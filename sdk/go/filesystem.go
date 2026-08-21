@@ -59,12 +59,17 @@ func (c *Client) Tree(ctx context.Context, uri string, opts *TreeOptions) ([]map
 	if nodeLimit == 0 {
 		nodeLimit = 1000
 	}
+	levelLimit := 3
+	if opts.LevelLimit != nil {
+		levelLimit = *opts.LevelLimit
+	}
 	query := url.Values{}
 	query.Set("uri", NormalizeURI(uri))
 	query.Set("output", output)
 	queryInt(query, "abs_limit", absLimit)
 	queryBool(query, "show_all_hidden", opts.ShowAllHidden)
 	queryInt(query, "node_limit", nodeLimit)
+	queryInt(query, "level_limit", levelLimit)
 	var result []map[string]any
 	err := c.doJSON(ctx, http.MethodGet, "/api/v1/fs/tree", query, nil, &result)
 	return result, err
@@ -208,6 +213,14 @@ func (c *Client) Reindex(ctx context.Context, uri string, opts *ReindexOptions) 
 		"mode":    mode,
 		"wait":    opts.Wait,
 		"dry_run": opts.DryRun,
+	}
+	if opts.Tags != nil {
+		payload["tags"] = opts.Tags
+		tagMode := opts.TagMode
+		if tagMode == "" {
+			tagMode = "replace"
+		}
+		payload["tag_mode"] = tagMode
 	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/content/reindex", nil, payload, &result)

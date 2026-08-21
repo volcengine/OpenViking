@@ -371,10 +371,6 @@ v1 建议保持简洁：
   score: number;
   category: string;
   match_reason: string;
-  relations: Array<{
-    uri: string;
-    abstract: string;
-  }>;
   abstract: string;
   overview?: string | null;
 }
@@ -429,7 +425,6 @@ Skills
         score: 0.82,
         category: "",
         match_reason: "...",
-        relations: [],
         abstract: "OpenViking installation guide and setup commands...",
         overview: "..."
       }
@@ -442,7 +437,6 @@ Skills
         score: 0.69,
         category: "",
         match_reason: "...",
-        relations: [],
         abstract: "Install and operate OpenViking memory integration...",
         overview: "..."
       }

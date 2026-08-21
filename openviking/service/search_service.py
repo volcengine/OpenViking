@@ -8,8 +8,6 @@ Provides semantic search operations: search, find.
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from openviking.core.path_variables import resolve_path_variables
-from openviking.core.uri_validation import validate_optional_viking_uris
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import VikingFS
 from openviking.utils.image_search import (
@@ -66,7 +64,6 @@ class SearchService:
     ) -> Optional[str]:
         if not image_url:
             return None
-        image_url = resolve_path_variables(image_url)
         if is_viking_uri(image_url):
             viking_fs = self._ensure_initialized()
             content = await viking_fs.read_file_bytes(image_url, ctx=ctx)
@@ -105,7 +102,6 @@ class SearchService:
         """
         resolved_image_url = await self._resolve_image_url(image_url, ctx)
         _ensure_non_empty_query(query, resolved_image_url)
-        target_uri = validate_optional_viking_uris(target_uri, field_name="target_uri")
         viking_fs = self._ensure_initialized()
 
         session_info = None
@@ -152,7 +148,6 @@ class SearchService:
         """
         resolved_image_url = await self._resolve_image_url(image_url, ctx)
         _ensure_non_empty_query(query, resolved_image_url)
-        target_uri = validate_optional_viking_uris(target_uri, field_name="target_uri")
         viking_fs = self._ensure_initialized()
         result = await viking_fs.find(
             query=query,

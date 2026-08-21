@@ -84,7 +84,7 @@ async function main() {
       if (duplicateEvent) return null;
       const block = state.promptHash === promptHash && state.recallBlock
         ? state.recallBlock
-        : await recallForPrompt(fetchJSON, cfg, prompt, cwd, log).catch((error) => {
+        : await recallForPrompt(fetchJSON, cfg, prompt, cwd, log, { sessionId }).catch((error) => {
           logError("recall", error);
           return null;
         });
@@ -119,7 +119,7 @@ async function main() {
       for (const item of toSend.slice(0, captured)) hashes.add(item.hash);
       let nextCount = Number(state.capturedSinceCommit || 0) + captured;
       if (captured > 0) {
-        const committed = await commitAgentSession(fetchJSON, sessionId);
+        const committed = await commitAgentSession(fetchJSON, sessionId, log);
         if (committed.ok) nextCount = 0;
       }
       await writeHookState(requestedClient, nativeSessionId, {

@@ -37,6 +37,7 @@ from openviking.session.memory.utils import (
     MemoryFileUtils,
     parse_memory_file_with_fields,
 )
+from openviking.storage.semantic_sidecar import parse_semantic_sidecar
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -192,7 +193,7 @@ class TestMemoryUpdater:
             async def ls(self, uri, show_all_hidden=False, ctx=None):
                 return [{"name": ".overview.md", "isDir": False}]
 
-            async def rm(self, uri, recursive=False, ctx=None):
+            async def rm(self, uri, recursive=False, ctx=None, **kwargs):
                 self.rm_calls.append((uri, recursive))
 
         viking_fs = FakeVikingFS()
@@ -306,7 +307,7 @@ class TestMemoryUpdater:
             async def read_file(self, uri, ctx=None):
                 return self.store[uri]
 
-            async def write_file(self, uri, content, ctx=None):
+            async def write_file(self, uri, content, ctx=None, **kwargs):
                 self.store[uri] = content
 
         viking_fs = FakeVikingFS()
@@ -316,10 +317,21 @@ class TestMemoryUpdater:
 
         await updater.generate_overview("events", directory, ctx, extract_context=None)
 
-        assert "**Date:**" not in viking_fs.store[overview_uri]
-        assert "- [kept event](./kept_event.md)" in viking_fs.store[overview_uri]
-        assert "- [plain_event.md](./plain_event.md)" in viking_fs.store[overview_uri]
-        assert "deleted_event.md" not in viking_fs.store[overview_uri]
+        document = parse_semantic_sidecar(viking_fs.store[overview_uri])
+        assert document.metadata["generated_by"] == {
+            "component": "MemoryUpdater",
+            "trigger": "memory_update",
+        }
+        assert document.metadata["freshness"] == {
+            "total_entries": 2,
+            "sampled_entries": 2,
+            "unsampled_entries": 0,
+            "pending_child_changes": 0,
+        }
+        assert "**Date:**" not in document.body
+        assert "- [kept event](./kept_event.md)" in document.body
+        assert "- [plain_event.md](./plain_event.md)" in document.body
+        assert "deleted_event.md" not in document.body
 
     @pytest.mark.asyncio
     async def test_generate_overview_template_fallbacks_for_preferences_and_entities(self):
@@ -351,7 +363,7 @@ class TestMemoryUpdater:
             async def read_file(self, uri, ctx=None):
                 return self.store[uri]
 
-            async def write_file(self, uri, content, ctx=None):
+            async def write_file(self, uri, content, ctx=None, **kwargs):
                 self.store[uri] = content
 
         viking_fs = FakeVikingFS()
@@ -571,6 +583,7 @@ class TestMemoryUpdater:
             expected_directory,
             ctx,
             None,
+            lease_ref=None,
         )
 
     @pytest.mark.asyncio
@@ -624,10 +637,10 @@ class TestMemoryUpdater:
             ],
         )
 
-        async def mock_apply_upsert(resolved_op, ctx, extract_context=None):
+        async def mock_apply_upsert(resolved_op, ctx, extract_context=None, **kwargs):
             return None
 
-        async def mock_apply_delete(uri, ctx):
+        async def mock_apply_delete(uri, ctx, **kwargs):
             assert uri == deleted_uri
 
         updater._apply_upsert = AsyncMock(side_effect=mock_apply_upsert)
@@ -690,7 +703,8 @@ class TestMemoryUpdater:
     @pytest.mark.asyncio
     async def test_apply_operations_remaps_deleted_links_to_replacement(self):
         deleted_uri = "viking://user/u/memories/preferences/Evan/hobby_preferences.md"
-        replacement_uri = "viking://user/u/memories/preferences/Evan/hobbies.md"
+        intermediate_uri = "viking://user/u/memories/preferences/Evan/hobbies.md"
+        replacement_uri = "viking://user/u/memories/preferences/Evan/interests.md"
         profile_uri = "viking://user/u/memories/profile.md"
 
         schema = MemoryTypeSchema(
@@ -719,18 +733,34 @@ class TestMemoryUpdater:
                 }
             ],
         )
+        intermediate_file = MemoryFile(
+            uri=intermediate_uri,
+            content="new hobbies",
+            memory_type="preferences",
+        )
         replacement_file = MemoryFile(
             uri=replacement_uri,
-            content="new hobbies",
+            content="new interests",
             memory_type="preferences",
         )
         profile_file = MemoryFile(
             uri=profile_uri,
             content="profile",
             memory_type="profile",
+            backlinks=[
+                {
+                    "from_uri": deleted_uri,
+                    "to_uri": profile_uri,
+                    "link_type": "related_to",
+                    "weight": 0.8,
+                    "match_text": "hobby",
+                    "description": "old link",
+                }
+            ],
         )
         files = {
             deleted_uri: MemoryFileUtils.write(deleted_file),
+            intermediate_uri: MemoryFileUtils.write(intermediate_file),
             replacement_uri: MemoryFileUtils.write(replacement_file),
             profile_uri: MemoryFileUtils.write(profile_file),
         }
@@ -738,7 +768,7 @@ class TestMemoryUpdater:
         mock_viking_fs = MagicMock()
         mock_viking_fs.read_file = AsyncMock(side_effect=lambda uri, ctx=None: files[uri])
 
-        async def write_file(uri, content, ctx=None):
+        async def write_file(uri, content, ctx=None, **kwargs):
             files[uri] = content
 
         mock_viking_fs.write_file = AsyncMock(side_effect=write_file)
@@ -757,7 +787,7 @@ class TestMemoryUpdater:
                     uris=[replacement_uri],
                 )
             ],
-            delete_file_contents=[deleted_file],
+            delete_file_contents=[deleted_file, intermediate_file],
             errors=[],
             resolved_links=[
                 StoredLink(
@@ -769,7 +799,10 @@ class TestMemoryUpdater:
                     description="in-flight link",
                 )
             ],
-            delete_replacements={deleted_uri: replacement_uri},
+            delete_replacements={
+                deleted_uri: intermediate_uri,
+                intermediate_uri: replacement_uri,
+            },
         )
 
         ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
@@ -777,11 +810,12 @@ class TestMemoryUpdater:
         result = await updater.apply_operations(operations=resolved, ctx=ctx)
 
         assert result.written_uris == [replacement_uri]
-        assert result.deleted_uris == [deleted_uri]
+        assert result.deleted_uris == [deleted_uri, intermediate_uri]
         assert resolved.resolved_links[0].from_uri == replacement_uri
         profile = MemoryFileUtils.read(files[profile_uri], uri=profile_uri)
-        assert profile.backlinks[0]["from_uri"] == replacement_uri
-        assert profile.backlinks[0]["to_uri"] == profile_uri
+        assert {(link["from_uri"], link["to_uri"]) for link in profile.backlinks} == {
+            (replacement_uri, profile_uri)
+        }
 
     @pytest.mark.asyncio
     async def test_apply_operations_routes_backlinks_to_matching_uri_only(self):
@@ -1408,9 +1442,9 @@ class TestConsecutivePatchesSameURI:
         updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
 
         patch_op = MagicMock()
-        patch_op.apply.side_effect = ValueError("patch failed")
+        patch_op.apply = AsyncMock(side_effect=ValueError("patch failed"))
         replace_op = MagicMock()
-        replace_op.apply.return_value = "Updated Title"
+        replace_op.apply = AsyncMock(return_value="Updated Title")
 
         def mock_from_field(field):
             if field.name == "content":

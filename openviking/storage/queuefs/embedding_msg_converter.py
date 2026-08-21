@@ -20,7 +20,7 @@ class EmbeddingMsgConverter:
     """Converter for Context objects to EmbeddingMsg."""
 
     @staticmethod
-    def from_context(context: Context) -> EmbeddingMsg:
+    def from_context(context: Context) -> EmbeddingMsg | None:
         """
         Convert a Context object to EmbeddingMsg.
         """
@@ -38,11 +38,7 @@ class EmbeddingMsgConverter:
         uri = context_data.get("uri", "")
         owner_fields = None
         if uri:
-            owner_fields = owner_fields_for_uri(
-                uri,
-                user=context.user,
-                account_id=context_data.get("account_id"),
-            )
+            owner_fields = owner_fields_for_uri(uri)
             context_data["uri"] = owner_fields["uri"]
         if context_data.get("owner_user_id") is None:
             if owner_fields is not None:
@@ -50,7 +46,7 @@ class EmbeddingMsgConverter:
 
         # Derive level field for hierarchical retrieval.
         uri = context_data.get("uri", "")
-        context_level = getattr(context, "level", None)
+        context_level = context.level
         if context_level is not None:
             resolved_level = context_level
         elif context_data.get("level") is not None:
@@ -67,11 +63,6 @@ class EmbeddingMsgConverter:
         if isinstance(resolved_level, ContextLevel):
             resolved_level = int(resolved_level.value)
         context_data["level"] = int(resolved_level)
-
-        # Store full content in content field for bm25 full-text search.
-        # Use full_text (raw file content) when available; fall back to vectorization_text.
-        full_content = context.vectorize.full_text or vectorization_text
-        context_data["content"] = full_content
 
         if vectorization_images:
             # Multimodal message: combine text (if any) and image references into the

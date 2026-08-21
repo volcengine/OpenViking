@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 import time
@@ -17,12 +18,14 @@ from typing import Any, Optional
 from openviking.server.config import ServerConfig, TempUploadConfig
 from openviking.server.identity import RequestContext, Role
 from openviking.server.local_input_guard import _read_upload_meta
-from openviking.storage.errors import LockAcquisitionError
-from openviking.storage.viking_fs import get_viking_fs
+from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.utils.config.open_viking_config import get_openviking_config
 
 _CHUNK_SIZE = 1024 * 1024
+_SHARED_UPLOAD_ROOT = "viking://upload"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -31,14 +34,8 @@ class ResolvedTempUpload:
     temp_file_id: str
     original_filename: Optional[str]
     local_path: str
-    lock_handle: Any = None
 
     async def cleanup(self) -> None:
-        if self.lock_handle is not None:
-            with suppress(Exception):
-                await get_viking_fs()._async_agfs.pathlock_release(self.lock_handle)
-            self.lock_handle = None
-
         if self.mode == "shared" and self.local_path:
             with suppress(FileNotFoundError):
                 os.unlink(self.local_path)
@@ -48,20 +45,12 @@ def get_temp_upload_config(server_config: ServerConfig) -> TempUploadConfig:
     return server_config.temp_upload
 
 
-def _shared_prefix(cfg: TempUploadConfig) -> str:
-    return cfg.shared_prefix.rstrip("/")
+def _shared_content_uri(upload_id: str) -> str:
+    return f"{_SHARED_UPLOAD_ROOT}/{upload_id}/content"
 
 
-def _shared_upload_uri(cfg: TempUploadConfig, ctx: RequestContext, upload_id: str) -> str:
-    return f"{_shared_prefix(cfg)}/{upload_id}"
-
-
-def _shared_content_uri(cfg: TempUploadConfig, ctx: RequestContext, upload_id: str) -> str:
-    return f"{_shared_upload_uri(cfg, ctx, upload_id)}/content"
-
-
-def _shared_meta_uri(cfg: TempUploadConfig, ctx: RequestContext, upload_id: str) -> str:
-    return f"{_shared_upload_uri(cfg, ctx, upload_id)}/meta.json"
+def _shared_meta_uri(upload_id: str) -> str:
+    return f"{_SHARED_UPLOAD_ROOT}/{upload_id}/meta"
 
 
 def _parse_shared_temp_file_id(temp_file_id: str) -> Optional[str]:
@@ -71,6 +60,23 @@ def _parse_shared_temp_file_id(temp_file_id: str) -> Optional[str]:
     if not upload_id or "/" in upload_id or "\\" in upload_id:
         return None
     return upload_id
+
+
+def _new_shared_upload_id() -> str:
+    return f"{time.time_ns() // 1_000_000:013d}-{uuid.uuid4().hex}"
+
+
+def _shared_upload_created_at(upload_id: str) -> Optional[float]:
+    timestamp_ms, separator, nonce = upload_id.partition("-")
+    if (
+        not separator
+        or len(timestamp_ms) != 13
+        or not timestamp_ms.isdigit()
+        or len(nonce) != 32
+        or any(char not in "0123456789abcdef" for char in nonce)
+    ):
+        return None
+    return int(timestamp_ms) / 1_000
 
 
 async def _stream_upload_to_local_temp(upload_file: Any, max_size_bytes: int) -> tuple[str, int]:
@@ -135,44 +141,6 @@ class TempUploadStore:
             return self._resolve_local(temp_file_id)
         return await self._resolve_shared(temp_file_id, shared_id, ctx)
 
-    async def mark_failed(self, resolved: ResolvedTempUpload, ctx: RequestContext) -> None:
-        shared_id = _parse_shared_temp_file_id(resolved.temp_file_id)
-        if shared_id is None or resolved.lock_handle is None:
-            return
-        meta = await self._read_shared_meta(shared_id, ctx)
-        meta["state"] = "uploaded"
-        meta["updated_at"] = int(time.time())
-        await self._write_shared_meta(
-            shared_id,
-            ctx,
-            meta,
-            lease_ref=resolved.lock_handle,
-        )
-
-    async def mark_consumed(self, resolved: ResolvedTempUpload, ctx: RequestContext) -> None:
-        shared_id = _parse_shared_temp_file_id(resolved.temp_file_id)
-        if shared_id is None:
-            return
-        uri = _shared_upload_uri(self.temp_cfg, ctx, shared_id)
-        await get_viking_fs().rm(
-            uri,
-            recursive=True,
-            ctx=self._internal_ctx(ctx),
-            lease_ref=resolved.lock_handle,
-        )
-
-    async def try_cleanup_invalid_or_expired(
-        self,
-        temp_file_id: str,
-        ctx: RequestContext,
-    ) -> None:
-        shared_id = _parse_shared_temp_file_id(temp_file_id)
-        if shared_id is None:
-            return
-        uri = _shared_upload_uri(self.temp_cfg, ctx, shared_id)
-        with suppress(Exception):
-            await get_viking_fs().rm(uri, recursive=True, ctx=self._internal_ctx(ctx))
-
     async def _save_local(self, upload_file: Any) -> str:
         config = get_openviking_config()
         temp_dir = config.storage.get_upload_temp_dir()
@@ -210,20 +178,18 @@ class TempUploadStore:
         return temp_filename
 
     async def _save_shared(self, upload_file: Any, ctx: RequestContext) -> str:
+        await self._cleanup_shared_uploads(ctx)
         temp_path, total_size = await _stream_upload_to_local_temp(
             upload_file, self.temp_cfg.shared_max_size_bytes
         )
-        upload_id = uuid.uuid4().hex
+        upload_id = _new_shared_upload_id()
         temp_file_id = f"shared_{upload_id}"
         vfs = get_viking_fs()
         internal_ctx = self._internal_ctx(ctx)
-        content_uri = _shared_content_uri(self.temp_cfg, ctx, upload_id)
-        meta_uri = _shared_meta_uri(self.temp_cfg, ctx, upload_id)
-        now = int(time.time())
+        content_uri = _shared_content_uri(upload_id)
+        meta_uri = _shared_meta_uri(upload_id)
         meta = {
-            "version": 1,
-            "upload_mode": "shared",
-            "upload_id": upload_id,
+            "version": 2,
             "temp_file_id": temp_file_id,
             "account": ctx.account_id,
             "user": ctx.user.user_id,
@@ -231,11 +197,7 @@ class TempUploadStore:
             "content_type": getattr(upload_file, "content_type", None),
             "file_ext": Path(upload_file.filename or "").suffix,
             "size": total_size,
-            "sha256": None,
             "storage_uri": content_uri,
-            "state": "uploaded",
-            "created_at": now,
-            "updated_at": now,
         }
 
         try:
@@ -246,7 +208,11 @@ class TempUploadStore:
             return temp_file_id
         except Exception:
             with suppress(Exception):
-                await self.try_cleanup_invalid_or_expired(temp_file_id, ctx)
+                await vfs.rm(
+                    f"{_SHARED_UPLOAD_ROOT}/{upload_id}",
+                    recursive=True,
+                    ctx=internal_ctx,
+                )
             raise
         finally:
             with suppress(FileNotFoundError):
@@ -313,78 +279,36 @@ class TempUploadStore:
         vfs = get_viking_fs()
         internal_ctx = self._internal_ctx(ctx)
         if not await vfs.exists(content_uri, ctx=internal_ctx):
-            await self.try_cleanup_invalid_or_expired(temp_file_id, ctx)
             raise PermissionDeniedError("Temporary upload is invalid: content missing.")
 
-        lock_path = vfs._uri_to_path(
-            _shared_upload_uri(self.temp_cfg, ctx, upload_id),
-            ctx=internal_ctx,
-        )
+        file_ext = meta.get("file_ext") or ".tmp"
+        fd, temp_path = tempfile.mkstemp(prefix="ov_shared_upload_", suffix=file_ext)
+        os.close(fd)
         try:
-            lease = await vfs._async_agfs.pathlock_acquire_tree(lock_path, timeout_secs=0.0)
-        except LockAcquisitionError:
-            raise PermissionDeniedError("Temporary upload is being consumed.")
-
-        try:
-            meta = await self._read_shared_meta(upload_id, ctx)
-            now = int(time.time())
-            if meta.get("state") != "uploaded":
-                raise PermissionDeniedError("Temporary upload is being consumed.")
-
-            meta["state"] = "consuming"
-            meta["updated_at"] = now
-            await self._write_shared_meta(upload_id, ctx, meta, lease_ref=lease)
-
-            file_ext = meta.get("file_ext") or ".tmp"
-            fd, temp_path = tempfile.mkstemp(prefix="ov_shared_upload_", suffix=file_ext)
-            os.close(fd)
-            try:
-                content = await vfs.read_file_bytes(content_uri, ctx=internal_ctx)
-                with open(temp_path, "wb") as f:
-                    f.write(content)
-            except Exception:
-                with suppress(FileNotFoundError):
-                    os.unlink(temp_path)
-                raise
-
-            return ResolvedTempUpload(
-                mode="shared",
-                temp_file_id=temp_file_id,
-                original_filename=meta.get("original_filename") or None,
-                local_path=temp_path,
-                lock_handle=lease,
-            )
+            content = await vfs.read_file_bytes(content_uri, ctx=internal_ctx)
+            with open(temp_path, "wb") as f:
+                f.write(content)
         except Exception:
-            with suppress(Exception):
-                await vfs._async_agfs.pathlock_release(lease)
+            with suppress(FileNotFoundError):
+                os.unlink(temp_path)
             raise
+        return ResolvedTempUpload(
+            mode="shared",
+            temp_file_id=temp_file_id,
+            original_filename=meta.get("original_filename") or None,
+            local_path=temp_path,
+        )
 
     async def _read_shared_meta(self, upload_id: str, ctx: RequestContext) -> dict[str, Any]:
-        meta_uri = _shared_meta_uri(self.temp_cfg, ctx, upload_id)
+        vfs = get_viking_fs()
+        internal_ctx = self._internal_ctx(ctx)
         try:
-            raw = await get_viking_fs().read_file(meta_uri, ctx=self._internal_ctx(ctx))
-            data = json.loads(raw)
+            data = json.loads(await vfs.read_file(_shared_meta_uri(upload_id), ctx=internal_ctx))
         except Exception as exc:
             raise PermissionDeniedError("Temporary upload metadata is invalid or missing.") from exc
         if not isinstance(data, dict):
             raise PermissionDeniedError("Temporary upload metadata is invalid or missing.")
         return data
-
-    async def _write_shared_meta(
-        self,
-        upload_id: str,
-        ctx: RequestContext,
-        meta: dict[str, Any],
-        lease_ref: Any = None,
-    ) -> None:
-        """Write shared-upload metadata under an optional existing pathlock lease."""
-        meta_uri = _shared_meta_uri(self.temp_cfg, ctx, upload_id)
-        await get_viking_fs().write_file(
-            meta_uri,
-            json.dumps(meta, ensure_ascii=False),
-            ctx=self._internal_ctx(ctx),
-            lease_ref=lease_ref,
-        )
 
     def _validate_shared_meta(
         self,
@@ -397,17 +321,82 @@ class TempUploadStore:
         if meta.get("account") != ctx.account_id:
             raise PermissionDeniedError("Temporary upload does not belong to current account.")
 
-    @staticmethod
-    def _cleanup_local_temp_files(temp_dir: Path, max_age_hours: int = 1) -> None:
+    async def _cleanup_shared_uploads(self, ctx: RequestContext) -> None:
+        if self.temp_cfg.ttl_seconds == 0:
+            return
+        vfs = get_viking_fs()
+        internal_ctx = self._internal_ctx(ctx)
+        try:
+            uploads = await vfs.ls(
+                _SHARED_UPLOAD_ROOT,
+                show_all_hidden=True,
+                node_limit=LS_ALL_NODES,
+                ctx=internal_ctx,
+            )
+        except Exception:
+            logger.warning(
+                "Shared temp upload cleanup list failed account=%s",
+                ctx.account_id,
+                exc_info=True,
+            )
+            return
+
+        now = time.time()
+        cutoff = now - self.temp_cfg.ttl_seconds
+        logger.debug(
+            "Shared temp upload cleanup account=%s ttl_seconds=%s upload_count=%s "
+            "now=%s cutoff=%s",
+            ctx.account_id,
+            self.temp_cfg.ttl_seconds,
+            len(uploads),
+            now,
+            cutoff,
+        )
+        for upload in uploads:
+            if not upload.get("isDir"):
+                continue
+            uri = str(upload.get("uri") or "").rstrip("/")
+            upload_id = uri.removeprefix(f"{_SHARED_UPLOAD_ROOT}/")
+            if not uri.startswith(f"{_SHARED_UPLOAD_ROOT}/") or "/" in upload_id:
+                continue
+            created_at = _shared_upload_created_at(upload_id)
+            if created_at is None:
+                logger.debug("Shared temp upload cleanup skipped malformed uri=%s", uri)
+                continue
+            age_seconds = now - created_at
+            expired = created_at < cutoff
+            logger.debug(
+                "Shared temp upload cleanup candidate uri=%s created_at=%s "
+                "age_seconds=%s expired=%s",
+                uri,
+                created_at,
+                age_seconds,
+                expired,
+            )
+            if not expired:
+                continue
+            try:
+                await vfs.rm(uri, recursive=True, ctx=internal_ctx)
+            except Exception:
+                logger.warning(
+                    "Shared temp upload cleanup remove failed uri=%s",
+                    uri,
+                    exc_info=True,
+                )
+            else:
+                logger.debug("Shared temp upload cleanup removed uri=%s", uri)
+
+    def _cleanup_local_temp_files(self, temp_dir: Path) -> None:
+        if self.temp_cfg.ttl_seconds == 0:
+            return
         if not temp_dir.exists():
             return
         now = time.time()
-        max_age_seconds = max_age_hours * 3600
         for file_path in temp_dir.iterdir():
             if not file_path.is_file():
                 continue
             file_age = now - file_path.stat().st_mtime
-            if file_age > max_age_seconds:
+            if file_age > self.temp_cfg.ttl_seconds:
                 file_path.unlink(missing_ok=True)
                 if not file_path.name.endswith(".ov_upload.meta"):
                     meta_path = temp_dir / f"{file_path.name}.ov_upload.meta"

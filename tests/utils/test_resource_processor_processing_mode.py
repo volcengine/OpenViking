@@ -1,13 +1,14 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from openviking.utils.ingest_options import IngestOptions
 from openviking.server.identity import RequestContext, Role
+from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -48,6 +49,141 @@ def ctx() -> RequestContext:
 
 
 @pytest.mark.asyncio
+async def test_flat_file_refreshes_parent_semantics_and_vectorizes_via_summary(
+    monkeypatch,
+    ctx,
+):
+    viking_fs = SimpleNamespace(
+        _async_agfs=SimpleNamespace(pathlock_release=AsyncMock()),
+        tree=AsyncMock(return_value=[]),
+    )
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.get_viking_fs",
+        lambda: viking_fs,
+    )
+    processor = ResourceProcessor(_FakeVikingDB())
+    summarizer = SimpleNamespace(refresh_file_parent=AsyncMock(return_value={"status": "success"}))
+    processor._get_summarizer = Mock(return_value=summarizer)
+
+    result = await processor.finish_prepared_resource(
+        {
+            "root_uri": "viking://resources/神雕_副本.md",
+            "temp_uri": "viking://resources/神雕_副本.md",
+            "source_committed": True,
+            "root_is_file": True,
+        },
+        ctx=ctx,
+        resource_lock={"lease_ref": "flat-file"},
+        build_index=True,
+        processing_mode="semantic_and_vectors",
+    )
+
+    assert result == {
+        "status": "success",
+        "root_uri": "viking://resources/神雕_副本.md",
+    }
+    summarizer.refresh_file_parent.assert_awaited_once_with(
+        file_uri="viking://resources/神雕_副本.md",
+        ctx=ctx,
+        skip_vectorization=False,
+        ingest_options=IngestOptions(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_flat_file_skips_all_post_processing_when_build_index_false(
+    monkeypatch,
+    ctx,
+):
+    vectorize_file = AsyncMock()
+    monkeypatch.setattr("openviking.utils.resource_processor.vectorize_file", vectorize_file)
+    processor = ResourceProcessor(_FakeVikingDB())
+    processor._get_summarizer = Mock(
+        side_effect=AssertionError("flat files have no directory semantics")
+    )
+
+    await processor.finish_prepared_resource(
+        {
+            "root_uri": "viking://resources/神雕_副本.md",
+            "temp_uri": "viking://resources/神雕_副本.md",
+            "source_committed": True,
+            "root_is_file": True,
+        },
+        ctx=ctx,
+        build_index=False,
+    )
+
+    vectorize_file.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_vectors_only_replaces_preexisting_flat_file_without_directory_sync(
+    monkeypatch,
+    ctx,
+):
+    viking_fs = SimpleNamespace(
+        _async_agfs=SimpleNamespace(pathlock_release=AsyncMock()),
+        exists=AsyncMock(return_value=True),
+        ls=AsyncMock(side_effect=NotADirectoryError("flat resource roots cannot be listed")),
+        persist_temp_tree=AsyncMock(),
+        delete_temp=AsyncMock(),
+    )
+    vectorize_file = AsyncMock()
+    rewrite_image_uris = AsyncMock()
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.get_viking_fs",
+        lambda: viking_fs,
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: viking_fs,
+    )
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.rewrite_image_uris",
+        rewrite_image_uris,
+    )
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.vectorize_file",
+        vectorize_file,
+    )
+    processor = ResourceProcessor(_FakeVikingDB())
+    processor._get_summarizer = Mock(
+        side_effect=AssertionError("flat files have no directory semantics")
+    )
+    lock = {"lease_ref": "flat-file"}
+
+    result = await processor.finish_prepared_resource(
+        {
+            "root_uri": "viking://resources/神雕_副本.md",
+            "temp_uri": "viking://temp/神雕_副本.md",
+            "temp_dir_path": "viking://temp/job-1",
+            "source_committed": False,
+            "target_preexisting": True,
+            "root_is_file": True,
+        },
+        ctx=ctx,
+        resource_lock=lock,
+        build_index=True,
+        processing_mode="vectors_only",
+    )
+
+    assert result == {
+        "status": "success",
+        "root_uri": "viking://resources/神雕_副本.md",
+    }
+    viking_fs.persist_temp_tree.assert_awaited_once_with(
+        "viking://temp/神雕_副本.md",
+        "viking://resources/神雕_副本.md",
+        ctx=ctx,
+        lease_ref=lock,
+    )
+    viking_fs.delete_temp.assert_awaited_once_with("viking://temp/job-1", ctx=ctx)
+    rewrite_image_uris.assert_not_awaited()
+    vectorize_file.assert_awaited_once()
+    viking_fs._async_agfs.pathlock_release.assert_awaited_once_with(lock)
+
+
+@pytest.mark.asyncio
 async def test_vectors_only_persists_tree_and_vectorizes_files_only(monkeypatch, ctx):
     viking_fs = SimpleNamespace(
         _async_agfs=SimpleNamespace(pathlock_release=AsyncMock()),
@@ -62,6 +198,11 @@ async def test_vectors_only_persists_tree_and_vectorizes_files_only(monkeypatch,
                     "name": "page.md",
                 },
                 {
+                    "uri": "viking://resources/demo/section/notes.txt",
+                    "isDir": False,
+                    "name": "notes.txt",
+                },
+                {
                     "uri": "viking://resources/demo/section/.abstract.md",
                     "isDir": False,
                     "name": ".abstract.md",
@@ -69,11 +210,30 @@ async def test_vectors_only_persists_tree_and_vectorizes_files_only(monkeypatch,
             ]
         ),
     )
-    vectorize_file = AsyncMock()
+    vectorized = {}
+    both_entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def vectorize_file(**kwargs):
+        vectorized[kwargs["file_path"]] = kwargs
+        if len(vectorized) == 2:
+            both_entered.set()
+        await release.wait()
+
     rewrite_image_uris = AsyncMock()
     monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: viking_fs)
-    monkeypatch.setattr("openviking.utils.resource_processor.rewrite_image_uris", rewrite_image_uris)
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.rewrite_image_uris", rewrite_image_uris
+    )
     monkeypatch.setattr("openviking.utils.resource_processor.vectorize_file", vectorize_file)
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.get_openviking_config",
+        lambda: SimpleNamespace(
+            queue_workers=SimpleNamespace(
+                add_resource=SimpleNamespace(file_vectorization_concurrency=8)
+            )
+        ),
+    )
     processor = ResourceProcessor(_FakeVikingDB())
     processor._get_summarizer = Mock(side_effect=AssertionError("summarizer should not run"))
     processor._delete_resource_semantic_markers = AsyncMock()
@@ -81,19 +241,27 @@ async def test_vectors_only_persists_tree_and_vectorizes_files_only(monkeypatch,
     processor._delete_removed_resource_vectors = AsyncMock()
     lock = {"lease_ref": "lock-1"}
 
-    result = await processor.finish_prepared_resource(
-        {
-            "root_uri": "viking://resources/demo",
-            "temp_uri": "viking://temp/demo",
-            "temp_dir_path": "tmp/demo",
-            "source_committed": False,
-        },
-        ctx=ctx,
-        resource_lock=lock,
-        build_index=True,
-        processing_mode="vectors_only",
-        ingest_options=IngestOptions.from_search_tags(["team=search"], mode="append"),
+    task = asyncio.create_task(
+        processor.finish_prepared_resource(
+            {
+                "root_uri": "viking://resources/demo",
+                "temp_uri": "viking://temp/demo",
+                "temp_dir_path": "tmp/demo",
+                "source_committed": False,
+            },
+            ctx=ctx,
+            resource_lock=lock,
+            build_index=True,
+            processing_mode="vectors_only",
+            ingest_options=IngestOptions.from_search_tags(["team=search"], mode="append"),
+        )
     )
+    try:
+        await asyncio.wait_for(both_entered.wait(), timeout=1)
+    finally:
+        release.set()
+        await task
+    result = task.result()
 
     assert result == {"status": "success", "root_uri": "viking://resources/demo"}
     viking_fs.persist_temp_tree.assert_awaited_once_with(
@@ -108,20 +276,20 @@ async def test_vectors_only_persists_tree_and_vectorizes_files_only(monkeypatch,
         lease_ref=lock,
     )
     viking_fs.delete_temp.assert_awaited_once_with("tmp/demo", ctx=ctx)
-    vectorize_file.assert_awaited_once()
-    assert vectorize_file.await_args.kwargs["file_path"] == (
-        "viking://resources/demo/section/page.md"
-    )
-    assert vectorize_file.await_args.kwargs["parent_uri"] == "viking://resources/demo/section"
-    assert vectorize_file.await_args.kwargs["summary_dict"] == {
+    assert set(vectorized) == {
+        "viking://resources/demo/section/page.md",
+        "viking://resources/demo/section/notes.txt",
+    }
+    page = vectorized["viking://resources/demo/section/page.md"]
+    assert page["parent_uri"] == "viking://resources/demo/section"
+    assert page["summary_dict"] == {
         "name": "page.md",
         "summary": "",
     }
-    assert vectorize_file.await_args.kwargs["ingest_options"] == IngestOptions(
+    assert page["ingest_options"] == IngestOptions(
         search_tags=["team=search"],
         search_tag_mode="append",
     )
-    assert vectorize_file.await_args.kwargs["register_request_wait"] is True
     processor._delete_resource_semantic_markers.assert_not_awaited()
     processor._delete_resource_semantic_vectors.assert_not_awaited()
     viking_fs._async_agfs.pathlock_release.assert_awaited_once_with(lock)
@@ -178,6 +346,14 @@ async def test_vectors_only_syncs_preexisting_target_instead_of_merging(monkeypa
     )
     monkeypatch.setattr("openviking.utils.resource_processor.rewrite_image_uris", AsyncMock())
     monkeypatch.setattr("openviking.utils.resource_processor.vectorize_file", AsyncMock())
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.get_openviking_config",
+        lambda: SimpleNamespace(
+            queue_workers=SimpleNamespace(
+                add_resource=SimpleNamespace(file_vectorization_concurrency=8)
+            )
+        ),
+    )
     processor = ResourceProcessor(_FakeVikingDB())
     processor._delete_resource_semantic_vectors = AsyncMock()
     lock = {"lease_ref": "lock-1"}
@@ -206,34 +382,72 @@ async def test_vectors_only_syncs_preexisting_target_instead_of_merging(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_vectors_only_leaves_existing_semantic_vectors_untouched(monkeypatch, ctx):
-    viking_fs = SimpleNamespace(
-        _async_agfs=SimpleNamespace(pathlock_release=AsyncMock()),
-        persist_temp_tree=AsyncMock(),
-        delete_temp=AsyncMock(),
-        tree=AsyncMock(return_value=[]),
-    )
-    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: viking_fs)
-    monkeypatch.setattr("openviking.utils.resource_processor.rewrite_image_uris", AsyncMock())
-    monkeypatch.setattr("openviking.utils.resource_processor.vectorize_file", AsyncMock())
-    processor = ResourceProcessor(_FakeVikingDB())
-    processor._delete_resource_semantic_vectors = AsyncMock()
-    processor._delete_removed_resource_vectors = AsyncMock()
+async def test_vectors_only_cancels_siblings_before_releasing_lock(monkeypatch, ctx):
+    healthy_started = asyncio.Event()
+    healthy_cancelled = asyncio.Event()
     lock = {"lease_ref": "lock-1"}
 
-    await processor.finish_prepared_resource(
-        {
-            "root_uri": "viking://resources/demo",
-            "temp_uri": "viking://temp/demo",
-            "source_committed": False,
-        },
-        ctx=ctx,
-        resource_lock=lock,
-        build_index=True,
-        processing_mode="vectors_only",
+    async def release_lock(released_lock):
+        assert released_lock == lock
+        assert healthy_cancelled.is_set()
+
+    viking_fs = SimpleNamespace(
+        _async_agfs=SimpleNamespace(pathlock_release=AsyncMock(side_effect=release_lock)),
+        tree=AsyncMock(
+            return_value=[
+                {
+                    "uri": "viking://resources/demo/failing.md",
+                    "isDir": False,
+                    "name": "failing.md",
+                },
+                {
+                    "uri": "viking://resources/demo/healthy.md",
+                    "isDir": False,
+                    "name": "healthy.md",
+                },
+            ]
+        ),
     )
 
+    async def vectorize_file(*, file_path, **kwargs):
+        if file_path.endswith("failing.md"):
+            await healthy_started.wait()
+            raise RuntimeError("vector enqueue failed")
+        healthy_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            healthy_cancelled.set()
+            raise
+
+    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: viking_fs)
+    monkeypatch.setattr("openviking.utils.resource_processor.vectorize_file", vectorize_file)
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.get_openviking_config",
+        lambda: SimpleNamespace(
+            queue_workers=SimpleNamespace(
+                add_resource=SimpleNamespace(file_vectorization_concurrency=8)
+            )
+        ),
+    )
+    processor = ResourceProcessor(_FakeVikingDB())
+    processor._delete_resource_semantic_vectors = AsyncMock()
+
+    with pytest.raises(RuntimeError, match="vector enqueue failed"):
+        await processor.finish_prepared_resource(
+            {
+                "root_uri": "viking://resources/demo",
+                "source_committed": True,
+            },
+            ctx=ctx,
+            resource_lock=lock,
+            build_index=True,
+            processing_mode="vectors_only",
+        )
+
+    assert healthy_cancelled.is_set()
     processor._delete_resource_semantic_vectors.assert_not_awaited()
+    viking_fs._async_agfs.pathlock_release.assert_awaited_once_with(lock)
 
 
 @pytest.mark.asyncio
@@ -256,6 +470,14 @@ async def test_vectors_only_deletes_sync_removed_detail_vectors(monkeypatch, ctx
     )
     monkeypatch.setattr("openviking.utils.resource_processor.rewrite_image_uris", AsyncMock())
     monkeypatch.setattr("openviking.utils.resource_processor.vectorize_file", AsyncMock())
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.get_openviking_config",
+        lambda: SimpleNamespace(
+            queue_workers=SimpleNamespace(
+                add_resource=SimpleNamespace(file_vectorization_concurrency=8)
+            )
+        ),
+    )
     processor = ResourceProcessor(_FakeVikingDB())
     processor._delete_resource_semantic_vectors = AsyncMock()
     processor._delete_removed_resource_vectors = AsyncMock()

@@ -9,8 +9,7 @@
 
 ## 这个示例覆盖什么
 
-- 本地快速试用时的嵌入式 SDK 用法
-- 服务端模式下的 HTTP 客户端用法
+- HTTP SDK 用法
 - 从远程 URL 导入资源
 - 使用 `ls`、`tree`、`read` 浏览 `viking://` 文件系统
 - 使用 `find`、`abstract`、`overview`、`grep` 做检索和加载
@@ -18,15 +17,13 @@
 
 ## 先选对接入方式
 
-目前 OpenViking 常见有三种接入路径：
+目前 OpenViking 常见有两种接入路径：
 
 | 模式 | 适合场景 | 是否推荐 |
 |------|----------|----------|
-| 嵌入式 SDK | 单进程、本地试用、快速验证 | 是，适合第一次上手 |
 | HTTP 服务端 + SDK/CLI | 共享服务、多会话、多 Agent | 是，正式使用优先 |
 | MCP | Claude Code、Cursor、Claude Desktop、OpenClaw 等 MCP 宿主 | 是，工具化集成优先 |
 
-如果不是单进程本地 demo，而是要长期运行或多端接入，优先使用 HTTP 服务端模式。  
 如果你是给 Claude Code、Cursor 这类客户端接入，请直接看 [MCP 集成指南](../../docs/zh/guides/06-mcp-integration.md)。
 
 ## 前置条件
@@ -35,10 +32,10 @@
 2. 安装 OpenViking：
 
 ```bash
-pip install openviking --upgrade --force-reinstall
+pip install openviking-sdk --upgrade
 ```
 
-3. 准备好 `~/.openviking/ov.conf`
+3. 启动 OpenViking Server
 
 ## 快速开始
 
@@ -50,21 +47,12 @@ cd OpenViking/examples/basic-usage
 python basic_usage.py
 ```
 
-脚本默认使用嵌入式模式：
+脚本默认连接本地 OpenViking Server：
 
 ```python
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
-client = ov.OpenViking(path="./data")
-client.initialize()
-```
-
-如果你想把同样的流程切到服务端模式，改成：
-
-```python
-import openviking as ov
-
-client = ov.SyncHTTPClient(url="http://localhost:1933")
+client = SyncHTTPClient(url="http://localhost:1933")
 client.initialize()
 ```
 
@@ -87,28 +75,19 @@ client.initialize()
 
 ### 初始化
 
-本地首次试用建议先用嵌入式模式：
+使用 HTTP 客户端连接 OpenViking Server：
 
 ```python
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
-client = ov.OpenViking(path="./data")
-client.initialize()
-```
-
-如果 OpenViking 作为独立服务运行，则使用 HTTP 客户端：
-
-```python
-import openviking as ov
-
-client = ov.SyncHTTPClient(url="http://localhost:1933")
+client = SyncHTTPClient(url="http://localhost:1933")
 client.initialize()
 ```
 
 如果服务端启用了认证，普通数据访问请优先使用 `user_key`：
 
 ```python
-client = ov.SyncHTTPClient(
+client = SyncHTTPClient(
     url="http://localhost:1933",
     api_key="<user-key>",
 )

@@ -18,16 +18,22 @@ from fastapi.responses import JSONResponse
 from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.server.api_keys import APIKeyManager
 from openviking.server.app import create_app
-from openviking.server.config import ServerConfig
+from openviking.server.config import ServerConfig, UserConfig
 from openviking.server.dependencies import set_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
-from openviking.server.user_config import read_user_add_targets, read_user_config
+from openviking.server.user_config import (
+    read_user_add_targets,
+    read_user_config,
+    user_config_backup_uri,
+)
 from openviking.service.core import OpenVikingService
 from openviking.service.task_store import (
     SYSTEM_TASK_ACCOUNT_ID,
     SYSTEM_TASK_USER_ID,
 )
+from openviking.service.task_tracker import get_task_tracker
+from openviking.service.user_deletion import setup_user_deletion
 from openviking_cli.exceptions import OpenVikingError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -80,6 +86,7 @@ class _FakeVikingFS:
     def __init__(self):
         self.agfs = _FakeAGFS()
         self.files = {}
+        self.writes = []
 
     async def read_file(self, uri, **_kwargs):
         if uri not in self.files:
@@ -87,6 +94,7 @@ class _FakeVikingFS:
         return self.files[uri]
 
     async def write_file(self, uri, content, **_kwargs):
+        self.writes.append(uri)
         self.files[uri] = content
 
     async def rm(self, uri, **_kwargs):
@@ -96,6 +104,11 @@ class _FakeVikingFS:
 class _FakeService:
     def __init__(self):
         self.viking_fs = _FakeVikingFS()
+        self.sessions = self
+
+    async def get_agent_evolution_enabled(self, account_id):
+        del account_id
+        return True
 
     async def initialize_account_directories(self, ctx):
         return None
@@ -175,6 +188,10 @@ async def admin_app(admin_service):
     manager = APIKeyManager(root_key=ROOT_KEY, viking_fs=admin_service.viking_fs)
     await manager.load()
     app.state.api_key_manager = manager
+    app.state.user_deletion_service = await setup_user_deletion(
+        service=admin_service,
+        manager=manager,
+    )
 
     # Set auth plugin (lifespan not triggered in ASGI tests)
     registry = get_registry()
@@ -298,7 +315,7 @@ async def test_create_user_paths_accept_initial_user_config(
         viking_fs,
         RequestContext(user=UserIdentifier(acct, "alice"), role=Role.ADMIN),
     )
-    assert alice_settings.resource_uri == "viking://user/resources/admin"
+    assert alice_settings.resource_uri == "viking://user/alice/resources/admin"
 
     resp = await lightweight_admin_client.post(
         f"/api/v1/admin/accounts/{acct}/users",
@@ -315,7 +332,129 @@ async def test_create_user_paths_accept_initial_user_config(
         viking_fs,
         RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER),
     )
-    assert bob_settings.resource_uri == "viking://user/resources/bob"
+    assert bob_settings.resource_uri == "viking://user/bob/resources/bob"
+
+
+async def test_user_memory_policy_can_be_initialized_and_hot_updated(
+    lightweight_admin_client: httpx.AsyncClient,
+    lightweight_admin_app: FastAPI,
+):
+    acct = _uid()
+    create_account = await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    assert create_account.status_code == 200, create_account.text
+
+    create_user = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={
+            "user_id": "bob",
+            "role": "user",
+            "user_config": {"memory_policy": {"memory_types": ["profile"]}},
+        },
+        headers=root_headers(),
+    )
+    assert create_user.status_code == 200, create_user.text
+
+    get_settings = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/users/bob/settings",
+        headers=root_headers(),
+    )
+    assert get_settings.status_code == 200, get_settings.text
+    assert get_settings.json()["result"]["memory_policy"] == {
+        "self": {"enabled": True},
+        "peer": {"enabled": True},
+        "memory_types": ["profile"],
+    }
+
+    patch_settings = await lightweight_admin_client.patch(
+        f"/api/v1/admin/accounts/{acct}/users/bob/settings",
+        json={"memory_policy": {"memory_types": ["experiences"]}},
+        headers=root_headers(),
+    )
+    assert patch_settings.status_code == 200, patch_settings.text
+    memory_policy = patch_settings.json()["result"]["memory_policy"]
+    assert memory_policy["memory_types"] == [
+        "cases",
+        "experiences",
+        "trajectories",
+    ]
+
+    viking_fs = lightweight_admin_app.state.fake_service.viking_fs
+    persisted = await read_user_config(
+        viking_fs,
+        RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER),
+    )
+    assert persisted.memory_policy["memory_types"] == [
+        "cases",
+        "experiences",
+        "trajectories",
+    ]
+    user_ctx = RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER)
+    backup = json.loads(viking_fs.files[user_config_backup_uri(user_ctx)])
+    assert backup["memory_policy"]["memory_types"] == ["profile"]
+
+    writes_before_noop = len(viking_fs.writes)
+    noop_patch = await lightweight_admin_client.patch(
+        f"/api/v1/admin/accounts/{acct}/users/bob/settings",
+        json={"memory_policy": persisted.memory_policy},
+        headers=root_headers(),
+    )
+    assert noop_patch.status_code == 200, noop_patch.text
+    assert len(viking_fs.writes) == writes_before_noop
+
+    lightweight_admin_app.state.config.user_config_defaults = UserConfig(
+        memory_policy={"memory_types": ["events"]}
+    )
+    reset_settings = await lightweight_admin_client.patch(
+        f"/api/v1/admin/accounts/{acct}/users/bob/settings",
+        json={"memory_policy": None},
+        headers=root_headers(),
+    )
+    assert reset_settings.status_code == 200, reset_settings.text
+    assert reset_settings.json()["result"]["memory_policy"] == {
+        "self": {"enabled": True},
+        "peer": {"enabled": True},
+        "memory_types": ["events"],
+    }
+
+    persisted = await read_user_config(viking_fs, user_ctx)
+    assert persisted.memory_policy is None
+    backup = json.loads(viking_fs.files[user_config_backup_uri(user_ctx)])
+    assert backup["memory_policy"]["memory_types"] == [
+        "cases",
+        "experiences",
+        "trajectories",
+    ]
+
+
+async def test_user_memory_policy_uses_server_default_without_user_override(
+    lightweight_admin_client: httpx.AsyncClient,
+    lightweight_admin_app: FastAPI,
+):
+    acct = _uid()
+    lightweight_admin_app.state.config.user_config_defaults = UserConfig(
+        memory_policy={"memory_types": ["profile"]}
+    )
+    create_account = await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    assert create_account.status_code == 200, create_account.text
+
+    get_settings = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/users/alice/settings",
+        headers=root_headers(),
+    )
+    assert get_settings.status_code == 200, get_settings.text
+    assert get_settings.json()["result"]["memory_policy"] == {
+        "self": {"enabled": True},
+        "peer": {"enabled": True},
+        "memory_types": ["profile"],
+    }
 
 
 async def test_create_user_paths_ignore_deprecated_agent_evolution_config(
@@ -629,8 +768,12 @@ async def test_list_users(admin_client: httpx.AsyncClient):
     assert user_ids == {"alice", "bob"}
 
 
-async def test_remove_user(admin_client: httpx.AsyncClient):
-    """ROOT can remove a user."""
+async def test_remove_user(
+    admin_client: httpx.AsyncClient,
+    admin_service: OpenVikingService,
+    admin_app: FastAPI,
+):
+    """Deletion revokes the user and removes only their private data, uploads, and tasks."""
     acct = _uid()
     await admin_client.post(
         "/api/v1/admin/accounts",
@@ -643,18 +786,57 @@ async def test_remove_user(admin_client: httpx.AsyncClient):
         headers=root_headers(),
     )
     bob_key = resp.json()["result"]["user_key"]
-
+    bob_ctx = RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER)
+    private_uri = "viking://user/bob/memories/private.md"
+    await admin_service.viking_fs.write_file(private_uri, "private", ctx=bob_ctx)
+    alice_upload_uri = "viking://upload/1800000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    bob_upload_uri = "viking://upload/1800000000000-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    upload_ctx = RequestContext(user=UserIdentifier(acct, "alice"), role=Role.ROOT)
+    for upload_uri, user_id in ((alice_upload_uri, "alice"), (bob_upload_uri, "bob")):
+        await admin_service.viking_fs.write_file(
+            f"{upload_uri}/meta",
+            json.dumps({"account": acct, "user": user_id}),
+            ctx=upload_ctx,
+        )
+    bob_task = await get_task_tracker().create(
+        "session_commit",
+        resource_id="bob-session",
+        account_id=acct,
+        user_id="bob",
+    )
     resp = await admin_client.delete(
         f"/api/v1/admin/accounts/{acct}/users/bob", headers=root_headers()
     )
-    assert resp.status_code == 200
+    assert resp.status_code == 202
+    task_id = resp.json()["result"]["task_id"]
 
-    # Bob's key should be invalid now
+    # The fence invalidates Bob before background cleanup finishes.
     resp = await admin_client.get(
         "/api/v1/fs/ls?uri=viking://",
         headers={"X-API-Key": bob_key},
     )
     assert resp.status_code == 401
+
+    deletion_task = await _wait_for_task(admin_client, task_id)
+    assert deletion_task["status"] == "completed"
+    assert not await admin_service.viking_fs.exists(private_uri, ctx=bob_ctx)
+    assert not await admin_service.viking_fs.exists(bob_upload_uri, ctx=upload_ctx)
+    assert await admin_service.viking_fs.exists(alice_upload_uri, ctx=upload_ctx)
+    assert not admin_app.state.api_key_manager.has_user(acct, "bob")
+    assert (
+        await get_task_tracker().get(
+            bob_task.task_id,
+            account_id=acct,
+            user_id="bob",
+        )
+        is None
+    )
+
+    missing = await admin_client.delete(
+        f"/api/v1/admin/accounts/{acct}/users/bob",
+        headers=root_headers(),
+    )
+    assert missing.status_code == 404
 
 
 # ---- Role management ----
@@ -1192,7 +1374,7 @@ async def test_legacy_cleanup_removes_only_legacy_namespaces(
     )
 
 
-async def test_legacy_agent_and_session_uri_reads_are_read_only(
+async def test_legacy_agent_uri_is_read_only_and_session_storage_uses_canonical_uri(
     admin_service: OpenVikingService,
 ):
     """Old agent/session URIs remain readable but not mutable."""
@@ -1207,6 +1389,11 @@ async def test_legacy_agent_and_session_uri_reads_are_read_only(
         "/local/default/session/old-session/messages.jsonl",
         '{"role":"user"}\n',
     )
+    await _agfs_write(
+        admin_service,
+        "/local/default/session/old-session/.meta.json",
+        '{"created_by_user_id":"admin_user"}',
+    )
 
     assert (
         await admin_service.viking_fs.read_file(
@@ -1217,7 +1404,7 @@ async def test_legacy_agent_and_session_uri_reads_are_read_only(
     )
     assert (
         await admin_service.viking_fs.read_file(
-            "viking://session/old-session/messages.jsonl",
+            "viking://user/admin_user/sessions/old-session/messages.jsonl",
             ctx=ctx,
         )
         == '{"role":"user"}\n'
@@ -1228,8 +1415,6 @@ async def test_legacy_agent_and_session_uri_reads_are_read_only(
             "blocked",
             ctx=ctx,
         )
-    with pytest.raises(PermissionDeniedError):
-        await admin_service.viking_fs.mkdir("viking://session/new-session", ctx=ctx)
 
 
 @pytest_asyncio.fixture(scope="function")

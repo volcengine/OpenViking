@@ -54,7 +54,7 @@ interface OVConfig {
   recallBudget: number;          // Max tokens for <relevant-memories> block (default: 2000)
   recallMaxContentChars: number; // Max chars per recall result before truncation (default: 500)
   recallPreferAbstract: boolean; // Prefer abstract/overview over full content (default: true)
-  recallLimit: number;          // Max results after dedup, before budget filtering (default: 6)
+  recallLimit: number;          // Legacy input scaled into six coding quotas (default: 10)
   recallScoreThreshold: number;  // Min relevance score for recall results (default: 0.35)
   recallMinQueryLength: number;  // Skip recall for queries shorter than this (default: 3)
   profileBudget: number;        // Max tokens for user profile injection at session start (default: 10000)
@@ -73,6 +73,10 @@ interface OVConfig {
   logLevel: "silent" | "error" | "info";  // default: "error"
 }
 ```
+
+`recallLimit` is not a final result cap. Explicit values from 1 through 5 yield
+an effective total quota of 6 because every coding category keeps one slot.
+Callers that require exact category ceilings should use Context `quotas`.
 
 Config resolution: `config.json` → env vars (`OPENVIKING_URL`, `OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, `OPENVIKING_AGENT_ID`, etc.) → defaults. Follows the Claude Code plugin's priority chain.
 
@@ -228,11 +232,11 @@ Synchronous recall that runs on every user prompt, injecting relevant OV context
 
 1. Extract query text from the user's prompt (plain text, no tool calls/images)
 2. **Short-circuit**: if query length < `recallMinQueryLength` (default 3), skip recall — queries like "y", "ok", "go" don't carry enough signal for useful retrieval (from Claude Code plugin)
-3. **Dual-scope parallel search**: two concurrent `client.find()` calls via `Promise.all`. Current-user shorthand URIs are resolved against the authenticated user:
-   - `viking://user/memories` → resolved to `viking://user/<space>/memories` → user's personal memories
-   - `viking://user/skills` → resolved to `viking://user/<space>/skills` → user's installed Skill definitions
-   
-   Resources are explicitly excluded from automatic recall (cross-namespace leakage prevention — resources can be searched on demand via `viking_search` with `scope`). Per-source limit: `max(recallLimit * 2, 8)` = up to 12 candidates per source (24 total before filtering).
+3. **Server-side context assembly**: call `/api/v1/search/search` with
+   `mode="context"` and `purpose="coding"`. The server applies the six-domain
+   preset (`events/entities/preferences/experiences/resources/skills`), ownership
+   scopes, budgeting and dedup. On older servers the extension falls back to
+   `/recall`, then to the legacy memory/skill `find` path.
 4. **Query profiling**: analyze the query for intent signals before ranking (from Claude Code plugin):
    ```typescript
    function buildQueryProfile(query: string): QueryProfile {
@@ -887,7 +891,6 @@ Default: `~/.pi/agent/extensions/openviking/config.json`
   "recallBudget": 2000,
   "recallMaxContentChars": 500,
   "recallPreferAbstract": true,
-  "recallLimit": 6,
   "recallScoreThreshold": 0.35,
   "recallMinQueryLength": 3,
   "profileBudget": 10000,

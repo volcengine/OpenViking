@@ -9,6 +9,7 @@ import { sendSessionMessages } from "./batch-send.mjs";
 import { enqueue, replayPending } from "./pending-queue.mjs";
 import { buildProfileBlock } from "./profile-inject.mjs";
 import { buildRecallBlock } from "./recall-core.mjs";
+import { isRetryableFailure } from "./retryable.mjs";
 import { deriveHarnessSessionId, isBypassed } from "./session-model.mjs";
 import { resolveEffectivePeerId } from "./workspace-peer.mjs";
 
@@ -29,6 +30,10 @@ function envNumber(name, fallback, minimum = 0) {
 
 function safePart(value) {
   return String(value || "unknown").replace(/[^A-Za-z0-9._-]/g, "-");
+}
+
+function responseTraceId(body) {
+  return body?.result?.trace_id || body?.error?.trace_id || body?.trace_id || undefined;
 }
 
 export function stableHash(...values) {
@@ -52,7 +57,8 @@ export function loadAgentHookConfig(clientId) {
     bypassSession: envBool("OPENVIKING_BYPASS_SESSION", false),
     bypassSessionPatterns: String(process.env.OPENVIKING_BYPASS_SESSION_PATTERNS || "")
       .split(",").map((item) => item.trim()).filter(Boolean),
-    recallLimit: envNumber("OPENVIKING_RECALL_LIMIT", 6, 1),
+    recallLimit: envNumber("OPENVIKING_RECALL_LIMIT", 10, 1),
+    recallLimitConfigured: Boolean(process.env.OPENVIKING_RECALL_LIMIT),
     recallTokenBudget: envNumber("OPENVIKING_RECALL_TOKEN_BUDGET", 2000, 200),
     recallMaxContentChars: envNumber("OPENVIKING_RECALL_MAX_CONTENT_CHARS", 500, 50),
     scoreThreshold: envNumber("OPENVIKING_SCORE_THRESHOLD", 0.35, 0),
@@ -61,6 +67,7 @@ export function loadAgentHookConfig(clientId) {
     timeoutMs: envNumber("OPENVIKING_TIMEOUT_MS", 15000, 1000),
     profileTokenBudget: envNumber("OPENVIKING_PROFILE_TOKEN_BUDGET", 6000, 500),
     commitTurnThreshold: envNumber("OPENVIKING_COMMIT_TURN_THRESHOLD", 8, 1),
+    writePathAsync: envBool("OPENVIKING_WRITE_PATH_ASYNC", true),
     debug: envBool("OPENVIKING_DEBUG", false),
     debugLogPath,
   };
@@ -168,7 +175,8 @@ export function makeAgentFetchJSON(cfg, cwd = process.cwd()) {
   const effectivePeer = resolveEffectivePeerId({ cfg, cwd });
   const fetchJSON = async (path, init = {}, options = {}) => {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), cfg.timeoutMs);
+    const timeoutMs = Math.max(1000, Number(options.timeoutMs) || cfg.timeoutMs);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const headers = { "Content-Type": "application/json", ...(init.headers || {}) };
       if (cfg.apiKey) headers.Authorization = `Bearer ${cfg.apiKey}`;
@@ -179,10 +187,11 @@ export function makeAgentFetchJSON(cfg, cwd = process.cwd()) {
       if (cfg.userAgent) headers["User-Agent"] = cfg.userAgent;
       const response = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
       const body = await response.json().catch(() => ({}));
+      const traceId = responseTraceId(body);
       if (!response.ok || body.status === "error") {
-        return { ok: false, status: response.status, error: body.error || body };
+        return { ok: false, status: response.status, error: body.error || body, traceId };
       }
-      return { ok: true, result: body.result ?? body };
+      return { ok: true, result: body.result ?? body, traceId };
     } catch (error) {
       return { ok: false, status: 0, error: { message: error?.message || String(error) } };
     } finally {
@@ -192,17 +201,12 @@ export function makeAgentFetchJSON(cfg, cwd = process.cwd()) {
   return { fetchJSON, effectivePeer };
 }
 
-function retryable(result) {
-  const status = Number(result?.status || 0);
-  return !status || status === 408 || status === 429 || status >= 500;
-}
-
 export async function addAgentMessage(fetchJSON, sessionId, payload) {
   const result = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`, {
     method: "POST",
     body: JSON.stringify(payload),
   });
-  if (!result.ok && retryable(result)) await enqueue("addMessage", sessionId, payload);
+  if (!result.ok && isRetryableFailure(result)) await enqueue("addMessage", sessionId, payload);
   return result;
 }
 
@@ -210,12 +214,24 @@ export async function addAgentMessages(fetchJSON, sessionId, payloads) {
   return sendSessionMessages(fetchJSON, sessionId, payloads, { enqueueOnRetryable: true });
 }
 
-export async function commitAgentSession(fetchJSON, sessionId) {
+export async function commitAgentSession(fetchJSON, sessionId, log = () => {}) {
   const result = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`, {
     method: "POST",
     body: "{}",
   });
-  if (!result.ok && retryable(result)) await enqueue("commitSession", sessionId, {});
+  let queued = false;
+  if (!result.ok && isRetryableFailure(result)) {
+    const pending = await enqueue("commitSession", sessionId, {});
+    queued = Boolean(pending.ok);
+  }
+  log("commit", {
+    sessionId,
+    ok: result.ok,
+    status: result.result?.status || result.status,
+    trace_id: result.traceId || result.result?.trace_id,
+    queued,
+    error: result.ok ? undefined : result.error?.message || result.error?.code,
+  });
   return result;
 }
 
@@ -223,10 +239,16 @@ export async function replayAgentPending(fetchJSON, log = () => {}) {
   return replayPending(fetchJSON, log);
 }
 
-export async function recallForPrompt(fetchJSON, cfg, prompt, cwd, log = () => {}) {
+export async function recallForPrompt(fetchJSON, cfg, prompt, cwd, log = () => {}, options = {}) {
   if (!cfg.autoRecall || !String(prompt || "").trim()) return null;
   const peer = resolveEffectivePeerId({ cfg, cwd });
-  return buildRecallBlock(fetchJSON, cfg, prompt, { actorPeerId: peer.peerId, log });
+  return buildRecallBlock(fetchJSON, cfg, prompt, {
+    actorPeerId: peer.peerId,
+    // Passing the OV session id is what turns on server-side query expansion
+    // and the cross-turn dedup ledger for these thin harnesses.
+    sessionId: options.sessionId || "",
+    log,
+  });
 }
 
 export async function buildAgentProfile(fetchJSON, cfg, cwd) {

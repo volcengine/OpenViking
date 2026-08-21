@@ -52,9 +52,7 @@ class _AsyncBytesStream(httpx.AsyncByteStream):
 
 
 class TestOpenAPIAuth:
-    def test_compile_routes_use_existing_principal_resolver(
-        self, message_bus, temp_workspace
-    ):
+    def test_compile_routes_use_existing_principal_resolver(self, message_bus, temp_workspace):
         class FakeCompileService:
             def __init__(self):
                 self.scope = None
@@ -73,6 +71,13 @@ class TestOpenAPIAuth:
                     "created_at": "2026-07-20T00:00:00Z",
                     "updated_at": "2026-07-20T00:00:01Z",
                 }
+
+            async def cancel_task(self, task_id, *, principal_scope):
+                task = await self.get_task(task_id, principal_scope=principal_scope)
+                if task is not None:
+                    task["status"] = "cancelled"
+                    task["stage"] = "cancelled"
+                return task
 
         service = FakeCompileService()
         channel = OpenAPIChannel(
@@ -94,6 +99,10 @@ class TestOpenAPIAuth:
         assert created.json()["task_id"] == "cmp_test"
         assert client.get("/bot/v1/compile/cmp_test").status_code == 200
         assert client.get("/bot/v1/compile/cmp_other").status_code == 404
+        cancelled = client.post("/bot/v1/compile/cmp_test/cancel")
+        assert cancelled.status_code == 200
+        assert cancelled.json()["status"] == "cancelled"
+        assert client.post("/bot/v1/compile/cmp_other/cancel").status_code == 404
 
     def test_dev_compile_with_forwarded_connection_uses_same_principal_for_status(
         self, message_bus, temp_workspace, monkeypatch

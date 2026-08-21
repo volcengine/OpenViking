@@ -1,25 +1,30 @@
-## 安装 Cursor 集成
-
-需要 macOS/Linux 和 Node.js 18+。以下命令会一次完成 Hook、MCP、Rule 和 Skill 安装：
+## 安装
 
 ```bash
 bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness cursor --dist tos
 ```
 
-安装器询问连接方式时，请选择 **火山引擎 OpenViking 云服务** 并填写 API Key。只有本机已运行 OpenViking 服务时才选择 **自建 / 本地**。
+选 **火山引擎 OpenViking 云服务**，把本页 API Key 贴进去。
+
+API Key：复制页面中展示的 API Key，并在安装器提示时粘贴。
+
+{{OPENVIKING_API_KEY_BLOCK}}
 
 ## 验证
 
-1. 重启 Cursor 并新建 Agent 会话。
-2. 在 **Cursor Settings → Hooks** 中确认生命周期 Hook 执行了 `cursor-hook.mjs`、URI 保护 Hook 执行了 `uri-guard.mjs`，且 prompt Hook 返回 `additional_context`。
-3. 在 **Cursor Settings → Tools & MCPs** 中确认 `openviking` 已连接。
-
-完整说明见 [Cursor 接入文档](https://docs.openviking.ai/zh/agent-integrations/12-cursor)。
+1. 重启 Cursor，新建 Agent 会话。
+2. **Cursor Settings → Hooks**：生命周期 Hook 执行 `cursor-hook.mjs`。
+3. **Cursor Settings → Tools & MCPs**：`openviking` 已连接。
 
 ## 故障排查
 
 | 问题 | 处理 |
 |---|---|
-| 安装后没有触发 Hook | 完全退出并重新启动 Cursor，然后新建 Agent 会话。 |
-| 出现重复召回 | 检查 Execution Log 是否导入了旧 Claude OpenViking Hook，并按安装器提示升级或移除旧插件。 |
-| 连接或鉴权失败 | 检查 `~/.openviking/ovcli.conf`，然后重启 Cursor。 |
+| Hook 没跑 | 完全退出 Cursor，重启，再建会话 |
+| 连接 / 鉴权失败 | 检查 `~/.openviking/ovcli.conf`，重启 Cursor |
+| 需要日志 | `OPENVIKING_DEBUG=1`，看 `~/.openviking/logs/cursor-hooks.log` |
+
+## 参考
+
+- 手动配置文档：[Cursor](https://docs.openviking.net/zh/agent-integrations/12-cursor)
+- 源码：[examples/cursor-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/cursor-memory-plugin)

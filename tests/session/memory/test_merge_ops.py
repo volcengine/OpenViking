@@ -4,12 +4,16 @@
 Tests for MergeOp architecture - type-safe merge operations.
 """
 
+import asyncio
+import threading
+
 import pytest
 
 from openviking.session.memory.dataclass import (
     MemoryField,
 )
 from openviking.session.memory.merge_op import (
+    DeleteBlock,
     ImmutableOp,
     MergeOp,
     MergeOpFactory,
@@ -76,37 +80,64 @@ class TestPatchOp:
         assert "Replace" in desc
         assert "score" in desc
 
-    def test_apply(self):
+    @pytest.mark.asyncio
+    async def test_apply(self):
         """PatchOp apply should just return the patch value."""
         op_str = PatchOp(FieldType.STRING)
-        assert op_str.apply("old", "new") == "new"
+        assert await op_str.apply("old", "new") == "new"
 
         op_int = PatchOp(FieldType.INT64)
-        assert op_int.apply(100, 200) == 200
+        assert await op_int.apply(100, 200) == 200
 
-    def test_apply_dict_patch(self):
-        """Dict-form string patches should be converted and applied."""
+    @pytest.mark.asyncio
+    async def test_apply_dict_patch(self, monkeypatch):
+        """Dict-form string patches should be applied without blocking the event loop."""
+        from openviking.session.memory.merge_op import patch_handler
+
         op = PatchOp(FieldType.STRING)
+        original_apply = patch_handler.apply_str_patch
+        loop_progressed = threading.Event()
+        merge_observed_progress = None
+
+        def apply_and_observe(current_value, patch_value):
+            nonlocal merge_observed_progress
+            merge_observed_progress = loop_progressed.wait(timeout=0.5)
+            return original_apply(current_value, patch_value)
+
+        monkeypatch.setattr(patch_handler, "apply_str_patch", apply_and_observe)
         patch = {"blocks": [{"search": "hello world", "replace": "hello there"}]}
 
-        assert op.apply("hello world", patch) == "hello there"
+        merge_task = asyncio.create_task(op.apply("hello world", patch))
+        await asyncio.sleep(0)
+        loop_progressed.set()
 
-    def test_apply_invalid_dict_patch_falls_back_to_string_replacement(self):
+        assert await merge_task == "hello there"
+        assert merge_observed_progress is True
+
+    @pytest.mark.asyncio
+    async def test_apply_invalid_dict_patch_falls_back_to_string_replacement(self):
         """Invalid dict-form patches should preserve the compatibility fallback."""
         op = PatchOp(FieldType.STRING)
         patch = {"blocks": [{"search": "hello world"}]}
 
-        assert op.apply("hello world", patch) == str(patch)
+        assert await op.apply("hello world", patch) == str(patch)
 
-    def test_apply_dict_patch_propagates_patch_parse_error(self):
+    @pytest.mark.asyncio
+    async def test_apply_dict_patch_propagates_patch_parse_error(self):
         """Patch errors raised after dict conversion must reach the caller."""
         op = PatchOp(FieldType.STRING)
-        patch = {
-            "blocks": [{"search": "status: pending", "replace": "status: done"}]
-        }
+        patch = {"blocks": [{"search": "status: pending", "replace": "status: done"}]}
 
         with pytest.raises(PatchParseError, match="matched 2 locations"):
-            op.apply("status: pending\nstatus: pending", patch)
+            await op.apply("status: pending\nstatus: pending", patch)
+
+    @pytest.mark.asyncio
+    async def test_apply_dict_delete_patch(self):
+        """Dict-form DELETE blocks should remove complete lines."""
+        op = PatchOp(FieldType.STRING)
+        patch = {"blocks": [{"delete": "line 2\nline 3"}]}
+
+        assert await op.apply("line 1\nline 2\nline 3\nline 4", patch) == "line 1\nline 4"
 
 
 class TestSumOp:
@@ -124,30 +155,35 @@ class TestSumOp:
         desc = op.get_output_schema_description("打分合")
         assert desc == "add for '打分合'"
 
-    def test_apply_both_int(self):
+    @pytest.mark.asyncio
+    async def test_apply_both_int(self):
         """Sum of two ints."""
         op = SumOp()
-        assert op.apply(10, 5) == 15
+        assert await op.apply(10, 5) == 15
 
-    def test_apply_both_float(self):
+    @pytest.mark.asyncio
+    async def test_apply_both_float(self):
         """Sum of two floats."""
         op = SumOp()
-        assert op.apply(10.5, 3.5) == 14.0
+        assert await op.apply(10.5, 3.5) == 14.0
 
-    def test_apply_mixed(self):
+    @pytest.mark.asyncio
+    async def test_apply_mixed(self):
         """Sum of int and float."""
         op = SumOp()
-        assert op.apply(10, 3.5) == 13.5
+        assert await op.apply(10, 3.5) == 13.5
 
-    def test_apply_current_none(self):
+    @pytest.mark.asyncio
+    async def test_apply_current_none(self):
         """Current is None should return patch."""
         op = SumOp()
-        assert op.apply(None, 10) == 10
+        assert await op.apply(None, 10) == 10
 
-    def test_apply_invalid_values(self):
+    @pytest.mark.asyncio
+    async def test_apply_invalid_values(self):
         """Invalid values should keep current."""
         op = SumOp()
-        assert op.apply("not a number", 10) == "not a number"
+        assert await op.apply("not a number", 10) == "not a number"
 
 
 class TestImmutableOp:
@@ -167,15 +203,17 @@ class TestImmutableOp:
         assert "name" in desc
         assert "can only be set once" in desc
 
-    def test_apply_current_none(self):
+    @pytest.mark.asyncio
+    async def test_apply_current_none(self):
         """Current is None should set to patch."""
         op = ImmutableOp()
-        assert op.apply(None, "new value") == "new value"
+        assert await op.apply(None, "new value") == "new value"
 
-    def test_apply_current_exists(self):
+    @pytest.mark.asyncio
+    async def test_apply_current_exists(self):
         """Current exists should keep current."""
         op = ImmutableOp()
-        assert op.apply("existing", "new value") == "existing"
+        assert await op.apply("existing", "new value") == "existing"
 
 
 class TestMergeOpFactory:
@@ -255,6 +293,29 @@ class TestSearchReplaceBlock:
         assert description is not None
         assert "line_number<TAB>" in description
         assert "Never include" in description
+        assert "Use a DELETE block for complete-line deletion" in description
+
+
+class TestDeleteBlock:
+    """Tests for DeleteBlock."""
+
+    def test_create_basic(self):
+        block = DeleteBlock(delete="line 2\nline 3")
+
+        assert block.delete == "line 2\nline 3"
+        assert block.search == "line 2\nline 3"
+        assert block.replace == ""
+
+    def test_delete_description_requires_complete_contiguous_lines(self):
+        description = DeleteBlock.model_fields["delete"].description
+
+        assert description is not None
+        assert "complete, contiguous lines" in description
+        assert "unique" in description
+        assert "line_number<TAB>" in description
+        assert "other content must remain" in description
+        assert "delete_ids deletes the whole item" in description
+        assert "non-contiguous" in description
 
 
 class TestStrPatch:
@@ -271,6 +332,34 @@ class TestStrPatch:
         block2 = SearchReplaceBlock(search="c", replace="d")
         patch = StrPatch(blocks=[block1, block2])
         assert len(patch.blocks) == 2
+
+    def test_create_with_mixed_blocks(self):
+        patch = StrPatch(
+            blocks=[
+                SearchReplaceBlock(search="a", replace="A"),
+                DeleteBlock(delete="b"),
+            ]
+        )
+
+        assert isinstance(patch.blocks[0], SearchReplaceBlock)
+        assert isinstance(patch.blocks[1], DeleteBlock)
+
+    def test_parse_delete_block_from_json_shape(self):
+        patch = StrPatch.model_validate({"blocks": [{"delete": "line 2"}]})
+
+        assert patch.blocks == [DeleteBlock(delete="line 2")]
+
+    def test_json_schema_exposes_delete_block(self):
+        schema = StrPatch.model_json_schema()
+
+        assert schema["$defs"]["DeleteBlock"]["required"] == ["delete"]
+        block_refs = {
+            option["$ref"] for option in schema["properties"]["blocks"]["items"]["anyOf"]
+        }
+        assert block_refs == {
+            "#/$defs/SearchReplaceBlock",
+            "#/$defs/DeleteBlock",
+        }
 
 
 # ============================================================================
@@ -295,6 +384,34 @@ class TestApplyStrPatch:
         result = apply_str_patch(original, patch)
         # Directly test apply_str_patch
         assert result == "hello there"
+
+    @pytest.mark.parametrize(
+        ("original", "delete", "expected"),
+        [
+            ("line 1\nline 2\nline 3", "line 2", "line 1\nline 3"),
+            ("line 1\nline 2\nline 3\nline 4", "line 2\nline 3", "line 1\nline 4"),
+            ("line 1\nline 2\nline 3", "line 2\nline 3", "line 1"),
+            ("line 1\nline 2", "line 1", "line 2"),
+            ("line 1", "line 1", ""),
+            ("line 1\r\nline 2\r\nline 3", "line 2", "line 1\r\nline 3"),
+        ],
+    )
+    def test_delete_complete_lines(self, original, delete, expected):
+        patch = StrPatch(blocks=[DeleteBlock(delete=delete)])
+
+        assert apply_str_patch(original, patch) == expected
+
+    def test_delete_rejects_partial_line(self):
+        patch = StrPatch(blocks=[DeleteBlock(delete="world")])
+
+        with pytest.raises(PatchParseError, match="complete lines"):
+            apply_str_patch("hello world", patch)
+
+    def test_duplicate_delete_is_rejected(self):
+        patch = StrPatch(blocks=[DeleteBlock(delete="duplicate")])
+
+        with pytest.raises(PatchParseError, match="matched 2 locations"):
+            apply_str_patch("duplicate\nduplicate", patch)
 
     def test_duplicate_search_is_rejected(self):
         """Ambiguous SEARCH content must fail instead of replacing globally."""

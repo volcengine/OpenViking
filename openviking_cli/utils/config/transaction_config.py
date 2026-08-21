@@ -6,20 +6,19 @@ from pydantic import BaseModel, Field
 class TransactionConfig(BaseModel):
     """Deprecated compatibility settings for legacy transaction fields.
 
-    Prefer ``storage.agfs.pathlock`` for active PathLock configuration.
+    Prefer ``storage.agfs.pathlock`` only for active expiry configuration.
     """
 
     lock_timeout: float = Field(
         default=0.0,
         description=(
             "Deprecated compatibility field. "
-            "Use storage.agfs.pathlock.lock_timeout_secs instead. "
-            "When the new field is unset, this value is mapped to it."
+            "Ignored by the current implementation; runtime wait timeout is fixed at 0.0 seconds."
         ),
     )
 
     lock_expire: float = Field(
-        default=1800.0,
+        default=30.0,
         description=(
             "Deprecated compatibility field. "
             "Use storage.agfs.pathlock.lock_expire_secs instead. "

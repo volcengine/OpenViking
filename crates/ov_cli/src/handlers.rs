@@ -341,34 +341,6 @@ pub async fn handle_add_skill(
     .await
 }
 
-pub async fn handle_relations(uri: String, ctx: CliContext) -> Result<()> {
-    let client = ctx.get_client();
-    commands::relations::list_relations(&client, &uri, ctx.output_format, ctx.compact).await
-}
-
-pub async fn handle_link(
-    from_uri: String,
-    to_uris: Vec<String>,
-    reason: String,
-    ctx: CliContext,
-) -> Result<()> {
-    let client = ctx.get_client();
-    commands::relations::link(
-        &client,
-        &from_uri,
-        &to_uris,
-        &reason,
-        ctx.output_format,
-        ctx.compact,
-    )
-    .await
-}
-
-pub async fn handle_unlink(from_uri: String, to_uri: String, ctx: CliContext) -> Result<()> {
-    let client = ctx.get_client();
-    commands::relations::unlink(&client, &from_uri, &to_uri, ctx.output_format, ctx.compact).await
-}
-
 pub async fn handle_export(
     uri: String,
     to: String,
@@ -506,8 +478,22 @@ use crate::SessionCommands;
 pub async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     match cmd {
-        SessionCommands::New => {
-            commands::session::new_session(&client, ctx.output_format, ctx.compact).await
+        SessionCommands::New {
+            session_id,
+            event_tags,
+            auto_commit_policy_json,
+            no_auto_commit,
+        } => {
+            commands::session::new_session(
+                &client,
+                session_id.as_deref(),
+                &event_tags,
+                auto_commit_policy_json.as_deref(),
+                no_auto_commit,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
         }
         SessionCommands::List => {
             commands::session::list_sessions(&client, ctx.output_format, ctx.compact).await
@@ -576,9 +562,41 @@ pub async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()>
             )
             .await
         }
-        SessionCommands::Commit { session_id } => {
-            commands::session::commit_session(&client, &session_id, ctx.output_format, ctx.compact)
+        SessionCommands::Config { action } => match action {
+            crate::SessionConfigCommands::Set {
+                session_id,
+                event_tags,
+                no_event_tags,
+                auto_commit_policy_json,
+                no_auto_commit,
+            } => {
+                commands::session::set_session_config(
+                    &client,
+                    &session_id,
+                    &event_tags,
+                    no_event_tags,
+                    auto_commit_policy_json.as_deref(),
+                    no_auto_commit,
+                    ctx.output_format,
+                    ctx.compact,
+                )
                 .await
+            }
+        },
+        SessionCommands::Commit {
+            session_id,
+            event_tags,
+            no_event_tags,
+        } => {
+            commands::session::commit_session(
+                &client,
+                &session_id,
+                &event_tags,
+                no_event_tags,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
         }
     }
 }
@@ -1285,6 +1303,7 @@ pub async fn handle_write(
     mode: String,
     wait: bool,
     timeout: Option<f64>,
+    processing_mode: String,
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
@@ -1305,6 +1324,7 @@ pub async fn handle_write(
         &mode,
         wait,
         timeout,
+        &processing_mode,
         ctx.output_format,
         ctx.compact,
     )
@@ -1336,6 +1356,8 @@ pub async fn handle_reindex(
     mode: String,
     wait: bool,
     dry_run: bool,
+    tags: Vec<String>,
+    tag_mode: String,
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
@@ -1345,6 +1367,8 @@ pub async fn handle_reindex(
         &mode,
         wait,
         dry_run,
+        tags,
+        &tag_mode,
         ctx.output_format,
         ctx.compact,
     )

@@ -92,3 +92,68 @@ class TestFindResultProvenance:
         assert d_without["resources"] == d_with["resources"]
         assert d_without["skills"] == d_with["skills"]
         assert d_without["total"] == d_with["total"]
+
+
+class TestMatchedContextSearchTags:
+    def test_context_to_dict_exposes_search_tags_as_tags(self):
+        ctx = MatchedContext(
+            uri="viking://resources/docs/arch.md",
+            context_type=ContextType.RESOURCE,
+            level=2,
+            search_tags=["team=infra", "project=viking"],
+        )
+        result = FindResult(memories=[], resources=[ctx], skills=[])
+        d = result.to_dict()
+        assert d["resources"][0]["tags"] == ["team=infra", "project=viking"]
+        assert "search_tags" not in d["resources"][0]
+
+    def test_context_to_dict_defaults_empty_tags(self):
+        ctx = MatchedContext(
+            uri="viking://resources/docs/arch.md",
+            context_type=ContextType.RESOURCE,
+            level=2,
+        )
+        result = FindResult(memories=[], resources=[ctx], skills=[])
+        d = result.to_dict()
+        assert d["resources"][0]["tags"] == []
+
+    def test_context_to_dict_drops_always_empty_fields(self):
+        ctx = MatchedContext(
+            uri="viking://resources/docs/arch.md",
+            context_type=ContextType.RESOURCE,
+            level=2,
+        )
+        result = FindResult(memories=[], resources=[ctx], skills=[])
+        item = result.to_dict()["resources"][0]
+        for dropped in ("category", "match_reason", "overview"):
+            assert dropped not in item
+
+    def test_context_to_dict_keeps_useful_fields(self):
+        ctx = MatchedContext(
+            uri="viking://resources/docs/arch.md",
+            context_type=ContextType.RESOURCE,
+            level=2,
+            abstract="Architecture doc",
+            score=0.5,
+        )
+        result = FindResult(memories=[], resources=[ctx], skills=[])
+        item = result.to_dict()["resources"][0]
+        assert item["uri"] == "viking://resources/docs/arch.md"
+        assert item["context_type"] == "resource"
+        assert item["level"] == 2
+        assert item["score"] == 0.5
+        assert item["abstract"] == "Architecture doc"
+
+    def test_from_dict_round_trips_tags(self):
+        payload = {
+            "resources": [
+                {
+                    "uri": "viking://resources/docs/arch.md",
+                    "context_type": "resource",
+                    "level": 2,
+                    "tags": ["team=infra"],
+                }
+            ]
+        }
+        result = FindResult.from_dict(payload)
+        assert result.resources[0].search_tags == ["team=infra"]

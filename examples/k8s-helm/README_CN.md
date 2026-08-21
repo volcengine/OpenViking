@@ -208,12 +208,12 @@ openviking health
 ### Python 客户端
 
 ```python
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
 # 获取服务端点
 # kubectl get svc openviking
 
-client = ov.OpenViking(url="http://<load-balancer-ip>:1933", api_key="your-key")
+client = SyncHTTPClient(url="http://<load-balancer-ip>:1933", api_key="your-key")
 client.initialize()
 
 # 添加资源

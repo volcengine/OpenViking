@@ -72,6 +72,8 @@ The plugin hooks into the Claude Code lifecycle:
 
 All write operations run asynchronously, ensuring they never block your conversation.
 
+Tool calls and results are captured as dedicated `tool` parts, and `tool_output` is reported verbatim. Truncation is the server's job: output larger than `tool_output_externalization.threshold_chars` (default `20000`) is written to the session's tool-result store, and the part keeps a synopsis stub plus `tool_output_ref`, so the original stays readable through [`/api/v1/sessions/{id}/tool-results`](../api/05-sessions.md#read_tool_result).
+
 <details>
 <summary><b>Configuration</b></summary>
 
@@ -80,13 +82,15 @@ Configuration priority: Environment variables > `ovcli.conf` > `ov.conf` > Built
 | Env Var | Default | Description |
 |---------|---------|-------------|
 | `OPENVIKING_AUTO_RECALL` | `true` | Auto-recall on every user prompt |
-| `OPENVIKING_RECALL_LIMIT` | `6` | Max memories to inject per turn |
-| `OPENVIKING_RECALL_TOKEN_BUDGET` | `2000` | Token budget for inline content |
+| `OPENVIKING_RECALL_LIMIT` | `10` | Legacy width override converted to per-category coding quotas |
+| `OPENVIKING_RECALL_TOKEN_BUDGET` | `2000` | Inline token budget for the final raw-find fallback |
 | `OPENVIKING_AUTO_CAPTURE` | `true` | Auto-capture after each turn |
 | `OPENVIKING_BYPASS_SESSION` | `false` | Skip all hooks for this session |
 | `OPENVIKING_BYPASS_SESSION_PATTERNS` | `""` | CSV glob patterns to auto-bypass |
 | `OPENVIKING_MEMORY_ENABLED` | (auto) | Force on/off |
 | `OPENVIKING_DEBUG` | `false` | Write logs to `~/.openviking/logs/cc-hooks.log` |
+
+If recall latency matters most, see [Low-latency recall](./01-overview.md#low-latency-recall) for the environment-variable and `ovcli.conf` settings that disable query expansion and result compression.
 
 For multi-tenant deployments, configure `OPENVIKING_ACCOUNT` and `OPENVIKING_USER`. The complete list of environment variables is available in the [plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#configuration).
 
@@ -108,6 +112,7 @@ The plugin renders an OpenViking status indicator beneath your Claude Code input
 
 ## See also
 
+- [Capability Reference](./16-capability-reference.md)
 - [Blog: OpenViking in Claude Code / Codex](https://blog.openviking.ai/post/openviking-coding-agent/) — Motivation, architecture overview, and demo
 - [Plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md) — Full environment variable tables, hook details, and architecture diagrams
 - [MCP Clients](./06-mcp-clients.md) — Information on MCP tool parameters and other clients

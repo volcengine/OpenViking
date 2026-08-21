@@ -21,7 +21,7 @@ class EmbeddingQueue(NamedQueue):
         if msg is None:
             logger.warning("Embedding message is None, skipping enqueuing")
             return ""
-        logger.debug(f"Enqueued embedding message: {msg}")
+        logger.debug("Enqueued embedding message: uri=%s", msg.context_data.get("uri", ""))
         return await super().enqueue(msg.to_dict())
 
     async def dequeue(self) -> Optional[EmbeddingMsg]:

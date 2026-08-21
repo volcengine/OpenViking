@@ -64,19 +64,10 @@ class StorageConfig(BaseModel):
     @model_validator(mode="after")
     def resolve_paths(self):
         """Normalize storage paths and map legacy transaction settings into native pathlock config."""
-        if (
-            "lock_timeout" in self.transaction.model_fields_set
-            and "lock_timeout_secs" not in self.agfs.pathlock.model_fields_set
-        ):
-            self.agfs.pathlock.lock_timeout_secs = self.transaction.lock_timeout
+        if "lock_timeout" in self.transaction.model_fields_set:
             logger.warning(
-                "StorageConfig: 'transaction.lock_timeout' is deprecated. "
-                "Mapped to 'storage.agfs.pathlock.lock_timeout_secs'."
-            )
-        elif "lock_timeout" in self.transaction.model_fields_set:
-            logger.warning(
-                "StorageConfig: 'transaction.lock_timeout' is deprecated and ignored because "
-                "'storage.agfs.pathlock.lock_timeout_secs' is set."
+                "StorageConfig: 'transaction.lock_timeout' is deprecated and ignored. "
+                "The runtime wait timeout is fixed at 0.0 seconds."
             )
 
         if (

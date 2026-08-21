@@ -68,6 +68,8 @@ bytes = "1.5"
 
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }
+redis = { version = "1.5.0", features = ["cluster", "r2d2", "sentinel", "tls-rustls-insecure", "tokio-rustls-comp"] }
+r2d2 = "0.8"
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "mysql"], optional = true }
 
 # AWS S3

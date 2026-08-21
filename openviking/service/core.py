@@ -11,27 +11,29 @@ import os
 from typing import TYPE_CHECKING, Any, Optional
 
 from openviking.core.directories import DirectoryInitializer
-from openviking.core.namespace import canonicalize_uri
 from openviking.privacy import UserPrivacyConfigService
+from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
 from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.server.identity import RequestContext, Role
+from openviking.service.agent_evolution_service import AgentEvolutionService
 from openviking.service.debug_service import DebugService
 from openviking.service.fs_service import FSService
+from openviking.service.mineru_preflight import wait_for_mineru_ready
 from openviking.service.pack_service import PackService
-from openviking.service.relation_service import RelationService
 from openviking.service.resource_memory_link_service import ResourceMemoryLinkService
 from openviking.service.resource_service import ResourceService
 from openviking.service.search_service import SearchService
+from openviking.service.session_auto_commit import SessionAutoCommitScheduler
 from openviking.service.session_service import SessionService
 from openviking.service.task_tracker import get_task_tracker, set_task_tracker
 from openviking.session import create_session_compressor
-from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.storage.collection_schemas import init_context_collection
 from openviking.storage.index_consistency import check_index_consistency
 from openviking.storage.queuefs.add_resource_processor import AddResourceProcessor
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
 from openviking.storage.queuefs.session_commit_processor import SessionCommitProcessor
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
+from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.utils.agfs_utils import (
     build_runtime_ragfs_binding_config,
     resolve_queuefs_mount_point,
@@ -43,13 +45,14 @@ from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import OPENVIKING_ENABLE_RECORDER_ENV, get_openviking_config
 from openviking_cli.utils.config.git_config import GitConfig
+from openviking_cli.utils.config.memory_config import SessionAutoCommitConfig
 from openviking_cli.utils.config.open_viking_config import initialize_openviking_config
 from openviking_cli.utils.config.storage_config import StorageConfig
 
 logger = get_logger(__name__)
 
 if TYPE_CHECKING:
-    from openviking.session.compressor_v2 import SessionCompressorV2
+    from openviking.session.compressor_v3 import SessionCompressorV3
 
 
 class OpenVikingService:
@@ -86,24 +89,27 @@ class OpenVikingService:
         self._embedder: Optional[Any] = None
         self._resource_processor: Optional[ResourceProcessor] = None
         self._skill_processor: Optional[SkillProcessor] = None
-        self._session_compressor: Optional["SessionCompressorV2"] = None
-
+        self._session_compressor: Optional["SessionCompressorV3"] = None
         self._directory_initializer: Optional[DirectoryInitializer] = None
+        self._uri_mutation_coordinator = UriMutationCoordinator()
         self._watch_scheduler: Optional[WatchScheduler] = None
+        self._session_auto_commit_scheduler: Optional[SessionAutoCommitScheduler] = None
         self._encryptor: Optional[Any] = None
         self._privacy_config_service: Optional[UserPrivacyConfigService] = None
         self._data_dir_lock_acquired = False
         self._data_dir_lock_path: Optional[str] = None
 
         # Sub-services
-        self._fs_service = FSService()
-        self._relation_service = RelationService()
+        self._fs_service = FSService(
+            uri_mutation_coordinator=self._uri_mutation_coordinator,
+        )
         self._pack_service = PackService()
         self._search_service = SearchService()
         self._resource_memory_link_service = ResourceMemoryLinkService()
         self._resource_service = ResourceService()
         self._session_service = SessionService()
         self._debug_service = DebugService()
+        self._agent_evolution_service = AgentEvolutionService()
 
         # State
         self._initialized = False
@@ -120,8 +126,11 @@ class OpenVikingService:
         # Initialize storage
         self._init_storage(
             config.storage,
-            config.embedding.max_concurrent,
-            config.vlm.max_concurrent,
+            max_concurrent_embedding=config.embedding.max_concurrent,
+            max_concurrent_semantic=config.vlm.max_concurrent,
+            max_concurrent_external_parse=config.queue_workers.external_parse.max_concurrent,
+            max_concurrent_add_resource=config.queue_workers.add_resource.max_concurrent,
+            max_concurrent_session_commit=config.queue_workers.session_commit.max_concurrent,
             binding_config=binding_config,
             git_config=config.git,
         )
@@ -136,7 +145,10 @@ class OpenVikingService:
         self,
         config: StorageConfig,
         max_concurrent_embedding: int = 10,
-        max_concurrent_semantic: int = 64,
+        max_concurrent_semantic: int = 32,
+        max_concurrent_external_parse: int = 4,
+        max_concurrent_add_resource: int = 4,
+        max_concurrent_session_commit: int = 8,
         binding_config: Any = None,
         *,
         git_config: Optional[GitConfig] = None,
@@ -157,6 +169,9 @@ class OpenVikingService:
                 mount_point=queue_mount_point,
                 max_concurrent_embedding=max_concurrent_embedding,
                 max_concurrent_semantic=max_concurrent_semantic,
+                max_concurrent_external_parse=max_concurrent_external_parse,
+                max_concurrent_add_resource=max_concurrent_add_resource,
+                max_concurrent_session_commit=max_concurrent_session_commit,
             )
         else:
             logger.warning("RAGFS client not initialized, skipping queue manager")
@@ -223,7 +238,7 @@ class OpenVikingService:
         return self._vikingdb_manager
 
     @property
-    def session_compressor(self) -> Optional["SessionCompressorV2"]:
+    def session_compressor(self) -> Optional["SessionCompressorV3"]:
         """Get SessionCompressor instance."""
         return self._session_compressor
 
@@ -236,11 +251,6 @@ class OpenVikingService:
     def fs(self) -> FSService:
         """Get FSService instance."""
         return self._fs_service
-
-    @property
-    def relations(self) -> RelationService:
-        """Get RelationService instance."""
-        return self._relation_service
 
     @property
     def pack(self) -> PackService:
@@ -277,6 +287,11 @@ class OpenVikingService:
         """Get DebugService instance."""
         return self._debug_service
 
+    @property
+    def agent_evolution(self) -> AgentEvolutionService:
+        """Get Agent Evolution query service."""
+        return self._agent_evolution_service
+
     async def initialize(self) -> None:
         """Initialize OpenViking storage and indexes."""
         if self._initialized:
@@ -288,8 +303,17 @@ class OpenVikingService:
         if self._vikingdb_manager is None:
             self._init_storage(
                 self._config.storage,
-                self._config.embedding.max_concurrent,
-                self._config.vlm.max_concurrent,
+                max_concurrent_embedding=self._config.embedding.max_concurrent,
+                max_concurrent_semantic=self._config.vlm.max_concurrent,
+                max_concurrent_external_parse=(
+                    self._config.queue_workers.external_parse.max_concurrent
+                ),
+                max_concurrent_add_resource=(
+                    self._config.queue_workers.add_resource.max_concurrent
+                ),
+                max_concurrent_session_commit=(
+                    self._config.queue_workers.session_commit.max_concurrent
+                ),
                 binding_config=self._build_ragfs_binding_config(),
                 git_config=self._config.git,
             )
@@ -364,6 +388,7 @@ class OpenVikingService:
         self._watch_scheduler = WatchScheduler(
             resource_service=self._resource_service,
             viking_fs=self._viking_fs,
+            uri_mutation_coordinator=self._uri_mutation_coordinator,
         )
 
         # Wire up sub-services
@@ -373,8 +398,8 @@ class OpenVikingService:
             privacy_config_service=self._privacy_config_service,
             resource_memory_link_service=self._resource_memory_link_service,
             watch_scheduler=self._watch_scheduler,
+            uri_mutation_coordinator=self._uri_mutation_coordinator,
         )
-        self._relation_service.set_viking_fs(self._viking_fs)
         self._pack_service.set_dependencies(
             viking_fs=self._viking_fs,
             vector_store=self._vikingdb_manager,
@@ -398,10 +423,28 @@ class OpenVikingService:
             viking_fs=self._viking_fs,
             session_service=self._session_service,
         )
+        try:
+            session_auto_commit_config = get_openviking_config().memory.session_auto_commit
+        except Exception:
+            session_auto_commit_config = SessionAutoCommitConfig()
+        self._session_service.set_session_auto_commit_config(session_auto_commit_config)
+        if session_auto_commit_config.idle_enabled:
+            self._session_auto_commit_scheduler = SessionAutoCommitScheduler(
+                self._session_service,
+                session_auto_commit_config,
+                check_interval=session_auto_commit_config.check_interval_seconds,
+            )
+            await self._session_auto_commit_scheduler.start()
+        else:
+            self._session_auto_commit_scheduler = None
         self._debug_service.set_dependencies(
             vikingdb=self._vikingdb_manager,
             config=self._config,
             agfs_client=self._agfs_client,
+        )
+        self._agent_evolution_service.set_dependencies(
+            vikingdb=self._vikingdb_manager,
+            viking_fs=self._viking_fs,
         )
 
         if self._queue_manager:
@@ -427,24 +470,43 @@ class OpenVikingService:
                 ),
                 allow_create=True,
             )
+            # Auth state is initialized by the HTTP server after the core service.
+            # Register the durable queue now so task tracking can rebuild its work;
+            # the user-deletion service binds the handler once auth is ready.
+            self._queue_manager.get_queue(
+                self._queue_manager.USER_DELETION,
+                allow_create=True,
+            )
             await self._queue_manager.prepare_task_tracking(get_task_tracker())
 
-        # Do not let watches produce queue work while task ownership is being
-        # rebuilt from QueueFS. Consumers start only after the scheduler is ready.
-        await self._watch_scheduler.start()
-        logger.info("WatchScheduler started")
+        if self._config.enable_watch_scheduler:
+            await self._watch_scheduler.start()
+            logger.info("WatchScheduler started")
+        else:
+            logger.info("WatchScheduler disabled by config (enable_watch_scheduler=false)")
 
         if self._queue_manager:
             self._queue_manager.start()
             logger.info("QueueManager workers started")
 
-        # Register as the process-wide service so flows that resolve the
-        # service via the dependency global (e.g. background reindex tasks
-        # triggered by git restore) work in embedded mode, not just under the
-        # HTTP server which calls set_service() during bootstrap.
-        from openviking.server.dependencies import set_service
+        # Preflight the MinerU endpoint when it will be used, so endpoint
+        # misconfiguration or a stopped service surfaces now instead of on the
+        # first PDF import. Required for strategy="mineru"; advisory for "auto".
+        pdf_config = self._config.pdf
+        should_preflight_mineru = pdf_config.strategy == "mineru" or (
+            pdf_config.strategy == "auto" and pdf_config.mineru_endpoint is not None
+        )
 
-        set_service(self)
+        if should_preflight_mineru and pdf_config.mineru_endpoint:
+            try:
+                await wait_for_mineru_ready(pdf_config.mineru_endpoint)
+                logger.info("MinerU preflight passed: %s", pdf_config.mineru_endpoint)
+            except RuntimeError as exc:
+                if pdf_config.strategy == "mineru":
+                    raise
+                logger.warning(
+                    "MinerU preflight failed (fallback will retry on first parse): %s", exc
+                )
 
         self._initialized = True
         logger.info("OpenVikingService initialized")
@@ -457,6 +519,11 @@ class OpenVikingService:
             await self._watch_scheduler.stop()
             self._watch_scheduler = None
             logger.info("WatchScheduler stopped")
+
+        if self._session_auto_commit_scheduler:
+            await self._session_auto_commit_scheduler.stop()
+            self._session_auto_commit_scheduler = None
+            logger.info("SessionAutoCommitScheduler stopped")
 
         if self._queue_manager:
             await asyncio.to_thread(self._queue_manager.stop)
@@ -499,6 +566,8 @@ class OpenVikingService:
         mode: str = "vectors_only",
         wait: bool = True,
         dry_run: bool = False,
+        tags: list[str] | None = None,
+        tag_mode: str = "replace",
         ctx: RequestContext | None = None,
     ) -> dict[str, Any]:
         """Reindex semantic/vector artifacts for a URI."""
@@ -506,16 +575,19 @@ class OpenVikingService:
             await self.initialize()
 
         effective_ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
-        canonical_uri = canonicalize_uri(uri, effective_ctx)
         from openviking.service.reindex_executor import get_reindex_executor
 
-        return await get_reindex_executor().execute(
-            uri=canonical_uri,
-            mode=mode,
-            wait=wait,
-            dry_run=dry_run,
-            ctx=effective_ctx,
-        )
+        execute_kwargs = {
+            "uri": uri,
+            "mode": mode,
+            "wait": wait,
+            "dry_run": dry_run,
+            "ctx": effective_ctx,
+        }
+        if tags is not None:
+            execute_kwargs["tags"] = tags
+            execute_kwargs["tag_mode"] = tag_mode
+        return await get_reindex_executor().execute(**execute_kwargs)
 
     async def check_consistency(
         self,

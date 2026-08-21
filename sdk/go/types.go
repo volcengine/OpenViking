@@ -160,6 +160,7 @@ type TreeOptions struct {
 	AbsLimit      int
 	ShowAllHidden bool
 	NodeLimit     int
+	LevelLimit    *int
 }
 
 // RemoveOptions controls Remove.
@@ -185,10 +186,14 @@ type SetTagsOptions struct {
 }
 
 // ReindexOptions controls Reindex.
+// Wait is used as-is when options are provided; set it explicitly to true
+// when adding optional fields such as Tags and synchronous behavior is desired.
 type ReindexOptions struct {
-	Mode   string
-	Wait   bool
-	DryRun bool
+	Mode    string
+	Wait    bool
+	DryRun  bool
+	Tags    []string
+	TagMode string
 }
 
 // FindOptions controls Find.
@@ -241,14 +246,24 @@ type GlobOptions struct {
 
 // CreateSessionOptions controls CreateSession.
 type CreateSessionOptions struct {
-	SessionID    string
-	MemoryPolicy map[string]any
-	Telemetry    any
+	SessionID              string
+	MemoryPolicy           map[string]any
+	AutoCommitPolicy       map[string]any
+	DisableAutoCommit      bool
+	MemoryExtractionConfig map[string]any
+	Telemetry              any
 }
 
 // GetSessionOptions controls GetSession.
 type GetSessionOptions struct {
 	AutoCreate bool
+}
+
+// UpdateSessionConfigOptions controls UpdateSessionConfig.
+type UpdateSessionConfigOptions struct {
+	MemoryExtractionConfig map[string]any
+	AutoCommitPolicy       *map[string]any
+	Telemetry              any
 }
 
 // AddMessageOptions controls AddMessage.
@@ -278,6 +293,7 @@ type BatchAddMessagesOptions struct {
 type CommitSessionOptions struct {
 	KeepRecentCount int
 	Telemetry       any
+	EventTags       []string
 }
 
 // ListTasksOptions controls ListTasks.
@@ -324,16 +340,6 @@ type MatchedContext struct {
 	Category    string           `json:"category,omitempty"`
 	Score       float64          `json:"score,omitempty"`
 	MatchReason string           `json:"match_reason,omitempty"`
-	Relations   []RelatedContext `json:"relations,omitempty"`
-}
-
-// RelatedContext is a related context reference attached to a retrieval hit.
-type RelatedContext struct {
-	URI        string  `json:"uri,omitempty"`
-	Reason     string  `json:"reason,omitempty"`
-	Score      float64 `json:"score,omitempty"`
-	Relation   string  `json:"relation,omitempty"`
-	RelationID string  `json:"relation_id,omitempty"`
 }
 
 // QueryPlan describes search query expansion details when the server returns them.

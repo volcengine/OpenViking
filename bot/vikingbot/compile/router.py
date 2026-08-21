@@ -72,5 +72,20 @@ def register_compile_routes(
             )
         return task
 
+    @router.post("/compile/{task_id}/cancel")
+    async def cancel_compile(
+        task_id: str,
+        http_request: Request,
+        auth: Any = Depends(verify_gateway_request),
+    ) -> dict[str, Any]:
+        principal_scope = await channel._resolve_request_principal(http_request, auth)
+        task = await service.cancel_task(task_id, principal_scope=principal_scope)
+        if task is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "NOT_FOUND", "message": "Compile task not found"},
+            )
+        return task
+
 
 __all__ = ["register_compile_routes"]

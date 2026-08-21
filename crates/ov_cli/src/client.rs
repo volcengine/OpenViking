@@ -164,6 +164,8 @@ struct CompileCreateRequest<'a> {
     skill: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    runtime_timeout_seconds: Option<f64>,
 }
 
 // ============ HttpClient ============
@@ -201,6 +203,26 @@ impl HttpClient {
 
     pub fn with_gateway_token(mut self, gateway_token: Option<String>) -> Self {
         self.base = self.base.with_gateway_token(gateway_token);
+        self
+    }
+
+    pub fn with_auth_mode(mut self, auth_mode: Option<String>) -> Self {
+        self.base = self.base.with_auth_mode(auth_mode);
+        self
+    }
+
+    pub fn with_ldap_username(mut self, username: Option<String>) -> Self {
+        self.base = self.base.with_ldap_username(username);
+        self
+    }
+
+    pub fn with_ldap_password(mut self, password: Option<String>) -> Self {
+        self.base = self.base.with_ldap_password(password);
+        self
+    }
+
+    pub fn with_oidc_token(mut self, token: Option<String>) -> Self {
+        self.base = self.base.with_oidc_token(token);
         self
     }
 
@@ -336,12 +358,14 @@ impl HttpClient {
         to: &str,
         skill: &str,
         reason: Option<&str>,
+        runtime_timeout_seconds: Option<f64>,
     ) -> Result<CompileAccepted> {
         let body = CompileCreateRequest {
             from_uris,
             to,
             skill,
             reason,
+            runtime_timeout_seconds,
         };
         self.post("/bot/v1/compile", &body).await
     }
@@ -387,8 +411,9 @@ impl HttpClient {
         mode: &str,
         wait: bool,
         timeout: Option<f64>,
+        processing_mode: &str,
     ) -> Result<serde_json::Value> {
-        let body = Self::build_write_body(uri, content, mode, wait, timeout);
+        let body = Self::build_write_body(uri, content, mode, wait, timeout, processing_mode);
         self.post("/api/v1/content/write", &body).await
     }
 
@@ -414,14 +439,18 @@ impl HttpClient {
         mode: &str,
         wait: bool,
         timeout: Option<f64>,
+        processing_mode: &str,
     ) -> Value {
-        serde_json::json!({
+        let mut body = serde_json::json!({
             "uri": uri,
             "content": content,
             "mode": mode,
             "wait": wait,
             "timeout": timeout,
-        })
+            "processing_mode": processing_mode,
+        });
+        compact_request_body(&mut body);
+        body
     }
 
     pub async fn reindex(
@@ -430,13 +459,22 @@ impl HttpClient {
         mode: &str,
         wait: bool,
         dry_run: bool,
+        tags: Vec<String>,
+        tag_mode: &str,
     ) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "uri": uri,
             "mode": mode,
             "wait": wait,
             "dry_run": dry_run,
         });
+        if !tags.is_empty() {
+            let obj = body
+                .as_object_mut()
+                .expect("reindex request body must be an object");
+            obj.insert("tags".to_string(), serde_json::json!(tags));
+            obj.insert("tag_mode".to_string(), serde_json::json!(tag_mode));
+        }
         self.post("/api/v1/content/reindex", &body).await
     }
 
@@ -1172,12 +1210,20 @@ impl HttpClient {
     // ============ Task Methods ============
 
     pub async fn get_task(&self, task_id: &str) -> Result<serde_json::Value> {
-        let path = format!("/api/v1/tasks/{}", task_id);
+        let path = if task_id.starts_with("cmp_") {
+            format!("/bot/v1/compile/{task_id}")
+        } else {
+            format!("/api/v1/tasks/{task_id}")
+        };
         self.get(&path, &[]).await
     }
 
     pub async fn cancel_task(&self, task_id: &str) -> Result<serde_json::Value> {
-        let path = format!("/api/v1/tasks/{}/cancel", task_id);
+        let path = if task_id.starts_with("cmp_") {
+            format!("/bot/v1/compile/{task_id}/cancel")
+        } else {
+            format!("/api/v1/tasks/{task_id}/cancel")
+        };
         self.post(&path, &serde_json::json!({})).await
     }
 
@@ -1194,35 +1240,6 @@ impl HttpClient {
             params.push(("status".to_string(), s.to_string()));
         }
         self.get("/api/v1/tasks", &params).await
-    }
-
-    // ============ Relation Methods ============
-
-    pub async fn relations(&self, uri: &str) -> Result<serde_json::Value> {
-        let params = vec![("uri".to_string(), uri.to_string())];
-        self.get("/api/v1/relations", &params).await
-    }
-
-    pub async fn link(
-        &self,
-        from_uri: &str,
-        to_uris: &[String],
-        reason: &str,
-    ) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
-            "from_uri": from_uri,
-            "to_uris": to_uris,
-            "reason": reason,
-        });
-        self.post("/api/v1/relations/link", &body).await
-    }
-
-    pub async fn unlink(&self, from_uri: &str, to_uri: &str) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
-            "from_uri": from_uri,
-            "to_uri": to_uri,
-        });
-        self.delete_with_body("/api/v1/relations/link", &body).await
     }
 
     // ============ Pack Methods ============
@@ -1821,7 +1838,7 @@ mod tests {
     use super::{BaseClient, HttpClient, TimeoutConfig};
     use crate::base_client::api_error_from_envelope;
     use reqwest::StatusCode;
-    use serde_json::json;
+    use serde_json::{Map, json};
     use std::collections::HashMap;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
@@ -1856,6 +1873,78 @@ mod tests {
         let mut body = json!({"path": "x", "args": {"feishu_access_token": "u-x"}});
         super::compact_request_body(&mut body);
         assert!(body.as_object().unwrap().contains_key("args"));
+    }
+
+    #[tokio::test]
+    async fn add_resource_sends_parse_mode_through_args() {
+        let (default_url, default_request_rx) = spawn_request_capture_server().await;
+        let default_client = HttpClient::new(default_url, None, None, None, None, 5.0, false, None);
+        default_client
+            .add_resource(
+                "https://example.com/default.md",
+                None,
+                None,
+                None,
+                None,
+                "",
+                "",
+                false,
+                None,
+                false,
+                None,
+                None,
+                None,
+                true,
+                0.0,
+                "semantic_and_vectors".to_string(),
+                None,
+                Vec::new(),
+                "replace".to_string(),
+                false,
+                false,
+            )
+            .await
+            .expect("default add-resource request should succeed");
+        let default_request = default_request_rx
+            .await
+            .expect("request should be captured");
+        assert!(!default_request.contains("parse_mode"));
+
+        let (no_split_url, no_split_request_rx) = spawn_request_capture_server().await;
+        let no_split_client =
+            HttpClient::new(no_split_url, None, None, None, None, 5.0, false, None);
+        let mut no_split_args = Map::new();
+        no_split_args.insert("parse_mode".to_string(), json!("no_split"));
+        no_split_client
+            .add_resource(
+                "https://example.com/manual.pdf",
+                None,
+                None,
+                None,
+                None,
+                "",
+                "",
+                false,
+                None,
+                false,
+                None,
+                None,
+                None,
+                true,
+                0.0,
+                "semantic_and_vectors".to_string(),
+                Some(no_split_args),
+                Vec::new(),
+                "replace".to_string(),
+                false,
+                false,
+            )
+            .await
+            .expect("no_split add-resource request should succeed");
+        let no_split_request = no_split_request_rx
+            .await
+            .expect("request should be captured");
+        assert!(no_split_request.contains(r#""args":{"parse_mode":"no_split"}"#));
     }
 
     #[test]
@@ -1974,6 +2063,7 @@ mod tests {
             "replace",
             true,
             Some(3.0),
+            "semantic_and_vectors",
         );
 
         assert_eq!(
@@ -1988,6 +2078,34 @@ mod tests {
         );
         assert!(body.get("regenerate_semantics").is_none());
         assert!(body.get("revectorize").is_none());
+    }
+
+    #[test]
+    fn build_write_body_drops_default_processing_mode_for_legacy_servers() {
+        let body = HttpClient::build_write_body(
+            "viking://resources/demo.md",
+            "updated",
+            "replace",
+            true,
+            None,
+            "semantic_and_vectors",
+        );
+
+        assert!(body.get("processing_mode").is_none());
+    }
+
+    #[test]
+    fn build_write_body_keeps_vectors_only_processing_mode() {
+        let body = HttpClient::build_write_body(
+            "viking://resources/demo.md",
+            "updated",
+            "replace",
+            true,
+            None,
+            "vectors_only",
+        );
+
+        assert_eq!(body["processing_mode"], "vectors_only");
     }
 
     #[tokio::test]
@@ -2141,7 +2259,9 @@ mod tests {
         tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.expect("request should arrive");
             let mut buffer = vec![0; 4096];
-            let _ = stream.read(&mut buffer).await.expect("request should read");
+            let read = stream.read(&mut buffer).await.expect("request should read");
+            let request = String::from_utf8_lossy(&buffer[..read]);
+            assert!(request.contains(r#""runtime_timeout_seconds":86400.0"#));
             let body = r#"{"status":"ok","result":{"task_id":"cmp_1","status":"accepted","to":"viking://resources/wiki"}}"#;
             let response = format!(
                 "HTTP/1.1 202 Accepted\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
@@ -2169,10 +2289,36 @@ mod tests {
                 "viking://resources/wiki",
                 "viking://agent/skills/wiki",
                 None,
+                Some(86_400.0),
             )
             .await
             .expect("202 response body should deserialize");
         assert_eq!(accepted.task_id, "cmp_1");
+    }
+
+    #[tokio::test]
+    async fn task_methods_route_compile_ids_to_compile_endpoints() {
+        let (base_url, status_request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        client
+            .get_task("cmp_1")
+            .await
+            .expect("compile status request should succeed");
+        let status_request = status_request_rx
+            .await
+            .expect("status request should be captured");
+        assert!(status_request.starts_with("GET /bot/v1/compile/cmp_1 "));
+
+        let (base_url, cancel_request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        client
+            .cancel_task("cmp_1")
+            .await
+            .expect("compile cancellation request should succeed");
+        let cancel_request = cancel_request_rx
+            .await
+            .expect("cancel request should be captured");
+        assert!(cancel_request.starts_with("POST /bot/v1/compile/cmp_1/cancel "));
     }
 
     #[tokio::test]

@@ -1,9 +1,11 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import { createServer } from "node:http"
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { loadConfig } from "../lib/config.mjs"
+import { OpenVikingPlugin } from "../index.mjs"
 
 async function withTempDir(prefix, fn) {
   const dir = await mkdtemp(join(tmpdir(), prefix))
@@ -11,6 +13,25 @@ async function withTempDir(prefix, fn) {
     return await fn(dir)
   } finally {
     await rm(dir, { recursive: true, force: true })
+  }
+}
+
+async function withHealthServer(fn) {
+  const server = createServer((request, response) => {
+    response.setHeader("Content-Type", "application/json")
+    if (request.url === "/health") {
+      response.end(JSON.stringify({ status: "ok" }))
+      return
+    }
+    response.statusCode = 404
+    response.end(JSON.stringify({ status: "error" }))
+  })
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve))
+  try {
+    const { port } = server.address()
+    return await fn(`http://127.0.0.1:${port}`)
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
   }
 }
 
@@ -139,6 +160,65 @@ test("loadConfig can disable workspace peer", async () => {
     } finally {
       restoreOpenVikingEnv(snapshot)
     }
+  })
+})
+
+test("loadConfig supports hook-only mode without registering the bundled MCP server", async () => {
+  const snapshot = { ...process.env }
+  await withTempDir("ov-oc-hook-only-", async (dir) => {
+    try {
+      for (const key of Object.keys(process.env)) {
+        if (key.startsWith("OPENVIKING_")) delete process.env[key]
+      }
+      const project = join(dir, "project")
+      await mkdir(join(project, ".opencode"), { recursive: true })
+      await writeFile(join(project, ".opencode", "openviking-config.json"), JSON.stringify({
+        mcp: { enabled: false },
+      }))
+
+      const cfg = loadConfig(dir, project)
+      assert.equal(cfg.enabled, true)
+      assert.equal(cfg.mcp.enabled, false)
+    } finally {
+      restoreOpenVikingEnv(snapshot)
+    }
+  })
+})
+
+test("OpenVikingPlugin keeps lifecycle hooks without mutating MCP config in hook-only mode", async () => {
+  const snapshot = { ...process.env }
+  await withTempDir("ov-oc-hook-only-runtime-", async (dir) => {
+    await withHealthServer(async (endpoint) => {
+      try {
+        for (const key of Object.keys(process.env)) {
+          if (key.startsWith("OPENVIKING_")) delete process.env[key]
+        }
+        const configPath = join(dir, "openviking-config.json")
+        await writeFile(configPath, JSON.stringify({
+          mcp: { enabled: false },
+          runtime: { dataDir: join(dir, "runtime") },
+          repoContext: { enabled: false },
+          autoRecall: { enabled: false },
+          autoCapture: false,
+        }))
+        process.env.OPENVIKING_PLUGIN_CONFIG = configPath
+        process.env.OPENVIKING_URL = endpoint
+
+        const plugin = await OpenVikingPlugin({ client: {}, directory: dir })
+        assert.equal(typeof plugin.event, "function")
+        assert.equal(typeof plugin["chat.message"], "function")
+        assert.equal(typeof plugin.dispose, "function")
+
+        const opencodeConfig = { mcp: { external: { type: "remote", url: "https://example.com/mcp" } } }
+        await plugin.config(opencodeConfig)
+        assert.deepEqual(opencodeConfig, {
+          mcp: { external: { type: "remote", url: "https://example.com/mcp" } },
+        })
+        await plugin.dispose()
+      } finally {
+        restoreOpenVikingEnv(snapshot)
+      }
+    })
   })
 })
 

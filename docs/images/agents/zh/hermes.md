@@ -1,33 +1,29 @@
-
-[Hermes Agent](https://hermes-agent.nousresearch.com/) (Nous Research) 内置 OpenViking 记忆提供方。无需安装插件——把 Hermes 指向你的 OpenViking 服务即可，记忆存储、召回和抽取均原生支持。
-
-## 步骤 1：运行 Hermes 记忆配置向导：
+## 安装
 
 ```bash
-hermes memory setup
+hermes memory setup openviking
 ```
 
-## 步骤 2：复制 Base URL 和 鉴权管理
-执行 setup 命令后会依次提示输入 Base URL 和 鉴权管理，可复制后粘贴到你的 Hermes：
+保持 **OpenViking Service (VolcEngine Cloud)**，把本页 API Key 贴进去：
 
-- Base URL: 复制以下 Base URL 到你的 Hermes：
-```text
-https://api.vikingdb.cn-beijing.volces.com/openviking
-```
-- 鉴权管理: 复制页面中展示的 鉴权管理 到你的 Hermes 终端
-- 租户 account / user / agent ID：多租户部署时使用
+{{OPENVIKING_API_KEY_BLOCK}}
 
-配置保存在 Hermes 的 `config.yaml` 和 `.env` 文件中。
-
-
-## 步骤 3：验证 Hermes 记忆状态
+## 验证
 
 ```bash
 hermes memory status
 ```
 
-配置完成后，Hermes 自动使用 OpenViking 作为长期记忆——`viking_remember`、`viking_recall` 等记忆工具即刻可用。
+应看到 `Provider: openviking` 且 `Status: available`。然后开一轮新会话。
 
-## 参考文档
+## 故障排查
 
-- [Hermes — OpenViking memory provider 文档](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers#openviking) — 完整配置指南
+| 问题 | 处理 |
+|---|---|
+| Provider 不是 openviking | 重跑 `hermes memory setup openviking` |
+| Status 不是 available | 检查本页 API Key |
+
+## 参考
+
+- 手动配置文档：[Hermes](https://docs.openviking.net/zh/agent-integrations/05-hermes)
+- 原理说明：[OpenViking memory provider](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers#openviking)

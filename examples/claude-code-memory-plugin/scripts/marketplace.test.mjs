@@ -11,6 +11,8 @@ const repoRoot = resolve(scriptsDir, "..", "..", "..");
 const rootCatalogPath = join(repoRoot, ".claude-plugin", "marketplace.json");
 const localCatalogPath = join(repoRoot, "examples", ".claude-plugin", "marketplace.json");
 const manifestPath = join(pluginDir, ".claude-plugin", "plugin.json");
+const canonicalExperienceSkillPath = join(repoRoot, "examples", "skills", "ov-experience-memory", "SKILL.md");
+const packagedExperienceSkillPath = join(pluginDir, "skills", "ov-experience-memory", "SKILL.md");
 
 const PLUGIN_NAME = "openviking-memory";
 
@@ -42,6 +44,15 @@ test("local Claude marketplace entry name matches plugin manifest", () => {
   assert.ok(entry, `local catalog must contain ${PLUGIN_NAME}`);
   assert.equal(entry.name, manifest.name);
   assert.equal(entry.source, "./claude-code-memory-plugin");
+});
+
+test("marketplace package ships the canonical Experience skill", () => {
+  assert.ok(existsSync(packagedExperienceSkillPath), "Claude plugin must package the Experience skill");
+  assert.equal(
+    readFileSync(packagedExperienceSkillPath, "utf-8"),
+    readFileSync(canonicalExperienceSkillPath, "utf-8"),
+    "packaged Experience skill must stay byte-identical to examples/skills/ov-experience-memory",
+  );
 });
 
 test("Claude .mcp.json starts the stdio MCP proxy", () => {

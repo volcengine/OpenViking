@@ -1,7 +1,9 @@
+import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
 
+from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
 from openviking.resource.watch_manager import WatchManager
 from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.service.resource_service import ResourceService
@@ -112,7 +114,7 @@ class TestWatchSchedulerResourceExistence:
         manager.update_execution_time.assert_awaited_once_with(task.task_id)
 
     @pytest.mark.asyncio
-    async def test_execute_task_forwards_processing_mode(self, tmp_path):
+    async def test_execute_task_uses_stable_target_and_options(self, tmp_path):
         class FakeResourceService(ResourceService):
             def __init__(self):
                 super().__init__()
@@ -124,20 +126,39 @@ class TestWatchSchedulerResourceExistence:
 
         source = tmp_path / "source.txt"
         source.write_text("ok")
+        coordinator = UriMutationCoordinator()
         resource_service = FakeResourceService()
-        scheduler = WatchScheduler(resource_service=resource_service, check_interval=1)
-        manager = WatchManager(viking_fs=None)
+        scheduler = WatchScheduler(
+            resource_service=resource_service,
+            uri_mutation_coordinator=coordinator,
+            check_interval=1,
+        )
+        manager = WatchManager(uri_mutation_coordinator=coordinator)
         await manager.initialize()
         scheduler._watch_manager = manager
         manager.update_execution_time = AsyncMock()
+        old_uri = "viking://resources/codeask/wiki"
+        new_uri = "viking://resources/codeask/wiki-renamed"
         task = await manager.create_task(
             path=str(source),
-            to_uri="viking://resources/codeask/wiki",
+            to_uri=old_uri,
             watch_interval=30.0,
             processing_mode="vectors_only",
         )
 
-        await scheduler._execute_task(task)
+        async with coordinator.mutation(task.account_id, [old_uri, new_uri]):
+            execution = asyncio.create_task(scheduler._execute_task(task.model_copy(deep=True)))
+            await asyncio.sleep(0)
+            assert resource_service.calls == []
+            await manager.rewrite_target_prefix_internal(
+                old_uri,
+                new_uri,
+                account_id=task.account_id,
+            )
 
-        assert resource_service.calls
+        await asyncio.wait_for(execution, timeout=1)
+
+        assert len(resource_service.calls) == 1
+        assert resource_service.calls[0]["to"] == new_uri
         assert resource_service.calls[0]["processing_mode"] == "vectors_only"
+        assert resource_service.calls[0]["enforce_public_remote_targets"] is True

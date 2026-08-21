@@ -138,18 +138,13 @@ pip install openviking --upgrade --force-reinstall
 ### 如何初始化客户端？
 
 ```python
-import openviking as ov
+from openviking_sdk import AsyncHTTPClient
 
-# 异步客户端（推荐）- 嵌入模式
-client = ov.AsyncOpenViking(path="./my_data")
-await client.initialize()
-
-# 异步客户端 - 服务模式
-client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
 ```
 
-SDK 构造函数仅接受 `url`、`api_key`、`path` 参数。其他配置（embedding、vlm 等）通过 `ov.conf` 配置文件管理。
+Embedding、VLM、存储等服务配置由 OpenViking Server 通过 `ov.conf` 管理。
 
 ### 支持哪些文件格式？
 
@@ -361,24 +356,9 @@ OpenViking 使用分数传播机制：
 1. **批量处理**：一次添加多个资源比逐个添加更高效
 2. **合理设置 `batch_size`**：Embedding 配置中调整批处理大小
 3. **使用本地存储**：开发阶段使用 `local` 后端减少网络延迟
-4. **异步操作**：充分利用 `AsyncOpenViking` / `AsyncHTTPClient` 的异步特性
+4. **异步操作**：充分利用 `AsyncHTTPClient` 的异步特性
 
 ## 部署相关
-
-### 嵌入式模式和服务模式有什么区别？
-
-| 模式 | 适用场景 | 特点 |
-|------|----------|------|
-| **嵌入式** | 本地开发、单进程应用 | 自动启动 AGFS 子进程，使用本地向量索引 |
-| **服务模式** | 生产环境、分布式部署 | 连接远程服务，支持多实例并发，可独立扩展 |
-
-```python
-# 嵌入式模式
-client = ov.AsyncOpenViking(path="./data")
-
-# 服务模式
-client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-```
 
 ### OpenViking 是开源的吗？
 

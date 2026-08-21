@@ -9,7 +9,7 @@ key, no on-disk state, no replay-set bookkeeping. ``dict.pop`` doubles as the
 consume-and-burn primitive.
 
 The token carries the identity bound at issue time (account/user), the caller's actor peer
-scope (``actor_peer_id``), and the business params (``to``/``reason``) so the server can
+scope (``actor_peer_id``), and the business params (``to``/``reason``/``parse_mode``) so the server can
 finish ingestion automatically once the file lands — the caller does not re-invoke
 ``add_resource``, and the ingest keeps the original peer scope. The ``temp_file_id`` is minted by
 :class:`openviking.server.temp_upload_store.TempUploadStore` at upload time, so the token
@@ -49,6 +49,7 @@ class _TokenInfo:
     processing_mode: ProcessingMode
     tags: Optional[list[str]]
     tag_mode: str
+    parse_mode: str
     expires_at: float
 
 
@@ -61,9 +62,10 @@ class ConsumedUploadToken:
     to: str
     reason: str
     actor_peer_id: str
-    processing_mode: ProcessingMode
-    tags: Optional[list[str]]
-    tag_mode: str
+    processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
+    tags: Optional[list[str]] = None
+    tag_mode: str = "replace"
+    parse_mode: str = "default"
 
 
 class UploadTokenStore:
@@ -82,6 +84,7 @@ class UploadTokenStore:
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
         tags: Optional[list[str]] = None,
         tag_mode: str = "replace",
+        parse_mode: str = "default",
     ) -> Tuple[str, float]:
         """Mint a fresh token bound to (account, user) plus ``to``/``reason``/``actor_peer_id``.
 
@@ -101,6 +104,7 @@ class UploadTokenStore:
             processing_mode,
             tags,
             tag_mode,
+            parse_mode,
             expires_at,
         )
         for _ in range(8):
@@ -128,6 +132,7 @@ class UploadTokenStore:
             info.processing_mode,
             info.tags,
             info.tag_mode,
+            info.parse_mode,
         )
 
     def peek(self, token: str) -> Optional[_TokenInfo]:

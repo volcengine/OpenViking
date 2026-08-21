@@ -10,6 +10,7 @@ import asyncio
 from datetime import datetime
 from typing import Any, Dict, Optional, Set
 
+from openviking.connector.delegate import ConnectorDelegate
 from openviking.resource.feishu_watch_auth import (
     FeishuOAuthClient,
     FeishuTokenRefreshError,
@@ -17,6 +18,11 @@ from openviking.resource.feishu_watch_auth import (
     feishu_auth_state_needs_refresh,
     is_feishu_auth_state,
 )
+from openviking.resource.git_watch_auth import (
+    git_http_auth_config_from_state,
+    is_git_http_auth_state,
+)
+from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
 from openviking.resource.watch_manager import WatchManager
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext, Role
@@ -44,6 +50,7 @@ class WatchScheduler:
         viking_fs: Optional[Any] = None,
         check_interval: float = DEFAULT_CHECK_INTERVAL,
         max_concurrency: int = 4,
+        uri_mutation_coordinator: Optional[UriMutationCoordinator] = None,
     ):
         """Initialize WatchScheduler.
 
@@ -54,6 +61,7 @@ class WatchScheduler:
         """
         self._resource_service = resource_service
         self._viking_fs = viking_fs
+        self._uri_mutation_coordinator = uri_mutation_coordinator or UriMutationCoordinator()
         if check_interval <= 0:
             raise ValueError("check_interval must be > 0")
         if max_concurrency <= 0:
@@ -85,7 +93,10 @@ class WatchScheduler:
             return
 
         # Initialize WatchManager
-        self._watch_manager = WatchManager(viking_fs=self._viking_fs)
+        self._watch_manager = WatchManager(
+            viking_fs=self._viking_fs,
+            uri_mutation_coordinator=self._uri_mutation_coordinator,
+        )
         await self._watch_manager.initialize()
         logger.info("[WatchScheduler] WatchManager initialized")
 
@@ -211,6 +222,38 @@ class WatchScheduler:
             await asyncio.gather(*(asyncio.create_task(run_one(t)) for t in tasks_to_run))
 
     async def _execute_task(self, task) -> None:
+        """Execute a task only after confirming its target URI is stable."""
+        if not self._watch_manager:
+            return
+
+        candidate = task
+        while True:
+            stable_account_id = candidate.account_id
+            stable_to_uri = candidate.to_uri
+            async with self._uri_mutation_coordinator.access(
+                stable_account_id,
+                [stable_to_uri],
+            ):
+                current = await self._watch_manager.get_task(
+                    candidate.task_id,
+                    account_id=candidate.account_id,
+                    user_id=candidate.user_id,
+                    role=getattr(candidate, "original_role", None) or str(Role.USER),
+                )
+                if current is None:
+                    logger.info(
+                        f"[WatchScheduler] Task {candidate.task_id} disappeared before execution"
+                    )
+                    return
+                if current.account_id != stable_account_id or current.to_uri != stable_to_uri:
+                    candidate = current
+                    continue
+
+                stable_task = current.model_copy(deep=True)
+                await self._execute_stable_task(stable_task)
+                return
+
+    async def _execute_stable_task(self, task) -> None:
         """Execute a single watch task.
 
         Calls ResourceService.refresh_resource to re-process the resource.
@@ -220,14 +263,16 @@ class WatchScheduler:
         Args:
             task: WatchTask to execute
         """
-        logger.info(f"[WatchScheduler] Executing task {task.task_id} for path {task.path}")
+        logger.info(f"[WatchScheduler] Executing task {task.task_id}")
 
         cancelled = False
         should_deactivate = False
         deactivation_reason = ""
 
         try:
-            if not self._check_resource_exists(task.path):
+            auth_state = getattr(task, "auth_state", None)
+            connector_watch = ConnectorDelegate.is_watch_auth_state(auth_state)
+            if not connector_watch and not self._check_resource_exists(task.path):
                 should_deactivate = True
                 deactivation_reason = f"Resource path does not exist: {task.path}"
                 logger.warning(
@@ -265,7 +310,6 @@ class WatchScheduler:
                     processor_kwargs = dict(getattr(task, "processor_kwargs", {}) or {})
                     processor_kwargs.pop("build_index", None)
                     processor_kwargs.pop("summarize", None)
-                    auth_state = getattr(task, "auth_state", None)
                     if is_feishu_auth_state(auth_state):
                         try:
                             auth_state = await self._prepare_feishu_auth_state(task, auth_state)
@@ -280,12 +324,31 @@ class WatchScheduler:
                                 )
                             else:
                                 raise
+                    elif is_git_http_auth_state(auth_state):
+                        processor_kwargs["auth_config"] = git_http_auth_config_from_state(
+                            auth_state,
+                            task.path,
+                        )
+                    elif connector_watch:
+                        (
+                            api_key,
+                            add_type,
+                            connector_args,
+                        ) = await self._resource_service._connector.restore_watch_request(
+                            auth_state,
+                            account_id=task.account_id,
+                            path=task.path,
+                        )
+                        ctx.api_key = api_key
+                        processor_kwargs["add_type"] = add_type
+                        processor_kwargs["args"] = connector_args
 
                 if not should_deactivate:
                     result = await self._resource_service.refresh_resource(
                         path=task.path,
                         ctx=ctx,
                         to=task.to_uri,
+                        to_is_directory=getattr(task, "to_is_directory", None),
                         parent=task.parent_uri,
                         reason=task.reason,
                         instruction=task.instruction,
@@ -293,13 +356,20 @@ class WatchScheduler:
                         summarize=getattr(task, "summarize", False),
                         processing_mode=getattr(task, "processing_mode", "semantic_and_vectors"),
                         watch_interval=task.watch_interval,
+                        enforce_public_remote_targets=True,
                         **processor_kwargs,
                     )
 
-                    logger.info(
-                        f"[WatchScheduler] Task {task.task_id} executed successfully, "
-                        f"result: {result.get('root_uri', 'N/A')}"
-                    )
+                    if result.get("status") == "failed":
+                        logger.warning(
+                            f"[WatchScheduler] Task {task.task_id} execution finished with "
+                            "a failed ingestion task"
+                        )
+                    else:
+                        logger.info(
+                            f"[WatchScheduler] Task {task.task_id} executed successfully, "
+                            f"result: {result.get('root_uri', 'N/A')}"
+                        )
 
         except asyncio.CancelledError:
             cancelled = True
@@ -312,8 +382,8 @@ class WatchScheduler:
             )
         except Exception as e:
             logger.error(
-                f"[WatchScheduler] Task {task.task_id} execution failed: {e}",
-                exc_info=True,
+                f"[WatchScheduler] Task {task.task_id} execution failed, "
+                f"error_type={type(e).__name__}"
             )
 
         finally:

@@ -1,18 +1,24 @@
 # LangChain and LangGraph
 
-Wire OpenViking into your LangChain or LangGraph agent as the context backend. The SDK provides a retriever, chat history, context wrapper, agent tools, LangGraph store, and middleware for HTTP-backed or embedded OpenViking deployments.
+Wire OpenViking into your LangChain or LangGraph agent as the context backend. The
+standalone integration package provides a retriever, chat history, context wrapper,
+agent tools, LangGraph store, and middleware for OpenViking HTTP deployments.
 
 ## Install
 
 ```bash
-pip install "openviking[langchain]"       # retriever + chat history
-pip install "openviking[langgraph]"       # full LangGraph support (includes langchain)
+pip install langchain-openviking                 # LangChain adapters
+pip install "langchain-openviking[langgraph]"    # LangGraph middleware support
 ```
+
+The integration is released independently from the OpenViking server. The full
+package keeps forwarding the legacy `openviking.integrations.langchain` import
+path to `langchain-openviking` for existing applications.
 
 ## Connection
 
 ```python
-from openviking.integrations.langchain import create_openviking_tools
+from langchain_openviking import create_openviking_tools
 
 tools = create_openviking_tools(
     url="http://localhost:1933",
@@ -21,7 +27,7 @@ tools = create_openviking_tools(
 )
 ```
 
-When both `url` and `path` are omitted, adapters use the HTTP connection settings from the OpenViking CLI config. Pass `path` to use an embedded workspace through OpenViking's synchronous client. Embedding and VLM providers are configured in OpenViking, not in your app.
+When `url` is omitted, adapters use the HTTP connection settings from the OpenViking CLI config. Embedding and VLM providers are configured in OpenViking, not in your app.
 
 ### Async applications
 
@@ -37,20 +43,19 @@ result = await chain.ainvoke(
 )
 ```
 
-Async adapters support three client modes:
+Async adapters support two client modes:
 
 | Configuration | Async interface | Ownership |
 |---------------|-----------------|-----------|
 | `client=` or `async_client=` | The injected client is returned unchanged | Caller |
-| `url=`, or neither `url` nor `path` | One recovery-capable HTTP handle per event loop | Adapter |
-| `path=` | A synchronous embedded client invoked in a worker thread | Adapter |
+| `url=`, or omitted | One recovery-capable HTTP handle per event loop | Adapter |
 
 Long-lived applications can initialize one caller-owned async client and reuse
 it across adapters running on the same event loop:
 
 ```python
-from openviking.client import AsyncHTTPClient
-from openviking.integrations.langchain import OpenVikingRetriever
+from openviking_sdk import AsyncHTTPClient
+from langchain_openviking import OpenVikingRetriever
 
 client = AsyncHTTPClient(url="http://localhost:1933", api_key="...")
 await client.initialize()
@@ -65,14 +70,6 @@ Injected async clients are bound to the event loop that initializes them. Do
 not share one injected async client across event loops; create and manage one
 client per loop instead. An injected synchronous client remains safe to use
 from async adapter methods because its calls run in a worker thread.
-
-For embedded `path=` adapters, the synchronous fallback is intentional:
-`SyncOpenViking` keeps the stateful embedded engine on OpenViking's shared
-background loop while the application event loop remains non-blocking. To use
-native embedded async methods, construct and initialize `AsyncOpenViking`
-yourself, inject it with `async_client=`, use it from that same event loop, and
-close it yourself. Only one embedded workspace can be live per process; close
-or reset it before selecting another workspace.
 
 `OpenVikingChatMessageHistory` provides `aget_messages()`, `aadd_messages()`,
 and `aclear()`. `OpenVikingSessionRecorder` provides `arecord()`, `aflush()`,
@@ -164,7 +161,7 @@ chain.invoke(
 LangGraph run while reusing its credential-bound HTTP clients:
 
 ```python
-from openviking.integrations.langchain import OpenVikingContextMiddleware
+from langchain_openviking import OpenVikingContextMiddleware
 
 
 def resolve_actor_peer(_state, runtime):
@@ -193,8 +190,7 @@ remain bound to the API key or OAuth credential, so multi-user applications
 must select a credential-bound client before invoking the middleware. Resolve
 the actor peer only from authenticated, server-owned runtime fields; do not
 trust model state or client-controlled configurable values. Runtime actor-peer
-resolution is available only for HTTP-backed middleware, not embedded `path=`
-clients. An injected custom client must set
+resolution is available only for HTTP-backed middleware. An injected custom client must set
 `supports_request_actor_peer = True` and honor the `openviking_sdk` actor-peer
 scope. Upgrade `openviking-sdk` together with `openviking` before enabling this
 feature in an existing environment.
@@ -216,7 +212,7 @@ feature in an existing environment.
 ### Retriever
 
 ```python
-from openviking.integrations.langchain import OpenVikingRetriever
+from langchain_openviking import OpenVikingRetriever
 
 retriever = OpenVikingRetriever(url="http://localhost:1933", api_key="...")
 docs = retriever.invoke("What did the user decide about deployment?")
@@ -227,7 +223,7 @@ docs = retriever.invoke("What did the user decide about deployment?")
 ```python
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
-from openviking.integrations.langchain import with_openviking_context
+from langchain_openviking import with_openviking_context
 
 with with_openviking_context(
     RunnableLambda(lambda msgs: AIMessage(content="...")),
@@ -240,7 +236,7 @@ with with_openviking_context(
 ### Agent tools
 
 ```python
-from openviking.integrations.langchain import create_openviking_tools
+from langchain_openviking import create_openviking_tools
 
 tools = create_openviking_tools(url="http://localhost:1933", profile="agent")
 # Includes: viking_find, viking_search, viking_browse, viking_read,
@@ -250,7 +246,7 @@ tools = create_openviking_tools(url="http://localhost:1933", profile="agent")
 ### LangGraph store
 
 ```python
-from openviking.integrations.langchain import OpenVikingStore
+from langchain_openviking import OpenVikingStore
 
 store = OpenVikingStore(url="http://localhost:1933", api_key="...")
 store.put(("users", "ada"), "preferences", {"color": "azure"})
@@ -260,7 +256,7 @@ items = store.search(("users",), query="azure", limit=3)
 ### LangGraph middleware
 
 ```python
-from openviking.integrations.langchain import OpenVikingContextMiddleware
+from langchain_openviking import OpenVikingContextMiddleware
 
 middleware = OpenVikingContextMiddleware(
     url="http://localhost:1933",
@@ -275,7 +271,7 @@ Use the recorder when your application already owns the conversation lifecycle
 and only needs reusable OpenViking persistence:
 
 ```python
-from openviking.integrations.langchain import (
+from langchain_openviking import (
     OpenVikingPartialWriteError,
     OpenVikingSessionRecorder,
 )
@@ -312,16 +308,17 @@ finish an async lifecycle with `recorder.close()`.
 The repository includes runnable examples that work without model credentials using an in-memory test client:
 
 ```bash
-uv run --extra langgraph python examples/langchain-langgraph/langchain/rag/quick_app.py
-uv run --extra langgraph python examples/langchain-langgraph/langchain/context-backend/quick_app.py
-uv run --extra langgraph python examples/langchain-langgraph/langchain/message-history/quick_app.py
-uv run --extra langgraph python examples/langchain-langgraph/langgraph/agent/quick_app.py
-uv run --extra langgraph python examples/langchain-langgraph/langgraph/middleware/quick_app.py
+uv run --project integrations/langchain --extra langgraph python examples/langchain-langgraph/langchain/rag/quick_app.py
+uv run --project integrations/langchain --extra langgraph python examples/langchain-langgraph/langchain/context-backend/quick_app.py
+uv run --project integrations/langchain --extra langgraph python examples/langchain-langgraph/langchain/message-history/quick_app.py
+uv run --project integrations/langchain --extra langgraph python examples/langchain-langgraph/langgraph/agent/quick_app.py
+uv run --project integrations/langchain --extra langgraph python examples/langchain-langgraph/langgraph/middleware/quick_app.py
 ```
 
 For a real OpenViking server and OpenAI-compatible model flow, see the [live LangGraph app](https://github.com/volcengine/OpenViking/blob/main/examples/langchain-langgraph/langgraph/agent/live_app.py).
 
 ## See also
 
+- [Capability Reference](./16-capability-reference.md)
 - [examples/langchain-langgraph/](https://github.com/volcengine/OpenViking/tree/main/examples/langchain-langgraph) — full source for all examples above
 - [MCP Clients](./06-mcp-clients.md) — for non-SDK MCP integration

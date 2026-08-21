@@ -177,6 +177,7 @@ function DetailPane({
         <LazyFilePreview
           file={detail.file}
           onClose={() => {}}
+          onNavigate={onOpenFile}
           showCloseButton={false}
         />
       )

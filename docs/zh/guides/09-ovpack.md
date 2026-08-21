@@ -17,7 +17,10 @@ checksum，保证包内容没有偏离 manifest；如果攻击者能同时篡改
 全量迁移使用单独的 `backup/restore`，它会把公开 scope root 一起打进备份包：
 
 - `viking://resources`
-- `viking://user`
+- 当前账号下所有 `viking://user/{user_id}` 内容
+
+`backup/restore` 仅允许 ROOT 或 ADMIN 调用，并以账号为边界访问所有用户内容。备份包不包含
+用户账号、API Key 或其他鉴权数据。
 
 Session 通过 user 命名空间一起迁移，路径为
 `viking://user/{user_id}/sessions/{session_id}`。`viking://session/...`
@@ -138,14 +141,20 @@ ov restore ./backups/openviking.ovpack --on-conflict overwrite
 
 备份包只能通过 `restore` 恢复，不能通过普通 `import` 导入到任意父目录。
 
+备份是在线逐文件读取，不是同一时刻的原子快照。备份期间仍在变化的内容可能来自不同时间点；
+需要严格一致性时，应由使用方在备份窗口暂停写入。
+
+恢复到新环境时，先恢复内容，再使用备份中的相同 `user_id` 创建用户。用户目录已存在不代表
+用户账号已经创建，API Key 会由目标环境重新生成。
+
 ## Python SDK
 
 ```python
-from openviking import AsyncOpenViking
+from openviking_sdk import AsyncHTTPClient
 
 
 async def migrate_project():
-    client = AsyncOpenViking()
+    client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
     await client.initialize()
     try:
         await client.export_ovpack(
@@ -289,6 +298,14 @@ curl -X POST http://localhost:1933/api/v1/pack/backup \
 
 `skip` 是 root 级跳过，不是文件级补齐导入。
 
+上表描述普通 `import`。全量 `restore` 的 `overwrite` 使用合并覆盖：包内不存在的目标路径会
+创建，同路径内容会覆盖，目标环境中仅有而备份中没有的路径会保留。恢复不会删除整个
+`viking://resources` 或 `viking://user`，也不会创建或写入 `viking://user` 聚合目录本身。
+向量只恢复或重建包内新增、覆盖的内容，目标环境独有内容的向量保持不变。
+
+无论使用哪种冲突策略，都会先完整校验 manifest、文件、checksum 和向量元数据。损坏的包
+即使使用 `skip` 也会报错，不会返回成功。
+
 ## 包结构
 
 OVPack v3 是标准 ZIP。ZIP 内部有一个包根目录：
@@ -388,6 +405,8 @@ type, context_type, level, name, description, tags, abstract
 id, uri, account_id, owner_user_id, owner_space,
 created_at, updated_at, active_count
 ```
+
+用户归属从 `viking://user/{user_id}` 路径重建；用户账号和 API Key 不属于 OVPack 内容。
 
 如果使用 `--include-vectors`，会额外导出纯 dense 向量和 embedding 元数据。导入时即使恢复
 dense 快照，也会按目标 URI、目标账号和当前时间重建运行态字段。hybrid index 当前不支持

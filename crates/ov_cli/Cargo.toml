@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.91.1"
 authors = ["OpenViking Contributors"]
 description = "Rust CLI client for OpenViking"
-license = "MIT"
+license = "Apache-2.0"
 
 [[bin]]
 name = "ov"

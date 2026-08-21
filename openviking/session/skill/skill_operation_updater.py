@@ -15,6 +15,7 @@ from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOpera
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.merge_op import MergeOpFactory
 from openviking.storage.content_write import ContentWriteCoordinator
+from openviking.storage.semantic_sidecar import body_for_preview
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
 from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.exceptions import NotFoundError
@@ -96,7 +97,7 @@ class SkillOperationUpdater:
         skill_md_uri = operation.uris[0]
         root_uri = self._root_uri_from_skill_md(skill_md_uri)
         existing_skill = await self._load_existing_skill(skill_md_uri, ctx)
-        merged_skill = self._merge_skill(operation, existing_skill)
+        merged_skill = await self._merge_skill(operation, existing_skill)
 
         if existing_skill is None:
             processor_result = await self._skill_processor.process_skill(
@@ -135,7 +136,7 @@ class SkillOperationUpdater:
             "name": merged_skill["name"],
         }
 
-    def _merge_skill(
+    async def _merge_skill(
         self,
         operation: ResolvedOperation,
         existing_skill: Optional[Dict[str, Any]],
@@ -163,7 +164,7 @@ class SkillOperationUpdater:
             patch_value = operation.memory_fields[schema_field.name]
             target_key = self._target_skill_key(schema_field.name)
             current_value = skill.get(target_key)
-            skill[target_key] = merge_op.apply(current_value, patch_value)
+            skill[target_key] = await merge_op.apply(current_value, patch_value)
 
         if not skill["name"]:
             raise ValueError("Session skill operation is missing skill_name")
@@ -213,7 +214,7 @@ class SkillOperationUpdater:
             )
         except (FileNotFoundError, NotFoundError):
             return None
-        parsed = yaml.safe_load(abstract)
+        parsed = yaml.safe_load(body_for_preview(abstract))
         return parsed if isinstance(parsed, dict) else None
 
     @staticmethod

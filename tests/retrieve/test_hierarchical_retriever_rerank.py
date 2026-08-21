@@ -9,8 +9,10 @@ import time
 
 import pytest
 
+from openviking.core.context import ContextLevel
 from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever, RetrieverMode
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.semantic_sidecar import render_semantic_sidecar
 from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.retrieve.types import ContextType, TypedQuery
 from openviking_cli.session.user_id import UserIdentifier
@@ -624,7 +626,7 @@ async def test_retrieval_hotness_alpha_blends_when_configured(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_convert_to_matched_contexts_returns_empty_relations():
+async def test_convert_to_matched_contexts_propagates_search_tags():
     retriever = HierarchicalRetriever(
         storage=DummyStorage(),
         embedder=None,
@@ -632,8 +634,60 @@ async def test_convert_to_matched_contexts_returns_empty_relations():
     )
 
     result = await retriever._convert_to_matched_contexts(
-        [_result("viking://resources/file-a", 1.0, abstract="child A")],
+        [
+            _result(
+                "viking://resources/file-a",
+                1.0,
+                abstract="child A",
+                search_tags=["team=infra", "project=viking"],
+            )
+        ],
         ctx=_ctx(),
     )
 
-    assert result[0].relations == []
+    assert result[0].search_tags == ["team=infra", "project=viking"]
+
+
+@pytest.mark.asyncio
+async def test_convert_to_matched_contexts_defaults_tags_and_body_previews():
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=None,
+        rerank_config=None,
+    )
+    uri = "viking://resources/demo"
+    metadata = {
+        "source": {"kind": "http", "uri": "https://example.com/private.pdf"},
+        "generated_by": {"component": "SemanticProcessor", "trigger": "ingest"},
+    }
+    markdown = "---\ntitle: User document\n---\n\nVisible body."
+
+    result = await retriever._convert_to_matched_contexts(
+        [
+            _result(
+                uri,
+                1.0,
+                level=int(ContextLevel.ABSTRACT),
+                abstract=render_semantic_sidecar(
+                    ContextLevel.ABSTRACT, uri, "Visible abstract.", metadata
+                ),
+            ),
+            _result(
+                uri,
+                0.9,
+                level=int(ContextLevel.OVERVIEW),
+                abstract=render_semantic_sidecar(
+                    ContextLevel.OVERVIEW, uri, "# Visible overview", metadata
+                ),
+            ),
+            _result("viking://resources/demo.md", 0.8, level=2, abstract=markdown),
+        ],
+        ctx=_ctx(),
+    )
+
+    assert [item.search_tags for item in result] == [[], [], []]
+    assert [item.abstract for item in result] == [
+        "Visible abstract.",
+        "# Visible overview",
+        markdown,
+    ]

@@ -182,7 +182,7 @@ If the `openclaw` CLI cannot run inside the container, merge the following field
   | --- | --- | --- |
   | `env` | `{ "source": "env", "id": "OPENVIKING_API_KEY" }` | Reads the named env var at plugin load time. |
   | `file` | `{ "source": "file", "id": "/etc/secrets/openviking.key" }` | Reads UTF-8, trims whitespace. `~` is expanded; ideal for Kubernetes `secretKeyRef` volumes and 0600-managed files. |
-  | `exec` | `{ "source": "exec", "provider": "op", "id": "op://vault/openviking/credential" }` | Runs `<provider> <id>` and trims stdout (1Password `op`, Vault, gopass, etc. all match this shape). |
+  | `exec` | not supported in the packaged plugin (marketplace install scanners block subprocess execution) | Wrap the CLI instead: `OPENVIKING_API_KEY=$(op read op://vault/openviking/credential)` and use `env`. |
 
   A plain `string` (including `${ENV_VAR}` interpolation) is still accepted, but only as a backward-compatibility path; in that case, restrict file permissions or provide the file through a managed Secret volume, then restart the Gateway, container, or Pod.
 

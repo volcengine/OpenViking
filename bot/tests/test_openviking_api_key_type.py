@@ -864,6 +864,13 @@ def test_validate_openviking_auth_allows_trusted_root(monkeypatch, capsys):
     )
 
     def _fake_probe(_server_url, path, *, headers=None):
+        if path == "/health":
+            assert headers == {
+                "X-OpenViking-Account": "acct",
+                "X-OpenViking-User": "admin",
+                "X-API-Key": "root-key",
+            }
+            return _auth_probe(data={"auth_mode": "trusted"})
         if path == "/api/v1/system/status":
             assert headers == {
                 "X-OpenViking-Account": "acct",
@@ -871,7 +878,7 @@ def test_validate_openviking_auth_allows_trusted_root(monkeypatch, capsys):
                 "X-API-Key": "root-key",
             }
             return _auth_probe(data={"status": "ok", "result": {"user": "admin"}})
-        return _auth_probe(data={"auth_mode": "trusted"})
+        raise AssertionError(f"unexpected auth probe path: {path}")
 
     monkeypatch.setattr(config_loader_module, "_request_openviking_json", _fake_probe)
 

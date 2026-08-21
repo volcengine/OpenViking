@@ -3,6 +3,7 @@
 import json
 from typing import Any, Dict, List, Optional
 
+from openviking.storage.errors import VikingDBException
 from openviking.storage.vectordb.collection.collection import ICollection
 from openviking.storage.vectordb.collection.result import (
     AggregateResult,
@@ -38,6 +39,39 @@ class VikingDBCollection(ICollection):
         self.project_name = self.meta_data.get("ProjectName", "default")
         self.collection_name = self.meta_data.get("CollectionName", "")
 
+    @staticmethod
+    def _build_response_error(response: Any, action: str) -> VikingDBException:
+        try:
+            result = response.json()
+        except json.JSONDecodeError:
+            result = {}
+
+        if isinstance(result, dict):
+            code = result.get("code")
+            message = (
+                result.get("message") or result.get("msg") or result.get("error") or response.text
+            )
+        else:
+            code = None
+            message = response.text
+
+        status_code = response.status_code
+        error_type = (
+            "http_client_error"
+            if 400 <= status_code < 500
+            else "http_server_error"
+            if status_code >= 500
+            else "http_error"
+        )
+        return VikingDBException(
+            f"Request to {action} failed: {status_code} {message}",
+            status_code=status_code,
+            code=str(code) if code is not None else None,
+            error_type=error_type,
+            retryable=status_code == 429 or status_code >= 500,
+            action=action,
+        )
+
     def _console_post(self, data: Dict[str, Any], action: str):
         path, method = VIKINGDB_APIS[action]
         response = self.client.do_req(method, path=path, req_body=data)
@@ -71,23 +105,23 @@ class VikingDBCollection(ICollection):
     def _data_post(self, path: str, data: Dict[str, Any]):
         response = self.client.do_req("POST", path, req_body=data)
         if response.status_code != 200:
-            logger.error(f"Request to {path} failed: {response.text}")
-            return {}
+            raise self._build_response_error(response, path)
         try:
             result = response.json()
             return result.get("result", {})
         except json.JSONDecodeError:
+            logger.warning("Invalid JSON response from %s", path)
             return {}
 
     def _data_get(self, path: str, params: Dict[str, Any]):
         response = self.client.do_req("GET", path, req_params=params)
         if response.status_code != 200:
-            logger.error(f"Request to {path} failed: {response.text}")
-            return {}
+            raise self._build_response_error(response, path)
         try:
             result = response.json()
             return result.get("result", {})
         except json.JSONDecodeError:
+            logger.warning("Invalid JSON response from %s", path)
             return {}
 
     def update(self, fields: Optional[Dict[str, Any]] = None, description: Optional[str] = None):

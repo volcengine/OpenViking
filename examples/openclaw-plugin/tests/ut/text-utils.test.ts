@@ -321,6 +321,47 @@ describe("extractNewTurnMessages", () => {
       },
     ]);
   });
+
+  it("preserves failed toolResult status", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_failed",
+            name: "ov_read",
+            arguments: { uri: "viking://user/test/memories/experiences/missing.md" },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_failed",
+        toolName: "ov_read",
+        content: [{ type: "text", text: "OpenViking request failed" }],
+        isError: true,
+      },
+    ];
+
+    const { messages: extracted } = extractNewTurnMessages(messages, 0);
+
+    expect(extracted).toEqual([
+      {
+        role: "assistant",
+        parts: [
+          {
+            type: "tool",
+            toolCallId: "call_failed",
+            toolName: "ov_read",
+            toolInput: { uri: "viking://user/test/memories/experiences/missing.md" },
+            toolOutput: "OpenViking request failed",
+            toolStatus: "error",
+          },
+        ],
+      },
+    ]);
+  });
 });
 
 describe("extractLatestUserText", () => {

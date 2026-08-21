@@ -1,9 +1,9 @@
 import { getHealth } from '#/lib/ov-client'
 
-export type ServerAuthMode = 'api_key' | 'trusted' | 'dev'
+export type ServerAuthMode = 'api_key' | 'trusted' | 'dev' | 'oidc' | 'ldap'
 export type ServerMode = ServerAuthMode | 'checking' | 'offline'
 
-const SERVER_AUTH_MODES = new Set<ServerAuthMode>(['api_key', 'trusted', 'dev'])
+const SERVER_AUTH_MODES = new Set<ServerAuthMode>(['api_key', 'trusted', 'dev', 'oidc', 'ldap'])
 const HEALTH_REQUEST_REUSE_MS = 1_000
 
 let recentHealthRequest:

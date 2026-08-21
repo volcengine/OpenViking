@@ -171,11 +171,11 @@ Save the following content as `~/.openviking/ov.conf`:
 ### Test Connection
 
 ```python
-import openviking as ov
 import asyncio
+from openviking_sdk import AsyncHTTPClient
 
 async def test():
-    client = ov.AsyncOpenViking(path="./test_data")
+    client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
     await client.initialize()
 
     # Test adding a simple resource

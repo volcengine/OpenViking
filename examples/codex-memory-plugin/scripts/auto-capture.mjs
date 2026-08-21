@@ -61,6 +61,10 @@ function makeHeaders() {
   return headers;
 }
 
+function responseTraceId(body) {
+  return body?.result?.trace_id || body?.error?.trace_id || body?.trace_id || undefined;
+}
+
 async function fetchJSONRes(path, init = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), cfg.captureTimeoutMs);
@@ -68,10 +72,11 @@ async function fetchJSONRes(path, init = {}) {
     const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers: makeHeaders(), signal: controller.signal });
     const body = await res.json().catch(() => null);
     if (!body) return { ok: false, status: res.status, error: { message: "empty or invalid JSON response" } };
+    const traceId = responseTraceId(body);
     if (!res.ok || body.status === "error") {
-      return { ok: false, status: res.status, error: body.error || body };
+      return { ok: false, status: res.status, error: body.error || body, traceId };
     }
-    return { ok: true, status: res.status, result: body.result ?? body };
+    return { ok: true, status: res.status, result: body.result ?? body, traceId };
   } catch (err) {
     return { ok: false, status: 0, error: { message: err?.message || String(err) } };
   } finally {
@@ -135,7 +140,15 @@ async function appendTurns(ovSessionId, turns, state) {
 }
 
 async function maybeCommitByThreshold(ovSessionId, added) {
-  if (added <= 0) return { committed: false, pendingTokens: 0, commitCount: 0, totalMessageCount: 0 };
+  if (added <= 0) {
+    return {
+      committed: false,
+      pendingTokens: 0,
+      commitCount: 0,
+      totalMessageCount: 0,
+      traceId: "",
+    };
+  }
   const meta = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}`);
   const pendingTokens = Number(meta?.pending_tokens || 0);
   const commitCount = Number(meta?.commit_count || 0);
@@ -147,19 +160,28 @@ async function maybeCommitByThreshold(ovSessionId, added) {
     keepRecentCount: cfg.commitKeepRecentCount,
   });
   if (pendingTokens < cfg.commitTokenThreshold) {
-    return { committed: false, pendingTokens, commitCount, totalMessageCount };
+    return { committed: false, pendingTokens, commitCount, totalMessageCount, traceId: "" };
   }
-  const commit = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`, {
+  const commit = await fetchJSONRes(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`, {
     method: "POST",
     body: JSON.stringify({ keep_recent_count: cfg.commitKeepRecentCount }),
   });
-  const committed = Boolean(commit);
-  log("commit", { ovSessionId, ok: committed, pending: pendingTokens });
+  const committed = commit.ok;
+  const traceId = commit.traceId || commit.result?.trace_id || "";
+  log("commit", {
+    ovSessionId,
+    ok: committed,
+    status: commit.status,
+    trace_id: traceId || undefined,
+    pending: pendingTokens,
+    error: committed ? undefined : commit.error?.message || commit.error?.code,
+  });
   return {
     committed,
     pendingTokens,
     commitCount: committed ? commitCount + 1 : commitCount,
     totalMessageCount,
+    traceId,
   };
 }
 
@@ -232,7 +254,13 @@ async function main() {
 
   let added = 0;
   let ovSessionId = "";
-  let commitInfo = { committed: false, pendingTokens: 0, commitCount: 0, totalMessageCount: 0 };
+  let commitInfo = {
+    committed: false,
+    pendingTokens: 0,
+    commitCount: 0,
+    totalMessageCount: 0,
+    traceId: "",
+  };
   if (newTurns.length > 0) {
     ovSessionId = resolveOvSessionId(state);
     if (!ovSessionId) {
@@ -251,7 +279,9 @@ async function main() {
   if (added > 0) {
     noop(
       `appended ${added} turn(s) to OpenViking session ${state.ovSessionId}` +
-      (commitInfo.committed ? " (committed)" : ""),
+      (commitInfo.committed
+        ? ` (committed${commitInfo.traceId ? `; trace_id=${commitInfo.traceId}` : ""})`
+        : ""),
     );
   } else {
     noop();

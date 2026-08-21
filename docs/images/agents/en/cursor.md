@@ -1,25 +1,30 @@
-## Install the Cursor integration
-
-Requires macOS/Linux and Node.js 18+. The command installs Hooks, MCP, Rule, and Skill together:
+## Install
 
 ```bash
 bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness cursor --dist tos
 ```
 
-When asked where to connect, select **Volcengine OpenViking Cloud** and enter your API key. Choose **Self-hosted / local** only for a locally running OpenViking server.
+Select **Volcengine OpenViking Cloud**. Paste the API key from this page.
+
+API Key: Copy the API Key shown on the page and paste it when the installer prompts for it.
+
+{{OPENVIKING_API_KEY_BLOCK}}
 
 ## Verify
 
 1. Restart Cursor and start a new Agent session.
-2. In **Cursor Settings → Hooks**, confirm that the lifecycle Hooks ran `cursor-hook.mjs`, the URI protection Hooks ran `uri-guard.mjs`, and the prompt Hook returned `additional_context`.
-3. In **Cursor Settings → Tools & MCPs**, confirm that `openviking` is connected.
+2. **Cursor Settings → Hooks**: lifecycle hooks run `cursor-hook.mjs`.
+3. **Cursor Settings → Tools & MCPs**: `openviking` is connected.
 
-See the complete [Cursor integration guide](https://docs.openviking.ai/en/agent-integrations/12-cursor).
+## Troubleshoot
 
-## Troubleshooting
-
-| Problem | Suggested fix |
+| Problem | Fix |
 |---|---|
-| Hooks do not run after installation | Quit Cursor completely, restart it, and create a new Agent session. |
-| Recall runs more than once | Check the Execution Log for an imported legacy Claude OpenViking Hook, then upgrade or remove the legacy plugin reported by the installer. |
-| Connection/authentication fails | Check `~/.openviking/ovcli.conf` and restart Cursor. |
+| Hooks do not run | Quit Cursor completely, restart, new Agent session |
+| Connection / auth fails | Check `~/.openviking/ovcli.conf` and restart Cursor |
+| Need logs | `OPENVIKING_DEBUG=1` and `~/.openviking/logs/cursor-hooks.log` |
+
+## Reference
+
+- Docs on Manual Settings: [Cursor](https://docs.openviking.net/en/agent-integrations/12-cursor)
+- Code: [examples/cursor-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/cursor-memory-plugin)

@@ -78,7 +78,7 @@ UsageEvent 是 OpenViking 内核和外部 Sink 之间的稳定协议。
     "archive_uri": "viking://user/test/sessions/510bb5f9/history/archive_001",
     "message_id": "msg_xxx",
     "tool_call_id": "call_xxx",
-    "tool_name": "read_experience"
+    "tool_name": "mcp__openviking__read"
   },
   "attributes": {}
 }
@@ -89,6 +89,17 @@ UsageEvent 是 OpenViking 内核和外部 Sink 之间的稳定协议。
 `resource_uri` 和 `resource_type` 描述被使用的资源，不限定为记忆文件；事件类型特有的数据写入 `attributes`。当前 `MemoryUsageExtractor` 只接受属于 `UsageContext.user_id` 的规范 experience URI，其他用户 URI 不生成 UsageEvent。ToolPart 必须包含非空 `tool_id`，无法稳定标识具体调用的 ToolPart 不进入统计。
 
 UsageEvent 是可独立传输和消费的完整事件。`UsageContext` 只用于 Extractor 构造事件，不再重复传给 Sink。
+
+### 5.1 Experience 使用事件识别
+
+插件使用 OpenViking 原生通用工具消费 Experience，不额外注册 Experience 专用工具：
+
+- 成功的 `find`、`search`、`list` 调用结果中出现 Experience URI，产生 `memory.recalled`。
+- 成功的 `read`、`multi_read` 调用实际读取 Experience URI，产生 `memory.injected`。
+- 支持 OpenCode 的 `openviking_*`、OpenClaw 的 `ov_*` 和
+  `mcp__openviking__*` 命名空间形式；仅按受支持的工具名精确识别。
+- 通用工具返回其他记忆类型时，只保留当前用户 `memories/experiences/` 目录下的规范文件 URI。
+- 只识别上述正式通用工具，不为未发布的专用工具名提供解析或配置兼容。
 
 ## 6. UsageSink 机制
 
@@ -136,36 +147,31 @@ HTTP 请求。日志文件使用 UTC 小时滚动，默认保留 168 个小时�
 时，通过进程间文件锁串行化写入和滚动；Windows worker 写入后主动关闭文件句柄，
 避免其他进程滚动重命名失败。
 
-### 6.1 文件日志 CountRecord 协议
+### 6.1 文件日志计量协议
 
 `UsageEvent` 继续作为 OpenViking 内部抽取结果和自定义 Sink 的稳定协议。内置
-文件日志 Sink 将 `UsageEvent` 转换为计量接收端使用的 `CountRecord`。每个事件
-写成一行包含 Kafka key/value 的 JSON envelope：
+文件日志 Sink 将 `UsageEvent` 转换为计量接收端使用的扁平 JSON。每个事件写成
+一行：
 
-```text
-{"key":"ov-xxx|new|test|viking://user/test/memories/experiences/example.md","value":{"count_name":"experience.recall.count","op_type":"add","amount":1.0,"timestamp":1785124800000,"unique_id":"ue_<sha256>","tags":{"account_id":"new","user_id":"test","resource_uri":"viking://user/test/memories/experiences/example.md","resource_type":"experience"},"extra":{"session_id":"session-id","task_id":"task-id","archive_uri":"viking://user/test/sessions/session-id/history/archive_001","message_id":"message-id","tool_call_id":"tool-call-id","tool_name":"search_experience"},"prefix":"ov-xxx"}}
+```json
+{"event_time":"2026-08-05 11:30:00","tenant_id":"resource_id:ov-xxx;account_id:new;user_id:test;resource_uri:viking://user/test/memories/experiences/example.md","event_name":"experience.recall.count","object_id":"ue_<sha256>","count":1,"tags":{"resource_type":"experience"}}
 ```
 
 字段映射：
 
-- envelope 的 `key` 与原 Kafka message key 一致，格式为
-  `resource_id|account_id|user_id|resource_uri`；`resource_uri` 为空时回退
-  到 `session_id`。
-- envelope 的 `value` 是原 Kafka message value 的完整 JSON，不拆分内部字段。
-- 整行使用 JSON envelope，key 中的分隔符不会影响 key/value 解析。
-- JSON 中的 `prefix` 为 OpenViking 实例的 resource ID。
-- `memory.recalled` 映射为 `count_name=experience.recall.count`。
-- `memory.injected` 映射为 `count_name=experience.inject.count`。
-- `op_type` 固定为 `add`。
-- `amount` 固定为 `1.0`。
-- `timestamp` 由 `occurred_at` 转换为 Unix 毫秒时间戳。
-- JSON 中的 `unique_id` 使用稳定的 `event_id`。
-- JSON 中的 `tags` 保存 `account_id`、`user_id`、`resource_uri` 和
-  `resource_type`。
-- JSON 中的 `extra` 保存 `session_id`、可选的 `task_id` 以及 `evidence`
-  中的审计字段。
-- 非空的 `UsageEvent.attributes` 原样写入 `extra.attributes`。
-- 空的可选字段不写入 `extra`。
+- `event_time` 由 `occurred_at` 转换为 UTC `YYYY-MM-DD HH:MM:SS`。
+- `tenant_id` 固定为
+  `resource_id:<resource_id>;account_id:<account_id>;user_id:<user_id>;resource_uri:<resource_uri>`。
+- `memory.recalled` 映射为 `event_name=experience.recall.count`。
+- `memory.injected` 映射为 `event_name=experience.inject.count`。
+- `object_id` 使用稳定的 `event_id`。下游以 `(tenant_id, object_id)` 作为复合去重键，
+  不跨 tenant 单独按 `object_id` 去重。
+- `count` 固定为 `1`。
+- `tags.resource_type` 固定记录被使用资源的类型；本期只产生
+  `experience` 使用事件。
+
+接收端按 `tenant_id`、`event_name` 和 `event_time` 范围过滤，并通过
+`sum(count)` 聚合使用次数。
 
 无法识别的 `event_type` 不生成含义不明确的计量记录，转换时抛出错误并由
 Reporter 的 best-effort 隔离机制处理。
@@ -207,6 +213,9 @@ server:
           rotation_interval_hours: 1
           backup_count: 168
 ```
+
+部署时必须设置 `resource_id_env` 指定的环境变量。Sink 使用其值构造
+`tenant_id`，保证不同 OpenViking resource 的数据相互隔离。
 
 ## 8. 对 OpenViking 的侵入
 
@@ -256,7 +265,8 @@ Usage Reporter 采用 best-effort 投递语义：
 - 多个 Sink 相互隔离，某个 Sink 失败不影响其他 Sink。
 - Sink 失败时事件可能丢失，因此本机制不保证 at-least-once。
 - 如果 Sink 已写入成功，但进程在 phase2 写入完成标记前退出，phase2 恢复执行时可能重复发送同一事件。
-- 每个事件包含稳定的 `event_id`。Sink 可将其作为 Kafka message key，消费端可按 `event_id` 去重。
+- 每个事件包含稳定的 `event_id`。Sink 可将其作为 Kafka message key；消费端按
+  `(tenant_id, object_id)` 复合键去重。
 - `event_id` 只用于识别重复事件，不代表事件一定成功送达。
 
 `event_id` 为以下字段规范序列化后的 SHA-256：
@@ -278,4 +288,4 @@ schema_version
 
 内置文件日志 Sink 在 `write()` 返回前完成本地追加，但不负责 TLS 采集、Kafka
 投递或下游确认。文件写入、TLS 采集和下游消费任一阶段都可能在故障时产生丢失
-或重复，消费端需按 `unique_id` 去重，整体保持 best-effort 语义。
+或重复，消费端需按 `(tenant_id, object_id)` 复合键去重，整体保持 best-effort 语义。

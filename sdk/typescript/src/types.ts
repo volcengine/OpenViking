@@ -90,6 +90,11 @@ export interface AddResourceOptions extends WaitOptions {
   tags?: string[];
   tagMode?: "replace" | "append";
 }
+/** Content write options. */
+export interface WriteOptions extends WaitOptions {
+  mode?: string;
+  processingMode?: ProcessingMode;
+}
 /** Semantic retrieval options. */
 export interface SearchOptions {
   targetUri?: TargetURI;
@@ -131,6 +136,7 @@ export interface TreeOptions {
   absLimit?: number;
   showAllHidden?: boolean;
   nodeLimit?: number;
+  levelLimit?: number;
 }
 /** Session message payload. */
 export interface Message {
@@ -145,6 +151,20 @@ export interface Message {
 export interface CreateSessionOptions {
   sessionId?: string;
   memoryPolicy?: JsonObject;
+  autoCommitPolicy?: JsonObject | null;
+  memoryExtractionConfig?: MemoryExtractionConfig;
+  telemetry?: unknown;
+}
+/** Event-memory extraction settings shared by session create and update. */
+export interface MemoryExtractionConfig {
+  events?: {
+    tags?: string[];
+  };
+}
+/** Mutable session configuration. */
+export interface UpdateSessionConfigOptions {
+  memoryExtractionConfig?: MemoryExtractionConfig;
+  autoCommitPolicy?: JsonObject | null;
   telemetry?: unknown;
 }
 /** Background task filters. */

@@ -173,6 +173,13 @@ fn identity_field<'a>(
 fn format_auth_mode(value: Option<&str>, language: Language) -> String {
     match value {
         Some("api_key") => "API key".to_string(),
+        Some("oidc") => "OIDC".to_string(),
+        Some("ldap") => "LDAP".to_string(),
+        Some("trusted") => "Trusted".to_string(),
+        Some("dev") => match language {
+            Language::En => "Dev".to_string(),
+            Language::ZhCn => "开发模式".to_string(),
+        },
         Some("none") => match language {
             Language::En => "None".to_string(),
             Language::ZhCn => "无".to_string(),

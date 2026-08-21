@@ -280,7 +280,7 @@ preflight 阶段的 `assemble()` 并不是简单地把旧聊天记录塞回来�
 - `openviking_tool_result_search`：在外置工具输出中按关键词搜索
 - `openviking_tool_result_read`：通过 ref 和 offset/limit 分页读取外置工具输出
 
-工具选择器支持精确工具名，也支持分组：`default`、`all`、`memory`、`resource_query`、`import`、`recall_trace`、`archive`、`tool_result`。例如，禁用记忆并只保留资源查询工具：
+工具选择器支持精确工具名，也支持分组：`default`、`all`、`memory`、`resource_query`、`import`、`recall_trace`、`archive`、`tool_result`。Experience 检索使用 `resource_query` 分组或 `ov_search`、`ov_read` 等当前工具名。例如，禁用记忆并只保留资源查询工具：
 
 ```json
 {

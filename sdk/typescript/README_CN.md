@@ -34,6 +34,27 @@ await client.addResource("./docs/guide.md", {
 });
 ```
 
+事件记忆 tags 可设置为 session 默认值、后续更新，也可在单次 commit 时覆盖。向 `commitSession` 传 `[]` 表示本次显式跳过 session 默认 tags。
+
+```ts
+await client.createSession({
+  sessionId: "s1",
+  memoryExtractionConfig: {
+    events: { tags: ["team=search", "channel=web"] },
+  },
+});
+await client.createSession({ sessionId: "manual", autoCommitPolicy: null });
+await client.updateSessionConfig("s1", {
+  autoCommitPolicy: { message_count_threshold: 25 },
+  memoryExtractionConfig: {
+    events: { tags: ["team=search", "channel=app"] },
+  },
+});
+await client.updateSessionConfig("s1", { autoCommitPolicy: null });
+await client.commitSession("s1", 0, undefined, ["team=search", "channel=web"]);
+await client.commitSession("s1", 0, undefined, []);
+```
+
 使用共享临时存储的部署可设置 `uploadMode: "shared"`；服务端也接受 `"local"`（默认值）。
 
 OVPack 导出和备份与 Python、Go SDK 契约一致：内容会流式写入 Node.js 本地文件，并返回最终文件路径。

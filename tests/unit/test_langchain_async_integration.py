@@ -10,10 +10,10 @@ import pytest
 
 pytest.importorskip("langchain_core")
 pytest.importorskip("langgraph")
+pytest.importorskip("langchain_openviking")
 
 from langchain_core.messages import AIMessage, HumanMessage
-
-from openviking.integrations.langchain import (
+from langchain_openviking import (
     InMemoryOpenVikingClient,
     OpenVikingCancellationProgress,
     OpenVikingChatMessageHistory,
@@ -25,7 +25,7 @@ from openviking.integrations.langchain import (
     OpenVikingSessionRecorder,
     get_openviking_cancellation_progress,
 )
-from openviking.integrations.langchain.client import (
+from langchain_openviking.client import (
     OpenVikingAsyncClientHandle,
     OpenVikingConnection,
     acall_openviking,
@@ -136,7 +136,7 @@ def test_retriever_deepcopy_discards_owned_sync_client(monkeypatch):
         def find(self, **_kwargs: Any) -> dict[str, Any]:
             return {"memories": [], "resources": [], "skills": []}
 
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "SyncHTTPClient", NonCopyableSyncHTTPClient)
     retriever = OpenVikingRetriever(url="http://localhost:1933")
@@ -166,7 +166,7 @@ async def test_ensure_async_client_defaults_to_native_http_client(monkeypatch):
         async def find(self, query: str) -> dict[str, str]:
             return {"query": query}
 
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "AsyncHTTPClient", FakeAsyncHTTPClient)
 
@@ -274,7 +274,7 @@ async def test_async_client_handle_initializes_once_under_concurrency(monkeypatc
         async def close(self) -> None:
             self.closed = True
 
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "AsyncHTTPClient", SlowAsyncHTTPClient)
     handle = OpenVikingAsyncClientHandle(OpenVikingConnection(url="http://localhost:1933"))
@@ -302,7 +302,7 @@ async def test_async_client_initialization_failure_closes_candidate(monkeypatch)
         async def close(self) -> None:
             self.closed = True
 
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "AsyncHTTPClient", FailingAsyncHTTPClient)
 
@@ -328,7 +328,7 @@ async def test_async_adapter_client_caches_initialize_once_under_concurrency(mon
         async def close(self) -> None:
             self.closed = True
 
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "AsyncHTTPClient", SlowAsyncHTTPClient)
     recorder = OpenVikingSessionRecorder(url="http://localhost:1933")
@@ -379,7 +379,7 @@ def test_async_adapter_clients_are_scoped_per_event_loop(monkeypatch):
         async def close(self) -> None:
             self.closed = True
 
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "AsyncHTTPClient", LoopBoundAsyncHTTPClient)
     recorder = OpenVikingSessionRecorder(url="http://localhost:1933")
@@ -420,7 +420,7 @@ def test_async_adapter_aclose_after_originating_loop_ends_is_best_effort(monkeyp
         async def close(self) -> None:
             raise RuntimeError("event loop is closed")
 
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "AsyncHTTPClient", LoopBoundAsyncHTTPClient)
     recorder = OpenVikingSessionRecorder(url="http://localhost:1933")
@@ -448,7 +448,7 @@ def test_async_adapter_aclose_routes_to_live_originating_loop(monkeypatch):
         async def close(self) -> None:
             self.closed_loop = asyncio.get_running_loop()
 
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "AsyncHTTPClient", LoopBoundAsyncHTTPClient)
     recorder = OpenVikingSessionRecorder(url="http://localhost:1933")
@@ -504,7 +504,7 @@ async def test_async_handle_copy_and_missing_attribute_behavior(monkeypatch):
         async def close(self) -> None:
             self.closed = True
 
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "AsyncHTTPClient", FakeAsyncHTTPClient)
     retriever = OpenVikingRetriever(url="http://localhost:1933")
@@ -547,7 +547,7 @@ async def test_async_handle_method_lookup_survives_recovery_reset(monkeypatch):
                 reset_started.set()
                 await release_close.wait()
 
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "AsyncHTTPClient", RecoveringAsyncHTTPClient)
     handle = OpenVikingAsyncClientHandle(OpenVikingConnection(url="http://localhost:1933"))
@@ -599,7 +599,7 @@ async def test_async_handle_stale_failure_does_not_reset_replacement(monkeypatch
                 reset_started.set()
                 await release_old_close.wait()
 
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "AsyncHTTPClient", RecoveringAsyncHTTPClient)
     handle = OpenVikingAsyncClientHandle(OpenVikingConnection(url="http://localhost:1933"))
@@ -636,7 +636,7 @@ async def test_async_handle_missing_method_fails_when_called(monkeypatch):
         async def close(self) -> None:
             return None
 
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "AsyncHTTPClient", FakeAsyncHTTPClient)
     handle = OpenVikingAsyncClientHandle(OpenVikingConnection(url="http://localhost:1933"))
@@ -671,7 +671,7 @@ async def test_sync_close_after_async_use_remains_recoverable(monkeypatch):
         def close(self) -> None:
             self.closed = True
 
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "AsyncHTTPClient", FakeAsyncHTTPClient)
     monkeypatch.setattr(client_module, "SyncHTTPClient", FakeSyncHTTPClient)
@@ -710,7 +710,7 @@ async def test_async_middleware_closes_all_internally_owned_clients(monkeypatch)
         async def close(self) -> None:
             self.closed = True
 
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "AsyncHTTPClient", FakeAsyncHTTPClient)
     middleware = OpenVikingContextMiddleware(url="http://localhost:1933")
@@ -776,7 +776,7 @@ async def test_async_client_retries_safe_read_with_fresh_client(monkeypatch):
                 raise ConnectionError("OpenViking server was not ready")
             return {"memories": [], "resources": [], "skills": []}
 
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "AsyncHTTPClient", FlakyAsyncHTTPClient)
 
@@ -806,7 +806,7 @@ async def test_async_client_evicts_without_replaying_mutating_call(monkeypatch):
         async def batch_add_messages(self, **_kwargs: Any) -> dict[str, Any]:
             raise ConnectionError("OpenViking connection dropped during write")
 
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "AsyncHTTPClient", FlakyAsyncHTTPClient)
 
@@ -838,70 +838,6 @@ async def test_sync_client_async_fallback_runs_outside_event_loop_thread():
     assert result["query"] == "fallback"
     assert call_thread_ids
     assert call_thread_ids[0] != main_thread_id
-
-
-@pytest.mark.asyncio
-async def test_embedded_path_async_uses_owned_sync_client_in_worker(monkeypatch, tmp_path):
-    main_thread_id = threading.get_ident()
-    instances: list[Any] = []
-
-    class FakeSyncOpenViking:
-        def __init__(self, *, path: str, actor_peer_id: str | None = None):
-            self.path = path
-            self.actor_peer_id = actor_peer_id
-            self._initialized = False
-            self.initialize_thread_id: int | None = None
-            self.find_thread_id: int | None = None
-            self.closed = False
-            instances.append(self)
-
-        def initialize(self) -> None:
-            self.initialize_thread_id = threading.get_ident()
-            self._initialized = True
-
-        def find(self, **_kwargs: Any) -> dict[str, Any]:
-            self.find_thread_id = threading.get_ident()
-            return {
-                "memories": [
-                    {
-                        "uri": "viking://user/memories/example",
-                        "abstract": "Embedded result.",
-                        "level": 1,
-                    }
-                ],
-                "resources": [],
-                "skills": [],
-            }
-
-        def close(self) -> None:
-            self.closed = True
-
-    import openviking.sync_client as sync_client_module
-
-    monkeypatch.setattr(sync_client_module, "SyncOpenViking", FakeSyncOpenViking)
-    retriever = OpenVikingRetriever(path=str(tmp_path), actor_peer_id="assistant-a")
-
-    documents = await retriever.ainvoke("embedded")
-    client = await retriever.get_async_client()
-
-    assert [document.page_content for document in documents] == ["Embedded result."]
-    assert len(instances) == 1
-    assert client is instances[0]
-    assert client is retriever._get_client()
-    assert client.actor_peer_id == "assistant-a"
-    assert client.initialize_thread_id != main_thread_id
-    assert client.find_thread_id != main_thread_id
-
-    await retriever.aclose()
-    assert client.closed is True
-
-    recorder = OpenVikingSessionRecorder(path=str(tmp_path / "recorder"))
-    recorder_client = await recorder.get_async_client()
-
-    assert recorder_client is recorder.client
-    recorder.close()
-    assert recorder._closed is True
-    assert recorder_client.closed is True
 
 
 @pytest.mark.asyncio
@@ -1212,7 +1148,7 @@ async def test_async_recorder_closes_only_internally_created_client(monkeypatch)
         async def close(self) -> None:
             self.closed = True
 
-    import openviking.client as client_module
+    import openviking_sdk as client_module
 
     monkeypatch.setattr(client_module, "AsyncHTTPClient", FakeAsyncHTTPClient)
     owned_recorder = OpenVikingSessionRecorder(url="http://localhost:1933")

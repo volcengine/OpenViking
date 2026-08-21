@@ -10,10 +10,12 @@ import os
 import tempfile
 import zipfile
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
 from openviking.server.identity import RequestContext, Role
+from openviking.service.pack_service import PackService
 from openviking.storage.index_consistency import IndexConsistencyReport, IndexExpectation
 from openviking.storage.ovpack.operations import (
     backup_ovpack,
@@ -26,10 +28,13 @@ from openviking_cli.session.user_id import UserIdentifier
 
 
 class FakeVikingFS:
-    def __init__(self) -> None:
+    def __init__(self, existing_roots: set[str] | None = None) -> None:
         self.written_files: list[str] = []
         self.created_dirs: list[str] = []
         self.tree_calls: list[str] = []
+        self.write_contexts: list[RequestContext] = []
+        self.existing_roots = existing_roots or set()
+        self.removed_roots: list[str] = []
 
     async def stat(self, uri: str, ctx=None):
         return {"uri": uri, "isDir": True}
@@ -38,10 +43,17 @@ class FakeVikingFS:
         self.created_dirs.append(uri)
 
     async def ls(self, uri: str, ctx=None):
+        if uri in self.existing_roots:
+            return []
         raise NotFoundError(uri, "file")
+
+    async def rm(self, uri: str, recursive: bool = False, ctx=None):
+        assert recursive is True
+        self.removed_roots.append(uri)
 
     async def write_file_bytes(self, uri: str, data: bytes, ctx=None):
         self.written_files.append(uri)
+        self.write_contexts.append(ctx)
 
     async def tree(self, uri: str, node_limit=None, level_limit=None, ctx=None):
         self.tree_calls.append(uri)
@@ -169,8 +181,9 @@ class FakeBackupVikingFS:
     def __init__(self) -> None:
         self.binary_files = {
             "viking://resources/README.md": b"hello",
-            "viking://user/alice/sessions/sess_1/.meta.json": b'{"session_id":"sess_1"}',
+            "viking://user/resources/sessions/sess_1/.meta.json": b'{"session_id":"sess_1"}',
         }
+        self.tree_contexts: list[tuple[str, RequestContext]] = []
 
     async def tree(
         self,
@@ -183,6 +196,7 @@ class FakeBackupVikingFS:
         assert show_all_hidden is True
         assert node_limit is None
         assert level_limit is None
+        self.tree_contexts.append((uri, ctx))
         if uri == "viking://resources":
             return [
                 {
@@ -195,26 +209,26 @@ class FakeBackupVikingFS:
         if uri == "viking://user":
             return [
                 {
-                    "rel_path": "alice",
-                    "uri": "viking://user/alice",
+                    "rel_path": "resources",
+                    "uri": "viking://user/resources",
                     "isDir": True,
                     "size": 0,
                 },
                 {
-                    "rel_path": "alice/sessions",
-                    "uri": "viking://user/alice/sessions",
+                    "rel_path": "resources/sessions",
+                    "uri": "viking://user/resources/sessions",
                     "isDir": True,
                     "size": 0,
                 },
                 {
-                    "rel_path": "alice/sessions/sess_1",
-                    "uri": "viking://user/alice/sessions/sess_1",
+                    "rel_path": "resources/sessions/sess_1",
+                    "uri": "viking://user/resources/sessions/sess_1",
                     "isDir": True,
                     "size": 0,
                 },
                 {
-                    "rel_path": "alice/sessions/sess_1/.meta.json",
-                    "uri": "viking://user/alice/sessions/sess_1/.meta.json",
+                    "rel_path": "resources/sessions/sess_1/.meta.json",
+                    "uri": "viking://user/resources/sessions/sess_1/.meta.json",
                     "isDir": False,
                     "size": 23,
                 },
@@ -588,19 +602,21 @@ async def test_export_ovpack_skips_missing_semantic_sidecars(
 
 
 @pytest.mark.asyncio
-async def test_backup_restore_contract(temp_ovpack_path: Path, request_ctx: RequestContext):
-    await backup_ovpack(
-        FakeBackupVikingFS(),
-        str(temp_ovpack_path),
-        ctx=request_ctx,
-    )
+async def test_backup_restore_contract(
+    temp_ovpack_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    admin_ctx = RequestContext(user=UserIdentifier("acct", "admin"), role=Role.ADMIN)
+    backup_fs = FakeBackupVikingFS()
+    await PackService(backup_fs).backup_ovpack(str(temp_ovpack_path), ctx=admin_ctx)
 
     with zipfile.ZipFile(temp_ovpack_path, "r") as zf:
         names = set(zf.namelist())
         manifest = json.loads(zf.read("openviking-backup/_ovpack/manifest.json").decode("utf-8"))
 
     assert "openviking-backup/files/resources/README.md" in names
-    assert "openviking-backup/files/user/alice/sessions/sess_1/.meta.json" in names
+    assert "openviking-backup/files/user/resources/sessions/sess_1/.meta.json" in names
+    assert all(ctx.role == Role.ROOT for _, ctx in backup_fs.tree_contexts)
     assert manifest["root"] == {
         "name": "openviking-backup",
         "uri": "viking://",
@@ -608,17 +624,51 @@ async def test_backup_restore_contract(temp_ovpack_path: Path, request_ctx: Requ
         "package_type": "backup",
     }
     assert manifest["scopes"] == ["resources", "user"]
+    user_entries = {
+        entry["path"]: entry
+        for entry in manifest["entries"]
+        if entry["path"].startswith("user/resources")
+    }
+    assert user_entries
+    assert {entry["user_id"] for entry in user_entries.values()} == {"resources"}
 
     with pytest.raises(InvalidArgumentError, match=r"must be restored"):
-        await import_ovpack(FakeVikingFS(), str(temp_ovpack_path), "viking://", request_ctx)
+        await import_ovpack(FakeVikingFS(), str(temp_ovpack_path), "viking://", admin_ctx)
+
+    vectorization_calls: list[tuple[str, RequestContext]] = []
+
+    async def capture_vectorization(viking_fs, uri, ctx, **kwargs):
+        vectorization_calls.append((uri, ctx))
+
+    monkeypatch.setattr(
+        "openviking.storage.ovpack.operations._enqueue_direct_vectorization",
+        capture_vectorization,
+    )
 
     fake_fs = FakeVikingFS()
-    assert await restore_ovpack(fake_fs, str(temp_ovpack_path), request_ctx) == "viking://"
+    fake_fs.ls = AsyncMock(return_value=[])
+    fake_fs.stat = AsyncMock(side_effect=FileNotFoundError())
+    fake_fs.rm = AsyncMock()
+    assert (
+        await PackService(fake_fs).restore_ovpack(
+            str(temp_ovpack_path), ctx=admin_ctx, on_conflict="overwrite"
+        )
+        == "viking://"
+    )
     assert fake_fs.written_files == [
         "viking://resources/README.md",
-        "viking://user/alice/sessions/sess_1/.meta.json",
+        "viking://user/resources/sessions/sess_1/.meta.json",
     ]
-    assert fake_fs.tree_calls == ["viking://resources", "viking://user"]
+    fake_fs.rm.assert_not_awaited()
+    assert all(ctx.role == Role.ROOT for ctx in fake_fs.write_contexts)
+    assert [uri for uri, _ in vectorization_calls] == [
+        "viking://resources",
+        "viking://user/resources",
+    ]
+    user_vector_ctx = vectorization_calls[1][1]
+    assert user_vector_ctx.user.user_id == "resources"
+    assert user_vector_ctx.role == Role.ROOT
+    assert "viking://user" not in fake_fs.created_dirs
 
 
 @pytest.mark.asyncio
@@ -887,9 +937,16 @@ async def test_import_ovpack_rejects_manifest_file_hash_mismatch(
         manifest=manifest,
     )
     fake_fs = FakeVikingFS()
+    fake_fs.ls = AsyncMock(return_value=[])
 
     with pytest.raises(InvalidArgumentError, match=r"sha256 does not match manifest"):
-        await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://resources", request_ctx)
+        await import_ovpack(
+            fake_fs,
+            str(temp_ovpack_path),
+            "viking://resources",
+            request_ctx,
+            on_conflict="skip",
+        )
 
     assert fake_fs.written_files == []
 

@@ -8,6 +8,10 @@ import warnings
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from openviking.session.memory.constants import (
+    AGENT_EVOLUTION_MEMORY_TYPES,
+    EXPERIENCE_MEMORY_TYPE,
+)
 from openviking_cli.exceptions import InvalidArgumentError
 
 _POLICY_KEYS = {"self", "peer", "memory_types", "working_memory"}
@@ -73,6 +77,10 @@ def _parse_memory_types(data: Any) -> Optional[set[str]]:
         if not isinstance(item, str) or not item:
             raise InvalidArgumentError("memory_policy.memory_types must contain non-empty strings")
         memory_types.add(item)
+    if EXPERIENCE_MEMORY_TYPE in memory_types:
+        memory_types.update(AGENT_EVOLUTION_MEMORY_TYPES)
+    else:
+        memory_types.difference_update(AGENT_EVOLUTION_MEMORY_TYPES)
     return memory_types
 
 

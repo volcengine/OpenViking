@@ -218,34 +218,6 @@ export function mergeExpanded(
   return next
 }
 
-export function buildBreadcrumbs(
-  uri: string,
-  isFile: boolean,
-): Array<{ label: string; uri: string }> {
-  const normalized = isFile ? normalizeFileUri(uri) : normalizeDirUri(uri)
-  const dirUri = isFile ? normalizeDirUri(parentUri(normalized)) : normalized
-  const body = dirUri.slice(ROOT_URI.length).replace(/\/$/, '')
-  const parts = body ? body.split('/').filter(Boolean) : []
-  const crumbs: Array<{ label: string; uri: string }> = [
-    { label: ROOT_URI, uri: ROOT_URI },
-  ]
-  let running = ROOT_URI
-
-  for (const part of parts) {
-    running = `${running}${part}/`
-    crumbs.push({ label: part, uri: running })
-  }
-
-  if (isFile) {
-    crumbs.push({
-      label: fileNameFromUri(normalized) || normalized,
-      uri: normalized,
-    })
-  }
-
-  return crumbs
-}
-
 export function isDirectoryLevelFile(uri: string): boolean {
   const name = fileNameFromUri(uri)
   return name === '_abstract.md' || name === '_overview.md'

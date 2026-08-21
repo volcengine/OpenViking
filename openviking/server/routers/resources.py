@@ -7,6 +7,8 @@ from typing import Any, Dict, Literal, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from openviking.core.path_variables import resolve_path_variables
+from openviking.core.uri_validation import validate_content_target_uri
 from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.server.auth import get_request_context, get_upload_request_context
 from openviking.server.dependencies import get_service
@@ -56,7 +58,10 @@ class AddResourceRequest(BaseModel):
         exclude: Glob pattern for files to exclude during parsing.
         directly_upload_media: Whether to directly upload media files. Default is True.
         preserve_structure: Whether to preserve directory structure when adding directories.
-        args: Parser-specific import options. For Feishu one-time user-token imports,
+        args: Parser-specific import options. Native HTTPS Git imports accept
+            {"auth_config": {"username": "oauth2", "token": "..."}}; when
+            watch_interval > 0 the credentials are stored in private watch state.
+            For Feishu one-time user-token imports,
             pass {"feishu_access_token": "..."}. For Feishu user-token watches,
             pass {"feishu_access_token": "...", "feishu_refresh_token": "..."}.
         watch_interval: Watch interval in minutes for automatic resource monitoring.
@@ -67,9 +72,12 @@ class AddResourceRequest(BaseModel):
             - watch_interval < 0: Same as watch_interval = 0, cancels any existing watch task.
             Default is 0 (no monitoring).
 
-            Note: If the target URI already has an active watch task, a ConflictError will be
-            raised. You must first cancel the existing watch (set watch_interval <= 0) before
-            creating a new one.
+            Note: Re-adding the same source to the same target updates its active watch task.
+            A different source targeting an active watch raises ConflictError; cancel that
+            watch first with watch_interval <= 0. For Connector imports this check is
+            eventually consistent: the Watch is created only after the background import
+            succeeds, so overlapping imports may both write before Watch finalization
+            reports the conflict.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -182,6 +190,7 @@ async def temp_upload(
             processing_mode=signed.processing_mode,
             tags=signed.tags,
             tag_mode=signed.tag_mode,
+            parse_mode=signed.parse_mode,
         )
 
     try:
@@ -210,23 +219,34 @@ async def add_resource(
 ):
     """Add resource to OpenViking."""
     service = get_service()
+    to_uri = resolve_path_variables(request.to).strip() if request.to else ""
+    if to_uri:
+        to_uri = validate_content_target_uri(to_uri, _ctx, kind="resource", field_name="to")
+    parent_uri = resolve_path_variables(request.parent).strip() if request.parent else ""
+    if parent_uri:
+        parent_uri = validate_content_target_uri(
+            parent_uri,
+            _ctx,
+            kind="resource",
+            field_name="parent",
+        )
 
     path = request.path
     allow_local_path_resolution = False
     original_filename = None
     resolved = None
-    store = None
     if request.temp_file_id:
         if request.watch_interval > 0:
             raise InvalidArgumentError(
                 "watch_interval > 0 is not supported for uploaded content: an "
-                "upload is consumed as a one-time snapshot at ingest, so the "
-                "watch would re-process stale content forever. Watch a URL / "
+                "upload is a static snapshot, so the watch would re-process "
+                "stale content forever. Watch a URL / "
                 "sitemap / RSS source instead, or re-add the resource when the "
                 "source changes."
             )
-        store = TempUploadStore.build(http_request.app.state.config)
-        resolved = await store.resolve_for_consume(request.temp_file_id, _ctx)
+        resolved = await TempUploadStore.build(http_request.app.state.config).resolve_for_consume(
+            request.temp_file_id, _ctx
+        )
         path = resolved.local_path
         original_filename = resolved.original_filename
         allow_local_path_resolution = True
@@ -266,8 +286,8 @@ async def add_resource(
                 path=path,
                 ctx=_ctx,
                 add_type=request.add_type,
-                to=request.to,
-                parent=request.parent,
+                to=to_uri,
+                parent=parent_uri,
                 reason=request.reason,
                 instruction=request.instruction,
                 wait=request.wait,
@@ -280,12 +300,8 @@ async def add_resource(
                 **kwargs,
             )
         except Exception:
-            if resolved and store:
-                await store.mark_failed(resolved, _ctx)
             raise
         else:
-            if resolved and store:
-                await store.mark_consumed(resolved, _ctx)
             return result
         finally:
             if resolved:
@@ -307,6 +323,14 @@ async def add_skill(
 ):
     """Add skill to OpenViking."""
     service = get_service()
+    target_uri = resolve_path_variables(request.target_uri).strip() if request.target_uri else ""
+    if target_uri:
+        target_uri = validate_content_target_uri(
+            target_uri,
+            _ctx,
+            kind="skill",
+            field_name="target_uri",
+        )
     data = request.data
     allow_local_path_resolution = False
     resolved = None
@@ -331,8 +355,6 @@ async def add_skill(
             source_metadata["original_filename"] = resolved.original_filename
 
     source_path_hint = resolved.original_filename if resolved else None
-    store = TempUploadStore.build(http_request.app.state.config) if resolved else None
-
     async def _add() -> dict[str, Any]:
         try:
             result = await service.resources.add_skill(
@@ -342,16 +364,12 @@ async def add_skill(
                 timeout=request.timeout,
                 allow_local_path_resolution=allow_local_path_resolution,
                 source_path_hint=source_path_hint,
-                target_uri=request.target_uri,
+                target_uri=target_uri,
             )
             await persist_skill_source_metadata(service, _ctx, result, source_metadata)
         except Exception:
-            if resolved and store:
-                await store.mark_failed(resolved, _ctx)
             raise
         else:
-            if resolved and store:
-                await store.mark_consumed(resolved, _ctx)
             return result
         finally:
             if resolved:

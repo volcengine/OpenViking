@@ -238,7 +238,7 @@ openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --peer
   | --- | --- | --- |
   | `env` | `{ "source": "env", "id": "OPENVIKING_API_KEY" }` | 启动时读取同名环境变量。 |
   | `file` | `{ "source": "file", "id": "/etc/secrets/openviking.key" }` | 以 UTF-8 读取并去除首尾空白；`~` 可展开，适配 Kubernetes `secretKeyRef` 卷挂载、0600 权限文件。 |
-  | `exec` | `{ "source": "exec", "provider": "op", "id": "op://vault/openviking/credential" }` | 运行 `<provider> <id>`，去除 stdout 首尾空白（1Password `op`、Vault、gopass 等均符合此形态）。 |
+  | `exec` | 打包版插件不支持（应用市场安装扫描会拦截子进程执行） | 改用命令包一层环境变量：`OPENVIKING_API_KEY=$(op read op://vault/openviking/credential)`，然后配 `env`。 |
 
   仍可使用纯字符串形式（含 `${ENV_VAR}` 插值）作为向后兼容路径；此时请限制文件权限或通过受控 Secret 卷提供，并在修改后重启 Gateway、容器或 Pod。
 

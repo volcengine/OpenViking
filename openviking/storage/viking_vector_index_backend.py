@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Dict, List, Mapping, Optional
 
-from openviking.core.namespace import canonicalize_uri, uri_parts, visible_roots
+from openviking.core.namespace import uri_parts, visible_roots
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, RawDSL
 from openviking.storage.vectordb.collection.collection import Collection
@@ -354,7 +354,7 @@ class _SingleAccountBackend:
                     ]
             except Exception as e:
                 logger.error("Error reading existing record before partial update: %s", e)
-                return ""
+                raise
 
             if existing_records:
                 existing = dict(existing_records[0])
@@ -665,7 +665,7 @@ class _SingleAccountBackend:
             return await self._async_adapter.call("count", filter=filter)
         except Exception as e:
             logger.error("Error counting records: %s", e)
-            return 0
+            raise
 
     async def clear(self) -> bool:
         try:
@@ -790,6 +790,10 @@ class VikingVectorIndexBackend:
     def mode(self) -> str:
         return self._get_default_backend()._mode
 
+    @property
+    def uses_content_field(self) -> bool:
+        return self._shared_adapter.USE_CONTENT_FIELD
+
     # =========================================================================
     # 内部辅助方法
     # =========================================================================
@@ -885,12 +889,10 @@ class VikingVectorIndexBackend:
         """
         options = normalize_upsert_options(options)
         logger.debug(
-            "[VikingVectorIndexBackend.upsert] Called with ctx.account_id=%s, "
-            "partial_update=%s, search_tag_mode=%s, data=%s",
-            ctx.account_id,
+            "[VikingVectorIndexBackend.upsert] uri=%s partial_update=%s search_tag_mode=%s",
+            data.get("uri", ""),
             options.partial_update,
             options.search_tag_mode,
-            data,
         )
         backend = self._get_backend_for_context(ctx)
         logger.debug(
@@ -968,9 +970,7 @@ class VikingVectorIndexBackend:
 
     async def update(self, data: Dict[str, Any], *, ctx: RequestContext) -> UpdateResult:
         """Strict update path. The target record must already exist."""
-        logger.debug(
-            f"[VikingVectorIndexBackend.update] Called with ctx.account_id={ctx.account_id}, data={data}"
-        )
+        logger.debug("[VikingVectorIndexBackend.update] uri=%s", data.get("uri", ""))
         backend = self._get_backend_for_context(ctx)
         logger.debug(
             f"[VikingVectorIndexBackend.update] Using backend for account_id={ctx.account_id}"
@@ -1010,9 +1010,8 @@ class VikingVectorIndexBackend:
 
         from openviking.utils.tags import merge_search_tags
 
-        canonical_uri = canonicalize_uri(uri, ctx)
         if levels is None:
-            record = await self.fetch_by_uri(canonical_uri, ctx=ctx)
+            record = await self.fetch_by_uri(uri, ctx=ctx)
             if not record or not record.get("id"):
                 return []
 
@@ -1020,7 +1019,7 @@ class VikingVectorIndexBackend:
             if not full_records:
                 logger.warning(
                     "update_search_tags failed to fetch full exact record uri=%s account_id=%s id=%s",
-                    canonical_uri,
+                    uri,
                     ctx.account_id,
                     record.get("id"),
                 )
@@ -1038,7 +1037,7 @@ class VikingVectorIndexBackend:
                 logger.warning(
                     "update_search_tags failed to merge exact record tags uri=%s "
                     "account_id=%s existing_tags=%s incoming_tags=%s error=%s",
-                    canonical_uri,
+                    uri,
                     ctx.account_id,
                     updated_record.get("search_tags"),
                     tags,
@@ -1051,7 +1050,7 @@ class VikingVectorIndexBackend:
             return []
 
         records = await self.filter(
-            filter=And([Eq("uri", canonical_uri), In("level", levels)]),
+            filter=And([Eq("uri", uri), In("level", levels)]),
             limit=max(len(levels), 2),
             output_fields=FETCH_BY_URI_OUTPUT_FIELDS,
             ctx=ctx,
@@ -1075,7 +1074,7 @@ class VikingVectorIndexBackend:
             if not full_record:
                 logger.warning(
                     "update_search_tags failed to fetch full leveled record uri=%s account_id=%s level=%s id=%s",
-                    canonical_uri,
+                    uri,
                     ctx.account_id,
                     record.get("level"),
                     record.get("id"),
@@ -1093,7 +1092,7 @@ class VikingVectorIndexBackend:
                 logger.warning(
                     "update_search_tags failed to merge leveled record tags uri=%s "
                     "account_id=%s level=%s existing_tags=%s incoming_tags=%s error=%s",
-                    canonical_uri,
+                    uri,
                     ctx.account_id,
                     updated_record.get("level"),
                     updated_record.get("search_tags"),
@@ -1356,7 +1355,7 @@ class VikingVectorIndexBackend:
         ctx: RequestContext,
     ) -> List[Dict[str, Any]]:
         conds: List[FilterExpr] = [
-            PathScope("uri", canonicalize_uri(uri, ctx), depth=0),
+            PathScope("uri", uri, depth=0),
             Eq("account_id", ctx.account_id),
         ]
         if level is not None:
@@ -1375,12 +1374,25 @@ class VikingVectorIndexBackend:
         root_backend = self._get_root_backend()
         return await root_backend.delete_by_filter(Eq("account_id", account_id))
 
+    async def delete_user_data(
+        self,
+        account_id: str,
+        user_id: str,
+        *,
+        ctx: RequestContext,
+    ) -> int:
+        """Delete every vector record owned by one user as ROOT."""
+        self._check_root_role(ctx)
+        root_backend = self._get_root_backend()
+        return await root_backend.delete_by_filter(
+            And([Eq("account_id", account_id), Eq("owner_user_id", user_id)])
+        )
+
     async def delete_uris(self, ctx: RequestContext, uris: List[str]) -> None:
         for uri in uris:
-            canonical_uri = canonicalize_uri(uri, ctx)
             conds: List[FilterExpr] = [
                 Eq("account_id", ctx.account_id),
-                Or([Eq("uri", canonical_uri), In("uri", [f"{canonical_uri}/"])]),
+                Or([Eq("uri", uri), In("uri", [f"{uri}/"])]),
             ]
 
             backend = self._get_backend_for_context(ctx)
@@ -1395,9 +1407,7 @@ class VikingVectorIndexBackend:
     ) -> bool:
         import hashlib
 
-        canonical_uri = canonicalize_uri(uri, ctx)
-        canonical_new_uri = canonicalize_uri(new_uri, ctx)
-        conds: List[FilterExpr] = [Eq("uri", canonical_uri), Eq("account_id", ctx.account_id)]
+        conds: List[FilterExpr] = [Eq("uri", uri), Eq("account_id", ctx.account_id)]
         if levels:
             conds.append(In("level", levels))
 
@@ -1413,8 +1423,8 @@ class VikingVectorIndexBackend:
         if not record_ids:
             logger.warning(
                 "update_uri_mapping found records without ids: uri=%s new_uri=%s account_id=%s",
-                canonical_uri,
-                canonical_new_uri,
+                uri,
+                new_uri,
                 ctx.account_id,
             )
             return False
@@ -1422,8 +1432,8 @@ class VikingVectorIndexBackend:
         if not full_records:
             logger.warning(
                 "update_uri_mapping failed to fetch full records: uri=%s new_uri=%s account_id=%s ids=%s",
-                canonical_uri,
-                canonical_new_uri,
+                uri,
+                new_uri,
                 ctx.account_id,
                 record_ids,
             )
@@ -1447,21 +1457,21 @@ class VikingVectorIndexBackend:
             except (TypeError, ValueError):
                 level = 2
 
-            seed_uri = _seed_uri_for_id(canonical_new_uri, level)
+            seed_uri = _seed_uri_for_id(new_uri, level)
             id_seed = f"{ctx.account_id}:{seed_uri}"
             new_id = hashlib.md5(id_seed.encode("utf-8")).hexdigest()
 
             updated = {
                 **record,
                 "id": new_id,
-                "uri": canonical_new_uri,
+                "uri": new_uri,
             }
             vector = updated.get("vector")
             if not vector:
                 logger.warning(
                     "update_uri_mapping skipped record without dense vector: old_uri=%s new_uri=%s level=%s account_id=%s id=%s",
-                    canonical_uri,
-                    canonical_new_uri,
+                    uri,
+                    new_uri,
                     level,
                     ctx.account_id,
                     record.get("id"),
@@ -1512,13 +1522,9 @@ class VikingVectorIndexBackend:
         if context_type:
             filters.append(Eq("context_type", context_type))
 
-        canonical_targets = [
-            canonicalize_uri(target_dir, ctx)
-            for target_dir in target_directories or []
-            if target_dir
-        ]
+        targets = [target_dir for target_dir in target_directories or [] if target_dir]
         tenant_filter = self._tenant_filter(ctx, context_type=context_type)
-        if tenant_filter and self._targets_within_visible_roots(ctx, canonical_targets):
+        if tenant_filter and self._targets_within_visible_roots(ctx, targets):
             # The target scopes are already narrower than the tenant-visible
             # roots. Keep account isolation, but avoid recursively evaluating
             # the broader path scopes as an additional filter.
@@ -1526,8 +1532,8 @@ class VikingVectorIndexBackend:
         if tenant_filter:
             filters.append(tenant_filter)
 
-        if canonical_targets:
-            uri_conds = [PathScope("uri", target_dir, depth=-1) for target_dir in canonical_targets]
+        if targets:
+            uri_conds = [PathScope("uri", target_dir, depth=-1) for target_dir in targets]
             if uri_conds:
                 filters.append(Or(uri_conds))
 
@@ -1543,8 +1549,8 @@ class VikingVectorIndexBackend:
         return self._merge_filters(*filters)
 
     @staticmethod
-    def _targets_within_visible_roots(ctx: RequestContext, canonical_targets: List[str]) -> bool:
-        if not canonical_targets:
+    def _targets_within_visible_roots(ctx: RequestContext, targets: List[str]) -> bool:
+        if not targets:
             return False
 
         root_parts = [tuple(uri_parts(root)) for root in visible_roots(ctx)]
@@ -1553,7 +1559,7 @@ class VikingVectorIndexBackend:
                 len(target_parts) >= len(root) and target_parts[: len(root)] == root
                 for root in root_parts
             )
-            for target_parts in (tuple(uri_parts(target)) for target in canonical_targets)
+            for target_parts in (tuple(uri_parts(target)) for target in targets)
         )
 
     @staticmethod

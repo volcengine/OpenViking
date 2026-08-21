@@ -476,24 +476,6 @@ class OpenVikingAPIClient:
         url = self._build_url(self.server_url, endpoint)
         return self.session.post(url, json={"from_uri": from_uri, "to_uri": to_uri})
 
-    def link(self, from_uri: str, to_uris: Any, reason: str = "") -> requests.Response:
-        endpoint = "/api/v1/relations/link"
-        url = self._build_url(self.server_url, endpoint)
-        return self.session.post(
-            url, json={"from_uri": from_uri, "to_uris": to_uris, "reason": reason}
-        )
-
-    def relations(self, uri: str) -> requests.Response:
-        endpoint = "/api/v1/relations"
-        params = {"uri": uri}
-        url = self._build_url(self.server_url, endpoint, params)
-        return self.session.get(url)
-
-    def unlink(self, from_uri: str, to_uri: str) -> requests.Response:
-        endpoint = "/api/v1/relations/link"
-        url = self._build_url(self.server_url, endpoint)
-        return self.session.delete(url, json={"from_uri": from_uri, "to_uri": to_uri})
-
     def session_used(
         self,
         session_id: str,

@@ -824,7 +824,6 @@ def create_http_observability_middleware() -> Callable[[Request, Callable], Resp
 
         # Extract request information
         raw_path = str(request.url.path)
-        raw_query = request.url.query or None
         route_template = _get_route_template(request)
         request_id = request.state.request_id
 
@@ -834,7 +833,6 @@ def create_http_observability_middleware() -> Callable[[Request, Callable], Resp
             http_route=route_template,
             request_id=request_id,
             url_path=raw_path,
-            url_query=raw_query,
             url_scheme=request.url.scheme,
             http_host=request.url.netloc,
             source_type=request.headers.get("x-source-type"),

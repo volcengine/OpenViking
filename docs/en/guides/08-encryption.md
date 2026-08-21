@@ -56,13 +56,13 @@ Edit `~/.openviking/ov.conf`:
 ### 3. Verify
 
 ```python
-import openviking as ov
 import asyncio
 from pathlib import Path
+from openviking_sdk import AsyncHTTPClient
 
 
 async def test():
-    client = ov.AsyncOpenViking(path="./data")
+    client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
     await client.initialize()
 
     # add_resource expects a file path or URL
@@ -412,7 +412,7 @@ ov backup ./backups/before-encryption.ovpack
 ov restore ./backups/before-encryption.ovpack --on-conflict fail
 ```
 
-4. Verify resource, user, session, and index data before switching traffic. OVPack excludes runtime/internal state such as queues, uploads, locks, watches, and relation files; recreate or validate those separately.
+4. Verify resource, user, session, and index data before switching traffic. OVPack excludes runtime/internal state such as queues, uploads, locks, and watches; recreate or validate those separately.
 
 See [OVPack Import and Export](09-ovpack.md#full-backup-and-restore) for supported scopes and restore options.
 

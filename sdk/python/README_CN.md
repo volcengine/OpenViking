@@ -172,7 +172,28 @@ from openviking_sdk import SyncHTTPClient
 
 client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
 client.initialize()
-result = client.create_session("demo-session")
+event_config = {
+    "events": {
+        "tags": ["team=search", "channel=web"],
+    }
+}
+result = client.create_session(
+    "demo-session",
+    memory_extraction_config=event_config,
+)
+# 创建时显式传 None，可覆盖服务端默认并禁用自动提交。
+client.create_session("manual-session", auto_commit_policy=None)
+client.update_session_config(
+    "demo-session",
+    auto_commit_policy={"message_count_threshold": 25},
+    memory_extraction_config={
+        "events": {"tags": ["team=search", "channel=app"]}
+    },
+)
+# 显式传 None 会禁用自动 commit；省略参数则保持不变。
+client.update_session_config("demo-session", auto_commit_policy=None)
+client.session("demo-session").commit(event_tags=["team=search", "channel=web"])
+# 单次 commit 传 event_tags=[] 可显式跳过 session 默认 tags。
 print(result)
 ```
 

@@ -244,7 +244,7 @@ List background tasks visible to the current caller, supporting filtering by typ
 
 **Code Entries:**
 - `openviking/server/routers/tasks.py:list_tasks()` - HTTP route
-- `openviking_cli/client/base.py:BaseClient.list_tasks()` - Python SDK
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.list_tasks()` - Python SDK
 
 #### 2. Interface and Parameter Description
 

@@ -1,6 +1,6 @@
 # Codex 记忆插件
 
-本插件旨在为 [Codex](https://developers.openai.com/codex) 提供持久化的跨会话（session）记忆功能。只需安装一次，即可实现：在每次用户输入前自动召回相关记忆，在每轮对话结束后进行增量捕获，并在上下文压缩（compaction）前将完整记录提交给记忆抽取器。同时，该插件将 Codex 连接至 OpenViking 的 `/mcp` 端点，使模型能够直接调用 `find`、`search`、`recall`、`remember` 等工具来主动管理记忆。
+本插件旨在为 [Codex](https://developers.openai.com/codex) 提供持久化的跨会话（session）记忆功能。只需安装一次，即可实现：在会话开始时加载 OpenViking profile 与记忆索引，在每次用户输入前自动召回相关记忆，在每轮对话结束后进行增量捕获，并在上下文压缩（compaction）前将完整记录提交给记忆抽取器。同时，该插件将 Codex 连接至 OpenViking 的 `/mcp` 端点，使模型能够直接调用 `find`、`search`、`read`、`remember` 等工具来主动管理记忆。
 
 源码：[examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin) | [博客：动机与效果展示](https://blog.openviking.ai/post/openviking-coding-agent/)
 
@@ -10,6 +10,13 @@ Claude Code 和 Codex 共用同一个安装脚本。它会依次询问界面语�
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh)
+```
+
+TraeCode CLI 2.0 可以直接安装这一 Codex 格式插件，默认安装入口是 `--harness trae-cli`：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) \
+  --harness trae-cli
 ```
 
 GitHub 访问受限的地区，从火山引擎 TOS 镜像运行同一个安装脚本（或在下载源提问时选择「TOS 镜像」）。Codex 走 TOS 时安装自 TOS 托管的 git 仓库，保留远程更新能力：
@@ -44,28 +51,35 @@ codex              # 首次启动需进入 /hooks 完成一次审批
 
 ## 验证
 
-启动 `codex` 后，插件将在每次用户输入前自动召回记忆。若设置环境变量 `OPENVIKING_DEBUG=1`，则会将相关事件日志写入 `~/.openviking/logs/codex-hooks.log`。
+启动 `codex` 后，当前会话首次提交 prompt 时触发的 `SessionStart` 会加载 profile，之后插件将在每次用户输入前自动召回相关记忆。若设置环境变量 `OPENVIKING_DEBUG=1`，则会将相关事件日志写入 `~/.openviking/logs/codex-hooks.log`。
+TraeCode CLI 2.0 用户启动 `trae-cli`，并可用 `trae-cli plugin list` 确认插件已启用。
 
 ## 工作原理
 
-本插件深度挂载于 Codex 的生命周期之中：在每次用户输入前，它会搜索 OpenViking 并注入相关的记忆（触发 `UserPromptSubmit`）；在每轮对话结束后，会将新的对话追加至当前会话（触发 `Stop`）；在上下文压缩前，补齐并提交（commit）完整的对话记录（触发 `PreCompact`），以确保记忆抽取器能够在完整的上下文环境中运行。此外，在启动新会话时，插件还会自动清理前次运行遗留的孤儿会话（orphan session）。
+本插件深度挂载于 Codex 的生命周期之中：在 `SessionStart`（`startup`、`clear` 或 `resume`）阶段，它会复用其他 coding-agent 集成共用的 CJK-aware profile 构建逻辑，注入 `profile.md`，以及 `preferences/`、`entities/` 的 URI 和摘要索引；在每次用户输入前，它会搜索 OpenViking 并注入相关的记忆（触发 `UserPromptSubmit`）；在每轮对话结束后，会将新的对话追加至当前会话（触发 `Stop`）；在上下文压缩前，补齐并提交（commit）完整的对话记录（触发 `PreCompact`），以确保记忆抽取器能够在完整的上下文环境中运行。此外，在启动新会话时，插件还会自动清理前次运行遗留的孤儿会话（orphan session）。恢复已有会话时，固定 profile 背景还会与最新的 archive digest 合并注入。
 
 > **已知局限**：当通过 `SIGTERM`、`Ctrl+C` 或输入 `/exit` 退出 Codex 时，不会触发任何 hook（钩子）。遗留的孤儿会话将在下一次触发 `SessionStart` 时，通过闲置 TTL（生存时间，默认为 30 分钟）机制或活动窗口启发式策略进行回收清理。
+
+工具调用和结果会作为独立的 `tool` part 捕获，`tool_output` 原样上报。截断由服务端负责：超过 `tool_output_externalization.threshold_chars`（默认 `20000`）的输出会写入 session 的 tool-result 存储，part 中只保留 synopsis stub 和 `tool_output_ref`，原文仍可通过 [`/api/v1/sessions/{id}/tool-results`](../api/05-sessions.md#read_tool_result) 读回。
 
 <details>
 <summary><b>配置</b></summary>
 
-凭据来源：默认使用当前激活的 `ovcli.conf`（`OPENVIKING_CLI_CONFIG_FILE` 或 `~/.openviking/ovcli.conf`），因此 `ov config switch <name>` 会在下次启动时同时影响 hook、MCP 代理和 Codex 内部运行的 `ov` 命令。只有明确希望环境变量覆盖 CLI 配置时，才设置 `OPENVIKING_CREDENTIAL_SOURCE=env`。若没有 ovcli 配置，则依次回退到环境变量、`ov.conf` 和内置默认值。
+凭据来源：默认环境变量优先——只要设置了任一 `OPENVIKING_*` 凭据环境变量（`OPENVIKING_URL`/`OPENVIKING_BASE_URL`、`OPENVIKING_BEARER_TOKEN`/`OPENVIKING_API_KEY`、`OPENVIKING_ACCOUNT`、`OPENVIKING_USER`、`OPENVIKING_PEER_ID`），其取值就会覆盖当前激活的 `ovcli.conf`。只有在这些环境变量都未设置时，才由激活的 `ovcli.conf`（`OPENVIKING_CLI_CONFIG_FILE` 或 `~/.openviking/ovcli.conf`）统一驱动 hook、MCP 代理和 Codex 内部运行的 `ov` 命令，此时 `ov config switch <name>` 会在下次启动时生效。若希望在设置了凭据环境变量的情况下仍强制使用 ovcli 配置，可设置 `OPENVIKING_CREDENTIAL_SOURCE=cli`。两者都未覆盖的字段依次回退到 `ovcli.conf`、`ov.conf` 和内置默认值。
 
 | 环境变量 | 默认值 | 说明 |
 |---------|--------|------|
 | `OPENVIKING_URL` / `OPENVIKING_BASE_URL` | — | 完整的服务器 URL |
 | `OPENVIKING_API_KEY` | — | API 密钥（将通过 `Authorization: Bearer` 标头发送） |
 | `OPENVIKING_CLI_CONFIG_FILE` | `~/.openviking/ovcli.conf` | hook、MCP 和 Codex 内部 `ov` 命令共同使用的当前 CLI 配置 |
-| `OPENVIKING_CREDENTIAL_SOURCE` | `auto` | 设置为 `env` 时强制使用环境变量凭据 |
+| `OPENVIKING_CREDENTIAL_SOURCE` | `auto` | `auto` 下已设置的凭据环境变量优先；设为 `cli` 强制使用激活的 ovcli 配置，设为 `env` 强制使用环境变量 |
+| `OPENVIKING_NO_AUTO_INJECT` | `false` | 关闭会话启动阶段的固定 profile/背景注入，但不关闭逐 prompt 语义召回 |
+| `OPENVIKING_PROFILE_TOKEN_BUDGET` | `10000` | `profile.md` 及 `preferences/`、`entities/` 索引共用的 CJK-aware token 预算 |
 | `OPENVIKING_CODEX_ACTIVE_WINDOW_MS` | `120000` | `SessionStart` 活动窗口阈值（毫秒） |
 | `OPENVIKING_CODEX_IDLE_TTL_MS` | `1800000` | `SessionStart` 闲置 TTL 清理阈值（毫秒） |
 | `OPENVIKING_DEBUG` | `false` | 是否将日志写入 `~/.openviking/logs/codex-hooks.log` |
+
+如果更看重召回响应速度，请参阅[低延迟召回](./01-overview.md#低延迟召回)，其中说明了如何通过环境变量或 `ovcli.conf` 关闭查询扩展与 Codex 本地结果压缩。
 
 更多调参说明（如 `OPENVIKING_RECALL_LIMIT`、`OPENVIKING_CAPTURE_ASSISTANT_TURNS` 等），请参考 [插件 README](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md#tuning-the-plugin)。
 
@@ -79,10 +93,11 @@ codex              # 首次启动需进入 /hooks 完成一次审批
 | MCP 工具调用报连接错误 | 服务器不可达或 URL 配置错误 | 执行 `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` 检查服务器状态 |
 | `4 hooks need review` | 首次启动需要进行安全审批 | 在 Codex 终端内输入 `/hooks` 完成审批 |
 | `ov config switch` 后插件仍指向旧服务器 | 上个会话的代理进程仍在运行 | 重启 Codex；代理在启动时解析凭据 |
-| Hook 与 MCP 指向不同服务器 | 某一侧设置了 `OPENVIKING_CREDENTIAL_SOURCE=env` 且环境变量过期 | 取消该设置（让 ovcli.conf 同时驱动两者），或保证环境变量一致 |
+| Hook 与 MCP 指向不同服务器 | 某一侧残留了过期的 `OPENVIKING_*` 凭据环境变量（默认环境变量优先于 ovcli.conf） | 清除过期环境变量（让 ovcli.conf 同时驱动两者）、设置 `OPENVIKING_CREDENTIAL_SOURCE=cli`，或保证环境变量一致 |
 
 ## 参见
 
+- [集成能力参考](./16-capability-reference.md)
 - [博客：在 Claude Code / Codex 中接入 OpenViking](https://blog.openviking.ai/post/openviking-coding-agent/) — 为什么以及如何给你的 Coding Agent 加上长期记忆
 - [插件 README](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md) — 完整的环境变量说明与架构图
 - [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/DESIGN.md) — 提交（commit）决策树

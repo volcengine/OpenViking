@@ -14,6 +14,7 @@ def test_semantic_config_defaults():
     assert config.max_file_content_chars == 30000
     assert config.max_overview_prompt_chars == 60000
     assert config.overview_batch_size == 50
+    assert config.sidecar_sample_size == 32
     assert config.abstract_max_chars == 256
     assert config.overview_max_chars == 4000
     assert config.memory_chunk_chars == 2000

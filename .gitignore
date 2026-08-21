@@ -147,6 +147,7 @@ RAGbenchmark/*.log
 CLAUDE.md
 *.so
 AGENTS.md
+AGENTS.md.local
 
 # Git worktrees
 .worktrees/
@@ -226,3 +227,6 @@ tests/integration/.tmp_*/
 
 # all node_modules folders
 node_modules/
+
+# Local scratch / working notes
+.scratch/

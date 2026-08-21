@@ -34,7 +34,7 @@ class ReplaceOp(MergeOpBase):
             "You must have read the current content first and incorporate it."
         )
 
-    def apply(self, current_value: Any, patch_value: Any) -> Any:
+    async def apply(self, current_value: Any, patch_value: Any) -> Any:
         if patch_value is None or patch_value == "":
             return current_value
         return patch_value

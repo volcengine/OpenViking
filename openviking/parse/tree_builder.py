@@ -73,9 +73,6 @@ class TreeBuilder:
             if media_type:
                 return get_media_base_uri(media_type)
             return "viking://resources"
-        if scope == "user":
-            # user resources go to memories (no separate resources dir)
-            return "viking://user"
         raise ValueError(f"unsupported tree scope: {scope}")
 
     # ============================================================================
@@ -104,7 +101,7 @@ class TreeBuilder:
 
         auto_base_uri = self._get_base_uri(scope, source_path, source_format)
         base_uri = parent_uri or auto_base_uri
-        use_to_as_parent = bool(to_uri and is_content_root_uri(to_uri, ctx, kind="resource"))
+        use_to_as_parent = bool(to_uri and is_content_root_uri(to_uri, kind="resource"))
         if to_uri and not use_to_as_parent:
             return to_uri, None
 
@@ -115,7 +112,6 @@ class TreeBuilder:
             viking_fs = get_viking_fs()
             parent_is_content_root = is_content_root_uri(
                 effective_parent_uri,
-                ctx,
                 kind="resource",
             )
             try:
@@ -153,6 +149,7 @@ class TreeBuilder:
         source_path: Optional[str] = None,
         source_format: Optional[str] = None,
         create_parent: bool = False,
+        flatten_single_file: bool = False,
     ) -> "BuildingTree":
         """
         Finalize URI metadata for a temp parse result.
@@ -181,6 +178,18 @@ class TreeBuilder:
         original_name = doc_dirs[0]["name"]
         doc_name = VikingURI.sanitize_segment(original_name)
         temp_doc_uri = f"{temp_uri}/{original_name}"  # use original name to find temp dir
+        root_is_file = False
+        if flatten_single_file:
+            doc_entries = [
+                entry
+                for entry in await viking_fs.ls(temp_doc_uri, ctx=ctx)
+                if entry.get("name") not in [".", ".."]
+            ]
+            if len(doc_entries) == 1 and not doc_entries[0].get("isDir"):
+                original_name = doc_entries[0]["name"]
+                doc_name = VikingURI.sanitize_segment(original_name)
+                temp_doc_uri = f"{temp_doc_uri}/{original_name}"
+                root_is_file = True
         if original_name != doc_name:
             logger.debug(f"[TreeBuilder] Sanitized doc name: {original_name!r} -> {doc_name!r}")
 
@@ -200,6 +209,7 @@ class TreeBuilder:
             source_format=source_format,
         )
         tree._root_uri = planned_uri
+        tree._root_is_file = root_is_file
         if unique_candidate_uri:
             tree._candidate_uri = unique_candidate_uri
 

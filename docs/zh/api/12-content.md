@@ -226,7 +226,7 @@ openviking read viking://resources/docs/api.md
 
 - `replace` 和 `append` 要求文件已存在；`create` 仅用于创建新文件，目标路径已存在时返回 `409 Conflict`。目录始终会被拒绝。
 - `create` 只允许以下文本类扩展名：`.md`、`.txt`、`.json`、`.yaml`、`.yml`、`.toml`、`.py`、`.js`、`.ts`。父目录会自动创建。
-- 不允许直接写入派生语义文件：`.abstract.md`、`.overview.md`、`.relations.json`。
+- 已存在的 `.abstract.md` / `.overview.md` 可以修改正文，但不能通过公共 API 创建；只提交正文时会保留现有 OKF metadata，提交完整 OKF 时 metadata 必须与存量值一致。未知 metadata 字段会静默丢弃。sidecar 正文写入只重建该目录实际存在的 L0/L1 向量，不触发语义重新生成。
 - 文件内容会在 API 返回前完成更新；`wait` 只控制是否等待语义/向量刷新完成。
 - 公共 API 已不再接受 `regenerate_semantics` 或 `revectorize`；写入后一定会自动刷新相关语义与向量。
 
@@ -328,7 +328,7 @@ openviking write viking://resources/docs/api.md \
 
 ### batch_write()
 
-在一个 Resource 或 Memory 目录下执行一组带前置条件的文件写入，并在同一次请求中刷新受影响的语义与向量索引。
+在一个 Resource 或 Memory 目录下写入多个文件；全部写完后，再统一刷新一次受影响的语义与向量索引。
 
 **参数**
 
@@ -347,17 +347,17 @@ openviking write viking://resources/docs/api.md \
 | `uri` | string | 是 | 位于 `root_uri` 下的目标文件 URI |
 | `content` | string | 条件必填 | UTF-8 文本；与 `content_base64` 必须且只能提供一个 |
 | `content_base64` | string | 条件必填 | Base64 编码的字节；Memory 目标不支持 |
-| `precondition.kind` | string | 是 | `create_if_absent` 或 `replace_if_hash` |
-| `precondition.base_hash` | string | 条件必填 | `replace_if_hash` 必填，格式为 `sha256:<小写十六进制>` |
+| `mode` | string | 否 | `replace`（默认）、`append`、`create` 或 `upsert` |
 
 **说明**
 
-- 单次请求最多包含 128 个 operation，单文件不超过 8 MiB，总内容不超过 16 MiB。
+- 单次请求最多包含 256 个 operation，单文件不超过 8 MiB，总内容不超过 16 MiB。
 - 所有目标必须是 `root_uri` 下的文件、属于同一 context type，且 canonical URI 不能重复。
 - Resource 目标允许任意安全文件扩展名；Memory 目标仍使用文本扩展名白名单，且不接受二进制内容。
-- 系统会在目标 tree lock 内、首次产生新写入之前检查所有非幂等前置条件；不满足时返回 `409 Conflict`。
-- 如果目标已经包含期望字节，则归入 `unchanged`；因此刷新失败后可以安全重试，而不会重复写入相同内容。
-- API 能保证前置条件冲突不会产生新写入，但底层 I/O 中途失败时，本批次较早完成的写入仍可能已经可见。
+- `replace`、`append`、`create` 与 `write()` 语义一致；`upsert` 会覆盖已有文件或创建缺失文件。
+- 写入期间整批共用一个目标 tree lock。所有文件写完并释放锁后才启动语义处理，因此 `.overview.md` / `.abstract.md` 每批只统一刷新一次。
+- 底层 I/O 中途失败时，本批次较早完成的写入仍可能已经可见。
+- 已存在的 `.abstract.md` / `.overview.md` 可以 replace 或 append；系统会保留并校验受保护的 OKF metadata，并只重建对应目录实际存在的 L0/L1 向量。
 
 **Python SDK**
 
@@ -368,15 +368,12 @@ result = client.batch_write(
         {
             "uri": "viking://resources/wiki/new.md",
             "content": "# 新页面\n",
-            "precondition": {"kind": "create_if_absent"},
+            "mode": "upsert",
         },
         {
             "uri": "viking://resources/wiki/existing.md",
             "content": "# 更新后的页面\n",
-            "precondition": {
-                "kind": "replace_if_hash",
-                "base_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-            },
+            "mode": "upsert",
         },
     ],
     wait=True,
@@ -399,7 +396,7 @@ curl -X POST http://localhost:1933/api/v1/content/batch-write \
       {
         "uri": "viking://resources/wiki/new.md",
         "content": "# 新页面\n",
-        "precondition": {"kind": "create_if_absent"}
+        "mode": "upsert"
       }
     ],
     "wait": true
@@ -572,7 +569,6 @@ ov set-tags viking://resources/project/ \
 **认证**
 
 - HTTP 端点：在开启认证时要求 admin/root 角色。`api_key` 模式下，租户内容重建请使用 admin key；裸 root key 不能访问租户级数据。
-- Python embedded 模式：使用当前 service context
 - Python HTTP client / CLI：使用当前认证身份发起请求
 
 **参数**
@@ -583,6 +579,8 @@ ov set-tags viking://resources/project/ \
 | mode | str | 否 | `vectors_only` | 重建模式：`vectors_only`、`semantic_and_vectors` 或 `prune_orphans` |
 | wait | bool | 否 | `true` | 是否等待任务完成 |
 | dry_run | bool | 否 | `false` | 仅适用于 `mode="prune_orphans"`；只报告 orphan 向量记录，不实际删除 |
+| tags | list[str] | 否 | `null` | 写入本次成功重建的全部向量记录。省略时保留已有 tags；空数组配合 `replace` 可清空 |
+| tag_mode | str | 否 | `replace` | `tags` 的写入模式：`replace` 或 `append` |
 
 HTTP 请求体不接受未知字段。`uri` 可以使用其他 content API 支持的 OpenViking 路径变量，服务端会先解析再校验。
 
@@ -613,6 +611,10 @@ session 子树会被跳过。
 
 对于 `prune_orphans`，源文件是否存在以当前文件系统为准。如果整个目录已经不存在，该目录下的正文文件向量和语义 sidecar 向量（例如 `.abstract.md`、`.overview.md`）会一起清理。`dry_run` 用在其他模式时会被拒绝。
 
+传入 `tags` 时，标签会随 reindex 生成的向量记录在同一次 upsert 中写入，不会在完成后额外调用 `set_tags`。目录或 namespace reindex 会把标签应用到本次成功重建的目录 L0/L1 和叶子 L2 记录。`replace` 覆盖已有标签，`append` 按 key 合并；省略 `tags` 时不校验 `tag_mode` 且不修改已有标签。`prune_orphans` 不生成向量，因此会忽略 `tags` 和 `tag_mode`。
+
+子树 reindex 不是事务性操作。如果部分记录因缺少语义来源或 embedding 失败而未重建，只有成功写入的记录会更新标签。
+
 **Python SDK**
 
 ```python
@@ -620,6 +622,8 @@ result = client.reindex(
     uri="viking://resources",
     mode="vectors_only",
     wait=True,
+    tags=["team=search", "env=prod"],
+    tag_mode="replace",
 )
 print(result)
 ```
@@ -645,15 +649,23 @@ print(result["would_delete_records"])
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.reindex("viking://resources/docs/"));
+console.log(await client.reindex("viking://resources/docs/", {
+  tags: ["team=search"],
+  tagMode: "append",
+}));
 ```
 
 **Go SDK**
+
+传入非 `nil` 的 `ReindexOptions` 时，需要显式设置 `Wait`。Go 的布尔零值为
+`false`；只有 `opts=nil` 时 SDK 才会应用 `wait=true` 的默认值。
 
 ```go
 result, err := client.Reindex(ctx, "viking://resources", &openviking.ReindexOptions{
     Mode: "vectors_only",
     Wait: true,
+    Tags: []string{"team=search"},
+    TagMode: "replace",
 })
 if err != nil {
     return err
@@ -688,17 +700,21 @@ curl -X POST http://localhost:1933/api/v1/content/reindex \
   -H "X-OpenViking-Account: default" \
   -d '{
     "uri": "viking://resources",
-    "mode": "prune_orphans",
+    "mode": "vectors_only",
     "wait": true,
-    "dry_run": true
+    "tags": ["team=search", "env=prod"],
+    "tag_mode": "replace"
   }'
 ```
 
 **CLI**
 
 ```bash
-openviking reindex viking://resources --mode vectors_only
+openviking reindex viking://resources --mode vectors_only \
+  --tag team=search --tag env=prod --tag-mode replace
 ```
+
+CLI 仅在至少传入一个 `--tag` 时发送标签字段；如需用 `tags: []` 清空标签，请使用 HTTP 或 SDK。
 
 ```bash
 openviking reindex viking://user/default/skills --mode semantic_and_vectors --wait false

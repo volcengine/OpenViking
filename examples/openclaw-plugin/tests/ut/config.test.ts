@@ -81,6 +81,14 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.disabledTools).toEqual(["memory_forget", "add_resource"]);
   });
 
+  it("rejects unpublished experience tool selectors", () => {
+    for (const selector of ["experience", "search_experience", "read_experience"]) {
+      expect(() =>
+        memoryOpenVikingConfigSchema.parse({ enabledTools: [selector] }),
+      ).toThrow("unknown tool selectors");
+    }
+  });
+
   it("does not expose add_resource through enabledTools without enableAddResourceTool", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({ enabledTools: "all" });
     expect(cfg.enabledTools).not.toContain("add_resource");
@@ -489,30 +497,12 @@ describe("memoryOpenVikingConfigSchema.parse() — apiKey SecretRef (#3522)", ()
     ).toThrow(/file source.*no\/such\/path/);
   });
 
-  it("SecretRef exec source runs <provider> <id> and trims stdout", () => {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const cp = require("node:child_process") as typeof import("node:child_process");
-    const spy = vi
-      .spyOn(cp, "execFileSync")
-      .mockImplementation(((cmd: string, args: readonly string[]): unknown => {
-        expect(cmd).toBe("my-vault");
-        expect(args).toEqual(["secret/openviking/apiKey"]);
-        return "  provider-returned-key  \n";
-      }) as typeof cp.execFileSync);
-
-    const cfg = memoryOpenVikingConfigSchema.parse({
-      apiKey: { source: "exec", provider: "my-vault", id: "secret/openviking/apiKey" },
-    });
-    expect(cfg.apiKey).toBe("provider-returned-key");
-    expect(spy).toHaveBeenCalledTimes(1);
-  });
-
-  it("SecretRef exec source errors without a provider field", () => {
+  it("SecretRef exec source is rejected with a not-supported error", () => {
     expect(() =>
       memoryOpenVikingConfigSchema.parse({
-        apiKey: { source: "exec", id: "some-id" } as unknown as { source: "exec"; provider: string; id: string },
+        apiKey: { source: "exec", provider: "my-vault", id: "secret/openviking/apiKey" },
       }),
-    ).toThrow(/exec source requires a "provider" field/);
+    ).toThrow(/exec source is not supported in the packaged plugin/);
   });
 
   it("SecretRef validates required fields (unknown source, missing id)", () => {
@@ -538,4 +528,3 @@ describe("memoryOpenVikingConfigSchema.parse() — apiKey SecretRef (#3522)", ()
     expect(cfg2.apiKey).toBe("fallback-key");
   });
 });
-
