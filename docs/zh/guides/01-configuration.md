@@ -1506,6 +1506,9 @@ Redis Sentinel 分别配置数据节点和 Sentinel 的 ACL：
   }
 }
 ```
+
+**支持的区域**（`volcengine` 后端）：`cn-beijing`、`cn-shanghai`、`cn-guangzhou` 和 `ap-southeast-1`（东南亚）。未显式设置 `host` 时，`region` 用于选择内置的 VikingDB API 主机，应为上述值之一。
+
 </details>
 
 ## 配置文件
