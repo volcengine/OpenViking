@@ -14,7 +14,7 @@ npm i -g @openviking/cli && ov config
 ```text
 {{OPENVIKING_BASE_URL}}
 ```
-- API Key: 把本页展示的 API Key 粘贴到终端
+- API Key: 把 API Key 粘贴到终端
 
 {{OPENVIKING_API_KEY_BLOCK}}
 
