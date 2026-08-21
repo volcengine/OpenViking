@@ -117,7 +117,8 @@ class PersistentTaskStore:
         except AGFSAlreadyExistsError:
             return
         except Exception as exc:
-            if "already exists" in str(exc).lower():
+            message = str(exc).lower()
+            if "already exists" in message or "file exists" in message:
                 return
             raise
 
