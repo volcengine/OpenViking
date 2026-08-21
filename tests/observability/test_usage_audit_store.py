@@ -11,6 +11,7 @@ import pytest
 
 from openviking.observability.events import ObservabilityEvent
 from openviking.observability.usage_audit import sqlite_store as sqlite_store_module
+from openviking.observability.usage_audit.schema import SCHEMA_VERSION
 from openviking.observability.usage_audit.sqlite_store import SQLiteUsageAuditStore
 
 UTC = ZoneInfo("UTC")
@@ -354,9 +355,7 @@ async def test_sqlite_usage_audit_store_aggregates_dashboard_data(tmp_path):
             bucket="hour",
             tz=UTC,
         )
-        assert any(
-            row["hour"] == 1 and row["session_add_message"] == 2 for row in account_commits
-        )
+        assert any(row["hour"] == 1 and row["session_add_message"] == 2 for row in account_commits)
         assert any(row["hour"] == 1 and row["session_add_message"] == 1 for row in commits)
         audit = await store.query_audit_logs(account_id="acct-1")
         assert audit["total"] == 4
@@ -444,7 +443,10 @@ async def test_sqlite_usage_audit_store_resets_incompatible_legacy_schema(tmp_pa
         assert "hour_utc" in context_columns
         assert "hour_bucket" not in context_columns
         version = conn.execute("SELECT value FROM _schema_meta WHERE key = 'version'").fetchone()
-        assert version == ("5",)
+        # Assert against the module constant, not a literal: this test is about the
+        # reset writing the CURRENT version, and a hardcoded value breaks on every
+        # legitimate schema bump: it already broke on 4 -> 5, and again on 5 -> 6.
+        assert version == (str(SCHEMA_VERSION),)
     finally:
         conn.close()
 
@@ -519,9 +521,12 @@ async def test_sqlite_usage_audit_store_migrates_v4_without_losing_rows(tmp_path
     conn = sqlite3.connect(db_path)
     try:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(request_audit)")}
-        assert {"error_code", "error_message", "error_details"} <= columns
+        # v4 -> v5 adds the error fields, v5 -> v6 adds url_path; a v4 snapshot has
+        # to arrive with BOTH, i.e. the additive steps chain rather than stopping
+        # after the first one.
+        assert {"error_code", "error_message", "error_details", "url_path"} <= columns
         version = conn.execute("SELECT value FROM _schema_meta WHERE key = 'version'").fetchone()
-        assert version == ("5",)
+        assert version == (str(SCHEMA_VERSION),)
     finally:
         conn.close()
 
@@ -537,20 +542,25 @@ async def test_sqlite_usage_audit_store_rejects_unhandled_future_migration_witho
     await store.initialize()
     await store.close()
 
-    monkeypatch.setattr(sqlite_store_module, "SCHEMA_VERSION", 6)
+    # One past the newest handled step, so this stays a test about failing closed
+    # on an UNHANDLED transition rather than about a specific version pair.
+    unhandled = SCHEMA_VERSION + 1
+    monkeypatch.setattr(sqlite_store_module, "SCHEMA_VERSION", unhandled)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
         with pytest.raises(
             RuntimeError,
-            match="No usage/audit schema migration path from version 5 to 6",
+            match=(
+                f"No usage/audit schema migration path from version {SCHEMA_VERSION} to {unhandled}"
+            ),
         ):
             SQLiteUsageAuditStore._migrate_legacy_sync(conn)
 
         assert conn.execute("SELECT COUNT(*) FROM request_audit").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM usage_token_hourly").fetchone()[0] == 1
         version = conn.execute("SELECT value FROM _schema_meta WHERE key = 'version'").fetchone()
-        assert version[0] == "5"
+        assert version[0] == str(SCHEMA_VERSION)
     finally:
         conn.close()
 
