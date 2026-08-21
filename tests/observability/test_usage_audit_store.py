@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from openviking.observability.events import ObservabilityEvent
+from openviking.observability.usage_audit import sqlite_store as sqlite_store_module
 from openviking.observability.usage_audit.sqlite_store import SQLiteUsageAuditStore
 
 UTC = ZoneInfo("UTC")
@@ -521,6 +522,35 @@ async def test_sqlite_usage_audit_store_migrates_v4_without_losing_rows(tmp_path
         assert {"error_code", "error_message", "error_details"} <= columns
         version = conn.execute("SELECT value FROM _schema_meta WHERE key = 'version'").fetchone()
         assert version == ("5",)
+    finally:
+        conn.close()
+
+
+@pytest.mark.asyncio
+async def test_sqlite_usage_audit_store_rejects_unhandled_future_migration_without_data_loss(
+    tmp_path, monkeypatch
+):
+    db_path = tmp_path / "usage.sqlite3"
+    _create_v4_usage_audit_db(db_path)
+
+    store = SQLiteUsageAuditStore(db_path)
+    await store.initialize()
+    await store.close()
+
+    monkeypatch.setattr(sqlite_store_module, "SCHEMA_VERSION", 6)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        with pytest.raises(
+            RuntimeError,
+            match="No usage/audit schema migration path from version 5 to 6",
+        ):
+            SQLiteUsageAuditStore._migrate_legacy_sync(conn)
+
+        assert conn.execute("SELECT COUNT(*) FROM request_audit").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM usage_token_hourly").fetchone()[0] == 1
+        version = conn.execute("SELECT value FROM _schema_meta WHERE key = 'version'").fetchone()
+        assert version[0] == "5"
     finally:
         conn.close()
 

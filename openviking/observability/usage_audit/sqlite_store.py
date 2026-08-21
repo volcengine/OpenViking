@@ -73,7 +73,8 @@ class SQLiteUsageAuditStore:
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA foreign_keys=ON")
         # Preserve the compatible v4 layout through its additive migration.
-        # Older daily/local layouts remain incompatible and use the reset path.
+        # Unknown newer transitions fail closed; older daily/local layouts
+        # remain incompatible and use the reset path.
         self._migrate_legacy_sync(conn)
         conn.executescript(SQLITE_SCHEMA)
         conn.execute(
@@ -89,11 +90,20 @@ class SQLiteUsageAuditStore:
         except sqlite3.OperationalError:
             row = None
         current = int(row["value"]) if row and row["value"] else 0
-        if current >= SCHEMA_VERSION:
+        if current > SCHEMA_VERSION:
+            raise RuntimeError(
+                "Usage/audit database schema "
+                f"version {current} is newer than supported version {SCHEMA_VERSION}"
+            )
+        if current == SCHEMA_VERSION:
             return
-        if current == 4:
+        if current == 4 and SCHEMA_VERSION == 5:
             SQLiteUsageAuditStore._migrate_v4_to_v5_sync(conn)
             return
+        if current >= 4:
+            raise RuntimeError(
+                f"No usage/audit schema migration path from version {current} to {SCHEMA_VERSION}"
+            )
         for table in RESET_ON_SCHEMA_UPGRADE_TABLES:
             conn.execute(f"DROP TABLE IF EXISTS {table}")
 

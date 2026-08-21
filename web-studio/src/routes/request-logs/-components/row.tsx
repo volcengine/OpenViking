@@ -30,7 +30,10 @@ export function RequestLogRow({ log }: RequestLogRowProps) {
   const hasErrorDetails = Boolean(
     log.error_code || log.error_message || log.error_details,
   )
-  const serializedDetails = log.error_details
+  const hasStructuredDetails = Boolean(
+    log.error_details && Object.keys(log.error_details).length > 0,
+  )
+  const serializedDetails = hasStructuredDetails
     ? JSON.stringify(log.error_details, null, 2)
     : null
 

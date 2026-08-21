@@ -9,7 +9,8 @@ serve any region. Token and retrieval rollups are hour-grained so cross-tz
 """
 
 # Stored on the `_schema_meta` row. Version 4 has an explicit additive migration;
-# older incompatible snapshots continue to use the reset path.
+# unhandled newer transitions fail closed, while older incompatible snapshots
+# continue to use the reset path.
 SCHEMA_VERSION = 5
 
 SQLITE_SCHEMA = """

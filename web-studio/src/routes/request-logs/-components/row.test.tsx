@@ -63,6 +63,23 @@ describe('RequestLogRow', () => {
     expect(screen.getByText('Task was not found')).toBeTruthy()
   })
 
+  it('omits the structured details section for an empty object', () => {
+    renderRow({
+      error_code: 'PERMISSION_DENIED',
+      error_details: {},
+      error_message: 'Permission denied',
+      method: 'GET',
+      route: '/api/v1/resources',
+      status_code: 403,
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'details.show' }))
+
+    expect(screen.getByText('PERMISSION_DENIED')).toBeTruthy()
+    expect(screen.getByText('Permission denied')).toBeTruthy()
+    expect(screen.queryByText('details.data')).toBeNull()
+  })
+
   it('does not add an expansion control to rows without captured errors', () => {
     renderRow({ method: 'GET', route: '/api/v1/tasks', status_code: 200 })
 
