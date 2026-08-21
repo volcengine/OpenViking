@@ -172,6 +172,7 @@ class OpenVikingService:
                 max_concurrent_external_parse=max_concurrent_external_parse,
                 max_concurrent_add_resource=max_concurrent_add_resource,
                 max_concurrent_session_commit=max_concurrent_session_commit,
+                recover_stale_sec=config.agfs.queuefs.recover_stale_sec,
             )
         else:
             logger.warning("RAGFS client not initialized, skipping queue manager")

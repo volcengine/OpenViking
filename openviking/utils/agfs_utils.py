@@ -178,7 +178,9 @@ def _build_queuefs_plugin_config(agfs_config: Any, data_path: Path) -> Dict[str,
     plugin_config: Dict[str, Any] = {"backend": backend}
 
     if backend in {"sqlite", "sqlite3"}:
-        plugin_config["recover_stale_sec"] = getattr(queuefs_config, "recover_stale_sec", 0)
+        # Default to 300s so crash-orphaned 'processing' rows are recovered on
+        # the next mount instead of sticking forever (0 disables recovery).
+        plugin_config["recover_stale_sec"] = getattr(queuefs_config, "recover_stale_sec", 300)
         plugin_config["busy_timeout_ms"] = getattr(queuefs_config, "busy_timeout_ms", 5000)
         configured_queue_db_path = None
         if queuefs_config is not None:
