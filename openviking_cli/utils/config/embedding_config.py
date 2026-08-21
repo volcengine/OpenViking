@@ -577,7 +577,9 @@ class EmbeddingModelConfig(BaseModel):
             )
 
         if provider == "local":
-            from openviking.models.embedder.local_embedders import get_local_model_default_dimension
+            from openviking.models.embedder.local_embedders import (
+                get_local_model_default_dimension,
+            )
 
             return get_local_model_default_dimension(effective_model)
 
@@ -887,6 +889,7 @@ class EmbeddingConfig(BaseModel):
                 lambda cfg: {
                     "model_name": cfg.model,
                     "api_key": cfg.api_key,
+                    "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
                     "config": dict(runtime_config),
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
@@ -1007,7 +1010,10 @@ class EmbeddingConfig(BaseModel):
             ValueError: If configuration is invalid or unsupported
         """
         from openviking.models.embedder import CompositeHybridEmbedder
-        from openviking.models.embedder.base import DenseEmbedderBase, SparseEmbedderBase
+        from openviking.models.embedder.base import (
+            DenseEmbedderBase,
+            SparseEmbedderBase,
+        )
 
         if self.hybrid:
             if self.hybrid.credentials:

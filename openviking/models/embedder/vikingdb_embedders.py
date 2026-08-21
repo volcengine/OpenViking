@@ -3,8 +3,10 @@
 """VikingDB Embedder Implementation via HTTP API"""
 
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 import httpx
+from openviking_cli.utils.logger import default_logger as logger
 
 from openviking.models.embedder.base import (
     DenseEmbedderBase,
@@ -12,12 +14,15 @@ from openviking.models.embedder.base import (
     HybridEmbedderBase,
     SparseEmbedderBase,
 )
+from openviking.models.network import (
+    create_model_requests_session,
+    create_optional_async_httpx_client,
+)
 from openviking.storage.vectordb.collection.volcengine_clients import (
     DEFAULT_TIMEOUT,
     ClientForDataApi,
 )
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
-from openviking_cli.utils.logger import default_logger as logger
 
 
 class VikingDBClientMixin:
@@ -33,12 +38,25 @@ class VikingDBClientMixin:
         self.ak = ak
         self.sk = sk
         self.region = region or "cn-beijing"
-        self.host = host
 
         if not self.ak or not self.sk:
             raise ValueError("AK and SK are required for VikingDB Embedder")
 
-        self.client = ClientForDataApi(self.ak, self.sk, self.region, self.host)
+        parsed_host = urlparse(host or "")
+        if parsed_host.scheme in {"http+sd", "https+sd"}:
+            logical_host = parsed_host.netloc
+            endpoint_base = (host or "").rstrip("/")
+        else:
+            logical_host = host
+            endpoint_base = ""
+
+        self.client = ClientForDataApi(self.ak, self.sk, self.region, logical_host)
+        self.host = self.client.host
+        self._endpoint_base = endpoint_base or f"https://{self.host}"
+        self._sync_session = create_model_requests_session(
+            self._endpoint_base,
+            mount_retry=False,
+        )
         self._async_client_cache = LoopScopedAsyncClientCache()
 
     def _call_api(
@@ -63,7 +81,15 @@ class VikingDBClientMixin:
             req_body["sparse_model"] = sparse_model
 
         try:
-            response = self.client.do_req("POST", path, req_body=req_body)
+            req = self.client.prepare_request(method="POST", path=path, data=req_body)
+            response = self._sync_session.request(
+                method=req.method,
+                url=f"{self._endpoint_base}{req.path}",
+                headers=req.headers,
+                params=req.query,
+                data=req.body,
+                timeout=DEFAULT_TIMEOUT,
+            )
             if response.status_code != 200:
                 logger.warning(
                     f"VikingDB API returned bad code: {response.status_code}, message: {response.text}"
@@ -93,11 +119,17 @@ class VikingDBClientMixin:
             req_body["sparse_model"] = sparse_model
 
         req = self.client.prepare_request(method="POST", path=path, data=req_body)
-        client = self._async_client_cache.get(lambda: httpx.AsyncClient(timeout=DEFAULT_TIMEOUT))
+        client = self._async_client_cache.get(
+            lambda: create_optional_async_httpx_client(
+                self._endpoint_base,
+                timeout=DEFAULT_TIMEOUT,
+            )
+            or httpx.AsyncClient(timeout=DEFAULT_TIMEOUT)
+        )
 
         response = await client.request(
             method=req.method,
-            url=f"https://{self.host}{req.path}",
+            url=f"{self._endpoint_base}{req.path}",
             headers=req.headers,
             content=req.body,
         )
@@ -145,6 +177,10 @@ class VikingDBClientMixin:
                     if key is not None and val is not None:
                         result[str(key)] = float(val)
         return result
+
+    def _close_vikingdb_clients(self) -> None:
+        self._sync_session.close()
+        self._async_client_cache.close_all_with_aclose()
 
 
 class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
@@ -240,6 +276,9 @@ class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
 
     def get_dimension(self) -> int:
         return self.dimension if self.dimension else 2048
+
+    def close(self):
+        self._close_vikingdb_clients()
 
 
 class VikingDBSparseEmbedder(SparseEmbedderBase, VikingDBClientMixin):
@@ -437,4 +476,4 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
         return self.dimension if self.dimension else 2048
 
     def close(self):
-        self._async_client_cache.close_all_with_aclose()
+        self._close_vikingdb_clients()
