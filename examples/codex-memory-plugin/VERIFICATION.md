@@ -196,7 +196,7 @@ files are still present — the skip path does not clear them.
 # Backdate one of the state files to be older than IDLE_TTL_MS (default 30 min).
 OLD=$(node -e 'console.log(Date.now() - 60*60*1000)')   # 1 hour ago
 cat > "$STATE_DIR/state/sess-aaa.json" <<EOF
-{"codexSessionId":"sess-aaa","ovSessionId":null,"capturedTurnCount":0,"createdAt":$OLD,"lastUpdatedAt":$OLD}
+{"codexSessionId":"sess-aaa","ovSessionId":"cx-sess-aaa","capturedTurnCount":2,"createdAt":$OLD,"lastUpdatedAt":$OLD}
 EOF
 
 echo '{"session_id":"sess-ddd","source":"startup","cwd":"/tmp","model":"x","permission_mode":"default","transcript_path":null,"hook_event_name":"SessionStart"}' \
@@ -206,8 +206,9 @@ echo '{"session_id":"sess-ddd","source":"startup","cwd":"/tmp","model":"x","perm
     node $PLUGIN/scripts/session-start-commit.mjs
 ```
 
-Expect: log shows `idle_sweep` for `sess-aaa` (committed and cleared).
-`sess-bbb.json` is still present (still fresh). `sess-aaa.json` is gone.
+Expect: log shows `idle_sweep` for `sess-aaa` (committed).
+`sess-bbb.json` is still present (still fresh). `sess-aaa.json` is also
+present with `ovSessionId: null` and `capturedTurnCount: 2` for resume.
 If `sess-bbb` was in `≥2 active` from 6c, the heuristic on this call sees
 just `sess-bbb` (1 active) and commits it — that's expected and shows the
 heuristic + sweep working together.

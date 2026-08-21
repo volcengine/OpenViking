@@ -226,15 +226,17 @@ async function main() {
 
   // Post-compact transcript-shrink defense: codex's /compact may rewrite or
   // truncate transcript_path. If allTurns has fewer entries than we cached,
-  // our slice math would underflow and silently drop turns. Reset the
-  // counter so the next slice captures everything in the new transcript.
+  // our slice math would underflow and silently drop turns. Resume at the
+  // latest human user turn without replaying compacted history.
   // See DESIGN.md "Post-compact transcript shrink".
   if (allTurns.length < state.capturedTurnCount) {
     log("transcript_shrink_detected", {
       cached: state.capturedTurnCount,
       observed: allTurns.length,
     });
-    state.capturedTurnCount = 0;
+    state.capturedTurnCount = Math.max(0, allTurns.findLastIndex(
+      (turn) => turn.role === "user" && turn.parts?.some((part) => part.type === "text"),
+    ));
   }
 
   const newTurns = allTurns.slice(state.capturedTurnCount);

@@ -385,3 +385,81 @@ test("auto-capture logs a commit error trace_id", async () => {
     await rm(stateDir, { recursive: true, force: true });
   }
 });
+
+test("auto-capture skips compacted history after transcript shrink", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-capture-compact-"));
+  const transcriptPath = join(stateDir, "transcript.jsonl");
+  const batches = [];
+  const now = Date.now();
+
+  try {
+    await writeFile(join(stateDir, "compaction.json"), JSON.stringify({
+      codexSessionId: "compaction",
+      ovSessionId: "cx-compaction",
+      capturedTurnCount: 8,
+      createdAt: now - 1000,
+      lastUpdatedAt: now,
+    }));
+    await writeFile(
+      transcriptPath,
+      [
+        { payload: { message: { role: "user", content: "compacted historical summary" } } },
+        { payload: { message: { role: "assistant", content: "prior assistant tail" } } },
+        { payload: { message: { role: "user", content: "current user request" } } },
+        { payload: { type: "function_call", id: "call-1", name: "shell", arguments: "{}" } },
+        { payload: { type: "function_call_output", call_id: "call-1", output: "tool result" } },
+        { payload: { message: { role: "assistant", content: "current assistant response" } } },
+      ].map((entry) => JSON.stringify(entry)).join("\n"),
+    );
+
+    await withMockOpenViking(async (req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      if (req.method === "GET" && url.pathname === "/health") {
+        writeJson(res, { status: "ok", result: { ok: true } });
+        return;
+      }
+      if (req.method === "POST" && url.pathname.endsWith("/messages/batch")) {
+        batches.push(await readRequestBody(req));
+        writeJson(res, { status: "ok", result: { ok: true } });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/v1/sessions/cx-compaction") {
+        writeJson(res, {
+          status: "ok",
+          result: { pending_tokens: 0, commit_count: 0, total_message_count: 4 },
+        });
+        return;
+      }
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "error", error: "not found" }));
+    }, async (baseUrl) => {
+      await runAutoCapture(
+        { session_id: "compaction", transcript_path: transcriptPath },
+        {
+          OPENVIKING_AUTO_CAPTURE: "1",
+          OPENVIKING_CAPTURE_ASSISTANT_TURNS: "1",
+          OPENVIKING_CODEX_STATE_DIR: stateDir,
+          OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
+          OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
+          OPENVIKING_CREDENTIAL_SOURCE: "env",
+          OPENVIKING_MIN_QUERY_LENGTH: "1",
+          OPENVIKING_WRITE_PATH_ASYNC: "0",
+          OPENVIKING_TIMEOUT_MS: "5000",
+          OPENVIKING_URL: baseUrl,
+        },
+      );
+    });
+
+    const messages = batches.flatMap((batch) => batch.messages || []);
+    assert.equal(messages.length, 4);
+    assert.equal(messages[0].parts[0].text, "current user request");
+    assert.equal(
+      messages.some((message) =>
+        message.parts?.some((part) => part.text === "compacted historical summary")
+      ),
+      false,
+    );
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});

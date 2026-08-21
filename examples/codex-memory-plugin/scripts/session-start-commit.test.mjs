@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -224,6 +224,54 @@ test("startup preserves the existing commit systemMessage alongside profile cont
       request.method === "POST"
       && request.path === "/api/v1/sessions/cx-old-session/commit"
     ));
+    const state = JSON.parse(await readFile(join(stateDir, "old-session.json"), "utf-8"));
+    assert.equal(state.ovSessionId, null);
+    assert.equal(state.capturedTurnCount, 2);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("startup ignores committed cursor-only states", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-codex-cursor-only-"));
+  const requests = [];
+  try {
+    const now = Date.now();
+    await Promise.all([
+      writeFile(join(stateDir, "recent.json"), JSON.stringify({
+        codexSessionId: "recent",
+        ovSessionId: null,
+        capturedTurnCount: 4,
+        createdAt: now - 500,
+        lastUpdatedAt: now,
+      })),
+      writeFile(join(stateDir, "stale.json"), JSON.stringify({
+        codexSessionId: "stale",
+        ovSessionId: null,
+        capturedTurnCount: 6,
+        createdAt: now - 20_000,
+        lastUpdatedAt: now - 10_000,
+      })),
+    ]);
+
+    await withMockOpenViking(profileHandler(requests), async (baseUrl) => {
+      await runSessionStart(
+        { session_id: "new-session", source: "startup", cwd: "/tmp/codex-cursor-only" },
+        {
+          ...baseEnv(baseUrl, stateDir),
+          OPENVIKING_CODEX_ACTIVE_WINDOW_MS: "1000",
+          OPENVIKING_CODEX_IDLE_TTL_MS: "5000",
+        },
+      );
+    });
+
+    const [recent, stale] = await Promise.all([
+      readFile(join(stateDir, "recent.json"), "utf-8"),
+      readFile(join(stateDir, "stale.json"), "utf-8"),
+    ]);
+    assert.equal(JSON.parse(recent).capturedTurnCount, 4);
+    assert.equal(JSON.parse(stale).capturedTurnCount, 6);
+    assert.equal(requests.some((request) => request.path.endsWith("/commit")), false);
   } finally {
     await rm(stateDir, { recursive: true, force: true });
   }
