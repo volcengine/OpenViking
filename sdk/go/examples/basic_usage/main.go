@@ -85,7 +85,7 @@ func main() {
 	fmt.Println("5. Write and find")
 	_, err = client.Write(ctx, resourceURI, content+"\n\nGo SDK write check.", &openviking.WriteOptions{
 		Mode: "replace",
-		Wait: openviking.Bool(true),
+		Wait: true,
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -93,7 +93,7 @@ func main() {
 
 	findResult, err := client.Find(ctx, "Go SDK smoke test", &openviking.FindOptions{
 		TargetURI: "viking://resources/go-sdk-smoke",
-		Limit:     openviking.Int(5),
+		Limit:     5,
 	})
 	if err != nil {
 		log.Fatal(err)

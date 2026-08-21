@@ -287,6 +287,7 @@ describe("OpenVikingClient", () => {
       mode: "prune_orphans",
       wait: true,
       dryRun: true,
+      recursive: false,
     });
 
     const [url, init] = fetcher.mock.calls[0]!;
@@ -296,6 +297,7 @@ describe("OpenVikingClient", () => {
       mode: "prune_orphans",
       wait: true,
       dry_run: true,
+      recursive: false,
     });
   });
 

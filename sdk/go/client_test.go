@@ -145,7 +145,7 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 
 	result, err := client.Find(context.Background(), "auth", &FindOptions{
 		TargetURI:   "resources/docs",
-		Limit:       Int(5),
+		Limit:       5,
 		ContextType: []string{"resource"},
 		Since:       "2026-06-01",
 		Until:       "2026-06-18",
@@ -180,10 +180,10 @@ func TestFindOmitsSearchFiltersWhenUnset(t *testing.T) {
 	}
 }
 
-func TestFindPreservesExplicitZeroAndEmptyValues(t *testing.T) {
+func TestFindUsesDefaultLimitAndPreservesEmptyValues(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body := readJSONBody(t, r)
-		if got, ok := body["limit"]; !ok || got != float64(0) {
+		if got, ok := body["limit"]; !ok || got != float64(10) {
 			t.Fatalf("limit = %#v, present = %v", got, ok)
 		}
 		if tags, ok := body["tags"].([]any); !ok || len(tags) != 0 {
@@ -197,7 +197,6 @@ func TestFindPreservesExplicitZeroAndEmptyValues(t *testing.T) {
 	defer closeServer()
 
 	if _, err := client.Find(context.Background(), "auth", &FindOptions{
-		Limit: Int(0),
 		Tags:  []string{},
 		Level: []int{},
 	}); err != nil {
@@ -296,14 +295,18 @@ func TestReindexSendsDryRun(t *testing.T) {
 		if got := body["dry_run"]; got != true {
 			t.Fatalf("dry_run = %#v", got)
 		}
+		if got := body["recursive"]; got != false {
+			t.Fatalf("recursive = %#v", got)
+		}
 		writeOK(t, w, map[string]any{"status": "completed"})
 	}))
 	defer closeServer()
 
 	if _, err := client.Reindex(context.Background(), "resources/demo", &ReindexOptions{
-		Mode:   "prune_orphans",
-		Wait:   false,
-		DryRun: true,
+		Mode:      "prune_orphans",
+		Wait:      false,
+		DryRun:    true,
+		Recursive: Bool(false),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -585,7 +588,7 @@ func TestSearchContextSendsContextOptionsAndRejectsModeOverride(t *testing.T) {
 func TestWriteSendsProcessingModeAndExtra(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body := readJSONBody(t, r)
-		if body["processing_mode"] != "vectors_only" || body["future_flag"] != float64(0) {
+		if body["processing_mode"] != "vectors_only" || body["future_flag"] != float64(0) || body["wait"] != true {
 			t.Fatalf("body = %#v", body)
 		}
 		writeOK(t, w, map[string]any{"uri": "viking://resources/a.md"})
@@ -594,6 +597,7 @@ func TestWriteSendsProcessingModeAndExtra(t *testing.T) {
 
 	if _, err := client.Write(context.Background(), "resources/a.md", "", &WriteOptions{
 		ProcessingMode: "vectors_only",
+		Wait:           true,
 		Extra:          map[string]any{"future_flag": 0},
 	}); err != nil {
 		t.Fatal(err)

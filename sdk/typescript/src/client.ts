@@ -639,6 +639,7 @@ export class OpenVikingClient {
       mode: options.mode ?? "vectors_only",
       wait: options.wait ?? true,
       dry_run: options.dryRun ?? false,
+      recursive: options.recursive ?? true,
       tags: options.tags,
       tag_mode:
         options.tags === undefined ? undefined : (options.tagMode ?? "replace"),

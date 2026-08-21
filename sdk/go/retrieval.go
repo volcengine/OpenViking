@@ -10,6 +10,13 @@ func (c *Client) Find(ctx context.Context, queryText string, opts *FindOptions) 
 	if opts == nil {
 		opts = &FindOptions{}
 	}
+	limit := opts.Limit
+	if limit == 0 {
+		limit = 10
+	}
+	if opts.NodeLimit != nil {
+		limit = *opts.NodeLimit
+	}
 	imageURL, err := normalizeImageInput(opts.Image)
 	if err != nil {
 		return nil, err
@@ -18,8 +25,7 @@ func (c *Client) Find(ctx context.Context, queryText string, opts *FindOptions) 
 	if opts.TargetURI != nil {
 		payload["target_uri"] = normalizeTarget(opts.TargetURI)
 	}
-	setAny(payload, "limit", opts.Limit)
-	setAny(payload, "node_limit", opts.NodeLimit)
+	payload["limit"] = limit
 	setString(payload, "image_url", imageURL)
 	setAny(payload, "score_threshold", opts.ScoreThreshold)
 	setAny(payload, "filter", opts.Filter)
@@ -48,6 +54,13 @@ func (c *Client) Search(ctx context.Context, queryText string, opts *SearchOptio
 	if opts == nil {
 		opts = &SearchOptions{}
 	}
+	limit := opts.Limit
+	if limit == 0 {
+		limit = 10
+	}
+	if opts.NodeLimit != nil {
+		limit = *opts.NodeLimit
+	}
 	imageURL, err := normalizeImageInput(opts.Image)
 	if err != nil {
 		return nil, err
@@ -56,8 +69,7 @@ func (c *Client) Search(ctx context.Context, queryText string, opts *SearchOptio
 	if opts.TargetURI != nil {
 		payload["target_uri"] = normalizeTarget(opts.TargetURI)
 	}
-	setAny(payload, "limit", opts.Limit)
-	setAny(payload, "node_limit", opts.NodeLimit)
+	payload["limit"] = limit
 	setString(payload, "image_url", imageURL)
 	setString(payload, "session_id", opts.SessionID)
 	setAny(payload, "score_threshold", opts.ScoreThreshold)

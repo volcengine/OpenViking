@@ -179,7 +179,7 @@ type RemoveOptions struct {
 // WriteOptions controls Write.
 type WriteOptions struct {
 	Mode           string
-	Wait           *bool
+	Wait           bool
 	Timeout        *float64
 	Telemetry      any
 	ProcessingMode string
@@ -220,19 +220,20 @@ type SetTagsOptions struct {
 // Wait is used as-is when options are provided; set it explicitly to true
 // when adding optional fields such as Tags and synchronous behavior is desired.
 type ReindexOptions struct {
-	Mode    string
-	Wait    bool
-	DryRun  bool
-	Tags    []string
-	TagMode string
-	Extra   map[string]any
+	Mode      string
+	Wait      bool
+	DryRun    bool
+	Recursive *bool
+	Tags      []string
+	TagMode   string
+	Extra     map[string]any
 }
 
 // FindOptions controls Find.
 type FindOptions struct {
 	TargetURI         any
 	Image             string
-	Limit             *int
+	Limit             int
 	NodeLimit         *int
 	ScoreThreshold    *float64
 	Filter            map[string]any
@@ -252,7 +253,7 @@ type SearchOptions struct {
 	TargetURI         any
 	Image             string
 	SessionID         string
-	Limit             *int
+	Limit             int
 	NodeLimit         *int
 	ScoreThreshold    *float64
 	Filter            map[string]any

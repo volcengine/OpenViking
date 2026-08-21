@@ -187,12 +187,16 @@ func (c *Client) Write(ctx context.Context, uri string, content string, opts *Wr
 	if opts == nil {
 		opts = &WriteOptions{}
 	}
+	mode := opts.Mode
+	if mode == "" {
+		mode = "replace"
+	}
 	payload := map[string]any{
 		"uri":     NormalizeURI(uri),
 		"content": content,
+		"mode":    mode,
+		"wait":    opts.Wait,
 	}
-	setString(payload, "mode", opts.Mode)
-	setAny(payload, "wait", opts.Wait)
 	setFloatPtr(payload, "timeout", opts.Timeout)
 	setAny(payload, "telemetry", opts.Telemetry)
 	setString(payload, "processing_mode", opts.ProcessingMode)
@@ -275,10 +279,11 @@ func (c *Client) Reindex(ctx context.Context, uri string, opts *ReindexOptions) 
 		mode = "vectors_only"
 	}
 	payload := map[string]any{
-		"uri":     NormalizeURI(uri),
-		"mode":    mode,
-		"wait":    opts.Wait,
-		"dry_run": opts.DryRun,
+		"uri":       NormalizeURI(uri),
+		"mode":      mode,
+		"wait":      opts.Wait,
+		"dry_run":   opts.DryRun,
+		"recursive": boolValue(opts.Recursive, true),
 	}
 	if opts.Tags != nil {
 		payload["tags"] = opts.Tags
