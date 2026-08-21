@@ -752,8 +752,19 @@ export class OpenVikingClient {
   batchAddMessages(
     sessionId: string,
     messages: Message[],
-    options: BatchAddMessagesOptions = {},
+    telemetry?: unknown,
+  ): Promise<JsonObject>;
+  batchAddMessages(
+    sessionId: string,
+    messages: Message[],
+    options?: BatchAddMessagesOptions,
   ): Promise<JsonObject> {
+    const normalizedOptions =
+      options !== null &&
+      typeof options === "object" &&
+      ("telemetry" in options || "extra" in options)
+        ? options
+        : { telemetry: options };
     return this.request(
       "POST",
       `/api/v1/sessions/${pathPart(sessionId)}/messages/batch`,
@@ -778,9 +789,9 @@ export class OpenVikingClient {
                 source_message_ids: message.sourceMessageIds,
               });
             }),
-            telemetry: options.telemetry,
+            telemetry: normalizedOptions.telemetry,
           }),
-          options.extra,
+          normalizedOptions.extra,
         ),
       },
     );
@@ -788,8 +799,28 @@ export class OpenVikingClient {
   /** Commit a session and extract memories. */
   commitSession(
     sessionId: string,
-    options: CommitSessionOptions = {},
+    keepRecentCount?: number,
+    telemetry?: unknown,
+    eventTags?: string[],
+  ): Promise<JsonObject>;
+  commitSession(
+    sessionId: string,
+    options?: CommitSessionOptions,
+  ): Promise<JsonObject>;
+  commitSession(
+    sessionId: string,
+    optionsOrKeepRecentCount: CommitSessionOptions | number = {},
+    telemetry?: unknown,
+    eventTags?: string[],
   ): Promise<JsonObject> {
+    let options: CommitSessionOptions;
+    if (typeof optionsOrKeepRecentCount === "number") {
+      options = { keepRecentCount: optionsOrKeepRecentCount };
+      if (telemetry !== undefined) options.telemetry = telemetry;
+      if (eventTags !== undefined) options.eventTags = eventTags;
+    } else {
+      options = optionsOrKeepRecentCount;
+    }
     const body = compact({
       keep_recent_count: options.keepRecentCount,
       retention_mode: options.retentionMode,

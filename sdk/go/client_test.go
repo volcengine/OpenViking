@@ -684,8 +684,7 @@ func TestSessionSendsLatestMessageAndRetentionFields(t *testing.T) {
 	}))
 	defer closeServer()
 
-	if _, err := client.AddMessage(context.Background(), "session-1", Message{
-		Role:             "assistant",
+	if _, err := client.AddMessage(context.Background(), "session-1", "assistant", AddMessageOptions{
 		Content:          String("done"),
 		TurnID:           "turn-1",
 		MessageKind:      "assistant_step",

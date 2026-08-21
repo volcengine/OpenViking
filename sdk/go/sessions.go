@@ -105,23 +105,26 @@ func (c *Client) DeleteSession(ctx context.Context, sessionID string) error {
 }
 
 // AddMessage appends a message to a session.
-func (c *Client) AddMessage(ctx context.Context, sessionID string, message Message) (map[string]any, error) {
-	payload := map[string]any{"role": message.Role}
-	if len(message.Parts) > 0 {
-		payload["parts"] = message.Parts
-	} else if message.Content != nil {
-		payload["content"] = *message.Content
+func (c *Client) AddMessage(ctx context.Context, sessionID, role string, opts AddMessageOptions) (map[string]any, error) {
+	payload := map[string]any{"role": role}
+	if len(opts.Parts) > 0 {
+		payload["parts"] = opts.Parts
+	} else if opts.Content != nil {
+		payload["content"] = *opts.Content
 	} else {
 		return nil, fmt.Errorf("openviking: AddMessage requires Content or Parts")
 	}
-	setString(payload, "created_at", message.CreatedAt)
-	setString(payload, "peer_id", message.PeerID)
-	setString(payload, "turn_id", message.TurnID)
-	setString(payload, "message_kind", message.MessageKind)
-	if message.SourceMessageIDs != nil {
-		payload["source_message_ids"] = message.SourceMessageIDs
+	setString(payload, "created_at", opts.CreatedAt)
+	setString(payload, "peer_id", opts.PeerID)
+	setString(payload, "turn_id", opts.TurnID)
+	setString(payload, "message_kind", opts.MessageKind)
+	if opts.SourceMessageIDs != nil {
+		payload["source_message_ids"] = opts.SourceMessageIDs
 	}
-	setAny(payload, "telemetry", message.Telemetry)
+	setAny(payload, "telemetry", opts.Telemetry)
+	if err := mergeExtra(payload, opts.Extra); err != nil {
+		return nil, err
+	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/sessions/"+url.PathEscape(sessionID)+"/messages", nil, payload, &result)
 	return result, err

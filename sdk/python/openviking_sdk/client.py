@@ -158,7 +158,6 @@ class Session:
 
     async def add_message(
         self,
-        *,
         role: str,
         content: Optional[str] = None,
         parts: Optional[List[Dict[str, Any]]] = None,
@@ -177,7 +176,6 @@ class Session:
 
     async def commit(
         self,
-        *,
         keep_recent_count: int = 0,
         options: Optional[CommitSessionOptions] = None,
     ) -> Dict[str, Any]:
@@ -207,7 +205,6 @@ class SyncSession:
 
     def add_message(
         self,
-        *,
         role: str,
         content: Optional[str] = None,
         parts: Optional[List[Dict[str, Any]]] = None,
@@ -226,7 +223,6 @@ class SyncSession:
 
     def commit(
         self,
-        *,
         keep_recent_count: int = 0,
         options: Optional[CommitSessionOptions] = None,
     ) -> Dict[str, Any]:
@@ -238,7 +234,6 @@ class SyncSession:
 
     def commit_async(
         self,
-        *,
         keep_recent_count: int = 0,
         options: Optional[CommitSessionOptions] = None,
     ) -> Dict[str, Any]:
@@ -524,7 +519,6 @@ class AsyncHTTPClient:
         cls,
         options: Optional[Mapping[str, Any]],
         options_type: Type[Any],
-        *,
         fixed: Optional[Mapping[str, Any]] = None,
         protected: Optional[set[str]] = None,
     ) -> Dict[str, Any]:
@@ -555,7 +549,6 @@ class AsyncHTTPClient:
         query: str,
         options: Optional[Mapping[str, Any]],
         options_type: Type[Any],
-        *,
         fixed: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
         option_values = dict(options or {})
@@ -696,10 +689,10 @@ class AsyncHTTPClient:
     async def add_resource(
         self,
         path: str,
-        *,
         to: Optional[str] = None,
         parent: Optional[str] = None,
         reason: str = "",
+        instruction: str = "",
         wait: bool = False,
         timeout: Optional[float] = None,
         options: Optional[AddResourceOptions] = None,
@@ -728,6 +721,7 @@ class AsyncHTTPClient:
                 "to": to,
                 "parent": parent,
                 "reason": reason or None,
+                "instruction": instruction or None,
                 "wait": wait,
                 "timeout": timeout,
             },
@@ -778,7 +772,6 @@ class AsyncHTTPClient:
     async def add_skill(
         self,
         data: Any,
-        *,
         wait: bool = False,
         timeout: Optional[float] = None,
         options: Optional[AddSkillOptions] = None,
@@ -890,7 +883,6 @@ class AsyncHTTPClient:
         self,
         skill_name: str,
         data: Any,
-        *,
         wait: bool = False,
         timeout: Optional[float] = None,
         options: Optional[UpdateSkillOptions] = None,
@@ -1181,7 +1173,6 @@ class AsyncHTTPClient:
         self,
         uri: str,
         content: str,
-        *,
         mode: str = "replace",
         wait: bool = False,
         timeout: Optional[float] = None,
@@ -1209,7 +1200,6 @@ class AsyncHTTPClient:
         self,
         root_uri: str,
         operations: List[Dict[str, Any]],
-        *,
         wait: bool = True,
         timeout: Optional[float] = None,
         options: Optional[BatchWriteOptions] = None,
@@ -1242,7 +1232,6 @@ class AsyncHTTPClient:
         self,
         uri: str,
         tags: List[str],
-        *,
         mode: str = "replace",
         recursive: bool = False,
         options: Optional[SetTagsOptions] = None,
@@ -1267,7 +1256,6 @@ class AsyncHTTPClient:
     async def find(
         self,
         query: str = "",
-        *,
         target_uri: Union[str, List[str]] = "",
         limit: int = 10,
         options: Optional[FindOptions] = None,
@@ -1276,7 +1264,10 @@ class AsyncHTTPClient:
             query,
             options,
             FindOptions,
-            fixed={"target_uri": self._normalize_target_uri(target_uri), "limit": limit},
+            fixed={
+                "target_uri": self._normalize_target_uri(target_uri),
+                "limit": limit,
+            },
         )
         response = await self._request("POST", "/api/v1/search/find", json=payload)
         return self._handle_response_data(response).get("result", {})
@@ -1284,7 +1275,6 @@ class AsyncHTTPClient:
     async def search(
         self,
         query: str = "",
-        *,
         session_id: Optional[str] = None,
         target_uri: Union[str, List[str]] = "",
         limit: int = 10,
@@ -1306,7 +1296,6 @@ class AsyncHTTPClient:
     async def search_context(
         self,
         query: str = "",
-        *,
         session_id: Optional[str] = None,
         target_uri: Union[str, List[str]] = "",
         limit: int = 10,
@@ -1365,7 +1354,6 @@ class AsyncHTTPClient:
     async def create_session(
         self,
         session_id: Optional[str] = None,
-        *,
         options: Optional[CreateSessionOptions] = None,
     ) -> Dict[str, Any]:
         option_values = dict(options or {})
@@ -1460,7 +1448,6 @@ class AsyncHTTPClient:
     async def commit_session(
         self,
         session_id: str,
-        *,
         keep_recent_count: int = 0,
         options: Optional[CommitSessionOptions] = None,
     ) -> Dict[str, Any]:
@@ -1497,7 +1484,6 @@ class AsyncHTTPClient:
     async def add_message(
         self,
         session_id: str,
-        *,
         role: str,
         content: Optional[str] = None,
         parts: Optional[List[Dict[str, Any]]] = None,
@@ -2018,10 +2004,10 @@ class SyncHTTPClient:
     def add_resource(
         self,
         path: str,
-        *,
         to: Optional[str] = None,
         parent: Optional[str] = None,
         reason: str = "",
+        instruction: str = "",
         wait: bool = False,
         timeout: Optional[float] = None,
         options: Optional[AddResourceOptions] = None,
@@ -2032,6 +2018,7 @@ class SyncHTTPClient:
                 to=to,
                 parent=parent,
                 reason=reason,
+                instruction=instruction,
                 wait=wait,
                 timeout=timeout,
                 options=options,
@@ -2049,7 +2036,6 @@ class SyncHTTPClient:
     def add_skill(
         self,
         data: Any,
-        *,
         wait: bool = False,
         timeout: Optional[float] = None,
         options: Optional[AddSkillOptions] = None,
@@ -2131,7 +2117,6 @@ class SyncHTTPClient:
         self,
         skill_name: str,
         data: Any,
-        *,
         wait: bool = False,
         timeout: Optional[float] = None,
         options: Optional[UpdateSkillOptions] = None,
@@ -2289,7 +2274,6 @@ class SyncHTTPClient:
         self,
         uri: str,
         content: str,
-        *,
         mode: str = "replace",
         wait: bool = False,
         timeout: Optional[float] = None,
@@ -2305,7 +2289,6 @@ class SyncHTTPClient:
         self,
         root_uri: str,
         operations: List[Dict[str, Any]],
-        *,
         wait: bool = True,
         timeout: Optional[float] = None,
         options: Optional[BatchWriteOptions] = None,
@@ -2320,7 +2303,6 @@ class SyncHTTPClient:
         self,
         uri: str,
         tags: List[str],
-        *,
         mode: str = "replace",
         recursive: bool = False,
         options: Optional[SetTagsOptions] = None,
@@ -2334,21 +2316,22 @@ class SyncHTTPClient:
     def find(
         self,
         query: str = "",
-        *,
         target_uri: Union[str, List[str]] = "",
         limit: int = 10,
         options: Optional[FindOptions] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.find(
-                query, target_uri=target_uri, limit=limit, options=options
+                query,
+                target_uri=target_uri,
+                limit=limit,
+                options=options,
             )
         )
 
     def search(
         self,
         query: str = "",
-        *,
         session_id: Optional[str] = None,
         target_uri: Union[str, List[str]] = "",
         limit: int = 10,
@@ -2367,7 +2350,6 @@ class SyncHTTPClient:
     def search_context(
         self,
         query: str = "",
-        *,
         session_id: Optional[str] = None,
         target_uri: Union[str, List[str]] = "",
         limit: int = 10,
@@ -2412,7 +2394,6 @@ class SyncHTTPClient:
     def create_session(
         self,
         session_id: Optional[str] = None,
-        *,
         options: Optional[CreateSessionOptions] = None,
     ) -> Dict[str, Any]:
         return run_async(self._async_client.create_session(session_id, options=options))
@@ -2464,7 +2445,6 @@ class SyncHTTPClient:
     def commit_session(
         self,
         session_id: str,
-        *,
         keep_recent_count: int = 0,
         options: Optional[CommitSessionOptions] = None,
     ) -> Dict[str, Any]:
@@ -2477,7 +2457,6 @@ class SyncHTTPClient:
     def add_message(
         self,
         session_id: str,
-        *,
         role: str,
         content: Optional[str] = None,
         parts: Optional[List[Dict[str, Any]]] = None,

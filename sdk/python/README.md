@@ -281,12 +281,14 @@ print(result)
 
 ### Core Parameters and Options
 
-Frequently used fields are explicit keyword parameters. For example, use
-`to`, `reason`, and `wait` with `add_resource`; `target_uri` and `limit` with
-retrieval; and `role`, `content`, and `parts` with `add_message`.
+Frequently used fields are explicit parameters. For readability, prefer named
+arguments such as `to`, `reason`, and `wait` with `add_resource`; `target_uri`
+and `limit` with retrieval; and `role`, `content`, and `parts` with
+`add_message`. Positional calls remain supported.
 
 Use the method's typed `options` dictionary for advanced fields, such as
-`processing_mode`, retrieval filters, or session extraction configuration.
+`processing_mode`, retrieval filters, session extraction configuration, or
+`telemetry`.
 Do not pass advanced fields as bare keyword arguments. A field must be passed
 through exactly one entry point; SDK-defined fields in `options` and
 `extra` cannot override explicit parameters.

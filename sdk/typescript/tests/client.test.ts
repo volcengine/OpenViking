@@ -129,6 +129,39 @@ describe("OpenVikingClient", () => {
     });
   });
 
+  it("supports legacy batch and commit session arguments", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => ok({}));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+    const telemetry = { trace_id: "trace-1" };
+
+    await client.batchAddMessages(
+      "session-1",
+      [{ role: "user", content: "hello" }],
+      telemetry,
+    );
+    await client.commitSession(
+      "session-1",
+      2,
+      telemetry,
+      ["team=platform"],
+    );
+
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
+      messages: [{ role: "user", content: "hello" }],
+      telemetry,
+    });
+    expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toEqual({
+      keep_recent_count: 2,
+      extraction_metadata: { event: { tags: ["team=platform"] } },
+      telemetry,
+    });
+  });
+
   it("queries Agent Evolution trajectories and outcomes", async () => {
     const fetcher = vi
       .fn<typeof fetch>()

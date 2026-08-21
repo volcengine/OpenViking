@@ -34,7 +34,7 @@ def test_options_are_public_typed_dicts():
     assert write["processing_mode"] == "vectors_only"
 
 
-def test_core_options_are_explicit_keyword_parameters_without_legacy_kwargs():
+def test_core_options_are_explicit_without_legacy_kwargs():
     assert inspect.Parameter.VAR_KEYWORD not in {
         parameter.kind for parameter in inspect.signature(AsyncHTTPClient.add_resource).parameters.values()
     }
@@ -45,6 +45,102 @@ def test_core_options_are_explicit_keyword_parameters_without_legacy_kwargs():
     assert "to" not in AddResourceOptions.__optional_keys__
     assert "limit" not in FindOptions.__optional_keys__
     assert "wait" not in WriteOptions.__optional_keys__
+
+
+@pytest.mark.asyncio
+async def test_core_methods_accept_positional_parameters_and_options():
+    client, post = _client()
+
+    await client.add_message(
+        "session-1",
+        "assistant",
+        "done",
+        None,
+        {"message_kind": "final"},
+    )
+    await client.write(
+        "viking://resources/demo.md",
+        "updated",
+        "append",
+        True,
+        60,
+        {"processing_mode": "vectors_only"},
+    )
+
+    assert post.await_args_list[0].kwargs["json"] == {
+        "role": "assistant",
+        "content": "done",
+        "message_kind": "final",
+    }
+    assert post.await_args_list[1].kwargs["json"] == {
+        "uri": "viking://resources/demo.md",
+        "content": "updated",
+        "mode": "append",
+        "wait": True,
+        "timeout": 60,
+        "processing_mode": "vectors_only",
+    }
+
+
+@pytest.mark.asyncio
+async def test_core_resource_and_retrieval_fields_remain_flattened():
+    client, post = _client()
+
+    await client.add_resource(
+        "https://example.com/guide.md",
+        to="viking://resources/docs",
+        reason="import guide",
+        instruction="extract API references",
+        wait=True,
+        timeout=60,
+    )
+    await client.find(
+        "authentication",
+        target_uri="viking://resources/docs",
+        limit=5,
+        options={
+            "score_threshold": 0.7,
+            "filter": {"source": "guide"},
+            "tags": ["team=platform"],
+        },
+    )
+    await client.search(
+        "continue",
+        session_id="session-1",
+        target_uri="viking://resources/docs",
+        limit=3,
+        options={
+            "score_threshold": 0.6,
+            "filter": {"source": "guide"},
+            "tags": ["team=platform"],
+        },
+    )
+
+    assert post.await_args_list[0].kwargs["json"] == {
+        "path": "https://example.com/guide.md",
+        "to": "viking://resources/docs",
+        "reason": "import guide",
+        "instruction": "extract API references",
+        "wait": True,
+        "timeout": 60,
+    }
+    assert post.await_args_list[1].kwargs["json"] == {
+        "query": "authentication",
+        "target_uri": "viking://resources/docs",
+        "limit": 5,
+        "score_threshold": 0.7,
+        "filter": {"source": "guide"},
+        "tags": ["team=platform"],
+    }
+    assert post.await_args_list[2].kwargs["json"] == {
+        "query": "continue",
+        "session_id": "session-1",
+        "target_uri": "viking://resources/docs",
+        "limit": 3,
+        "score_threshold": 0.6,
+        "filter": {"source": "guide"},
+        "tags": ["team=platform"],
+    }
 
 
 @pytest.mark.asyncio

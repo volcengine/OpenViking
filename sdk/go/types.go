@@ -333,6 +333,19 @@ type UpdateSessionConfigOptions struct {
 	Extra                  map[string]any
 }
 
+// AddMessageOptions controls AddMessage.
+type AddMessageOptions struct {
+	Content          *string
+	Parts            []map[string]any
+	CreatedAt        string
+	PeerID           string
+	TurnID           string
+	MessageKind      string
+	SourceMessageIDs []string
+	Telemetry        any
+	Extra            map[string]any
+}
+
 // Message is one session message payload for BatchAddMessages.
 type Message struct {
 	Role             string           `json:"role"`
