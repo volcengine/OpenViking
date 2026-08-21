@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "openviking": {
+      "type": "http",
+      "url": "https://your-openviking.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${COPILOT_MCP_OPENVIKING_API_KEY}"
+      },
+      "tools": [
+        "recall",
+        "search",
+        "find",
+        "remember",
+        "read",
+        "list",
+        "grep",
+        "glob"
+      ]
+    }
+  }
+}
