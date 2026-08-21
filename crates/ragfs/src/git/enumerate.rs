@@ -11,8 +11,10 @@
 //! | Any segment equals `.path.ovlock` OR starts with `.path.ovlock` | Runtime lock |
 //! | File extension is `.faiss` or `.index`, OR path contains an `embedding_cache/` segment | Vector index — derived data |
 //!
-//! L0/L1 derived files (`.abstract.md`, `.overview.md`, `.relations.json`)
+//! L0/L1 derived files (`.abstract.md`, `.overview.md`)
 //! are intentionally KEPT — design §4.2 says they belong in snapshots.
+
+use crate::core::internal_names::{is_hidden_runtime_lock_name, PATH_LOCK_FILE};
 
 use std::sync::Arc;
 
@@ -47,11 +49,12 @@ pub fn prune_path(rel: &str) -> bool {
         return true;
     }
 
-    // Rule 2: any segment equals or starts with ".path.ovlock"
-    for seg in &segments {
-        if seg.starts_with(".path.ovlock") {
-            return true;
-        }
+    // Rule 2: any segment is a runtime path-lock file.
+    if segments
+        .iter()
+        .any(|segment| segment.starts_with(PATH_LOCK_FILE) || is_hidden_runtime_lock_name(segment))
+    {
+        return true;
     }
 
     // Rule 3a: any intermediate segment named exactly "embedding_cache"
@@ -287,7 +290,6 @@ mod tests {
                 ("/local/acct/resources/x.md", false),
                 ("/local/acct/resources/x.md.abstract.md", false),
                 ("/local/acct/resources/x.md.overview.md", false),
-                ("/local/acct/resources/x.md.relations.json", false),
             ],
         );
         let fs: Arc<dyn FileSystem> = Arc::new(mock);
@@ -299,7 +301,6 @@ mod tests {
             "resources/x.md".to_string(),
             "resources/x.md.abstract.md".to_string(),
             "resources/x.md.overview.md".to_string(),
-            "resources/x.md.relations.json".to_string(),
         ];
         expected.sort();
 
@@ -389,6 +390,9 @@ mod tests {
         assert!(prune_path("upload/x"));
         assert!(prune_path("resources/.path.ovlock"));
         assert!(prune_path(".path.ovlock"));
+        assert!(prune_path(
+            "resources/.exact.ovlock.file.txt.0123456789abcdef"
+        ));
         assert!(prune_path("resources/x.faiss"));
         assert!(prune_path("resources/x.index"));
         assert!(prune_path("resources/embedding_cache/v.bin"));
@@ -399,7 +403,6 @@ mod tests {
         assert!(!prune_path("agent/skills/b.py"));
         assert!(!prune_path("resources/x.md.abstract.md"));
         assert!(!prune_path("resources/x.md.overview.md"));
-        assert!(!prune_path("resources/x.md.relations.json"));
         // "_systemfoo" is NOT "_system", must survive.
         assert!(!prune_path("_systemfoo/x"));
         // Per "any segment starting with .path.ovlock", ".path.ovlocking"

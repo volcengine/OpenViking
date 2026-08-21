@@ -233,9 +233,32 @@ class TestOverviewGenerationFlow:
             in prompt
         )
         assert (
-            "- When the summaries suggest a code repository, explain how subdirectories relate to the whole repo, such as services, libraries, apps, modules, or support folders."
+            "- When the summaries indicate a code repository, explain how subdirectories relate to the whole repo, such as services, libraries, apps, modules, or support folders."
             in prompt
         )
+        assert (
+            "- Describe only what the provided summaries state; do not invent or generalize entities, facts, or relationships not present in them."
+            in prompt
+        )
+        assert "Before output, remove any named entity absent from the provided summaries" in prompt
+        assert "never fill gaps with outside knowledge" in prompt
+        assert "Who it's suitable for, if stated in the provided summaries" in prompt
+
+    def test_chinese_overview_uses_localized_headings(self):
+        prompt = render_prompt(
+            "semantic.overview_generation",
+            {
+                "dir_name": "测试",
+                "file_summaries": "[1] test.md: 测试文档",
+                "children_abstracts": "",
+                "output_language": "zh-CN",
+            },
+        )
+
+        assert "**快速导航** (H2)" in prompt
+        assert "**详细说明** (H2)" in prompt
+        assert "**Quick Navigation** (H2)" not in prompt
+        assert "**Detailed Description** (H2)" not in prompt
 
 class LanguageAwareMockVLM:
     """语言感知的 MockVLM，根据 prompt 中的 Output Language 返回对应语言的响应。"""
@@ -334,19 +357,15 @@ class TestGenerateTextSummaryOutputLanguage:
     def _create_mock_config(self, mock_vlm: LanguageAwareMockVLM) -> MagicMock:
         mock_config = MagicMock()
         mock_config.vlm = mock_vlm
+        mock_config.output_language_override = ""
         mock_config.language_fallback = "en"
         mock_config.semantic.max_file_content_chars = 10000
-        mock_config.code.code_summary_mode = "llm"
         return mock_config
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "file_key,file_name,expected_lang",
         [
-            ("chinese_py", "chinese_code.py", "zh-CN"),
-            ("english_py", "english_code.py", "en"),
-            ("japanese_py", "japanese_code.py", "ja"),
-            ("korean_py", "korean_code.py", "ko"),
             ("chinese_md", "chinese_doc.md", "zh-CN"),
             ("english_md", "english_doc.md", "en"),
         ],
@@ -393,7 +412,7 @@ class TestGenerateTextSummaryOutputLanguage:
             assert _verify_content_language(result["summary"], expected_lang), (
                 f"{file_name}: Content language mismatch. Expected {expected_lang}, got: {result['summary']}"
             )
-            assert result["content"] == content
+            assert "content" not in result
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -499,7 +518,13 @@ class TestOutputLanguageOverride:
 
     def test_timezone_hint_used_when_locale_hint_absent(self):
         config = self._make_config(override="")
-        with patch.dict(os.environ, {"TZ": "Asia/Tokyo"}, clear=True):
+        with (
+            patch.dict(os.environ, {"TZ": "Asia/Tokyo"}, clear=True),
+            patch(
+                "openviking.session.memory.utils.language.locale.getlocale",
+                return_value=("C", "UTF-8"),
+            ),
+        ):
             result = resolve_output_language("12345 ---", config=config)
         assert result == "ja"
 
@@ -546,13 +571,25 @@ class TestOutputLanguageOverride:
 
     def test_english_timezone_hint_used_when_locale_hint_absent(self):
         config = self._make_config(override="")
-        with patch.dict(os.environ, {"TZ": "America/New_York"}, clear=True):
+        with (
+            patch.dict(os.environ, {"TZ": "America/New_York"}, clear=True),
+            patch(
+                "openviking.session.memory.utils.language.locale.getlocale",
+                return_value=("C", "UTF-8"),
+            ),
+        ):
             result = resolve_output_language("12345 ---", config=config)
         assert result == "en"
 
     def test_arabic_timezone_hint_used_when_locale_hint_absent(self):
         config = self._make_config(override="")
-        with patch.dict(os.environ, {"TZ": "Asia/Riyadh"}, clear=True):
+        with (
+            patch.dict(os.environ, {"TZ": "Asia/Riyadh"}, clear=True),
+            patch(
+                "openviking.session.memory.utils.language.locale.getlocale",
+                return_value=("C", "UTF-8"),
+            ),
+        ):
             result = resolve_output_language("12345 ---", config=config)
         assert result == "ar"
 

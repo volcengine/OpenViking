@@ -263,6 +263,7 @@ class TelegramChannel(BaseChannel):
             return
         await self._handle_message(
             sender_id=str(update.effective_user.id),
+            sender_name=update.effective_user.full_name or str(update.effective_user.id),
             chat_id=str(update.message.chat_id),
             content=update.message.text,
         )
@@ -363,6 +364,7 @@ class TelegramChannel(BaseChannel):
         # Forward to the message bus
         await self._handle_message(
             sender_id=sender_id,
+            sender_name=user.full_name or sender_id,
             chat_id=str_chat_id,
             content=content,
             media=media_paths,

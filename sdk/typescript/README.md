@@ -20,9 +20,40 @@ const results = await client.search("deployment guide", {
 });
 ```
 
-The client follows the same HTTP API, identity headers, response envelope and error codes as `openviking-sdk` for Python and the Go SDK. It supports resources and skills, filesystem/content operations, relations, retrieval, sessions, OVPack files, snapshots, tasks, watches, observer status and tenant administration.
+The client follows the same HTTP API, identity headers, response envelope and error codes as `openviking-sdk` for Python and the Go SDK. It supports resources and skills, filesystem/content operations, retrieval, sessions, OVPack files, snapshots, tasks, watches, observer status and tenant administration.
 
 Existing local file paths are uploaded automatically, and local directories are zipped before upload. Other strings are sent to the server as URLs or server-side paths.
+
+To ingest content without VLM semantic understanding, pass `processingMode: "vectors_only"` to `addResource`. This writes or syncs the resource tree and vectorizes current files, but does not generate or refresh `.abstract.md` / `.overview.md`.
+
+```ts
+await client.addResource("./docs/guide.md", {
+  to: "viking://resources/guide",
+  processingMode: "vectors_only",
+  wait: true,
+});
+```
+
+Event-memory tags can be configured as session defaults, updated later, or overridden per commit. Passing `[]` to `commitSession` explicitly skips the session defaults for that commit.
+
+```ts
+await client.createSession({
+  sessionId: "s1",
+  memoryExtractionConfig: {
+    events: { tags: ["team=search", "channel=web"] },
+  },
+});
+await client.createSession({ sessionId: "manual", autoCommitPolicy: null });
+await client.updateSessionConfig("s1", {
+  autoCommitPolicy: { message_count_threshold: 25 },
+  memoryExtractionConfig: {
+    events: { tags: ["team=search", "channel=app"] },
+  },
+});
+await client.updateSessionConfig("s1", { autoCommitPolicy: null });
+await client.commitSession("s1", 0, undefined, ["team=search", "channel=web"]);
+await client.commitSession("s1", 0, undefined, []);
+```
 
 Deployments using shared temporary storage can set `uploadMode: "shared"`; the server also accepts `"local"` (the default).
 

@@ -1,6 +1,6 @@
 """Tests for FSService git forwarder methods.
 
-These tests verify FSService.{commit, restore, show, log} pass the right
+These tests verify FSService.{commit, restore, show, diff, log} pass the right
 args to VikingFS. They don't exercise real git — that's covered by
 tests/agfs/test_viking_fs_git.py.
 """
@@ -27,6 +27,15 @@ def viking_fs_mock():
     m.commit = AsyncMock(return_value={"result": "created", "commit_oid": "a" * 40, "changed": 1})
     m.restore = AsyncMock(return_value={"result": "applied", "commit_oid": "b" * 40})
     m.show = AsyncMock(return_value={"oid": "c" * 40, "message": "m", "parents": []})
+    m.diff = AsyncMock(
+        return_value={
+            "path": "viking://resources/a.md",
+            "from_commit": "",
+            "to_commit": "c" * 40,
+            "change_type": "added",
+            "diff_text": "+hello\n",
+        }
+    )
     m.log = AsyncMock(return_value=[{"oid": "c" * 40, "message": "m"}])
     return m
 
@@ -116,6 +125,24 @@ async def test_show_with_path_validated(svc, viking_fs_mock):
 
 
 @pytest.mark.asyncio
+async def test_diff_forwards_validated_path_and_refs(svc, viking_fs_mock):
+    ctx = _ctx()
+    out = await svc.diff(
+        path="viking://resources/a.md",
+        from_ref=None,
+        to_ref="main",
+        ctx=ctx,
+    )
+    viking_fs_mock.diff.assert_awaited_once_with(
+        path="viking://resources/a.md",
+        from_ref=None,
+        to_ref="main",
+        ctx=ctx,
+    )
+    assert out["change_type"] == "added"
+
+
+@pytest.mark.asyncio
 async def test_log_defaults(svc, viking_fs_mock):
     ctx = _ctx()
     out = await svc.log(ctx=ctx)
@@ -162,5 +189,9 @@ async def test_methods_raise_when_not_initialized():
         await svc.restore(project_dir="viking://x", source_commit="a", ctx=ctx)
     with pytest.raises(NotInitializedError):
         await svc.show("main", ctx=ctx)
+    with pytest.raises(NotInitializedError):
+        await svc.diff(
+            path="viking://resources/a.md", from_ref=None, to_ref="main", ctx=ctx
+        )
     with pytest.raises(NotInitializedError):
         await svc.log(ctx=ctx)

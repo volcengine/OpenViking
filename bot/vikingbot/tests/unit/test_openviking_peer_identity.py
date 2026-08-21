@@ -107,12 +107,14 @@ def test_normalize_session_messages_preserves_assistant_turn_tool_relationship()
             {
                 "role": "assistant",
                 "content": "final answer",
+                "reasoning_content": "private final reasoning",
                 "timestamp": "2026-07-14T10:00:03Z",
                 "tools_used": [{"tool_name": "legacy", "result": "must not duplicate"}],
                 "agent_turns": [
                     {
                         "role": "assistant",
                         "content": "Let me check these.",
+                        "reasoning_content": "private intermediate reasoning",
                         "timestamp": "2026-07-14T10:00:01Z",
                         "tool_calls": [
                             {
@@ -164,6 +166,8 @@ def test_normalize_session_messages_preserves_assistant_turn_tool_relationship()
         for message in normalized
         for part in message.get("parts", [])
     )
+    assert "private final reasoning" not in str(normalized)
+    assert "private intermediate reasoning" not in str(normalized)
 
 
 def test_normalize_session_messages_excludes_auto_memory_search():
@@ -398,6 +402,47 @@ async def test_commit_session_defaults_to_peer_only_memory(monkeypatch):
     assert calls["commit"] == {
         "session_id": "session-1",
         "keep_recent_count": 2,
+    }
+
+
+@pytest.mark.asyncio
+async def test_commit_session_forwards_turn_budget_retention(monkeypatch):
+    client = _client(api_key_type="user")
+    calls = {}
+
+    async def fake_ensure_session(session_id, user_id=None, memory_policy=None):
+        return {"session_id": session_id}
+
+    class FakeSessionClient:
+        async def commit_session(self, session_id, keep_recent_count=0, **kwargs):
+            calls["commit"] = {
+                "session_id": session_id,
+                "keep_recent_count": keep_recent_count,
+                **kwargs,
+            }
+            return {"archived": True}
+
+    async def fake_session_client_for_user(user_id=None):
+        return FakeSessionClient()
+
+    monkeypatch.setattr(client, "ensure_session", fake_ensure_session)
+    monkeypatch.setattr(client, "_session_client_for_user", fake_session_client_for_user)
+
+    await client.commit_session(
+        "session-1",
+        retention_mode="turn_budget",
+        keep_recent_turn_count=3,
+        retained_message_token_budget=12_000,
+        min_raw_tail_steps=1,
+    )
+
+    assert calls["commit"] == {
+        "session_id": "session-1",
+        "keep_recent_count": 0,
+        "retention_mode": "turn_budget",
+        "keep_recent_turn_count": 3,
+        "retained_message_token_budget": 12_000,
+        "min_raw_tail_steps": 1,
     }
 
 

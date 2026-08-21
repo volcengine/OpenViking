@@ -256,7 +256,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
     client = _build_http_client(config)
     await client.initialize()
     try:
-        policy_root_uri = "viking://user/memories/experiences"
+        policy_root_uri = f"viking://user/{config.user_id}/memories/experiences"
         policy_set = ExperienceSet(
             root_uri=policy_root_uri,
             policies=[],

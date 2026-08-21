@@ -1,19 +1,14 @@
-import { fileTypeFromBlob } from 'file-type'
 import {
   AlertTriangle,
   CheckCircle2,
   ChevronRight,
-  FileIcon,
-  FolderOpen,
   Globe,
   Info,
   Loader2Icon,
   Upload,
 } from 'lucide-react'
 import { useCallback, useState } from 'react'
-import { useDropzone } from 'react-dropzone'
 import { useTranslation } from 'react-i18next'
-import { toast } from 'sonner'
 
 import { Button } from '#/components/ui/button'
 import { Checkbox } from '#/components/ui/checkbox'
@@ -30,54 +25,94 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '#/components/ui/tooltip'
-import { cn } from '#/lib/utils'
 import { useResourceUpload } from '../-hooks/use-resource-upload'
-import {
-  MAX_UPLOAD_FILES,
-  MAX_UPLOAD_FILE_SIZE_BYTES,
-  formatFileSize,
-  isBlockedFile,
-} from '../-lib/upload'
+import type { RemoteStartResult } from '../-hooks/use-resource-upload'
+import { detectRemoteResourceKind } from '../-lib/resource-source'
+import type { RemoteResourceTypeSelection } from '../-lib/resource-source'
+import { buildResourceImportCommonBody } from '../-lib/resource-import-request'
+import { getRemoteResourceCapabilities } from '../-lib/resource-source-strategy'
+import type { RemoteSourceOptionState } from '../-lib/resource-source-strategy'
 import { DirectoryPickerDialog } from './directory-picker-dialog'
+import { AdditionalResourceOptions } from './additional-resource-options'
+import type { AdditionalResourceOptionsValue } from './additional-resource-options'
+import { FeishuResourceOptions } from './feishu-resource-options'
+import type { FeishuResourceOptionsValue } from './feishu-resource-options'
+import { GitResourceOptions } from './git-resource-options'
+import type { GitResourceOptionsValue } from './git-resource-options'
+import { RemoteResourceFields } from './remote-resource-fields'
+import { ResourceDestinationFields } from './resource-destination-fields'
+import type { ResourceDestinationMode } from './resource-destination-fields'
+import { TosResourceOptions } from './tos-resource-options'
+import { UploadResourceFields } from './upload-resource-fields'
+import type { SelectedUploadFile } from './upload-resource-fields'
+import { WebResourceOptions } from './web-resource-options'
+import type { WebResourceOptionsValue } from './web-resource-options'
 
 type Mode = 'upload' | 'remote'
 
-type SelectedUploadFile = {
-  id: string
-  file: File
-  fileType: string | null
+const DEFAULT_WEB_OPTIONS: WebResourceOptionsValue = {
+  allowExternalLinks: false,
+  depth: '1',
+  excludePaths: '',
+  includePaths: '',
+  maxPages: '50',
+  mode: 'auto',
+  skipDownloadLinks: true,
 }
 
-function createLocalFileId(): string {
-  if (
-    typeof crypto !== 'undefined' &&
-    typeof crypto.randomUUID === 'function'
-  ) {
-    return crypto.randomUUID()
-  }
-  return `local-file-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+const DEFAULT_FEISHU_OPTIONS: FeishuResourceOptionsValue = {
+  accessToken: '',
+  authMode: 'app',
+  refreshToken: '',
 }
 
-async function detectFileType(file: File): Promise<string | null> {
-  try {
-    const result = await fileTypeFromBlob(file)
-    return result?.mime ?? null
-  } catch {
-    return null
-  }
+const DEFAULT_GIT_OPTIONS: GitResourceOptionsValue = {
+  authMode: 'public',
+  refMode: 'branch',
+  refValue: '',
+  token: '',
+  username: 'oauth2',
+}
+
+const DEFAULT_ADDITIONAL_OPTIONS: AdditionalResourceOptionsValue = {
+  parseMode: 'default',
+  processingMode: 'semantic_and_vectors',
+  sourceName: '',
+  tagMode: 'replace',
+  tags: '',
+  timeout: '',
+  wait: false,
 }
 
 export function AddResourceForm({
+  initialMode = 'upload',
+  initialWatchEnabled = false,
+  onAccepted,
+  onCompleted,
+  onFailed,
   onSubmitted,
-}: { onSubmitted?: () => void } = {}) {
-  const { t } = useTranslation('addResource')
+  watchRequired = false,
+}: {
+  initialMode?: Mode
+  initialWatchEnabled?: boolean
+  onAccepted?: (result: RemoteStartResult) => void
+  onCompleted?: () => void
+  onFailed?: () => void
+  onSubmitted?: () => void
+  watchRequired?: boolean
+} = {}) {
+  const { i18n, t } = useTranslation('addResource')
   const { enqueueUploads, startRemote, resetRemote, remoteState } =
     useResourceUpload()
 
-  const [mode, setMode] = useState<Mode>('upload')
+  const [mode, setMode] = useState<Mode>(watchRequired ? 'remote' : initialMode)
   const [remoteUrl, setRemoteUrl] = useState('')
+  const [remoteResourceType, setRemoteResourceType] =
+    useState<RemoteResourceTypeSelection>('auto')
   const [selectedFiles, setSelectedFiles] = useState<SelectedUploadFile[]>([])
   const [targetUri, setTargetUri] = useState('viking://resources/')
+  const [destinationMode, setDestinationMode] =
+    useState<ResourceDestinationMode>('parent')
   const [strict, setStrict] = useState(false)
   const [createParent, setCreateParent] = useState(true)
   const [directlyUploadMedia, setDirectlyUploadMedia] = useState(true)
@@ -86,6 +121,17 @@ export function AddResourceForm({
   const [ignoreDirs, setIgnoreDirs] = useState('')
   const [include, setInclude] = useState('')
   const [exclude, setExclude] = useState('')
+  const [watchEnabled, setWatchEnabled] = useState(initialWatchEnabled)
+  const [watchInterval, setWatchInterval] = useState('1440')
+  const [feishuOptions, setFeishuOptions] = useState(DEFAULT_FEISHU_OPTIONS)
+  const [gitOptions, setGitOptions] = useState(DEFAULT_GIT_OPTIONS)
+  const [webOptions, setWebOptions] =
+    useState<WebResourceOptionsValue>(DEFAULT_WEB_OPTIONS)
+  const [additionalOptions, setAdditionalOptions] =
+    useState<AdditionalResourceOptionsValue>(DEFAULT_ADDITIONAL_OPTIONS)
+  const feishuConfigurationUrl = i18n.resolvedLanguage?.startsWith('zh')
+    ? 'https://docs.openviking.ai/zh/guides/01-configuration#feishu'
+    : 'https://docs.openviking.ai/en/guides/01-configuration#feishu'
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [dirPickerOpen, setDirPickerOpen] = useState(false)
 
@@ -94,102 +140,89 @@ export function AddResourceForm({
   const displayRemoteUrl =
     remotePhase === 'processing' ? remoteState.remoteUrl : remoteUrl
   const skippedFiles = remoteState.skippedFiles
-
-  const addFiles = useCallback(
-    (files: File[]) => {
-      void (async () => {
-        const nextItems: SelectedUploadFile[] = []
-
-        for (const file of files) {
-          if (isBlockedFile(file.name)) {
-            toast.error(t('fileBlocked', { name: file.name }), {
-              duration: 2500,
-            })
-            continue
-          }
-
-          if (file.size > MAX_UPLOAD_FILE_SIZE_BYTES) {
-            toast.error(
-              t('fileTooLarge', {
-                name: file.name,
-                size: formatFileSize(MAX_UPLOAD_FILE_SIZE_BYTES),
-              }),
-              { duration: 2500 },
-            )
-            continue
-          }
-
-          nextItems.push({
-            id: createLocalFileId(),
-            file,
-            fileType: await detectFileType(file),
-          })
-        }
-
-        if (nextItems.length === 0) return
-
-        setSelectedFiles((prev) => {
-          const remainingSlots = Math.max(MAX_UPLOAD_FILES - prev.length, 0)
-          const kept = nextItems.slice(0, remainingSlots)
-          if (nextItems.length > remainingSlots) {
-            toast(t('tooManyFiles', { count: MAX_UPLOAD_FILES }), {
-              duration: 2500,
-            })
-          }
-          return [...prev, ...kept]
-        })
-      })()
-    },
-    [t],
+  const detectedRemoteResourceKind = detectRemoteResourceKind(remoteUrl)
+  const remoteResourceKind =
+    remoteResourceType === 'auto'
+      ? detectedRemoteResourceKind
+      : remoteResourceType
+  const sourceCapabilities = getRemoteResourceCapabilities(
+    activeMode === 'remote' ? remoteResourceKind : 'unknown',
   )
-
-  const removeFile = useCallback((id: string) => {
-    setSelectedFiles((prev) => prev.filter((file) => file.id !== id))
-  }, [])
+  const gitSupportsHttpAuth = remoteUrl
+    .trim()
+    .toLowerCase()
+    .startsWith('https://')
+  const effectiveWatchEnabled = watchEnabled && sourceCapabilities.watch
+  const effectiveDestinationMode: ResourceDestinationMode =
+    sourceCapabilities.exactDestination ? 'to' : destinationMode
+  const sourceOptionState: RemoteSourceOptionState = {
+    feishu: feishuOptions,
+    git: {
+      ...gitOptions,
+      supportsHttpAuth: gitSupportsHttpAuth,
+    },
+    watchEnabled: effectiveWatchEnabled,
+    web: webOptions,
+  }
 
   const handleRemoteUrlChange = useCallback(
     (value: string) => {
       if (remotePhase === 'done') {
         resetRemote()
       }
+      const nextSupportsHttpAuth = value
+        .trim()
+        .toLowerCase()
+        .startsWith('https://')
+      if (gitSupportsHttpAuth && !nextSupportsHttpAuth) {
+        setGitOptions((current) => ({
+          ...current,
+          authMode: 'public',
+          token: '',
+        }))
+      }
       setRemoteUrl(value)
     },
-    [remotePhase, resetRemote],
+    [gitSupportsHttpAuth, remotePhase, resetRemote],
   )
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop: addFiles,
-    multiple: true,
-  })
+  const resetRemoteSourceFields = useCallback(() => {
+    setWatchEnabled(initialWatchEnabled)
+    setWatchInterval('1440')
+    setFeishuOptions(DEFAULT_FEISHU_OPTIONS)
+    setGitOptions(DEFAULT_GIT_OPTIONS)
+    setWebOptions(DEFAULT_WEB_OPTIONS)
+  }, [initialWatchEnabled])
 
-  const buildCommonBody = () => {
-    const body: Record<string, unknown> = {
-      parent: targetUri.trim() || undefined,
+  const handleRemoteResourceTypeChange = useCallback(
+    (value: RemoteResourceTypeSelection) => {
+      resetRemote()
+      setRemoteUrl('')
+      setRemoteResourceType(value)
+      resetRemoteSourceFields()
+    },
+    [resetRemote, resetRemoteSourceFields],
+  )
+
+  const buildCommonBody = () =>
+    buildResourceImportCommonBody({
+      additionalOptions,
+      createParent,
+      destinationMode,
+      directlyUploadMedia,
+      exclude,
+      ignoreDirs,
+      include,
+      instruction,
+      mode,
+      reason,
+      remoteResourceKind,
+      sourceOptionState,
       strict,
-      create_parent: createParent,
-      telemetry: true,
-      wait: false,
-      directly_upload_media: directlyUploadMedia,
-    }
-    if (reason.trim()) {
-      body.reason = reason.trim()
-    }
-    if (instruction.trim()) {
-      body.instruction = instruction.trim()
-    }
-    if (mode === 'remote') {
-      if (ignoreDirs.trim()) {
-        body.ignore_dirs = ignoreDirs.trim()
-      }
-      if (include.trim()) {
-        body.include = include.trim()
-      }
-      if (exclude.trim()) {
-        body.exclude = exclude.trim()
-      }
-    }
-    return body
-  }
+      targetUri,
+      watchEnabled: effectiveWatchEnabled,
+      watchInterval,
+    })
 
   const handleSubmit = () => {
     if (mode === 'upload') {
@@ -205,7 +238,13 @@ export function AddResourceForm({
 
     const url = remoteUrl.trim()
     if (!url) return
-    startRemote({ url, commonBody: buildCommonBody() })
+    startRemote({
+      url,
+      commonBody: buildCommonBody(),
+      onAccepted,
+      onCompleted,
+      onFailed,
+    })
     onSubmitted?.()
   }
 
@@ -213,112 +252,115 @@ export function AddResourceForm({
     resetRemote()
     setSelectedFiles([])
     setRemoteUrl('')
-    setMode('upload')
+    setRemoteResourceType('auto')
+    setMode(watchRequired ? 'remote' : initialMode)
+    resetRemoteSourceFields()
+    setAdditionalOptions(DEFAULT_ADDITIONAL_OPTIONS)
+    setDestinationMode('parent')
   }
 
+  const hasWatchInterval =
+    !effectiveWatchEnabled || Boolean(watchInterval.trim())
+  const hasValidDestination =
+    !sourceCapabilities.exactDestination ||
+    (effectiveDestinationMode === 'to' && !!targetUri.trim())
+  const watchRequirementMet =
+    !watchRequired ||
+    (activeMode === 'remote' &&
+      sourceCapabilities.watch &&
+      effectiveWatchEnabled &&
+      hasWatchInterval)
   const canSubmit =
-    activeMode === 'upload' ? selectedFiles.length > 0 : !!remoteUrl.trim()
+    hasValidDestination &&
+    watchRequirementMet &&
+    (activeMode === 'upload'
+      ? selectedFiles.length > 0
+      : !!remoteUrl.trim() && hasWatchInterval)
 
   return (
     <div className="flex flex-col gap-6">
       <div className="space-y-5">
-        <div className="flex gap-1 rounded-lg bg-muted p-1">
-          <button
-            type="button"
-            className={`flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-              activeMode === 'upload'
-                ? 'bg-background text-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-            onClick={() => setMode('upload')}
-          >
-            <Upload className="size-4" />
-            {t('mode.upload')}
-          </button>
-          <button
-            type="button"
-            className={`flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-              activeMode === 'remote'
-                ? 'bg-background text-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-            onClick={() => setMode('remote')}
-          >
-            <Globe className="size-4" />
-            {t('mode.remote')}
-          </button>
-        </div>
+        {!watchRequired ? (
+          <div className="flex gap-1 rounded-lg bg-muted p-1">
+            <button
+              type="button"
+              className={`flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                activeMode === 'upload'
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+              onClick={() => setMode('upload')}
+            >
+              <Upload className="size-4" />
+              {t('mode.upload')}
+            </button>
+            <button
+              type="button"
+              className={`flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                activeMode === 'remote'
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+              onClick={() => setMode('remote')}
+            >
+              <Globe className="size-4" />
+              {t('mode.remote')}
+            </button>
+          </div>
+        ) : null}
 
         {activeMode === 'upload' ? (
-          <div className="space-y-3">
-            <div
-              {...getRootProps()}
-              className={cn(
-                'relative rounded-lg border-2 border-dashed p-8 text-center transition-colors',
-                isDragActive
-                  ? 'cursor-pointer border-primary bg-primary/5'
-                  : 'cursor-pointer border-muted-foreground/25 hover:border-primary/50 hover:bg-muted/30',
-              )}
-            >
-              <input {...getInputProps()} />
-              <div className="space-y-2">
-                <Upload className="mx-auto size-10 text-muted-foreground/60" />
-                <p className="text-sm font-medium">{t('dropzone.title')}</p>
-                <p className="text-xs text-muted-foreground">
-                  {t('dropzone.hint')}
-                </p>
-                <p className="text-xs text-muted-foreground/70">
-                  {t('dropzone.supportedFormats')}
-                </p>
-              </div>
-            </div>
-
-            {selectedFiles.length > 0 ? (
-              <div className="overflow-hidden rounded-lg border border-border/60 bg-muted/10">
-                {selectedFiles.map(({ id, file }) => (
-                  <div
-                    key={id}
-                    className="flex items-center gap-3 border-b border-border/50 px-4 py-3 last:border-b-0"
-                  >
-                    <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted">
-                      <FileIcon className="size-5 text-muted-foreground" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">
-                        {file.name}
-                      </p>
-                    </div>
-                    <div className="shrink-0 text-xs text-muted-foreground">
-                      {formatFileSize(file.size)}
-                    </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="shrink-0 text-muted-foreground hover:text-foreground"
-                      onClick={() => removeFile(id)}
-                    >
-                      {t('fileInfo.remove')}
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-          </div>
+          <UploadResourceFields
+            files={selectedFiles}
+            onFilesChange={setSelectedFiles}
+            t={t}
+          />
         ) : (
-          <div className="space-y-2">
-            <Label htmlFor="add-resource-remote-url">{t('remoteUrl')}</Label>
-            <Input
-              id="add-resource-remote-url"
-              placeholder={t('remoteUrl.placeholder')}
-              value={displayRemoteUrl}
-              onChange={(e) => handleRemoteUrlChange(e.target.value)}
-              disabled={remotePhase === 'processing'}
-            />
-            <p className="text-xs text-muted-foreground">
-              {t('remoteUrl.hint')}
-            </p>
-          </div>
+          <RemoteResourceFields
+            disabled={remotePhase === 'processing'}
+            onResourceTypeChange={handleRemoteResourceTypeChange}
+            onUrlChange={handleRemoteUrlChange}
+            onWatchEnabledChange={setWatchEnabled}
+            onWatchIntervalChange={setWatchInterval}
+            resourceKind={remoteResourceKind}
+            resourceType={remoteResourceType}
+            t={t}
+            url={displayRemoteUrl}
+            watchEnabled={effectiveWatchEnabled}
+            watchInterval={watchInterval}
+            watchRequired={watchRequired}
+            watchSupported={sourceCapabilities.watch}
+          >
+            {remoteResourceKind === 'feishu' ? (
+              <FeishuResourceOptions
+                disabled={remotePhase === 'processing'}
+                documentationUrl={feishuConfigurationUrl}
+                onChange={setFeishuOptions}
+                t={t}
+                value={feishuOptions}
+                watchEnabled={effectiveWatchEnabled}
+              />
+            ) : null}
+            {remoteResourceKind === 'git' ? (
+              <GitResourceOptions
+                disabled={remotePhase === 'processing'}
+                onChange={setGitOptions}
+                supportsHttpAuth={gitSupportsHttpAuth}
+                t={t}
+                value={gitOptions}
+              />
+            ) : null}
+            {remoteResourceKind === 'webPage' ||
+            remoteResourceKind === 'webFeed' ? (
+              <WebResourceOptions
+                disabled={remotePhase === 'processing'}
+                onChange={setWebOptions}
+                t={t}
+                value={webOptions}
+              />
+            ) : null}
+            {remoteResourceKind === 'tos' ? <TosResourceOptions t={t} /> : null}
+          </RemoteResourceFields>
         )}
 
         {activeMode === 'remote' && remotePhase === 'processing' ? (
@@ -363,29 +405,16 @@ export function AddResourceForm({
           </div>
         ) : null}
 
-        <div className="space-y-2">
-          <Label htmlFor="add-resource-target">{t('targetUri')}</Label>
-          <div className="flex gap-2">
-            <Input
-              id="add-resource-target"
-              placeholder={t('targetUri.placeholder')}
-              value={targetUri}
-              onChange={(event) => setTargetUri(event.target.value)}
-              className="flex-1"
-            />
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="shrink-0"
-              onClick={() => setDirPickerOpen(true)}
-            >
-              <FolderOpen className="mr-1.5 size-4" />
-              {t('targetUri.browse')}
-            </Button>
-          </div>
-          <p className="text-xs text-muted-foreground">{t('targetUri.hint')}</p>
-        </div>
+        <ResourceDestinationFields
+          disabled={remotePhase === 'processing'}
+          exactOnly={sourceCapabilities.exactDestination}
+          mode={effectiveDestinationMode}
+          onBrowse={() => setDirPickerOpen(true)}
+          onModeChange={setDestinationMode}
+          onUriChange={setTargetUri}
+          t={t}
+          uri={targetUri}
+        />
 
         <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
           <CollapsibleTrigger className="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground">
@@ -399,7 +428,8 @@ export function AddResourceForm({
               <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
                 <Label className="flex items-center gap-2">
                   <Checkbox
-                    checked={strict}
+                    checked={sourceCapabilities.nativeOptions ? strict : false}
+                    disabled={!sourceCapabilities.nativeOptions}
                     onCheckedChange={(checked) => setStrict(Boolean(checked))}
                   />
                   <span>{t('strict')}</span>
@@ -426,14 +456,17 @@ export function AddResourceForm({
                         <Info className="size-3.5 text-muted-foreground" />
                       }
                     />
-                    <TooltipContent>
-                      {t('createParent.hint')}
-                    </TooltipContent>
+                    <TooltipContent>{t('createParent.hint')}</TooltipContent>
                   </Tooltip>
                 </Label>
                 <Label className="flex items-center gap-2">
                   <Checkbox
-                    checked={directlyUploadMedia}
+                    checked={
+                      sourceCapabilities.nativeOptions
+                        ? directlyUploadMedia
+                        : true
+                    }
+                    disabled={!sourceCapabilities.nativeOptions}
                     onCheckedChange={(checked) =>
                       setDirectlyUploadMedia(Boolean(checked))
                     }
@@ -452,7 +485,16 @@ export function AddResourceForm({
                 </Label>
               </div>
 
-              {activeMode === 'remote' ? (
+              <AdditionalResourceOptions
+                disabled={remotePhase === 'processing'}
+                isRemote={activeMode === 'remote'}
+                nativeOptions={sourceCapabilities.nativeOptions}
+                onChange={setAdditionalOptions}
+                t={t}
+                value={additionalOptions}
+              />
+
+              {activeMode === 'remote' && sourceCapabilities.nativeOptions ? (
                 <div className="space-y-4 border-t border-border/50 pt-4">
                   <div className="space-y-2">
                     <Label htmlFor="add-resource-ignore-dirs">
@@ -500,17 +542,19 @@ export function AddResourceForm({
                 />
               </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="add-resource-instruction">
-                  {t('instruction')}
-                </Label>
-                <Textarea
-                  id="add-resource-instruction"
-                  placeholder={t('instruction.placeholder')}
-                  value={instruction}
-                  onChange={(e) => setInstruction(e.target.value)}
-                />
-              </div>
+              {sourceCapabilities.nativeOptions ? (
+                <div className="space-y-2">
+                  <Label htmlFor="add-resource-instruction">
+                    {t('instruction')}
+                  </Label>
+                  <Textarea
+                    id="add-resource-instruction"
+                    placeholder={t('instruction.placeholder')}
+                    value={instruction}
+                    onChange={(e) => setInstruction(e.target.value)}
+                  />
+                </div>
+              ) : null}
             </div>
           </CollapsibleContent>
         </Collapsible>

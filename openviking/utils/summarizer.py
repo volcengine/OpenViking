@@ -9,10 +9,11 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from openviking.core.namespace import context_type_for_uri
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
-from openviking.storage.transaction import NO_LOCK, LockLease
+from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.uri import VikingURI
 
@@ -31,12 +32,71 @@ class Summarizer:
     def __init__(self, vlm_processor: "VLMProcessor"):
         self.vlm_processor = vlm_processor
 
+    async def refresh_file_parent(
+        self,
+        *,
+        file_uri: str,
+        ctx: "RequestContext",
+        skip_vectorization: bool = False,
+        ingest_options: IngestOptions | None = None,
+    ) -> Dict[str, Any]:
+        """Summarize one flat file and refresh its parent directory semantics."""
+        parent = VikingURI(file_uri).parent
+        if parent is None:
+            return {"status": "error", "message": f"file has no parent URI: {file_uri}"}
+
+        queue_manager = get_queue_manager()
+        semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
+        telemetry_id = get_current_telemetry().telemetry_id
+        parent_uri = parent.uri.rstrip("/")
+        msg = SemanticMsg(
+            uri=parent_uri,
+            context_type=context_type_for_uri(file_uri),
+            recursive=False,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+            peer_id=ctx.user.user_id,
+            role=str(ctx.role),
+            skip_vectorization=skip_vectorization,
+            telemetry_id=telemetry_id,
+            changes={"modified": [file_uri]},
+            coalesce_key=build_semantic_coalesce_key(
+                context_type=context_type_for_uri(file_uri),
+                uri=parent_uri,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+                peer_id=ctx.user.user_id,
+            ),
+            ingest_options=ingest_options,
+        )
+        if telemetry_id:
+            get_request_wait_tracker().register_semantic_root(telemetry_id, msg.id)
+        try:
+            enqueue_id = await semantic_queue.enqueue(msg)
+        except Exception as exc:
+            if telemetry_id:
+                get_request_wait_tracker().mark_semantic_failed(
+                    telemetry_id,
+                    msg.id,
+                    str(exc),
+                )
+            raise
+        if enqueue_id == "deduplicated":
+            if telemetry_id:
+                get_request_wait_tracker().mark_semantic_done(
+                    telemetry_id,
+                    msg.id,
+                    processed_delta=0,
+                )
+            return {"status": "success", "enqueued_count": 0}
+        return {"status": "success", "enqueued_count": 1}
+
     async def summarize(
         self,
         resource_uris: List[str],
         ctx: "RequestContext",
         skip_vectorization: bool = False,
-        lock: LockLease = NO_LOCK,
+        lock: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -47,6 +107,9 @@ class Summarizer:
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
 
         temp_uris = kwargs.get("temp_uris", [])
+        ingest_options = IngestOptions.from_value(kwargs.get("ingest_options"))
+        source = kwargs.get("semantic_source")
+        generation_trigger = str(kwargs.get("generation_trigger") or "manual_refresh")
         if not temp_uris:
             temp_uris = resource_uris
         if len(temp_uris) != len(resource_uris):
@@ -60,7 +123,9 @@ class Summarizer:
         enqueued_count = 0
 
         telemetry = get_current_telemetry()
-        lock_handoff = lock.to_handoff()
+        lock_handoff: Optional[Dict[str, Any]] = None
+        if lock is not None:
+            lock_handoff = await get_viking_fs()._async_agfs.pathlock_to_handoff(lock)
         target_preexisting_arg = kwargs.get("target_preexisting")
 
         def resolve_target_preexisting(index: int, target_uri: str) -> Optional[bool]:
@@ -125,6 +190,9 @@ class Summarizer:
                     lock_handoff=lock_handoff,
                     is_code_repo=kwargs.get("is_code_repo", False),
                     target_preexisting=resolve_target_preexisting(idx, target_uri),
+                    ingest_options=ingest_options,
+                    source=source,
+                    generation_trigger=generation_trigger,
                 )
                 if msg.telemetry_id:
                     get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)

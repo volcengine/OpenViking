@@ -92,6 +92,7 @@ Example configuration:
 ```json
 {
   "enabled": true,
+  "mcp": { "enabled": true },
   "timeoutMs": 30000,
   "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
   "autoRecall": {
@@ -110,6 +111,10 @@ Example configuration:
 }
 ```
 
+`autoRecall.limit` is a legacy quota-scaling input, not a final result cap.
+Explicit values from 1 through 5 produce an effective total quota of 6 because
+each coding category keeps one retrieval slot.
+
 It is recommended to provide the API key through an environment variable instead of writing it into the configuration file:
 
 ```bash
@@ -122,17 +127,31 @@ API keys are resolved from environment variables or `~/.openviking/ovcli.conf` a
 
 For advanced setups, use `OPENVIKING_PLUGIN_CONFIG` to point to another configuration file path.
 
+### Hook-only mode
+
+If another MCP server already exposes OpenViking, set the bundled MCP registration to `false` while
+keeping this plugin's lifecycle hooks active:
+
+```json
+{
+  "mcp": { "enabled": false }
+}
+```
+
+Repository context, automatic recall, message capture, and lifecycle commits remain enabled. This
+does not add or overwrite OpenCode's `mcp.openviking` entry.
+
 ## Verify
 
 Restart OpenCode after changing plugin or OpenViking configuration.
 
 In a new OpenCode session, ask the agent to browse OpenViking memory or search for a known indexed resource. The plugin should expose the OpenViking MCP server, with tools namespaced by OpenCode as `openviking_*`:
 
-- `openviking_recall`, `openviking_search`, `openviking_find`
-- `openviking_read`, `openviking_list`, `openviking_grep`, `openviking_glob`
-- `openviking_remember`, `openviking_add_resource`, `openviking_forget`, `openviking_health`
+- `openviking_search`, `openviking_find`
+- `openviking_read`, `openviking_list`, `openviking_tree`, `openviking_grep`, `openviking_glob`
+- `openviking_remember`, `openviking_write`, `openviking_edit`, `openviking_add_resource`
+- `openviking_list_watches`, `openviking_cancel_watch`, `openviking_forget`, `openviking_health`
 - `openviking_list_watches`, `openviking_cancel_watch`
-- `openviking_code_search`, `openviking_code_outline`, `openviking_code_expand`
 
 If anything looks wrong, check the runtime files:
 
@@ -151,18 +170,19 @@ curl http://localhost:1933/health
 
 The plugin registers OpenViking's stdio MCP proxy through OpenCode config. The server's real `tools/list` response is the source of truth; current OpenViking servers expose:
 
-- `openviking_recall`: balanced current-task recall.
-- `openviking_search`: deep semantic retrieval across memories, resources, and skills.
+- `openviking_search`: deep semantic retrieval across memories, resources, and skills; use `mode="context"` for balanced, injection-ready context.
 - `openviking_find`: fast semantic retrieval.
 - `openviking_remember`: store important facts or decisions for memory extraction.
 - `openviking_read`: read one or more `viking://` files.
 - `openviking_list`: list a `viking://` directory.
+- `openviking_tree`: show a `viking://` directory tree.
 - `openviking_grep`: exact text or regex search.
 - `openviking_glob`: glob file matching.
+- `openviking_write`: create, overwrite, or append to a `viking://` file.
+- `openviking_edit`: exact string replacement in a `viking://` file.
 - `openviking_add_resource`: add a URL, local file, sitemap, or feed.
 - `openviking_forget`: delete a `viking://` URI after explicit user confirmation.
 - `openviking_list_watches` / `openviking_cancel_watch`: inspect or cancel resource watches.
-- `openviking_code_search`, `openviking_code_outline`, `openviking_code_expand`: inspect indexed code symbols.
 - `openviking_health`: check OpenViking server health.
 
 Usage guidance:

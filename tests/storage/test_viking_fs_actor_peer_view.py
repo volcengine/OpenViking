@@ -33,6 +33,9 @@ class _MemoryAGFS:
             "/local/acct/session/legacy-session/messages.jsonl": (
                 b'{"role":"user","content":"legacy"}\n'
             ),
+            "/local/acct/session/legacy-session/.meta.json": (
+                b'{"created_by_user_id":"support_bot"}'
+            ),
             "/local/acct/session/other-owned/.meta.json": b'{"created_by_user_id":"other"}',
             "/local/acct/session/other-owned/messages.jsonl": (
                 b'{"role":"user","content":"other"}\n'
@@ -205,29 +208,30 @@ async def test_actor_peer_view_filters_legacy_agent_collection(fs, actor_ctx):
 
 @pytest.mark.asyncio
 async def test_legacy_session_scope_merges_new_and_unmigrated_sessions(fs, actor_ctx):
-    entries = await fs.ls("viking://session", ctx=actor_ctx)
+    session_root = "viking://user/support_bot/sessions"
+    entries = await fs.ls(session_root, ctx=actor_ctx)
 
     assert [entry["uri"] for entry in entries] == [
-        "viking://session/duplicate",
-        "viking://session/new-session",
-        "viking://session/legacy-session",
-        "viking://session/nested-session",
+        f"{session_root}/duplicate",
+        f"{session_root}/new-session",
+        f"{session_root}/legacy-session",
+        f"{session_root}/nested-session",
     ]
 
     assert (
-        await fs.read_file("viking://session/duplicate/messages.jsonl", ctx=actor_ctx)
+        await fs.read_file(f"{session_root}/duplicate/messages.jsonl", ctx=actor_ctx)
         == '{"role":"user","content":"new"}\n'
     )
     assert (
-        await fs.read_file("viking://session/legacy-session/messages.jsonl", ctx=actor_ctx)
+        await fs.read_file(f"{session_root}/legacy-session/messages.jsonl", ctx=actor_ctx)
         == '{"role":"user","content":"legacy"}\n'
     )
     assert (
-        await fs.read_file("viking://session/nested-session/messages.jsonl", ctx=actor_ctx)
+        await fs.read_file(f"{session_root}/nested-session/messages.jsonl", ctx=actor_ctx)
         == '{"role":"user","content":"nested"}\n'
     )
     with pytest.raises(NotFoundError):
-        await fs.read_file("viking://session/other-owned/messages.jsonl", ctx=actor_ctx)
+        await fs.read_file(f"{session_root}/other-owned/messages.jsonl", ctx=actor_ctx)
 
 
 @pytest.mark.asyncio

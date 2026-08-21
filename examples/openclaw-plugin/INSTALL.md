@@ -147,6 +147,45 @@ If you want assistant messages to carry a prefixed `peer_id` and data-plane reca
 openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --peer-role assistant --peer-prefix <PREFIX> --json
 ```
 
+#### Configure The File Directly When The CLI Is Unavailable
+
+If the `openclaw` CLI cannot run inside the container, merge the following fields into the config file that OpenClaw actually reads. Use `OPENCLAW_CONFIG_PATH` when it is set; otherwise the file is usually `$OPENCLAW_STATE_DIR/openclaw.json` (default: `~/.openclaw/openclaw.json`).
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "openviking": {
+        "enabled": true,
+        "config": {
+          "mode": "remote",
+          "baseUrl": "http://openviking:1933",
+          "apiKey": "<API_KEY>",
+          "peer_role": "assistant"
+        }
+      }
+    },
+    "slots": {
+      "contextEngine": "openviking"
+    }
+  }
+}
+```
+
+- The plugin must already be installed. Back up the file and merge these fields into the existing `plugins` config.
+- If `plugins.allow` already exists, append `openviking`; otherwise, do not create an allowlist only for this plugin.
+- `contextEngine` is an exclusive slot. If another context engine is configured, change it only after confirming the replacement. Root API keys also require `accountId` and `userId` in `config`.
+- When connecting to another service from a container, use a `baseUrl` that is reachable from the container rather than `127.0.0.1`.
+- Prefer a `SecretRef` for `apiKey` instead of a plaintext string so the key is never stored inside `openclaw.json`. Supported shapes match OpenClaw's standard `SecretRef` used by LLM/TTS/MCP provider configs:
+
+  | Shape | Example | Notes |
+  | --- | --- | --- |
+  | `env` | `{ "source": "env", "id": "OPENVIKING_API_KEY" }` | Reads the named env var at plugin load time. |
+  | `file` | `{ "source": "file", "id": "/etc/secrets/openviking.key" }` | Reads UTF-8, trims whitespace. `~` is expanded; ideal for Kubernetes `secretKeyRef` volumes and 0600-managed files. |
+  | `exec` | not supported in the packaged plugin (marketplace install scanners block subprocess execution) | Wrap the CLI instead: `OPENVIKING_API_KEY=$(op read op://vault/openviking/credential)` and use `env`. |
+
+  A plain `string` (including `${ENV_VAR}` interpolation) is still accepted, but only as a backward-compatibility path; in that case, restrict file permissions or provide the file through a managed Secret volume, then restart the Gateway, container, or Pod.
+
 ### 3. Restart OpenClaw Gateway
 
 ```bash

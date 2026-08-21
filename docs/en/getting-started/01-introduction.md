@@ -62,22 +62,24 @@ client.overview("viking://...")          # Get L1 overview
 
 Stuffing massive context into prompts all at once is not only expensive but also risks exceeding model windows and introducing noise. OpenViking automatically processes context into three levels upon ingestion:
 
-| Level | Name | Token Limit | Purpose |
-|-------|------|-------------|---------|
-| **L0** | Abstract | ~100 tokens | Vector search, quick filtering |
-| **L1** | Overview | ~2k tokens | Rerank, content navigation |
-| **L2** | Detail | Unlimited | Full content, on-demand loading |
+| Level | Name | Default body limit | Purpose |
+| --- | --- | --- | --- |
+| **L0** | Abstract | 256 characters | Vector search, quick filtering |
+| **L1** | Overview | 4000 characters | Rerank, content navigation |
+| **L2** | Detail | No uniform limit | Full content, on-demand loading |
 
 ```
 viking://resources/my_project/
 ├── .abstract.md               # L0 layer: abstract
 ├── .overview.md               # L1 layer: overview
 ├── docs/
-│   ├── .abstract.md          # Each directory has L0/L1 layers
+│   ├── .abstract.md          # Semantically processed directories commonly have L0/L1
 │   ├── .overview.md
 │   └── api.md                # L2 layer: full content
 └── src/
 ```
+
+L0/L1 are directory sidecars, not per-file sidecars, and they are not guaranteed to coexist. See [Context Layers](../concepts/03-context-layers.md).
 
 ### 3. Directory Recursive Retrieval
 

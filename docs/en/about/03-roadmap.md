@@ -15,7 +15,6 @@ This document outlines the development roadmap for OpenViking.
 - Text resource management (Markdown, HTML, PDF)
 - Automatic L0/L1 generation
 - Semantic search with vector indexing
-- Resource relations and linking
 - Content write API
 - Agent namespace management
 
@@ -64,7 +63,7 @@ This document outlines the development roadmap for OpenViking.
 - HTTP Server (FastAPI)
 - Native MCP endpoint built into openviking-server
 - Python HTTP Client
-- Client abstraction layer (LocalClient / HTTPClient)
+- Python HTTP client SDK
 - Web Console
 
 ### CLI

@@ -39,59 +39,43 @@ class _CtxMgr:
         return False
 
 
-class _FakeLockManager:
+class _FakePathLock:
     def __init__(self, *, busy_tree_paths=None):
-        from openviking.storage.transaction.lock_handle import LockHandle
-
-        self._lock_handle_cls = LockHandle
-        self._handles = {}
-        self.acquired_exact_paths = []
-        self.acquired_tree_paths = []
-        self.tree_attempts = []
+        self._next_id = 0
+        self.acquired_exact_paths: list[str] = []
+        self.acquired_tree_paths: list[str] = []
+        self.exact_attempts: list[tuple[str, float]] = []
+        self.tree_attempts: list[tuple[str, float]] = []
         self.busy_tree_paths = set(busy_tree_paths or [])
 
-    def create_handle(self):
-        handle = self._lock_handle_cls()
-        self._handles[handle.id] = handle
-        return handle
+    def _new_lease(self):
+        self._next_id += 1
+        return {"id": f"lock-{self._next_id}"}
 
-    async def acquire_exact_path_batch(self, handle, paths, timeout=None):
-        for path in paths:
-            lock_path = f"exact:{path}"
-            handle.add_lock(lock_path)
-            self.acquired_exact_paths.append(path)
-        return True
+    async def pathlock_acquire_tree(self, path, timeout_secs=0.0):
+        from openviking.storage.errors import LockAcquisitionError
 
-    async def acquire_tree(self, handle, path, timeout=None):
-        self.tree_attempts.append((path, timeout))
+        self.tree_attempts.append((path, timeout_secs))
         if path in self.busy_tree_paths:
-            return False
-        lock_path = f"tree:{path}"
-        handle.add_lock(lock_path)
+            raise LockAcquisitionError(f"busy: {path}")
         self.acquired_tree_paths.append(path)
-        return True
+        return self._new_lease()
 
-    async def release_selected(self, handle, lock_paths):
-        for path in lock_paths:
-            handle.remove_lock(path)
+    async def pathlock_acquire_exact(self, path, timeout_secs=0.0):
+        self.exact_attempts.append((path, timeout_secs))
+        self.acquired_exact_paths.append(path)
+        return self._new_lease()
 
-    async def release(self, handle):
-        for path in list(handle.locks):
-            handle.remove_lock(path)
-        self._handles.pop(handle.id, None)
-
-    def get_handle(self, handle_id):
-        handle = self._handles.get(handle_id)
-        if handle and handle.locks:
-            return handle
-        return None
+    async def pathlock_release(self, lease):
+        pass
 
 
 class _FakeVikingFS:
-    def __init__(self, *, exists_result=False, existing_uris=None):
+    def __init__(self, *, exists_result=False, existing_uris=None, pathlock=None):
         self.agfs = SimpleNamespace(
             write=MagicMock(return_value={"status": "ok"}),
         )
+        self._async_agfs = pathlock or _FakePathLock()
         self._exists_result = exists_result
         self._existing_uris = set(existing_uris or [])
         self.exists_calls = []
@@ -110,12 +94,12 @@ class _FakeVikingFS:
     async def mkdir(self, uri, exist_ok=False, ctx=None):
         return None
 
-    async def delete_temp(self, temp_dir_path, ctx=None):
-        self.delete_temp_calls.append(temp_dir_path)
+    async def delete_temp(self, temp_dir_path, ctx=None, lease_ref=None):
+        self.delete_temp_calls.append((temp_dir_path, lease_ref))
         return None
 
-    async def persist_temp_tree(self, temp_uri, target_uri, ctx=None):
-        self.persist_calls.append((temp_uri, target_uri))
+    async def persist_temp_tree(self, temp_uri, target_uri, ctx=None, lease_ref=None):
+        self.persist_calls.append((temp_uri, target_uri, lease_ref))
         self.agfs.write(self._uri_to_path(target_uri, ctx=ctx), b"content")
 
     async def glob(self, pattern, uri=None, ctx=None):
@@ -135,7 +119,6 @@ async def test_resource_processor_first_add_summarizes_from_committed_uri(monkey
     from openviking.utils.resource_processor import ResourceProcessor
 
     fake_fs = _FakeVikingFS()
-    fake_lock_manager = _FakeLockManager()
     summarize_calls = []
 
     monkeypatch.setattr(
@@ -143,10 +126,6 @@ async def test_resource_processor_first_add_summarizes_from_committed_uri(monkey
         lambda: _DummyTelemetry(),
     )
     _patch_viking_fs(monkeypatch, fake_fs)
-    monkeypatch.setattr(
-        "openviking.storage.transaction.get_lock_manager",
-        lambda: fake_lock_manager,
-    )
 
     rp = ResourceProcessor(vikingdb=_DummyVikingDB(), media_storage=None)
     rp._get_media_processor = MagicMock()
@@ -176,10 +155,125 @@ async def test_resource_processor_first_add_summarizes_from_committed_uri(monkey
 
     assert result["status"] == "success"
     assert result["root_uri"] == "viking://resources/root"
-    assert fake_fs.persist_calls == [("viking://temp/root_tmp", "viking://resources/root")]
-    assert fake_fs.delete_temp_calls == ["viking://temp/tmpdir"]
+    assert fake_fs.persist_calls == [
+        ("viking://temp/root_tmp", "viking://resources/root", {"id": "lock-1"})
+    ]
+    assert fake_fs.delete_temp_calls == [("viking://temp/tmpdir", None)]
     assert summarize_calls[0]["temp_uris"] == ["viking://resources/root"]
     assert summarize_calls[0]["target_preexisting"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auto_candidate", [False, True])
+async def test_resource_processor_allows_flat_root_only_for_single_no_split_source(
+    monkeypatch,
+    auto_candidate,
+):
+    from openviking.utils.resource_processor import ResourceProcessor
+
+    fake_fs = _FakeVikingFS()
+    fake_fs.glob = AsyncMock(
+        side_effect=NotADirectoryError("flat resource roots cannot be globbed")
+    )
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.get_current_telemetry",
+        lambda: _DummyTelemetry(),
+    )
+    _patch_viking_fs(monkeypatch, fake_fs)
+
+    rp = ResourceProcessor(vikingdb=_DummyVikingDB(), media_storage=None)
+    rp._get_media_processor = MagicMock()
+    rp._get_media_processor.return_value.process = AsyncMock(
+        return_value=SimpleNamespace(
+            temp_dir_path="viking://temp/tmpdir",
+            source_path="神雕_副本.md",
+            source_format="markdown",
+            meta={},
+            warnings=[],
+        )
+    )
+    root_uri = "viking://resources/神雕_副本.md"
+    rp.tree_builder.finalize_from_temp = AsyncMock(
+        return_value=SimpleNamespace(
+            root=SimpleNamespace(
+                uri=root_uri,
+                temp_uri="viking://temp/tmpdir/神雕_副本/神雕_副本.md",
+            ),
+            _root_is_file=True,
+            _candidate_uri=root_uri if auto_candidate else None,
+        )
+    )
+    rp._summarizer = SimpleNamespace(
+        summarize=AsyncMock(return_value={"status": "success"}),
+        refresh_file_parent=AsyncMock(return_value={"status": "success"}),
+    )
+
+    result = await rp.process_resource(
+        path="神雕_副本.md",
+        ctx=object(),
+        build_index=True,
+        parse_mode="no_split",
+    )
+
+    assert result["status"] == "success"
+    assert result["root_uri"] == root_uri
+    assert fake_fs._async_agfs.exact_attempts == [
+        ("/mock/resources/神雕_副本.md", 0.0)
+    ]
+    assert fake_fs._async_agfs.tree_attempts == []
+    assert rp.tree_builder.finalize_from_temp.await_args.kwargs[
+        "flatten_single_file"
+    ] is True
+
+
+@pytest.mark.asyncio
+async def test_resource_processor_keeps_wrapper_for_directory_to_no_split(monkeypatch):
+    from openviking.utils.resource_processor import ResourceProcessor
+
+    fake_fs = _FakeVikingFS()
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.get_current_telemetry",
+        lambda: _DummyTelemetry(),
+    )
+    _patch_viking_fs(monkeypatch, fake_fs)
+
+    rp = ResourceProcessor(vikingdb=_DummyVikingDB(), media_storage=None)
+    rp._get_media_processor = MagicMock()
+    rp._get_media_processor.return_value.process = AsyncMock(
+        return_value=SimpleNamespace(
+            temp_dir_path="viking://temp/tmpdir",
+            source_path="神雕.md",
+            source_format="markdown",
+            meta={},
+            warnings=[],
+        )
+    )
+    rp.tree_builder.finalize_from_temp = AsyncMock(
+        return_value=SimpleNamespace(
+            root=SimpleNamespace(
+                uri="viking://resources/0803_shendiao_01",
+                temp_uri="viking://temp/tmpdir/神雕",
+            ),
+            _root_is_file=False,
+        )
+    )
+    rp._summarizer = SimpleNamespace(
+        summarize=AsyncMock(return_value={"status": "success"})
+    )
+
+    result = await rp.process_resource(
+        path="神雕.md",
+        ctx=object(),
+        to="viking://resources/0803_shendiao_01",
+        to_is_directory=True,
+        build_index=True,
+        parse_mode="no_split",
+    )
+
+    assert result["root_uri"] == "viking://resources/0803_shendiao_01"
+    assert rp.tree_builder.finalize_from_temp.await_args.kwargs[
+        "flatten_single_file"
+    ] is False
 
 
 @pytest.mark.asyncio
@@ -187,7 +281,6 @@ async def test_resource_processor_second_add_preserves_temp_uri_for_incremental(
     from openviking.utils.resource_processor import ResourceProcessor
 
     fake_fs = _FakeVikingFS(exists_result=True)
-    fake_lock_manager = _FakeLockManager()
     summarize_calls = []
 
     monkeypatch.setattr(
@@ -195,10 +288,6 @@ async def test_resource_processor_second_add_preserves_temp_uri_for_incremental(
         lambda: _DummyTelemetry(),
     )
     _patch_viking_fs(monkeypatch, fake_fs)
-    monkeypatch.setattr(
-        "openviking.storage.transaction.get_lock_manager",
-        lambda: fake_lock_manager,
-    )
 
     rp = ResourceProcessor(vikingdb=_DummyVikingDB(), media_storage=None)
     rp._get_media_processor = MagicMock()
@@ -237,8 +326,8 @@ async def test_resource_processor_second_add_preserves_temp_uri_for_incremental(
 async def test_resource_processor_auto_candidate_skips_existing_and_busy(monkeypatch):
     from openviking.utils.resource_processor import ResourceProcessor
 
-    fake_fs = _FakeVikingFS(existing_uris={"viking://resources/root"})
-    fake_lock_manager = _FakeLockManager(busy_tree_paths={"/mock/resources/root_1"})
+    fake_pathlock = _FakePathLock(busy_tree_paths={"/mock/resources/root_1"})
+    fake_fs = _FakeVikingFS(existing_uris={"viking://resources/root"}, pathlock=fake_pathlock)
     summarize_calls = []
 
     monkeypatch.setattr(
@@ -246,10 +335,6 @@ async def test_resource_processor_auto_candidate_skips_existing_and_busy(monkeyp
         lambda: _DummyTelemetry(),
     )
     _patch_viking_fs(monkeypatch, fake_fs)
-    monkeypatch.setattr(
-        "openviking.storage.transaction.get_lock_manager",
-        lambda: fake_lock_manager,
-    )
 
     rp = ResourceProcessor(vikingdb=_DummyVikingDB(), media_storage=None)
     rp._get_media_processor = MagicMock()
@@ -285,12 +370,13 @@ async def test_resource_processor_auto_candidate_skips_existing_and_busy(monkeyp
         "viking://resources/root_1",
         "viking://resources/root_2",
     ]
-    assert fake_lock_manager.tree_attempts == [
+    assert fake_pathlock.tree_attempts == [
         ("/mock/resources/root_1", 0.0),
         ("/mock/resources/root_2", 0.0),
     ]
-    assert fake_lock_manager.acquired_exact_paths == []
-    assert fake_lock_manager.acquired_tree_paths == ["/mock/resources/root_2"]
+    assert fake_pathlock.acquired_tree_paths == ["/mock/resources/root_2"]
     assert summarize_calls[0]["temp_uris"] == ["viking://resources/root_2"]
     assert summarize_calls[0]["target_preexisting"] is False
-    assert fake_fs.persist_calls == [("viking://temp/root_tmp", "viking://resources/root_2")]
+    assert fake_fs.persist_calls == [
+        ("viking://temp/root_tmp", "viking://resources/root_2", {"id": "lock-1"})
+    ]

@@ -5,7 +5,6 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '#/components/ui/dialog'
@@ -28,12 +27,17 @@ export function CrossDeviceVerifyDialog({
             {t('verify.description', { ns: 'oauth' })}
           </DialogDescription>
         </DialogHeader>
-        <CrossDeviceVerifyForm />
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            {t('action.cancel', { ns: 'common' })}
-          </Button>
-        </DialogFooter>
+        <CrossDeviceVerifyForm
+          secondaryAction={
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+            >
+              {t('action.cancel', { ns: 'common' })}
+            </Button>
+          }
+        />
       </DialogContent>
     </Dialog>
   )

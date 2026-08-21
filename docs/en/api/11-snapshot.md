@@ -4,13 +4,14 @@ On top of VikingFS, OpenViking provides Git-based multi-version management, call
 
 Snapshots are powered by [gitoxide](https://github.com/Byron/gitoxide) embedded in the Rust RAGFS layer, maintaining one logical Git repository per `account_id`. This is fully transparent to callers — you never touch a `.ovgit` directory, the object store, or ref internals.
 
-The four core commands:
+The five core commands:
 
 | Command | Purpose |
 |---------|---------|
 | `commit` | Save the current workspace state as a new snapshot |
 | `log` | Walk commit history starting from the newest |
 | `show` | View a commit's metadata, or read a file's content from that commit |
+| `diff` | Compare one file between two snapshots as a unified diff |
 | `restore` | Restore a directory (or the whole account tree) to a past snapshot |
 
 In addition, account-level `.ovgitignore` exclusion rules can be managed (`get`/`set`/`delete`) to exclude matching files from `commit`. See [Ignore management](#ignore-management).
@@ -25,8 +26,8 @@ In addition, account-level `.ovgitignore` exclusion rules can be managed (`get`/
 ## Implementation
 
 - HTTP routes: [snapshot.py](https://github.com/volcengine/OpenViking/blob/main/openviking/server/routers/snapshot.py), prefix `/api/v1/snapshot`.
-- SDK namespace: [snapshot_namespace.py](https://github.com/volcengine/OpenViking/blob/main/openviking/snapshot_namespace.py), exposed as `client.snapshot.*`.
-- Underlying semantics: `commit` / `restore` / `show` / `log` in [viking_fs.py](https://github.com/volcengine/OpenViking/blob/main/openviking/storage/viking_fs.py).
+- SDK namespace: [client.py](https://github.com/volcengine/OpenViking/blob/main/sdk/python/openviking_sdk/client.py), exposed as `client.snapshot.*`.
+- Underlying semantics: `commit` / `restore` / `show` / `log` / `diff` in [viking_fs.py](https://github.com/volcengine/OpenViking/blob/main/openviking/storage/viking_fs.py).
 - CLI: the `SnapshotCmd` in [main.rs](https://github.com/volcengine/OpenViking/blob/main/crates/ov_cli/src/main.rs), subcommands in [snapshot.rs](https://github.com/volcengine/OpenViking/blob/main/crates/ov_cli/src/commands/snapshot.rs).
 
 ## API Reference
@@ -45,7 +46,7 @@ Save the current workspace state as a new snapshot.
 | author_name | str | No | null | Override the default author name (default `viking-bot`) |
 | author_email | str | No | null | Override the default author email |
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK**
 
 ```python
 result = client.snapshot.commit(
@@ -130,7 +131,7 @@ Filtering happens before the result limit is applied, so `limit=10` with `paths=
 
 To bound storage work, a filtered request inspects at most 1,000 commits. If the requested number of matches has not been collected and older uninspected history remains, the request returns an `INVALID_ARGUMENT` error instead of a partial history list. Unfiltered history is not subject to this scan budget because every inspected commit advances the result limit.
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK**
 
 ```python
 history = client.snapshot.log(
@@ -220,7 +221,7 @@ View a commit's metadata; if `path` is given, return that file's content from th
 | target_ref | str | Yes | - | Commit OID (abbreviated prefix allowed), branch name, or tag |
 | path | str | No | null | `viking://` URI of a single file; omit to return commit metadata |
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK**
 
 ```python
 # View commit metadata
@@ -237,7 +238,7 @@ blob = client.snapshot.show("3f2a1b9c", path="viking://resources/my_project/guid
 console.log(await client.gitShow("main", "viking://resources/docs/api.md"));
 ```
 
-> Note: when reading a file (`path` given), the **Embedded (local) client** returns raw `bytes`, while the **HTTP client** returns a `{"oid": str, "size": int, "bytes": bytes}` dict.
+> Note: when reading a file (`path` given), the Python client returns a `{"oid": str, "size": int, "bytes": bytes}` dict.
 
 **HTTP API**
 
@@ -298,6 +299,73 @@ ov snapshot show 3f2a1b9c --path viking://resources/my_project/guide.md --out-fi
 
 ---
 
+### diff()
+
+Compare one UTF-8 file between two snapshot refs and return a unified diff. `to_ref` is required. When `from_ref` is omitted, the older side is treated as an empty file, which is useful for displaying the initial version.
+
+**Python HTTP SDK**
+
+```python
+result = client.snapshot.diff(
+    "viking://resources/my_project/guide.md",
+    from_ref="3f2a1b9c",
+    to_ref="9a0b1c2d",
+)
+print(result["diff_text"])
+```
+
+**TypeScript SDK**
+
+```typescript
+const result = await client.gitDiff(
+  "viking://resources/my_project/guide.md",
+  "9a0b1c2d",
+  "3f2a1b9c",
+);
+console.log(result.diff_text);
+```
+
+**HTTP API**
+
+```
+GET /api/v1/snapshot/diff?path={uri}&from={old_ref}&to={new_ref}
+```
+
+```bash
+curl --get "http://localhost:1933/api/v1/snapshot/diff" \
+  --data-urlencode "path=viking://resources/my_project/guide.md" \
+  --data-urlencode "from=3f2a1b9c" \
+  --data-urlencode "to=9a0b1c2d" \
+  -H "X-API-Key: your-key"
+```
+
+**CLI**
+
+```bash
+ov snapshot diff viking://resources/my_project/guide.md \
+  --from 3f2a1b9c \
+  --to 9a0b1c2d
+```
+
+**Response**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "path": "viking://resources/my_project/guide.md",
+    "from_commit": "3f2a1b9c...",
+    "to_commit": "9a0b1c2d...",
+    "change_type": "modified",
+    "diff_text": "--- a/guide.md\n+++ b/guide.md\n@@ -1 +1 @@\n-old line\n+new line\n"
+  }
+}
+```
+
+`change_type` is `added`, `deleted`, `modified`, or `unchanged`. Each side is limited to 10 MiB and 100,000 lines, and the generated diff is limited to 20 MiB; larger requests return `RESOURCE_EXHAUSTED` rather than a truncated diff.
+
+---
+
 ### restore()
 
 Restore a directory (or the whole account tree) to its state at `source_commit`.
@@ -316,7 +384,7 @@ This is a **forward-commit restore**: it computes the diff between `source_commi
 | author_name | str | No | null | Override the default author name |
 | author_email | str | No | null | Override the default author email |
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK**
 
 ```python
 result = client.snapshot.restore(
@@ -444,7 +512,7 @@ Three methods are provided: `get_gitignore` (read, empty string when absent), `s
 
 Reads the account `.ovgitignore` content; returns an empty string when the file is absent.
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK**
 
 ```python
 content = client.snapshot.get_gitignore()
@@ -494,7 +562,7 @@ Writes the account `.ovgitignore` content (overwrites). The size limit (64 KiB) 
 |-----------|------|----------|---------|-------------|
 | content | str | Yes | - | The `.ovgitignore` content (UTF-8) |
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK**
 
 ```python
 client.snapshot.set_gitignore(content="*.log\n")
@@ -540,7 +608,7 @@ ov snapshot ignore-set --file ./my-rules -o json
 
 Deletes the account `.ovgitignore`. Missing is success (idempotent).
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK**
 
 ```python
 client.snapshot.delete_gitignore()
@@ -583,9 +651,9 @@ ov snapshot ignore-delete -o json
 A complete "commit → modify → restore" flow (Python SDK):
 
 ```python
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
-client = ov.OpenViking()
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 root = "viking://resources/my_project"

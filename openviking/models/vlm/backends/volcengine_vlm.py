@@ -6,10 +6,12 @@ import asyncio
 import base64
 import json
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from openviking.telemetry import tracer
+from openviking.utils.multimodal import redact_image_data_urls
 from openviking_cli.utils import get_logger
 
 from ..base import ToolCall, VLMResponse
@@ -25,6 +27,24 @@ def _build_volcengine_headers(extra_headers: Optional[Dict[str, str]]) -> Dict[s
     headers = dict(extra_headers or {})
     if not any(k.lower() == VOLCENGINE_CLIENT_REQUEST_ID_HEADER.lower() for k in headers):
         headers[VOLCENGINE_CLIENT_REQUEST_ID_HEADER] = VOLCENGINE_CLIENT_REQUEST_ID
+    return headers
+
+
+def build_volcengine_request_headers(
+    extra_headers: Optional[Dict[str, str]],
+) -> Dict[str, str]:
+    """Return per-request headers with a unique default client request ID.
+
+    The existing prefix identifies OpenViking service traffic. A UUID suffix
+    makes an individual Ark request searchable while custom client request ID
+    values remain unchanged.
+    """
+    headers = _build_volcengine_headers(extra_headers)
+    header_key = next(
+        key for key in headers if key.lower() == VOLCENGINE_CLIENT_REQUEST_ID_HEADER.lower()
+    )
+    if headers[header_key] == VOLCENGINE_CLIENT_REQUEST_ID:
+        headers[header_key] = f"{VOLCENGINE_CLIENT_REQUEST_ID},{uuid.uuid4().hex}"
     return headers
 
 
@@ -115,6 +135,39 @@ class VolcEngineVLM(OpenAIVLM):
             max_retries=0,
         )
 
+    def supports_media(
+        self,
+        *,
+        media_type: str,
+        filename: str,
+        size_bytes: int,
+    ) -> bool:
+        from .volcengine_media import supports_media
+
+        return supports_media(
+            media_type=media_type,
+            filename=filename,
+            size_bytes=size_bytes,
+        )
+
+    async def get_media_completion_async(
+        self,
+        *,
+        prompt: str,
+        media_path: Path,
+        filename: str,
+        media_type: str,
+    ) -> str:
+        from .volcengine_media import understand_media
+
+        return await understand_media(
+            self,
+            prompt=prompt,
+            media_path=media_path,
+            filename=filename,
+            media_type=media_type,
+        )
+
     def get_completion(
         self,
         prompt: str = "",
@@ -131,7 +184,7 @@ class VolcEngineVLM(OpenAIVLM):
             "messages": kwargs_messages,
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not effective_thinking else "enabled"},
-            "extra_headers": self.extra_headers,
+            "extra_headers": build_volcengine_request_headers(self.extra_headers),
         }
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
@@ -149,7 +202,7 @@ class VolcEngineVLM(OpenAIVLM):
             return result
         return self._clean_response(str(result))
 
-    @tracer("volcengine.vlm.call", ignore_result=True, ignore_args=False)
+    @tracer("volcengine.vlm.call", ignore_result=True, ignore_args=["messages"])
     async def get_completion_async(
         self,
         prompt: str = "",
@@ -166,7 +219,7 @@ class VolcEngineVLM(OpenAIVLM):
             "messages": kwargs_messages,
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not effective_thinking else "enabled"},
-            "extra_headers": self.extra_headers,
+            "extra_headers": build_volcengine_request_headers(self.extra_headers),
         }
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
@@ -175,7 +228,10 @@ class VolcEngineVLM(OpenAIVLM):
             kwargs["tool_choice"] = tool_choice or "auto"
 
         # 用 tracer.info 打印请求
-        tracer.info(f"request: {json.dumps(kwargs_messages, ensure_ascii=False, indent=2)}")
+        tracer.info(
+            "request: "
+            f"{json.dumps(redact_image_data_urls(kwargs_messages), ensure_ascii=False, indent=2)}"
+        )
         if tools:
             tracer.info(
                 f"tools: {json.dumps([t['function']['name'] for t in tools], ensure_ascii=False)}"
@@ -347,7 +403,7 @@ class VolcEngineVLM(OpenAIVLM):
             "messages": kwargs_messages,
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not effective_thinking else "enabled"},
-            "extra_headers": self.extra_headers,
+            "extra_headers": build_volcengine_request_headers(self.extra_headers),
         }
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
@@ -391,7 +447,7 @@ class VolcEngineVLM(OpenAIVLM):
             "messages": kwargs_messages,
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not effective_thinking else "enabled"},
-            "extra_headers": self.extra_headers,
+            "extra_headers": build_volcengine_request_headers(self.extra_headers),
         }
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens

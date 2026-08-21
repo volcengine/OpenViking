@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import math
+import random
 import uuid
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Iterable, Optional
@@ -27,6 +28,7 @@ from openviking.storage.expr import (
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.result import FetchDataInCollectionResult
 from openviking_cli.utils import get_logger
+from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.config.vectordb_config import DEFAULT_INDEX_NAME
 
 logger = get_logger(__name__)
@@ -75,6 +77,13 @@ def _normalize_collection_names(raw_collections: Iterable[Any]) -> list[str]:
             if isinstance(name, str):
                 names.append(name)
     return names
+
+
+def _normalize_result_score(value: Any) -> float:
+    """Return a finite numeric score; scalar sort values may be strings or datetimes."""
+    if isinstance(value, (int, float)) and math.isfinite(value):
+        return float(value)
+    return 0.0
 
 
 class CollectionAdapter(ABC):
@@ -489,8 +498,13 @@ class CollectionAdapter(ABC):
                 output_fields=output_fields,
             )
         else:
-            result = coll.search_by_random(
+            # Approximate random sampling with a client-generated random
+            # vector so every backend behaves consistently.
+            dim = get_openviking_config().embedding.dimension
+            random_vector = [random.uniform(-1, 1) for _ in range(dim)]
+            result = coll.search_by_vector(
                 index_name=self._index_name,
+                dense_vector=random_vector,
                 limit=limit,
                 offset=offset,
                 filters=vectordb_filter,
@@ -501,10 +515,7 @@ class CollectionAdapter(ABC):
         for item in result.data:
             record = dict(item.fields) if item.fields else {}
             record["id"] = item.id
-            raw_score = item.score if item.score is not None else 0.0
-            if not math.isfinite(raw_score):
-                raw_score = 0.0
-            record["_score"] = raw_score
+            record["_score"] = _normalize_result_score(item.score)
             record = self._normalize_record_for_read(record)
             records.append(record)
         return records
@@ -519,7 +530,11 @@ class CollectionAdapter(ABC):
         coll = self.get_collection()
         delete_ids = list(ids or [])
         if not delete_ids and filter is not None:
-            matched = self.query(filter=filter, limit=limit, output_fields=["id"])
+            matched = self.query(
+                filter=filter,
+                limit=limit,
+                output_fields=["id"],
+            )
             delete_ids = [record["id"] for record in matched if record.get("id")]
 
         if not delete_ids:

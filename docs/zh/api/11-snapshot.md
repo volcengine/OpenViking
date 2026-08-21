@@ -4,13 +4,14 @@ OpenViking 在 VikingFS 之上提供了一套基于 Git 的多版本管理能力
 
 快照能力底层由内嵌在 Rust RAGFS 层的 [gitoxide](https://github.com/Byron/gitoxide) 驱动，按 `account_id` 维护一个逻辑 Git 仓库（每个账号一个仓库），对调用方完全透明——你无需关心 `.ovgit` 目录、对象库或引用细节。
 
-四个核心命令：
+五个核心命令：
 
 | 命令 | 作用 |
 |------|------|
 | `commit` | 把当前工作区状态保存成一个新快照 |
 | `log` | 从最新提交开始回溯历史 |
 | `show` | 查看某个提交的元数据，或读取该提交中某个文件的内容 |
+| `diff` | 以 unified diff 格式对比某个文件在两个快照中的内容 |
 | `restore` | 把目录（或整棵账号树）恢复到某个历史快照的状态 |
 
 此外还提供账号级 `.ovgitignore` 排除规则的管理命令（`get`/`set`/`delete`），用于在 `commit` 时按规则排除匹配的文件。详见 [ignore 管理](#ignore-管理)。
@@ -25,8 +26,8 @@ OpenViking 在 VikingFS 之上提供了一套基于 Git 的多版本管理能力
 ## API 实现介绍
 
 - HTTP 路由：[snapshot.py](https://github.com/volcengine/OpenViking/blob/main/openviking/server/routers/snapshot.py)，前缀 `/api/v1/snapshot`。
-- 命名空间（SDK）：[snapshot_namespace.py](https://github.com/volcengine/OpenViking/blob/main/openviking/snapshot_namespace.py)，暴露为 `client.snapshot.*`。
-- 底层语义实现：[viking_fs.py](https://github.com/volcengine/OpenViking/blob/main/openviking/storage/viking_fs.py) 的 `commit` / `restore` / `show` / `log`。
+- 命名空间（SDK）：[client.py](https://github.com/volcengine/OpenViking/blob/main/sdk/python/openviking_sdk/client.py)，暴露为 `client.snapshot.*`。
+- 底层语义实现：[viking_fs.py](https://github.com/volcengine/OpenViking/blob/main/openviking/storage/viking_fs.py) 的 `commit` / `restore` / `show` / `log` / `diff`。
 - CLI 命令：[main.rs](https://github.com/volcengine/OpenViking/blob/main/crates/ov_cli/src/main.rs) 的 `SnapshotCmd`，子命令 [snapshot.rs](https://github.com/volcengine/OpenViking/blob/main/crates/ov_cli/src/commands/snapshot.rs)。
 
 ## API 参考
@@ -45,7 +46,7 @@ OpenViking 在 VikingFS 之上提供了一套基于 Git 的多版本管理能力
 | author_name | str | 否 | null | 覆盖默认的提交者名字（默认 `viking-bot`） |
 | author_email | str | 否 | null | 覆盖默认的提交者邮箱 |
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK**
 
 ```python
 result = client.snapshot.commit(
@@ -130,7 +131,7 @@ ov snapshot commit -m "v1 initial import" --paths viking://resources/my_md.md -o
 
 为限制存储开销，过滤请求最多检查 1,000 条提交。如果尚未收集到请求数量的匹配结果，并且仍存在未检查的更早历史，接口将返回 `INVALID_ARGUMENT` 错误，而不是返回不完整的历史列表。非过滤请求不受该扫描预算限制，因为每检查一条提交都会推进返回数量限制。
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK**
 
 ```python
 history = client.snapshot.log(
@@ -220,7 +221,7 @@ ov snapshot log --limit 10 \
 | target_ref | str | 是 | - | 提交 OID（支持缩写前缀）、分支名或标签 |
 | path | str | 否 | null | 某个文件的 `viking://` URI；省略时返回提交元数据 |
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK**
 
 ```python
 # 查看提交元数据
@@ -237,7 +238,7 @@ blob = client.snapshot.show("3f2a1b9c", path="viking://resources/my_project/guid
 console.log(await client.gitShow("main", "viking://resources/docs/api.md"));
 ```
 
-> 注意：带 `path` 读取文件内容时，**Embedded（本地）客户端**直接返回原始 `bytes`；**HTTP 客户端**返回 `{"oid": str, "size": int, "bytes": bytes}` 字典。
+> 注意：带 `path` 读取文件内容时，Python 客户端返回 `{"oid": str, "size": int, "bytes": bytes}` 字典。
 
 **HTTP API**
 
@@ -298,6 +299,73 @@ ov snapshot show 3f2a1b9c --path viking://resources/my_project/guide.md --out-fi
 
 ---
 
+### diff()
+
+对比一个 UTF-8 文件在两个快照引用中的内容，并返回 unified diff。`to_ref` 必填；省略 `from_ref` 时，旧版本按空文件处理，可用于展示文件的初始版本。
+
+**Python HTTP SDK**
+
+```python
+result = client.snapshot.diff(
+    "viking://resources/my_project/guide.md",
+    from_ref="3f2a1b9c",
+    to_ref="9a0b1c2d",
+)
+print(result["diff_text"])
+```
+
+**TypeScript SDK**
+
+```typescript
+const result = await client.gitDiff(
+  "viking://resources/my_project/guide.md",
+  "9a0b1c2d",
+  "3f2a1b9c",
+);
+console.log(result.diff_text);
+```
+
+**HTTP API**
+
+```
+GET /api/v1/snapshot/diff?path={uri}&from={old_ref}&to={new_ref}
+```
+
+```bash
+curl --get "http://localhost:1933/api/v1/snapshot/diff" \
+  --data-urlencode "path=viking://resources/my_project/guide.md" \
+  --data-urlencode "from=3f2a1b9c" \
+  --data-urlencode "to=9a0b1c2d" \
+  -H "X-API-Key: your-key"
+```
+
+**CLI**
+
+```bash
+ov snapshot diff viking://resources/my_project/guide.md \
+  --from 3f2a1b9c \
+  --to 9a0b1c2d
+```
+
+**响应**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "path": "viking://resources/my_project/guide.md",
+    "from_commit": "3f2a1b9c...",
+    "to_commit": "9a0b1c2d...",
+    "change_type": "modified",
+    "diff_text": "--- a/guide.md\n+++ b/guide.md\n@@ -1 +1 @@\n-old line\n+new line\n"
+  }
+}
+```
+
+`change_type` 为 `added`、`deleted`、`modified` 或 `unchanged`。参与对比的单侧文件上限为 10 MiB 和 100,000 行，生成的 diff 上限为 20 MiB；超限时返回 `RESOURCE_EXHAUSTED`，不会返回被截断的 diff。
+
+---
+
 ### restore()
 
 把某个目录（或整棵账号树）恢复到 `source_commit` 时的状态。
@@ -316,7 +384,7 @@ ov snapshot show 3f2a1b9c --path viking://resources/my_project/guide.md --out-fi
 | author_name | str | 否 | null | 覆盖默认的提交者名字 |
 | author_email | str | 否 | null | 覆盖默认的提交者邮箱 |
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK**
 
 ```python
 result = client.snapshot.restore(
@@ -444,7 +512,7 @@ ov snapshot restore 3f2a1b9c viking://resources/my_project --dry-run -o json
 
 读取账号 `.ovgitignore` 内容；文件不存在时返回空字符串。
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK**
 
 ```python
 content = client.snapshot.get_gitignore()
@@ -494,7 +562,7 @@ ov snapshot ignore-get -o json
 |------|------|------|--------|------|
 | content | str | 是 | - | `.ovgitignore` 文件内容（UTF-8） |
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK**
 
 ```python
 client.snapshot.set_gitignore(content="*.log\n")
@@ -540,7 +608,7 @@ ov snapshot ignore-set --file ./my-rules -o json
 
 删除账号 `.ovgitignore`。文件不存在也视为成功（幂等）。
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK**
 
 ```python
 client.snapshot.delete_gitignore()
@@ -583,9 +651,9 @@ ov snapshot ignore-delete -o json
 下面演示一个"提交 → 修改 → 恢复"的完整流程（Python SDK）：
 
 ```python
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
-client = ov.OpenViking()
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 root = "viking://resources/my_project"

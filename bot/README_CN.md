@@ -105,13 +105,14 @@ ov find "我的回答偏好"
     "agents": {
       "provider": "openai",
       "model": "gpt-4o-mini",
-      "api_key": "<your-model-api-key>"
+      "api_key": "<your-model-api-key>",
+      "max_tokens": 8192
     }
   }
 }
 ```
 
-也可以只配置根级 `vlm`，VikingBot 会继承其中的模型、Provider、API Key、API Base 和超时配置。
+也可以只配置根级 `vlm`，VikingBot 会继承其中的模型、Provider、API Key、API Base、超时和输出 Token 配置。`bot.agents.max_tokens` 是可选项；不配置时由模型服务决定输出上限。单个 credential 上的 `max_tokens` 会覆盖 Agent 级值。
 
 #### 2. 开始对话
 
@@ -313,6 +314,7 @@ export OPENVIKING_CONFIG_FILE=/path/to/ov.conf
 | `bot.gateway.port` | `18790` | Gateway 监听端口 |
 | `bot.sandbox.backend` | `direct` | 执行后端 |
 | `bot.sandbox.mode` | `shared` | 工作区隔离方式 |
+| `bot.sandbox.backends.direct.allow_compile_exec` | `true` | 如需关闭可显式设为 `false` |
 | `bot.heartbeat.enabled` | `true` | 是否周期检查 `HEARTBEAT.md` |
 | `bot.heartbeat.interval_seconds` | `600` | 心跳间隔 |
 | `bot.mode` | `normal` | 可选 `normal`、`readonly`、`debug` |

@@ -280,6 +280,9 @@ impl FileSystem for MemFileSystem {
                     WriteFlag::Create | WriteFlag::Truncate => {
                         entry.data = data.to_vec();
                     }
+                    WriteFlag::CreateNew => {
+                        return Err(Error::AlreadyExists(normalized));
+                    }
                     WriteFlag::Append => {
                         entry.data.extend_from_slice(data);
                     }
@@ -299,8 +302,8 @@ impl FileSystem for MemFileSystem {
                 Ok(data.len() as u64)
             }
             None => {
-                // Create file if Create flag is set
-                if matches!(flags, WriteFlag::Create) {
+                // Create file if Create or CreateNew flag is set
+                if matches!(flags, WriteFlag::Create | WriteFlag::CreateNew) {
                     // Check parent exists
                     if let Some(parent) = Self::parent_path(&normalized) {
                         match entries.get(&parent) {
@@ -319,6 +322,39 @@ impl FileSystem for MemFileSystem {
                 }
             }
         }
+    }
+
+    /// Atomically replace a memory file when its content matches `expected`.
+    async fn compare_and_write(
+        &self,
+        path: &str,
+        expected: &[u8],
+        new_data: &[u8],
+    ) -> Result<bool> {
+        let normalized = Self::normalize_path(path);
+        let mut entries = self.entries.write().await;
+        let Some(entry) = entries.get_mut(&normalized) else {
+            return Ok(false);
+        };
+        if entry.is_dir || entry.data != expected {
+            return Ok(false);
+        }
+        entry.data = new_data.to_vec();
+        entry.touch();
+        Ok(true)
+    }
+
+    /// Atomically remove a memory file when its content matches `expected`.
+    async fn compare_and_remove(&self, path: &str, expected: &[u8]) -> Result<bool> {
+        let normalized = Self::normalize_path(path);
+        let mut entries = self.entries.write().await;
+        let matches = entries
+            .get(&normalized)
+            .is_some_and(|entry| !entry.is_dir && entry.data == expected);
+        if matches {
+            entries.remove(&normalized);
+        }
+        Ok(matches)
     }
 
     async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {

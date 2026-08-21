@@ -16,18 +16,20 @@ class TestOpenAIRerankClient:
         return OpenAIRerankClient(
             api_key="test-key",
             api_base="https://dashscope.aliyuncs.com/api/v1/services/rerank",
-            model_name="qwen3-rerank",
+            model_name="gte-rerank-v2",
         )
 
     def test_rerank_batch_success(self):
         client = self._make_client()
         mock_response = MagicMock()
         mock_response.json.return_value = {
-            "results": [
-                {"index": 0, "relevance_score": 0.9},
-                {"index": 1, "relevance_score": 0.3},
-                {"index": 2, "relevance_score": 0.7},
-            ]
+            "output": {
+                "results": [
+                    {"index": 0, "relevance_score": 0.9},
+                    {"index": 1, "relevance_score": 0.3},
+                    {"index": 2, "relevance_score": 0.7},
+                ]
+            }
         }
         mock_response.raise_for_status = MagicMock()
 
@@ -43,11 +45,13 @@ class TestOpenAIRerankClient:
         client = self._make_client()
         mock_response = MagicMock()
         mock_response.json.return_value = {
-            "results": [
-                {"index": 2, "relevance_score": 0.7},
-                {"index": 0, "relevance_score": 0.9},
-                {"index": 1, "relevance_score": 0.3},
-            ]
+            "output": {
+                "results": [
+                    {"index": 2, "relevance_score": 0.7},
+                    {"index": 0, "relevance_score": 0.9},
+                    {"index": 1, "relevance_score": 0.3},
+                ]
+            }
         }
         mock_response.raise_for_status = MagicMock()
 
@@ -80,10 +84,12 @@ class TestOpenAIRerankClient:
         client = self._make_client()
         mock_response = MagicMock()
         mock_response.json.return_value = {
-            "results": [
-                {"index": 2, "relevance_score": 0.7},
-                {"index": 0, "relevance_score": 0.9},
-            ]
+            "output": {
+                "results": [
+                    {"index": 2, "relevance_score": 0.7},
+                    {"index": 0, "relevance_score": 0.9},
+                ]
+            }
         }
         mock_response.raise_for_status = MagicMock()
 
@@ -102,9 +108,11 @@ class TestOpenAIRerankClient:
         client = self._make_client()
         mock_response = MagicMock()
         mock_response.json.return_value = {
-            "results": [
-                {"index": 5, "relevance_score": 0.9},  # only 1 doc
-            ]
+            "output": {
+                "results": [
+                    {"index": 5, "relevance_score": 0.9},  # only 1 doc
+                ]
+            }
         }
         mock_response.raise_for_status = MagicMock()
 
@@ -120,9 +128,11 @@ class TestOpenAIRerankClient:
         client = self._make_client()
         mock_response = MagicMock()
         mock_response.json.return_value = {
-            "results": [
-                {"relevance_score": 0.9},  # missing 'index'
-            ]
+            "output": {
+                "results": [
+                    {"relevance_score": 0.9},  # missing 'index'
+                ]
+            }
         }
         mock_response.raise_for_status = MagicMock()
 
@@ -147,7 +157,9 @@ class TestOpenAIRerankClient:
     def test_rerank_batch_sends_correct_request(self):
         client = self._make_client()
         mock_response = MagicMock()
-        mock_response.json.return_value = {"results": [{"index": 0, "relevance_score": 0.8}]}
+        mock_response.json.return_value = {
+            "output": {"results": [{"index": 0, "relevance_score": 0.8}]}
+        }
         mock_response.raise_for_status = MagicMock()
 
         with patch(
@@ -159,9 +171,10 @@ class TestOpenAIRerankClient:
         assert call_kwargs.kwargs["url"] == "https://dashscope.aliyuncs.com/api/v1/services/rerank"
         assert call_kwargs.kwargs["headers"]["Authorization"] == "Bearer test-key"
         body = call_kwargs.kwargs["json"]
-        assert body["model"] == "qwen3-rerank"
-        assert body["query"] == "my query"
-        assert body["documents"] == ["doc1"]
+        assert body["model"] == "gte-rerank-v2"
+        assert body["input"]["query"] == "my query"
+        assert body["input"]["documents"] == ["doc1"]
+        assert body["parameters"]["return_documents"] is False
 
     def test_from_config(self):
         config = RerankConfig(

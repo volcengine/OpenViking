@@ -277,6 +277,7 @@ class OpenVikingAPIClient:
         parent: Optional[str] = None,
         instruction: Optional[str] = None,
         wait: bool = False,
+        processing_mode: Optional[str] = None,
     ) -> requests.Response:
         endpoint = "/api/v1/resources"
         url = self._build_url(self.server_url, endpoint)
@@ -299,6 +300,8 @@ class OpenVikingAPIClient:
             payload["instruction"] = instruction
         if wait:
             payload["wait"] = wait
+        if processing_mode:
+            payload["processing_mode"] = processing_mode
         try:
             return self._request_with_retry("POST", url, json=payload)
         finally:
@@ -472,24 +475,6 @@ class OpenVikingAPIClient:
         endpoint = "/api/v1/fs/mv"
         url = self._build_url(self.server_url, endpoint)
         return self.session.post(url, json={"from_uri": from_uri, "to_uri": to_uri})
-
-    def link(self, from_uri: str, to_uris: Any, reason: str = "") -> requests.Response:
-        endpoint = "/api/v1/relations/link"
-        url = self._build_url(self.server_url, endpoint)
-        return self.session.post(
-            url, json={"from_uri": from_uri, "to_uris": to_uris, "reason": reason}
-        )
-
-    def relations(self, uri: str) -> requests.Response:
-        endpoint = "/api/v1/relations"
-        params = {"uri": uri}
-        url = self._build_url(self.server_url, endpoint, params)
-        return self.session.get(url)
-
-    def unlink(self, from_uri: str, to_uri: str) -> requests.Response:
-        endpoint = "/api/v1/relations/link"
-        url = self._build_url(self.server_url, endpoint)
-        return self.session.delete(url, json={"from_uri": from_uri, "to_uri": to_uri})
 
     def session_used(
         self,

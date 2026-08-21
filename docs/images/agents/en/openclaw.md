@@ -1,25 +1,29 @@
-## Step 1: Install OpenViking
+## Install
 
-On the terminal of the machine running OpenClaw, run the following command to install the OpenViking plugin:
+Copy the API key from this page:
 
-```bash
-openclaw plugins install clawhub:@openviking/openclaw-plugin && openclaw openviking setup
-```
-
-## Step 2: Copy the Base URL and API Key
-
-After running the install command, the setup flow prompts for the Base URL and API Key. Copy them and paste them into your agent terminal:
-
-- Base URL: Copy the following Base URL into your agent terminal
-```text
-https://api.vikingdb.cn-beijing.volces.com/openviking
-```
-- API Key: Copy the API Key shown on the page into your agent terminal
-
-## Step 3: Restart OpenClaw
-
-Copy the following command into the agent terminal to restart OpenClaw. After restart, the console automatically detects the agent connection status.
+{{OPENVIKING_API_KEY_BLOCK}}
 
 ```bash
+openclaw plugins install clawhub:@openviking/openclaw-plugin
+openclaw openviking setup --base-url {{OPENVIKING_BASE_URL}} --api-key <API-key-from-this-page>
 openclaw gateway restart
 ```
+
+## Verify
+
+```bash
+openclaw openviking status
+```
+
+## Troubleshoot
+
+| Problem | Fix |
+|---|---|
+| Plugin not active | Re-run Install, then `openclaw gateway restart` |
+| 401 / 403 | Paste the API key from this page again |
+
+## Reference
+
+- Docs on Manual Settings: [OpenClaw](https://docs.openviking.net/en/agent-integrations/03-openclaw)
+- Code: [examples/openclaw-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/openclaw-plugin)

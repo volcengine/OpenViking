@@ -4,21 +4,24 @@
 Feishu/Lark Accessor.
 
 Fetches Feishu/Lark cloud documents using the lark-oapi SDK.
-This is the DataAccessor layer extracted from FeishuParser.
 
 Note: This accessor requires the `lark-oapi` package.
 Included by default in `openviking[bot]` installation.
 """
 
 import asyncio
+import json
+import mimetypes
 import os
 import re
+import shutil
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, NoReturn, Optional, Tuple, Union
-from urllib.parse import urlparse
+from typing import Any, Dict, List, NoReturn, Optional, Tuple, Union
+from urllib.parse import parse_qs, unquote, urlparse
 
+from openviking.parse.base import format_table_to_markdown
 from openviking.utils.exceptions import error_code_from_http_status
 from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.utils.logger import get_logger
@@ -30,7 +33,32 @@ logger = get_logger(__name__)
 
 _FEISHU_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(feishu://image/([^)]+)\)")
 _FEISHU_DOCUMENT_FORBIDDEN = 1770032
+_FEISHU_WIKI_NODE_PERMISSION_DENIED = 131006
 _FEISHU_BITABLE_PERMISSION_REQUIRED = 99991672
+_FEISHU_LEGACY_DOC_LOGIN_REQUIRED = 91404
+_FEISHU_PERMISSION_DENIED_CODES = {
+    _FEISHU_DOCUMENT_FORBIDDEN,
+    _FEISHU_WIKI_NODE_PERMISSION_DENIED,
+    91403,
+    95008,
+    95009,
+}
+_FEISHU_NOT_FOUND_CODES = {91402, 95006, 95007}
+_MAX_MEDIA_DOWNLOAD_CONTEXTS = 8
+_FEISHU_DOC_PATH_TYPES = {"doc", "docs", "docx", "wiki", "sheets", "base"}
+_FEISHU_DRIVE_DOC_TYPES = {
+    "doc": "docs",
+    "docx": "docx",
+    "sheet": "sheets",
+    "sheets": "sheets",
+    "bitable": "base",
+    "base": "base",
+    "wiki": "wiki",
+}
+_MAX_PATH_SEGMENT_CHARS = 120
+_MAX_PATH_SEGMENT_BYTES = 240
+
+_MediaDownloadExtras = Dict[str, List[Optional[str]]]
 
 
 def _title_as_filename(title: str) -> str:
@@ -41,6 +69,90 @@ def _title_as_filename(title: str) -> str:
     field makes ``Path(...).name`` silently discard the title prefix.
     """
     return title.replace("/", "_").replace("\\", "_")
+
+
+def _truncate_text_for_path_segment(text: str, *, max_chars: int, max_bytes: int) -> str:
+    """Trim text so its UTF-8 representation fits a single path segment budget."""
+    if max_chars <= 0 or max_bytes <= 0:
+        return ""
+    result: list[str] = []
+    used_bytes = 0
+    for char in text[:max_chars]:
+        char_bytes = len(char.encode("utf-8"))
+        if used_bytes + char_bytes > max_bytes:
+            break
+        result.append(char)
+        used_bytes += char_bytes
+    return "".join(result)
+
+
+def _fit_path_segment(text: str, *, max_chars: int, max_bytes: int) -> str:
+    """Ensure a complete path segment fits the configured character and byte budgets."""
+    if len(text) <= max_chars and len(text.encode("utf-8")) <= max_bytes:
+        return text
+    return _truncate_text_for_path_segment(
+        text,
+        max_chars=max_chars,
+        max_bytes=max_bytes,
+    ).rstrip(" ._")
+
+
+def _safe_path_segment(
+    name: str,
+    *,
+    fallback: str = "untitled",
+    max_len: int = _MAX_PATH_SEGMENT_CHARS,
+    max_bytes: int = _MAX_PATH_SEGMENT_BYTES,
+) -> str:
+    """Return one portable path segment while preserving readable names."""
+    safe_name = re.sub(r"[\x00-\x1f/\\:*?\"<>|]+", "_", str(name or "")).strip(" ._")
+    safe_name = re.sub(r"\s+", " ", safe_name)
+    if not safe_name:
+        safe_name = fallback
+    if len(safe_name) <= max_len and len(safe_name.encode("utf-8")) <= max_bytes:
+        return safe_name
+
+    stem = Path(safe_name).stem
+    suffix = Path(safe_name).suffix
+    suffix_bytes = len(suffix.encode("utf-8"))
+    if suffix_bytes >= max_bytes:
+        suffix = ""
+        suffix_bytes = 0
+
+    stem = _truncate_text_for_path_segment(
+        stem,
+        max_chars=max_len - len(suffix),
+        max_bytes=max_bytes - suffix_bytes,
+    ).rstrip(" ._")
+    if not stem:
+        stem = _truncate_text_for_path_segment(
+            fallback,
+            max_chars=max_len - len(suffix),
+            max_bytes=max_bytes - suffix_bytes,
+        ).rstrip(" ._")
+    return _fit_path_segment(
+        f"{stem or 'untitled'}{suffix}",
+        max_chars=max_len,
+        max_bytes=max_bytes,
+    ) or "untitled"
+
+
+def _numbered_path_segment(stem: str, suffix: str, index: int) -> str:
+    marker = f" ({index})"
+    marker_bytes = len(marker.encode("utf-8"))
+    suffix_bytes = len(suffix.encode("utf-8"))
+    max_stem_bytes = _MAX_PATH_SEGMENT_BYTES - marker_bytes - suffix_bytes
+    max_stem_chars = _MAX_PATH_SEGMENT_CHARS - len(marker) - len(suffix)
+    safe_stem = _truncate_text_for_path_segment(
+        stem,
+        max_chars=max_stem_chars,
+        max_bytes=max_stem_bytes,
+    ).rstrip(" ._")
+    return _fit_path_segment(
+        f"{safe_stem or 'untitled'}{marker}{suffix}",
+        max_chars=_MAX_PATH_SEGMENT_CHARS,
+        max_bytes=_MAX_PATH_SEGMENT_BYTES,
+    ) or "untitled"
 
 
 def _getattr_safe(obj, key: str, default=None):
@@ -83,29 +195,42 @@ def _raise_from_lark_response(
     if code == _FEISHU_BITABLE_PERMISSION_REQUIRED:
         public_code = "FAILED_PRECONDITION"
         message = (
-            "Feishu application is missing required Bitable permissions: "
-            f"code={code}, msg={msg}"
+            f"Feishu application is missing required Bitable permissions: code={code}, msg={msg}"
         )
     else:
-        public_code = (
-            "PERMISSION_DENIED"
-            if code == _FEISHU_DOCUMENT_FORBIDDEN
-            else error_code_from_http_status(http_status)
-        )
+        if code in _FEISHU_PERMISSION_DENIED_CODES:
+            public_code = "PERMISSION_DENIED"
+        elif code in _FEISHU_NOT_FOUND_CODES:
+            public_code = "NOT_FOUND"
+        elif code == _FEISHU_LEGACY_DOC_LOGIN_REQUIRED:
+            public_code = "UNAUTHENTICATED"
+        else:
+            public_code = error_code_from_http_status(http_status)
         message = f"Feishu {operation} failed: code={code}, msg={msg}"
 
     raise OpenVikingError(message, code=public_code, details=details)
+
+
+@dataclass(frozen=True)
+class FeishuSourcePreflight:
+    """Lightweight Feishu source identity resolved before enqueueing imports."""
+
+    doc_type: str
+    token: str
+    source_name: Optional[str]
+    source_format: str
 
 
 @dataclass
 class FeishuDocument:
     """Result from fetching a Feishu document."""
 
-    doc_type: str  # "docx" only for now
+    doc_type: str
     token: str
     markdown_content: str
     title: str
     meta: Dict[str, Any]
+    media_download_extras: _MediaDownloadExtras = field(default_factory=dict)
 
 
 class FeishuAccessor(DataAccessor):
@@ -114,7 +239,12 @@ class FeishuAccessor(DataAccessor):
 
     Supports:
     - Documents: https://*.feishu.cn/docx/{document_id}
-    - Wiki pages: https://*.feishu.cn/wiki/{token} (resolves to docx)
+    - Legacy documents: https://*.feishu.cn/docs/{doc_token}
+    - Wiki pages: https://*.feishu.cn/wiki/{token}
+    - Spreadsheets: https://*.feishu.cn/sheets/{token}
+    - Bitable: https://*.feishu.cn/base/{app_token}
+    - Drive files: https://*.feishu.cn/file/{file_token}
+    - Drive folders: https://*.feishu.cn/drive/folder/{folder_token}
 
     Requires:
     - lark-oapi package
@@ -126,7 +256,13 @@ class FeishuAccessor(DataAccessor):
     PRIORITY = 100  # Higher than Git/HTTP, very specific
 
     # Wiki obj_type normalization (API returns short names)
-    _WIKI_TYPE_MAP = {"doc": "docx", "sheet": "sheets", "bitable": "base"}
+    _WIKI_TYPE_MAP = {"doc": "doc", "sheet": "sheets", "bitable": "base"}
+    _DOC_TYPE_HANDLERS = {
+        "doc": "_parse_legacy_doc",
+        "docx": "_parse_docx",
+        "sheets": "_parse_sheets",
+        "base": "_parse_bitable",
+    }
 
     # Attributes that skip processing (structural containers or metadata)
     _SKIP_ATTRS = {"page", "table_cell", "quote_container", "grid", "grid_column"}
@@ -136,6 +272,7 @@ class FeishuAccessor(DataAccessor):
         "divider": "_handle_divider",
         "image": "_handle_image",
         "table": "_table_block_to_markdown",
+        "sheet": "_embedded_sheet_to_markdown",
     }
 
     # Attribute → markdown prefix template for text-bearing blocks.
@@ -169,6 +306,7 @@ class FeishuAccessor(DataAccessor):
         19: "callout",
         22: "divider",
         27: "image",
+        30: "sheet",
         31: "table",
         32: "table_cell",
         34: "quote_container",
@@ -196,6 +334,7 @@ class FeishuAccessor(DataAccessor):
             "callout",
             "divider",
             "image",
+            "sheet",
             "table",
             "table_cell",
             "quote_container",
@@ -245,6 +384,64 @@ class FeishuAccessor(DataAccessor):
         feishu_access_token = kwargs.get("feishu_access_token")
 
         try:
+            doc_type, token = self._parse_feishu_url(source_str)
+            if doc_type == "file":
+                content, content_type, filename = await asyncio.to_thread(
+                    self._download_drive_file,
+                    token,
+                    feishu_access_token=feishu_access_token,
+                )
+                local_path = self._write_temp_drive_file(
+                    token,
+                    content,
+                    content_type,
+                    filename_hint=filename,
+                )
+                return LocalResource(
+                    path=local_path,
+                    source_type=SourceType.FEISHU,
+                    original_source=source_str,
+                    meta={
+                        "feishu_doc_type": doc_type,
+                        "feishu_token": token,
+                        "original_filename": local_path.name,
+                        "_cleanup_path": str(local_path.parent),
+                    },
+                    is_temporary=True,
+                )
+
+            if doc_type == "folder":
+                temp_dir = Path(tempfile.mkdtemp(prefix="ov_feishu_folder_"))
+                skipped_items: list[dict[str, Any]] = []
+                folder_name = await asyncio.to_thread(
+                    self._drive_folder_display_name,
+                    token,
+                    feishu_access_token=feishu_access_token,
+                )
+                try:
+                    await self._materialize_drive_folder(
+                        token,
+                        temp_dir,
+                        feishu_access_token=feishu_access_token,
+                        skipped_items=skipped_items,
+                        strict=bool(kwargs.get("strict", False)),
+                    )
+                except Exception:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    raise
+                return LocalResource(
+                    path=temp_dir,
+                    source_type=SourceType.FEISHU,
+                    original_source=source_str,
+                    meta={
+                        "feishu_doc_type": doc_type,
+                        "feishu_token": token,
+                        "original_filename": _safe_path_segment(folder_name, fallback=token),
+                        "feishu_folder_skipped_items": skipped_items,
+                    },
+                    is_temporary=True,
+                )
+
             # Fetch the document and convert to Markdown
             doc = await self._fetch_document(
                 source_str,
@@ -257,6 +454,7 @@ class FeishuAccessor(DataAccessor):
                 self._resolve_image_refs,
                 doc.markdown_content,
                 feishu_access_token=feishu_access_token,
+                media_download_extras=doc.media_download_extras,
             )
 
             # Build metadata
@@ -303,6 +501,149 @@ class FeishuAccessor(DataAccessor):
             logger.error(f"[FeishuAccessor] Failed to access {source}: {e}", exc_info=True)
             raise
 
+    async def preflight_source(
+        self,
+        source: Union[str, Path],
+        *,
+        feishu_access_token: Optional[str] = None,
+    ) -> FeishuSourcePreflight:
+        """Resolve lightweight source identity and root permission before enqueueing."""
+        return await asyncio.to_thread(
+            self._preflight_source_sync,
+            str(source),
+            feishu_access_token,
+        )
+
+    def _preflight_source_sync(
+        self,
+        url: str,
+        feishu_access_token: Optional[str] = None,
+    ) -> FeishuSourcePreflight:
+        doc_type, token = self._parse_feishu_url(url)
+        query = parse_qs(urlparse(url).query)
+        table_id = (query.get("table") or [None])[0]
+        view_id = (query.get("view") or [None])[0]
+
+        if doc_type == "wiki":
+            real_type, real_token, title = self._resolve_wiki_node(
+                token,
+                feishu_access_token,
+            )
+            if real_type != "base":
+                table_id = view_id = None
+            self._probe_document_permission(
+                real_type,
+                real_token,
+                feishu_access_token=feishu_access_token,
+                table_id=table_id,
+                view_id=view_id,
+            )
+            source_name = None
+            if title:
+                scope = "/".join(value for value in (table_id, view_id) if value)
+                source_name = _title_as_filename(f"{title} ({scope})" if scope else title)
+            return FeishuSourcePreflight(
+                doc_type=real_type,
+                token=real_token,
+                source_name=source_name,
+                source_format="file",
+            )
+
+        if doc_type == "folder":
+            name = self._get_drive_folder_name(
+                token,
+                feishu_access_token=feishu_access_token,
+            )
+            self._probe_drive_folder_children(
+                token,
+                feishu_access_token=feishu_access_token,
+            )
+            return FeishuSourcePreflight(
+                doc_type=doc_type,
+                token=token,
+                source_name=_safe_path_segment(name or token, fallback=token),
+                source_format="directory",
+            )
+
+        return FeishuSourcePreflight(
+            doc_type=doc_type,
+            token=token,
+            source_name=self._preflight_document_source_name(
+                doc_type,
+                token,
+                feishu_access_token=feishu_access_token,
+                table_id=table_id,
+                view_id=view_id,
+            ),
+            source_format="file",
+        )
+
+    def _preflight_document_source_name(
+        self,
+        doc_type: str,
+        token: str,
+        *,
+        feishu_access_token: Optional[str],
+        table_id: Optional[str],
+        view_id: Optional[str],
+    ) -> Optional[str]:
+        if doc_type == "doc":
+            metadata = self._fetch_legacy_doc_metadata(
+                token,
+                feishu_access_token=feishu_access_token,
+            )
+            title = metadata.get("title") or None
+            return _title_as_filename(str(title)) if title else None
+        if doc_type == "docx":
+            self._probe_docx_document(token, feishu_access_token=feishu_access_token)
+            return None
+        if doc_type == "sheets":
+            metadata = self._fetch_spreadsheet_metadata(
+                token,
+                feishu_access_token=feishu_access_token,
+            )
+            title = (metadata.get("properties") or {}).get("title") or "Spreadsheet"
+            return _title_as_filename(title)
+        if doc_type == "base":
+            if view_id and not table_id:
+                raise ValueError("Feishu Base URL with 'view' must also include 'table'")
+            if table_id:
+                self._probe_bitable_table(
+                    token,
+                    table_id,
+                    view_id=view_id,
+                    feishu_access_token=feishu_access_token,
+                )
+                return f"{table_id} ({view_id})" if view_id else table_id
+            tables = self._list_bitable_tables(
+                token,
+                feishu_access_token=feishu_access_token,
+            )
+            return f"Bitable ({len(tables)} tables)"
+        if doc_type == "file":
+            return None
+        raise ValueError(
+            f"Unsupported Feishu document type: {doc_type}. "
+            f"Supported: {list(self._DOC_TYPE_HANDLERS)}"
+        )
+
+    def _probe_document_permission(
+        self,
+        doc_type: str,
+        token: str,
+        *,
+        feishu_access_token: Optional[str],
+        table_id: Optional[str] = None,
+        view_id: Optional[str] = None,
+    ) -> None:
+        self._preflight_document_source_name(
+            doc_type,
+            token,
+            feishu_access_token=feishu_access_token,
+            table_id=table_id,
+            view_id=view_id,
+        )
+
     async def _fetch_document(
         self,
         url: str,
@@ -312,11 +653,15 @@ class FeishuAccessor(DataAccessor):
         """
         Fetch a Feishu document and convert to Markdown.
 
-        This method extracts and adapts the logic from FeishuParser.parse().
+        The fetched document is materialized as Markdown for the standard parser chain.
         """
         doc_type, token = self._parse_feishu_url(url)
+        query = parse_qs(urlparse(url).query)
+        table_id = (query.get("table") or [None])[0]
+        view_id = (query.get("view") or [None])[0]
         title = None
         meta = {}
+        media_download_extras: _MediaDownloadExtras = {}
 
         if doc_type == "wiki":
             # Resolve wiki node to actual document type
@@ -328,24 +673,43 @@ class FeishuAccessor(DataAccessor):
             doc_type, token = real_type, real_token
             meta["wiki_resolved"] = True
 
-        # Only docx is supported
-        if doc_type != "docx":
+        if doc_type != "base":
+            table_id = view_id = None
+
+        handler_name = self._DOC_TYPE_HANDLERS.get(doc_type)
+        if handler_name is None:
             raise ValueError(
                 f"Unsupported Feishu document type: {doc_type}. "
-                f"Only docx is supported in this version."
+                f"Supported: {list(self._DOC_TYPE_HANDLERS)}"
             )
 
-        # Call the handler (in thread pool since lark-oapi is sync)
+        handler_kwargs = {}
+        if doc_type == "base":
+            handler_kwargs = {
+                "table_id": table_id,
+                "view_id": view_id,
+                "media_download_extras": media_download_extras,
+            }
+        elif doc_type == "sheets":
+            handler_kwargs = {"media_download_extras": media_download_extras}
+
+        # Feishu's SDK is synchronous; keep it off the event loop.
         markdown, doc_title = await asyncio.to_thread(
-            self._parse_docx,
+            getattr(self, handler_name),
             token,
             feishu_access_token,
+            **handler_kwargs,
         )
 
         if title:
-            doc_title = title
+            scope = "/".join(value for value in (table_id, view_id) if value)
+            doc_title = f"{title} ({scope})" if scope else title
 
         meta["original_url"] = url
+        if table_id:
+            meta["feishu_table_id"] = table_id
+        if view_id:
+            meta["feishu_view_id"] = view_id
 
         return FeishuDocument(
             doc_type=doc_type,
@@ -353,6 +717,7 @@ class FeishuAccessor(DataAccessor):
             markdown_content=markdown,
             title=doc_title,
             meta=meta,
+            media_download_extras=media_download_extras,
         )
 
     @staticmethod
@@ -360,15 +725,17 @@ class FeishuAccessor(DataAccessor):
         """Check if URL is a Feishu/Lark cloud document."""
         parsed = urlparse(url)
         host = (parsed.hostname or "").lower().rstrip(".")
-        path = parsed.path
+        path_parts = [p for p in parsed.path.split("/") if p]
         is_feishu_domain = any(
             host == allowed_host or host.endswith(f".{allowed_host}")
             for allowed_host in ("feishu.cn", "larksuite.com", "larkoffice.com")
         )
-        has_doc_path = any(
-            path == f"/{t}" or path.startswith(f"/{t}/") for t in ("docx", "wiki", "sheets", "base")
-        )
-        return is_feishu_domain and has_doc_path
+        if not is_feishu_domain or len(path_parts) < 2:
+            return False
+        has_doc_path = path_parts[0] in _FEISHU_DOC_PATH_TYPES
+        has_drive_folder_path = len(path_parts) >= 3 and path_parts[:2] == ["drive", "folder"]
+        has_file_path = path_parts[0] == "file"
+        return is_feishu_domain and (has_doc_path or has_drive_folder_path or has_file_path)
 
     @staticmethod
     def _parse_feishu_url(url: str) -> Tuple[str, str]:
@@ -382,9 +749,495 @@ class FeishuAccessor(DataAccessor):
         path_parts = [p for p in parsed.path.split("/") if p]
         if len(path_parts) < 2:
             raise ValueError(f"Cannot parse Feishu URL: {url}")
-        doc_type = path_parts[0]  # docx, wiki
+        if len(path_parts) >= 3 and path_parts[:2] == ["drive", "folder"]:
+            return "folder", path_parts[2]
+        if path_parts[0] == "file":
+            return "file", path_parts[1]
+        doc_type = "doc" if path_parts[0] in {"doc", "docs"} else path_parts[0]
         token = path_parts[1]
         return doc_type, token
+
+    async def _materialize_drive_folder(
+        self,
+        folder_token: str,
+        target_dir: Path,
+        *,
+        feishu_access_token: Optional[str] = None,
+        _seen: Optional[set[str]] = None,
+        skipped_items: Optional[list[dict[str, Any]]] = None,
+        strict: bool = False,
+    ) -> None:
+        """Expand a Feishu Drive folder into a local directory tree."""
+        target_dir.mkdir(parents=True, exist_ok=True)
+        seen = _seen or set()
+        if folder_token in seen:
+            logger.warning("[FeishuAccessor] Skipping recursive Drive folder %s", folder_token)
+            return
+        seen.add(folder_token)
+
+        try:
+            children = await asyncio.to_thread(
+                self._list_drive_folder_children,
+                folder_token,
+                feishu_access_token=feishu_access_token,
+            )
+            for item in children:
+                item_type, item_token, item_name, item_url = self._normalize_drive_item(item)
+                if not item_token:
+                    logger.warning("[FeishuAccessor] Skipping Drive item without token: %s", item)
+                    continue
+
+                if item_type == "folder":
+                    folder_name = _safe_path_segment(item_name or item_token, fallback=item_token)
+                    child_dir = self._unique_child_path(target_dir, folder_name)
+                    try:
+                        await self._materialize_drive_folder(
+                            item_token,
+                            child_dir,
+                            feishu_access_token=feishu_access_token,
+                            _seen=seen,
+                            skipped_items=skipped_items,
+                            strict=strict,
+                        )
+                    except Exception as exc:
+                        shutil.rmtree(child_dir, ignore_errors=True)
+                        self._record_skipped_drive_item(
+                            skipped_items,
+                            item_type=item_type,
+                            token=item_token,
+                            name=item_name,
+                            target_dir=target_dir,
+                            error=exc,
+                        )
+                        if strict:
+                            raise
+                    continue
+
+                doc_path_type = _FEISHU_DRIVE_DOC_TYPES.get(item_type)
+                if doc_path_type:
+                    try:
+                        url = item_url or self._build_feishu_doc_url(doc_path_type, item_token)
+                        doc = await self._fetch_document(
+                            url,
+                            feishu_access_token=feishu_access_token,
+                        )
+                        markdown_content, downloaded_images = await asyncio.to_thread(
+                            self._resolve_image_refs,
+                            doc.markdown_content,
+                            feishu_access_token=feishu_access_token,
+                            media_download_extras=doc.media_download_extras,
+                        )
+                        doc_name = _safe_path_segment(
+                            item_name or doc.title or item_token,
+                            fallback=item_token,
+                        )
+                        markdown_path = self._unique_child_path(
+                            target_dir,
+                            self._markdown_file_name(doc_name),
+                        )
+                        markdown_path.write_text(markdown_content, encoding="utf-8")
+                        for rel_path, image_bytes in downloaded_images.items():
+                            image_path = markdown_path.parent / rel_path
+                            image_path.parent.mkdir(parents=True, exist_ok=True)
+                            image_path.write_bytes(image_bytes)
+                    except Exception as exc:
+                        self._record_skipped_drive_item(
+                            skipped_items,
+                            item_type=item_type,
+                            token=item_token,
+                            name=item_name,
+                            target_dir=target_dir,
+                            error=exc,
+                        )
+                        if strict:
+                            raise
+                    continue
+
+                if item_type == "file":
+                    try:
+                        content, content_type, downloaded_name = await asyncio.to_thread(
+                            self._download_drive_file,
+                            item_token,
+                            feishu_access_token=feishu_access_token,
+                            filename_hint=item_name,
+                        )
+                        file_name = self._drive_file_name(
+                            item_token,
+                            content,
+                            content_type,
+                            filename_hint=downloaded_name or item_name,
+                        )
+                        file_path = self._unique_child_path(target_dir, file_name)
+                        file_path.write_bytes(content)
+                    except Exception as exc:
+                        self._record_skipped_drive_item(
+                            skipped_items,
+                            item_type=item_type,
+                            token=item_token,
+                            name=item_name,
+                            target_dir=target_dir,
+                            error=exc,
+                        )
+                        if strict:
+                            raise
+                    continue
+
+                error = ValueError(f"Unsupported Feishu Drive item type: {item_type}")
+                self._record_skipped_drive_item(
+                    skipped_items,
+                    item_type=item_type,
+                    token=item_token,
+                    name=item_name,
+                    target_dir=target_dir,
+                    error=error,
+                )
+                if strict:
+                    raise error
+
+        finally:
+            seen.discard(folder_token)
+
+    @staticmethod
+    def _record_skipped_drive_item(
+        skipped_items: Optional[list[dict[str, Any]]],
+        *,
+        item_type: str,
+        token: str,
+        name: str,
+        target_dir: Path,
+        error: Exception,
+    ) -> None:
+        message = str(error).replace("\n", " ")
+        logger.warning(
+            "[FeishuAccessor] Skipping Drive %s %s under %s: %s",
+            item_type,
+            token,
+            target_dir,
+            message,
+        )
+        if skipped_items is None:
+            return
+        skipped_items.append(
+            {
+                "path": str(target_dir / _safe_path_segment(name or token, fallback=token)),
+                "name": name or token,
+                "type": item_type,
+                "token": token,
+                "reason": message,
+            }
+        )
+
+    def _fetch_drive_folder_children_page(
+        self,
+        folder_token: str,
+        *,
+        feishu_access_token: Optional[str] = None,
+        page_token: Optional[str] = None,
+        page_size: int = 200,
+    ) -> tuple[List[Any], bool, Optional[str]]:
+        import lark_oapi as lark
+
+        client = self._get_client(use_user_token=bool(feishu_access_token))
+        token_type = (
+            lark.AccessTokenType.USER if feishu_access_token else lark.AccessTokenType.TENANT
+        )
+        raw_req = (
+            lark.BaseRequest.builder()
+            .http_method(lark.HttpMethod.GET)
+            .uri("/open-apis/drive/v1/files")
+            .token_types({token_type})
+            .build()
+        )
+        raw_req.add_query("folder_token", folder_token)
+        raw_req.add_query("page_size", page_size)
+        if page_token:
+            raw_req.add_query("page_token", page_token)
+
+        response = self._call_api(client.request, raw_req, feishu_access_token)
+        if not response.success():
+            _raise_from_lark_response(
+                response,
+                operation=f"list Drive folder {folder_token}",
+                resource=folder_token,
+            )
+
+        data = self._raw_response_data(response)
+        items = _getattr_safe(data, "files", None) or _getattr_safe(data, "items", None) or []
+        has_more = bool(_getattr_safe(data, "has_more", False))
+        next_page_token = _getattr_safe(data, "next_page_token", None) or _getattr_safe(
+            data,
+            "page_token",
+            None,
+        )
+        return list(items), has_more, next_page_token
+
+    def _list_drive_folder_children(
+        self,
+        folder_token: str,
+        *,
+        feishu_access_token: Optional[str] = None,
+    ) -> List[Any]:
+        """List direct children under a Feishu Drive folder token."""
+        all_children: List[Any] = []
+        page_token = None
+        while True:
+            items, has_more, page_token = self._fetch_drive_folder_children_page(
+                folder_token,
+                feishu_access_token=feishu_access_token,
+                page_token=page_token,
+            )
+            all_children.extend(items)
+
+            if not has_more:
+                break
+            if not page_token:
+                raise RuntimeError(
+                    f"Feishu returned more Drive folder items for {folder_token} "
+                    "without a page token"
+                )
+
+        return all_children
+
+    def _probe_drive_folder_children(
+        self,
+        folder_token: str,
+        *,
+        feishu_access_token: Optional[str] = None,
+    ) -> None:
+        self._fetch_drive_folder_children_page(
+            folder_token,
+            feishu_access_token=feishu_access_token,
+            page_size=1,
+        )
+
+    def _drive_folder_display_name(
+        self,
+        folder_token: str,
+        *,
+        feishu_access_token: Optional[str] = None,
+    ) -> str:
+        """Best-effort readable folder name for resource roots."""
+        try:
+            name = self._get_drive_folder_name(
+                folder_token,
+                feishu_access_token=feishu_access_token,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[FeishuAccessor] Falling back to Drive folder token %s as name: %s",
+                folder_token,
+                exc,
+            )
+            return folder_token
+        return name or folder_token
+
+    def _get_drive_folder_name(
+        self,
+        folder_token: str,
+        *,
+        feishu_access_token: Optional[str] = None,
+    ) -> Optional[str]:
+        """Fetch a Feishu Drive folder display name by folder token."""
+        import lark_oapi as lark
+
+        client = self._get_client(use_user_token=bool(feishu_access_token))
+        token_type = (
+            lark.AccessTokenType.USER if feishu_access_token else lark.AccessTokenType.TENANT
+        )
+        raw_req = (
+            lark.BaseRequest.builder()
+            .http_method(lark.HttpMethod.GET)
+            .uri(f"/open-apis/drive/explorer/v2/folder/{folder_token}/meta")
+            .token_types({token_type})
+            .build()
+        )
+        response = self._call_api(client.request, raw_req, feishu_access_token)
+        if not response.success():
+            _raise_from_lark_response(
+                response,
+                operation=f"fetch Drive folder metadata {folder_token}",
+                resource=folder_token,
+            )
+
+        data = self._raw_response_data(response)
+        folder_meta = _getattr_safe(data, "folder", None) or _getattr_safe(data, "meta", None)
+        name = _getattr_safe(data, "name", None) or _getattr_safe(folder_meta, "name", None)
+        return str(name) if name else None
+
+    def _download_drive_file(
+        self,
+        file_token: str,
+        *,
+        feishu_access_token: Optional[str] = None,
+        filename_hint: Optional[str] = None,
+    ) -> Tuple[bytes, Optional[str], Optional[str]]:
+        """Download a Feishu Drive binary file by file token."""
+        import lark_oapi as lark
+
+        client = self._get_client(use_user_token=bool(feishu_access_token))
+        token_type = (
+            lark.AccessTokenType.USER if feishu_access_token else lark.AccessTokenType.TENANT
+        )
+        raw_req = (
+            lark.BaseRequest.builder()
+            .http_method(lark.HttpMethod.GET)
+            .uri(f"/open-apis/drive/v1/files/{file_token}/download")
+            .token_types({token_type})
+            .build()
+        )
+        response = self._call_api(client.request, raw_req, feishu_access_token)
+        if not response.success():
+            _raise_from_lark_response(
+                response,
+                operation=f"download Drive file {file_token}",
+                resource=file_token,
+            )
+
+        raw = getattr(response, "raw", None)
+        content = getattr(raw, "content", None)
+        if content is None:
+            raise OpenVikingError(
+                f"Feishu Drive file download returned empty content: {file_token}",
+                code="NOT_FOUND",
+                details={"operation": "download Drive file", "resource": file_token},
+            )
+        if isinstance(content, str):
+            content = content.encode("utf-8")
+
+        content_type = self._response_content_type(raw)
+        filename = self._filename_from_content_disposition(
+            self._response_header(raw, "content-disposition")
+        )
+        return content, content_type, filename or filename_hint
+
+    def _write_temp_drive_file(
+        self,
+        file_token: str,
+        content: bytes,
+        content_type: Optional[str],
+        *,
+        filename_hint: Optional[str] = None,
+    ) -> Path:
+        filename = self._drive_file_name(
+            file_token,
+            content,
+            content_type,
+            filename_hint=filename_hint,
+        )
+        temp_dir = Path(tempfile.mkdtemp(prefix="ov_feishu_file_"))
+        path = temp_dir / filename
+        path.write_bytes(content)
+        return path
+
+    @staticmethod
+    def _raw_response_data(response: Any) -> Any:
+        data = getattr(response, "data", None)
+        if data is not None:
+            return data
+        raw_content = getattr(getattr(response, "raw", None), "content", None)
+        if not raw_content:
+            return {}
+        if isinstance(raw_content, bytes):
+            raw_content = raw_content.decode("utf-8")
+        return json.loads(raw_content).get("data", {})
+
+    @classmethod
+    def _normalize_drive_item(cls, item: Any) -> Tuple[str, str, str, str]:
+        item_type = str(_getattr_safe(item, "type", "") or "").lower()
+        token = str(_getattr_safe(item, "token", "") or "")
+        name = str(_getattr_safe(item, "name", "") or "")
+        url = str(_getattr_safe(item, "url", "") or "")
+        shortcut_info = _getattr_safe(item, "shortcut_info", None)
+        if shortcut_info:
+            item_type = str(
+                _getattr_safe(shortcut_info, "target_type", item_type) or item_type
+            ).lower()
+            token = str(_getattr_safe(shortcut_info, "target_token", token) or token)
+        return item_type, token, name, url
+
+    @staticmethod
+    def _build_feishu_doc_url(doc_type: str, token: str) -> str:
+        if doc_type == "doc":
+            doc_type = "docs"
+        return f"https://open.feishu.cn/{doc_type}/{token}"
+
+    @staticmethod
+    def _unique_child_path(parent: Path, name: str) -> Path:
+        path = parent / _safe_path_segment(name)
+        if not path.exists():
+            return path
+        suffix = path.suffix
+        stem = path.stem
+        for index in range(2, 10000):
+            candidate = parent / _numbered_path_segment(stem, suffix, index)
+            if not candidate.exists():
+                return candidate
+        raise RuntimeError(f"Unable to allocate unique path under {parent}")
+
+    @classmethod
+    def _drive_file_name(
+        cls,
+        file_token: str,
+        content: bytes,
+        content_type: Optional[str],
+        *,
+        filename_hint: Optional[str] = None,
+    ) -> str:
+        raw_name = filename_hint or file_token
+        if Path(raw_name).suffix:
+            return _safe_path_segment(raw_name, fallback=file_token)
+        ext = cls._guess_drive_file_ext(content, content_type)
+        return _safe_path_segment(f"{raw_name}{ext}", fallback=f"{file_token}{ext}")
+
+    @staticmethod
+    def _markdown_file_name(name: str) -> str:
+        if str(name).lower().endswith((".md", ".markdown")):
+            return _safe_path_segment(name)
+        return _safe_path_segment(f"{name}.md")
+
+    @staticmethod
+    def _guess_drive_file_ext(content: bytes, content_type: Optional[str]) -> str:
+        if content.startswith(b"%PDF-"):
+            return ".pdf"
+        if (
+            content.startswith(b"PK\x03\x04")
+            or content.startswith(b"PK\x05\x06")
+            or content.startswith(b"PK\x07\x08")
+        ):
+            return ".zip"
+        if content.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"):
+            return ".doc"
+        if content_type:
+            ext = get_preferred_extension(content_type)
+            if ext:
+                return ext
+        return ".bin"
+
+    @staticmethod
+    def _response_header(raw: Any, name: str) -> Optional[str]:
+        headers = getattr(raw, "headers", None)
+        if not headers:
+            return None
+        try:
+            get = headers.get
+        except AttributeError:
+            return None
+        return get(name) or get(name.title()) or get(name.lower())
+
+    @staticmethod
+    def _filename_from_content_disposition(content_disposition: Optional[str]) -> Optional[str]:
+        if not content_disposition:
+            return None
+        utf8_match = re.search(r"filename\*=UTF-8''([^;]+)", content_disposition, re.I)
+        if utf8_match:
+            return unquote(utf8_match.group(1))
+        quoted_match = re.search(r'filename="([^"]+)"', content_disposition, re.I)
+        if quoted_match:
+            return quoted_match.group(1)
+        simple_match = re.search(r"filename=([^;]+)", content_disposition, re.I)
+        if simple_match:
+            return simple_match.group(1).strip()
+        return None
 
     # ========== Configuration & Client ==========
 
@@ -434,6 +1287,10 @@ class FeishuAccessor(DataAccessor):
 
         return RequestOption.builder().user_access_token(feishu_access_token).build()
 
+    def _call_api(self, method, request, feishu_access_token: Optional[str] = None):
+        option = self._user_request_option(feishu_access_token)
+        return method(request) if option is None else method(request, option)
+
     # ========== Wiki Resolution ==========
 
     def _resolve_wiki_node(
@@ -451,11 +1308,11 @@ class FeishuAccessor(DataAccessor):
 
         client = self._get_client(use_user_token=bool(feishu_access_token))
         request = GetNodeSpaceRequest.builder().token(token).build()
-        option = self._user_request_option(feishu_access_token)
-        if option is None:
-            response = client.wiki.v2.space.get_node(request)
-        else:
-            response = client.wiki.v2.space.get_node(request, option)
+        response = self._call_api(
+            client.wiki.v2.space.get_node,
+            request,
+            feishu_access_token,
+        )
         if not response.success():
             _raise_from_lark_response(
                 response,
@@ -471,6 +1328,88 @@ class FeishuAccessor(DataAccessor):
         doc_type = self._WIKI_TYPE_MAP.get(obj_type, obj_type)
 
         return doc_type, obj_token, title
+
+    # ========== Legacy Doc Parsing ==========
+
+    def _parse_legacy_doc(
+        self,
+        doc_token: str,
+        feishu_access_token: Optional[str] = None,
+    ) -> Tuple[str, str]:
+        metadata = self._fetch_legacy_doc_metadata(
+            doc_token,
+            feishu_access_token=feishu_access_token,
+        )
+        title = str(metadata.get("title") or "Untitled")
+        content = self._fetch_legacy_doc_raw_content(
+            doc_token,
+            feishu_access_token=feishu_access_token,
+        ).strip()
+
+        if title and title != "Untitled":
+            markdown = f"# {title}\n\n{content}" if content else f"# {title}"
+        else:
+            markdown = content
+        return markdown, title
+
+    def _fetch_legacy_doc_metadata(
+        self,
+        doc_token: str,
+        *,
+        feishu_access_token: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        import lark_oapi as lark
+
+        client = self._get_client(use_user_token=bool(feishu_access_token))
+        token_type = (
+            lark.AccessTokenType.USER if feishu_access_token else lark.AccessTokenType.TENANT
+        )
+        request = (
+            lark.BaseRequest.builder()
+            .http_method(lark.HttpMethod.GET)
+            .uri(f"/open-apis/doc/v2/meta/{doc_token}")
+            .token_types({token_type})
+            .build()
+        )
+        response = self._call_api(client.request, request, feishu_access_token)
+        if not response.success():
+            _raise_from_lark_response(
+                response,
+                operation=f"fetch legacy document metadata for {doc_token}",
+                resource=doc_token,
+            )
+        data = self._raw_response_data(response)
+        return data if isinstance(data, dict) else {}
+
+    def _fetch_legacy_doc_raw_content(
+        self,
+        doc_token: str,
+        *,
+        feishu_access_token: Optional[str] = None,
+    ) -> str:
+        import lark_oapi as lark
+
+        client = self._get_client(use_user_token=bool(feishu_access_token))
+        token_type = (
+            lark.AccessTokenType.USER if feishu_access_token else lark.AccessTokenType.TENANT
+        )
+        request = (
+            lark.BaseRequest.builder()
+            .http_method(lark.HttpMethod.GET)
+            .uri(f"/open-apis/doc/v2/{doc_token}/raw_content")
+            .token_types({token_type})
+            .build()
+        )
+        response = self._call_api(client.request, request, feishu_access_token)
+        if not response.success():
+            _raise_from_lark_response(
+                response,
+                operation=f"fetch legacy document content for {doc_token}",
+                resource=doc_token,
+            )
+        data = self._raw_response_data(response)
+        content = _getattr_safe(data, "content", "")
+        return str(content or "")
 
     # ========== Docx Parsing ==========
 
@@ -512,7 +1451,11 @@ class FeishuAccessor(DataAccessor):
                 continue  # Skip page container
 
             line = self._block_to_markdown(
-                block, block_map, ordered_counter, document_id=document_id
+                block,
+                block_map,
+                ordered_counter,
+                document_id=document_id,
+                feishu_access_token=feishu_access_token,
             )
             if line is not None:
                 markdown_lines.append(line)
@@ -523,6 +1466,35 @@ class FeishuAccessor(DataAccessor):
             markdown = f"# {doc_title}\n\n{markdown}"
 
         return markdown, doc_title
+
+    def _probe_docx_document(
+        self,
+        document_id: str,
+        *,
+        feishu_access_token: Optional[str] = None,
+    ) -> None:
+        """Check document block read permission without loading the whole document."""
+        from lark_oapi.api.docx.v1 import ListDocumentBlockRequest
+
+        client = self._get_client(use_user_token=bool(feishu_access_token))
+        request = (
+            ListDocumentBlockRequest.builder()
+            .document_id(document_id)
+            .page_size(1)
+            .document_revision_id(-1)
+            .build()
+        )
+        response = self._call_api(
+            client.docx.v1.document_block.list,
+            request,
+            feishu_access_token,
+        )
+        if not response.success():
+            _raise_from_lark_response(
+                response,
+                operation=f"probe document {document_id}",
+                resource=document_id,
+            )
 
     def _fetch_all_blocks(
         self,
@@ -548,11 +1520,11 @@ class FeishuAccessor(DataAccessor):
                 builder = builder.page_token(page_token)
 
             request = builder.build()
-            option = self._user_request_option(feishu_access_token)
-            if option is None:
-                response = client.docx.v1.document_block.list(request)
-            else:
-                response = client.docx.v1.document_block.list(request, option)
+            response = self._call_api(
+                client.docx.v1.document_block.list,
+                request,
+                feishu_access_token,
+            )
 
             if not response.success():
                 _raise_from_lark_response(
@@ -592,7 +1564,12 @@ class FeishuAccessor(DataAccessor):
         return None
 
     def _block_to_markdown(
-        self, block, block_map: Dict, ordered_counter: Dict[str, int], document_id: str = ""
+        self,
+        block,
+        block_map: Dict,
+        ordered_counter: Dict[str, int],
+        document_id: str = "",
+        feishu_access_token: Optional[str] = None,
     ) -> Optional[str]:
         """Convert a single SDK block object to markdown string.
 
@@ -618,7 +1595,12 @@ class FeishuAccessor(DataAccessor):
         # Special blocks (non-text: divider, image, table)
         special_handler = self._SPECIAL_BLOCK_HANDLERS.get(attr)
         if special_handler:
-            return getattr(self, special_handler)(block, block_map, document_id=document_id)
+            return getattr(self, special_handler)(
+                block,
+                block_map,
+                document_id=document_id,
+                feishu_access_token=feishu_access_token,
+            )
 
         # --- Text-bearing blocks: extract elements, apply formatting ---
         content_obj = getattr(block, attr, None)
@@ -725,6 +1707,7 @@ class FeishuAccessor(DataAccessor):
         file_token: str,
         *,
         feishu_access_token: Optional[str] = None,
+        extra: Optional[str] = None,
     ) -> Optional[Tuple[bytes, Optional[str]]]:
         """Download an image from Feishu Drive API by file token.
 
@@ -747,12 +1730,10 @@ class FeishuAccessor(DataAccessor):
             .token_types({token_type})
             .build()
         )
-        option = self._user_request_option(feishu_access_token)
-
+        if extra:
+            raw_req.add_query("extra", extra)
         try:
-            raw_resp = (
-                client.request(raw_req) if option is None else client.request(raw_req, option)
-            )
+            raw_resp = self._call_api(client.request, raw_req, feishu_access_token)
         except Exception as exc:
             logger.warning("[FeishuAccessor] Error downloading image %s: %s", file_token, exc)
             return None
@@ -797,6 +1778,7 @@ class FeishuAccessor(DataAccessor):
         markdown: str,
         *,
         feishu_access_token: Optional[str] = None,
+        media_download_extras: Optional[_MediaDownloadExtras] = None,
     ) -> Tuple[str, Dict[str, bytes]]:
         """Download Feishu image refs and rewrite them to local relative paths."""
         config = self._get_config()
@@ -814,10 +1796,25 @@ class FeishuAccessor(DataAccessor):
             if file_token in token_to_rel_path:
                 continue
 
-            downloaded = self._download_image(
-                file_token,
-                feishu_access_token=feishu_access_token,
-            )
+            configured_extras = (media_download_extras or {}).get(file_token)
+            if configured_extras:
+                # Try protected contexts before the legacy token-only fallback.
+                extras: List[Optional[str]] = list(
+                    dict.fromkeys(extra for extra in configured_extras if extra)
+                )[:_MAX_MEDIA_DOWNLOAD_CONTEXTS]
+                extras.append(None)
+            else:
+                extras = [None]
+
+            downloaded = None
+            for extra in extras:
+                downloaded = self._download_image(
+                    file_token,
+                    feishu_access_token=feishu_access_token,
+                    extra=extra,
+                )
+                if downloaded is not None:
+                    break
             if downloaded is None:
                 continue
             image_bytes, content_type = downloaded
@@ -936,8 +1933,6 @@ class FeishuAccessor(DataAccessor):
                     row.append("")
             rows.append(row)
 
-        from openviking.parse.base import format_table_to_markdown
-
         return format_table_to_markdown(rows, has_header=True) if rows else None
 
     def _extract_cell_text(self, cell_block, block_map: Dict) -> str:
@@ -956,3 +1951,514 @@ class FeishuAccessor(DataAccessor):
                 if text:
                     texts.append(text)
         return " ".join(texts)
+
+    def _embedded_sheet_to_markdown(
+        self,
+        block,
+        block_map: Dict = None,
+        *,
+        document_id: str = "",
+        feishu_access_token: Optional[str] = None,
+        **_,
+    ) -> Optional[str]:
+        """Convert an embedded spreadsheet block in a docx document."""
+        import lark_oapi as lark
+
+        client = self._get_client(use_user_token=bool(feishu_access_token))
+        token_type = (
+            lark.AccessTokenType.USER if feishu_access_token else lark.AccessTokenType.TENANT
+        )
+        request = (
+            lark.BaseRequest.builder()
+            .http_method(lark.HttpMethod.GET)
+            .uri(
+                f"/open-apis/docx/v1/documents/{document_id or block.parent_id}"
+                f"/blocks/{block.block_id}"
+            )
+            .token_types({token_type})
+            .build()
+        )
+        response = self._call_api(client.request, request, feishu_access_token)
+        if not response.success():
+            logger.warning(
+                "[FeishuAccessor] Failed to inspect embedded sheet %s: code=%s msg=%s",
+                block.block_id,
+                getattr(response, "code", None),
+                getattr(response, "msg", None),
+            )
+            return None
+
+        data = json.loads(response.raw.content)
+        sheet_token = data.get("data", {}).get("block", {}).get("sheet", {}).get("token", "")
+        parts = sheet_token.rsplit("_", 1)
+        if len(parts) != 2:
+            return None
+
+        spreadsheet_token, sheet_id = parts
+        try:
+            rows = self._read_sheet_range(
+                spreadsheet_token,
+                sheet_id,
+                max_rows=100,
+                max_cols=26,
+                feishu_access_token=feishu_access_token,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[FeishuAccessor] Failed to read embedded sheet %s: %s",
+                sheet_token,
+                exc,
+            )
+            return None
+
+        rows = self._trim_empty_columns(rows)
+        return format_table_to_markdown(rows, has_header=True) if rows else None
+
+    @staticmethod
+    def _trim_empty_columns(rows: List[List[str]]) -> List[List[str]]:
+        """Remove trailing columns that are empty in every row."""
+        if not rows:
+            return rows
+        last_col = 0
+        for col in range(max(len(row) for row in rows)):
+            if any(col < len(row) and row[col].strip() for row in rows):
+                last_col = col + 1
+        return [row[:last_col] for row in rows] if last_col else []
+
+    def _parse_sheets(
+        self,
+        token: str,
+        feishu_access_token: Optional[str] = None,
+        *,
+        media_download_extras: Optional[_MediaDownloadExtras] = None,
+    ) -> Tuple[str, str]:
+        """Fetch a Feishu spreadsheet and convert it to Markdown."""
+        config = self._get_config()
+        metadata = self._fetch_spreadsheet_metadata(
+            token,
+            feishu_access_token=feishu_access_token,
+        )
+        title = (metadata.get("properties") or {}).get("title") or "Spreadsheet"
+        sheets = metadata.get("sheets") or []
+        markdown_parts = [f"# {title}", f"**Sheets:** {len(sheets)}"]
+        for sheet in sheets:
+            sheet_id = sheet.get("sheetId") or ""
+            sheet_title = sheet.get("title") or sheet_id
+            parts = [f"## Sheet: {sheet_title}"]
+
+            block_info = sheet.get("blockInfo")
+            if block_info:
+                block_type = block_info.get("blockType") or "unknown"
+                if block_type != "BITABLE_BLOCK":
+                    parts.append(f"*Unsupported sheet block: {block_type}*")
+                else:
+                    block_token = block_info.get("blockToken") or ""
+                    tokens = block_token.rsplit("_", 1)
+                    if len(tokens) != 2 or not all(tokens):
+                        parts.append("*Invalid embedded bitable token*")
+                    else:
+                        bitable, _ = self._parse_bitable(
+                            tokens[0],
+                            feishu_access_token,
+                            table_id=tokens[1],
+                            table_name=sheet_title,
+                            media_download_extras=media_download_extras,
+                        )
+                        parts.append(bitable or "*Empty bitable*")
+                markdown_parts.append("\n\n".join(parts))
+                continue
+
+            row_count = int(sheet.get("rowCount") or 0)
+            col_count = int(sheet.get("columnCount") or 0)
+            if not row_count or not col_count:
+                parts.append("*Empty sheet*")
+                markdown_parts.append("\n\n".join(parts))
+                continue
+
+            parts.append(f"**Dimensions:** {row_count} rows x {col_count} columns")
+            rows_to_read = min(row_count, config.max_rows_per_sheet)
+            rows = self._read_sheet_range(
+                token,
+                sheet_id,
+                rows_to_read,
+                col_count,
+                feishu_access_token=feishu_access_token,
+            )
+            if rows:
+                parts.append(format_table_to_markdown(rows, has_header=True))
+            if row_count > config.max_rows_per_sheet:
+                parts.append(
+                    f"\n*... {row_count - config.max_rows_per_sheet} more rows truncated ...*"
+                )
+            if col_count > 26:
+                parts.append(f"\n*... {col_count - 26} columns after Z omitted ...*")
+            markdown_parts.append("\n\n".join(parts))
+
+        return "\n\n".join(markdown_parts), title
+
+    def _fetch_spreadsheet_metadata(
+        self,
+        token: str,
+        *,
+        feishu_access_token: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        import lark_oapi as lark
+
+        client = self._get_client(use_user_token=bool(feishu_access_token))
+        token_type = (
+            lark.AccessTokenType.USER if feishu_access_token else lark.AccessTokenType.TENANT
+        )
+        metadata_request = (
+            lark.BaseRequest.builder()
+            .http_method(lark.HttpMethod.GET)
+            .uri(f"/open-apis/sheets/v2/spreadsheets/{token}/metainfo")
+            .token_types({token_type})
+            .build()
+        )
+        metadata_response = self._call_api(
+            client.request,
+            metadata_request,
+            feishu_access_token,
+        )
+        if not metadata_response.success():
+            _raise_from_lark_response(
+                metadata_response,
+                operation=f"fetch spreadsheet metadata for {token}",
+                resource=token,
+            )
+        return json.loads(metadata_response.raw.content).get("data", {})
+
+    def _read_sheet_range(
+        self,
+        token: str,
+        sheet_id: str,
+        max_rows: int,
+        max_cols: int,
+        feishu_access_token: Optional[str] = None,
+    ) -> List[List[str]]:
+        """Read a bounded cell range from a Feishu spreadsheet."""
+        import lark_oapi as lark
+
+        client = self._get_client(use_user_token=bool(feishu_access_token))
+        # ponytail: the existing importer reads A:Z only; add chunked ranges if wider
+        # spreadsheet imports become a real requirement.
+        end_col = self._col_number_to_letter(min(max_cols, 26))
+        cell_range = f"{sheet_id}!A1:{end_col}{max_rows}"
+        token_type = (
+            lark.AccessTokenType.USER if feishu_access_token else lark.AccessTokenType.TENANT
+        )
+        request = (
+            lark.BaseRequest.builder()
+            .http_method(lark.HttpMethod.GET)
+            .uri(f"/open-apis/sheets/v2/spreadsheets/{token}/values/{cell_range}")
+            .token_types({token_type})
+            .build()
+        )
+        response = self._call_api(client.request, request, feishu_access_token)
+        if not response.success():
+            _raise_from_lark_response(
+                response,
+                operation=f"read spreadsheet range {cell_range}",
+                resource=token,
+            )
+
+        data = json.loads(response.raw.content)
+        values = data.get("data", {}).get("valueRange", {}).get("values", [])
+        return [[str(cell) if cell is not None else "" for cell in row] for row in values]
+
+    @staticmethod
+    def _col_number_to_letter(number: int) -> str:
+        return chr(ord("A") + number - 1) if 1 <= number <= 26 else "Z"
+
+    def _parse_bitable(
+        self,
+        app_token: str,
+        feishu_access_token: Optional[str] = None,
+        *,
+        table_id: Optional[str] = None,
+        table_name: Optional[str] = None,
+        view_id: Optional[str] = None,
+        media_download_extras: Optional[_MediaDownloadExtras] = None,
+    ) -> Tuple[str, str]:
+        """Fetch a Feishu bitable app and convert it to Markdown."""
+        if view_id and not table_id:
+            raise ValueError("Feishu Base URL with 'view' must also include 'table'")
+
+        from lark_oapi.api.bitable.v1 import (
+            ListAppTableFieldRequest,
+            ListAppTableRecordRequest,
+        )
+
+        client = self._get_client(use_user_token=bool(feishu_access_token))
+        config = self._get_config()
+        if table_id:
+            tables = [(table_id, table_name or table_id)]
+            title = table_name or table_id
+            if view_id:
+                title = f"{title} ({view_id})"
+            markdown_parts = []
+            heading = "###"
+        else:
+            table_models = self._list_bitable_tables(
+                app_token,
+                feishu_access_token=feishu_access_token,
+            )
+            tables = [(table.table_id, table.name or table.table_id) for table in table_models]
+            title = f"Bitable ({len(tables)} tables)"
+            markdown_parts = [f"# {title}"]
+            heading = "##"
+
+        for current_table_id, current_table_name in tables:
+            fields = []
+            page_token = None
+            while True:
+                builder = (
+                    ListAppTableFieldRequest.builder()
+                    .app_token(app_token)
+                    .table_id(current_table_id)
+                    .page_size(100)
+                )
+                if page_token:
+                    builder = builder.page_token(page_token)
+                fields_response = self._call_api(
+                    client.bitable.v1.app_table_field.list,
+                    builder.build(),
+                    feishu_access_token,
+                )
+                if not fields_response.success():
+                    _raise_from_lark_response(
+                        fields_response,
+                        operation=f"list fields for bitable table {current_table_id}",
+                        resource=app_token,
+                    )
+                fields.extend(fields_response.data.items or [])
+                if not getattr(fields_response.data, "has_more", False):
+                    break
+                page_token = getattr(fields_response.data, "page_token", None)
+                if not page_token:
+                    raise RuntimeError(
+                        f"Feishu returned more fields for table {current_table_id} "
+                        "without a page token"
+                    )
+            field_names = [field.field_name for field in fields]
+            field_ids = {
+                field.field_name: field.field_id
+                for field in fields
+                if getattr(field, "field_name", None) and getattr(field, "field_id", None)
+            }
+
+            records = []
+            page_token = None
+            records_truncated = False
+            while len(records) < config.max_records_per_table:
+                remaining = config.max_records_per_table - len(records)
+                builder = (
+                    ListAppTableRecordRequest.builder()
+                    .app_token(app_token)
+                    .table_id(current_table_id)
+                    .page_size(min(remaining, 500))
+                )
+                if view_id:
+                    builder = builder.view_id(view_id)
+                if page_token:
+                    builder = builder.page_token(page_token)
+                records_response = self._call_api(
+                    client.bitable.v1.app_table_record.list,
+                    builder.build(),
+                    feishu_access_token,
+                )
+                if not records_response.success():
+                    _raise_from_lark_response(
+                        records_response,
+                        operation=f"list records for bitable table {current_table_id}",
+                        resource=app_token,
+                    )
+                items = records_response.data.items or []
+                records.extend(items[:remaining])
+                has_more = bool(records_response.data.has_more)
+                if len(items) > remaining:
+                    records_truncated = True
+                    break
+                if not has_more:
+                    break
+                if len(records) >= config.max_records_per_table:
+                    records_truncated = True
+                    break
+                page_token = records_response.data.page_token
+                if not page_token:
+                    raise RuntimeError(
+                        f"Feishu returned more records for table {current_table_id} "
+                        "without a page token"
+                    )
+
+            parts = [f"{heading} {current_table_name}", f"**Records:** {len(records)}"]
+            if field_names and records:
+                rows = [field_names]
+                for record in records:
+                    record_fields = record.fields or {}
+                    row = []
+                    for name in field_names:
+                        value = record_fields.get(name, "")
+                        row.append(self._format_bitable_field(value))
+                        if media_download_extras is not None:
+                            self._collect_bitable_media_extras(
+                                value,
+                                table_id=current_table_id,
+                                field_id=field_ids.get(name),
+                                record_id=getattr(record, "record_id", None),
+                                media_download_extras=media_download_extras,
+                            )
+                    rows.append(row)
+                parts.append(format_table_to_markdown(rows, has_header=True))
+            if records_truncated:
+                parts.append(f"\n*... records truncated at {config.max_records_per_table} ...*")
+            markdown_parts.append("\n\n".join(parts))
+
+        return "\n\n".join(markdown_parts), title
+
+    def _list_bitable_tables(
+        self,
+        app_token: str,
+        *,
+        feishu_access_token: Optional[str] = None,
+    ) -> List[Any]:
+        from lark_oapi.api.bitable.v1 import ListAppTableRequest
+
+        client = self._get_client(use_user_token=bool(feishu_access_token))
+        table_models = []
+        page_token = None
+        while True:
+            builder = ListAppTableRequest.builder().app_token(app_token).page_size(100)
+            if page_token:
+                builder = builder.page_token(page_token)
+            tables_response = self._call_api(
+                client.bitable.v1.app_table.list,
+                builder.build(),
+                feishu_access_token,
+            )
+            if not tables_response.success():
+                _raise_from_lark_response(
+                    tables_response,
+                    operation=f"list bitable tables for {app_token}",
+                    resource=app_token,
+                )
+            table_models.extend(tables_response.data.items or [])
+            if not getattr(tables_response.data, "has_more", False):
+                break
+            page_token = getattr(tables_response.data, "page_token", None)
+            if not page_token:
+                raise RuntimeError("Feishu returned more bitable tables without a page token")
+        return table_models
+
+    def _probe_bitable_table(
+        self,
+        app_token: str,
+        table_id: str,
+        *,
+        view_id: Optional[str] = None,
+        feishu_access_token: Optional[str] = None,
+    ) -> None:
+        from lark_oapi.api.bitable.v1 import (
+            ListAppTableFieldRequest,
+            ListAppTableRecordRequest,
+        )
+
+        client = self._get_client(use_user_token=bool(feishu_access_token))
+        fields_response = self._call_api(
+            client.bitable.v1.app_table_field.list,
+            ListAppTableFieldRequest.builder()
+            .app_token(app_token)
+            .table_id(table_id)
+            .page_size(1)
+            .build(),
+            feishu_access_token,
+        )
+        if not fields_response.success():
+            _raise_from_lark_response(
+                fields_response,
+                operation=f"probe bitable fields for table {table_id}",
+                resource=app_token,
+            )
+
+        record_builder = (
+            ListAppTableRecordRequest.builder()
+            .app_token(app_token)
+            .table_id(table_id)
+            .page_size(1)
+        )
+        if view_id:
+            record_builder = record_builder.view_id(view_id)
+        records_response = self._call_api(
+            client.bitable.v1.app_table_record.list,
+            record_builder.build(),
+            feishu_access_token,
+        )
+        if not records_response.success():
+            _raise_from_lark_response(
+                records_response,
+                operation=f"probe bitable records for table {table_id}",
+                resource=app_token,
+            )
+
+    @classmethod
+    def _collect_bitable_media_extras(
+        cls,
+        value: Any,
+        *,
+        table_id: str,
+        field_id: Optional[str],
+        record_id: Optional[str],
+        media_download_extras: _MediaDownloadExtras,
+    ) -> None:
+        """Collect transient permission contexts for image refs emitted from a cell."""
+        if isinstance(value, list):
+            for item in value:
+                cls._collect_bitable_media_extras(
+                    item,
+                    table_id=table_id,
+                    field_id=field_id,
+                    record_id=record_id,
+                    media_download_extras=media_download_extras,
+                )
+            return
+        if not isinstance(value, dict):
+            return
+
+        file_token = value.get("file_token")
+        name = str(value.get("name") or "image")
+        media_type = value.get("type") or mimetypes.guess_type(name)[0]
+        if not file_token or not str(media_type).lower().startswith("image/"):
+            return
+
+        contexts = media_download_extras.setdefault(str(file_token), [])
+        if field_id and record_id:
+            extra = json.dumps(
+                {
+                    "bitablePerm": {
+                        "tableId": table_id,
+                        "attachments": {field_id: {record_id: [str(file_token)]}},
+                    }
+                },
+                separators=(",", ":"),
+            )
+            context_count = sum(context is not None for context in contexts)
+            if extra not in contexts and context_count < _MAX_MEDIA_DOWNLOAD_CONTEXTS:
+                contexts.append(extra)
+        elif None not in contexts:
+            contexts.append(None)
+
+    @classmethod
+    def _format_bitable_field(cls, value: Any) -> str:
+        """Render the common structured values returned by bitable fields."""
+        if value is None:
+            return ""
+        if isinstance(value, list):
+            return ", ".join(cls._format_bitable_field(item) for item in value)
+        if isinstance(value, dict):
+            file_token = value.get("file_token")
+            name = str(value.get("name") or "image")
+            media_type = value.get("type") or mimetypes.guess_type(name)[0]
+            if file_token and str(media_type).lower().startswith("image/"):
+                return f"![{name}](feishu://image/{file_token})"
+            return str(value.get("text", value.get("name", value)))
+        return str(value)

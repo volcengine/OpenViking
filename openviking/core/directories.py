@@ -24,6 +24,8 @@ if TYPE_CHECKING:
     from openviking.storage import VikingDBManager
     from openviking.storage.viking_fs import VikingFS
 
+from openviking_cli.exceptions import NotFoundError
+
 
 @dataclass
 class DirectoryDefinition:
@@ -198,7 +200,7 @@ class DirectoryInitializer:
         # still protect peer subtrees during normal filesystem mutations, but
         # it must not prevent a fresh user from creating the container that
         # owns those subtrees in the first place.
-        initialization_ctx = replace(ctx, actor_peer_id=None, legacy_agent_id=None)
+        initialization_ctx = replace(ctx, actor_peer_id=None)
         user_tree = PRESET_DIRECTORIES["user"]
         parent_uri = "viking://user"
         count = 0
@@ -308,7 +310,7 @@ class DirectoryInitializer:
             viking_fs = self._get_viking_fs()
             await viking_fs.abstract(uri, ctx=ctx)
             return True
-        except Exception:
+        except (FileNotFoundError, NotFoundError):
             return False
 
     async def _initialize_children(

@@ -8,6 +8,8 @@ use clap::Subcommand;
 use dirs::home_dir;
 use std::fs::OpenOptions;
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 
 /// Crypto subcommands.
@@ -63,9 +65,11 @@ async fn handle_init_key(output_file: Option<PathBuf>) -> Result<()> {
     let hex_key = hex::encode(&key);
 
     // Write to file
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options
         .open(&key_path)
         .map_err(|e| Error::Client(format!("Failed to create key file: {}", e)))?;
 

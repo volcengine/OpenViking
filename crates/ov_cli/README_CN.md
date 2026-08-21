@@ -151,13 +151,25 @@ ov grep "openviking" --uri viking://resources
 
 ### Session 与记忆
 
-- `session new` - 创建 session。
+- `session new` - 创建 session，并可设置事件记忆默认 tags 和自动提交策略。
 - `session list` - 列出 sessions。
 - `session get` - 查看 session 详情。
 - `session get-session-context` - 获取合并后的 session 上下文。
 - `session add-message` / `session add-messages` - 向 session 添加消息。
-- `session commit` - 归档消息并抽取记忆。
+- `session config set` - 更新 session 的可变配置。
+- `session commit` - 归档消息并抽取记忆，可覆盖本次事件 tags。
 - `add-memory` - 一次性创建 session、添加消息并提交，实验特性。
+
+```bash
+ov session new --session-id s1 --event-tags team=search,channel=web \
+  --auto-commit-policy-json '{"message_count_threshold":25}'
+ov session new --session-id s2 --no-auto-commit
+ov session config set s1 --event-tags team=search,channel=app
+ov session config set s1 --auto-commit-policy-json '{"message_count_threshold":25}'
+ov session config set s1 --no-auto-commit
+ov session commit s1 --event-tags team=search,channel=web
+ov session commit s1 --no-event-tags
+```
 
 ### 交互式工具
 
@@ -175,7 +187,7 @@ ov grep "openviking" --uri viking://resources
 - `observer vikingdb` - VikingDB 状态。
 - `observer models` - VLM、embedding 和 rerank 模型状态。
 - `observer retrieval` - 检索质量指标。
-- `observer fs` - 文件系统操作指标。
+- `observer filesystem` - 文件系统操作指标。
 - `observer system` - 整体系统状态。
 
 ### 配置
@@ -199,11 +211,8 @@ ov grep "openviking" --uri viking://resources
 - `snapshot log` - 查看快照历史。
 - `snapshot ignore-get` / `snapshot ignore-set` / `snapshot ignore-delete` - 管理 account `.ovgitignore`。
 
-### 关系与隐私
+### 隐私
 
-- `relations` - 列出资源关系，实验特性。
-- `link` - 创建关系链接，实验特性。
-- `unlink` - 删除关系链接，实验特性。
 - `privacy` - 管理隐私配置分类、目标、版本和 active 配置。
 
 ### 管理员命令
@@ -269,8 +278,8 @@ ov glob "**/*.md" --uri viking://resources
 
 # Session 工作流
 SESSION=$(ov -o json session new | jq -r '.result.session_id')
-ov session add-message --session-id "$SESSION" --role user --content "Hello"
-ov session commit --session-id "$SESSION"
+ov session add-message "$SESSION" --role user --content "Hello"
+ov session commit "$SESSION"
 
 # Watch 任务管理
 ov add-resource https://example.com/docs --to viking://resources/docs --watch-interval 60

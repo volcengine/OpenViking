@@ -142,9 +142,9 @@ class BaseChannel(ABC):
     async def _handle_message(
         self,
         sender_id: str,
-        sender_name: str,
         chat_id: str,
         content: str,
+        sender_name: str | None = None,
         need_reply: bool = True,
         media: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
@@ -156,6 +156,8 @@ class BaseChannel(ABC):
 
         Args:
             sender_id: The sender's identifier.
+            sender_name: The sender's display name; falls back to sender_id
+                downstream when unavailable.
             chat_id: The chat/channel identifier.
             content: Message text content.
             media: Optional list of media URLs.

@@ -9,9 +9,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 import requests
-
-import openviking as ov
-from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
+from openviking_sdk import SyncHTTPClient
 
 
 class Recipe:
@@ -24,13 +22,17 @@ class Recipe:
     3. Return generated answer with sources
     """
 
-    def __init__(self, config_path: str = "./ov.conf", data_path: str = "./data"):
+    def __init__(
+        self,
+        config_path: str = "./ov.conf",
+        server_url: str = "http://127.0.0.1:1933",
+    ):
         """
         Initialize RAG pipeline
 
         Args:
             config_path: Path to config file with LLM settings
-            data_path: Path to OpenViking data directory
+            server_url: OpenViking HTTP server URL
         """
         # Load configuration
         with open(config_path, "r") as f:
@@ -43,8 +45,7 @@ class Recipe:
         self.model = self.vlm_config.get("model")
 
         # Initialize OpenViking client
-        config = OpenVikingConfig.from_dict(self.config_dict)
-        self.client = ov.SyncOpenViking(path=data_path, config=config)
+        self.client = SyncHTTPClient(url=server_url)
         self.client.initialize()
 
     def search(
@@ -74,33 +75,35 @@ class Recipe:
 
         # Extract top results
         search_results = []
-        for _i, resource in enumerate(
-            results.resources[:top_k] + results.memories[:top_k]
-        ):  # ignore SKILLs for mvp
+        resources = results.get("resources", [])[:top_k]
+        memories = results.get("memories", [])[:top_k]
+        for _i, resource in enumerate(resources + memories):  # ignore SKILLs for mvp
+            uri = resource["uri"]
+            score = resource.get("score", 0.0)
             try:
-                content = self.client.read(resource.uri)
+                content = self.client.read(uri)
                 search_results.append(
                     {
-                        "uri": resource.uri,
-                        "score": resource.score,
+                        "uri": uri,
+                        "score": score,
                         "content": content,
                     }
                 )
-                # print(f"  {i + 1}. {resource.uri} (score: {resource.score:.4f})")
+                # print(f"  {i + 1}. {uri} (score: {score:.4f})")
 
             except Exception as e:
                 # Handle directories - read their abstract instead
                 if "is a directory" in str(e):
                     try:
-                        abstract = self.client.abstract(resource.uri)
+                        abstract = self.client.abstract(uri)
                         search_results.append(
                             {
-                                "uri": resource.uri,
-                                "score": resource.score,
+                                "uri": uri,
+                                "score": score,
                                 "content": f"[Directory Abstract] {abstract}",
                             }
                         )
-                        # print(f"  {i + 1}. {resource.uri} (score: {resource.score:.4f}) [directory]")
+                        # print(f"  {i + 1}. {uri} (score: {score:.4f}) [directory]")
                     except:
                         # Skip if we can't get abstract
                         continue

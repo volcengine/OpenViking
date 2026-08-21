@@ -252,6 +252,7 @@ export function createOpenVikingMcpProxy({
     if (proxyConfig.account) headers["X-OpenViking-Account"] = proxyConfig.account;
     if (proxyConfig.user) headers["X-OpenViking-User"] = proxyConfig.user;
     if (proxyConfig.peerId) headers["X-OpenViking-Actor-Peer"] = proxyConfig.peerId;
+    if (proxyConfig.userAgent) headers["User-Agent"] = proxyConfig.userAgent;
     return headers;
   }
 

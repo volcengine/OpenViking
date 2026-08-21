@@ -11,9 +11,16 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestAddResourceOptionsHasNoTopLevelParseMode(t *testing.T) {
+	if _, ok := reflect.TypeOf(AddResourceOptions{}).FieldByName("ParseMode"); ok {
+		t.Fatal("AddResourceOptions must configure parse_mode through Args")
+	}
+}
 
 func testClient(t *testing.T, handler http.Handler) (*Client, func()) {
 	t.Helper()
@@ -124,6 +131,9 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 		if !ok || len(levels) != 2 || levels[0] != float64(0) || levels[1] != float64(2) {
 			t.Fatalf("level = %#v", body["level"])
 		}
+		if tags, ok := body["tags"].([]any); !ok || len(tags) != 2 || tags[0] != "topic=docs" || tags[1] != "kind=api" {
+			t.Fatalf("tags = %#v", body["tags"])
+		}
 		requireBodyKeysAbsent(t, body, "agent_id", "agent_uri")
 		writeOK(t, w, map[string]any{
 			"resources": []map[string]any{
@@ -141,6 +151,7 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 		Until:       "2026-06-18",
 		TimeField:   "created_at",
 		Level:       []int{0, 2},
+		Tags:        []string{"topic=docs", "kind=api"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -156,7 +167,7 @@ func TestFindOmitsSearchFiltersWhenUnset(t *testing.T) {
 			t.Fatalf("path = %s", r.URL.Path)
 		}
 		body := readJSONBody(t, r)
-		requireBodyKeysAbsent(t, body, "since", "until", "time_field", "level", "agent_id", "agent_uri")
+		requireBodyKeysAbsent(t, body, "since", "until", "time_field", "level", "tags", "agent_id", "agent_uri")
 		writeOK(t, w, map[string]any{"resources": []any{}})
 	}))
 	defer closeServer()
@@ -166,30 +177,43 @@ func TestFindOmitsSearchFiltersWhenUnset(t *testing.T) {
 	}
 }
 
-func TestListSendsOrderingOptions(t *testing.T) {
+func TestListAndTreeSendQueryOptions(t *testing.T) {
+	wantTreeLimits := []string{"0", "3"}
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/fs/ls" {
-			t.Fatalf("path = %s", r.URL.Path)
-		}
-		if got := r.URL.Query().Get("node_limit"); got != "200" {
-			t.Fatalf("node_limit = %q", got)
-		}
-		if got := r.URL.Query().Get("sort_by"); got != "mtime" {
-			t.Fatalf("sort_by = %q", got)
-		}
-		if got := r.URL.Query().Get("sort_order"); got != "desc" {
-			t.Fatalf("sort_order = %q", got)
+		switch r.URL.Path {
+		case "/api/v1/fs/ls":
+			if got := r.URL.Query().Get("node_limit"); got != "200" {
+				t.Fatalf("node_limit = %q", got)
+			}
+			if got := r.URL.Query().Get("sort_by"); got != "mtime" {
+				t.Fatalf("sort_by = %q", got)
+			}
+			if got := r.URL.Query().Get("sort_order"); got != "desc" {
+				t.Fatalf("sort_order = %q", got)
+			}
+		case "/api/v1/fs/tree":
+			if got := r.URL.Query().Get("level_limit"); got != wantTreeLimits[0] {
+				t.Fatalf("level_limit = %q, want %q", got, wantTreeLimits[0])
+			}
+			wantTreeLimits = wantTreeLimits[1:]
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
 		writeOK(t, w, []any{})
 	}))
 	defer closeServer()
 
-	_, err := client.List(context.Background(), "viking://session", &ListOptions{
+	if _, err := client.List(context.Background(), "viking://session", &ListOptions{
 		NodeLimit: 200,
 		SortBy:    "mtime",
 		SortOrder: "desc",
-	})
-	if err != nil {
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Tree(context.Background(), "viking://resources/docs", &TreeOptions{LevelLimit: Int(0)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Tree(context.Background(), "viking://resources/docs", nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -252,6 +276,28 @@ func TestReindexSendsDryRun(t *testing.T) {
 		Mode:   "prune_orphans",
 		Wait:   false,
 		DryRun: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReindexSendsExplicitEmptyTags(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		tags, ok := body["tags"].([]any)
+		if !ok || len(tags) != 0 {
+			t.Fatalf("tags = %#v", body["tags"])
+		}
+		if got := body["tag_mode"]; got != "replace" {
+			t.Fatalf("tag_mode = %#v", got)
+		}
+		writeOK(t, w, map[string]any{"status": "completed"})
+	}))
+	defer closeServer()
+
+	if _, err := client.Reindex(context.Background(), "resources/demo", &ReindexOptions{
+		Tags:    []string{},
+		TagMode: "replace",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -406,6 +452,9 @@ func TestSearchSendsSessionAndSearchFilters(t *testing.T) {
 		if !ok || len(levels) != 1 || levels[0] != float64(2) {
 			t.Fatalf("level = %#v", body["level"])
 		}
+		if tags, ok := body["tags"].([]any); !ok || len(tags) != 1 || tags[0] != "topic=docs" {
+			t.Fatalf("tags = %#v", body["tags"])
+		}
 		requireBodyKeysAbsent(t, body, "agent_id", "agent_uri")
 		writeOK(t, w, map[string]any{"resources": []any{}})
 	}))
@@ -418,6 +467,7 @@ func TestSearchSendsSessionAndSearchFilters(t *testing.T) {
 		Until:     "2026-06-18",
 		TimeField: "updated_at",
 		Level:     []int{2},
+		Tags:      []string{"topic=docs"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -429,7 +479,7 @@ func TestSearchOmitsSearchFiltersWhenUnset(t *testing.T) {
 			t.Fatalf("path = %s", r.URL.Path)
 		}
 		body := readJSONBody(t, r)
-		requireBodyKeysAbsent(t, body, "since", "until", "time_field", "level", "agent_id", "agent_uri")
+		requireBodyKeysAbsent(t, body, "since", "until", "time_field", "level", "tags", "agent_id", "agent_uri")
 		writeOK(t, w, map[string]any{"resources": []any{}})
 	}))
 	defer closeServer()
@@ -528,7 +578,7 @@ func TestAddResourceUploadsLocalFile(t *testing.T) {
 			// args must be omitted when the caller does not pass any, so the
 			// request is accepted by pre-#2549 instances whose resources route
 			// uses model_config=ConfigDict(extra="forbid").
-			requireBodyKeysAbsent(t, body, "args")
+			requireBodyKeysAbsent(t, body, "args", "parse_mode")
 			writeOK(t, w, map[string]any{"uri": "viking://resources/note.md"})
 		default:
 			t.Fatalf("unexpected path %s", r.URL.Path)
@@ -542,6 +592,27 @@ func TestAddResourceUploadsLocalFile(t *testing.T) {
 	}
 	if result["uri"] != "viking://resources/note.md" {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestAddResourceSendsNoSplitMode(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		args, ok := body["args"].(map[string]any)
+		if !ok || args["parse_mode"] != "no_split" {
+			t.Fatalf("args = %#v", body["args"])
+		}
+		requireBodyKeysAbsent(t, body, "parse_mode")
+		writeOK(t, w, map[string]any{"uri": "viking://resources/manual"})
+	}))
+	defer closeServer()
+
+	if _, err := client.AddResource(
+		context.Background(),
+		"https://example.com/manual.pdf",
+		&AddResourceOptions{Args: map[string]any{"parse_mode": "no_split"}},
+	); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -577,6 +648,31 @@ func TestAddResourceSendsArgsWhenProvided(t *testing.T) {
 
 	if _, err := client.AddResource(context.Background(), filePath, &AddResourceOptions{
 		Args: map[string]any{"key": "value"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAddResourceSendsTagsAndTagMode(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/resources" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		body := readJSONBody(t, r)
+		tags, ok := body["tags"].([]any)
+		if !ok || len(tags) != 1 || tags[0] != "team=search" {
+			t.Fatalf("tags = %#v", body["tags"])
+		}
+		if body["tag_mode"] != "append" {
+			t.Fatalf("tag_mode = %#v", body["tag_mode"])
+		}
+		writeOK(t, w, map[string]any{"uri": "viking://resources/demo.md"})
+	}))
+	defer closeServer()
+
+	if _, err := client.AddResource(context.Background(), "https://example.com/demo.md", &AddResourceOptions{
+		Tags:    []string{"team=search"},
+		TagMode: "append",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1238,5 +1334,82 @@ func TestGrepOmitsLevelLimitWhenUnset(t *testing.T) {
 
 	if _, err := client.Grep(context.Background(), "viking://user", "pat", nil); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSessionAPIsSendEventMemoryTags(t *testing.T) {
+	var requests []map[string]any
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, map[string]any{
+			"method": r.Method,
+			"path":   r.URL.Path,
+			"body":   readJSONBody(t, r),
+		})
+		writeOK(t, w, map[string]any{"status": "ok"})
+	}))
+	defer closeServer()
+
+	config := map[string]any{
+		"events": map[string]any{"tags": []string{"team=search", "channel=web"}},
+	}
+	if _, err := client.CreateSession(context.Background(), &CreateSessionOptions{
+		SessionID:              "tagged",
+		MemoryExtractionConfig: config,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.UpdateSessionConfig(context.Background(), "tagged", &UpdateSessionConfigOptions{
+		MemoryExtractionConfig: config,
+		AutoCommitPolicy:       Map(map[string]any{"message_count_threshold": 25}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.CommitSession(context.Background(), "tagged", &CommitSessionOptions{
+		EventTags: []string{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.UpdateSessionConfig(
+		context.Background(),
+		"tagged",
+		&UpdateSessionConfigOptions{AutoCommitPolicy: Map(nil)},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.CreateSession(
+		context.Background(),
+		&CreateSessionOptions{DisableAutoCommit: true},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(requests) != 5 {
+		t.Fatalf("requests = %#v", requests)
+	}
+	createBody := requests[0]["body"].(map[string]any)
+	if _, ok := createBody["memory_extraction_config"]; !ok {
+		t.Fatalf("create body = %#v", createBody)
+	}
+	if requests[1]["method"] != http.MethodPatch ||
+		requests[1]["path"] != "/api/v1/sessions/tagged/config" {
+		t.Fatalf("patch request = %#v", requests[1])
+	}
+	patchBody := requests[1]["body"].(map[string]any)
+	if policy, ok := patchBody["auto_commit_policy"].(map[string]any); !ok ||
+		policy["message_count_threshold"] != float64(25) {
+		t.Fatalf("patch auto_commit_policy = %#v", patchBody["auto_commit_policy"])
+	}
+	commitBody := requests[2]["body"].(map[string]any)
+	metadata := commitBody["extraction_metadata"].(map[string]any)
+	event := metadata["event"].(map[string]any)
+	if tags, ok := event["tags"].([]any); !ok || len(tags) != 0 {
+		t.Fatalf("commit event tags = %#v", event["tags"])
+	}
+	for _, request := range requests[3:] {
+		body := request["body"].(map[string]any)
+		value, ok := body["auto_commit_policy"]
+		if !ok || value != nil {
+			t.Fatalf("auto_commit_policy = %#v, present = %v", value, ok)
+		}
 	}
 }

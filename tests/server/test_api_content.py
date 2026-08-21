@@ -3,11 +3,54 @@
 
 """Tests for content endpoints: read, abstract, overview, reindex."""
 
+from types import SimpleNamespace
+
 import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking.server.routers.content import ReindexRequest, reindex
+from openviking.server.routers import content as content_router
+from openviking.server.routers.content import ReindexRequest, WriteContentRequest, reindex
 from openviking_cli.session.user_id import UserIdentifier
+
+
+def test_write_content_request_accepts_processing_mode():
+    request = WriteContentRequest(
+        uri="viking://resources/demo.md",
+        content="updated",
+        processing_mode="vectors_only",
+    )
+
+    assert request.processing_mode == "vectors_only"
+
+
+def test_write_content_request_defaults_processing_mode():
+    request = WriteContentRequest(uri="viking://resources/demo.md", content="updated")
+
+    assert request.processing_mode == "semantic_and_vectors"
+
+
+async def test_write_forwards_processing_mode_to_service(monkeypatch):
+    seen = {}
+
+    async def fake_write(**kwargs):
+        seen.update(kwargs)
+        return {"uri": kwargs["uri"], "semantic_status": "skipped"}
+
+    service = SimpleNamespace(fs=SimpleNamespace(write=fake_write))
+    monkeypatch.setattr(content_router, "get_service", lambda: service)
+    ctx = RequestContext(user=UserIdentifier("account-1", "user-1"), role=Role.USER)
+
+    response = await content_router.write(
+        WriteContentRequest(
+            uri="viking://resources/demo.md",
+            content="updated",
+            processing_mode="vectors_only",
+        ),
+        ctx,
+    )
+
+    assert response["status"] == "ok"
+    assert seen["processing_mode"] == "vectors_only"
 
 
 async def _first_child_uri(client, uri: str) -> str:
@@ -32,6 +75,35 @@ async def test_read_content(client_with_resource):
     assert body["result"] is not None
 
 
+async def test_read_memory_uses_visible_projection_and_raw_bypasses_it(monkeypatch):
+    ctx = RequestContext(user=UserIdentifier.the_default_user("test_user"), role=Role.USER)
+    uri = "viking://user/test_user/memories/notes/private.md"
+    raw = 'line one\nline two\n\n<!-- MEMORY_FIELDS\n{"secret": "do-not-leak"}\n-->'
+    calls = []
+
+    async def fake_read_visible(_uri, *, ctx, offset, limit):
+        calls.append((offset, limit))
+        return "visible slice"
+
+    async def fake_read(_uri, *, ctx, offset, limit):
+        lines = raw.splitlines(keepends=True)
+        return "".join(lines[offset:] if limit == -1 else lines[offset : offset + limit])
+
+    monkeypatch.setattr(
+        content_router,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(read=fake_read, read_visible=fake_read_visible)),
+    )
+
+    response = await content_router.read(uri=uri, offset=4, limit=1, raw=False, _ctx=ctx)
+    assert response.result == "visible slice"
+    assert calls[-1] == (4, 1)
+
+    raw_response = await content_router.read(uri=uri, offset=4, limit=1, raw=True, _ctx=ctx)
+    assert raw_response.result == '{"secret": "do-not-leak"}\n'
+    assert calls[-1] == (4, 1)
+
+
 async def test_read_directory_uri_returns_invalid_argument(client_with_resource):
     client, uri = client_with_resource
 
@@ -41,7 +113,8 @@ async def test_read_directory_uri_returns_invalid_argument(client_with_resource)
     body = resp.json()
     assert body["status"] == "error"
     assert body["error"]["code"] == "INVALID_ARGUMENT"
-    assert "Cannot read directory as file" in body["error"]["message"]
+    assert "Directory URI is not readable as a file" in body["error"]["message"]
+    assert "List it first, then read a file URI." in body["error"]["message"]
     assert body["error"]["details"] == {
         "resource": uri,
         "expected": "file",

@@ -7,6 +7,8 @@ export type ClientHeaders =
   Headers | Record<string, string> | [string, string][];
 /** Temporary upload storage mode supported by the OpenViking server. */
 export type UploadMode = "local" | "shared";
+/** Resource post-ingest processing modes accepted by addResource. */
+export type ProcessingMode = "semantic_and_vectors" | "vectors_only";
 /** Conflict policy accepted when importing an OVPack. */
 export type PackConflictPolicy = "fail" | "overwrite" | "skip";
 /** Vector handling strategy accepted when importing an OVPack. */
@@ -83,7 +85,15 @@ export interface AddResourceOptions extends WaitOptions {
   directlyUploadMedia?: boolean;
   preserveStructure?: boolean;
   watchInterval?: number;
+  processingMode?: ProcessingMode;
   args?: JsonObject;
+  tags?: string[];
+  tagMode?: "replace" | "append";
+}
+/** Content write options. */
+export interface WriteOptions extends WaitOptions {
+  mode?: string;
+  processingMode?: ProcessingMode;
 }
 /** Semantic retrieval options. */
 export interface SearchOptions {
@@ -126,6 +136,7 @@ export interface TreeOptions {
   absLimit?: number;
   showAllHidden?: boolean;
   nodeLimit?: number;
+  levelLimit?: number;
 }
 /** Session message payload. */
 export interface Message {
@@ -140,6 +151,20 @@ export interface Message {
 export interface CreateSessionOptions {
   sessionId?: string;
   memoryPolicy?: JsonObject;
+  autoCommitPolicy?: JsonObject | null;
+  memoryExtractionConfig?: MemoryExtractionConfig;
+  telemetry?: unknown;
+}
+/** Event-memory extraction settings shared by session create and update. */
+export interface MemoryExtractionConfig {
+  events?: {
+    tags?: string[];
+  };
+}
+/** Mutable session configuration. */
+export interface UpdateSessionConfigOptions {
+  memoryExtractionConfig?: MemoryExtractionConfig;
+  autoCommitPolicy?: JsonObject | null;
   telemetry?: unknown;
 }
 /** Background task filters. */

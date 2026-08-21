@@ -3,11 +3,13 @@
 """Agent-scope skill management endpoints for OpenViking HTTP Server."""
 
 import asyncio
-import re
+import hashlib
+import json
 import shutil
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, AsyncIterator, Dict, Optional
 
 import yaml
 from fastapi import APIRouter, Depends, Request
@@ -16,7 +18,8 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from openviking.core.namespace import canonical_user_root
 from openviking.core.path_variables import resolve_path_variables
-from openviking.core.skill_loader import SkillLoader
+from openviking.core.skill_loader import validate_skill_format
+from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.privacy.service import UserPrivacyConfigVersion
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
@@ -31,9 +34,14 @@ from openviking.server.telemetry import run_operation
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.telemetry import TelemetryRequest
 from openviking.utils.skill_processor import validate_skill_name
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, ResourceExhaustedError
 
 router = APIRouter(prefix="/api/v1/skills", tags=["skills"])
+
+_SKILL_INTEGRITY_MAX_ENTRIES = 512
+_SKILL_INTEGRITY_MAX_FILE_BYTES = 16 * 1024 * 1024
+_SKILL_INTEGRITY_MAX_TOTAL_BYTES = 64 * 1024 * 1024
+_SKILL_INTEGRITY_READ_CONCURRENCY = 8
 
 
 class UpdateSkillRequest(BaseModel):
@@ -81,10 +89,10 @@ def _agent_skills_root(ctx: RequestContext, target_uri: Optional[str] = None) ->
     user_root = f"{canonical_user_root(ctx)}/skills"
     if not target_uri:
         return user_root
-    resolved_uri = resolve_path_variables(target_uri).rstrip("/")
-    if resolved_uri == "viking://agent/skills" or resolved_uri.startswith(
-        "viking://agent/skills/"
-    ):
+    resolved_uri = validate_request_viking_uri(
+        resolve_path_variables(target_uri), ctx, field_name="target_uri"
+    ).rstrip("/")
+    if resolved_uri == "viking://agent/skills" or resolved_uri.startswith("viking://agent/skills/"):
         return "viking://agent/skills"
     if resolved_uri == user_root or resolved_uri.startswith(f"{user_root}/"):
         return user_root
@@ -97,7 +105,9 @@ def _agent_skills_root(ctx: RequestContext, target_uri: Optional[str] = None) ->
     )
 
 
-async def _list_skills_from_root(service, ctx: RequestContext, root_uri: str) -> list[Dict[str, Any]]:
+async def _list_skills_from_root(
+    service, ctx: RequestContext, root_uri: str
+) -> list[Dict[str, Any]]:
     """List skills from a specific root URI.
 
     Filters out directory entries that do not look like a valid skill — i.e.
@@ -128,9 +138,7 @@ async def _list_skills_from_root(service, ctx: RequestContext, root_uri: str) ->
     return results
 
 
-async def _entry_looks_like_skill(
-    service, ctx: RequestContext, entry: Dict[str, Any]
-) -> bool:
+async def _entry_looks_like_skill(service, ctx: RequestContext, entry: Dict[str, Any]) -> bool:
     """Decide whether a directory entry from ``ls`` represents a real skill."""
     entry_uri = entry.get("uri", "")
     if not entry_uri:
@@ -157,7 +165,6 @@ async def _entry_looks_like_skill(
     if not skill_md_stat or skill_md_stat.get("isDir", False):
         return False
     return True
-
 
 
 def _validate_skill_name(skill_name: str) -> str:
@@ -214,147 +221,6 @@ def _skill_summary_from_meta(name: str, root_uri: str, meta: Dict[str, Any]) -> 
     }
 
 
-_SKILL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
-
-
-def _validation_issue(rule: str, message: str, field: str = "") -> Dict[str, str]:
-    issue = {"rule": rule, "message": message}
-    if field:
-        issue["field"] = field
-    return issue
-
-
-def _parse_skill_for_validation(data: Any) -> Dict[str, Any]:
-    if isinstance(data, dict):
-        parsed = dict(data)
-        parsed["content"] = parsed.get("content") or ""
-    elif isinstance(data, str):
-        frontmatter, body = SkillLoader._split_frontmatter(data)
-        if not frontmatter:
-            raise ValueError("SKILL.md must have YAML frontmatter")
-        try:
-            meta = yaml.safe_load(frontmatter)
-        except Exception as exc:
-            raise ValueError(f"Invalid YAML frontmatter: {exc}") from exc
-        if not isinstance(meta, dict):
-            raise ValueError("Invalid YAML frontmatter")
-        parsed = dict(meta)
-        parsed["content"] = body.strip()
-    else:
-        raise ValueError(f"Unsupported data type: {type(data)}")
-
-    allowed_tools = parsed.get("allowed_tools")
-    if not allowed_tools:
-        allowed_tools = parsed.get("allowed-tools")
-    if allowed_tools is not None:
-        parsed["allowed_tools"] = (
-            allowed_tools if isinstance(allowed_tools, list) else [allowed_tools]
-        )
-    parsed.pop("allowed-tools", None)
-
-    tags = parsed.get("tags")
-    if tags is not None and not isinstance(tags, list):
-        parsed["tags"] = [tags]
-
-    return parsed
-
-
-def _validate_skill_format(
-    service,
-    data: Any,
-    *,
-    strict: bool,
-    skill_dir_name: Optional[str],
-    source_path: Optional[str],
-) -> Dict[str, Any]:
-    errors: list[Dict[str, str]] = []
-    warnings: list[Dict[str, str]] = []
-
-    try:
-        parsed = _parse_skill_for_validation(data)
-    except Exception as exc:
-        return {
-            "valid": False,
-            "strict": strict,
-            "errors": [
-                _validation_issue(
-                    "yaml_format",
-                    str(exc),
-                    "data",
-                )
-            ],
-            "warnings": [],
-            "source_path": source_path or "",
-        }
-
-    name = parsed.get("name")
-    description = parsed.get("description")
-    content = parsed.get("content") or ""
-
-    if not isinstance(name, str) or not name.strip():
-        errors.append(_validation_issue("name_required", "name is required", "name"))
-    if not isinstance(description, str) or not description.strip():
-        errors.append(
-            _validation_issue("description_required", "description is required", "description")
-        )
-
-    def add_mode_issue(rule: str, message: str, field: str):
-        issue = _validation_issue(rule, message, field)
-        if strict:
-            errors.append(issue)
-        else:
-            warnings.append(issue)
-
-    if isinstance(name, str) and name.strip():
-        normalized_name = name.strip()
-        normalized_dir_name = (skill_dir_name or "").strip()
-        if normalized_dir_name and normalized_name != normalized_dir_name:
-            add_mode_issue(
-                "name_matches_directory",
-                f"name '{normalized_name}' does not match directory name '{normalized_dir_name}'",
-                "name",
-            )
-        if len(normalized_name) > 64:
-            add_mode_issue("name_max_length", "name must not exceed 64 characters", "name")
-        if not _SKILL_NAME_PATTERN.match(normalized_name):
-            add_mode_issue(
-                "name_allowed_characters",
-                "name may only contain letters, numbers, underscores, and hyphens",
-                "name",
-            )
-
-    if isinstance(description, str) and len(description) > 1024:
-        add_mode_issue(
-            "description_max_length",
-            "description must not exceed 1024 characters",
-            "description",
-        )
-
-    body_lines = len(content.splitlines())
-    if strict and body_lines > 500:
-        warnings.append(
-            _validation_issue(
-                "body_max_lines",
-                "SKILL.md body exceeds 500 lines",
-                "content",
-            )
-        )
-
-    return {
-        "valid": not errors,
-        "strict": strict,
-        "name": name or "",
-        "description": description or "",
-        "tags": parsed.get("tags") or [],
-        "allowed_tools": parsed.get("allowed_tools") or [],
-        "body_lines": body_lines,
-        "source_path": source_path or "",
-        "skill_dir_name": skill_dir_name or "",
-        "errors": errors,
-        "warnings": warnings,
-    }
-
-
 def _skill_summary_from_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
     root_uri = entry.get("uri", "")
     name = entry.get("name") or _skill_name_from_uri(root_uri)
@@ -394,10 +260,11 @@ def _skill_root_from_hit_uri(hit_uri: str) -> str:
     return trimmed
 
 
-async def _require_skill(service, ctx: RequestContext, skill_name: str, target_uri: Optional[str] = None) -> str:
+async def _require_skill(
+    service, ctx: RequestContext, skill_name: str, target_uri: Optional[str] = None
+) -> str:
     if target_uri:
-        resolved_uri = resolve_path_variables(target_uri)
-        root_uri = _skill_root_uri(ctx, skill_name, resolved_uri)
+        root_uri = _skill_root_uri(ctx, skill_name, target_uri)
         try:
             stat = await service.fs.stat(root_uri, ctx=ctx)
             if stat and stat.get("isDir", False):
@@ -474,6 +341,171 @@ async def _list_skill_files(
     return entries
 
 
+async def _skill_manifest_with_integrity(
+    service,
+    ctx: RequestContext,
+    root_uri: str,
+    *,
+    include_integrity: bool = True,
+    max_entries: int = _SKILL_INTEGRITY_MAX_ENTRIES,
+    max_file_bytes: int = _SKILL_INTEGRITY_MAX_FILE_BYTES,
+    max_total_bytes: int = _SKILL_INTEGRITY_MAX_TOTAL_BYTES,
+) -> tuple[list[Dict[str, Any]], str | None]:
+    """Build a Skill manifest, optionally content-addressed for remote consumers."""
+    entries = await _list_skill_files(
+        service,
+        ctx,
+        root_uri,
+        node_limit=max_entries + 2 if include_integrity else 10000,
+    )
+    visible_entries = [
+        entry
+        for entry in entries
+        if isinstance(entry, dict)
+        and _relative_skill_path(root_uri, str(entry.get("uri") or "")) != SOURCE_METADATA_FILENAME
+    ]
+    if include_integrity and len(visible_entries) > max_entries:
+        raise ResourceExhaustedError(f"Skill integrity manifest exceeds {max_entries} entries")
+    if include_integrity:
+        declared_total = 0
+        for entry in visible_entries:
+            if bool(entry.get("isDir", False)) or entry.get("size") is None:
+                continue
+            declared_size = int(entry["size"])
+            path = _relative_skill_path(root_uri, str(entry.get("uri") or ""))
+            if declared_size > max_file_bytes:
+                raise ResourceExhaustedError(f"Skill file exceeds integrity size limit: {path}")
+            declared_total += declared_size
+            if declared_total > max_total_bytes:
+                raise ResourceExhaustedError(
+                    f"Skill integrity manifest exceeds {max_total_bytes} total bytes"
+                )
+
+    async def build_entry(entry: Dict[str, Any]) -> Dict[str, Any] | None:
+        uri = str(entry.get("uri") or "")
+        path = _relative_skill_path(root_uri, uri)
+        if not uri or path == SOURCE_METADATA_FILENAME:
+            return None
+        is_dir = bool(entry.get("isDir", False))
+        item: Dict[str, Any] = {
+            "name": entry.get("name") or _skill_name_from_uri(uri),
+            "uri": uri,
+            "path": path,
+            "is_dir": is_dir,
+            "kind": _skill_file_kind(path, is_dir),
+        }
+        if not is_dir and include_integrity:
+            declared_size = entry.get("size")
+            if declared_size is not None and int(declared_size) > max_file_bytes:
+                raise ResourceExhaustedError(f"Skill file exceeds integrity size limit: {path}")
+            data = await service.fs.read_file_bytes(uri, ctx=ctx)
+            if len(data) > max_file_bytes:
+                raise ResourceExhaustedError(f"Skill file exceeds integrity size limit: {path}")
+            item["size"] = len(data)
+            item["sha256"] = hashlib.sha256(data).hexdigest()
+        return item
+
+    built: list[Dict[str, Any] | None] = []
+    total_bytes = 0
+    for offset in range(0, len(visible_entries), _SKILL_INTEGRITY_READ_CONCURRENCY):
+        batch = visible_entries[offset : offset + _SKILL_INTEGRITY_READ_CONCURRENCY]
+        batch_items = await asyncio.gather(*(build_entry(entry) for entry in batch))
+        for item in batch_items:
+            if item is not None and not item["is_dir"]:
+                total_bytes += int(item.get("size") or 0)
+                if total_bytes > max_total_bytes:
+                    raise ResourceExhaustedError(
+                        f"Skill integrity manifest exceeds {max_total_bytes} total bytes"
+                    )
+        built.extend(batch_items)
+    files = [item for item in built if item is not None]
+    if not include_integrity:
+        return files, None
+    revision_payload = [
+        {
+            "path": item["path"],
+            "is_dir": item["is_dir"],
+            "size": item.get("size"),
+            "sha256": item.get("sha256"),
+        }
+        for item in sorted(files, key=lambda value: value["path"])
+    ]
+    revision = hashlib.sha256(
+        json.dumps(revision_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return files, revision
+
+
+@asynccontextmanager
+async def _skill_snapshot_lock(
+    service,
+    ctx: RequestContext,
+    root_uri: str,
+) -> AsyncIterator[None]:
+    """Hold the storage tree lock while one content-addressed Skill view is read."""
+    viking_fs = service.fs._ensure_initialized()  # noqa: SLF001
+    viking_fs._ensure_access(root_uri, ctx)  # noqa: SLF001
+    path = viking_fs._uri_to_path(root_uri, ctx=ctx)  # noqa: SLF001
+    fs_ctx = {"account_id": ctx.account_id}
+    lease = await viking_fs._async_agfs.pathlock_acquire_tree(  # noqa: SLF001
+        path,
+        fs_ctx=fs_ctx,
+    )
+    try:
+        yield
+    finally:
+        await viking_fs._async_agfs.pathlock_release(lease, fs_ctx=fs_ctx)  # noqa: SLF001
+
+
+async def _read_skill_detail(
+    service,
+    ctx: RequestContext,
+    *,
+    skill_name: str,
+    root_uri: str,
+    include_content: Optional[bool],
+    include_files: bool,
+    include_integrity: bool,
+    include_source: bool,
+    level: Optional[int],
+) -> Dict[str, Any]:
+    """Read one Skill; integrity requests observe a storage-locked package snapshot."""
+
+    async def read_fields() -> Dict[str, Any]:
+        abstract = await service.fs.abstract(root_uri, ctx=ctx)
+        result = _skill_summary_from_meta(skill_name, root_uri, _parse_abstract_meta(abstract))
+        if level is None or level == 0:
+            result["abstract"] = abstract
+        if level is None or level == 1:
+            result["overview"] = await service.fs.overview(root_uri, ctx=ctx)
+        if (
+            level == 2
+            or include_content is True
+            or (level is None and include_content is not False)
+        ):
+            content = await service.fs.read(_skill_md_uri(root_uri), ctx=ctx)
+            result["content"] = content
+            result["content_sha256"] = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        if include_files:
+            files, revision = await _skill_manifest_with_integrity(
+                service,
+                ctx,
+                root_uri,
+                include_integrity=include_integrity,
+            )
+            result["files"] = files
+            if revision is not None:
+                result["revision"] = revision
+        if include_source:
+            result["source"] = await read_skill_source_metadata(service, ctx, root_uri)
+        return result
+
+    if include_integrity:
+        async with _skill_snapshot_lock(service, ctx, root_uri):
+            return await read_fields()
+    return await read_fields()
+
+
 async def _restore_skill_privacy(
     service,
     ctx: RequestContext,
@@ -504,7 +536,9 @@ async def list_skills(
     """List installed agent skills."""
     service = get_service()
     if target_uri:
-        resolved_uri = resolve_path_variables(target_uri)
+        resolved_uri = validate_request_viking_uri(
+            resolve_path_variables(target_uri), _ctx, field_name="target_uri"
+        )
         skills = await _list_skills_from_root(service, _ctx, resolved_uri)
         return Response(
             status="ok", result={"root_uri": resolved_uri, "skills": skills, "total": len(skills)}
@@ -538,7 +572,9 @@ async def find_skills(
     service = get_service()
     target_uri = request.target_uri
     if target_uri:
-        resolved_uri = resolve_path_variables(target_uri)
+        resolved_uri = validate_request_viking_uri(
+            resolve_path_variables(target_uri), _ctx, field_name="target_uri"
+        )
         execution = await run_operation(
             operation="skills.find",
             telemetry=request.telemetry,
@@ -591,11 +627,15 @@ async def find_skills(
         )
 
         user_result = user_execution.result
-        user_result_dict = user_result.to_dict() if hasattr(user_result, "to_dict") else dict(user_result or {})
+        user_result_dict = (
+            user_result.to_dict() if hasattr(user_result, "to_dict") else dict(user_result or {})
+        )
         user_hits = [_skill_summary_from_hit(hit) for hit in user_result_dict.get("skills", [])]
 
         agent_result = agent_execution.result
-        agent_result_dict = agent_result.to_dict() if hasattr(agent_result, "to_dict") else dict(agent_result or {})
+        agent_result_dict = (
+            agent_result.to_dict() if hasattr(agent_result, "to_dict") else dict(agent_result or {})
+        )
         agent_hits = [_skill_summary_from_hit(hit) for hit in agent_result_dict.get("skills", [])]
 
         merged_hits = [*user_hits, *agent_hits]
@@ -621,9 +661,7 @@ async def validate_skill(
 ):
     """Validate a SKILL.md payload using Agent Skills formatting rules."""
     del _ctx
-    service = get_service()
-    result = _validate_skill_format(
-        service,
+    result = validate_skill_format(
         request.data,
         strict=request.strict,
         skill_dir_name=request.skill_dir_name,
@@ -638,6 +676,7 @@ async def get_skill(
     target_uri: Optional[str] = None,
     include_content: Optional[bool] = None,
     include_files: bool = True,
+    include_integrity: bool = False,
     include_source: bool = False,
     level: Optional[int] = None,
     _ctx: RequestContext = Depends(get_request_context),
@@ -650,33 +689,17 @@ async def get_skill(
         )
     service = get_service()
     root_uri = await _require_skill(service, _ctx, skill_name, target_uri)
-    abstract = await service.fs.abstract(root_uri, ctx=_ctx)
-    result = _skill_summary_from_meta(skill_name, root_uri, _parse_abstract_meta(abstract))
-    if level is None or level == 0:
-        result["abstract"] = abstract
-    if level is None or level == 1:
-        result["overview"] = await service.fs.overview(root_uri, ctx=_ctx)
-    if level == 2 or include_content is True or (level is None and include_content is not False):
-        result["content"] = await service.fs.read(_skill_md_uri(root_uri), ctx=_ctx)
-    if include_files:
-        entries = await _list_skill_files(service, _ctx, root_uri)
-        result["files"] = [
-            {
-                "name": entry.get("name") or _skill_name_from_uri(entry.get("uri", "")),
-                "uri": entry.get("uri", ""),
-                "path": _relative_skill_path(root_uri, entry.get("uri", "")),
-                "is_dir": entry.get("isDir", False),
-                "kind": _skill_file_kind(
-                    _relative_skill_path(root_uri, entry.get("uri", "")),
-                    entry.get("isDir", False),
-                ),
-            }
-            for entry in entries
-            if isinstance(entry, dict)
-            and _relative_skill_path(root_uri, entry.get("uri", "")) != SOURCE_METADATA_FILENAME
-        ]
-    if include_source:
-        result["source"] = await read_skill_source_metadata(service, _ctx, root_uri)
+    result = await _read_skill_detail(
+        service,
+        _ctx,
+        skill_name=skill_name,
+        root_uri=root_uri,
+        include_content=include_content,
+        include_files=include_files,
+        include_integrity=include_integrity,
+        include_source=include_source,
+        level=level,
+    )
     return Response(status="ok", result=result)
 
 
@@ -700,8 +723,9 @@ async def update_skill(
         "operation": "update",
     }
     if request.temp_file_id:
-        store = TempUploadStore.build(http_request.app.state.config)
-        resolved = await store.resolve_for_consume(request.temp_file_id, _ctx)
+        resolved = await TempUploadStore.build(http_request.app.state.config).resolve_for_consume(
+            request.temp_file_id, _ctx
+        )
         data = Path(resolved.local_path)
         allow_local_path_resolution = True
         if request.source_metadata is None:
@@ -715,8 +739,6 @@ async def update_skill(
             source_metadata["original_filename"] = resolved.original_filename
 
     source_path_hint = resolved.original_filename if resolved else None
-    store = TempUploadStore.build(http_request.app.state.config) if resolved else None
-
     async def _update() -> Dict[str, Any]:
         # Derive backup root from the actual skill root URI to keep backup in the same scope.
         skill_root_parent = root_uri.rsplit("/", 1)[0]
@@ -781,14 +803,10 @@ async def update_skill(
                     await _restore_skill_privacy(service, _ctx, skill_name, previous_privacy)
                 except Exception:
                     pass
-            if resolved and store:
-                await store.mark_failed(resolved, _ctx)
             raise
         else:
             if backup_created:
                 await service.fs.rm(backup_uri, ctx=_ctx, recursive=True)
-            if resolved and store:
-                await store.mark_consumed(resolved, _ctx)
             result["action"] = "update"
             return result
         finally:

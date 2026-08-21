@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for memory-context semantic enqueue deduplication (#769)."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -11,6 +12,7 @@ from openviking.storage.queuefs.named_queue import NamedQueue
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.queuefs.semantic_queue import SemanticQueue, is_semantic_msg_stale
+from openviking.storage.semantic_sidecar import parse_semantic_sidecar
 
 
 @pytest.mark.asyncio
@@ -101,46 +103,32 @@ async def test_coalesced_semantic_messages_mark_old_version_stale():
         assert not is_semantic_msg_stale(second)
 
 
-class _FakeHandle:
-    def __init__(self):
-        self.id = "lock-1"
-        self.locks = []
+class _FakePathLock:
+    """Mock for _async_agfs pathlock operations."""
 
-
-class _FakeLockManager:
     def __init__(self):
         self.acquired_batches = []
         self.release_calls = []
 
-    def create_handle(self):
-        return _FakeHandle()
-
-    def get_handle(self, handle_id):
-        del handle_id
-        return None
-
-    async def acquire_exact_path_batch(self, handle, paths):
+    async def pathlock_acquire_exact_batch(self, paths):
         self.acquired_batches.append(paths)
-        handle.locks.extend(paths)
-        return True
+        return {"id": "lock-1"}
 
-    async def release(self, handle):
-        self.release_calls.append(handle.id)
-
-    async def release_selected(self, handle, lock_paths):
-        del handle, lock_paths
+    async def pathlock_release(self, lease):
+        self.release_calls.append(lease["id"])
 
 
 class _FakeVikingFS:
-    def __init__(self):
+    def __init__(self, pathlock=None):
+        self._async_agfs = pathlock or _FakePathLock()
         self.writes = []
 
     def _uri_to_path(self, uri, ctx=None):
         del ctx
         return f"/fake/{uri.replace('://', '/').strip('/')}"
 
-    async def write_file(self, uri, content, ctx=None):
-        del ctx
+    async def write_file(self, uri, content, ctx=None, lease_ref=None):
+        del ctx, lease_ref
         self.writes.append((uri, content))
 
 
@@ -153,10 +141,17 @@ class _FakeMemoryDirFS:
         ]
 
 
+def _patch_semantic_config(monkeypatch, *, sidecar_sample_size=32):
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(sidecar_sample_size=sidecar_sample_size)),
+    )
+
+
 @pytest.mark.asyncio
 async def test_stale_memory_semantic_write_is_skipped(monkeypatch):
-    lock_manager = _FakeLockManager()
-    viking_fs = _FakeVikingFS()
+    pathlock = _FakePathLock()
+    viking_fs = _FakeVikingFS(pathlock)
     processor = SemanticProcessor()
     coalesce_key = f"memory|acc|u|p|viking://user/default/memories/preferences/{uuid4().hex}"
 
@@ -174,8 +169,6 @@ async def test_stale_memory_semantic_write_is_skipped(monkeypatch):
         )
         await q.enqueue(first)
         await q.enqueue(latest)
-
-    monkeypatch.setattr("openviking.storage.transaction.get_lock_manager", lambda: lock_manager)
 
     wrote_first = await processor._write_memory_directory_semantics(
         msg=first,
@@ -196,15 +189,19 @@ async def test_stale_memory_semantic_write_is_skipped(monkeypatch):
 
     assert not wrote_first
     assert wrote_latest
-    assert lock_manager.acquired_batches == [
+    assert pathlock.acquired_batches == [
         [
             "/fake/viking/user/default/memories/preferences/.overview.md",
             "/fake/viking/user/default/memories/preferences/.abstract.md",
         ]
     ]
-    assert viking_fs.writes == [
-        ("viking://user/default/memories/preferences/.overview.md", "latest overview"),
-        ("viking://user/default/memories/preferences/.abstract.md", "latest abstract"),
+    assert [uri for uri, _ in viking_fs.writes] == [
+        "viking://user/default/memories/preferences/.overview.md",
+        "viking://user/default/memories/preferences/.abstract.md",
+    ]
+    assert [parse_semantic_sidecar(raw).body.strip() for _, raw in viking_fs.writes] == [
+        "latest overview",
+        "latest abstract",
     ]
 
 
@@ -231,6 +228,7 @@ async def test_memory_directory_summarizes_all_uncached_files(monkeypatch):
         "openviking.storage.queuefs.semantic_processor.get_viking_fs",
         lambda: _FakeMemoryDirFS(),
     )
+    _patch_semantic_config(monkeypatch)
     monkeypatch.setattr(processor, "_generate_single_file_summary", generate_file_summary)
     monkeypatch.setattr(processor, "_generate_overview", generate_overview)
     monkeypatch.setattr(
@@ -262,10 +260,12 @@ async def test_memory_directory_vectorizes_changed_files_with_generated_summary(
     async def generate_file_summary(file_path, llm_sem=None, ctx=None):
         del llm_sem, ctx
         name = file_path.rsplit("/", 1)[-1]
-        return {"name": name, "summary": f"summary:{name}"}
+        return {"name": name, "summary": f"summary:{name}", "content": "raw content"}
 
     async def generate_overview(dir_uri, file_summaries, children_abstracts, llm_sem=None):
-        del dir_uri, file_summaries, children_abstracts, llm_sem
+        del dir_uri, children_abstracts, llm_sem
+        assert len(captured_file_vectorize) == 1
+        assert all("content" not in summary for summary in file_summaries)
         return "overview"
 
     async def write_semantics(**kwargs):
@@ -282,6 +282,7 @@ async def test_memory_directory_vectorizes_changed_files_with_generated_summary(
         "openviking.storage.queuefs.semantic_processor.get_viking_fs",
         lambda: _FakeMemoryDirFS(),
     )
+    _patch_semantic_config(monkeypatch)
     monkeypatch.setattr(processor, "_generate_single_file_summary", generate_file_summary)
     monkeypatch.setattr(processor, "_generate_overview", generate_overview)
     monkeypatch.setattr(
@@ -308,6 +309,7 @@ async def test_memory_directory_vectorizes_changed_files_with_generated_summary(
     assert captured_file_vectorize[0]["summary_dict"] == {
         "name": "first.md",
         "summary": "summary:first.md",
+        "content": "raw content",
     }
     assert captured_file_vectorize[0]["preserve_existing_created_at"] is True
     assert len(captured_directory_vectorize) == 1

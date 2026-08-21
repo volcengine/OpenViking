@@ -112,16 +112,13 @@ function extractToolResultText(content) {
 }
 
 // Structured parts (parts-mode capture) — mirrors auto-capture.mjs. Tool calls /
-// results become dedicated `tool` parts instead of being inlined into content.
-const TOOL_OUTPUT_PART_MAX_CHARS = 2000;
-
+// results become dedicated `tool` parts instead of being inlined into content,
+// and tool_output is reported verbatim so the server can externalize it.
 function truncateToolOutput(s) {
   if (typeof s !== "string") s = String(s ?? "");
-  if (s.length <= TOOL_OUTPUT_PART_MAX_CHARS) return s;
-  return (
-    s.slice(0, TOOL_OUTPUT_PART_MAX_CHARS) +
-    `\n... [truncated, ${s.length - TOOL_OUTPUT_PART_MAX_CHARS} more chars]`
-  );
+  const max = cfg.captureToolMaxChars;
+  if (s.length <= max) return s;
+  return s.slice(0, max) + `\n... [truncated, ${s.length - max} more chars]`;
 }
 
 function collectToolNamesById(messages) {
@@ -270,16 +267,26 @@ async function pushTurns(ovSessionId, turns, { peerId = null, enqueueOnly = fals
   // adds little value.
   let committed = false;
   let commitQueued = false;
+  let commitTraceId = "";
   if (ok + queued > 0) {
     const commitRes = enqueueOnly
       ? await enqueuePendingDirectly("commitSession", ovSessionId, {})
       : await commitSession(fetchJSON, ovSessionId);
     committed = !enqueueOnly && commitRes.ok;
     commitQueued = enqueueOnly ? Boolean(commitRes.ok) : Boolean(commitRes.pendingQueued);
+    commitTraceId = enqueueOnly ? "" : commitRes.traceId || commitRes.result?.trace_id || "";
     if (enqueueOnly && !commitRes.ok) enqueueFailed++;
     else if (!enqueueOnly && commitRes.pendingEnqueueFailed) enqueueFailed++;
   }
-  return { ok, queued, failed, enqueueFailed, committed, commitQueued };
+  return {
+    ok,
+    queued,
+    failed,
+    enqueueFailed,
+    committed,
+    commitQueued,
+    commit_trace_id: commitTraceId || undefined,
+  };
 }
 
 async function main() {

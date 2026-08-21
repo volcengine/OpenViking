@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import re
 import threading
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, Hashable
 
@@ -54,10 +55,14 @@ from openviking.session.memory.utils.streaming_batcher import (
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
 from openviking.telemetry.tracer import get_trace_id
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
+
+_MEMORY_APPLY_LOCK_TIMEOUT_SECONDS = 300.0
+_MEMORY_APPLY_LOCK_MAX_ACQUISITIONS = 3
 
 
 @dataclass(slots=True)
@@ -235,24 +240,41 @@ class StreamingMemoryUpdater:
         links = remap_stored_links(
             links, dict(getattr(result.operations, "delete_replacements", {}) or {})
         )
-        valid_links = await filter_valid_links(
-            links,
-            upsert_operations=result.operations.upsert_operations,
-            delete_file_contents=result.operations.delete_file_contents,
-            ctx=request.ctx,
-            trace_console=self.config.trace_console,
-        )
-        if not valid_links:
-            return
         viking_fs = safe_get_viking_fs()
-        if viking_fs is not None:
-            updated_uris = await write_stored_links(valid_links, request.ctx, viking_fs)
-            for uri in dict.fromkeys(updated_uris):
-                result.apply_result.add_edited(uri)
-        result.operations.resolved_links = merge_link_lists(
-            list(getattr(result.operations, "resolved_links", []) or []),
-            valid_links,
-        )
+        lock_paths = _uri_lock_paths(_link_endpoint_uri_set(links), viking_fs, request.ctx)
+        async with self._apply_lock:
+            lease = None
+            if lock_paths:
+                lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(
+                    lock_paths,
+                    timeout_secs=_MEMORY_APPLY_LOCK_TIMEOUT_SECONDS,
+                )
+            try:
+                valid_links = await filter_valid_links(
+                    links,
+                    upsert_operations=result.operations.upsert_operations,
+                    delete_file_contents=result.operations.delete_file_contents,
+                    ctx=request.ctx,
+                    trace_console=self.config.trace_console,
+                )
+                if not valid_links:
+                    return
+                if viking_fs is not None:
+                    updated_uris = await write_stored_links(
+                        valid_links,
+                        request.ctx,
+                        viking_fs,
+                        lease_ref=lease,
+                    )
+                    for uri in dict.fromkeys(updated_uris):
+                        result.apply_result.add_edited(uri)
+                result.operations.resolved_links = merge_link_lists(
+                    list(getattr(result.operations, "resolved_links", []) or []),
+                    valid_links,
+                )
+            finally:
+                if lease is not None:
+                    await viking_fs._async_agfs.pathlock_release(lease)
 
     async def _get_group_batcher(
         self,
@@ -439,44 +461,131 @@ class StreamingMemoryUpdater:
         request: MemoryUpdateRequest,
         messages: list[Message],
     ) -> MemoryUpdateResult:
-        updater = MemoryUpdater(
-            registry=self.registry,
-            vikingdb=self.vikingdb,
-            transaction_handle=None,
-        )
         extract_context = ExtractContext(messages)
         isolation_handler = _make_isolation_handler(request, extract_context)
         async with self._apply_lock:
-            return await updater.apply_operations(
+            viking_fs = safe_get_viking_fs()
+            lease = await _acquire_stable_operation_lease(
                 operations,
+                viking_fs,
                 request.ctx,
-                extract_context=extract_context,
-                isolation_handler=isolation_handler,
             )
+            try:
+                updater = MemoryUpdater(
+                    registry=self.registry,
+                    vikingdb=self.vikingdb,
+                    transaction_handle=lease,
+                )
+                return await updater.apply_operations(
+                    operations,
+                    request.ctx,
+                    extract_context=extract_context,
+                    isolation_handler=isolation_handler,
+                )
+            finally:
+                if lease is not None:
+                    await viking_fs._async_agfs.pathlock_release(lease)
 
     async def _merge_requests(self, requests: list[MemoryUpdateRequest]) -> ResolvedOperations:
-        all_ops = ResolvedOperations(
-            upsert_operations=[],
-            delete_file_contents=[],
-            errors=[],
-            resolved_links=[],
-            delete_replacements={},
-        )
+        all_ops = _combine_resolved_operations(request.operations for request in requests)
+        if all_ops.has_errors():
+            return all_ops
+
+        requests_by_kind: dict[str, list[MemoryUpdateRequest]] = {
+            "add": [],
+            "update": [],
+            "delete": [],
+        }
         for request in requests:
-            ops = request.operations
-            all_ops.upsert_operations.extend(list(ops.upsert_operations or []))
-            all_ops.delete_file_contents.extend(list(ops.delete_file_contents or []))
-            all_ops.errors.extend(list(ops.errors or []))
-            all_ops.resolved_links.extend(list(getattr(ops, "resolved_links", []) or []))
-            all_ops.delete_replacements.update(dict(getattr(ops, "delete_replacements", {}) or {}))
-        return await merge_memory_operations(
-            operations=all_ops,
-            messages=_combined_request_messages(requests),
-            ctx=requests[0].ctx,
-            registry=self.registry or create_default_registry(),
-            strict_extract_errors=any(request.strict_extract_errors for request in requests),
-            trace_console=self.config.trace_console,
+            adds = [
+                op
+                for op in request.operations.upsert_operations
+                if op.old_memory_file_content is None
+            ]
+            updates = [
+                op
+                for op in request.operations.upsert_operations
+                if op.old_memory_file_content is not None
+            ]
+            for kind, upserts, deletes in (
+                ("add", adds, []),
+                ("update", updates, []),
+                ("delete", [], list(request.operations.delete_file_contents or [])),
+            ):
+                if not upserts and not deletes:
+                    continue
+                requests_by_kind[kind].append(
+                    clone_memory_update_request(
+                        request,
+                        operations=ResolvedOperations(
+                            upsert_operations=upserts,
+                            delete_file_contents=deletes,
+                            errors=[],
+                            resolved_links=[],
+                            delete_replacements={
+                                file.uri: replacement_uri
+                                for file in deletes
+                                if file.uri
+                                if (
+                                    replacement_uri := request.operations.delete_replacements.get(
+                                        file.uri
+                                    )
+                                )
+                            },
+                        ),
+                    )
+                )
+
+        async def merge_kind(kind_requests: list[MemoryUpdateRequest]) -> ResolvedOperations:
+            operations = _combine_resolved_operations(
+                request.operations for request in kind_requests
+            )
+            if not _requests_span_sessions(kind_requests):
+                return operations
+            return await merge_memory_operations(
+                operations=operations,
+                messages=_combined_request_messages(kind_requests),
+                ctx=kind_requests[0].ctx,
+                registry=self.registry or create_default_registry(),
+                strict_extract_errors=any(
+                    request.strict_extract_errors for request in kind_requests
+                ),
+                trace_console=self.config.trace_console,
+                force_merge=True,
+            )
+
+        kind_batches = [
+            (kind, kind_requests)
+            for kind, kind_requests in requests_by_kind.items()
+            if kind_requests
+        ]
+        kind_results = await asyncio.gather(
+            *(merge_kind(kind_requests) for _, kind_requests in kind_batches)
         )
+        uri_kinds: dict[str, str] = {}
+        conflicting_uris: set[str] = set()
+        for (kind, _), operations in zip(kind_batches, kind_results, strict=True):
+            for uri in _operation_uri_set(operations):
+                previous_kind = uri_kinds.setdefault(uri, kind)
+                if previous_kind != kind:
+                    conflicting_uris.add(uri)
+        if conflicting_uris:
+            return ResolvedOperations(
+                upsert_operations=[],
+                delete_file_contents=[],
+                errors=[
+                    "Conflicting add/update/delete results for URIs: "
+                    + ", ".join(sorted(conflicting_uris))
+                ],
+                resolved_links=[],
+                delete_replacements={},
+            )
+        merged = _combine_resolved_operations(kind_results)
+        merged.resolved_links = merge_link_lists(
+            list(all_ops.resolved_links or []),
+            list(merged.resolved_links or []),
+        )
+        return merged
 
 
 def split_request_by_merge_group(
@@ -574,6 +683,7 @@ async def merge_memory_operations(
     registry: MemoryTypeRegistry | None = None,
     strict_extract_errors: bool = False,
     trace_console: bool = False,
+    force_merge: bool = False,
 ) -> ResolvedOperations:
     """Merge resolved memory operations by memory type/URI using patch context."""
 
@@ -636,6 +746,7 @@ async def merge_memory_operations(
                 registry=registry,
                 peer_id=peer_id,
                 trace_console=trace_console,
+                force_merge=force_merge,
             )
             for (peer_id, memory_type) in all_group_keys
         ],
@@ -694,6 +805,13 @@ async def merge_memory_operations(
             if replacement_uri:
                 merged_delete_replacements[delete_file.uri] = replacement_uri
 
+    final_delete_uris = {file.uri for file in merged_deletes if file.uri}
+    for deleted_uri, replacement_uri in dict(
+        getattr(operations, "delete_replacements", {}) or {}
+    ).items():
+        if deleted_uri in final_delete_uris:
+            merged_delete_replacements.setdefault(deleted_uri, replacement_uri)
+
     merged_links = await filter_valid_links(
         merged_links,
         upsert_operations=merged_upserts,
@@ -720,6 +838,7 @@ async def merge_one_memory_type_operations(
     registry: MemoryTypeRegistry | None = None,
     peer_id: str | None = None,
     trace_console: bool = False,
+    force_merge: bool = False,
 ) -> ResolvedOperations:
     registry = registry or create_default_registry()
     schema = registry.get(memory_type)
@@ -737,7 +856,7 @@ async def merge_one_memory_type_operations(
     )
 
     # Fast path: no upserts, only deletes — passthrough directly
-    if not operations and delete_files:
+    if not force_merge and not operations and delete_files:
         tracer.info(
             "[streaming_memory_updater] memory_type merge decision "
             f"memory_type={memory_type} mode=no_merge "
@@ -763,13 +882,16 @@ async def merge_one_memory_type_operations(
         )
         return ResolvedOperations(
             upsert_operations=list(operations),
-            delete_file_contents=[],
+            delete_file_contents=list(delete_files),
             errors=[],
             resolved_links=[],
             delete_replacements={},
         )
 
-    fast_path, fast_path_reason = classify_memory_merge_mode(operations, schema=schema)
+    if force_merge:
+        fast_path, fast_path_reason = False, "cross_session_batch"
+    else:
+        fast_path, fast_path_reason = await classify_memory_merge_mode(operations, schema=schema)
     if fast_path:
         tracer.info(
             "[streaming_memory_updater] memory_type merge decision "
@@ -816,11 +938,17 @@ async def merge_one_memory_type_operations(
         )
     )
     patches = [
-        operation_to_patch(op, schema=schema, extract_context=extract_context) for op in operations
-    ] + [
+        await operation_to_patch(
+            op=op,
+            schema=schema,
+            extract_context=extract_context,
+        )
+        for op in operations
+    ]
+    patches.extend(
         memory_file_to_delete_patch(df, schema=schema, extract_context=extract_context)
         for df in delete_files
-    ]
+    )
     provider = PatchMergeContextProvider(
         memory_type=memory_type,
         required_file_uris=required_file_uris,
@@ -936,14 +1064,14 @@ def memory_file_to_delete_patch(
     )
 
 
-def operation_to_patch(
+async def operation_to_patch(
     op: ResolvedOperation,
     *,
     schema: MemoryTypeSchema,
     extract_context: ExtractContext,
 ) -> PatchMergePatch:
     old_file = getattr(op, "old_memory_file_content", None)
-    after_file = render_operation_after_file(
+    after_file = await render_operation_after_file(
         op,
         schema=schema,
         extract_context=extract_context,
@@ -954,13 +1082,13 @@ def operation_to_patch(
     )
 
 
-def render_operation_after_file(
+async def render_operation_after_file(
     op: ResolvedOperation,
     *,
     schema: MemoryTypeSchema,
     extract_context: ExtractContext,
 ) -> MemoryFile:
-    after_content = render_operation_after_file_content(
+    after_content = await render_operation_after_file_content(
         op,
         schema=schema,
         extract_context=extract_context,
@@ -968,7 +1096,7 @@ def render_operation_after_file(
     return MemoryFileUtils.read(after_content, uri=_first_uri(getattr(op, "uris", []) or []))
 
 
-def render_operation_after_file_content(
+async def render_operation_after_file_content(
     op: ResolvedOperation,
     *,
     schema: MemoryTypeSchema,
@@ -992,7 +1120,7 @@ def render_operation_after_file_content(
         else:
             current_value = old_content.extra_fields.get(field_def.name)
         try:
-            metadata[field_def.name] = MergeOpFactory.from_field(field_def).apply(
+            metadata[field_def.name] = await MergeOpFactory.from_field(field_def).apply(
                 current_value,
                 metadata[field_def.name],
             )
@@ -1027,7 +1155,7 @@ def render_operation_after_file_content(
     )
 
 
-def classify_memory_merge_mode(
+async def classify_memory_merge_mode(
     operations: list[ResolvedOperation],
     *,
     schema: MemoryTypeSchema | None = None,
@@ -1063,7 +1191,7 @@ def classify_memory_merge_mode(
     old_plain_content = old_file.plain_content().strip()
     if schema is not None:
         try:
-            after_content = render_operation_after_file_content(
+            after_content = await render_operation_after_file_content(
                 op,
                 schema=schema,
                 extract_context=ExtractContext([]),
@@ -1788,6 +1916,44 @@ def _combined_request_messages(items: list[MemoryUpdateRequest]) -> list[Message
     return messages
 
 
+def _combine_resolved_operations(
+    items: Iterable[ResolvedOperations],
+) -> ResolvedOperations:
+    combined = ResolvedOperations(
+        upsert_operations=[],
+        delete_file_contents=[],
+        errors=[],
+        resolved_links=[],
+        delete_replacements={},
+    )
+    for operations in items:
+        combined.upsert_operations.extend(list(operations.upsert_operations or []))
+        combined.delete_file_contents.extend(list(operations.delete_file_contents or []))
+        combined.errors.extend(list(operations.errors or []))
+        combined.resolved_links = merge_link_lists(
+            combined.resolved_links,
+            list(getattr(operations, "resolved_links", []) or []),
+        )
+        combined.delete_replacements.update(
+            dict(getattr(operations, "delete_replacements", {}) or {})
+        )
+    return combined
+
+
+def _requests_span_sessions(items: list[MemoryUpdateRequest]) -> bool:
+    """Return whether a kind batch cannot be proven to come from one session."""
+
+    if len(items) < 2:
+        return False
+    session_ids: set[str] = set()
+    for request in items:
+        session_id = str((request.metadata or {}).get("session_id") or "").strip()
+        if not session_id:
+            return True
+        session_ids.add(session_id)
+    return len(session_ids) > 1
+
+
 def _make_isolation_handler(
     request: MemoryUpdateRequest,
     extract_context: ExtractContext,
@@ -1804,6 +1970,120 @@ def _make_isolation_handler(
 
 def _operation_count(operations: ResolvedOperations) -> int:
     return len(operations.upsert_operations or []) + len(operations.delete_file_contents or [])
+
+
+def _operation_lock_paths(
+    operations: ResolvedOperations,
+    viking_fs: Any | None,
+    ctx: RequestContext,
+) -> list[str]:
+    operation_uris = _operation_uri_set(operations)
+    uris = set(operation_uris)
+    for uri in operation_uris:
+        normalized_uri = str(uri).rstrip("/")
+        directory, separator, _ = normalized_uri.rpartition("/")
+        if separator and directory:
+            uris.add(f"{directory}/.overview.md")
+    uris.update(_link_endpoint_uri_set(list(operations.resolved_links or [])))
+    for deleted_uri, replacement_uri in dict(operations.delete_replacements or {}).items():
+        if deleted_uri:
+            uris.add(str(deleted_uri))
+        if replacement_uri:
+            uris.add(str(replacement_uri))
+    for memory_file in operations.delete_file_contents or []:
+        for link in list(memory_file.links or []) + list(memory_file.backlinks or []):
+            if isinstance(link, dict):
+                from_uri = link.get("from_uri")
+                to_uri = link.get("to_uri")
+            else:
+                from_uri = getattr(link, "from_uri", None)
+                to_uri = getattr(link, "to_uri", None)
+            if from_uri:
+                uris.add(str(from_uri))
+            if to_uri:
+                uris.add(str(to_uri))
+    return _uri_lock_paths(uris, viking_fs, ctx)
+
+
+async def _persisted_replacement_relation_uris(
+    operations: ResolvedOperations,
+    viking_fs: Any,
+    ctx: RequestContext,
+) -> set[str]:
+    uris: set[str] = set()
+    for deleted_uri in dict(operations.delete_replacements or {}):
+        try:
+            content = await viking_fs.read_file(deleted_uri, ctx=ctx)
+        except (FileNotFoundError, NotFoundError):
+            continue
+        if not content:
+            continue
+        memory_file = MemoryFileUtils.read(content, uri=deleted_uri)
+        for link in list(memory_file.links or []) + list(memory_file.backlinks or []):
+            if isinstance(link, dict):
+                from_uri = link.get("from_uri")
+                to_uri = link.get("to_uri")
+            else:
+                from_uri = link.from_uri
+                to_uri = link.to_uri
+            if from_uri:
+                uris.add(str(from_uri))
+            if to_uri:
+                uris.add(str(to_uri))
+    return uris
+
+
+async def _acquire_stable_operation_lease(
+    operations: ResolvedOperations,
+    viking_fs: Any | None,
+    ctx: RequestContext,
+) -> Any | None:
+    lock_paths = _operation_lock_paths(operations, viking_fs, ctx)
+    if not lock_paths:
+        return None
+
+    required_paths = set(lock_paths)
+    for acquisition in range(1, _MEMORY_APPLY_LOCK_MAX_ACQUISITIONS + 1):
+        lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(
+            sorted(required_paths),
+            timeout_secs=_MEMORY_APPLY_LOCK_TIMEOUT_SECONDS,
+        )
+        try:
+            relation_uris = await _persisted_replacement_relation_uris(
+                operations,
+                viking_fs,
+                ctx,
+            )
+            expanded_paths = required_paths | set(_uri_lock_paths(relation_uris, viking_fs, ctx))
+        except BaseException:
+            await viking_fs._async_agfs.pathlock_release(lease)
+            raise
+
+        if expanded_paths == required_paths:
+            return lease
+
+        await viking_fs._async_agfs.pathlock_release(lease)
+        required_paths = expanded_paths
+        if acquisition == _MEMORY_APPLY_LOCK_MAX_ACQUISITIONS:
+            raise RuntimeError(
+                "Unable to stabilize memory apply lock coverage after "
+                f"{_MEMORY_APPLY_LOCK_MAX_ACQUISITIONS} acquisitions"
+            )
+
+    raise AssertionError("unreachable")
+
+
+def _uri_lock_paths(
+    uris: set[str],
+    viking_fs: Any | None,
+    ctx: RequestContext,
+) -> list[str]:
+    if viking_fs is None or not hasattr(viking_fs, "_async_agfs"):
+        return []
+    uri_to_path = getattr(viking_fs, "_uri_to_path", None)
+    if not callable(uri_to_path):
+        return []
+    return sorted(uri_to_path(uri, ctx=ctx) for uri in uris if uri)
 
 
 def _first_uri(uris: list[str] | None) -> str | None:

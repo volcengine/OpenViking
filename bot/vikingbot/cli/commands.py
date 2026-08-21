@@ -21,6 +21,7 @@ from prompt_toolkit.styles import Style as PromptStyle
 from rich.console import Console
 from rich.table import Table
 
+from openviking.utils.time_utils import parse_iso_datetime
 from vikingbot import __logo__, __version__
 from vikingbot.agent.loop import AgentLoop
 from vikingbot.bus.queue import MessageBus
@@ -264,7 +265,6 @@ def _init_prompt_session() -> None:
     )
 
 
-
 def _is_exit_command(command: str) -> bool:
     """Return True when input should end interactive chat."""
     return command.lower() in EXIT_COMMANDS
@@ -304,15 +304,13 @@ def main(
     pass
 
 
-def _make_provider(config, langfuse_client: None = None):
+def _make_provider(config, langfuse_client: Any = None):
     """Create LLM provider from configuration.
 
-    When bot.agents.provider is explicitly set, uses openviking's VLMFactory
-    to create the appropriate VLM backend and wraps it in VLMProviderAdapter.
-    Otherwise falls back to the legacy LiteLLMProvider.
+    An explicit bot.agents.model or non-empty bot.agents.credentials uses the
+    Bot's own VLM configuration. Otherwise the complete root VLM configuration
+    is inherited, including its ordered credentials and failover behavior.
     """
-    from vikingbot.providers.litellm_provider import LiteLLMProvider
-
     p = config.agents
     model = p.model if p else None
     temperature = p.temperature if p else 0.7
@@ -322,9 +320,90 @@ def _make_provider(config, langfuse_client: None = None):
     provider_name = p.provider if p else None
     extra_headers = p.extra_headers if p else {}
     timeout = p.timeout if p else None
+    max_tokens = getattr(p, "max_tokens", None) if p else None
+    credentials = list(getattr(p, "credentials", None) or [])
 
-    if not model:
+    if not model and not credentials:
         raise RuntimeError("No LLM model configured. Please set it in ~/.openviking/ov.conf")
+
+    inherits_root_vlm = False
+    inherits_root_vlm_getter = getattr(config, "inherits_root_vlm", None)
+    if callable(inherits_root_vlm_getter):
+        inherits_root_vlm = bool(inherits_root_vlm_getter())
+
+    if inherits_root_vlm:
+        from openviking_cli.utils.config.vlm_config import VLMConfig
+        from vikingbot.providers.vlm_adapter import VLMProviderAdapter
+
+        root_vlm_getter = getattr(config, "get_root_vlm_config", None)
+        root_vlm = root_vlm_getter() if callable(root_vlm_getter) else None
+        if root_vlm is None:
+            raise RuntimeError("Root VLM configuration is unavailable")
+
+        # Re-validate a fresh copy so the Bot keeps its existing generation
+        # settings without sharing a cached VLM instance with another runtime.
+        root_vlm_data = root_vlm.model_dump()
+        root_vlm_data["temperature"] = temperature
+        root_vlm_data["thinking"] = thinking
+        if timeout is not None:
+            root_vlm_data["timeout"] = timeout
+        if max_tokens is not None:
+            root_vlm_data["max_tokens"] = max_tokens
+        if extra_headers:
+            root_vlm_data["extra_headers"] = extra_headers
+        effective_vlm = VLMConfig.model_validate(root_vlm_data)
+        return VLMProviderAdapter(
+            vlm_instance=effective_vlm.get_vlm_instance(),
+            default_model=effective_vlm.model or model,
+            langfuse_client=langfuse_client,
+        )
+
+    if credentials:
+        from openviking_cli.utils.config.vlm_config import VLMConfig
+        from vikingbot.providers.vlm_adapter import VLMProviderAdapter
+
+        if not model:
+            missing_model_ids = [
+                credential.id or f"index-{index}"
+                for index, credential in enumerate(credentials)
+                if not credential.model
+            ]
+            if missing_model_ids:
+                raise RuntimeError(
+                    "bot.agents.model is omitted, so every bot.agents.credentials "
+                    "entry must define model; missing for: " + ", ".join(missing_model_ids)
+                )
+
+        bot_vlm_data: dict[str, Any] = {
+            # VLMConfig currently requires a parent model even when every
+            # credential has its own. Use the primary credential internally
+            # without persisting an outer bot.agents.model.
+            "model": model or credentials[0].model,
+            "temperature": temperature,
+            "thinking": thinking,
+            "credentials": credentials,
+            "failback_timeout_seconds": p.failback_timeout_seconds,
+            "failback_request_count": p.failback_request_count,
+        }
+        if provider_name:
+            bot_vlm_data["provider"] = provider_name
+        if timeout is not None:
+            bot_vlm_data["timeout"] = timeout
+        if max_tokens is not None:
+            bot_vlm_data["max_tokens"] = max_tokens
+        if api_key:
+            bot_vlm_data["api_key"] = api_key
+        if api_base:
+            bot_vlm_data["api_base"] = api_base
+        if extra_headers:
+            bot_vlm_data["extra_headers"] = extra_headers
+
+        effective_vlm = VLMConfig.model_validate(bot_vlm_data)
+        return VLMProviderAdapter(
+            vlm_instance=effective_vlm.get_vlm_instance(),
+            default_model=effective_vlm.model or credentials[0].model or "",
+            langfuse_client=langfuse_client,
+        )
 
     # When provider is explicitly set, use VLMFactory to get the correct
     # backend (e.g. VolcEngineVLM for volcengine, OpenAIVLM for openai).
@@ -342,6 +421,8 @@ def _make_provider(config, langfuse_client: None = None):
         }
         if timeout is not None:
             vlm_config["timeout"] = timeout
+        if max_tokens is not None:
+            vlm_config["max_tokens"] = max_tokens
         if api_key:
             vlm_config["api_key"] = api_key
         if api_base:
@@ -356,20 +437,10 @@ def _make_provider(config, langfuse_client: None = None):
             langfuse_client=langfuse_client,
         )
 
-    # Fallback: legacy LiteLLMProvider (no explicit provider set)
-    if not api_key and not model.startswith("bedrock/"):
-        console.print("[yellow]Warning: No API key configured.[/yellow]")
-        console.print("You can configure providers later in the Console UI.")
-
-    return LiteLLMProvider(
-        api_key=api_key,
-        api_base=api_base,
-        default_model=model,
-        extra_headers=extra_headers,
-        provider_name=provider_name,
-        timeout=timeout,
-        thinking=thinking,
-        langfuse_client=langfuse_client,
+    raise RuntimeError(
+        "No VLM provider configured for VikingBot. Set bot.agents.provider, "
+        "configure bot.agents.credentials, or inherit the root vlm configuration. "
+        "Set provider to 'litellm' to use LiteLLM."
     )
 
 
@@ -423,14 +494,18 @@ def gateway(
     )
 
     cron = prepare_cron(bus)
+    agent_loop = prepare_agent_loop(config, bus, session_manager, cron)
+    from vikingbot.compile.service import BotCompileService
+
+    compile_service = BotCompileService(agent_loop=agent_loop)
     channels = prepare_channel(
         config,
         bus,
         fastapi_app=fastapi_app,
         enable_openapi=True,
         openapi_port=effective_port,
+        compile_service=compile_service,
     )
-    agent_loop = prepare_agent_loop(config, bus, session_manager, cron)
     heartbeat = prepare_heartbeat(config, agent_loop, session_manager)
 
     async def run():
@@ -448,6 +523,7 @@ def gateway(
         tasks = [
             cron.start(),
             heartbeat.start(),
+            compile_service.start(),
             channels.start_all(),
             agent_loop.run(),
             server.serve(),
@@ -576,7 +652,12 @@ Reminder message to deliver:
 
 
 def prepare_channel(
-    config, bus, fastapi_app=None, enable_openapi: bool = False, openapi_port: int = 18790
+    config,
+    bus,
+    fastapi_app=None,
+    enable_openapi: bool = False,
+    openapi_port: int = 18790,
+    compile_service=None,
 ):
     """Prepare channels for the bot.
 
@@ -602,6 +683,7 @@ def prepare_channel(
             bus,
             app=fastapi_app,  # Pass the external FastAPI app
             global_config=config,
+            compile_service=compile_service,
         )
         channels.add_channel(openapi_channel)
         logger.info(f"OpenAPI channel enabled on port {openapi_port}")
@@ -643,13 +725,13 @@ def prepare_heartbeat(config, agent_loop, session_manager) -> HeartbeatService:
     return heartbeat
 
 
-
 # ============================================================================
 # Agent Commands
 # ============================================================================
 
 
 # Helper for thinking spinner context
+
 
 def prepare_agent_channel(
     config,
@@ -776,7 +858,7 @@ def chat(
     # Use unified default session ID
     if session_id is None:
         session_id = get_or_create_machine_id()
-    cron = prepare_cron(bus, quiet=is_single_turn)
+    cron = None if eval else prepare_cron(bus, quiet=is_single_turn)
     channels = prepare_agent_channel(
         config,
         bus,
@@ -797,7 +879,7 @@ def chat(
         try:
             if is_single_turn:
                 # Single-turn mode: run channels and agent, exit after response
-                task_cron = asyncio.create_task(cron.start())
+                task_cron = asyncio.create_task(cron.start()) if cron is not None else None
                 task_channels = asyncio.create_task(channels.start_all())
                 task_agent = asyncio.create_task(agent_loop.run())
 
@@ -809,15 +891,20 @@ def chat(
                 # Cancel all other tasks
                 for task in pending:
                     task.cancel()
-                task_cron.cancel()
+                if task_cron is not None:
+                    task_cron.cancel()
                 task_agent.cancel()
 
                 # Wait for cancellation
-                await asyncio.gather(task_cron, task_agent, return_exceptions=True)
+                background_tasks = [task_agent]
+                if task_cron is not None:
+                    background_tasks.append(task_cron)
+                await asyncio.gather(*background_tasks, return_exceptions=True)
             else:
                 # Interactive mode: run forever
                 tasks = []
-                tasks.append(cron.start())
+                if cron is not None:
+                    tasks.append(cron.start())
                 tasks.append(channels.start_all())
                 tasks.append(agent_loop.run())
 
@@ -1048,9 +1135,11 @@ def cron_add(
     elif cron_expr:
         schedule = CronSchedule(kind="cron", expr=cron_expr)
     elif at:
-        import datetime
-
-        dt = datetime.datetime.fromisoformat(at)
+        try:
+            dt = parse_iso_datetime(at)
+        except ValueError as e:
+            console.print(f"[red]Error: invalid --at datetime: {e}[/red]")
+            raise typer.Exit(1) from e
         schedule = CronSchedule(kind="at", at_ms=int(dt.timestamp() * 1000))
     else:
         console.print("[red]Error: Must specify --every, --cron, or --at[/red]")
@@ -1061,13 +1150,17 @@ def cron_add(
 
     session_key = SessionKey(type="cli", channel_id="default", chat_id="default")
 
-    job = service.add_job(
-        name=name,
-        schedule=schedule,
-        message=message,
-        deliver=deliver,
-        session_key=session_key,
-    )
+    try:
+        job = service.add_job(
+            name=name,
+            schedule=schedule,
+            message=message,
+            deliver=deliver,
+            session_key=session_key,
+        )
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
 
     console.print(f"[green]✓[/green] Added job '{job.name}' ({job.id})")
 
@@ -1101,7 +1194,11 @@ def cron_enable(
     store_path = get_data_dir() / "cron" / "jobs.json"
     service = CronService(store_path)
 
-    job = service.enable_job(job_id, enabled=not disable)
+    try:
+        job = service.enable_job(job_id, enabled=not disable)
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
     if job:
         status = "disabled" if disable else "enabled"
         console.print(f"[green]✓[/green] Job '{job.name}' {status}")
@@ -1124,10 +1221,16 @@ def cron_run(
     async def run():
         return await service.run_job(job_id, force=force)
 
-    if asyncio.run(run()):
-        console.print("[green]✓[/green] Job executed")
-    else:
+    try:
+        executed = asyncio.run(run())
+    except RuntimeError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+
+    if not executed:
         console.print(f"[red]Failed to run job {job_id}[/red]")
+        raise typer.Exit(1)
+    console.print("[green]✓[/green] Job executed")
 
 
 # ============================================================================

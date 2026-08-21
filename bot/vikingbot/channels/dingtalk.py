@@ -238,6 +238,7 @@ class DingTalkChannel(BaseChannel):
             logger.info(f"DingTalk inbound: {content} from {sender_name}")
             await self._handle_message(
                 sender_id=sender_id,
+                sender_name=sender_name or sender_id,
                 chat_id=sender_id,  # For private chat, chat_id == sender_id
                 content=str(content),
                 metadata={

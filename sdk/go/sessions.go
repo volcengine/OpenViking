@@ -16,6 +16,12 @@ func (c *Client) CreateSession(ctx context.Context, opts *CreateSessionOptions) 
 	payload := map[string]any{}
 	setString(payload, "session_id", opts.SessionID)
 	setAny(payload, "memory_policy", opts.MemoryPolicy)
+	if opts.DisableAutoCommit {
+		payload["auto_commit_policy"] = nil
+	} else {
+		setAny(payload, "auto_commit_policy", opts.AutoCommitPolicy)
+	}
+	setAny(payload, "memory_extraction_config", opts.MemoryExtractionConfig)
 	setAny(payload, "telemetry", opts.Telemetry)
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/sessions", nil, payload, &result)
@@ -37,6 +43,22 @@ func (c *Client) GetSession(ctx context.Context, sessionID string, opts *GetSess
 	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodGet, "/api/v1/sessions/"+url.PathEscape(sessionID), query, nil, &result)
+	return result, err
+}
+
+// UpdateSessionConfig updates mutable session memory extraction settings.
+func (c *Client) UpdateSessionConfig(ctx context.Context, sessionID string, opts *UpdateSessionConfigOptions) (map[string]any, error) {
+	if opts == nil {
+		opts = &UpdateSessionConfigOptions{}
+	}
+	payload := map[string]any{}
+	setAny(payload, "memory_extraction_config", opts.MemoryExtractionConfig)
+	if opts.AutoCommitPolicy != nil {
+		payload["auto_commit_policy"] = *opts.AutoCommitPolicy
+	}
+	setAny(payload, "telemetry", opts.Telemetry)
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPatch, "/api/v1/sessions/"+url.PathEscape(sessionID)+"/config", nil, payload, &result)
 	return result, err
 }
 
@@ -114,6 +136,11 @@ func (c *Client) CommitSession(ctx context.Context, sessionID string, opts *Comm
 		"keep_recent_count": opts.KeepRecentCount,
 	}
 	setAny(payload, "telemetry", opts.Telemetry)
+	if opts.EventTags != nil {
+		payload["extraction_metadata"] = map[string]any{
+			"event": map[string]any{"tags": opts.EventTags},
+		}
+	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/sessions/"+url.PathEscape(sessionID)+"/commit", nil, payload, &result)
 	return result, err
@@ -134,6 +161,23 @@ func (c *Client) GetTask(ctx context.Context, taskID string) (map[string]any, er
 		return nil, err
 	}
 	return result, nil
+}
+
+// CancelTask requests cooperative cancellation of a background task.
+func (c *Client) CancelTask(
+	ctx context.Context,
+	taskID string,
+) (map[string]any, error) {
+	var result map[string]any
+	err := c.doJSON(
+		ctx,
+		http.MethodPost,
+		"/api/v1/tasks/"+url.PathEscape(taskID)+"/cancel",
+		nil,
+		nil,
+		&result,
+	)
+	return result, err
 }
 
 // ListTasks lists background tasks visible to the caller.

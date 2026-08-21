@@ -83,7 +83,9 @@ class OpenVikingCompactHook(Hook):
         admin_user_id: str,
         *,
         force_commit: bool,
-        keep_recent_count: int,
+        keep_recent_turn_count: int,
+        retained_message_token_budget: int,
+        min_raw_tail_steps: int,
         commit_message_threshold: int | None,
     ) -> dict[str, Any]:
         state = get_openviking_state(session)
@@ -139,7 +141,11 @@ class OpenVikingCompactHook(Hook):
         if should_commit:
             admin_commit_result = await client.commit_session(
                 session_id=session_id,
-                keep_recent_count=keep_recent_count,
+                keep_recent_count=0,
+                retention_mode="turn_budget",
+                keep_recent_turn_count=keep_recent_turn_count,
+                retained_message_token_budget=retained_message_token_budget,
+                min_raw_tail_steps=min_raw_tail_steps,
                 user_id=session_user_id,
             )
             logger.info(
@@ -182,10 +188,24 @@ class OpenVikingCompactHook(Hook):
         if not isinstance(openviking_connection, dict):
             openviking_connection = None
         force_commit = bool(kwargs.get("force_commit", False))
-        keep_recent_count = int(
+        keep_recent_turn_count = int(
             kwargs.get(
-                "keep_recent_count",
-                getattr(agents_config, "commit_keep_recent_count", 10),
+                "keep_recent_turn_count",
+                getattr(agents_config, "commit_keep_recent_turn_count", 3),
+            )
+            or 0
+        )
+        retained_message_token_budget = int(
+            kwargs.get(
+                "retained_message_token_budget",
+                getattr(agents_config, "commit_retained_message_token_budget", 6_000),
+            )
+            or 6_000
+        )
+        min_raw_tail_steps = int(
+            kwargs.get(
+                "min_raw_tail_steps",
+                getattr(agents_config, "commit_min_raw_tail_steps", 1),
             )
             or 0
         )
@@ -226,7 +246,9 @@ class OpenVikingCompactHook(Hook):
                     agents_config,
                     admin_user_id,
                     force_commit=force_commit,
-                    keep_recent_count=keep_recent_count,
+                    keep_recent_turn_count=keep_recent_turn_count,
+                    retained_message_token_budget=retained_message_token_budget,
+                    min_raw_tail_steps=min_raw_tail_steps,
                     commit_message_threshold=commit_message_threshold,
                 )
 
@@ -296,14 +318,14 @@ class OpenVikingPostCallHook(Hook):
             else:
                 ov_client = await self._get_client(workspace_id, config=config)
             logger.debug(
-                "[SKILL_EXP]: start workspace_id=%s query_len=%d query=%r",
+                "[SKILL_EXP]: start workspace_id={} query_len={} query={!r}",
                 workspace_id,
                 len(query),
                 query_preview,
             )
             experiences = await ov_client.search_experiences(query, limit=3)
             logger.info(
-                "[SKILL_EXP]: found %d experiences workspace_id=%s elapsed_ms=%.1f query=%r",
+                "[SKILL_EXP]: found {} experiences workspace_id={} elapsed_ms={:.1f} query={!r}",
                 len(experiences),
                 workspace_id,
                 (time.perf_counter() - started_at) * 1000.0,
@@ -317,7 +339,7 @@ class OpenVikingPostCallHook(Hook):
                 score = exp.get("score", 0) if isinstance(exp, dict) else getattr(exp, "score", 0)
                 if score < 0.3:
                     logger.debug(
-                        "[SKILL_EXP]: skip low score workspace_id=%s index=%d uri=%s score=%s",
+                        "[SKILL_EXP]: skip low score workspace_id={} index={} uri={} score={}",
                         workspace_id,
                         index,
                         uri,
@@ -329,8 +351,8 @@ class OpenVikingPostCallHook(Hook):
                     content = await ov_client.read_content(uri, level="read")
                 except Exception as read_exc:
                     logger.warning(
-                        "[SKILL_EXP]: failed to read experience workspace_id=%s "
-                        "index=%d uri=%s score=%s elapsed_ms=%.1f error_type=%s error=%r",
+                        "[SKILL_EXP]: failed to read experience workspace_id={} "
+                        "index={} uri={} score={} elapsed_ms={:.1f} error_type={} error={!r}",
                         workspace_id,
                         index,
                         uri,
@@ -343,8 +365,8 @@ class OpenVikingPostCallHook(Hook):
                 if content:
                     parts.append(content)
                     logger.debug(
-                        "[SKILL_EXP]: read experience workspace_id=%s index=%d uri=%s "
-                        "score=%s chars=%d elapsed_ms=%.1f",
+                        "[SKILL_EXP]: read experience workspace_id={} index={} uri={} "
+                        "score={} chars={} elapsed_ms={:.1f}",
                         workspace_id,
                         index,
                         uri,
@@ -353,7 +375,7 @@ class OpenVikingPostCallHook(Hook):
                         (time.perf_counter() - read_started_at) * 1000.0,
                     )
             logger.info(
-                "[SKILL_EXP]: finished workspace_id=%s kept=%d/%d elapsed_ms=%.1f query=%r",
+                "[SKILL_EXP]: finished workspace_id={} kept={}/{} elapsed_ms={:.1f} query={!r}",
                 workspace_id,
                 len(parts),
                 len(experiences),
@@ -381,7 +403,11 @@ class OpenVikingPostCallHook(Hook):
                 await ov_client.close()
 
     async def execute(self, context: HookContext, tool_name, params, result) -> Any:
-        if tool_name == "read_file":
+        is_skill_read = tool_name == "read_file" or (
+            tool_name == "openviking_multi_read"
+            and any(str(uri).rstrip("/").endswith("/SKILL.md") for uri in params.get("uris", []))
+        )
+        if is_skill_read:
             if result and not isinstance(result, Exception):
                 match = re.search(r"^---\s*\nname:\s*(.+?)\s*\n", result, re.MULTILINE)
                 if match:

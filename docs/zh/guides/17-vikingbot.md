@@ -10,9 +10,27 @@ VikingBot 建议使用 Python 3.11 或更高版本。
 
 ### 从 PyPI 安装
 
-```bash
-pip install "openviking[bot]"
+选择你常用的 Python 包管理工具安装 VikingBot：
+
+::: code-group
+
+```bash [uv（推荐）]
+uv tool install "openviking[bot]" --upgrade
 ```
+
+```bash [pip]
+pip install "openviking[bot]" --upgrade --force-reinstall
+```
+
+```bash [pipx]
+# 安装
+pipx install "openviking[bot]"
+
+# 更新
+pipx upgrade openviking
+```
+
+:::
 
 安装后检查版本：
 
@@ -109,11 +127,50 @@ ov find "我的回答偏好"
     "agents": {
       "provider": "openai",
       "model": "gpt-4o-mini",
-      "api_key": "<your-model-api-key>"
+      "api_key": "<your-model-api-key>",
+      "max_tokens": 8192
     }
   }
 }
 ```
+
+`bot.agents` 可以配置自己的有序 `credentials` 主备链；每项都配置 `model` 时，
+外层 `bot.agents.model` 可以省略：
+
+```json
+{
+  "bot": {
+    "agents": {
+      "max_tokens": 8192,
+      "credentials": [
+        {
+          "id": "bot-primary",
+          "provider": "volcengine",
+          "model": "bot-primary-model",
+          "api_key": "${BOT_PRIMARY_API_KEY}",
+          "max_tokens": 4096
+        },
+        {
+          "id": "bot-backup",
+          "provider": "openai",
+          "model": "bot-backup-model",
+          "api_key": "${BOT_BACKUP_API_KEY}"
+        }
+      ],
+      "failback_timeout_seconds": 600,
+      "failback_request_count": 50
+    }
+  }
+}
+```
+
+优先级是确定的：存在非空的 `bot.agents.model` 或 `bot.agents.credentials` 时，
+使用 Bot 自己的模型/credentials；两者都省略时，完整继承根级 `vlm` 的模型、
+credentials 和 failover/failback 设置。配置 Bot credentials 但省略外层 model
+时，每个 credential 都必须配置自己的 `model`。两条 credentials 链不会混用。
+`max_tokens` 是可选项：credential 自己的值优先于 `bot.agents.max_tokens`，未配置
+时继承 Agent 级值；两层都未配置时，VikingBot 不发送该请求字段，由模型服务决定
+默认输出上限。
 
 ### 2. 启动对话
 

@@ -181,6 +181,9 @@ is an existing file, put it in delete_ids; if it is only a new proposal, omit it
         """Resolve required files plus semantic-search candidates for this merge."""
 
         required_uris = _dedupe_uris(self.required_file_uris)
+        if not any(patch.before_file is None for patch in self.patches):
+            return required_uris
+
         max_extra_candidate_files = min(_MAX_EXTRA_CANDIDATE_FILES, max(5, len(required_uris)))
         search_limit = max_extra_candidate_files * 2
         candidate_uris = await self._search_candidate_file_uris(limit=search_limit)

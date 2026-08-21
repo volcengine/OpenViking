@@ -18,12 +18,11 @@ Key features:
 import asyncio
 from pathlib import Path
 
-from openviking import AsyncOpenViking
-from openviking_cli.exceptions import ConflictError
+from openviking_sdk import AsyncHTTPClient, ConflictError
 
 
 async def example_basic_watch():
-    client = AsyncOpenViking(path="./data_watch_example")
+    client = AsyncHTTPClient(url="http://localhost:1933")
     await client.initialize()
 
     try:
@@ -57,7 +56,7 @@ Version: 1.0
 
 
 async def example_update_watch_interval():
-    client = AsyncOpenViking(path="./data_watch_example")
+    client = AsyncHTTPClient(url="http://localhost:1933")
     await client.initialize()
 
     try:
@@ -82,7 +81,7 @@ async def example_update_watch_interval():
 
 
 async def example_cancel_watch():
-    client = AsyncOpenViking(path="./data_watch_example")
+    client = AsyncHTTPClient(url="http://localhost:1933")
     await client.initialize()
 
     try:
@@ -101,7 +100,7 @@ async def example_cancel_watch():
 
 
 async def example_handle_conflict():
-    client = AsyncOpenViking(path="./data_watch_example")
+    client = AsyncHTTPClient(url="http://localhost:1933")
     await client.initialize()
 
     try:
@@ -148,4 +147,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-

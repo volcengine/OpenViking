@@ -133,6 +133,43 @@ test("sendSessionMessages treats non-retryable failures as failed without enqueu
   });
 });
 
+test("sendSessionMessages queues only explicitly retryable conflicts", async () => {
+  await withPendingDir(async () => {
+    const retryable = await sendSessionMessages(
+      async () => ({
+        ok: false,
+        status: 409,
+        error: {
+          code: "CONFLICT",
+          details: { conflict_type: "path_busy", retryable: true },
+        },
+      }),
+      "retryable-conflict",
+      payloads(2),
+      { enqueueOnRetryable: true },
+    );
+    assert.equal(retryable.queued, 2);
+    assert.equal(retryable.failed, 0);
+
+    const terminal = await sendSessionMessages(
+      async () => ({
+        ok: false,
+        status: 409,
+        error: {
+          code: "ALREADY_EXISTS",
+          details: { retryable: false },
+        },
+      }),
+      "terminal-conflict",
+      payloads(2, 2),
+      { enqueueOnRetryable: true },
+    );
+    assert.equal(terminal.queued, 0);
+    assert.equal(terminal.failed, 2);
+    assert.equal((await listPending()).length, 2);
+  });
+});
+
 test("sendSessionMessages treats missing status failures as retryable", async () => {
   await withPendingDir(async () => {
     const res = await sendSessionMessages(

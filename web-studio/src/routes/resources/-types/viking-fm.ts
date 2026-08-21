@@ -67,13 +67,14 @@ export interface VikingReadResult {
 export interface VikingPreviewPolicy {
   maxAutoReadBytes?: number
   defaultReadLimit?: number
+  requireKnownSize?: boolean
 }
 
 export interface VikingPreviewResult {
   entry: VikingFsEntry
   fileType: VikingFileType
   shouldAutoRead: boolean
-  reason?: 'binary' | 'too-large'
+  reason?: 'binary' | 'too-large' | 'unknown-size'
   content: string
   offset: number
   limit: number

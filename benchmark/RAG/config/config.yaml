@@ -40,8 +40,6 @@ paths:
   dataset_path: "datasets/{dataset_name}"
   # Output directory for processed documents
   doc_output_dir: "datasets/{dataset_name}/{dataset_name}_processed_docs"
-  # Vector index storage directory
-  vector_store: "datasets/{dataset_name}/viking_store_index_dir"
   # Results output directory
   output_dir: "Output/{dataset_name}/experiment_dev"
   # Log file path

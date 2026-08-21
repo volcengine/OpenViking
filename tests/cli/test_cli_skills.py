@@ -39,47 +39,41 @@ class TestSkillAdd:
 
 
 class TestSkillList:
-    def test_list_skills(self, ensure_user_skills_dir):
-        r = ov(["ls", "viking://user/skills/", "-o", "json"])
+    def test_list_skills(self):
+        r = ov(["skills", "list", "-o", "json"])
         assert r["exit_code"] == 0, (
-            f"ov ls skills should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
+            f"ov skills list should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )
         data = r["json"]
         assert data is not None and data.get("ok") is True, "Expected ok=true"
         assert "result" in data, "'result' field should exist"
-        assert isinstance(data["result"], list), "'result' should be a list"
+        result = data["result"]
+        assert isinstance(result, dict), "'result' should be an object"
+        assert isinstance(result.get("skills"), list), "'result.skills' should be a list"
 
 
-class TestSkillRead:
-    def test_read_skill(self, ensure_user_skills_dir):
-        ls_r = ov(["ls", "viking://user/skills/", "-o", "json"])
-        if ls_r["exit_code"] != 0 or not ls_r["json"] or not ls_r["json"].get("result"):
-            pytest.skip("No skills available to test read")
+class TestSkillShow:
+    def test_show_skill(self):
+        list_r = ov(["skills", "list", "-o", "json"])
+        if list_r["exit_code"] != 0 or not list_r["json"]:
+            pytest.skip("No skills available to test show")
             return
-        skills = ls_r["json"]["result"]
+        skills = list_r["json"].get("result", {}).get("skills", [])
         if not isinstance(skills, list) or len(skills) == 0:
-            pytest.skip("No skills available to test read")
+            pytest.skip("No skills available to test show")
             return
         for skill_entry in skills:
             if not isinstance(skill_entry, dict):
                 continue
-            skill_uri = skill_entry.get("uri", "")
-            if not skill_uri:
+            skill_name = skill_entry.get("name", "")
+            if not skill_name:
                 continue
-            ls_skill_r = ov(["ls", skill_uri, "-o", "json"])
-            if (
-                ls_skill_r["exit_code"] != 0
-                or not ls_skill_r["json"]
-                or not ls_skill_r["json"].get("result")
-            ):
-                continue
-            items = ls_skill_r["json"]["result"]
-            for item in items:
-                if isinstance(item, dict) and item.get("isDir") is False:
-                    file_uri = item.get("uri", "")
-                    if file_uri:
-                        r = ov(["read", file_uri, "-o", "json"])
-                        assert r["exit_code"] == 0, (
-                            f"ov read skill file should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
-                        )
-                        return
+            r = ov(["skills", "show", skill_name, "--level", "2", "-o", "json"])
+            assert r["exit_code"] == 0, (
+                f"ov skills show should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
+            )
+            data = r["json"]
+            assert data is not None and data.get("ok") is True, "Expected ok=true"
+            assert data.get("result", {}).get("name") == skill_name
+            return
+        pytest.skip("No named skills available to test show")

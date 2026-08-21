@@ -1,0 +1,47 @@
+[
+  {
+    "value": false,
+    "expected": false,
+    "deprecated": false
+  },
+  {
+    "value": true,
+    "expected": true,
+    "deprecated": false
+  },
+  {
+    "value": "false",
+    "expected": false,
+    "deprecated": true
+  },
+  {
+    "value": "OFF",
+    "expected": false,
+    "deprecated": true
+  },
+  {
+    "value": "true",
+    "expected": true,
+    "deprecated": true
+  },
+  {
+    "value": 0,
+    "expected": false,
+    "deprecated": true
+  },
+  {
+    "value": 1,
+    "expected": true,
+    "deprecated": true
+  },
+  {
+    "value": null,
+    "expected": false,
+    "deprecated": true
+  },
+  {
+    "value": "legacy-nonempty",
+    "expected": true,
+    "deprecated": true
+  }
+]

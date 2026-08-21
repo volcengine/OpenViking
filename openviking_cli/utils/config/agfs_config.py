@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -107,6 +108,81 @@ class S3Config(BaseModel):
         return self
 
 
+class QueueFSRedisConfig(BaseModel):
+    """Configuration for the QueueFS Redis backend."""
+
+    mode: Literal["singleton", "cluster", "sentinel"] = Field(
+        default="singleton",
+        description="Redis topology mode.",
+    )
+    endpoints: list[str] = Field(
+        default_factory=lambda: ["redis://127.0.0.1:6379"],
+        description="Redis endpoints interpreted by the selected topology mode.",
+    )
+    master_name: Optional[str] = Field(default=None, description="Sentinel master name")
+    username: Optional[str] = Field(default=None, description="Redis ACL username")
+    password: Optional[str] = Field(default=None, description="Redis ACL password")
+    sentinel_username: Optional[str] = Field(default=None, description="Sentinel ACL username")
+    sentinel_password: Optional[str] = Field(default=None, description="Sentinel ACL password")
+    db: int = Field(default=0, description="Redis database number")
+    connect_timeout_ms: int = Field(default=3000, description="Redis connect timeout")
+    command_timeout_ms: int = Field(default=3000, description="Redis command timeout")
+    key_prefix: str = Field(default="default", description="Redis QueueFS key prefix")
+    tls_enabled: bool = Field(default=False, description="Enable Redis TLS")
+    tls_insecure_skip_verify: bool = Field(
+        default=False,
+        description="Skip Redis TLS certificate verification",
+    )
+
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def validate_config(self):
+        """Validate Redis topology, endpoints, and numeric limits."""
+        if not self.endpoints:
+            raise ValueError("queuefs redis endpoints must not be empty")
+        for endpoint in self.endpoints:
+            parsed = urlparse(endpoint)
+            if parsed.scheme not in {"redis", "rediss"} or not parsed.hostname:
+                raise ValueError("queuefs redis endpoints must use redis:// or rediss:// URLs")
+            try:
+                port = parsed.port
+            except ValueError as error:
+                raise ValueError("queuefs redis endpoint port is invalid") from error
+            if port == 0:
+                raise ValueError("queuefs redis endpoint port is invalid")
+            if (
+                parsed.username is not None
+                or parsed.password is not None
+                or parsed.path not in {"", "/"}
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError(
+                    "queuefs redis endpoints must not include credentials, database paths, "
+                    "query parameters, or fragments; use dedicated redis fields"
+                )
+        if self.mode == "singleton" and len(self.endpoints) != 1:
+            raise ValueError("queuefs redis singleton mode requires exactly one endpoint")
+        if self.mode == "cluster" and self.db != 0:
+            raise ValueError("queuefs redis cluster mode requires db=0")
+        if self.mode == "sentinel" and not (self.master_name or "").strip():
+            raise ValueError("queuefs redis sentinel mode requires master_name")
+        if self.db < 0:
+            raise ValueError("queuefs redis db must be >= 0")
+        if self.connect_timeout_ms <= 0:
+            raise ValueError("queuefs redis connect_timeout_ms must be > 0")
+        if self.command_timeout_ms <= 0:
+            raise ValueError("queuefs redis command_timeout_ms must be > 0")
+        if not self.key_prefix.strip():
+            raise ValueError("queuefs redis key_prefix must not be empty")
+        if "{" in self.key_prefix or "}" in self.key_prefix:
+            raise ValueError("queuefs redis key_prefix must not contain '{' or '}'")
+        if self.tls_insecure_skip_verify and not self.tls_enabled:
+            raise ValueError("queuefs redis tls_insecure_skip_verify requires tls_enabled=true")
+        return self
+
+
 class QueueFSConfig(BaseModel):
     """Configuration for QueueFS backend."""
 
@@ -117,7 +193,7 @@ class QueueFSConfig(BaseModel):
 
     backend: str = Field(
         default="sqlite",
-        description="QueueFS backend: 'memory' | 'sqlite' | 'sqlite3'",
+        description="QueueFS backend: 'memory' | 'sqlite' | 'sqlite3' | 'redis'",
     )
 
     db_path: Optional[str] = Field(
@@ -135,6 +211,8 @@ class QueueFSConfig(BaseModel):
         description="SQLite busy timeout for QueueFS in milliseconds.",
     )
 
+    redis: QueueFSRedisConfig = Field(default_factory=QueueFSRedisConfig)
+
     model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
@@ -143,9 +221,11 @@ class QueueFSConfig(BaseModel):
         if self.mode not in valid_modes:
             raise ValueError("queuefs mode must be one of: 'shared', 'worker'")
 
-        valid_backends = {"memory", "sqlite", "sqlite3"}
+        valid_backends = {"memory", "sqlite", "sqlite3", "redis"}
         if self.backend not in valid_backends:
-            raise ValueError("queuefs backend must be one of: 'memory', 'sqlite', 'sqlite3'")
+            raise ValueError(
+                "queuefs backend must be one of: 'memory', 'sqlite', 'sqlite3', 'redis'"
+            )
         if self.recover_stale_sec < 0:
             raise ValueError("queuefs recover_stale_sec must be >= 0")
         if self.busy_timeout_ms < 0:
@@ -315,6 +395,45 @@ class AGFSCacheConfig(BaseModel):
         return self
 
 
+class AGFSPathLockConfig(BaseModel):
+    """Configuration for the native RAGFS path lock service."""
+
+    @model_validator(mode="after")
+    def ignore_deprecated_lock_timeout(self):
+        """Warn and force the deprecated timeout back to the fixed runtime value."""
+        if "lock_timeout_secs" in self.model_fields_set:
+            logger.warning(
+                "AGFSPathLockConfig: 'storage.agfs.pathlock.lock_timeout_secs' is deprecated "
+                "and ignored; the runtime wait timeout is fixed at 0.0 seconds."
+            )
+            self.lock_timeout_secs = 0.0
+        return self
+
+    provider: str = Field(
+        default="filesystem",
+        description="PathLock provider: 'filesystem' | 'memory'",
+    )
+    lock_timeout_secs: float = Field(
+        default=0.0,
+        description="Deprecated internal field. Runtime auto-pathlock wait timeout is fixed at 0.0 seconds.",
+    )
+    lock_expire_secs: float = Field(
+        default=30.0,
+        description="Seconds before an unrefreshed lock token becomes stale.",
+    )
+
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def validate_config(self):
+        """Validate provider and timeout/expiry ranges."""
+        if self.provider not in {"filesystem", "memory"}:
+            raise ValueError("pathlock provider must be one of: 'filesystem', 'memory'")
+        if self.lock_expire_secs < 1.0:
+            raise ValueError("pathlock lock_expire_secs must be >= 1.0")
+        return self
+
+
 class AGFSConfig(BaseModel):
     """Configuration for RAGFS (Rust-based AGFS)."""
 
@@ -379,6 +498,11 @@ class AGFSConfig(BaseModel):
     cache: AGFSCacheConfig = Field(
         default_factory=AGFSCacheConfig,
         description="RAGFS cache configuration.",
+    )
+
+    pathlock: AGFSPathLockConfig = Field(
+        default_factory=AGFSPathLockConfig,
+        description="Native RAGFS path lock configuration.",
     )
 
     retry_times: Any = Field(

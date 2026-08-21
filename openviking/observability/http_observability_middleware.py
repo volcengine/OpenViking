@@ -14,7 +14,6 @@ from __future__ import annotations
 import logging
 import threading
 import time
-import uuid
 from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, ContextManager, Optional
@@ -26,6 +25,12 @@ from openviking.metrics.datasources import HttpRequestLifecycleDataSource
 from openviking.observability.context import (
     bind_root_observability_context,
     reset_root_observability_context,
+)
+from openviking.observability.http_error_context import (
+    bind_http_error_context,
+    capture_public_http_error,
+    get_captured_http_error,
+    reset_http_error_context,
 )
 from openviking.telemetry.span_models import RootSpanAttributes, create_root_span_attributes
 from openviking_cli.utils import get_logger
@@ -677,6 +682,8 @@ def apply_http_metrics_finalize(
 
     # Record request duration and status code
     try:
+        captured_error = get_captured_http_error()
+        include_error = int(root_attrs.http_status_code or 500) >= 400
         HttpRequestLifecycleDataSource.record_request(
             method=root_attrs.http_method,
             route=final_route,
@@ -686,6 +693,9 @@ def apply_http_metrics_finalize(
             request_id=root_attrs.request_id,
             user_id=root_attrs.user_id,
             url_path=root_attrs.url_path,
+            error_code=captured_error.code if include_error and captured_error else None,
+            error_message=captured_error.message if include_error and captured_error else None,
+            error_details=captured_error.details if include_error and captured_error else None,
         )
 
     except (TypeError, ValueError, AttributeError) as e:
@@ -789,6 +799,30 @@ async def _execute_request_with_span(
             return response
 
         except Exception as exc:
+            # The catch-all JSON renderer is outside this middleware, so mirror
+            # its public mapping before the audit event is emitted. This keeps
+            # the stored status and envelope aligned with the client response;
+            # unexpected exception text remains confined to logs and traces.
+            try:
+                from openviking.server.error_mapping import map_exception
+                from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS
+
+                mapped = map_exception(exc)
+            except Exception:
+                mapped = None
+            if mapped is not None:
+                root_attrs.http_status_code = ERROR_CODE_TO_HTTP_STATUS.get(mapped.code, 500)
+                capture_public_http_error(
+                    code=mapped.code,
+                    message=mapped.message,
+                    details=mapped.details,
+                )
+            else:
+                root_attrs.http_status_code = 500
+                capture_public_http_error(
+                    code="INTERNAL",
+                    message="Internal server error",
+                )
             # Update route and span name if we have a real span
             if span is not None:
                 _maybe_update_route_and_span_name(
@@ -825,9 +859,8 @@ def create_http_observability_middleware() -> Callable[[Request, Callable], Resp
 
         # Extract request information
         raw_path = str(request.url.path)
-        raw_query = request.url.query or None
         route_template = _get_route_template(request)
-        request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+        request_id = request.state.request_id
 
         # Create root span attributes
         root_attrs = create_root_span_attributes(
@@ -835,7 +868,6 @@ def create_http_observability_middleware() -> Callable[[Request, Callable], Resp
             http_route=route_template,
             request_id=request_id,
             url_path=raw_path,
-            url_query=raw_query,
             url_scheme=request.url.scheme,
             http_host=request.url.netloc,
             source_type=request.headers.get("x-source-type"),
@@ -847,6 +879,7 @@ def create_http_observability_middleware() -> Callable[[Request, Callable], Resp
         request.state.request_id = request_id
 
         # Bind root context and start metrics
+        error_token = bind_http_error_context()
         root_token = bind_root_observability_context(root_attrs)
         apply_http_metrics_start(request=request, root_attrs=root_attrs)
 
@@ -877,5 +910,6 @@ def create_http_observability_middleware() -> Callable[[Request, Callable], Resp
 
             # Reset root context
             reset_root_observability_context(root_token)
+            reset_http_error_context(error_token)
 
     return middleware

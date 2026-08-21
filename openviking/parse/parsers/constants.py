@@ -8,6 +8,9 @@ This file contains all constant definitions used by CodeRepositoryParser
 to keep the main code file clean and focused on logic.
 """
 
+MPEG_TS_EXTENSION_ALIAS = "mpegts"
+TYPESCRIPT_MPEG_TS_EXTENSION = ".ts"
+
 # Directories to ignore in code repositories
 IGNORE_DIRS = {
     ".git",
@@ -101,6 +104,8 @@ CODE_EXTENSIONS = {
     ".cpp",
     ".cc",
     ".c",
+    ".cu",
+    ".cuh",
     ".h",
     ".hpp",
     ".inl",

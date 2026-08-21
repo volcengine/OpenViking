@@ -103,8 +103,7 @@ class CronService:
                     )
                 self._store = CronStore(jobs=jobs)
             except Exception as e:
-                logger.warning(f"Failed to load cron store: {e}")
-                self._store = CronStore()
+                raise RuntimeError(f"Failed to load cron store from {self.store_path}: {e}") from e
         else:
             self._store = CronStore()
 
@@ -156,10 +155,10 @@ class CronService:
 
     async def start(self) -> None:
         """Start the cron service."""
-        self._running = True
         self._load_store()
         self._recompute_next_runs()
         self._save_store()
+        self._running = True
         self._arm_timer()
         logger.info(
             f"Cron service started with {len(self._store.jobs if self._store else [])} jobs"
@@ -233,8 +232,9 @@ class CronService:
         logger.info(f"Cron: executing job '{job.name}' ({job.id})")
 
         try:
-            if self.on_job:
-                await self.on_job(job)
+            if self.on_job is None:
+                raise RuntimeError("Cron service has no job execution callback")
+            await self.on_job(job)
 
             job.state.last_status = "ok"
             job.state.last_error = None
@@ -278,8 +278,11 @@ class CronService:
         delete_after_run: bool = False,
     ) -> CronJob:
         """Add a new job."""
-        store = self._load_store()
         now = _now_ms()
+        next_run_at_ms = _compute_next_run(schedule, now)
+        if next_run_at_ms is None:
+            raise ValueError("Schedule does not have a future run time")
+        store = self._load_store()
 
         job = CronJob(
             id=str(uuid.uuid4())[:8],
@@ -293,7 +296,7 @@ class CronService:
                 session_key_str=session_key.model_dump_json(),
                 channel_metadata=dict(_dict_or_empty(channel_metadata)),
             ),
-            state=CronJobState(next_run_at_ms=_compute_next_run(schedule, now)),
+            state=CronJobState(next_run_at_ms=next_run_at_ms),
             created_at_ms=now,
             updated_at_ms=now,
             delete_after_run=delete_after_run,
@@ -325,12 +328,14 @@ class CronService:
         store = self._load_store()
         for job in store.jobs:
             if job.id == job_id:
+                next_run_at_ms = None
+                if enabled:
+                    next_run_at_ms = _compute_next_run(job.schedule, _now_ms())
+                    if next_run_at_ms is None:
+                        raise ValueError("Schedule does not have a future run time")
                 job.enabled = enabled
                 job.updated_at_ms = _now_ms()
-                if enabled:
-                    job.state.next_run_at_ms = _compute_next_run(job.schedule, _now_ms())
-                else:
-                    job.state.next_run_at_ms = None
+                job.state.next_run_at_ms = next_run_at_ms
                 self._save_store()
                 self._arm_timer()
                 return job
@@ -343,6 +348,8 @@ class CronService:
             if job.id == job_id:
                 if not force and not job.enabled:
                     return False
+                if self.on_job is None:
+                    raise RuntimeError("Cron service has no job execution callback")
                 await self._execute_job(job)
                 self._save_store()
                 self._arm_timer()

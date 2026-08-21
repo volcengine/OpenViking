@@ -18,6 +18,28 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const ENCODED_SEGMENT_PREFIX: char = '!';
 const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
 
+fn partial_delete_error(bucket: &str, errors: &[aws_sdk_s3::types::Error]) -> Option<Error> {
+    if errors.is_empty() {
+        return None;
+    }
+
+    let details = errors
+        .iter()
+        .map(|error| {
+            format!(
+                "key={} code={} message={}",
+                error.key().unwrap_or("<unknown>"),
+                error.code().unwrap_or("<unknown>"),
+                error.message().unwrap_or("<unknown>")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    Some(Error::internal(format!(
+        "S3 DeleteObjects partial failure: bucket={bucket} errors=[{details}]"
+    )))
+}
+
 fn build_s3_error_message(
     op: &str,
     scope: &str,
@@ -59,6 +81,16 @@ where
         err.request_id(),
         err.extended_request_id(),
     ))
+}
+
+fn is_s3_compatible_not_found_code<E>(err: &E) -> bool
+where
+    E: ProvideErrorMetadata,
+{
+    // AWS S3 uses the modeled NoSuchKey error; some TOS direct backends return NotFound.
+    err.code()
+        .map(|code| code == "NotFound")
+        .unwrap_or(false)
 }
 
 fn format_sdk_s3_error<E, R>(op: &str, scope: &str, sdk_err: &SdkError<E, R>) -> Error
@@ -108,6 +140,30 @@ where
             None,
         )),
     }
+}
+
+/// Return true when an S3 SDK service error represents a failed conditional request.
+fn is_s3_conditional_failure<E, R>(sdk_err: &SdkError<E, R>) -> bool
+where
+    E: ProvideErrorMetadata,
+    R: 'static,
+{
+    use std::any::Any;
+
+    let SdkError::ServiceError(service_err) = sdk_err else {
+        return false;
+    };
+
+    if matches!(
+        service_err.err().code(),
+        Some("PreconditionFailed" | "ConditionalRequestConflict")
+    ) {
+        return true;
+    }
+
+    (service_err.raw() as &dyn Any)
+        .downcast_ref::<HttpResponse>()
+        .is_some_and(|response| matches!(response.status().as_u16(), 409 | 412))
 }
 
 fn format_generic_s3_error(
@@ -466,7 +522,7 @@ impl S3Client {
             Ok(resp) => resp,
             Err(sdk_err) => {
                 let service_err = sdk_err.into_service_error();
-                if service_err.is_no_such_key() {
+                if service_err.is_no_such_key() || is_s3_compatible_not_found_code(&service_err) {
                     return Err(Error::NotFound(key.to_string()));
                 }
                 return Err(format_s3_service_error(
@@ -484,6 +540,46 @@ impl S3Client {
             .map_err(|e| format_generic_s3_error("ReadBody", &self.bucket, key, e))?;
 
         Ok(bytes.to_vec())
+    }
+
+    /// Get an object's contents and ETag for conditional updates.
+    pub async fn get_object_with_etag(&self, key: &str) -> Result<Option<(Vec<u8>, String)>> {
+        let resp = match self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+        {
+            Ok(resp) => resp,
+            Err(sdk_err) => {
+                let service_err = sdk_err.into_service_error();
+                if service_err.is_no_such_key() || is_s3_compatible_not_found_code(&service_err) {
+                    return Ok(None);
+                }
+                return Err(format_s3_service_error(
+                    "GetObjectWithEtag",
+                    &format!("bucket={} key={}", self.bucket, key),
+                    &service_err,
+                ));
+            }
+        };
+
+        let etag = resp.e_tag().ok_or_else(|| {
+            Error::internal(format!(
+                "S3 GetObjectWithEtag missing ETag: bucket={} key={key}",
+                self.bucket
+            ))
+        })?.to_string();
+
+        let bytes = resp
+            .body
+            .collect()
+            .await
+            .map_err(|e| format_generic_s3_error("ReadBody", &self.bucket, key, e))?;
+
+        Ok(Some((bytes.to_vec(), etag)))
     }
 
     /// Get an object's contents with range request
@@ -506,7 +602,7 @@ impl S3Client {
             Ok(resp) => resp,
             Err(sdk_err) => {
                 let service_err = sdk_err.into_service_error();
-                if service_err.is_no_such_key() {
+                if service_err.is_no_such_key() || is_s3_compatible_not_found_code(&service_err) {
                     return Err(Error::NotFound(key.to_string()));
                 }
                 return Err(format_s3_service_error(
@@ -552,6 +648,72 @@ impl S3Client {
         Ok(())
     }
 
+    /// Upload an object only when the key does not already exist.
+    pub async fn put_object_create_new(&self, key: &str, data: Vec<u8>) -> Result<()> {
+        let mut request = self
+            .client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .if_none_match("*")
+            .body(ByteStream::from(data));
+
+        if self.auto_detect_content_type {
+            if let Some(content_type) = detect_content_type_for_key(key) {
+                request = request.content_type(content_type);
+            }
+        }
+
+        request.send().await.map_err(|e| {
+            if is_s3_conditional_failure(&e) {
+                Error::already_exists(key)
+            } else {
+                format_sdk_s3_error(
+                    "PutObjectCreateNew",
+                    &format!("bucket={} key={key}", self.bucket),
+                    &e,
+                )
+            }
+        })?;
+
+        Ok(())
+    }
+
+    /// Upload an object only when its ETag still matches `etag`.
+    pub async fn put_object_if_match(&self, key: &str, data: Vec<u8>, etag: &str) -> Result<bool> {
+        let mut request = self
+            .client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .if_match(etag)
+            .body(ByteStream::from(data));
+
+        if self.auto_detect_content_type {
+            if let Some(content_type) = detect_content_type_for_key(key) {
+                request = request.content_type(content_type);
+            }
+        }
+
+        request.send().await.map_err(|e| {
+            if is_s3_conditional_failure(&e) {
+                Error::AlreadyExists(key.to_string())
+            } else {
+                format_sdk_s3_error(
+                    "PutObjectIfMatch",
+                    &format!("bucket={} key={key}", self.bucket),
+                    &e,
+                )
+            }
+        }).map(|_| true).or_else(|e| {
+            if matches!(e, Error::AlreadyExists(_)) {
+                Ok(false)
+            } else {
+                Err(e)
+            }
+        })
+    }
+
     /// Delete a single object
     pub async fn delete_object(&self, key: &str) -> Result<()> {
         self.client
@@ -569,6 +731,36 @@ impl S3Client {
             })?;
 
         Ok(())
+    }
+
+    /// Delete a single object only when its ETag still matches `etag`.
+    pub async fn delete_object_if_match(&self, key: &str, etag: &str) -> Result<bool> {
+        self.client
+            .delete_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .if_match(etag)
+            .send()
+            .await
+            .map_err(|e| {
+                if is_s3_conditional_failure(&e) {
+                    Error::AlreadyExists(key.to_string())
+                } else {
+                    format_sdk_s3_error(
+                        "DeleteObjectIfMatch",
+                        &format!("bucket={} key={key}", self.bucket),
+                        &e,
+                    )
+                }
+            })
+            .map(|_| true)
+            .or_else(|e| {
+                if matches!(e, Error::AlreadyExists(_)) {
+                    Ok(false)
+                } else {
+                    Err(e)
+                }
+            })
     }
 
     /// Batch delete objects (up to 1000 per call)
@@ -615,7 +807,8 @@ impl S3Client {
                     .build()
                     .map_err(|e| format_bucket_s3_error("BuildDelete", &self.bucket, e))?;
 
-                self.client
+                let response = self
+                    .client
                     .delete_objects()
                     .bucket(&self.bucket)
                     .delete(delete)
@@ -624,6 +817,9 @@ impl S3Client {
                     .map_err(|e| {
                         format_sdk_s3_error("DeleteObjects", &format!("bucket={}", self.bucket), &e)
                     })?;
+                if let Some(error) = partial_delete_error(&self.bucket, response.errors()) {
+                    return Err(error);
+                }
             }
         }
 
@@ -660,7 +856,7 @@ impl S3Client {
                 // Check if it's a 404
                 if sdk_err
                     .as_service_error()
-                    .map(|err| err.is_not_found())
+                    .map(|err| err.is_not_found() || is_s3_compatible_not_found_code(err))
                     .unwrap_or(false)
                 {
                     Ok(None)
@@ -1114,6 +1310,19 @@ mod tests {
     }
 
     #[test]
+    fn test_partial_delete_error_reports_each_failed_key() {
+        let errors = [aws_sdk_s3::types::Error::builder()
+            .key("denied.txt")
+            .code("AccessDenied")
+            .message("denied")
+            .build()];
+
+        let error = partial_delete_error("bucket", &errors).unwrap();
+        assert!(error.to_string().contains("key=denied.txt"));
+        assert!(error.to_string().contains("code=AccessDenied"));
+    }
+
+    #[test]
     fn test_detect_content_type_for_key_uses_filename_extension() {
         assert_eq!(
             detect_content_type_for_key("tenant/docs/readme.md").as_deref(),
@@ -1184,5 +1393,32 @@ mod tests {
             }
             other => panic!("expected internal error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_is_s3_compatible_not_found_code_accepts_tos_code() {
+        let tos_not_found = FakeServiceError {
+            raw: "service error",
+            meta: ErrorMetadata::builder().code("NotFound").build(),
+        };
+        assert!(is_s3_compatible_not_found_code(&tos_not_found));
+
+        let no_such_key = FakeServiceError {
+            raw: "service error",
+            meta: ErrorMetadata::builder().code("NoSuchKey").build(),
+        };
+        assert!(!is_s3_compatible_not_found_code(&no_such_key));
+
+        let access_denied = FakeServiceError {
+            raw: "service error",
+            meta: ErrorMetadata::builder().code("AccessDenied").build(),
+        };
+        assert!(!is_s3_compatible_not_found_code(&access_denied));
+
+        let no_code = FakeServiceError {
+            raw: "service error",
+            meta: ErrorMetadata::builder().build(),
+        };
+        assert!(!is_s3_compatible_not_found_code(&no_code));
     }
 }

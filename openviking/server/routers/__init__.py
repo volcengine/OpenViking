@@ -3,17 +3,17 @@
 """OpenViking HTTP Server routers."""
 
 from openviking.server.routers.admin import router as admin_router
+from openviking.server.routers.agent_evolution import router as agent_evolution_router
 from openviking.server.routers.bot import router as bot_router
-from openviking.server.routers.code import router as code_router
 from openviking.server.routers.console import router as console_router
 from openviking.server.routers.content import router as content_router
 from openviking.server.routers.debug import router as debug_router
 from openviking.server.routers.filesystem import router as filesystem_router
 from openviking.server.routers.metrics import router as metrics_router
 from openviking.server.routers.observer import router as observer_router
+from openviking.server.routers.openviking_assets import router as openviking_assets_router
 from openviking.server.routers.pack import router as pack_router
 from openviking.server.routers.privacy_configs import router as privacy_configs_router
-from openviking.server.routers.relations import router as relations_router
 from openviking.server.routers.resources import router as resources_router
 from openviking.server.routers.search import router as search_router
 from openviking.server.routers.sessions import router as sessions_router
@@ -28,15 +28,14 @@ from openviking.server.routers.webdav import router as webdav_router
 
 __all__ = [
     "admin_router",
+    "agent_evolution_router",
     "bot_router",
-    "code_router",
     "system_router",
     "resources_router",
     "filesystem_router",
     "content_router",
     "console_router",
     "search_router",
-    "relations_router",
     "sessions_router",
     "skills_router",
     "snapshot_router",
@@ -46,6 +45,7 @@ __all__ = [
     "debug_router",
     "metrics_router",
     "observer_router",
+    "openviking_assets_router",
     "tasks_router",
     "user_settings_router",
     "watches_router",

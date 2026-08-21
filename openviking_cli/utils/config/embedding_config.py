@@ -4,6 +4,12 @@ from typing import Any, ClassVar, List, Literal, Optional, Tuple, cast
 
 from pydantic import BaseModel, Field, model_validator
 
+TEXT_SOURCE_CONTENT_ONLY = "content_only"
+TEXT_SOURCE_SUMMARY_FIRST = "summary_first"
+TEXT_SOURCE_SUMMARY_ONLY = "summary_only"
+SUMMARY_TEXT_SOURCES = frozenset({TEXT_SOURCE_SUMMARY_FIRST, TEXT_SOURCE_SUMMARY_ONLY})
+TEXT_SOURCES = SUMMARY_TEXT_SOURCES | {TEXT_SOURCE_CONTENT_ONLY}
+
 
 class EmbeddingCredential(BaseModel):
     """Single embedding credential configuration for multi-credential failover."""
@@ -92,6 +98,16 @@ class EmbeddingModelConfig(BaseModel):
             "which is bandwidth-efficient and decoded client-side). Set to 'float' "
             "to send/receive plain JSON arrays. This is the recommended workaround "
             "when the upstream gateway cannot serialize base64 responses correctly."
+        ),
+    )
+    extra_body: Optional[dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Extra JSON body fields merged into every embeddings request. "
+            "Applies to OpenAI / Azure providers. Useful for OpenAI-compatible "
+            "gateways that accept vendor-specific fields, e.g. OpenRouter provider "
+            "routing {'provider': {'sort': 'latency'}}. Explicit "
+            "query_param/document_param keys take precedence on conflict."
         ),
     )
     api_version: Optional[str] = Field(
@@ -630,7 +646,7 @@ class EmbeddingConfig(BaseModel):
         description="Maximum retry attempts for embedding provider calls (0 disables retry)",
     )
     text_source: str = Field(
-        default="content_only",
+        default=TEXT_SOURCE_CONTENT_ONLY,
         description="Text source for file vectorization: summary_first|summary_only|content_only",
     )
     max_input_tokens: int = Field(
@@ -677,7 +693,7 @@ class EmbeddingConfig(BaseModel):
             raise ValueError(
                 "At least one embedding configuration (dense, sparse, or hybrid) is required"
             )
-        if self.text_source not in {"summary_first", "summary_only", "content_only"}:
+        if self.text_source not in TEXT_SOURCES:
             raise ValueError(
                 "embedding.text_source must be one of: summary_first, summary_only, content_only"
             )
@@ -751,6 +767,7 @@ class EmbeddingConfig(BaseModel):
                         if cfg.encoding_format is not None
                         else {}
                     ),
+                    **({"extra_body": cfg.extra_body} if cfg.extra_body else {}),
                 },
             ),
             ("azure", "dense"): (
@@ -772,6 +789,7 @@ class EmbeddingConfig(BaseModel):
                         if cfg.encoding_format is not None
                         else {}
                     ),
+                    **({"extra_body": cfg.extra_body} if cfg.extra_body else {}),
                 },
             ),
             ("volcengine", "dense"): (
@@ -1049,6 +1067,7 @@ class EmbeddingConfig(BaseModel):
                 # Model-behavior fields are shared by all credentials of the
                 # same model and live only on the parent config.
                 encoding_format=config.encoding_format,
+                extra_body=config.extra_body,
                 model_path=config.model_path,
                 cache_dir=config.cache_dir,
                 enable_fusion=config.enable_fusion,

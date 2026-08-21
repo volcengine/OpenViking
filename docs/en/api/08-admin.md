@@ -23,7 +23,7 @@ For `/api/v1/admin/*`, `trusted` mode permits requests with no explicit identity
 | Register/remove users | Y | Y (own account) | N |
 | List agents (deprecated, returns empty list) | Y | Y (own account) | N |
 | Regenerate user key | Y | Y (own account) | N |
-| Change user role | Y | N | N |
+| Promote user to ADMIN | Y | Y (own account) | N |
 
 ## CLI `--sudo` Option
 
@@ -57,6 +57,100 @@ Configure `root_api_key` in `~/.openviking/ovcli.conf`:
 
 ## API Reference
 
+### get_agent_evolution_status
+
+Return the effective Agent Evolution switch for the caller's account. ROOT
+operates on the configured default account; ADMIN operates on its own account.
+
+**HTTP API**
+
+```
+GET /api/v1/admin/agent-evolution
+```
+
+```bash
+curl http://localhost:1933/api/v1/admin/agent-evolution \
+  -H "X-API-Key: <root-key>"
+```
+
+**Response Example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "enabled": false,
+    "account_id": "default"
+  },
+  "time": 0.1
+}
+```
+
+`enabled` is the account override from
+`/local/{account_id}/_system/setting.json`, or
+`server.agent_evolution.enabled` when no override exists. Session commits read
+this effective value without restarting the server.
+
+The existing update endpoint name is unchanged:
+
+```http
+PUT /api/v1/admin/agent-evolution
+Content-Type: application/json
+
+{"enabled": true}
+```
+
+### account_settings
+
+ROOT can manage any account and ADMIN can manage only its own account. The
+generic settings endpoint accepts only explicitly allowlisted fields; currently
+only `agent_evolution.enabled` is writable.
+
+```http
+GET /api/v1/admin/accounts/{account_id}/settings
+PATCH /api/v1/admin/accounts/{account_id}/settings
+Content-Type: application/json
+
+{"agent_evolution": {"enabled": true}}
+```
+
+Before an existing setting is replaced, it is backed up to
+`/local/{account_id}/_system/setting.backup.json`.
+
+### user_settings
+
+ROOT can manage any User and ADMIN can manage Users in its own account. The
+User settings endpoint currently allowlists only `memory_policy`. The shared
+top-level `memory_types` filter controls which memory schemas may be extracted.
+User memories are routed to Self or Peer according to each message's `peer_id`;
+Agent memory types remain Self-only.
+
+```http
+GET /api/v1/admin/accounts/{account_id}/users/{user_id}/settings
+PATCH /api/v1/admin/accounts/{account_id}/users/{user_id}/settings
+Content-Type: application/json
+
+{
+  "memory_policy": {
+    "memory_types": ["profile", "preferences", "events", "entities", "experiences"]
+  }
+}
+```
+
+The response contains the User-level `memory_policy`, expanded with its default
+memory types and Agent-memory dependencies. `experiences` expands to
+`cases`, `trajectories`, and `experiences`. The policy is independent of the
+account-level Agent Evolution switch, which is managed through the dedicated
+account endpoint. Updates are backed up to the User's
+`settings/user_config.backup.json` before replacement. A Session without an
+explicit policy reads the latest User policy when it is committed; if the User
+has no override, it falls back to `server.user_config_defaults.memory_policy`
+and then to the kernel default. To clear a persisted User override and resume
+inheriting these defaults, PATCH `{"memory_policy": null}`. An empty object
+`{"memory_policy": {}}` is an explicit policy and does not clear the override.
+
+---
+
 ### create_account
 
 #### 1. API Implementation Overview
@@ -85,7 +179,7 @@ Create a new workspace with its first admin user.
 | account_id | str | Yes | - | Workspace ID |
 | admin_user_id | str | Yes | - | First admin user ID |
 | seed | str | No | `null` | Optional deterministic API key seed. When set, the key secret is `sha256(user_id + "\0" + seed)` |
-| user_config | object | No | `null` | Initial config for the first admin user. Currently supports `add_targets.resource_uri` and `add_targets.skill_uri` |
+| user_config | object | No | `null` | Initial config for the first admin user. Supports `add_targets.resource_uri`, `add_targets.skill_uri`, and `memory_policy` |
 
 **Notes:**
 - In `trusted` mode, `user_key` is omitted from the response
@@ -125,13 +219,7 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
     "admin_user_id": "gateway-admin"
   }'
 
-# Then promote it to root for cross-account admin operations
-curl -X PUT http://localhost:1933/api/v1/admin/accounts/platform/users/gateway-admin/role \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: <root-key>" \
-  -d '{"role": "root"}'
-
-# Then use in trusted mode
+# Then use it in trusted mode; admin authorization comes from root_api_key
 curl -X POST http://localhost:1933/api/v1/admin/accounts \
   -H "Content-Type: application/json" \
   -H "X-API-Key: <root-key>" \
@@ -437,9 +525,9 @@ Register a new user in a workspace.
 |-----------|------|----------|---------|-------------|
 | account_id | str | Yes | - | Workspace ID |
 | user_id | str | Yes | - | User ID |
-| role | str | No | "user" | Role to assign. `ROOT` and same-account `ADMIN` may register `"user"` or `"admin"`. `"root"` must be assigned through the dedicated role-change endpoint. |
+| role | str | No | "user" | Role to assign. `ROOT` and same-account `ADMIN` may register `"user"` or `"admin"`. ROOT identity comes only from `server.root_api_key`. |
 | seed | str | No | `null` | Optional deterministic API key seed. When set, the key secret is `sha256(user_id + "\0" + seed)` |
-| user_config | object | No | `null` | Initial config for the new user. Currently supports `add_targets.resource_uri` and `add_targets.skill_uri` |
+| user_config | object | No | `null` | Initial config for the new user. Supports `add_targets.resource_uri`, `add_targets.skill_uri`, and `memory_policy` |
 
 **Notes:**
 - In `trusted` mode, `user_key` is omitted from the response
@@ -745,10 +833,10 @@ ov --sudo admin remove-user acme bob
 
 #### 1. API Implementation Overview
 
-Change a user's role (ROOT only).
+Promote an account user to ADMIN. ROOT may operate on any account; ADMIN is limited to its own account.
 
 **Processing Flow:**
-1. Verify requester has ROOT privileges
+1. Verify the requester has ROOT or ADMIN privileges and keep ADMIN within its own account
 2. Call API Key Manager to update user role
 3. Return updated user info
 
@@ -765,11 +853,11 @@ Change a user's role (ROOT only).
 |-----------|------|----------|---------|-------------|
 | account_id | str | Yes | - | Workspace ID |
 | user_id | str | Yes | - | User ID |
-| role | str | Yes | - | New role: "admin", "user", or "root" |
+| role | str | Yes | - | Must be "admin" |
 
 **Notes:**
-- Only ROOT can change user roles
-- Role can be set to "admin", "user", or "root"
+- ROOT and ADMIN can promote users to ADMIN; ADMIN is limited to its own account
+- This endpoint cannot set "user" or "root"; ROOT comes only from `server.root_api_key`
 
 #### 3. Usage Examples
 
@@ -1052,49 +1140,7 @@ ov --sudo admin migrate --cleanup --output json
 
 ---
 
-### user add-location settings
-
-Per-user add defaults are stored as user config under
-`viking://user/{user_id}/settings/user_config.json`. They affect add calls that
-omit explicit targets:
-
-1. `add_resource`: explicit `to` / `parent` wins, then user
-   `add_targets.resource_uri`, then
-   `server.user_config_defaults.add_targets.resource_uri`, then legacy behavior.
-2. `add_skill`: explicit `target_uri` wins, then user
-   `add_targets.skill_uri`, then
-   `server.user_config_defaults.add_targets.skill_uri`, then legacy behavior.
-
-#### HTTP API
-
-```
-GET /api/v1/user-settings/add-locations
-PATCH /api/v1/user-settings/add-locations
-DELETE /api/v1/user-settings/add-locations
-```
-
-`PATCH` accepts the add-target fields directly. Passing `null` clears one field;
-deleting the settings clears the whole per-user override.
-
-```bash
-curl -X PATCH http://localhost:1933/api/v1/user-settings/add-locations \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: <user-key>" \
-  -d '{"resource_uri": "viking://user/resources/project-a"}'
-```
-
-`resource_uri` must be a writable resource directory URI:
-`viking://resources` or `viking://resources/...`,
-`viking://user/resources` or `viking://user/resources/...`,
-`viking://user/{user_id}/resources` or
-`viking://user/{user_id}/resources/...`, or
-`viking://user/{user_id}/peers/{peer_id}/resources` or
-`viking://user/{user_id}/peers/{peer_id}/resources/...`. `skill_uri` must be
-`viking://user/skills` or `viking://agent/skills`; explicit
-`viking://user/{user_id}/skills` is not accepted in v1. Invalid configured
-values are rejected; OpenViking does not silently fall back to another target.
-
----
+<a id="user-add-location-settings"></a>
 
 ## Full Example
 
@@ -1146,10 +1192,10 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users \
 curl -X GET http://localhost:1933/api/v1/admin/accounts/acme/users \
   -H "X-API-Key: <alice-key>"
 
-# Step 4: Change role (requires ROOT key)
+# Step 4: Promote the user to admin
 curl -X PUT http://localhost:1933/api/v1/admin/accounts/acme/users/bob/role \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: <root-key>" \
+  -H "X-API-Key: <alice-key>" \
   -d '{"role": "admin"}'
 
 # Step 5: Regenerate key

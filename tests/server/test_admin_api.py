@@ -18,16 +18,22 @@ from fastapi.responses import JSONResponse
 from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.server.api_keys import APIKeyManager
 from openviking.server.app import create_app
-from openviking.server.config import ServerConfig
+from openviking.server.config import ServerConfig, UserConfig
 from openviking.server.dependencies import set_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
-from openviking.server.user_config import read_user_add_targets
+from openviking.server.user_config import (
+    read_user_add_targets,
+    read_user_config,
+    user_config_backup_uri,
+)
 from openviking.service.core import OpenVikingService
 from openviking.service.task_store import (
     SYSTEM_TASK_ACCOUNT_ID,
     SYSTEM_TASK_USER_ID,
 )
+from openviking.service.task_tracker import get_task_tracker
+from openviking.service.user_deletion import setup_user_deletion
 from openviking_cli.exceptions import OpenVikingError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -41,19 +47,6 @@ def _seed_secret(user_id: str, seed: str) -> str:
 
 
 ROOT_KEY = "admin-api-test-root-key-abcdef1234567890ab"
-
-
-class _NoopLockContext:
-    """The lightweight fake storage does not exercise transaction locking."""
-
-    def __init__(self, *_args, **_kwargs):
-        pass
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *_args):
-        return False
 
 
 class _FakeAGFS:
@@ -82,11 +75,18 @@ class _FakeAGFS:
             current = f"{current}/{part}" if current else f"/{part}"
             self._dirs.add(current)
 
+    def pathlock_acquire_exact(self, ctx, path, timeout_secs=0.0, owner_lease_ref=None):
+        return {"lease_ref": f"test:{path}"}
+
+    def pathlock_release(self, ctx, lease):
+        return None
+
 
 class _FakeVikingFS:
     def __init__(self):
         self.agfs = _FakeAGFS()
         self.files = {}
+        self.writes = []
 
     async def read_file(self, uri, **_kwargs):
         if uri not in self.files:
@@ -94,6 +94,7 @@ class _FakeVikingFS:
         return self.files[uri]
 
     async def write_file(self, uri, content, **_kwargs):
+        self.writes.append(uri)
         self.files[uri] = content
 
     async def rm(self, uri, **_kwargs):
@@ -103,6 +104,11 @@ class _FakeVikingFS:
 class _FakeService:
     def __init__(self):
         self.viking_fs = _FakeVikingFS()
+        self.sessions = self
+
+    async def get_agent_evolution_enabled(self, account_id):
+        del account_id
+        return True
 
     async def initialize_account_directories(self, ctx):
         return None
@@ -148,12 +154,6 @@ def _build_lightweight_admin_test_app() -> FastAPI:
 
 @pytest_asyncio.fixture(scope="function")
 async def lightweight_admin_app(monkeypatch):
-    monkeypatch.setattr(
-        "openviking.server.api_keys.legacy.get_lock_manager", lambda: None
-    )
-    monkeypatch.setattr(
-        "openviking.server.api_keys.legacy.LockContext", _NoopLockContext
-    )
     app = _build_lightweight_admin_test_app()
     await app.state.api_key_manager.load()
     return app
@@ -188,6 +188,10 @@ async def admin_app(admin_service):
     manager = APIKeyManager(root_key=ROOT_KEY, viking_fs=admin_service.viking_fs)
     await manager.load()
     app.state.api_key_manager = manager
+    app.state.user_deletion_service = await setup_user_deletion(
+        service=admin_service,
+        manager=manager,
+    )
 
     # Set auth plugin (lifespan not triggered in ASGI tests)
     registry = get_registry()
@@ -311,7 +315,7 @@ async def test_create_user_paths_accept_initial_user_config(
         viking_fs,
         RequestContext(user=UserIdentifier(acct, "alice"), role=Role.ADMIN),
     )
-    assert alice_settings.resource_uri == "viking://user/resources/admin"
+    assert alice_settings.resource_uri == "viking://user/alice/resources/admin"
 
     resp = await lightweight_admin_client.post(
         f"/api/v1/admin/accounts/{acct}/users",
@@ -328,7 +332,171 @@ async def test_create_user_paths_accept_initial_user_config(
         viking_fs,
         RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER),
     )
-    assert bob_settings.resource_uri == "viking://user/resources/bob"
+    assert bob_settings.resource_uri == "viking://user/bob/resources/bob"
+
+
+async def test_user_memory_policy_can_be_initialized_and_hot_updated(
+    lightweight_admin_client: httpx.AsyncClient,
+    lightweight_admin_app: FastAPI,
+):
+    acct = _uid()
+    create_account = await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    assert create_account.status_code == 200, create_account.text
+
+    create_user = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={
+            "user_id": "bob",
+            "role": "user",
+            "user_config": {"memory_policy": {"memory_types": ["profile"]}},
+        },
+        headers=root_headers(),
+    )
+    assert create_user.status_code == 200, create_user.text
+
+    get_settings = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/users/bob/settings",
+        headers=root_headers(),
+    )
+    assert get_settings.status_code == 200, get_settings.text
+    assert get_settings.json()["result"]["memory_policy"] == {
+        "self": {"enabled": True},
+        "peer": {"enabled": True},
+        "memory_types": ["profile"],
+    }
+
+    patch_settings = await lightweight_admin_client.patch(
+        f"/api/v1/admin/accounts/{acct}/users/bob/settings",
+        json={"memory_policy": {"memory_types": ["experiences"]}},
+        headers=root_headers(),
+    )
+    assert patch_settings.status_code == 200, patch_settings.text
+    memory_policy = patch_settings.json()["result"]["memory_policy"]
+    assert memory_policy["memory_types"] == [
+        "cases",
+        "experiences",
+        "trajectories",
+    ]
+
+    viking_fs = lightweight_admin_app.state.fake_service.viking_fs
+    persisted = await read_user_config(
+        viking_fs,
+        RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER),
+    )
+    assert persisted.memory_policy["memory_types"] == [
+        "cases",
+        "experiences",
+        "trajectories",
+    ]
+    user_ctx = RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER)
+    backup = json.loads(viking_fs.files[user_config_backup_uri(user_ctx)])
+    assert backup["memory_policy"]["memory_types"] == ["profile"]
+
+    writes_before_noop = len(viking_fs.writes)
+    noop_patch = await lightweight_admin_client.patch(
+        f"/api/v1/admin/accounts/{acct}/users/bob/settings",
+        json={"memory_policy": persisted.memory_policy},
+        headers=root_headers(),
+    )
+    assert noop_patch.status_code == 200, noop_patch.text
+    assert len(viking_fs.writes) == writes_before_noop
+
+    lightweight_admin_app.state.config.user_config_defaults = UserConfig(
+        memory_policy={"memory_types": ["events"]}
+    )
+    reset_settings = await lightweight_admin_client.patch(
+        f"/api/v1/admin/accounts/{acct}/users/bob/settings",
+        json={"memory_policy": None},
+        headers=root_headers(),
+    )
+    assert reset_settings.status_code == 200, reset_settings.text
+    assert reset_settings.json()["result"]["memory_policy"] == {
+        "self": {"enabled": True},
+        "peer": {"enabled": True},
+        "memory_types": ["events"],
+    }
+
+    persisted = await read_user_config(viking_fs, user_ctx)
+    assert persisted.memory_policy is None
+    backup = json.loads(viking_fs.files[user_config_backup_uri(user_ctx)])
+    assert backup["memory_policy"]["memory_types"] == [
+        "cases",
+        "experiences",
+        "trajectories",
+    ]
+
+
+async def test_user_memory_policy_uses_server_default_without_user_override(
+    lightweight_admin_client: httpx.AsyncClient,
+    lightweight_admin_app: FastAPI,
+):
+    acct = _uid()
+    lightweight_admin_app.state.config.user_config_defaults = UserConfig(
+        memory_policy={"memory_types": ["profile"]}
+    )
+    create_account = await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    assert create_account.status_code == 200, create_account.text
+
+    get_settings = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/users/alice/settings",
+        headers=root_headers(),
+    )
+    assert get_settings.status_code == 200, get_settings.text
+    assert get_settings.json()["result"]["memory_policy"] == {
+        "self": {"enabled": True},
+        "peer": {"enabled": True},
+        "memory_types": ["profile"],
+    }
+
+
+async def test_create_user_paths_ignore_deprecated_agent_evolution_config(
+    lightweight_admin_client: httpx.AsyncClient,
+    lightweight_admin_app: FastAPI,
+):
+    acct = _uid()
+    viking_fs = lightweight_admin_app.state.fake_service.viking_fs
+
+    resp = await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={
+            "account_id": acct,
+            "admin_user_id": "alice",
+            "user_config": {"agent_evolution": {"enabled": True}},
+        },
+        headers=root_headers(),
+    )
+    assert resp.status_code == 200, resp.text
+
+    alice_config = await read_user_config(
+        viking_fs,
+        RequestContext(user=UserIdentifier(acct, "alice"), role=Role.ADMIN),
+    )
+    assert alice_config.agent_evolution.enabled is None
+
+    resp = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={
+            "user_id": "bob",
+            "role": "user",
+            "user_config": {"agent_evolution": {"enabled": False}},
+        },
+        headers=root_headers(),
+    )
+    assert resp.status_code == 200, resp.text
+
+    bob_config = await read_user_config(
+        viking_fs,
+        RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER),
+    )
+    assert bob_config.agent_evolution.enabled is None
 
 
 async def test_list_accounts(admin_client: httpx.AsyncClient):
@@ -444,7 +612,7 @@ async def test_root_can_register_admin_role_user(
 async def test_root_cannot_register_root_role_user(
     lightweight_admin_client: httpx.AsyncClient,
 ):
-    """ROOT must use set_role instead of minting ROOT directly in register_user."""
+    """ROOT is the configured server identity, not an account user role."""
     acct = _uid()
     await lightweight_admin_client.post(
         "/api/v1/admin/accounts",
@@ -600,8 +768,12 @@ async def test_list_users(admin_client: httpx.AsyncClient):
     assert user_ids == {"alice", "bob"}
 
 
-async def test_remove_user(admin_client: httpx.AsyncClient):
-    """ROOT can remove a user."""
+async def test_remove_user(
+    admin_client: httpx.AsyncClient,
+    admin_service: OpenVikingService,
+    admin_app: FastAPI,
+):
+    """Deletion revokes the user and removes only their private data, uploads, and tasks."""
     acct = _uid()
     await admin_client.post(
         "/api/v1/admin/accounts",
@@ -614,43 +786,100 @@ async def test_remove_user(admin_client: httpx.AsyncClient):
         headers=root_headers(),
     )
     bob_key = resp.json()["result"]["user_key"]
-
+    bob_ctx = RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER)
+    private_uri = "viking://user/bob/memories/private.md"
+    await admin_service.viking_fs.write_file(private_uri, "private", ctx=bob_ctx)
+    alice_upload_uri = "viking://upload/1800000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    bob_upload_uri = "viking://upload/1800000000000-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    upload_ctx = RequestContext(user=UserIdentifier(acct, "alice"), role=Role.ROOT)
+    for upload_uri, user_id in ((alice_upload_uri, "alice"), (bob_upload_uri, "bob")):
+        await admin_service.viking_fs.write_file(
+            f"{upload_uri}/meta",
+            json.dumps({"account": acct, "user": user_id}),
+            ctx=upload_ctx,
+        )
+    bob_task = await get_task_tracker().create(
+        "session_commit",
+        resource_id="bob-session",
+        account_id=acct,
+        user_id="bob",
+    )
     resp = await admin_client.delete(
         f"/api/v1/admin/accounts/{acct}/users/bob", headers=root_headers()
     )
-    assert resp.status_code == 200
+    assert resp.status_code == 202
+    task_id = resp.json()["result"]["task_id"]
 
-    # Bob's key should be invalid now
+    # The fence invalidates Bob before background cleanup finishes.
     resp = await admin_client.get(
         "/api/v1/fs/ls?uri=viking://",
         headers={"X-API-Key": bob_key},
     )
     assert resp.status_code == 401
 
+    deletion_task = await _wait_for_task(admin_client, task_id)
+    assert deletion_task["status"] == "completed"
+    assert not await admin_service.viking_fs.exists(private_uri, ctx=bob_ctx)
+    assert not await admin_service.viking_fs.exists(bob_upload_uri, ctx=upload_ctx)
+    assert await admin_service.viking_fs.exists(alice_upload_uri, ctx=upload_ctx)
+    assert not admin_app.state.api_key_manager.has_user(acct, "bob")
+    assert (
+        await get_task_tracker().get(
+            bob_task.task_id,
+            account_id=acct,
+            user_id="bob",
+        )
+        is None
+    )
+
+    missing = await admin_client.delete(
+        f"/api/v1/admin/accounts/{acct}/users/bob",
+        headers=root_headers(),
+    )
+    assert missing.status_code == 404
+
 
 # ---- Role management ----
 
 
-async def test_set_role(admin_client: httpx.AsyncClient):
-    """ROOT can change a user's role."""
+async def test_admin_can_set_user_role_in_own_account(
+    lightweight_admin_client: httpx.AsyncClient,
+):
+    """ADMIN can promote a user in its own account to ADMIN."""
     acct = _uid()
-    await admin_client.post(
+    create_account = await lightweight_admin_client.post(
         "/api/v1/admin/accounts",
         json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
-    await admin_client.post(
+    alice_key = create_account.json()["result"]["user_key"]
+    create_user = await lightweight_admin_client.post(
         f"/api/v1/admin/accounts/{acct}/users",
         json={"user_id": "bob", "role": "user"},
         headers=root_headers(),
     )
-    resp = await admin_client.put(
+    bob_key = create_user.json()["result"]["user_key"]
+
+    resp = await lightweight_admin_client.put(
         f"/api/v1/admin/accounts/{acct}/users/bob/role",
         json={"role": "admin"},
-        headers=root_headers(),
+        headers={"X-API-Key": alice_key},
     )
     assert resp.status_code == 200
     assert resp.json()["result"]["role"] == "admin"
+
+    list_users = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/users",
+        headers={"X-API-Key": bob_key},
+    )
+    assert list_users.status_code == 200
+
+    invalid_role = await lightweight_admin_client.put(
+        f"/api/v1/admin/accounts/{acct}/users/bob/role",
+        json={"role": "root"},
+        headers={"X-API-Key": alice_key},
+    )
+    assert invalid_role.status_code == 400
 
 
 async def test_regenerate_key(admin_client: httpx.AsyncClient):
@@ -1145,7 +1374,7 @@ async def test_legacy_cleanup_removes_only_legacy_namespaces(
     )
 
 
-async def test_legacy_agent_and_session_uri_reads_are_read_only(
+async def test_legacy_agent_uri_is_read_only_and_session_storage_uses_canonical_uri(
     admin_service: OpenVikingService,
 ):
     """Old agent/session URIs remain readable but not mutable."""
@@ -1160,6 +1389,11 @@ async def test_legacy_agent_and_session_uri_reads_are_read_only(
         "/local/default/session/old-session/messages.jsonl",
         '{"role":"user"}\n',
     )
+    await _agfs_write(
+        admin_service,
+        "/local/default/session/old-session/.meta.json",
+        '{"created_by_user_id":"admin_user"}',
+    )
 
     assert (
         await admin_service.viking_fs.read_file(
@@ -1170,7 +1404,7 @@ async def test_legacy_agent_and_session_uri_reads_are_read_only(
     )
     assert (
         await admin_service.viking_fs.read_file(
-            "viking://session/old-session/messages.jsonl",
+            "viking://user/admin_user/sessions/old-session/messages.jsonl",
             ctx=ctx,
         )
         == '{"role":"user"}\n'
@@ -1181,8 +1415,6 @@ async def test_legacy_agent_and_session_uri_reads_are_read_only(
             "blocked",
             ctx=ctx,
         )
-    with pytest.raises(PermissionDeniedError):
-        await admin_service.viking_fs.mkdir("viking://session/new-session", ctx=ctx)
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -1221,10 +1453,6 @@ async def test_trusted_mode_root_can_create_account(
     trusted_admin_app,
 ):
     """Trusted ROOT requests should be able to create accounts."""
-    # Set gateway-admin to ROOT role
-    manager = trusted_admin_app.state.api_key_manager
-    await manager.set_role("platform", "gateway-admin", "root")
-
     acct = _uid()
     resp = await trusted_admin_client.post(
         "/api/v1/admin/accounts",
@@ -1250,10 +1478,6 @@ async def test_trusted_mode_admin_can_register_user_in_own_account(
     trusted_admin_app,
 ):
     """Trusted ADMIN requests should be able to manage users in their own account."""
-    # Set gateway-admin to ROOT role first
-    manager = trusted_admin_app.state.api_key_manager
-    await manager.set_role("platform", "gateway-admin", "root")
-
     acct = _uid()
     create_resp = await trusted_admin_client.post(
         "/api/v1/admin/accounts",
@@ -1286,10 +1510,6 @@ async def test_trusted_mode_admin_can_list_users_with_account_only_in_url(
     trusted_admin_app,
 ):
     """Trusted ADMIN requests may omit X-OpenViking-Account when the URL already provides it."""
-    # Set gateway-admin to ROOT role first
-    manager = trusted_admin_app.state.api_key_manager
-    await manager.set_role("platform", "gateway-admin", "root")
-
     acct = _uid()
     create_resp = await trusted_admin_client.post(
         "/api/v1/admin/accounts",
@@ -1319,10 +1539,6 @@ async def test_trusted_mode_admin_can_list_users_without_account_or_user_headers
     trusted_admin_app,
 ):
     """Trusted admin routes may omit caller account/user when the route itself identifies the target."""
-    # Set gateway-admin to ROOT role first
-    manager = trusted_admin_app.state.api_key_manager
-    await manager.set_role("platform", "gateway-admin", "root")
-
     acct = _uid()
     create_resp = await trusted_admin_client.post(
         "/api/v1/admin/accounts",
@@ -1348,10 +1564,6 @@ async def test_trusted_mode_admin_cannot_register_user_in_other_account(
     trusted_admin_app,
 ):
     """Trusted ADMIN requests should reject conflicting account identity."""
-    # Set gateway-admin to ROOT role first
-    manager = trusted_admin_app.state.api_key_manager
-    await manager.set_role("platform", "gateway-admin", "root")
-
     acct = _uid()
     other = _uid()
     for account_id, admin_user_id in ((acct, "alice"), (other, "eve")):
@@ -1384,11 +1596,8 @@ async def test_trusted_mode_admin_api_uses_trusted_gateway_identity(
     trusted_admin_app,
 ):
     """Trusted admin routes use the trusted gateway identity instead of tenant user role."""
-    # Set gateway-admin to ROOT role first
-    manager = trusted_admin_app.state.api_key_manager
-    await manager.set_role("platform", "gateway-admin", "root")
-
     acct = _uid()
+    manager = trusted_admin_app.state.api_key_manager
     create_resp = await trusted_admin_client.post(
         "/api/v1/admin/accounts",
         json={"account_id": acct, "admin_user_id": "alice"},
@@ -1423,10 +1632,6 @@ async def test_trusted_mode_requires_matching_api_key_for_admin_api(
     trusted_admin_app,
 ):
     """Trusted admin requests should require the configured server API key when present."""
-    # Set gateway-admin to ROOT role first
-    manager = trusted_admin_app.state.api_key_manager
-    await manager.set_role("platform", "gateway-admin", "root")
-
     resp = await trusted_admin_client.post(
         "/api/v1/admin/accounts",
         json={"account_id": _uid(), "admin_user_id": "alice"},
@@ -1444,10 +1649,6 @@ async def test_trusted_mode_create_account_lists_current_account_metadata(
     trusted_admin_app,
 ):
     """Trusted account creation should list the current account metadata shape."""
-    # Set gateway-admin to ROOT role first
-    manager = trusted_admin_app.state.api_key_manager
-    await manager.set_role("platform", "gateway-admin", "root")
-
     acct = _uid()
     resp = await trusted_admin_client.post(
         "/api/v1/admin/accounts",

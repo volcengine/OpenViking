@@ -3,11 +3,13 @@
 """Usage reporting extension points for OpenViking."""
 
 from .extractors import MemoryUsageExtractor, UsageExtractor
+from .file_log_sink import FileLogUsageSink
 from .models import UsageContext, UsageEvent
 from .reporter import UsageReporter
 from .sinks import UsageSink
 
 __all__ = [
+    "FileLogUsageSink",
     "MemoryUsageExtractor",
     "UsageContext",
     "UsageEvent",

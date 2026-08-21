@@ -47,7 +47,7 @@ OpenViking supports various resource types, categorized by functionality:
 
 | Type | Description |
 |------|-------------|
-| Feishu/Lark | URL-based, supports docx, wiki, sheets, bitable. By default uses app credentials from FEISHU_APP_ID and FEISHU_APP_SECRET; user-token imports can pass `args.feishu_access_token`, and user-token watches also pass `args.feishu_refresh_token` |
+| Feishu/Lark | URL-based, supports doc/docx, wiki, sheets, bitable. By default uses app credentials from FEISHU_APP_ID and FEISHU_APP_SECRET; user-token imports can pass `args.feishu_access_token`, and user-token watches also pass `args.feishu_refresh_token` |
 
 **Web Pages (recursive web crawler)**
 
@@ -112,7 +112,7 @@ Resource incremental updates are implemented via the **Watch Task** mechanism:
 
 #### Watch Task Creation
 - Set `watch_interval > 0` (in minutes) when calling `add_resource` with a re-readable source, such as a URL, sitemap, or RSS feed, to create a watch task
-- Uploaded content referenced by `temp_file_id` is consumed as a one-time snapshot and cannot be watched; re-add it when the local source changes
+- Uploaded content referenced by `temp_file_id` is a static snapshot and cannot be watched; re-add it when the local source changes
 - You may specify `to` to define the target URI; if omitted, the task binds to the `root_uri` returned by this import
 - Pointing a watch at a sitemap/RSS/Atom URL keeps the **whole site** in sync: each refresh re-reads the feed and rebuilds the tree, so newly published pages are added and removed pages drop automatically
 - `WatchManager` handles task persistence
@@ -134,24 +134,24 @@ Resource incremental updates are implemented via the **Watch Task** mechanism:
 
 ### add_resource
 
-Add a resource to the knowledge base. The SDK supports local files/directories, URLs, and other sources. Raw HTTP calls accept remote URLs through `path` or uploaded local files through `temp_file_id`. Uploaded content is a one-time snapshot, so it cannot be combined with `watch_interval > 0`.
+Add a resource to the knowledge base. The SDK supports local files/directories, URLs, and other sources. Raw HTTP calls accept remote URLs through `path` or uploaded local files through `temp_file_id`. Uploaded content is a static snapshot, so it cannot be combined with `watch_interval > 0`.
 
 #### 1. API Implementation Overview
 
-This endpoint is the core entry point for resource management, supporting adding resources from various sources with optional waiting for semantic processing completion.
+This endpoint is the core entry point for resource management, supporting adding resources from various sources with optional waiting for semantic processing and vectorization completion.
 
 **Processing Flow**:
 1. Identify and validate the resource source (URL or uploaded temporary file)
 2. Resolve the target URI
-3. Call the corresponding Parser to parse content
+3. Call the corresponding format Parser; `args.parse_mode` controls whether the converted Markdown body may be split
 4. Build the directory tree and write to AGFS
-5. Wait for semantic processing completion when `wait=true`; with `wait=false`, return a `task_id` for queue tracking
-6. If `reason` is non-empty, append it to the fixed resource reason session and commit through the normal memory extraction pipeline so suitable user memories can reference the resource URI
-7. Set up scheduled update task if `watch_interval` is specified
+5. Run post-ingest processing according to `processing_mode`: `semantic_and_vectors` generates semantic artifacts and vectors; `vectors_only` skips semantic understanding and only enqueues file vectorization
+6. Wait for semantic processing/vectorization completion when `wait=true`; with `wait=false`, return a `task_id` for queue tracking
+7. If `reason` is non-empty, append it to the fixed resource reason session and commit through the normal memory extraction pipeline so suitable user memories can reference the resource URI
+8. Set up scheduled update task if `watch_interval` is specified
 
 **Code Entry Points**:
-- `openviking/client/local.py:LocalClient.add_resource` - SDK entry (embedded)
-- `openviking_cli/client/http.py:AsyncHTTPClient.add_resource` - SDK entry (HTTP)
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.add_resource` - Python SDK entry
 - `openviking/server/routers/resources.py:add_resource` - HTTP router
 - `openviking/service/resource_service.py` - Core service implementation
 - `crates/ov_cli/src/handlers.rs:handle_add_resource` - CLI handler
@@ -177,8 +177,9 @@ This endpoint is the core entry point for resource management, supporting adding
 | exclude | string | No | None | File patterns to exclude (glob) |
 | directly_upload_media | bool | No | True | Whether to directly upload media files |
 | preserve_structure | bool | No | None | Whether to preserve directory structure |
-| args | object | No | `{}` | Parser-specific import options forwarded to the source parser/accessor. E.g. `args.site=true/false` forces/opts out of whole-site (sitemap/RSS) ingestion, `args.max_pages` etc. override the `webfeed` config; the recursive web crawler accepts `args.depth`, `args.max_pages`, `args.include_paths`, `args.exclude_paths`, `args.allow_external_links`, `args.skip_download_links`; Feishu user-token imports pass `args.feishu_access_token`. Core `add_resource` fields such as `path`, `to`, `watch_interval`, `include`, and `exclude` are not allowed inside `args` |
-| watch_interval | float | No | 0 | Scheduled update interval (minutes). >0 creates a task for a re-readable URL/sitemap/RSS source; uploaded `temp_file_id` content is a one-time snapshot and must be re-added when it changes. <=0 cancels a task; explicit `to` wins, otherwise binds to the imported `root_uri` |
+| args | object | No | `{}` | Parser-specific import options forwarded to the source parser/accessor. Native HTTPS Git imports and watches accept HTTP Basic credentials over TLS as `args.auth_config={"username":"oauth2","token":"..."}`; `username` defaults to `oauth2`. Git `branch` or `commit` remains at the top level of `args`. `args.parse_mode` accepts `default` (existing splitting behavior) or `no_split` (parse and convert each source document to one Markdown body). E.g. `args.site=true/false` forces/opts out of whole-site (sitemap/RSS) ingestion, `args.max_pages` etc. override the `webfeed` config; the recursive web crawler accepts `args.depth`, `args.max_pages`, `args.include_paths`, `args.exclude_paths`, `args.allow_external_links`, `args.skip_download_links`; Feishu user-token imports pass `args.feishu_access_token`. Core `add_resource` fields such as `path`, `to`, `watch_interval`, `include`, and `exclude` are not allowed inside `args` |
+| watch_interval | float | No | 0 | Scheduled update interval (minutes). >0 creates a task for a re-readable URL/sitemap/RSS source; uploaded `temp_file_id` content is a static snapshot and must be re-added when it changes. <=0 cancels a task; explicit `to` wins, otherwise binds to the imported `root_uri` |
+| processing_mode | string | No | `semantic_and_vectors` | Post-ingest processing mode. `semantic_and_vectors` is the normal flow: generate semantic artifacts (`.abstract.md`, `.overview.md`) and vectors. `vectors_only` skips semantic understanding/VLM summarization and only vectorizes current resource files |
 | telemetry | TelemetryRequest | No | False | Whether to return telemetry data |
 
 **Additional Notes**:
@@ -190,9 +191,13 @@ This endpoint is the core entry point for resource management, supporting adding
 - Raw HTTP calls for local files require first uploading via [temp_upload](#temp_upload) to obtain `temp_file_id`
 - When `to` is specified and the target already exists, triggers incremental update
 - Only Git repository sources use full background import when `wait=false`; OpenViking performs repository preflight and target planning before returning the `task_id`.
+- Native HTTPS Git credentials in `args.auth_config` remain request-local when `watch_interval <= 0`. When `watch_interval > 0`, OpenViking stores the repository-bound username/token in private watch state and restores it only for later Git fetches. The credentials are excluded from ordinary queue payloads and watch API/MCP/CLI responses. Git PATs have no generic refresh flow; rotate an expired or revoked token by recreating the watch. Legacy URL-embedded credentials such as `https://user:token@host/repo.git` remain accepted and are passed through unchanged; because that URL is also the source identifier, it may be recorded in process arguments, logs, queues, resource metadata, and watch state. Prefer `args.auth_config` for new integrations. Plaintext HTTP authentication and authenticated redirects for `args.auth_config` remain rejected.
+- The token travels in the HTTPS request body. Keep diagnostic request-body dumping disabled in production because explicitly enabling it can record secrets.
 - Memory generated from `reason` is extracted through the same pipeline as `session.commit`. It uses `reason`, the resource URI, available source name, and available directory abstract; it does not inspect or expand the full resource content. OpenViking writes to existing memory types such as `entities`, `events`, or `preferences`, not a dedicated resource memory directory.
 - When deleting a resource, OpenViking scans the self or peer memories targeted by the current context before deletion, removes the matching resource URI and content introduced by that `reason`, and refreshes the semantic index for the affected memories.
 - Other sources with `wait=false` finish source parsing, target resolution, and AGFS writes before returning. Only semantic and embedding queues continue asynchronously.
+- `processing_mode=vectors_only` does not call the VLM semantic-understanding stage and does not generate or refresh `.abstract.md` / `.overview.md`. For existing targets, it preserves existing semantic artifacts and existing semantic vectors. It still updates the resource tree, vectorizes current non-hidden files when `build_index=true`, and removes detail vectors for files deleted during refresh.
+- `processing_mode` belongs to `add_resource`. The admin `reindex` API/CLI continues to use `mode` (`vectors_only`, `semantic_and_vectors`, `prune_orphans`) for maintenance operations on already-ingested data.
 - When `watch_interval > 0`, the watch task binds to `to` if provided; otherwise it binds to the `root_uri` returned by this import. If no stable `root_uri` is available, the request fails and asks for an explicit `to`.
 - Feishu/Lark app-token imports do not pass `args.feishu_access_token`. OpenViking keeps the existing app credential flow and the SDK obtains an app/tenant token from `app_id` and `app_secret`. This mode supports both one-time imports and `watch_interval > 0`.
 - Feishu/Lark one-time user-token imports pass `args={"feishu_access_token": "u-..."}` with `watch_interval <= 0`. OpenViking uses that user token only for the current import and does not store it.
@@ -200,6 +205,9 @@ This endpoint is the core entry point for resource management, supporting adding
 - Feishu/Lark user-token watches require `FEISHU_APP_ID` and `FEISHU_APP_SECRET` (or `feishu.app_id` and `feishu.app_secret` in `ov.conf`) because Feishu refresh tokens are bound to the app that issued them. The supplied user token must come from the same Feishu app configured in OpenViking.
 - Watch task token state is stored in the internal `viking://resources/.watch_tasks.json` control file and is hidden from watch API/MCP/CLI responses. If VikingFS file encryption is enabled, this control file is encrypted at rest; otherwise the server-side control file contains plaintext token state.
 - For local directory inputs, scanning respects `.gitignore` files (root and nested) with standard Git semantics; `ignore_dirs`, `include`, and `exclude` further refine what is ingested.
+- `args.parse_mode=no_split` still invokes the normal format Parser. PDF, Word, PowerPoint, HTML, and other supported documents are converted to Markdown, but heading-, paragraph-, and size-based splitting is skipped. A directory import applies this independently to each supported document and continues to honor `.gitignore`, filters, and `preserve_structure`.
+- For a single-file input in `no_split` mode, when parsing produces exactly one visible file and `to` is omitted, that file is stored directly under the resolved parent (for example, `guide.md` becomes `viking://resources/guide.md`). No wrapper directory or directory-level `.abstract.md` / `.overview.md` is created. If parsing also produces images or other visible files, the wrapper directory is retained. An explicit `to` is always preserved as the exact final URI.
+- `no_split` changes only the stored Markdown layout. Semantic processing, file vectorization, and any internal embedding chunking remain unchanged. Relative Markdown links are resolved against the same no-split output layout, so links do not point to split-only paths. A configured Understanding parser that cannot guarantee a single Markdown body returns an explicit unsupported-mode error.
 - To create or update plain text directly, use [content/write](03-filesystem.md#write) instead of `add_resource`. Semantic processing and embeddings are refreshed automatically after resource ingestion and content writes.
 
 #### 3. Usage Examples
@@ -219,6 +227,34 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -d '{
     "path": "https://example.com/guide.md",
     "reason": "User guide documentation",
+    "wait": true
+  }'
+
+# Import and watch a private HTTPS Git repository
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "https://git.example.com/team/private-repo.git",
+    "to": "viking://resources/private-repo",
+    "watch_interval": 60,
+    "args": {
+      "branch": "main",
+      "auth_config": {
+        "username": "oauth2",
+        "token": "replace-with-your-token"
+      }
+    }
+  }'
+
+# Add a resource and only build vectors, without VLM semantic understanding
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "https://example.com/guide.md",
+    "to": "viking://resources/guide",
+    "processing_mode": "vectors_only",
     "wait": true
   }'
 
@@ -290,14 +326,9 @@ curl -X POST http://localhost:1933/api/v1/resources \
 **Python SDK**
 
 ```python
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
-# Using embedded mode
-client = ov.OpenViking(path="./data")
-client.initialize()
-
-# Or using HTTP client
-client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 # Add local file
@@ -306,6 +337,12 @@ result = client.add_resource(
     reason="User guide documentation"
 )
 print(f"Added: {result['root_uri']}")
+
+# Parse each document to Markdown without splitting its body
+result = client.add_resource(
+    "./documents",
+    args={"parse_mode": "no_split"},
+)
 
 # Add from URL to specific location
 result = client.add_resource(
@@ -375,6 +412,7 @@ client.add_resource(
 const task = await client.addResource("https://example.com/docs", {
   to: "viking://resources/docs/",
   wait: true,
+  args: { parse_mode: "no_split" },
 });
 console.log(task);
 ```
@@ -385,6 +423,7 @@ console.log(task);
 result, err := client.AddResource(ctx, "./documents/guide.md", &openviking.AddResourceOptions{
     Reason: "User guide documentation",
     Wait:   true,
+    Args:   map[string]any{"parse_mode": "no_split"},
 })
 if err != nil {
     return err
@@ -397,6 +436,9 @@ fmt.Println(result["root_uri"])
 ```bash
 # Add local file
 ov add-resource ./documents/guide.md --reason "User guide"
+
+# Parse each document to one Markdown body
+ov add-resource ./documents --args parse_mode:no_split
 
 # Add from URL
 ov add-resource https://example.com/guide.md --to viking://resources/guide.md
@@ -533,316 +575,40 @@ task_id      uuid-xxx
 | `warnings` | array | (Optional) List of warnings (only when `strict=False`) |
 | `queue_status` | object | (Optional, only when `wait=true`) Queue processing status with `pending`, `processing`, `completed` counts |
 
-For Git repository sources with `wait=false`, the background task has `task_type="add_resource"` and `resource_id` equal to the returned `root_uri`. Running task records may include `stage`; completed task results include `queue_status` with the final semantic and embedding queue summary.
+**Completed add-resource task result**
 
----
-
-### Watch Management
-
-List, inspect, update, and trigger watch tasks created via [`add_resource`](#add_resource) with `watch_interval > 0`. The control plane is mirrored across REST (`/api/v1/watches`), the `ov task watch` CLI subcommand group, and a minimum-closure MCP surface (`list_watches` / `cancel_watch`) for agents.
-
-#### 1. API Implementation Overview
-
-This control plane wraps the `WatchManager` primitives without changing any server-side behavior. Every endpoint and CLI command resolves the target task by either its `task_id` (path) or its `to_uri` (query). The two keys are interchangeable; if both are supplied they must refer to the same task, otherwise the request is rejected with 400.
-
-**Operations**:
-- **List** (`GET /api/v1/watches`) — returns `{tasks, total}`; pass `?active_only=true` to filter; pass `?to_uri=...` to collapse to a single-task lookup
-- **Show** (`GET /api/v1/watches/{task_id}`) — inspect one task; optional `?to_uri=` performs a cross-key sanity check
-- **Update** (`PATCH /api/v1/watches/{task_id}` or `PATCH /api/v1/watches?to_uri=...`) — partial update of `watch_interval`, `is_active`, `reason`, `instruction`. `is_active` is orthogonal to `watch_interval`: flip `is_active` to pause/resume without losing the configured cadence.
-- **Delete** (`DELETE /api/v1/watches/{task_id}` or `DELETE /api/v1/watches?to_uri=...`)
-- **Trigger** (`POST /api/v1/watches/{task_id}/trigger` or `POST /api/v1/watches/trigger?to_uri=...`) — fire-and-forget refresh; returns immediately while the underlying re-ingest runs in the background
-
-**Code Entry Points**:
-- `openviking/server/routers/watches.py` — REST router for `/api/v1/watches`
-- `crates/ov_cli/src/commands/watch.rs` — `ov task watch` CLI subcommand group
-- `openviking/server/mcp_endpoint.py` — MCP `list_watches` / `cancel_watch` tools and the `watch_interval` / `to` parameters on `add_resource`
-- `openviking/resource/watch_manager.py:WatchManager` — task persistence and scheduling primitives
-
-#### 2. Interface and Parameter Description
-
-For every single-task endpoint the path `{task_id}` can be replaced with a `?to_uri=` query argument. The CLI `<key>` argument is auto-classified: any value starting with `viking://` routes to the by-URI path, anything else is treated as a task ID (other URI schemes such as `http://` are rejected locally to avoid silent 404s).
-
-**`PATCH /watches` body** (all fields optional; at least one is required)
-
-| Field | Type | Description |
-|-------|------|-------------|
-| watch_interval | float | New cadence in minutes. Must be `> 0`; use `is_active=false` to pause without losing the cadence. |
-| is_active | bool | Toggle activation without losing the cadence (pause / resume). |
-| reason | string | Update the recorded reason for the watch. |
-| instruction | string | Update the semantic processing instruction. |
-
-Unrecognized fields are rejected with 422 (`extra="forbid"`). Fields left unset preserve their current values.
-
-#### 3. Usage Examples
-
-**HTTP API**
-
-```bash
-# List active watch tasks (drop ?active_only to include paused ones)
-curl -s "http://localhost:1933/api/v1/watches?active_only=true" \
-  -H "X-API-Key: your-key"
-
-# Pause a watch without losing its cadence
-curl -X PATCH "http://localhost:1933/api/v1/watches/<task_id>" \
-  -H "X-API-Key: your-key" -H "Content-Type: application/json" \
-  -d '{"is_active": false}'
-
-# Trigger an immediate refresh (fire-and-forget; returns before the re-ingest finishes)
-curl -X POST "http://localhost:1933/api/v1/watches/<task_id>/trigger" \
-  -H "X-API-Key: your-key"
-
-# Resolve by URI instead of task ID
-curl -X DELETE "http://localhost:1933/api/v1/watches?to_uri=viking://resources/guide.md" \
-  -H "X-API-Key: your-key"
-```
-
-**Python SDK**
-
-```python
-watches = client.list_watches(active_only=True)
-client.update_watch(to_uri="viking://resources/guide.md", is_active=False)
-client.trigger_watch(to_uri="viking://resources/guide.md")
-client.delete_watch(to_uri="viking://resources/guide.md")
-```
-
-**Go SDK**
-
-```go
-watches, err := client.ListWatches(ctx, &openviking.ListWatchesOptions{
-    ActiveOnly: true,
-})
-updated, err := client.UpdateWatch(ctx, openviking.UpdateWatchOptions{
-    ToURI:    "viking://resources/guide.md",
-    IsActive: openviking.Bool(false),
-})
-triggered, err := client.TriggerWatch(ctx, openviking.WatchRef{
-    ToURI: "viking://resources/guide.md",
-})
-deleted, err := client.DeleteWatch(ctx, openviking.WatchRef{
-    ToURI: "viking://resources/guide.md",
-})
-_, _, _, _ = watches, updated, triggered, deleted
-```
-
-**CLI** (subcommands of `ov task watch`)
-
-```bash
-# List active watches (drop --active-only to include paused ones)
-ov task watch ls --active-only
-
-# Inspect a single watch (key may be either a viking:// URI or a task_id)
-ov task watch show viking://resources/guide.md
-
-# Pause / resume without losing the cadence
-ov task watch pause viking://resources/guide.md
-ov task watch resume viking://resources/guide.md
-
-# Update the cadence (or any combination of --active / --reason / --instruction)
-ov task watch update viking://resources/guide.md --interval 30
-
-# Trigger an immediate fire-and-forget refresh
-ov task watch trigger viking://resources/guide.md
-
-# Remove a watch task entirely
-ov task watch rm viking://resources/guide.md
-```
-
-**MCP** (agent control plane — minimum closure only)
-
-```text
-list_watches()                                            # one line per task; URIs only, no task_ids surfaced
-cancel_watch(to_uri="viking://resources/guide.md")        # idempotent removal by URI
-```
-
-Pause / resume / trigger / update are intentionally not exposed via MCP — those power-user operations live on the CLI/REST surface to keep the agent system prompt compact. Creating a watch or changing its cadence from the agent side still goes through [`add_resource`](#add_resource) with `watch_interval`; pass `to` explicitly or let the system bind to the `root_uri` returned by this import.
-
----
-
-### add_skill
-
-Add a skill to the knowledge base.
-
-#### 1. API Implementation Overview
-
-Skills are special resources used to define operations or tools that agents can execute.
-
-**Processing Flow**:
-1. Receive skill data or uploaded temporary file
-2. Parse skill definition
-3. Store to skill directory
-4. Wait for skill processing completion if `wait=true`
-
-**Code Entry Points**:
-- `openviking/client/local.py:LocalClient.add_skill` - SDK entry (embedded)
-- `openviking_cli/client/http.py:AsyncHTTPClient.add_skill` - SDK entry (HTTP)
-- `openviking/server/routers/resources.py:add_skill` - HTTP router
-- `openviking/service/resource_service.py` - Core service implementation
-- `crates/ov_cli/src/handlers.rs:handle_add_skill` - CLI handler
-
-#### 2. Interface and Parameter Description
-
-**Parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| data | Any | No | - | Inline skill content or structured data. Mutually exclusive with `temp_file_id` |
-| temp_file_id | string | No | - | Temporary upload file ID (obtained via [temp_upload](#temp_upload)). Mutually exclusive with `data` |
-| target_uri | string | No | - | Skill root override. Explicit value wins over user and deployment defaults |
-| wait | bool | No | False | Whether to wait for skill processing to complete |
-| timeout | float | No | None | Timeout in seconds, only effective when `wait=True` |
-| telemetry | TelemetryRequest | No | False | Whether to return telemetry data |
-
-When `target_uri` is omitted, the server may use the current user's
-`add_targets.skill_uri` override, then
-`server.user_config_defaults.add_targets.skill_uri`. If neither is set,
-legacy behavior installs under the current user's skills root. The public
-short form `viking://user/skills` resolves to
-`viking://user/{user_id}/skills`. The v1 API accepts only
-`viking://user/skills` and `viking://agent/skills` as skill add roots.
-
-#### 3. Usage Examples
-
-**HTTP API**
-
-```
-POST /api/v1/skills
-Content-Type: application/json
-```
-
-```bash
-# Using inline data
-curl -X POST http://localhost:1933/api/v1/skills \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "data": {
-      "name": "my-skill",
-      "description": "My custom skill",
-      "steps": []
-    }
-  }'
-
-# Using local file (requires temp_upload first)
-TEMP_FILE_ID=$(
-  curl -s -X POST http://localhost:1933/api/v1/resources/temp_upload \
-    -H "X-API-Key: your-key" \
-    -F "file=@./skills/my-skill.json" \
-  | jq -r '.result.temp_file_id'
-)
-
-curl -X POST http://localhost:1933/api/v1/skills \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d "{
-    \"temp_file_id\": \"$TEMP_FILE_ID\"
-  }"
-```
-
-**Python SDK**
-
-```python
-import openviking as ov
-
-client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-client.initialize()
-
-# Add skill from local file
-result = client.add_skill("./skills/my-skill.json")
-
-# Wait for processing to complete
-client.wait_processed()
-```
-
-**TypeScript SDK**
-
-```typescript
-const task = await client.addSkill("./my-skill", { wait: true });
-console.log(task);
-```
-
-**Go SDK**
-
-```go
-result, err := client.AddSkill(ctx, "./skills/my-skill.json", &openviking.AddSkillOptions{
-    Wait: true,
-})
-if err != nil {
-    return err
-}
-fmt.Println(result["uri"])
-```
-
-**CLI**
-
-```bash
-# Add skill
-ov add-skill ./skills/my-skill.json
-
-# Wait for processing to complete
-ov add-skill ./skills/my-skill.json --wait
-```
-
-#### 4. Response Example
-
-**HTTP API Response (JSON)**
+For Git repository sources with `wait=false`, the background task has `task_type="add_resource"` and `resource_id` equal to the returned `root_uri`. Running task records may include `stage`. Poll `/api/v1/tasks/{task_id}` until the task completes. Its nested `result` then contains the final queue summary and `context_count`:
 
 ```json
 {
   "status": "ok",
   "result": {
-    "status": "success",
-    "root_uri": "viking://user/alice/skills/my-skill",
-    "uri": "viking://user/alice/skills/my-skill",
-    "name": "my-skill",
-    "auxiliary_files": 2,
-    "queue_status": {
-      "pending": 0,
-      "processing": 0,
-      "completed": 1
+    "task_id": "uuid-xxx",
+    "task_type": "add_resource",
+    "status": "completed",
+    "resource_id": "viking://resources/guide",
+    "result": {
+      "status": "success",
+      "root_uri": "viking://resources/guide",
+      "queue_status": {
+        "Embedding": {
+          "processed": 11,
+          "requeue_count": 0,
+          "error_count": 0,
+          "errors": []
+        }
+      },
+      "context_count": 11
     }
-  },
-  "telemetry": {
-    "operation_id": "550e8400-e29b-41d4-a716-446655440000"
   }
 }
 ```
 
-**CLI Response (Default Table Format)**
-
-```
-Note: Skill is being processed in the background.
-Use 'ov wait' to wait for completion, or 'ov observer queue' to check status.
-status          success
-root_uri        viking://user/alice/skills/my-skill
-uri             viking://user/alice/skills/my-skill
-name            my-skill
-auxiliary_files 2
-```
-
-**CLI Response (JSON Format, using -o json)**
-
-```json
-{
-  "status": "success",
-  "root_uri": "viking://user/alice/skills/my-skill",
-  "uri": "viking://user/alice/skills/my-skill",
-  "name": "my-skill",
-  "auxiliary_files": 2
-}
-```
-
-**Field Description**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `status` | string | Processing status: "success" or "error" |
-| `root_uri` | string | Canonical final URI of the skill in OpenViking (same as `uri`) |
-| `uri` | string | Canonical final URI of the skill in OpenViking (same as `root_uri`) |
-| `name` | string | Skill name |
-| `auxiliary_files` | number | Number of auxiliary files attached to the skill |
-| `queue_status` | object | (Optional, only when `wait=true`) Queue processing status with `pending`, `processing`, `completed` counts |
+`context_count` is the number of contexts successfully produced and indexed by this upload task. A context is counted after its embedding record is written successfully. It is not the total number of contexts already stored under `root_uri`. If the server restarts before the task persists its final metrics, the field is omitted instead of reporting a partial count.
 
 ---
+
+<a id="watch-management"></a><a id="add_skill"></a>
 
 ### temp_upload
 
@@ -876,8 +642,9 @@ Notes:
 
 - The default is `local`, so existing clients keep the original behavior unless they explicitly opt into `shared`.
 - Use `upload_mode=shared` only when you explicitly want distributed shared temporary uploads.
-- `shared` mode returns a one-time `temp_file_id` in the `shared_<upload_id>` form.
-- Shared upload objects live under the internal `viking://upload/...` namespace and are not part of the normal filesystem browsing surface.
+- `shared` mode returns a `temp_file_id` in the `shared_<upload_id>` form. The same account can consume it repeatedly while it remains available.
+- New shared uploads create an internal `viking://upload/<created_at_ms>-<uuid>/` directory containing `content` and `meta`. The 13-digit Unix-millisecond timestamp in the directory name is the upload creation time; `meta` is written last and marks a completed upload. These objects are not part of the normal filesystem browsing surface.
+- Shared uploads remain for `server.temp_upload.ttl_seconds` (12 hours by default). Each new shared upload makes one listing of the internal upload root, parses the creation timestamp from each first-level upload directory, and recursively removes expired directories without relying on filesystem modification times.
 
 #### 3. Usage Examples
 
@@ -950,3 +717,4 @@ Possible shared response:
 - [Skills](04-skills.md) - Skill management APIs
 - [Retrieval](06-retrieval.md) - Search and context acquisition
 - [ovpack Guide](../guides/09-ovpack.md) - Detailed ovpack import/export documentation
+- [OpenViking Assets](../guides/18-openviking-assets.md) - Declarative resource-set protocol and usage guide

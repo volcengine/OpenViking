@@ -96,14 +96,16 @@ Then execute the update:
   --execute
 ```
 
-Optional throttling:
+The following legacy options were accepted by earlier versions but never affected
+execution:
 
-```bash
-./venv/bin/python scripts/maintenance/vikingdb_content_backfill/backfill_vikingdb_content.py \
-  --execute \
-  --batch-size 100 \
-  --limit 10000
-```
+- `--batch-size`
+- `--page-size`
+- `--read-concurrency`
+- `--update-sleep-ms`
+
+They remain accepted for compatibility with existing operational scripts, but
+print a deprecation warning and should be removed.
 
 ## Output Files
 

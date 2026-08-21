@@ -32,7 +32,8 @@ test("queued recall waits for the context phase and still injects current-query 
 
   await recall.searchPending();
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].path, "/api/v1/search/recall");
+  assert.equal(calls[0].path, "/api/v1/search/search");
+  assert.equal(JSON.parse(calls[0].init.body).mode, "context");
 
   const messages = [{ role: "user", content: "current prompt" }];
   const injected = recall.injectRecall(messages);
@@ -41,6 +42,30 @@ test("queued recall waits for the context phase and still injects current-query 
 
   await recall.searchPending();
   assert.equal(calls.length, 1, "later context iterations must reuse the cached recall");
+});
+
+test("recall sends the OV session id so dedup and expansion engage", async () => {
+  const bodies = [];
+  const client = {
+    fetchJSON: async (path, init) => {
+      bodies.push(JSON.parse(init.body));
+      return { ok: true, result: { rendered: "- memory" } };
+    },
+  };
+  // The sync manager owns the id and is constructed after the recall manager,
+  // so it arrives as a getter and is null until a session has been opened.
+  let sessionId = null;
+  const recall = new RecallManager(client, config({ recallDedupTurns: 5 }), () => sessionId);
+
+  recall.queueSearch("first prompt");
+  await recall.searchPending();
+  assert.equal(bodies[0].session_id, undefined);
+
+  sessionId = "pi-session-1";
+  recall.queueSearch("second prompt");
+  await recall.searchPending();
+  assert.equal(bodies[1].session_id, "pi-session-1");
+  assert.equal(bodies[1].dedup_turns, 5);
 });
 
 test("a queued short prompt clears the previous recall block", async () => {

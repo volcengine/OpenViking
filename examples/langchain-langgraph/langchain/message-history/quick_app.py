@@ -6,11 +6,11 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.runnables import RunnableLambda
 from langchain_core.runnables.history import RunnableWithMessageHistory
 
-from openviking.integrations.langchain import (
+from langchain_openviking import (
     InMemoryOpenVikingClient,
     OpenVikingChatMessageHistory,
 )
-from openviking.integrations.langchain.client import extract_message_text
+from langchain_openviking.client import extract_message_text
 
 
 def build_app(client: InMemoryOpenVikingClient | None = None):

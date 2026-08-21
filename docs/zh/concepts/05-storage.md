@@ -7,7 +7,7 @@ OpenViking 采用双层存储架构，分离内容存储和索引存储。
 ```
 ┌─────────────────────────────────────────┐
 │            VikingFS (URI 抽象层)         │
-│    URI 映射 · 层级访问 · 关联管理        │
+│            URI 映射 · 层级访问           │
 └────────────────┬────────────────────────┘
         ┌────────┴────────┐
         │                 │
@@ -21,7 +21,7 @@ OpenViking 采用双层存储架构，分离内容存储和索引存储。
 
 | 存储层 | 职责 | 存储内容 |
 |--------|------|----------|
-| **AGFS** | 内容存储 | L0/L1/L2 完整内容、多媒体文件、关联关系 |
+| **AGFS** | 内容存储 | L0/L1/L2 完整内容、多媒体文件 |
 | **向量库** | 索引存储 | URI、向量、元数据（不存文件内容） |
 
 ### 设计优势
@@ -55,24 +55,7 @@ viking://user/skills          →  /local/{account_id}/user/{user_id}/skills
 | `mv(old, new)` | 移动/重命名（同步更新向量 URI） |
 | `abstract(uri)` | 读取 L0 摘要 |
 | `overview(uri)` | 读取 L1 概览 |
-| `relations(uri)` | 获取关联列表 |
 | `find(query, uri)` | 语义搜索 |
-
-### 关联管理
-
-VikingFS 通过 `.relations.json` 管理资源间的关联：
-
-```python
-# 创建关联
-viking_fs.link(
-    from_uri="viking://resources/docs/auth",
-    uris=["viking://resources/docs/security"],
-    reason="相关安全文档"
-)
-
-# 获取关联
-relations = viking_fs.relations("viking://resources/docs/auth")
-```
 
 ## AGFS 底层存储
 
@@ -105,7 +88,6 @@ AGFS 提供 POSIX 风格的文件操作，支持多种后端。
 viking://resources/docs/auth/
 ├── .abstract.md          # L0 摘要
 ├── .overview.md          # L1 概览
-├── .relations.json       # 关联
 └── *.md                  # L2 详细内容
 ```
 

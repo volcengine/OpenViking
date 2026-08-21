@@ -121,19 +121,6 @@ function pickFirstNonEmpty(values: Array<unknown>): unknown {
   return ''
 }
 
-export function sameUri(left: string, right: string): boolean {
-  const leftNormalized =
-    left.endsWith('/') || left === 'viking://'
-      ? normalizeDirUri(left)
-      : normalizeFileUri(left)
-  const rightNormalized =
-    right.endsWith('/') || right === 'viking://'
-      ? normalizeDirUri(right)
-      : normalizeFileUri(right)
-
-  return leftNormalized === rightNormalized
-}
-
 export function parseSizeToBytes(value: unknown): number | null {
   if (typeof value === 'number') {
     return Number.isFinite(value) ? value : null
@@ -285,9 +272,10 @@ export function isLikelyBinary(uri: string): boolean {
 export function shouldAutoRead(
   entry: Pick<VikingFsEntry, 'isDir' | 'uri' | 'sizeBytes'>,
   maxAutoReadBytes = 2 * 1024 * 1024,
+  requireKnownSize = false,
 ): {
   shouldRead: boolean
-  reason?: 'binary' | 'too-large'
+  reason?: 'binary' | 'too-large' | 'unknown-size'
 } {
   if (entry.isDir) {
     return { shouldRead: false }
@@ -296,6 +284,10 @@ export function shouldAutoRead(
   const fileType = detectFileType(entry.uri)
   if (fileType === 'image' || isLikelyBinary(entry.uri)) {
     return { shouldRead: false, reason: 'binary' }
+  }
+
+  if (requireKnownSize && entry.sizeBytes === null) {
+    return { shouldRead: false, reason: 'unknown-size' }
   }
 
   if (entry.sizeBytes !== null && entry.sizeBytes > maxAutoReadBytes) {
@@ -462,10 +454,6 @@ export function formatSize(
   }
 
   return `${scaled.toFixed(maximumFractionDigits)} ${units[unitIndex]}`
-}
-
-export function normalizeUriForDisplay(uri: string, isDir: boolean): string {
-  return isDir ? normalizeDirUri(uri) : normalizeFileUri(uri)
 }
 
 export function normalizeReadContent(result: unknown): string {

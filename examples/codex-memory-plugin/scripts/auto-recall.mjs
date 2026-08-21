@@ -26,7 +26,12 @@ import {
   markRecallCompressorRuntimeFailed,
 } from "./recall-compressor-profile.mjs";
 import { deriveOvSessionId } from "./session-state.mjs";
-import { postRecall } from "./shared/recall-core.mjs";
+import {
+  buildRecallEndpointBody,
+  fetchAssembledContext,
+  normalizeContextEntry,
+  postRecall,
+} from "./shared/recall-core.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
 const cfg = loadConfig();
@@ -87,9 +92,12 @@ recallDeadline = setTimeout(() => {
 }, cfg.recallTimeoutMs);
 recallDeadline.unref?.();
 
-async function fetchJSON(path, init = {}) {
+async function fetchJSON(path, init = {}, options = {}) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), cfg.timeoutMs);
+  const timer = setTimeout(
+    () => controller.abort(),
+    Math.max(1000, Number(options.timeoutMs) || cfg.timeoutMs),
+  );
   try {
     const headers = { "Content-Type": "application/json" };
     if (cfg.apiKey) {
@@ -99,6 +107,7 @@ async function fetchJSON(path, init = {}) {
     if (cfg.sendIdentityHeaders && cfg.account) headers["X-OpenViking-Account"] = cfg.account;
     if (cfg.sendIdentityHeaders && cfg.user) headers["X-OpenViking-User"] = cfg.user;
     if (effectivePeer.peerId) headers["X-OpenViking-Actor-Peer"] = effectivePeer.peerId;
+    if (cfg.userAgent) headers["User-Agent"] = cfg.userAgent;
     const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
     const body = await res.json().catch(() => null);
     if (!body) return { ok: false, status: res.status };
@@ -298,38 +307,10 @@ async function readMemoryContent(uri) {
   return null;
 }
 
-async function recallViaTypeQuotaEndpoint(query) {
-  const body = {
-    query,
-    quotas: {
-      events: Math.max(cfg.recallLimit, 1),
-      entities: Math.max(cfg.recallLimit, 1),
-      preferences: Math.max(1, Math.min(cfg.recallLimit, 3)),
-      experiences: 0,
-    },
-    max_chars: cfg.recallCompress
-      ? cfg.recallCompressMaxInputChars
-      : DEFAULT_FINAL_RECALL_CHARS,
-    min_score: cfg.scoreThreshold,
-    render: true,
-  };
-  if (cfg.recallPeerScope === "actor") body.peer_scope = "actor";
-  const result = await postRecall(fetchJSON, body, { actorPeerId: effectivePeer.peerId, log });
-  if (!result.ok) {
-    log("recall_endpoint_fallback", { status: result.status || 0 });
-    return null;
-  }
-  const rendered = String(result.result?.rendered || "").trim();
-  const entries = Array.isArray(result.result?.entries) ? result.result.entries : [];
+function assembledToRecallResult(rendered, entries) {
   const items = entries
-    .map((entry) => ({
-      uri: String(entry?.uri || "").trim(),
-      category: String(entry?.type || "memory").trim() || "memory",
-      score: clampScore(entry?.score),
-      text: String(
-        entry?.content || entry?.summary || entry?.abstract || entry?.uri || "",
-      ).trim(),
-    }))
+    .map(normalizeContextEntry)
+    .map((entry) => ({ ...entry, score: clampScore(entry.score) }))
     .filter((entry) => entry.uri && entry.text);
   const context = rendered
     ? [
@@ -340,6 +321,41 @@ async function recallViaTypeQuotaEndpoint(query) {
       ].join("\n")
     : "";
   return { context, items };
+}
+
+async function recallViaServerAssembly(query, ovSessionId = "") {
+  const maxInputChars = cfg.recallCompress
+    ? cfg.recallCompressMaxInputChars
+    : DEFAULT_FINAL_RECALL_CHARS;
+  const assembleCfg = {
+    ...cfg,
+    // Local compression happens below, so ask the server for the assembled
+    // block only. The server budget stays independent from the compressor's
+    // input-character ceiling.
+    recallRewrite: "off",
+  };
+
+  const assembled = await fetchAssembledContext(fetchJSON, assembleCfg, query, {
+    actorPeerId: effectivePeer.peerId,
+    sessionId: ovSessionId,
+    log,
+  });
+  if (assembled) {
+    return assembledToRecallResult(assembled.rendered, assembled.entries);
+  }
+
+  const body = buildRecallEndpointBody(cfg);
+  body.query = query;
+  body.max_chars = maxInputChars;
+  const result = await postRecall(fetchJSON, body, { actorPeerId: effectivePeer.peerId, log });
+  if (!result.ok) {
+    log("recall_endpoint_fallback", { status: result.status || 0 });
+    return null;
+  }
+  return assembledToRecallResult(
+    String(result.result?.rendered || "").trim(),
+    Array.isArray(result.result?.entries) ? result.result.entries : [],
+  );
 }
 
 function truncateText(text, maxChars) {
@@ -578,7 +594,7 @@ async function main() {
     return;
   }
 
-  const endpointRecall = await recallViaTypeQuotaEndpoint(userPrompt);
+  const endpointRecall = await recallViaServerAssembly(userPrompt, recallSessionId || "");
   if (endpointRecall !== null) {
     if (!endpointRecall.context && endpointRecall.items.length === 0) {
       log("skip", { stage: "recall_endpoint", reason: "no results" });

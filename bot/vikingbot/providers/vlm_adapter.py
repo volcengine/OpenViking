@@ -6,13 +6,18 @@ configuration semantics are consistent with openviking server's vlm section.
 """
 
 import asyncio
+import json
+import re
 import time
-from collections.abc import AsyncIterator
+import traceback
+from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
 from loguru import logger
 
+from openviking.models.vlm.backends.volcengine_vlm import build_volcengine_request_headers
 from openviking.utils.model_retry import is_retryable_rate_limit_error, rate_limit_retry_delay
+from openviking.utils.multimodal import redact_image_data_urls
 from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.providers.base import (
     LLMProvider,
@@ -24,6 +29,203 @@ from vikingbot.providers.base import (
     stream_delta_value,
 )
 from vikingbot.utils.tracing import get_current_response_id
+
+_MAX_ERROR_LOG_VALUE_CHARS = 4096
+_MAX_ERROR_LOG_ITEMS = 50
+_SENSITIVE_ERROR_KEYS = frozenset(
+    {
+        "access_token",
+        "api_key",
+        "apikey",
+        "authorization",
+        "client_secret",
+        "credential",
+        "credentials",
+        "id_token",
+        "password",
+        "refresh_token",
+        "secret",
+        "session_token",
+        "token",
+    }
+)
+_SENSITIVE_ERROR_KEY_SUFFIXES = (
+    "api_key",
+    "password",
+    "secret",
+    "token",
+)
+_SENSITIVE_ERROR_KV_RE = re.compile(
+    r"(?i)((?:api[_-]?key|authorization|credential|password|secret|token)"
+    r"[\"']?\s*[:=]\s*[\"']?)[^\s,;\]\}\"']+"
+)
+_BEARER_TOKEN_RE = re.compile(r"(?i)(bearer\s+)[^\s,;\]\}\"']+")
+_API_KEY_TOKEN_RE = re.compile(r"\bsk-[a-zA-Z0-9._-]{8,}")
+_SERVER_REQUEST_ID_HEADERS = ("x-request-id",)
+_SERVER_TRACE_ID_HEADERS = (
+    "x-trace-id",
+    "trace-id",
+    "x-tt-logid",
+    "x-log-id",
+)
+
+
+def _safe_exception_attribute(error: BaseException, name: str) -> Any:
+    try:
+        return getattr(error, name, None)
+    except BaseException:
+        return None
+
+
+def _exception_chain(error: BaseException) -> list[BaseException]:
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        chain.append(current)
+        current = _safe_exception_attribute(current, "__cause__") or _safe_exception_attribute(
+            current, "__context__"
+        )
+    return chain
+
+
+def _redact_error_text(value: str) -> str:
+    value = redact_image_data_urls(value)
+    value = _SENSITIVE_ERROR_KV_RE.sub(lambda match: f"{match.group(1)}<redacted>", value)
+    value = _BEARER_TOKEN_RE.sub(lambda match: f"{match.group(1)}<redacted>", value)
+    value = _API_KEY_TOKEN_RE.sub("<redacted>", value)
+    if len(value) > _MAX_ERROR_LOG_VALUE_CHARS:
+        return value[:_MAX_ERROR_LOG_VALUE_CHARS] + "...[truncated]"
+    return value
+
+
+def _sanitize_error_value(value: Any, *, depth: int = 0) -> Any:
+    """Prepare an upstream error body for logs without exposing credentials or huge values."""
+    if depth >= 5:
+        return "<max-depth>"
+    if isinstance(value, Mapping):
+        sanitized: dict[str, Any] = {}
+        for index, (key, item) in enumerate(value.items()):
+            if index >= _MAX_ERROR_LOG_ITEMS:
+                sanitized["<truncated>"] = f"{len(value) - _MAX_ERROR_LOG_ITEMS} more items"
+                break
+            key_text = str(key)
+            normalized_key = key_text.lower().replace("-", "_")
+            if normalized_key in _SENSITIVE_ERROR_KEYS or any(
+                normalized_key.endswith(f"_{suffix}") for suffix in _SENSITIVE_ERROR_KEY_SUFFIXES
+            ):
+                sanitized[key_text] = "<redacted>"
+            else:
+                sanitized[key_text] = _sanitize_error_value(item, depth=depth + 1)
+        return sanitized
+    if isinstance(value, (list, tuple, set, frozenset)):
+        items = list(value)
+        sanitized_items = [
+            _sanitize_error_value(item, depth=depth + 1) for item in items[:_MAX_ERROR_LOG_ITEMS]
+        ]
+        if len(items) > _MAX_ERROR_LOG_ITEMS:
+            sanitized_items.append(f"<{len(items) - _MAX_ERROR_LOG_ITEMS} more items>")
+        return sanitized_items
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    if isinstance(value, str):
+        return _redact_error_text(value)
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    try:
+        return _redact_error_text(str(value))
+    except BaseException:
+        return f"<{type(value).__name__}>"
+
+
+def _render_error_log_value(value: Any) -> str:
+    if value is None:
+        return "-"
+    sanitized = _sanitize_error_value(value)
+    try:
+        rendered = json.dumps(sanitized, ensure_ascii=False, default=str, separators=(",", ":"))
+    except BaseException:
+        rendered = _redact_error_text(str(sanitized))
+    if len(rendered) > _MAX_ERROR_LOG_VALUE_CHARS:
+        return rendered[:_MAX_ERROR_LOG_VALUE_CHARS] + "...[truncated]"
+    return rendered
+
+
+def _first_exception_attribute(chain: list[BaseException], name: str) -> Any:
+    for item in chain:
+        value = _safe_exception_attribute(item, name)
+        if value is not None:
+            return value
+    return None
+
+
+def _first_header_value(headers: Any, names: tuple[str, ...]) -> str | None:
+    if headers is None:
+        return None
+    for name in names:
+        try:
+            value = headers.get(name)
+        except BaseException:
+            value = None
+        if value:
+            return _redact_error_text(str(value))
+    return None
+
+
+def _exception_log_details(error: BaseException) -> dict[str, str]:
+    """Extract Ark/OpenAI-compatible exception details for one structured log line."""
+    chain = _exception_chain(error)
+    response = _first_exception_attribute(chain, "response")
+    request = _first_exception_attribute(chain, "request")
+    if request is None and response is not None:
+        request = _safe_exception_attribute(response, "request")
+
+    status = _first_exception_attribute(chain, "status_code")
+    if status is None and response is not None:
+        status = _safe_exception_attribute(response, "status_code")
+
+    body = _first_exception_attribute(chain, "body")
+    if body is None and response is not None:
+        body = _safe_exception_attribute(response, "text")
+
+    response_headers = (
+        _safe_exception_attribute(response, "headers") if response is not None else None
+    )
+    request_headers = _safe_exception_attribute(request, "headers") if request is not None else None
+    client_request_id = _first_exception_attribute(chain, "request_id")
+    if client_request_id is None:
+        client_request_id = _first_header_value(request_headers, ("x-client-request-id",))
+
+    method = _safe_exception_attribute(request, "method") if request is not None else None
+    url = _safe_exception_attribute(request, "url") if request is not None else None
+    # Query strings can contain credentials. The Ark API endpoint path is sufficient for diagnosis.
+    safe_url = str(url).split("?", 1)[0] if url is not None else "-"
+
+    causes = [f"{type(item).__name__}: {_redact_error_text(str(item))}" for item in chain[1:]]
+    stack_frames: list[str] = []
+    for item in chain:
+        item_traceback = _safe_exception_attribute(item, "__traceback__")
+        if item_traceback is None:
+            continue
+        for frame in traceback.extract_tb(item_traceback)[-12:]:
+            stack_frames.append(
+                f"{type(item).__name__}@{frame.filename}:{frame.lineno} in {frame.name}"
+            )
+    return {
+        "error_type": type(error).__name__,
+        "status": str(status) if status is not None else "-",
+        "code": _render_error_log_value(_first_exception_attribute(chain, "code")),
+        "client_request_id": _render_error_log_value(client_request_id),
+        "server_request_id": _first_header_value(response_headers, _SERVER_REQUEST_ID_HEADERS)
+        or "-",
+        "server_trace_id": _first_header_value(response_headers, _SERVER_TRACE_ID_HEADERS) or "-",
+        "method": str(method) if method is not None else "-",
+        "url": safe_url,
+        "response_body": _render_error_log_value(body),
+        "cause_chain": " <- ".join(causes) if causes else "-",
+        "traceback": " <- ".join(stack_frames) if stack_frames else "-",
+    }
 
 
 class VLMProviderAdapter(LLMProvider):
@@ -52,7 +254,7 @@ class VLMProviderAdapter(LLMProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
-        max_tokens: int = 4096,
+        max_tokens: int | None = None,
         temperature: float = 0.7,
         session_id: str | None = None,
     ) -> LLMResponse:
@@ -72,7 +274,7 @@ class VLMProviderAdapter(LLMProvider):
                         name="llm-chat",
                         as_type="generation",
                         model=effective_model,
-                        input=messages,
+                        input=redact_image_data_urls(messages),
                         metadata=metadata,
                     )
                     if response_id:
@@ -82,13 +284,16 @@ class VLMProviderAdapter(LLMProvider):
 
             # --- Call VLM backend ---
             attempt = 1
+            # An explicit empty list asks VLM backends for a structured response
+            # without exposing tools, so per-response usage is preserved.
+            response_tools = tools if tools is not None else []
             while True:
                 try:
                     result = await self._vlm.get_completion_async(
                         messages=messages,
                         thinking=getattr(self._vlm, "thinking", None),
-                        tools=tools,
-                        tool_choice="auto" if tools else None,
+                        tools=response_tools,
+                        tool_choice="auto" if response_tools else None,
                     )
                     break
                 except Exception as e:
@@ -115,6 +320,7 @@ class VLMProviderAdapter(LLMProvider):
         except Exception as e:
             if langfuse_observation:
                 self._end_langfuse_observation_error(langfuse_observation, e)
+            self._log_request_exception("chat", e, model=effective_model)
             return LLMResponse(
                 content=f"Error calling LLM in VLM Adapter: {str(e)}",
                 finish_reason="error",
@@ -125,11 +331,11 @@ class VLMProviderAdapter(LLMProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
-        max_tokens: int = 4096,
+        max_tokens: int | None = None,
         temperature: float = 0.7,
         session_id: str | None = None,
     ) -> AsyncIterator[LLMStreamEvent]:
-        if getattr(self._vlm, "provider", None) != "volcengine":
+        if not self._supports_native_stream(self._vlm):
             async for event in super().chat_stream(
                 messages=messages,
                 tools=tools,
@@ -141,125 +347,294 @@ class VLMProviderAdapter(LLMProvider):
                 yield event
             return
 
-        async for event in self._chat_stream_volcengine(
-            messages=messages,
-            tools=tools,
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        ):
-            yield event
+        try:
+            stream_with_failover = getattr(self._vlm, "stream_with_failover", None)
+            if callable(stream_with_failover):
+                async for event in self._chat_stream_failover_with_retry(
+                    stream_with_failover,
+                    messages=messages,
+                    tools=tools,
+                    model=model,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                ):
+                    yield event
+                return
 
-    async def _chat_stream_volcengine(
+            async for event in self._chat_stream_with_retry(
+                self._vlm,
+                messages=messages,
+                tools=tools,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            ):
+                yield event
+        except Exception as exc:
+            self._log_request_exception("chat_stream", exc, model=model or self._default_model)
+            yield LLMStreamEvent(
+                type="response",
+                response=LLMResponse(
+                    content=f"Error calling LLM in VLM Adapter stream: {str(exc)}",
+                    finish_reason="error",
+                ),
+            )
+
+    def _log_request_exception(
         self,
+        operation: str,
+        error: BaseException,
+        *,
+        model: str,
+    ) -> None:
+        details = _exception_log_details(error)
+        logger.error(
+            "VLM Adapter request failed: operation={} provider={} model={} timeout={}s "
+            "error_type={} status={} code={} client_request_id={} "
+            "server_request_id={} server_trace_id={} method={} url={} "
+            "response_body={} cause_chain={} traceback={}",
+            operation,
+            getattr(self._vlm, "provider", None) or "unknown",
+            model,
+            getattr(self._vlm, "timeout", None) or "-",
+            details["error_type"],
+            details["status"],
+            details["code"],
+            details["client_request_id"],
+            details["server_request_id"],
+            details["server_trace_id"],
+            details["method"],
+            details["url"],
+            details["response_body"],
+            details["cause_chain"],
+            details["traceback"],
+        )
+
+    @classmethod
+    def _supports_native_stream(cls, vlm: Any) -> bool:
+        instances = getattr(vlm, "_vlm_instances", None)
+        if instances is not None:
+            return bool(instances) and all(cls._supports_native_stream(item) for item in instances)
+
+        primary = getattr(vlm, "primary", None)
+        backup = getattr(vlm, "backup", None)
+        if primary is not None and backup is not None:
+            return cls._supports_native_stream(primary) and cls._supports_native_stream(backup)
+
+        return getattr(vlm, "provider", None) in {"openai", "volcengine"} and callable(
+            getattr(vlm, "get_async_client", None)
+        )
+
+    async def _chat_stream_failover_with_retry(
+        self,
+        stream_with_failover: Any,
+        *,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
         model: str | None,
-        max_tokens: int,
+        max_tokens: int | None,
         temperature: float,
     ) -> AsyncIterator[LLMStreamEvent]:
-        kwargs: dict[str, Any] = {
-            "model": model or getattr(self._vlm, "model", None) or self._default_model,
-            "messages": messages,
-            "temperature": getattr(self._vlm, "temperature", temperature),
-            "max_tokens": getattr(self._vlm, "max_tokens", None) or max_tokens,
-            "thinking": {
-                "type": "enabled" if getattr(self._vlm, "thinking", False) else "disabled"
-            },
-            "stream": True,
-            "stream_options": {"include_usage": True},
-        }
-        extra_headers = getattr(self._vlm, "extra_headers", None)
-        if extra_headers:
-            kwargs["extra_headers"] = extra_headers
-        if tools:
-            kwargs["tools"] = tools
-            kwargs["tool_choice"] = "auto"
-
-        content_parts: list[str] = []
-        reasoning_parts: list[str] = []
-        tool_calls: dict[int, dict[str, Any]] = {}
-        finish_reason = "stop"
-        usage: dict[str, int] = {}
-
         attempt = 1
         while True:
-            content_parts.clear()
-            reasoning_parts.clear()
-            tool_calls.clear()
-            finish_reason = "stop"
-            usage = {}
-            start_time = time.perf_counter()
+            emitted = False
             try:
-                client = self._vlm.get_async_client()
-                response = await client.chat.completions.create(**kwargs)
-                async for chunk in response:
-                    chunk_usage = self._parse_usage(getattr(chunk, "usage", None))
-                    if chunk_usage:
-                        usage = chunk_usage
-
-                    choices = getattr(chunk, "choices", None) or []
-                    if not choices:
-                        continue
-                    choice = choices[0]
-                    if getattr(choice, "finish_reason", None):
-                        finish_reason = choice.finish_reason or finish_reason
-                    delta = getattr(choice, "delta", None)
-                    if delta is None:
-                        continue
-
-                    reasoning_delta = stream_delta_value(delta, "reasoning_content")
-                    if reasoning_delta:
-                        reasoning_parts.append(reasoning_delta)
-                        yield LLMStreamEvent(type="reasoning_delta", content=reasoning_delta)
-
-                    content_delta = stream_delta_value(delta, "content")
-                    if content_delta:
-                        content_parts.append(content_delta)
-                        yield LLMStreamEvent(type="content_delta", content=content_delta)
-
-                    for fallback_index, delta_tool_call in enumerate(
-                        getattr(delta, "tool_calls", None) or []
-                    ):
-                        merge_stream_tool_call_delta(
-                            tool_calls,
-                            delta_tool_call,
-                            fallback_index=fallback_index,
-                        )
-
-                if usage:
-                    self._record_vlm_usage(usage, time.perf_counter() - start_time)
-
-                yield LLMStreamEvent(
-                    type="response",
-                    response=build_stream_response(
-                        content="".join(content_parts),
-                        reasoning_content="".join(reasoning_parts),
-                        raw_tool_calls=tool_calls,
-                        finish_reason=finish_reason,
-                        usage=usage,
-                    ),
-                )
-                return
-            except Exception as e:
-                if not is_retryable_rate_limit_error(e):
-                    yield LLMStreamEvent(
-                        type="response",
-                        response=LLMResponse(
-                            content=f"Error calling LLM in VLM Adapter stream: {str(e)}",
-                            finish_reason="error",
-                        ),
+                async for event in stream_with_failover(
+                    lambda vlm: self._chat_stream_backend(
+                        vlm,
+                        messages=messages,
+                        tools=tools,
+                        model=model,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
                     )
-                    return
+                ):
+                    emitted = True
+                    yield event
+                return
+            except Exception as exc:
+                if emitted or not is_retryable_rate_limit_error(exc):
+                    raise
+                delay = rate_limit_retry_delay(attempt)
+                logger.warning(
+                    "VLM credential stream rate limited; retrying attempt={} "
+                    "delay={:.1f}s error={}",
+                    attempt,
+                    delay,
+                    exc,
+                )
+                await asyncio.sleep(delay)
+                attempt += 1
+
+    async def _chat_stream_with_retry(
+        self,
+        vlm: Any,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        model: str | None,
+        max_tokens: int | None,
+        temperature: float,
+    ) -> AsyncIterator[LLMStreamEvent]:
+        attempt = 1
+        while True:
+            emitted = False
+            try:
+                async for event in self._chat_stream_backend(
+                    vlm,
+                    messages=messages,
+                    tools=tools,
+                    model=model,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                ):
+                    emitted = True
+                    yield event
+                return
+            except Exception as exc:
+                if emitted or not is_retryable_rate_limit_error(exc):
+                    raise
                 delay = rate_limit_retry_delay(attempt)
                 logger.warning(
                     "VLM adapter stream rate limited; retrying attempt={} delay={:.1f}s error={}",
                     attempt,
                     delay,
-                    e,
+                    exc,
                 )
                 await asyncio.sleep(delay)
                 attempt += 1
+
+    async def _chat_stream_backend(
+        self,
+        vlm: Any,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        model: str | None,
+        max_tokens: int | None,
+        temperature: float,
+    ) -> AsyncIterator[LLMStreamEvent]:
+        kwargs = self._build_stream_kwargs(
+            vlm,
+            messages=messages,
+            tools=tools,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        content_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        tool_calls: dict[int, dict[str, Any]] = {}
+        finish_reason = "stop"
+        usage: dict[str, int] = {}
+        start_time = time.perf_counter()
+
+        client = vlm.get_async_client()
+        response = await client.chat.completions.create(**kwargs)
+        async for chunk in response:
+            chunk_usage = self._parse_usage(getattr(chunk, "usage", None))
+            if chunk_usage:
+                usage = chunk_usage
+
+            choices = getattr(chunk, "choices", None) or []
+            if not choices:
+                continue
+            choice = choices[0]
+            if getattr(choice, "finish_reason", None):
+                finish_reason = choice.finish_reason or finish_reason
+            delta = getattr(choice, "delta", None)
+            if delta is None:
+                continue
+
+            reasoning_delta = stream_delta_value(delta, "reasoning_content")
+            if reasoning_delta:
+                reasoning_parts.append(reasoning_delta)
+                yield LLMStreamEvent(type="reasoning_delta", content=reasoning_delta)
+
+            content_delta = stream_delta_value(delta, "content")
+            if content_delta:
+                content_parts.append(content_delta)
+                yield LLMStreamEvent(type="content_delta", content=content_delta)
+
+            for fallback_index, delta_tool_call in enumerate(
+                getattr(delta, "tool_calls", None) or []
+            ):
+                merge_stream_tool_call_delta(
+                    tool_calls,
+                    delta_tool_call,
+                    fallback_index=fallback_index,
+                )
+
+        if usage:
+            self._record_vlm_usage(vlm, usage, time.perf_counter() - start_time)
+
+        yield LLMStreamEvent(
+            type="response",
+            response=build_stream_response(
+                content="".join(content_parts),
+                reasoning_content="".join(reasoning_parts),
+                raw_tool_calls=tool_calls,
+                finish_reason=finish_reason,
+                usage=usage,
+            ),
+        )
+
+    def _build_stream_kwargs(
+        self,
+        vlm: Any,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        model: str | None,
+        max_tokens: int | None,
+        temperature: float,
+    ) -> dict[str, Any]:
+        provider = getattr(vlm, "provider", None)
+        configured_max_tokens = getattr(vlm, "max_tokens", None)
+        effective_max_tokens = (
+            configured_max_tokens if configured_max_tokens is not None else max_tokens
+        )
+        # A wrapped credential owns its model.  The model passed by AgentLoop is
+        # the outer/default model and must not overwrite a backup credential.
+        effective_model = (
+            getattr(vlm, "model", None)
+            if vlm is not self._vlm
+            else model or getattr(vlm, "model", None)
+        ) or self._default_model
+
+        if provider == "volcengine":
+            kwargs: dict[str, Any] = {
+                "model": effective_model,
+                "messages": messages,
+                "temperature": getattr(vlm, "temperature", temperature),
+                "thinking": {"type": "enabled" if getattr(vlm, "thinking", False) else "disabled"},
+                "stream": True,
+                "stream_options": {"include_usage": True},
+            }
+            if effective_max_tokens is not None:
+                kwargs["max_tokens"] = effective_max_tokens
+            kwargs["extra_headers"] = build_volcengine_request_headers(
+                getattr(vlm, "extra_headers", None)
+            )
+            if tools:
+                kwargs["tools"] = tools
+                kwargs["tool_choice"] = "auto"
+            return kwargs
+
+        kwargs = vlm._build_text_kwargs(
+            messages=messages,
+            tools=tools,
+            tool_choice="auto" if tools else None,
+            thinking=getattr(vlm, "thinking", None),
+        )
+        kwargs["model"] = effective_model
+        kwargs["stream"] = True
+        kwargs["stream_options"] = {"include_usage": True}
+        if effective_max_tokens is not None and not (
+            "max_tokens" in kwargs or "max_completion_tokens" in kwargs
+        ):
+            token_key = "max_completion_tokens" if "reasoning_effort" in kwargs else "max_tokens"
+            kwargs[token_key] = effective_max_tokens
+        return kwargs
 
     @staticmethod
     def _usage_value(usage: Any, name: str) -> int:
@@ -297,14 +672,19 @@ class VLMProviderAdapter(LLMProvider):
             usage["reasoning_tokens"] = reasoning
         return usage
 
-    def _record_vlm_usage(self, usage: dict[str, int], duration_seconds: float) -> None:
-        update_token_usage = getattr(self._vlm, "update_token_usage", None)
+    def _record_vlm_usage(
+        self,
+        vlm: Any,
+        usage: dict[str, int],
+        duration_seconds: float,
+    ) -> None:
+        update_token_usage = getattr(vlm, "update_token_usage", None)
         if not callable(update_token_usage):
             return
         try:
             update_token_usage(
-                model_name=getattr(self._vlm, "model", None) or self._default_model,
-                provider=getattr(self._vlm, "provider", None) or "volcengine",
+                model_name=getattr(vlm, "model", None) or self._default_model,
+                provider=getattr(vlm, "provider", None) or "unknown",
                 prompt_tokens=usage.get("prompt_tokens", 0),
                 completion_tokens=usage.get("completion_tokens", 0),
                 duration_seconds=duration_seconds,

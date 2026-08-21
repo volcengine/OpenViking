@@ -27,7 +27,7 @@ from openviking.privacy import (
 )
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import deny_direct_local_skill_input
-from openviking.storage import VikingDBManager
+from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
@@ -316,7 +316,9 @@ class SkillProcessor:
                     skill_dict = SkillLoader.load(str(skill_file))
                     base_path = data
                     for item in data.rglob("*"):
-                        if item.is_file() and item.name != "SKILL.md":
+                        # Exclude only the top-level SKILL.md (the skill body);
+                        # nested SKILL.md files belong to sub-skills and must be kept.
+                        if item.is_file() and item != skill_file:
                             auxiliary_files.append(item)
                 else:
                     # Single skill markdown file

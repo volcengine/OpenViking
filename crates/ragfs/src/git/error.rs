@@ -27,6 +27,15 @@ pub enum ObjectStoreError {
     /// Backend-specific error
     #[error("backend error: {0}")]
     Backend(String),
+
+    /// Object retrieval exceeded the caller-provided byte budget.
+    #[error("object read limit exceeded: {size} bytes exceeds limit {limit} bytes")]
+    ReadLimitExceeded {
+        /// Number of bytes observed or declared by the object.
+        size: u64,
+        /// Maximum number of bytes permitted by the caller.
+        limit: u64,
+    },
 }
 
 /// Errors from RefStore operations

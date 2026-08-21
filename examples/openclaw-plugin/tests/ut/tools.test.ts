@@ -498,6 +498,39 @@ describe("Tool: memory_store (behavioral)", () => {
     expect(body).not.toHaveProperty("role_id");
   });
 
+  it("shows commit trace_id in the memory_store success result", async () => {
+    const openVikingTransport = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "default" });
+      }
+      if (url.includes("/messages")) {
+        return okResponse({ session_id: "sess-trace" });
+      }
+      if (url.endsWith("/commit")) {
+        return okResponse({
+          status: "completed",
+          archived: true,
+          memories_extracted: { core: 1 },
+          trace_id: "trace-memory-store",
+        });
+      }
+      return okResponse({});
+    });
+
+    const { factoryTools, api } = setupPlugin();
+    (api as any).openVikingTransport = openVikingTransport;
+    contextEnginePlugin.register(api as any);
+    const tool = factoryTools.get("memory_store")!({
+      sessionId: "runtime-session",
+      sessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("tc-memory-store", { text: "remember this trace" });
+
+    expect(result.content[0].text).toContain("trace_id=trace-memory-store");
+    expect(result.details).toMatchObject({ traceId: "trace-memory-store" });
+  });
+
   it("uses a temporary session by default instead of the current tool session", async () => {
     const openVikingTransport = vi.fn(async (url: string) => {
       if (url.endsWith("/api/v1/system/status")) {
@@ -876,7 +909,6 @@ describe("Tool: ov_search (behavioral)", () => {
                 score: 0.82,
                 category: "",
                 match_reason: "",
-                relations: [],
                 abstract: "OpenViking install guide",
                 overview: null,
               },
@@ -896,7 +928,6 @@ describe("Tool: ov_search (behavioral)", () => {
               score: 0.7,
               category: "",
               match_reason: "",
-              relations: [],
               abstract: "Install OpenViking memory integration",
               overview: null,
             },
@@ -951,7 +982,6 @@ describe("Tool: ov_search (behavioral)", () => {
                 score: 0.82,
                 category: "",
                 match_reason: "",
-                relations: [],
                 abstract: "OpenViking install guide",
                 overview: null,
               },
@@ -988,7 +1018,6 @@ describe("Tool: ov_search (behavioral)", () => {
               score: 0.91,
               category: "preferences",
               match_reason: "",
-              relations: [],
               abstract: "User prefers dark theme",
               overview: null,
             },
@@ -1171,7 +1200,6 @@ describe("Tool: ov_search (behavioral)", () => {
                 score: 0.92,
                 category: "",
                 match_reason: "",
-                relations: [],
                 abstract: "OpenCompass evaluation details",
                 overview: null,
               },
@@ -1212,7 +1240,6 @@ describe("Tool: ov_search (behavioral)", () => {
               score: 0.88,
               category: "",
               match_reason: "",
-              relations: [],
               abstract: "Runtime default search result",
               overview: null,
             },

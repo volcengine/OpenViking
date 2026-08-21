@@ -1,12 +1,69 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  createManagementAccountConnection,
+  createIdentityScopeKey,
+  createConnectionRoleProbeKey,
+  resolveSwitchedIdentity,
   resolveConnectionRoleProbeState,
   resolveInitialApiKey,
   shouldRedirectToLoginOnApiError,
+  synchronizeConnectionRuntime,
+  synchronizeResolvedDataIdentity,
 } from './use-app-connection'
+import { ovClient } from '#/lib/ov-client'
 
 const acceptClientError = () => true
+
+describe('createConnectionRoleProbeKey', () => {
+  it('matches the connection produced by an internal identity synchronization', () => {
+    const connection = {
+      accountId: 'default',
+      adminApiKey: 'root-key',
+      apiKey: 'selected-user-key',
+      baseUrl: 'http://localhost:1933/',
+      userId: 'default',
+    }
+    const synchronized = {
+      ...connection,
+      accountId: 'workspace-a',
+      userId: 'alice',
+    }
+
+    expect(createConnectionRoleProbeKey(synchronized, 'api_key')).toBe(
+      createConnectionRoleProbeKey(
+        {
+          ...connection,
+          accountId: 'workspace-a',
+          baseUrl: 'http://localhost:1933',
+          userId: 'alice',
+        },
+        'api_key',
+      ),
+    )
+  })
+
+  it('changes when a credential or asserted identity changes', () => {
+    const connection = {
+      accountId: 'workspace-a',
+      adminApiKey: 'root-key',
+      apiKey: 'selected-user-key',
+      baseUrl: 'http://localhost:1933',
+      userId: 'alice',
+    }
+    const key = createConnectionRoleProbeKey(connection, 'api_key')
+
+    expect(
+      createConnectionRoleProbeKey(
+        { ...connection, apiKey: 'another-user-key' },
+        'api_key',
+      ),
+    ).not.toBe(key)
+    expect(
+      createConnectionRoleProbeKey({ ...connection, userId: 'bob' }, 'api_key'),
+    ).not.toBe(key)
+  })
+})
 
 describe('resolveInitialApiKey', () => {
   it('keeps the stored connection key paired with the stored account and user', () => {
@@ -37,6 +94,168 @@ describe('resolveInitialApiKey', () => {
         storedApiKey: 'stored-selected-user-key',
       }),
     ).toBe('env-key')
+  })
+})
+
+describe('createIdentityScopeKey', () => {
+  it('changes when the active account changes', () => {
+    const connection = {
+      accountId: 'account-a',
+      adminApiKey: 'root-key',
+      apiKey: 'user-key',
+      baseUrl: 'http://localhost:1933',
+      userId: 'default',
+    }
+
+    expect(createIdentityScopeKey(connection, 'api_key')).not.toBe(
+      createIdentityScopeKey(
+        {
+          ...connection,
+          accountId: 'account-b',
+        },
+        'api_key',
+      ),
+    )
+  })
+
+  it('does not expose the raw data credential', () => {
+    const scope = createIdentityScopeKey(
+      {
+        accountId: 'default',
+        adminApiKey: 'root-key',
+        apiKey: 'secret-user-key',
+        baseUrl: 'http://localhost:1933',
+        userId: 'default',
+      },
+      'api_key',
+    )
+
+    expect(scope).not.toContain('secret-user-key')
+  })
+})
+
+describe('synchronizeResolvedDataIdentity', () => {
+  it('updates the active account and user even when a Root control key is configured', () => {
+    const connection = {
+      accountId: 'account-a',
+      adminApiKey: 'root-key',
+      apiKey: 'account-b-user-key',
+      baseUrl: 'http://localhost:1933',
+      userId: 'alice',
+    }
+
+    expect(
+      synchronizeResolvedDataIdentity(connection, {
+        accountId: 'account-b',
+        role: 'user',
+        userId: 'bob',
+      }),
+    ).toEqual({
+      ...connection,
+      accountId: 'account-b',
+      userId: 'bob',
+    })
+  })
+
+  it('does not rewrite an already synchronized identity', () => {
+    const connection = {
+      accountId: 'account-b',
+      adminApiKey: 'root-key',
+      apiKey: 'account-b-user-key',
+      baseUrl: 'http://localhost:1933',
+      userId: 'bob',
+    }
+
+    expect(
+      synchronizeResolvedDataIdentity(connection, {
+        accountId: 'account-b',
+        role: 'user',
+        userId: 'bob',
+      }),
+    ).toBeNull()
+  })
+})
+
+describe('resolveSwitchedIdentity', () => {
+  it('uses the requested account and user for legacy health responses', () => {
+    expect(
+      resolveSwitchedIdentity(
+        { accountId: 'account-b', userId: 'bob' },
+        { accountId: '', role: 'user', userId: '' },
+      ),
+    ).toEqual({ accountId: 'account-b', userId: 'bob' })
+  })
+
+  it('rejects a credential that resolves to another identity', () => {
+    expect(
+      resolveSwitchedIdentity(
+        { accountId: 'account-b', userId: 'bob' },
+        { accountId: 'account-a', role: 'user', userId: 'alice' },
+      ),
+    ).toBeNull()
+  })
+
+  it('uses an Admin API credential association with legacy health endpoints', () => {
+    expect(
+      resolveSwitchedIdentity(
+        { accountId: 'account-b', userId: 'bob' },
+        { accountId: '', role: 'unknown', userId: '' },
+        true,
+      ),
+    ).toEqual({ accountId: 'account-b', userId: 'bob' })
+  })
+})
+
+describe('createManagementAccountConnection', () => {
+  it('keeps the Root credential while clearing stale tenant data credentials', () => {
+    expect(
+      createManagementAccountConnection(
+        {
+          accountId: 'account-a',
+          adminApiKey: 'root-key',
+          apiKey: 'account-a-user-key',
+          baseUrl: 'http://localhost:1933',
+          userId: 'alice',
+        },
+        ' account-b ',
+      ),
+    ).toEqual({
+      accountId: 'account-b',
+      adminApiKey: 'root-key',
+      apiKey: '',
+      baseUrl: 'http://localhost:1933',
+      userId: '',
+    })
+  })
+})
+
+describe('synchronizeConnectionRuntime', () => {
+  it('updates the imperative client before React state consumers remount', () => {
+    const next = synchronizeConnectionRuntime(
+      {
+        accountId: 'account-b',
+        adminApiKey: 'root-key',
+        apiKey: 'account-b-user-key',
+        baseUrl: 'http://localhost:1933/',
+        userId: 'bob',
+      },
+      'api_key',
+    )
+
+    expect(next).toEqual({
+      accountId: 'account-b',
+      adminApiKey: 'root-key',
+      apiKey: 'account-b-user-key',
+      baseUrl: 'http://localhost:1933/',
+      userId: 'bob',
+    })
+    expect(ovClient.getConnection()).toMatchObject({
+      accountId: 'account-b',
+      adminApiKey: 'root-key',
+      apiKey: 'account-b-user-key',
+      identityHeaders: false,
+      userId: 'bob',
+    })
   })
 })
 

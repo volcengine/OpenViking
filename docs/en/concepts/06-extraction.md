@@ -119,72 +119,47 @@ Leaf directories → Parent directories → Root
 2. **Collect child directory abstracts**: Read generated .abstract.md
 3. **Generate .overview.md**: LLM generates L1 overview
 4. **Extract .abstract.md**: Extract L0 from overview
-5. **Write files**: Save to AGFS
+5. **Write files**: Store the body and protected metadata as OKF Markdown
 6. **Vectorize**: Create Context and queue to EmbeddingQueue
 
-### Configuration Parameters
+L0/L1 are directory sidecars, not per-file sidecars. Parent-summary generation consumes only child L0 bodies; OKF frontmatter is excluded from prompts. Embedding input contains the body and the whitelisted `directory`; `source`, `generated_by`, and `freshness` are excluded.
+
+### Freshness, Sampling, and Parent Refresh
+
+Each generation records direct-child `total_entries`, `sampled_entries`, and `unsampled_entries`. When the direct-child count exceeds `semantic.sidecar_sample_size` (32 by default), OpenViking uses deterministic stable sampling. `pending_child_changes` increases when a known child change is not yet reflected in the parent body and resets to 0 after a successful refresh.
+
+Currently, each successful resource/skill semantic task schedules the next parent refresh and marks that parent pending before enqueue, continuing to the namespace-root boundary.
+
+> **TODO: control bubbling frequency with freshness**
+>
+> Bubbling after every successful task can create repeated refreshes and upward write amplification in hot, deeply nested directories. A future scheduler should use `pending_child_changes`, sampling coverage, direct-child change volume, and recent refresh state to coalesce, threshold, or time-window parent refreshes while preserving eventual consistency.
+
+### Processing Limits
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `max_concurrent_llm` | 10 | Concurrent LLM calls |
 | `max_images_per_call` | 10 | Max images per VLM call |
 | `max_sections_per_call` | 20 | Max sections per VLM call |
+| `sidecar_sample_size` | 32 | Maximum direct-child sample used for one directory summary |
 
-## Code Skeleton Extraction (AST Mode)
+## Code Skeleton Extraction
 
-For code files, OpenViking supports AST-based skeleton extraction via tree-sitter as a lightweight alternative to LLM summarization, significantly reducing processing cost.
+For code files, OpenViking uses a fixed skeleton extraction route. This route is built into the code summary pipeline and is not selected or tuned by per-language parser settings.
 
-### Modes
+### What Skeleton Extraction Includes
 
-Controlled by `code_summary_mode` in `ov.conf` (see [Configuration](../guides/01-configuration.md#code)):
+The skeleton can include imports, classes, methods, functions, and other language-level symbols. Exact output depends on the maintained query or generic parser result for that language, but the route itself is fixed.
 
-| Mode | Description |
-|------|-------------|
-| `"ast"` | Extract structural skeleton for files ≥100 lines, skip LLM calls (**default**) |
-| `"llm"` | Always use LLM for summarization (original behavior) |
-| `"ast_llm"` | Extract AST skeleton first, then pass it as context to LLM for summarization |
+### Extraction Route
 
-### What AST Extracts
+Code skeleton extraction follows this fixed order:
 
-The skeleton includes:
+1. Use a maintained `tags.scm` query when one exists for the language.
+2. If no corresponding `tags.scm` exists, use `tree-sitter-language-pack.process()`.
+3. Invoke `semantic.code_summary` only as fallback when the extraction route produces no useful skeleton.
 
-- Module-level docstring (first line)
-- Import statement list
-- Class names, base classes, and method signatures (`ast` mode: first-line docstrings only; `ast_llm` mode: full docstrings)
-- Top-level function signatures
-
-### Supported Languages
-
-The following languages have dedicated extractors built on tree-sitter:
-
-| Language | Status |
-|----------|--------|
-| Python | Supported |
-| JavaScript / TypeScript | Supported |
-| Rust | Supported |
-| Go | Supported |
-| Java | Supported |
-| C / C++ | Supported |
-
-Other languages automatically fall back to LLM.
-
-### Fallback Behavior
-
-The following conditions trigger automatic fallback to LLM, with the reason logged. The overall pipeline is unaffected:
-
-- Language not in the supported list
-- File has fewer than 100 lines
-- AST parse error
-- Extraction produces an empty skeleton
-
-### File Structure
-
-```
-openviking/parse/parsers/code/ast/
-├── extractor.py      # Language detection and dispatch
-├── skeleton.py       # CodeSkeleton / FunctionSig / ClassSkeleton data structures
-└── languages/        # Per-language extractors
-```
+This routing applies to short and long code files alike.
 
 ## Three Context Types Extraction
 
@@ -227,8 +202,13 @@ await client.add_skill({
 # Memory auto-extracted from session
 await session.commit()
 
-# Flow: SessionCompressorV2 → ExtractLoop → MemoryUpdater → SemanticQueue
+# Flow: SessionCompressorV3 → ExtractLoop → MemoryUpdater → SemanticQueue
 ```
+
+V3 has one extraction entry. It first extracts enabled user-memory schemas,
+including `cases`. Trajectory, experience, and optional executable session-skill
+training runs only when that extraction produces at least one case. A session
+with no case therefore produces none of those execution-derived artifacts.
 
 ## Related Documents
 

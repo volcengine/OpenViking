@@ -244,3 +244,42 @@ async def test_patch_partial_preserves_unset_fields(client: httpx.AsyncClient, w
     body = resp.json()
     assert body["result"]["watch_interval"] == original_interval
     assert body["result"]["is_active"] is False
+
+
+async def test_home_alias_to_uri_resolves_to_canonically_keyed_task(
+    app, client: httpx.AsyncClient, watch_manager
+):
+    """`?to_uri=viking://~/...` addresses the task stored under the canonical key.
+
+    Watch tasks are keyed on the canonical URI, and the router canonicalizes
+    ``to_uri`` at the request boundary, so the alias resolves to the same task
+    and the response keeps echoing the stored canonical key. The dev auth plugin
+    resolves test requests to root, which never expands the alias, so this test
+    overrides the request context with a user-role identity.
+    """
+    from openviking.server.auth import get_request_context
+    from openviking.server.identity import RequestContext, Role
+    from openviking_cli.session.user_id import UserIdentifier
+
+    canonical = "viking://user/default/resources/home-alias"
+    task = await _seed(watch_manager, to_uri=canonical)
+    app.dependency_overrides[get_request_context] = lambda: RequestContext(
+        user=UserIdentifier(account_id="default", user_id="default"),
+        role=Role.USER,
+    )
+    try:
+        resp = await client.get(
+            "/api/v1/watches", params={"to_uri": "viking://~/resources/home-alias"}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["result"]["task_id"] == task.task_id
+        assert resp.json()["result"]["to_uri"] == canonical
+
+        resp = await client.delete(
+            "/api/v1/watches", params={"to_uri": "viking://~/resources/home-alias"}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["result"]["deleted"] is True
+        assert resp.json()["result"]["to_uri"] == canonical
+    finally:
+        app.dependency_overrides.pop(get_request_context, None)

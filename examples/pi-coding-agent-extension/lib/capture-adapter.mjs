@@ -61,8 +61,15 @@ export function extractBranchCapturePayloads(branch, syncedEntryCount = 0, cfg =
     const structuredParts = parts.filter((part) => part?.type !== "text");
     if (!decision.shouldCapture && structuredParts.length === 0) continue;
 
+    // decision.text is derived from rawText, which renders tool I/O as
+    // "[tool-result ...]" lines. For a tool-only payload that would resend the
+    // same output the tool part already carries, so only keep it when the
+    // payload really had text of its own.
+    const hasTextPart = parts.some((part) => part?.type === "text");
     const bodyParts = [
-      ...(decision.shouldCapture && decision.text ? [{ type: "text", text: decision.text }] : []),
+      ...(hasTextPart && decision.shouldCapture && decision.text
+        ? [{ type: "text", text: decision.text }]
+        : []),
       ...structuredParts,
     ];
     const body = bodyParts.length > 0

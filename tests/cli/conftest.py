@@ -607,7 +607,16 @@ def _find_file_in_pack(pack_uri, retries=10, interval=5):
     return None
 
 
-@pytest.fixture(scope="session", autouse=True)
+def pytest_collection_modifyitems(items):
+    for item in items:
+        if (
+            item.get_closest_marker("cli_remote")
+            and "ensure_resources_dir" not in item.fixturenames
+        ):
+            item.fixturenames.append("ensure_resources_dir")
+
+
+@pytest.fixture(scope="session")
 def ensure_resources_dir():
     r = ov_mkdir("viking://resources")
     if r["exit_code"] != 0:
@@ -618,20 +627,6 @@ def ensure_resources_dir():
         if r2["exit_code"] != 0:
             skip_if_auth_error(r2)
             pytest.fail(f"Failed to create resources dir: {r['stderr'][:300]}")
-
-
-@pytest.fixture(scope="session")
-def ensure_user_skills_dir():
-    uri = "viking://user/skills"
-    r = ov_mkdir(uri)
-    if r["exit_code"] == 0 or "already exists" in (r.get("stderr") or "").lower():
-        return
-    skip_if_auth_error(r)
-    stat_r = ov(["stat", uri, "-o", "json"], timeout=120)
-    if stat_r["exit_code"] == 0:
-        return
-    skip_if_auth_error(stat_r)
-    pytest.fail(f"mkdir {uri} failed after retries: {r['stderr'][:300]}")
 
 
 @pytest.fixture(scope="session")

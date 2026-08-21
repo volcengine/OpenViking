@@ -7,8 +7,9 @@ from typing import Any, Literal, Optional
 from fastapi import APIRouter, Body, Depends, Query
 from pydantic import BaseModel
 
-from openviking.core.namespace import NamespaceShapeError, canonicalize_uri, context_type_for_uri
+from openviking.core.namespace import context_type_for_uri
 from openviking.core.path_variables import resolve_path_variables
+from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
@@ -17,8 +18,10 @@ from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.routers.content import SetTagsRequest
 from openviking.server.routers.content import set_tags as content_set_tags
-from openviking.storage import VikingDBManagerProxy
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
+from openviking.storage.expr import And, Eq, In
+from openviking.storage.vikingdb_manager import VikingDBManagerProxy
+from openviking.utils.tags import normalize_search_tags
+from openviking_cli.exceptions import NotFoundError
 
 router = APIRouter(prefix="/api/v1/fs", tags=["filesystem"])
 
@@ -35,21 +38,29 @@ def _clean_memory_attrs(raw: str) -> dict[str, Any]:
     return attrs
 
 
-async def _tags_attr(service: Any, uri: str, ctx: RequestContext) -> list[str]:
+async def _tags_attr(
+    service: Any, uri: str, ctx: RequestContext, *, is_dir: bool
+) -> list[str]:
     vikingdb_manager = getattr(service, "vikingdb_manager", None)
     if not vikingdb_manager:
         return []
 
+    # Tags are written per level (see ContentWriteCoordinator.set_tags): a
+    # directory carries them on its L0/L1 summary records, while a file carries
+    # them on its L2 content record. Mirror that here so the exact node's tags
+    # are read back instead of unrelated records. Eq("uri", ...) compiles to an
+    # exact path match (-d=0), avoiding prefix/subtree matches over the path field.
+    levels = [0, 1] if is_dir else [2]
     proxy = VikingDBManagerProxy(vikingdb_manager, ctx)
     records = await proxy.filter(
-        filter={"op": "must", "field": "uri", "conds": [uri]},
+        filter=And([Eq("uri", uri), In("level", levels)]),
         limit=10,
         output_fields=_ATTR_INDEX_FIELDS,
     )
     records = sorted(records, key=lambda item: item.get("level", 99))
     tags: list[str] = []
     for record in records:
-        for tag in record.get("search_tags") or []:
+        for tag in normalize_search_tags(record.get("search_tags"), discard_invalid=True):
             if tag not in tags:
                 tags.append(tag)
     return tags
@@ -76,7 +87,7 @@ async def ls(
     service = get_service()
     actual_node_limit = limit if limit is not None else node_limit
     # Resolve path variables
-    uri = resolve_path_variables(uri)
+    uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
         result = await service.fs.ls(
             uri,
@@ -115,7 +126,7 @@ async def tree(
     service = get_service()
     actual_node_limit = limit if limit is not None else node_limit
     # Resolve path variables
-    uri = resolve_path_variables(uri)
+    uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
         result = await service.fs.tree(
             uri,
@@ -144,7 +155,7 @@ async def stat(
     """Get resource status."""
     service = get_service()
     # Resolve path variables
-    uri = resolve_path_variables(uri)
+    uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
         result = await service.fs.stat(uri, ctx=_ctx)
         return Response(status="ok", result=result)
@@ -169,24 +180,21 @@ async def attrs(
 ):
     """Get logical extended attributes for a URI."""
     service = get_service()
-    uri = resolve_path_variables(uri)
+    uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
         stat_result = await service.fs.stat(uri, ctx=_ctx)
-        try:
-            canonical_uri = canonicalize_uri(uri, _ctx)
-        except NamespaceShapeError as exc:
-            raise InvalidArgumentError(str(exc)) from exc
-
         result = {
-            "uri": canonical_uri,
-            "context_type": context_type_for_uri(canonical_uri),
+            "uri": uri,
+            "context_type": context_type_for_uri(uri),
             "attrs": {
-                "tags": await _tags_attr(service, canonical_uri, _ctx),
+                "tags": await _tags_attr(
+                    service, uri, _ctx, is_dir=stat_result.get("isDir", False)
+                ),
             },
         }
         if result["context_type"] == "memory" and not stat_result.get("isDir", False):
             result["attrs"]["memory"] = _clean_memory_attrs(
-                await service.fs.read(canonical_uri, ctx=_ctx)
+                await service.fs.read(uri, ctx=_ctx)
             )
         return Response(status="ok", result=result)
     except AGFSNotFoundError:
@@ -227,7 +235,7 @@ async def mkdir(
     """Create directory."""
     service = get_service()
     # Resolve path variables
-    uri = resolve_path_variables(request.uri)
+    uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
     try:
         await service.fs.mkdir(uri, ctx=_ctx, description=request.description)
     except AGFSClientError as e:
@@ -249,7 +257,7 @@ async def rm(
     """Remove resource."""
     service = get_service()
     # Resolve path variables
-    uri = resolve_path_variables(uri)
+    uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
         result = await service.fs.rm(uri, ctx=_ctx, recursive=recursive, wait=wait, timeout=timeout)
     except AGFSNotFoundError:
@@ -294,8 +302,12 @@ async def mv(
     """Move resource."""
     service = get_service()
     # Resolve path variables
-    from_uri = resolve_path_variables(request.from_uri)
-    to_uri = resolve_path_variables(request.to_uri)
+    from_uri = validate_request_viking_uri(
+        resolve_path_variables(request.from_uri), _ctx, field_name="from_uri"
+    )
+    to_uri = validate_request_viking_uri(
+        resolve_path_variables(request.to_uri), _ctx, field_name="to_uri"
+    )
     try:
         await service.fs.mv(from_uri, to_uri, ctx=_ctx)
     except AGFSNotFoundError:

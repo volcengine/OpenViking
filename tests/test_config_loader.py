@@ -2,8 +2,11 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for config_loader utilities."""
 
+import json
 import logging
+import re
 from logging.handlers import QueueHandler
+from pathlib import Path
 
 import pytest
 
@@ -15,6 +18,9 @@ from openviking_cli.utils.config.config_loader import (
     require_config,
     resolve_config_path,
 )
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfig, ParserApiConfig
+from openviking_cli.utils.config.parser_config import CodeHostingConfig
+from openviking_cli.utils.config.queue_worker_config import QueueWorkersConfig
 
 
 class TestResolveConfigPath:
@@ -113,6 +119,91 @@ class TestRequireConfig:
         monkeypatch.delenv("TEST_MISSING_ENV", raising=False)
         with pytest.raises(FileNotFoundError, match="configuration file not found"):
             require_config(None, "TEST_MISSING_ENV", "nonexistent_file.conf", "test")
+
+
+def test_runtime_concurrency_uses_scope_specific_defaults():
+    config = OpenVikingConfig.from_dict({})
+
+    assert config.queue_workers.external_parse.max_concurrent == 4
+    assert config.queue_workers.add_resource.max_concurrent == 4
+    assert config.queue_workers.add_resource.file_vectorization_concurrency == 8
+    assert config.queue_workers.session_commit.max_concurrent == 8
+    assert config.reindex.file_vectorization_concurrency == 8
+
+
+def test_runtime_concurrency_accepts_separate_values():
+    config = OpenVikingConfig.from_dict(
+        {
+            "queue_workers": {
+                "external_parse": {"max_concurrent": 9},
+                "add_resource": {
+                    "max_concurrent": 7,
+                    "file_vectorization_concurrency": 12,
+                },
+                "session_commit": {"max_concurrent": 50},
+            },
+            "reindex": {"file_vectorization_concurrency": 16},
+        }
+    )
+
+    assert config.queue_workers.external_parse.max_concurrent == 9
+    assert config.queue_workers.add_resource.max_concurrent == 7
+    assert config.queue_workers.add_resource.file_vectorization_concurrency == 12
+    assert config.queue_workers.session_commit.max_concurrent == 50
+    assert config.reindex.file_vectorization_concurrency == 16
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_queue_worker_concurrency_rejects_non_positive_value(value):
+    with pytest.raises(ValueError) as exc_info:
+        QueueWorkersConfig(add_resource={"max_concurrent": value})
+
+    assert exc_info.value.errors()[0]["type"] == "greater_than"
+
+
+def test_parser_api_rejects_worker_max_concurrent():
+    with pytest.raises(ValueError) as exc_info:
+        ParserApiConfig(max_concurrent=9)
+
+    assert exc_info.value.errors()[0]["type"] == "extra_forbidden"
+
+
+def test_generic_code_hosting_domains_include_supported_platforms():
+    config = CodeHostingConfig()
+
+    assert config.code_hosting_domains == [
+        "github.com",
+        "gitlab.com",
+        "gitcode.com",
+        "gitee.com",
+        "bitbucket.org",
+        "codeberg.org",
+        "gitea.com",
+        "atomgit.com",
+        "git.sr.ht",
+    ]
+
+
+def test_example_code_hosting_domains_match_runtime_defaults():
+    example_path = Path(__file__).resolve().parents[1] / "examples" / "ov.conf.example"
+    example_text = example_path.read_text(encoding="utf-8")
+    domains_match = re.search(
+        r'"code_hosting_domains"\s*:\s*(\[[^\]]*\])',
+        example_text,
+    )
+
+    assert domains_match is not None
+    assert json.loads(domains_match.group(1)) == CodeHostingConfig().code_hosting_domains
+
+
+def test_generic_code_hosting_domains_load_from_config():
+    config = CodeHostingConfig.from_dict(
+        {
+            "code_hosting_domains": ["git.generic.example.com"],
+        }
+    )
+
+    assert config.code_hosting_domains == ["git.generic.example.com"]
 
 
 def test_openviking_config_rejects_unknown_nested_parser_section(monkeypatch):
@@ -223,6 +314,30 @@ def test_openviking_config_ignores_deprecated_agent_memory_enabled(monkeypatch):
     assert not hasattr(legacy_config.memory, "agent_memory_enabled")
     assert not hasattr(working_memory_config.memory, "working_memory_enabled")
     assert experimental_config.memory.experimental_memory_switch is True
+
+    OpenVikingConfigSingleton.reset_instance()
+
+
+def test_openviking_config_ignores_deprecated_code_summary_mode(monkeypatch):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+
+    from openviking_cli.utils.config import parser_config
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        parser_config.logger,
+        "warning",
+        lambda message, *args, **kwargs: warnings.append(message % args if args else message),
+    )
+
+    config = OpenVikingConfig.from_dict({"code": {"code_summary_mode": "llm"}})
+
+    assert not hasattr(config.code, "code_summary_mode")
+    assert any("code.code_summary_mode is deprecated and ignored" in item for item in warnings)
 
     OpenVikingConfigSingleton.reset_instance()
 

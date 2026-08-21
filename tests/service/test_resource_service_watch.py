@@ -13,6 +13,10 @@ from openviking.resource.watch_manager import WatchManager
 from openviking.server.identity import RequestContext, Role
 from openviking.service import resource_service as resource_service_module
 from openviking.service.resource_service import ResourceService
+from openviking.service.task_tracker import TaskStatus
+from openviking.storage.content_write import ContentWriteCoordinator
+from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
+from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.exceptions import ConflictError, InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -34,7 +38,22 @@ class MockResourceProcessor:
 
     async def process_resource(self, **kwargs):
         self.calls.append(kwargs)
-        return {"root_uri": kwargs.get("to") or "viking://resources/test"}
+        root_uri = kwargs.get("to") or "viking://resources/test"
+        return {
+            "root_uri": root_uri,
+            "_post_process": {"root_uri": root_uri},
+            "_resource_lock": SimpleNamespace(
+                active=False,
+                to_handoff=MagicMock(return_value=None),
+                close=AsyncMock(),
+            ),
+        }
+
+    def should_use_understanding_directly(self, *_args, **_kwargs):
+        return False
+
+    async def finish_prepared_resource(self, *_args, **_kwargs):
+        return {"status": "success"}
 
 
 class MockSkillProcessor:
@@ -70,6 +89,9 @@ class NoopTaskTracker:
     async def complete(self, *_args, **_kwargs):
         pass
 
+    async def wait(self, *_args, **_kwargs):
+        return SimpleNamespace(status=TaskStatus.COMPLETED, result={})
+
     def count(self):
         return self._count
 
@@ -89,6 +111,14 @@ def isolate_service_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda: task_tracker,
     )
     monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: False)
+    monkeypatch.setattr("openviking.connector.routing.is_git_repo_url", lambda _path: False)
+
+
+@pytest_asyncio.fixture
+async def watch_manager() -> AsyncGenerator[WatchManager, None]:
+    manager = WatchManager(viking_fs=None)
+    await manager.initialize()
+    yield manager
 
 
 @pytest_asyncio.fixture
@@ -103,6 +133,7 @@ async def resource_service(watch_manager: WatchManager) -> AsyncGenerator[Resour
         skill_processor=MockSkillProcessor(),
         watch_scheduler=scheduler,
     )
+    service._enqueue_add_resource_job = AsyncMock(return_value=SimpleNamespace(task_id="test-task"))
     yield service
 
 
@@ -150,7 +181,7 @@ class TestWatchTaskCreation:
     async def test_watch_interval_rejected_for_uploaded_snapshot_source(
         self, resource_service: ResourceService, request_context: RequestContext
     ):
-        """A temp-upload source is a one-time snapshot: watching it would silently
+        """A temp-upload source is a static snapshot: watching it would silently
         re-process stale content forever, so creation must fail loudly."""
         to_uri = "viking://resources/uploaded_resource"
 
@@ -199,6 +230,7 @@ class TestWatchTaskCreation:
             watch_interval=30.0,
             build_index=False,
             summarize=True,
+            processing_mode="vectors_only",
             custom_option="x",
         )
 
@@ -206,7 +238,140 @@ class TestWatchTaskCreation:
         assert task is not None
         assert task.build_index is False
         assert task.summarize is True
+        assert task.processing_mode == "vectors_only"
         assert task.processor_kwargs.get("custom_option") == "x"
+        assert "processing_mode" not in task.processor_kwargs
+
+    @pytest.mark.asyncio
+    async def test_add_resource_forwards_tags_to_ingest_without_calling_set_tags(
+        self,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        async def fake_set_tags(self, **kwargs):
+            raise AssertionError("add_resource(tags=...) must write tags during ingest")
+
+        class FakeQueueManager:
+            async def wait_complete(self, timeout=None):
+                return {}
+
+        monkeypatch.setattr(ContentWriteCoordinator, "set_tags", fake_set_tags)
+        monkeypatch.setattr(
+            resource_service_module, "get_queue_manager", lambda: FakeQueueManager()
+        )
+
+        result = await resource_service.add_resource(
+            path="/test/path",
+            ctx=request_context,
+            to="viking://resources/tagged_resource",
+            wait=True,
+            tags=["team=search"],
+            tag_mode="append",
+        )
+
+        assert "tags_result" not in result
+        assert resource_service._resource_processor.calls[-1]["ingest_options"] == IngestOptions(
+            search_tags=["team=search"],
+            search_tag_mode="append",
+        )
+
+    @pytest.mark.asyncio
+    async def test_add_resource_rejects_invalid_tag_mode_before_processing(
+        self,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+    ):
+        with pytest.raises(InvalidArgumentError, match="unsupported tag mode"):
+            await resource_service.add_resource(
+                path="/test/path",
+                ctx=request_context,
+                tags=["team=search"],
+                tag_mode="create",
+            )
+
+        assert resource_service._resource_processor.calls == []
+
+    @pytest.mark.asyncio
+    async def test_watch_task_persists_tag_policy_for_refresh(
+        self,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        to_uri = "viking://resources/watch_tag_policy"
+
+        async def fake_set_tags(self, **kwargs):
+            return {"tags_updated": True}
+
+        class FakeQueueManager:
+            async def wait_complete(self, timeout=None):
+                return {}
+
+        monkeypatch.setattr(ContentWriteCoordinator, "set_tags", fake_set_tags)
+        monkeypatch.setattr(
+            resource_service_module, "get_queue_manager", lambda: FakeQueueManager()
+        )
+
+        await resource_service.add_resource(
+            path="/test/path",
+            ctx=request_context,
+            to=to_uri,
+            wait=True,
+            watch_interval=30.0,
+            tags=["team=search"],
+            tag_mode="replace",
+        )
+
+        task = await get_task_by_uri(resource_service, to_uri, request_context)
+        assert task is not None
+        assert task.processor_kwargs["tags"] == ["team=search"]
+        assert task.processor_kwargs["tag_mode"] == "replace"
+
+    @pytest.mark.asyncio
+    async def test_execute_prepared_add_resource_job_forwards_tags_to_ingest(
+        self,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        finish_calls = []
+
+        async def fake_set_tags(self, **kwargs):
+            raise AssertionError("queued add_resource(tags=...) must write tags during ingest")
+
+        async def fake_finish_prepared_resource(*args, **kwargs):
+            finish_calls.append({"args": args, "kwargs": kwargs})
+            return {"root_uri": "viking://resources/queued"}
+
+        monkeypatch.setattr(ContentWriteCoordinator, "set_tags", fake_set_tags)
+        resource_service._resource_processor.finish_prepared_resource = AsyncMock(
+            side_effect=fake_finish_prepared_resource
+        )
+
+        msg = AddResourceMsg(
+            task_id="task-1",
+            root_uri="viking://resources/queued",
+            account_id=request_context.account_id,
+            user_id=request_context.user.user_id,
+            role=str(request_context.role),
+            prepared={"path": "/test/path"},
+            tags=["team=search"],
+            tag_mode="append",
+        )
+
+        result = await resource_service.execute_add_resource_job(
+            msg,
+            ctx=request_context,
+            resource_lock=None,
+            stage_callback=lambda _stage: None,
+        )
+
+        assert "tags_result" not in result
+        assert finish_calls[-1]["kwargs"]["ingest_options"] == IngestOptions(
+            search_tags=["team=search"],
+            search_tag_mode="append",
+        )
 
     @pytest.mark.asyncio
     async def test_create_watch_task_with_default_interval(
@@ -296,6 +461,16 @@ class TestAddResourceArgs:
         )
         disable_task_tracker(monkeypatch)
         to_uri = "viking://resources/feishu_user_watch"
+        resource_service._plan_source_job_target = AsyncMock(return_value=(to_uri, None, False))
+
+        async def preflight(_self, _source, *, feishu_access_token=None):
+            assert feishu_access_token == "u-test"
+            return SimpleNamespace(source_name=None, source_format="file")
+
+        monkeypatch.setattr(
+            "openviking.parse.accessors.feishu_accessor.FeishuAccessor.preflight_source",
+            preflight,
+        )
 
         await resource_service.add_resource(
             path="https://example.feishu.cn/docx/doc_token",
@@ -306,6 +481,24 @@ class TestAddResourceArgs:
                 "feishu_access_token": " u-test ",
                 "feishu_refresh_token": " r-test ",
             },
+        )
+
+        enqueue_call = resource_service._enqueue_add_resource_job.await_args
+        message = enqueue_call.args[0]
+        task_auth = enqueue_call.kwargs["task_auth"]
+        assert "u-test" not in str(message.to_dict())
+        assert task_auth == {
+            "provider": "feishu",
+            "access_token": "u-test",
+            "refresh_token": "r-test",
+            "expires_at": None,
+        }
+        await resource_service.execute_add_resource_job(
+            message,
+            ctx=request_context,
+            resource_lock=None,
+            stage_callback=AsyncMock(),
+            task_auth=task_auth,
         )
 
         processor = resource_service._resource_processor
@@ -323,6 +516,80 @@ class TestAddResourceArgs:
         }
         assert "auth_state" not in task.to_dict()
 
+    @pytest.mark.asyncio
+    async def test_git_token_watch_stores_private_auth_state(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+    ):
+        monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: True)
+        disable_task_tracker(monkeypatch)
+        repo_url = "https://git.example/org/private.git"
+        to_uri = "viking://resources/git_private_watch"
+        resource_service._preflight_git_source = AsyncMock(
+            return_value=SimpleNamespace(
+                source_name="private",
+                source_path=repo_url,
+                source_format="repository",
+            )
+        )
+        resource_service._plan_source_job_target = AsyncMock(return_value=(to_uri, None, False))
+
+        await resource_service.add_resource(
+            path=repo_url,
+            ctx=request_context,
+            to=to_uri,
+            watch_interval=30,
+            args={
+                "branch": "main",
+                "auth_config": {
+                    "username": "git-user",
+                    "token": "git-secret",
+                },
+            },
+        )
+
+        enqueue_call = resource_service._enqueue_add_resource_job.await_args
+        message = enqueue_call.args[0]
+        task_auth = enqueue_call.kwargs["task_auth"]
+        assert "git-secret" not in str(message.to_dict())
+        assert task_auth == {
+            "provider": "git_http_basic",
+            "username": "git-user",
+            "token": "git-secret",
+            "repo_url": repo_url,
+        }
+        await resource_service.execute_add_resource_job(
+            message,
+            ctx=request_context,
+            resource_lock=None,
+            stage_callback=AsyncMock(),
+            task_auth=task_auth,
+        )
+
+        processor = resource_service._resource_processor
+        assert processor.calls[-1]["auth_config"] == {
+            "username": "git-user",
+            "token": "git-secret",
+        }
+
+        task = await get_task_by_uri(resource_service, to_uri, request_context)
+        assert task is not None
+        assert task.processor_kwargs == {
+            "branch": "main",
+            "source_name": "private",
+        }
+        assert task.auth_state == {
+            "provider": "git_http_basic",
+            "username": "git-user",
+            "token": "git-secret",
+            "repo_url": repo_url,
+        }
+        public_task = task.to_dict()
+        assert "auth_state" not in public_task
+        assert "git-secret" not in str(public_task)
+
 
 class TestWatchTaskConflict:
     """Tests for watch task conflict detection."""
@@ -331,7 +598,7 @@ class TestWatchTaskConflict:
     async def test_conflict_when_active_task_exists(
         self, resource_service: ResourceService, request_context: RequestContext
     ):
-        """Test that ConflictError is raised when an active task already exists."""
+        """A different source cannot replace an active watch."""
         to_uri = "viking://resources/conflict_test"
 
         await resource_service.add_resource(
@@ -351,6 +618,43 @@ class TestWatchTaskConflict:
 
         assert "already being monitored" in str(exc_info.value)
         assert to_uri in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_same_source_updates_active_task(
+        self, resource_service: ResourceService, request_context: RequestContext
+    ):
+        """Re-applying one source updates its active watch instead of conflicting."""
+        to_uri = "viking://resources/idempotent_watch"
+        source = "/test/same-path"
+
+        await resource_service.add_resource(
+            path=source,
+            ctx=request_context,
+            to=to_uri,
+            reason="Original reason",
+            watch_interval=30.0,
+            args={"branch": "main"},
+        )
+        original = await get_task_by_uri(resource_service, to_uri, request_context)
+        assert original is not None
+
+        await resource_service.add_resource(
+            path=source,
+            ctx=request_context,
+            to=to_uri,
+            reason="Updated reason",
+            watch_interval=45.0,
+            args={"branch": "release"},
+        )
+
+        updated = await get_task_by_uri(resource_service, to_uri, request_context)
+        assert updated is not None
+        assert updated.task_id == original.task_id
+        assert updated.path == source
+        assert updated.reason == "Updated reason"
+        assert updated.watch_interval == 45.0
+        assert updated.processor_kwargs == {"branch": "release"}
+        assert updated.is_active is True
 
     @pytest.mark.asyncio
     async def test_conflict_does_not_create_async_task(
@@ -659,6 +963,9 @@ class TestResourceProcessingIndependence:
             skill_processor=MockSkillProcessor(),
             watch_scheduler=scheduler,
         )
+        service._enqueue_add_resource_job = AsyncMock(
+            return_value=SimpleNamespace(task_id="test-task")
+        )
 
         result = await service.add_resource(
             path="/test/path",
@@ -679,6 +986,9 @@ class TestResourceProcessingIndependence:
             resource_processor=MockResourceProcessor(),
             skill_processor=MockSkillProcessor(),
             watch_scheduler=None,
+        )
+        service._enqueue_add_resource_job = AsyncMock(
+            return_value=SimpleNamespace(task_id="test-task")
         )
 
         result = await service.add_resource(

@@ -25,6 +25,16 @@ headers = {
 }
 
 
+def _parse_success_response(response, operation: str) -> Dict[str, Any]:
+    if response.status_code != 200:
+        raise RuntimeError(f"Failed to {operation}: HTTP {response.status_code}: {response.text}")
+    result = json.loads(response.text)
+    error_code = result.get("code")
+    if error_code != 0:
+        raise RuntimeError(f"Failed to {operation}: code {error_code}: {result.get('message', '')}")
+    return result
+
+
 def get_or_create_http_collection(
     host: str = "127.0.0.1", port: int = 5000, meta_data: Optional[Dict[str, Any]] = None
 ):
@@ -353,9 +363,7 @@ class HttpCollection(ICollection):
             timeout=DEFAULT_TIMEOUT,
         )
         # logger.info(f"DeleteData response: {response.text}")
-        if response.status_code != 200:
-            return {}
-        result = json.loads(response.text)
+        result = _parse_success_response(response, "delete data")
         return result.get("data", {})
 
     def delete_all_data(self):
@@ -534,8 +542,9 @@ class HttpCollection(ICollection):
         # logger.info(f"SearchByRandom response: {response.text}")
         if response.status_code != 200:
             return SearchResult()
+        payload = json.loads(response.text)
 
-        data = json.loads(response.text).get("data", {})
+        data = payload.get("data", {})
         result = SearchResult()
         if isinstance(data, dict) and "data" in data:
             result.data = [

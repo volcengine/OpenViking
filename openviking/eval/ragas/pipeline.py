@@ -4,7 +4,6 @@
 RAG Query Pipeline for OpenViking evaluation.
 """
 
-import json
 from pathlib import Path
 from typing import Any, Dict, List, Union
 
@@ -26,31 +25,26 @@ class RAGQueryPipeline:
     def __init__(
         self,
         config_path: str = "./ov.conf",
-        data_path: str = "./data",
+        server_url: str = "http://127.0.0.1:1933",
     ):
         """
         Initialize the RAG pipeline.
 
         Args:
             config_path: Path to OpenViking config file
-            data_path: Path to OpenViking data directory
+            server_url: OpenViking HTTP server URL
         """
         self.config_path = config_path
-        self.data_path = data_path
+        self.server_url = server_url
         self._client = None
         self._llm = None
 
     def _get_client(self):
         """Lazy initialization of OpenViking client."""
         if self._client is None:
-            import openviking as ov
-            from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
+            from openviking_sdk import SyncHTTPClient
 
-            with open(self.config_path, "r") as f:
-                config_dict = json.load(f)
-
-            config = OpenVikingConfig.from_dict(config_dict)
-            self._client = ov.SyncOpenViking(path=self.data_path, config=config)
+            self._client = SyncHTTPClient(url=self.server_url)
             self._client.initialize()
             logger.info("OpenViking client initialized")
         return self._client
@@ -154,15 +148,23 @@ class RAGQueryPipeline:
         contexts = []
         retrieved_uris = []
 
-        if search_result and "results" in search_result:
-            for item in search_result["results"]:
+        items = (
+            search_result.get("memories", [])
+            + search_result.get("resources", [])
+            + search_result.get("skills", [])
+        )
+        for item in items or []:
+            if isinstance(item, dict):
                 uri = item.get("uri", "")
                 content = (
                     item.get("content", "") or item.get("overview", "") or item.get("abstract", "")
                 )
-                if content:
-                    contexts.append(content)
-                    retrieved_uris.append(uri)
+            else:
+                uri = getattr(item, "uri", "")
+                content = getattr(item, "overview", None) or getattr(item, "abstract", "")
+            if content:
+                contexts.append(content)
+                retrieved_uris.append(uri)
 
         result = {
             "question": question,

@@ -18,7 +18,7 @@ class MemoryVikingFS:
     def __init__(self):
         self.files = {}
 
-    async def write_file(self, uri, content, *, ctx=None):  # noqa: ANN001
+    async def write_file(self, uri, content, *, ctx=None, lease_ref=None):  # noqa: ANN001
         self.files[uri] = content
 
     async def append_file(self, uri, content, *, ctx=None):  # noqa: ANN001
@@ -136,7 +136,7 @@ async def test_list_tool_results_filters_tool_name_before_limit():
 
     store = ToolResultStore(
         FakeVikingFS(),
-        "viking://session/filter-before-limit",
+        "viking://user/alice/sessions/filter-before-limit",
         "filter-before-limit",
         ctx=None,
     )

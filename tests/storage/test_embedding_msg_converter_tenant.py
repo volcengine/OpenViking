@@ -14,8 +14,8 @@ from openviking_cli.session.user_id import UserIdentifier
     ("uri", "expected_uri", "expected_owner_user_id"),
     [
         (
-            "viking://user/memories/preferences/me.md",
-            lambda user: f"viking://user/{user.user_id}/memories/preferences/me.md",
+            "viking://user/alice/memories/preferences/me.md",
+            "viking://user/alice/memories/preferences/me.md",
             lambda user: user.user_id,
         ),
         (
@@ -47,13 +47,12 @@ def test_embedding_msg_converter_backfills_account_and_owner_fields(
     assert msg.context_data["owner_user_id"] == expected_user
 
 
-def test_embedding_msg_converter_preserves_full_content_without_vikingdb_truncation():
-    full_content = "x" * (1024 * 1024 + 17)
+def test_embedding_msg_converter_keeps_only_embedding_input():
     context = Context(uri="viking://resources/large.txt", abstract="short embedding text")
-    context.set_vectorize(Vectorize(text="short embedding text", full_text=full_content))
+    context.set_vectorize(Vectorize(text="bounded embedding text"))
 
     msg = EmbeddingMsgConverter.from_context(context)
 
     assert msg is not None
-    assert msg.message == "short embedding text"
-    assert msg.context_data["content"] == full_content
+    assert msg.message == "bounded embedding text"
+    assert "content" not in msg.context_data

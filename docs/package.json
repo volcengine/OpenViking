@@ -12,8 +12,6 @@
     "test:search": "node --experimental-strip-types --test .vitepress/theme/openviking-search-*.test.ts"
   },
   "devDependencies": {
-    "markdown-it": "^14.3.0",
-    "vitepress": "1.6.4",
-    "xss": "^1.0.15"
+    "vitepress": "1.6.4"
   }
 }

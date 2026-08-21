@@ -47,6 +47,7 @@ Common client fields:
 - `user_id`: legacy alias for `user`
 - `actor_peer_id`: optional actor peer override
 - `agent_id`: legacy alias for `actor_peer_id`
+- `event_hooks`: optional `httpx.AsyncClient` event hooks, such as async request or response hooks
 
 Compatibility notes:
 
@@ -77,6 +78,38 @@ client = SyncHTTPClient(
 )
 ```
 
+## Request-Scoped Actor Peer
+
+Applications can reuse one initialized, credential-bound client while selecting
+the active actor peer for each request:
+
+```python
+from openviking_sdk import (
+    SyncHTTPClient,
+    use_actor_peer,
+)
+
+client = SyncHTTPClient(
+    url="http://127.0.0.1:1933",
+    api_key="your-user-key",
+)
+client.initialize()
+
+with use_actor_peer("assistant-a"):
+    memories = client.find("deployment preference")
+```
+
+The scope is isolated with Python `ContextVar`, so concurrent async tasks and
+sync calls dispatched through the SDK worker loop do not overwrite each
+other. Nested scopes restore the previous actor peer automatically.
+
+This scope does not change authentication or tenant ownership. Account and user
+identity remain bound to the API key or OAuth credential. Use a separate
+credential-bound client for each OpenViking user, and derive actor peer values
+only from authenticated application state. The server applies the actor peer
+only to endpoints that accept an actor-peer view; session APIs remain
+user-scoped.
+
 ## Quick Start: Sync Client
 
 ```python
@@ -86,6 +119,7 @@ client = SyncHTTPClient(
     url="http://127.0.0.1:1933",
     api_key="your-user-key",
 )
+client.initialize()
 
 healthy = client.health()
 print("health:", healthy)
@@ -96,6 +130,8 @@ print("session:", session)
 client.session("demo-session").add_message("user", "hello from sdk")
 context = client.session("demo-session").get_session_context(token_budget=4096)
 print("context:", context)
+
+client.close()
 ```
 
 ## Quick Start: Async Client
@@ -111,6 +147,7 @@ async def main() -> None:
         url="http://127.0.0.1:1933",
         api_key="your-user-key",
     )
+    await client.initialize()
 
     healthy = await client.health()
     print("health:", healthy)
@@ -137,7 +174,29 @@ asyncio.run(main())
 from openviking_sdk import SyncHTTPClient
 
 client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
-result = client.create_session("demo-session")
+client.initialize()
+event_config = {
+    "events": {
+        "tags": ["team=search", "channel=web"],
+    }
+}
+result = client.create_session(
+    "demo-session",
+    memory_extraction_config=event_config,
+)
+# Explicit None disables a server-wide auto-commit default at creation time.
+client.create_session("manual-session", auto_commit_policy=None)
+client.update_session_config(
+    "demo-session",
+    auto_commit_policy={"message_count_threshold": 25},
+    memory_extraction_config={
+        "events": {"tags": ["team=search", "channel=app"]}
+    },
+)
+# Explicit None disables automatic commits; omitting the argument leaves it unchanged.
+client.update_session_config("demo-session", auto_commit_policy=None)
+client.session("demo-session").commit(event_tags=["team=search", "channel=web"])
+# Use event_tags=[] to skip the session defaults for one commit.
 print(result)
 ```
 
@@ -149,6 +208,7 @@ print(result)
 from openviking_sdk import SyncHTTPClient
 
 client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
+client.initialize()
 
 result = client.add_resource(
     "/path/to/notes.md",
@@ -159,12 +219,26 @@ result = client.add_resource(
 print(result)
 ```
 
+To ingest content without VLM semantic understanding, pass `processing_mode="vectors_only"`.
+This writes/syncs the resource tree and vectorizes current files, but does not generate
+or refresh `.abstract.md` / `.overview.md`.
+
+```python
+result = client.add_resource(
+    "/path/to/notes.md",
+    to="viking://resources/demo-notes",
+    processing_mode="vectors_only",
+    wait=True,
+)
+```
+
 ### Filesystem Operations
 
 ```python
 from openviking_sdk import SyncHTTPClient
 
 client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
+client.initialize()
 
 client.mkdir("viking://resources/demo-dir")
 print(client.ls("viking://resources"))
@@ -177,6 +251,7 @@ print(client.read("viking://resources/demo-dir/example.md"))
 from openviking_sdk import SyncHTTPClient
 
 client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
+client.initialize()
 
 result = client.find("hello", limit=5)
 print(result)
@@ -209,6 +284,7 @@ root_client = SyncHTTPClient(
     url="http://127.0.0.1:1933",
     api_key="your-root-key",
 )
+root_client.initialize()
 
 result = root_client.admin_create_account(
     account_id="demo-account",
@@ -251,6 +327,7 @@ The SDK maps server-side error codes to Python exceptions.
 from openviking_sdk import OpenVikingError, SyncHTTPClient
 
 client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
+client.initialize()
 
 try:
     print(client.read("viking://resources/not-exists.md"))

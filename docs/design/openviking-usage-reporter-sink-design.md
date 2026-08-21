@@ -78,7 +78,7 @@ UsageEvent 是 OpenViking 内核和外部 Sink 之间的稳定协议。
     "archive_uri": "viking://user/test/sessions/510bb5f9/history/archive_001",
     "message_id": "msg_xxx",
     "tool_call_id": "call_xxx",
-    "tool_name": "read_experience"
+    "tool_name": "mcp__openviking__read"
   },
   "attributes": {}
 }
@@ -90,9 +90,20 @@ UsageEvent 是 OpenViking 内核和外部 Sink 之间的稳定协议。
 
 UsageEvent 是可独立传输和消费的完整事件。`UsageContext` 只用于 Extractor 构造事件，不再重复传给 Sink。
 
+### 5.1 Experience 使用事件识别
+
+插件使用 OpenViking 原生通用工具消费 Experience，不额外注册 Experience 专用工具：
+
+- 成功的 `find`、`search`、`list` 调用结果中出现 Experience URI，产生 `memory.recalled`。
+- 成功的 `read`、`multi_read` 调用实际读取 Experience URI，产生 `memory.injected`。
+- 支持 OpenCode 的 `openviking_*`、OpenClaw 的 `ov_*` 和
+  `mcp__openviking__*` 命名空间形式；仅按受支持的工具名精确识别。
+- 通用工具返回其他记忆类型时，只保留当前用户 `memories/experiences/` 目录下的规范文件 URI。
+- 只识别上述正式通用工具，不为未发布的专用工具名提供解析或配置兼容。
+
 ## 6. UsageSink 机制
 
-OpenViking 开源包只定义 Sink 抽象：
+OpenViking 开源包定义统一的 Sink 抽象：
 
 ```python
 class UsageSink:
@@ -100,7 +111,7 @@ class UsageSink:
         ...
 ```
 
-具体 Sink 作为外部扩展，通过 `class_path` 动态加载。
+具体 Sink 可以作为外部扩展通过 `class_path` 动态加载。开源包同时提供不依赖第三方消息队列 SDK 的内置文件日志 Sink，供日志采集系统读取。
 
 配置示例：
 
@@ -130,6 +141,41 @@ def load_class(class_path: str):
 
 每个 Sink 的 `write()` 调用最多等待 5 秒。超时或异常只记录日志，不影响其他 Sink。Reporter 在应用生命周期内只创建一次，应用退出时调用 Sink 可选的 `close()` 方法。同步和异步 `close()` 均受同一超时限制；同步 hook 在独立 daemon 线程中执行，超时后不会阻塞事件循环、后续 Sink 清理或进程退出。
 
+内置文件日志 Sink 将事件立即追加到专用日志文件，不写默认 stdout，也不发起
+HTTP 请求。日志文件使用 UTC 小时滚动，默认保留 168 个小时文件。部署侧应将
+专用目录挂载到日志采集系统可见的宿主机路径。多个 server worker 写入同一路径
+时，通过进程间文件锁串行化写入和滚动；Windows worker 写入后主动关闭文件句柄，
+避免其他进程滚动重命名失败。
+
+### 6.1 文件日志计量协议
+
+`UsageEvent` 继续作为 OpenViking 内部抽取结果和自定义 Sink 的稳定协议。内置
+文件日志 Sink 将 `UsageEvent` 转换为计量接收端使用的扁平 JSON。每个事件写成
+一行：
+
+```json
+{"event_time":"2026-08-05 11:30:00","tenant_id":"resource_id:ov-xxx;account_id:new;user_id:test;resource_uri:viking://user/test/memories/experiences/example.md","event_name":"experience.recall.count","object_id":"ue_<sha256>","count":1,"tags":{"resource_type":"experience"}}
+```
+
+字段映射：
+
+- `event_time` 由 `occurred_at` 转换为 UTC `YYYY-MM-DD HH:MM:SS`。
+- `tenant_id` 固定为
+  `resource_id:<resource_id>;account_id:<account_id>;user_id:<user_id>;resource_uri:<resource_uri>`。
+- `memory.recalled` 映射为 `event_name=experience.recall.count`。
+- `memory.injected` 映射为 `event_name=experience.inject.count`。
+- `object_id` 使用稳定的 `event_id`。下游以 `(tenant_id, object_id)` 作为复合去重键，
+  不跨 tenant 单独按 `object_id` 去重。
+- `count` 固定为 `1`。
+- `tags.resource_type` 固定记录被使用资源的类型；本期只产生
+  `experience` 使用事件。
+
+接收端按 `tenant_id`、`event_name` 和 `event_time` 范围过滤，并通过
+`sum(count)` 聚合使用次数。
+
+无法识别的 `event_type` 不生成含义不明确的计量记录，转换时抛出错误并由
+Reporter 的 best-effort 隔离机制处理。
+
 ## 7. 配置设计
 
 默认关闭：
@@ -152,6 +198,24 @@ server:
         config:
           endpoint: https://usage.example.com/events
 ```
+
+内置文件日志 Sink：
+
+```yaml
+server:
+  usage_reporter:
+    enabled: true
+    sinks:
+      - type: file_log
+        config:
+          path: /var/log/openviking_usage/usage.log
+          resource_id_env: OV_RESOURCE_ID
+          rotation_interval_hours: 1
+          backup_count: 168
+```
+
+部署时必须设置 `resource_id_env` 指定的环境变量。Sink 使用其值构造
+`tenant_id`，保证不同 OpenViking resource 的数据相互隔离。
 
 ## 8. 对 OpenViking 的侵入
 
@@ -197,11 +261,12 @@ archive session success
 Usage Reporter 采用 best-effort 投递语义：
 
 - Sink 成功：正常返回。
-- Sink 失败或超时：记录日志，不影响 session commit，也不自动重试。
+- Sink 失败或超时：记录日志，不影响 session commit。自定义 Sink 是否重试由其实现决定。
 - 多个 Sink 相互隔离，某个 Sink 失败不影响其他 Sink。
 - Sink 失败时事件可能丢失，因此本机制不保证 at-least-once。
 - 如果 Sink 已写入成功，但进程在 phase2 写入完成标记前退出，phase2 恢复执行时可能重复发送同一事件。
-- 每个事件包含稳定的 `event_id`。Sink 可将其作为 Kafka message key，消费端可按 `event_id` 去重。
+- 每个事件包含稳定的 `event_id`。Sink 可将其作为 Kafka message key；消费端按
+  `(tenant_id, object_id)` 复合键去重。
 - `event_id` 只用于识别重复事件，不代表事件一定成功送达。
 
 `event_id` 为以下字段规范序列化后的 SHA-256：
@@ -212,12 +277,15 @@ schema_version
 + account_id
 + user_id
 + session_id
-+ task_id
-+ evidence.archive_uri
++ evidence.message_id
 + evidence.tool_call_id
 + resource_uri
 ```
 
-`occurred_at`、`message_id` 和 `attributes` 不参与计算，避免重放时间差或附加属性变化破坏幂等性。同一 archive 中同一 tool call 对同一资源产生的事件，在 phase2 重放后仍得到相同 `event_id`。
+`occurred_at`、`task_id`、`archive_uri` 和 `attributes` 不参与计算，避免重放时间差、
+任务恢复或附加属性变化破坏幂等性。同一 session message 中同一 tool call
+对同一资源产生的事件，在 phase2 重放后仍得到相同 `event_id`。
 
-如果后续需要可靠投递，需要增加持久化 outbox、失败重试和发送确认机制。
+内置文件日志 Sink 在 `write()` 返回前完成本地追加，但不负责 TLS 采集、Kafka
+投递或下游确认。文件写入、TLS 采集和下游消费任一阶段都可能在故障时产生丢失
+或重复，消费端需按 `(tenant_id, object_id)` 复合键去重，整体保持 best-effort 语义。

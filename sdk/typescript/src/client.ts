@@ -24,8 +24,10 @@ import type {
   SearchOptions,
   TaskListOptions,
   TreeOptions,
+  UpdateSessionConfigOptions,
   UpdateWatchOptions,
   WaitOptions,
+  WriteOptions,
 } from "./types.js";
 
 const compact = (value: JsonObject): JsonObject =>
@@ -119,10 +121,13 @@ export class OpenVikingClient {
       directly_upload_media: options.directlyUploadMedia ?? true,
       preserve_structure: options.preserveStructure,
       watch_interval: options.watchInterval ?? 0,
+      processing_mode: options.processingMode,
       args:
         options.args && Object.keys(options.args).length
           ? options.args
           : undefined,
+      tags: options.tags,
+      tag_mode: options.tags ? options.tagMode : undefined,
       telemetry: options.telemetry,
     });
     const local = await nodePathToBlob(source);
@@ -379,38 +384,6 @@ export class OpenVikingClient {
       body: { pattern, uri: normalizeURI(uri), node_limit: nodeLimit },
     });
   }
-  /** Return relations associated with a resource. */
-  relations(uri: string): Promise<unknown[]> {
-    return this.request("GET", "/api/v1/relations", {
-      query: { uri: normalizeURI(uri) },
-    });
-  }
-  /** Create one or more resource relations. */
-  async link(
-    fromUri: string,
-    toUris: string | string[],
-    reason = "",
-  ): Promise<void> {
-    await this.request("POST", "/api/v1/relations/link", {
-      body: {
-        from_uri: normalizeURI(fromUri),
-        to_uris: Array.isArray(toUris)
-          ? toUris.map(normalizeURI)
-          : normalizeURI(toUris),
-        reason,
-      },
-    });
-  }
-  /** Remove a resource relation. */
-  async unlink(fromUri: string, toUri: string): Promise<void> {
-    await this.request("DELETE", "/api/v1/relations/link", {
-      body: {
-        from_uri: normalizeURI(fromUri),
-        to_uri: normalizeURI(toUri),
-      },
-    });
-  }
-
   /** List directory contents. */
   list(uri: string, options: ListOptions = {}): Promise<unknown[]> {
     return this.request("GET", "/api/v1/fs/ls", {
@@ -436,6 +409,7 @@ export class OpenVikingClient {
         abs_limit: options.absLimit ?? 128,
         show_all_hidden: options.showAllHidden ?? false,
         node_limit: options.nodeLimit ?? 1000,
+        level_limit: options.levelLimit ?? 3,
       },
     });
   }
@@ -499,13 +473,14 @@ export class OpenVikingClient {
   write(
     uri: string,
     content: string,
-    options: WaitOptions & { mode?: string } = {},
+    options: WriteOptions = {},
   ): Promise<JsonObject> {
     return this.request("POST", "/api/v1/content/write", {
       body: compact({
         uri: normalizeURI(uri),
         content,
         mode: options.mode ?? "replace",
+        processing_mode: options.processingMode,
         wait: options.wait ?? false,
         timeout: options.timeout,
         telemetry: options.telemetry,
@@ -531,26 +506,38 @@ export class OpenVikingClient {
   /** Rebuild indexes for a URI. */
   reindex(
     uri: string,
-    options: { mode?: string; wait?: boolean; dryRun?: boolean } = {},
+    options: {
+      mode?: string;
+      wait?: boolean;
+      dryRun?: boolean;
+      tags?: string[];
+      tagMode?: "replace" | "append";
+    } = {},
   ): Promise<JsonObject> {
     return this.request("POST", "/api/v1/content/reindex", {
-      body: {
+      body: compact({
         uri: normalizeURI(uri),
         mode: options.mode ?? "vectors_only",
         wait: options.wait ?? true,
         dry_run: options.dryRun ?? false,
-      },
+        tags: options.tags,
+        tag_mode: options.tags === undefined ? undefined : options.tagMode ?? "replace",
+      }),
     });
   }
 
   /** Create a session. */
   createSession(options: CreateSessionOptions = {}): Promise<JsonObject> {
+    const body = compact({
+      session_id: options.sessionId,
+      memory_policy: options.memoryPolicy,
+      memory_extraction_config: options.memoryExtractionConfig,
+      telemetry: options.telemetry,
+    });
+    if ("autoCommitPolicy" in options)
+      body.auto_commit_policy = options.autoCommitPolicy ?? null;
     return this.request("POST", "/api/v1/sessions", {
-      body: compact({
-        session_id: options.sessionId,
-        memory_policy: options.memoryPolicy,
-        telemetry: options.telemetry,
-      }),
+      body,
     });
   }
   /** List sessions visible to the caller. */
@@ -562,6 +549,25 @@ export class OpenVikingClient {
     return this.request("GET", `/api/v1/sessions/${pathPart(sessionId)}`, {
       query: { auto_create: autoCreate || undefined },
     });
+  }
+  /** Update mutable session memory extraction settings. */
+  updateSessionConfig(
+    sessionId: string,
+    options: UpdateSessionConfigOptions,
+  ): Promise<JsonObject> {
+    const body = compact({
+      memory_extraction_config: options.memoryExtractionConfig,
+      telemetry: options.telemetry,
+    });
+    if ("autoCommitPolicy" in options)
+      body.auto_commit_policy = options.autoCommitPolicy ?? null;
+    return this.request(
+      "PATCH",
+      `/api/v1/sessions/${pathPart(sessionId)}/config`,
+      {
+        body,
+      },
+    );
   }
   /** Test whether a session exists. */
   async sessionExists(sessionId: string): Promise<boolean> {
@@ -653,11 +659,19 @@ export class OpenVikingClient {
     sessionId: string,
     keepRecentCount = 0,
     telemetry?: unknown,
+    eventTags?: string[],
   ): Promise<JsonObject> {
     return this.request(
       "POST",
       `/api/v1/sessions/${pathPart(sessionId)}/commit`,
-      { body: compact({ keep_recent_count: keepRecentCount, telemetry }) },
+      {
+        body: compact({
+          keep_recent_count: keepRecentCount,
+          telemetry,
+          extraction_metadata:
+            eventTags === undefined ? undefined : { event: { tags: eventTags } },
+        }),
+      },
     );
   }
   /** Export a resource subtree to a local OVPack file. */
@@ -750,6 +764,13 @@ export class OpenVikingClient {
       }
       throw error;
     }
+  }
+
+  cancelTask(taskId: string): Promise<JsonObject> {
+    return this.request(
+      "POST",
+      `/api/v1/tasks/${pathPart(taskId)}/cancel`,
+    ) as Promise<JsonObject>;
   }
   /** List background tasks. */
   listTasks(options: TaskListOptions = {}): Promise<unknown[]> {
@@ -861,6 +882,16 @@ export class OpenVikingClient {
   gitLog(branch = "main", limit = 20, paths?: string[]): Promise<JsonObject[]> {
     return this.request("GET", "/api/v1/snapshot/log", {
       query: { branch, limit, paths },
+    });
+  }
+  /** Compare one file between two snapshot refs. */
+  gitDiff(path: string, toRef: string, fromRef?: string): Promise<JsonObject> {
+    return this.request("GET", "/api/v1/snapshot/diff", {
+      query: {
+        path: normalizeURI(path),
+        from: fromRef,
+        to: toRef,
+      },
     });
   }
   /** Return the account `.ovgitignore` content. */

@@ -58,7 +58,7 @@ export function Composer({
       <div
         className={cn(
           'mx-auto w-full border border-border/50 bg-background/95',
-          isCompact ? 'max-w-none' : 'max-w-3xl',
+          isCompact ? 'max-w-none' : 'max-w-[clamp(48rem,68vw,72rem)]',
           isCompact ? 'rounded-xl' : 'rounded-2xl',
           'shadow-lg shadow-black/8 dark:shadow-black/25',
         )}

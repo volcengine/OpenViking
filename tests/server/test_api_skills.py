@@ -75,7 +75,12 @@ async def test_skills_api_list_show_find_and_delete(client):
 
     show_response = await client.get(
         "/api/v1/skills/api-skill",
-        params={"level": 2, "include_files": True, "include_source": True},
+        params={
+            "level": 2,
+            "include_files": True,
+            "include_integrity": True,
+            "include_source": True,
+        },
     )
     assert show_response.status_code == 200, show_response.text
     shown = show_response.json()["result"]
@@ -84,6 +89,12 @@ async def test_skills_api_list_show_find_and_delete(client):
     assert shown["skill_md_uri"].endswith("/skills/api-skill/SKILL.md")
     assert "# api-skill" in shown["content"]
     assert any(file["name"] == "SKILL.md" for file in shown["files"])
+    assert len(shown["revision"]) == 64
+    assert len(shown["content_sha256"]) == 64
+    assert all(
+        file.get("is_dir") or (file.get("size") is not None and len(file.get("sha256", "")) == 64)
+        for file in shown["files"]
+    )
     assert shown["source"]["tracked"] is True
     assert shown["source"]["type"] == "api"
     assert shown["source"]["source"] == "inline_content"

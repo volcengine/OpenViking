@@ -13,11 +13,13 @@ export function LazyFilePreview({
   file,
   hideDirectoryHeader,
   onClose,
+  onNavigate,
   showCloseButton,
 }: {
   file: VikingFsEntry | null
   hideDirectoryHeader?: boolean
   onClose: () => void
+  onNavigate?: (uri: string) => void
   showCloseButton?: boolean
 }) {
   return (
@@ -32,6 +34,7 @@ export function LazyFilePreview({
         file={file}
         hideDirectoryHeader={hideDirectoryHeader}
         onClose={onClose}
+        onNavigate={onNavigate}
         showCloseButton={showCloseButton}
       />
     </Suspense>

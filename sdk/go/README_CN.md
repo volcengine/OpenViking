@@ -31,7 +31,7 @@ Go SDK 发送的身份请求头与 Python HTTP client 一致：
 
 普通 `api_key` 部署下只需要设置 `APIKey`，服务端会从 API key 推导 account/user 身份。只有在 trusted 部署或网关显式透传租户身份时，才需要设置 `Account` 和 `User`。
 
-Go SDK 仅支持 HTTP 模式，不支持 Python embedded 模式，也不保留旧 `agent_id` 兼容路径。
+Go SDK 不保留旧 `agent_id` 兼容路径。
 
 ## 图片检索示例
 
@@ -70,7 +70,7 @@ _, _, _ = imageResults, storedImageResults, similarPosters
 | Watch 管理 | `ListWatches`, `GetWatch`, `UpdateWatch`, `DeleteWatch`, `TriggerWatch` |
 | 文件系统和内容 | `List`, `Tree`, `Stat`, `Attrs`, `Mkdir`, `Remove`, `Move`, `Read`, `Abstract`, `Overview`, `Write`, `SetTags`, `Reindex` |
 | 检索 | `Find`, `Search`, `Grep`, `Glob` |
-| 会话和任务 | `CreateSession`, `ListSessions`, `GetSession`, `SessionExists`, `GetSessionContext`, `GetSessionArchive`, `DeleteSession`, `AddMessage`, `BatchAddMessages`, `CommitSession`, `GetTask`, `ListTasks` |
+| 会话和任务 | `CreateSession`, `ListSessions`, `GetSession`, `UpdateSessionConfig`, `SessionExists`, `GetSessionContext`, `GetSessionArchive`, `DeleteSession`, `AddMessage`, `BatchAddMessages`, `CommitSession`, `GetTask`, `ListTasks` |
 | OVPack | `ExportOVPack`, `BackupOVPack`, `ImportOVPack`, `RestoreOVPack` |
 | 系统和 observer | `Health`, `CheckConsistency`, `GetStatus`, `IsHealthy`, `QueueStatus`, `VikingDBStatus`, `ModelsStatus` |
 | 管理接口 | `AdminCreateAccount`, `AdminCreateAccountWithOptions`, `AdminListAccounts`, `AdminDeleteAccount`, `AdminRegisterUser`, `AdminRegisterUserWithOptions`, `AdminListUsers`, `AdminRemoveUser`, `AdminSetRole`, `AdminRegenerateKey`, `AdminRegenerateKeyWithOptions`, `AdminMigrate` |
@@ -81,7 +81,6 @@ Go SDK v1 的边界是对齐当前 Python HTTP client，不覆盖所有 server �
 
 | 模块 | 原因 |
 |------|------|
-| Python embedded 模式 | Go SDK 是纯 HTTP SDK。 |
 | 旧 `agent_id` 兼容 | 新 SDK 只使用 `ActorPeerID`。 |
 | Privacy config 路由 | 当前属于 server-only 管理面，Python HTTP client 未公开。 |
 | Metrics endpoint | Prometheus 文本抓取端点，不是标准 JSON SDK API。 |

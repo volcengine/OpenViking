@@ -4,9 +4,9 @@
 {
   "mcpServers": {
     "ov-mcp-server": {
-      "url": "https://api.vikingdb.cn-beijing.volces.com/openviking/mcp",
+      "url": "{{OPENVIKING_BASE_URL}}/mcp",
       "headers": {
-        "Authorization": "Bearer ZGVmYXV********YzdlZjhiMg"
+        "Authorization": "Bearer {{OPENVIKING_API_KEY}}"
       }
     }
   }

@@ -8,11 +8,15 @@ scattered across different modules. All configurations inherit from ParserConfig
 and can be loaded from ov.conf files.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Iterable, Optional, Union
+
+from openviking_cli.utils.logger import get_logger
 
 from .config_utils import raise_unknown_config_fields
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -144,18 +148,16 @@ class PDFConfig(ParserConfig):
     Attributes:
         strategy: Parsing strategy ("local" | "mineru" | "auto")
         mineru_endpoint: MinerU API endpoint URL
-        mineru_api_key: MinerU API authentication key
         mineru_timeout: MinerU request timeout in seconds
-        mineru_params: Additional MinerU API parameters
+        mineru_bodys: Additional MinerU API multipart form fields
     """
 
     strategy: str = "auto"  # "local" | "mineru" | "auto"
 
     # MinerU API configuration
     mineru_endpoint: Optional[str] = None  # API endpoint URL
-    mineru_api_key: Optional[str] = None  # API authentication key
     mineru_timeout: float = 300.0  # Request timeout in seconds (5 minutes)
-    mineru_params: Optional[dict] = None  # Additional API parameters
+    mineru_bodys: Optional[dict] = None  # Additional API multipart form fields
 
     # Heading detection configuration
     heading_detection: str = "auto"  # "bookmarks" | "font" | "auto" | "none"
@@ -201,7 +203,7 @@ class CodeHostingConfig(ParserConfig):
     Base configuration for code hosting platform domains.
 
     Attributes:
-        code_hosting_domains: List of code hosting platform domains (github.com, gitlab.com, etc.)
+        code_hosting_domains: List of allowed generic code hosting domains
         github_domains: List of GitHub domains (github.com, www.github.com)
         gitlab_domains: List of GitLab domains (gitlab.com, www.gitlab.com)
         azure_devops_domains: List of Azure DevOps domains (dev.azure.com, ssh.dev.azure.com)
@@ -216,7 +218,17 @@ class CodeHostingConfig(ParserConfig):
     def __post_init__(self):
         """Initialize default values for mutable fields."""
         if self.code_hosting_domains is None:
-            self.code_hosting_domains = ["github.com", "gitlab.com"]
+            self.code_hosting_domains = [
+                "github.com",
+                "gitlab.com",
+                "gitcode.com",
+                "gitee.com",
+                "bitbucket.org",
+                "codeberg.org",
+                "gitea.com",
+                "atomgit.com",
+                "git.sr.ht",
+            ]
         if self.github_domains is None:
             self.github_domains = ["github.com", "www.github.com"]
         if self.gitlab_domains is None:
@@ -235,20 +247,18 @@ class CodeConfig(CodeHostingConfig):
     Configuration for code parsing.
 
     Attributes:
-        code_summary_mode: Summary generation mode ("llm" | "ast" | "ast_llm")
-        extract_functions: Whether to extract function definitions
-        extract_classes: Whether to extract class definitions
-        extract_imports: Whether to extract import statements
-        include_comments: Whether to include comments in L1/L2
-        max_line_length: Maximum line length before splitting
-        language_hint: Optional language hint (auto-detected if None)
-        max_token_limit: Maximum tokens to process per file
-        truncation_strategy: "head", "tail", or "balanced"
-        warn_on_truncation: Whether to warn when truncation occurs
+        extract_functions: Legacy compatibility field; ignored by the fixed skeleton route
+        extract_classes: Legacy compatibility field; ignored by the fixed skeleton route
+        extract_imports: Legacy compatibility field; ignored by the fixed skeleton route
+        include_comments: Legacy compatibility field; ignored by the fixed skeleton route
+        max_line_length: Legacy compatibility field; ignored by the fixed skeleton route
+        language_hint: Legacy compatibility field; ignored by the fixed skeleton route
+        max_token_limit: Legacy compatibility field; ignored by the fixed skeleton route
+        truncation_strategy: Legacy compatibility field; ignored by the fixed skeleton route
+        warn_on_truncation: Legacy compatibility field; ignored by the fixed skeleton route
         github_raw_domain: Domain for GitHub raw content (raw.githubusercontent.com)
     """
 
-    code_summary_mode: str = "ast"  # "llm" | "ast" | "ast_llm"
     extract_functions: bool = True
     extract_classes: bool = True
     extract_imports: bool = True
@@ -259,6 +269,22 @@ class CodeConfig(CodeHostingConfig):
     truncation_strategy: str = "head"  # "head", "tail", or "balanced"
     warn_on_truncation: bool = True
     github_raw_domain: str = "raw.githubusercontent.com"
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "CodeConfig":
+        """Create code configuration, accepting removed fields for upgrade compatibility."""
+
+        data = dict(data)
+        if "code_summary_mode" in data:
+            data.pop("code_summary_mode", None)
+            logger.warning(
+                "code.code_summary_mode is deprecated and ignored; "
+                "code summaries now always use the fixed skeleton route with LLM fallback"
+            )
+
+        valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
+        raise_unknown_config_fields(data=data, valid_fields=valid_fields, context_name=cls.__name__)
+        return cls(**data)
 
     def validate(self) -> None:
         """
@@ -271,12 +297,6 @@ class CodeConfig(CodeHostingConfig):
         super().validate()
 
         # Validate code-specific fields
-        if self.code_summary_mode not in ("llm", "ast", "ast_llm"):
-            raise ValueError(
-                f"Invalid code_summary_mode '{self.code_summary_mode}'. "
-                "Must be 'llm', 'ast', or 'ast_llm'"
-            )
-
         if self.max_line_length <= 0:
             raise ValueError("max_line_length must be positive")
 
@@ -417,13 +437,16 @@ class MarkdownConfig(ParserConfig):
 
     Attributes:
         preserve_links: Whether to preserve hyperlinks in output
-        extract_frontmatter: Whether to extract YAML frontmatter
+        extract_frontmatter: Whether to REMOVE YAML frontmatter from the stored
+            document body. Frontmatter is parsed into the parse result metadata
+            regardless. Off by default: the parsed metadata is never persisted, so
+            removing the block would silently lose those fields.
         include_metadata: Whether to include file metadata
         max_heading_depth: Maximum heading depth to include in structure
     """
 
     preserve_links: bool = True
-    extract_frontmatter: bool = True
+    extract_frontmatter: bool = False
     include_metadata: bool = True
     max_heading_depth: int = 3
 
@@ -440,6 +463,95 @@ class MarkdownConfig(ParserConfig):
         # Validate markdown-specific fields
         if self.max_heading_depth < 1:
             raise ValueError("max_heading_depth must be at least 1")
+
+
+@dataclass
+class ExcelConfig(ParserConfig):
+    """
+    Configuration for Excel parsing.
+
+    Attributes:
+        enable_process_pool: Offload Excel→Markdown conversion and layout
+            planning to a ProcessPoolExecutor (default off).
+        process_pool_workers: Max worker processes when the pool is enabled.
+    """
+
+    enable_process_pool: bool = False
+    process_pool_workers: int = 2
+
+    # Excel is converted to Markdown and then sectioned by MarkdownParser, so
+    # these fields decide the resulting node structure and stable URIs.
+    _SECTIONING_FIELDS = (
+        "max_content_length",
+        "encoding",
+        "max_section_size",
+        "section_size_flexibility",
+        "max_section_chars",
+    )
+
+    # Names of keys a config source actually provided. Tracked as a plain
+    # instance attribute rather than a dataclass field so it never appears in
+    # asdict/model_dump output, cannot be injected from a config file, and does
+    # not affect equality. Absent means "provenance unknown".
+    _EXPLICIT_ATTR = "_openviking_explicit_keys"
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ExcelConfig":
+        """Build the config while remembering which keys were actually present.
+
+        ``with_sectioning_defaults_from`` needs to tell "the user wrote this
+        value" from "the key was absent". Comparing against class defaults
+        cannot do that, so record the provided keys here instead.
+        """
+        config = super().from_dict(data)
+        return config.with_explicit_keys(data)
+
+    def with_explicit_keys(self, names: Iterable[str]) -> "ExcelConfig":
+        """Return this config marked as having ``names`` explicitly configured."""
+        object.__setattr__(self, self._EXPLICIT_ATTR, frozenset(names))
+        return self
+
+    @property
+    def explicit_keys(self) -> Optional[frozenset]:
+        """Keys a config source provided, or ``None`` when unknown."""
+        return getattr(self, self._EXPLICIT_ATTR, None)
+
+    def with_sectioning_defaults_from(self, markdown: "ParserConfig") -> "ExcelConfig":
+        """Inherit sectioning fields that ``parsers.excel`` did not set.
+
+        Excel used to be registered with ``config.markdown`` directly, so a
+        deployment that tuned ``parsers.markdown`` also tuned Excel imports.
+        Introducing a dedicated ``parsers.excel`` section must not silently
+        change that node structure, so a sectioning field absent from
+        ``parsers.excel`` keeps following Markdown. Explicit ``parsers.excel``
+        values always win, including one that happens to equal the class
+        default.
+
+        Configs built without ``from_dict`` carry no key information; those are
+        treated as fully explicit so a hand-constructed ``ExcelConfig`` is never
+        silently rewritten.
+        """
+        if markdown is None:
+            return self
+
+        explicit = self.explicit_keys
+        if explicit is None:
+            return self
+
+        overrides = {
+            name: getattr(markdown, name)
+            for name in self._SECTIONING_FIELDS
+            if hasattr(markdown, name) and name not in explicit
+        }
+        if not overrides:
+            return self
+        return replace(self, **overrides).with_explicit_keys(explicit)
+
+    def validate(self) -> None:
+        """Validate Excel-specific configuration."""
+        super().validate()
+        if self.process_pool_workers < 1:
+            raise ValueError("process_pool_workers must be at least 1")
 
 
 @dataclass
@@ -629,7 +741,7 @@ class SemanticConfig:
     """Maximum characters of file content sent to LLM for summary generation."""
 
     max_skeleton_chars: int = 12000
-    """Maximum characters of AST skeleton used for embedding (~3000 tokens)."""
+    """Maximum characters of code skeleton used for embedding (~3000 tokens)."""
 
     max_overview_prompt_chars: int = 60000
     """Maximum characters allowed in the overview generation prompt.
@@ -637,6 +749,9 @@ class SemanticConfig:
 
     overview_batch_size: int = 50
     """Maximum number of file summaries per batch when splitting oversized prompts."""
+
+    sidecar_sample_size: int = 32
+    """Maximum direct-child summaries used in one generated directory sidecar."""
 
     abstract_max_chars: int = 256
     """Maximum characters for generated abstracts."""
@@ -652,6 +767,8 @@ class SemanticConfig:
     """Character overlap between adjacent memory chunks for context continuity."""
 
     def __post_init__(self):
+        if self.sidecar_sample_size <= 0:
+            raise ValueError("sidecar_sample_size must be positive")
         if self.memory_chunk_chars <= 0:
             raise ValueError("memory_chunk_chars must be positive")
         if self.memory_chunk_overlap < 0:
@@ -668,6 +785,7 @@ PARSER_CONFIG_REGISTRY = {
     "audio": AudioConfig,
     "video": VideoConfig,
     "markdown": MarkdownConfig,
+    "excel": ExcelConfig,
     "html": HTMLConfig,
     "text": TextConfig,
     "directory": DirectoryConfig,
@@ -698,8 +816,7 @@ def get_parser_config(
 
         >>> # Get custom code configuration
         >>> code_config = get_parser_config("code", {
-        ...     "enable_ast": False,
-        ...     "max_token_limit": 10000
+        ...     "github_raw_domain": "raw.githubusercontent.com"
         ... })
     """
     if parser_type not in PARSER_CONFIG_REGISTRY:
@@ -708,10 +825,10 @@ def get_parser_config(
 
     config_class = PARSER_CONFIG_REGISTRY[parser_type]
 
-    if config_data:
-        return config_class.from_dict(config_data)
-    else:
-        return config_class()
+    # Always go through from_dict, even with no data: configs that track which
+    # keys a source provided need to see the empty mapping to record that none
+    # were set.
+    return config_class.from_dict(config_data or {})
 
 
 def load_parser_configs_from_dict(config_dict: Dict[str, Any]) -> Dict[str, ParserConfig]:
@@ -727,7 +844,7 @@ def load_parser_configs_from_dict(config_dict: Dict[str, Any]) -> Dict[str, Pars
     Examples:
         >>> configs = load_parser_configs_from_dict({
         ...     "pdf": {"strategy": "auto"},
-        ...     "code": {"enable_ast": false}
+        ...     "code": {"github_raw_domain": "raw.githubusercontent.com"}
         ... })
         >>> pdf_config = configs["pdf"]
         >>> code_config = configs["code"]
@@ -741,10 +858,8 @@ def load_parser_configs_from_dict(config_dict: Dict[str, Any]) -> Dict[str, Pars
     configs = {}
 
     for parser_type, config_class in PARSER_CONFIG_REGISTRY.items():
-        if parser_type in config_dict:
-            config_data = config_dict[parser_type]
-            configs[parser_type] = config_class.from_dict(config_data)
-        else:
-            configs[parser_type] = config_class()
+        # from_dict on an empty mapping rather than a bare constructor, so
+        # configs that track provided keys record that a section was absent.
+        configs[parser_type] = config_class.from_dict(config_dict.get(parser_type) or {})
 
     return configs

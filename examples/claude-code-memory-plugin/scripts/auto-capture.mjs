@@ -67,7 +67,7 @@ function stateFilePath(sessionId) {
 async function loadState(sessionId) {
   try {
     const data = await readFile(stateFilePath(sessionId), "utf-8");
-    return JSON.parse(data);
+    return { capturedTurnCount: 0, ...JSON.parse(data) };
   } catch {
     return { capturedTurnCount: 0 };
   }
@@ -78,6 +78,52 @@ async function saveState(sessionId, state) {
     await mkdir(STATE_DIR, { recursive: true });
     await writeFile(stateFilePath(sessionId), JSON.stringify(state));
   } catch { /* best effort */ }
+}
+
+async function reconcileKnownFailedCapture(sessionId, ovSessionId, state) {
+  if (
+    state.capturedTurnCount <= 0
+    || cfg.captureMode !== "semantic"
+    || !cfg.captureAssistantTurns
+  ) {
+    return;
+  }
+
+  const lastCapture = readJsonState("last-capture.json");
+  if (
+    lastCapture?.cc_session_id !== sessionId
+    || lastCapture?.ov_session_id !== ovSessionId
+    || Number(lastCapture.turns_failed || 0) <= 0
+    || Number(lastCapture.turns_captured || 0) > 0
+    || Number(lastCapture.turns_queued || 0) > 0
+  ) {
+    return;
+  }
+
+  const res = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}`);
+  if (!res.ok && res.status !== 404) {
+    log("capture_state_verification_deferred", {
+      sessionId,
+      ovSessionId,
+      status: res.status || 0,
+    });
+    return;
+  }
+
+  const meta = res.ok ? (res.result || {}) : {};
+  const hasDurableCapture = Number(meta.message_count || 0) > 0
+    || Number(meta.total_message_count || 0) > 0
+    || Number(meta.commit_count || 0) > 0;
+  if (!hasDurableCapture) {
+    log("capture_state_rewound", {
+      sessionId,
+      ovSessionId,
+      previousCapturedTurnCount: state.capturedTurnCount,
+      status: res.status || 200,
+    });
+    state.capturedTurnCount = 0;
+    await saveState(sessionId, state);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -230,17 +276,14 @@ function extractToolResultText(content) {
 
 // Tool output retention for the part path. Unlike the legacy prose path
 // (TOOL_RESULT_MAX_CHARS, which drops outputs to keep the extractor's text
-// clean), results here land in a separable tool_output field, so we keep them —
-// bounded so we don't store whole files / web pages / command stdout verbatim.
-const TOOL_OUTPUT_PART_MAX_CHARS = 2000;
-
+// clean), results here land in a separable tool_output field and are reported
+// verbatim — the server externalizes anything oversized and leaves a stub plus
+// tool_output_ref, so truncating here would only destroy what it stores.
 function truncateToolOutput(s) {
   if (typeof s !== "string") s = String(s ?? "");
-  if (s.length <= TOOL_OUTPUT_PART_MAX_CHARS) return s;
-  return (
-    s.slice(0, TOOL_OUTPUT_PART_MAX_CHARS) +
-    `\n... [truncated, ${s.length - TOOL_OUTPUT_PART_MAX_CHARS} more chars]`
-  );
+  const max = cfg.captureToolMaxChars;
+  if (s.length <= max) return s;
+  return s.slice(0, max) + `\n... [truncated, ${s.length - max} more chars]`;
 }
 
 // tool_result blocks carry only tool_use_id, not the tool name. Pre-scan all
@@ -407,7 +450,13 @@ async function pushTurnsToOv(ovSessionId, turns, peerId = "") {
   const res = await sendSessionMessages(fetchJSON, ovSessionId, payloads, {
     enqueueOnRetryable: true,
   });
-  return { ok: res.sent, queued: res.queued, failed: res.failed, enqueueFailed: res.enqueueFailed };
+  return {
+    ok: res.sent,
+    queued: res.queued,
+    failed: res.failed,
+    enqueueFailed: res.enqueueFailed,
+    lastError: res.lastError,
+  };
 }
 
 async function enqueueTurnsToPending(ovSessionId, turns, peerId = "") {
@@ -424,6 +473,11 @@ async function enqueueTurnsToPending(ovSessionId, turns, peerId = "") {
     else failed++;
   }
   return { ok: 0, queued, failed, enqueueFailed: failed };
+}
+
+function isMissingSessionState(error) {
+  const code = String(error?.code || "").toUpperCase();
+  return code === "NOT_FOUND";
 }
 
 // ---------------------------------------------------------------------------
@@ -492,6 +546,7 @@ async function main() {
   }
 
   const state = await loadState(sessionId);
+  await reconcileKnownFailedCapture(sessionId, ovSessionId, state);
   const newTurns = allTurns.slice(state.capturedTurnCount);
   const captureTurns = cfg.captureAssistantTurns
     ? newTurns
@@ -511,7 +566,10 @@ async function main() {
   }
 
   if (captureTurns.length === 0) {
-    await saveState(sessionId, { capturedTurnCount: allTurns.length });
+    await saveState(sessionId, {
+      ...state,
+      capturedTurnCount: allTurns.length,
+    });
     log("state_update", { newCapturedTurnCount: allTurns.length, reason: "assistant_only_increment" });
     approve();
     return;
@@ -532,7 +590,10 @@ async function main() {
   const combined = formatTurnsAsText(captureTurns);
   if (!sanitize(combined)) {
     log("skip", { stage: "batch_empty" });
-    await saveState(sessionId, { capturedTurnCount: allTurns.length });
+    await saveState(sessionId, {
+      ...state,
+      capturedTurnCount: allTurns.length,
+    });
     approve();
     return;
   }
@@ -545,7 +606,10 @@ async function main() {
     );
     if (!hasTrigger) {
       log("skip", { stage: "keyword_mode_no_trigger", turns: captureTurns.length });
-      await saveState(sessionId, { capturedTurnCount: allTurns.length });
+      await saveState(sessionId, {
+        ...state,
+        capturedTurnCount: allTurns.length,
+      });
       approve();
       return;
     }
@@ -575,7 +639,10 @@ async function main() {
       approve();
       return;
     }
-    await saveState(sessionId, { capturedTurnCount: allTurns.length });
+    await saveState(sessionId, {
+      ...state,
+      capturedTurnCount: allTurns.length,
+    });
     log("state_update", { newCapturedTurnCount: allTurns.length, reason: "pending_queued" });
     writeJsonState("last-capture.json", {
       turns_captured: 0,
@@ -604,22 +671,46 @@ async function main() {
     enqueueFailed: result.enqueueFailed,
   });
 
-  if (result.enqueueFailed > 0) {
-    logError("pending_enqueue", "some retryable failures could not be enqueued; state not advanced");
+  if (result.enqueueFailed > 0 || (
+    result.failed > 0
+    && result.ok === 0
+    && result.queued === 0
+    && isMissingSessionState(result.lastError)
+  )) {
+    logError(
+      "capture_write",
+      "some turns were neither sent nor queued; state not advanced",
+    );
+    writeJsonState("last-capture.json", {
+      turns_captured: result.ok,
+      turns_queued: result.queued,
+      turns_failed: result.failed + result.enqueueFailed,
+      pending_tokens: 0,
+      commit_threshold: cfg.commitTokenThreshold,
+      committed: false,
+      commit_count: 0,
+      total_message_count: 0,
+      ov_session_id: ovSessionId,
+      cc_session_id: sessionId,
+    });
     approve();
     return;
   }
 
-  // Advance state only after every retryable write was either sent or durably
-  // enqueued. Non-retryable 4xx failures are still treated as terminal so they
-  // do not loop forever.
-  await saveState(sessionId, { capturedTurnCount: allTurns.length });
+  // A missing live-message file is recoverable after the server is fixed, so
+  // retain the cursor for that failure. Other non-retryable 4xx responses keep
+  // the historical terminal behavior instead of retrying invalid payloads.
+  await saveState(sessionId, {
+    ...state,
+    capturedTurnCount: allTurns.length,
+  });
   log("state_update", { newCapturedTurnCount: allTurns.length });
 
   // Client-driven commit (ported from openclaw-plugin/context-engine.ts:afterTurn).
   // OV's Session._auto_commit_threshold is not consumed by addMessage, so we
   // poll pending_tokens ourselves and commit when the threshold is crossed.
   let committed = false;
+  let commitTraceId = "";
   let pendingTokens = 0;
   let commitCount = 0;
   let totalMessageCount = 0;
@@ -634,10 +725,12 @@ async function main() {
         keep_recent_count: cfg.commitKeepRecentCount,
       });
       committed = commitRes.ok;
+      commitTraceId = commitRes.traceId || commitRes.result?.trace_id || "";
       if (committed) commitCount += 1;
       log("commit", {
         ovSessionId,
         ok: commitRes.ok,
+        trace_id: commitTraceId || undefined,
         pending: pendingTokens,
         keepRecentCount: cfg.commitKeepRecentCount,
       });
@@ -674,7 +767,9 @@ async function main() {
   if (result.ok > 0) {
     approve(
       `captured ${result.ok} turns to ov session ${ovSessionId}` +
-      (committed ? " (committed)" : ""),
+      (committed
+        ? ` (committed${commitTraceId ? `; trace_id=${commitTraceId}` : ""})`
+        : ""),
     );
   } else {
     approve();

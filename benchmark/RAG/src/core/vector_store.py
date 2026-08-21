@@ -1,24 +1,21 @@
 import os
-import time
-from typing import List
 import sys
+import time
 from pathlib import Path
+from typing import List
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from adapters.base import StandardDoc, StandardSample
 import tiktoken
-import openviking as ov
+from adapters.base import StandardDoc
+from openviking_sdk import SyncHTTPClient
 
 
 class VikingStoreWrapper:
-    def __init__(self, store_path: str):
-        self.store_path = store_path
-        if not os.path.exists(store_path):
-            os.makedirs(store_path)
-        
-        self.client = ov.SyncOpenViking(path=store_path)
-        
+    def __init__(self):
+        self.client = SyncHTTPClient()
+        self.client.initialize()
+
         try:
             self.enc = tiktoken.get_encoding("cl100k_base")
         except Exception as e:

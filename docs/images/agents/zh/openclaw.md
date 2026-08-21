@@ -1,22 +1,29 @@
-## 步骤 1：安装 OpenViking
-在你的 OpenClaw 的机器终端，执行以下命令以安装 OpenViking Plugin
+## 安装
+
+复制本页 API Key：
+
+{{OPENVIKING_API_KEY_BLOCK}}
 
 ```bash
-openclaw plugins install clawhub:@openviking/openclaw-plugin && openclaw openviking setup
-```
-
-## 步骤 2：复制 Base URL 和 API Key
-执行安装命令后会依次提示输入 Base URL 和 API Key，可复制后粘贴到你的 Agent 终端
-
-- Base URL: 复制以下 Base URL 到你的 Agent 终端
-```text
-https://api.vikingdb.cn-beijing.volces.com/openviking
-```
-- API Key: 复制页面中展示的 API Key 到你的 Agent 终端
-
-## 步骤 3：重启 OpenClaw
-复制以下指令到 Agent 终端以重启 OpenClaw，重启后控制台将自动判断 Agent 接入状态
-
-```bash
+openclaw plugins install clawhub:@openviking/openclaw-plugin
+openclaw openviking setup --base-url {{OPENVIKING_BASE_URL}} --api-key <本页的-API-Key>
 openclaw gateway restart
 ```
+
+## 验证
+
+```bash
+openclaw openviking status
+```
+
+## 故障排查
+
+| 问题 | 处理 |
+|---|---|
+| 插件未生效 | 重跑安装，再执行 `openclaw gateway restart` |
+| 401 / 403 | 重新粘贴本页 API Key |
+
+## 参考
+
+- 手动配置文档：[OpenClaw](https://docs.openviking.net/zh/agent-integrations/03-openclaw)
+- 源码：[examples/openclaw-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/openclaw-plugin)

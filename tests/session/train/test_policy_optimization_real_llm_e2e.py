@@ -30,7 +30,6 @@ from openviking.session.train import (
     TrajectoryRolloutAnalyzer,
 )
 from openviking.session.train.components.gradient_estimator import ExperienceGradientEstimator
-from openviking.storage.transaction import init_lock_manager, reset_lock_manager
 from openviking.telemetry import start_current_span, tracer
 from openviking.telemetry.tracer import init_tracer_from_server_config
 from openviking_cli.utils.config import get_openviking_config
@@ -534,10 +533,11 @@ def _print_iterative_real_llm_summary(
     tracer.info("\n".join(lines), console=True)
 
 
-def _patch_experience_prefetch(
-    monkeypatch, fs: InMemoryVikingFS, experience_uri: str
-) -> None:
+def _patch_experience_prefetch(monkeypatch, fs: InMemoryVikingFS, experience_uri: str) -> None:
+    """Patch experience prefetch so the test reads from the in-memory filesystem."""
+
     async def search_files(self, query, search_uris=None, limit=5):
+        del self, query, search_uris, limit
         return [experience_uri]
 
     async def read_file(self, uri):
@@ -603,8 +603,6 @@ async def _run_policy_optimization_pipeline_real_config_llm_e2e_writes_updated_e
             )
         }
     )
-    reset_lock_manager()
-    init_lock_manager(fs.agfs, redo_recovery_enabled=False)
     request_context = SimpleNamespace(
         user=SimpleNamespace(account_id="default", user_id="u"),
         account_id="default",
@@ -673,14 +671,10 @@ async def _run_policy_optimization_pipeline_real_config_llm_e2e_writes_updated_e
     assert trajectory_content.strip()
     assert gradient.after_file.plain_content().strip()
     assert all(epoch.apply_result.errors == [] for epoch in result.epochs)
-    written_uris = [
-        uri for epoch in result.epochs for uri in epoch.apply_result.written_uris
-    ]
+    written_uris = [uri for epoch in result.epochs for uri in epoch.apply_result.written_uris]
     assert experience_uri in written_uris
     assert result.plan.metadata["optimizer"] == "patch_merge"
-    assert any(
-        epoch.plan.metadata.get("optimizer") == "patch_merge" for epoch in result.epochs
-    )
+    assert any(epoch.plan.metadata.get("optimizer") == "patch_merge" for epoch in result.epochs)
     assert len(result.epochs) == 4
     assert result.evaluation_passes == []
     assert final_evaluation.metadata["score"] > result.metadata["first_score"]
@@ -725,8 +719,6 @@ async def test_experience_gradient_estimator_real_config_llm_generates_gradient(
             ),
         }
     )
-    reset_lock_manager()
-    init_lock_manager(fs.agfs, redo_recovery_enabled=False)
     request_context = SimpleNamespace(
         user=SimpleNamespace(account_id="default", user_id="u"),
         account_id="default",

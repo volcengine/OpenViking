@@ -51,7 +51,12 @@ function makeHeaders() {
   if (cfg.sendIdentityHeaders && cfg.account) headers["X-OpenViking-Account"] = cfg.account;
   if (cfg.sendIdentityHeaders && cfg.user) headers["X-OpenViking-User"] = cfg.user;
   if (activePeerId) headers["X-OpenViking-Actor-Peer"] = activePeerId;
+  if (cfg.userAgent) headers["User-Agent"] = cfg.userAgent;
   return headers;
+}
+
+function responseTraceId(body) {
+  return body?.result?.trace_id || body?.error?.trace_id || body?.trace_id || undefined;
 }
 
 async function fetchJSONRes(path, init = {}) {
@@ -61,10 +66,11 @@ async function fetchJSONRes(path, init = {}) {
     const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers: makeHeaders(), signal: controller.signal });
     const body = await res.json().catch(() => null);
     if (!body) return { ok: false, status: res.status, error: { message: "empty or invalid JSON response" } };
+    const traceId = responseTraceId(body);
     if (!res.ok || body.status === "error") {
-      return { ok: false, status: res.status, error: body.error || body };
+      return { ok: false, status: res.status, error: body.error || body, traceId };
     }
-    return { ok: true, status: res.status, result: body.result ?? body };
+    return { ok: true, status: res.status, result: body.result ?? body, traceId };
   } catch (err) {
     return { ok: false, status: 0, error: { message: err?.message || String(err) } };
   } finally {
@@ -198,7 +204,7 @@ async function main() {
   }
 
   const ovSessionId = state.ovSessionId;
-  const commit = await fetchJSON(
+  const commit = await fetchJSONRes(
     `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`,
     { method: "POST", body: JSON.stringify({}) },
   );
@@ -207,18 +213,29 @@ async function main() {
   // fails (server unreachable, non-2xx, timeout) we MUST NOT reset
   // ovSessionId — keep state intact so the next sweep / SessionStart can
   // retry. A transient OV outage shouldn't lose a session's memory.
-  if (!commit) {
-    logError("commit_failed_keep_state", { ovSessionId });
+  if (!commit.ok) {
+    log("commit", {
+      ovSessionId,
+      ok: false,
+      status: commit.status,
+      trace_id: commit.traceId,
+      error: commit.error?.message || commit.error?.code,
+    });
     await saveState(state); // bumps lastUpdatedAt only, keeps ovSessionId
-    noop(`pre-compact commit attempted on ${ovSessionId}; result unavailable (state preserved for retry)`);
+    noop(
+      `pre-compact commit attempted on ${ovSessionId}; result unavailable` +
+      `${commit.traceId ? ` (trace_id=${commit.traceId})` : ""} (state preserved for retry)`,
+    );
     return;
   }
 
+  const traceId = commit.traceId || commit.result?.trace_id || "";
   log("commit", {
     ovSessionId,
-    archived: commit.archived ?? false,
-    taskId: commit.task_id,
-    status: commit.status,
+    archived: commit.result?.archived ?? false,
+    taskId: commit.result?.task_id,
+    status: commit.result?.status,
+    trace_id: traceId || undefined,
   });
 
   // Reset OV session for the post-compact half. Keep capturedTurnCount so
@@ -226,7 +243,10 @@ async function main() {
   state.ovSessionId = null;
   await saveState(state);
 
-  noop(`OpenViking session ${ovSessionId} is committed`);
+  noop(
+    `OpenViking session ${ovSessionId} is committed` +
+    (traceId ? ` (trace_id=${traceId})` : ""),
+  );
 }
 
 function hasCaptureKeyword(turns) {

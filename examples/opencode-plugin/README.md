@@ -114,6 +114,7 @@ Create `~/.config/opencode/openviking-config.json`:
 ```json
 {
   "enabled": true,
+  "mcp": { "enabled": true },
   "timeoutMs": 30000,
   "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
   "autoRecall": {
@@ -132,7 +133,12 @@ Create `~/.config/opencode/openviking-config.json`:
 }
 ```
 
-API keys are resolved from environment variables or `~/.openviking/ovcli.conf` and sent as `Authorization: Bearer ...` by both hooks and the MCP proxy. `account` and `user` are trusted-mode identity
+`autoRecall.limit` is a legacy quota-scaling input, not a final result cap.
+Explicit values from 1 through 5 produce an effective total quota of 6 because
+each coding category keeps one retrieval slot. Use Context `quotas` directly
+when exact category ceilings are required.
+
+API keys are resolved from environment variables or `~/.openviking/ovcli.conf` and sent as `Authorization: Bearer ...` by both hooks and the MCP proxy. Recall goes through the server-side context face (`POST /api/v1/search/search` with `mode="context"`), falling back to the deprecated `/api/v1/search/recall` on older deployments. `account` and `user` are trusted-mode identity
 headers sent as `X-OpenViking-Account` and `X-OpenViking-User`; leave them empty
 when using API-key mode with user/admin API keys.
 By default the plugin derives a peer from the project directory using Claude's
@@ -158,6 +164,20 @@ and `OPENVIKING_PEER_ID` take precedence over values in this file.
 
 For advanced setups, `OPENVIKING_PLUGIN_CONFIG` can point to another config file path.
 
+### Hook-only mode
+
+When OpenViking is already exposed through another MCP server, retain the lifecycle hooks while
+skipping this plugin's bundled MCP registration:
+
+```json
+{
+  "mcp": { "enabled": false }
+}
+```
+
+This leaves repository context, automatic recall, message capture, and lifecycle commits enabled.
+It does not add or overwrite OpenCode's `mcp.openviking` entry.
+
 OpenCode's local `read`, `glob`, and `grep` tools cannot read `viking://` URIs.
 When the agent accidentally tries that, the plugin blocks the filesystem tool
 call and points it to the OpenViking MCP tools.
@@ -166,18 +186,19 @@ call and points it to the OpenViking MCP tools.
 
 OpenCode sees the OpenViking MCP server as `openviking`, so tool names are namespaced with `openviking_`.
 
-- `openviking_recall`: balanced current-task recall using OpenViking's `/recall` endpoint.
-- `openviking_search`: deep semantic retrieval across memories, resources, and skills.
+- `openviking_search`: deep semantic retrieval across memories, resources, and skills; use `mode="context"` for balanced, injection-ready context.
 - `openviking_find`: fast semantic retrieval.
 - `openviking_remember`: store important facts or decisions for memory extraction.
 - `openviking_read`: read one or more `viking://` files.
 - `openviking_list`: list a `viking://` directory.
+- `openviking_tree`: show a `viking://` directory tree.
 - `openviking_grep`: exact text or regex search.
 - `openviking_glob`: glob file matching.
+- `openviking_write`: create, overwrite, or append to a `viking://` file.
+- `openviking_edit`: exact string replacement in a `viking://` file.
 - `openviking_add_resource`: add a URL, local file, sitemap, or feed.
 - `openviking_forget`: delete a `viking://` URI after explicit user confirmation.
 - `openviking_list_watches` / `openviking_cancel_watch`: inspect or cancel resource watches.
-- `openviking_code_search`, `openviking_code_outline`, `openviking_code_expand`: inspect indexed code symbols.
 - `openviking_health`: check OpenViking server health.
 
 The proxy forwards the server's real `tools/list` response; the plugin does not maintain a separate native tool list.

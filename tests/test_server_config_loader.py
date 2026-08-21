@@ -61,6 +61,7 @@ def test_load_server_config_preserves_supported_fields(tmp_path):
                     "host": "0.0.0.0",
                     "port": 1944,
                     "workers": 2,
+                    "timeout_keep_alive": 120,
                     "auth_mode": "trusted",
                     "with_bot": True,
                     "bot_api_url": "http://localhost:19999",
@@ -77,11 +78,21 @@ def test_load_server_config_preserves_supported_fields(tmp_path):
     assert config.host == "0.0.0.0"
     assert config.port == 1944
     assert config.workers == 2
+    assert config.timeout_keep_alive == 120
     assert config.auth_mode == "trusted"
     assert config.with_bot is True
     assert config.bot_api_url == "http://localhost:19999"
     assert config.observability.metrics.exporters.prometheus.enabled is True
     assert config.encryption_enabled is True
+
+
+def test_load_server_config_defaults_timeout_keep_alive(tmp_path):
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(json.dumps({"server": {"host": "0.0.0.0"}}))
+
+    config = load_server_config(str(config_path))
+
+    assert config.timeout_keep_alive == 5
 
 
 def test_load_server_config_rejects_legacy_queuefs_scope(tmp_path):

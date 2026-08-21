@@ -4,69 +4,23 @@ This page covers how to connect to OpenViking and the conventions shared across 
 
 ## Connection Modes
 
-OpenViking supports two usage modes: **Embedded Mode** (direct Python API calls) and **Client-Server Mode** (via HTTP API).
-
-This API documentation primarily focuses on the HTTP API usage in **Client-Server Mode**. Embedded mode is available but will not be covered separately in subsequent documentation.
+OpenViking clients connect to an OpenViking Server over HTTP.
 
 | Mode | Use Case | Description |
 |------|----------|-------------|
-| **Embedded** | Local development, single process | Runs locally with local data storage |
 | **HTTP** | Connect to OpenViking Server | Connects to a remote server via HTTP API |
 | **CLI** | Shell scripting, agent tool-use | Connects to server via CLI commands |
 
-### Embedded Mode (Brief Overview)
-
-Embedded mode allows direct OpenViking API calls within a Python process without starting a separate server process.
-
-```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-```
-
-Embedded mode uses `ov.conf` to configure embedding, vlm, storage, and other modules. Default configuration path: `~/.openviking/ov.conf`. You can also specify the path via environment variable:
-
-```bash
-export OPENVIKING_CONFIG_FILE=/path/to/ov.conf
-```
-
-Minimal configuration example:
-
-```json
-{
-  "embedding": {
-    "dense": {
-      "api_base": "<api-endpoint>",
-      "api_key": "<your-api-key>",
-      "provider": "<volcengine|openai|jina|...>",
-      "dimension": 1024,
-      "model": "<model-name>"
-    }
-  },
-  "vlm": {
-    "api_base": "<api-endpoint>",
-    "api_key": "<your-api-key>",
-    "provider": "<volcengine|openai|openai-codex|kimi|glm>",
-    "model": "<model-name>"
-  }
-}
-```
-
-For `provider: "openai-codex"`, `vlm.api_key` is optional once Codex OAuth is available through `openviking-server init`.
-
-For full configuration options and provider-specific examples, see the [Configuration Guide](../guides/01-configuration.md).
-
-### Client-Server Mode (Main Focus)
+### Client-Server Mode
 
 Client-Server mode connects to an OpenViking server via HTTP API, supporting multi-tenancy, remote access, and other features. See the deployment documentation for how to start the OpenViking server.
 
 #### Python SDK Client
 
 ```python
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
-client = ov.SyncHTTPClient(
+client = SyncHTTPClient(
     url="http://localhost:1933",
     api_key="your-key",
     timeout=120.0,
@@ -107,7 +61,7 @@ For normal `api_key` deployments, `APIKey` is enough because the server derives
 tenant identity from the key. Set `Account` and `User` only for trusted
 deployments or gateways that explicitly forward tenant identity.
 
-It does not implement Python embedded mode or legacy `agent_id` compatibility.
+It does not implement legacy `agent_id` compatibility.
 See [`sdk/go/README.md`](../../../sdk/go/README.md) for package-level examples.
 
 #### JavaScript/TypeScript SDK Client
@@ -191,7 +145,7 @@ client.initialize()
 #### HTTP Call Examples
 
 - CLI, `SyncHTTPClient`, and `AsyncHTTPClient` automatically upload local files or directories before calling the server API.
-- Python HTTP client and CLI can also opt into shared temporary uploads via client config (`ovcli.conf` -> `upload.mode = "shared"`).
+- Python HTTP clients can opt into shared temporary uploads through `ovcli.conf` (`upload.mode = "shared"`). The Rust `ov` CLI does not read that field; set `OPENVIKING_UPLOAD_MODE=shared` for `ov` instead.
 - Raw HTTP calls don't get this convenience layer. When using `curl` or other HTTP clients, you need to first call `POST /api/v1/resources/temp_upload`, then pass the returned `temp_file_id` to the target API.
 - `temp_upload` defaults to `upload_mode=local`. Use `upload_mode=shared` only when you explicitly want distributed shared temporary uploads.
 - For raw HTTP imports of local directories, you need to first zip them into a `.zip` file and upload using the above method; the server does not accept direct host directory paths.
@@ -228,19 +182,6 @@ openviking -o json ls viking://resources/
 ```
 
 ## Lifecycle
-
-### Embedded Mode
-
-```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
-# ... use client ...
-
-client.close()
-```
 
 ### Client-Server Mode
 
@@ -396,220 +337,194 @@ JSON output - error:
 
 ## API Endpoints
 
-Below are all HTTP API endpoints provided by OpenViking, grouped by functional module:
+This catalog follows the routes actually mounted by the server. Each group heading links to its detailed reference. Detail pages show an HTTP, Python SDK, TypeScript SDK, Go SDK, or CLI tab only when that surface is genuinely available; a raw HTTP workaround is not presented as an SDK.
 
-### System
-
-| Method | Path | Description | Authentication |
-|--------|------|-------------|----------------|
-| GET | `/health` | Health check (no auth) | No auth required |
-| GET | `/ready` | Readiness probe (no auth) | No auth required |
-| GET | `/metrics` | Prometheus metrics export | Optional |
-| GET | `/api/v1/system/status` | System status | Required |
-| POST | `/api/v1/system/wait` | Wait for processing | Required |
-| POST | `/api/v1/system/consistency` | Filesystem/vector-index consistency check | Required |
-
-### Resources
+### [System Status](07-system.md)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/resources/temp_upload` | Upload local file for raw HTTP resource / pack import |
-| POST | `/api/v1/resources` | Add resource (supports URL or temp_file_id) |
+| GET | `/health` | Basic health check (no authentication) |
+| GET | `/ready` | AGFS, VectorDB, and API key manager readiness (no authentication) |
+| GET | `/api/v1/system/status` | System status |
+| POST | `/api/v1/system/wait` | Wait for background processing |
+| POST | `/api/v1/system/consistency` | Check filesystem and vector-index consistency |
+| POST | `/api/v1/system/backend/sync-status` | Query backend synchronization status |
+| POST | `/api/v1/system/backend/sync-retry` | Retry backend synchronization |
+| GET | `/api/v1/system/sync/{sync_path}` | Path-form compatibility endpoint for synchronization status |
+| POST | `/api/v1/system/sync/{sync_path}/retry` | Path-form compatibility endpoint for synchronization retry |
 
-### Skills
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/v1/skills` | List installed skills |
-| POST | `/api/v1/skills` | Add skill |
-| POST | `/api/v1/skills/find` | Search installed skills |
-| POST | `/api/v1/skills/validate` | Validate skill payload |
-| GET | `/api/v1/skills/{skill_name}` | Get skill |
-| PUT | `/api/v1/skills/{skill_name}` | Update skill |
-| DELETE | `/api/v1/skills/{skill_name}` | Delete skill |
-
-### Watches
+### [Resources](02-resources.md) and [Filesystem](03-filesystem.md)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/watches` | List watches or get one by `to_uri` |
-| GET | `/api/v1/watches/{task_id}` | Get watch |
-| PATCH | `/api/v1/watches` | Update watch by `to_uri` |
-| PATCH | `/api/v1/watches/{task_id}` | Update watch by task ID |
-| DELETE | `/api/v1/watches` | Delete watch by `to_uri` |
-| DELETE | `/api/v1/watches/{task_id}` | Delete watch by task ID |
-| POST | `/api/v1/watches/trigger` | Trigger watch by `to_uri` |
-| POST | `/api/v1/watches/{task_id}/trigger` | Trigger watch by task ID |
+| POST | `/api/v1/resources/temp_upload` | Upload a temporary file for a later import |
+| POST | `/api/v1/resources` | Add a resource from a URL or temporary upload |
+| GET | `/api/v1/fs/ls` | List a directory |
+| GET | `/api/v1/fs/tree` | Get a directory tree |
+| GET | `/api/v1/fs/stat` | Get resource status |
+| GET | `/api/v1/fs/attrs` | Get logical extended attributes |
+| POST | `/api/v1/fs/attrs/set_tags` | Set retrieval tags (compatibility alias) |
+| POST | `/api/v1/fs/mkdir` | Create a directory |
+| DELETE | `/api/v1/fs` | Delete a resource |
+| POST | `/api/v1/fs/mv` | Move or rename a resource |
 
-### Pack
-
-| Method | Path | Description | Permission |
-|--------|------|-------------|------------|
-| POST | `/api/v1/pack/export` | Export .ovpack | ROOT/ADMIN/USER, subject to normal URI ACL |
-| POST | `/api/v1/pack/import` | Import .ovpack | ROOT/ADMIN/USER, subject to normal URI ACL |
-| POST | `/api/v1/pack/backup` | Back up public scopes | ROOT/ADMIN |
-| POST | `/api/v1/pack/restore` | Restore backup package | ROOT/ADMIN |
-
-### File System
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/v1/fs/ls` | List directory |
-| GET | `/api/v1/fs/tree` | Directory tree |
-| GET | `/api/v1/fs/stat` | Resource status |
-| GET | `/api/v1/fs/attrs` | Logical extended attributes |
-| POST | `/api/v1/fs/attrs/set_tags` | Set retrieval tags |
-| POST | `/api/v1/fs/mkdir` | Create directory |
-| DELETE | `/api/v1/fs` | Delete resource |
-| POST | `/api/v1/fs/mv` | Move/rename resource |
-
-### Snapshots (Multi-Version Management)
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/v1/snapshot/commit` | Save the current workspace state as a new snapshot |
-| GET | `/api/v1/snapshot/log` | Walk commit history newest-first |
-| GET | `/api/v1/snapshot/show` | View commit metadata, or read a file from a commit |
-| POST | `/api/v1/snapshot/restore` | Restore a directory or the whole account tree to a past snapshot (forward commit) |
-
-### Content
+### [Content](12-content.md)
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/content/read` | Read full content (L2) |
-| GET | `/api/v1/content/abstract` | Read abstract (L0) |
-| GET | `/api/v1/content/overview` | Read overview (L1) |
-| GET | `/api/v1/content/download` | Download raw file bytes |
-| POST | `/api/v1/content/write` | Update an existing file and refresh semantics/vectors |
-| POST | `/api/v1/content/reindex` | Rebuild semantic/vector index for existing content |
+| GET | `/api/v1/content/abstract` | Read an abstract (L0) |
+| GET | `/api/v1/content/overview` | Read an overview (L1) |
+| GET | `/api/v1/content/download` | Download original file bytes |
+| POST | `/api/v1/content/write` | Write content and refresh semantic indexes |
+| POST | `/api/v1/content/batch-write` | Apply preconditioned multi-file writes |
+| POST | `/api/v1/content/set_tags` | Set retrieval tags |
+| POST | `/api/v1/content/reindex` | Rebuild semantic or vector indexes |
 
-### Search
+### [Skills](04-skills.md)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/search/find` | Semantic search (no session context) |
-| POST | `/api/v1/search/search` | Context-aware search (supports sessions) |
+| GET | `/api/v1/skills` | List skills |
+| POST | `/api/v1/skills` | Add a skill |
+| POST | `/api/v1/skills/find` | Search skills |
+| POST | `/api/v1/skills/validate` | Validate skill data |
+| GET | `/api/v1/skills/{skill_name}` | Get a skill |
+| PUT | `/api/v1/skills/{skill_name}` | Update a skill |
+| DELETE | `/api/v1/skills/{skill_name}` | Delete a skill |
+
+### [Sessions](05-sessions.md), [Memory](16-memory.md), and [Agent Evolution](19-agent-evolution.md)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/sessions` | Create a session |
+| GET | `/api/v1/sessions` | List sessions |
+| GET | `/api/v1/sessions/{session_id}` | Get a session |
+| PATCH | `/api/v1/sessions/{session_id}/config` | Update mutable session configuration |
+| GET | `/api/v1/sessions/{session_id}/tool-results` | List tool results |
+| GET | `/api/v1/sessions/{session_id}/tool-results/{tool_result_id}` | Read a tool result |
+| GET | `/api/v1/sessions/{session_id}/tool-results/{tool_result_id}/search` | Search within a tool result |
+| GET | `/api/v1/sessions/{session_id}/context` | Get assembled context |
+| GET | `/api/v1/sessions/{session_id}/archives/{archive_id}` | Get a session archive |
+| DELETE | `/api/v1/sessions/{session_id}` | Delete a session |
+| POST | `/api/v1/sessions/{session_id}/commit` | Archive a session and extract memory |
+| POST | `/api/v1/sessions/{session_id}/extract` | Extract memory |
+| POST | `/api/v1/sessions/{session_id}/messages` | Add one message |
+| POST | `/api/v1/sessions/{session_id}/messages/batch` | Add messages in a batch |
+| POST | `/api/v1/sessions/{session_id}/used` | Record context or skills actually used |
+| POST | `/api/v1/search/recall` | Deprecated: thin preset over the search endpoint with `mode="context"` |
+| GET | `/api/v1/agent-evolution/experiences/trajectories` | List trajectories that consumed an Experience |
+| GET | `/api/v1/agent-evolution/experiences/outcomes` | Aggregate outcomes of trajectories that consumed an Experience |
+
+### [Retrieval](06-retrieval.md)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/search/find` | Semantic search |
+| POST | `/api/v1/search/search` | Context-aware search; `mode="context"` returns assembled, injection-ready context |
 | POST | `/api/v1/search/grep` | Content pattern search |
 | POST | `/api/v1/search/glob` | File pattern matching |
 
-### Relations (Experimental, may change in future versions)
+### [Watches](15-watches.md), [Snapshots](11-snapshot.md), and [OVPack](14-ovpack.md)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/relations` | Get relations |
-| POST | `/api/v1/relations/link` | Create link |
-| DELETE | `/api/v1/relations/link` | Remove link |
+| GET | `/api/v1/watches` | List watches or query by `to_uri` |
+| GET | `/api/v1/watches/{task_id}` | Get a watch by task ID |
+| PATCH | `/api/v1/watches` | Update a watch by `to_uri` |
+| PATCH | `/api/v1/watches/{task_id}` | Update a watch by task ID |
+| DELETE | `/api/v1/watches` | Delete a watch by `to_uri` |
+| DELETE | `/api/v1/watches/{task_id}` | Delete a watch by task ID |
+| POST | `/api/v1/watches/trigger` | Trigger a watch by `to_uri` |
+| POST | `/api/v1/watches/{task_id}/trigger` | Trigger a watch by task ID |
+| POST | `/api/v1/snapshot/commit` | Create a snapshot |
+| GET | `/api/v1/snapshot/log` | Read snapshot history |
+| POST | `/api/v1/snapshot/restore` | Restore a historical snapshot |
+| GET | `/api/v1/snapshot/show` | Inspect a snapshot or one of its files |
+| GET | `/api/v1/snapshot/diff` | Compare snapshots |
+| GET | `/api/v1/snapshot/ignore` | Read snapshot ignore rules |
+| PUT | `/api/v1/snapshot/ignore` | Replace snapshot ignore rules |
+| DELETE | `/api/v1/snapshot/ignore` | Clear snapshot ignore rules |
+| POST | `/api/v1/pack/export` | Export an `.ovpack` |
+| POST | `/api/v1/pack/import` | Import an `.ovpack` |
+| POST | `/api/v1/pack/backup` | Back up public scopes |
+| POST | `/api/v1/pack/restore` | Restore a backup package |
 
-### Sessions
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/v1/sessions` | Create session |
-| GET | `/api/v1/sessions` | List sessions |
-| GET | `/api/v1/sessions/{session_id}` | Get session |
-| GET | `/api/v1/sessions/{session_id}/context` | Get assembled session context |
-| GET | `/api/v1/sessions/{session_id}/archives/{archive_id}` | Get a specific session archive |
-| DELETE | `/api/v1/sessions/{session_id}` | Delete session |
-| POST | `/api/v1/sessions/{session_id}/commit` | Commit session (archive and extract memories) |
-| POST | `/api/v1/sessions/{session_id}/extract` | Extract memories from a session |
-| POST | `/api/v1/sessions/{session_id}/messages` | Add message |
-| POST | `/api/v1/sessions/{session_id}/used` | Record contexts / skills actually used |
-
-### Privacy Configs
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/v1/privacy-configs` | List privacy config categories |
-| GET | `/api/v1/privacy-configs/{category}` | List targets under a category |
-| GET | `/api/v1/privacy-configs/{category}/{target_key}` | Get active config (`meta + current`) |
-| POST | `/api/v1/privacy-configs/{category}/{target_key}` | Upsert and activate |
-| GET | `/api/v1/privacy-configs/{category}/{target_key}/versions` | List version numbers |
-| GET | `/api/v1/privacy-configs/{category}/{target_key}/versions/{version}` | Get version snapshot |
-| POST | `/api/v1/privacy-configs/{category}/{target_key}/activate` | Activate a version |
-
-### Tasks
+### [Background Tasks](17-tasks.md), [Runtime Observer](18-observer.md), and [Metrics](09-metrics.md)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/tasks/{task_id}` | Get background task status |
-| GET | `/api/v1/tasks` | List background tasks (supports filtering by type, status, resource) |
-
-### Observer
-
-| Method | Path | Description |
-|--------|------|-------------|
+| GET | `/api/v1/tasks/{task_id}` | Get a background task |
+| POST | `/api/v1/tasks/{task_id}/cancel` | Cancel a background task |
+| GET | `/api/v1/tasks` | List background tasks |
 | GET | `/api/v1/observer/queue` | Queue status |
 | GET | `/api/v1/observer/vikingdb` | VikingDB status |
-| GET | `/api/v1/observer/models` | Models status (VLM / embedding / rerank) |
-| GET | `/api/v1/observer/lock` | Lock subsystem status |
-| GET | `/api/v1/observer/retrieval` | Retrieval subsystem status |
-| GET | `/api/v1/observer/system` | System status |
+| GET | `/api/v1/observer/models` | Model status |
+| GET | `/api/v1/observer/lock` | Lock status |
+| GET | `/api/v1/observer/retrieval` | Retrieval status |
+| GET | `/api/v1/observer/filesystem` | Filesystem status |
+| GET | `/api/v1/observer/system` | Aggregate runtime status |
+| GET | `/metrics` | Prometheus metrics |
 
-### Debug
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/v1/debug/health` | Quick health check |
-| GET | `/api/v1/debug/vector/scroll` | Paginated vector record inspection |
-| GET | `/api/v1/debug/vector/count` | Count vector records |
-
-### Statistics
+### [Administration](08-admin.md) and [Privacy Configuration](10-privacy.md)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/stats/memories` | Get memory health statistics (supports category filtering) |
-| GET | `/api/v1/stats/sessions/{session_id}` | Get session extraction statistics |
+| GET | `/api/v1/admin/agent-evolution` | Get the caller account's Agent Evolution status |
+| PUT | `/api/v1/admin/agent-evolution` | Update the caller account's Agent Evolution status |
+| GET | `/api/v1/admin/accounts/{account_id}/settings` | Get effective account settings |
+| PATCH | `/api/v1/admin/accounts/{account_id}/settings` | Update allowlisted account settings |
+| POST | `/api/v1/admin/accounts` | Create an account and its first administrator |
+| GET | `/api/v1/admin/accounts` | List accounts |
+| POST | `/api/v1/admin/migrate` | Migrate legacy identity data |
+| DELETE | `/api/v1/admin/accounts/{account_id}` | Delete an account |
+| POST | `/api/v1/admin/accounts/{account_id}/users` | Register a user |
+| GET | `/api/v1/admin/accounts/{account_id}/users` | List users |
+| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | Get a user's memory policy |
+| PATCH | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | Update a user's memory policy |
+| DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | Remove a user |
+| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | Promote a user to ADMIN |
+| POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | Regenerate a user key |
+| GET | `/api/v1/privacy-configs` | List privacy configuration categories |
+| GET | `/api/v1/privacy-configs/{category}` | List category targets |
+| GET | `/api/v1/privacy-configs/{category}/{target_key}` | Get the active configuration |
+| GET | `/api/v1/privacy-configs/{category}/{target_key}/versions` | List configuration versions |
+| GET | `/api/v1/privacy-configs/{category}/{target_key}/versions/{version}` | Get one version |
+| POST | `/api/v1/privacy-configs/{category}/{target_key}` | Write and activate a new version |
+| POST | `/api/v1/privacy-configs/{category}/{target_key}/activate` | Activate a version |
 
-### Admin (Multi-tenant)
-
-| Method | Path | Description | Permission |
-|--------|------|-------------|------------|
-| POST | `/api/v1/admin/accounts` | Create workspace + first admin | ROOT |
-| GET | `/api/v1/admin/accounts` | List workspaces | ROOT |
-| DELETE | `/api/v1/admin/accounts/{account_id}` | Delete workspace (cascade data cleanup) | ROOT |
-| POST | `/api/v1/admin/accounts/{account_id}/users` | Register user | ROOT/ADMIN |
-| GET | `/api/v1/admin/accounts/{account_id}/users` | List users | ROOT/ADMIN |
-| DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | Remove user | ROOT/ADMIN |
-| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | Change user role | ROOT |
-| POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | Regenerate user key | ROOT/ADMIN |
-
-### VikingBot Interaction Endpoints (Optional)
-
-VikingBot API requires the server to be started with the `--with-bot` option:
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/health` | Bot health check (reused with system /health) |
-| POST | `/chat` | Send message to Bot |
-| POST | `/chat/stream` | Bot streaming response |
-
-### WebDAV Endpoints
+### [OpenViking Assets](22-openviking-assets.md), [WebDAV](20-webdav.md), and [VikingBot API](24-vikingbot.md)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| OPTIONS | `/webdav/resources`, `/webdav/resources/{path}` | WebDAV options query |
-| PROPFIND | `/webdav/resources`, `/webdav/resources/{path}` | WebDAV property query |
-| GET/HEAD | `/webdav/resources/{path}` | Read file |
-| PUT | `/webdav/resources/{path}` | Upload/create file (UTF-8 text only) |
-| DELETE | `/webdav/resources/{path}` | Delete file/directory |
-| MKCOL | `/webdav/resources/{path}` | Create directory |
-| MOVE | `/webdav/resources/{path}` | Move/rename resource |
+| POST | `/api/v1/openviking-assets/resolve` | Parse and validate a Catalog and Manifest, returning a normalized asset plan |
+| POST | `/api/v1/openviking-assets/preflight` | Read-only access check for a Git repository and ref |
+| OPTIONS | `/webdav/resources`, `/webdav/resources/{resource_path}` | Query WebDAV capabilities |
+| PROPFIND | `/webdav/resources`, `/webdav/resources/{resource_path}` | Query resource properties |
+| GET / HEAD | `/webdav/resources`, `/webdav/resources/{resource_path}` | Read a file or directory |
+| PUT | `/webdav/resources`, `/webdav/resources/{resource_path}` | Write a UTF-8 text file |
+| DELETE | `/webdav/resources`, `/webdav/resources/{resource_path}` | Delete a file or directory |
+| MKCOL | `/webdav/resources`, `/webdav/resources/{resource_path}` | Create a directory |
+| MOVE | `/webdav/resources`, `/webdav/resources/{resource_path}` | Move or rename a resource |
+| GET | `/bot/v1/health` | VikingBot health check |
+| POST | `/bot/v1/chat` | Non-streaming VikingBot chat |
+| POST | `/bot/v1/chat/stream` | Streaming VikingBot chat |
+| POST | `/bot/v1/feedback` | Submit feedback for a VikingBot answer |
+| POST | `/bot/v1/compile` | Start a Skill-driven Compile task |
+| GET | `/bot/v1/compile/{task_id}` | Get Compile task status |
+| POST | `/bot/v1/compile/{task_id}/cancel` | Cancel a Compile task |
 
 ---
 
 ## Documentation Reading Plan
 
-Subsequent API documentation is organized by functional module as follows:
+The sidebar is organized by responsibility rather than historical file size:
 
-| Document | Content |
-|----------|---------|
-| [Resources](02-resources.md) - Resource management API | Adding, importing, exporting resources and skills |
-| [Retrieval](06-retrieval.md) - Search API | Search, relations, context acquisition |
-| [File System](03-filesystem.md) - File system operations | Directory operations, content reading and writing |
-| [Snapshots](11-snapshot.md) - Multi-version management | Snapshot commit, history walk, version restore |
-| [Sessions](05-sessions.md) - Session management | Session creation, message management, memory extraction |
-| [Skills](04-skills.md) - Skill management API | Skill management |
-| [System](07-system.md) - System and monitoring API | System status, monitoring, debug API |
-| [Privacy Configs](10-privacy.md) - Privacy config version management and activation | Privacy configuration |
-| [Metrics](09-metrics.md) - Prometheus metrics export and scraping guide | Metrics documentation |
-| [Admin](08-admin.md) - Multi-tenant management API | Multi-tenant account and user management |
+| Group | What to look for |
+|-------|------------------|
+| Core Data | Resources, content, filesystem, skills, sessions, and memory |
+| Retrieval | Semantic retrieval and code retrieval |
+| Data Lifecycle | Watches, snapshots, and OVPack |
+| Operations & Observability | System, tasks, Observer, and Metrics |
+| Identity & Governance | Administration and privacy configuration |
+| Protocols & Extensions | OpenViking Assets, WebDAV, and VikingBot API |

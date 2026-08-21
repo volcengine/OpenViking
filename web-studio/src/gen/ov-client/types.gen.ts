@@ -49,6 +49,18 @@ export type AddMessageRequest = {
      */
     created_at?: string | null;
     /**
+     * Turn Id
+     */
+    turn_id?: string | null;
+    /**
+     * Message Kind
+     */
+    message_kind?: 'user_query' | 'assistant_step' | 'tool_transport' | 'checkpoint' | null;
+    /**
+     * Source Message Ids
+     */
+    source_message_ids?: Array<string> | null;
+    /**
      * Telemetry
      */
     telemetry?: boolean | {
@@ -257,6 +269,30 @@ export type CommitRequest = {
      * Number of most-recent messages to keep live after commit. Plugin's afterTurn path typically passes its configured value (default 10); compact path passes 0 to archive everything.
      */
     keep_recent_count?: number;
+    /**
+     * Retention Mode
+     *
+     * Opt in to logical Turn retention. Omit to preserve keep_recent_count semantics.
+     */
+    retention_mode?: 'turn_budget' | null;
+    /**
+     * Keep Recent Turn Count
+     *
+     * Maximum number of newest logical user Turns to retain.
+     */
+    keep_recent_turn_count?: number | null;
+    /**
+     * Retained Message Token Budget
+     *
+     * Token budget for retained raw messages and checkpoint.
+     */
+    retained_message_token_budget?: number | null;
+    /**
+     * Min Raw Tail Steps
+     *
+     * Minimum number of latest atomic assistant Steps kept raw.
+     */
+    min_raw_tail_steps?: number | null;
     /**
      * Telemetry
      */
@@ -481,26 +517,6 @@ export type ImportRequest = {
 };
 
 /**
- * LinkRequest
- *
- * Request model for link.
- */
-export type LinkRequest = {
-    /**
-     * From Uri
-     */
-    from_uri: string;
-    /**
-     * To Uris
-     */
-    to_uris: string | Array<string>;
-    /**
-     * Reason
-     */
-    reason?: string;
-};
-
-/**
  * MkdirRequest
  *
  * Request model for mkdir.
@@ -664,22 +680,6 @@ export type SetRoleRequest = {
      * Role
      */
     role: string;
-};
-
-/**
- * UnlinkRequest
- *
- * Request model for unlink.
- */
-export type UnlinkRequest = {
-    /**
-     * From Uri
-     */
-    from_uri: string;
-    /**
-     * To Uri
-     */
-    to_uri: string;
 };
 
 /**
@@ -2523,136 +2523,6 @@ export type PostSearchGlobErrors = {
 export type PostSearchGlobError = PostSearchGlobErrors[keyof PostSearchGlobErrors];
 
 export type PostSearchGlobResponses = {
-    /**
-     * Successful Response
-     */
-    200: unknown;
-};
-
-export type GetRelationsData = {
-    body?: never;
-    headers?: {
-        /**
-         * X-Api-Key
-         */
-        'x-api-key'?: string | null;
-        /**
-         * Authorization
-         */
-        authorization?: string | null;
-        /**
-         * X-Openviking-Account
-         */
-        'X-OpenViking-Account'?: string | null;
-        /**
-         * X-Openviking-User
-         */
-        'X-OpenViking-User'?: string | null;
-    };
-    path?: never;
-    query: {
-        /**
-         * Uri
-         *
-         * Viking URI
-         */
-        uri: string;
-    };
-    url: '/api/v1/relations';
-};
-
-export type GetRelationsErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GetRelationsError = GetRelationsErrors[keyof GetRelationsErrors];
-
-export type GetRelationsResponses = {
-    /**
-     * Successful Response
-     */
-    200: unknown;
-};
-
-export type DeleteRelationsLinkData = {
-    body: UnlinkRequest;
-    headers?: {
-        /**
-         * X-Api-Key
-         */
-        'x-api-key'?: string | null;
-        /**
-         * Authorization
-         */
-        authorization?: string | null;
-        /**
-         * X-Openviking-Account
-         */
-        'X-OpenViking-Account'?: string | null;
-        /**
-         * X-Openviking-User
-         */
-        'X-OpenViking-User'?: string | null;
-    };
-    path?: never;
-    query?: never;
-    url: '/api/v1/relations/link';
-};
-
-export type DeleteRelationsLinkErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type DeleteRelationsLinkError = DeleteRelationsLinkErrors[keyof DeleteRelationsLinkErrors];
-
-export type DeleteRelationsLinkResponses = {
-    /**
-     * Successful Response
-     */
-    200: unknown;
-};
-
-export type PostRelationsLinkData = {
-    body: LinkRequest;
-    headers?: {
-        /**
-         * X-Api-Key
-         */
-        'x-api-key'?: string | null;
-        /**
-         * Authorization
-         */
-        authorization?: string | null;
-        /**
-         * X-Openviking-Account
-         */
-        'X-OpenViking-Account'?: string | null;
-        /**
-         * X-Openviking-User
-         */
-        'X-OpenViking-User'?: string | null;
-    };
-    path?: never;
-    query?: never;
-    url: '/api/v1/relations/link';
-};
-
-export type PostRelationsLinkErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type PostRelationsLinkError = PostRelationsLinkErrors[keyof PostRelationsLinkErrors];
-
-export type PostRelationsLinkResponses = {
     /**
      * Successful Response
      */

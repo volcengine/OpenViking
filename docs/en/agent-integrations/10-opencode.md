@@ -4,6 +4,8 @@ Give [OpenCode](https://opencode.ai/) cross-project and cross-session long-term 
 
 Source: [examples/opencode-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-plugin)
 
+Tool calls and results are captured as dedicated `tool` parts, and `tool_output` is reported verbatim. Truncation is the server's job: output larger than `tool_output_externalization.threshold_chars` (default `20000`) is written to the session's tool-result store, and the part keeps a synopsis stub plus `tool_output_ref`, so the original stays readable through [`/api/v1/sessions/{id}/tool-results`](../api/05-sessions.md#read_tool_result).
+
 ## Prerequisites
 
 - [OpenCode](https://opencode.ai/)
@@ -131,12 +133,12 @@ API keys are sent as `Authorization: Bearer ...` by both hooks and the MCP proxy
 
 ## Verify
 
-Restart OpenCode after installation. In an OpenCode session, the plugin should expose the `openviking` MCP server. OpenCode namespaces MCP tools as `openviking_*`, for example:
+Restart OpenCode after installation. In an OpenCode session, the plugin should expose the `openviking` MCP server with the full server MCP tool set (15 tools). OpenCode namespaces MCP tools as `openviking_*`:
 
-- `openviking_recall`, `openviking_search`, `openviking_find`
-- `openviking_read`, `openviking_list`, `openviking_grep`, `openviking_glob`
-- `openviking_remember`, `openviking_add_resource`, `openviking_forget`, `openviking_health`
-- `openviking_code_search`, `openviking_code_outline`, `openviking_code_expand`
+- `openviking_find`, `openviking_search` (`openviking_search` with `mode="context"` replaces the former recall tool)
+- `openviking_read`, `openviking_list`, `openviking_tree`, `openviking_grep`, `openviking_glob`
+- `openviking_remember`, `openviking_write`, `openviking_edit`, `openviking_add_resource`
+- `openviking_list_watches`, `openviking_cancel_watch`, `openviking_forget`, `openviking_health`
 
 Ask OpenCode to search or browse OpenViking memory. Runtime state and errors are written to:
 
@@ -156,3 +158,7 @@ Ask OpenCode to search or browse OpenViking memory. Runtime state and errors are
 | Local `openviking_add_resource` fails | Pass a file path, not a directory; local directories are not uploaded automatically yet |
 
 For all available tools, configuration fields, and runtime file details, see the [plugin README](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-plugin).
+
+## See also
+
+- [Capability Reference](./16-capability-reference.md)

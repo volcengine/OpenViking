@@ -75,19 +75,20 @@ def main():
     except Exception:
         pass
 
-    # 3. 检查 PATH，但跳过当前 Python 脚本
+    # 3. 检查 PATH，但跳过当前 Python 入口点
     path_binary = which("ov")
     if path_binary:
-        # 检查文件是否是 Python 脚本（避免无限循环）
         try:
             candidate_path = Path(path_binary).resolve()
-            with open(candidate_path, "rb") as f:
-                first_bytes = f.read(2)
-            # Skip if it starts with #! (shebang, likely Python script)
-            if first_bytes != b"#!":
-                _exec_binary(path_binary, sys.argv[1:])
-        except Exception:
+            current_path = Path(sys.argv[0])
+            if not current_path.is_absolute():
+                current_path = Path(which(sys.argv[0]) or current_path)
+            current_path = current_path.resolve()
+        except OSError:
             pass
+        else:
+            if candidate_path != current_path:
+                _exec_binary(path_binary, sys.argv[1:])
 
     # 都找不到，提示用户
     print(

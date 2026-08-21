@@ -14,11 +14,31 @@
 
 OpenViking 支持通过 Python Package 安装作为本地库使用，也支持通过 Docker 快速启动独立服务。
 
-### 方式一：通过 pip 安装 (作为本地库)
+### 方式一：通过 Python 包安装（作为本地命令和库）
 
-```bash
+选择你常用的 Python 包管理工具安装 OpenViking：
+
+::: code-group
+
+```bash [uv（推荐）]
+uv tool install openviking --upgrade
+```
+
+```bash [pip]
 pip install openviking --upgrade --force-reinstall
 ```
+
+```bash [pipx]
+# 安装
+pipx install openviking
+
+# 更新
+pipx upgrade openviking
+```
+
+:::
+
+安装完成后，可以使用客户端命令 `ov`（`openviking` 是其别名）和服务端命令 `openviking-server`。
 
 ### 方式二：通过 Docker 启动 (作为独立服务)
 
@@ -132,6 +152,21 @@ openviking-server doctor
 export OPENVIKING_CONFIG_FILE=/path/to/your/ov.conf
 ```
 
+## 启动本地服务
+
+首次在本地运行时，完成初始化并启动服务：
+
+```bash
+openviking-server init
+openviking-server
+```
+
+保持服务运行，然后打开另一个终端执行下面的 Python SDK 示例。
+如果使用自定义配置路径，通过 `openviking-server --config /path/to/ov.conf` 启动。
+
+默认本地模式不需要 API Key；连接启用鉴权的 Server 时，先设置
+`OPENVIKING_API_KEY`。
+
 ## 运行第一个示例
 
 ### 创建 Python 脚本
@@ -139,13 +174,13 @@ export OPENVIKING_CONFIG_FILE=/path/to/your/ov.conf
 创建 `example.py`：
 
 ```python
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
-# Initialize OpenViking client with data directory
-client = ov.OpenViking(path="./data")
+# 连接本地 OpenViking Server
+client = SyncHTTPClient(url="http://localhost:1933")
 
 try:
-    # Initialize the client
+    # 检查连接
     client.initialize()
 
     # Add resource (supports URL, file, or directory)
@@ -176,8 +211,8 @@ try:
     # Perform semantic search
     results = client.find("what is openviking", target_uri=root_uri)
     print("Search results:")
-    for r in results.resources:
-        print(f"  {r.uri} (score: {r.score:.4f})")
+    for result in results.get("resources", []):
+        print(f"  {result['uri']} (score: {result.get('score', 0.0):.4f})")
 
     # Close the client
     client.close()

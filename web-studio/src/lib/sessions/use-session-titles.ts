@@ -1,29 +1,59 @@
-import { useSyncExternalStore, useCallback } from 'react'
+import { useCallback, useSyncExternalStore } from 'react'
 
 const STORAGE_KEY = 'ov-session-titles'
+const snapshots = new Map<string, Record<string, string>>()
 
-function readTitles(): Record<string, string> {
+export function createSessionTitleStorageKey(identityScopeKey: string): string {
+  return `${STORAGE_KEY}.${encodeURIComponent(identityScopeKey)}`
+}
+
+function readTitles(storageKey: string): Record<string, string> {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = localStorage.getItem(storageKey)
     return raw ? (JSON.parse(raw) as Record<string, string>) : {}
   } catch {
     return {}
   }
 }
 
-function writeTitles(titles: Record<string, string>) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(titles))
-  // Notify all subscribers within the same tab
-  window.dispatchEvent(new StorageEvent('storage', { key: STORAGE_KEY }))
+function getTitlesSnapshot(storageKey: string): Record<string, string> {
+  const current = snapshots.get(storageKey)
+  if (current) {
+    return current
+  }
+  const initial = readTitles(storageKey)
+  snapshots.set(storageKey, initial)
+  return initial
 }
 
-// Shared snapshot reference — updated on every storage event
-let snapshot = readTitles()
+function writeTitles(storageKey: string, titles: Record<string, string>) {
+  const serialized = JSON.stringify(titles)
+  try {
+    localStorage.setItem(storageKey, serialized)
+  } catch {
+    // Keep the in-memory snapshot usable in restricted browser environments.
+  }
+  snapshots.set(storageKey, titles)
+  window.dispatchEvent(
+    new StorageEvent('storage', { key: storageKey, newValue: serialized }),
+  )
+}
 
-function subscribe(onStoreChange: () => void) {
-  const handler = (e: StorageEvent) => {
-    if (e.key === STORAGE_KEY || e.key === null) {
-      snapshot = readTitles()
+function subscribe(storageKey: string, onStoreChange: () => void) {
+  const handler = (event: StorageEvent) => {
+    if (event.key === storageKey || event.key === null) {
+      if (event.key === storageKey && event.newValue !== null) {
+        try {
+          snapshots.set(
+            storageKey,
+            JSON.parse(event.newValue) as Record<string, string>,
+          )
+        } catch {
+          snapshots.set(storageKey, readTitles(storageKey))
+        }
+      } else {
+        snapshots.set(storageKey, readTitles(storageKey))
+      }
       onStoreChange()
     }
   }
@@ -31,31 +61,55 @@ function subscribe(onStoreChange: () => void) {
   return () => window.removeEventListener('storage', handler)
 }
 
-function getSnapshot() {
-  return snapshot
+export function setSessionTitle(
+  identityScopeKey: string,
+  sessionId: string,
+  title: string,
+) {
+  const storageKey = createSessionTitleStorageKey(identityScopeKey)
+  const titles = { ...getTitlesSnapshot(storageKey), [sessionId]: title }
+  writeTitles(storageKey, titles)
 }
 
-export function setSessionTitle(sessionId: string, title: string) {
-  const titles = readTitles()
-  titles[sessionId] = title
-  writeTitles(titles)
-  snapshot = titles
-}
-
-export function removeSessionTitle(sessionId: string) {
-  const titles = readTitles()
+export function removeSessionTitle(
+  identityScopeKey: string,
+  sessionId: string,
+) {
+  const storageKey = createSessionTitleStorageKey(identityScopeKey)
+  const titles = { ...getTitlesSnapshot(storageKey) }
   delete titles[sessionId]
-  writeTitles(titles)
-  snapshot = titles
+  writeTitles(storageKey, titles)
 }
 
-export function useSessionTitles() {
-  const titles = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+export function useSessionTitles(identityScopeKey: string) {
+  const storageKey = createSessionTitleStorageKey(identityScopeKey)
+  const subscribeToScope = useCallback(
+    (onStoreChange: () => void) => subscribe(storageKey, onStoreChange),
+    [storageKey],
+  )
+  const getSnapshot = useCallback(
+    () => getTitlesSnapshot(storageKey),
+    [storageKey],
+  )
+  const titles = useSyncExternalStore(
+    subscribeToScope,
+    getSnapshot,
+    getSnapshot,
+  )
 
   const getTitle = useCallback(
     (sessionId: string) => titles[sessionId] ?? sessionId,
     [titles],
   )
+  const setTitle = useCallback(
+    (sessionId: string, title: string) =>
+      setSessionTitle(identityScopeKey, sessionId, title),
+    [identityScopeKey],
+  )
+  const removeTitle = useCallback(
+    (sessionId: string) => removeSessionTitle(identityScopeKey, sessionId),
+    [identityScopeKey],
+  )
 
-  return { titles, getTitle }
+  return { getTitle, removeTitle, setTitle, titles }
 }

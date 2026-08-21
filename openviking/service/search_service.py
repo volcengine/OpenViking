@@ -8,8 +8,6 @@ Provides semantic search operations: search, find.
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from openviking.core.path_variables import resolve_path_variables
-from openviking.core.uri_validation import validate_optional_viking_uris
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import VikingFS
 from openviking.utils.image_search import (
@@ -48,6 +46,17 @@ class SearchService:
             raise NotInitializedError("VikingFS")
         return self._viking_fs
 
+    def is_intent_enabled(self) -> bool:
+        """Whether search uses session context for LLM intent analysis.
+
+        When false, callers should skip session.load / get_context_for_search:
+        VikingFS.search ignores session_info and searches with the raw query.
+        Default is True (matches RetrievalConfig) when config is unset.
+        """
+        if not self._viking_fs or self._viking_fs.retrieval_config is None:
+            return True
+        return bool(self._viking_fs.retrieval_config.enable_intent)
+
     async def _resolve_image_url(
         self,
         image_url: Optional[str],
@@ -55,7 +64,6 @@ class SearchService:
     ) -> Optional[str]:
         if not image_url:
             return None
-        image_url = resolve_path_variables(image_url)
         if is_viking_uri(image_url):
             viking_fs = self._ensure_initialized()
             content = await viking_fs.read_file_bytes(image_url, ctx=ctx)
@@ -94,11 +102,11 @@ class SearchService:
         """
         resolved_image_url = await self._resolve_image_url(image_url, ctx)
         _ensure_non_empty_query(query, resolved_image_url)
-        target_uri = validate_optional_viking_uris(target_uri, field_name="target_uri")
         viking_fs = self._ensure_initialized()
 
         session_info = None
-        if session and not resolved_image_url:
+        # Intent off: session_info is unused by VikingFS — skip the archive/message scan.
+        if session is not None and self.is_intent_enabled() and not resolved_image_url:
             session_info = await session.get_context_for_search(query)
 
         result = await viking_fs.search(
@@ -140,7 +148,6 @@ class SearchService:
         """
         resolved_image_url = await self._resolve_image_url(image_url, ctx)
         _ensure_non_empty_query(query, resolved_image_url)
-        target_uri = validate_optional_viking_uris(target_uri, field_name="target_uri")
         viking_fs = self._ensure_initialized()
         result = await viking_fs.find(
             query=query,

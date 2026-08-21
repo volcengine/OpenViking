@@ -26,6 +26,9 @@ class UsageAuditStore(Protocol):
     async def record_batch(self, events: Sequence[ObservabilityEvent]) -> None:
         """Persist a batch of observability events."""
 
+    async def delete_user_data(self, *, account_id: str, user_id: str) -> dict[str, int]:
+        """Delete every persisted usage/audit row owned by one user."""
+
     async def get_today_tokens(
         self,
         *,

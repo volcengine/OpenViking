@@ -85,7 +85,7 @@ def tmp_with_drafts(tmp_path: Path) -> Path:
 @pytest.fixture
 def registry() -> ParserRegistry:
     """Default parser registry (includes markdown, pdf, html, text, etc.)."""
-    return ParserRegistry(register_optional=False)
+    return ParserRegistry()
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +152,26 @@ class TestScanDirectoryClassification:
         assert "inline.inl" in processable_rel
         assert "config.yaml" in processable_rel
         assert "src/app.py" in processable_rel
+
+    def test_processable_includes_skeleton_supported_code_extensions(
+        self, tmp_path: Path, registry: ParserRegistry
+    ) -> None:
+        (tmp_path / "infra.tf").write_text('resource "local_file" "demo" {}\n', encoding="utf-8")
+        (tmp_path / "module.rkt").write_text(
+            "#lang racket\n(define (run x) (+ x 1))\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "request.http").write_text("GET https://example.com\n", encoding="utf-8")
+        (tmp_path / "diagram.mmd").write_text("graph TD\n  A-->B\n", encoding="utf-8")
+
+        result: DirectoryScanResult = scan_directory(tmp_path, registry=registry, strict=False)
+
+        processable_rel = {f.rel_path for f in result.processable}
+        unsupported_rel = {f.rel_path for f in result.unsupported}
+        assert "infra.tf" in processable_rel
+        assert "module.rkt" in processable_rel
+        assert "request.http" in unsupported_rel
+        assert "diagram.mmd" in unsupported_rel
 
     def test_unsupported_unknown_ext(self, tmp_tree: Path, registry: ParserRegistry) -> None:
         result: DirectoryScanResult = scan_directory(tmp_tree, registry=registry, strict=False)

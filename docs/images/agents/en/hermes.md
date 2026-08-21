@@ -1,32 +1,29 @@
-[Hermes Agent](https://hermes-agent.nousresearch.com/) (Nous Research) includes OpenViking as a built-in memory provider. No plugin installation is required. Point Hermes to your OpenViking service to enable native memory storage, recall, and extraction.
-
-## Step 1: Run the Hermes memory setup wizard
+## Install
 
 ```bash
-hermes memory setup
+hermes memory setup openviking
 ```
 
-## Step 2: Copy the Base URL and Authentication management
+Keep **OpenViking Service (VolcEngine Cloud)**. Paste the API key from this page:
 
-After running the setup command, Hermes prompts for the Base URL and Authentication management. Copy them and paste them into Hermes:
+{{OPENVIKING_API_KEY_BLOCK}}
 
-- Base URL: Copy the following Base URL into Hermes:
-```text
-https://api.vikingdb.cn-beijing.volces.com/openviking
-```
-- Authentication management: Copy the Authentication management shown on the page into your Hermes terminal
-- Tenant account / user / agent ID: Used for multi-tenant deployments
-
-The configuration is saved to Hermes `config.yaml` and `.env` files.
-
-## Step 3: Verify Hermes memory status
+## Verify
 
 ```bash
 hermes memory status
 ```
 
-After configuration, Hermes automatically uses OpenViking as long-term memory. Memory tools such as `viking_remember` and `viking_recall` are available immediately.
+Expect `Provider: openviking` and `Status: available`. Start a new Hermes session.
 
-## Reference docs
+## Troubleshoot
 
-- [Hermes - OpenViking memory provider documentation](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers#openviking) - Full configuration guide
+| Problem | Fix |
+|---|---|
+| Provider is not openviking | Re-run `hermes memory setup openviking` |
+| Status is not available | Check the API key from this page |
+
+## Reference
+
+- Docs on Manual Settings: [Hermes](https://docs.openviking.net/en/agent-integrations/05-hermes)
+- Blog about how it works: [OpenViking memory provider](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers#openviking)

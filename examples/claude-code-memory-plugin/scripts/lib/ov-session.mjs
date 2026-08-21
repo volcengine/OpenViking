@@ -24,6 +24,7 @@ import {
   deriveHarnessSessionId,
   isBypassed,
 } from "../shared/session-model.mjs";
+import { isRetryableFailure as isSharedRetryableFailure } from "../shared/retryable.mjs";
 
 /**
  * Check whether a CC session_id or cwd matches any bypass pattern.
@@ -42,13 +43,18 @@ export function deriveOvSessionId(ccSessionId, suffix = "") {
   return deriveHarnessSessionId("cc-", ccSessionId, suffix);
 }
 
+function responseTraceId(body) {
+  return body?.result?.trace_id || body?.error?.trace_id || body?.trace_id || undefined;
+}
+
 /**
  * Build a fetchJSON closure tied to a given config. Callers pass their own cfg
  * (from scripts/config.mjs loadConfig()) so the timeout can vary per hook.
  */
 export function makeFetchJSON(cfg, timeoutKey = "timeoutMs") {
-  const timeoutMs = Math.max(1000, cfg[timeoutKey] || cfg.timeoutMs || 10000);
+  const defaultTimeoutMs = Math.max(1000, cfg[timeoutKey] || cfg.timeoutMs || 10000);
   return async function fetchJSON(path, init = {}, options = {}) {
+    const timeoutMs = Math.max(1000, Number(options.timeoutMs) || defaultTimeoutMs);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -58,12 +64,19 @@ export function makeFetchJSON(cfg, timeoutKey = "timeoutMs") {
       if (cfg.userId) headers["X-OpenViking-User"] = cfg.userId;
       const actorPeerId = options.actorPeerId ?? "";
       if (actorPeerId) headers["X-OpenViking-Actor-Peer"] = actorPeerId;
+      if (cfg.userAgent) headers["User-Agent"] = cfg.userAgent;
       const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
       const body = await res.json().catch(() => ({}));
+      const traceId = responseTraceId(body);
       if (!res.ok || body.status === "error") {
-        return { ok: false, status: res.status, error: body.error || { message: `HTTP ${res.status}` } };
+        return {
+          ok: false,
+          status: res.status,
+          error: body.error || { message: `HTTP ${res.status}` },
+          traceId,
+        };
       }
-      return { ok: true, result: body.result ?? body };
+      return { ok: true, result: body.result ?? body, traceId };
     } catch (err) {
       return { ok: false, error: { message: err?.message || String(err) } };
     } finally {
@@ -73,9 +86,7 @@ export function makeFetchJSON(cfg, timeoutKey = "timeoutMs") {
 }
 
 export function isRetryableFailure(res) {
-  if (!res || res.ok) return false;
-  const status = Number(res.status || 0);
-  return !status || status >= 500 || status === 408 || status === 429;
+  return isSharedRetryableFailure(res);
 }
 
 function warnNonRetryable(operation, res) {
@@ -133,7 +144,7 @@ export async function commitSession(fetchJSON, sessionId, payload = {}) {
   });
   if (!res.ok) {
     if (isRetryableFailure(res)) {
-      const queued = await enqueuePendingDirectly("commitSession", sessionId, {});
+      const queued = await enqueuePendingDirectly("commitSession", sessionId, payload || {});
       if (queued.ok) res.pendingQueued = true;
       else res.pendingEnqueueFailed = true;
     } else {

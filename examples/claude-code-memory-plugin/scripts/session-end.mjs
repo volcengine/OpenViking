@@ -82,6 +82,7 @@ async function main() {
   log("commit", {
     ovSessionId,
     ok: res.ok,
+    trace_id: res.traceId || res.result?.trace_id,
     queued: Boolean(res.pendingQueued),
     enqueueFailed: Boolean(res.pendingEnqueueFailed),
     error: res.ok ? undefined : res.error?.message,
