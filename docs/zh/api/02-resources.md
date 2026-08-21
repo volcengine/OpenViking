@@ -14,15 +14,15 @@ OpenViking 支持多种资源类型，按照功能分类如下：
 | PDF | `.pdf` | 支持本地解析和 MinerU API 转换 |
 | Markdown | `.md`, `.markdown`, `.mdown`, `.mkd` | 原生支持，会提取结构并分段存储 |
 | HTML | `.html`, `.htm` | 清理导航/广告后提取内容，转换为 Markdown |
-| Word | `.docx` | 提取文本、标题、表格并转换为 Markdown |
+| Word | `.doc`, `.docx`, `.docm`, `.odt`, `.rtf` | 基于 anydoc 提取文本、标题、表格和嵌入图片并转换为 Markdown |
 | 纯文本 | `.txt`, `.text` | 直接导入处理 |
-| EPUB | `.epub` | 电子书格式，支持 ebooklib 或手动提取 |
+| EPUB | `.epub` | 基于 anydoc 将电子书内容和嵌入图片转换为 Markdown |
 
 表格类
 | 类型 | 扩展名 | 说明 |
 |------|--------|------|
-| Excel | `.xlsx`, `.xls`, `.xlsm` | 支持新版和老版 Excel，按工作表转换为 Markdown 表格 |
-| PowerPoint | `.pptx` | 按幻灯片提取内容，支持提取备注 |
+| Excel | `.xlsx`, `.xls`, `.xlsm`, `.xlsb`, `.ods`, `.csv` | 基于 anydoc 按工作表转换为 Markdown 表格 |
+| PowerPoint | `.pptx`, `.ppt`, `.pptm`, `.pps`, `.ppsx`, `.ppsm`, `.pot`, `.odp` | 基于 anydoc 按幻灯片提取内容和嵌入图片并转换为 Markdown |
 
 代码类
 | 类型 | 资源名 | 说明 |

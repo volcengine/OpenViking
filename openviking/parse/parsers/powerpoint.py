@@ -13,58 +13,122 @@ from typing import List, Optional, Union
 
 from openviking.parse.base import ParseResult
 from openviking.parse.parsers.base_parser import BaseParser
-from openviking_cli.utils.config.parser_config import ParserConfig
+from openviking_cli.utils.config.parser_config import AnydocConfig, ParserConfig
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+_LEGACY_SUPPORTED_EXTENSIONS = frozenset({".pptx"})
 
 
 class PowerPointParser(BaseParser):
     """
     PowerPoint presentation parser for OpenViking.
 
-    Supports: .pptx
+    Supports: .pptx, .ppt, .pptm, .pps, .ppsx, .ppsm, .pot, .odp
 
-    Converts PowerPoint presentations to Markdown using python-pptx,
-    then delegates to MarkdownParser for tree structure creation.
+    Converts PowerPoint presentations to Markdown using anydoc, then delegates
+    to MarkdownParser for tree structure creation. The python-pptx converter
+    remains available for .pptx when anydoc is disabled or fallback is enabled.
     """
 
-    def __init__(self, config: Optional[ParserConfig] = None, extract_notes: bool = False):
+    def __init__(
+        self,
+        config: Optional[ParserConfig] = None,
+        anydoc_config: Optional[AnydocConfig] = None,
+        extract_notes: bool = False,
+    ):
         """
         Initialize PowerPoint parser.
 
         Args:
             config: Parser configuration
-            extract_notes: Whether to extract speaker notes
+            anydoc_config: Shared anydoc converter configuration
+            extract_notes: Whether the legacy converter extracts speaker notes
         """
         from openviking.parse.parsers.markdown import MarkdownParser
 
         self._md_parser = MarkdownParser(config=config)
         self.config = config or ParserConfig()
+        self.anydoc_config = anydoc_config or AnydocConfig()
         self.extract_notes = extract_notes
 
     @property
     def supported_extensions(self) -> List[str]:
-        return [".pptx"]
+        return [".pptx", ".ppt", ".pptm", ".pps", ".ppsx", ".ppsm", ".pot", ".odp"]
 
     async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
         """Parse PowerPoint presentation from file path."""
         path = Path(source)
 
         if path.exists():
-            import pptx
+            from openviking_cli.utils.storage import get_storage
 
-            markdown_content = await asyncio.to_thread(self._convert_to_markdown, path, pptx)
-            result = await self._md_parser.parse_content(
-                markdown_content, source_path=str(path), instruction=instruction, **kwargs
+            storage = get_storage()
+            resource_name = kwargs.get("resource_name") or kwargs.get("source_name") or path.stem
+            source_format = path.suffix.lstrip(".").lower() or "pptx"
+
+            if self.anydoc_config.enable:
+                from openviking.parse.parsers.anydoc_converter import AnyDocConverter
+
+                try:
+                    conversion = await asyncio.to_thread(
+                        AnyDocConverter().convert,
+                        path,
+                        resource_name=resource_name,
+                        storage=storage,
+                    )
+                    markdown_content = conversion.markdown
+                    source_format = conversion.source_format or source_format
+                except Exception:
+                    if (
+                        not self.anydoc_config.fallback_to_legacy
+                        or path.suffix.lower() not in _LEGACY_SUPPORTED_EXTENSIONS
+                    ):
+                        raise
+                    logger.warning(
+                        "[PowerPointParser] anydoc conversion failed for %s; "
+                        "using legacy converter",
+                        path.name,
+                        exc_info=True,
+                    )
+                    markdown_content = await self._legacy_convert(path)
+            else:
+                if path.suffix.lower() not in _LEGACY_SUPPORTED_EXTENSIONS:
+                    raise RuntimeError(
+                        "anydoc conversion is disabled and no legacy converter is available "
+                        f"for {path.suffix.lower() or 'this format'}"
+                    )
+                markdown_content = await self._legacy_convert(path)
+
+            markdown_kwargs = dict(kwargs)
+            allowed_media_dirs = list(markdown_kwargs.get("allowed_media_dirs") or [])
+            if storage.media_dir not in allowed_media_dirs:
+                allowed_media_dirs.append(storage.media_dir)
+            markdown_kwargs.update(
+                source_path=str(path),
+                base_dir=path.parent,
+                allowed_media_dirs=allowed_media_dirs,
             )
+            result = await self._md_parser.parse_content(
+                markdown_content,
+                instruction=instruction,
+                **markdown_kwargs,
+            )
+            result.source_format = source_format
         else:
             result = await self._md_parser.parse_content(
                 str(source), instruction=instruction, **kwargs
             )
-        result.source_format = "pptx"
+            result.source_format = "pptx"
         result.parser_name = "PowerPointParser"
         return result
+
+    async def _legacy_convert(self, path: Path) -> str:
+        """Run the python-pptx converter off the event loop."""
+        import pptx
+
+        return await asyncio.to_thread(self._convert_to_markdown, path, pptx)
 
     async def parse_content(
         self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs

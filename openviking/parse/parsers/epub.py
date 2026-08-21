@@ -17,7 +17,7 @@ from typing import List, Optional, Union
 
 from openviking.parse.base import ParseResult
 from openviking.parse.parsers.base_parser import BaseParser
-from openviking_cli.utils.config.parser_config import ParserConfig
+from openviking_cli.utils.config.parser_config import AnydocConfig, ParserConfig
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -92,16 +92,22 @@ class EPubParser(BaseParser):
 
     Supports: .epub
 
-    Converts EPub e-books to Markdown using ebooklib (if available)
-    or falls back to manual extraction, then delegates to MarkdownParser.
+    Converts EPub e-books to Markdown using anydoc, then delegates to
+    MarkdownParser. The ebooklib/manual converter remains available when
+    anydoc is disabled or legacy fallback is configured.
     """
 
-    def __init__(self, config: Optional[ParserConfig] = None):
+    def __init__(
+        self,
+        config: Optional[ParserConfig] = None,
+        anydoc_config: Optional[AnydocConfig] = None,
+    ):
         """Initialize EPub parser."""
         from openviking.parse.parsers.markdown import MarkdownParser
 
         self._md_parser = MarkdownParser(config=config)
         self.config = config or ParserConfig()
+        self.anydoc_config = anydoc_config or AnydocConfig()
 
     @property
     def supported_extensions(self) -> List[str]:
@@ -112,17 +118,62 @@ class EPubParser(BaseParser):
         path = Path(source)
 
         if path.exists():
-            markdown_content = await asyncio.to_thread(self._convert_to_markdown, path)
-            result = await self._md_parser.parse_content(
-                markdown_content, source_path=str(path), instruction=instruction, **kwargs
+            from openviking_cli.utils.storage import get_storage
+
+            storage = get_storage()
+            resource_name = kwargs.get("resource_name") or kwargs.get("source_name") or path.stem
+            source_format = path.suffix.lstrip(".").lower() or "epub"
+
+            if self.anydoc_config.enable:
+                from openviking.parse.parsers.anydoc_converter import AnyDocConverter
+
+                try:
+                    conversion = await asyncio.to_thread(
+                        AnyDocConverter().convert,
+                        path,
+                        resource_name=resource_name,
+                        storage=storage,
+                    )
+                    markdown_content = conversion.markdown
+                    source_format = conversion.source_format or source_format
+                except Exception:
+                    if not self.anydoc_config.fallback_to_legacy:
+                        raise
+                    logger.warning(
+                        "[EPubParser] anydoc conversion failed for %s; using legacy converter",
+                        path.name,
+                        exc_info=True,
+                    )
+                    markdown_content = await self._legacy_convert(path)
+            else:
+                markdown_content = await self._legacy_convert(path)
+
+            markdown_kwargs = dict(kwargs)
+            allowed_media_dirs = list(markdown_kwargs.get("allowed_media_dirs") or [])
+            if storage.media_dir not in allowed_media_dirs:
+                allowed_media_dirs.append(storage.media_dir)
+            markdown_kwargs.update(
+                source_path=str(path),
+                base_dir=path.parent,
+                allowed_media_dirs=allowed_media_dirs,
             )
+            result = await self._md_parser.parse_content(
+                markdown_content,
+                instruction=instruction,
+                **markdown_kwargs,
+            )
+            result.source_format = source_format
         else:
             result = await self._md_parser.parse_content(
                 str(source), instruction=instruction, **kwargs
             )
-        result.source_format = "epub"
+            result.source_format = "epub"
         result.parser_name = "EPubParser"
         return result
+
+    async def _legacy_convert(self, path: Path) -> str:
+        """Run the ebooklib/manual converter off the event loop."""
+        return await asyncio.to_thread(self._convert_to_markdown, path)
 
     async def parse_content(
         self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs

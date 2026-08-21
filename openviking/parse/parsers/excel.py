@@ -9,6 +9,7 @@ Inspired by microsoft/markitdown approach.
 
 import asyncio
 import concurrent.futures
+import re
 import time
 from dataclasses import asdict, fields
 from functools import partial
@@ -18,7 +19,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from openviking.parse.base import NodeType, ParseResult, ResourceNode, create_parse_result
 from openviking.parse.parsers.base_parser import BaseParser
-from openviking_cli.utils.config.parser_config import ExcelConfig, ParserConfig
+from openviking_cli.utils.config.parser_config import AnydocConfig, ExcelConfig, ParserConfig
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -30,6 +31,65 @@ _EXCEL_LAYOUT_EXECUTOR_WORKERS: Optional[int] = None
 _EXCEL_PROCESS_POOL_START_METHOD = "spawn"
 _EXCEL_PROCESS_POOL_MIN_BYTES = 200_000
 _EXCEL_PROCESS_POOL_TIMEOUT_S = 120.0
+_LEGACY_SUPPORTED_EXTENSIONS = frozenset({".xlsx", ".xls", ".xlsm"})
+
+
+def truncate_excel_markdown_tables(markdown: str, max_rows: int) -> str:
+    """Limit the first GFM table in each sheet section to ``max_rows`` data rows."""
+    if max_rows <= 0:
+        return markdown
+
+    def truncate_section(section: str) -> str:
+        lines = section.splitlines(keepends=True)
+        for index in range(len(lines) - 1):
+            header = lines[index].strip()
+            separator = lines[index + 1].strip()
+            if not _is_gfm_table_row(header) or not _is_gfm_separator(separator):
+                continue
+
+            table_end = index + 2
+            while table_end < len(lines) and _is_gfm_table_row(lines[table_end].strip()):
+                table_end += 1
+            data_start = index + 2
+            if table_end - data_start <= max_rows:
+                return section
+
+            newline = "\r\n" if lines[index].endswith("\r\n") else "\n"
+            kept_end = data_start + max_rows
+            comment = f"<!-- truncated to {max_rows} rows -->{newline}"
+            return "".join(lines[:kept_end] + [comment] + lines[table_end:])
+        logger.warning(
+            "[ExcelParser] Row truncation could not recognize a table; "
+            "leaving section unchanged"
+        )
+        return section
+
+    try:
+        headings = list(re.finditer(r"^## .*(?:\r?\n|$)", markdown, flags=re.MULTILINE))
+        if not headings:
+            return truncate_section(markdown)
+
+        parts = [markdown[: headings[0].start()]]
+        for index, heading in enumerate(headings):
+            section_end = (
+                headings[index + 1].start() if index + 1 < len(headings) else len(markdown)
+            )
+            parts.append(truncate_section(markdown[heading.start() : section_end]))
+        return "".join(parts)
+    except Exception:
+        logger.warning("[ExcelParser] Failed to truncate converted markdown tables", exc_info=True)
+        return markdown
+
+
+def _is_gfm_table_row(line: str) -> bool:
+    return line.startswith("|") and line.endswith("|") and line.count("|") >= 3
+
+
+def _is_gfm_separator(line: str) -> bool:
+    if not _is_gfm_table_row(line):
+        return False
+    cells = [cell.strip() for cell in line[1:-1].split("|")]
+    return bool(cells) and all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells)
 
 
 def _get_excel_layout_executor(workers: int) -> concurrent.futures.ProcessPoolExecutor:
@@ -82,6 +142,7 @@ def _build_excel_layout_in_process(
     }
     parser = ExcelParser(
         config=ParserConfig.from_dict(filtered_config),
+        anydoc_config=AnydocConfig(enable=False),
         max_rows_per_sheet=max_rows_per_sheet,
     )
 
@@ -129,7 +190,10 @@ class ExcelParser(BaseParser):
     """
 
     def __init__(
-        self, config: Optional[ParserConfig] = None, max_rows_per_sheet: int = 1000
+        self,
+        config: Optional[ParserConfig] = None,
+        anydoc_config: Optional[AnydocConfig] = None,
+        max_rows_per_sheet: int = 1000,
     ):
         """
         Initialize Excel parser.
@@ -142,6 +206,7 @@ class ExcelParser(BaseParser):
 
         self._md_parser = MarkdownParser(config=config)
         self.config = config or ExcelConfig()
+        self.anydoc_config = anydoc_config or AnydocConfig()
         self.max_rows_per_sheet = max_rows_per_sheet
 
     def _process_pool_enabled(self) -> bool:
@@ -152,7 +217,9 @@ class ExcelParser(BaseParser):
 
     @property
     def supported_extensions(self) -> List[str]:
-        return [".xlsx", ".xls", ".xlsm"]
+        # anydoc intentionally maps .xlsb to its shared "xlsx" parser. This is
+        # documented upstream and verified against a real binary XLSB workbook.
+        return [".xlsx", ".xls", ".xlsm", ".xlsb", ".ods", ".csv"]
 
     async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
         """Parse Excel spreadsheet from file path."""
@@ -182,23 +249,90 @@ class ExcelParser(BaseParser):
                     exc_info=True,
                 )
 
-        # Use xlrd for legacy .xls, openpyxl for .xlsx/.xlsm
-        if path.suffix.lower() == ".xls":
-            markdown_content = await asyncio.to_thread(self._convert_xls_to_markdown, path)
-        else:
-            import openpyxl
+        from openviking_cli.utils.storage import get_storage
 
-            markdown_content = await asyncio.to_thread(self._convert_to_markdown, path, openpyxl)
-        return await self._md_parser.parse_content(
-            markdown_content, source_path=str(path), instruction=instruction, **kwargs
+        storage = get_storage()
+        resource_name = kwargs.get("resource_name") or kwargs.get("source_name") or path.stem
+        source_format = path.suffix.lstrip(".").lower() or "xlsx"
+
+        if self.anydoc_config.enable:
+            from openviking.parse.parsers.anydoc_converter import AnyDocConverter
+
+            try:
+                conversion = await asyncio.to_thread(
+                    AnyDocConverter().convert,
+                    path,
+                    resource_name=resource_name,
+                    storage=storage,
+                )
+                markdown_content = conversion.markdown
+                source_format = conversion.source_format or source_format
+                if self.max_rows_per_sheet > 0:
+                    markdown_content = truncate_excel_markdown_tables(
+                        markdown_content, self.max_rows_per_sheet
+                    )
+            except Exception:
+                if (
+                    not self.anydoc_config.fallback_to_legacy
+                    or path.suffix.lower() not in _LEGACY_SUPPORTED_EXTENSIONS
+                ):
+                    raise
+                logger.warning(
+                    "[ExcelParser] anydoc conversion failed for %s; using legacy converter",
+                    path.name,
+                    exc_info=True,
+                )
+                markdown_content = await self._legacy_convert(path)
+        else:
+            if path.suffix.lower() not in _LEGACY_SUPPORTED_EXTENSIONS:
+                raise RuntimeError(
+                    "anydoc conversion is disabled and no legacy converter is available "
+                    f"for {path.suffix.lower() or 'this format'}"
+                )
+            markdown_content = await self._legacy_convert(path)
+
+        markdown_kwargs = dict(kwargs)
+        allowed_media_dirs = list(markdown_kwargs.get("allowed_media_dirs") or [])
+        if storage.media_dir not in allowed_media_dirs:
+            allowed_media_dirs.append(storage.media_dir)
+        markdown_kwargs.update(
+            source_path=str(path),
+            base_dir=path.parent,
+            allowed_media_dirs=allowed_media_dirs,
         )
+        result = await self._md_parser.parse_content(
+            markdown_content,
+            instruction=instruction,
+            **markdown_kwargs,
+        )
+        result.source_format = source_format
+        return result
+
+    async def _legacy_convert(self, path: Path) -> str:
+        """Run an existing xlrd/openpyxl converter off the event loop."""
+        if path.suffix.lower() == ".xls":
+            return await asyncio.to_thread(self._convert_xls_to_markdown, path)
+
+        import openpyxl
+
+        return await asyncio.to_thread(self._convert_to_markdown, path, openpyxl)
 
     def _should_use_process_pool(self, path: Path, kwargs: Dict[str, Any]) -> bool:
+        # anydoc may extract images through storage, which is not safe in the
+        # CPU-only worker; keep conversion and layout in the parent process.
+        if self.anydoc_config.enable:
+            return False
         if not self._process_pool_enabled():
+            return False
+        if path.suffix.lower() not in _LEGACY_SUPPORTED_EXTENSIONS:
             return False
         if path.suffix.lower() == ".xls":
             return False
-        if kwargs.get("enable_link_rewrite") or kwargs.get("base_dir") or kwargs.get("allowed_media_dirs"):
+        if (
+            kwargs.get("enable_link_rewrite")
+            or kwargs.get("base_dir")
+            or kwargs.get("allowed_media_dirs")
+        ):
             logger.debug("[ExcelParserProcessPool] Disabled for link/media rewrite parse")
             return False
         try:
@@ -233,9 +367,7 @@ class ExcelParser(BaseParser):
         )
 
         worker_started = time.perf_counter()
-        worker_result = await asyncio.wait_for(
-            future, timeout=_EXCEL_PROCESS_POOL_TIMEOUT_S
-        )
+        worker_result = await asyncio.wait_for(future, timeout=_EXCEL_PROCESS_POOL_TIMEOUT_S)
         worker_s = time.perf_counter() - worker_started
         layout = worker_result["layout"]
 
