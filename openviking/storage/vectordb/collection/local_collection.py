@@ -43,6 +43,7 @@ from openviking.storage.vectordb.utils.constants import (
 from openviking.storage.vectordb.utils.data_processor import DataProcessor
 from openviking.storage.vectordb.utils.dict_utils import ThreadSafeDictManager
 from openviking.storage.vectordb.utils.id_generator import generate_auto_id
+from openviking.storage.vectordb.store.bytes_row import STRING_MAX_UINT16_LENGTH
 from openviking.storage.vectordb.utils.json_safety import safe_json_dumps
 from openviking.storage.vectordb.utils.path_safety import (
     resolve_storage_path,
@@ -818,6 +819,53 @@ class LocalCollection(ICollection):
             data_list.append(data)
         return data_list
 
+    # Reserve headroom for JSON structural overhead (braces, quotes, commas,
+    # key names) so the *total* serialized blob stays under the uint16 limit.
+    _FIELDS_JSON_MAX_BYTES = STRING_MAX_UINT16_LENGTH - 2048
+
+    @staticmethod
+    def _truncate_fields_json(data: Dict[str, Any]) -> str:
+        """Serialize *data* to JSON, truncating oversized string values.
+
+        The local vectordb ``bytes_row`` format length-prefixes every string
+        field with a ``uint16``, capping each at 65 535 bytes.  The ``fields``
+        column stores **all** scalar metadata as a single JSON blob, so a
+        large ``abstract`` or ``description`` can push the combined payload
+        over the limit even though every individual value was independently
+        acceptable.
+
+        Strategy: serialize once; if the blob fits, return it unchanged.
+        Otherwise, iteratively halve the longest string value until the blob
+        fits or no string values remain.  This preserves as much information
+        as possible while guaranteeing the write succeeds.
+        """
+        blob = safe_json_dumps(data, ensure_ascii=False)
+        if len(blob.encode("utf-8")) <= LocalCollection._FIELDS_JSON_MAX_BYTES:
+            return blob
+
+        # Identify string keys sorted by descending encoded length.
+        str_keys = sorted(
+            (k for k, v in data.items() if isinstance(v, str)),
+            key=lambda k: len(data[k].encode("utf-8")),
+            reverse=True,
+        )
+        for k in str_keys:
+            encoded = data[k].encode("utf-8")
+            # Halve until the blob fits.
+            while len(encoded) > 256:
+                encoded = encoded[: len(encoded) // 2]
+                data[k] = encoded.decode("utf-8", errors="ignore") + "…[truncated]"
+                blob = safe_json_dumps(data, ensure_ascii=False)
+                if len(blob.encode("utf-8")) <= LocalCollection._FIELDS_JSON_MAX_BYTES:
+                    return blob
+            # Last resort: drop the field entirely.
+            data[k] = ""
+            blob = safe_json_dumps(data, ensure_ascii=False)
+            if len(blob.encode("utf-8")) <= LocalCollection._FIELDS_JSON_MAX_BYTES:
+                return blob
+
+        return blob
+
     def _write_data_list(self, data_list: List[Dict[str, Any]], ttl=0):
         result = UpsertDataResult()
 
@@ -841,7 +889,7 @@ class LocalCollection(ICollection):
                 if sparse_dict and isinstance(sparse_dict, dict):
                     cands_list[i].sparse_raw_terms = list(sparse_dict.keys())
                     cands_list[i].sparse_values = list(sparse_dict.values())
-            cands_list[i].fields = safe_json_dumps(data, ensure_ascii=False)
+            cands_list[i].fields = self._truncate_fields_json(data)
             cands_list[i].expire_ns_ts = time.time_ns() + ttl * 1000000000 if ttl > 0 else 0
 
         if not self.store_mgr:
