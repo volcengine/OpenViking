@@ -241,6 +241,8 @@ class SemanticProcessor(DequeueHandlerBase):
         self.report_success()
 
     async def _enqueue_parent_refresh(self, msg: SemanticMsg, uri: str) -> None:
+        if msg.generation_trigger == "content_copy":
+            return
         if msg.context_type not in {"resource", "skill"}:
             return
         parent = VikingURI(uri).parent
@@ -433,6 +435,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                 coalesce_version=msg.coalesce_version,
                                 source=msg.source,
                                 generation_trigger=msg.generation_trigger,
+                                copy_source_uri=msg.copy_source_uri,
                             )
                             await executor.run(run_uri)
                             self._cache_dag_stats(
@@ -1393,6 +1396,21 @@ class SemanticProcessor(DequeueHandlerBase):
             ctx=active_ctx,
             ingest_options=ingest_options,
         )
+
+    async def _load_transfer_file_summaries(
+        self,
+        file_paths: List[str],
+        ctx: Optional[RequestContext] = None,
+    ) -> Dict[str, str]:
+        """Load copied/moved file summaries from their existing target L2 vectors."""
+        if not file_paths:
+            return {}
+        viking_fs = get_viking_fs()
+        vector_store = viking_fs._get_vector_store()
+        if vector_store is None:
+            return {}
+        active_ctx = ctx or self._default_ctx
+        return await vector_store.get_l2_abstracts_by_uris(file_paths, ctx=active_ctx)
 
     async def _vectorize_single_file(
         self,

@@ -130,10 +130,17 @@ ov grep "openviking" --uri viking://resources
 - `tree` - 显示目录树。
 - `mkdir` - 创建目录。
 - `rm` - 删除资源或目录。
+- `cp` - 复制文件，或使用 `-r` 递归复制目录。
 - `mv` - 移动或重命名资源。
 - `stat` - 查看资源元数据。
 - `attrs` - 获取逻辑扩展属性。
 - `get` - 下载文件到本地路径。
+
+```bash
+# 目标父目录必须已存在，目标本身必须不存在。
+ov cp viking://resources/docs/guide.md viking://resources/archive/guide-copy.md
+ov cp -r viking://resources/docs viking://resources/docs-backup
+```
 
 ### 内容访问
 

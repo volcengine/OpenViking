@@ -173,7 +173,7 @@ def _resolve_api_key() -> str:
     account_id = CLI_ACCOUNT or "test-account"
     user_id = CLI_USER or "test-user"
 
-    for attempt in range(5):
+    for _attempt in range(5):
         try:
             list_resp = httpx.get(
                 f"{BASE_URL}/api/v1/admin/accounts/{account_id}/users",
@@ -336,7 +336,7 @@ def _check_cli_compatible():
 CLI_COMPATIBLE = _check_cli_compatible()
 
 
-def pytest_collection_modifyitems(config, items):
+def _apply_cli_skip_markers(items):
     skip_reason = None
     if not CLI_COMPATIBLE:
         skip_reason = "openviking CLI not available"
@@ -554,6 +554,16 @@ def ov_mv(src_uri, dst_uri):
     return ov_retry(["mv", src_uri, dst_uri, "-o", "json"], attempts=20, interval=15)
 
 
+def ov_cp(src_uri, dst_uri, *, recursive=False, output="json"):
+    args = ["cp"]
+    if recursive:
+        args.append("-r")
+    args.extend([src_uri, dst_uri])
+    if output:
+        args.extend(["-o", output])
+    return ov_retry(args, attempts=20, interval=15)
+
+
 def ov_write(uri, content, *extra_args):
     return ov_retry(
         [
@@ -608,6 +618,7 @@ def _find_file_in_pack(pack_uri, retries=10, interval=5):
 
 
 def pytest_collection_modifyitems(items):
+    _apply_cli_skip_markers(items)
     for item in items:
         if (
             item.get_closest_marker("cli_remote")

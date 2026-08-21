@@ -192,6 +192,7 @@ class AsyncAGFSClient:
             src_path,
             dst_path,
             recursive=recursive,
+            stream=True,
             fs_ctx=_fs_ctx_or_default(src_path, fs_ctx),
         )
 
