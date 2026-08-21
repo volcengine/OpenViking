@@ -166,8 +166,15 @@ class AsyncAGFSClient:
             kwargs["force"] = force
         return await self.run("rm", path, **kwargs, ctx=_fs_ctx_or_default(path, fs_ctx))
 
-    async def stat(self, path: str, *, fs_ctx: Dict[str, str] | None = None) -> Dict[str, Any]:
-        return await self.run("stat", path, ctx=_fs_ctx_or_default(path, fs_ctx))
+    async def stat(
+        self, path: str, *, fs_ctx: Dict[str, str] | None = None, bypass_cache: bool = False
+    ) -> Dict[str, Any]:
+        ctx = dict(_fs_ctx_or_default(path, fs_ctx))
+        if bypass_cache:
+            # Force plugin-local metadata caches (e.g. S3FS stat cache) to serve
+            # fresh backend state so pollers observe writer-side changes.
+            ctx["bypass_cache"] = "true"
+        return await self.run("stat", path, ctx=ctx)
 
     async def mv(
         self, old_path: str, new_path: str, *, fs_ctx: Dict[str, str] | None = None
