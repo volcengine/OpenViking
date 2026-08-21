@@ -391,6 +391,46 @@ async def test_content_copy_with_no_ready_summaries_preserves_existing_sidecars(
 
 
 @pytest.mark.asyncio
+async def test_content_copy_rebuilds_semantics_when_move_leaves_source_directory_empty(monkeypatch):
+    root_uri = "viking://resources/source"
+    old_overview = render_semantic_sidecar(ContextLevel.OVERVIEW, root_uri, "old file summary")
+    old_abstract = render_semantic_sidecar(ContextLevel.ABSTRACT, root_uri, "old abstract")
+    fake_fs = _FakeVikingFS(
+        tree={root_uri: []},
+        file_contents={
+            f"{root_uri}/.overview.md": old_overview,
+            f"{root_uri}/.abstract.md": old_abstract,
+        },
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(sidecar_sample_size=32)),
+    )
+    processor = _FakeProcessor(fake_fs)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER),
+        incremental_update=True,
+        target_uri=root_uri,
+        recursive=False,
+        changes={"deleted": [f"{root_uri}/moved.txt"]},
+        generation_trigger="content_copy",
+    )
+
+    await executor.run(root_uri)
+
+    assert processor.generated_overviews == [root_uri]
+    assert processor.vectorized_dirs == [root_uri]
+    overview = parse_semantic_sidecar(fake_fs._file_contents[f"{root_uri}/.overview.md"]).body
+    abstract = parse_semantic_sidecar(fake_fs._file_contents[f"{root_uri}/.abstract.md"]).body
+    assert overview.strip() == "FILES:"
+    assert abstract.strip() == "abstract"
+
+
+@pytest.mark.asyncio
 async def test_content_copy_propagates_vector_summary_read_failure(monkeypatch):
     root_uri = "viking://resources/archive"
     file_path = f"{root_uri}/copied.txt"
