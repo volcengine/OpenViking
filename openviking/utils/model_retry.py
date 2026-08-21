@@ -325,6 +325,34 @@ def _compute_delay(
     return delay
 
 
+def is_completion_retryable(error: Exception) -> bool:
+    """Retry predicate for LLM/VLM completion calls.
+
+    Extends :func:`is_retryable_api_error` (transient errors) to also retry
+    rate-limit (429) responses. Rate-limit errors are sometimes classified as
+    ``quota_exceeded`` (e.g. ``"429 ... AccountQuotaExceeded"``) which the base
+    predicate treats as non-retryable; during memory-extraction bursts they are
+    transient load conditions that should back off and retry rather than fail
+    the extraction and drop memories (issue #3008).
+    """
+    if is_retryable_api_error(error):
+        return True
+    return is_retryable_rate_limit_error(error)
+
+
+def completion_retry_delay(attempt: int, error: Exception) -> float:
+    """Backoff delay for LLM/VLM completion retries.
+
+    Rate-limit (429) errors use the longer :func:`rate_limit_retry_delay`
+    schedule (5s base, 120s cap) so concurrent extraction bursts back off
+    instead of hammering the provider. Other transient errors keep the default
+    short backoff.
+    """
+    if is_retryable_rate_limit_error(error):
+        return rate_limit_retry_delay(attempt + 1)
+    return _compute_delay(attempt, base_delay=0.5, max_delay=8.0, jitter=True)
+
+
 def retry_sync(
     func: Callable[[], T],
     *,
@@ -333,10 +361,16 @@ def retry_sync(
     max_delay: float = 8.0,
     jitter: bool = True,
     is_retryable: Callable[[Exception], bool] = is_retryable_api_error,
+    delay_fn: Callable[[int, Exception], float] | None = None,
     logger=None,
     operation_name: str = "operation",
 ) -> T:
-    """Retry a sync function on known transient errors."""
+    """Retry a sync function on known transient errors.
+
+    If ``delay_fn`` is provided it overrides the default backoff: it receives the
+    current ``attempt`` index and the caught exception, letting callers tailor the
+    delay to the error type (e.g. longer sleeps for rate-limit responses).
+    """
     attempt = 0
 
     while True:
@@ -346,12 +380,15 @@ def retry_sync(
             if max_retries <= 0 or attempt >= max_retries or not is_retryable(e):
                 raise
 
-            delay = _compute_delay(
-                attempt,
-                base_delay=base_delay,
-                max_delay=max_delay,
-                jitter=jitter,
-            )
+            if delay_fn is not None:
+                delay = delay_fn(attempt, e)
+            else:
+                delay = _compute_delay(
+                    attempt,
+                    base_delay=base_delay,
+                    max_delay=max_delay,
+                    jitter=jitter,
+                )
             if logger:
                 logger.warning(
                     "%s failed with retryable error (retry %d/%d): %s; retrying in %.2fs",
@@ -373,10 +410,16 @@ async def retry_async(
     max_delay: float = 8.0,
     jitter: bool = True,
     is_retryable: Callable[[Exception], bool] = is_retryable_api_error,
+    delay_fn: Callable[[int, Exception], float] | None = None,
     logger=None,
     operation_name: str = "operation",
 ) -> T:
-    """Retry an async function on known transient errors."""
+    """Retry an async function on known transient errors.
+
+    If ``delay_fn`` is provided it overrides the default backoff: it receives the
+    current ``attempt`` index and the caught exception, letting callers tailor the
+    delay to the error type (e.g. longer sleeps for rate-limit responses).
+    """
     attempt = 0
 
     while True:
@@ -386,12 +429,15 @@ async def retry_async(
             if max_retries <= 0 or attempt >= max_retries or not is_retryable(e):
                 raise
 
-            delay = _compute_delay(
-                attempt,
-                base_delay=base_delay,
-                max_delay=max_delay,
-                jitter=jitter,
-            )
+            if delay_fn is not None:
+                delay = delay_fn(attempt, e)
+            else:
+                delay = _compute_delay(
+                    attempt,
+                    base_delay=base_delay,
+                    max_delay=max_delay,
+                    jitter=jitter,
+                )
             if logger:
                 logger.warning(
                     "%s failed with retryable error (retry %d/%d): %s; retrying in %.2fs",

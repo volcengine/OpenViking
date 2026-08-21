@@ -607,6 +607,7 @@ class VLMConfig(BaseModel):
             ),
             "stream": credential.stream if credential.stream is not None else self.stream,
             "api_version": credential.api_version,
+            "max_concurrent": self.max_concurrent,
             "media": self.media.model_dump(),
         }
 
@@ -642,6 +643,7 @@ class VLMConfig(BaseModel):
             "max_tokens": self.max_tokens,
             "stream": stream,
             "api_version": self.api_version,
+            "max_concurrent": self.max_concurrent,
             "media": self.media.model_dump(),
         }
 
