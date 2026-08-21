@@ -101,7 +101,7 @@ def main():
         print("\n== 4. 添加资源: CONTRIBUTING.md ==")
         result = client.add_resource(
             path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/CONTRIBUTING.md",
-            reason="贡献指南学习笔记",
+            options={"reason": "贡献指南学习笔记"},
         )
         bob_uri = result.get("root_uri", "")
         print(f"  URI: {bob_uri}")

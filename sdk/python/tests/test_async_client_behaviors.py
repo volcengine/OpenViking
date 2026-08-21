@@ -629,8 +629,7 @@ async def test_add_resource_uploads_local_file_even_when_url_is_localhost(tmp_pa
 
     await client.add_resource(
         str(resource_file),
-        reason="test",
-        options={"watch_interval": 60},
+        options={"reason": "test", "watch_interval": 60},
     )
 
     fake_http.post.assert_awaited_once()
@@ -747,7 +746,6 @@ def test_sync_add_resource_accepts_and_forwards_declared_add_type():
     assert mock_add_resource.await_args.kwargs == {
         "to": "viking://resources/feishu",
         "parent": None,
-        "reason": "",
         "wait": False,
         "timeout": None,
         "options": {"add_type": "feishu"},

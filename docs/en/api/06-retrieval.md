@@ -1067,35 +1067,6 @@ curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://resources/do
     -H "X-API-Key: your-key"
 ```
 
-### Get Related Resources
-
-**Python SDK**
-
-```python
-import openviking as ov
-
-client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-client.initialize()
-
-results = client.find(query="OAuth implementation")
-
-for ctx in results.resources:
-    print(f"Found: {ctx.uri}")
-
-    # Get related resources
-    relations = client.relations(uri=ctx.uri)
-    for rel in relations:
-        print(f"  Related: {rel['uri']} - {rel['reason']}")
-```
-
-**HTTP API**
-
-```bash
-# Get relations for resource
-curl -X GET "http://localhost:1933/api/v1/relations?uri=viking://resources/docs/auth" \
-    -H "X-API-Key: your-key"
-```
-
 ## Best Practices
 
 ### Use Specific Queries

@@ -67,7 +67,7 @@ def main():
         print("\n== 1. 添加资源: OpenViking README ==")
         result = client.add_resource(
             path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md",
-            reason="项目核心文档",
+            options={"reason": "项目核心文档"},
         )
         readme_uri = result.get("root_uri", "")
         print(f"  URI: {readme_uri}")

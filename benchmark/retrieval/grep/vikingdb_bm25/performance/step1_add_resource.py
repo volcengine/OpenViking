@@ -118,9 +118,9 @@ def main():
                 result = client.add_resource(
                     path=dir_path,
                     parent=parent_uri,
-                    reason=f"benchmark perf: {rel_dir}",
                     wait=True,
                     options={
+                        "reason": f"benchmark perf: {rel_dir}",
                         "processing_mode": "vectors_only",
                     },
                 )

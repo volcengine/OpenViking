@@ -170,14 +170,14 @@ Embedding, VLM, storage, and other service configuration is managed by the OpenV
 # Add single file
 await client.add_resource(
     path="./document.pdf",
-    reason="Project technical documentation",  # Describe resource purpose to improve retrieval quality
     to="viking://resources/docs/",  # Specify storage location
+    options={"reason": "Project technical documentation"},  # Describe resource purpose to improve retrieval quality
 )
 
 # Add web page
 await client.add_resource(
     path="https://example.com/api-docs",
-    reason="API reference documentation",
+    options={"reason": "API reference documentation"},
 )
 
 # Wait for processing to complete

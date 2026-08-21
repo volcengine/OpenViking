@@ -334,7 +334,7 @@ client.initialize()
 # Add local file
 result = client.add_resource(
     path="./documents/guide.md",
-    reason="User guide documentation",
+    options={"reason": "User guide documentation"},
 )
 print(f"Added: {result['root_uri']}")
 
@@ -348,7 +348,7 @@ result = client.add_resource(
 result = client.add_resource(
     path="https://example.com/api-docs.md",
     to="viking://resources/external/api-docs.md",
-    reason="External API documentation",
+    options={"reason": "External API documentation"},
 )
 
 # Recursively crawl a site (same-host BFS; depth levels, max_pages cap)

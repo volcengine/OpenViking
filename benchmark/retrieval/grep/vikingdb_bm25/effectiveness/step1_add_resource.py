@@ -55,9 +55,9 @@ def main():
         result = client.add_resource(
             path=source,
             parent=args.parent,
-            reason="benchmark effectiveness",
             wait=True,
             options={
+                "reason": "benchmark effectiveness",
                 "processing_mode": "semantic_and_vectors",
             },
         )

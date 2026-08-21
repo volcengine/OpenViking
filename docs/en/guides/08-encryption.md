@@ -70,7 +70,7 @@ async def test():
     sample.write_text("Hello, encrypted world!", encoding="utf-8")
     await client.add_resource(
         path=str(sample),
-        reason="Test encryption",
+        options={"reason": "Test encryption"},
     )
 
     # Read resource (automatically decrypted)

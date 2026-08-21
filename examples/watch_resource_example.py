@@ -44,8 +44,8 @@ Version: 1.0
         result = await client.add_resource(
             path=str(test_file),
             to=to_uri,
-            reason="Example: monitoring a document",
             options={
+                "reason": "Example: monitoring a document",
                 "instruction": "Check for updates and re-index",
                 "watch_interval": 60.0,
             },
@@ -74,8 +74,8 @@ async def example_update_watch_interval():
         await client.add_resource(
             path=str(test_file),
             to=to_uri,
-            reason="Updated: more frequent monitoring",
             options={
+                "reason": "Updated: more frequent monitoring",
                 "watch_interval": 120.0,
             },
         )

@@ -163,14 +163,14 @@ Embedding、VLM、存储等服务配置由 OpenViking Server 通过 `ov.conf` �
 # 添加单个文件
 await client.add_resource(
     path="./document.pdf",
-    reason="项目技术文档",  # 描述资源用途，提升检索质量
     to="viking://resources/docs/",  # 指定存储位置
+    options={"reason": "项目技术文档"},  # 描述资源用途，提升检索质量
 )
 
 # 添加网页
 await client.add_resource(
     path="https://example.com/api-docs",
-    reason="API 参考文档",
+    options={"reason": "API 参考文档"},
 )
 
 # 等待处理完成

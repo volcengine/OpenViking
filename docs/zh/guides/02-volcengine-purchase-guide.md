@@ -183,7 +183,7 @@ async def test():
     # 添加简单资源测试
     result = await client.add_resource(
         path="https://example.com",
-        reason="测试连接",
+        options={"reason": "测试连接"},
     )
     print(f"✓ 配置成功: {result['root_uri']}")
 

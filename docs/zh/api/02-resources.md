@@ -339,7 +339,7 @@ client.initialize()
 ## 添加本地文件
 result = client.add_resource(
     path="./documents/guide.md",
-    reason="User guide documentation",
+    options={"reason": "User guide documentation"},
 )
 print(f"Added: {result['root_uri']}")
 
@@ -353,7 +353,7 @@ result = client.add_resource(
 result = client.add_resource(
     path="https://example.com/api-docs.md",
     to="viking://resources/external/api-docs.md",
-    reason="External API docs",
+    options={"reason": "External API docs"},
 )
 
 ## 递归抓取网页（同域 BFS，depth 层数、max_pages 页数上限）
