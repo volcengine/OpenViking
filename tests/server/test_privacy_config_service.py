@@ -10,6 +10,7 @@ from openviking.privacy.skill_extractor import extract_skill_privacy_values
 from openviking.privacy.skill_placeholder import placeholderize_skill_content_with_blocks
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -19,12 +20,23 @@ class _MemoryPrivacyStorage:
         self.files: dict[str, str] = {}
         self._lock = asyncio.Lock()
         self._async_agfs = self
+        self.lock_timeouts = []
 
     def _uri_to_path(self, uri, ctx=None):
         return uri
 
-    async def pathlock_acquire_tree(self, _path):
-        await self._lock.acquire()
+    async def pathlock_acquire_tree(self, _path, timeout_secs=0.0):
+        self.lock_timeouts.append(timeout_secs)
+        if timeout_secs == 0.0:
+            acquired = self._lock.locked() is False and await self._lock.acquire()
+        else:
+            try:
+                await asyncio.wait_for(self._lock.acquire(), timeout_secs)
+                acquired = True
+            except asyncio.TimeoutError:
+                acquired = False
+        if not acquired:
+            raise RuntimeError("lock acquire timed out")
         return {"lease_ref": "test"}
 
     async def pathlock_release(self, _lease):
@@ -127,6 +139,23 @@ async def test_privacy_config_exists_propagates_storage_errors():
 
     with pytest.raises(RuntimeError, match="storage unavailable"):
         await privacy.exists(ctx, "skill", "demo-skill")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("read_method", ["read_file", "read_file_bytes"])
+async def test_viking_fs_read_propagates_storage_errors(read_method):
+    class FailingReadStorage:
+        def stat(self, _path, **_kwargs):
+            return {"isDir": False}
+
+        def read(self, _path, **_kwargs):
+            raise RuntimeError("storage unavailable")
+
+    fs = VikingFS(FailingReadStorage())
+    ctx = RequestContext(user=UserIdentifier.the_default_user("privacy_read_error"), role=Role.ROOT)
+
+    with pytest.raises(RuntimeError, match="storage unavailable"):
+        await getattr(fs, read_method)("viking://user/privacy/meta.json", ctx=ctx)
 
 
 @pytest.mark.asyncio

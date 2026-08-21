@@ -80,7 +80,10 @@ class UserPrivacyConfigService:
         if not callable(uri_to_path) or not callable(acquire) or not callable(release):
             yield None
             return
-        lease = await acquire(uri_to_path(self.get_config_root(ctx, category, target_key), ctx=ctx))
+        lease = await acquire(
+            uri_to_path(self.get_config_root(ctx, category, target_key), ctx=ctx),
+            timeout_secs=30.0,
+        )
         try:
             yield lease
         finally:
