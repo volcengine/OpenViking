@@ -22,8 +22,10 @@ from openviking.session.compressor_v3 import (
 )
 from openviking.session.memory.dataclass import (
     MemoryFile,
+    MemoryOperationSkipCode,
     ResolvedOperation,
     ResolvedOperations,
+    SkippedMemoryOperation,
     StoredLink,
 )
 from openviking.session.memory.memory_updater import MemoryUpdateResult
@@ -107,6 +109,51 @@ def test_extract_long_term_memories_preserves_legacy_positional_parameter_order(
         "event_search_tags",
         "peer_memory_enabled",
     ]
+
+
+@pytest.mark.asyncio
+async def test_memory_diff_includes_intentionally_skipped_operations(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.get_viking_fs",
+        lambda: SimpleNamespace(),
+    )
+    compressor = SessionCompressorV3(vikingdb=None)
+    result = MemoryUpdateResult()
+    result.add_skipped(
+        SkippedMemoryOperation(
+            memory_type="events",
+            page_id=101,
+            reason_code=MemoryOperationSkipCode.INVALID_RANGES,
+            reason="No valid event range could be resolved",
+        )
+    )
+
+    diff = await compressor._build_memory_diff(
+        result=result,
+        operations=ResolvedOperations(
+            upsert_operations=[],
+            delete_file_contents=[],
+            errors=[],
+        ),
+        viking_fs=SimpleNamespace(),
+        ctx=_ctx(),
+        archive_uri="viking://user/u/sessions/s1/history/archive_001",
+    )
+
+    assert diff["skipped_operations"] == [
+        {
+            "memory_type": "events",
+            "page_id": 101,
+            "reason_code": "invalid_ranges",
+            "reason": "No valid event range could be resolved",
+        }
+    ]
+    assert diff["summary"] == {
+        "total_adds": 0,
+        "total_updates": 0,
+        "total_deletes": 0,
+        "total_skipped": 1,
+    }
 
 
 @pytest.mark.asyncio
@@ -1093,7 +1140,20 @@ async def test_v3_fast_path_writes_final_memory_diff_with_case_traj_and_exp(monk
                     "updates": [],
                     "deletes": [],
                 },
-                "summary": {"total_adds": 1, "total_updates": 0, "total_deletes": 0},
+                "skipped_operations": [
+                    {
+                        "memory_type": "preferences",
+                        "page_id": 102,
+                        "reason_code": "peer_not_allowed",
+                        "reason": "Target peer is outside the allowed memory scope",
+                    }
+                ],
+                "summary": {
+                    "total_adds": 1,
+                    "total_updates": 0,
+                    "total_deletes": 0,
+                    "total_skipped": 1,
+                },
             },
         )
 
@@ -1146,7 +1206,20 @@ async def test_v3_fast_path_writes_final_memory_diff_with_case_traj_and_exp(monk
         "trajectories",
     ]
     assert [item["memory_type"] for item in diff["operations"]["updates"]] == ["experiences"]
-    assert diff["summary"] == {"total_adds": 2, "total_updates": 1, "total_deletes": 0}
+    assert diff["skipped_operations"] == [
+        {
+            "memory_type": "preferences",
+            "page_id": 102,
+            "reason_code": "peer_not_allowed",
+            "reason": "Target peer is outside the allowed memory scope",
+        }
+    ]
+    assert diff["summary"] == {
+        "total_adds": 2,
+        "total_updates": 1,
+        "total_deletes": 0,
+        "total_skipped": 1,
+    }
 
 
 @pytest.mark.asyncio
@@ -1218,7 +1291,12 @@ async def test_v3_builds_training_memory_diff_from_streaming_result(monkeypatch)
         archive_uri=archive_uri,
     )
 
-    assert diff["summary"] == {"total_adds": 1, "total_updates": 1, "total_deletes": 0}
+    assert diff["summary"] == {
+        "total_adds": 1,
+        "total_updates": 1,
+        "total_deletes": 0,
+        "total_skipped": 0,
+    }
     assert diff["operations"]["adds"][0]["memory_type"] == "trajectories"
     update = diff["operations"]["updates"][0]
     assert update["memory_type"] == "experiences"
@@ -1315,7 +1393,12 @@ async def test_v3_training_memory_diff_filters_batch_items_by_current_analysis_t
         archive_uri=archive_uri,
     )
 
-    assert diff["summary"] == {"total_adds": 2, "total_updates": 0, "total_deletes": 0}
+    assert diff["summary"] == {
+        "total_adds": 2,
+        "total_updates": 0,
+        "total_deletes": 0,
+        "total_skipped": 0,
+    }
     assert [op["uri"] for op in diff["operations"]["adds"]] == [traj_a, exp_a]
 
 

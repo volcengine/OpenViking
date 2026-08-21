@@ -346,6 +346,9 @@ class SessionCompressorV3:
             adds=adds,
             updates=updates,
             deletes=deletes,
+            skipped_operations=_serialize_skipped_operations(
+                getattr(result, "skipped_operations", [])
+            ),
         )
 
     @tracer(ignore_result=True)
@@ -725,10 +728,9 @@ class SessionCompressorV3:
             cases=canonical_cases,
             memory_diff=memory_diff,
             case_uri_by_name=_case_uri_by_name(canonical_cases, patch_operations, result),
-            skipped_operations=[
-                item.model_dump(mode="json", exclude_none=True)
-                for item in getattr(result, "skipped_operations", [])
-            ],
+            skipped_operations=_serialize_skipped_operations(
+                getattr(result, "skipped_operations", [])
+            ),
         )
 
     def _session_skill_extraction_enabled(self) -> bool:
@@ -2052,6 +2054,22 @@ def _same_memory_file(before: Optional[MemoryFile], after: Optional[MemoryFile])
     )
 
 
+def _serialize_skipped_operations(items: Any) -> list[dict[str, Any]]:
+    serialized: list[dict[str, Any]] = []
+    for item in list(items or []):
+        if isinstance(item, dict):
+            payload = dict(item)
+        else:
+            model_dump = getattr(item, "model_dump", None)
+            if not callable(model_dump):
+                continue
+            payload = model_dump(mode="json", exclude_none=True)
+        if isinstance(payload, dict):
+            payload.pop("source", None)
+            serialized.append(payload)
+    return serialized
+
+
 def _v3_extraction_response(
     *,
     contexts: list[Context],
@@ -2090,7 +2108,9 @@ def _make_memory_diff(
     adds: list[dict[str, Any]],
     updates: list[dict[str, Any]],
     deletes: list[dict[str, Any]],
+    skipped_operations: Optional[list[dict[str, Any]]] = None,
 ) -> dict[str, Any]:
+    skipped = list(skipped_operations or [])
     return {
         "archive_uri": archive_uri,
         "trace_id": tracer.get_trace_id() or None,
@@ -2100,10 +2120,12 @@ def _make_memory_diff(
             "updates": list(updates),
             "deletes": list(deletes),
         },
+        "skipped_operations": skipped,
         "summary": {
             "total_adds": len(adds),
             "total_updates": len(updates),
             "total_deletes": len(deletes),
+            "total_skipped": len(skipped),
         },
     }
 
@@ -2116,12 +2138,16 @@ def _merge_memory_diffs(
     adds: list[dict[str, Any]] = []
     updates: list[dict[str, Any]] = []
     deletes: list[dict[str, Any]] = []
+    skipped_operations: list[dict[str, Any]] = []
     trace_id = tracer.get_trace_id() or None
     for diff in diffs:
         if not isinstance(diff, dict):
             continue
         if trace_id is None and diff.get("trace_id"):
             trace_id = str(diff.get("trace_id"))
+        skipped_operations.extend(
+            item for item in diff.get("skipped_operations", []) if isinstance(item, dict)
+        )
         operations = diff.get("operations")
         if not isinstance(operations, dict):
             continue
@@ -2133,6 +2159,7 @@ def _merge_memory_diffs(
         adds=adds,
         updates=updates,
         deletes=deletes,
+        skipped_operations=skipped_operations,
     )
     merged["trace_id"] = trace_id
     return merged
@@ -2145,7 +2172,8 @@ def _memory_diff_has_changes(diff: Any) -> bool:
     if not isinstance(summary, dict):
         return False
     return any(
-        int(summary.get(key) or 0) > 0 for key in ("total_adds", "total_updates", "total_deletes")
+        int(summary.get(key) or 0) > 0
+        for key in ("total_adds", "total_updates", "total_deletes", "total_skipped")
     )
 
 

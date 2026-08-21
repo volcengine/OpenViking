@@ -1612,10 +1612,19 @@ When long-term memory extraction runs successfully, the commit writes a `memory_
       }
     ]
   },
+  "skipped_operations": [
+    {
+      "memory_type": "events",
+      "page_id": 101,
+      "reason_code": "invalid_ranges",
+      "reason": "No valid event range could be resolved"
+    }
+  ],
   "summary": {
     "total_adds": 1,
     "total_updates": 1,
-    "total_deletes": 1
+    "total_deletes": 1,
+    "total_skipped": 1
   }
 }
 ```
@@ -1627,11 +1636,13 @@ When long-term memory extraction runs successfully, the commit writes a `memory_
 | `operations.adds` | array | New memories created (`uri`, `memory_type`, `after`) |
 | `operations.updates` | array | Modified memories (`uri`, `memory_type`, `before`, `after`) |
 | `operations.deletes` | array | Deleted memories (`uri`, `memory_type`, `deleted_content`) |
+| `skipped_operations` | array | Intentionally skipped operations and their stable reason codes; these do not represent file changes |
 | `summary.total_adds` | int | Number of new memories |
 | `summary.total_updates` | int | Number of modified memories |
 | `summary.total_deletes` | int | Number of deleted memories |
+| `summary.total_skipped` | int | Number of intentionally skipped operations |
 
-An empty `memory_diff.json` (all counts zero) is written when long-term memory extraction runs but produces no memory operations.
+An empty `memory_diff.json` (all counts zero) is written when long-term memory extraction runs but produces no applied or intentionally skipped operations.
 
 <a id="built-in-memory-types"></a>
 

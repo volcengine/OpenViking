@@ -650,6 +650,7 @@ merge 输入/输出日志通过 `tracer.info(..., console=False)` 记录，避�
   "trace_id": "...",
   "extracted_at": "...",
   "operations": {...},
+  "skipped_operations": [...],
   "summary": {...}
 }
 ```

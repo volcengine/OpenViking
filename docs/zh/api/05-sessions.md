@@ -1584,10 +1584,19 @@ viking://user/{user_id}/sessions/{session_id}/
       }
     ]
   },
+  "skipped_operations": [
+    {
+      "memory_type": "events",
+      "page_id": 101,
+      "reason_code": "invalid_ranges",
+      "reason": "无法解析出有效的事件范围"
+    }
+  ],
   "summary": {
     "total_adds": 1,
     "total_updates": 1,
-    "total_deletes": 1
+    "total_deletes": 1,
+    "total_skipped": 1
   }
 }
 ```
@@ -1599,11 +1608,13 @@ viking://user/{user_id}/sessions/{session_id}/
 | `operations.adds` | array | 新增记忆（`uri`、`memory_type`、`after`） |
 | `operations.updates` | array | 修改记忆（`uri`、`memory_type`、`before`、`after`） |
 | `operations.deletes` | array | 删除记忆（`uri`、`memory_type`、`deleted_content`） |
+| `skipped_operations` | array | 策略性跳过的操作及稳定原因码；不代表文件变更 |
 | `summary.total_adds` | int | 新增记忆数 |
 | `summary.total_updates` | int | 修改记忆数 |
 | `summary.total_deletes` | int | 删除记忆数 |
+| `summary.total_skipped` | int | 策略性跳过的操作数 |
 
-如果长记忆抽取已运行但没有产生记忆操作，也会写入空结构的 `memory_diff.json`（所有计数为零）。
+如果长记忆抽取已运行但没有产生实际变更或策略性跳过，也会写入空结构的 `memory_diff.json`（所有计数为零）。
 
 <a id="内置记忆类型"></a>
 
