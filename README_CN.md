@@ -94,6 +94,8 @@ viking://resources/my_project/
 
 OpenViking 0.3.22 的评测覆盖长对话用户记忆（LoCoMo）和多轮智能体任务（tau2-bench）。完整结果和实验设置（含知识库问答）见[评测报告](https://blog.openviking.ai/post/openviking-benchmark-results/)，复现脚本在 [./benchmark](./benchmark)。
 
+记忆评测使用 [Doubao 2.0 Pro](https://docs.volcengine.com/docs/82379/1593703) 作为 VLM，使用 [Doubao Embedding](https://docs.volcengine.com/docs/82379/1593703) 作为 Embedding 模型。
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/benchmark-dark.svg">
   <img alt="Benchmark results. LoCoMo accuracy: OpenClaw 24.20% native vs 82.08% with OpenViking; Hermes 33.38% vs 82.86%; Claude Code 57.21% vs 80.32%. tau2-bench task success: Retail 70.94% vs 77.81%; Airline 54.38% vs 66.25%." src="docs/images/benchmark-light.svg">
