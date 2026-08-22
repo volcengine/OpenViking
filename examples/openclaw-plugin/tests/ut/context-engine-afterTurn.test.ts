@@ -80,6 +80,14 @@ function makeEngine(opts?: {
 }
 
 describe("context-engine afterTurn()", () => {
+  it("leaves transcript persistence and compaction with OpenClaw", () => {
+    const { engine } = makeEngine();
+
+    expect(engine.info.ownsCompaction).toBe(false);
+    expect(engine.info).not.toHaveProperty("transcriptSemantics");
+    expect(engine).not.toHaveProperty("commitTurn");
+  });
+
   it("does nothing when autoCapture is disabled", async () => {
     const { engine, client } = makeEngine({ autoCapture: false });
 

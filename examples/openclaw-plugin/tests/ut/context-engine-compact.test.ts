@@ -13,7 +13,15 @@ function makeLogger() {
   };
 }
 
-function makeEngine(commitResult: unknown, opts?: { throwError?: Error }) {
+function makeEngine(
+  commitResult: unknown,
+  opts?: {
+    throwError?: Error;
+    delegateCompactionToRuntime?: Parameters<
+      typeof createMemoryOpenVikingContextEngine
+    >[0]["delegateCompactionToRuntime"];
+  },
+) {
   const cfg = memoryOpenVikingConfigSchema.parse({
     mode: "remote",
     baseUrl: "http://127.0.0.1:1933",
@@ -49,6 +57,7 @@ function makeEngine(commitResult: unknown, opts?: { throwError?: Error }) {
     logger,
     getClient,
     resolveAgentId,
+    delegateCompactionToRuntime: opts?.delegateCompactionToRuntime,
   });
 
   return {
@@ -177,6 +186,46 @@ describe("context-engine commitOVSession()", () => {
 });
 
 describe("context-engine compact()", () => {
+  it("commits OpenViking state and delegates the transcript rewrite to OpenClaw", async () => {
+    const delegateCompactionToRuntime = vi.fn().mockResolvedValue({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "native summary",
+        tokensBefore: 4_000,
+        tokensAfter: 900,
+      },
+    });
+    const { engine, client } = makeEngine(
+      {
+        status: "completed",
+        archived: true,
+        memories_extracted: { core: 1 },
+      },
+      { delegateCompactionToRuntime },
+    );
+    const compactParams = {
+      sessionId: "s-delegate",
+      sessionFile: "/tmp/session.jsonl",
+      tokenBudget: 2_000,
+      currentTokenCount: 4_000,
+      force: true,
+    };
+
+    const result = await engine.compact(compactParams);
+
+    expect(client.commitSession).toHaveBeenCalledWith("s-delegate", {
+      wait: true,
+      keepRecentCount: 0,
+    });
+    expect(delegateCompactionToRuntime).toHaveBeenCalledWith(compactParams);
+    expect(result).toMatchObject({
+      ok: true,
+      compacted: true,
+      result: { summary: "native summary", tokensAfter: 900 },
+    });
+  });
+
   it("returns compacted=false when the session matches bypassSessionPatterns", async () => {
     const cfg = memoryOpenVikingConfigSchema.parse({
       mode: "remote",

@@ -24,7 +24,7 @@ type ContextEngineInfo = {
   id: string;
   name: string;
   version?: string;
-  ownsCompaction: true;
+  ownsCompaction: false;
 };
 
 type AssembleResult = {
@@ -93,6 +93,22 @@ type ContextEngine = {
     runtimeContext?: Record<string, unknown>;
   }) => Promise<CompactResult>;
 };
+
+type RuntimeCompactionDelegate = ContextEngine["compact"];
+
+async function loadRuntimeCompactionDelegate(): Promise<RuntimeCompactionDelegate | undefined> {
+  try {
+    // Resolved from the OpenClaw host at runtime. Keeping this lazy preserves
+    // compatibility with older hosts that do not export the delegate yet.
+    const moduleSpecifier = "openclaw/plugin-sdk/core";
+    const sdk = (await import(moduleSpecifier)) as {
+      delegateCompactionToRuntime?: RuntimeCompactionDelegate;
+    };
+    return sdk.delegateCompactionToRuntime;
+  } catch {
+    return undefined;
+  }
+}
 
 export type ContextEngineWithCommit = ContextEngine & {
   /** Commit (archive + extract) the OV session. Returns true on success. */
@@ -248,6 +264,7 @@ export function createMemoryOpenVikingContextEngine(params: {
   }) => void;
   queryConfigStore?: RuntimeQueryConfigStore;
   traceRecorder?: { record(entry: RecallTraceEntry): void; recordAndFlush?: (entry: RecallTraceEntry) => Promise<unknown> };
+  delegateCompactionToRuntime?: RuntimeCompactionDelegate;
 }): ContextEngineWithCommit {
   const {
     id,
@@ -323,7 +340,9 @@ export function createMemoryOpenVikingContextEngine(params: {
       id,
       name,
       version,
-      ownsCompaction: true,
+      // OpenClaw owns the durable transcript and compaction lifecycle. This
+      // engine only projects OpenViking context through assemble().
+      ownsCompaction: false,
     },
 
     commitOVSession: doCommitOVSession,
@@ -389,6 +408,23 @@ export function createMemoryOpenVikingContextEngine(params: {
     },
 
     async compact(compactParams): Promise<CompactResult> {
+      const delegate =
+        params.delegateCompactionToRuntime ?? (await loadRuntimeCompactionDelegate());
+      if (delegate) {
+        // Preserve OV's archive/extraction side effect, but leave the durable
+        // transcript rewrite and retry identity to OpenClaw's native runtime.
+        await doCommitOVSession({
+          sessionId: compactParams.sessionId,
+          sessionKey: resolveSessionKey(compactParams),
+          runtimeContext: compactParams.runtimeContext,
+        });
+        return delegate(compactParams);
+      }
+
+      logger.warn?.(
+        "openviking: OpenClaw runtime compaction delegate is unavailable; " +
+          "falling back to legacy OpenViking compaction",
+      );
       const tokenBudget = validTokenBudget(compactParams.tokenBudget) ?? 128_000;
       return compactOpenVikingSession({
         sessionId: compactParams.sessionId,
