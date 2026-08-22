@@ -198,11 +198,12 @@ On `startup` or `clear`, the script:
 
 1. Counts state files (excluding the new session_id) whose `lastUpdatedAt` is within `OPENVIKING_CODEX_ACTIVE_WINDOW_MS` (default 2 min) of "now":
    - **0 active** → no-op (no orphan to commit)
-   - **1 active** → commit it (the just-ended session)
+   - **1 active** → commit it (the just-ended session), unless it has no live `ovSessionId` left to commit
    - **≥2 active** → skip; rely on idle TTL (we can't tell which one ended)
-2. **Idle-TTL sweep at the tail**: any state file (regardless of session_id) older than `OPENVIKING_CODEX_IDLE_TTL_MS` (default 30 min) gets committed and cleared.
+2. **Idle-TTL sweep at the tail**: any live session state older than `OPENVIKING_CODEX_IDLE_TTL_MS` (default 30 min) gets committed while preserving its transcript cursor for resume.
+3. **Cursor retention in the same pass**: a state file with no live OV session is kept as a resume cursor until `OPENVIKING_CODEX_COMMITTED_TTL_MS` (default 30 days), or dropped after the idle TTL if it never captured a turn.
 
-On any /commit failure (OV unreachable, non-2xx, timeout) we **preserve state** (don't `clearState`) so the next sweep can retry.
+On any /commit failure (OV unreachable, non-2xx, timeout) we **preserve state** (keep `ovSessionId` set) so the next sweep can retry.
 
 On `resume`, the script skips commit/sweep. It still injects the profile block. If local state has no live `ovSessionId`, it also reads `/api/v1/sessions/{cx-session-id}/context` and combines the latest committed archive overview into the same `SessionStart` output. The archive block includes a `viking://~/sessions/{cx-session-id}/history/` URI and tells the model to use the OpenViking MCP `read`/`search` tools for exact prior commands, file paths, tool outputs, or messages. Set `OPENVIKING_RESUME_ARCHIVE_INJECT=0` to disable the archive half without disabling profile injection.
 

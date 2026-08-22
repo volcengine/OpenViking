@@ -196,7 +196,7 @@ files are still present — the skip path does not clear them.
 # Backdate one of the state files to be older than IDLE_TTL_MS (default 30 min).
 OLD=$(node -e 'console.log(Date.now() - 60*60*1000)')   # 1 hour ago
 cat > "$STATE_DIR/state/sess-aaa.json" <<EOF
-{"codexSessionId":"sess-aaa","ovSessionId":null,"capturedTurnCount":0,"createdAt":$OLD,"lastUpdatedAt":$OLD}
+{"codexSessionId":"sess-aaa","ovSessionId":"cx-sess-aaa","capturedTurnCount":2,"createdAt":$OLD,"lastUpdatedAt":$OLD}
 EOF
 
 echo '{"session_id":"sess-ddd","source":"startup","cwd":"/tmp","model":"x","permission_mode":"default","transcript_path":null,"hook_event_name":"SessionStart"}' \
@@ -206,11 +206,30 @@ echo '{"session_id":"sess-ddd","source":"startup","cwd":"/tmp","model":"x","perm
     node $PLUGIN/scripts/session-start-commit.mjs
 ```
 
-Expect: log shows `idle_sweep` for `sess-aaa` (committed and cleared).
-`sess-bbb.json` is still present (still fresh). `sess-aaa.json` is gone.
+Expect: log shows `idle_sweep` for `sess-aaa` (committed).
+`sess-bbb.json` is still present (still fresh). `sess-aaa.json` is also
+present with `ovSessionId: null` and `capturedTurnCount: 2` for resume.
 If `sess-bbb` was in `≥2 active` from 6c, the heuristic on this call sees
 just `sess-bbb` (1 active) and commits it — that's expected and shows the
 heuristic + sweep working together.
+
+### 6d-2. Cursor retention
+
+```bash
+# sess-aaa is now cursor-only (ovSessionId: null, capturedTurnCount: 2).
+# Re-run the same SessionStart with a 1 s committed TTL.
+echo '{"session_id":"sess-eee","source":"startup","cwd":"/tmp","model":"x","permission_mode":"default","transcript_path":null,"hook_event_name":"SessionStart"}' \
+  | OPENVIKING_CONFIG_FILE=$OV_CONF \
+    OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
+    OPENVIKING_CODEX_COMMITTED_TTL_MS=1000 \
+    CODEX_PLUGIN_ROOT=$PLUGIN \
+    OPENVIKING_DEBUG=1 \
+    node $PLUGIN/scripts/session-start-commit.mjs
+```
+
+Expect: log shows `state_retire` for `sess-aaa` and the file is gone. With
+the default 30-day TTL it stays, and no `/commit` is issued for it either
+way — a cursor-only state has nothing left to commit.
 
 ### 6e. `source=resume` → no commit/sweep; optional archive inject
 

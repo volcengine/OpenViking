@@ -28,6 +28,7 @@
 import { readFile } from "node:fs/promises";
 import {
   extractCaptureTurns,
+  findLastHumanTurnIndex,
 } from "./capture-utils.mjs";
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
@@ -226,15 +227,20 @@ async function main() {
 
   // Post-compact transcript-shrink defense: codex's /compact may rewrite or
   // truncate transcript_path. If allTurns has fewer entries than we cached,
-  // our slice math would underflow and silently drop turns. Reset the
-  // counter so the next slice captures everything in the new transcript.
-  // See DESIGN.md "Post-compact transcript shrink".
+  // our slice math would underflow and silently drop turns. Resume at the
+  // latest human turn so the current interaction is captured without replaying
+  // compacted history. See DESIGN.md "Post-compact transcript shrink".
   if (allTurns.length < state.capturedTurnCount) {
+    const humanIndex = findLastHumanTurnIndex(allTurns);
     log("transcript_shrink_detected", {
       cached: state.capturedTurnCount,
       observed: allTurns.length,
+      resumeFrom: Math.max(0, humanIndex),
+      // -1 means no human turn survived the rewrite; capturing the whole
+      // transcript is the only way not to lose the interaction.
+      fallback: humanIndex < 0 ? "full_transcript" : undefined,
     });
-    state.capturedTurnCount = 0;
+    state.capturedTurnCount = Math.max(0, humanIndex);
   }
 
   const newTurns = allTurns.slice(state.capturedTurnCount);
