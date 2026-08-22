@@ -192,6 +192,11 @@ local-embed = [
     "llama-cpp-python>=0.3.0",
 ]
 
+opengauss = [
+  # PostgreSQL wire-compatible driver verified against openGauss DataVec 7.0.
+  "psycopg2-binary>=2.9,<3",
+]
+
 [project.urls]
 Homepage = "https://github.com/volcengine/openviking"
 Documentation = "https://openviking.ai"

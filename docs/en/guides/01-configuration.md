@@ -1379,7 +1379,7 @@ Vector database storage configuration
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `backend` | str | VectorDB backend type: 'local' (file-based), 'http' (remote service), 'volcengine' (cloud VikingDB), 'vikingdb' (private deployment), or 'cuvs' (local storage + GPU dense search) | "local" |
+| `backend` | str | VectorDB backend type: 'local' (file-based), 'http' (remote service), 'volcengine' (cloud VikingDB), 'vikingdb' (private deployment), 'cuvs' (local storage + GPU dense search), or 'opengauss' | "local" |
 | `name` | str | VectorDB collection name | "context" |
 | `url` | str | Remote service URL for 'http' type (e.g., 'http://localhost:5000') | null |
 | `project_name` | str | Project name (alias project) | "default" |
@@ -1389,6 +1389,7 @@ Vector database storage configuration
 | `volcengine` | object | 'volcengine' type VikingDB configuration | - |
 | `vikingdb` | object | 'vikingdb' type private deployment configuration | - |
 | `cuvs` | object | NVIDIA cuVS configuration for the 'cuvs' backend and the opt-in memory-aware auto mode on 'local'; see the [cuVS guide](./16-cuvs.md) | - |
+| `opengauss` | object | openGauss DataVec config, see [openGauss guide](./19-opengauss.md) | - |
 
 Default local mode
 ```
@@ -1400,6 +1401,40 @@ Default local mode
   }
 }
 ```
+
+<details>
+<summary><b>openGauss</b></summary>
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "backend": "opengauss",
+      "dimension": 512,
+      "distance_metric": "cosine",
+      "opengauss": {
+        "host": "127.0.0.1",
+        "port": 5432,
+        "user": "gaussdb",
+        "password": "replace-me",
+        "db_name": "openviking",
+        "mode": "standalone",
+        "shard_count": 32,
+        "index_type": "hnsw",
+        "build_params": {"m": 16, "ef_construction": 64},
+        "search_params": {"ef_search": 100},
+        "parallel_workers": 4,
+        "connection_pool_min_size": 1,
+        "connection_pool_max_size": 8
+      }
+    }
+  }
+}
+```
+
+See the [openGauss guide](./19-opengauss.md) for PQ, RabitQ, DiskANN, lifecycle, and distributed configuration.
+
+</details>
 
 <details>
 <summary><b>volcengine vikingDB</b></summary>

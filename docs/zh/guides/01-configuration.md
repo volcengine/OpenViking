@@ -1465,7 +1465,7 @@ Redis Sentinel 分别配置数据节点和 Sentinel 的 ACL：
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `backend` | str | VectorDB 后端类型: 'local'（基于文件）, 'http'（远程服务）, 'volcengine'（云上 VikingDB）, 'vikingdb'（私有部署）或 'cuvs'（本地存储 + GPU dense search） | "local" |
+| `backend` | str | VectorDB 后端类型: 'local'（基于文件）, 'http'（远程服务）, 'volcengine'（云上 VikingDB）, 'vikingdb'（私有部署）, 'cuvs'（本地存储 + GPU dense search）或 'opengauss' | "local" |
 | `name` | str | VectorDB 的集合名称 | "context" |
 | `url` | str | 'http' 类型的远程服务 URL（例如 'http://localhost:5000'） | null |
 | `project_name` | str | 项目名称（别名 project） | "default" |
@@ -1475,6 +1475,7 @@ Redis Sentinel 分别配置数据节点和 Sentinel 的 ACL：
 | `volcengine` | object | 'volcengine' 类型的 VikingDB 配置 | - |
 | `vikingdb` | object | 'vikingdb' 类型的私有部署配置 | - |
 | `cuvs` | object | NVIDIA cuVS 配置，也用于在 'local' 下显式开启显存感知自动模式，参见 [cuVS 使用指南](./16-cuvs.md) | - |
+| `opengauss` | object | openGauss DataVec 配置，参见 [openGauss 使用指南](./19-opengauss.md) | - |
 
 默认使用本地模式
 ```
@@ -1486,6 +1487,40 @@ Redis Sentinel 分别配置数据节点和 Sentinel 的 ACL：
   }
 }
 ```
+
+<details>
+<summary><b>openGauss</b></summary>
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "backend": "opengauss",
+      "distance_metric": "cosine",
+      "opengauss": {
+        "host": "127.0.0.1",
+        "port": 5432,
+        "user": "gaussdb",
+        "password": "Gauss@123",
+        "db_name": "openviking",
+        "mode": "standalone",
+        "shard_count": 32,
+        "index_type": "hnsw",
+        "build_params": { "m": 16, "ef_construction": 64 },
+        "search_params": { "ef_search": 100 },
+        "parallel_workers": 4,
+        "connection_pool_min_size": 1,
+        "connection_pool_max_size": 8
+      }
+    }
+  }
+}
+```
+
+更多索引与分布式配置见 [openGauss 使用指南](./19-opengauss.md)。
+
+</details>
+
 
 <details>
 <summary><b>volcengine vikingDB</b></summary>

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 import importlib
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional, Type, Union
 
 from openviking.storage.vectordb.collection.result import AggregateResult, SearchResult
 from openviking.storage.vectordb.index.index import IIndex
@@ -136,7 +136,7 @@ class ICollection(ABC):
     def update_index(
         self,
         index_name: str,
-        scalar_index: Optional[Dict[str, Any]] = None,
+        scalar_index: Optional[Union[List[str], Dict[str, Any]]] = None,
         description: Optional[str] = None,
     ):
         raise NotImplementedError
@@ -535,7 +535,7 @@ class Collection:
     def update_index(
         self,
         index_name: str,
-        scalar_index: Optional[Dict[str, Any]] = None,
+        scalar_index: Optional[Union[List[str], Dict[str, Any]]] = None,
         description: Optional[str] = None,
     ):
         """
@@ -543,8 +543,9 @@ class Collection:
 
         Args:
             index_name (str): Name of the index to update.
-            scalar_index (Optional[Dict[str, Any]]): Updated configuration for scalar indexes.
-                Defaults to None.
+            scalar_index (Optional[Union[List[str], Dict[str, Any]]]): Updated scalar
+                index configuration. List-based backends use field names; legacy
+                backends may accept a dictionary-shaped configuration. Defaults to None.
             description (Optional[str]): New description for the index. Defaults to None.
         """
         if self.__collection is None:

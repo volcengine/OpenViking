@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from openviking.storage.vectordb.collection.collection import Collection, ICollection
 from openviking.storage.vectordb.collection.result import AggregateResult, SearchResult
@@ -162,7 +162,7 @@ class MockCollection(ICollection):
     def update_index(
         self,
         index_name: str,
-        scalar_index: Optional[Dict[str, Any]] = None,
+        scalar_index: Optional[Union[List[str], Dict[str, Any]]] = None,
         description: Optional[str] = None,
     ):
         raise NotImplementedError("MockCollection.update_index is not supported")

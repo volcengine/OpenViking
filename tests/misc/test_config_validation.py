@@ -878,7 +878,7 @@ def test_removed_volcengine_api_key_backend_name_is_rejected():
         assert "volcengine_api_key" in str(e)
 
 
-@pytest.mark.parametrize("backend", ["qdrant", "opengauss"])
+@pytest.mark.parametrize("backend", ["qdrant"])
 def test_removed_third_party_vectordb_backends_are_rejected(backend):
     with pytest.raises(ValueError) as exc_info:
         VectorDBBackendConfig(backend=backend)
@@ -888,6 +888,33 @@ def test_removed_third_party_vectordb_backends_are_rejected(backend):
     assert "local" in message
     assert "volcengine" in message
     assert "vikingdb" in message
+
+
+def test_opengauss_backend_is_accepted_with_defaults():
+    config = VectorDBBackendConfig(backend="opengauss")
+    assert config.backend == "opengauss"
+    assert config.opengauss is not None
+    assert config.opengauss.host == "127.0.0.1"
+    assert config.opengauss.index_type == "hnsw"
+    assert config.opengauss.mode == "standalone"
+
+
+def test_opengauss_backend_requires_host():
+    from openviking_cli.utils.config.vectordb_config import OpenGaussConfig
+
+    with pytest.raises(ValueError, match="opengauss.host"):
+        VectorDBBackendConfig(backend="opengauss", opengauss=OpenGaussConfig(host=""))
+
+
+def test_opengauss_l1_requires_hnsw():
+    from openviking_cli.utils.config.vectordb_config import OpenGaussConfig
+
+    with pytest.raises(ValueError, match="l1"):
+        VectorDBBackendConfig(
+            backend="opengauss",
+            distance_metric="l1",
+            opengauss=OpenGaussConfig(index_type="ivfflat", build_params={"lists": 100}),
+        )
 
 
 def test_vectordb_volcengine_api_key_auth_requires_host_or_region():

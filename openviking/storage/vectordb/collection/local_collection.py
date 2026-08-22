@@ -9,7 +9,7 @@ import threading
 import time
 from contextlib import contextmanager
 from itertools import zip_longest
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Union
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -475,7 +475,7 @@ class LocalCollection(ICollection):
     def update_index(
         self,
         index_name: str,
-        scalar_index: Optional[Dict[str, Any]] = None,
+        scalar_index: Optional[Union[List[str], Dict[str, Any]]] = None,
         description: Optional[str] = None,
     ) -> None:
         with self._index_mutation_barrier.mutation() as mutation:

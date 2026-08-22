@@ -482,6 +482,9 @@ class OpenVikingConfig(BaseModel):
                 and getattr(instance.storage, "vectordb", None)
                 and getattr(instance, "embedding", None)
             ):
+                instance.storage.vectordb.apply_resolved_dimension(
+                    instance.embedding.dimension
+                )
                 db_dim = instance.storage.vectordb.dimension
                 emb_dim = instance.embedding.dimension
                 if db_dim > 0 and emb_dim > 0 and db_dim != emb_dim:
@@ -714,9 +717,9 @@ def initialize_openviking_config(
         config.storage.agfs.path = resolved
         config.storage.vectordb.path = resolved
 
-    # Ensure vector dimension is synced if not set in storage
-    if config.storage.vectordb.dimension == 0:
-        config.storage.vectordb.dimension = config.embedding.dimension
+    # Ensure vector dimension is synced if not set in storage, then
+    # re-run backend-specific limits that skipped dimension=0 at construct time.
+    config.storage.vectordb.apply_resolved_dimension(config.embedding.dimension)
 
     # Validate configuration
     if not is_valid_openviking_config(config):
