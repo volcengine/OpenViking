@@ -155,6 +155,12 @@ class OVFileTool(Tool, ABC):
             return f"{memory_uri[: -len('/memories')]}/skills/"
         return "viking://~/skills/"
 
+    def _current_resources_uri(self, client: VikingClient) -> str:
+        memory_uri = self._current_memory_uri(client).rstrip("/")
+        if memory_uri.endswith("/memories"):
+            return f"{memory_uri[: -len('/memories')]}/resources/"
+        return "viking://~/resources/"
+
     def _fs_retrieval_uris(
         self,
         client: VikingClient,
@@ -173,7 +179,7 @@ class OVFileTool(Tool, ABC):
                 return [uri or ""]
 
             target_uris = [
-                "viking://resources/",
+                self._current_resources_uri(client),
                 self._current_memory_uri(client),
                 self._current_skill_uri(client),
                 *self._peer_memory_uris(client, tool_context),
@@ -456,7 +462,7 @@ class VikingSearchTool(OVFileTool):
                 and (memory_owner_user_ids or legacy_memory_user_ids)
             ):
                 user_ids = memory_owner_user_ids or legacy_memory_user_ids
-                search_targets: list[tuple[str, str | None]] = [("viking://resources/", None)]
+                search_targets: list[tuple[str, str | None]] = [(self._current_resources_uri(client), None)]
                 for user_id in self._dedupe_strings(list(user_ids or [])):
                     memory_uri = client._memory_target_uri(user_id)
                     skill_uri = (
@@ -474,7 +480,7 @@ class VikingSearchTool(OVFileTool):
                     if actor_peer_id or peer_ids:
                         target_uris = self._dedupe_strings(
                             [
-                                "viking://resources/",
+                                self._current_resources_uri(client),
                                 self._current_memory_uri(client),
                                 self._current_skill_uri(client),
                                 *self._peer_memory_uris(client, tool_context, peer_ids=peer_ids),
