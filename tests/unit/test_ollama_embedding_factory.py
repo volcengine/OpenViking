@@ -171,3 +171,72 @@ class TestOllamaFactoryApiBase:
 
         call_kwargs = mock_openai_class.call_args[1]
         assert call_kwargs["base_url"] == "http://gpu-server:11434/v1"
+
+
+@patch("openai.OpenAI")
+class TestOllamaFactoryProviderAttribution:
+    """Provider attribution for the ollama factory.
+
+    Regression for PR #2317: the ollama factory branch omitted the ``provider``
+    kwarg, so ``OpenAIDenseEmbedder`` defaulted ``self._provider`` to ``"openai"``
+    while ``self.provider`` was correctly ``"ollama"``. This mislabeled embedding
+    token-usage attribution (metrics recorded under ``provider="openai"``).
+    """
+
+    def test_provider_attribution_is_ollama(self, mock_openai_class):
+        """A (regression catcher, fails before fix): _provider and provider must be 'ollama'."""
+        mock_client = MagicMock()
+        mock_client.embeddings.create.return_value = MagicMock(
+            data=[MagicMock(embedding=[0.1] * 8)], usage=None
+        )
+        mock_openai_class.return_value = mock_client
+
+        cfg = _make_ollama_cfg()
+        embedder = EmbeddingConfig(dense=cfg)._create_embedder("ollama", "dense", cfg)
+
+        # Note: this asserts OpenAIDenseEmbedder._provider (factory-layer kwarg),
+        # distinct from EmbeddingModelConfig.provider (model-layer field).
+        assert embedder._provider == "ollama"  # was "openai" before fix
+        assert embedder.provider == "ollama"
+
+    def test_dimensions_sent_in_request(self, mock_openai_class):
+        """B (behavior contract, always true, NOT a regression catcher):
+        ollama sends the ``dimensions`` param when dimension is configured."""
+        mock_client = MagicMock()
+        mock_client.embeddings.create.return_value = MagicMock(
+            data=[MagicMock(embedding=[0.1] * 768)], usage=None
+        )
+        mock_openai_class.return_value = mock_client
+
+        cfg = _make_ollama_cfg(dimension=768)
+        embedder = EmbeddingConfig(dense=cfg)._create_embedder("ollama", "dense", cfg)
+        embedder.embed("hello")
+
+        call_kwargs = mock_client.embeddings.create.call_args[1]
+        assert call_kwargs["dimensions"] == 768
+
+    def test_token_usage_attribution_is_ollama(self, mock_openai_class):
+        """C (regression catcher, fails before fix): update_token_usage receives provider='ollama'.
+
+        The mock response MUST carry ``usage`` (dict branch). Do NOT reuse
+        ``_make_mock_openai_class`` -- its ``usage=None`` makes
+        ``_update_telemetry_token_usage`` return early at
+        ``openai_embedders.py`` ``if not usage: return``, so ``update_token_usage``
+        is never invoked and the spy assertion would spuriously fail. A bare
+        MagicMock usage would hit ``int(MagicMock)`` -> TypeError, hence the dict.
+        """
+        mock_client = MagicMock()
+        mock_client.embeddings.create.return_value = MagicMock(
+            data=[MagicMock(embedding=[0.1] * 8)],
+            usage={"prompt_tokens": 7, "total_tokens": 9},
+        )
+        mock_openai_class.return_value = mock_client
+
+        cfg = _make_ollama_cfg(dimension=768)
+        embedder = EmbeddingConfig(dense=cfg)._create_embedder("ollama", "dense", cfg)
+
+        with patch.object(embedder, "update_token_usage") as spy:
+            embedder.embed("hello")
+
+        spy.assert_called_once()
+        assert spy.call_args.kwargs["provider"] == "ollama"  # was "openai" before fix

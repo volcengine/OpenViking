@@ -901,7 +901,12 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key
                     or "no-key",  # Ollama ignores the key, but client requires non-empty
                     "api_base": cfg.api_base or "http://localhost:11434/v1",
+                    # Configured dimension is sent with the request (unlike LiteLLM's
+                    # "don't send, truncate client-side" strategy in litellm_embedders
+                    # _build_kwargs; some Ollama models don't support matryoshka
+                    # representation and may error -- handle as a separate issue).
                     "dimension": cfg.dimension,
+                    "provider": "ollama",  # fix self._provider attribution (was defaulting to "openai")
                     "configured_provider": "ollama",
                     "config": dict(runtime_config),
                 },
