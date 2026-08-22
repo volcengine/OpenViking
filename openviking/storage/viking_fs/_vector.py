@@ -34,6 +34,8 @@ class _VectorMixin:
             logger.warning(f"[VikingFS] Failed to delete from vector store: {e}")
             raise
 
+        await self._enqueue_keyword_delete(uris, ctx)
+
     async def _update_vector_store_uris(
         self,
         uris: List[str],
@@ -62,6 +64,8 @@ class _VectorMixin:
                     logger.debug(f"[VikingFS] Updated URI: {uri} -> {new_uri}")
             except Exception as e:
                 logger.warning(f"[VikingFS] Failed to update {uri} in vector store: {e}")
+
+        await self._enqueue_keyword_move(uris, old_base, new_base, ctx)
 
     def _get_vector_store(self) -> Optional["VikingVectorIndexBackend"]:
         """Get vector store instance."""

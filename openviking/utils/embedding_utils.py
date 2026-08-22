@@ -125,6 +125,42 @@ async def _enqueue_embedding_message(
     return True
 
 
+def _keyword_indexing_enabled(viking_fs: Any) -> bool:
+    """Whether keyword indexing should be enqueued for this deployment.
+
+    Matches the effective enablement used when wiring the keyword pipeline:
+    the config switch must be on, at-rest encryption must not disable it, and
+    the keyword sidecar must actually be wired into VikingFS.
+    """
+    config = get_openviking_config()
+    if not config.keyword.enabled:
+        return False
+    if config.keyword.respect_encryption and getattr(viking_fs, "_encryptor", None) is not None:
+        return False
+    getter = getattr(viking_fs, "_get_keyword_fs", None)
+    return bool(getter is not None and getter() is not None)
+
+
+async def _enqueue_keyword_message(
+    keyword_queue,
+    embedding_msg,
+    *,
+    failure_message: str,
+) -> bool:
+    """Persist one keyword message derived from an embedding message."""
+    from openviking.storage.keywordfs.keyword_msg import KeywordMsg
+
+    try:
+        keyword_msg = KeywordMsg.from_embedding(embedding_msg)
+        if keyword_msg is None:
+            return False
+        enqueue_id = await keyword_queue.enqueue(keyword_msg)
+        return bool(enqueue_id)
+    except Exception as exc:
+        logger.warning(f"{failure_message}: {exc}")
+        return False
+
+
 def _coerce_datetime(value: object) -> Optional[datetime]:
     if isinstance(value, datetime):
         return value
@@ -630,6 +666,20 @@ async def vectorize_file(
         if not enqueued:
             return False
         logger.debug(f"Enqueued file for vectorization: {file_path}")
+
+        # Co-enqueue a keyword-sidecar upsert for the same content so the local
+        # FTS5 index stays in sync with vector coverage (best-effort).
+        if _keyword_indexing_enabled(viking_fs):
+            try:
+                keyword_queue = queue_manager.get_queue(queue_manager.KEYWORD)
+            except Exception:
+                keyword_queue = None
+            if keyword_queue is not None:
+                await _enqueue_keyword_message(
+                    keyword_queue,
+                    embedding_msg,
+                    failure_message=f"Failed to enqueue keyword for {file_path}",
+                )
 
     except TaskWorkRejected:
         logger.debug("Skipped file vectorization for cancelling task: %s", file_path)
