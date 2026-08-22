@@ -23,6 +23,7 @@ from openviking.utils.git_auth import (
     GitHttpAuthConfig,
     build_git_http_auth_env,
 )
+from openviking.utils.url_parser import normalize_repo_url
 from openviking_cli.exceptions import (
     DeadlineExceededError,
     InvalidArgumentError,
@@ -177,51 +178,6 @@ def _normalize_asset_target_uri(
     ):
         return normalized
     raise InvalidArgumentError(f"{where}: 'to' must target resource content")
-
-
-def _strip_port(host: str) -> str:
-    head, separator, tail = host.rpartition(":")
-    if separator and tail and tail.isascii() and tail.isdigit():
-        return head
-    return host
-
-
-def normalize_repo_url(url: str) -> str:
-    """Normalize supported Git URL forms into a stable host/path locator."""
-
-    value = url.strip()
-    if not value:
-        return ""
-    lowered = value.lower()
-    protocol = next(
-        (
-            prefix
-            for prefix in ("ssh://", "git://", "http://", "https://")
-            if lowered.startswith(prefix)
-        ),
-        None,
-    )
-    if protocol:
-        value = value[len(protocol) :]
-    if "@" in value:
-        user, remainder = value.split("@", 1)
-        if user and "/" not in user and ":" not in user:
-            value = remainder
-    if protocol is None:
-        slash = value.find("/")
-        colon = value.find(":")
-        if colon >= 0 and (slash < 0 or colon < slash):
-            value = f"{value[:colon]}/{value[colon + 1 :]}"
-    while "//" in value:
-        value = value.replace("//", "/")
-    if "/" in value:
-        host, path = value.split("/", 1)
-        value = f"{_strip_port(host).lower()}/{path}"
-    else:
-        value = _strip_port(value).lower()
-    if value.lower().endswith(".git"):
-        value = value[:-4]
-    return value.rstrip("/")
 
 
 def _validate_clone_url(url: str, asset_name: str) -> None:

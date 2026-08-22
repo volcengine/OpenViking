@@ -116,6 +116,12 @@ fi
 
 normalize_with_bot "${WITH_BOT}"
 ensure_config
+
+if [ -d "/app/dev_openviking" ]; then
+    echo "[openviking-entrypoint] using dev openviking from /app/dev_openviking via PYTHONPATH"
+    export PYTHONPATH="/app/dev_openviking:${PYTHONPATH:-}"
+fi
+
 resolve_server_port
 
 forward_signal() {
