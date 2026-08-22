@@ -823,32 +823,33 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 
 代码骨架提取内置在代码摘要流程中，不再提供解析器级配置。OpenViking 会在语言存在维护中的 `tags.scm` 时优先使用 tags query；不存在对应的 `tags.scm` 时，使用 `tree-sitter-language-pack.process()`；当前提取路线无可用结果时，才将 `semantic.code_summary` 作为兜底处理。
 
-当前保留的 `code` 配置字段用于远程代码资源的网络防护和代码托管白名单。提取路线详见 [代码骨架提取](../concepts/06-extraction.md#代码骨架提取)。
+当前保留的 `code` 配置字段用于识别代码托管平台并启用对应平台的 URL 处理逻辑。提取路线详见 [代码骨架提取](../concepts/06-extraction.md#代码骨架提取)。
 
 #### 远程资源网络防护
 
-通过 URL 拉取资源时，OpenViking 会拒绝环回、链路本地、私有及其他非公网目标，以及不在代码托管白名单中的主机，并抛出 `PermissionDeniedError`。要从自建 GitHub Enterprise / GitLab / Azure DevOps 拉取代码，请将主机加入 `code` 下对应的白名单：
+通过 URL 拉取资源时，OpenViking 会在连接前解析并校验目标地址。无法解析的主机，以及解析到环回、链路本地、私有或其他非公网地址的主机，都会被拒绝并抛出 `PermissionDeniedError`。
+
+`code` 下的域名列表仅用于选择平台专属的 URL 处理逻辑，不会绕过上述网络校验。对于使用公网地址的自建 GitHub Enterprise / GitLab / Azure DevOps，请将主机加入 `code` 下对应的列表，以便 OpenViking 识别该平台：
 
 | 字段 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `github_domains` | list[str] | 允许的 GitHub 主机（在此添加你的 GitHub Enterprise 主机） | `["github.com", "www.github.com"]` |
-| `gitlab_domains` | list[str] | 允许的 GitLab 主机（在此添加你的自建 GitLab 主机） | `["gitlab.com", "www.gitlab.com"]` |
-| `azure_devops_domains` | list[str] | 允许的 Azure DevOps 主机 | `["dev.azure.com", "ssh.dev.azure.com", "vs-ssh.visualstudio.com"]` |
-| `code_hosting_domains` | list[str] | 允许的通用代码托管主机 | `["github.com", "gitlab.com", "gitcode.com", "gitee.com", "bitbucket.org", "codeberg.org", "gitea.com", "atomgit.com", "git.sr.ht"]` |
+| `github_domains` | list[str] | 识别为 GitHub 并使用 GitHub 专属 URL 处理逻辑的主机 | `["github.com", "www.github.com"]` |
+| `gitlab_domains` | list[str] | 识别为 GitLab 并使用 GitLab 专属 URL 处理逻辑的主机 | `["gitlab.com", "www.gitlab.com"]` |
+| `azure_devops_domains` | list[str] | 识别为 Azure DevOps 并使用平台专属 URL 处理逻辑的主机 | `["dev.azure.com", "ssh.dev.azure.com", "vs-ssh.visualstudio.com"]` |
+| `code_hosting_domains` | list[str] | 识别为其他代码托管服务的主机 | `["github.com", "gitlab.com", "gitcode.com", "gitee.com", "bitbucket.org", "codeberg.org", "gitea.com", "atomgit.com", "git.sr.ht"]` |
 
-要从私有/内网地址（例如内部镜像）拉取，请将顶层的 `allow_private_networks` 设为 `true`（默认关闭，因此仅允许公网地址）：
+要从私有或内网地址拉取资源，请将顶层的 `allow_private_networks` 设为 `true`；对于自建代码托管平台，还需将主机加入 `code` 下对应的列表。该选项默认关闭，因为启用后会允许远程资源请求访问私有网络目标：
 
 ```json
 {
-  "allow_private_networks": false,
+  "allow_private_networks": true,
   "code": {
     "github_domains": ["github.com", "github.example.com"]
   }
 }
 ```
 
-需要 GitHub、GitLab 或 Azure DevOps 专属 URL 语义时，应配置到对应的平台字段；
-其他 Git 主机统一添加到 `code_hosting_domains`。
+需要 GitHub、GitLab 或 Azure DevOps 专属 URL 语义时，应配置到对应的平台字段；其他 Git 主机统一添加到 `code_hosting_domains`。这些列表本身不会授权访问私有网络。
 
 ### pdf
 
