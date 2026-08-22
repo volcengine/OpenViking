@@ -205,10 +205,19 @@ Each `session.commit()` writes a `memory_diff.json` to the archive directory, re
       }
     ]
   },
+  "skipped_operations": [
+    {
+      "memory_type": "events",
+      "page_id": 101,
+      "reason_code": "invalid_ranges",
+      "reason": "No valid event range could be resolved"
+    }
+  ],
   "summary": {
     "total_adds": 1,
     "total_updates": 1,
-    "total_deletes": 1
+    "total_deletes": 1,
+    "total_skipped": 1
   }
 }
 ```
@@ -220,9 +229,10 @@ Each `session.commit()` writes a `memory_diff.json` to the archive directory, re
 | `operations.adds` | New memories created (no `before`) |
 | `operations.updates` | Modified memories (with `before` and `after`) |
 | `operations.deletes` | Deleted memories (with `deleted_content`) |
+| `skipped_operations` | Intentionally skipped operations and their stable reason codes; these are not file changes |
 | `summary` | Counts per operation type |
 
-An empty `memory_diff.json` (all counts zero) is written even when no memory operations occurred.
+An empty `memory_diff.json` (all counts zero) is written when no applied or intentionally skipped operations occurred.
 
 ## Storage Structure
 

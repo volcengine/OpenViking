@@ -77,6 +77,27 @@ def test_v3_extraction_response_returns_session_skills():
     }
 
 
+def test_v3_extraction_response_returns_skipped_operations():
+    skipped = {
+        "memory_type": "preferences",
+        "reason_code": "invalid_ranges",
+        "reason": "Message ranges are malformed or out of bounds",
+    }
+
+    result = _v3_extraction_response(
+        contexts=[],
+        train_result={},
+        archive_uri="viking://sessions/s1/history/archive_001",
+        skipped_operations=[skipped],
+    )
+
+    assert result == {
+        "contexts": [],
+        "session_skills": [],
+        "skipped_operations": [skipped],
+    }
+
+
 def test_session_skill_operations_dedup_duplicate_creates():
     result = dedup_session_skill_operations(_build_duplicate_session_skill_operations())
 

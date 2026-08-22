@@ -15,6 +15,8 @@ from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import (
     MemoryField,
     MemoryFile,
+    MemoryOperationSkip,
+    MemoryOperationSkipCode,
     MemoryOperationSource,
     MemoryTypeSchema,
     ResolvedOperation,
@@ -481,6 +483,49 @@ class TestMemoryUpdater:
         )
 
     @pytest.mark.asyncio
+    async def test_apply_operations_reports_expected_empty_uri_as_skip(self):
+        updater = MemoryUpdater(registry=MagicMock())
+        updater._get_viking_fs = MagicMock(return_value=MagicMock())
+        updater._apply_upsert = AsyncMock(return_value=None)
+        updater._sync_resource_refs_for_result = AsyncMock()
+        updater._vectorize_memories = AsyncMock()
+        updater.generate_overview = AsyncMock()
+        operation = ResolvedOperation(
+            memory_fields={"peer_id": "web-visitor-alice"},
+            memory_type="preferences",
+            uris=[],
+            page_id=102,
+            resolution_skip=MemoryOperationSkip(
+                reason_code=MemoryOperationSkipCode.PEER_NOT_ALLOWED,
+                reason="Target peer is outside the allowed memory scope",
+            ),
+        )
+        operations = ResolvedOperations(
+            upsert_operations=[operation],
+            delete_file_contents=[],
+            errors=[],
+        )
+        ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+
+        with (
+            patch("openviking.session.memory.memory_updater.tracer.info") as tracer_info,
+            patch("openviking.session.memory.memory_updater.tracer.error") as tracer_error,
+        ):
+            result = await updater.apply_operations(operations=operations, ctx=ctx)
+
+        assert result.errors == []
+        assert len(result.skipped_operations) == 1
+        assert result.skipped_operations[0].reason_code == (
+            MemoryOperationSkipCode.PEER_NOT_ALLOWED
+        )
+        updater._apply_upsert.assert_not_awaited()
+        tracer_error.assert_not_called()
+        tracer_info.assert_any_call(
+            "Skipping memory operation by resolution policy: "
+            "memory_type=preferences page_id=102 reason_code=peer_not_allowed"
+        )
+
+    @pytest.mark.asyncio
     async def test_apply_operations_skips_deletes_when_replacement_uri_is_unresolved(self):
         registry = MagicMock()
         registry.get.return_value = MemoryTypeSchema(
@@ -532,6 +577,46 @@ class TestMemoryUpdater:
             ("events(page_id=102)", "Missing resolved URI"),
             (old_uri, "Skipped delete because batch contains unresolved upsert URIs"),
         ]
+        updater._apply_delete.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_apply_operations_safely_suppresses_delete_for_expected_uri_skip(self):
+        updater = MemoryUpdater(registry=MagicMock())
+        updater._get_viking_fs = MagicMock(return_value=MagicMock())
+        updater._apply_upsert = AsyncMock(return_value=None)
+        updater._apply_delete = AsyncMock()
+        updater._sync_resource_refs_for_result = AsyncMock()
+        updater._vectorize_memories = AsyncMock()
+        updater.generate_overview = AsyncMock()
+        old_uri = "viking://user/alice/memories/preferences/old.md"
+        operations = ResolvedOperations(
+            upsert_operations=[
+                ResolvedOperation(
+                    memory_fields={"ranges": "99"},
+                    memory_type="preferences",
+                    uris=[],
+                    page_id=102,
+                    resolution_skip=MemoryOperationSkip(
+                        reason_code=MemoryOperationSkipCode.INVALID_RANGES,
+                        reason="Message ranges are malformed or out of bounds",
+                    ),
+                )
+            ],
+            delete_file_contents=[
+                MemoryFile(uri=old_uri, extra_fields={"memory_type": "preferences"})
+            ],
+            errors=[],
+        )
+        ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+
+        result = await updater.apply_operations(operations=operations, ctx=ctx)
+
+        assert result.errors == []
+        assert [item.reason_code for item in result.skipped_operations] == [
+            MemoryOperationSkipCode.INVALID_RANGES,
+            MemoryOperationSkipCode.DEPENDENT_DELETE_SUPPRESSED,
+        ]
+        assert result.skipped_operations[1].memory_type == "preferences"
         updater._apply_delete.assert_not_awaited()
 
     @pytest.mark.asyncio

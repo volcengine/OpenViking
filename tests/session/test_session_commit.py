@@ -115,6 +115,42 @@ class TestCommit:
         # Wait for semantic/embedding queues
         await service.resources.wait_processed(timeout=60.0)
 
+    async def test_commit_task_reports_intentionally_skipped_memory_operations(
+        self,
+        session_with_messages: Session,
+    ):
+        session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
+            return_value={
+                "contexts": [],
+                "session_skills": [],
+                "skipped_operations": [
+                    {
+                        "memory_type": "preferences",
+                        "page_id": 102,
+                        "reason_code": "peer_not_allowed",
+                        "reason": "Target peer is outside the allowed memory scope",
+                    }
+                ],
+            }
+        )
+
+        commit_result = await session_with_messages.commit_async()
+        task_result = await _wait_for_task(commit_result["task_id"])
+
+        assert commit_result["status"] == "accepted"
+        assert task_result["status"] == "completed"
+        assert task_result["result"]["memory_extraction"] == {
+            "skipped": 1,
+            "skipped_operations": [
+                {
+                    "memory_type": "preferences",
+                    "page_id": 102,
+                    "reason_code": "peer_not_allowed",
+                    "reason": "Target peer is outside the allowed memory scope",
+                }
+            ],
+        }
+
     async def test_commit_default_disables_agent_memory_but_keeps_archive(
         self, session_with_messages: Session
     ):
@@ -365,6 +401,7 @@ class TestCommit:
             ctx,
             allowed_memory_types,
             allow_self_memory=True,
+            peer_memory_enabled=True,
             allowed_peer_ids=None,
             **kwargs,
         ):
@@ -373,6 +410,7 @@ class TestCommit:
                 {
                     "allowed_memory_types": set(allowed_memory_types or set()),
                     "allow_self_memory": allow_self_memory,
+                    "peer_memory_enabled": peer_memory_enabled,
                     "allowed_peer_ids": set(allowed_peer_ids or set()),
                     "roles": [message.role for message in messages],
                     "peer_ids": [message.peer_id for message in messages],
@@ -411,6 +449,7 @@ class TestCommit:
                     "profile",
                 },
                 "allow_self_memory": False,
+                "peer_memory_enabled": True,
                 "allowed_peer_ids": {"web-visitor-alice"},
                 "roles": ["user", "assistant"],
                 "peer_ids": ["web-visitor-alice", "web-visitor-alice"],

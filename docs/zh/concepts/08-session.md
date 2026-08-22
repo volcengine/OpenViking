@@ -205,10 +205,19 @@ LLM 去重决策 → candidate(skip/create/none) + item(merge/delete)
       }
     ]
   },
+  "skipped_operations": [
+    {
+      "memory_type": "events",
+      "page_id": 101,
+      "reason_code": "invalid_ranges",
+      "reason": "无法解析出有效的事件范围"
+    }
+  ],
   "summary": {
     "total_adds": 1,
     "total_updates": 1,
-    "total_deletes": 1
+    "total_deletes": 1,
+    "total_skipped": 1
   }
 }
 ```
@@ -220,9 +229,10 @@ LLM 去重决策 → candidate(skip/create/none) + item(merge/delete)
 | `operations.adds` | 新增的记忆（无 `before`） |
 | `operations.updates` | 修改的记忆（含 `before` 和 `after`） |
 | `operations.deletes` | 删除的记忆（含 `deleted_content`） |
+| `skipped_operations` | 策略性跳过的操作及稳定原因码；不代表文件变更 |
 | `summary` | 各操作类型的计数 |
 
-即使没有记忆操作，也会写入空结构的 `memory_diff.json`（所有计数为零）。
+如果没有实际变更或策略性跳过，也会写入空结构的 `memory_diff.json`（所有计数为零）。
 
 ## 存储结构
 
