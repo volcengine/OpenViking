@@ -81,11 +81,14 @@ async def health_check(request: Request):
             effective_auth_mode = config.get_effective_auth_mode()
         result["auth_mode"] = effective_auth_mode
 
-        # Resolve identity when API key is provided
+        # Resolve identity when a credential is provided, or when the auth
+        # plugin authenticates without one (e.g. dev mode always resolves to
+        # ROOT, trusted mode reads identity headers). Only the credential-less
+        # api_key case is skipped so unauthenticated probes stay warning-free.
         x_api_key = request.headers.get("X-API-Key")
         authorization = request.headers.get("Authorization")
 
-        if x_api_key or authorization:
+        if x_api_key or authorization or effective_auth_mode != AuthMode.API_KEY.value:
             try:
                 from openviking.server.auth import resolve_identity
 

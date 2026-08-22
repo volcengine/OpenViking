@@ -70,6 +70,34 @@ async def test_health_endpoint_without_api_key():
     assert "role" not in body
 
 
+async def test_health_endpoint_dev_mode_resolves_identity_without_api_key():
+    """In dev mode, /health should resolve identity (ROOT) without any credential.
+
+    The Studio uses the role echoed by /health to unlock the Usage/Audit
+    panels; dev mode has no API key, so identity must resolve without one.
+    """
+    from openviking.server.auth.plugins import DevAuthPlugin
+
+    app = create_app(
+        config=ServerConfig(auth_mode="dev", host="127.0.0.1"),
+        service=SimpleNamespace(),
+    )
+    # ASGITransport doesn't trigger lifespan; wire the auth plugin manually.
+    app.state.auth_plugin = DevAuthPlugin()
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/health")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["auth_mode"] == "dev"
+    assert body["role"] == "root"
+    assert body["account_id"] == "default"
+    assert body["user_id"] == "default"
+
+
 async def test_system_status(client: httpx.AsyncClient):
     resp = await client.get("/api/v1/system/status")
     assert resp.status_code == 200

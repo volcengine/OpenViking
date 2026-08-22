@@ -327,6 +327,17 @@ async function canListAccounts(connection: ConnectionDraft): Promise<boolean> {
   }
 }
 
+export function resolveHealthRole(
+  data: Record<string, unknown>,
+): ConnectionRole {
+  // Dev mode always authenticates as ROOT; short-circuit on auth_mode so the
+  // Studio unlocks even against servers whose /health omits role in dev mode.
+  if (data.auth_mode === 'dev') {
+    return 'root'
+  }
+  return isConnectionRole(data.role) ? data.role : 'unknown'
+}
+
 async function detectConnectionIdentity(
   connection: ConnectionDraft,
   credential: 'control' | 'data' = 'control',
@@ -339,7 +350,7 @@ async function detectConnectionIdentity(
   // /health resolves the presented key and echoes back its identity:
   // { role, account_id, user_id }. We use role to gate the admin UI and
   // account_id to pin the assumed account for an account-admin key.
-  const healthRole = isConnectionRole(data.role) ? data.role : 'unknown'
+  const healthRole = resolveHealthRole(data)
   // In trusted mode /health resolves the asserted tenant user, even when the
   // configured Root key is the credential authorizing Admin API calls. Probe
   // the actual control-plane endpoint so Root capabilities reflect what the
