@@ -36,10 +36,12 @@ class SyncDiff:
 class _SyncMixin:
     """Top-down recursive tree diff-and-merge primitive.
 
-    Moves (not copies) visible children of ``root_uri`` into ``target_uri``
-    so the target ends up mirroring the source, returning a :class:`SyncDiff`
-    describing what changed.  Hidden files (``.``-prefixed) are skipped —
-    callers that need to carry over parser sidecars (e.g.
+    Moves (not copies) visible children of ``root_uri`` into ``target_uri``,
+    returning a :class:`SyncDiff` describing what changed.  The merge is
+    additive by default: entries that exist only in the target are left
+    untouched.  Pass ``delete_missing=True`` to ``sync_tree`` to make the
+    target mirror the source exactly.  Hidden files (``.``-prefixed) are
+    skipped — callers that need to carry over parser sidecars (e.g.
     ``.image_mappings.json``) do so explicitly after the sync.
     """
 
@@ -52,6 +54,7 @@ class _SyncMixin:
         file_change_status: Optional[Dict[str, bool]] = None,
         lease_ref: Optional[Dict[str, Any]] = None,
         delete_temp_after: bool = False,
+        delete_missing: bool = False,
         is_changed: Optional[Callable[[str, str, "RequestContext"], "bool"]] = None,
     ) -> SyncDiff:
         """Recursively merge ``root_uri`` into ``target_uri``.
@@ -59,6 +62,11 @@ class _SyncMixin:
         Hidden entries (names starting with ``.``) are skipped on both sides.
         Name conflicts (file vs. directory at the same name) are resolved by
         deleting the target-side entry before moving the source in place.
+
+        The merge is additive: files and directories that exist only in the
+        target are kept unless ``delete_missing`` is set.  This keeps
+        add-resource style syncs (a temp tree holding only the newly-added
+        resource) from deleting pre-existing siblings.
 
         Args:
             root_uri: Source (typically a temp/staging tree). Must exist.
@@ -74,6 +82,9 @@ class _SyncMixin:
             delete_temp_after: If ``True``, call ``delete_temp(root_uri)``
                 after a successful sync into an existing target (the
                 whole-tree mv path already consumes the source).
+            delete_missing: If ``True``, entries that exist only in the
+                target are deleted so it mirrors the source exactly.  Default
+                ``False`` (additive merge) — target-only entries are kept.
             is_changed: Optional async predicate ``(root_file, target_file,
                 ctx) -> bool`` used to decide if an existing file needs to
                 be replaced.  Defaults to a stat-size shortcut followed by
@@ -163,7 +174,7 @@ class _SyncMixin:
                         )
                     continue
 
-                if target_file and not root_file:
+                if delete_missing and target_file and not root_file:
                     try:
                         await self.rm(target_file, ctx=ctx, lease_ref=lease_ref)
                         diff.deleted_files.append(target_file)
@@ -240,7 +251,7 @@ class _SyncMixin:
                         )
                     target_subdir = None
 
-                if target_subdir and not root_subdir:
+                if delete_missing and target_subdir and not root_subdir:
                     try:
                         await self.rm(
                             target_subdir,
