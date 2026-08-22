@@ -32,6 +32,11 @@ class TestResolveOperations:
             filename_template="{{ name }}.md",
             fields=[
                 MemoryField(name="name", field_type=FieldType.STRING, merge_op=MergeOp.IMMUTABLE),
+                MemoryField(
+                    name="description",
+                    field_type=FieldType.STRING,
+                    merge_op=MergeOp.REPLACE,
+                ),
                 MemoryField(name="content", field_type=FieldType.STRING, merge_op=MergeOp.PATCH),
             ],
         )
@@ -40,7 +45,7 @@ class TestResolveOperations:
             uri=existing_uri,
             content="old content",
             memory_type="entities",
-            extra_fields={"name": "Melanie"},
+            extra_fields={"name": "Melanie", "description": "old description"},
         )
 
         context_provider = Mock()
@@ -64,7 +69,13 @@ class TestResolveOperations:
 
         operations, _ = await loop.resolve_operations(
             AttrDict(
-                entities=[{"content": "new content", "page_id": 7}],
+                entities=[
+                    {
+                        "description": "new description",
+                        "content": "new content",
+                        "page_id": 7,
+                    }
+                ],
                 delete_uris=[],
             )
         )
@@ -73,6 +84,7 @@ class TestResolveOperations:
         assert operation.uris == [existing_uri]
         assert operation.old_memory_file_content is old_file
         assert operation.memory_fields["name"] == "Melanie"
+        assert operation.memory_fields["description"] == "new description"
         assert operation.memory_fields["content"] == "new content"
         isolation_handler.calculate_memory_uris.assert_not_called()
 

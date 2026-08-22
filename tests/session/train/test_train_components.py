@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 from test_fakes import fake_request_context
 
+from openviking.core.skill_loader import SkillLoader
 from openviking.session.memory.dataclass import MemoryFile, StoredLink
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.train import (
@@ -20,7 +21,10 @@ from openviking.session.train import (
     PatchMergePolicyOptimizer,
     PatchMergePolicyOptimizerContext,
     PatchSemanticGradient,
+    PolicyPlanItem,
     PolicyUpdatePlan,
+    SkillPolicyUpdater,
+    SkillSetLoader,
 )
 
 
@@ -47,13 +51,13 @@ class FakeVikingFS:
     async def read_file(self, uri: str, ctx=None):
         return self.files[uri]
 
-    async def write_file(self, uri: str, content: str, ctx=None, lock_handle=None):
-        self.write_lock_handles.append((uri, lock_handle))
+    async def write_file(self, uri: str, content: str, ctx=None, lease_ref=None):
+        self.write_lock_handles.append((uri, lease_ref))
         self.files[uri] = content
 
-    async def rm(self, uri: str, recursive: bool = False, ctx=None, lock_handle=None):
+    async def rm(self, uri: str, recursive: bool = False, ctx=None, lease_ref=None):
         del recursive, ctx
-        self.rm_lock_handles.append(lock_handle)
+        self.rm_lock_handles.append(lease_ref)
         self.files.pop(uri, None)
         return {"estimated_deleted_count": 1}
 
@@ -226,6 +230,133 @@ async def test_experience_set_loader_requires_request_context():
 
     with pytest.raises(ValueError, match="requires request_context ctx"):
         await ExperienceSetLoader(viking_fs=fs).load(root)
+
+
+async def test_skill_policy_set_reload_preserves_skill_loader():
+    root = "viking://user/u/skills"
+    skill_uri = f"{root}/code-review/SKILL.md"
+    raw_skill = """---
+name: code-review
+description: Review code changes
+allowed-tools:
+- Read
+metadata:
+  vikingbot:
+    requires:
+      bins:
+      - git
+---
+Read changed files before commenting.
+"""
+
+    class FakeSkillVikingFS:
+        async def ls(self, uri, output="original", ctx=None):
+            del ctx
+            assert uri == root
+            assert output == "original"
+            return [
+                {
+                    "name": "code-review",
+                    "uri": f"{root}/code-review",
+                    "isDir": True,
+                }
+            ]
+
+        async def read_file(self, uri, ctx=None):
+            del ctx
+            assert uri == skill_uri
+            return raw_skill
+
+    ctx = fake_request_context()
+    loaded = await SkillSetLoader(viking_fs=FakeSkillVikingFS()).load(root, ctx=ctx)
+
+    updated = loaded.with_policies([])
+    reloaded = await updated.reload()
+
+    assert reloaded.metadata["source"] == "skill_store"
+    assert [policy.name for policy in reloaded.policies] == ["code-review"]
+    policy = reloaded.policies[0]
+    assert policy.metadata["allowed_tools"] == ["Read"]
+    assert policy.metadata["allowed_tools_declared"] is True
+    assert policy.metadata["metadata"] == {"vikingbot": {"requires": {"bins": ["git"]}}}
+
+
+async def test_skill_policy_updater_preserves_omitted_existing_description():
+    root = "viking://user/u/skills"
+    skill_uri = f"{root}/code-review/SKILL.md"
+    original_description = "Review code changes"
+
+    class FakeSkillProcessor:
+        async def process_skill(
+            self,
+            *,
+            data,
+            viking_fs,
+            ctx,
+            allow_local_path_resolution,
+            privacy_change_reason,
+            target_uri,
+            lease_ref,
+        ):
+            del ctx
+            assert allow_local_path_resolution is False
+            assert privacy_change_reason == "auto-extracted from session skill update"
+            assert lease_ref is None
+            skill_root_uri = f"{target_uri.rstrip('/')}/{data['name']}"
+            viking_fs.files[f"{skill_root_uri}/SKILL.md"] = SkillLoader.to_skill_md(data)
+            return {"root_uri": skill_root_uri}
+
+    fs = FakeVikingFS(
+        {
+            skill_uri: SkillLoader.to_skill_md(
+                {
+                    "name": "code-review",
+                    "description": original_description,
+                    "content": "Read changed files.",
+                }
+            )
+        }
+    )
+    policy_set = ExperienceSet(
+        root_uri=root,
+        policies=[
+            Experience(
+                name="code-review",
+                uri=skill_uri,
+                version=1,
+                status="production",
+                content="Read changed files.",
+                metadata={"description": original_description, "memory_type": "skills"},
+            )
+        ],
+    )
+    plan = PolicyUpdatePlan(
+        items=[
+            PolicyPlanItem(
+                kind="upsert",
+                memory_type="skills",
+                target_name="code-review",
+                target_uri=skill_uri,
+                before_content="Read changed files.",
+                after_content="Read changed files before commenting.",
+                metadata={
+                    "merge_memory_fields": {
+                        "description": None,
+                        "content": "Read changed files before commenting.",
+                    }
+                },
+            )
+        ]
+    )
+
+    result = await SkillPolicyUpdater(
+        skill_processor=FakeSkillProcessor(),
+        viking_fs=fs,
+    ).apply(plan, policy_set, fake_request_context())
+
+    assert result.errors == []
+    assert result.updated_policy_set.policies[0].metadata["description"] == original_description
+    assert SkillLoader.parse(fs.files[skill_uri])["description"] == original_description
 
 
 @pytest.mark.asyncio

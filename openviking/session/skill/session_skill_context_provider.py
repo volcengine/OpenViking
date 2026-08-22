@@ -41,11 +41,14 @@ def parse_skill_extract_file(raw_content: str) -> Dict[str, Any]:
     try:
         parsed = SkillLoader.parse(raw_content)
         return {
+            "memory_type": SESSION_SKILL_MEMORY_TYPE,
             "name": parsed.get("name", ""),
             "description": parsed.get("description", ""),
             "content": parsed.get("content", ""),
             "allowed_tools": parsed.get("allowed_tools", []),
+            "allowed_tools_declared": parsed.get("allowed_tools_declared", False),
             "tags": parsed.get("tags", []),
+            **({"metadata": parsed["metadata"]} if "metadata" in parsed else {}),
         }
     except Exception:
         return parse_memory_file_with_fields(raw_content)

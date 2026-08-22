@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
+from openviking.core.skill_loader import SkillLoader
 from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session import create_session_compressor
@@ -30,6 +32,7 @@ from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.train import (
     Case,
     ExperienceSet,
+    PatchSemanticGradient,
     PolicyApplyResult,
     PolicyPlanItem,
     PolicyUpdatePlan,
@@ -43,6 +46,7 @@ from openviking.session.train import (
     Trajectory,
 )
 from openviking.session.train.components.session_commit import _case_spec_message_to_request
+from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -232,6 +236,245 @@ async def test_v3_skill_only_extraction_submits_gradients_without_agent_memories
         "skill_submitted": 1,
         "skill_uris": [skill_uri],
     }
+
+
+@pytest.mark.parametrize(
+    "skill_case",
+    ["new", "existing"],
+)
+async def test_session_skill_trainer_optimizes_gradients_with_session_skill_schema(
+    monkeypatch, skill_case
+):
+    existing_skill = skill_case == "existing"
+
+    class FakeVLM:
+        model = "test-model"
+
+        def __init__(self):
+            self.messages = []
+
+        async def get_completion_async(self, **kwargs):
+            self.messages.append(list(kwargs["messages"]))
+            return json.dumps(
+                {
+                    "session_skills": [
+                        {
+                            "page_id": 1 if existing_skill else 100,
+                            "skill_name": "code-review",
+                            "description": "Review code changes",
+                            "content": {
+                                "blocks": [
+                                    {
+                                        "search": ("Read changed files." if existing_skill else ""),
+                                        "replace": "Read changed files before commenting.",
+                                    }
+                                ]
+                            },
+                        }
+                    ]
+                }
+            )
+
+    class FakeAsyncAGFS:
+        async def pathlock_acquire_tree(self, path, timeout_secs):
+            del path, timeout_secs
+            return "skill-policy-lease"
+
+        async def pathlock_release(self, lease):
+            assert lease == "skill-policy-lease"
+
+    class FakeVikingFS:
+        def __init__(self, files):
+            self._async_agfs = FakeAsyncAGFS()
+            self.files = files
+            self.write_context_calls = []
+
+        def _uri_to_path(self, uri, ctx=None):
+            del ctx
+            return f"/local/default/{uri.removeprefix('viking://')}"
+
+        async def ls(self, uri, output="original", ctx=None):
+            del ctx
+            assert output == "original"
+            if existing_skill and uri == "viking://user/u/skills":
+                return [
+                    {
+                        "name": "code-review",
+                        "uri": "viking://user/u/skills/code-review",
+                        "isDir": True,
+                    }
+                ]
+            return []
+
+        async def read_file(self, uri, ctx=None):
+            del ctx
+            if uri not in self.files:
+                raise FileNotFoundError(uri)
+            return self.files[uri]
+
+        async def write_context(
+            self,
+            *,
+            uri,
+            content,
+            abstract,
+            overview,
+            content_filename,
+            is_leaf,
+            ctx,
+            lease_ref,
+        ):
+            del abstract, overview, is_leaf, ctx
+            assert content_filename == "SKILL.md"
+            assert lease_ref == "skill-policy-lease"
+            self.write_context_calls.append((uri, lease_ref))
+            self.files[f"{uri}/SKILL.md"] = content
+
+        async def search(self, query, **kwargs):
+            del query, kwargs
+            return []
+
+    class FakeVikingDB:
+        async def enqueue_embedding_msg(self, _message):
+            return True
+
+    vlm = FakeVLM()
+    config = SimpleNamespace(
+        memory=SimpleNamespace(
+            custom_templates_dir="",
+            eager_prefetch=True,
+            experimental_memory_switch=False,
+            link_enabled=False,
+            prefetch_search_topn=5,
+        ),
+        prompts=SimpleNamespace(templates_dir=""),
+        vlm=SimpleNamespace(get_vlm_instance=lambda: vlm),
+    )
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "openviking.prompts.manager.get_openviking_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.extract_loop.get_openviking_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.session_extract_context_provider.get_openviking_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.utils.language.get_openviking_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "openviking.session.train.components.policy_optimizer.get_openviking_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "openviking.utils.skill_processor.get_openviking_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3._skill_trainer_key",
+        lambda _ctx: object(),
+    )
+
+    ctx = _ctx()
+    skill_uri = "viking://user/u/skills/code-review/SKILL.md"
+    existing_skill_data = {
+        "name": "code-review",
+        "description": "Review code changes",
+        "content": "Read changed files.",
+        "allowed_tools": ["Read"],
+        "allowed_tools_declared": True,
+        "metadata": {"vikingbot": {"requires": {"bins": ["git"]}}},
+    }
+    files = {skill_uri: SkillLoader.to_skill_md(existing_skill_data)} if existing_skill else {}
+    fs = FakeVikingFS(files)
+    gradient = PatchSemanticGradient(
+        before_file=(
+            MemoryFile(
+                uri=skill_uri,
+                content="Read changed files.",
+                memory_type="skills",
+                extra_fields={
+                    "memory_type": "skills",
+                    "skill_name": "code-review",
+                    "description": "Review code changes",
+                    "allowed_tools": ["Read"],
+                    "allowed_tools_declared": True,
+                    "metadata": {"vikingbot": {"requires": {"bins": ["git"]}}},
+                },
+            )
+            if existing_skill
+            else None
+        ),
+        after_file=MemoryFile(
+            uri=skill_uri,
+            content="## Workflow\n- Read changed files before commenting.",
+            memory_type="skills",
+            extra_fields={
+                "memory_type": "skills",
+                "skill_name": "code-review",
+                "description": "Review code changes",
+            },
+        ),
+        base_version=None,
+        rationale="Preserve the verified review workflow.",
+        links=[],
+        confidence=0.9,
+        metadata={},
+    )
+    skill_processor = SkillProcessor(vikingdb=FakeVikingDB())
+    skill_processor._generate_overview = AsyncMock(return_value="Review workflow overview")
+    compressor = SessionCompressorV3(
+        vikingdb=None,
+        rollout_analyzer=SimpleNamespace(),
+        skill_processor=skill_processor,
+        streaming_trainer_config=StreamingPolicyTrainerConfig(
+            max_gradients_per_update=1,
+            max_wait_seconds=60,
+        ),
+    )
+    trainer = await compressor._get_session_skill_trainer(
+        viking_fs=fs,
+        ctx=ctx,
+        messages=_messages(),
+        strict_extract_errors=True,
+        archive_uri="viking://user/u/sessions/s1/history/archive_001",
+    )
+
+    try:
+        result = await trainer.submit_gradients([gradient])
+    finally:
+        await trainer.close()
+
+    assert result.apply_result.errors == []
+    assert result.apply_result.written_uris == [skill_uri]
+    assert result.plan.items[0].after_content == "Read changed files before commenting."
+    assert fs.write_context_calls == [("viking://user/u/skills/code-review", "skill-policy-lease")]
+    written_skill = SkillLoader.parse(fs.files[skill_uri])
+    assert written_skill["description"] == "Review code changes"
+    assert written_skill["content"] == "Read changed files before commenting."
+    if existing_skill:
+        assert written_skill["allowed_tools"] == ["Read"]
+        assert written_skill["allowed_tools_declared"] is True
+        assert written_skill["metadata"] == {"vikingbot": {"requires": {"bins": ["git"]}}}
+        assert result.apply_result.updated_policy_set.policies[0].metadata["metadata"] == {
+            "vikingbot": {"requires": {"bins": ["git"]}}
+        }
+    assert result.plan.metadata["chunks"][0]["memory_type"] == "skills"
+    system_prompt = next(
+        message["content"]
+        for messages in vlm.messages
+        for message in messages
+        if message["role"] == "system"
+    )
+    assert '"session_skills"' in system_prompt
 
 
 @pytest.mark.asyncio
