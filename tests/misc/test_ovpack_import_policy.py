@@ -272,6 +272,54 @@ class MissingSidecarBackupVikingFS(FakeBackupVikingFS):
         )
 
 
+class WatchTaskBackupVikingFS(FakeBackupVikingFS):
+    WATCH_CONTROL_FILES = {
+        ".watch_tasks.json": b'{"tasks":[]}',
+        ".watch_tasks.json.bak": b'{"backup":true}',
+        ".watch_tasks.json.tmp": b'{"tmp":true}',
+    }
+
+    def __init__(self) -> None:
+        super().__init__()
+        for name, data in self.WATCH_CONTROL_FILES.items():
+            self.binary_files[f"viking://resources/{name}"] = data
+
+    async def tree(
+        self,
+        uri: str,
+        show_all_hidden: bool = False,
+        node_limit=None,
+        level_limit=None,
+        ctx=None,
+    ):
+        if uri == "viking://resources":
+            entries = [
+                {
+                    "rel_path": "README.md",
+                    "uri": "viking://resources/README.md",
+                    "isDir": False,
+                    "size": 5,
+                }
+            ]
+            entries.extend(
+                {
+                    "rel_path": name,
+                    "uri": f"viking://resources/{name}",
+                    "isDir": False,
+                    "size": len(data),
+                }
+                for name, data in self.WATCH_CONTROL_FILES.items()
+            )
+            return entries
+        return await super().tree(
+            uri,
+            show_all_hidden=show_all_hidden,
+            node_limit=node_limit,
+            level_limit=level_limit,
+            ctx=ctx,
+        )
+
+
 class FakeRestoreVectorVikingFS(FakeVikingFS):
     async def tree(self, uri: str, node_limit=None, level_limit=None, ctx=None):
         self.tree_calls.append(uri)
@@ -690,6 +738,86 @@ async def test_backup_skips_missing_abstract_overviews(
     assert "openviking-backup/files/user/.overview.md" not in names
     assert "user/.overview.md" not in manifest_paths
     assert "user" in manifest_paths
+
+
+@pytest.mark.asyncio
+async def test_backup_excludes_watch_task_control_files(
+    temp_ovpack_path: Path,
+    request_ctx: RequestContext,
+):
+    await backup_ovpack(
+        WatchTaskBackupVikingFS(),
+        str(temp_ovpack_path),
+        ctx=request_ctx,
+    )
+
+    with zipfile.ZipFile(temp_ovpack_path, "r") as zf:
+        names = set(zf.namelist())
+        manifest = json.loads(zf.read("openviking-backup/_ovpack/manifest.json").decode("utf-8"))
+
+    manifest_paths = {entry["path"] for entry in manifest["entries"]}
+    for name in (".watch_tasks.json", ".watch_tasks.json.bak", ".watch_tasks.json.tmp"):
+        assert f"openviking-backup/files/resources/{name}" not in names
+        assert f"resources/{name}" not in manifest_paths
+    assert "openviking-backup/files/resources/README.md" in names
+    assert "resources/README.md" in manifest_paths
+
+
+@pytest.mark.asyncio
+async def test_restore_skips_watch_task_control_files(
+    temp_ovpack_path: Path,
+    request_ctx: RequestContext,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    files = {
+        "resources/README.md": "hello",
+        "resources/.watch_tasks.json": '{"tasks":[]}',
+        "resources/.watch_tasks.json.bak": '{"backup":true}',
+        "resources/.watch_tasks.json.tmp": '{"tmp":true}',
+    }
+    manifest = _manifest_for_files("openviking-backup", files)
+    manifest["root"] = {
+        "name": "openviking-backup",
+        "uri": "viking://",
+        "scope": "root",
+        "package_type": "backup",
+    }
+    manifest["scopes"] = ["resources"]
+    entries_list: list[dict[str, object]] = manifest["entries"]  # type: ignore[assignment]
+    entries_list.insert(1, {"path": "resources", "kind": "directory"})
+    index_data = _set_manifest_index(manifest)
+    entries = {
+        "openviking-backup/": "",
+        "openviking-backup/files/": "",
+        "openviking-backup/files/resources/": "",
+        "openviking-backup/_ovpack/": "",
+        "openviking-backup/_ovpack/index_records.jsonl": index_data.decode("utf-8"),
+        "openviking-backup/_ovpack/manifest.json": json.dumps(manifest),
+    }
+    entries.update(
+        {f"openviking-backup/files/{rel_path}": content for rel_path, content in files.items()}
+    )
+    _write_ovpack(temp_ovpack_path, entries)
+
+    async def noop_vectorization(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "openviking.storage.ovpack.operations._enqueue_direct_vectorization",
+        noop_vectorization,
+    )
+
+    fake_fs = FakeVikingFS()
+    fake_fs.ls = AsyncMock(return_value=[])
+    fake_fs.stat = AsyncMock(side_effect=FileNotFoundError())
+    fake_fs.rm = AsyncMock()
+    result = await restore_ovpack(
+        fake_fs, str(temp_ovpack_path), request_ctx, on_conflict="overwrite"
+    )
+
+    assert result == "viking://"
+    assert fake_fs.written_files == ["viking://resources/README.md"]
+    fake_fs.rm.assert_not_awaited()
 
 
 @pytest.mark.asyncio
