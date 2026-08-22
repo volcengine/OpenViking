@@ -110,6 +110,7 @@ export interface SearchOptions {
   until?: string;
   timeField?: string;
   level?: number[];
+  includeProvenance?: boolean;
   tags?: string[];
 }
 /** Content grep options. */
