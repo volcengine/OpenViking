@@ -145,14 +145,25 @@ when exact category ceilings are required.
 API keys are resolved from environment variables or `~/.openviking/ovcli.conf` and sent as `Authorization: Bearer ...` by both hooks and the MCP proxy. Recall goes through the server-side context face (`POST /api/v1/search/search` with `mode="context"`), falling back to the deprecated `/api/v1/search/recall` on older deployments. `account` and `user` are trusted-mode identity
 headers sent as `X-OpenViking-Account` and `X-OpenViking-User`; leave them empty
 when using API-key mode with user/admin API keys.
-By default the plugin derives a peer from the project directory using Claude's
-project-directory naming rule: every non-letter-or-digit character becomes `-`,
-with no path normalization. For example, `/Users/x/Dev/OpenViking` becomes
-`-Users-x-Dev-OpenViking`. Data-plane memory/resource requests send the
-effective peer as `X-OpenViking-Actor-Peer`; captured session messages store it
-as body `peer_id`. Configure `peerId` or `OPENVIKING_PEER_ID` to override the
+By default the plugin derives a peer from the **stable identity of the
+enclosing Git repository** so the same clone resolves to one peer across
+machines, fresh checkouts, and linked worktrees. Inside a Git repo with an
+`origin` remote, SSH and HTTPS forms of the same remote collapse together
+(`git@github.com:volcengine/OpenViking.git` ≡
+`https://github.com/volcengine/OpenViking.git`) and the main checkout plus
+every linked worktree resolve to the same peer
+(e.g. `git-github-com-volcengine-openviking-b44f5292`). A Git repo without a
+usable remote falls back to a stable local-repo identity shared across linked
+worktrees, and a non-Git directory falls back to the absolute-path slug
+(`/Users/x/Dev/OpenViking` → `-Users-x-Dev-OpenViking`). Credentials are
+stripped before the peer id is formed, so secrets never appear in it.
+Data-plane memory/resource requests send the effective peer as
+`X-OpenViking-Actor-Peer`; captured session messages store it as body
+`peer_id`. Configure `peerId` or `OPENVIKING_PEER_ID` to override the
 workspace-derived peer, or set `workspacePeer=false` /
 `OPENVIKING_WORKSPACE_PEER=0` to turn workspace-derived peers off.
+
+> **Migrating from a path-derived peer**: this default changed from the absolute workspace path to the Git-repo identity. If you have existing path-derived memories — especially under actor-scoped recall, which only sees the current peer — pin the old peer via `OPENVIKING_PEER_ID` / `peerId` before upgrading to avoid stranding data. See the migration steps in [`examples/memory-plugin-shared/README.md`](../memory-plugin-shared/README.md#migrating-from-path-derived-peers).
 
 Recall defaults to the broad mode: global memory, the current workspace, and
 other workspace memories can all be recalled, with other workspaces penalized
