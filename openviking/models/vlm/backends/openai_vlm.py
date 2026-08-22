@@ -19,7 +19,7 @@ try:
 except ImportError:
     openai = None
 
-from openviking.utils.model_retry import retry_async, retry_sync
+from openviking.utils.model_retry import retry_async, retry_deadline_seconds, retry_sync
 
 from ..base import ToolCall, VLMBase, VLMResponse
 from ..registry import DEFAULT_AZURE_API_VERSION
@@ -84,6 +84,14 @@ class OpenAIVLM(VLMBase):
         self._async_client_cache = LoopScopedAsyncClientCache()
         self.api_version = config.get("api_version")
         self.reasoning_effort = config.get("reasoning_effort", "low")
+
+    def _retry_timeout_seconds(self) -> float | None:
+        """Return the retry budget for cancellation-cooperative async clients."""
+        if self.provider == "openai-codex":
+            # Codex delegates to a sync request in asyncio.to_thread, which
+            # cannot be stopped through asyncio cancellation.
+            return None
+        return retry_deadline_seconds(self.timeout, self.max_retries)
 
     def get_client(self):
         """Get sync client"""
@@ -354,6 +362,7 @@ class OpenAIVLM(VLMBase):
             max_retries=self.max_retries,
             logger=logger,
             operation_name="OpenAI VLM async completion",
+            timeout=self._retry_timeout_seconds(),
         )
 
     def _detect_image_format(self, data: bytes) -> str:
@@ -469,4 +478,5 @@ class OpenAIVLM(VLMBase):
             max_retries=self.max_retries,
             logger=logger,
             operation_name="OpenAI VLM async vision completion",
+            timeout=self._retry_timeout_seconds(),
         )

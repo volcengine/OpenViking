@@ -110,7 +110,10 @@ class VLMConfig(BaseModel):
         description=(
             "Per-request HTTP timeout in seconds for VLM API calls. Applied to "
             "the underlying OpenAI/Azure/LiteLLM clients. Increase for slow or "
-            "high-latency endpoints (e.g., DashScope, local inference servers)."
+            "high-latency endpoints (e.g., DashScope, local inference servers). "
+            "Cancellation-cooperative OpenAI-compatible async calls also derive "
+            "an overall retry deadline as (max_retries + 1) * timeout; threaded "
+            "providers such as Codex keep the per-request timeout only."
         ),
     )
 

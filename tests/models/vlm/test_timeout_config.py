@@ -1,16 +1,21 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Tests for ``vlm.timeout`` configuration propagation.
+"""Tests for ``vlm.timeout`` propagation and derived async retry deadlines.
 
 Before this was wired through, ``_build_openai_client_kwargs`` exposed a
 ``timeout`` parameter (#1208) but callers never passed it, so the default
 timeout was always used and end users could not override it via ``ov.conf``.
 These tests lock in that the config value flows through to the underlying
-OpenAI and LiteLLM clients.
+OpenAI and LiteLLM clients. They also cover the cancellation-cooperative retry
+deadline derived by OpenAI-compatible async backends and the threaded Codex
+exception to that policy.
 """
 
+import asyncio
 from unittest import mock
 
+import httpx
+import openai
 import pytest
 from pydantic import ValidationError
 
@@ -137,3 +142,76 @@ def test_codex_vlm_propagates_config_timeout():
         assert vlm.get_completion("hello") == "timeout ok"
 
     assert fake.call_args.kwargs.get("timeout") == 45.0
+
+
+def test_codex_vlm_skips_asyncio_deadline_for_threaded_requests():
+    from openviking.models.vlm.backends.codex_vlm import CodexVLM
+
+    vlm = CodexVLM(
+        {
+            "provider": "openai-codex",
+            "model": "gpt-5.3-codex",
+            "api_key": "oauth-token",
+            "api_base": "https://example.invalid/codex",
+            "timeout": 45.0,
+        }
+    )
+
+    assert vlm._retry_timeout_seconds() is None
+
+
+def test_openai_vlm_retry_deadline_scales_with_attempts():
+    vlm = OpenAIVLM(
+        {
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "api_key": "sk-x",
+            "api_base": "https://example.invalid",
+            "timeout": 10.0,
+            "max_retries": 3,
+        }
+    )
+    assert vlm._retry_timeout_seconds() == 40.0
+
+
+@pytest.mark.asyncio
+async def test_openai_vlm_retry_deadline_cancels_async_transport(monkeypatch):
+    request_started = asyncio.Event()
+    cancellation_seen = asyncio.Event()
+
+    async def handle_request(_request: httpx.Request) -> httpx.Response:
+        request_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancellation_seen.set()
+            raise
+        raise AssertionError("unreachable")
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handle_request))
+    client = openai.AsyncOpenAI(
+        api_key="sk-x",
+        base_url="https://example.invalid/v1",
+        http_client=http_client,
+        max_retries=0,
+    )
+    vlm = OpenAIVLM(
+        {
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "api_key": "sk-x",
+            "api_base": "https://example.invalid/v1",
+            "timeout": 1.0,
+            "max_retries": 0,
+        }
+    )
+    monkeypatch.setattr(vlm, "get_async_client", lambda: client)
+
+    try:
+        with pytest.raises(TimeoutError, match="timed out after 1.0s"):
+            await vlm.get_completion_async("hello")
+    finally:
+        await client.close()
+
+    assert request_started.is_set()
+    assert cancellation_seen.is_set()
