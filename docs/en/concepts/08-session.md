@@ -109,12 +109,14 @@ class Message:
 commit() executes in two phases:
 
 **Phase 1 (synchronous, returns immediately)**:
+
 1. Increment compression_index
 2. Write messages to archive directory (`messages.jsonl`)
 3. Clear current messages list
 4. Return `task_id`
 
 **Phase 2 (asynchronous background)**:
+
 5. Generate structured summary (LLM) → write `.abstract.md` and `.overview.md`
 6. Extract long-term memories
 7. Write `memory_diff.json` (memory change audit log) to archive directory
