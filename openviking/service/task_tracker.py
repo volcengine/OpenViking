@@ -947,6 +947,47 @@ class TaskTracker:
             for t in tasks
         )
 
+    async def get_stats(
+        self,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> Dict[str, int]:
+        """Return task count breakdown for the requested owner filter without full copy overhead."""
+        return await self._dispatcher.run(lambda: self._get_stats_on_owner(account_id, user_id))
+
+    async def _get_stats_on_owner(
+        self,
+        account_id: Optional[str],
+        user_id: Optional[str],
+    ) -> Dict[str, int]:
+        if account_id is not None:
+            self._merge_loaded_tasks(await self._load_all_from_store(account_id, user_id))
+        source = self._cache_snapshot()
+        matching = [t for t in source if self._matches_owner(t, account_id, user_id)]
+        from collections import Counter
+
+        counts = Counter(t.status.value for t in matching)
+        return {
+            "total": len(matching),
+            "completed": counts.get("completed", 0),
+            "pending": counts.get("pending", 0),
+            "running": counts.get("running", 0),
+            "failed": counts.get("failed", 0),
+        }
+
+    def get_grouped_stats(self) -> Dict[str, Dict[str, int]]:
+        """Return a snapshot of task counts grouped by task_type and status."""
+        from collections import defaultdict
+
+        grouped: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))  # type: ignore[assignment]
+        with self._lock:
+            tasks = list(self._tasks.values())
+        for t in tasks:
+            task_type = t.task_type or "unknown"
+            status = t.status.value
+            grouped[task_type][status] += 1
+        return {k: dict(v) for k, v in grouped.items()}
+
     async def _load_for_update(
         self,
         task_id: str,

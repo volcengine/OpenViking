@@ -620,3 +620,81 @@ async def test_session_service_get_commit_task_also_filters_account():
     )
 
     assert other_account_result is None
+
+
+async def test_get_stats_counts_by_owner(tracker: TaskTracker):
+    t1 = await tracker.create("reindex", resource_id="res-1", account_id="acme", user_id="alice")
+    t2 = await tracker.create(
+        "session_commit", resource_id="res-2", account_id="acme", user_id="alice"
+    )
+    await tracker.create("reindex", resource_id="res-3", account_id="acme", user_id="bob")
+    await tracker.start(t1.task_id, account_id="acme", user_id="alice")
+    await tracker.complete(t1.task_id, {"reindexed": 1}, account_id="acme", user_id="alice")
+    await tracker.start(t2.task_id, account_id="acme", user_id="alice")
+    await tracker.fail(t2.task_id, "failed reason", account_id="acme", user_id="alice")
+
+    stats_alice = await tracker.get_stats(account_id="acme", user_id="alice")
+    assert stats_alice == {
+        "total": 2,
+        "completed": 1,
+        "pending": 0,
+        "running": 0,
+        "failed": 1,
+    }
+
+    stats_bob = await tracker.get_stats(account_id="acme", user_id="bob")
+    assert stats_bob == {
+        "total": 1,
+        "completed": 0,
+        "pending": 1,
+        "running": 0,
+        "failed": 0,
+    }
+
+
+async def test_get_grouped_stats(tracker: TaskTracker):
+    t1 = await tracker.create("reindex", resource_id="res-1", account_id="acme", user_id="alice")
+    await tracker.create("session_commit", resource_id="res-2", account_id="acme", user_id="alice")
+    await tracker.complete(t1.task_id, {"done": True}, account_id="acme", user_id="alice")
+
+    grouped = tracker.get_grouped_stats()
+    assert grouped.get("reindex", {}).get("completed") == 1
+    assert grouped.get("session_commit", {}).get("pending") == 1
+
+
+async def test_task_stats_endpoint_roles():
+    from openviking.server.routers.tasks import task_stats
+    from openviking.service.task_store import SYSTEM_TASK_ACCOUNT_ID, SYSTEM_TASK_USER_ID
+
+    tracker = _set_fake_global_tracker()
+    # System task
+    tsys = await tracker.create(
+        "system_work", account_id=SYSTEM_TASK_ACCOUNT_ID, user_id=SYSTEM_TASK_USER_ID
+    )
+    await tracker.complete(
+        tsys.task_id, {"done": 1}, account_id=SYSTEM_TASK_ACCOUNT_ID, user_id=SYSTEM_TASK_USER_ID
+    )
+
+    # User task
+    tuser = await tracker.create("user_work", account_id="acme", user_id="alice")
+    await tracker.start(tuser.task_id, account_id="acme", user_id="alice")
+
+    # User role context
+    user_ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+    user_resp = await task_stats(_ctx=user_ctx)
+    assert user_resp.status == "ok"
+    assert user_resp.result == {
+        "total": 1,
+        "completed": 0,
+        "pending": 0,
+        "running": 1,
+        "failed": 0,
+    }
+
+    # Root role context includes system tasks
+    root_ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.ROOT)
+    root_resp = await task_stats(_ctx=root_ctx)
+    assert root_resp.status == "ok"
+    assert root_resp.result["total"] == 2
+    assert root_resp.result["completed"] == 1
+    assert root_resp.result["running"] == 1
