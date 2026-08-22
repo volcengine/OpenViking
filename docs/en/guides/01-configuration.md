@@ -1379,7 +1379,7 @@ Vector database storage configuration
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `backend` | str | VectorDB backend type: 'local' (file-based), 'http' (remote service), 'volcengine' (cloud VikingDB), 'vikingdb' (private deployment), or 'cuvs' (local storage + GPU dense search) | "local" |
+| `backend` | str | VectorDB backend type: 'local' (file-based), 'http' (remote service), 'volcengine' (cloud VikingDB), 'vikingdb' (private deployment), 'qdrant' (REST), or 'cuvs' (local storage + GPU dense search) | "local" |
 | `name` | str | VectorDB collection name | "context" |
 | `url` | str | Remote service URL for 'http' type (e.g., 'http://localhost:5000') | null |
 | `project_name` | str | Project name (alias project) | "default" |
@@ -1388,6 +1388,7 @@ Vector database storage configuration
 | `sparse_weight` | float | Sparse weight for hybrid vector search, only effective when using hybrid index | 0.0 |
 | `volcengine` | object | 'volcengine' type VikingDB configuration | - |
 | `vikingdb` | object | 'vikingdb' type private deployment configuration | - |
+| `qdrant` | object | Qdrant REST URL, API key, timeout, named vector names, and optional metadata collection name | - |
 | `cuvs` | object | NVIDIA cuVS configuration for the 'cuvs' backend and the opt-in memory-aware auto mode on 'local'; see the [cuVS guide](./16-cuvs.md) | - |
 
 Default local mode
@@ -1419,6 +1420,49 @@ Supports cloud-deployed VikingDB on Volcengine
       }
   }
 }
+```
+</details>
+
+<details>
+<summary><b>Qdrant REST</b></summary>
+
+Qdrant uses the standard-library REST transport; no `qdrant-client` dependency is
+required. Set `sparse_weight` to `0` for dense-only mode, or to a value in
+`(0, 1]` to enable named sparse vectors and client-side weighted RRF hybrid
+search:
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "backend": "qdrant",
+      "url": "http://127.0.0.1:6333",
+      "project": "default",
+      "name": "context",
+      "dimension": 1536,
+      "sparse_weight": 0.5,
+      "qdrant": {
+        "api_key": "optional-key",
+        "timeout_seconds": 10,
+        "dense_vector_name": "vector",
+        "sparse_vector_name": "sparse_vector"
+      }
+    }
+  }
+}
+```
+
+OpenViking stores a metadata marker and sparse term dictionary in a deterministic
+sidecar collection. Existing Qdrant collections without that marker fail closed
+instead of being adopted. URI scope metadata and account/tag filters are retained;
+`Contains` and server-side content grep are unsupported, so grep uses the
+filesystem fallback (`USE_CONTENT_FIELD=False`).
+
+For live coverage, set `QDRANT_URL` and optionally `QDRANT_API_KEY`, then run:
+
+```bash
+QDRANT_URL=http://127.0.0.1:6333 \
+  pytest --confcutdir=tests/storage -q tests/storage/test_qdrant_integration.py
 ```
 </details>
 
