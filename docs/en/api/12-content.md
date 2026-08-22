@@ -452,6 +452,12 @@ curl --get http://localhost:1933/api/v1/content/download \
   --output logo.png
 ```
 
+**CLI**
+
+```bash
+ov get viking://resources/images/logo.png ./logo.png
+```
+
 **Response**
 
 On success, the endpoint returns HTTP `200` with the raw file bytes instead of the standard JSON envelope:
@@ -464,7 +470,7 @@ Content-Disposition: attachment; filename*=UTF-8''logo.png
 <binary body>
 ```
 
-The public SDKs and CLI do not currently expose a dedicated raw-byte download method, so this section shows only the HTTP tab.
+`ov get <uri> <local-path>` downloads through the HTTP API above and writes the file to a local path. The Python, TypeScript, and Go SDKs do not currently expose a dedicated raw-byte download method.
 
 ---
 

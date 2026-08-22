@@ -452,6 +452,12 @@ curl --get http://localhost:1933/api/v1/content/download \
   --output logo.png
 ```
 
+**CLI**
+
+```bash
+ov get viking://resources/images/logo.png ./logo.png
+```
+
 **响应**
 
 成功时返回 HTTP `200` 和文件原始字节，不使用标准 JSON 响应包：
@@ -464,7 +470,7 @@ Content-Disposition: attachment; filename*=UTF-8''logo.png
 <binary body>
 ```
 
-公共 SDK 和 CLI 当前没有独立的原始字节下载方法，因此本节只展示 HTTP Tab。
+`ov get <uri> <local-path>` 通过上述 HTTP API 下载文件并写入本地路径。Python、TypeScript 和 Go SDK 当前没有独立的原始字节下载方法。
 
 ---
 
