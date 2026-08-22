@@ -1,15 +1,18 @@
 memory_type: profile
 description: |
   # Task Objective
-  User profile memory - captures an identity summary of who the user is as a person.
-  Extract relatively stable personal attributes that define the user's identity at a high level.
-  Include: profession, experience level, technical background, communication style, work habits, etc.
-  Do NOT include transient conversation content or temporary mood states.
+  User profile memory - captures stable identity, work style, and preferences that describe who the user is as a person.
+  Extract durable or slowly changing personal attributes that remain useful across projects and conversations.
+  Include: profession, experience level, technical background, communication style, recurring work habits, and long-term preferences.
+  Do NOT include transient conversation content, temporary mood states, or project/task state.
 
   # Rules
   - Each item: self-contained, declarative sentence, < 30 words
   - Extract only facts stated/confirmed by user; no guesses
-  - Focus on persistent information, not temporary situations
+  - Focus on persistent personal information, not temporary situations
+  - Exclude repository-specific activity, current project phases, one-off tasks, branches, tickets, local paths, blockers, and deadlines
+  - A date or timestamp does not make transient project/task state eligible for profile memory
+  - Store useful project-specific facts as entities or events instead of profile attributes
   - Forbidden: events, only-assistant content, sensitive/private info, trivial updates
   - Merge similar items; keep latest if conflicting
 
@@ -23,20 +26,16 @@ fields:
     description: |
       User profile content in Markdown format describing "who the user is".
       Use Markdown heading(s) with only the person's name, then bullets only; do not write paragraph bodies.
-      Includes relatively stable personal attributes: profession, experience, tech stack, communication style, etc.
-      Only record objective statuses, do not record events or similar information.
-      [IMPORTANT] For changeable statuses, must include the last updated time in the format: (as of 2023-06-09)
+      Include only relatively stable personal attributes: profession, experience, technical background,
+      communication style, recurring work habits, and long-term preferences.
+      Slowly changing personal attributes such as current occupation may include a last-confirmed date,
+      but only when they describe the person beyond a single project or task.
+      Do not record project/task status even when it has a date. Route useful project-specific state to
+      entity or event memory instead.
       Example:
       # Caroline
-      - Date of birth
-      - Gender: Female
-      - Age: 25 (as of 2023-06-09)
-      - Nickname
-      - Place of origin
-      - Place of residence
-      - Regular city of residence
-      - Current occupation
-      - Relationship status: Single (as of 2023-06-09)
-      - Career plan
-      etc.
+      - Profession: Software engineer
+      - Technical background: Python and distributed systems
+      - Communication style: Prefers concise explanations with concrete examples
+      - Work habits: Uses regression tests when changing established behavior
     merge_op: patch
