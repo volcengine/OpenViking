@@ -52,3 +52,32 @@ def test_embedding_runtime_config_includes_max_input_tokens():
 def test_embedding_max_input_tokens_validation_rejects_too_small_value():
     with pytest.raises(ValueError):
         _cfg(max_input_tokens=10)
+
+
+# image_vectorization
+#
+# Regression: PR #2460 added an `image_vectorization` config field that selects
+# between `summary_only` (text-only embedding of the VLM summary), `image_only`
+# (multimodal embedding of the image bytes), and `image_and_summary` (both).
+# The field was inadvertently dropped from EmbeddingConfig during the
+# multi-credential refactor in PR #2468, but the consumer in
+# `openviking/utils/embedding_utils.py` still reads it via getattr — meaning
+# the feature became unreachable in user configs (always defaulting to
+# summary_only). These tests pin the field back in place.
+
+
+def test_embedding_image_vectorization_validation_accepts_supported_values():
+    for value in ["summary_only", "image_only", "image_and_summary"]:
+        cfg = _cfg(image_vectorization=value)
+        assert cfg.image_vectorization == value
+
+
+def test_embedding_image_vectorization_defaults_to_summary_only():
+    cfg = _cfg()
+    assert cfg.image_vectorization == "summary_only"
+
+
+@pytest.mark.parametrize("bad_value", ["image", "summary", "both", "auto", ""])
+def test_embedding_image_vectorization_validation_rejects_invalid_values(bad_value):
+    with pytest.raises(ValueError, match="embedding.image_vectorization"):
+        _cfg(image_vectorization=bad_value)
