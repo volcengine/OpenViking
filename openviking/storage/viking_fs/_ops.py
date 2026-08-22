@@ -977,8 +977,10 @@ class _OpsMixin:
                 raw = b""
 
             text = self._decode_bytes(raw)
-        except Exception:
-            raise NotFoundError(uri, "file")
+        except Exception as exc:
+            if is_not_found_error(exc):
+                raise NotFoundError(uri, "file") from exc
+            raise
 
         if offset == 0 and limit == -1:
             return text
@@ -1017,8 +1019,10 @@ class _OpsMixin:
         try:
             raw = self._handle_agfs_read(await self._async_agfs.read(path))
             return raw
-        except Exception:
-            raise NotFoundError(uri, "file")
+        except Exception as exc:
+            if is_not_found_error(exc):
+                raise NotFoundError(uri, "file") from exc
+            raise
 
     async def write_file_bytes(
         self,
