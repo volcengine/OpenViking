@@ -273,21 +273,58 @@ def resolve_client_config(
     )
 
     resolved_url = url or os.getenv("OPENVIKING_URL") or (cli_config.url if cli_config else None)
+    config_matches_target = bool(
+        cli_config
+        and cli_config.url
+        and resolved_url
+        and cli_config.url.rstrip("/") == resolved_url.rstrip("/")
+    )
+    # An ovcli profile is origin-bound.  Never carry API keys, gateway tokens,
+    # identity headers, or custom authorization headers from one configured
+    # endpoint to an explicitly selected endpoint.
+    use_bound_cli_credentials = config_matches_target
     resolved_api_key = (
-        api_key or os.getenv("OPENVIKING_API_KEY") or (cli_config.api_key if cli_config else None)
+        api_key
+        or os.getenv("OPENVIKING_API_KEY")
+        or (
+            cli_config.api_key
+            if use_bound_cli_credentials and cli_config is not None
+            else None
+        )
     )
     resolved_account = (
-        account or os.getenv("OPENVIKING_ACCOUNT") or (cli_config.account if cli_config else None)
+        account
+        or os.getenv("OPENVIKING_ACCOUNT")
+        or (
+            cli_config.account
+            if use_bound_cli_credentials and cli_config is not None
+            else None
+        )
     )
     resolved_user = (
-        user or os.getenv("OPENVIKING_USER") or (cli_config.user if cli_config else None)
+        user
+        or os.getenv("OPENVIKING_USER")
+        or (
+            cli_config.user
+            if use_bound_cli_credentials and cli_config is not None
+            else None
+        )
     )
     resolved_actor_peer_id = (
         actor_peer_id
         or os.getenv("OPENVIKING_ACTOR_PEER_ID")
-        or (cli_config.actor_peer_id if cli_config else None)
+        or (
+            cli_config.actor_peer_id
+            if use_bound_cli_credentials and cli_config is not None
+            else None
+        )
     )
-    if resolved_actor_peer_id is None and cli_config is not None and cli_config.agent_id:
+    if (
+        resolved_actor_peer_id is None
+        and use_bound_cli_credentials
+        and cli_config is not None
+        and cli_config.agent_id
+    ):
         resolved_actor_peer_id = cli_config.agent_id
 
     if timeout is not None:
@@ -296,21 +333,22 @@ def resolve_client_config(
         env_timeout = os.getenv("OPENVIKING_TIMEOUT")
         if env_timeout:
             resolved_timeout = float(env_timeout)
-        elif cli_config is not None:
+        elif use_bound_cli_credentials and cli_config is not None:
             resolved_timeout = cli_config.timeout
         else:
             resolved_timeout = 60.0
 
     resolved_profile_enabled = bool(profile_enabled)
-    if profile_enabled is None and cli_config is not None:
+    if profile_enabled is None and use_bound_cli_credentials and cli_config is not None:
         resolved_profile_enabled = cli_config.profile
 
     resolved_extra_headers = dict(extra_headers) if extra_headers is not None else {}
-    if extra_headers is None and cli_config is not None:
+    if extra_headers is None and use_bound_cli_credentials and cli_config is not None:
         resolved_extra_headers = dict(cli_config.extra_headers)
     resolved_gateway_token = None
     if (
-        cli_config is not None
+        use_bound_cli_credentials
+        and cli_config is not None
         and cli_config.url
         and resolved_url
         and cli_config.url.rstrip("/") == resolved_url.rstrip("/")
@@ -318,7 +356,7 @@ def resolve_client_config(
         resolved_gateway_token = cli_config.gateway_token
 
     resolved_upload_mode = upload_mode
-    if resolved_upload_mode is None and cli_config is not None:
+    if resolved_upload_mode is None and use_bound_cli_credentials and cli_config is not None:
         resolved_upload_mode = cli_config.upload_mode
 
     if not resolved_url:

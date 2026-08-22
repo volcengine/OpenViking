@@ -1551,8 +1551,9 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
     "auth_mode": "api_key",
     "root_api_key": "your-secret-root-key",
     "profile_enabled": false,
-    "cors_origins": ["*"],
+    "cors_origins": ["https://studio.example.com"],
     "public_base_url": "https://ov.example.com",
+    "webdav_max_body_bytes": 16777216,
     "upload_signed_ttl_seconds": 600,
     "temp_upload": {
       "default_mode": "local",
@@ -1582,8 +1583,9 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 | `auth_mode` | str | Authentication mode: `"api_key"` or `"trusted"`. Default is `"api_key"` | `"api_key"` |
 | `root_api_key` | str | Root API key for multi-tenant auth in `api_key` mode. In `trusted` mode it is optional on localhost, but required for any non-localhost deployment; it does not become the source of user identity | `null` |
 | `profile_enabled` | bool | Whether to allow request-scoped cProfile via `profile=1` on HTTP requests. When disabled, the server ignores that query parameter. When enabled, the CLI can display the returned `profile`, while the Python HTTP client currently triggers profiling but does not automatically attach the top-level `profile` field to most SDK return values. | `false` |
-| `cors_origins` | list | Allowed CORS origins | `["*"]` |
-| `public_base_url` | str | Public-facing base URL emitted in MCP-issued upload instructions. Resolution order: env var `OPENVIKING_PUBLIC_BASE_URL` → this field → `X-Forwarded-Host`/`X-Forwarded-Proto` request headers → `Host` request header → listen-address fallback. Set this (or the env var) when the server runs behind a reverse proxy that does not forward `X-Forwarded-*` headers. | `null` |
+| `cors_origins` | list | Allowed CORS origins. The default is an empty allowlist. A public bind address requires one or more explicit origins and rejects wildcards. | `[]` |
+| `public_base_url` | str | Canonical public origin emitted in MCP-issued upload instructions. Resolution order is env var `OPENVIKING_PUBLIC_BASE_URL` → this field. A public bind address requires one of them; request headers are never used as a fallback. | `null` |
+| `webdav_max_body_bytes` | int | Maximum accepted WebDAV request body, in bytes. Oversize requests are rejected before parsing. | `16777216` (16 MiB) |
 | `upload_signed_ttl_seconds` | int | TTL in seconds for the one-shot tokens minted by the MCP `add_resource` tool for local-file uploads via `POST /api/v1/resources/temp_upload?token=...`. | `600` (10 minutes) |
 | `temp_upload.default_mode` | str | Server-side default for `POST /api/v1/resources/temp_upload` when the client does not send `upload_mode`: `"local"` (per-instance disk, current single-node behavior) or `"shared"` (distributed shared store usable across replicas). New shared uploads are stored in internal `viking://upload/<created_at_ms>-<uuid>/content` and `meta` objects, and can be consumed repeatedly for `ttl_seconds`. | `"local"` |
 | `temp_upload.shared_max_size_bytes` | int | Maximum size accepted in `shared` mode, in bytes. Requests above this size are rejected before object-store write. | `536870912` (512 MiB) |
@@ -1874,7 +1876,7 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
     "host": "127.0.0.1",
     "port": 1933,
     "root_api_key": "string",
-    "cors_origins": ["*"]
+    "cors_origins": ["https://studio.example.com"]
   }
 }
 ```

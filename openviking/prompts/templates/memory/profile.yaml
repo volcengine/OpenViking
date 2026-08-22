@@ -2,6 +2,7 @@ memory_type: profile
 description: |
   # Task Objective
   User profile memory - captures an identity summary of who the user is as a person.
+  Capture identity, work style, and preferences that remain stable over time.
   Extract relatively stable personal attributes that define the user's identity at a high level.
   Include: profession, experience level, technical background, communication style, work habits, etc.
   Do NOT include transient conversation content or temporary mood states.

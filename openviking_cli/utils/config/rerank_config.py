@@ -9,7 +9,7 @@ class RerankConfig(BaseModel):
     """Configuration for rerank API. Supports VikingDB, Cohere, OpenAI-compatible, and LiteLLM providers."""
 
     provider: Optional[str] = Field(
-        default=None,
+        default="vikingdb",
         description="Rerank provider: 'vikingdb', 'cohere', 'openai', or 'litellm'. Auto-detected from config if omitted.",
     )
 
@@ -60,7 +60,12 @@ class RerankConfig(BaseModel):
 
     def _effective_provider(self) -> Optional[str]:
         """Auto-detect provider from config fields when not explicitly set."""
-        if self.provider:
+        # Keep the public legacy default (``provider == 'vikingdb'``) without
+        # treating an empty config as an available VikingDB client.
+        if self.provider and (
+            self.provider.lower() != "vikingdb"
+            or "provider" in self.model_fields_set
+        ):
             return self.provider.lower()
         if self.api_key and self.api_base:
             return "openai"

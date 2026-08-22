@@ -14,8 +14,8 @@ from utils.test_utils import (
     RetryManager,
     SessionIdManager,
     SmartWaiter,
-    TestData,
-    TestDataManager,
+    ScenarioData,
+    ScenarioDataManager,
     get_default_data_manager,
 )
 
@@ -34,7 +34,7 @@ class BaseOpenClawCLITest(unittest.TestCase):
     """
 
     session_manager: SessionIdManager = SessionIdManager()
-    data_manager: TestDataManager = get_default_data_manager()
+    data_manager: ScenarioDataManager = get_default_data_manager()
 
     @classmethod
     def setUpClass(cls):
@@ -411,7 +411,7 @@ class BaseOpenClawCLITest(unittest.TestCase):
         )
         self.assertTrue(success, msg or "未在任何关键词组中找到匹配")
 
-    def get_test_data(self, name: str) -> TestData:
+    def get_test_data(self, name: str) -> ScenarioData:
         """
         获取测试数据
 
@@ -419,7 +419,7 @@ class BaseOpenClawCLITest(unittest.TestCase):
             name: 数据名称
 
         Returns:
-            TestData: 测试数据
+            ScenarioData: 测试数据
         """
         return self.data_manager.get_data(name)
 

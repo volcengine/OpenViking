@@ -35,12 +35,15 @@ class VikingURI:
 
     SCHEME = "viking"
     # SCOPES that can be listed in root directory (ov ls)
+    # Account-root enumeration is intentionally narrower than the set of
+    # addressable public namespaces: shared agent data is accessed through its
+    # explicit ``viking://agent/skills`` root and must not leak into a tenant's
+    # account-root listing.
     LISTABLE_SCOPES = {
         "resources",
         "user",
-        "agent",
     }
-    PUBLIC_SCOPES = frozenset(LISTABLE_SCOPES)
+    PUBLIC_SCOPES = frozenset({"resources", "user", "agent"})
     LEGACY_SCOPES = frozenset({"session"})
     INTERNAL_SCOPES = frozenset({"temp", "queue", "upload"})
     # Server-side alias for the caller's user namespace root. Only valid as segment 0,

@@ -528,8 +528,14 @@ class OpenVikingConfigSingleton:
     _initializing: bool = False
 
     @classmethod
-    def get_instance(cls) -> OpenVikingConfig:
+    def get_instance(cls, workspace_override: Optional[str] = None) -> OpenVikingConfig:
         """Get the global singleton instance.
+
+        ``workspace_override`` is applied to the decoded configuration before
+        Pydantic validates ``StorageConfig``.  This is required for embedded
+        clients: ``StorageConfig`` creates its workspace during validation, so
+        applying the override afterwards can already have attempted to create a
+        container-only path such as ``/app``.
 
         Raises FileNotFoundError if no config file is found.
         Raises RuntimeError if called re-entrantly during initialization.
@@ -548,7 +554,9 @@ class OpenVikingConfigSingleton:
                             None, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF
                         )
                         if config_path is not None:
-                            cls._instance = cls._load_from_file(str(config_path))
+                            cls._instance = cls._load_from_file(
+                                str(config_path), workspace_override=workspace_override
+                            )
                         else:
                             default_path_user = DEFAULT_CONFIG_DIR / DEFAULT_OV_CONF
                             default_path_system = SYSTEM_CONFIG_DIR / DEFAULT_OV_CONF
@@ -603,8 +611,10 @@ class OpenVikingConfigSingleton:
         return cls._instance
 
     @classmethod
-    def _load_from_file(cls, config_file: str) -> "OpenVikingConfig":
-        """Load configuration from JSON config file."""
+    def _load_from_file(
+        cls, config_file: str, workspace_override: Optional[str] = None
+    ) -> "OpenVikingConfig":
+        """Load JSON config, applying an embedded workspace before validation."""
         try:
             config_path = Path(config_file)
             if not config_path.exists():
@@ -617,6 +627,16 @@ class OpenVikingConfigSingleton:
             # Unset variables are left unchanged by expandvars().
             raw = os.path.expandvars(raw)
             config_data = json.loads(raw)
+
+            if workspace_override is not None:
+                if not isinstance(config_data, dict):
+                    raise ValueError("OpenViking configuration must be a JSON object")
+                storage_data = config_data.setdefault("storage", {})
+                if not isinstance(storage_data, dict):
+                    raise ValueError("OpenViking configuration 'storage' must be an object")
+                storage_data["workspace"] = str(
+                    Path(workspace_override).expanduser().resolve()
+                )
 
             return OpenVikingConfig.from_dict(config_data)
         except json.JSONDecodeError as e:
@@ -693,7 +713,9 @@ def initialize_openviking_config(
         ValueError: If the resulting configuration is invalid
         FileNotFoundError: If no config file is found
     """
-    config = get_openviking_config()
+    config = OpenVikingConfigSingleton.get_instance(
+        workspace_override=path if path else None
+    )
 
     if user:
         # Set user if provided, like a email address or a account_id

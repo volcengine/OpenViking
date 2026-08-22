@@ -45,7 +45,12 @@ def _patch_to_thread(monkeypatch, module) -> list[tuple[Callable[..., Any], tupl
         calls.append((func, args, kwargs))
         return func(*args, **kwargs)
 
-    monkeypatch.setattr(module.asyncio, "to_thread", fake_to_thread)
+    # Parser modules import the shared stdlib ``asyncio`` module. Patching its
+    # attribute in place would also intercept unrelated ``asyncio.to_thread``
+    # calls made by other components during a full-suite run. Replace only the
+    # parser module's reference so this test records the conversion boundary it
+    # owns, without changing process-global asyncio behavior.
+    monkeypatch.setattr(module, "asyncio", SimpleNamespace(to_thread=fake_to_thread))
     return calls
 
 

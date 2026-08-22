@@ -17,9 +17,10 @@ test = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "."]
+testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
+pythonpath = [".", "utils"]
 addopts = "-v --tb=short"
 log_cli = true
 log_cli_level = "INFO"

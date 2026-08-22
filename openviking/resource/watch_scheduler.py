@@ -116,13 +116,29 @@ class WatchScheduler:
 
         self._running = False
 
-        if self._scheduler_task:
-            self._scheduler_task.cancel()
+        scheduler_task = self._scheduler_task
+        self._scheduler_task = None
+        if scheduler_task:
             try:
-                await self._scheduler_task
-            except asyncio.CancelledError:
-                pass
-            self._scheduler_task = None
+                current_loop = asyncio.get_running_loop()
+            except RuntimeError:  # pragma: no cover - stop is normally awaited
+                current_loop = None
+            task_loop = scheduler_task.get_loop()
+            if task_loop is current_loop:
+                scheduler_task.cancel()
+                try:
+                    await scheduler_task
+                except asyncio.CancelledError:
+                    pass
+            elif not scheduler_task.done():
+                # A singleton can be reset from a different pytest/application
+                # loop after a cancellation.  Never await a foreign-loop task:
+                # request cancellation on its owner loop and finish local
+                # cleanup without leaking a cross-loop Future.
+                if task_loop.is_running():
+                    task_loop.call_soon_threadsafe(scheduler_task.cancel)
+                elif not task_loop.is_closed():
+                    scheduler_task.cancel()
 
         # Clean up WatchManager
         if self._watch_manager:

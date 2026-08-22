@@ -7,6 +7,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 # Add parent directory to path to import openviking
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -62,7 +64,7 @@ def test_ignore_dirs_compliance():
         else:
             print(f"  ✗ {dir_name} (missing)")
 
-    return all_present
+    assert all_present, "one or more required directories are not ignored"
 
 
 def test_ignore_extensions_compliance():
@@ -108,7 +110,7 @@ def test_ignore_extensions_compliance():
         print("  ✗ .md files ARE in IGNORE_EXTENSIONS (will be ignored - this may be incorrect)")
         missing_count += 1
 
-    return missing_count == 0
+    assert missing_count == 0, "one or more required extensions have incorrect handling"
 
 
 def test_file_type_detection():
@@ -140,7 +142,7 @@ def test_file_type_detection():
             print(f"  ✗ {file_path}: {detected_type} (expected: {expected_type})")
             all_correct = False
 
-    return all_correct
+    assert all_correct, "one or more file type classifications are incorrect"
 
 
 def test_symbolic_link_handling():
@@ -158,15 +160,13 @@ def test_symbolic_link_handling():
     if hasattr(os.path, "islink"):
         print("  ✓ os.path.islink is available")
     else:
-        print("  ✗ os.path.islink not available")
-        return False
+        pytest.fail("os.path.islink not available")
 
     # Check that os.readlink is imported
     if hasattr(os, "readlink"):
         print("  ✓ os.readlink is available")
     else:
-        print("  ✗ os.readlink not available")
-        return False
+        pytest.fail("os.readlink not available")
 
     print("\nSymbolic link handling should:")
     print("  1. Detect symbolic links using os.path.islink()")
@@ -174,7 +174,8 @@ def test_symbolic_link_handling():
     print("  3. Log the symbolic link and target path")
     print("  4. Skip uploading the symbolic link")
 
-    return True
+    # The assertions above are the test contract; no boolean return value is
+    # needed by pytest.
 
 
 def main():
@@ -196,7 +197,7 @@ def main():
         try:
             result = test_func()
             results.append((test_name, result))
-            status = "PASS" if result else "FAIL"
+            status = "PASS" if result is not False else "FAIL"
             print(f"\n{test_name}: {status}")
         except Exception as e:
             print(f"\n{test_name}: ERROR - {e}")
@@ -206,11 +207,11 @@ def main():
     print("Summary")
     print("=" * 60)
 
-    passed = sum(1 for _, result in results if result)
+    passed = sum(1 for _, result in results if result is not False)
     total = len(results)
 
     for test_name, result in results:
-        status = "✓ PASS" if result else "✗ FAIL"
+        status = "✓ PASS" if result is not False else "✗ FAIL"
         print(f"{status}: {test_name}")
 
     print(f"\nTotal: {passed}/{total} tests passed")

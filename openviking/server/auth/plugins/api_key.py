@@ -41,16 +41,26 @@ def _api_key_root_can_access_path(path: str) -> bool:
     return False
 
 
-def _remove_header(request: Request, name: bytes) -> None:
-    """Remove a header from the underlying request scope.
+def _reject_identity_assertion_headers(
+    x_openviking_account: Optional[str],
+    x_openviking_user: Optional[str],
+) -> None:
+    """Reject caller-controlled tenant assertions in key-authenticated mode.
 
-    Starlette's Headers object is immutable; we mutate the raw scope list
-    so downstream middleware and handlers do not see the header.
+    The account and user headers are assertions, not metadata.  Silently
+    dropping them made malformed or compromised clients appear successful and
+    allowed callers to confuse the request they signed with the request the
+    server authorized.  Trusted mode is the explicit opt-in path for these
+    headers; API-key and OAuth identities are bound to their credential.
     """
-    scope_headers = request.scope.get("headers", [])
-    request.scope["headers"] = [
-        (key, value) for key, value in scope_headers if key.lower() != name.lower()
-    ]
+    if x_openviking_account:
+        raise PermissionDeniedError(
+            "X-OpenViking-Account cannot override an API-key or OAuth identity."
+        )
+    if x_openviking_user:
+        raise PermissionDeniedError(
+            "X-OpenViking-User cannot override an API-key or OAuth identity."
+        )
 
 
 class ApiKeyAuthPlugin(AuthPlugin):
@@ -94,13 +104,7 @@ class ApiKeyAuthPlugin(AuthPlugin):
         identity.account_id = identity.account_id or "default"
         identity.user_id = identity.user_id or "default"
 
-        # Silently ignore identity assertion headers in api_key mode.
-        # Older clients may send these headers out of habit; clearing them
-        # avoids breaking compatibility without weakening security.
-        if x_openviking_account:
-            _remove_header(request, b"x-openviking-account")
-        if x_openviking_user:
-            _remove_header(request, b"x-openviking-user")
+        _reject_identity_assertion_headers(x_openviking_account, x_openviking_user)
 
         return identity
 
@@ -163,11 +167,7 @@ class ApiKeyAuthPlugin(AuthPlugin):
                     "please re-authorize the client."
                 )
 
-        # Silently ignore identity assertion headers in api_key mode.
-        if x_openviking_account:
-            _remove_header(request, b"x-openviking-account")
-        if x_openviking_user:
-            _remove_header(request, b"x-openviking-user")
+        _reject_identity_assertion_headers(x_openviking_account, x_openviking_user)
 
         return ResolvedIdentity(
             role=role,

@@ -104,8 +104,11 @@ config:
     # Required when host is 0.0.0.0. Prefer setting this via an environment
     # variable placeholder plus extraEnv/Secret, e.g. ${OPENVIKING_ROOT_API_KEY}.
     root_api_key: null
-    cors_origins:
-      - "*"
+    # A public bind fails closed until operators explicitly set the real Studio
+    # origin(s) and canonical HTTPS endpoint for their deployment.
+    cors_origins: []
+    public_base_url: ""
+    webdav_max_body_bytes: 16777216
   embedding:
     dense:
       api_base: "https://ark.cn-beijing.volces.com/api/v3"

@@ -318,6 +318,7 @@ def main():
                 host=config.host,
                 port=config.port,
                 workers=workers,
+                ws="websockets-sansio",
                 timeout_keep_alive=config.timeout_keep_alive,
                 log_config=None,
             )
@@ -326,6 +327,7 @@ def main():
                 app,
                 host=config.host,
                 port=config.port,
+                ws="websockets-sansio",
                 timeout_keep_alive=config.timeout_keep_alive,
                 log_config=None,
             )

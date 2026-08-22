@@ -405,8 +405,9 @@ async def test_sdk_find(http_client):
     await client.add_resource(path=str(f), reason="search test", wait=True)
 
     result = await client.find(query="sample document", limit=5)
-    assert hasattr(result, "resources")
-    assert hasattr(result, "total")
+    assert isinstance(result, dict)
+    assert isinstance(result["resources"], list)
+    assert isinstance(result["total"], int)
 
 
 async def test_sdk_find_accepts_tags(http_client):
@@ -417,7 +418,7 @@ async def test_sdk_find_accepts_tags(http_client):
     await client.add_resource(path=str(f), reason="find tags test", wait=True)
 
     result = await client.find(query="sample document", limit=5, tags=["team=search"])
-    assert hasattr(result, "resources")
+    assert isinstance(result["resources"], list)
 
 
 async def test_sdk_search_accepts_tags(http_client):
@@ -428,7 +429,7 @@ async def test_sdk_search_accepts_tags(http_client):
     await client.add_resource(path=str(f), reason="search tags test", wait=True)
 
     result = await client.search(query="sample document", limit=5, tags=["team=search"])
-    assert hasattr(result, "resources")
+    assert isinstance(result["resources"], list)
 
 
 async def test_sdk_set_tags_accepts_tags(http_client):
@@ -495,7 +496,7 @@ async def test_sdk_full_workflow(http_client):
 
     # Search
     find_result = await client.find(query="sample", limit=3)
-    assert find_result.total >= 0
+    assert find_result["total"] >= 0
 
     # List contents (the URI is a directory)
     children = await client.ls(uri, simple=True)

@@ -100,7 +100,11 @@ description: uploaded skill with Windows-style zip paths
     assert body["status"] == "ok"
 
     script_uri = f"{body['result']['uri']}/scripts/check_bounding_boxes.py"
-    read_resp = await client.get("/api/v1/content/read", params={"uri": script_uri})
+    # ``raw=true`` is the byte-exact contract; the default reader may normalize
+    # text line endings before returning JSON content.
+    read_resp = await client.get(
+        "/api/v1/content/read", params={"uri": script_uri, "raw": "true"}
+    )
     assert read_resp.status_code == 200, read_resp.text
     assert read_resp.json()["result"] == "print('ok')\n"
 

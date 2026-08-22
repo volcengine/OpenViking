@@ -21,6 +21,7 @@ from openviking.server.identity import RequestContext
 from openviking.storage.internal_names import WEBDAV_RESERVED_FILENAMES
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
+from openviking_cli.utils import get_logger
 from openviking_cli.utils.uri import VikingURI
 
 router = APIRouter(prefix="/webdav/resources", tags=["webdav"])
@@ -28,6 +29,9 @@ router = APIRouter(prefix="/webdav/resources", tags=["webdav"])
 _DAV_NAMESPACE = "DAV:"
 _WEBDAV_METHODS = "OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE, MKCOL, MOVE"
 _TEXT_MEDIA_FALLBACK = "text/plain; charset=utf-8"
+_DEFAULT_MAX_BODY_BYTES = 16 * 1024 * 1024
+
+logger = get_logger(__name__)
 
 
 def _webdav_headers() -> dict[str, str]:
@@ -40,6 +44,43 @@ def _webdav_headers() -> dict[str, str]:
 
 def _error(status_code: int, message: str) -> PlainTextResponse:
     return PlainTextResponse(message, status_code=status_code, headers=_webdav_headers())
+
+
+def _webdav_max_body_bytes(request: Request) -> int:
+    config = getattr(request.app.state, "config", None)
+    value = getattr(config, "webdav_max_body_bytes", _DEFAULT_MAX_BODY_BYTES)
+    return int(value)
+
+
+def _log_body_limit_rejection(request: Request, *, limit: int, size: int, declared: bool) -> None:
+    logger.warning(
+        "Rejected oversized WebDAV PUT path=%s limit=%d size=%d declared=%s",
+        request.url.path,
+        limit,
+        size,
+        declared,
+    )
+
+
+async def _read_limited_body(request: Request, limit: int) -> Optional[bytes]:
+    """Read one request stream without retaining more than the configured limit."""
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            declared_size = int(content_length)
+        except ValueError:
+            return None
+        if declared_size < 0 or declared_size > limit:
+            _log_body_limit_rejection(request, limit=limit, size=max(declared_size, 0), declared=True)
+            return None
+
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > limit:
+            _log_body_limit_rejection(request, limit=limit, size=len(body) + len(chunk), declared=False)
+            return None
+        body.extend(chunk)
+    return bytes(body)
 
 
 def _normalized_resource_path(resource_path: str) -> str:
@@ -312,7 +353,9 @@ async def put(
     if not normalized_path:
         return _error(405, "PUT requires a file path")
 
-    raw_body = await request.body()
+    raw_body = await _read_limited_body(request, _webdav_max_body_bytes(request))
+    if raw_body is None:
+        return _error(413, "WebDAV request body exceeds the configured size limit")
     try:
         content = raw_body.decode("utf-8")
     except UnicodeDecodeError:

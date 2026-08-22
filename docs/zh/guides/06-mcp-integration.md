@@ -168,13 +168,11 @@ claude mcp add --transport http openviking \
 
 #### 必须配置 `OPENVIKING_PUBLIC_BASE_URL` 的场景
 
-工具响应里给出的上传 URL,server 端按以下顺序解析:
+对于公网部署，工具响应里的上传 URL 只能从显式配置的规范 origin 按以下顺序解析：
 
 1. 环境变量 `OPENVIKING_PUBLIC_BASE_URL`
 2. `ov.conf` 中的 `server.public_base_url`
-3. 请求头 `X-Forwarded-Host` / `X-Forwarded-Proto`(由反代链转发)
-4. 请求头 `Host`(直连场景)
-5. 监听地址兜底 `http://{host}:{port}`
+仅限回环地址的开发环境仍可将请求头和监听地址作为兼容兜底；它们绝不能作为公网部署的信任锚点。
 
 只要 server 部署在反向代理(nginx / cloud LB / k8s ingress)后,**强烈建议显式配置 `OPENVIKING_PUBLIC_BASE_URL`**。后两层是兜底推断,在以下情况会失败:
 

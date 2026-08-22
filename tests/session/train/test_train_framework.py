@@ -622,6 +622,67 @@ async def test_pipeline_lifecycle_hooks_receive_report_events():
 
 
 @pytest.mark.asyncio
+async def test_pipeline_allows_analyzer_to_supply_training_evaluation_after_rollout_hook():
+    class UnevaluatedExecutor(DummyExecutor):
+        async def execute(self, cases, policy_set, context):
+            rollouts = await super().execute(cases, policy_set, context)
+            for rollout in rollouts:
+                rollout.evaluation = None
+            return rollouts
+
+    pipeline = OfflinePolicyOptimizationPipeline(
+        snapshotter=DummySnapshotter(),
+        rollout_executor=UnevaluatedExecutor(),
+        rollout_analyzer=DummyAnalyzer(),
+        gradient_estimator=DummyEstimator(),
+        policy_optimizer=DummyOptimizer(),
+        policy_updater=DummyUpdater(),
+    )
+
+    result = await pipeline.train(
+        case_loader=ListCaseLoader([_case()]),
+        policy_set=_policy_set(),
+        context=PipelineContext(),
+    )
+
+    # The pre-training rollout hook cannot report an evaluation it has not
+    # received yet, but the completed epoch report must use analyzer output.
+    train_report = result.metadata["train_reports"][0]
+    assert train_report["train_rollout"] is None
+    assert train_report["train_eval"]["case_count"] == 1
+    assert train_report["train_eval"]["average_reward"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_pipeline_eval_uses_analyzer_when_executor_has_no_evaluation():
+    class UnevaluatedExecutor(DummyExecutor):
+        async def execute(self, cases, policy_set, context):
+            rollouts = await super().execute(cases, policy_set, context)
+            for rollout in rollouts:
+                rollout.evaluation = None
+            return rollouts
+
+    pipeline = OfflinePolicyOptimizationPipeline(
+        snapshotter=DummySnapshotter(),
+        rollout_executor=UnevaluatedExecutor(),
+        rollout_analyzer=DummyAnalyzer(),
+        gradient_estimator=DummyEstimator(),
+        policy_optimizer=DummyOptimizer(),
+        policy_updater=DummyUpdater(),
+    )
+
+    result = await pipeline.eval(
+        case_loader=ListCaseLoader([_case()]),
+        policy_set=_policy_set(),
+        context=PipelineContext(),
+    )
+
+    assert result.metadata["analysis_count"] == 1
+    assert result.analyses[0].evaluation.score == 0.0
+    assert result.analyses[0].metadata["rollout"].evaluation is None
+
+
+@pytest.mark.asyncio
 async def test_policy_optimization_pipeline_trains_from_external_rollouts_without_executor():
     snapshotter = DummySnapshotter()
     executor = DummyExecutor()

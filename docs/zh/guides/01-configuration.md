@@ -1633,8 +1633,9 @@ openviking add-resource ./docs --exclude "*.tmp"
     "auth_mode": "api_key",
     "root_api_key": "your-secret-root-key",
     "profile_enabled": false,
-    "cors_origins": ["*"],
+    "cors_origins": ["https://studio.example.com"],
     "public_base_url": "https://ov.example.com",
+    "webdav_max_body_bytes": 16777216,
     "upload_signed_ttl_seconds": 600,
     "temp_upload": {
       "default_mode": "local",
@@ -1664,8 +1665,9 @@ openviking add-resource ./docs --exclude "*.tmp"
 | `auth_mode` | str | 认证模式：`"api_key"` 或 `"trusted"`。默认值为 `"api_key"` | `"api_key"` |
 | `root_api_key` | str | Root API Key。在 `api_key` 模式下启用多租户认证；在 `trusted` 模式下它只是可选附加保护，不负责解析普通用户身份 | `null` |
 | `profile_enabled` | bool | 是否允许 HTTP 请求通过 `profile=1` 开启请求级 cProfile。关闭时服务端会忽略该请求参数；开启后，CLI 可以显示返回的 `profile`，而 Python HTTP client 默认只触发服务端 profile，不会把顶层 `profile` 字段自动附着到大多数 SDK 返回值上。 | `false` |
-| `cors_origins` | list | CORS 允许的来源 | `["*"]` |
-| `public_base_url` | str | MCP `add_resource` 工具向客户端返回的上传指令里使用的对外可见 base URL。解析顺序：环境变量 `OPENVIKING_PUBLIC_BASE_URL` → 本字段 → 请求头 `X-Forwarded-Host` / `X-Forwarded-Proto` → 请求头 `Host` → 监听地址兜底。当 server 部署在反向代理后且代理不转发 `X-Forwarded-*` 时，请显式设置本字段（或环境变量）。 | `null` |
+| `cors_origins` | list | CORS 允许的来源。默认值为空白名单；公网绑定地址必须配置一个或多个明确来源，且拒绝通配符。 | `[]` |
+| `public_base_url` | str | MCP `add_resource` 上传指令中使用的规范对外 origin。解析顺序为环境变量 `OPENVIKING_PUBLIC_BASE_URL` → 本字段。公网绑定地址必须配置其中之一，且不会回退到请求头。 | `null` |
+| `webdav_max_body_bytes` | int | WebDAV 请求体允许的最大字节数。超出限制的请求会在解析前被拒绝。 | `16777216`（16 MiB） |
 | `upload_signed_ttl_seconds` | int | MCP `add_resource` 为本地文件上传 mint 的一次性 token 的过期时间（秒），走 `POST /api/v1/resources/temp_upload?token=...`。 | `600`（10 分钟） |
 | `temp_upload.default_mode` | str | `POST /api/v1/resources/temp_upload` 的服务端默认模式（客户端未显式传 `upload_mode` 时使用）：`"local"`（仅当前实例本地磁盘，单机默认行为）或 `"shared"`（分布式共享存储，多副本部署可跨实例消费）。新的 shared 上传会固定写入内部 `viking://upload/<created_at_ms>-<uuid>/content` 和 `meta` 对象，在 `ttl_seconds` 指定的时间内可重复消费。 | `"local"` |
 | `temp_upload.shared_max_size_bytes` | int | `shared` 模式下接受的最大文件大小（字节）。超过此阈值的请求会在写入对象存储之前被拒绝。 | `536870912`（512 MiB） |

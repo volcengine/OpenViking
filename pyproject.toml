@@ -84,7 +84,7 @@ dependencies = [
     "loguru>=0.7.3",
     "cryptography>=48.0.1",
     "argon2-cffi>=23.0.0",
-    "lark-oapi>=1.5.3",
+    "lark-oapi>=1.7.1,<2.0",
     "mcp>=1.27,<2",
     "pathspec>=1.1.1",
     "grep-ast>=0.9.0",
@@ -145,7 +145,7 @@ build = [
 # vikingbot - all features included
 bot = [
   "pydantic-settings>=2.0.0",
-  "websockets>=12.0",
+  "websockets>=13.0,<14",
   "websocket-client>=1.6.0",
   "httpx[socks]>=0.25.0",
   "readability-lxml>=0.8.0",
@@ -168,7 +168,7 @@ bot = [
   # All optional features included by default
   "langfuse>=3.0.0",
   "python-telegram-bot[socks]>=21.0",
-  "lark-oapi>=1.0.0",
+  "lark-oapi>=1.7.1,<2.0",
   "dingtalk-stream>=0.4.0",
   "slack-sdk>=3.26.0",
   "qq-botpy>=1.0.0",
@@ -253,10 +253,13 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
+pythonpath = ["."]
 norecursedirs = ["api_test", "oc2ov_test"]
 markers = [
     "integration: tests that require external services or real model configuration",
     "cli_remote: tests that require a remote OpenViking CLI binary and server connection",
+    "qdrant: tests that require a reachable Qdrant instance",
+    "bot: tests executed by the standalone vikingbot harness",
 ]
 addopts = "-v --cov=openviking --cov-report=term-missing"
 

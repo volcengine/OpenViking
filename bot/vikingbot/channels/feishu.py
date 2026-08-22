@@ -301,7 +301,7 @@ class FeishuChannel(BaseChannel):
         """Start the Feishu bot with WebSocket long connection."""
         if not FEISHU_AVAILABLE:
             logger.exception(
-                "Feishu SDK not installed. Install with: uv pip install lark-oapi>=1.0.0"
+                "Feishu SDK not installed. Install with: uv pip install 'lark-oapi>=1.7.1,<2.0'"
             )
             return
 

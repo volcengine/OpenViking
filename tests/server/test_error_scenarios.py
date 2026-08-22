@@ -42,7 +42,7 @@ async def test_not_found_resource_returns_structured_error(
     """Accessing non-existent resource should return structured error."""
     resp = await client.get(
         "/api/v1/fs/stat",
-        params={"uri": "viking://does_not_exist"},
+        params={"uri": "viking://resources/does_not_exist"},
     )
     assert resp.status_code == 404
     body = resp.json()

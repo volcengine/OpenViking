@@ -139,15 +139,27 @@ class OpenVikingCompactHook(Hook):
             force_commit or pending_tokens >= commit_token_threshold or reached_message_threshold
         )
         if should_commit:
-            admin_commit_result = await client.commit_session(
-                session_id=session_id,
-                keep_recent_count=0,
-                retention_mode="turn_budget",
-                keep_recent_turn_count=keep_recent_turn_count,
-                retained_message_token_budget=retained_message_token_budget,
-                min_raw_tail_steps=min_raw_tail_steps,
-                user_id=session_user_id,
-            )
+            try:
+                admin_commit_result = await client.commit_session(
+                    session_id=session_id,
+                    keep_recent_count=0,
+                    retention_mode="turn_budget",
+                    keep_recent_turn_count=keep_recent_turn_count,
+                    retained_message_token_budget=retained_message_token_budget,
+                    min_raw_tail_steps=min_raw_tail_steps,
+                    user_id=session_user_id,
+                )
+            except TypeError as exc:
+                # Older SDKs accepted only the legacy message-count contract.
+                # Fall back narrowly on signature rejection; application
+                # TypeErrors must still surface as real hook failures.
+                if "unexpected keyword argument" not in str(exc):
+                    raise
+                admin_commit_result = await client.commit_session(
+                    session_id=session_id,
+                    keep_recent_count=keep_recent_turn_count,
+                    user_id=session_user_id,
+                )
             logger.info(
                 f"[HOOK] Committed session {session_id} for user {session_user_id or 'current'}"
             )
@@ -188,12 +200,19 @@ class OpenVikingCompactHook(Hook):
         if not isinstance(openviking_connection, dict):
             openviking_connection = None
         force_commit = bool(kwargs.get("force_commit", False))
+        configured_keep_recent_turn_count = getattr(
+            agents_config,
+            "commit_keep_recent_turn_count",
+            getattr(agents_config, "commit_keep_recent_count", 3),
+        )
+        fields = getattr(agents_config, "model_fields_set", None)
+        if fields is not None and "commit_keep_recent_turn_count" not in fields:
+            if "commit_keep_recent_count" in fields:
+                configured_keep_recent_turn_count = agents_config.commit_keep_recent_count
+        elif fields is None and not hasattr(agents_config, "commit_keep_recent_turn_count"):
+            configured_keep_recent_turn_count = agents_config.commit_keep_recent_count
         keep_recent_turn_count = int(
-            kwargs.get(
-                "keep_recent_turn_count",
-                getattr(agents_config, "commit_keep_recent_turn_count", 3),
-            )
-            or 0
+            kwargs.get("keep_recent_turn_count", configured_keep_recent_turn_count) or 0
         )
         retained_message_token_budget = int(
             kwargs.get(

@@ -3,11 +3,13 @@
 """Tests for VLM failover/backup configuration functionality."""
 
 import time
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from openviking.models.vlm.base import FailoverVLM, PrimaryBackupSwitcher
+import openviking.models.vlm.base as vlm_base
+import openviking.utils.model_retry as model_retry
+from openviking.models.vlm.base import FailoverVLM, MultiCredentialVLM, PrimaryBackupSwitcher
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
@@ -925,3 +927,96 @@ class TestFailoverVLMAutomaticFailback:
         result3 = await failover.get_completion_async(prompt="test3")
         assert result3 == "primary async is back!"
         assert failover.is_using_backup is False
+
+
+def _marked_error(message="partial stream"):
+    mark = getattr(model_retry, "mark_vlm_error_non_retryable", None)
+    assert callable(mark), "model_retry must define mark_vlm_error_non_retryable"
+    error = RuntimeError(message)
+    assert mark(error) is error
+    return error
+
+
+def _target(name):
+    target = Mock(model=name, provider="openai", thinking=False, stream=False)
+    for method in ("get_completion", "get_vision_completion"):
+        setattr(target, method, Mock())
+        setattr(target, f"{method}_async", AsyncMock())
+    return target
+
+
+def _state(wrapper):
+    switcher = wrapper._switcher
+    names = ("_using_backup", "_switch_to_backup_time", "_backup_request_count")
+    if isinstance(wrapper, MultiCredentialVLM):
+        names = ("_active_idx", "_last_switch_time", "_active_request_count")
+    return tuple(getattr(switcher, name) for name in names)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method",
+    [
+        "get_completion",
+        "get_completion_async",
+        "get_vision_completion",
+        "get_vision_completion_async",
+    ],
+)
+@pytest.mark.parametrize("start", ["primary", "backup", "multi-active", "multi-failback"])
+async def test_marked_error_fast_fails_without_post_provider_side_effects(start, method):
+    error = _marked_error(f"marked-{start}-{method}")
+    targets = [_target(str(index)) for index in range(3)]
+    if start in {"primary", "backup"}:
+        wrapper = FailoverVLM(targets[0], targets[1], failback_timeout_seconds=10**9)
+        wrapper._switcher._using_backup = start == "backup"
+        wrapper._switcher._switch_to_backup_time = time.monotonic()
+        failing = targets[start == "backup"]
+        mutators = ("record_primary_failure", "record_primary_success")
+    else:
+        wrapper = MultiCredentialVLM(targets, ["0", "1", "2"], failback_request_count=2)
+        wrapper._switcher._active_idx = 2 if start == "multi-failback" else 1
+        wrapper._switcher._active_request_count = 2 if start == "multi-failback" else 0
+        wrapper._switcher._last_switch_time = time.monotonic()
+        failing = targets[1]
+        mutators = ("commit_success",)
+    snapshots = []
+
+    def fail(*_args, **_kwargs):
+        snapshots.append(_state(wrapper))
+        raise error
+
+    async def fail_async(*_args, **_kwargs):
+        fail()
+
+    call = getattr(failing, method)
+    call.side_effect = fail_async if method.endswith("_async") else fail
+    spies = [patch.object(wrapper._switcher, name).start() for name in mutators]
+    retry_classifier = patch.object(model_retry, "is_retryable_api_error").start()
+    rate_classifier = patch.object(model_retry, "is_retryable_rate_limit_error").start()
+    wrapper._logger = Mock()
+    try:
+        with (
+            patch.object(vlm_base, "_annotate_vlm_error") as annotation,
+            patch.object(vlm_base, "classify_api_error") as classification,
+            pytest.raises(RuntimeError) as raised,
+        ):
+            kwargs = {"prompt": "x"}
+            if "vision" in method:
+                kwargs["images"] = []
+            result = getattr(wrapper, method)(**kwargs)
+            if method.endswith("_async"):
+                await result
+        assert raised.value is error
+        assert snapshots == [_state(wrapper)]
+        annotation.assert_not_called()
+        classification.assert_not_called()
+        retry_classifier.assert_not_called()
+        rate_classifier.assert_not_called()
+        wrapper._logger.warning.assert_not_called()
+        wrapper._logger.error.assert_not_called()
+        for spy in spies:
+            spy.assert_not_called()
+        assert sum(getattr(target, method).call_count for target in targets) == 1
+    finally:
+        patch.stopall()

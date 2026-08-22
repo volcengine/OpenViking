@@ -158,17 +158,22 @@ class TestNormalizeZipFilenames:
             info = zipfile.ZipInfo(cp437_name)
             info.flag_bits = 0
             zf.writestr(info, "content")
-        buf2.seek(0)
-        with zipfile.ZipFile(buf2, "r") as zf:
-            member = zf.infolist()[0]
-            # Before normalization, filename should be the mojibake
-            assert member.filename == cp437_name
-            normalize_zip_filenames(zf)
-            # After normalization, the name should be repaired to CJK
-            repaired = zf.infolist()[0]
-            assert repaired.filename == cjk_name, (
-                f"Expected filename to be repaired to {cjk_name!r}, got {repaired.filename!r}"
-            )
+        # ZipFile sets the UTF-8 flag automatically for non-ASCII names, so
+        # use a ZipInfo double to model the malformed member exactly.
+        member = zipfile.ZipInfo(cp437_name)
+        member.flag_bits = 0
+
+        class ZipInfoContainer:
+            metadata_encoding = None
+
+            def infolist(self):
+                return [member]
+
+        zf = ZipInfoContainer()
+        normalize_zip_filenames(zf)
+        assert member.filename == cjk_name, (
+            f"Expected filename to be repaired to {cjk_name!r}, got {member.filename!r}"
+        )
 
 
 # ── safe_extract_zip ─────────────────────────────────────────────────────────

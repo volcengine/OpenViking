@@ -10,6 +10,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
+import pytest
+
 
 def load_jsonl(file_path: str) -> List[Dict[str, Any]]:
     """Load JSONL file and return list of dicts."""
@@ -94,9 +96,9 @@ def test_evaluator_initialization():
     except ImportError as e:
         print(f"  ⚠️  RAGAS not installed: {e}")
         print("  ℹ️  Install with: pip install ragas datasets")
-        return False
+        pytest.skip("RAGAS optional dependency is not installed")
 
-    return True
+    assert evaluator.metrics is not None
 
 
 def test_pipeline_initialization():

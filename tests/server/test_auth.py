@@ -221,7 +221,8 @@ def _build_task_http_test_app(identity: ResolvedIdentity | None) -> FastAPI:
 
 
 @pytest_asyncio.fixture(scope="function")
-async def auth_service(temp_dir):
+async def auth_service(temp_dir, offline_test_models):
+    del offline_test_models
     """Service for auth tests."""
     svc = OpenVikingService(
         path=str(temp_dir / "auth_data"), user=UserIdentifier.the_default_user("auth_user")

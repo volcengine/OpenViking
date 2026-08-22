@@ -2,10 +2,13 @@
 # SPDX-License-Identifier: AGPL-3.0
 """OpenAI VLM backend implementation"""
 
+import asyncio
 import base64
+import inspect
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse
 
@@ -19,7 +22,7 @@ try:
 except ImportError:
     openai = None
 
-from openviking.utils.model_retry import retry_async, retry_sync
+from openviking.utils.model_retry import mark_vlm_error_non_retryable, retry_async, retry_sync
 
 from ..base import ToolCall, VLMBase, VLMResponse
 from ..registry import DEFAULT_AZURE_API_VERSION
@@ -231,6 +234,7 @@ class OpenAIVLM(VLMBase):
         kwargs: Dict[str, Any] = {
             "model": model,
             "messages": kwargs_messages,
+            "stream": self.stream,
         }
         if is_reasoning:
             kwargs["reasoning_effort"] = self.reasoning_effort
@@ -269,6 +273,7 @@ class OpenAIVLM(VLMBase):
         kwargs: Dict[str, Any] = {
             "model": model,
             "messages": kwargs_messages,
+            "stream": self.stream,
         }
         if is_reasoning:
             kwargs["reasoning_effort"] = self.reasoning_effort
@@ -292,6 +297,114 @@ class OpenAIVLM(VLMBase):
         content = self._extract_content_from_response(response)
         return self._clean_response(content)
 
+    @staticmethod
+    def _extract_from_chunk(chunk) -> tuple[str, Any]:
+        usage = getattr(chunk, "usage", None)
+        choices = getattr(chunk, "choices", None) or []
+        if not choices:
+            return "", usage
+        delta = getattr(choices[0], "delta", None)
+        content = getattr(delta, "content", None) if delta is not None else None
+        return (content if isinstance(content, str) else ""), usage
+
+    def _process_streaming_response(self, response) -> str:
+        content_parts: list[str] = []
+        last_usage = None
+        saw_event = False
+        primary_error: BaseException | None = None
+
+        try:
+            for chunk in response:
+                saw_event = True
+                content, usage = self._extract_from_chunk(chunk)
+                content_parts.append(content)
+                if usage is not None:
+                    last_usage = usage
+            if last_usage is not None:
+                self._update_token_usage_from_response(SimpleNamespace(usage=last_usage))
+        except BaseException as exc:
+            primary_error = mark_vlm_error_non_retryable(exc) if saw_event else exc
+
+        cleanup_error: BaseException | None = None
+        try:
+            close = getattr(response, "close", None)
+            if callable(close):
+                close()
+        except BaseException as exc:
+            cleanup_error = exc
+
+        if primary_error is not None:
+            if cleanup_error is not None:
+                logger.warning("OpenAI VLM stream cleanup failed after a primary error.")
+            raise primary_error
+        if cleanup_error is not None:
+            if saw_event:
+                cleanup_error = mark_vlm_error_non_retryable(cleanup_error)
+            raise cleanup_error
+        return "".join(content_parts)
+
+    @staticmethod
+    async def _close_async_stream(response) -> None:
+        close = getattr(response, "close", None)
+        if callable(close):
+            result = close()
+            if inspect.isawaitable(result):
+                await result
+            return
+        aclose = getattr(response, "aclose", None)
+        if callable(aclose):
+            await aclose()
+
+    async def _process_streaming_response_async(self, response) -> str:
+        content_parts: list[str] = []
+        last_usage = None
+        saw_event = False
+        primary_error: BaseException | None = None
+
+        try:
+            async for chunk in response:
+                saw_event = True
+                content, usage = self._extract_from_chunk(chunk)
+                content_parts.append(content)
+                if usage is not None:
+                    last_usage = usage
+            if last_usage is not None:
+                self._update_token_usage_from_response(SimpleNamespace(usage=last_usage))
+        except BaseException as exc:
+            primary_error = mark_vlm_error_non_retryable(exc) if saw_event else exc
+
+        cleanup_task = asyncio.create_task(self._close_async_stream(response))
+        wait_cancellation: asyncio.CancelledError | None = None
+        cleanup_error: BaseException | None = None
+        while not cleanup_task.done():
+            try:
+                await asyncio.shield(cleanup_task)
+            except asyncio.CancelledError as exc:
+                if wait_cancellation is None:
+                    wait_cancellation = exc
+            except BaseException as exc:
+                cleanup_error = exc
+                break
+        if cleanup_task.done() and cleanup_error is None:
+            try:
+                cleanup_task.result()
+            except BaseException as exc:
+                cleanup_error = exc
+
+        if primary_error is not None:
+            if cleanup_error is not None:
+                logger.warning("OpenAI VLM stream cleanup failed after a primary error.")
+            raise primary_error
+        if wait_cancellation is not None:
+            if cleanup_error is not None:
+                logger.warning("OpenAI VLM stream cleanup failed during cancellation.")
+            raise wait_cancellation
+        if cleanup_error is not None:
+            if saw_event:
+                cleanup_error = mark_vlm_error_non_retryable(cleanup_error)
+            raise cleanup_error
+        return "".join(content_parts)
+
     def get_completion(
         self,
         prompt: str = "",
@@ -301,9 +414,24 @@ class OpenAIVLM(VLMBase):
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion"""
+        if self.stream and tools:
+            raise NotImplementedError("stream with tools is not supported")
         effective_thinking = self.thinking if thinking is None else thinking
         client = self.get_client()
         kwargs = self._build_text_kwargs(prompt, tools, tool_choice, messages, effective_thinking)
+
+        if self.stream:
+
+            def _create_stream():
+                return client.chat.completions.create(**kwargs)
+
+            response = retry_sync(
+                _create_stream,
+                max_retries=self.max_retries,
+                logger=logger,
+                operation_name="OpenAI VLM stream creation",
+            )
+            return self._process_streaming_response(response)
 
         def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
@@ -331,9 +459,24 @@ class OpenAIVLM(VLMBase):
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously"""
+        if self.stream and tools:
+            raise NotImplementedError("stream with tools is not supported")
         effective_thinking = self.thinking if thinking is None else thinking
         client = self.get_async_client()
         kwargs = self._build_text_kwargs(prompt, tools, tool_choice, messages, effective_thinking)
+
+        if self.stream:
+
+            async def _create_stream():
+                return await client.chat.completions.create(**kwargs)
+
+            response = await retry_async(
+                _create_stream,
+                max_retries=self.max_retries,
+                logger=logger,
+                operation_name="OpenAI VLM async stream creation",
+            )
+            return await self._process_streaming_response_async(response)
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
@@ -417,11 +560,26 @@ class OpenAIVLM(VLMBase):
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get vision completion"""
+        if self.stream and tools:
+            raise NotImplementedError("stream with tools is not supported")
         effective_thinking = self.thinking if thinking is None else thinking
         client = self.get_client()
         kwargs = self._build_vision_kwargs(
             prompt, images, tools, tool_choice, messages, effective_thinking
         )
+
+        if self.stream:
+
+            def _create_stream():
+                return client.chat.completions.create(**kwargs)
+
+            response = retry_sync(
+                _create_stream,
+                max_retries=self.max_retries,
+                logger=logger,
+                operation_name="OpenAI VLM vision stream creation",
+            )
+            return self._process_streaming_response(response)
 
         def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
@@ -449,11 +607,26 @@ class OpenAIVLM(VLMBase):
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get vision completion asynchronously"""
+        if self.stream and tools:
+            raise NotImplementedError("stream with tools is not supported")
         effective_thinking = self.thinking if thinking is None else thinking
         client = self.get_async_client()
         kwargs = self._build_vision_kwargs(
             prompt, images, tools, tool_choice, messages, effective_thinking
         )
+
+        if self.stream:
+
+            async def _create_stream():
+                return await client.chat.completions.create(**kwargs)
+
+            response = await retry_async(
+                _create_stream,
+                max_retries=self.max_retries,
+                logger=logger,
+                operation_name="OpenAI VLM async vision stream creation",
+            )
+            return await self._process_streaming_response_async(response)
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()

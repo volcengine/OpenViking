@@ -55,7 +55,7 @@ async def test_profile_query_adds_profile_field_to_json_response():
         "/Users/bytedance/github_openviking/OpenViking/" in line for line in body["profile"]
     )
     assert not any("/site-packages/" in line for line in body["profile"])
-    assert not any("/lib/python" in line for line in body["profile"])
+    assert not any("lib/python" in line for line in body["profile"])
     assert any("openviking/" in line or "tests/" in line for line in body["profile"])
     assert any(
         "starlette/" in line or "fastapi/" in line or "asyncio/" in line for line in body["profile"]

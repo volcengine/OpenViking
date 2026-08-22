@@ -204,7 +204,10 @@ def test_vlm_config_default_provider_resolves_codex(_mock_auth_available):
     provider_config, provider_name = config.get_provider_config()
 
     assert provider_name == "openai-codex"
-    assert provider_config == {}
+    assert provider_config["api_key"] is None
+    assert provider_config["api_key"] != "sk-test"
+    assert provider_config["api_base"] is None
+    assert provider_config["stream"] is False
 
 
 @patch("openviking.models.vlm.backends.codex_auth.has_codex_auth_available", return_value=True)
@@ -302,6 +305,69 @@ def test_codex_auth_store_uses_windows_lock_when_fcntl_is_unavailable(tmp_path, 
     assert lock_calls == [(_FakeMsvcrt.LK_LOCK, 1), (_FakeMsvcrt.LK_UNLCK, 1)]
 
 
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("OPENVIKING_CODEX_BASE_URL", "http://evil.invalid/codex"),
+        ("OPENVIKING_CODEX_OAUTH_ISSUER", "https://evil.invalid"),
+        ("OPENVIKING_CODEX_OAUTH_TOKEN_URL", "https://auth.openai.com.evil.invalid/oauth/token"),
+        ("OPENVIKING_CODEX_OAUTH_TOKEN_URL", "https://auth.openai.com/oauth/token?leak=1"),
+    ],
+)
+def test_codex_auth_rejects_unapproved_endpoints_before_network(name, value, monkeypatch):
+    monkeypatch.setenv(name, value)
+    with pytest.raises(codex_auth.CodexAuthError, match="not an allowed HTTPS origin"):
+        if name == "OPENVIKING_CODEX_BASE_URL":
+            codex_auth._resolve_base_url()
+        elif name == "OPENVIKING_CODEX_OAUTH_ISSUER":
+            codex_auth._resolve_codex_oauth_issuer()
+        else:
+            codex_auth._resolve_codex_oauth_token_url()
+
+
+def test_codex_auth_store_is_private_and_parent_is_not_followed(tmp_path, monkeypatch):
+    auth_path = tmp_path / "private" / "codex_auth.json"
+    monkeypatch.setenv("OPENVIKING_CODEX_AUTH_PATH", str(auth_path))
+
+    codex_auth.save_codex_tokens("header.payload.signature", "refresh-token")
+
+    assert auth_path.parent.stat().st_mode & 0o777 == 0o700
+    assert auth_path.stat().st_mode & 0o777 == 0o600
+    assert auth_path.with_suffix(".lock").stat().st_mode & 0o777 == 0o600
+
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir()
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(real_parent, target_is_directory=True)
+    monkeypatch.setenv(
+        "OPENVIKING_CODEX_AUTH_PATH", str(linked_parent / "codex_auth.json")
+    )
+    with pytest.raises(codex_auth.CodexAuthError, match="must not be a symlink"):
+        codex_auth.save_codex_tokens("header.payload.signature", "refresh-token")
+
+
+def test_codex_auth_refresh_errors_do_not_echo_provider_details(monkeypatch):
+    class _Response:
+        status_code = 400
+
+        @staticmethod
+        def json():
+            return {"error_description": "SENTINEL-REFRESH-DETAIL"}
+
+    monkeypatch.setattr(codex_auth.httpx, "post", lambda *_args, **_kwargs: _Response())
+    with pytest.raises(codex_auth.CodexAuthError) as exc_info:
+        codex_auth.refresh_codex_oauth("refresh-token", client_id="client")
+    assert "SENTINEL-REFRESH-DETAIL" not in str(exc_info.value)
+
+    def _raise_network(*_args, **_kwargs):
+        raise RuntimeError("https://evil.invalid/?refresh_token=SENTINEL-URL")
+
+    monkeypatch.setattr(codex_auth.httpx, "post", _raise_network)
+    with pytest.raises(codex_auth.CodexAuthError) as exc_info:
+        codex_auth.refresh_codex_oauth("refresh-token", client_id="client")
+    assert "SENTINEL-URL" not in str(exc_info.value)
+
+
 def _make_jwt_token(payload: dict) -> str:
     encoded = (
         base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode("utf-8").rstrip("=")
@@ -395,6 +461,7 @@ def test_codex_auth_refresh_uses_persisted_client_id(tmp_path, monkeypatch):
     creds = resolve_codex_runtime_credentials(force_refresh=True)
 
     assert creds["source"] == "openviking"
+    assert creds["client_id"] == "app_persisted_client"
     assert recorded["client_id"] == "app_persisted_client"
 
 

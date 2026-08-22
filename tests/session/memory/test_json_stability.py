@@ -144,7 +144,7 @@ class TestTypeHelpers:
 class TestParseJsonWithStability:
     """Tests for full five-layer stable JSON parsing."""
 
-    class TestModel(BaseModel):
+    class JsonStabilityModel(BaseModel):
         reasonning: str = ""
         count: Optional[int] = None
         tags: List[str] = Field(default_factory=list)
@@ -152,7 +152,7 @@ class TestParseJsonWithStability:
     def test_parses_valid_json(self):
         """Test valid JSON parses successfully."""
         content = '{"reasonning": "test", "count": 42, "tags": ["a", "b"]}'
-        data, error = parse_json_with_stability(content, model_class=self.TestModel)
+        data, error = parse_json_with_stability(content, model_class=self.JsonStabilityModel)
         assert error is None
         assert data.reasonning == "test"
         assert data.count == 42
@@ -161,7 +161,7 @@ class TestParseJsonWithStability:
     def test_handles_list_wrapped_response(self):
         """Test [{"..."}] is handled correctly."""
         content = '[{"reasonning": "test", "count": 42}]'
-        data, error = parse_json_with_stability(content, model_class=self.TestModel)
+        data, error = parse_json_with_stability(content, model_class=self.JsonStabilityModel)
         assert error is None
         assert data.reasonning == "test"
 
@@ -189,7 +189,7 @@ class TestParseJsonWithStability:
             def is_empty(self) -> bool:
                 return not self.tags
 
-        for model in (self.TestModel, HasIsEmptyButNotOptedIn):
+        for model in (self.JsonStabilityModel, HasIsEmptyButNotOptedIn):
             data, error = parse_json_with_stability("[]", model_class=model)
             assert data is None
             assert error is not None
@@ -199,7 +199,7 @@ class TestParseJsonWithStability:
         content = '{"reasonning": "test", "extra_field": "should be filtered", "count": 42}'
         data, error = parse_json_with_stability(
             content,
-            model_class=self.TestModel,
+            model_class=self.JsonStabilityModel,
             expected_fields=["reasonning", "count", "tags"],
         )
         assert error is None
@@ -220,7 +220,7 @@ class TestParseJsonWithStability:
 
 Note: This is a safety warning.
 Please be careful with the output."""
-        data, error = parse_json_with_stability(content, model_class=self.TestModel)
+        data, error = parse_json_with_stability(content, model_class=self.JsonStabilityModel)
         assert error is None
         assert data.reasonning == "test"
 
@@ -229,7 +229,7 @@ Please be careful with the output."""
         content = """```json
 {"reasonning": "test", "count": 42}
 ```"""
-        data, error = parse_json_with_stability(content, model_class=self.TestModel)
+        data, error = parse_json_with_stability(content, model_class=self.JsonStabilityModel)
         assert error is None
         assert data.reasonning == "test"
 
@@ -244,7 +244,7 @@ Please be careful with the output."""
 class TestJsonUtilsLoads:
     """Tests for JsonUtils.loads convenience parsing."""
 
-    class TestModel(BaseModel):
+    class JsonUtilsModel(BaseModel):
         reasonning: str
         count: Optional[int] = None
 
@@ -255,8 +255,8 @@ class TestJsonUtilsLoads:
 
     def test_loads_validates_pydantic_model(self):
         """Test model class loading uses a TypeAdapter instance."""
-        data = JsonUtils.loads('{"reasonning": "test", "count": "42"}', self.TestModel)
-        assert isinstance(data, self.TestModel)
+        data = JsonUtils.loads('{"reasonning": "test", "count": "42"}', self.JsonUtilsModel)
+        assert isinstance(data, self.JsonUtilsModel)
         assert data.reasonning == "test"
         assert data.count == 42
 

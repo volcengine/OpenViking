@@ -274,4 +274,4 @@ class TestRerankConfig:
 
     def test_unknown_provider_raises_value_error(self):
         with pytest.raises(ValueError, match="provider"):
-            RerankConfig(provider="cohere", ak="ak", sk="sk")
+            RerankConfig(provider="unknown", ak="ak", sk="sk")

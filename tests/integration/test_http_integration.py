@@ -40,9 +40,8 @@ class TestHTTPClientIntegration:
     async def test_find(self, client):
         """Test find operation."""
         result = await client.find(query="test", limit=5)
-        assert result is not None
-        assert hasattr(result, "resources")
-        assert hasattr(result, "total")
+        assert isinstance(result, dict)
+        assert set(("resources", "memories", "skills", "total")).issubset(result)
 
     @pytest.mark.asyncio
     async def test_search(self, client):
@@ -54,7 +53,7 @@ class TestHTTPClientIntegration:
     async def test_stat_not_found(self, client):
         """Test stat on non-existent path raises NotFoundError."""
         with pytest.raises(NotFoundError):
-            await client.stat("viking://nonexistent/path")
+            await client.stat("viking://resources/nonexistent/path")
 
     @pytest.mark.asyncio
     async def test_tree(self, client):

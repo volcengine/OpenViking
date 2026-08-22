@@ -2,41 +2,23 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for VLM stream configuration support."""
 
+import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import openviking.utils.model_retry as model_retry
 from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
-
-
-class MockDelta:
-    """Mock delta object for streaming chunks."""
-
-    def __init__(self, content=None):
-        self.content = content
-
-
-class MockChoice:
-    """Mock choice object for streaming chunks."""
-
-    def __init__(self, delta=None):
-        self.delta = delta
-
-
-class MockChunk:
-    """Mock chunk object for streaming response."""
-
-    def __init__(self, content=None, usage=None):
-        self.choices = [MockChoice(delta=MockDelta(content=content))] if content is not None else []
-        self.usage = usage
-
-
-class MockUsage:
-    """Mock usage object."""
-
-    def __init__(self, prompt_tokens=0, completion_tokens=0):
-        self.prompt_tokens = prompt_tokens
-        self.completion_tokens = completion_tokens
+from tests.unit._streaming_support import (
+    AcloseOnlyStream,
+    DetailedMockUsage,
+    MockChunk,
+    MockUsage,
+    NonAwaitableCloseStream,
+    ScriptedAsyncStream,
+    ScriptedSyncStream,
+)
 
 
 class TestVLMStreamConfig:
@@ -433,6 +415,9 @@ class TestStreamingResponseProcessing:
                 provider="openai",
                 prompt_tokens=10,
                 completion_tokens=5,
+                duration_seconds=0.0,
+                prompt_cached_tokens=0,
+                completion_reasoning_tokens=0,
             )
 
     def test_process_streaming_response_empty_chunks(self):
@@ -472,4 +457,466 @@ class TestStreamingResponseProcessing:
                 provider="openai",
                 prompt_tokens=15,
                 completion_tokens=8,
+                duration_seconds=0.0,
+                prompt_cached_tokens=0,
+                completion_reasoning_tokens=0,
             )
+
+
+def _is_marked(error):
+    check = getattr(model_retry, "is_vlm_error_non_retryable", None)
+    assert callable(check), "model_retry must define is_vlm_error_non_retryable"
+    return check(error)
+
+
+class TestToolStreamingPreflight:
+    def test_text_sync_rejects_tools_before_builder_or_client(self):
+        vlm = OpenAIVLM({"api_key": "sk-test", "stream": True})
+        builder = MagicMock(side_effect=AssertionError("request builder reached"))
+        client = MagicMock(side_effect=AssertionError("client reached"))
+        vlm._build_text_kwargs = builder
+        vlm.get_client = client
+        with pytest.raises(NotImplementedError, match="stream.*tools|tools.*stream"):
+            vlm.get_completion("test", tools=[{"type": "function"}])
+        builder.assert_not_called()
+        client.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_text_async_rejects_tools_before_builder_or_client(self):
+        vlm = OpenAIVLM({"api_key": "sk-test", "stream": True})
+        builder = MagicMock(side_effect=AssertionError("request builder reached"))
+        client = MagicMock(side_effect=AssertionError("client reached"))
+        vlm._build_text_kwargs = builder
+        vlm.get_async_client = client
+        with pytest.raises(NotImplementedError, match="stream.*tools|tools.*stream"):
+            await vlm.get_completion_async("test", tools=[{"type": "function"}])
+        builder.assert_not_called()
+        client.assert_not_called()
+
+    def test_vision_sync_rejects_tools_before_builder_client_or_image_io(self):
+        vlm = OpenAIVLM({"api_key": "sk-test", "stream": True})
+        builder = MagicMock(side_effect=AssertionError("request builder reached"))
+        client = MagicMock(side_effect=AssertionError("client reached"))
+        image_io = MagicMock(side_effect=AssertionError("vision I/O reached"))
+        vlm._build_vision_kwargs = builder
+        vlm.get_client = client
+        vlm._prepare_image = image_io
+        with pytest.raises(NotImplementedError, match="stream.*tools|tools.*stream"):
+            vlm.get_vision_completion(
+                "test",
+                images=[object()],
+                tools=[{"type": "function"}],
+            )
+        builder.assert_not_called()
+        client.assert_not_called()
+        image_io.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_vision_async_rejects_tools_before_builder_client_or_image_io(self):
+        vlm = OpenAIVLM({"api_key": "sk-test", "stream": True})
+        builder = MagicMock(side_effect=AssertionError("request builder reached"))
+        client = MagicMock(side_effect=AssertionError("client reached"))
+        image_io = MagicMock(side_effect=AssertionError("vision I/O reached"))
+        vlm._build_vision_kwargs = builder
+        vlm.get_async_client = client
+        vlm._prepare_image = image_io
+        with pytest.raises(NotImplementedError, match="stream.*tools|tools.*stream"):
+            await vlm.get_vision_completion_async(
+                "test",
+                images=[object()],
+                tools=[{"type": "function"}],
+            )
+        builder.assert_not_called()
+        client.assert_not_called()
+        image_io.assert_not_called()
+
+
+@pytest.mark.parametrize("builder_name", ["_build_text_kwargs", "_build_vision_kwargs"])
+@pytest.mark.parametrize("stream", [False, True])
+def test_every_openai_request_builder_carries_explicit_stream_flag(builder_name, stream):
+    vlm = OpenAIVLM({"api_key": "sk-test", "stream": stream})
+    kwargs = getattr(vlm, builder_name)()
+    assert kwargs["stream"] is stream
+
+
+class TestStreamingReducerContract:
+    def test_sync_reducer_keeps_string_content_and_only_last_usage(self):
+        vlm = OpenAIVLM({"api_key": "sk-test"})
+        first_usage = DetailedMockUsage(2, 1, cached_tokens=1)
+        last_usage = DetailedMockUsage(7, 5, cached_tokens=3, reasoning_tokens=4)
+        stream = ScriptedSyncStream(
+            [
+                MockChunk(content="A", usage=first_usage),
+                MockChunk(content=17),
+                MockChunk(),
+                MockChunk(content="B", usage=last_usage),
+            ]
+        )
+        with patch.object(vlm, "update_token_usage") as update:
+            result = vlm._process_streaming_response(stream)
+        assert result == "AB"
+        update.assert_called_once_with(
+            model_name="gpt-4o-mini",
+            provider="openai",
+            prompt_tokens=7,
+            completion_tokens=5,
+            duration_seconds=0.0,
+            prompt_cached_tokens=3,
+            completion_reasoning_tokens=4,
+        )
+        assert stream.close_count == 1
+
+    @pytest.mark.asyncio
+    async def test_async_reducer_matches_content_empty_and_last_usage_contract(self):
+        vlm = OpenAIVLM({"api_key": "sk-test"})
+        last_usage = DetailedMockUsage(9, 6, cached_tokens=2, reasoning_tokens=5)
+        stream = ScriptedAsyncStream(
+            [
+                MockChunk(),
+                MockChunk(content="async "),
+                MockChunk(usage=last_usage),
+                MockChunk(content="ok"),
+            ]
+        )
+        with patch.object(vlm, "update_token_usage") as update:
+            result = await vlm._process_streaming_response_async(stream)
+        assert result == "async ok"
+        update.assert_called_once_with(
+            model_name="gpt-4o-mini",
+            provider="openai",
+            prompt_tokens=9,
+            completion_tokens=6,
+            duration_seconds=0.0,
+            prompt_cached_tokens=2,
+            completion_reasoning_tokens=5,
+        )
+        assert stream.close_count == 1
+
+    def test_sync_iterator_error_before_first_event_is_unmarked_and_closed_once(self):
+        vlm = OpenAIVLM({"api_key": "sk-test"})
+        error = RuntimeError("503 before first event")
+        stream = ScriptedSyncStream([error])
+        with pytest.raises(RuntimeError) as raised:
+            vlm._process_streaming_response(stream)
+        assert raised.value is error
+        assert _is_marked(error) is False
+        assert stream.close_count == 1
+
+    def test_sync_iterator_error_after_event_is_marked_and_closed_once(self):
+        vlm = OpenAIVLM({"api_key": "sk-test"})
+        error = RuntimeError("503 after event")
+        stream = ScriptedSyncStream([MockChunk(), error])
+        with pytest.raises(RuntimeError) as raised:
+            vlm._process_streaming_response(stream)
+        assert raised.value is error
+        assert _is_marked(error) is True
+        assert stream.close_count == 1
+
+    def test_sync_parser_error_after_read_event_is_marked_and_closed_once(self):
+        class MalformedChunk:
+            usage = None
+
+            @property
+            def choices(self):
+                raise parser_error
+
+        vlm = OpenAIVLM({"api_key": "sk-test"})
+        parser_error = RuntimeError("malformed chunk")
+        stream = ScriptedSyncStream([MalformedChunk()])
+
+        with pytest.raises(RuntimeError) as raised:
+            vlm._process_streaming_response(stream)
+
+        assert raised.value is parser_error
+        assert _is_marked(parser_error) is True
+        assert stream.close_count == 1
+
+    def test_sync_primary_error_wins_over_redacted_cleanup_error(self):
+        vlm = OpenAIVLM({"api_key": "sk-test"})
+        primary = RuntimeError("primary")
+        cleanup = RuntimeError("SENTINEL-CLEANUP-SECRET")
+        stream = ScriptedSyncStream([MockChunk(), primary], close_error=cleanup)
+        fake_logger = MagicMock()
+
+        with (
+            patch("openviking.models.vlm.backends.openai_vlm.logger", fake_logger),
+            pytest.raises(RuntimeError) as raised,
+        ):
+            vlm._process_streaming_response(stream)
+
+        assert raised.value is primary
+        assert stream.close_count == 1
+        assert fake_logger.warning.call_count == 1
+        assert "SENTINEL-CLEANUP-SECRET" not in repr(fake_logger.warning.call_args)
+
+    def test_sync_cleanup_only_error_after_event_is_marked(self):
+        vlm = OpenAIVLM({"api_key": "sk-test"})
+        cleanup = RuntimeError("cleanup only")
+        stream = ScriptedSyncStream([MockChunk(content="ok")], close_error=cleanup)
+
+        with pytest.raises(RuntimeError) as raised:
+            vlm._process_streaming_response(stream)
+
+        assert raised.value is cleanup
+        assert _is_marked(cleanup) is True
+        assert stream.close_count == 1
+
+    @pytest.mark.asyncio
+    async def test_async_nonawaitable_close_prevents_aclose_fallback(self):
+        vlm = OpenAIVLM({"api_key": "sk-test"})
+        stream = NonAwaitableCloseStream([MockChunk(content="ok")])
+
+        assert await vlm._process_streaming_response_async(stream) == "ok"
+        assert stream.close_count == 1
+        assert stream.aclose_count == 0
+
+    @pytest.mark.asyncio
+    async def test_async_uses_aclose_only_when_close_is_absent(self):
+        vlm = OpenAIVLM({"api_key": "sk-test"})
+        stream = AcloseOnlyStream([MockChunk(content="ok")])
+
+        assert await vlm._process_streaming_response_async(stream) == "ok"
+        assert stream.aclose_count == 1
+
+    @pytest.mark.asyncio
+    async def test_async_cleanup_only_error_after_event_is_marked(self):
+        vlm = OpenAIVLM({"api_key": "sk-test"})
+        cleanup = RuntimeError("cleanup only")
+        stream = ScriptedAsyncStream([MockChunk(content="ok")], close_error=cleanup)
+
+        with pytest.raises(RuntimeError) as raised:
+            await vlm._process_streaming_response_async(stream)
+
+        assert raised.value is cleanup
+        assert _is_marked(cleanup) is True
+        assert stream.close_count == 1
+
+    @pytest.mark.asyncio
+    async def test_unmarkable_async_cleanup_error_raises_marker_return_value(self):
+        class MarkerAssignmentRejectingCleanupError(RuntimeError):
+            def __setattr__(self, name, value):
+                if name == "_openviking_vlm_non_retryable":
+                    raise RuntimeError("instance marker assignment denied")
+                super().__setattr__(name, value)
+
+        vlm = OpenAIVLM({"api_key": "sk-test"})
+        original = MarkerAssignmentRejectingCleanupError("SENTINEL-CLEANUP-MARKER")
+        stream = ScriptedAsyncStream([MockChunk(content="partial")], close_error=original)
+
+        with pytest.raises(BaseException) as raised:
+            await vlm._process_streaming_response_async(stream)
+
+        assert stream.close_count == 1
+        assert raised.value is not original
+        assert raised.value.__cause__ is original
+        assert _is_marked(raised.value) is True
+
+    @pytest.mark.asyncio
+    async def test_async_cancellation_after_event_preserves_identity_and_cleans_up_once(self):
+        vlm = OpenAIVLM({"api_key": "sk-test"})
+        cancellation = asyncio.CancelledError("post-event cancellation")
+        stream = ScriptedAsyncStream([MockChunk(content="partial"), cancellation])
+        original_create_task = asyncio.create_task
+        cleanup_tasks = []
+
+        def capture_cleanup_task(coro):
+            task = original_create_task(coro)
+            cleanup_tasks.append(task)
+            return task
+
+        with patch.object(asyncio, "create_task", capture_cleanup_task):
+            subject = original_create_task(vlm._process_streaming_response_async(stream))
+            with pytest.raises(asyncio.CancelledError) as raised:
+                await subject
+
+        assert raised.value is cancellation
+        assert stream.close_count == 1
+        assert subject.done()
+        assert len(cleanup_tasks) == 1
+        assert cleanup_tasks[0].done()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("mode", ["sync", "async"])
+    async def test_assignment_rejecting_error_is_wrapped_after_exactly_one_cleanup(self, mode):
+        class MarkerAssignmentRejectingError(RuntimeError):
+            def __setattr__(self, name, value):
+                if name == "_openviking_vlm_non_retryable":
+                    raise RuntimeError("instance marker assignment denied")
+                super().__setattr__(name, value)
+
+        vlm = OpenAIVLM({"api_key": "sk-test"})
+        original = MarkerAssignmentRejectingError("SENTINEL-STREAM-SECRET")
+        stream_type = ScriptedSyncStream if mode == "sync" else ScriptedAsyncStream
+        stream = stream_type([MockChunk(content="partial"), original])
+        fake_logger = MagicMock()
+
+        with patch("openviking.models.vlm.backends.openai_vlm.logger", fake_logger):
+            with pytest.raises(BaseException) as raised:
+                if mode == "sync":
+                    vlm._process_streaming_response(stream)
+                else:
+                    await vlm._process_streaming_response_async(stream)
+
+        assert stream.close_count == 1
+        assert raised.value is not original
+        assert raised.value.__cause__ is original
+        assert _is_marked(raised.value) is True
+        assert "SENTINEL-STREAM-SECRET" not in repr((raised.value, fake_logger.mock_calls))
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("body", ["success", "primary", "body-cancel"])
+    async def test_async_cleanup_uses_one_task_and_deterministic_cancellation_priority(self, body):
+        vlm = OpenAIVLM({"api_key": "sk-test"})
+        primary = RuntimeError("identical-primary")
+        body_cancel = asyncio.CancelledError("identical-body-cancel")
+        first_cancel = asyncio.CancelledError("identical-first-wait-cancel")
+        second_cancel = asyncio.CancelledError("identical-second-wait-cancel")
+        expected = {"success": first_cancel, "primary": primary, "body-cancel": body_cancel}[body]
+        events = {
+            "success": [MockChunk(content="ok")],
+            "primary": [MockChunk(), primary],
+            "body-cancel": [body_cancel],
+        }[body]
+        first_seen, second_seen, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        stream = ScriptedAsyncStream(
+            events, RuntimeError("SENTINEL-CLEANUP"), close_release=release
+        )
+        original_create_task = asyncio.create_task
+        cleanup_tasks, shield_tasks = [], []
+        baseline = {task for task in asyncio.all_tasks() if not task.done()}
+
+        def capture_create_task(coro):
+            task = original_create_task(coro)
+            cleanup_tasks.append(task)
+            return task
+
+        async def controlled_shield(task):
+            shield_tasks.append(task)
+            call = len(shield_tasks)
+            if call == 1:
+                first_seen.set()
+                raise first_cancel
+            if call == 2:
+                second_seen.set()
+                raise second_cancel
+            return await task
+
+        async def release_after_both_observations():
+            await first_seen.wait()
+            await second_seen.wait()
+            release.set()
+
+        helper = original_create_task(release_after_both_observations())
+        subject = None
+        try:
+            with (
+                patch.object(asyncio, "create_task", capture_create_task),
+                patch.object(asyncio, "shield", controlled_shield),
+            ):
+                subject = original_create_task(vlm._process_streaming_response_async(stream))
+                with pytest.raises(type(expected)) as raised:
+                    await subject
+            assert raised.value is expected
+            assert len(cleanup_tasks) == 1
+            assert shield_tasks and all(task is cleanup_tasks[0] for task in shield_tasks)
+            assert stream.close_count == 1
+        finally:
+            first_seen.set()
+            second_seen.set()
+            release.set()
+            await asyncio.gather(helper, *(cleanup_tasks or []), return_exceptions=True)
+            if subject is not None and not subject.done():
+                subject.cancel()
+                await asyncio.gather(subject, return_exceptions=True)
+        assert subject.done() and helper.done() and all(task.done() for task in cleanup_tasks)
+        assert not ({task for task in asyncio.all_tasks() if not task.done()} - baseline)
+
+
+class TestStreamingRetryBoundary:
+    def test_sync_retries_stream_creation_but_not_stream_iteration(self):
+        vlm = OpenAIVLM({"api_key": "sk-test", "stream": True, "max_retries": 1})
+        stream = ScriptedSyncStream([MockChunk(content="ok")])
+        create = MagicMock(side_effect=[RuntimeError("503 create"), stream])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        vlm.get_client = MagicMock(return_value=client)
+
+        with patch.object(model_retry.time, "sleep") as sleep:
+            assert vlm.get_completion("test") == "ok"
+
+        assert create.call_count == 2
+        sleep.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_async_retries_stream_creation_within_budget(self):
+        vlm = OpenAIVLM({"api_key": "sk-test", "stream": True, "max_retries": 1})
+        stream = ScriptedAsyncStream([MockChunk(content="ok")])
+        create = AsyncMock(side_effect=[RuntimeError("503 create"), stream])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        vlm.get_async_client = MagicMock(return_value=client)
+
+        with patch.object(model_retry.asyncio, "sleep") as sleep:
+            assert await vlm.get_completion_async("test") == "ok"
+
+        assert create.call_count == 2
+        sleep.assert_awaited_once()
+
+    def test_sync_never_retries_iterator_error_before_first_event(self):
+        vlm = OpenAIVLM({"api_key": "sk-test", "stream": True, "max_retries": 2})
+        error = RuntimeError("503 before first event")
+        first = ScriptedSyncStream([error])
+        second = ScriptedSyncStream([MockChunk(content="must not run")])
+        create = MagicMock(side_effect=[first, second])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        vlm.get_client = MagicMock(return_value=client)
+
+        with (
+            patch.object(model_retry.time, "sleep") as sleep,
+            pytest.raises(RuntimeError) as raised,
+        ):
+            vlm.get_completion("test")
+
+        assert raised.value is error
+        assert _is_marked(error) is False
+        assert create.call_count == 1
+        sleep.assert_not_called()
+
+    def test_sync_never_retries_iteration_after_first_event(self):
+        vlm = OpenAIVLM({"api_key": "sk-test", "stream": True, "max_retries": 2})
+        error = RuntimeError("503 during iteration")
+        first = ScriptedSyncStream([MockChunk(content="partial"), error])
+        second = ScriptedSyncStream([MockChunk(content="must not run")])
+        create = MagicMock(side_effect=[first, second])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        vlm.get_client = MagicMock(return_value=client)
+
+        with (
+            patch.object(model_retry.time, "sleep") as sleep,
+            pytest.raises(RuntimeError) as raised,
+        ):
+            vlm.get_completion("test")
+
+        assert raised.value is error
+        assert _is_marked(error) is True
+        assert create.call_count == 1
+        sleep.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_async_never_retries_iteration_after_usage_only_event(self):
+        vlm = OpenAIVLM({"api_key": "sk-test", "stream": True, "max_retries": 2})
+        error = RuntimeError("503 during async iteration")
+        first = ScriptedAsyncStream([MockChunk(usage=MockUsage(1, 0)), error])
+        second = ScriptedAsyncStream([MockChunk(content="must not run")])
+        create = AsyncMock(side_effect=[first, second])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        vlm.get_async_client = MagicMock(return_value=client)
+
+        with (
+            patch.object(model_retry.asyncio, "sleep") as sleep,
+            pytest.raises(RuntimeError) as raised,
+        ):
+            await vlm.get_completion_async("test")
+
+        assert raised.value is error
+        assert _is_marked(error) is True
+        assert create.call_count == 1
+        sleep.assert_not_called()

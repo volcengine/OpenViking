@@ -356,7 +356,7 @@ async def test_skills_api_update_restores_previous_privacy_on_failure(client, mo
 
     privacy_response = await client.get("/api/v1/privacy-configs/skill/rollback-privacy-skill")
     assert privacy_response.status_code == 200, privacy_response.text
-    assert privacy_response.json()["result"]["values"]["api_key"] == "secret-old"
+    assert privacy_response.json()["result"]["current"]["values"]["api_key"] == "secret-old"
 
 
 async def test_skills_api_update_restores_previous_privacy_after_privacy_write(client, monkeypatch):
@@ -419,7 +419,7 @@ async def test_skills_api_update_restores_previous_privacy_after_privacy_write(c
         "/api/v1/privacy-configs/skill/rollback-privacy-after-write-skill"
     )
     assert privacy_response.status_code == 200, privacy_response.text
-    assert privacy_response.json()["result"]["values"]["api_key"] == "secret-old"
+    assert privacy_response.json()["result"]["current"]["values"]["api_key"] == "secret-old"
 
     show_response = await client.get(
         "/api/v1/skills/rollback-privacy-after-write-skill",

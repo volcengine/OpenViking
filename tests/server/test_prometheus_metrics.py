@@ -227,6 +227,24 @@ class TestMetricsEndpoint:
             )
         )
         app = create_app(config=config, service=None)
+        monkeypatch.setattr(
+            "openviking.metrics.collectors.feedback.compute_feedback_stats",
+            lambda *_args, **_kwargs: {
+                "summary": {
+                    "feedback_total": 1,
+                    "responses_total": 2,
+                    "tracked_responses_total": 2,
+                    "responses_with_feedback": 1,
+                },
+                "channels": {
+                    "cli__default": {
+                        "feedback_total": 1,
+                        "responses_total": 2,
+                        "tracked_responses_total": 2,
+                    }
+                },
+            },
+        )
         init_metrics_from_server_config(config, app=app)
         transport = httpx.ASGITransport(app=app)
         try:
@@ -241,7 +259,7 @@ class TestMetricsEndpoint:
         finally:
             shutdown_metrics(app=app)
 
-    def test_default_collector_manager_import_does_not_require_vikingbot(self, monkeypatch):
+    async def test_default_collector_manager_import_does_not_require_vikingbot(self, monkeypatch):
         import importlib
         import sys
 

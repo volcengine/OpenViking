@@ -107,7 +107,7 @@ def test_vlm_config_propagates_timeout_to_codex_backend():
         provider="openai-codex",
         model="gpt-5.3-codex",
         api_key="oauth-token",
-        api_base="https://example.invalid/codex",
+        api_base="https://chatgpt.com/backend-api/codex",
         timeout=45.0,
     )
 
@@ -125,7 +125,7 @@ def test_codex_vlm_propagates_config_timeout():
             "provider": "openai-codex",
             "model": "gpt-5.3-codex",
             "api_key": "oauth-token",
-            "api_base": "https://example.invalid/codex",
+                "api_base": "https://chatgpt.com/backend-api/codex",
             "timeout": 45.0,
         }
     )

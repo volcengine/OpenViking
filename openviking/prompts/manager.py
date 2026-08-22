@@ -90,7 +90,7 @@ class PromptManager:
 
         try:
             config = get_openviking_config()
-        except FileNotFoundError:
+        except (FileNotFoundError, RuntimeError):
             return cls._get_bundled_templates_dir()
 
         config_dir = config.prompts.templates_dir.strip()

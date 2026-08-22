@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenViking Security-Hardening Betriebsmanual</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { max-width: 980px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+    code, pre { background: #2222; padding: .15rem .3rem; border-radius: .2rem; }
+    pre { padding: 1rem; overflow: auto; }
+    th, td { padding: .55rem; border: 1px solid #8886; text-align: left; vertical-align: top; }
+    table { border-collapse: collapse; width: 100%; }
+    .warning { border-left: .35rem solid #b85; padding-left: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>OpenViking: Security-Hardening Betriebsmanual</h1>
+  <p><strong>Stand:</strong> 2026-07-27 · <strong>Geltung:</strong> Härtungszweig, nicht als Produktionsfreigabe zu lesen.</p>
+
+  <h2>Schutzziele und Änderungskarte</h2>
+  <table>
+    <thead><tr><th>Bereich</th><th>Vertrag</th><th>Operator-Prüfung</th></tr></thead>
+    <tbody>
+      <tr><td>Markdown</td><td>Nur erlaubte Link-Schemas; gesperrte Ziele sind nicht klickbar.</td><td>Erlaubte und <code>javascript:</code>-Testlinks in Studio und Graph prüfen.</td></tr>
+      <tr><td>WebDAV</td><td>Standardlimit 16 MiB; Übergröße wird mit 413 abgewiesen.</td><td>Grenztest aus dem Testdossier ausführen.</td></tr>
+      <tr><td>Öffentliches Deployment</td><td>Konkrete CORS-Origins und explizite HTTPS-<code>public_base_url</code>; Header sind kein öffentlicher Vertrauensanker.</td><td>Konfiguration vor Start validieren, keine Wildcard einsetzen.</td></tr>
+      <tr><td>Dependencies</td><td>Scanner laufen in CI; Ausnahmen sind paketpfadgenau und befristet.</td><td>Baseline-Verifier mit den vier JSON-Berichten ausführen.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Konfiguration</h2>
+  <p>Lokale Entwicklung benötigt keine CORS-Wildcard. Für eine öffentliche Bindung müssen Betreiber eine konkrete HTTPS-Basisadresse und jede erlaubte Origin eintragen. Beispielwerte sind Platzhalter und dürfen nur durch echte Betreiberwerte ersetzt werden:</p>
+  <pre><code>[server]
+host = "0.0.0.0"
+public_base_url = "https://viking.example.org"
+cors_origins = ["https://studio.example.org"]
+webdav_max_body_bytes = 16777216
+</code></pre>
+  <p class="warning"><strong>Fail closed:</strong> <code>cors_origins = ["*"]</code>, Credentials in URLs, Pfade/Queries in Origins und eine fehlende HTTPS-<code>public_base_url</code> sind für öffentliche Bindungen nicht zulässig. Keine Proxy-Header als Ersatz für die konfigurierte Basis verwenden.</p>
+
+  <h2>Betriebsworkflow</h2>
+  <ol>
+    <li>Vor dem Start die Betreiber-Origin(s), die HTTPS-Basis und das WebDAV-Limit prüfen.</li>
+    <li>Eine nicht-sekrete Test-<code>ov.conf</code> für die Regression bereitstellen; keine Produktivschlüssel in Tests ablegen.</li>
+    <li>Fokussierte Tests, dann Scanner und Baseline-Verifier ausführen.</li>
+    <li>Nach Änderungen an Origins, Dependencies oder Proxies den passenden Teil erneut testen.</li>
+  </ol>
+  <pre><code>uv run pytest tests/server/test_api_webdav.py tests/server/test_public_url.py tests/session/memory/test_graph_view.py
+cd web-studio &amp;&amp; npm run test -- file-preview.security.test.tsx &amp;&amp; npm run lint &amp;&amp; npm run build
+cd .. &amp;&amp; cargo test
+</code></pre>
+
+  <h2>Dependency-Audit</h2>
+  <p>Die Workflow-Datei <code>.github/workflows/security-dependency-audit.yml</code> exportiert die gelockten Python-Anforderungen, führt <code>pip-audit</code>, <code>cargo audit</code> sowie beide Production-npm-Audits aus und vergleicht die JSON-Befunde mit <code>.github/security-audit-baseline.json</code>. Eine neue, fehlende, verschobene oder abgelaufene Ausnahme führt zum Fehler.</p>
+  <pre><code>python scripts/verify_security_audit_baseline.py --help
+jq 'length' .github/security-audit-baseline.json
+</code></pre>
+  <p class="warning">74 Baseline-Einträge laufen am 2026-08-27 ab. Sie dürfen nicht global ignoriert oder automatisch verlängert werden. Siehe <code>docs/openitem/Security_Hardening_Open_Items_2026-07-27.md</code>.</p>
+
+  <h2>Grenzen, Incident- und Rollback-Regel</h2>
+  <p>Diese Änderung belegt weder Deployment, CI noch Browser-E2E. Ein lokaler <code>pip-audit</code>-Subprozess endete mit <code>SIGABRT</code>; ohne gültige <code>ov.conf</code> ist die volle Suite offen. Bei einem neuen Advisory oder abgelaufener Baseline: anhalten, JSON-Befund und Paketpfad sichern, Kompatibilität prüfen und keine breite Ausnahme einführen.</p>
+  <p>Rollback erfolgt ausschließlich als Revert des dedizierten Härtungs-Commits nach Git-Review. Es gibt keine Daten- oder Schema-Migration. Dieses Manual fordert keinen Neustart eines Rechners oder Servers an.</p>
+
+  <h2>Weiterführende Dossiers</h2>
+  <ul>
+    <li><code>docs/audit/2026-07-27-security-audit-main.md</code></li>
+    <li><code>docs/dossiers/ID_security_hardening_2026-07-27.md</code></li>
+    <li><code>docs/tests/TD_security_hardening_2026-07-27.md</code></li>
+    <li><code>docs/sessions/STP_security_hardening_2026-07-27.md</code></li>
+  </ul>
+</body>
+</html>

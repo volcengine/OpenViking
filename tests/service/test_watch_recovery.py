@@ -6,6 +6,7 @@ import asyncio
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import AsyncGenerator
 from unittest.mock import AsyncMock
 
@@ -111,6 +112,22 @@ async def request_context() -> RequestContext:
     return RequestContext(
         user=UserIdentifier.the_default_user(),
         role=Role.ROOT,
+    )
+
+
+@pytest.fixture
+def _empty_code_hosting_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep non-code-host URL watches independent from global config I/O."""
+    monkeypatch.setattr(
+        "openviking.utils.code_hosting_utils.get_openviking_config",
+        lambda: SimpleNamespace(
+            code=SimpleNamespace(
+                github_domains=[],
+                gitlab_domains=[],
+                azure_devops_domains=[],
+                code_hosting_domains=[],
+            )
+        ),
     )
 
 
@@ -385,7 +402,10 @@ class TestResourceExistenceCheck:
 
     @pytest.mark.asyncio
     async def test_url_resources_always_considered_existing(
-        self, temp_storage: Path, request_context: RequestContext
+        self,
+        temp_storage: Path,
+        request_context: RequestContext,
+        _empty_code_hosting_config: None,
     ):
         """Test that URL resources are always considered existing."""
         resource_processor = MockResourceProcessor()
@@ -425,7 +445,10 @@ class TestResourceExistenceCheck:
 
     @pytest.mark.asyncio
     async def test_feishu_user_token_watch_refreshes_before_execution(
-        self, temp_storage: Path, request_context: RequestContext
+        self,
+        temp_storage: Path,
+        request_context: RequestContext,
+        _empty_code_hosting_config: None,
     ):
         resource_processor = MockResourceProcessor()
         resource_service = ResourceService(

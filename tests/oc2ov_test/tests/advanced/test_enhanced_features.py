@@ -4,7 +4,7 @@
 """
 
 from tests.base_cli_test import BaseOpenClawCLITest
-from utils.test_utils import TestData
+from utils.test_utils import ScenarioData
 
 
 class TestEnhancedFeatures(BaseOpenClawCLITest):
@@ -98,10 +98,10 @@ class TestEnhancedFeatures(BaseOpenClawCLITest):
     def test_data_driven_with_custom_data(self):
         """
         演示：使用自定义测试数据
-        - 创建 TestData 对象
+        - 创建 ScenarioData 对象
         - 注册到 data_manager
         """
-        custom_data = TestData(
+        custom_data = ScenarioData(
             name="custom_user",
             description="自定义测试用户",
             input_data={

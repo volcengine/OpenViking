@@ -104,7 +104,8 @@ async def test_skill_read_restores_placeholder_for_agent_segment_name(service):
 
 
 @pytest.mark.asyncio
-async def test_skill_privacy_extraction_returns_content_blocks():
+async def test_skill_privacy_extraction_returns_content_blocks(root_openviking_config):
+    del root_openviking_config
     content = 'api_key: "secret-xyz"\nbase_url: "https://example.com"\n'
     result = await extract_skill_privacy_values(
         skill_name="extract-block-skill",

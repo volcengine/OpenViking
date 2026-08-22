@@ -108,11 +108,14 @@ def test_local_embedder_downloads_default_model_and_prefixes_query(monkeypatch, 
         downloaded["count"] += 1
         return _FakeResponse(b"gguf")
 
-    monkeypatch.setattr(
-        "openviking.models.embedder.local_embedders.importlib.import_module",
-        lambda _name: SimpleNamespace(Llama=_FakeLlama),
-    )
-    monkeypatch.setattr("openviking.models.embedder.local_embedders.requests.get", _fake_get)
+    from openviking.models.embedder import local_embedders
+
+    # Patch objects already imported by the module.  Resolving the second
+    # dotted path after replacing ``importlib.import_module`` would otherwise
+    # mutate the process-global importlib module and make this test order
+    # dependent.
+    monkeypatch.setattr(local_embedders.importlib, "import_module", lambda _name: SimpleNamespace(Llama=_FakeLlama))
+    monkeypatch.setattr(local_embedders.requests, "get", _fake_get)
 
     embedder = LocalDenseEmbedder(cache_dir=str(tmp_path))
 

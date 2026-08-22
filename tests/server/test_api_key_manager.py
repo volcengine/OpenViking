@@ -38,7 +38,8 @@ ROOT_KEY = "test-root-key-abcdef1234567890abcdef1234567890"
 
 
 @pytest_asyncio.fixture(scope="function")
-async def manager_service(temp_dir):
+async def manager_service(temp_dir, offline_test_models):
+    del offline_test_models
     """OpenVikingService for APIKeyManager tests."""
     svc = OpenVikingService(
         path=str(temp_dir / "mgr_data"), user=UserIdentifier.the_default_user("mgr_user")

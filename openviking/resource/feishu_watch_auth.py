@@ -137,7 +137,7 @@ class FeishuOAuthClient:
         except ImportError as exc:
             raise FeishuTenantTokenError(
                 "lark-oapi is required to obtain a Feishu tenant token. "
-                "Install it with: pip install lark-oapi>=1.0.0"
+                "Install it with: pip install 'lark-oapi>=1.7.1,<2.0'"
             ) from exc
 
         config = Config()
@@ -170,7 +170,7 @@ class FeishuOAuthClient:
         except ImportError as exc:
             raise FeishuTokenRefreshError(
                 "lark-oapi is required to refresh Feishu user tokens. "
-                "Install it with: pip install lark-oapi>=1.0.0",
+                "Install it with: pip install 'lark-oapi>=1.7.1,<2.0'",
                 permanent=True,
             ) from exc
 
@@ -227,7 +227,7 @@ class FeishuOAuthClient:
             except ImportError as exc:
                 raise FeishuTokenRefreshError(
                     "lark-oapi is required to refresh Feishu user tokens. "
-                    "Install it with: pip install lark-oapi>=1.0.0",
+                    "Install it with: pip install 'lark-oapi>=1.7.1,<2.0'",
                     permanent=True,
                 ) from exc
 

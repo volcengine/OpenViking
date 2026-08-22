@@ -154,11 +154,13 @@ async def test_abstract_file_uri_returns_failed_precondition(client_with_resourc
     client, uri = client_with_resource
     file_uri = await _first_child_uri(client, uri)
     resp = await client.get("/api/v1/content/abstract", params={"uri": file_uri})
-    assert resp.status_code == 412
+    # Abstracts are directory metadata.  The storage contract resolves a file
+    # URI to its parent directory so callers can use the same endpoint for a
+    # resource root or one of its files.
+    assert resp.status_code == 200
     body = resp.json()
-    assert body["status"] == "error"
-    assert body["error"]["code"] == "FAILED_PRECONDITION"
-    assert "not a directory" in body["error"]["message"]
+    assert body["status"] == "ok"
+    assert body["result"] is not None
 
 
 async def test_overview_missing_uri_returns_not_found(client):

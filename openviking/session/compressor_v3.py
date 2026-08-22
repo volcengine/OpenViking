@@ -2079,7 +2079,7 @@ def _make_memory_diff(
     return {
         "archive_uri": archive_uri,
         "trace_id": tracer.get_trace_id() or None,
-        "extracted_at": datetime.utcnow().isoformat() + "Z",
+        "extracted_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "operations": {
             "adds": list(adds),
             "updates": list(updates),

@@ -178,13 +178,14 @@ This lets any MCP client — including sandboxed environments without a local fi
 
 #### When you must set `OPENVIKING_PUBLIC_BASE_URL`
 
-The upload URL the tool returns is resolved server-side in this order:
+For a public deployment, the upload URL the tool returns is resolved only from
+an explicitly configured canonical origin, in this order:
 
 1. Environment variable `OPENVIKING_PUBLIC_BASE_URL`
 2. `server.public_base_url` in `ov.conf`
-3. Request headers `X-Forwarded-Host` / `X-Forwarded-Proto` (forwarded by the reverse-proxy chain)
-4. Request `Host` header (direct connection)
-5. Listen-address fallback: `http://{host}:{port}`
+For loopback-only development, request headers and the listen address remain
+available as compatibility fallbacks. They are never a public-deployment trust
+anchor.
 
 If the server runs behind a reverse proxy (nginx / cloud LB / k8s ingress / MCP proxy), **set `OPENVIKING_PUBLIC_BASE_URL` explicitly**. Layers 3–5 are inferred and break in these cases:
 

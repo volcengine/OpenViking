@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react'
 import type { ComponentProps, ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import hljs from 'highlight.js/lib/core'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import rehypeRaw from 'rehype-raw'
 import rehypeSanitize from 'rehype-sanitize'
 import remarkGfm from 'remark-gfm'
@@ -327,6 +327,124 @@ function resolveMarkdownAssetUrl(assetPath: string, fileUri: string): string {
     return toDownloadUrl(target.value)
   }
   return target.value
+}
+
+function decodeUriForSchemeCheck(value: string): string {
+  let decoded = value
+  // Nested encoding must not turn a dangerous scheme into a relative Viking
+  // path after the browser performs another decoding step.
+  for (let index = 0; index < 4; index += 1) {
+    const next = safeDecodeUri(decoded)
+    if (next === decoded) break
+    decoded = next
+  }
+  return decoded
+}
+
+function markdownUrlScheme(value: string): string | null {
+  const normalized = Array.from(value)
+    .filter((character) => {
+      const code = character.charCodeAt(0)
+      return code > 0x20 && code !== 0x7f
+    })
+    .join('')
+  const match = /^([a-z][a-z0-9+.-]*):/i.exec(normalized)
+  return match ? match[1].toLowerCase() : null
+}
+
+function transformMarkdownUrl(url: string): string {
+  const decodedForScheme = decodeUriForSchemeCheck(url.trim())
+  const scheme = markdownUrlScheme(decodedForScheme)
+  if (
+    scheme === 'http' ||
+    scheme === 'https' ||
+    scheme === 'mailto' ||
+    scheme === 'tel'
+  ) {
+    return decodedForScheme
+  }
+  if (scheme === 'viking' && /^viking:\/\//i.test(decodedForScheme)) {
+    return `${vikingPrefix}${decodedForScheme.slice(decodedForScheme.indexOf('://') + 3)}`
+  }
+  return defaultUrlTransform(url)
+}
+
+export function resolveMarkdownLinkUrl(
+  assetPath: string,
+  fileUri: string,
+): string | null {
+  const trimmed = assetPath.trim()
+  if (!trimmed) return null
+  if (trimmed.startsWith('#')) return trimmed
+
+  const decodedForScheme = decodeUriForSchemeCheck(trimmed)
+  const scheme = markdownUrlScheme(decodedForScheme)
+  if (scheme) {
+    if (
+      scheme === 'http' ||
+      scheme === 'https' ||
+      scheme === 'mailto' ||
+      scheme === 'tel'
+    ) {
+      return decodedForScheme
+    }
+    if (scheme === 'viking' && /^viking:\/\//i.test(decodedForScheme)) {
+      return toDownloadUrl(
+        `${vikingPrefix}${decodedForScheme.slice(decodedForScheme.indexOf('://') + 3)}`,
+      )
+    }
+    return null
+  }
+  if (
+    decodedForScheme.startsWith('//') ||
+    decodedForScheme.startsWith('\\\\')
+  ) {
+    return null
+  }
+  return toDownloadUrl(
+    resolveRelativeVikingUri(fileUri, safeDecodeUri(trimmed)),
+  )
+}
+
+export function MarkdownLink({
+  children,
+  fileUri,
+  href,
+  onNavigate,
+}: {
+  children: ReactNode
+  fileUri: string
+  href?: string
+  onNavigate?: (uri: string) => void
+}) {
+  const resolvedHref = href ? resolveMarkdownLinkUrl(href, fileUri) : null
+  const assetTarget = href
+    ? resolveMarkdownAssetTarget(href, fileUri)
+    : null
+  const internalTarget =
+    resolvedHref && assetTarget?.kind === 'viking'
+      ? assetTarget.value
+      : null
+  const renderedHref = internalTarget && onNavigate ? internalTarget : resolvedHref
+  const isExternal = resolvedHref
+    ? /^(https?:|mailto:|tel:)/i.test(resolvedHref)
+    : false
+
+  return (
+    <a
+      href={renderedHref ?? undefined}
+      onClick={(event) => {
+        if (internalTarget && onNavigate) {
+          event.preventDefault()
+          onNavigate(internalTarget)
+        }
+      }}
+      target={isExternal ? '_blank' : undefined}
+      rel={isExternal ? 'noreferrer noopener' : undefined}
+    >
+      {children}
+    </a>
+  )
 }
 
 function MarkdownImage({
@@ -1604,7 +1722,7 @@ export function FilePreview({
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm]}
                   rehypePlugins={[rehypeRaw, rehypeSanitize]}
-                  urlTransform={(url) => url}
+                  urlTransform={transformMarkdownUrl}
                   components={{
                     ...markdownComponents,
                     img: ({ src, alt }) => (
@@ -1614,36 +1732,15 @@ export function FilePreview({
                         fileUri={file.uri}
                       />
                     ),
-                    a: ({ href, children }) => {
-                      const target = href
-                        ? resolveMarkdownAssetTarget(String(href), file.uri)
-                        : null
-                      const isInternal =
-                        target?.kind === 'viking' && Boolean(onNavigate)
-                      const resolvedHref = target
-                        ? isInternal
-                          ? target.value
-                          : resolveMarkdownAssetUrl(target.value, file.uri)
-                        : ''
-                      const isExternal = /^(https?:|mailto:|tel:)/i.test(
-                        resolvedHref,
-                      )
-                      return (
-                        <a
-                          href={resolvedHref}
-                          onClick={(event) => {
-                            if (target?.kind === 'viking' && onNavigate) {
-                              event.preventDefault()
-                              onNavigate(target.value)
-                            }
-                          }}
-                          target={isExternal ? '_blank' : undefined}
-                          rel={isExternal ? 'noreferrer noopener' : undefined}
-                        >
-                          {children}
-                        </a>
-                      )
-                    },
+                    a: ({ href, children }) => (
+                      <MarkdownLink
+                        href={href ? String(href) : undefined}
+                        fileUri={file.uri}
+                        onNavigate={onNavigate}
+                      >
+                        {children}
+                      </MarkdownLink>
+                    ),
                   }}
                 >
                   {displayContent || emptyFileText}

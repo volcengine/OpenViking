@@ -1,0 +1,109 @@
+name: Security Dependency Audit
+
+on:
+  pull_request:
+    paths:
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'bot/package.json'
+      - 'bot/package-lock.json'
+      - 'web-studio/package.json'
+      - 'web-studio/package-lock.json'
+      - '.github/security-audit-baseline.json'
+      - '.github/workflows/security-dependency-audit.yml'
+      - 'scripts/verify_security_audit_baseline.py'
+  schedule:
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - uses: astral-sh/setup-uv@v7
+
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install pinned audit tools
+        run: |
+          set -euo pipefail
+          cargo install cargo-audit --version 0.22.1 --locked
+          npm install --global npm@11.6.1
+
+      - name: Export locked Python requirements
+        run: uv export --locked --no-hashes --format requirements-txt -o .security-requirements.txt
+
+      - name: Run pip-audit
+        run: |
+          set -euo pipefail
+          set +e
+          uv tool run --from pip-audit==2.10.0 pip-audit -r .security-requirements.txt --format json -o .security-pip-audit.json
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ] && [ "$status" -ne 1 ]; then
+            exit "$status"
+          fi
+
+      - name: Run cargo audit
+        run: |
+          set -euo pipefail
+          set +e
+          cargo audit --json > .security-cargo-audit.json
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ] && [ "$status" -ne 1 ]; then
+            exit "$status"
+          fi
+
+      - name: Run bot npm audit
+        working-directory: bot
+        run: |
+          set -euo pipefail
+          set +e
+          npm audit --omit=dev --json > ../.security-bot-npm-audit.json
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ] && [ "$status" -ne 1 ]; then
+            exit "$status"
+          fi
+
+      - name: Run web-studio npm audit
+        working-directory: web-studio
+        run: |
+          set -euo pipefail
+          set +e
+          npm audit --omit=dev --json > ../.security-web-studio-npm-audit.json
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ] && [ "$status" -ne 1 ]; then
+            exit "$status"
+          fi
+
+      - name: Reject new, moved, stale, or expired advisory exceptions
+        run: |
+          python scripts/verify_security_audit_baseline.py \
+            --baseline .github/security-audit-baseline.json \
+            --pip-audit .security-pip-audit.json \
+            --cargo-audit .security-cargo-audit.json \
+            --npm-audit .security-bot-npm-audit.json bot/package-lock.json \
+            --npm-audit .security-web-studio-npm-audit.json web-studio/package-lock.json \
+            --scanner-version pip=2.10.0 \
+            --scanner-version cargo=0.22.1 \
+            --scanner-version npm=11.6.1
