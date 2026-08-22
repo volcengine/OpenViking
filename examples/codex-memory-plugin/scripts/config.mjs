@@ -36,6 +36,7 @@
  *   OPENVIKING_RECALL_COMPRESS_MODEL, OPENVIKING_RECALL_COMPRESS_THINKING
  *   OPENVIKING_RECALL_COMPRESS_BASE_URL
  *   OPENVIKING_RECALL_LIMIT, OPENVIKING_SCORE_THRESHOLD
+ *   OPENVIKING_RECALL_CONTROL_PROMPT_SHORT_CIRCUIT
  *   OPENVIKING_WORKSPACE_PEER, OPENVIKING_RECALL_PEER_SCOPE
  *   OPENVIKING_NO_AUTO_INJECT, OPENVIKING_PROFILE_TOKEN_BUDGET
  *   OPENVIKING_DEBUG=1, OPENVIKING_DEBUG_LOG
@@ -187,6 +188,9 @@ export function loadConfig() {
       process.env.OPENVIKING_MIN_QUERY_LENGTH,
       num(cx.minQueryLength, 3),
     ))),
+    recallControlPromptShortCircuit:
+      envBool("OPENVIKING_RECALL_CONTROL_PROMPT_SHORT_CIRCUIT") ??
+      configBool(cx.recallControlPromptShortCircuit, true),
     logRankingDetails: envBool("OPENVIKING_LOG_RANKING_DETAILS") ?? (cx.logRankingDetails === true),
     recallPeerScope,
     recallCompress: envBool("OPENVIKING_RECALL_COMPRESS") ?? configBool(cx.recallCompress, true),

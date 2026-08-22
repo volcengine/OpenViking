@@ -17,6 +17,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "./config.mjs";
+import { classifyControlPrompt } from "./control-prompt.mjs";
 import { trySpawnCodex } from "./codex-launch.mjs";
 import { createLogger } from "./debug-log.mjs";
 import {
@@ -583,6 +584,15 @@ async function main() {
 
   if (!userPrompt || userPrompt.length < cfg.minQueryLength) {
     log("skip", { stage: "query_check", reason: "query too short or empty" });
+    emit();
+    return;
+  }
+
+  const controlPromptKind = cfg.recallControlPromptShortCircuit
+    ? classifyControlPrompt(userPrompt)
+    : null;
+  if (controlPromptKind) {
+    log("skip", { stage: "query_check", reason: "control prompt", kind: controlPromptKind });
     emit();
     return;
   }

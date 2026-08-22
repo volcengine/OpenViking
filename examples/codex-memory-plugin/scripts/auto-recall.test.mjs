@@ -7,6 +7,7 @@ import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { resolveCodexLaunch, trySpawnCodex } from "./codex-launch.mjs";
+import { classifyControlPrompt } from "./control-prompt.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -213,6 +214,82 @@ async function runEndpointCompressionCase({
     await rm(stateDir, { recursive: true, force: true });
   }
 }
+
+test("control prompt classifier is strict about prompts with task details", () => {
+  const controls = [
+    ["确认", "acknowledgement"],
+    ["继续执行", "continuation"],
+    ["现在什么进度？", "status"],
+    ["批准 PUBLISH_APPROVED，指纹 66a86081040c620b9ec92e52b22ca7a74d62f634fc921264030414943b1b2eae", "approval"],
+  ];
+  for (const [prompt, kind] of controls) assert.equal(classifyControlPrompt(prompt), kind);
+
+  for (const prompt of [
+    "继续优化 OpenViking 的召回算法",
+    "批准预算为 100 美元并导入历史记录",
+    "现在 OpenViking 的召回机制是什么",
+    "please continue the migration but keep Python 3.10 compatibility",
+    "这个 PR 完成了吗？如果没有请修复 CI",
+  ]) {
+    assert.equal(classifyControlPrompt(prompt), null, prompt);
+  }
+});
+
+test("auto-recall short-circuits control prompts before any HTTP request", async () => {
+  let requestCount = 0;
+  await withMockOpenViking(async (_req, res) => {
+    requestCount += 1;
+    writeJson(res, { status: "ok", result: { ok: true } });
+  }, async (baseUrl) => {
+    const result = await runAutoRecall(
+      { prompt: "继续执行", session_id: "codex:control" },
+      {
+        OPENVIKING_AUTO_RECALL: "1",
+        OPENVIKING_CREDENTIAL_SOURCE: "env",
+        OPENVIKING_MIN_QUERY_LENGTH: "1",
+        OPENVIKING_RECALL_TIMEOUT_MS: "10000",
+        OPENVIKING_URL: baseUrl,
+      },
+    );
+    assert.deepEqual(JSON.parse(result.stdout.trim()), {});
+  });
+  assert.equal(requestCount, 0);
+});
+
+test("control prompt short-circuit can be disabled", async () => {
+  let requestCount = 0;
+  await withMockOpenViking(async (req, res) => {
+    requestCount += 1;
+    const url = new URL(req.url, "http://127.0.0.1");
+    if (req.method === "GET" && url.pathname === "/health") {
+      writeJson(res, { status: "ok", result: { ok: true } });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/v1/search/search") {
+      writeJson(res, { status: "ok", result: { entries: [], rendered: "" } });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/v1/search/recall") {
+      writeJson(res, { status: "ok", result: { entries: [], rendered: "" } });
+      return;
+    }
+    writeStatusJson(res, 404, { status: "error", error: "not found" });
+  }, async (baseUrl) => {
+    const result = await runAutoRecall(
+      { prompt: "继续执行", session_id: "codex:control-disabled" },
+      {
+        OPENVIKING_AUTO_RECALL: "1",
+        OPENVIKING_CREDENTIAL_SOURCE: "env",
+        OPENVIKING_MIN_QUERY_LENGTH: "1",
+        OPENVIKING_RECALL_CONTROL_PROMPT_SHORT_CIRCUIT: "0",
+        OPENVIKING_RECALL_TIMEOUT_MS: "10000",
+        OPENVIKING_URL: baseUrl,
+      },
+    );
+    assert.deepEqual(JSON.parse(result.stdout.trim()), {});
+  });
+  assert.ok(requestCount > 0);
+});
 
 test("auto-recall asks the context face with the derived OpenViking session id", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-state-"));
