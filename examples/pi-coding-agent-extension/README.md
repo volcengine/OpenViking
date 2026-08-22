@@ -44,12 +44,15 @@ Credentials are resolved from `OPENVIKING_*` environment variables, `~/.openviki
 node ~/.pi/agent/extensions/openviking/scripts/setup.mjs
 ```
 
-`~/.pi/agent/extensions/openviking/config.json` is for behavior knobs only:
+`~/.pi/agent/extensions/openviking/config.json` is for behavior and peer-scoping knobs. Connection and authentication credentials still come from the shared sources above:
 
 ```json
 {
   "enabled": true,
   "syncTurns": true,
+  "peerId": "",
+  "workspacePeer": true,
+  "recallPeerScope": "all",
   "recallTokenBudget": 2000,
   "scoreThreshold": 0.35,
   "minQueryLength": 3,
@@ -85,7 +88,7 @@ tiers and cross-turn dedup are shared with every other harness. Deployments
 without that endpoint fall back to `/api/v1/search/recall`, and that outcome is
 cached so only the first turn pays for the probe.
 
-API keys are sent as `Authorization: Bearer ...`. By default the extension derives a peer from the process workspace path using Claude's project-directory naming rule: every non-letter-or-digit character becomes `-`, with no path normalization. For example, `/Users/x/Dev/OpenViking` becomes `-Users-x-Dev-OpenViking`. The effective peer is sent as `X-OpenViking-Actor-Peer` and stored as `peer_id` on captured session messages. `OPENVIKING_PEER_ID` overrides the workspace-derived value.
+API keys are sent as `Authorization: Bearer ...`. By default the extension derives a peer from the process workspace path using Claude's project-directory naming rule: every non-letter-or-digit character becomes `-`, with no path normalization. For example, `/Users/x/Dev/OpenViking` becomes `-Users-x-Dev-OpenViking`. The effective peer is sent as `X-OpenViking-Actor-Peer` and stored as `peer_id` on captured session messages. An explicit peer from the shared credential sources (`OPENVIKING_PEER_ID`, `ovcli.conf`, or `ov.conf`) takes precedence over `config.json`'s `peerId`; the local `peerId` in turn takes precedence over workspace derivation.
 
 Recall defaults to the broad mode: global memory, the current workspace, and other workspace memories can all be recalled, with other workspaces penalized and rendered later. Set `OPENVIKING_RECALL_PEER_SCOPE=actor` for the isolation mode, which only sees global memory plus the current workspace. In deployments where one bot serves multiple real people, such as zouk, vikingbot, or AstrBot, use the isolation mode with an explicit actor peer so one person's memories are not recalled into another person's session.
 
@@ -107,6 +110,14 @@ All fields below live in `config.json`. Defaults are shown.
 |--------------------------|------------|--------------------------------------------------------------------------|
 | `enabled`                | `true`     | Set `false` to disable the extension entirely                            |
 | `syncTurns`              | `true`     | Enable auto-capture of conversation turns                                |
+
+### Peer scoping
+
+| Field                    | Default    | Description                                                              |
+|--------------------------|------------|--------------------------------------------------------------------------|
+| `peerId`                 | `""`      | Local explicit peer fallback; shared credential sources take precedence  |
+| `workspacePeer`          | `true`     | Derive a peer from the current workspace when no explicit peer is set    |
+| `recallPeerScope`        | `"all"`   | Use `"actor"` for strict current-peer recall or `"all"` for broad recall |
 
 ### Recall tuning
 
