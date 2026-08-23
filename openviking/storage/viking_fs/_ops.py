@@ -163,13 +163,24 @@ class _OpsMixin:
                 if mapped is not None:
                     raise mapped from exc
                 raise
-            # Path does not exist: clean up any orphan index records and return
-            uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
-            uris_to_delete.append(target_uri)
+            # Path does not exist: clean up any orphan index records and return.
+            # The AGFS listing is gone, so discover descendant URIs from the
+            # vector index itself; otherwise exact-match deletion removes only
+            # the target URI record and leaves every child record behind as an
+            # orphan (#3064).
             real_ctx = self._ctx_or_default(ctx)
+            if recursive:
+                uris_to_delete = await self._collect_orphan_uris(target_uri, ctx=real_ctx)
+            else:
+                uris_to_delete = []
+            if target_uri not in uris_to_delete:
+                uris_to_delete.append(target_uri)
             estimated_count = await _estimate_deleted_count(path, real_ctx)
             await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
-            logger.info(f"[VikingFS] rm target not found, cleaned orphan index: {uri}")
+            logger.info(
+                f"[VikingFS] rm target not found, cleaned orphan index: {uri} "
+                f"({len(uris_to_delete)} URIs)"
+            )
             return {"estimated_deleted_count": estimated_count}
 
         if is_dir:
@@ -844,6 +855,42 @@ class _OpsMixin:
                     uris.append(self._path_to_uri(full_path, ctx=ctx))
 
         await _collect(path)
+        return uris
+
+    async def _collect_orphan_uris(
+        self, uri: str, ctx: Optional[RequestContext] = None
+    ) -> List[str]:
+        """Collect a URI and all its descendants from the vector index.
+
+        Used by ``rm()`` when the backing AGFS path no longer exists: the
+        filesystem listing is unavailable, so the index is the only source
+        of truth for which child records still need cleanup.
+        """
+        vector_store = self._get_vector_store()
+        if not vector_store:
+            return []
+
+        real_ctx = self._ctx_or_default(ctx)
+        try:
+            records = await vector_store.filter(
+                filter=PathScope("uri", uri, depth=-1),
+                limit=100000,
+                offset=0,
+                output_fields=["uri"],
+                ctx=real_ctx,
+            )
+        except Exception as e:
+            logger.warning(f"[VikingFS] Failed to collect orphan URIs under {uri}: {e}")
+            return []
+
+        uris: List[str] = []
+        seen: set = set()
+        for record in records:
+            child_uri = record.get("uri") if isinstance(record, dict) else None
+            if not isinstance(child_uri, str) or not child_uri or child_uri in seen:
+                continue
+            seen.add(child_uri)
+            uris.append(child_uri)
         return uris
 
     # ========== Parent Directory Creation ==========
