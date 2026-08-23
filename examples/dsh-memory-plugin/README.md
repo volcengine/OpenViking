@@ -152,7 +152,7 @@ The patch can also carry plugin config:
 - `session/event` captures user, assistant, and optionally tool-result messages without scraping a transcript.
 - `turn/end` checks the OpenViking pending-token threshold and commits when required.
 - Failed writes enter the shared OpenViking pending queue for replay at the next session start.
-- `tools/pre-execute` blocks DSH filesystem and shell tools from treating `viking://` URIs as local paths, pointing the model at the bridged `mcp__openviking__*` tools instead.
+- `tools/pre-execute` blocks DSH filesystem tools from using `viking://` URIs in path arguments and blocks shell commands that contain them, pointing the model at the bridged `mcp__openviking__*` tools instead. File content, edit replacement text, grep query patterns, and descriptive metadata may mention `viking://` URIs without being treated as paths; shell commands remain conservatively checked as a whole, without token-level interpretation.
 
 Each DSH session maps to `dsh-<session-id>` in OpenViking. Workspace-derived actor peers are resolved per session and sent on every session-specific request.
 
