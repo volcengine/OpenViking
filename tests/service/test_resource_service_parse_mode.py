@@ -311,6 +311,7 @@ async def test_tos_auth_args_are_snapshotted_and_omitted_from_queue(
     assert prepare_durable_source.await_args.kwargs["tos_signature"] == "signed-value"
     message = service._enqueue_add_resource_job.await_args.args[0]
     assert "tos_signature" not in message.args
+    assert "tos_access" not in message.args
 
 
 @pytest.mark.asyncio

@@ -130,6 +130,7 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "tag_mode",
     }
 )
+_ADD_RESOURCE_TRANSIENT_ARGS = frozenset({"tos_signature", "tos_access"})
 _ADD_RESOURCE_TAG_MODES = frozenset({"replace", "append"})
 
 _INTERNAL_INGESTION_FIELDS = frozenset(
@@ -725,7 +726,7 @@ class ResourceService:
         queued_args = {
             key: value
             for key, value in processor_kwargs.items()
-            if key not in _ADD_RESOURCE_ARGS_RESERVED_FIELDS | {"tos_signature", "tos_access"}
+            if key not in _ADD_RESOURCE_ARGS_RESERVED_FIELDS | _ADD_RESOURCE_TRANSIENT_ARGS
         }
         queued_args = self._sanitize_watch_processor_kwargs(queued_args)
         task_auth: Dict[str, Any] = {}
