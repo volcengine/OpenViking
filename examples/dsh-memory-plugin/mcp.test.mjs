@@ -20,6 +20,7 @@ test("the mount config validates against the pinned bridge's own schema", () => 
   assert.equal(parsed.serverName, "openviking");
   assert.equal(parsed.command, process.execPath);
   assert.deepEqual(parsed.args, [PROXY_PATH]);
+  assert.equal(parsed.env.ELECTRON_RUN_AS_NODE, "1");
   assert.equal(parsed.toolCallTimeoutMs, 60000);
   // Startup must not be fatal: recall, capture, and commit keep working when
   // only the MCP endpoint is down, and the bridge reconnects on its own.
@@ -42,6 +43,7 @@ test("credentials resolved by the plugin reach the proxy through the child env",
   const { env } = buildMcpConfig(config);
 
   assert.deepEqual(env, {
+    ELECTRON_RUN_AS_NODE: "1",
     OPENVIKING_URL: "http://ov.example.com",
     OPENVIKING_API_KEY: "secret",
     OPENVIKING_ACCOUNT: "acme",
@@ -69,7 +71,10 @@ test("an anonymous local server forwards no credential env", () => {
     mcpToolCallTimeoutMs: 60000,
   });
 
-  assert.deepEqual(env, { OPENVIKING_URL: "http://127.0.0.1:1933" });
+  assert.deepEqual(env, {
+    ELECTRON_RUN_AS_NODE: "1",
+    OPENVIKING_URL: "http://127.0.0.1:1933",
+  });
 });
 
 test("mounting passes the bridge plugin and its config to the host context", () => {

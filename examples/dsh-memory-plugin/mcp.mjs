@@ -16,7 +16,10 @@ export const PROXY_PATH = fileURLToPath(new URL("./servers/mcp-proxy.mjs", impor
  * already resolved have to be passed explicitly.
  */
 export function buildMcpConfig(config) {
-  const env = {};
+  // In DSH Desktop, process.execPath is Electron's executable rather than a
+  // standalone Node binary. This tells Electron to run the proxy script as
+  // Node instead of attempting to launch a second Desktop instance.
+  const env = { ELECTRON_RUN_AS_NODE: "1" };
   if (config.endpoint) env.OPENVIKING_URL = config.endpoint;
   if (config.apiKey) env.OPENVIKING_API_KEY = config.apiKey;
   if (config.account) env.OPENVIKING_ACCOUNT = config.account;
