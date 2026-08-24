@@ -162,4 +162,36 @@ describe('FilePreview Markdown links', () => {
 
     expect(onNavigate).toHaveBeenCalledWith('viking://resources/资料/目标.md')
   })
+
+  it('preserves non-viking links in a directory overview', () => {
+    const onNavigate = vi.fn()
+    renderPreview(
+      directory,
+      onNavigate,
+      [
+        '[Relative](child.md)',
+        '[Protocol relative](//example.com/child.md)',
+        '[External](https://example.com/child.md)',
+        '[Data](data:text/html,unsafe)',
+        '[Blob](blob:https://example.com/id)',
+      ].join('\n\n'),
+    )
+
+    expect(
+      screen.getByRole('link', { name: 'Relative' }).getAttribute('href'),
+    ).toBe('child.md')
+    expect(
+      screen
+        .getByRole('link', { name: 'Protocol relative' })
+        .getAttribute('href'),
+    ).toBe('//example.com/child.md')
+    const externalLink = screen.getByRole('link', { name: 'External' })
+    expect(externalLink.getAttribute('href')).toBe(
+      'https://example.com/child.md',
+    )
+    expect(externalLink.getAttribute('target')).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Data' })).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Blob' })).toBeNull()
+    expect(onNavigate).not.toHaveBeenCalled()
+  })
 })

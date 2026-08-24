@@ -329,8 +329,8 @@ function resolveMarkdownAssetUrl(assetPath: string, fileUri: string): string {
   return target.value
 }
 
-function transformMarkdownUrl(url: string): string {
-  return /^(viking|data|blob):/i.test(url) ? url : defaultUrlTransform(url)
+function transformDirectoryMarkdownUrl(url: string): string {
+  return url.startsWith(vikingPrefix) ? url : defaultUrlTransform(url)
 }
 
 function MarkdownLink({
@@ -367,6 +367,29 @@ function MarkdownLink({
     >
       {children}
     </a>
+  )
+}
+
+function DirectoryMarkdownLink({
+  children,
+  fileUri,
+  href,
+  onNavigate,
+}: {
+  children?: ReactNode
+  fileUri: string
+  href?: string
+  onNavigate?: (uri: string) => void
+}) {
+  const decodedHref = href ? safeDecodeUri(href.trim()) : ''
+  if (!decodedHref.startsWith(vikingPrefix)) {
+    return <a href={href}>{children}</a>
+  }
+
+  return (
+    <MarkdownLink href={decodedHref} fileUri={fileUri} onNavigate={onNavigate}>
+      {children}
+    </MarkdownLink>
   )
 }
 
@@ -1557,17 +1580,17 @@ export function FilePreview({
                         <article className="prose prose-sm max-w-none break-words rounded-md border bg-muted/20 p-3 dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
                           <ReactMarkdown
                             remarkPlugins={[remarkGfm]}
-                            urlTransform={transformMarkdownUrl}
+                            urlTransform={transformDirectoryMarkdownUrl}
                             components={{
                               ...markdownComponents,
                               a: ({ href, children }) => (
-                                <MarkdownLink
+                                <DirectoryMarkdownLink
                                   href={href}
                                   fileUri={file.uri}
                                   onNavigate={onNavigate}
                                 >
                                   {children}
-                                </MarkdownLink>
+                                </DirectoryMarkdownLink>
                               ),
                             }}
                           >
@@ -1657,7 +1680,7 @@ export function FilePreview({
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm]}
                   rehypePlugins={[rehypeRaw, rehypeSanitize]}
-                  urlTransform={transformMarkdownUrl}
+                  urlTransform={(url) => url}
                   components={{
                     ...markdownComponents,
                     img: ({ src, alt }) => (
