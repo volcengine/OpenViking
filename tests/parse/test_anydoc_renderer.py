@@ -18,7 +18,13 @@ class FakeStorage:
 
 
 def _style(**overrides):
-    values = {"bold": False, "italic": False, "strike": False, "code": False}
+    values = {
+        "bold": False,
+        "italic": False,
+        "strike": False,
+        "code": False,
+        "underline": False,
+    }
     values.update(overrides)
     return SimpleNamespace(**values)
 
@@ -124,6 +130,23 @@ def test_renderer_merges_adjacent_styled_text_and_preserves_outer_spaces(tmp_pat
     markdown = _render_document(tmp_path, document)
 
     assert markdown == "**foo bar**\n"
+
+
+def test_renderer_preserves_underlined_text(tmp_path):
+    document = _doc(
+        [
+            _paragraph(
+                _text("plain "),
+                _text("underlined", underline=True),
+                _text(" and "),
+                _text("strong", bold=True, underline=True),
+            )
+        ]
+    )
+
+    markdown = _render_document(tmp_path, document)
+
+    assert markdown == "plain <ins>underlined</ins> and <ins>**strong**</ins>\n"
 
 
 def test_renderer_uses_dynamic_backtick_fences(tmp_path):

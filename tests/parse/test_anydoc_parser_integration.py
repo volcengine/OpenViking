@@ -130,6 +130,29 @@ async def test_anydoc_parser_disabled_rejects_office_file(tmp_path):
         await parser.parse(source)
 
 
+@pytest.mark.asyncio
+async def test_anydoc_parser_parse_content_delegates_to_markdown_parser():
+    parser = anydoc.AnyDocParser()
+    seen = _stub_markdown_parse(parser)
+
+    result = await parser.parse_content(
+        "# converted",
+        source_path="/tmp/report.docx",
+        instruction="keep headings",
+        source_name="report.docx",
+        split_content=False,
+    )
+
+    assert seen["content"] == "# converted"
+    assert seen["source_path"] == "/tmp/report.docx"
+    assert seen["instruction"] == "keep headings"
+    assert seen["kwargs"]["source_name"] == "report.docx"
+    assert seen["kwargs"]["split_content"] is False
+    assert result.source_format == "docx"
+    assert result.parser_name == "AnyDocParser"
+    assert result.parser_version == "1.0"
+
+
 def test_registry_routes_office_and_epub_extensions_to_anydoc_parser():
     anydoc_config = AnydocConfig(enabled=False)
     registry = ParserRegistry(

@@ -10,7 +10,6 @@ import pytest
 
 from openviking.parse.base import NodeType, ResourceNode, create_parse_result
 from openviking.parse.parsers import anydoc, anydoc_converter
-from openviking_cli.utils.config.parser_config import AnydocConfig
 
 
 def _stub_markdown_parse(parser) -> dict[str, Any]:
@@ -84,51 +83,3 @@ async def test_anydoc_parser_offloads_docx_conversion(monkeypatch, tmp_path: Pat
     assert result.source_format == "docx"
     assert result.parser_name == "AnyDocParser"
 
-
-@pytest.mark.asyncio
-async def test_anydoc_parser_forwards_original_name_to_markdown(monkeypatch, tmp_path: Path):
-    parser = anydoc.AnyDocParser()
-    seen = _stub_markdown_parse(parser)
-    _patch_to_thread(monkeypatch, anydoc)
-    monkeypatch.setattr(
-        anydoc_converter.AnyDocConverter,
-        "convert",
-        lambda *args, **kwargs: _conversion(),
-    )
-
-    upload = tmp_path / "upload_abc123.docx"
-    upload.write_bytes(b"placeholder")
-
-    await parser.parse(upload, source_name="季度报告.docx")
-
-    forwarded = seen["kwargs"].get("source_name") or seen["kwargs"].get("resource_name")
-    assert forwarded == "季度报告.docx", seen["kwargs"]
-
-
-@pytest.mark.asyncio
-async def test_anydoc_parser_forwards_no_split_to_markdown(monkeypatch, tmp_path: Path):
-    parser = anydoc.AnyDocParser()
-    seen = _stub_markdown_parse(parser)
-    _patch_to_thread(monkeypatch, anydoc)
-    monkeypatch.setattr(
-        anydoc_converter.AnyDocConverter,
-        "convert",
-        lambda *args, **kwargs: _conversion(),
-    )
-
-    upload = tmp_path / "screenplay.docx"
-    upload.write_bytes(b"placeholder")
-
-    await parser.parse(upload, split_content=False)
-
-    assert seen["kwargs"]["split_content"] is False
-
-
-@pytest.mark.asyncio
-async def test_anydoc_parser_disabled_rejects_office_file(tmp_path: Path):
-    parser = anydoc.AnyDocParser(anydoc_config=AnydocConfig(enabled=False))
-    source = tmp_path / "sample.docx"
-    source.write_bytes(b"placeholder")
-
-    with pytest.raises(RuntimeError, match="AnyDoc parser is disabled"):
-        await parser.parse(source)

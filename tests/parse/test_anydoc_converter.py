@@ -179,6 +179,50 @@ def test_converter_adds_path_to_anydoc_conversion_error(tmp_path):
         )
 
 
+def test_converter_falls_back_for_legacy_doc_when_anydoc_fails(tmp_path, monkeypatch):
+    source = tmp_path / "legacy.doc"
+    source.write_bytes(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1placeholder")
+    monkeypatch.setattr(
+        "openviking.parse.parsers.anydoc_converter._load_document",
+        lambda path, format_hint=None: (_ for _ in ()).throw(RuntimeError("convert failed")),
+    )
+    monkeypatch.setattr(
+        "openviking.parse.parsers.anydoc_converter.extract_legacy_doc_text",
+        lambda path: "Recovered legacy doc text",
+    )
+
+    result = AnyDocConverter().convert(
+        source,
+        resource_name="legacy",
+        storage=FakeStorage(tmp_path / "media"),
+    )
+
+    assert result.markdown == "Recovered legacy doc text"
+    assert result.source_format == "doc"
+    assert result.images_saved == 0
+    assert "used text fallback" in result.warnings[0]
+
+
+def test_converter_does_not_raw_fallback_for_docx_payload_named_doc(tmp_path, monkeypatch):
+    source = tmp_path / "renamed.doc"
+    source.write_bytes(b"PK\x03\x04placeholder")
+    monkeypatch.setattr(
+        "openviking.parse.parsers.anydoc_converter._load_document",
+        lambda path, format_hint=None: (_ for _ in ()).throw(RuntimeError("convert failed")),
+    )
+    monkeypatch.setattr(
+        "openviking.parse.parsers.anydoc_converter.extract_legacy_doc_text",
+        lambda path: (_ for _ in ()).throw(AssertionError("fallback should not run")),
+    )
+
+    with pytest.raises(RuntimeError, match="convert failed"):
+        AnyDocConverter().convert(
+            source,
+            resource_name="renamed",
+            storage=FakeStorage(tmp_path / "media"),
+        )
+
+
 def test_converter_saves_table_cell_image_once(tmp_path, monkeypatch):
     document = _doc_with_image()
     image = document.blocks[0].content[0]

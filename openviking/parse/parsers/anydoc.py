@@ -112,6 +112,14 @@ class AnyDocParser(BaseParser):
         instruction: str = "",
         **kwargs,
     ) -> ParseResult:
-        raise NotImplementedError(
-            "AnyDocParser requires a document file path; string content is not supported"
+        result = await self._md_parser.parse_content(
+            content,
+            source_path=source_path,
+            instruction=instruction,
+            **kwargs,
         )
+        suffix = Path(source_path).suffix.lstrip(".").lower() if source_path else ""
+        result.source_format = suffix or "anydoc"
+        result.parser_name = "AnyDocParser"
+        result.parser_version = "1.0"
+        return result

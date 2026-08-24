@@ -6,6 +6,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from openviking.parse.parsers._legacy_doc_text import (
+    extract_legacy_doc_text,
+    has_ole2_signature,
+    has_zip_signature,
+)
 from openviking.parse.parsers.anydoc_renderer import _AnyDocMarkdownRenderer, _attr
 
 
@@ -55,6 +60,15 @@ def _load_document(path: Path, format_hint: str | None = None):
     return source_format or path.suffix.lstrip(".").lower() or "unknown", document
 
 
+def _can_fallback_legacy_doc(path: Path, format_hint: str | None = None) -> bool:
+    requested_doc = path.suffix.lower() == ".doc" or _format_name(format_hint) == "doc"
+    if not requested_doc:
+        return False
+    if has_zip_signature(path):
+        return False
+    return has_ole2_signature(path)
+
+
 class AnyDocConverter:
     def convert(
         self,
@@ -68,7 +82,18 @@ class AnyDocConverter:
         if path.suffix.lower() == ".pdf" or _format_name(format_hint) == "pdf":
             raise ValueError("AnyDocConverter does not support PDF; use PDFParser")
 
-        source_format, document = _load_document(path, format_hint=format_hint)
+        try:
+            source_format, document = _load_document(path, format_hint=format_hint)
+        except Exception as exc:
+            if not _can_fallback_legacy_doc(path, format_hint=format_hint):
+                raise
+            markdown = extract_legacy_doc_text(path)
+            return AnydocConversionResult(
+                markdown=markdown,
+                images_saved=0,
+                source_format="doc",
+                warnings=(f"AnyDoc failed for legacy .doc; used text fallback: {exc}",),
+            )
         renderer = _AnyDocMarkdownRenderer(
             document,
             source_format=source_format,

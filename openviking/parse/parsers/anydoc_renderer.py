@@ -229,8 +229,8 @@ class _AnyDocMarkdownRenderer:
         trailing_active: bool,
         at_line_start: bool,
     ) -> str:
-        bold, italic, strike, code = self._style_key(style)
-        if not any((bold, italic, strike, code)):
+        bold, italic, strike, code, underline = self._style_key(style)
+        if not any((bold, italic, strike, code, underline)):
             return self._escape_text(
                 text,
                 context=context,
@@ -252,14 +252,20 @@ class _AnyDocMarkdownRenderer:
             rendered = f"{fence}{pad}{flattened}{pad}{fence}"
         else:
             opening = ""
+            closing = ""
             if strike:
                 opening += "~~"
+                closing = "~~" + closing
             if bold:
                 opening += "**"
+                closing = "**" + closing
             if italic:
                 opening += "*"
+                closing = "*" + closing
             escaped = self._escape_text(core, context=context, styled=True, in_label=in_label)
-            rendered = f"{opening}{escaped}{opening[::-1]}"
+            rendered = f"{opening}{escaped}{closing}"
+        if underline:
+            rendered = f"<ins>{rendered}</ins>"
         return f"{leading}{rendered}{trailing}"
 
     def _render_link(self, inline: Any, *, context: str) -> str:
@@ -587,6 +593,7 @@ class _AnyDocMarkdownRenderer:
             False,
             False,
             False,
+            False,
         )
 
     @staticmethod
@@ -608,10 +615,16 @@ class _AnyDocMarkdownRenderer:
         return "|" + "".join(f" {cell} |" for cell in cells)
 
     @staticmethod
-    def _style_key(style: Any) -> tuple[bool, bool, bool, bool]:
+    def _style_key(style: Any) -> tuple[bool, bool, bool, bool, bool]:
         if style is None:
-            return False, False, False, False
-        return bool(style.bold), bool(style.italic), bool(style.strike), bool(style.code)
+            return False, False, False, False, False
+        return (
+            bool(_attr(style, "bold", default=False)),
+            bool(_attr(style, "italic", default=False)),
+            bool(_attr(style, "strike", default=False)),
+            bool(_attr(style, "code", default=False)),
+            bool(_attr(style, "underline", "underlined", default=False)),
+        )
 
     @staticmethod
     def _list_marker(list_model: Any, item: Any, ordinal: int) -> str:
