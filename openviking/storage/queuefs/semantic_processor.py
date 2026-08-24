@@ -255,7 +255,7 @@ class SemanticProcessor(DequeueHandlerBase):
         parent_uri = parent.uri.rstrip("/")
         if (
             not parent_uri
-            or parent_uri in {"viking://", "viking:"}
+            or parent_uri in {"viking://", "viking:", "viking://user", "viking://agent"}
             or parent_uri == uri.rstrip("/")
         ):
             return
