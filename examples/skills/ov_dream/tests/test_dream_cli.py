@@ -260,6 +260,17 @@ def test_sync_active_session_syncs_chat_sessions_with_independent_cursors(tmp_pa
         "main",
         [("user", "hello from main", "2026-04-20T00:01:00Z")],
     )
+    with main_file.open("a", encoding="utf-8") as session_file:
+        session_file.write(
+            json.dumps(
+                {
+                    "type": "message",
+                    "timestamp": "2026-04-20T00:01:30Z",
+                    "message": {"role": "assistant", "content": "plain string from main"},
+                }
+            )
+            + "\n"
+        )
     _write_session(
         direct_file,
         "direct",
@@ -300,16 +311,17 @@ def test_sync_active_session_syncs_chat_sessions_with_independent_cursors(tmp_pa
     summary = dream.sync_active_session(client, openclaw_root, state_root)
 
     assert summary["session_count"] == 2
-    assert summary["synced_count"] == 2
+    assert summary["synced_count"] == 3
     assert client.messages == [
         ("main", "user", "hello from main"),
+        ("main", "assistant", "plain string from main"),
         ("direct", "assistant", "hello from direct"),
     ]
     assert client.commits == [("main", True), ("direct", True)]
 
     state = json.loads((state_root / "ov_dream_sync.json").read_text(encoding="utf-8"))
     assert state["sessions"]["main"]["session_key"] == "agent:main:main"
-    assert state["sessions"]["main"]["last_synced_timestamp"] == "2026-04-20T00:01:00Z"
+    assert state["sessions"]["main"]["last_synced_timestamp"] == "2026-04-20T00:01:30Z"
     assert state["sessions"]["direct"]["session_key"] == "agent:main:telegram:direct:123"
     assert state["sessions"]["direct"]["last_synced_timestamp"] == "2026-04-20T00:02:00Z"
     assert "cron" not in state["sessions"]

@@ -118,6 +118,22 @@ All fields below live in `config.json`. Defaults are shown.
 | `recallLimit`            | `10`       | Legacy quota-scaling input converted to six coding quotas, not a final cap |
 | `scoreThreshold`         | `0.35`     | Min relevance score (0–1)                                                |
 | `minQueryLength`         | `3`        | Skip recall for queries shorter than N characters                        |
+| `recallLedger`           | `true`     | Persist injected blocks and re-apply them to historical user messages so provider prompt-prefix caches keep hitting |
+
+### Recall injection ledger
+
+Pi's `context` hook hands extensions a deep copy of the session messages, so
+an injected `<openviking-context>` block is never written back to session
+storage. Without compensation, every request's history diverges from what the
+provider saw last turn, and strict-prefix prompt caches (DeepSeek and other
+OpenAI-compatible providers) miss from the first injected message onward
+(#4137). The ledger records exactly which block was injected into which user
+message (keyed by position + content hash) in
+`~/.openviking/pi-recall-ledger/<session>.json` and re-applies them on every
+request, keeping the prefix byte-identical across turns while the newest
+message still gets fresh, current-query recall. Disable with
+`"recallLedger": false` or `OPENVIKING_RECALL_LEDGER=0`. Losing the ledger
+file only costs one cache miss; alignment resumes on the next turn.
 
 Explicit `recallLimit` values from 1 through 5 produce an effective total
 quota of 6 because each coding category keeps one retrieval slot. Direct API

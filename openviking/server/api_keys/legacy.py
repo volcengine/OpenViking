@@ -677,6 +677,9 @@ class LegacyAPIKeyManager:
         result = []
         count = 0
         for user_id, user_info in account.users.items():
+            if user_info.get("deletion"):
+                continue
+
             user_role = user_info.get("role", "user")
 
             # Apply name filter if provided
