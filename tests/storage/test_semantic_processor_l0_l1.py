@@ -183,3 +183,19 @@ def test_abstract_truncation_accepts_sentence_period_after_number(monkeypatch):
     _, abstract = processor._enforce_size_limits("# README\n\nBody", abstract)
 
     assert abstract == "This import check was generated at 16:55."
+
+
+def test_abstract_truncation_ignores_ordered_list_marker(monkeypatch):
+    _patch_semantic_limits(monkeypatch, abstract_max_chars=80)
+    processor = SemanticProcessor()
+    abstract = (
+        "1. **Project Overview**\n\n"
+        "This directory contains generated architecture notes and implementation "
+        "details that need to stay discoverable in semantic recall."
+    )
+
+    _, abstract = processor._enforce_size_limits("# overview\n\nBody", abstract)
+
+    assert abstract != "1."
+    assert abstract.startswith("1. **Project Overview**")
+    assert "This directory contains generated architecture notes" in abstract

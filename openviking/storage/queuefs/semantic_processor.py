@@ -1097,6 +1097,11 @@ class SemanticProcessor(DequeueHandlerBase):
         first_sentence_end = None
         last_sentence_end_within_limit = None
         for sentence_end_match in re.finditer(r"\.(?!\d)(?=\s|$)|[!?](?=\s|$)|[。？！]", text):
+            if sentence_end_match.group(0) == ".":
+                line_start = text.rfind("\n", 0, sentence_end_match.start()) + 1
+                prefix = text[line_start : sentence_end_match.start()]
+                if re.fullmatch(r"\s*\d+", prefix):
+                    continue
             sentence_end = sentence_end_match.end()
             if first_sentence_end is None:
                 first_sentence_end = sentence_end
