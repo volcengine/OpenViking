@@ -328,16 +328,16 @@ results = client.find(
 
 ```python
 # 列出目录
-entries = await client.ls("viking://resources/")
+entries = await client.ls(uri="viking://resources/")
 
 # 读取文件
-content = await client.read("viking://resources/docs/api.md")
+content = await client.read(uri="viking://resources/docs/api.md")
 
 # 获取摘要
-abstract = await client.abstract("viking://resources/docs/")
+abstract = await client.abstract(uri="viking://resources/docs/")
 
 # 获取概览
-overview = await client.overview("viking://resources/docs/")
+overview = await client.overview(uri="viking://resources/docs/")
 ```
 
 ## 特殊文件

@@ -109,7 +109,7 @@ try:
 
     # Add a resource
     result = client.add_resource(
-        "https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md"
+        path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md",
     )
     root_uri = result["root_uri"]
 

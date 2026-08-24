@@ -188,10 +188,12 @@ await client.add_resource(
 
 ```python
 # Add skill
-await client.add_skill({
-    "name": "search-web",
-    "content": "# search-web\\n..."
-})
+await client.add_skill(
+    data={
+        "name": "search-web",
+        "content": "# search-web\\n...",
+    },
+)
 
 # Flow: Direct write to viking://~/skills/{name}/ → SemanticQueue
 ```

@@ -187,10 +187,12 @@ await client.add_resource(
 
 ```python
 # 添加技能
-await client.add_skill({
-    "name": "search-web",
-    "content": "# search-web\\n..."
-})
+await client.add_skill(
+    data={
+        "name": "search-web",
+        "content": "# search-web\\n...",
+    },
+)
 
 # 流程: 直接写入 viking://~/skills/{name}/ → SemanticQueue
 ```

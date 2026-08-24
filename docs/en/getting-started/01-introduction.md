@@ -51,11 +51,11 @@ viking://
 **Unix-like API**: Familiar command-style operations
 
 ```python
-client.find("user authentication")       # Semantic search
-client.ls("viking://resources/")         # List directory
-client.read("viking://resources/doc")    # Read content
-client.abstract("viking://...")          # Get L0 abstract
-client.overview("viking://...")          # Get L1 overview
+client.find(query="user authentication")       # Semantic search
+client.ls(uri="viking://resources/")            # List directory
+client.read(uri="viking://resources/doc")       # Read content
+client.abstract(uri="viking://...")             # Get L0 abstract
+client.overview(uri="viking://...")             # Get L1 overview
 ```
 
 ### 2. Hierarchical Context On-Demand Loading

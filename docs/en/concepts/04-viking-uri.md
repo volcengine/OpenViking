@@ -346,16 +346,16 @@ results = client.find(
 
 ```python
 # List directory
-entries = await client.ls("viking://resources/")
+entries = await client.ls(uri="viking://resources/")
 
 # Read file
-content = await client.read("viking://resources/docs/api.md")
+content = await client.read(uri="viking://resources/docs/api.md")
 
 # Get abstract
-abstract = await client.abstract("viking://resources/docs/")
+abstract = await client.abstract(uri="viking://resources/docs/")
 
 # Get overview
-overview = await client.overview("viking://resources/docs/")
+overview = await client.overview(uri="viking://resources/docs/")
 ```
 
 ## Special Files

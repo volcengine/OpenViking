@@ -252,14 +252,18 @@ import openviking as ov
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
 
-result = client.admin_create_account("acme", "alice", seed="alice-seed")
+result = client.admin_create_account(
+    account_id="acme",
+    admin_user_id="alice",
+    seed="alice-seed",
+)
 print(f"Account created: {result['account_id']}")
 print(f"Admin user: {result['admin_user_id']}")
 print(f"User key: {result.get('user_key', '(not exposed in trusted mode)')}")
 
 result = client.admin_create_account(
-    "acme-private",
-    "alice",
+    account_id="acme-private",
+    admin_user_id="alice",
     user_config={
         "add_targets": {
             "resource_uri": "viking://~/resources",
@@ -459,7 +463,7 @@ import openviking as ov
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
 
-result = client.admin_delete_account("acme")
+result = client.admin_delete_account(account_id="acme")
 print(f"Account deleted: {result['deleted']}")
 ```
 
@@ -566,13 +570,18 @@ import openviking as ov
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
 
-result = client.admin_register_user("acme", "bob", role="user", seed="bob-seed")
+result = client.admin_register_user(
+    account_id="acme",
+    user_id="bob",
+    role="user",
+    seed="bob-seed",
+)
 print(f"User registered: {result['user_id']}")
 print(f"User key: {result.get('user_key', '(not exposed in trusted mode)')}")
 
 result = client.admin_register_user(
-    "acme",
-    "bob-private",
+    account_id="acme",
+    user_id="bob-private",
     role="user",
     user_config={"add_targets": {"resource_uri": "viking://~/resources/project-a"}},
 )
@@ -690,7 +699,7 @@ import openviking as ov
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
 
-users = client.admin_list_users("acme")
+users = client.admin_list_users(account_id="acme")
 for user in users:
     print(f"User: {user['user_id']}, role: {user['role']}")
 ```
@@ -787,7 +796,7 @@ import openviking as ov
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
 
-result = client.admin_remove_user("acme", "bob")
+result = client.admin_remove_user(account_id="acme", user_id="bob")
 print(f"User deleted: {result['deleted']}")
 ```
 
@@ -884,7 +893,7 @@ import openviking as ov
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
 
-result = client.admin_set_role("acme", "bob", "admin")
+result = client.admin_set_role(account_id="acme", user_id="bob", role="admin")
 print(f"User: {result['user_id']}, new role: {result['role']}")
 ```
 
@@ -982,7 +991,11 @@ import openviking as ov
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
 
-result = client.admin_regenerate_key("acme", "bob", seed="bob-new-seed")
+result = client.admin_regenerate_key(
+    account_id="acme",
+    user_id="bob",
+    seed="bob-new-seed",
+)
 print(f"New user key: {result['user_key']}")
 ```
 

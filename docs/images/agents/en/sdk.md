@@ -56,5 +56,5 @@ client.add_message(
     role="user",
     parts=[TextPart(text=text)],
 )
-result = client.commit_session(session_id)
+result = client.commit_session(session_id=session_id)
 ```

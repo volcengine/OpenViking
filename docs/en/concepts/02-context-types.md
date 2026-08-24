@@ -83,11 +83,11 @@ await session.add_message(
     parts=[TextPart(text="I prefer dark mode")],
 )
 commit = await session.commit()  # Starts background memory extraction
-task = await client.get_task(commit["task_id"])  # Poll until task["status"] == "completed"
+task = await client.get_task(task_id=commit["task_id"])  # Poll until task["status"] == "completed"
 
 # Search memories
 results = await client.find(
-    "UI preferences",
+    query="UI preferences",
     target_uri="viking://~/memories/"
 )
 ```
@@ -133,18 +133,20 @@ AgentDefinedContextType includes the following subtypes, all stored under the `v
 
 ```python
 # Add skill (defaults to viking://~/skills/)
-await client.add_skill({
-    "name": "search-web",
-    "description": "Search the web for information",
-    "content": "# search-web\n..."
-})
+await client.add_skill(
+    data={
+        "name": "search-web",
+        "description": "Search the web for information",
+        "content": "# search-web\n...",
+    },
+)
 
 # Write to global agent skills root (public/shared) via -p override
 ov skills add search-web -p viking://agent/skills
 
 # Search user skills
 results = await client.find(
-    "web search",
+    query="web search",
     target_uri="viking://~/skills/"
 )
 

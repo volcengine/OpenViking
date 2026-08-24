@@ -1092,6 +1092,7 @@ client.initialize()
 results = client.find(
     query="error handling",
     target_uri="viking://resources/my-project",
+)
 ```
 
 ### Use Session Context for Conversations

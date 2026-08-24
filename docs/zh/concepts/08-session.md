@@ -67,7 +67,7 @@ result = session.commit()
 # }
 
 # 查询后台任务进度
-task = client.get_task(result["task_id"])
+task = client.get_task(task_id=result["task_id"])
 # task["status"]: "pending" | "running" | "completed" | "failed"
 # sum(task["result"]["memories_extracted"].values()): 3
 ```

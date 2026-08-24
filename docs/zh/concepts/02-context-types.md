@@ -83,11 +83,11 @@ await session.add_message(
     parts=[TextPart(text="我喜欢深色模式")],
 )
 commit = await session.commit()  # 启动后台记忆提取
-task = await client.get_task(commit["task_id"])  # 轮询直到 task["status"] == "completed"
+task = await client.get_task(task_id=commit["task_id"])  # 轮询直到 task["status"] == "completed"
 
 # 搜索记忆
 results = await client.find(
-    "用户界面偏好",
+    query="用户界面偏好",
     target_uri="viking://~/memories/"
 )
 ```
@@ -133,18 +133,20 @@ AgentDefinedContextType 包含以下子类型，均存储于 `viking://agent/` �
 
 ```python
 # 添加技能（默认写入 viking://~/skills/）
-await client.add_skill({
-    "name": "search-web",
-    "description": "搜索网络获取信息",
-    "content": "# search-web\n..."
-})
+await client.add_skill(
+    data={
+        "name": "search-web",
+        "description": "搜索网络获取信息",
+        "content": "# search-web\n...",
+    },
+)
 
 # 通过 -p 指定写入全局 agent 技能根（公开共享）
 ov skills add search-web -p viking://agent/skills
 
 # 搜索用户技能
 results = await client.find(
-    "网络搜索",
+    query="网络搜索",
     target_uri="viking://~/skills/"
 )
 

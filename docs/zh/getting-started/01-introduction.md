@@ -51,11 +51,11 @@ viking://
 **类 Unix API**：熟悉的命令式操作
 
 ```python
-client.find("用户认证")              # 语义搜索
-client.ls("viking://resources/")     # 列出目录
-client.read("viking://resources/doc") # 读取内容
-client.abstract("viking://...")       # 获取 L0 摘要
-client.overview("viking://...")       # 获取 L1 概览
+client.find(query="用户认证")              # 语义搜索
+client.ls(uri="viking://resources/")       # 列出目录
+client.read(uri="viking://resources/doc")  # 读取内容
+client.abstract(uri="viking://...")        # 获取 L0 摘要
+client.overview(uri="viking://...")        # 获取 L1 概览
 ```
 
 ### 2. 分层上下文按需加载

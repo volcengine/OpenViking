@@ -27,7 +27,7 @@ API authentication guide covering OAuth 2.0, JWT tokens, and API keys for secure
 Semantic accessors return only the visible body:
 
 ```python
-abstract = client.abstract("viking://resources/docs/auth")
+abstract = client.abstract(uri="viking://resources/docs/auth")
 ```
 
 ## L1: Overview
@@ -47,7 +47,7 @@ This directory covers the primary API authentication methods.
 ```
 
 ```python
-overview = client.overview("viking://resources/docs/auth")
+overview = client.overview(uri="viking://resources/docs/auth")
 ```
 
 L0 is extracted from the L1 body: the Brief Description paragraph after the H1 title and before the first `##` heading. YAML frontmatter is not part of this extraction.
@@ -57,7 +57,7 @@ L0 is extracted from the L1 body: the Brief Description paragraph after the H1 t
 L2 is the original or fully parsed content, loaded only when needed and retaining its source format and structure.
 
 ```python
-content = client.read("viking://resources/docs/auth/oauth.md")
+content = client.read(uri="viking://resources/docs/auth/oauth.md")
 ```
 
 ## Directory Structure
