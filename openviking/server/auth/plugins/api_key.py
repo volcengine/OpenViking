@@ -146,6 +146,16 @@ class ApiKeyAuthPlugin(AuthPlugin):
 
         role = Role(record.role)
 
+        if role == Role.USER:
+            if x_openviking_account and x_openviking_account != record.account_id:
+                raise PermissionDeniedError(
+                    "OAuth token identity does not match X-OpenViking-Account"
+                )
+            if x_openviking_user and x_openviking_user != record.user_id:
+                raise PermissionDeniedError(
+                    "OAuth token identity does not match X-OpenViking-User"
+                )
+
         # Role downgrade protection
         if api_key_manager is not None and hasattr(api_key_manager, "get_user_role"):
             try:
