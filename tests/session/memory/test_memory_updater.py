@@ -317,7 +317,27 @@ class TestMemoryUpdater:
         updater._get_viking_fs = MagicMock(return_value=viking_fs)
         ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
-        await updater.generate_overview("events", directory, ctx, extract_context=None)
+        with patch(
+            "openviking.utils.embedding_utils.vectorize_directory_meta",
+            new_callable=AsyncMock,
+        ) as vectorize_directory_meta:
+            generated = await updater.generate_overview(
+                "events", directory, ctx, extract_context=None
+            )
+
+        assert generated is True
+        vectorize_directory_meta.assert_awaited_once_with(
+            uri=directory,
+            abstract="",
+            overview=(
+                "# Events Overview\n\n"
+                "- [kept event](./kept_event.md)\n\n"
+                "- [plain_event.md](./plain_event.md)"
+            ),
+            context_type="memory",
+            ctx=ctx,
+            include_abstract=False,
+        )
 
         document = parse_abstract_overview(viking_fs.store[overview_uri])
         assert document.metadata["generated_by"] == {
@@ -373,8 +393,16 @@ class TestMemoryUpdater:
         updater._get_viking_fs = MagicMock(return_value=viking_fs)
         ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
-        await updater.generate_overview("entities", entity_dir, ctx, extract_context=None)
-        await updater.generate_overview("preferences", preference_dir, ctx, extract_context=None)
+        with patch(
+            "openviking.utils.embedding_utils.vectorize_directory_meta",
+            new_callable=AsyncMock,
+        ) as vectorize_directory_meta:
+            await updater.generate_overview("entities", entity_dir, ctx, extract_context=None)
+            await updater.generate_overview(
+                "preferences", preference_dir, ctx, extract_context=None
+            )
+
+        assert vectorize_directory_meta.await_count == 2
 
         assert "**Category:** 动漫角色" in viking_fs.store[entity_overview_uri]
         assert "- [越前龙马.md](./越前龙马.md)" in viking_fs.store[entity_overview_uri]
