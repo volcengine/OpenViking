@@ -122,12 +122,18 @@ async def _build_directory_archive(
                 member_path = _safe_archive_path(root_name, str(entry["rel_path"]))
                 if entry.get("isDir", False):
                     archive.writestr(f"{member_path.rstrip('/')}/", b"")
-                    continue
-                content = await service.fs.read_file_bytes(str(entry["uri"]), ctx=ctx)
-                actual_total += len(content)
-                if actual_total > _DIRECTORY_ARCHIVE_MAX_BYTES:
+                else:
+                    content = await service.fs.read_file_bytes(str(entry["uri"]), ctx=ctx)
+                    actual_total += len(content)
+                    if actual_total > _DIRECTORY_ARCHIVE_MAX_BYTES:
+                        raise _archive_size_limit_error(uri)
+                    await asyncio.to_thread(archive.writestr, member_path, content)
+                # Bound the archive on disk while it grows. Per-entry ZIP headers
+                # are not counted by `actual_total`, so a tree of many empty
+                # directories or empty files would otherwise only be rejected by
+                # the post-build size check, after it was fully written.
+                if archive.fp.tell() > _DIRECTORY_ARCHIVE_MAX_BYTES:
                     raise _archive_size_limit_error(uri)
-                await asyncio.to_thread(archive.writestr, member_path, content)
         if os.path.getsize(archive_path) > _DIRECTORY_ARCHIVE_MAX_BYTES:
             raise _archive_size_limit_error(uri)
         return archive_path, f"{root_name}.zip"

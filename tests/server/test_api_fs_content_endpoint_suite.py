@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import io
+import os
 import zipfile
 from types import SimpleNamespace
 
@@ -279,6 +280,43 @@ async def test_build_directory_archive_rejects_zip_over_limit(monkeypatch):
             {"name": "project", "isDir": True},
             SimpleNamespace(),
         )
+
+
+async def test_build_directory_archive_stops_writing_once_over_limit(monkeypatch):
+    """Header-only entries must not grow the temp archive past the limit."""
+    limit = 4096
+
+    class FakeFS:
+        async def tree(self, *args, **kwargs):
+            return [
+                {
+                    "uri": f"viking://resources/project/d{index}",
+                    "rel_path": f"d{index}",
+                    "isDir": True,
+                }
+                for index in range(20000)
+            ]
+
+    written = {}
+    original_remove = content_router._remove_file
+
+    def record_then_remove(path):
+        written["bytes"] = os.path.getsize(path)
+        original_remove(path)
+
+    monkeypatch.setattr(content_router, "_DIRECTORY_ARCHIVE_MAX_BYTES", limit)
+    monkeypatch.setattr(content_router, "_remove_file", record_then_remove)
+
+    with pytest.raises(Exception, match="download limit"):
+        await content_router._build_directory_archive(
+            SimpleNamespace(fs=FakeFS()),
+            "viking://resources/project",
+            {"name": "project", "isDir": True},
+            SimpleNamespace(),
+        )
+
+    # Without the in-loop guard this reaches ~1.9 MB for 20k entries.
+    assert written["bytes"] < limit * 4
 
 
 @pytest.mark.parametrize("path", ["../escape", "/absolute", r"..\\escape"])
