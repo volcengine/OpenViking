@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from openviking.storage.errors import VikingDBException
 from openviking.storage.vectordb.collection.collection import ICollection
@@ -169,7 +169,7 @@ class VikingDBCollection(ICollection):
     def update_index(
         self,
         index_name: str,
-        scalar_index: Optional[Dict[str, Any]] = None,
+        scalar_index: Optional[Union[List[str], Dict[str, Any]]] = None,
         description: Optional[str] = None,
     ):
         raise NotImplementedError("index should be managed manually")

@@ -457,9 +457,9 @@ class LocalIndex(IIndex):
         description: Optional[str],
     ):
         meta_data: Dict[str, Any] = {}
-        if scalar_index:
+        if scalar_index is not None:
             meta_data["ScalarIndex"] = scalar_index
-        if description:
+        if description is not None:
             meta_data["Description"] = description
         if not meta_data:
             return

@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from openviking.storage.errors import ConnectionError
 from openviking.storage.vectordb.collection.collection import ICollection
@@ -298,7 +298,7 @@ class VolcengineApiKeyCollection(ICollection):
     def update_index(
         self,
         index_name: str,
-        scalar_index: Optional[Dict[str, Any]] = None,
+        scalar_index: Optional[Union[List[str], Dict[str, Any]]] = None,
         description: Optional[str] = None,
     ):
         raise NotImplementedError(

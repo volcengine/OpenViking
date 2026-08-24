@@ -83,7 +83,7 @@ from .rerank_config import RerankConfig
 from .retrieval_config import RetrievalConfig
 from .storage_config import StorageConfig
 from .telemetry_config import TelemetryConfig, TracerConfig
-from .vectordb_config import VectorDBBackendConfig
+from .vectordb_config import OpenGaussConfig, VectorDBBackendConfig
 from .vlm_config import VLMConfig
 
 __all__ = [
@@ -138,6 +138,7 @@ __all__ = [
     "RerankConfig",
     "RetrievalConfig",
     "StorageConfig",
+    "OpenGaussConfig",
     "VectorDBBackendConfig",
     "VLMConfig",
     "ParserConfig",

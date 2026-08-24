@@ -6,6 +6,7 @@ import time
 from array import array
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
+from unittest.mock import Mock
 
 import pytest
 
@@ -22,6 +23,7 @@ from openviking.storage.vectordb.index.cuvs_index import (
     estimate_cuvs_memory,
     matches_filter,
 )
+from openviking.storage.vectordb.index.local_index import LocalIndex
 from openviking.storage.vectordb.store.data import CandidateData, DeltaRecord
 
 
@@ -3400,3 +3402,17 @@ def test_missing_cuvs_runtime_has_actionable_error(monkeypatch):
             field_types={},
             config={},
         )
+
+
+def test_local_index_update_preserves_explicit_empty_values():
+    index = LocalIndex.__new__(LocalIndex)
+    index.meta = Mock()
+
+    index.update([], "")
+
+    index.meta.update.assert_called_once_with(
+        {
+            "ScalarIndex": [],
+            "Description": "",
+        }
+    )
