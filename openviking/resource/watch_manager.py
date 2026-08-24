@@ -9,7 +9,7 @@ Provides task creation, update, deletion, query, and persistence storage.
 import asyncio
 import json
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -32,6 +32,13 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 _UNSET = object()
+
+
+def _as_utc(dt: datetime) -> datetime:
+    """Normalize datetime values before comparing persisted schedules."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def _rewrite_uri_prefix(uri: str, old_prefix: str, new_prefix: str) -> str:
@@ -943,7 +950,7 @@ class WatchManager:
             List of tasks that need to be executed
         """
         async with self._lock:
-            now = datetime.now()
+            now = _as_utc(datetime.now())
             due_tasks = []
 
             for task in self._tasks.values():
@@ -953,7 +960,7 @@ class WatchManager:
                 if account_id and task.account_id != account_id:
                     continue
 
-                if task.next_execution_time and task.next_execution_time <= now:
+                if task.next_execution_time and _as_utc(task.next_execution_time) <= now:
                     due_tasks.append(task)
 
             return due_tasks
