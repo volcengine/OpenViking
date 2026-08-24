@@ -27,7 +27,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel, Field
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from openviking.server.responses import SurrogateSafeJSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from openviking.core.path_variables import resolve_path_variables
@@ -183,7 +183,7 @@ class _IdentityASGIMiddleware:
                     headers["WWW-Authenticate"] = (
                         f'Bearer resource_metadata="{origin}/.well-known/oauth-protected-resource"'
                     )
-            resp = JSONResponse(
+            resp = SurrogateSafeJSONResponse(
                 {"jsonrpc": "2.0", "id": None, "error": {"code": -32001, "message": str(exc)}},
                 status_code=status,
                 headers=headers,

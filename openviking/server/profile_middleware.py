@@ -12,9 +12,11 @@ from pathlib import Path
 from typing import Awaitable, Callable
 
 from fastapi import Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from starlette.responses import Response as StarletteResponse
 from starlette.responses import StreamingResponse
+
+from openviking.server.responses import SurrogateSafeJSONResponse
 
 PROFILE_TRUE_VALUES = {"1", "true", "yes", "on"}
 PROFILE_SORT_BY = "cumulative"
@@ -201,7 +203,7 @@ async def inject_profile_into_response(response, profile_lines: list[str]):
         )
 
     payload["profile"] = profile_lines
-    rebuilt = JSONResponse(status_code=response.status_code, content=payload)
+    rebuilt = SurrogateSafeJSONResponse(status_code=response.status_code, content=payload)
     for key, value in response.headers.items():
         if key.lower() not in {"content-length", "content-type"}:
             rebuilt.headers[key] = value

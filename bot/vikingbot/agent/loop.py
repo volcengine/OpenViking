@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from openviking.storage.vectordb.utils.json_safety import safe_json_dumps, sanitize_unicode_for_json
 from vikingbot.agent.context import ContextBuilder
 from vikingbot.agent.memory import MemoryStore
 from vikingbot.agent.remote_skills import SkillRuntimeContext
@@ -1518,7 +1519,7 @@ class AgentLoop:
                     return idx, tool_call, outcome, tool_execute_duration
 
                 for tool_call in response.tool_calls:
-                    args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
+                    args_str = safe_json_dumps(tool_call.arguments, ensure_ascii=False)
                     logger.info(f"[TOOL_CALL]: {tool_call.name}({args_str[:200]})")
                     if publish_events:
                         await self.bus.publish_outbound(
@@ -1595,8 +1596,11 @@ class AgentLoop:
                 # Stage 3: Process results sequentially in original order
                 turn_tools: list[dict[str, Any]] = []
                 for _idx, tool_call, outcome, tool_execute_duration in results:
-                    result = outcome.result
-                    args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
+                    # Tool output can carry lone surrogates (mangled filenames etc.).
+                    # Neutralize them before the result enters the message list or the
+                    # persisted tool dict, so the next json.dumps(...) encode cannot crash.
+                    result = sanitize_unicode_for_json(outcome.result)
+                    args_str = safe_json_dumps(tool_call.arguments, ensure_ascii=False)
                     logger.info(f"[RESULT]: {str(result)[:600]}")
 
                     if publish_events:
@@ -1615,7 +1619,7 @@ class AgentLoop:
                         "tool_call_id": tool_call.id,
                         "tool_name": tool_call.name,
                         "args": args_str,
-                        "resolved_args": outcome.effective_params,
+                        "resolved_args": sanitize_unicode_for_json(outcome.effective_params),
                         "result": result,
                         "duration": tool_execute_duration,
                         "execute_success": _is_tool_result_success(result),

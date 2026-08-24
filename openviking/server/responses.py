@@ -8,6 +8,26 @@ from fastapi.responses import JSONResponse
 
 from openviking.observability.http_error_context import capture_public_http_error
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
+from openviking.storage.vectordb.utils.json_safety import sanitize_unicode_for_json
+
+
+class SurrogateSafeJSONResponse(JSONResponse):
+    """``JSONResponse`` that tolerates lone surrogate code points in the payload.
+
+    Filesystem names and tool results can carry isolated UTF-16 surrogates
+    (U+D800-U+DFFF) after Python decodes non-UTF-8 bytes with ``surrogateescape``.
+    Starlette's ``render`` calls ``json.dumps(..., ensure_ascii=False)`` and then
+    encodes to UTF-8, which raises ``UnicodeEncodeError`` for those characters.
+    On that failure we re-render the sanitized payload (lone surrogates become
+    U+FFFD), so the response envelope stays well-formed instead of truncating
+    into a 500. Normal responses are byte-for-byte identical and pay no cost.
+    """
+
+    def render(self, content: Any) -> bytes:
+        try:
+            return super().render(content)
+        except UnicodeEncodeError:
+            return super().render(sanitize_unicode_for_json(content))
 
 
 def _message_from_business_error(result: Dict[str, Any]) -> str:
@@ -61,7 +81,7 @@ def response_from_result(
             error=error,
             telemetry=telemetry,
         ).model_dump(exclude_none=True)
-        return JSONResponse(
+        return SurrogateSafeJSONResponse(
             status_code=ERROR_CODE_TO_HTTP_STATUS.get(code, 500),
             content=content,
         )
@@ -87,7 +107,7 @@ def error_response(
         error=ErrorInfo(code=code, message=message, details=details),
         telemetry=telemetry,
     ).model_dump(exclude_none=True)
-    return JSONResponse(
+    return SurrogateSafeJSONResponse(
         status_code=ERROR_CODE_TO_HTTP_STATUS.get(code, 500),
         content=content,
     )

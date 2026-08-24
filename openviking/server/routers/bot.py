@@ -9,7 +9,9 @@ from typing import AsyncGenerator, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
+
+from openviking.server.responses import SurrogateSafeJSONResponse
 
 from openviking.server.auth import _auth_mode, get_request_context
 from openviking.server.config import get_server_url_from_server_data
@@ -207,7 +209,7 @@ async def create_compile(
         ) from exc
     if not response.is_success:
         _raise_compile_proxy_error(response)
-    return JSONResponse(
+    return SurrogateSafeJSONResponse(
         status_code=status.HTTP_202_ACCEPTED,
         content=Response(status="ok", result=response.json()).model_dump(mode="json"),
     )

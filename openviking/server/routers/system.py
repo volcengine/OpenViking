@@ -6,11 +6,11 @@ import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
+from openviking.server.responses import SurrogateSafeJSONResponse
 from openviking.pyagfs.exceptions import AGFSInvalidOperationError, AGFSNotSupportedError
 from openviking.server.auth import get_request_context, require_role
 from openviking.server.dependencies import get_service
@@ -118,13 +118,13 @@ async def readiness_check(request: Request):
     try:
         service = get_service()
         if not service._initialized:
-            return JSONResponse(
+            return SurrogateSafeJSONResponse(
                 status_code=503,
                 content={"status": "not_ready", "reason": "initializing"},
             )
     except RuntimeError:
         # get_service() raises RuntimeError when service not yet set
-        return JSONResponse(
+        return SurrogateSafeJSONResponse(
             status_code=503,
             content={"status": "not_ready", "reason": "initializing"},
         )
@@ -194,7 +194,7 @@ async def readiness_check(request: Request):
 
     all_ok = all(_is_ready_check_ok(v) for v in checks.values())
     status_code = 200 if all_ok else 503
-    return JSONResponse(
+    return SurrogateSafeJSONResponse(
         status_code=status_code,
         content={"status": "ready" if all_ok else "not_ready", "checks": checks},
     )

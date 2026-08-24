@@ -10,6 +10,7 @@ from typing import Any, Callable, TypeVar
 
 from loguru import logger
 
+from openviking.storage.vectordb.utils.json_safety import safe_json_dumps
 from vikingbot.config.schema import SessionKey
 from vikingbot.providers.registry import find_by_name
 from vikingbot.sandbox.manager import SandboxManager
@@ -323,10 +324,10 @@ class SessionManager:
                     "updated_at": session.updated_at.isoformat(),
                     "metadata": session.metadata,
                 }
-                f.write(json.dumps(metadata_line, ensure_ascii=False) + "\n")
+                f.write(safe_json_dumps(metadata_line, ensure_ascii=False) + "\n")
 
                 for msg in session.messages:
-                    f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+                    f.write(safe_json_dumps(msg, ensure_ascii=False) + "\n")
             temporary.replace(path)
         finally:
             temporary.unlink(missing_ok=True)

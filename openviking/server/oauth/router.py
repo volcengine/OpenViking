@@ -28,12 +28,13 @@ from typing import Optional
 from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 from mcp.shared.auth import ProtectedResourceMetadata
 from pydantic import AnyHttpUrl, BaseModel, Field
 
 from openviking.server.auth import get_request_context
 from openviking.server.identity import RequestContext
+from openviking.server.responses import SurrogateSafeJSONResponse
 from openviking.server.oauth.provider import MCP_SCOPE, OpenVikingOAuthProvider
 from openviking.server.oauth.storage import OAuthStore
 from openviking_cli.exceptions import (
@@ -222,7 +223,7 @@ def _public_origin(request: Request) -> str:
 
 
 @router.get("/.well-known/oauth-protected-resource")
-async def oauth_protected_resource(request: Request) -> JSONResponse:
+async def oauth_protected_resource(request: Request) -> SurrogateSafeJSONResponse:
     """RFC 9728 — protected resource metadata for /mcp.
 
     MCP clients reach this URL via the ``WWW-Authenticate: Bearer
@@ -241,7 +242,7 @@ async def oauth_protected_resource(request: Request) -> JSONResponse:
         bearer_methods_supported=["header"],
         resource_name="OpenViking MCP",
     )
-    return JSONResponse(
+    return SurrogateSafeJSONResponse(
         metadata.model_dump(mode="json", exclude_none=True),
         headers={"Cache-Control": "public, max-age=3600"},
     )
@@ -275,7 +276,7 @@ async def authorize_page_get(request: Request, pending: str = "") -> HTMLRespons
 
 
 @router.get("/oauth/authorize/page/status")
-async def authorize_page_status(request: Request, pending: str = "") -> JSONResponse:
+async def authorize_page_status(request: Request, pending: str = "") -> SurrogateSafeJSONResponse:
     """Polled by the authorize page until verification + auth-code mint.
 
     Status values:
@@ -285,14 +286,14 @@ async def authorize_page_status(request: Request, pending: str = "") -> JSONResp
     """
     store, provider = _get_store_and_provider(request)
     if not pending:
-        return JSONResponse({"status": "expired"}, status_code=410)
+        return SurrogateSafeJSONResponse({"status": "expired"}, status_code=410)
 
     record = await store.load_pending_authorization(pending)
     if record is None:
-        return JSONResponse({"status": "expired"}, status_code=410)
+        return SurrogateSafeJSONResponse({"status": "expired"}, status_code=410)
 
     if not record["verified"]:
-        return JSONResponse({"status": "pending"}, headers={"Cache-Control": "no-store"})
+        return SurrogateSafeJSONResponse({"status": "pending"}, headers={"Cache-Control": "no-store"})
 
     # Verified — mint auth code and tear down pending row.
     auth_code = provider.mint_authorization_code()
@@ -319,7 +320,7 @@ async def authorize_page_status(request: Request, pending: str = "") -> JSONResp
     if record.get("state"):
         params["state"] = record["state"]
     sep = "&" if "?" in record["redirect_uri"] else "?"
-    return JSONResponse(
+    return SurrogateSafeJSONResponse(
         {
             "status": "approved",
             "redirect_url": f"{record['redirect_uri']}{sep}{urlencode(params)}",
@@ -356,18 +357,18 @@ class OAuthPendingInfo(BaseModel):
     "/api/v1/auth/oauth/pending/{pending_id}",
     response_model=OAuthPendingInfo,
 )
-async def oauth_pending_info(request: Request, pending_id: str) -> JSONResponse:
+async def oauth_pending_info(request: Request, pending_id: str) -> SurrogateSafeJSONResponse:
     """Return public-safe metadata about a pending OAuth authorization."""
     store, provider = _get_store_and_provider(request)
     record = await store.load_pending_authorization(pending_id)
     if record is None:
-        return JSONResponse({"error": "expired"}, status_code=404)
+        return SurrogateSafeJSONResponse({"error": "expired"}, status_code=404)
 
     client = await provider.get_client(record["client_id"])
     redirect_uri = record.get("redirect_uri") or ""
     redirect_host = urlparse(redirect_uri).netloc or None
 
-    return JSONResponse(
+    return SurrogateSafeJSONResponse(
         OAuthPendingInfo(
             client_id=record["client_id"],
             client_name=client.client_name if client else None,
@@ -414,7 +415,7 @@ async def oauth_verify(
     request: Request,
     body: OAuthVerifyRequest,
     ctx: RequestContext = Depends(get_request_context),
-) -> JSONResponse:
+) -> SurrogateSafeJSONResponse:
     """Bind the caller's identity to a pending OAuth authorization.
 
     Two entry points converge here:
@@ -465,7 +466,7 @@ async def oauth_verify(
 
     if decision == "deny":
         await store.delete_pending_authorization(record["pending_id"])
-        return JSONResponse({"status": "denied"})
+        return SurrogateSafeJSONResponse({"status": "denied"})
 
     # Bind the verifier's current API-key fingerprint into the pending row.
     # The fp is propagated through auth_code → access/refresh tokens, and
@@ -496,7 +497,7 @@ async def oauth_verify(
         raise InvalidArgumentError("Verification raced — please restart from the authorize page")
 
     client = await provider.get_client(record["client_id"])
-    return JSONResponse(
+    return SurrogateSafeJSONResponse(
         {
             "status": "approved",
             "client_id": record["client_id"],
