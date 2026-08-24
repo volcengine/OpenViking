@@ -185,6 +185,17 @@ async def test_download_directory_returns_zip_archive(client_with_resource):
         assert all(not name.startswith("/") and ".." not in name.split("/") for name in names)
 
 
+async def test_download_directory_over_limit_returns_resource_exhausted(
+    client_with_resource, monkeypatch
+):
+    client, uri = client_with_resource
+    monkeypatch.setattr(content_router, "_DIRECTORY_ARCHIVE_MAX_BYTES", 1)
+
+    response = await client.get("/api/v1/content/download", params={"uri": uri})
+
+    _assert_error(response, status_code=429, error_code="RESOURCE_EXHAUSTED")
+
+
 async def test_build_directory_archive_preserves_tree_and_empty_directories():
     class FakeFS:
         async def tree(self, *args, **kwargs):
@@ -194,6 +205,7 @@ async def test_build_directory_archive_preserves_tree_and_empty_directories():
                     "uri": "viking://resources/project/docs/readme.md",
                     "rel_path": "docs/readme.md",
                     "isDir": False,
+                    "size": 5,
                 },
             ]
 
@@ -219,6 +231,54 @@ async def test_build_directory_archive_preserves_tree_and_empty_directories():
             assert archive.read("project/docs/readme.md") == b"hello"
     finally:
         content_router._remove_file(archive_path)
+
+
+async def test_build_directory_archive_rejects_declared_size_over_limit():
+    class FakeFS:
+        async def tree(self, *args, **kwargs):
+            return [
+                {
+                    "uri": "viking://resources/project/large.bin",
+                    "rel_path": "large.bin",
+                    "isDir": False,
+                    "size": content_router._DIRECTORY_ARCHIVE_MAX_BYTES + 1,
+                }
+            ]
+
+        async def read_file_bytes(self, *args, **kwargs):
+            raise AssertionError("oversized file must not be read")
+
+    service = SimpleNamespace(fs=FakeFS())
+    with pytest.raises(Exception, match="exceeds the .* download limit"):
+        await content_router._build_directory_archive(
+            service,
+            "viking://resources/project",
+            {"name": "project", "isDir": True},
+            SimpleNamespace(),
+        )
+
+
+async def test_build_directory_archive_rejects_zip_over_limit(monkeypatch):
+    class FakeFS:
+        async def tree(self, *args, **kwargs):
+            return [
+                {
+                    "uri": "viking://resources/project/empty",
+                    "rel_path": "empty",
+                    "isDir": True,
+                    "size": 0,
+                }
+            ]
+
+    monkeypatch.setattr(content_router, "_DIRECTORY_ARCHIVE_MAX_BYTES", 1)
+    service = SimpleNamespace(fs=FakeFS())
+    with pytest.raises(Exception, match="exceeds the 1-byte download limit"):
+        await content_router._build_directory_archive(
+            service,
+            "viking://resources/project",
+            {"name": "project", "isDir": True},
+            SimpleNamespace(),
+        )
 
 
 @pytest.mark.parametrize("path", ["../escape", "/absolute", r"..\\escape"])

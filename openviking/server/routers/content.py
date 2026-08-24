@@ -35,10 +35,23 @@ from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, PermissionDeniedError
+from openviking_cli.exceptions import (
+    InvalidArgumentError,
+    NotFoundError,
+    PermissionDeniedError,
+    ResourceExhaustedError,
+)
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+_DIRECTORY_ARCHIVE_MAX_BYTES = 10 * 1024 * 1024
+
+
+def _archive_size_limit_error(uri: str) -> ResourceExhaustedError:
+    return ResourceExhaustedError(
+        f"Directory archive exceeds the {_DIRECTORY_ARCHIVE_MAX_BYTES}-byte download limit: {uri}"
+    )
 
 
 def _safe_archive_path(root_name: str, rel_path: str = "") -> str:
@@ -77,6 +90,27 @@ async def _build_directory_archive(
             node_limit=None,
             level_limit=None,
         )
+
+        # Reject oversized trees before loading file contents into memory. The
+        # ZIP itself is checked below as well because headers can push a highly
+        # fragmented archive over the limit even when its files do not.
+        declared_total = 0
+        for entry in entries:
+            if entry.get("isDir", False):
+                continue
+            size = entry.get("size")
+            if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+                file_stat = await service.fs.stat(str(entry["uri"]), ctx=ctx)
+                size = file_stat.get("size")
+            if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+                raise InvalidArgumentError(
+                    f"Cannot determine file size for directory download: {entry['uri']}"
+                )
+            declared_total += size
+            if declared_total > _DIRECTORY_ARCHIVE_MAX_BYTES:
+                raise _archive_size_limit_error(uri)
+
+        actual_total = 0
         with zipfile.ZipFile(
             archive_path,
             mode="w",
@@ -90,7 +124,12 @@ async def _build_directory_archive(
                     archive.writestr(f"{member_path.rstrip('/')}/", b"")
                     continue
                 content = await service.fs.read_file_bytes(str(entry["uri"]), ctx=ctx)
+                actual_total += len(content)
+                if actual_total > _DIRECTORY_ARCHIVE_MAX_BYTES:
+                    raise _archive_size_limit_error(uri)
                 await asyncio.to_thread(archive.writestr, member_path, content)
+        if os.path.getsize(archive_path) > _DIRECTORY_ARCHIVE_MAX_BYTES:
+            raise _archive_size_limit_error(uri)
         return archive_path, f"{root_name}.zip"
     except Exception:
         _remove_file(archive_path)
