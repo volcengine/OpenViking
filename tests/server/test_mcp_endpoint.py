@@ -7,6 +7,7 @@ Tests the tool functions directly by setting up the identity contextvar
 and service dependency, avoiding MCP protocol complexity.
 """
 
+import base64
 import re
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -14,6 +15,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 from fastapi import FastAPI
+from mcp.types import ImageContent, TextContent
 from starlette.routing import Route
 
 import openviking.server.mcp_endpoint as mcp_endpoint
@@ -587,6 +589,131 @@ async def test_read_delegates_to_visible_read(monkeypatch):
         "viking://user/test_user/project/private.md",
         ctx=DEFAULT_CTX,
     )
+
+
+@pytest.mark.parametrize(
+    ("uri", "image_bytes", "mime_type"),
+    [
+        ("viking://resources/result.png", b"\x89PNG\r\n\x1a\nimage", "image/png"),
+        ("viking://resources/result.jpg", b"\xff\xd8\xffimage", "image/jpeg"),
+        ("viking://resources/result.gif", b"GIF89aimage", "image/gif"),
+        ("viking://resources/result.webp", b"RIFF\x00\x00\x00\x00WEBPimage", "image/webp"),
+    ],
+)
+async def test_read_image_returns_native_mcp_content(monkeypatch, uri, image_bytes, mime_type):
+    read_file_bytes = AsyncMock(return_value=image_bytes)
+    read_visible = AsyncMock()
+    monkeypatch.setattr(
+        mcp_endpoint,
+        "get_service",
+        lambda: SimpleNamespace(
+            fs=SimpleNamespace(
+                read_file_bytes=read_file_bytes,
+                read_visible=read_visible,
+            )
+        ),
+    )
+    result = await mcp_endpoint.mcp.call_tool("read", {"uris": uri})
+
+    assert isinstance(result, list)
+    assert isinstance(result[0], TextContent)
+    assert result[0].text == f"Source: {uri}"
+    assert isinstance(result[1], ImageContent)
+    assert result[1].mimeType == mime_type
+    assert base64.b64decode(result[1].data) == image_bytes
+    read_file_bytes.assert_awaited_once_with(uri, ctx=DEFAULT_CTX)
+    read_visible.assert_not_awaited()
+
+
+async def test_read_mixed_batch_preserves_source_order(monkeypatch):
+    image_bytes = b"\xff\xd8\xffimage"
+    read_visible = AsyncMock(return_value="notes")
+    read_file_bytes = AsyncMock(return_value=image_bytes)
+    monkeypatch.setattr(
+        mcp_endpoint,
+        "get_service",
+        lambda: SimpleNamespace(
+            fs=SimpleNamespace(
+                read_file_bytes=read_file_bytes,
+                read_visible=read_visible,
+            )
+        ),
+    )
+    text_uri = "viking://resources/notes.md"
+    image_uri = "viking://resources/chart.jpg"
+
+    result = await mcp_endpoint.mcp.call_tool(
+        "read", {"uris": [text_uri, image_uri]}
+    )
+
+    assert isinstance(result, list)
+    assert [block.type for block in result] == ["text", "text", "text", "image"]
+    assert result[0].text == f"=== {text_uri} ==="
+    assert result[1].text == "notes"
+    assert result[2].text == f"=== {image_uri} ==="
+    assert result[3].mimeType == "image/jpeg"
+
+
+async def test_read_rejects_spoofed_image_extension(monkeypatch):
+    read_file_bytes = AsyncMock(return_value=b"not an image")
+    monkeypatch.setattr(
+        mcp_endpoint,
+        "get_service",
+        lambda: SimpleNamespace(
+            fs=SimpleNamespace(
+                read_file_bytes=read_file_bytes,
+                read_visible=AsyncMock(),
+            )
+        ),
+    )
+
+    result = await read("viking://resources/not-really.png")
+
+    assert "bytes do not match" in result
+
+
+async def test_read_rejects_images_too_large_for_common_clients(monkeypatch):
+    image_bytes = b"\x89PNG\r\n\x1a\n" + b"x" * mcp_endpoint._MCP_IMAGE_MAX_BYTES
+    monkeypatch.setattr(
+        mcp_endpoint,
+        "get_service",
+        lambda: SimpleNamespace(
+            fs=SimpleNamespace(
+                read_file_bytes=AsyncMock(return_value=image_bytes),
+                read_visible=AsyncMock(),
+            )
+        ),
+    )
+
+    result = await read("viking://resources/huge.png")
+
+    assert "too large to inline" in result
+
+
+async def test_read_svg_remains_text(monkeypatch):
+    read_visible = AsyncMock(return_value="<svg></svg>")
+    read_file_bytes = AsyncMock()
+    monkeypatch.setattr(
+        mcp_endpoint,
+        "get_service",
+        lambda: SimpleNamespace(
+            fs=SimpleNamespace(
+                read_file_bytes=read_file_bytes,
+                read_visible=read_visible,
+            )
+        ),
+    )
+    uri = "viking://resources/diagram.svg"
+
+    assert await read(uri) == "<svg></svg>"
+    read_visible.assert_awaited_once_with(uri, ctx=DEFAULT_CTX)
+    read_file_bytes.assert_not_awaited()
+
+
+async def test_read_tool_has_no_structured_output_schema():
+    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+
+    assert tools["read"].outputSchema is None
 
 
 # ---------------------------------------------------------------------------

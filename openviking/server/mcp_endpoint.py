@@ -16,15 +16,18 @@ are extracted from HTTP request scope and propagated via contextvars.
 
 from __future__ import annotations
 
+import base64
 import contextvars
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import PurePosixPath
 from typing import Any, Dict, List, Literal, Optional, Union
 from urllib.parse import quote
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+from mcp.types import ContentBlock, ImageContent, TextContent
 from pydantic import BaseModel, Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -408,9 +411,37 @@ def _format_search_result(result) -> str:
 # -- read ------------------------------------------------------------------
 
 
-@mcp.tool()
-async def read(uris: str | list[str]) -> str:
-    """Read full content from one or more viking:// file URIs. Pass a single URI string or a list for batch reads. For directory listing, use the list tool instead."""
+_MCP_IMAGE_EXTENSIONS = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
+# Claude Code's cross-client-safe inline limit: 5 MiB of base64, or 3.75 MiB raw.
+_MCP_IMAGE_MAX_BYTES = 3_932_160
+
+
+def _is_mcp_image_uri(uri: str) -> bool:
+    path = uri.split("#", 1)[0].split("?", 1)[0]
+    return PurePosixPath(path).suffix.lower() in _MCP_IMAGE_EXTENSIONS
+
+
+def _sniff_mcp_image_mime_type(data: bytes) -> Optional[str]:
+    """Recognize the raster formats shared by common MCP coding clients."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def _mcp_image_content(data: bytes, mime_type: str) -> ImageContent:
+    encoded = base64.b64encode(data).decode("ascii")
+    return ImageContent(type="image", data=encoded, mimeType=mime_type)
+
+
+@mcp.tool(structured_output=False)
+async def read(uris: str | list[str]) -> str | list[ContentBlock]:
+    """Read full content from one or more viking:// file URIs. Text files return text. PNG, JPEG, GIF, and WebP images return native MCP ImageContent so vision-capable agents can inspect them. Pass a single URI string or a list for batch reads. For directory listing, use the list tool instead."""
     import asyncio
 
     service = get_service()
@@ -418,19 +449,48 @@ async def read(uris: str | list[str]) -> str:
     uri_list = uris if isinstance(uris, list) else [uris]
     semaphore = asyncio.Semaphore(10)
 
-    async def _read_one(uri: str) -> str:
+    async def _read_one(uri: str) -> str | ContentBlock:
         async with semaphore:
             try:
                 resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
+                if _is_mcp_image_uri(resolved_uri):
+                    data = await service.fs.read_file_bytes(resolved_uri, ctx=ctx)
+                    if len(data) > _MCP_IMAGE_MAX_BYTES:
+                        return (
+                            f"Image is too large to inline through MCP ({len(data)} bytes; "
+                            f"limit {_MCP_IMAGE_MAX_BYTES} bytes). Use OpenViking get or the "
+                            "content download API to fetch the original file."
+                        )
+                    mime_type = _sniff_mcp_image_mime_type(data)
+                    if mime_type is None:
+                        return (
+                            f"Cannot render {uri}: its bytes do not match PNG, JPEG, GIF, "
+                            "or WebP. Use OpenViking get or the content download API to "
+                            "fetch the original file."
+                        )
+                    return _mcp_image_content(data, mime_type)
                 content = await service.fs.read_visible(resolved_uri, ctx=ctx)
                 return content
             except OpenVikingError as exc:
                 return str(exc)
 
     if len(uri_list) == 1:
-        return await _read_one(uri_list[0])
+        result = await _read_one(uri_list[0])
+        if isinstance(result, str):
+            return result
+        return [TextContent(type="text", text=f"Source: {uri_list[0]}"), result]
 
     results = await asyncio.gather(*[_read_one(u) for u in uri_list])
+    if any(not isinstance(result, str) for result in results):
+        blocks: list[ContentBlock] = []
+        for uri, result in zip(uri_list, results, strict=True):
+            blocks.append(TextContent(type="text", text=f"=== {uri} ==="))
+            if isinstance(result, str):
+                blocks.append(TextContent(type="text", text=result))
+            else:
+                blocks.append(result)
+        return blocks
+
     parts = []
     for uri, text in zip(uri_list, results, strict=True):
         parts.append(f"=== {uri} ===\n{text}")
