@@ -7,6 +7,7 @@ Tests for memory ExtractLoop orchestrator.
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import BaseModel, Field
 
 from openviking.session.memory.dataclass import (
     MemoryFile,
@@ -17,6 +18,7 @@ from openviking.session.memory.dataclass import (
 from openviking.session.memory.extract_loop import (
     ExtractLoop,
 )
+from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.merge_op import SearchReplaceBlock, StrPatch
 from openviking.session.memory.schema_model_generator import SchemaModelGenerator
 
@@ -159,6 +161,89 @@ class TestAllowedDirectoriesList:
 
 
 class TestExtractLoopFinalJsonRetry:
+    @staticmethod
+    def _invalid_peer_resolution_loop(target_uri=None):
+        schema = MemoryTypeSchema(
+            memory_type="preferences",
+            description="Preferences",
+            directory="viking://user/{{ user_space }}/memories",
+            filename_template="preferences.md",
+            fields=[],
+        )
+        context_provider = MagicMock()
+        context_provider.get_memory_schemas.return_value = [schema]
+        context_provider.read_file_contents = {}
+
+        ctx = MagicMock()
+        ctx.user.user_id = "user_a"
+        extract_context = MagicMock()
+        extract_context.messages = []
+        extract_context.page_id_map.resolve.return_value = target_uri
+
+        extract_loop = object.__new__(ExtractLoop)
+        extract_loop.ctx = ctx
+        extract_loop.context_provider = context_provider
+        extract_loop._extract_context = extract_context
+        extract_loop._isolation_handler = MemoryIsolationHandler(ctx, extract_context)
+        return extract_loop
+
+    @pytest.mark.asyncio
+    async def test_existing_page_id_keeps_write_target_without_invalid_peer_metadata(self):
+        class PreferenceItem(BaseModel):
+            page_id: int
+            peer_id: str
+
+        class Operations(BaseModel):
+            preferences: list[PreferenceItem]
+            delete_ids: list = Field(default_factory=list)
+
+        target_uri = "viking://user/user_a/memories/preferences.md"
+        extract_loop = self._invalid_peer_resolution_loop(target_uri)
+
+        resolved, _ = await extract_loop.resolve_operations(
+            Operations(
+                preferences=[
+                    PreferenceItem(page_id=7, peer_id="web/visitor/alice"),
+                ]
+            )
+        )
+
+        operation = resolved.upsert_operations[0]
+        assert operation.uris == [target_uri]
+        assert operation.resolution_skip is None
+        assert operation.memory_fields == {
+            "memory_type": "preferences",
+            "user_id": "user_a",
+        }
+
+    @pytest.mark.asyncio
+    async def test_invalid_peer_hint_preserves_legacy_self_write_fallback(self):
+        class PreferenceItem(BaseModel):
+            page_id: int
+            peer_id: str
+
+        class Operations(BaseModel):
+            preferences: list[PreferenceItem]
+            delete_ids: list = Field(default_factory=list)
+
+        extract_loop = self._invalid_peer_resolution_loop()
+
+        resolved, _ = await extract_loop.resolve_operations(
+            Operations(
+                preferences=[
+                    PreferenceItem(page_id=101, peer_id="web/visitor/alice"),
+                ]
+            )
+        )
+
+        operation = resolved.upsert_operations[0]
+        assert operation.uris == ["viking://user/user_a/memories/preferences.md"]
+        assert operation.resolution_skip is None
+        assert operation.memory_fields == {
+            "memory_type": "preferences",
+            "user_id": "user_a",
+        }
+
     @pytest.mark.asyncio
     async def test_structured_parser_preserves_delete_ids(self):
         class FakeContextProvider:

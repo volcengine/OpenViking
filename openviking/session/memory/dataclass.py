@@ -180,7 +180,6 @@ class MemoryOperationSkipCode(str, Enum):
     INVALID_RANGES = "invalid_ranges"
     AMBIGUOUS_TARGET = "ambiguous_target"
     NO_WRITABLE_TARGET = "no_writable_target"
-    DEPENDENT_DELETE_SUPPRESSED = "dependent_delete_suppressed"
 
 
 class MemoryOperationSkip(BaseModel):

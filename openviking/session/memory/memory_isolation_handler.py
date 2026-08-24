@@ -21,7 +21,6 @@ logger = get_logger(__name__)
 
 _INTERNAL_MEMORY_TYPES = {"session_skills"}
 _SELF_PEER_ID = "__self"
-_INVALID_PEER_MARKER = "_memory_resolution_invalid_peer_id"
 
 _SKIP_REASON_MESSAGES = {
     MemoryOperationSkipCode.MEMORY_TYPE_FILTERED: (
@@ -123,9 +122,10 @@ class MemoryIsolationHandler:
         if not peer_id:
             return _TargetResolution(skip_code=MemoryOperationSkipCode.INVALID_PEER_ID)
         if peer_id == _SELF_PEER_ID:
-            if self.allow_self:
-                return _TargetResolution([_SELF_PEER_ID])
-            return _TargetResolution(skip_code=MemoryOperationSkipCode.SELF_MEMORY_DISABLED)
+            # ``__self`` is an internal operation-target sentinel, not a valid
+            # message peer. Preserve the legacy behavior: an explicit message
+            # peer with this value does not resolve to a writable target.
+            return _TargetResolution(skip_code=MemoryOperationSkipCode.NO_WRITABLE_TARGET)
         if not self.peer_memory_enabled:
             return _TargetResolution(skip_code=MemoryOperationSkipCode.PEER_MEMORY_DISABLED)
         if not self._can_write_peer(peer_id):
@@ -168,14 +168,29 @@ class MemoryIsolationHandler:
             item_dict.pop("peer_id", None)
             return
 
-        raw_peer_id = item_dict.get("peer_id")
-        peer_id = safe_peer_id(raw_peer_id)
+        peer_id = safe_peer_id(item_dict.get("peer_id"))
         if peer_id and peer_id != _SELF_PEER_ID:
             item_dict["peer_id"] = peer_id
         else:
             item_dict.pop("peer_id", None)
-            if raw_peer_id not in (None, "", _SELF_PEER_ID):
-                item_dict[_INVALID_PEER_MARKER] = True
+
+    @staticmethod
+    def _classify_identity_fields(
+        item_dict: Dict[str, Any],
+        memory_type_schema: Optional[MemoryTypeSchema] = None,
+    ) -> Optional[MemoryOperationSkip]:
+        """Capture a diagnostic hint without changing identity-field normalization."""
+        if memory_type_schema is not None and not memory_type_schema.peer_enabled:
+            return None
+        raw_peer_id = item_dict.get("peer_id")
+        if raw_peer_id not in (None, "", _SELF_PEER_ID):
+            if safe_peer_id(raw_peer_id):
+                return None
+            return MemoryOperationSkip(
+                reason_code=MemoryOperationSkipCode.INVALID_PEER_ID,
+                reason=_SKIP_REASON_MESSAGES[MemoryOperationSkipCode.INVALID_PEER_ID],
+            )
+        return None
 
     def allows_schema(self, memory_type_schema: MemoryTypeSchema) -> bool:
         memory_type = getattr(memory_type_schema, "memory_type", "")
@@ -253,8 +268,6 @@ class MemoryIsolationHandler:
         if not ranges or not self._extract_context:
             return _TargetResolution(skip_code=MemoryOperationSkipCode.INVALID_RANGES)
         range_is_fully_in_bounds = self._range_is_fully_in_bounds(ranges)
-        if not range_is_fully_in_bounds:
-            return _TargetResolution(skip_code=MemoryOperationSkipCode.INVALID_RANGES)
         try:
             msg_range = self._extract_context.read_message_ranges(str(ranges))
         except Exception:
@@ -277,14 +290,17 @@ class MemoryIsolationHandler:
         target_ids = list(dict.fromkeys(target_ids))
         if target_ids:
             return _TargetResolution(target_ids)
-        if has_user_message:
-            return _TargetResolution(skip_code=self._preferred_skip_code(skip_codes))
-        if has_message:
+        can_fallback = range_is_fully_in_bounds and has_message and not has_user_message
+        if can_fallback:
             fallback_targets = self._target_ids_in_messages()
             if len(fallback_targets) == 1:
                 return _TargetResolution(fallback_targets)
             if len(fallback_targets) > 1:
                 return _TargetResolution(skip_code=MemoryOperationSkipCode.AMBIGUOUS_TARGET)
+        if not range_is_fully_in_bounds:
+            return _TargetResolution(skip_code=MemoryOperationSkipCode.INVALID_RANGES)
+        if has_user_message:
+            return _TargetResolution(skip_code=self._preferred_skip_code(skip_codes))
         return _TargetResolution(skip_code=MemoryOperationSkipCode.NO_WRITABLE_TARGET)
 
     def _resolve_operation_target(self, raw_peer_id: Any) -> _TargetResolution:
@@ -322,7 +338,6 @@ class MemoryIsolationHandler:
         operation: ResolvedOperation,
         reason_code: MemoryOperationSkipCode,
     ) -> List[str]:
-        operation.memory_fields.pop(_INVALID_PEER_MARKER, None)
         operation.resolution_skip = MemoryOperationSkip(
             reason_code=reason_code,
             reason=_SKIP_REASON_MESSAGES[reason_code],
@@ -335,6 +350,7 @@ class MemoryIsolationHandler:
         operation: ResolvedOperation,
         extract_context: ExtractContext,
     ):
+        identity_resolution_skip = operation.resolution_skip
         operation.resolution_skip = None
         if not self.allows_schema(memory_type_schema):
             reason_code = (
@@ -367,14 +383,11 @@ class MemoryIsolationHandler:
             skip_code = resolution.skip_code
             operation.memory_fields.pop("peer_id", None)
         else:
-            invalid_peer_id = bool(operation.memory_fields.pop(_INVALID_PEER_MARKER, False))
-            resolution = (
-                _TargetResolution(skip_code=MemoryOperationSkipCode.INVALID_PEER_ID)
-                if invalid_peer_id
-                else self._resolve_operation_target(operation.memory_fields.get("peer_id"))
-            )
+            resolution = self._resolve_operation_target(operation.memory_fields.get("peer_id"))
             target_ids = resolution.target_ids
             skip_code = resolution.skip_code
+            if not target_ids and identity_resolution_skip is not None:
+                skip_code = identity_resolution_skip.reason_code
             target_id = target_ids[0] if len(target_ids) == 1 else None
             if target_id == _SELF_PEER_ID:
                 operation.memory_fields.pop("peer_id", None)

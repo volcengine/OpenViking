@@ -84,6 +84,14 @@ class TestGetReadScope:
         assert scope.user_ids == ["user_a"]
         assert scope.peer_ids == []
 
+    def test_explicit_self_sentinel_message_is_not_a_writable_target(self):
+        ctx = create_ctx()
+        message = create_message("user", peer_id="__self")
+        extract_ctx = create_mock_extract_context([message])
+        handler = MemoryIsolationHandler(ctx, extract_ctx, allow_self=True)
+
+        assert handler._message_target_id(message) is None
+
     def test_deduplicate_users(self):
         """Test that duplicate users are deduplicated."""
         ctx = create_ctx()
@@ -292,6 +300,21 @@ class TestFillIdentityFields:
 
         assert item_dict["user_id"] == "user_a"
         assert item_dict["peer_id"] == "web-visitor-alice"
+
+    def test_invalid_peer_classification_does_not_change_identity_field_semantics(self):
+        ctx = create_ctx()
+        extract_ctx = create_mock_extract_context([create_message("user")])
+        handler = MemoryIsolationHandler(ctx, extract_ctx)
+        role_scope = handler.get_read_scope()
+
+        item_dict = {"peer_id": "web/visitor/alice"}
+        resolution_skip = handler._classify_identity_fields(item_dict)
+        result = handler.fill_identity_fields(item_dict, role_scope)
+
+        assert resolution_skip is not None
+        assert resolution_skip.reason_code == MemoryOperationSkipCode.INVALID_PEER_ID
+        assert result is None
+        assert item_dict == {"user_id": "user_a"}
 
 
 class TestPrepareMessages:
@@ -945,7 +968,7 @@ class TestCalculateMemoryUris:
         assert uris == []
         assert operation.resolution_skip is not None
         assert operation.resolution_skip.reason_code == MemoryOperationSkipCode.INVALID_RANGES
-        extract_ctx.read_message_ranges.assert_not_called()
+        extract_ctx.read_message_ranges.assert_called_once_with("10-20")
 
     @patch("openviking.session.memory.memory_isolation_handler.generate_uri")
     def test_calculate_memory_uris_missing_peer_id_prefers_self_when_allowed(

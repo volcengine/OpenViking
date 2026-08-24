@@ -119,19 +119,36 @@ class TestCommit:
         self,
         session_with_messages: Session,
     ):
-        session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
-            return_value={
-                "contexts": [],
-                "session_skills": [],
-                "skipped_operations": [
+        async def extract_long_term_memories(**kwargs):
+            archive_uri = kwargs["archive_uri"]
+            await session_with_messages._viking_fs.write_file(
+                uri=f"{archive_uri}/memory_diff.json",
+                content=json.dumps(
                     {
-                        "memory_type": "preferences",
-                        "page_id": 102,
-                        "reason_code": "peer_not_allowed",
-                        "reason": "Target peer is outside the allowed memory scope",
+                        "archive_uri": archive_uri,
+                        "operations": {"adds": [], "updates": [], "deletes": []},
+                        "summary": {
+                            "total_adds": 0,
+                            "total_updates": 0,
+                            "total_deletes": 0,
+                            "total_skipped": 1,
+                        },
+                        "skipped_operations": [
+                            {
+                                "memory_type": "preferences",
+                                "page_id": 102,
+                                "reason_code": "peer_not_allowed",
+                                "reason": "Target peer is outside the allowed memory scope",
+                            }
+                        ],
                     }
-                ],
-            }
+                ),
+                ctx=session_with_messages.ctx,
+            )
+            return []
+
+        session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
+            side_effect=extract_long_term_memories
         )
 
         commit_result = await session_with_messages.commit_async()
@@ -150,6 +167,80 @@ class TestCommit:
                 }
             ],
         }
+
+    async def test_recovered_commit_task_reads_existing_skipped_memory_operations(
+        self,
+        session_with_messages: Session,
+        monkeypatch,
+    ):
+        original_prepare = Session._prepare_phase2_archive_messages
+
+        async def prepare_with_completed_long_term(self, archive_uri, current_messages):
+            (
+                messages,
+                coverage_start_archive,
+                coverage_end_archive,
+                covered_failed_archives,
+                completed_memory_steps,
+            ) = await original_prepare(self, archive_uri, current_messages)
+            completed_memory_steps.setdefault("long_term", set()).update(
+                message.id for message in messages
+            )
+            await self._viking_fs.write_file(
+                uri=f"{archive_uri}/memory_diff.json",
+                content=json.dumps(
+                    {
+                        "archive_uri": archive_uri,
+                        "operations": {"adds": [], "updates": [], "deletes": []},
+                        "summary": {
+                            "total_adds": 0,
+                            "total_updates": 0,
+                            "total_deletes": 0,
+                            "total_skipped": 1,
+                        },
+                        "skipped_operations": [
+                            {
+                                "memory_type": "preferences",
+                                "page_id": 102,
+                                "reason_code": "peer_not_allowed",
+                                "reason": "Target peer is outside the allowed memory scope",
+                            }
+                        ],
+                    }
+                ),
+                ctx=self.ctx,
+            )
+            return (
+                messages,
+                coverage_start_archive,
+                coverage_end_archive,
+                covered_failed_archives,
+                completed_memory_steps,
+            )
+
+        monkeypatch.setattr(
+            Session,
+            "_prepare_phase2_archive_messages",
+            prepare_with_completed_long_term,
+        )
+        session_with_messages._session_compressor.extract_long_term_memories = AsyncMock()
+
+        commit_result = await session_with_messages.commit_async()
+        task_result = await _wait_for_task(commit_result["task_id"])
+
+        assert task_result["status"] == "completed"
+        assert task_result["result"]["memory_extraction"] == {
+            "skipped": 1,
+            "skipped_operations": [
+                {
+                    "memory_type": "preferences",
+                    "page_id": 102,
+                    "reason_code": "peer_not_allowed",
+                    "reason": "Target peer is outside the allowed memory scope",
+                }
+            ],
+        }
+        session_with_messages._session_compressor.extract_long_term_memories.assert_not_awaited()
 
     async def test_commit_default_disables_agent_memory_but_keeps_archive(
         self, session_with_messages: Session

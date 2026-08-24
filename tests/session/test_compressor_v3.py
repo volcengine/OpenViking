@@ -189,13 +189,7 @@ async def test_v3_skips_agent_training_when_agent_evolution_is_disabled(monkeypa
     )
 
     compressor.train_from_extracted_cases.assert_not_awaited()
-    assert result["skipped_operations"] == [
-        {
-            "memory_type": "profile",
-            "reason_code": "peer_memory_disabled",
-            "reason": "Peer memory writes are disabled",
-        }
-    ]
+    assert result == []
 
 
 @pytest.mark.asyncio

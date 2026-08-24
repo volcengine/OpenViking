@@ -2640,14 +2640,6 @@ class Session:
                         if extraction_error is not None:
                             raise extraction_error
 
-                        if long_term_has_work and self._viking_fs:
-                            candidate_memory_diff_uri = f"{archive_uri}/memory_diff.json"
-                            if await self._viking_fs.exists(
-                                candidate_memory_diff_uri,
-                                ctx=self.ctx,
-                            ):
-                                memory_diff_uri = candidate_memory_diff_uri
-
                         total_extracted = 0
                         for label, result in zip(extraction_labels, _results, strict=True):
                             if label == "archive_summary":
@@ -2655,11 +2647,9 @@ class Session:
                             if isinstance(result, dict):
                                 target_contexts = list(result.get("contexts", []))
                                 target_skills = list(result.get("session_skills", []))
-                                target_skips = list(result.get("skipped_operations", []))
                             else:
                                 target_contexts = list(result or [])
                                 target_skills = []
-                                target_skips = []
                             logger.info(
                                 "Extracted %s memories for %s",
                                 len(target_contexts),
@@ -2671,9 +2661,6 @@ class Session:
                                 memories_extracted[cat] = memories_extracted.get(cat, 0) + 1
                             if target_skills:
                                 extracted_skill_results.extend(target_skills)
-                            skipped_memory_operations.extend(
-                                item for item in target_skips if isinstance(item, dict)
-                            )
 
                         if total_extracted:
                             self._stats.memories_extracted += total_extracted
@@ -2695,6 +2682,35 @@ class Session:
                             )
                         else:
                             await _run_archive_summary()
+
+                    # A recovered Phase 2 run may have already completed the
+                    # long-term step before a sibling step failed. Reuse its
+                    # persisted diff instead of reporting an empty task result.
+                    if completed_memory_steps.get("long_term") and self._viking_fs:
+                        candidate_memory_diff_uri = f"{archive_uri}/memory_diff.json"
+                        if await self._viking_fs.exists(
+                            candidate_memory_diff_uri,
+                            ctx=self.ctx,
+                        ):
+                            memory_diff_uri = candidate_memory_diff_uri
+                            try:
+                                raw_memory_diff = await self._viking_fs.read_file(
+                                    candidate_memory_diff_uri,
+                                    ctx=self.ctx,
+                                )
+                                memory_diff = json.loads(raw_memory_diff or "{}")
+                                if isinstance(memory_diff, dict):
+                                    skipped_memory_operations.extend(
+                                        item
+                                        for item in memory_diff.get("skipped_operations", [])
+                                        if isinstance(item, dict)
+                                    )
+                            except Exception as exc:
+                                logger.warning(
+                                    "Failed to read skipped memory operations from %s: %s",
+                                    candidate_memory_diff_uri,
+                                    exc,
+                                )
 
                     # Update active_count (using snapshot, not self._usage_records)
                     if self._vikingdb_manager:

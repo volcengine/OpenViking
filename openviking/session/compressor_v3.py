@@ -458,7 +458,6 @@ class SessionCompressorV3:
                 contexts=result.contexts,
                 train_result=train_result,
                 archive_uri=archive_uri or "",
-                skipped_operations=getattr(result, "skipped_operations", []),
             )
         except Exception:
             if strict_extract_errors:
@@ -2075,15 +2074,14 @@ def _v3_extraction_response(
     contexts: list[Context],
     train_result: Any,
     archive_uri: str,
-    skipped_operations: Optional[list[dict[str, Any]]] = None,
 ) -> list[Context] | dict[str, Any]:
     """Build the extraction response.
 
     Historically ``extract_long_term_memories`` returned ``list[Context]`` and
     a number of direct callers still index/compare the return value as a list.
     Commit orchestration also understands a structured response for session
-    skills and intentionally skipped operations. Preserve the old list shape
-    unless either field has content.
+    skills. Preserve the old list shape unless there are actual session skills
+    to report.
     """
     skill_dicts: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -2093,13 +2091,9 @@ def _v3_extraction_response(
             if uri_str and uri_str not in seen:
                 seen.add(uri_str)
                 skill_dicts.append({"uri": uri_str, "archive_uri": archive_uri})
-    public_skips = list(skipped_operations or [])
-    if not skill_dicts and not public_skips:
+    if not skill_dicts:
         return contexts
-    response: dict[str, Any] = {"contexts": contexts, "session_skills": skill_dicts}
-    if public_skips:
-        response["skipped_operations"] = public_skips
-    return response
+    return {"contexts": contexts, "session_skills": skill_dicts}
 
 
 def _make_memory_diff(

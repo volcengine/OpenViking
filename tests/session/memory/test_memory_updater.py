@@ -580,7 +580,7 @@ class TestMemoryUpdater:
         updater._apply_delete.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_apply_operations_safely_suppresses_delete_for_expected_uri_skip(self):
+    async def test_apply_operations_preserves_legacy_delete_suppression_for_expected_skip(self):
         updater = MemoryUpdater(registry=MagicMock())
         updater._get_viking_fs = MagicMock(return_value=MagicMock())
         updater._apply_upsert = AsyncMock(return_value=None)
@@ -611,12 +611,12 @@ class TestMemoryUpdater:
 
         result = await updater.apply_operations(operations=operations, ctx=ctx)
 
-        assert result.errors == []
+        assert [(target, str(error)) for target, error in result.errors] == [
+            (old_uri, "Skipped delete because batch contains unresolved upsert URIs")
+        ]
         assert [item.reason_code for item in result.skipped_operations] == [
             MemoryOperationSkipCode.INVALID_RANGES,
-            MemoryOperationSkipCode.DEPENDENT_DELETE_SUPPRESSED,
         ]
-        assert result.skipped_operations[1].memory_type == "preferences"
         updater._apply_delete.assert_not_awaited()
 
     @pytest.mark.asyncio

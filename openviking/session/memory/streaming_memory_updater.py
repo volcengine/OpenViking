@@ -616,16 +616,12 @@ def split_request_by_merge_group(
             group_key = MemoryMergeGroupKey(peer_id=peer_id, memory_type=single_uri_op.memory_type)
             upsert_groups.setdefault(group_key, []).append(single_uri_op)
 
-    # Keep deletes in the same apply group as unresolved upserts so MemoryUpdater
-    # can observe both operations and suppress delete execution when an upsert is
-    # intentionally skipped.
-    if not passthrough_upserts:
-        for file in list(operations.delete_file_contents or []):
-            group_key = MemoryMergeGroupKey(
-                peer_id=_peer_id_for_memory_file(file),
-                memory_type=file.memory_type or "",
-            )
-            delete_groups.setdefault(group_key, []).append(file)
+    for file in list(operations.delete_file_contents or []):
+        group_key = MemoryMergeGroupKey(
+            peer_id=_peer_id_for_memory_file(file),
+            memory_type=file.memory_type or "",
+        )
+        delete_groups.setdefault(group_key, []).append(file)
 
     group_keys = list(dict.fromkeys(list(upsert_groups.keys()) + list(delete_groups.keys())))
     grouped_requests: list[tuple[MemoryMergeGroupKey, MemoryUpdateRequest]] = []
@@ -658,7 +654,9 @@ def split_request_by_merge_group(
         )
 
     if passthrough_upserts:
-        passthrough_deletes = list(operations.delete_file_contents or [])
+        # Unresolved upserts keep their original standalone passthrough group.
+        # Deletes remain in their normal peer/type groups, including replacement
+        # metadata, so diagnostics cannot change write/delete ordering.
         group_key = MemoryMergeGroupKey(peer_id=None, memory_type="")
         grouped_requests.append(
             (
@@ -667,19 +665,10 @@ def split_request_by_merge_group(
                     request,
                     operations=ResolvedOperations(
                         upsert_operations=passthrough_upserts,
-                        delete_file_contents=passthrough_deletes,
+                        delete_file_contents=[],
                         errors=list(operations.errors or []),
                         resolved_links=[],
-                        delete_replacements={
-                            file.uri: replacement_uri
-                            for file in passthrough_deletes
-                            if file.uri
-                            if (
-                                replacement_uri := (
-                                    getattr(operations, "delete_replacements", {}) or {}
-                                ).get(file.uri)
-                            )
-                        },
+                        delete_replacements={},
                     ),
                 ),
             )
@@ -1772,12 +1761,18 @@ def _skipped_operation_matches_scope(
     scoped_uris: set[str],
 ) -> bool:
     source = getattr(operation, "source", None)
-    if scope.extraction_id and getattr(source, "extraction_id", None) == scope.extraction_id:
-        return True
-    if scope.archive_uri and getattr(source, "archive_uri", None) == scope.archive_uri:
-        return True
-    if scope.session_id and getattr(source, "session_id", None) == scope.session_id:
-        return True
+    source_extraction_id = _optional_str(getattr(source, "extraction_id", None))
+    if scope.extraction_id and source_extraction_id:
+        return source_extraction_id == scope.extraction_id
+
+    source_archive_uri = _optional_str(getattr(source, "archive_uri", None))
+    if scope.archive_uri and source_archive_uri:
+        return source_archive_uri == scope.archive_uri
+
+    source_session_id = _optional_str(getattr(source, "session_id", None))
+    if scope.session_id and source_session_id:
+        return source_session_id == scope.session_id
+
     uri = str(getattr(operation, "uri", None) or "")
     return bool(uri and uri in scoped_uris)
 
