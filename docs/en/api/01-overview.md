@@ -375,7 +375,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | GET | `/api/v1/content/read` | Read full content (L2) |
 | GET | `/api/v1/content/abstract` | Read an abstract (L0) |
 | GET | `/api/v1/content/overview` | Read an overview (L1) |
-| GET | `/api/v1/content/download` | Download original file bytes |
+| GET | `/api/v1/content/download` | Download original file bytes, or a directory as a ZIP archive |
 | POST | `/api/v1/content/write` | Write content and refresh semantic indexes |
 | POST | `/api/v1/content/batch-write` | Apply preconditioned multi-file writes |
 | POST | `/api/v1/content/set_tags` | Set retrieval tags |

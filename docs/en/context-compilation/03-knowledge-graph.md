@@ -67,10 +67,10 @@ Download the whole artifact tree as a ZIP archive, then extract it:
 
 ```bash
 ov get viking://resources/journal-kg ./journal-kg.zip
-unzip ./journal-kg.zip
+unzip -o ./journal-kg.zip
 ```
 
-> `ov get` requires the local target path to not exist yet, so remove the old archive before re-downloading.
+> `ov get` requires the local target path to not exist yet, so remove the old archive (`rm -f ./journal-kg.zip`) before re-downloading. `unzip -o` overwrites the previously extracted `./journal-kg/` instead of prompting.
 
 Confirm the local layout is correct:
 

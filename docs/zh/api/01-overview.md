@@ -370,7 +370,7 @@ JSON 输出 - 错误：
 | GET | `/api/v1/content/read` | 读取完整内容（L2） |
 | GET | `/api/v1/content/abstract` | 读取摘要（L0） |
 | GET | `/api/v1/content/overview` | 读取概览（L1） |
-| GET | `/api/v1/content/download` | 下载原始文件字节 |
+| GET | `/api/v1/content/download` | 下载原始文件字节，或将目录打包为 ZIP 归档 |
 | POST | `/api/v1/content/write` | 写入内容并刷新语义索引 |
 | POST | `/api/v1/content/batch-write` | 执行带前置条件的多文件写入 |
 | POST | `/api/v1/content/set_tags` | 设置检索标签 |
