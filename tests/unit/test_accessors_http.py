@@ -86,13 +86,20 @@ class TestHTTPAccessor:
         """Test filename extraction from URLs."""
         assert HTTPAccessor._extract_filename_from_url(url) == expected
 
-    async def test_source_headers_are_sent_for_head_and_get(
-        self, accessor: HTTPAccessor, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        ("tos_args", "header_name", "header_value"),
+        [
+            ({"tos_signature": "signed-value"}, "X-Tos-Signature", "signed-value"),
+            ({"tos_access": "access-key"}, "X-Tos-Access", "access-key"),
+        ],
+    )
+    async def test_tos_auth_is_sent_for_head_and_get(
+        self, accessor: HTTPAccessor, monkeypatch: pytest.MonkeyPatch, tos_args, header_name, header_value
     ) -> None:
         seen: list[tuple[str, str | None]] = []
 
         async def handler(request: httpx.Request) -> httpx.Response:
-            seen.append((request.method, request.headers.get("X-Tos-Signature")))
+            seen.append((request.method, request.headers.get(header_name)))
             return httpx.Response(
                 200,
                 headers={"Content-Type": "text/plain"},
@@ -117,15 +124,15 @@ class TestHTTPAccessor:
 
         resource = await accessor.access(
             "https://tos.example.com/object",
-            source_headers={"X-Tos-Signature": "signed-value"},
+            **tos_args,
         )
 
         try:
-            assert seen == [("HEAD", "signed-value"), ("GET", "signed-value")]
+            assert seen == [("HEAD", header_value), ("GET", header_value)]
         finally:
             resource.cleanup()
 
-    async def test_source_headers_do_not_reach_parser(
+    async def test_tos_auth_args_do_not_reach_parser(
         self, tmp_path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from openviking.parse.accessors.base import LocalResource, SourceType
@@ -160,12 +167,14 @@ class TestHTTPAccessor:
 
         await processor.process(
             "https://tos.example.com/object",
-            source_headers={"X-Tos-Signature": "signed-value"},
+            tos_signature="signed-value",
+            tos_access="access-key",
         )
 
-        assert "source_headers" not in received
+        assert "tos_signature" not in received
+        assert "tos_access" not in received
 
-    async def test_source_headers_do_not_reach_direct_understanding_parser(
+    async def test_tos_auth_args_do_not_reach_direct_understanding_parser(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from openviking.utils.media_processor import UnifiedResourceProcessor
@@ -186,10 +195,12 @@ class TestHTTPAccessor:
 
         await processor.process(
             "https://tos.example.com/object",
-            source_headers={"X-Tos-Signature": "signed-value"},
+            tos_signature="signed-value",
+            tos_access="access-key",
         )
 
-        assert "source_headers" not in received
+        assert "tos_signature" not in received
+        assert "tos_access" not in received
 
     @pytest.mark.parametrize("entry_url_type", [URLType.WEBPAGE, URLType.DOWNLOAD_HTML])
     async def test_webpage_uses_web_importer_directory(

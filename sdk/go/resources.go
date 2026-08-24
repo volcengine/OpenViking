@@ -34,9 +34,6 @@ func (c *Client) AddResource(ctx context.Context, path string, opts *AddResource
 		payload["preserve_structure"] = *opts.PreserveStructure
 	}
 	setString(payload, "processing_mode", opts.ProcessingMode)
-	if opts.SourceHeaders != nil {
-		payload["source_headers"] = opts.SourceHeaders
-	}
 	setAny(payload, "telemetry", opts.Telemetry)
 	// Only attach args when arguments were actually provided. Instances that
 	// predate #2549 (which added the args field to the resources route under

@@ -58,7 +58,6 @@ class SearchContextOptions(_ExtraOptions, total=False):
 
 
 class AddResourceOptions(_ExtraOptions, total=False):
-    source_headers: Dict[str, str]
     reason: str
     instruction: str
     create_parent: bool

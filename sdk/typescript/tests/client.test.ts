@@ -367,24 +367,6 @@ describe("OpenVikingClient", () => {
     });
   });
 
-  it("sends sourceHeaders for addResource requests", async () => {
-    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok({}));
-    const client = new OpenVikingClient({
-      baseUrl: "https://example.com",
-      fetch: fetcher,
-    });
-
-    await client.addResource("https://tos.example.com/object", {
-      sourceHeaders: { "X-Tos-Signature": "signed-value" },
-    });
-
-    const [, init] = fetcher.mock.calls[0]!;
-    expect(JSON.parse(String(init?.body))).toMatchObject({
-      path: "https://tos.example.com/object",
-      source_headers: { "X-Tos-Signature": "signed-value" },
-    });
-  });
-
   it("sends processing_mode for write requests", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok({}));
     const client = new OpenVikingClient({

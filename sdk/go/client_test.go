@@ -22,27 +22,6 @@ func TestAddResourceOptionsHasNoTopLevelParseMode(t *testing.T) {
 	}
 }
 
-func TestAddResourceSendsSourceHeaders(t *testing.T) {
-	var body map[string]any
-	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatal(err)
-		}
-		writeOK(t, w, map[string]any{})
-	}))
-	defer closeServer()
-
-	if _, err := client.AddResource(context.Background(), "https://tos.example.com/object", &AddResourceOptions{
-		SourceHeaders: map[string]string{"X-Tos-Signature": "signed-value"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	headers, ok := body["source_headers"].(map[string]any)
-	if !ok || headers["X-Tos-Signature"] != "signed-value" {
-		t.Fatalf("source_headers = %#v", body["source_headers"])
-	}
-}
-
 func testClient(t *testing.T, handler http.Handler) (*Client, func()) {
 	t.Helper()
 	server := httptest.NewServer(handler)

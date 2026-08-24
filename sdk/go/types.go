@@ -38,7 +38,6 @@ type AddResourceOptions struct {
 	PreserveStructure   *bool
 	WatchInterval       float64
 	ProcessingMode      string
-	SourceHeaders       map[string]string
 	Args                map[string]any
 	Tags                []string
 	TagMode             string

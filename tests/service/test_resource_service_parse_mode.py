@@ -261,35 +261,38 @@ async def test_rejects_invalid_parse_mode(service: ResourceService, ctx: Request
 
 
 @pytest.mark.asyncio
-async def test_source_headers_require_http_resource_url(
+async def test_tos_auth_args_require_http_resource_url(
     service: ResourceService,
     ctx: RequestContext,
 ):
-    with pytest.raises(InvalidArgumentError, match=r"only supported for HTTP\(S\)"):
+    with pytest.raises(InvalidArgumentError, match=r"tos_signature and tos_access are only supported"):
         await service.add_resource(
             path="/test/path",
             ctx=ctx,
             to="viking://resources/test",
-            source_headers={"X-Tos-Signature": "signed-value"},
+            args={"tos_signature": "signed-value"},
         )
 
 
 @pytest.mark.asyncio
-async def test_source_headers_are_reserved_from_args(
+async def test_tos_auth_args_are_mutually_exclusive(
     service: ResourceService,
     ctx: RequestContext,
 ):
-    with pytest.raises(InvalidArgumentError, match="core add_resource fields: source_headers"):
+    with pytest.raises(InvalidArgumentError, match="cannot both be provided"):
         await service.add_resource(
             path="https://tos.example.com/object",
             ctx=ctx,
             to="viking://resources/test",
-            args={"source_headers": {"X-Tos-Signature": "signed-value"}},
+            args={
+                "tos_signature": "signed-value",
+                "tos_access": "access-key",
+            },
         )
 
 
 @pytest.mark.asyncio
-async def test_source_headers_are_snapshotted_and_omitted_from_queue(
+async def test_tos_auth_args_are_snapshotted_and_omitted_from_queue(
     service: ResourceService,
     ctx: RequestContext,
 ):
@@ -300,16 +303,14 @@ async def test_source_headers_are_snapshotted_and_omitted_from_queue(
         path="https://tos.example.com/object",
         ctx=ctx,
         to="viking://resources/test",
-        source_headers={"X-Tos-Signature": "signed-value"},
+        args={"tos_signature": "signed-value"},
         allow_local_path_resolution=False,
     )
 
     assert prepare_durable_source.await_args.kwargs["snapshot_required"] is True
-    assert prepare_durable_source.await_args.kwargs["source_headers"] == {
-        "X-Tos-Signature": "signed-value"
-    }
+    assert prepare_durable_source.await_args.kwargs["tos_signature"] == "signed-value"
     message = service._enqueue_add_resource_job.await_args.args[0]
-    assert "source_headers" not in message.args
+    assert "tos_signature" not in message.args
 
 
 @pytest.mark.asyncio

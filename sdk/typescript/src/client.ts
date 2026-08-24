@@ -149,7 +149,6 @@ export class OpenVikingClient {
       preserve_structure: options.preserveStructure,
       watch_interval: options.watchInterval,
       processing_mode: options.processingMode,
-      source_headers: options.sourceHeaders,
       args:
         options.args && Object.keys(options.args).length
           ? options.args

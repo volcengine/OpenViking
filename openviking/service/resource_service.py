@@ -104,7 +104,6 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "build_index",
         "summarize",
         "processing_mode",
-        "source_headers",
         "watch_interval",
         "skip_watch_management",
         "allow_local_path_resolution",
@@ -726,7 +725,7 @@ class ResourceService:
         queued_args = {
             key: value
             for key, value in processor_kwargs.items()
-            if key not in _ADD_RESOURCE_ARGS_RESERVED_FIELDS
+            if key not in _ADD_RESOURCE_ARGS_RESERVED_FIELDS | {"tos_signature", "tos_access"}
         }
         queued_args = self._sanitize_watch_processor_kwargs(queued_args)
         task_auth: Dict[str, Any] = {}
@@ -786,7 +785,8 @@ class ResourceService:
             prepared = await self._resource_processor.prepare_durable_source(
                 path,
                 ctx,
-                snapshot_required=local_source or bool(processor_kwargs.get("source_headers")),
+                snapshot_required=local_source
+                or bool(processor_kwargs.get("tos_signature") or processor_kwargs.get("tos_access")),
                 parse_mode=mode,
                 allow_local_path_resolution=allow_local_path_resolution,
                 **processor_kwargs,
@@ -1118,7 +1118,6 @@ class ResourceService:
         enforce_public_remote_targets: bool = False,
         add_type: Optional[str] = None,
         args: Optional[Dict[str, Any]] = None,
-        source_headers: Optional[Dict[str, str]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Accept and route a new resource-add request."""
@@ -1150,7 +1149,6 @@ class ResourceService:
             allow_local_path_resolution=allow_local_path_resolution,
             enforce_public_remote_targets=enforce_public_remote_targets,
             args=args,
-            source_headers=source_headers,
             **kwargs,
         )
 
@@ -1220,7 +1218,6 @@ class ResourceService:
         allow_local_path_resolution: bool = True,
         enforce_public_remote_targets: bool = False,
         args: Optional[Dict[str, Any]] = None,
-        source_headers: Optional[Dict[str, str]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Validate and route one resource ingestion request.
@@ -1269,12 +1266,6 @@ class ResourceService:
             InvalidArgumentError: If the URI scope is not 'resources'
         """
         self._ensure_initialized()
-        if source_headers is not None:
-            if not path.startswith(("http://", "https://")):
-                raise InvalidArgumentError(
-                    "source_headers are only supported for HTTP(S) resource URLs."
-                )
-            kwargs["source_headers"] = dict(source_headers)
         processing_mode = normalize_processing_mode(processing_mode)
         self._validate_add_resource_tag_policy(tags=tags, tag_mode=tag_mode)
         from openviking.connector.delegate import ConnectorDelegate
@@ -1303,6 +1294,20 @@ class ResourceService:
                 "field and in args."
             )
         kwargs.update(normalized_args.processor_kwargs)
+        tos_signature = kwargs.get("tos_signature")
+        tos_access = kwargs.get("tos_access")
+        if tos_signature is not None or tos_access is not None:
+            if not path.startswith(("http://", "https://")):
+                raise InvalidArgumentError(
+                    "tos_signature and tos_access are only supported for HTTP(S) resource URLs."
+                )
+            if tos_signature is not None and tos_access is not None:
+                raise InvalidArgumentError("tos_signature and tos_access cannot both be provided.")
+            for field, value in (("tos_signature", tos_signature), ("tos_access", tos_access)):
+                if value is not None:
+                    if not isinstance(value, str) or not value.strip():
+                        raise InvalidArgumentError(f"args.{field} must be a non-empty string.")
+                    kwargs[field] = value.strip()
         git_repo_source = is_git_repo_url(path)
         if git_repo_source:
             reject_git_http_userinfo(path)

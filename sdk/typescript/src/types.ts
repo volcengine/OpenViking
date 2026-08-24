@@ -74,7 +74,6 @@ export interface WaitOptions {
 }
 /** Resource import options. */
 export interface AddResourceOptions extends WaitOptions {
-  sourceHeaders?: Record<string, string>;
   to?: string;
   parent?: string;
   createParent?: boolean;
