@@ -77,6 +77,7 @@ class AnyDocConverter:
         resource_name: str,
         storage: Any,
         format_hint: str | None = None,
+        max_table_rows: int = 1000,
     ) -> AnydocConversionResult:
         path = Path(path)
         if path.suffix.lower() == ".pdf" or _format_name(format_hint) == "pdf":
@@ -99,6 +100,7 @@ class AnyDocConverter:
             source_format=source_format,
             resource_name=resource_name,
             storage=storage,
+            max_table_rows=max_table_rows,
         )
         markdown = renderer.render()
         return AnydocConversionResult(

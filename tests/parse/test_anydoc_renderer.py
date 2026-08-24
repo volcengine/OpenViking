@@ -96,12 +96,13 @@ def _slot(cell=None, kind="origin"):
     return SimpleNamespace(kind=kind, cell=cell, origin_row=None, origin_col=None)
 
 
-def _render_document(tmp_path, document, *, source_format="docx"):
+def _render_document(tmp_path, document, *, source_format="docx", max_table_rows=1000):
     renderer = _AnyDocMarkdownRenderer(
         document,
         source_format=source_format,
         resource_name="Demo",
         storage=FakeStorage(tmp_path),
+        max_table_rows=max_table_rows,
     )
     return renderer.render()
 
@@ -283,6 +284,37 @@ def test_renderer_serializes_table_slots_header_and_cell_blocks(tmp_path):
     assert "|  |  |" in markdown
     assert "| A\\|B |  |" in markdown
     assert "| **Head**<br>- L | `` `code` ``<br>N1 / N2 |" in markdown
+
+
+def test_renderer_truncates_large_tables_before_rendering_rows(tmp_path):
+    def row(*blocks):
+        return [_slot(_cell(*blocks))]
+
+    document = _doc(
+        [
+            _block(
+                "table",
+                table=SimpleNamespace(
+                    grid=[
+                        row(_paragraph(_text("Header"))),
+                        row(_paragraph(_text("Row 1"))),
+                        row(_block("unsupported")),
+                        row(_paragraph(_text("Row 3"))),
+                    ],
+                    header_rows=1,
+                    kind="data",
+                ),
+            )
+        ]
+    )
+
+    markdown = _render_document(tmp_path, document, max_table_rows=2)
+
+    assert "| Header |" in markdown
+    assert "| Row 1 |" in markdown
+    assert "unsupported" not in markdown
+    assert "Row 3" not in markdown
+    assert "*... 2 more rows truncated ...*" in markdown
 
 
 def test_renderer_flattens_single_cell_layout_table(tmp_path):

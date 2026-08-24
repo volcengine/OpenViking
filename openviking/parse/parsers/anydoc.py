@@ -74,6 +74,7 @@ class AnyDocParser(BaseParser):
             path,
             resource_name=resource_name,
             storage=storage,
+            max_table_rows=self.anydoc_config.max_table_rows,
         )
 
         markdown_kwargs = dict(kwargs)

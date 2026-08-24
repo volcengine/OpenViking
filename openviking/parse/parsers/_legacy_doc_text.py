@@ -184,7 +184,8 @@ def _clean_word_text(text: str) -> str:
 
 
 def _fallback_extract(path: Path) -> str:
-    raw = Path(path).read_bytes()[:_MAX_STREAM_SIZE]
+    with Path(path).open("rb") as file_obj:
+        raw = file_obj.read(_MAX_STREAM_SIZE)
 
     try:
         decoded = raw.decode("utf-16-le", errors="ignore")

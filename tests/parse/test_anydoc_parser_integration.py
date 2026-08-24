@@ -52,21 +52,28 @@ def _patch_storage(monkeypatch, tmp_path):
 @pytest.mark.asyncio
 async def test_anydoc_parser_converts_and_forwards_markdown_options(tmp_path, monkeypatch):
     storage = _patch_storage(monkeypatch, tmp_path)
-    parser = anydoc.AnyDocParser()
+    parser = anydoc.AnyDocParser(anydoc_config=AnydocConfig(max_table_rows=7))
     seen = _stub_markdown_parse(parser)
+    seen_convert = {}
     source = tmp_path / "slides.pps"
     import_root = tmp_path / "import"
     source.write_bytes(b"placeholder")
-    monkeypatch.setattr(
-        anydoc_converter.AnyDocConverter,
-        "convert",
-        lambda self, path, **kwargs: SimpleNamespace(
+
+    def fake_convert(self, path, **kwargs):
+        seen_convert["path"] = path
+        seen_convert["kwargs"] = kwargs
+        return SimpleNamespace(
             markdown="# converted slides",
             source_format="pps",
             images_saved=2,
             assets_referenced=3,
             warnings=("skipped tiny image",),
-        ),
+        )
+
+    monkeypatch.setattr(
+        anydoc_converter.AnyDocConverter,
+        "convert",
+        fake_convert,
     )
 
     result = await parser.parse(
@@ -91,6 +98,7 @@ async def test_anydoc_parser_converts_and_forwards_markdown_options(tmp_path, mo
     assert seen["kwargs"]["flatten_single_output"] is True
     assert seen["kwargs"]["split_content"] is False
     assert seen["kwargs"]["base_dir"] == source.parent
+    assert seen_convert["kwargs"]["max_table_rows"] == 7
     assert result.source_format == "pps"
     assert result.parser_name == "AnyDocParser"
     assert result.parser_version == "1.0"

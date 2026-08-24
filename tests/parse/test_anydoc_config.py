@@ -11,11 +11,13 @@ def test_anydoc_config_defaults():
     configs = load_parser_configs_from_dict({})
     cfg = configs["anydoc"]
     assert cfg.enabled is True
+    assert cfg.max_table_rows == 1000
 
 
 def test_anydoc_config_from_dict():
-    configs = load_parser_configs_from_dict({"anydoc": {"enabled": False}})
+    configs = load_parser_configs_from_dict({"anydoc": {"enabled": False, "max_table_rows": 25}})
     assert configs["anydoc"].enabled is False
+    assert configs["anydoc"].max_table_rows == 25
 
 
 def test_anydoc_config_rejects_enable_alias():

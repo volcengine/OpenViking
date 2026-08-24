@@ -72,11 +72,13 @@ class _AnyDocMarkdownRenderer:
         source_format: str,
         resource_name: str,
         storage: Any,
+        max_table_rows: int = 1000,
     ):
         self.document = document
         self.source_format = str(source_format or "").lower().removeprefix("format.")
         self.resource_name = resource_name
         self.storage = storage
+        self.max_table_rows = max_table_rows
         self.images_saved = 0
         self.asset_paths: dict[int, str | None] = {}
         self.assets_referenced: set[int] = set()
@@ -390,7 +392,13 @@ class _AnyDocMarkdownRenderer:
             cell = table.grid[0][0].cell
             return self._render_blocks(cell.blocks if cell else [])
 
-        rows = self._render_table_rows(table)
+        grid = _items(table.grid)
+        truncated_rows = 0
+        if self.max_table_rows > 0 and len(grid) > self.max_table_rows:
+            truncated_rows = len(grid) - self.max_table_rows
+            grid = grid[: self.max_table_rows]
+
+        rows = self._render_table_rows(grid)
         while len(rows) > 1 and all(not text and not covered for text, covered in rows[-1]):
             rows.pop()
         width = self._table_width(rows)
@@ -400,12 +408,14 @@ class _AnyDocMarkdownRenderer:
         header = [text for text, _ in rows.pop(0)] if table.header_rows >= 1 else [""] * width
         lines = [self._format_table_row(header), self._format_table_row(["---"] * width)]
         lines.extend(self._format_table_row([text for text, _ in row]) for row in rows)
+        if truncated_rows:
+            lines.append(f"\n*... {truncated_rows} more rows truncated ...*")
         return "\n".join(lines)
 
-    def _render_table_rows(self, table: Any) -> list[list[tuple[str, bool]]]:
-        width = max((len(row) for row in table.grid), default=0)
+    def _render_table_rows(self, grid: list[Any]) -> list[list[tuple[str, bool]]]:
+        width = max((len(row) for row in grid), default=0)
         rows: list[list[tuple[str, bool]]] = []
-        for row in table.grid:
+        for row in grid:
             rendered = [
                 (self._render_cell(slot.cell), False)
                 if slot.kind == "origin"

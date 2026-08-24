@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from openviking.parse.parsers import _legacy_doc_text
 from openviking.parse.parsers.anydoc_converter import AnyDocConverter
 
 
@@ -221,6 +222,16 @@ def test_converter_does_not_raw_fallback_for_docx_payload_named_doc(tmp_path, mo
             resource_name="renamed",
             storage=FakeStorage(tmp_path / "media"),
         )
+
+
+def test_legacy_doc_raw_fallback_reads_only_capped_prefix(tmp_path, monkeypatch):
+    source = tmp_path / "oversized.doc"
+    source.write_bytes(b"ABCDEFGHIJKLTAIL_SHOULD_NOT_BE_READ")
+    monkeypatch.setattr(_legacy_doc_text, "_MAX_STREAM_SIZE", 12)
+
+    text = _legacy_doc_text._fallback_extract(source)
+
+    assert text == "ABCDEFGHIJKL"
 
 
 def test_converter_saves_table_cell_image_once(tmp_path, monkeypatch):

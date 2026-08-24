@@ -63,7 +63,7 @@ async def test_anydoc_parser_offloads_docx_conversion(monkeypatch, tmp_path: Pat
     seen = _stub_markdown_parse(parser)
     calls = _patch_to_thread(monkeypatch, anydoc)
 
-    def convert(self, path: Path, *, resource_name, storage):
+    def convert(self, path: Path, *, resource_name, storage, max_table_rows=1000):
         return _conversion()
 
     monkeypatch.setattr(anydoc_converter.AnyDocConverter, "convert", convert)
@@ -77,9 +77,9 @@ async def test_anydoc_parser_offloads_docx_conversion(monkeypatch, tmp_path: Pat
     assert func.__func__ is convert
     assert args == (source,)
     assert call_kwargs["resource_name"] == "sample"
+    assert call_kwargs["max_table_rows"] == 1000
     storage = call_kwargs["storage"]
     assert seen["content"] == "# converted docx"
     assert seen["kwargs"]["allowed_media_dirs"] == [storage.media_dir]
     assert result.source_format == "docx"
     assert result.parser_name == "AnyDocParser"
-

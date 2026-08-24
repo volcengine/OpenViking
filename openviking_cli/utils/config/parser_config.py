@@ -469,11 +469,18 @@ class MarkdownConfig(ParserConfig):
 class AnydocConfig(ParserConfig):
     """Configuration for the shared anydoc Office converter."""
 
+    max_table_rows: int = 1000
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "AnydocConfig":
         valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
         raise_unknown_config_fields(data=data, valid_fields=valid_fields, context_name=cls.__name__)
         return cls(**data)
+
+    def validate(self) -> None:
+        super().validate()
+        if self.max_table_rows < 0:
+            raise ValueError("max_table_rows must be non-negative")
 
 
 @dataclass
