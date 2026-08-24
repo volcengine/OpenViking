@@ -63,24 +63,14 @@ ov read viking://resources/journal-kg/entities/sun-wukong.md
 
 Unlike the LLM Wiki script, `knowledge_graph.py` reads from a **local directory** (it needs both `entities/` and `relations.jsonl` on disk). So download the output first, then generate the HTML.
 
-Download the whole artifact tree. `ov get` downloads one file at a time; combine it with `ov ls -r -s` to pull every path:
+Download the whole artifact tree as a ZIP archive, then extract it:
 
 ```bash
-SRC="viking://resources/journal-kg"
-DST="./journal-kg"
-mkdir -p "$DST"
-ov ls -r -s "$SRC" | while read -r uri; do
-  # only download files (entities/*.md and relations.jsonl), skip directories
-  case "$uri" in
-    */entities|"$SRC") continue ;;
-  esac
-  rel="${uri#$SRC/}"
-  mkdir -p "$DST/$(dirname "$rel")"
-  ov get "$uri" "$DST/$rel"
-done
+ov get viking://resources/journal-kg ./journal-kg.zip
+unzip ./journal-kg.zip
 ```
 
-> `ov get` requires the local target path to not exist yet, so clear the old directory (`rm -rf ./journal-kg`) before re-downloading.
+> `ov get` requires the local target path to not exist yet, so remove the old archive before re-downloading.
 
 Confirm the local layout is correct:
 

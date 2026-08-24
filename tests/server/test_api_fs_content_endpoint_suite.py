@@ -1,11 +1,15 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import io
+import zipfile
 from types import SimpleNamespace
 
 import httpx
+import pytest
 
 from openviking.pyagfs.exceptions import AGFSHTTPError
+from openviking.server.routers import content as content_router
 
 
 def _assert_error(
@@ -162,6 +166,65 @@ async def test_download_returns_attachment_response(client_with_resource):
     assert response.content
     assert response.headers["content-type"] == "application/octet-stream"
     assert "attachment;" in response.headers["content-disposition"]
+
+
+async def test_download_directory_returns_zip_archive(client_with_resource):
+    client, uri = client_with_resource
+    response = await client.get("/api/v1/content/download", params={"uri": uri})
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/zip"
+    assert ".zip" in response.headers["content-disposition"]
+
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        names = archive.namelist()
+        assert names
+        root = names[0].rstrip("/")
+        assert names[0].endswith("/")
+        assert any(name.startswith(f"{root}/") and not name.endswith("/") for name in names)
+        assert all(not name.startswith("/") and ".." not in name.split("/") for name in names)
+
+
+async def test_build_directory_archive_preserves_tree_and_empty_directories():
+    class FakeFS:
+        async def tree(self, *args, **kwargs):
+            return [
+                {"uri": "viking://resources/project/empty", "rel_path": "empty", "isDir": True},
+                {
+                    "uri": "viking://resources/project/docs/readme.md",
+                    "rel_path": "docs/readme.md",
+                    "isDir": False,
+                },
+            ]
+
+        async def read_file_bytes(self, uri, ctx):
+            assert uri.endswith("docs/readme.md")
+            return b"hello"
+
+    service = SimpleNamespace(fs=FakeFS())
+    archive_path, filename = await content_router._build_directory_archive(
+        service,
+        "viking://resources/project",
+        {"name": "project", "isDir": True},
+        SimpleNamespace(),
+    )
+    try:
+        assert filename == "project.zip"
+        with zipfile.ZipFile(archive_path) as archive:
+            assert archive.namelist() == [
+                "project/",
+                "project/empty/",
+                "project/docs/readme.md",
+            ]
+            assert archive.read("project/docs/readme.md") == b"hello"
+    finally:
+        content_router._remove_file(archive_path)
+
+
+@pytest.mark.parametrize("path", ["../escape", "/absolute", r"..\\escape"])
+def test_safe_archive_path_rejects_unsafe_members(path):
+    with pytest.raises(Exception, match="Unsafe path"):
+        content_router._safe_archive_path("project", path)
 
 
 async def test_download_missing_uri_returns_not_found(app, service, monkeypatch):

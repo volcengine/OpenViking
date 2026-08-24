@@ -503,7 +503,7 @@ impl HttpClient {
         self.post("/api/v1/system/backend/sync-retry", &body).await
     }
 
-    /// Download file as raw bytes
+    /// Download file bytes, or a directory as ZIP bytes
     pub async fn get_bytes(&self, uri: &str) -> Result<Vec<u8>> {
         let url = format!("{}/api/v1/content/download", self.base.base_url);
         let params = vec![

@@ -2,12 +2,19 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Content endpoints for OpenViking HTTP Server."""
 
+import asyncio
+import os
+import tempfile
+import zipfile
+from pathlib import PurePosixPath
 from typing import Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, Query
+from fastapi.responses import FileResponse
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, ConfigDict, model_validator
+from starlette.background import BackgroundTask
 
 from openviking.core.namespace import (
     is_hidden_by_actor_peer_view,
@@ -32,6 +39,62 @@ from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, Permi
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+
+def _safe_archive_path(root_name: str, rel_path: str = "") -> str:
+    """Build a portable ZIP member path from server-produced tree entries."""
+    relative = PurePosixPath(rel_path)
+    if relative.is_absolute():
+        raise InvalidArgumentError(f"Unsafe path in directory download: {rel_path}")
+    parts = [root_name, *relative.parts]
+    if any(part in {"", ".", ".."} or "\\" in part for part in parts):
+        raise InvalidArgumentError(f"Unsafe path in directory download: {rel_path or root_name}")
+    return "/".join(parts)
+
+
+def _remove_file(path: str) -> None:
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+
+
+async def _build_directory_archive(
+    service, uri: str, stat: dict, ctx: RequestContext
+) -> tuple[str, str]:
+    """Write one visible Viking directory tree to a temporary ZIP archive."""
+    root_name = str(stat.get("name") or uri.rstrip("/").rsplit("/", 1)[-1] or "download")
+    root_path = _safe_archive_path(root_name)
+    fd, archive_path = tempfile.mkstemp(prefix="openviking-download-", suffix=".zip")
+    os.close(fd)
+
+    try:
+        entries = await service.fs.tree(
+            uri,
+            ctx=ctx,
+            output="original",
+            show_all_hidden=True,
+            node_limit=None,
+            level_limit=None,
+        )
+        with zipfile.ZipFile(
+            archive_path,
+            mode="w",
+            compression=zipfile.ZIP_DEFLATED,
+            allowZip64=True,
+        ) as archive:
+            archive.writestr(f"{root_path}/", b"")
+            for entry in entries:
+                member_path = _safe_archive_path(root_name, str(entry["rel_path"]))
+                if entry.get("isDir", False):
+                    archive.writestr(f"{member_path.rstrip('/')}/", b"")
+                    continue
+                content = await service.fs.read_file_bytes(str(entry["uri"]), ctx=ctx)
+                await asyncio.to_thread(archive.writestr, member_path, content)
+        return archive_path, f"{root_name}.zip"
+    except Exception:
+        _remove_file(archive_path)
+        raise
 
 
 class WriteContentRequest(BaseModel):
@@ -191,10 +254,19 @@ async def download(
     uri: str = Query(..., description="Viking URI"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Download file as raw bytes (for images, binaries, etc.)."""
+    """Download a file as raw bytes or a directory as a ZIP archive."""
     service = get_service()
     uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
+        stat = await service.fs.stat(uri, ctx=_ctx)
+        if stat.get("isDir", False):
+            archive_path, filename = await _build_directory_archive(service, uri, stat, _ctx)
+            return FileResponse(
+                path=archive_path,
+                media_type="application/zip",
+                filename=filename,
+                background=BackgroundTask(_remove_file, archive_path),
+            )
         content = await service.fs.read_file_bytes(uri, ctx=_ctx)
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
@@ -204,14 +276,7 @@ async def download(
             raise mapped from e
         raise
 
-    # Try to get filename from stat
-    filename = "download"
-    try:
-        stat = await service.fs.stat(uri, ctx=_ctx)
-        if stat and "name" in stat:
-            filename = stat["name"]
-    except Exception:
-        pass
+    filename = stat.get("name", "download")
     filename = quote(filename)
     return FastAPIResponse(
         content=content,

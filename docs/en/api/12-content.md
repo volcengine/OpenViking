@@ -433,11 +433,11 @@ The TypeScript and Go SDKs and the CLI do not currently expose batch write direc
 
 ### download()
 
-Download a file as raw bytes. This is intended for images, PDFs, and other non-text content. The response uses `application/octet-stream` and returns the filename through `Content-Disposition`.
+Download a file as raw bytes, or a directory as a ZIP archive. File responses use `application/octet-stream`; directory responses use `application/zip` and preserve the downloaded directory as the archive root. Both return the filename through `Content-Disposition`.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `uri` | string | Yes | File URI to download |
+| `uri` | string | Yes | File or directory URI to download |
 
 **HTTP API**
 
@@ -450,6 +450,9 @@ curl --get http://localhost:1933/api/v1/content/download \
   -H "X-API-Key: your-key" \
   --data-urlencode "uri=viking://resources/images/logo.png" \
   --output logo.png
+
+# A directory is returned as a ZIP archive.
+ov get viking://resources/project ./project.zip
 ```
 
 **Response**
@@ -464,7 +467,7 @@ Content-Disposition: attachment; filename*=UTF-8''logo.png
 <binary body>
 ```
 
-The public SDKs and CLI do not currently expose a dedicated raw-byte download method, so this section shows only the HTTP tab.
+The CLI exposes the same endpoint through `ov get <uri> <local-path>`. The local path must not already exist.
 
 ---
 

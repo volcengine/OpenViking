@@ -63,24 +63,14 @@ ov read viking://resources/journal-kg/entities/孙悟空.md
 
 与 LLM Wiki 的脚本不同，`knowledge_graph.py` 读取的是**本地目录**（需要 `entities/` 和 `relations.jsonl` 都在本地）。所以先把产物拉到本地，再生成 HTML。
 
-先把整棵工件树下载下来。`ov get` 一次下载一个文件，配合 `ov ls -r -s` 列出全部路径即可批量拉取：
+先把整棵工件树打包成 ZIP 下载，再解压：
 
 ```bash
-SRC="viking://resources/journal-kg"
-DST="./journal-kg"
-mkdir -p "$DST"
-ov ls -r -s "$SRC" | while read -r uri; do
-  # 只下载文件（entities/*.md 和 relations.jsonl），跳过目录
-  case "$uri" in
-    */entities|"$SRC") continue ;;
-  esac
-  rel="${uri#$SRC/}"
-  mkdir -p "$DST/$(dirname "$rel")"
-  ov get "$uri" "$DST/$rel"
-done
+ov get viking://resources/journal-kg ./journal-kg.zip
+unzip ./journal-kg.zip
 ```
 
-> `ov get` 要求本地目标路径尚不存在，所以重新下载前先清掉旧目录（`rm -rf ./journal-kg`）。
+> `ov get` 要求本地目标路径尚不存在，所以重新下载前先删除旧压缩包。
 
 确认本地目录结构正确：
 

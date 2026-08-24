@@ -433,11 +433,11 @@ TypeScript、Go SDK 和 CLI 当前不直接暴露 batch write。
 
 ### download()
 
-以原始字节流下载文件，适用于图片、PDF 和其他非文本内容。响应使用 `application/octet-stream`，并通过 `Content-Disposition` 返回文件名。
+以原始字节流下载文件，或将目录打包成 ZIP 下载。文件响应使用 `application/octet-stream`；目录响应使用 `application/zip`，并以所下载目录作为压缩包根目录。两者都会通过 `Content-Disposition` 返回文件名。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `uri` | string | 是 | 要下载的文件 URI |
+| `uri` | string | 是 | 要下载的文件或目录 URI |
 
 **HTTP API**
 
@@ -450,6 +450,9 @@ curl --get http://localhost:1933/api/v1/content/download \
   -H "X-API-Key: your-key" \
   --data-urlencode "uri=viking://resources/images/logo.png" \
   --output logo.png
+
+# 目录会以 ZIP 压缩包返回
+ov get viking://resources/project ./project.zip
 ```
 
 **响应**
@@ -464,7 +467,7 @@ Content-Disposition: attachment; filename*=UTF-8''logo.png
 <binary body>
 ```
 
-公共 SDK 和 CLI 当前没有独立的原始字节下载方法，因此本节只展示 HTTP Tab。
+CLI 通过 `ov get <uri> <local-path>` 调用同一接口；本地目标路径必须尚不存在。
 
 ---
 

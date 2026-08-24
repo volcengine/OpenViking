@@ -678,7 +678,7 @@ enum Commands {
         #[arg(long, default_value = "false")]
         recursive: bool,
     },
-    /// [Data] Download file to local path (supports binaries/images)
+    /// [Data] Download a file, or archive a directory as ZIP, to a local path
     Get {
         /// Viking URI
         #[arg(value_name = "uri")]
