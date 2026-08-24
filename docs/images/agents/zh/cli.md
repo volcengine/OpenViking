@@ -18,8 +18,6 @@ npm i -g @openviking/cli && ov config
 
 {{OPENVIKING_API_KEY_BLOCK}}
 
-{{OPENVIKING_API_KEY_BLOCK}}
-
 
 ### 步骤3：配置完成后，可运行以下命令查看 CLI 用法：
 
