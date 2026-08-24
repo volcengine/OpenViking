@@ -40,8 +40,8 @@ VikingFS 是统一的 URI 抽象层，屏蔽底层存储细节。
 
 ```
 viking://resources/docs/auth  →  /local/{account_id}/resources/docs/auth
-viking://user/memories        →  /local/{account_id}/user/{user_id}/memories
-viking://user/skills          →  /local/{account_id}/user/{user_id}/skills
+viking://~/memories        →  /local/{account_id}/user/{user_id}/memories
+viking://~/skills          →  /local/{account_id}/user/{user_id}/skills
 ```
 
 ### 核心 API

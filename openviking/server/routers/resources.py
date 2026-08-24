@@ -74,7 +74,10 @@ class AddResourceRequest(BaseModel):
 
             Note: Re-adding the same source to the same target updates its active watch task.
             A different source targeting an active watch raises ConflictError; cancel that
-            watch first with watch_interval <= 0.
+            watch first with watch_interval <= 0. For Connector imports this check is
+            eventually consistent: the Watch is created only after the background import
+            succeeds, so overlapping imports may both write before Watch finalization
+            reports the conflict.
     """
 
     model_config = ConfigDict(extra="forbid")

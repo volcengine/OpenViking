@@ -33,6 +33,7 @@ pub struct PathLockContext {
 pub struct FsContextInner {
     account_id: String,
     pathlock: Option<PathLockContext>,
+    bypass_cache: bool,
 }
 
 impl FsContextInner {
@@ -41,6 +42,7 @@ impl FsContextInner {
         Self {
             account_id: account_id.into(),
             pathlock: None,
+            bypass_cache: false,
         }
     }
 
@@ -52,7 +54,14 @@ impl FsContextInner {
         Self {
             account_id: account_id.into(),
             pathlock: Some(pathlock),
+            bypass_cache: false,
         }
+    }
+
+    /// Return a context copy that forces plugin-local caches to serve fresh reads.
+    pub fn with_bypass_cache(mut self, bypass_cache: bool) -> Self {
+        self.bypass_cache = bypass_cache;
+        self
     }
 
     /// Tenant identifier (account_id == tenant).
@@ -65,6 +74,11 @@ impl FsContextInner {
         self.pathlock.as_ref()
     }
 
+    /// Whether plugin-local caches must be bypassed for this operation.
+    pub fn bypass_cache(&self) -> bool {
+        self.bypass_cache
+    }
+
     /// Return a context copy that preserves identity and lease while disabling automatic PathLock.
     pub fn with_auto_pathlock_disabled(&self) -> Self {
         let mut pathlock = self.pathlock.clone().unwrap_or_default();
@@ -72,6 +86,7 @@ impl FsContextInner {
         Self {
             account_id: self.account_id.clone(),
             pathlock: Some(pathlock),
+            bypass_cache: self.bypass_cache,
         }
     }
 }
@@ -117,6 +132,14 @@ impl FsContextView {
             .map(|p| p.disable_auto_pathlock)
             .unwrap_or(false)
     }
+
+    /// Whether plugin-local caches must be bypassed for the current operation.
+    pub fn bypass_cache(&self) -> bool {
+        self.inner
+            .as_ref()
+            .map(|c| c.bypass_cache())
+            .unwrap_or(false)
+    }
 }
 
 #[cfg(test)]
@@ -160,5 +183,19 @@ mod tests {
             .await;
         // Outside the scope it is unset again.
         assert_eq!(FsContextView::current().account_id(), None);
+    }
+
+    #[tokio::test]
+    async fn bypass_cache_defaults_false_and_round_trips() {
+        assert!(!FsContextInner::new("t").bypass_cache());
+
+        let ctx = Arc::new(FsContextInner::new("t").with_bypass_cache(true));
+        FS_CTX
+            .scope(ctx, async {
+                assert!(FsContextView::current().bypass_cache());
+            })
+            .await;
+        // Unset context reports no bypass.
+        assert!(!FsContextView::current().bypass_cache());
     }
 }

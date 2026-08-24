@@ -25,14 +25,15 @@ Query → Intent Analysis → Hierarchical Retrieval → Rerank → Results
 ```python
 # find(): Simple query
 results = await client.find(
-    "OAuth authentication",
-    target_uri="viking://resources/"
+    query="OAuth authentication",
+    target_uri="viking://resources/",
 )
 
 # search(): Complex task (needs session context)
+session_info = await client.create_session()
 results = await client.search(
-    "Help me create an RFC document",
-    session_info=session
+    query="Help me create an RFC document",
+    session_id=session_info["session_id"],
 )
 ```
 
@@ -92,9 +93,9 @@ Step 5: Convert to MatchedContext
 
 | context_type | Root Directories |
 |--------------|------------------|
-| MEMORY | `viking://user/memories` |
+| MEMORY | `viking://~/memories` |
 | RESOURCE | `viking://resources` |
-| SKILL | `viking://user/skills` |
+| SKILL | `viking://~/skills` |
 
 ### Recursive Search Algorithm
 

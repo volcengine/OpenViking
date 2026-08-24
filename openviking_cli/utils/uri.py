@@ -20,11 +20,11 @@ class VikingURI:
     Scopes:
     - resources: Independent resource scope (viking://resources/{project}/...)
     - user: Explicit user scope (viking://user/{user_id}/...), including sessions under
-      viking://user/{user_id}/sessions/{session_id}. Authenticated API boundaries may
-      accept documented current-user shorthands and expand them before internal use.
+      viking://user/{user_id}/sessions/{session_id}.
     - session: Legacy alias for user sessions (viking://session/{session_id}/...)
     - agent: Agent capabilities scope (viking://agent/skills/..., viking://agent/endpoints/...)
     - queue: Queue scope (viking://queue/...)
+    - ~: Server-side alias for the caller's user root, expanded to viking://user/{user_id}
 
     Examples:
     - viking://resources/my_project/docs/api
@@ -43,9 +43,12 @@ class VikingURI:
     PUBLIC_SCOPES = frozenset(LISTABLE_SCOPES)
     LEGACY_SCOPES = frozenset({"session"})
     INTERNAL_SCOPES = frozenset({"temp", "queue", "upload"})
+    # Server-side alias for the caller's user namespace root. Only valid as segment 0,
+    # and never persisted or echoed back: the server always expands it to viking://user/{user_id}.
+    ALIAS_SCOPES = frozenset({"~"})
     # All valid scopes that can be addressed by the URI parser/storage internals.
     # Public API handlers must not use this as their external whitelist.
-    VISITABLE_SCOPES = PUBLIC_SCOPES | LEGACY_SCOPES | INTERNAL_SCOPES
+    VISITABLE_SCOPES = PUBLIC_SCOPES | LEGACY_SCOPES | INTERNAL_SCOPES | ALIAS_SCOPES
 
     def __init__(self, uri: str):
         """
@@ -81,7 +84,8 @@ class VikingURI:
         # Parse scope
         scope = path.split("/")[0]
         if scope not in self.VISITABLE_SCOPES:
-            scope_names = ", ".join(sorted(self.VISITABLE_SCOPES))
+            # Alias scopes are accepted but never advertised in scope error messages.
+            scope_names = ", ".join(sorted(self.VISITABLE_SCOPES - self.ALIAS_SCOPES))
             raise ValueError(f"Invalid scope '{scope}'. Must be one of: {scope_names}")
 
         return {
@@ -195,7 +199,8 @@ class VikingURI:
         Returns:
             Viking URI string
         """
-        if scope not in VikingURI.VISITABLE_SCOPES:
+        # Alias scopes are inputs only: the server never mints a '~' URI.
+        if scope not in VikingURI.VISITABLE_SCOPES or scope in VikingURI.ALIAS_SCOPES:
             raise ValueError(f"Invalid scope '{scope}'")
 
         parts = [scope] + list(path_parts)

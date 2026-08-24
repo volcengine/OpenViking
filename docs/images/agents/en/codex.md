@@ -1,12 +1,12 @@
-## Install
+## Step 1: Install
 
 ```bash
 bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness codex --dist tos
 ```
 
-Select **Volcengine OpenViking Cloud**. Paste the API key from this page.
+Select **Volcengine OpenViking Cloud**. Paste the API key:
 
-## Verify
+## Step 2: Verify
 
 Launch `codex`. Approve hooks once with `/hooks`. The first prompt should load your profile.
 

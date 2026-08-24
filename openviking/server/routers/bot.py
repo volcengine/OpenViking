@@ -244,6 +244,38 @@ async def get_compile(
     return Response(status="ok", result=response.json())
 
 
+@router.post("/compile/{task_id}/cancel")
+async def cancel_compile(
+    task_id: str,
+    request: Request,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Cancel a Compile task without exposing tasks owned by another principal."""
+    bot_url = get_bot_url()
+    connection = _attach_openviking_connection(
+        {},
+        request,
+        _ctx,
+        include_legacy_user_id=False,
+    ).get("openviking_connection")
+    try:
+        async with _create_bot_proxy_client() as client:
+            response = await client.post(
+                f"{bot_url}/bot/v1/compile/{task_id}/cancel",
+                json={},
+                headers=_bot_gateway_headers(connection=connection),
+                timeout=30.0,
+            )
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Bot service unavailable: {exc}",
+        ) from exc
+    if not response.is_success:
+        _raise_compile_proxy_error(response)
+    return Response(status="ok", result=response.json())
+
+
 @router.get("/health")
 async def health_check(request: Request):
     """Health check endpoint for Bot API.

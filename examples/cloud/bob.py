@@ -74,26 +74,40 @@ def main():
 
         # ── 2. 回顾团队记忆（Alice 沉淀的技术决策） ──
         print("\n== 2. 回顾团队记忆: '项目技术选型' ==")
-        results = client.find("项目用了什么技术栈和架构选型", limit=5)
-        if hasattr(results, "memories") and results.memories:
+        results = client.find(query="项目用了什么技术栈和架构选型", limit=5)
+        memories = results.get("memories", [])
+        if memories:
             print("  团队记忆:")
-            for i, m in enumerate(results.memories, 1):
-                desc = m.abstract or m.overview or str(m.uri)
-                print(f"  {i}. [{m.score:.3f}] {desc[:150]}")
+            for index, memory in enumerate(memories, 1):
+                description = (
+                    memory.get("abstract")
+                    or memory.get("overview")
+                    or memory.get("uri", "")
+                )
+                print(f"  {index}. [{memory.get('score', 0.0):.3f}] {description[:150]}")
         else:
             print("  未找到团队记忆（Alice 可能还没执行 commit）")
-        if hasattr(results, "resources") and results.resources:
+        resources = results.get("resources", [])
+        if resources:
             print("  相关资源:")
-            for i, r in enumerate(results.resources, 1):
-                print(f"  {i}. [{r.score:.3f}] {r.uri}")
+            for index, resource in enumerate(resources, 1):
+                print(
+                    f"  {index}. [{resource.get('score', 0.0):.3f}] "
+                    f"{resource['uri']}"
+                )
 
         # ── 3. 搜索具体决策 ──
         print("\n== 3. 搜索: '存储方案 TOS 配置' ==")
-        results = client.find("文件存储方案 TOS bucket 配置", limit=3)
-        if hasattr(results, "memories") and results.memories:
-            for i, m in enumerate(results.memories, 1):
-                desc = m.abstract or m.overview or str(m.uri)
-                print(f"  {i}. [{m.score:.3f}] {desc[:150]}")
+        results = client.find(query="文件存储方案 TOS bucket 配置", limit=3)
+        memories = results.get("memories", [])
+        if memories:
+            for index, memory in enumerate(memories, 1):
+                description = (
+                    memory.get("abstract")
+                    or memory.get("overview")
+                    or memory.get("uri", "")
+                )
+                print(f"  {index}. [{memory.get('score', 0.0):.3f}] {description[:150]}")
         else:
             print("  未找到相关记忆")
 
@@ -101,7 +115,7 @@ def main():
         print("\n== 4. 添加资源: CONTRIBUTING.md ==")
         result = client.add_resource(
             path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/CONTRIBUTING.md",
-            reason="贡献指南学习笔记",
+            options={"reason": "贡献指南学习笔记"},
         )
         bob_uri = result.get("root_uri", "")
         print(f"  URI: {bob_uri}")
@@ -111,7 +125,8 @@ def main():
 
         # ── 5. 创建会话，模拟入职学习 ──
         print("\n== 5. 对话: 入职学习 ==")
-        session = client.session()
+        session_info = client.create_session()
+        session = client.session(session_id=session_info["session_id"])
         print(f"  Session: {session.session_id}")
 
         messages = [
@@ -153,31 +168,49 @@ def main():
 
         # ── 7. 回顾自己的记忆 ──
         print("\n== 7. 回顾记忆: '本地开发环境搭建' ==")
-        results = client.find("本地开发环境搭建步骤", limit=3)
-        if hasattr(results, "memories") and results.memories:
+        results = client.find(query="本地开发环境搭建步骤", limit=3)
+        memories = results.get("memories", [])
+        if memories:
             print("  记忆:")
-            for i, m in enumerate(results.memories, 1):
-                desc = m.abstract or m.overview or str(m.uri)
-                print(f"  {i}. [{m.score:.3f}] {desc[:150]}")
-        if hasattr(results, "resources") and results.resources:
+            for index, memory in enumerate(memories, 1):
+                description = (
+                    memory.get("abstract")
+                    or memory.get("overview")
+                    or memory.get("uri", "")
+                )
+                print(f"  {index}. [{memory.get('score', 0.0):.3f}] {description[:150]}")
+        resources = results.get("resources", [])
+        if resources:
             print("  资源:")
-            for i, r in enumerate(results.resources, 1):
-                print(f"  {i}. [{r.score:.3f}] {r.uri}")
+            for index, resource in enumerate(resources, 1):
+                print(
+                    f"  {index}. [{resource.get('score', 0.0):.3f}] "
+                    f"{resource['uri']}"
+                )
 
         # ── 8. 带会话上下文的搜索 ──
         print("\n== 8. 带上下文搜索: '还有什么注意事项' ==")
         results = client.search(
-            "还有什么需要注意的事项",
+            query="还有什么需要注意的事项",
             session_id=session.session_id,
             limit=3,
         )
-        if hasattr(results, "resources") and results.resources:
-            for i, r in enumerate(results.resources, 1):
-                print(f"  {i}. [{r.score:.3f}] {r.uri}")
-        if hasattr(results, "memories") and results.memories:
-            for i, m in enumerate(results.memories, 1):
-                desc = m.abstract or m.overview or str(m.uri)
-                print(f"  {i}. [{m.score:.3f}] {desc[:100]}")
+        resources = results.get("resources", [])
+        if resources:
+            for index, resource in enumerate(resources, 1):
+                print(
+                    f"  {index}. [{resource.get('score', 0.0):.3f}] "
+                    f"{resource['uri']}"
+                )
+        memories = results.get("memories", [])
+        if memories:
+            for index, memory in enumerate(memories, 1):
+                description = (
+                    memory.get("abstract")
+                    or memory.get("overview")
+                    or memory.get("uri", "")
+                )
+                print(f"  {index}. [{memory.get('score', 0.0):.3f}] {description[:100]}")
 
         print("\nBob 流程完成")
 

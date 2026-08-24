@@ -3,7 +3,7 @@
 """Server configuration for OpenViking HTTP Server."""
 
 import sys
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
@@ -39,6 +39,33 @@ def _normalize_config_uri(value: Optional[str], field_name: str) -> Optional[str
     return uri
 
 
+def _rewrite_legacy_current_user_uri(uri: str, field_name: str) -> str:
+    """Rewrite legacy uid-less current-user spellings to the ``~`` home alias.
+
+    ``viking://user/resources[/...]`` and ``viking://user/skills`` are no longer
+    expanded at request boundaries, but stored configurations (ov.conf
+    ``user_config_defaults.add_targets``, persisted ``user_config.json``, old
+    PATCH bodies) may still carry them. Their intent was unambiguous, so
+    normalize them here instead of breaking existing deployments.
+    """
+    from openviking.core.namespace import uri_parts
+
+    try:
+        parts = uri_parts(uri.rstrip("/"))
+    except ValueError:
+        return uri
+    if parts[:2] not in (["user", "resources"], ["user", "skills"]):
+        return uri
+    rewritten = f"viking://~/{'/'.join(parts[1:])}"
+    logger.info(
+        "Rewrote legacy current-user %s %r to %r; use the viking://~ home alias instead.",
+        field_name,
+        uri,
+        rewritten,
+    )
+    return rewritten
+
+
 class AddTargetsConfig(BaseModel):
     """Add targets for resource and skill writes."""
 
@@ -55,17 +82,26 @@ class AddTargetsConfig(BaseModel):
             return None
         from openviking.core.namespace import classify_uri, uri_parts
         from openviking.core.uri_validation import validate_viking_uri
+
+        uri = _rewrite_legacy_current_user_uri(uri, "resource_uri")
         validate_viking_uri(uri, field_name="resource_uri")
         normalized = uri.rstrip("/")
         parts = uri_parts(normalized)
         classification = classify_uri(normalized)
-        if parts[:1] == ["resources"] or parts[:2] == ["user", "resources"] or (
-            parts[:1] == ["user"]
-            and classification.context_type == "resource"
-            and classification.content_index is not None
+        if (
+            parts[:1] == ["resources"]
+            or parts[:2] == ["~", "resources"]
+            or (
+                parts[:1] == ["user"]
+                and classification.context_type == "resource"
+                and classification.content_index is not None
+            )
         ):
             return normalized
-        raise ValueError("resource_uri must be a resource directory URI")
+        raise ValueError(
+            "resource_uri must be a resource directory URI: viking://resources/..., "
+            "viking://~/resources[/...], or viking://user/{user_id}/resources[/...]"
+        )
 
     @field_validator("skill_uri")
     @classmethod
@@ -76,15 +112,16 @@ class AddTargetsConfig(BaseModel):
         from openviking.core.namespace import uri_parts
         from openviking.core.uri_validation import validate_viking_uri
 
+        uri = _rewrite_legacy_current_user_uri(uri, "skill_uri")
         validate_viking_uri(uri, field_name="skill_uri")
         normalized = uri.rstrip("/")
         parts = uri_parts(normalized)
-        if normalized in {"viking://user/skills", "viking://agent/skills"} or (
+        if parts in (["~", "skills"], ["agent", "skills"]) or (
             len(parts) == 3 and parts[0] == "user" and parts[2] == "skills"
         ):
             return normalized
         raise ValueError(
-            "skill_uri must be viking://user/skills, viking://user/{user_id}/skills, "
+            "skill_uri must be viking://~/skills, viking://user/{user_id}/skills, "
             "or viking://agent/skills"
         )
 
@@ -109,12 +146,22 @@ class UserConfig(BaseModel):
     """User configuration values that can be defaulted or initialized."""
 
     add_targets: AddTargetsConfig = Field(default_factory=AddTargetsConfig)
+    memory_policy: Optional[Dict[str, Any]] = None
     agent_evolution: DeprecatedUserAgentEvolutionConfig = Field(
         default_factory=DeprecatedUserAgentEvolutionConfig,
         exclude=True,
     )
 
     model_config = {"extra": "forbid"}
+
+    @field_validator("memory_policy", mode="before")
+    @classmethod
+    def validate_memory_policy(cls, value: Any) -> Optional[Dict[str, Any]]:
+        if value is None:
+            return None
+        from openviking.session.memory_policy import MemoryPolicy
+
+        return MemoryPolicy.from_dict(value).to_dict()
 
 
 class MetricsAccountDimensionConfig(BaseModel):

@@ -16,6 +16,7 @@ from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import (
     DeleteId,
     MemoryFile,
+    MemoryOperationSkip,
     ResolvedOperation,
     ResolvedOperations,
     StoredLink,
@@ -387,6 +388,17 @@ The final output of the model must strictly follow the JSON Schema format shown 
             for item in items:
                 item_dict = dict(item)
                 item_dict["memory_type"] = memory_type
+                identity_resolution_skip = None
+                classify_identity_fields = getattr(
+                    self._isolation_handler,
+                    "_classify_identity_fields",
+                    None,
+                )
+                if callable(classify_identity_fields):
+                    identity_resolution_skip = classify_identity_fields(
+                        item_dict,
+                        memory_type_schema=schema,
+                    )
                 try:
                     self._isolation_handler.fill_identity_fields(
                         item_dict,
@@ -404,6 +416,8 @@ The final output of the model must strictly follow the JSON Schema format shown 
                         item_dict,
                         role_scope=role_scope,
                     )
+                if not isinstance(identity_resolution_skip, MemoryOperationSkip):
+                    identity_resolution_skip = None
 
                 page_id = item_dict.pop("page_id", None)
                 resolved_op = ResolvedOperation(
@@ -412,12 +426,17 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     memory_type=memory_type,
                     uris=[],
                     page_id=page_id,
+                    resolution_skip=identity_resolution_skip,
                 )
 
                 if page_id is not None and page_id_map is not None:
                     resolved_uri = page_id_map.resolve(page_id)
                     if resolved_uri:
                         resolved_op.uris = [resolved_uri]
+                        # Existing page IDs retain their historical precedence over
+                        # an invalid peer hint. Keep the hint runtime-only and do
+                        # not persist it into memory metadata.
+                        resolved_op.resolution_skip = None
                         old_content = self.context_provider.read_file_contents.get(resolved_uri)
                         if old_content is not None:
                             resolved_op.old_memory_file_content = old_content

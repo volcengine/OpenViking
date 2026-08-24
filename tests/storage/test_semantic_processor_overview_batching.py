@@ -59,3 +59,42 @@ async def test_children_only_oversized_overview_is_batched(monkeypatch):
     assert "child-2" not in vlm.prompts[0]
     assert "child-2" in vlm.prompts[1]
     assert all(f"child-{index}" not in vlm.prompts[2] for index in range(3))
+
+
+@pytest.mark.asyncio
+async def test_sampled_overview_prompt_describes_full_directory_coverage(monkeypatch):
+    vlm = RecordingVLM()
+    config = SimpleNamespace(
+        vlm=vlm,
+        semantic=SimpleNamespace(
+            max_overview_prompt_chars=10_000,
+            overview_batch_size=32,
+        ),
+        output_language_override="en",
+    )
+    captured = {}
+    monkeypatch.setattr(
+        semantic_processor_module,
+        "get_openviking_config",
+        lambda: config,
+    )
+
+    def fake_render_prompt(_name, values):
+        captured.update(values)
+        return "prompt"
+
+    monkeypatch.setattr(semantic_processor_module, "render_prompt", fake_render_prompt)
+
+    await SemanticProcessor()._generate_overview(
+        "viking://resources/docs_flat",
+        file_summaries=[],
+        children_abstracts=[{"name": "sample", "abstract": "summary"}],
+        total_files=0,
+        total_children=513,
+    )
+
+    coverage = captured["directory_coverage"]
+    assert "Total direct entries: 513" in coverage
+    assert "Summaries provided for this aggregation: 1" in coverage
+    assert "Direct entries not individually shown: 512" in coverage
+    assert "Coverage: sampled" in coverage

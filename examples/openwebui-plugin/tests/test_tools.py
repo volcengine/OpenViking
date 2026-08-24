@@ -51,7 +51,7 @@ async def test_ov_search_calls_find(client: httpx.AsyncClient) -> None:
                 "status": "ok",
                 "result": {
                     "memories": [
-                        {"uri": "viking://user/memories/a.md", "score": 0.9, "snippet": "hi"}
+                        {"uri": "viking://~/memories/a.md", "score": 0.9, "snippet": "hi"}
                     ],
                     "resources": [],
                 },
@@ -61,7 +61,7 @@ async def test_ov_search_calls_find(client: httpx.AsyncClient) -> None:
     resp = await client.post("/tools/ov_search", json={"query": "hello", "limit": 5})
     assert resp.status_code == 200, resp.text
     data = resp.json()
-    assert data["hits"][0]["uri"] == "viking://user/memories/a.md"
+    assert data["hits"][0]["uri"] == "viking://~/memories/a.md"
     assert data["hits"][0]["score"] == pytest.approx(0.9)
     assert route.called
     sent = route.calls.last.request
@@ -79,7 +79,7 @@ async def test_ov_recall_scopes_to_memories(client: httpx.AsyncClient) -> None:
     sent = route.calls.last.request
     _assert_headers(sent)
     raw = sent.content.decode()
-    assert "viking://user/memories/" in raw
+    assert "viking://~/memories/" in raw
     assert '"limit":3' in raw.replace(" ", "")
 
 
@@ -94,11 +94,11 @@ async def test_ov_add_memory_writes_under_memories(client: httpx.AsyncClient) ->
     )
     assert resp.status_code == 200, resp.text
     data = resp.json()
-    assert data["uri"] == "viking://user/memories/profile.md"
+    assert data["uri"] == "viking://~/memories/profile.md"
     sent = route.calls.last.request
     _assert_headers(sent)
     raw = sent.content.decode()
-    assert "viking://user/memories/profile.md" in raw
+    assert "viking://~/memories/profile.md" in raw
     assert "I like Rust" in raw
 
 
@@ -111,7 +111,7 @@ async def test_ov_list_memories_calls_fs_ls(client: httpx.AsyncClient) -> None:
     assert resp.status_code == 200
     sent = route.calls.last.request
     _assert_headers(sent)
-    assert "uri=viking%3A%2F%2Fuser%2Fmemories%2F" in str(sent.url)
+    assert "uri=viking%3A%2F%2F~%2Fmemories%2F" in str(sent.url)
     assert "recursive=true" in str(sent.url)
     assert "node_limit=50" in str(sent.url)
 

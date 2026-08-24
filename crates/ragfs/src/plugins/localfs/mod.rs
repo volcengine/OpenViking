@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, ErrorKind};
 use std::process::{Command, Stdio};
 
 use grep_regex::RegexMatcher;
@@ -905,11 +905,13 @@ impl FileSystem for LocalFileSystem {
             }
         }
 
-        // Create directory
-        fs::create_dir(&local_path)
-            .map_err(|e| Error::plugin(format!("failed to create directory: {}", e)))?;
-
-        Ok(())
+        match fs::create_dir(&local_path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+                Err(Error::AlreadyExists(path.to_string()))
+            }
+            Err(e) => Err(Error::plugin(format!("failed to create directory: {}", e))),
+        }
     }
 
     async fn remove(&self, path: &str) -> Result<()> {

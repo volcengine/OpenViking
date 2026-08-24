@@ -6,6 +6,7 @@ from vikingbot.agent.loop import AgentLoop
 from vikingbot.config.schema import SessionKey
 from vikingbot.hooks.base import HookContext
 from vikingbot.hooks.builtins.openviking_hooks import OpenVikingCompactHook
+from vikingbot.openviking_mount.session_state import make_openviking_storage_session_id
 from vikingbot.session.manager import Session
 
 
@@ -51,7 +52,7 @@ async def test_session_context_commit_uses_turn_budget_retention():
     assert result["success"] is True
     assert commit_calls == [
         {
-            "session_id": session_key.safe_name(),
+            "session_id": make_openviking_storage_session_id(session_key.safe_name()),
             "keep_recent_count": 0,
             "retention_mode": "turn_budget",
             "keep_recent_turn_count": 3,

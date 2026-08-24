@@ -279,7 +279,7 @@ curl -X POST http://localhost:1933/api/v1/system/consistency \
 **Python SDK**
 
 ```python
-report = client.check_consistency("viking://resources/my-project")
+report = client.check_consistency(uri="viking://resources/my-project")
 print(report["ok"])
 print(report["missing_records"])
 ```
@@ -370,7 +370,7 @@ curl -X POST http://localhost:1933/api/v1/system/wait \
 
 ```python
 # Add resources
-client.add_resource("./docs/")
+client.add_resource(path="./docs/")
 
 # Wait for all processing to complete
 status = client.wait_processed(timeout=60.0)

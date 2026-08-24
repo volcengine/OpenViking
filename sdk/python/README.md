@@ -21,7 +21,7 @@ Requirements:
 - Python import name: `openviking_sdk`
 
 ```python
-from openviking_sdk import AsyncHTTPClient, SyncHTTPClient
+from openviking_sdk import AsyncHTTPClient, SyncHTTPClient, TextPart
 ```
 
 ## Configuration Sources
@@ -96,7 +96,7 @@ client = SyncHTTPClient(
 client.initialize()
 
 with use_actor_peer("assistant-a"):
-    memories = client.find("deployment preference")
+    memories = client.find(query="deployment preference")
 ```
 
 The scope is isolated with Python `ContextVar`, so concurrent async tasks and
@@ -124,11 +124,19 @@ client.initialize()
 healthy = client.health()
 print("health:", healthy)
 
-session = client.create_session("demo-session")
+session = client.create_session(session_id="demo-session")
 print("session:", session)
 
-client.session("demo-session").add_message("user", "hello from sdk")
-context = client.session("demo-session").get_session_context(token_budget=4096)
+client.session(session_id="demo-session").add_message(
+    role="user",
+    content="hello from sdk",
+)
+client.session(session_id="demo-session").add_message(
+    role="assistant",
+    parts=[TextPart(text="hello from a specific peer")],
+    peer_id="peer-alice",
+)
+context = client.session(session_id="demo-session").get_session_context(token_budget=4096)
 print("context:", context)
 
 client.close()
@@ -152,11 +160,14 @@ async def main() -> None:
     healthy = await client.health()
     print("health:", healthy)
 
-    session = await client.create_session("demo-session-async")
+    session = await client.create_session(session_id="demo-session-async")
     print("session:", session)
 
-    session_client = client.session("demo-session-async")
-    await session_client.add_message("user", "hello from async sdk")
+    session_client = client.session(session_id="demo-session-async")
+    await session_client.add_message(
+        role="user",
+        content="hello from async sdk",
+    )
     context = await session_client.get_session_context(token_budget=4096)
     print("context:", context)
 
@@ -181,21 +192,33 @@ event_config = {
     }
 }
 result = client.create_session(
-    "demo-session",
-    memory_extraction_config=event_config,
+    session_id="demo-session",
+    options={
+        "memory_extraction_config": event_config,
+    },
 )
 # Explicit None disables a server-wide auto-commit default at creation time.
-client.create_session("manual-session", auto_commit_policy=None)
+client.create_session(
+    session_id="manual-session",
+    options={"auto_commit_policy": None},
+)
 client.update_session_config(
-    "demo-session",
-    auto_commit_policy={"message_count_threshold": 25},
-    memory_extraction_config={
-        "events": {"tags": ["team=search", "channel=app"]}
+    session_id="demo-session",
+    options={
+        "auto_commit_policy": {"message_count_threshold": 25},
+        "memory_extraction_config": {
+            "events": {"tags": ["team=search", "channel=app"]}
+        },
     },
 )
 # Explicit None disables automatic commits; omitting the argument leaves it unchanged.
-client.update_session_config("demo-session", auto_commit_policy=None)
-client.session("demo-session").commit(event_tags=["team=search", "channel=web"])
+client.update_session_config(
+    session_id="demo-session",
+    options={"auto_commit_policy": None},
+)
+client.session(session_id="demo-session").commit(
+    options={"event_tags": ["team=search", "channel=web"]}
+)
 # Use event_tags=[] to skip the session defaults for one commit.
 print(result)
 ```
@@ -211,10 +234,12 @@ client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
 client.initialize()
 
 result = client.add_resource(
-    "/path/to/notes.md",
+    path="/path/to/notes.md",
     to="viking://resources/demo-notes",
-    reason="knowledge import",
     wait=True,
+    options={
+        "reason": "knowledge import",
+    },
 )
 print(result)
 ```
@@ -225,10 +250,12 @@ or refresh `.abstract.md` / `.overview.md`.
 
 ```python
 result = client.add_resource(
-    "/path/to/notes.md",
+    path="/path/to/notes.md",
     to="viking://resources/demo-notes",
-    processing_mode="vectors_only",
     wait=True,
+    options={
+        "processing_mode": "vectors_only",
+    },
 )
 ```
 
@@ -240,9 +267,9 @@ from openviking_sdk import SyncHTTPClient
 client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
 client.initialize()
 
-client.mkdir("viking://resources/demo-dir")
-print(client.ls("viking://resources"))
-print(client.read("viking://resources/demo-dir/example.md"))
+client.mkdir(uri="viking://resources/demo-dir")
+print(client.ls(uri="viking://resources"))
+print(client.read(uri="viking://resources/demo-dir/example.md"))
 ```
 
 ### Retrieval
@@ -253,15 +280,48 @@ from openviking_sdk import SyncHTTPClient
 client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
 client.initialize()
 
-result = client.find("hello", limit=5)
+result = client.find(query="hello", limit=5)
 print(result)
 ```
 
-Image search uses the same methods. Pass a local path, bytes, data URI, HTTP URL, or `viking://` URI with `image`. The server must use a multimodal embedding model.
+### Core Parameters and Options
+
+Frequently used fields are explicit parameters. For readability, prefer named
+arguments such as `to` and `wait` with `add_resource`; `target_uri`
+and `limit` with retrieval; and `role`, `content`, and `parts` with
+`add_message`. `add_message` also accepts `peer_id` as an explicit message
+field. For batch writes, place `peer_id` in each message dictionary. Positional
+calls remain supported.
+
+For structured messages, `parts` accepts either wire-format dictionaries or
+the SDK's `TextPart`, `ContextPart`, `ImagePart`, and `ToolPart` objects. The
+SDK serializes both forms to the same HTTP JSON payload.
+
+Use the method's typed `options` dictionary for advanced fields, such as
+`processing_mode`, retrieval filters, session extraction configuration, or
+`telemetry`.
+Do not pass advanced fields as bare keyword arguments. A field must be passed
+through exactly one entry point; SDK-defined fields in `options` and
+`extra` cannot override explicit parameters.
+
+Image search uses the same methods. Pass a local path, bytes, data URI, HTTP URL, or `viking://` URI with the explicit `image` parameter. The server must use a multimodal embedding model.
 
 ```python
-result = client.find(image="/path/to/photo.png", limit=5)
-result = client.search("similar poster", image="viking://resources/poster.png")
+result = client.find(limit=5, image="/path/to/photo.png")
+result = client.search(
+    image="viking://resources/poster.png",
+)
+```
+
+Complex requests use typed Options dictionaries. Use the `extra` key only for
+server fields that the installed SDK version does not yet expose:
+
+```python
+result = client.find(
+    query="authentication",
+    limit=10,
+    options={"extra": {"future_server_field": False}},
+)
 ```
 
 ## Admin Operations
@@ -300,8 +360,8 @@ root_client.admin_register_user(
     seed="alice-seed",
     user_config={
         "add_targets": {
-            "resource_uri": "viking://user/resources/project-a",
-            "skill_uri": "viking://user/skills",
+            "resource_uri": "viking://~/resources/project-a",
+            "skill_uri": "viking://~/skills",
         }
     },
 )
@@ -330,7 +390,7 @@ client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
 client.initialize()
 
 try:
-    print(client.read("viking://resources/not-exists.md"))
+    print(client.read(uri="viking://resources/not-exists.md"))
 except OpenVikingError as exc:
     print(type(exc).__name__, exc)
 ```

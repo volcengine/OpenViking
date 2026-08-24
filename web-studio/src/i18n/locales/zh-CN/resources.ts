@@ -17,6 +17,13 @@ const resources = {
       description: 'Usage/Audit 未初始化，暂无服务端请求日志。',
       title: '审计日志不可用',
     },
+    details: {
+      code: '错误代码',
+      data: '错误详情',
+      hide: '收起错误详情',
+      message: '错误信息',
+      show: '展开错误详情',
+    },
     empty: {
       description: '先开始您的第一次可审计调用吧！',
       filteredDescription: '调整搜索内容或状态筛选，扩大可见日志范围。',

@@ -1,4 +1,4 @@
-## Install
+## Step 1: Install
 
 ```bash
 # TRAE
@@ -8,9 +8,11 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness trae-cn --dist tos
 ```
 
-Select **Volcengine OpenViking Cloud**. Paste the API key from this page.
+Select **Volcengine OpenViking Cloud**. Paste the API key:
 
-## Verify
+{{OPENVIKING_API_KEY_BLOCK}}
+
+## Step 2: Verify
 
 Restart TRAE. Confirm `openviking` is connected in settings.
 

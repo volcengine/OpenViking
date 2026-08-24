@@ -1,13 +1,13 @@
 import base64
-import hashlib
 
 import pytest
 
 import openviking.storage.content_write as content_write_module
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.content_write import ContentWriteCoordinator
+from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
 from openviking_cli.exceptions import (
-    ConflictError,
+    AlreadyExistsError,
     InvalidArgumentError,
     NotFoundError,
     OpenVikingError,
@@ -74,14 +74,6 @@ class _VFS:
         self.writes.append(uri)
 
 
-def _hash(value):
-    return "sha256:" + hashlib.sha256(value.encode()).hexdigest()
-
-
-def _hash_bytes(value):
-    return "sha256:" + hashlib.sha256(value).hexdigest()
-
-
 @pytest.mark.asyncio
 async def test_batch_accepts_256_operations_and_rejects_257(monkeypatch):
     root = "viking://resources/wiki"
@@ -100,7 +92,7 @@ async def test_batch_accepts_256_operations_and_rejects_257(monkeypatch):
             {
                 "uri": f"{root}/{prefix}-{index}.txt",
                 "content": "x",
-                "precondition": {"kind": "create_if_absent"},
+                "mode": "upsert",
             }
             for index in range(count)
         ]
@@ -123,7 +115,7 @@ async def test_batch_accepts_256_operations_and_rejects_257(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_batch_checks_all_preconditions_before_any_write(monkeypatch):
+async def test_batch_validates_all_modes_before_any_write(monkeypatch):
     root = "viking://resources/wiki"
     existing = f"{root}/existing.md"
     created = f"{root}/new.md"
@@ -137,22 +129,19 @@ async def test_batch_checks_all_preconditions_before_any_write(monkeypatch):
 
     monkeypatch.setattr(coordinator, "_refresh_batch", refresh)
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
-    with pytest.raises(ConflictError):
+    with pytest.raises(AlreadyExistsError):
         await coordinator.batch_write(
             root_uri=root,
             operations=[
                 {
                     "uri": existing,
                     "content": "replacement",
-                    "precondition": {
-                        "kind": "replace_if_hash",
-                        "base_hash": _hash("old"),
-                    },
+                    "mode": "create",
                 },
                 {
                     "uri": created,
                     "content": "created",
-                    "precondition": {"kind": "create_if_absent"},
+                    "mode": "upsert",
                 },
             ],
             ctx=ctx,
@@ -183,8 +172,8 @@ async def test_batch_releases_tree_lock_before_one_aggregated_refresh(monkeypatc
     result = await coordinator.batch_write(
         root_uri=root,
         operations=[
-            {"uri": b, "content": "B", "precondition": {"kind": "create_if_absent"}},
-            {"uri": a, "content": "A", "precondition": {"kind": "create_if_absent"}},
+            {"uri": b, "content": "B", "mode": "upsert"},
+            {"uri": a, "content": "A", "mode": "upsert"},
         ],
         ctx=ctx,
         wait=False,
@@ -196,7 +185,43 @@ async def test_batch_releases_tree_lock_before_one_aggregated_refresh(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_batch_writes_and_hashes_binary_content(monkeypatch):
+async def test_batch_reports_deferred_directory_and_queued_file_vectors(monkeypatch):
+    root = "viking://resources/wide"
+    page = f"{root}/page.md"
+    coordinator = ContentWriteCoordinator(_VFS(root))
+
+    async def resolve_root(uri, **kwargs):
+        del uri, kwargs
+        return root
+
+    async def enqueue(**kwargs):
+        del kwargs
+        return FreshnessAction.MARK_PENDING
+
+    monkeypatch.setattr(coordinator, "_resolve_root_uri", resolve_root)
+    monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh_changes", enqueue)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+
+    result = await coordinator.batch_write(
+        root_uri=root,
+        operations=[
+            {
+                "uri": page,
+                "content": "content",
+                "mode": "create",
+            }
+        ],
+        ctx=ctx,
+        wait=False,
+    )
+
+    assert result["semantic_status"] == "deferred"
+    assert result["vector_status"] == "queued"
+    assert result["queue_status"] is None
+
+
+@pytest.mark.asyncio
+async def test_batch_upserts_binary_content(monkeypatch):
     root = "viking://resources/wiki"
     image = f"{root}/figure.png"
     original = b"\x89PNG\r\n\x1a\nold"
@@ -212,10 +237,7 @@ async def test_batch_writes_and_hashes_binary_content(monkeypatch):
     operation = {
         "uri": image,
         "content_base64": base64.b64encode(replacement).decode(),
-        "precondition": {
-            "kind": "replace_if_hash",
-            "base_hash": _hash_bytes(original),
-        },
+        "mode": "upsert",
     }
     result = await coordinator.batch_write(
         root_uri=root, operations=[operation], ctx=ctx, wait=False
@@ -226,7 +248,7 @@ async def test_batch_writes_and_hashes_binary_content(monkeypatch):
     retry = await coordinator.batch_write(
         root_uri=root, operations=[operation], ctx=ctx, wait=False
     )
-    assert retry["unchanged"] == [image]
+    assert retry["updated"] == [image]
 
 
 @pytest.mark.asyncio
@@ -241,7 +263,7 @@ async def test_batch_rejects_invalid_binary_payload_and_memory_binary():
                 {
                     "uri": f"{resource_root}/figure.png",
                     "content_base64": "not base64!",
-                    "precondition": {"kind": "create_if_absent"},
+                    "mode": "upsert",
                 }
             ],
             ctx=ctx,
@@ -257,7 +279,7 @@ async def test_batch_rejects_invalid_binary_payload_and_memory_binary():
                 {
                     "uri": f"{memory_root}/figure.png",
                     "content_base64": base64.b64encode(b"png").decode(),
-                    "precondition": {"kind": "create_if_absent"},
+                    "mode": "upsert",
                 }
             ],
             ctx=ctx,
@@ -282,26 +304,24 @@ async def test_batch_partial_failure_refreshes_successful_files_and_retry_is_saf
     monkeypatch.setattr(coordinator, "_refresh_batch", refresh)
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
     operations = [
-        {"uri": a, "content": "A", "precondition": {"kind": "create_if_absent"}},
-        {"uri": b, "content": "B", "precondition": {"kind": "create_if_absent"}},
+        {"uri": a, "content": "A", "mode": "upsert"},
+        {"uri": b, "content": "B", "mode": "upsert"},
     ]
     with pytest.raises(OSError, match="injected"):
-        await coordinator.batch_write(
-            root_uri=root, operations=operations, ctx=ctx, wait=False
-        )
+        await coordinator.batch_write(root_uri=root, operations=operations, ctx=ctx, wait=False)
     assert calls == [{a: "added"}]
 
     vfs.fail_uri = None
     result = await coordinator.batch_write(
         root_uri=root, operations=operations, ctx=ctx, wait=False
     )
-    assert result["unchanged"] == [a]
+    assert result["updated"] == [a]
     assert result["created"] == [b]
-    assert calls[-1] == {a: "added", b: "added"}
+    assert calls[-1] == {a: "modified", b: "added"}
 
 
 @pytest.mark.asyncio
-async def test_batch_refresh_failure_retry_skips_landed_write_and_refreshes(monkeypatch):
+async def test_batch_refresh_failure_retry_rewrites_and_refreshes(monkeypatch):
     root = "viking://resources/wiki"
     page = f"{root}/page.md"
     vfs = _VFS(root)
@@ -319,14 +339,12 @@ async def test_batch_refresh_failure_retry_skips_landed_write_and_refreshes(monk
         {
             "uri": page,
             "content": "landed",
-            "precondition": {"kind": "create_if_absent"},
+            "mode": "upsert",
         }
     ]
 
     with pytest.raises(OpenVikingError) as error:
-        await coordinator.batch_write(
-            root_uri=root, operations=operations, ctx=ctx, wait=False
-        )
+        await coordinator.batch_write(root_uri=root, operations=operations, ctx=ctx, wait=False)
     assert error.value.code == "REFRESH_FAILED"
     assert "injected refresh failure" in str(error.value)
     assert "Re-run the same batch-write or ov compile command" in str(error.value)
@@ -337,9 +355,9 @@ async def test_batch_refresh_failure_retry_skips_landed_write_and_refreshes(monk
     result = await coordinator.batch_write(
         root_uri=root, operations=operations, ctx=ctx, wait=False
     )
-    assert result["unchanged"] == [page]
-    assert vfs.writes == [page]
-    assert calls == [{page: "added"}, {page: "added"}]
+    assert result["updated"] == [page]
+    assert vfs.writes == [page, page]
+    assert calls == [{page: "added"}, {page: "modified"}]
 
 
 @pytest.mark.asyncio
@@ -355,6 +373,7 @@ async def test_batch_refresh_groups_resource_and_memory_work(monkeypatch):
 
     async def enqueue(**kwargs):
         semantic_calls.append(kwargs)
+        return FreshnessAction.MARK_PENDING
 
     async def overview(**kwargs):
         overview_calls.append(kwargs)
@@ -368,7 +387,7 @@ async def test_batch_refresh_groups_resource_and_memory_work(monkeypatch):
     monkeypatch.setattr(content_write_module.MemoryUpdater, "refresh_schema_overview", overview)
     monkeypatch.setattr(content_write_module.MemoryUpdater, "refresh_file_embedding", embedding)
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
-    await coordinator._refresh_batch(
+    outcome = await coordinator._refresh_batch(
         refresh_kinds={
             "viking://resources/wiki/a.md": "added",
             "viking://resources/wiki/b.md": "modified",
@@ -388,36 +407,29 @@ async def test_batch_refresh_groups_resource_and_memory_work(monkeypatch):
     assert len(overview_calls) == 1
     assert overview_calls[0]["strict"] is True
     assert len(embedding_calls) == 2
+    assert outcome.statuses(wait=False) == ("deferred", "queued")
     assert all(call["strict"] is True for call in embedding_calls)
 
 
 @pytest.mark.asyncio
-async def test_batch_write_api_updates_and_retries_by_final_hash(client_with_resource):
+async def test_batch_write_api_upserts_files(client_with_resource):
     client, root = client_with_resource
     listing = await client.get(
         "/api/v1/fs/ls",
         params={"uri": root, "simple": True, "recursive": True},
     )
     existing = listing.json()["result"][0]
-    current = (
-        await client.get(
-            "/api/v1/content/read", params={"uri": existing, "raw": True}
-        )
-    ).json()["result"]
     created = f"{root}/compile-batch-created.md"
     operations = [
         {
             "uri": existing,
             "content": "# Batch updated",
-            "precondition": {
-                "kind": "replace_if_hash",
-                "base_hash": _hash(current),
-            },
+            "mode": "upsert",
         },
         {
             "uri": created,
             "content": "# Batch created",
-            "precondition": {"kind": "create_if_absent"},
+            "mode": "upsert",
         },
     ]
     first = await client.post(
@@ -433,7 +445,7 @@ async def test_batch_write_api_updates_and_retries_by_final_hash(client_with_res
         json={"root_uri": root, "operations": operations, "wait": False},
     )
     assert retry.status_code == 200
-    assert retry.json()["result"]["unchanged"] == sorted([existing, created])
+    assert retry.json()["result"]["updated"] == sorted([existing, created])
 
 
 @pytest.mark.asyncio
@@ -456,7 +468,7 @@ async def test_batch_write_api_creates_binary_file(client_with_resource, filenam
                 {
                     "uri": artifact,
                     "content_base64": base64.b64encode(content).decode(),
-                    "precondition": {"kind": "create_if_absent"},
+                    "mode": "upsert",
                 }
             ],
         },
@@ -469,7 +481,7 @@ async def test_batch_write_api_creates_binary_file(client_with_resource, filenam
 
 
 @pytest.mark.asyncio
-async def test_batch_write_api_conflict_does_not_apply_other_operations(client_with_resource):
+async def test_batch_write_api_mode_error_does_not_apply_other_operations(client_with_resource):
     client, root = client_with_resource
     listing = await client.get(
         "/api/v1/fs/ls",
@@ -486,21 +498,18 @@ async def test_batch_write_api_conflict_does_not_apply_other_operations(client_w
                 {
                     "uri": existing,
                     "content": "conflicting update",
-                    "precondition": {
-                        "kind": "replace_if_hash",
-                        "base_hash": _hash("definitely stale"),
-                    },
+                    "mode": "create",
                 },
                 {
                     "uri": should_not_exist,
                     "content": "must not be written",
-                    "precondition": {"kind": "create_if_absent"},
+                    "mode": "upsert",
                 },
             ],
         },
     )
     assert response.status_code == 409
-    assert response.json()["error"]["code"] == "CONFLICT"
+    assert response.json()["error"]["code"] == "ALREADY_EXISTS"
     missing = await client.get(
         "/api/v1/content/read", params={"uri": should_not_exist, "raw": True}
     )
@@ -519,7 +528,7 @@ async def test_batch_write_rejects_path_traversal(client_with_resource):
                 {
                     "uri": f"{root}/../escaped.md",
                     "content": "escape",
-                    "precondition": {"kind": "create_if_absent"},
+                    "mode": "upsert",
                 }
             ],
         },

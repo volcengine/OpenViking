@@ -1,34 +1,38 @@
+import { MCP_SERVER_NAME } from "./config.mjs";
 import { buildGuardMessage, findVikingUri } from "./shared/uri-guard.mjs";
+
+/** Model-facing name of a bridged OpenViking MCP tool. */
+const mcp = rawName => `mcp__${MCP_SERVER_NAME}__${rawName}`;
 
 const GUARDED_TOOLS = {
   read: {
-    tool: "viking_read",
-    example: uri => `viking_read(uri="${uri}", level="overview")`,
+    tool: mcp("read"),
+    example: uri => `${mcp("read")}(uris="${uri}")`,
   },
   glob: {
-    tool: "viking_browse",
-    example: uri => `viking_browse(action="list", uri="${uri}")`,
+    tool: mcp("list"),
+    example: uri => `${mcp("list")}(uri="${uri}")`,
   },
   grep: {
-    tool: "viking_search",
+    tool: mcp("grep"),
     example: (uri, args) =>
-      `viking_search(query="${escapeText(args?.pattern)}", scope="${uri}")`,
+      `${mcp("grep")}(pattern="${escapeText(args?.pattern)}", uri="${uri}")`,
   },
   bash: {
-    tool: "viking_read or viking_search",
-    example: uri => `viking_read(uri="${uri}", level="overview")`,
+    tool: `${mcp("read")} or ${mcp("search")}`,
+    example: uri => `${mcp("read")}(uris="${uri}")`,
   },
   edit: {
-    tool: "OpenViking tools",
-    example: uri => `viking_read(uri="${uri}", level="full")`,
+    tool: mcp("edit"),
+    example: uri => `${mcp("edit")}(uri="${uri}", old_string="...", new_string="...")`,
   },
   write: {
-    tool: "OpenViking tools",
-    example: uri => `viking_read(uri="${uri}", level="full")`,
+    tool: mcp("write"),
+    example: uri => `${mcp("write")}(uri="${uri}", content="...")`,
   },
   str_replace_editor: {
-    tool: "OpenViking tools",
-    example: uri => `viking_read(uri="${uri}", level="full")`,
+    tool: "the OpenViking MCP tools",
+    example: uri => `${mcp("read")}(uris="${uri}")`,
   },
 };
 

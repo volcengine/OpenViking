@@ -77,6 +77,9 @@ export type ConsoleAuditLogItem = {
   api_type?: string
   created_at?: string
   duration_ms?: number
+  error_code?: string | null
+  error_details?: Record<string, unknown> | null
+  error_message?: string | null
   method?: string
   request_id?: string | null
   route?: string

@@ -7,7 +7,12 @@ from typing import Any, Dict, List, Optional, Set
 
 from openviking.core.peer_id import safe_peer_id
 from openviking.server.identity import RequestContext
-from openviking.session.memory.dataclass import MemoryTypeSchema, ResolvedOperation
+from openviking.session.memory.dataclass import (
+    MemoryOperationSkip,
+    MemoryOperationSkipCode,
+    MemoryTypeSchema,
+    ResolvedOperation,
+)
 from openviking.session.memory.memory_updater import ExtractContext
 from openviking.session.memory.utils.uri import generate_uri, render_template
 from openviking_cli.utils import get_logger
@@ -17,6 +22,29 @@ logger = get_logger(__name__)
 _INTERNAL_MEMORY_TYPES = {"session_skills"}
 _SELF_PEER_ID = "__self"
 
+_SKIP_REASON_MESSAGES = {
+    MemoryOperationSkipCode.MEMORY_TYPE_FILTERED: (
+        "Memory type is outside the allowed extraction scope"
+    ),
+    MemoryOperationSkipCode.SELF_MEMORY_DISABLED: "Self memory writes are disabled",
+    MemoryOperationSkipCode.PEER_MEMORY_DISABLED: "Peer memory writes are disabled",
+    MemoryOperationSkipCode.INVALID_PEER_ID: "Target peer ID is invalid",
+    MemoryOperationSkipCode.PEER_NOT_ALLOWED: ("Target peer is outside the allowed memory scope"),
+    MemoryOperationSkipCode.INVALID_RANGES: "Message ranges are malformed or out of bounds",
+    MemoryOperationSkipCode.AMBIGUOUS_TARGET: "Memory ownership cannot be resolved uniquely",
+    MemoryOperationSkipCode.NO_WRITABLE_TARGET: "No writable memory target could be resolved",
+}
+
+_SKIP_REASON_PRIORITY = {
+    MemoryOperationSkipCode.INVALID_PEER_ID: 0,
+    MemoryOperationSkipCode.INVALID_RANGES: 1,
+    MemoryOperationSkipCode.PEER_MEMORY_DISABLED: 2,
+    MemoryOperationSkipCode.PEER_NOT_ALLOWED: 3,
+    MemoryOperationSkipCode.SELF_MEMORY_DISABLED: 4,
+    MemoryOperationSkipCode.AMBIGUOUS_TARGET: 5,
+    MemoryOperationSkipCode.NO_WRITABLE_TARGET: 6,
+}
+
 
 @dataclass
 class RoleScope:
@@ -24,6 +52,12 @@ class RoleScope:
 
     user_ids: List[str]
     peer_ids: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _TargetResolution:
+    target_ids: List[str] = field(default_factory=list)
+    skip_code: Optional[MemoryOperationSkipCode] = None
 
 
 def peer_user_space(user_space: str, peer_id: str) -> str:
@@ -43,6 +77,7 @@ class MemoryIsolationHandler:
         allowed_memory_types: Optional[Set[str]] = None,
         allow_self: bool = True,
         allowed_peer_ids: Optional[Set[str]] = None,
+        peer_memory_enabled: Optional[bool] = None,
     ):
         self.ctx = ctx
         self._extract_context = extract_context
@@ -58,6 +93,9 @@ class MemoryIsolationHandler:
         }
         self.allow_self = bool(allow_self)
         self.allowed_peer_ids = peer_ids
+        self.peer_memory_enabled = (
+            bool(peer_memory_enabled) if peer_memory_enabled is not None else True
+        )
         self.allow_peer = bool(peer_ids)
 
     def prepare_messages(self) -> None:
@@ -69,15 +107,30 @@ class MemoryIsolationHandler:
         return messages if isinstance(messages, list) else []
 
     def _message_target_id(self, msg: Any) -> Optional[str]:
+        resolution = self._message_target_resolution(msg)
+        return resolution.target_ids[0] if resolution.target_ids else None
+
+    def _message_target_resolution(self, msg: Any) -> _TargetResolution:
         if not self._is_peer_owner_message(msg):
-            return None
+            return _TargetResolution()
         raw_peer_id = getattr(msg, "peer_id", None)
+        if raw_peer_id in (None, ""):
+            if self.allow_self:
+                return _TargetResolution([_SELF_PEER_ID])
+            return _TargetResolution(skip_code=MemoryOperationSkipCode.SELF_MEMORY_DISABLED)
         peer_id = safe_peer_id(raw_peer_id)
-        if peer_id and self._can_write_peer(peer_id):
-            return peer_id
-        if raw_peer_id in (None, "") and self.allow_self:
-            return _SELF_PEER_ID
-        return None
+        if not peer_id:
+            return _TargetResolution(skip_code=MemoryOperationSkipCode.INVALID_PEER_ID)
+        if peer_id == _SELF_PEER_ID:
+            # ``__self`` is an internal operation-target sentinel, not a valid
+            # message peer. Preserve the legacy behavior: an explicit message
+            # peer with this value does not resolve to a writable target.
+            return _TargetResolution(skip_code=MemoryOperationSkipCode.NO_WRITABLE_TARGET)
+        if not self.peer_memory_enabled:
+            return _TargetResolution(skip_code=MemoryOperationSkipCode.PEER_MEMORY_DISABLED)
+        if not self._can_write_peer(peer_id):
+            return _TargetResolution(skip_code=MemoryOperationSkipCode.PEER_NOT_ALLOWED)
+        return _TargetResolution([peer_id])
 
     @staticmethod
     def _is_peer_owner_message(msg: Any) -> bool:
@@ -121,6 +174,24 @@ class MemoryIsolationHandler:
         else:
             item_dict.pop("peer_id", None)
 
+    @staticmethod
+    def _classify_identity_fields(
+        item_dict: Dict[str, Any],
+        memory_type_schema: Optional[MemoryTypeSchema] = None,
+    ) -> Optional[MemoryOperationSkip]:
+        """Capture a diagnostic hint without changing identity-field normalization."""
+        if memory_type_schema is not None and not memory_type_schema.peer_enabled:
+            return None
+        raw_peer_id = item_dict.get("peer_id")
+        if raw_peer_id not in (None, "", _SELF_PEER_ID):
+            if safe_peer_id(raw_peer_id):
+                return None
+            return MemoryOperationSkip(
+                reason_code=MemoryOperationSkipCode.INVALID_PEER_ID,
+                reason=_SKIP_REASON_MESSAGES[MemoryOperationSkipCode.INVALID_PEER_ID],
+            )
+        return None
+
     def allows_schema(self, memory_type_schema: MemoryTypeSchema) -> bool:
         memory_type = getattr(memory_type_schema, "memory_type", "")
         if memory_type in _INTERNAL_MEMORY_TYPES:
@@ -134,23 +205,11 @@ class MemoryIsolationHandler:
     def _can_write_peer(self, peer_id: str) -> bool:
         return self.allow_peer and peer_id in self.allowed_peer_ids
 
-    def _unique_peer_target_id_in_messages(self) -> Optional[str]:
-        targets = [
-            peer_id
-            for msg in self._messages()
-            if (peer_id := safe_peer_id(getattr(msg, "peer_id", None)))
-            and self._is_peer_owner_message(msg)
-            and self._can_write_peer(peer_id)
-        ]
-        peer_ids = list(dict.fromkeys(targets))
-        return peer_ids[0] if len(peer_ids) == 1 else None
-
-    def _unique_target_id_in_messages(self) -> Optional[str]:
+    def _target_ids_in_messages(self) -> List[str]:
         targets = [
             target_id for msg in self._messages() if (target_id := self._message_target_id(msg))
         ]
-        target_ids = list(dict.fromkeys(targets))
-        return target_ids[0] if len(target_ids) == 1 else None
+        return list(dict.fromkeys(targets))
 
     def _range_is_fully_in_bounds(self, ranges: Any) -> bool:
         parts = str(ranges).split(",")
@@ -197,41 +256,93 @@ class MemoryIsolationHandler:
             )
         return directories
 
-    def _range_targets(self, ranges: Any) -> tuple[List[str], bool]:
+    @staticmethod
+    def _preferred_skip_code(
+        skip_codes: List[MemoryOperationSkipCode],
+    ) -> MemoryOperationSkipCode:
+        if not skip_codes:
+            return MemoryOperationSkipCode.NO_WRITABLE_TARGET
+        return min(skip_codes, key=lambda code: _SKIP_REASON_PRIORITY.get(code, 999))
+
+    def _range_targets(self, ranges: Any) -> _TargetResolution:
         if not ranges or not self._extract_context:
-            return [], False
+            return _TargetResolution(skip_code=MemoryOperationSkipCode.INVALID_RANGES)
         range_is_fully_in_bounds = self._range_is_fully_in_bounds(ranges)
         try:
             msg_range = self._extract_context.read_message_ranges(str(ranges))
         except Exception:
             logger.warning("Failed to parse memory ranges for peer memory: %s", ranges)
-            return [], False
+            return _TargetResolution(skip_code=MemoryOperationSkipCode.INVALID_RANGES)
 
         target_ids = []
         has_message = False
         has_user_message = False
+        skip_codes: List[MemoryOperationSkipCode] = []
         for msg_group in getattr(msg_range, "elements", []) or []:
             for msg in msg_group:
                 has_message = True
                 if self._is_peer_owner_message(msg):
                     has_user_message = True
-                target_id = self._message_target_id(msg)
-                if target_id:
-                    target_ids.append(target_id)
+                resolution = self._message_target_resolution(msg)
+                target_ids.extend(resolution.target_ids)
+                if resolution.skip_code is not None:
+                    skip_codes.append(resolution.skip_code)
+        target_ids = list(dict.fromkeys(target_ids))
+        if target_ids:
+            return _TargetResolution(target_ids)
         can_fallback = range_is_fully_in_bounds and has_message and not has_user_message
-        return list(dict.fromkeys(target_ids)), can_fallback
+        if can_fallback:
+            fallback_targets = self._target_ids_in_messages()
+            if len(fallback_targets) == 1:
+                return _TargetResolution(fallback_targets)
+            if len(fallback_targets) > 1:
+                return _TargetResolution(skip_code=MemoryOperationSkipCode.AMBIGUOUS_TARGET)
+        if not range_is_fully_in_bounds:
+            return _TargetResolution(skip_code=MemoryOperationSkipCode.INVALID_RANGES)
+        if has_user_message:
+            return _TargetResolution(skip_code=self._preferred_skip_code(skip_codes))
+        return _TargetResolution(skip_code=MemoryOperationSkipCode.NO_WRITABLE_TARGET)
 
-    def _resolve_operation_target_id(self, raw_peer_id: Any) -> Optional[str]:
-        peer_id = safe_peer_id(raw_peer_id)
-        if peer_id == _SELF_PEER_ID and self.allow_self:
-            return _SELF_PEER_ID
-        if peer_id and self._can_write_peer(peer_id):
-            return peer_id
+    def _resolve_operation_target(self, raw_peer_id: Any) -> _TargetResolution:
         if raw_peer_id not in (None, ""):
-            return None
+            peer_id = safe_peer_id(raw_peer_id)
+            if not peer_id:
+                return _TargetResolution(skip_code=MemoryOperationSkipCode.INVALID_PEER_ID)
+            if peer_id == _SELF_PEER_ID:
+                if self.allow_self:
+                    return _TargetResolution([_SELF_PEER_ID])
+                return _TargetResolution(skip_code=MemoryOperationSkipCode.SELF_MEMORY_DISABLED)
+            if not self.peer_memory_enabled:
+                return _TargetResolution(skip_code=MemoryOperationSkipCode.PEER_MEMORY_DISABLED)
+            if not self._can_write_peer(peer_id):
+                return _TargetResolution(skip_code=MemoryOperationSkipCode.PEER_NOT_ALLOWED)
+            return _TargetResolution([peer_id])
         if self.allow_self:
-            return _SELF_PEER_ID
-        return self._unique_peer_target_id_in_messages()
+            return _TargetResolution([_SELF_PEER_ID])
+        peer_targets = list(
+            dict.fromkeys(
+                target
+                for msg in self._messages()
+                for target in self._message_target_resolution(msg).target_ids
+                if target != _SELF_PEER_ID
+            )
+        )
+        if len(peer_targets) == 1:
+            return _TargetResolution(peer_targets)
+        if len(peer_targets) > 1:
+            return _TargetResolution(skip_code=MemoryOperationSkipCode.AMBIGUOUS_TARGET)
+        return _TargetResolution(skip_code=MemoryOperationSkipCode.NO_WRITABLE_TARGET)
+
+    @staticmethod
+    def _skip_operation(
+        operation: ResolvedOperation,
+        reason_code: MemoryOperationSkipCode,
+    ) -> List[str]:
+        operation.resolution_skip = MemoryOperationSkip(
+            reason_code=reason_code,
+            reason=_SKIP_REASON_MESSAGES[reason_code],
+        )
+        return []
 
     def calculate_memory_uris(
         self,
@@ -239,8 +350,15 @@ class MemoryIsolationHandler:
         operation: ResolvedOperation,
         extract_context: ExtractContext,
     ):
+        identity_resolution_skip = operation.resolution_skip
+        operation.resolution_skip = None
         if not self.allows_schema(memory_type_schema):
-            return []
+            reason_code = (
+                MemoryOperationSkipCode.SELF_MEMORY_DISABLED
+                if not self.allow_self and not getattr(memory_type_schema, "peer_enabled", True)
+                else MemoryOperationSkipCode.MEMORY_TYPE_FILTERED
+            )
+            return self._skip_operation(operation, reason_code)
 
         if not self.ctx or not self.ctx.user:
             return []
@@ -249,25 +367,28 @@ class MemoryIsolationHandler:
         operation.memory_fields["user_id"] = user_id
 
         target_ids: List[str] = []
+        skip_code: Optional[MemoryOperationSkipCode] = None
         has_ranges = operation.memory_fields.get("ranges") is not None
         if not getattr(memory_type_schema, "peer_enabled", True):
             operation.memory_fields.pop("peer_id", None)
-            target_ids = [_SELF_PEER_ID] if self.allow_self else []
+            if self.allow_self:
+                target_ids = [_SELF_PEER_ID]
+            else:
+                skip_code = MemoryOperationSkipCode.SELF_MEMORY_DISABLED
         elif operation.memory_fields.get("ranges") is not None:
-            target_ids, can_fallback = self._range_targets(
+            resolution = self._range_targets(
                 operation.memory_fields.get("ranges"),
             )
-            if not target_ids and can_fallback:
-                fallback_target = self._unique_target_id_in_messages()
-                if fallback_target:
-                    target_ids = [fallback_target]
+            target_ids = resolution.target_ids
+            skip_code = resolution.skip_code
             operation.memory_fields.pop("peer_id", None)
         else:
-            target_id = self._resolve_operation_target_id(
-                operation.memory_fields.get("peer_id"),
-            )
-            if target_id:
-                target_ids = [target_id]
+            resolution = self._resolve_operation_target(operation.memory_fields.get("peer_id"))
+            target_ids = resolution.target_ids
+            skip_code = resolution.skip_code
+            if not target_ids and identity_resolution_skip is not None:
+                skip_code = identity_resolution_skip.reason_code
+            target_id = target_ids[0] if len(target_ids) == 1 else None
             if target_id == _SELF_PEER_ID:
                 operation.memory_fields.pop("peer_id", None)
             elif target_id:
@@ -276,7 +397,10 @@ class MemoryIsolationHandler:
                 operation.memory_fields.pop("peer_id", None)
 
         if not target_ids:
-            return []
+            return self._skip_operation(
+                operation,
+                skip_code or MemoryOperationSkipCode.NO_WRITABLE_TARGET,
+            )
 
         # 文件
         uris = set()

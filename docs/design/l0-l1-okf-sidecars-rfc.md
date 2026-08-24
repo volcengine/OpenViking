@@ -184,8 +184,8 @@ The current L0 extraction rule should continue to operate on the L1 body, not th
 
 Introduce a small semantic-sidecar document helper near the existing sidecar write/read code:
 
-- `render_semantic_sidecar(level, dir_uri, body, metadata) -> str`
-- `parse_semantic_sidecar(raw) -> {metadata, body}`
+- `render_abstract_overview(level, dir_uri, body, metadata) -> str`
+- `parse_abstract_overview(raw) -> {metadata, body}`
 - `body_for_preview(raw) -> str`
 - `body_for_embedding(raw, whitelist=()) -> str`
 

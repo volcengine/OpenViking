@@ -83,3 +83,50 @@ async def test_attrs_returns_memory_fields_and_tags(monkeypatch):
         "memory_type": "preferences",
     }
     assert attrs["tags"] == ["team=search"]
+
+
+@pytest.mark.asyncio
+async def test_mkdir_echoes_canonical_home_alias(monkeypatch):
+    seen = {}
+
+    async def fake_mkdir(uri, ctx=None, description=None):
+        seen["uri"] = uri
+
+    monkeypatch.setattr(
+        filesystem,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(mkdir=fake_mkdir)),
+    )
+
+    response = await filesystem.mkdir(
+        filesystem.MkdirRequest(uri="viking://~/resources/notes"),
+        _ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER),
+    )
+
+    assert seen["uri"] == "viking://user/alice/resources/notes"
+    assert response.result["uri"] == "viking://user/alice/resources/notes"
+
+
+@pytest.mark.asyncio
+async def test_ls_user_container_lists_only_caller_space(app, client, service):
+    """`viking://user` is the container of user spaces, not a current-user shorthand."""
+    from openviking.server.auth import get_request_context
+
+    root_ctx = RequestContext(user=UserIdentifier("default", "default"), role=Role.ROOT)
+    await service.viking_fs.mkdir("viking://user/alice", exist_ok=True, ctx=root_ctx)
+    await service.viking_fs.mkdir("viking://user/bob", exist_ok=True, ctx=root_ctx)
+
+    app.dependency_overrides[get_request_context] = lambda: RequestContext(
+        user=UserIdentifier("default", "alice"), role=Role.USER
+    )
+    try:
+        response = await client.get(
+            "/api/v1/fs/ls",
+            params={"uri": "viking://user", "output": "original"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_request_context, None)
+
+    assert response.status_code == 200, response.text
+    names = {entry["name"] for entry in response.json()["result"]}
+    assert names == {"alice"}

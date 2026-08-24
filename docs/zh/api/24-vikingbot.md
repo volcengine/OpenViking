@@ -142,7 +142,7 @@ data: {"event":"response","data":{"content":"当前知识库包含……","respo
 | `to` | string | 是 | - | 目标 Resource 或 Memory 目录，或受支持的 Skill namespace |
 | `skill` | string | 是 | - | Skill 目录或其 `SKILL.md` URI |
 | `reason` | string | 否 | Skill 驱动的默认值 | 本次 Compile 的补充指令 |
-| `runtime_timeout_seconds` | number | 否 | 2400 | 正数且有限，且不得超过服务端最大运行时限（默认 2400 秒） |
+| `runtime_timeout_seconds` | number | 否 | 3600 | 正数且有限，且不得超过服务端最大运行时限（默认 3600 秒） |
 
 **HTTP API**
 
@@ -175,7 +175,7 @@ ov compile \
 
 `--wait` 会轮询状态接口，直到任务进入终态。`--timeout` 只限制本地等待时间，不会取消服务端任务；`--runtime-timeout` 用于设置本次任务的 `runtime_timeout_seconds`，只能缩短服务端拥有的最大运行时限，超限请求会以 `429 RESOURCE_EXHAUSTED` 拒绝。在 Agent 执行期间达到该时限，或达到配置的 AgentLoop 迭代上限（`bot.agents.max_tool_iterations`，默认 50）时，会在独立的短 grace period 内尝试保存符合条件的 Resource 阶段性产物；没有可保存产物时任务失败，非 Resource 目标以及后续阶段超时不使用该 fallback。
 
-`direct` backend 会以 Bot 宿主机权限执行 Compile 的 `exec` 命令。`bot.sandbox.backends.direct.allow_compile_exec` 默认为 `false`，此时 Compile 不会暴露 `exec`，但普通 Wiki 和产物文件整理仍可通过文件工具运行。声明了 `requires.bins` 或 `requires.env` 的 Skill 会在执行任何命令探测前以 `SKILL_CAPABILITY_UNAVAILABLE` 失败。将该选项设为 `true` 是明确的不安全 opt-in；依赖 CLI 的 Skill 推荐使用具备文件系统和网络策略的隔离 backend。超过 admission 上限时返回 `429 RESOURCE_EXHAUSTED`。
+`direct` backend 会以 Bot 宿主机权限执行 Compile 的 `exec` 命令。`bot.sandbox.backends.direct.allow_compile_exec` 默认为 `true`：Compile 工具链开源，`exec` 默认直接以用户 shell 权限运行，普通 Wiki 和产物文件整理仍通过文件工具运行。声明了 `requires.bins` 或 `requires.env` 的 Skill 仍会先探测命令；将该选项设为 `false` 时 Compile 不会暴露 `exec`，此类 Skill 会在执行任何命令探测前以 `SKILL_CAPABILITY_UNAVAILABLE` 失败。依赖 CLI 的 Skill 推荐使用具备文件系统和网络策略的隔离 backend。超过 admission 上限时返回 `429 RESOURCE_EXHAUSTED`。
 
 **响应示例**
 
@@ -207,6 +207,12 @@ curl http://localhost:1933/bot/v1/compile/cmp_01abc \
   -H "X-API-Key: your-key"
 ```
 
+CLI 可直接使用 Compile 返回的 `cmp_...` task ID：
+
+```bash
+ov task status cmp_01abc
+```
+
 **响应示例**
 
 ```json
@@ -234,6 +240,27 @@ curl http://localhost:1933/bot/v1/compile/cmp_01abc \
 }
 ```
 
+### compile_cancel()
+
+按 task ID 请求协作式停止 Compile 任务。任务会先进入 `cancelling`，待当前进程内工作和清理完成后进入 `cancelled`；已经完成的写入不会回滚。重复取消已经 `cancelled` 的任务是幂等的，任务不存在或属于其他 principal 时返回 `404`。
+
+**CLI**
+
+```bash
+ov task cancel cmp_01abc
+```
+
+**HTTP API**
+
+```http
+POST /bot/v1/compile/{task_id}/cancel
+```
+
+```bash
+curl -X POST http://localhost:1933/bot/v1/compile/cmp_01abc/cancel \
+  -H "X-API-Key: your-key"
+```
+
 任务生命周期如下：
 
 | Status | 常见 Stage |
@@ -241,8 +268,10 @@ curl http://localhost:1933/bot/v1/compile/cmp_01abc \
 | `accepted` | `queued` |
 | `running` | `loading_skill`、`collecting_context`、`agent`、`rendering` |
 | `committing` | `writing`、`refreshing`、`salvaging` |
+| `cancelling` | 收敛当前进程内工作和清理资源 |
 | `completed` | `completed`、`salvaged` |
 | `failed` | 失败发生时的 Stage；响应包含 `error.code` 和 `error.message` |
+| `cancelled` | `cancelled` |
 
 ### feedback()
 

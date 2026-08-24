@@ -52,7 +52,7 @@ from openviking_sdk import AsyncHTTPClient
 client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
 
-task = await client.get_task("uuid-xxx")
+task = await client.get_task(task_id="uuid-xxx")
 print(f"Status: {task['status']}")
 await client.close()
 ```
@@ -172,7 +172,7 @@ Only the current user who owns the task can cancel it. ROOT identities cannot ca
 **Python SDK**
 
 ```python
-task = await client.cancel_task("uuid-xxx")
+task = await client.cancel_task(task_id="uuid-xxx")
 print(task["status"])
 ```
 

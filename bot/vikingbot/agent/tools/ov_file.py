@@ -7,7 +7,7 @@ import tempfile
 import time
 from abc import ABC
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Mapping, Optional
 
 import httpx
 from loguru import logger
@@ -17,6 +17,27 @@ from vikingbot.openviking_mount.ov_server import VikingClient
 
 if TYPE_CHECKING:
     from vikingbot.config.schema import Config
+
+
+def local_path_for_viking_uri(uri: str) -> str:
+    """Map a viking:// URI to a workspace-relative path, dropping the namespace prefix.
+
+    ``viking://resources/a/b`` -> ``a/b`` and
+    ``viking://user/<id>/resources/a/b`` -> ``a/b``, so the materialized tree does not
+    collide with the viking ``resources``/``skills`` namespace names.
+    """
+    path = str(uri).removeprefix("viking://").lstrip("/")
+    for prefix in ("resources/", "skills/", "memories/", "sessions/"):
+        if path.startswith(prefix):
+            return path[len(prefix) :]
+    parts = path.split("/")
+    if (
+        len(parts) >= 3
+        and parts[0] in {"user", "agent"}
+        and parts[2] in {"resources", "skills", "memories", "sessions"}
+    ):
+        return "/".join(parts[3:])
+    return path
 
 
 class OVFileTool(Tool, ABC):
@@ -96,17 +117,15 @@ class OVFileTool(Tool, ABC):
             ]
         )
 
-    def _is_default_memory_uri(self, client: VikingClient, uri: str | None) -> bool:
+    def _is_default_memory_uri(self, uri: str | None) -> bool:
         normalized = self._normalize_uri(uri)
-        if normalized in {"", "viking://user/memories"}:
-            return True
-        try:
-            return normalized == self._normalize_uri(client._memory_target_uri(None))
-        except Exception:
-            return False
+        # ``viking://user/memories`` is the legacy spelling of the current-user default
+        # target; it is still accepted here because it survives in stored bot configs and
+        # LLM output. New emissions always use the ``viking://~`` home alias.
+        return normalized in {"", "viking://user/memories", "viking://~/memories"}
 
     def _is_default_root_uri(self, uri: str | None) -> bool:
-        return self._normalize_uri(uri) in {"", "viking://", "viking://user"}
+        return self._normalize_uri(uri) in {"", "viking://", "viking://user", "viking://~"}
 
     def _peer_memory_uris(
         self,
@@ -122,15 +141,6 @@ class OVFileTool(Tool, ABC):
             include_self=False,
         )
 
-    def _current_memory_uri(self, client: VikingClient) -> str:
-        return client._memory_target_uri(None)
-
-    def _current_skill_uri(self, client: VikingClient) -> str:
-        memory_uri = self._current_memory_uri(client).rstrip("/")
-        if memory_uri.endswith("/memories"):
-            return f"{memory_uri[: -len('/memories')]}/skills/"
-        return "viking://user/skills/"
-
     def _fs_retrieval_uris(
         self,
         client: VikingClient,
@@ -140,18 +150,19 @@ class OVFileTool(Tool, ABC):
         if getattr(client, "actor_peer_id", None):
             if self._is_default_root_uri(uri):
                 return [uri or "viking://"]
-            if self._is_default_memory_uri(client, uri):
-                return [uri or self._current_memory_uri(client)]
+            if self._is_default_memory_uri(uri):
+                return [uri or "viking://~/memories/"]
             return [uri or ""]
 
-        if not self._is_default_memory_uri(client, uri):
+        if not self._is_default_memory_uri(uri):
             if not self._is_default_root_uri(uri):
                 return [uri or ""]
 
             target_uris = [
                 "viking://resources/",
-                self._current_memory_uri(client),
-                self._current_skill_uri(client),
+                "viking://~/resources/",
+                "viking://~/memories/",
+                "viking://~/skills/",
                 *self._peer_memory_uris(client, tool_context),
             ]
             return self._dedupe_strings(target_uris)
@@ -161,7 +172,7 @@ class OVFileTool(Tool, ABC):
             uris = builder(peer_ids=self._memory_peer_ids(tool_context))
             if uris:
                 return uris
-        return [uri or "viking://user/memories/"]
+        return [uri or "viking://~/memories/"]
 
 
 class VikingListTool(OVFileTool):
@@ -434,13 +445,13 @@ class VikingSearchTool(OVFileTool):
                 user_ids = memory_owner_user_ids or legacy_memory_user_ids
                 search_targets: list[tuple[str, str | None]] = [("viking://resources/", None)]
                 for user_id in self._dedupe_strings(list(user_ids or [])):
-                    memory_uri = client._memory_target_uri(user_id)
-                    skill_uri = (
-                        f"{memory_uri.rstrip('/')[: -len('/memories')]}/skills/"
-                        if memory_uri.rstrip("/").endswith("/memories")
-                        else "viking://user/skills/"
+                    search_targets.extend(
+                        [
+                            ("viking://~/resources/", user_id),
+                            ("viking://~/memories/", user_id),
+                            ("viking://~/skills/", user_id),
+                        ]
                     )
-                    search_targets.extend([(memory_uri, user_id), (skill_uri, user_id)])
             else:
                 peer_ids = self._memory_peer_ids(tool_context)
                 if not target_uri:
@@ -451,21 +462,26 @@ class VikingSearchTool(OVFileTool):
                         target_uris = self._dedupe_strings(
                             [
                                 "viking://resources/",
-                                self._current_memory_uri(client),
-                                self._current_skill_uri(client),
-                                *self._peer_memory_uris(client, tool_context, peer_ids=peer_ids),
+                                "viking://~/resources/",
+                                "viking://~/memories/",
+                                "viking://~/skills/",
+                                *self._peer_memory_uris(
+                                    client,
+                                    tool_context,
+                                    peer_ids=peer_ids,
+                                ),
                             ]
                         )
                     else:
                         target_uris = [""]
                 elif (
-                    self._is_default_memory_uri(client, target_uri)
+                    self._is_default_memory_uri(target_uri)
                     and not getattr(client, "actor_peer_id", None)
                     and peer_ids
                 ):
                     target_uris = self._dedupe_strings(
                         [
-                            "viking://user/memories/",
+                            "viking://~/memories/",
                             *self._peer_memory_uris(client, tool_context, peer_ids=peer_ids),
                         ]
                     )
@@ -902,13 +918,20 @@ class VikingMemoryCommitTool(OVFileTool):
 class VikingMultiReadTool(OVFileTool):
     """Tool to read content from multiple Viking resources concurrently."""
 
+    _FULL_READ_WARN_BYTES = 512 * 1024
+
     @property
     def name(self) -> str:
         return "openviking_multi_read"
 
     @property
     def description(self) -> str:
-        return "Read full content from multiple OpenViking resources concurrently. Returns complete content for all URIs with no truncation."
+        return (
+            "Read content from multiple OpenViking resources concurrently. By default returns "
+            "complete content. Large files (over 512 KB) are not returned in full: first use "
+            "openviking_grep to locate relevant lines, then read a bounded window with offset "
+            "and limit (line numbers, 0-indexed)."
+        )
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -918,7 +941,17 @@ class VikingMultiReadTool(OVFileTool):
                 "uris": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": 'List of Viking file URIs to read from (e.g., ["viking://resources/path/123.md", "viking://resources/path/456.md"])',
+                    "description": 'List of Viking file URIs to read from (e.g., ["viking://resources/path/123.md"])',
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Starting line number (0-indexed) for bounded reads; default 0.",
+                    "default": 0,
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Number of lines to read; -1 reads to the end (default). Use a small value to page through large files.",
+                    "default": -1,
                 },
             },
             "required": ["uris"],
@@ -928,6 +961,8 @@ class VikingMultiReadTool(OVFileTool):
         self,
         tool_context: ToolContext,
         uris: list[str],
+        offset: int = 0,
+        limit: int = -1,
         **kwargs: Any,
     ) -> str:
         level = "read"  # 默认获取完整内容
@@ -943,7 +978,26 @@ class VikingMultiReadTool(OVFileTool):
             async def read_single_uri(uri: str) -> dict:
                 async with semaphore:
                     try:
-                        content = await client.read_content(uri, level=level)
+                        if limit == -1:
+                            try:
+                                stat = await client.stat(uri)
+                                size = stat.get("size")
+                            except Exception:
+                                size = None
+                            if isinstance(size, int) and size > self._FULL_READ_WARN_BYTES:
+                                return {
+                                    "uri": uri,
+                                    "content": (
+                                        f"File is {size} bytes; reading it fully would exceed "
+                                        "the tool result budget. Use openviking_grep to locate "
+                                        "relevant lines, then read a window with "
+                                        "openviking_multi_read offset/limit."
+                                    ),
+                                    "success": False,
+                                }
+                        content = await client.read_content(
+                            uri, level=level, offset=offset, limit=limit
+                        )
                         skill_runtime = getattr(tool_context, "skill_runtime", None)
                         if skill_runtime is not None:
                             active_skill = await skill_runtime.activate_from_read(uri, content)
@@ -967,6 +1021,11 @@ class VikingMultiReadTool(OVFileTool):
             results = await asyncio.gather(*read_tasks)
 
             # 构建结果
+            range_note = (
+                ""
+                if limit == -1
+                else f" (lines {offset}..{offset + limit - 1 if limit > 0 else 'end'})"
+            )
             result_lines = [f"Multi-read results for {len(uris)} resources (level: {level}):"]
 
             for result in results:
@@ -974,7 +1033,7 @@ class VikingMultiReadTool(OVFileTool):
                 content = result["content"]
                 success = result["success"]
 
-                result_lines.append(f"\n--- START OF {uri} ---")
+                result_lines.append(f"\n--- START OF {uri}{range_note} ---")
                 if success:
                     result_lines.append(content)
                 else:
@@ -986,5 +1045,163 @@ class VikingMultiReadTool(OVFileTool):
         except Exception as e:
             logger.exception(f"Error in VikingMultiReadTool: {e}")
             return f"Error multi-reading Viking resources: {str(e)}"
+        finally:
+            await self._release_client(tool_context, client)
+
+
+class VikingExportTool(OVFileTool):
+    """Materialize viking:// files into the task sandbox so shell tools can process them.
+
+    The OpenViking ``exec``/``write_file`` tools operate on the task sandbox filesystem,
+    which does not contain viking:// source files by default. This tool downloads a
+    viking:// file or directory into the sandbox workspace (under ``compile_resources/``
+    by default), so the agent can then run arbitrary shell commands on them with ``exec``
+    (``jq``, ``wc``, ``grep``, ``head``, ``python``, ...) or inspect them with
+    ``read_file``. It is intentionally data-format agnostic: the agent decides which
+    files to pull and how to process them.
+    """
+
+    _MAX_FILES = 1000
+    _MAX_TOTAL_BYTES = 1024 * 1024 * 1024  # 1 GiB
+    _DEFAULT_DEST = "compile_resources"
+
+    @property
+    def name(self) -> str:
+        return "openviking_export"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Download a viking:// file or directory into the task sandbox workspace "
+            "(under `compile_resources/` by default) so you can process it with "
+            "exec/read_file — for example `jq`, `wc`, `grep`, `head`, `python`. Use this "
+            "instead of openviking_multi_read for large or structured files that you want "
+            "to filter or aggregate with shell tools."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "uri": {
+                    "type": "string",
+                    "description": "Viking URI of a file or directory to materialize into the workspace.",
+                },
+                "dest": {
+                    "type": "string",
+                    "description": "Base directory under the workspace to write into (default 'compile_resources').",
+                    "default": self._DEFAULT_DEST,
+                },
+            },
+            "required": ["uri"],
+        }
+
+    async def _collect_uris(self, client: VikingClient, uri: str) -> tuple[list[str], bool]:
+        """Return (file URIs to export, whether the listing hit the file-count cap).
+
+        The second element lets the caller warn that files beyond the cap were
+        not exported, instead of dropping them silently.
+        """
+        try:
+            stat = await client.stat(uri)
+        except Exception:
+            return [], False
+        if not stat.get("isDir"):
+            return [uri], False
+        entries = await client.list_resources(path=uri, recursive=True, node_limit=self._MAX_FILES)
+        uris = []
+        for entry in entries:
+            if not isinstance(entry, Mapping):
+                continue
+            entry_uri = str(entry.get("uri") or "")
+            if not entry_uri:
+                continue
+            uris.append(entry_uri)
+            if len(uris) >= self._MAX_FILES:
+                break
+        truncated = len(entries) >= self._MAX_FILES
+        return uris, truncated
+
+    @staticmethod
+    def _local_path(uri: str) -> str:
+        return local_path_for_viking_uri(uri)
+
+    async def execute(
+        self,
+        tool_context: ToolContext,
+        uri: str,
+        dest: str = "compile_resources",
+        **kwargs: Any,
+    ) -> str:
+        del kwargs
+        client = None
+        try:
+            if tool_context.sandbox_manager is None:
+                return "Error: openviking_export requires a task sandbox to write into."
+            client = await self._get_client(tool_context)
+            file_uris, listing_truncated = await self._collect_uris(client, uri)
+            if not file_uris:
+                return f"No files found under {uri}"
+
+            sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
+            dest = dest.strip("/") or self._DEFAULT_DEST
+            exported: list[str] = []
+            skipped_binary = 0
+            total_bytes = 0
+            byte_limit_hit = False
+            for file_uri in file_uris:
+                try:
+                    stat = await client.stat(file_uri)
+                    size = stat.get("size")
+                    if isinstance(size, int) and total_bytes + size > self._MAX_TOTAL_BYTES:
+                        byte_limit_hit = True
+                        break
+                    payload = await client.download_bytes(file_uri)
+                except Exception as exc:
+                    logger.warning(f"openviking_export failed to download {file_uri}: {exc}")
+                    continue
+                total_bytes += len(payload)
+                relative = f"{dest}/{self._local_path(file_uri)}"
+                try:
+                    text = payload.decode("utf-8")
+                except UnicodeDecodeError:
+                    skipped_binary += 1
+                    continue
+                await sandbox.write_file(relative, text)
+                exported.append(f"{relative}  ({len(payload)} bytes)")
+
+            if not exported:
+                if byte_limit_hit:
+                    return (
+                        f"No text files exported from {uri}: the first file alone would "
+                        f"exceed the total-byte budget ({self._MAX_TOTAL_BYTES} bytes)."
+                    )
+                return f"No text files exported from {uri}."
+            lines = [
+                f"Exported {len(exported)} file(s) into the workspace under '{dest}/':"
+            ]
+            lines.extend(f"- {line}" for line in exported)
+            if skipped_binary:
+                lines.append(f"Skipped {skipped_binary} non-UTF-8 (binary) file(s).")
+            if byte_limit_hit:
+                lines.append(
+                    "NOTE: stopped before the total-byte budget "
+                    f"({self._MAX_TOTAL_BYTES} bytes) was exceeded; remaining files were "
+                    "not exported. Narrow the uri or ask to raise the limit if you need them."
+                )
+            elif listing_truncated:
+                lines.append(
+                    f"NOTE: the source listing was capped at {self._MAX_FILES} entries; "
+                    "files beyond that were not exported."
+                )
+            lines.append(
+                "You can now process these with exec (jq/wc/grep/head/python) or read_file."
+            )
+            return "\n".join(lines)
+
+        except Exception as e:
+            logger.exception("Error in VikingExportTool: %s", e)
+            return f"Error exporting Viking resources: {str(e)}"
         finally:
             await self._release_client(tool_context, client)

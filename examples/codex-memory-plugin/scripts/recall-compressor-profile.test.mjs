@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  buildCodexExecArgs,
   detectRecallCompressorProfile,
   invalidateRecallCompressorProfileCache,
   loadCachedRecallCompressorProfile,
@@ -49,6 +50,31 @@ async function writeModelsCache(codexHome, slugs) {
     }),
   );
 }
+
+test("buildCodexExecArgs injects a configured compressor base URL", () => {
+  const args = buildCodexExecArgs(
+    { model: "gpt-5.3-codex-spark", thinking: "default" },
+    "/tmp/last-message.txt",
+    { recallCompressBaseUrl: "https://compressor.example/v1" },
+  );
+
+  assert.deepEqual(args.slice(0, 8), [
+    "-m", "gpt-5.3-codex-spark",
+    "-c", 'model_provider="openviking_compressor"',
+    "-c", 'model_providers.openviking_compressor.name="openviking_compressor"',
+    "-c", 'model_providers.openviking_compressor.base_url="https://compressor.example/v1"',
+  ]);
+  assert.ok(args.indexOf("exec") > args.indexOf('model_providers.openviking_compressor.base_url="https://compressor.example/v1"'));
+});
+
+test("buildCodexExecArgs preserves the existing command without a compressor base URL", () => {
+  const args = buildCodexExecArgs(
+    { model: "gpt-5.3-codex-spark", thinking: "default" },
+    "/tmp/last-message.txt",
+  );
+
+  assert.equal(args.some((arg) => arg.includes("openviking_compressor")), false);
+});
 
 test("loadCodexModelsCache returns empty set when cache missing", async () => {
   await withTempState(async ({ codexHome }) => {

@@ -958,7 +958,7 @@ describe("Tool: ov_search (behavioral)", () => {
       .filter((call) => String(call[0]).endsWith("/api/v1/search/find"))
       .map((call) => JSON.parse(String((call[1] as RequestInit).body)));
     expect(findBodies.some((body) => body.target_uri === "viking://resources")).toBe(true);
-    expect(findBodies.some((body) => String(body.target_uri).startsWith("viking://user/") && String(body.target_uri).endsWith("/skills"))).toBe(true);
+    expect(findBodies.some((body) => String(body.target_uri) === "viking://~/skills")).toBe(true);
   });
 
   it("returns partial results when one default scope search fails", async () => {

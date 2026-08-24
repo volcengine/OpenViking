@@ -25,14 +25,15 @@ OpenViking 采用两阶段检索：意图分析 + 层级检索 + Rerank。
 ```python
 # find(): 简单查询
 results = await client.find(
-    "OAuth 认证",
-    target_uri="viking://resources/"
+    query="OAuth 认证",
+    target_uri="viking://resources/",
 )
 
 # search(): 复杂任务（需要会话上下文）
+session_info = await client.create_session()
 results = await client.search(
-    "帮我创建一个 RFC 文档",
-    session_info=session
+    query="帮我创建一个 RFC 文档",
+    session_id=session_info["session_id"],
 )
 ```
 
@@ -92,9 +93,9 @@ Step 5: 转换为 MatchedContext
 
 | context_type | 根目录 |
 |--------------|--------|
-| MEMORY | `viking://user/memories` |
+| MEMORY | `viking://~/memories` |
 | RESOURCE | `viking://resources` |
-| SKILL | `viking://user/skills` |
+| SKILL | `viking://~/skills` |
 
 ### 递归搜索算法
 

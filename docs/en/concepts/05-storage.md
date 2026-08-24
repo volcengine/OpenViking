@@ -41,8 +41,8 @@ VikingFS is the unified URI abstraction layer that hides underlying storage deta
 
 ```
 viking://resources/docs/auth  →  /local/{account_id}/resources/docs/auth
-viking://user/memories        →  /local/{account_id}/user/{user_id}/memories
-viking://user/skills          →  /local/{account_id}/user/{user_id}/skills
+viking://~/memories        →  /local/{account_id}/user/{user_id}/memories
+viking://~/skills          →  /local/{account_id}/user/{user_id}/skills
 ```
 
 ### Core API

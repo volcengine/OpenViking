@@ -852,7 +852,7 @@ class OpenVikingInspector:
             self.base_url,
             "/api/v1/search/find",
             method="POST",
-            body={"query": query, "target_uri": "viking://user/memories", "limit": limit},
+            body={"query": query, "target_uri": "viking://~/memories", "limit": limit},
             headers=self.headers(),
             timeout=20.0,
             insecure=self.insecure,

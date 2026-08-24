@@ -499,4 +499,6 @@ ov add-resource --help
 - `--mode semantic_and_vectors` — regenerate semantic artifacts (`.abstract.md`, `.overview.md`) before refreshing vectors.
 - `--mode prune_orphans` — remove vector records whose source files no longer exist. Add `--dry-run` to preview the cleanup without applying it.
 
+`semantic_and_vectors` processes the full subtree by default. If child summaries already exist and only the target directory's `.abstract.md` / `.overview.md` need regeneration, add `--recursive=false`; this refreshes only the target directory semantics and its L0/L1 vectors.
+
 There is no `semantic` or `full` mode alias.

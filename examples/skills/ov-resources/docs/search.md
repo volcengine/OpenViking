@@ -105,10 +105,10 @@ Results are grouped by `context_type`:
 ov find "authentication" --uri "viking://resources"
 
 # Search only memories
-ov find "preferences" --uri "viking://user/memories"
+ov find "preferences" --uri "viking://~/memories"
 
 # Search only skills
-ov find "web search" --uri "viking://user/skills"
+ov find "web search" --uri "viking://~/skills"
 
 # Search specific project
 ov find "API endpoints" --uri "viking://resources/my-project"

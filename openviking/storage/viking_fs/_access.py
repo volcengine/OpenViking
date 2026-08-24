@@ -204,8 +204,8 @@ class _AccessMixin:
             )
         if parts == ["user"]:
             raise PermissionDeniedError(
-                "Deleting viking://user is not supported; use an explicit user namespace "
-                "or current-user content path instead.",
+                "Deleting viking://user is not supported; use viking://~/... or an "
+                "explicit viking://user/{user_id}/... path instead.",
                 resource=normalized_uri,
             )
         if parts == ["agent"]:
@@ -223,8 +223,8 @@ class _AccessMixin:
         parts = [p for p in normalized_uri[len("viking://") :].strip("/").split("/") if p]
         if parts == ["user"]:
             raise PermissionDeniedError(
-                "Writing viking://user is not supported; use an explicit user namespace "
-                "or current-user content path instead.",
+                "Writing viking://user is not supported; use viking://~/... or an "
+                "explicit viking://user/{user_id}/... path instead.",
                 resource=normalized_uri,
             )
         if parts and parts[0] == "session":

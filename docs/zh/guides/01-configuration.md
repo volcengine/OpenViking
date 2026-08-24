@@ -120,7 +120,8 @@ openviking-server doctor
   "vlm": {
     "provider" : "openai-codex",
     "model"    : "gpt-5.4",
-    "api_base" : "https://chatgpt.com/backend-api/codex"
+    "api_base" : "https://chatgpt.com/backend-api/codex",
+    "reasoning_effort": "xhigh"
   }
 }
 ```
@@ -602,7 +603,7 @@ provider，并设置 `storage.vectordb.sparse_weight > 0`。自托管模型的�
 | `thinking` | bool | 启用思考模式（仅对部分火山模型生效，默认：`false`） |
 | `max_concurrent` | int | 语义处理阶段 LLM 最大并发调用数（默认：`32`） |
 | `max_retries` | int | VLM provider 瞬时错误的最大重试次数（默认：`3`；`0` 表示禁用重试） |
-| `credentials` | array | 有序 VLM 凭据/模型列表，索引 0 优先级最高。每项可单独覆盖 `provider`、`model`、`api_key`、`api_base`、`api_version`、`extra_headers`、`extra_request_body` 和 `stream` |
+| `credentials` | array | 有序 VLM 凭据/模型列表，索引 0 优先级最高。每项可单独覆盖 `provider`、`model`、`api_key`、`api_base`、`api_version`、`extra_headers`、`extra_request_body`、`stream` 和 `reasoning_effort` |
 | `failback_timeout_seconds` | float | 切换到低优先级 credential 后，尝试逐级切回的时间阈值（默认：`600`） |
 | `failback_request_count` | int | 低优先级 credential 成功处理多少次请求后尝试逐级切回（默认：`50`） |
 | `backup` | object | 可选的备用 VLM 配置（结构与 `vlm` 相同），当主 VLM 遇到限流、`5xx`、超时或连接失败等可重试错误时自动切换。仅支持 1 层备用 &mdash; 备用 VLM 本身不能再嵌套 `backup` |
@@ -610,6 +611,7 @@ provider，并设置 `storage.vectordb.sparse_weight > 0`。自托管模型的�
 | `extra_headers` | object | 兼容 HTTP provider 的自定义请求头。`kimi` 默认已注入所需订阅请求头，也支持在这里覆盖或扩展 |
 | `extra_request_body` | object | 传给 OpenAI 兼容 completion 请求的额外 JSON body 字段，可用于 Ollama `{"think": false}` 等 provider 专有参数 |
 | `stream` | bool | 启用流式模式（OpenAI 兼容 provider 可用，默认：`false`） |
+| `reasoning_effort` | str | OpenAI Codex Responses 请求的推理强度。不设置时使用模型默认值 |
 | `media` | object | 音视频运行参数；音视频理解复用该 VLM 的 provider、模型、凭据、client、超时、重试、请求头、输出 token 限制、故障切换和 token 统计 |
 | `media.enabled` | bool | 启用音视频理解（默认：`false`） |
 | `media.max_concurrent` | int | 音视频调用最大并发数（默认：`2`） |
@@ -1643,8 +1645,11 @@ openviking add-resource ./docs --exclude "*.tmp"
     },
     "user_config_defaults": {
       "add_targets": {
-        "resource_uri": "viking://user/resources",
-        "skill_uri": "viking://user/skills"
+        "resource_uri": "viking://~/resources",
+        "skill_uri": "viking://~/skills"
+      },
+      "memory_policy": {
+        "memory_types": ["profile", "preferences", "events", "entities", "experiences"]
       }
     },
     "agent_evolution": {
@@ -1667,15 +1672,16 @@ openviking add-resource ./docs --exclude "*.tmp"
 | `temp_upload.default_mode` | str | `POST /api/v1/resources/temp_upload` 的服务端默认模式（客户端未显式传 `upload_mode` 时使用）：`"local"`（仅当前实例本地磁盘，单机默认行为）或 `"shared"`（分布式共享存储，多副本部署可跨实例消费）。新的 shared 上传会固定写入内部 `viking://upload/<created_at_ms>-<uuid>/content` 和 `meta` 对象，在 `ttl_seconds` 指定的时间内可重复消费。 | `"local"` |
 | `temp_upload.shared_max_size_bytes` | int | `shared` 模式下接受的最大文件大小（字节）。超过此阈值的请求会在写入对象存储之前被拒绝。 | `536870912`（512 MiB） |
 | `temp_upload.ttl_seconds` | int | local 和 shared 临时上传文件共用的保留时间（秒）。每次对应模式的上传会清理超过此时间的文件；shared 只需一次上传根目录列举，从每个一级目录名解析创建时间，并递归删除过期目录，不依赖文件系统修改时间；设为 `0` 时禁用自动清理。 | `43200`（12 小时） |
-| `user_config_defaults.add_targets.resource_uri` | str | `add_resource` 未传 `to` 和 `parent` 时使用的部署级默认资源添加目录。`viking://user/...` 会按请求用户解析。 | `null` |
-| `user_config_defaults.add_targets.skill_uri` | str | `add_skill` 未传 `target_uri` 时使用的部署级默认技能添加根目录。仅允许 `viking://user/skills` 和 `viking://agent/skills`。 | `null` |
+| `user_config_defaults.add_targets.resource_uri` | str | `add_resource` 未传 `to` 和 `parent` 时使用的部署级默认资源添加目录。`viking://~/...` 会按请求用户解析。 | `null` |
+| `user_config_defaults.add_targets.skill_uri` | str | `add_skill` 未传 `target_uri` 时使用的部署级默认技能添加根目录。仅允许 `viking://~/skills` 和 `viking://agent/skills`。 | `null` |
+| `user_config_defaults.memory_policy` | object | Session 和 User 都未显式配置策略时使用的部署级默认记忆抽取策略。 | `null` |
 | `agent_evolution.enabled` | bool | 实例级 Agent 进化开关。开启时，session commit 可按 session `memory_policy` 生成或更新 cases、trajectories 和 experiences；关闭时，所有账号和用户均停止生产这三类记忆。已有记忆仍可读取和检索。 | `false` |
 
 `api_key` 模式使用 API Key 认证，也是默认模式；`trusted` 模式信任上游网关或受信调用方注入的 `X-OpenViking-Account` / `X-OpenViking-User` 请求头。
 
 在 `api_key` 模式下配置 `root_api_key` 后，服务端启用正式多租户认证，并通过 Admin API 创建工作区和用户 key。在 `trusted` 模式下，普通请求不需要先注册 user key；每个请求都会根据注入的身份头解析成 `USER`。只有在 `auth_mode = "api_key"` 且未配置 `root_api_key` 时，服务端才会进入开发模式。
 
-`user_config_defaults` 仅用于添加目标的用户级默认配置。添加操作中，显式请求目标仍然优先：`add_resource.to` / `add_resource.parent` 优先于用户默认值，`add_skill.target_uri` 优先于用户默认值。`agent_evolution.enabled` 是当前 OpenViking 实例的统一开关，不支持用户级覆盖。HTTP Server 的 worker 会在 session commit 时从启动阶段解析出的 `ov.conf` 路径读取当前值，因此合法的文件更新无需重启服务即可生效。
+`user_config_defaults` 提供添加目标和记忆抽取的部署级默认配置。添加操作中，显式请求目标仍然优先：`add_resource.to` / `add_resource.parent` 优先于用户默认值，`add_skill.target_uri` 优先于用户默认值。记忆策略优先级为 Session 策略 > User `settings/user_config.json` 策略 > `server.user_config_defaults.memory_policy` > 内核默认策略。`agent_evolution.enabled` 是当前 OpenViking 实例的统一开关，不支持用户级覆盖。HTTP Server 的 worker 会在 session commit 时从解析后的 `ov.conf` 读取当前 Agent 进化配置，因此合法的文件更新无需重启服务即可生效。
 
 ### Usage Reporter
 
@@ -1719,8 +1725,9 @@ openviking add-resource ./docs --exclude "*.tmp"
 
 支持的 add target URI：
 
-- `resource_uri` 作为 `add_resource` 的默认父目录使用，等价于 `parent=<uri>, create_parent=true`。它必须是当前请求用户可写的 resource 目录 URI，支持 `viking://resources` 或 `viking://resources/...`、`viking://user/resources` 或 `viking://user/resources/...`、`viking://user/{user_id}/resources` 或 `viking://user/{user_id}/resources/...`、`viking://user/{user_id}/peers/{peer_id}/resources` 或 `viking://user/{user_id}/peers/{peer_id}/resources/...`。`viking://user/...` 短写会按请求用户解析。
-- `skill_uri` 作为 `add_skill` 的默认目标根目录使用。v1 只允许 `viking://user/skills` 和 `viking://agent/skills`；不支持显式写成 `viking://user/{user_id}/skills`。
+- `resource_uri` 作为 `add_resource` 的默认父目录使用，等价于 `parent=<uri>, create_parent=true`。它必须是当前请求用户可写的 resource 目录 URI，支持 `viking://resources` 或 `viking://resources/...`、`viking://~/resources` 或 `viking://~/resources/...`、`viking://user/{user_id}/resources` 或 `viking://user/{user_id}/resources/...`、`viking://user/{user_id}/peers/{peer_id}/resources` 或 `viking://user/{user_id}/peers/{peer_id}/resources/...`。`viking://~/...` 家目录别名会按请求用户解析。
+- `skill_uri` 作为 `add_skill` 的默认目标根目录使用。v1 只允许 `viking://~/skills` 和 `viking://agent/skills`；不支持显式写成 `viking://user/{user_id}/skills`。
+- 旧写法兼容：早期配置中的 `viking://user/resources` 和 `viking://user/skills` 会在配置加载时自动归一化为 `viking://~/resources` 和 `viking://~/skills`，并打印一条 info 日志。新配置请直接使用 `viking://~/...`；在 `add_targets` 之外，无 uid 的写法会在请求入口被拒绝。
 
 启动方式和部署详情见 [服务部署](./03-deployment.md)，认证详情见 [认证](./04-authentication.md)。
 

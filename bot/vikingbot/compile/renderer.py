@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping
@@ -26,20 +25,19 @@ from openviking.utils.path_safety import (
     validate_safe_viking_uri_path,
 )
 from openviking_cli.utils import VikingURI
-from vikingbot.compile.models import CompileLimits, WikiBundleDraft
+from vikingbot.compile.models import CompileLimits, WikiBundleDraft, WikiLanguage
 
 _FRONTMATTER_RE = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.DOTALL)
 _FRONTMATTER_START_RE = re.compile(rb"\A---[ \t]*\r?\n")
 _FRONTMATTER_END_RE = re.compile(rb"\r?\n---[ \t]*(?:\r?\n|\Z)")
 _OKF_TYPE_DECLARATION_RE = re.compile(rb"""(?m)^(?:type|["']type["'])[ \t]*:""")
-_CITATION_LINE_RE = re.compile(r"^\[\d+\]\s+\[([^\]\n]+)\]\(([^)\n]+)\)\s*$")
-_BARE_VIKING_URI_RE = re.compile(
-    r"""viking://[^\s<>\[\](){}"'«»，。；：！？]+"""
+_BARE_VIKING_URI_RE = re.compile(r"""viking://[^\s<>\[\](){}"'«»，。；：！？]+""")
+_LEADING_H1_RE = re.compile(r"\A(?:[ \t]*\r?\n)*#[ \t]+[^\r\n]*(?:\r?\n|\Z)")
+_LEGACY_RELATED_PAGES_RE = re.compile(
+    r"(?mi)^##[ \t]+(?:Related pages|相关页面)[ \t]*\r?\n"
+    r"(?:[ \t]*\r?\n)*(?:[ \t]*-[^\r\n]*(?:\r?\n|\Z))+"
 )
-_RELATED_PAGES_RE = re.compile(r"(?mi)^#{1,6}[ \t]+Related pages[ \t]*$")
-_RESERVED_FILENAMES = frozenset(
-    {".abstract.md", ".overview.md"}
-)
+_RESERVED_FILENAMES = frozenset({".abstract.md", ".overview.md", ".relations.json", ".source.json"})
 _PLATFORM_FRONTMATTER_FIELDS = frozenset({"type", "title", "description", "tags"})
 
 
@@ -53,10 +51,11 @@ class RenderedBundle:
     link_count: int = 0
 
 
-def content_hash(content: str | bytes) -> str:
-    if isinstance(content, str):
-        content = content.encode("utf-8")
-    return "sha256:" + hashlib.sha256(content).hexdigest()
+@dataclass(slots=True)
+class FinalizedCheckout:
+    files: dict[str, bytes] = field(default_factory=dict)
+    wiki_paths: set[str] = field(default_factory=set)
+    link_count: int = 0
 
 
 def wiki_page_path_from_title(title: str) -> str:
@@ -74,11 +73,14 @@ def _split_frontmatter(content: str) -> tuple[dict[str, Any], str]:
     return parsed, content[match.end() :]
 
 
+def strip_okf_frontmatter(content: str) -> str:
+    """Return the editable Wiki body from a materialized OKF Markdown file."""
+    return _split_frontmatter(content)[1].lstrip("\r\n")
+
+
 def has_unclosed_frontmatter(content: bytes) -> bool:
     opening = _FRONTMATTER_START_RE.match(content)
-    return opening is not None and _FRONTMATTER_END_RE.search(
-        content[opening.end() :]
-    ) is None
+    return opening is not None and _FRONTMATTER_END_RE.search(content[opening.end() :]) is None
 
 
 def validate_declared_okf_markdown(path: str, content: bytes) -> str | None:
@@ -162,27 +164,6 @@ def _frontmatter(
     return "---\n" + dumped + "---\n\n"
 
 
-def _split_citations(body: str) -> tuple[str, list[tuple[str, str]]]:
-    protected = [
-        (start, end)
-        for start, end in LinkRenderer.protected_markdown_spans(body)
-        if not body[start:end].startswith("# Citations")
-    ]
-    heading = None
-    for match in re.finditer(r"(?m)^# Citations[ \t]*$", body):
-        if not any(start <= match.start() < end for start, end in protected):
-            heading = match
-            break
-    if heading is None:
-        return body.rstrip(), []
-    citations: list[tuple[str, str]] = []
-    for line in body[heading.end() :].strip().splitlines():
-        match = _CITATION_LINE_RE.match(line.strip())
-        if match:
-            citations.append((match.group(1).strip(), match.group(2).strip()))
-    return body[: heading.start()].rstrip(), citations
-
-
 def _citation_target_allowed(target: str, source_roots: Mapping[str, str]) -> bool:
     if not target.startswith("viking://"):
         return False
@@ -196,13 +177,9 @@ def _citation_target_allowed(target: str, source_roots: Mapping[str, str]) -> bo
     return False
 
 
-def _linkify_source_uris(
-    body: str, source_roots: Mapping[str, str]
-) -> tuple[str, list[tuple[str, str]]]:
+def _linkify_source_uris(body: str, source_roots: Mapping[str, str]) -> str:
     protected = LinkRenderer.protected_markdown_spans(body)
     replacements: list[tuple[int, int, str]] = []
-    citations: list[tuple[str, str]] = []
-    seen: set[str] = set()
     for match in _BARE_VIKING_URI_RE.finditer(body):
         start = match.start()
         target = match.group(0).rstrip(".,;:!?")
@@ -216,74 +193,175 @@ def _linkify_source_uris(
         label = unquote(target.rstrip("/").rsplit("/", 1)[-1]).removesuffix(".md")
         label = label.replace("[", r"\[").replace("]", r"\]") or "Source"
         replacements.append((start, end, f"[{label}]({target})"))
-        if target not in seen:
-            seen.add(target)
-            citations.append((label, target))
 
     rendered = list(body)
     for start, end, replacement in reversed(replacements):
         rendered[start:end] = replacement
-    return "".join(rendered), citations
+    return "".join(rendered)
 
 
-def _render_related_pages(
+def _wiki_page_basename(uri: str) -> str:
+    name = unquote(uri.rstrip("/").rsplit("/", 1)[-1])
+    return name[:-3] if name.casefold().endswith(".md") else name
+
+
+def _wiki_mention_targets(uris: set[str]) -> dict[str, str]:
+    """Return unambiguous basename -> URI targets, excluding the root index."""
+    grouped: dict[str, list[tuple[str, str]]] = {}
+    for uri in sorted(uris):
+        name = _wiki_page_basename(uri).strip()
+        if not name or name.casefold() == "index":
+            continue
+        grouped.setdefault(name.casefold(), []).append((name, uri))
+    return {items[0][0]: items[0][1] for items in grouped.values() if len(items) == 1}
+
+
+def _has_link_to(body: str, source_uri: str, target_uri: str) -> bool:
+    relative = LinkRenderer.relative_path(source_uri, target_uri)
+    expected = {
+        LinkRenderer.normalize_markdown_target(target_uri),
+        LinkRenderer.normalize_markdown_target(relative if relative is not None else target_uri),
+    }
+    return any(
+        link.start == 0 or body[link.start - 1] != "!"
+        for link in LinkRenderer.iter_markdown_links(body)
+        if LinkRenderer.normalize_markdown_target(link.target) in expected
+    )
+
+
+def _strip_legacy_related_pages(body: str) -> str:
+    rendered, count = _LEGACY_RELATED_PAGES_RE.subn("", body)
+    return rendered.rstrip() if count else body
+
+
+def _link_wiki_mentions(
+    content: str,
+    *,
+    source_uri: str,
+    targets: Mapping[str, str],
+) -> tuple[str, int]:
+    """Link the first body mention of each unambiguous Wiki filename."""
+    frontmatter = _FRONTMATTER_RE.match(content)
+    prefix = content[: frontmatter.end()] if frontmatter else ""
+    body = content[frontmatter.end() :] if frontmatter else content
+    title = _LEADING_H1_RE.match(body)
+    if title:
+        prefix += body[: title.end()]
+        body = body[title.end() :]
+    body = _strip_legacy_related_pages(body)
+
+    links = [
+        {
+            "match_text": name,
+            "to_uri": target_uri,
+            "weight": len(name),
+        }
+        for name, target_uri in targets.items()
+        if target_uri != source_uri and not _has_link_to(body, source_uri, target_uri)
+    ]
+    rendered, count = LinkRenderer.render_links_with_count(body, source_uri, links)
+    return prefix + rendered, count
+
+
+def finalize_resource_checkout(
+    files: Mapping[str, bytes],
+    *,
+    target_uri: str,
+    source_roots: Mapping[str, str],
+) -> FinalizedCheckout:
+    """Validate and deterministically finalize one Resource checkout.
+
+    The checkout already contains the final file layout. This pass only identifies
+    self-declared OKF Wiki pages, makes supplied source URIs readable, and links the
+    first body mention of another unambiguous Wiki filename. It does not decide create
+    versus update.
+    """
+    wiki_paths: set[str] = set()
+    for path, payload in files.items():
+        page_type = validate_declared_okf_markdown(path, payload)
+        if page_type is not None:
+            text = payload.decode("utf-8")
+            frontmatter, _body = _split_frontmatter(text)
+            missing = [
+                field
+                for field in ("type", "title", "description")
+                if not isinstance(frontmatter.get(field), str)
+                or not str(frontmatter[field]).strip()
+            ]
+            if missing:
+                raise ValueError(
+                    f'OKF Markdown file "{path}" must have non-empty YAML frontmatter fields: '
+                    + ", ".join(missing)
+                )
+            description = str(frontmatter["description"]).strip()
+            if "\n" in description or "\r" in description:
+                raise ValueError(
+                    f'OKF Markdown file "{path}" frontmatter description must be one line'
+                )
+            wiki_paths.add(path)
+
+    wiki_uris = {safe_join_viking_uri(target_uri, path).rstrip("/") for path in wiki_paths}
+    mention_targets = _wiki_mention_targets(wiki_uris)
+    finalized = dict(files)
+    link_count = 0
+    for path in sorted(wiki_paths):
+        payload = files[path]
+        try:
+            content = payload.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f'OKF Markdown file "{path}" must be UTF-8') from exc
+        uri = safe_join_viking_uri(target_uri, path).rstrip("/")
+        frontmatter = _FRONTMATTER_RE.match(content)
+        if frontmatter:
+            content = content[: frontmatter.end()] + _linkify_source_uris(
+                content[frontmatter.end() :], source_roots
+            )
+        else:
+            content = _linkify_source_uris(content, source_roots)
+        content, rendered_count = _link_wiki_mentions(
+            content,
+            source_uri=uri,
+            targets=mention_targets,
+        )
+        finalized[path] = content.encode("utf-8")
+        link_count += rendered_count
+
+    return FinalizedCheckout(
+        files=finalized,
+        wiki_paths=wiki_paths,
+        link_count=link_count,
+    )
+
+
+def _render_source_fallback(
     body: str,
     *,
-    page_uri: str,
-    incoming: list[StoredLink],
-    page_titles: Mapping[str, str],
-) -> str:
-    if not incoming or _RELATED_PAGES_RE.search(body):
-        return body
-    lines: list[str] = []
-    seen: set[str] = set()
-    for link in incoming:
-        source_uri = link.from_uri
-        if source_uri in seen:
-            continue
-        seen.add(source_uri)
-        target = LinkRenderer.relative_path(page_uri, source_uri) or source_uri
-        target = target.replace(" ", "%20").replace("(", "%28").replace(")", "%29")
-        if f"]({target})" in body:
-            continue
-        label = page_titles.get(source_uri) or source_uri.rstrip("/").rsplit("/", 1)[-1]
-        label = label.replace("[", r"\[").replace("]", r"\]")
-        lines.append(f"- [{label}]({target})")
-    if not lines:
-        return body
-    return body.rstrip() + "\n\n## Related pages\n\n" + "\n".join(lines)
-
-
-def _render_citations(
-    body: str,
-    *,
-    old_body: str,
     source_ids: list[str],
     source_roots: Mapping[str, str],
-    inline_citations: list[tuple[str, str]] | None = None,
+    wiki_language: WikiLanguage | None,
 ) -> str:
-    body, draft_citations = _split_citations(body)
-    _old_without_citations, old_citations = _split_citations(old_body)
-    merged: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    for label, target in [
-        *old_citations,
-        *draft_citations,
-        *(inline_citations or []),
-    ]:
-        if not _citation_target_allowed(target, source_roots) or target in seen:
-            continue
-        seen.add(target)
-        merged.append((label, target))
+    linked_targets = {
+        LinkRenderer.normalize_markdown_target(link.target)
+        for link in LinkRenderer.iter_markdown_links(body)
+        if _citation_target_allowed(
+            LinkRenderer.normalize_markdown_target(link.target), source_roots
+        )
+    }
+    missing: list[tuple[str, str]] = []
     for source_id in source_ids:
         target = source_roots[source_id]
-        if target in seen:
+        if any(
+            linked.rstrip("/") == target.rstrip("/") or relative_uri_path(target, linked)
+            for linked in linked_targets
+        ):
             continue
-        seen.add(target)
-        label = target.rstrip("/").rsplit("/", 1)[-1] or f"Source {source_id}"
-        merged.append((label, target))
-    lines = [f"[{index}] [{label}]({target})" for index, (label, target) in enumerate(merged, 1)]
-    return body.rstrip() + "\n\n# Citations\n\n" + "  \n".join(lines) + "\n"
+        label = unquote(target.rstrip("/").rsplit("/", 1)[-1]) or f"Source {source_id}"
+        missing.append((label, target))
+    if not missing:
+        return body.rstrip()
+    heading = "来源" if wiki_language == "zh-CN" else "Sources"
+    lines = [f"- [{label}]({target})" for label, target in missing]
+    return body.rstrip() + f"\n\n## {heading}\n\n" + "\n".join(lines) + "\n"
 
 
 def validate_relative_page_path(path: str) -> str:
@@ -359,6 +437,7 @@ class WikiRenderer:
         source_roots: Mapping[str, str],
         catalog_uris: set[str],
         existing_raw: Mapping[str, str],
+        wiki_language: WikiLanguage | None = None,
         file_catalog_uris: set[str] | None = None,
         existing_bytes: Mapping[str, bytes] | None = None,
         file_payloads: list[bytes | None] | None = None,
@@ -397,7 +476,9 @@ class WikiRenderer:
                 raise ValueError(f"page {page.page_id} summary must be a single line")
             if _FRONTMATTER_RE.match(page.body_markdown.lstrip()):
                 raise ValueError(f"page {page.page_id} body_markdown must not contain frontmatter")
-            source_ids = list(dict.fromkeys(value.strip() for value in page.source_ids if value.strip()))
+            source_ids = list(
+                dict.fromkeys(value.strip() for value in page.source_ids if value.strip())
+            )
             if not source_ids or any(source_id not in source_roots for source_id in source_ids):
                 raise ValueError(f"page {page.page_id} must reference valid source_ids")
 
@@ -466,9 +547,11 @@ class WikiRenderer:
                 )
 
         resolved_links = resolve_wiki_links(bundle.links, page_uris, strict=True)
-        page_titles = {
-            page_uris[page.page_id][0]: page.title.strip() for page in bundle.pages
-        }
+        mention_targets = (
+            _wiki_mention_targets(set(existing_raw) | {uris[0] for uris in page_uris.values()})
+            if not memory_target and bundle.pages
+            else {}
+        )
         result = RenderedBundle()
         total_bytes = 0
         for page in bundle.pages:
@@ -482,41 +565,52 @@ class WikiRenderer:
             else:
                 old_memory = None
                 old_visible = old_raw
-            old_frontmatter, old_body = _split_frontmatter(old_visible)
+            old_frontmatter, _ = _split_frontmatter(old_visible)
 
-            outgoing = [link for link in resolved_links if link.from_uri == uri]
-            incoming = [link for link in resolved_links if link.to_uri == uri]
-            rendered_body, rendered_count = LinkRenderer.render_links_with_count(
-                page.body_markdown.strip(),
-                uri,
-                [link.model_dump() for link in outgoing],
+            outgoing = (
+                [link for link in resolved_links if link.from_uri == uri] if memory_target else []
             )
-            result.link_count += rendered_count
-            rendered_body, inline_citations = _linkify_source_uris(
-                rendered_body, source_roots
+            incoming = (
+                [link for link in resolved_links if link.to_uri == uri] if memory_target else []
             )
-            if not memory_target:
-                rendered_body = _render_related_pages(
-                    rendered_body,
-                    page_uri=uri,
-                    incoming=incoming,
-                    page_titles=page_titles,
+            if memory_target:
+                rendered_body, rendered_count = LinkRenderer.render_links_with_count(
+                    page.body_markdown.strip(),
+                    uri,
+                    [link.model_dump() for link in outgoing],
                 )
-            source_ids = list(dict.fromkeys(value.strip() for value in page.source_ids if value.strip()))
-            rendered_body = _render_citations(
+            else:
+                rendered_body = page.body_markdown.strip()
+                rendered_count = 0
+            result.link_count += rendered_count
+            rendered_body = _linkify_source_uris(rendered_body, source_roots)
+            source_ids = list(
+                dict.fromkeys(value.strip() for value in page.source_ids if value.strip())
+            )
+            rendered_body = _render_source_fallback(
                 rendered_body,
-                old_body=old_body,
                 source_ids=source_ids,
                 source_roots=source_roots,
-                inline_citations=inline_citations,
+                wiki_language=wiki_language,
             )
-            visible = _frontmatter(
-                old=old_frontmatter,
-                page_type=page.page_type.strip(),
-                title=page.title.strip(),
-                summary=page.summary.strip(),
-                tags=page.tags,
-            ) + rendered_body
+            visible = (
+                _frontmatter(
+                    old=old_frontmatter,
+                    page_type=page.page_type.strip(),
+                    title=page.title.strip(),
+                    summary=page.summary.strip(),
+                    tags=page.tags,
+                )
+                + rendered_body
+            )
+
+            if not memory_target:
+                visible, automatic_count = _link_wiki_mentions(
+                    visible,
+                    source_uri=uri,
+                    targets=mention_targets,
+                )
+                result.link_count += automatic_count
 
             if memory_target:
                 mf = old_memory or MemoryFile(uri=uri)
@@ -544,13 +638,36 @@ class WikiRenderer:
                 continue
             if is_update:
                 result.updated.append(uri)
-                precondition = {"kind": "replace_if_hash", "base_hash": content_hash(old_raw)}
             else:
                 result.created.append(uri)
-                precondition = {"kind": "create_if_absent"}
-            result.operations.append(
-                {"uri": uri, "content": candidate, "precondition": precondition}
-            )
+            result.operations.append({"uri": uri, "content": candidate, "mode": "upsert"})
+
+        if not memory_target and bundle.pages:
+            for uri, old_raw in sorted(existing_raw.items()):
+                if uri in output_uris:
+                    continue
+                candidate, automatic_count = _link_wiki_mentions(
+                    old_raw,
+                    source_uri=uri,
+                    targets=mention_targets,
+                )
+                if candidate == old_raw:
+                    continue
+                result.link_count += automatic_count
+                total_bytes += len(candidate.encode("utf-8"))
+                if total_bytes > self.limits.output_total_bytes:
+                    raise ValueError("Wiki bundle exceeds the final content size limit")
+                result.updated.append(uri)
+                result.wiki_uris.append(uri)
+                result.operations.append(
+                    {
+                        "uri": uri,
+                        "content": candidate,
+                        "mode": "upsert",
+                    }
+                )
+            if len(result.created) + len(result.updated) > self.limits.output_pages:
+                raise ValueError("Wiki mention linking exceeds the page limit")
 
         for index, file in enumerate(bundle.files):
             uri = file_uris[index]
@@ -583,24 +700,21 @@ class WikiRenderer:
             if is_update:
                 assert old is not None
                 result.updated.append(uri)
-                precondition = {
-                    "kind": "replace_if_hash",
-                    "base_hash": content_hash(old),
-                }
             else:
                 result.created.append(uri)
-                precondition = {"kind": "create_if_absent"}
-            result.operations.append(
-                {"uri": uri, **operation_content, "precondition": precondition}
-            )
+            result.operations.append({"uri": uri, **operation_content, "mode": "upsert"})
+        if len(result.operations) > self.limits.output_operations:
+            raise ValueError("Wiki bundle exceeds the combined output operation limit")
         return result
 
 
 __all__ = [
+    "FinalizedCheckout",
     "RenderedBundle",
     "WikiRenderer",
-    "content_hash",
+    "finalize_resource_checkout",
     "has_unclosed_frontmatter",
+    "strip_okf_frontmatter",
     "is_reserved_wiki_page_uri",
     "validate_declared_okf_markdown",
     "validate_relative_file_path",

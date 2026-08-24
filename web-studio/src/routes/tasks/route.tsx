@@ -43,39 +43,24 @@ import {
   TableRow,
 } from '#/components/ui/table'
 import { useAppConnection } from '#/hooks/use-app-connection'
-import { getOvResult, getTasks, ovClient } from '#/lib/ov-client'
+import { ovClient } from '#/lib/ov-client'
 import { postResources } from '#/gen/ov-client'
 import { commitSession } from '#/lib/sessions/api'
 import { cn } from '#/lib/utils'
 import { QueueStatusCard } from '#/routes/monitoring/-components/queue-status-card'
 import { TaskDetailSheet } from '#/routes/tasks/-components/task-detail-sheet'
-import {
-  normalizeTasks,
-  normalizeTaskStatus,
-} from '#/routes/tasks/-lib/task-record'
-import type { TaskRecord, TaskStatus } from '#/routes/tasks/-lib/task-record'
+import { normalizeTaskStatus } from '#/routes/tasks/-lib/task-record'
+import type { TaskRecord } from '#/routes/tasks/-lib/task-record'
 import { formatTaskDuration, getTaskDate } from '#/routes/tasks/-lib/task-time'
+import { fetchTasks, getEffectiveTaskStatus, MAX_TASKS } from './-lib/task-list'
+import type { TaskStatusFilter, TaskTypeFilter } from './-lib/task-list'
 import { getTaskPipelineGroups } from './-lib/task-pipeline'
 
 export const Route = createFileRoute('/tasks')({
   component: TasksRoute,
 })
 
-type TaskStatusFilter = Exclude<TaskStatus, 'unknown'> | 'all'
-
-type TaskTypeFilter =
-  | 'add_resource'
-  | 'add_skill'
-  | 'admin_reindex'
-  | 'connector_import'
-  | 'legacy_cleanup'
-  | 'legacy_migration'
-  | 'session_commit'
-  | 'snapshot_restore_reindex'
-  | 'all'
-
 const DEFAULT_PAGE_SIZE = 20
-const MAX_TASKS = 300
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const
 const TASK_TYPE_OPTIONS: Exclude<TaskTypeFilter, 'all'>[] = [
   'session_commit',
@@ -96,74 +81,6 @@ const TASK_STATUS_OPTIONS: Exclude<TaskStatusFilter, 'all'>[] = [
   'cancelled',
 ]
 
-// 根据 8 并发物理上限计算任务的物理有效状态 (前 8 个 running, 第 9 个及以后 pending)
-export function getEffectiveTaskStatus(taskItem: any, list: any[]): string {
-  const rawStatus = normalizeTaskStatus(taskItem.status)
-  if (rawStatus !== 'running') {
-    return rawStatus
-  }
-  const runningList = list
-    .filter((t) => normalizeTaskStatus(t.status) === 'running')
-    .sort((a, b) => Number(a.created_at || 0) - Number(b.created_at || 0))
-  const idx = runningList.findIndex((t) => t.task_id === taskItem.task_id)
-  return idx >= 8 ? 'pending' : 'running'
-}
-
-export type TaskDataScope = '24h' | 'all'
-
-async function fetchTasks(
-  taskType: TaskTypeFilter,
-  status: TaskStatusFilter,
-  dataScope: TaskDataScope = '24h',
-): Promise<TaskRecord[]> {
-  const query = {
-    limit: dataScope === 'all' ? 10000 : MAX_TASKS,
-    status: undefined,
-    task_type: taskType === 'all' ? undefined : taskType,
-    include_archived: dataScope === 'all' ? true : undefined,
-  }
-  try {
-    const result = await getOvResult<unknown>(
-      getTasks({
-        query: query as any,
-      }),
-    )
-    let fetched = normalizeTasks(result).sort(
-      (a, b) => Number(b.created_at || 0) - Number(a.created_at || 0),
-    )
-    if (dataScope === '24h') {
-      const nowSec = Math.floor(Date.now() / 1000)
-      fetched = fetched.filter((t) => {
-        const timeVal = Number(t.created_at || t.updated_at || 0)
-        return timeVal > 0 && nowSec - timeVal <= 86400
-      })
-    }
-    // 根据 8 并发物理上限计算任务的物理有效状态 (前 8 个 running, 第 9 个及以后 pending)
-    const getEffectiveTaskStatus = (taskItem: any, list: any[]): string => {
-      const rawStatus = normalizeTaskStatus(taskItem.status)
-      if (rawStatus !== 'running') {
-        return rawStatus
-      }
-      const runningList = list
-        .filter((t) => normalizeTaskStatus(t.status) === 'running')
-        .sort((a, b) => Number(a.created_at || 0) - Number(b.created_at || 0))
-      const idx = runningList.findIndex((t) => t.task_id === taskItem.task_id)
-      return idx >= 8 ? 'pending' : 'running'
-    }
-
-    if (status !== 'all') {
-      fetched = fetched.filter((t) => getEffectiveTaskStatus(t, fetched) === status)
-    }
-    if (taskType !== 'all') {
-      fetched = fetched.filter((t) => t.task_type === taskType)
-    }
-    return fetched
-  } catch (err) {
-    console.warn('[fetchTasks] Backend fetch failed:', err)
-    return []
-  }
-}
-
 function TasksRoute() {
   const { i18n, t } = useTranslation('tasksPage')
   const { identityScopeKey } = useAppConnection()
@@ -173,14 +90,13 @@ function TasksRoute() {
   const [taskType, setTaskType] = React.useState<TaskTypeFilter>('all')
   const [statusFilter, setStatusFilter] =
     React.useState<TaskStatusFilter>('all')
-  const [dataScope, setDataScope] = React.useState<TaskDataScope>('24h')
   const [dedupByResource, setDedupByResource] = React.useState<boolean>(true)
   const [selectedTaskId, setSelectedTaskId] = React.useState<string | null>(
     null,
   )
   const tasksQuery = useQuery({
-    queryFn: () => fetchTasks(taskType, statusFilter, dataScope),
-    queryKey: ['tasks', identityScopeKey, taskType, statusFilter, dataScope],
+    queryFn: () => fetchTasks(taskType, statusFilter),
+    queryKey: ['tasks', identityScopeKey, taskType, statusFilter],
     refetchInterval: 10_000,
   })
   const rawTasks = tasksQuery.data ?? []
@@ -353,7 +269,7 @@ function TasksRoute() {
     const effStatus = getEffectiveTaskStatus(task, allTasks)
     const status = normalizeTaskStatus(effStatus)
     const pct = getTaskProgressPct(task)
-    const isRetrying = retryMutation.isPending && retryMutation.variables?.task_id === taskId
+    const isRetrying = retryMutation.isPending && retryMutation.variables.task_id === taskId
     const Icon =
       status === 'completed'
         ? CheckCircle2Icon
@@ -470,29 +386,6 @@ function TasksRoute() {
       </div>
     )
   }
-
-  const taskStatsQuery = useQuery({
-    queryFn: async () => {
-      try {
-        const resp = await ovClient.instance.get('/api/v1/tasks/stats')
-        const json = resp.data
-        if (json.result) {
-          return json.result as {
-            total: number
-            completed: number
-            pending: number
-            running: number
-            failed: number
-          }
-        }
-      } catch {
-        // Fallback to local counts if endpoint fails
-      }
-      return null
-    },
-    queryKey: ['taskStats', identityScopeKey],
-    refetchInterval: 5_000,
-  })
 
   const queueRows = React.useMemo(() => {
     const map: Record<
@@ -711,18 +604,11 @@ function TasksRoute() {
             type="button"
             variant="outline"
             size="sm"
-            disabled={tasksQuery.isFetching || taskStatsQuery.isFetching}
-            onClick={() => {
-              void tasksQuery.refetch()
-              void taskStatsQuery.refetch()
-            }}
+            disabled={tasksQuery.isFetching}
+            onClick={() => void tasksQuery.refetch()}
           >
             <RefreshCwIcon
-              className={
-                tasksQuery.isFetching || taskStatsQuery.isFetching
-                  ? 'animate-spin'
-                  : undefined
-              }
+              className={tasksQuery.isFetching ? 'animate-spin' : undefined}
             />
             {t('refresh')}
           </Button>
@@ -832,29 +718,6 @@ function TasksRoute() {
           {t('filters.label')}
         </span>
         <Select
-          value={dataScope}
-          onValueChange={(value) => {
-            setDataScope(value as TaskDataScope)
-            setPage(1)
-          }}
-        >
-          <SelectTrigger
-            size="sm"
-            className="min-w-32 bg-background font-medium"
-            aria-label={t('filters.scope')}
-          >
-            <SelectValue>
-              {dataScope === '24h'
-                ? t('filters.scope24h')
-                : t('filters.scopeAll')}
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="24h">{t('filters.scope24h')}</SelectItem>
-            <SelectItem value="all">{t('filters.scopeAll')}</SelectItem>
-          </SelectContent>
-        </Select>
-        <Select
           value={taskType}
           onValueChange={(value) => {
             setTaskType(value as TaskTypeFilter)
@@ -908,7 +771,7 @@ function TasksRoute() {
             ))}
           </SelectContent>
         </Select>
-        {hasActiveFilters || dataScope !== '24h' ? (
+        {hasActiveFilters ? (
           <Button
             type="button"
             variant="ghost"
@@ -917,7 +780,6 @@ function TasksRoute() {
             onClick={() => {
               setTaskType('all')
               setStatusFilter('all')
-              setDataScope('24h')
               setPage(1)
             }}
           >
@@ -935,10 +797,10 @@ function TasksRoute() {
           {i18n.language.startsWith('zh')
             ? dedupByResource
               ? '按资源收敛 (最新)'
-              : '全部历史记录'
+              : '逐条任务'
             : dedupByResource
               ? 'Latest per Resource'
-              : 'All History Logs'}
+              : 'Individual Tasks'}
         </Button>
       </div>
 

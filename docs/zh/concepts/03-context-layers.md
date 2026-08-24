@@ -27,7 +27,7 @@ API 认证指南，涵盖 OAuth 2.0、JWT 令牌和 API 密钥的安全访问方
 通过语义 accessor 读取时，只返回可见正文：
 
 ```python
-abstract = client.abstract("viking://resources/docs/auth")
+abstract = client.abstract(uri="viking://resources/docs/auth")
 ```
 
 ## L1：概览
@@ -47,7 +47,7 @@ L1 提供更完整的目录摘要和导航信息，用于 Rerank 和决定是否
 ```
 
 ```python
-overview = client.overview("viking://resources/docs/auth")
+overview = client.overview(uri="viking://resources/docs/auth")
 ```
 
 L0 从 L1 正文中提取：取 H1 标题之后、第一个 `##` 标题之前的 Brief Description 段落。YAML frontmatter 不参与提取。
@@ -57,7 +57,7 @@ L0 从 L1 正文中提取：取 H1 标题之后、第一个 `##` 标题之前的
 L2 是原始文件或解析后的完整内容，只在需要时加载，并保留源格式和结构。
 
 ```python
-content = client.read("viking://resources/docs/auth/oauth.md")
+content = client.read(uri="viking://resources/docs/auth/oauth.md")
 ```
 
 ## 目录结构
@@ -146,7 +146,7 @@ API 认证指南，涵盖 OAuth 2.0、JWT 令牌和 API 密钥。
 - `unsampled_entries`：未采样的直接子项数，满足 `sampled + unsampled = total`。
 - `pending_child_changes`：已知发生变化、但尚未反映到当前正文中的直接子项数。
 
-当直接子项超过 `semantic.sidecar_sample_size`（默认 32）时，系统使用确定性、保序的稳定采样。相同目录树重复刷新会选择相同样本，避免无意义的正文和 Git diff 抖动。
+当直接子项超过 `semantic.overview_sample_limit`（默认 32）时，系统使用确定性、保序的稳定采样。相同目录树重复刷新会选择相同样本，避免无意义的正文和 Git diff 抖动。
 
 `pending_child_changes > 0` 表示正文仍然可读，但已知落后于下层变化。父目录刷新成功后，该值会随新的覆盖率元数据重置为 0。
 

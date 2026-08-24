@@ -13,10 +13,12 @@ from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import (
     MemoryField,
     MemoryFile,
+    MemoryOperationSkipCode,
     MemoryOperationSource,
     MemoryTypeSchema,
     ResolvedOperation,
     ResolvedOperations,
+    SkippedMemoryOperation,
     StoredLink,
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
@@ -715,8 +717,7 @@ async def test_merge_requests_merges_cross_session_operation_kinds_in_parallel(m
         else:
             kind = "update"
             assert all(
-                op.old_memory_file_content is not None
-                for op in operations.upsert_operations
+                op.old_memory_file_content is not None for op in operations.upsert_operations
             )
         assert kwargs["force_merge"] is True
         entered.add(kind)
@@ -795,6 +796,28 @@ def test_scope_memory_update_result_to_submitter_filters_shared_batch_by_source(
     apply_result = MemoryUpdateResult()
     apply_result.add_written(op_a.uris[0])
     apply_result.add_written(op_b.uris[0])
+    apply_result.add_skipped(
+        SkippedMemoryOperation(
+            memory_type="preferences",
+            reason_code=MemoryOperationSkipCode.PEER_NOT_ALLOWED,
+            reason="Target peer is outside the allowed memory scope",
+            source=MemoryOperationSource(
+                extraction_id="extract_a",
+                session_id="session_a",
+            ),
+        )
+    )
+    apply_result.add_skipped(
+        SkippedMemoryOperation(
+            memory_type="preferences",
+            reason_code=MemoryOperationSkipCode.PEER_MEMORY_DISABLED,
+            reason="Peer memory writes are disabled",
+            source=MemoryOperationSource(
+                extraction_id="extract_b",
+                session_id="session_a",
+            ),
+        )
+    )
     batch_result = StreamingMemoryUpdateResult(
         operations=ResolvedOperations(
             upsert_operations=[op_a, op_b],
@@ -822,6 +845,10 @@ def test_scope_memory_update_result_to_submitter_filters_shared_batch_by_source(
     assert scoped.metadata["batch_request_count"] == 2
     assert scoped.metadata["scoped_to_source_extraction_id"] == "extract_a"
     assert scoped.apply_result.written_uris == [op_a.uris[0]]
+    assert len(scoped.apply_result.skipped_operations) == 1
+    assert scoped.apply_result.skipped_operations[0].reason_code == (
+        MemoryOperationSkipCode.PEER_NOT_ALLOWED
+    )
     assert scoped.operations.upsert_operations == [op_a]
     assert scoped.metadata["unscoped_written_uris"] == [op_a.uris[0], op_b.uris[0]]
 
@@ -864,6 +891,38 @@ def test_split_request_by_merge_group_groups_by_peer_and_memory_type():
         0,
         0,
     ]
+
+
+def test_split_request_keeps_unresolved_upserts_separate_from_delete_groups():
+    replacement = _note_op("replacement")
+    unresolved = _note_op("skipped")
+    unresolved.uris = []
+    old_file = _note_delete_file("old")
+    request = MemoryUpdateRequest(
+        operations=ResolvedOperations(
+            upsert_operations=[replacement, unresolved],
+            delete_file_contents=[old_file],
+            errors=[],
+            delete_replacements={old_file.uri: replacement.uris[0]},
+        ),
+        messages=[],
+        ctx=_ctx(),
+    )
+
+    grouped = split_request_by_merge_group(request)
+
+    assert len(grouped) == 2
+    replacement_key, replacement_request = grouped[0]
+    assert replacement_key == MemoryMergeGroupKey(peer_id=None, memory_type="notes")
+    assert replacement_request.operations.upsert_operations == [replacement]
+    assert replacement_request.operations.delete_file_contents == [old_file]
+    assert replacement_request.operations.delete_replacements == {old_file.uri: replacement.uris[0]}
+
+    unresolved_key, unresolved_request = grouped[1]
+    assert unresolved_key == MemoryMergeGroupKey(peer_id=None, memory_type="")
+    assert unresolved_request.operations.upsert_operations == [unresolved]
+    assert unresolved_request.operations.delete_file_contents == []
+    assert unresolved_request.operations.delete_replacements == {}
 
 
 def test_split_request_by_merge_group_infers_peer_from_uri_when_field_missing():

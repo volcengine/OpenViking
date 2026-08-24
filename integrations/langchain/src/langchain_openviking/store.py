@@ -59,6 +59,12 @@ class OpenVikingStore(BaseStore):
     Values are stored as JSON records under ``<root_uri>/data``. A separate
     markdown projection under ``<root_uri>/index`` gives OpenViking semantic
     retrieval a compact document to index for query-based ``search`` calls.
+
+    Args:
+        root_uri: Base URI for the store. Defaults to the ``viking://~`` home alias,
+            which the server expands to the authenticated caller's own user space, so
+            this requires an OpenViking server with ``viking://~`` support. Pass an
+            explicit ``viking://user/<uid>/...`` URI to target a specific user.
     """
 
     def __init__(
@@ -71,7 +77,7 @@ class OpenVikingStore(BaseStore):
         user: str | None = None,
         user_id: str | None = None,
         actor_peer_id: str | None = None,
-        root_uri: str = "viking://user/memories/langgraph_store",
+        root_uri: str = "viking://~/memories/langgraph_store",
         index: bool | list[str] | None = None,
         wait: bool = True,
         timeout: float | None = None,

@@ -1,7 +1,14 @@
 import { buildUserAgent, resolveOpenVikingCredentials } from "./shared/credentials.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
-export const PLUGIN_VERSION = "0.1.0";
+export const PLUGIN_VERSION = "0.2.1";
+
+/**
+ * Namespace for the bridged OpenViking MCP tools. DSH publishes every MCP tool
+ * as `mcp__<serverName>__<rawName>`, so this string is part of the
+ * model-facing contract: changing it renames all of them.
+ */
+export const MCP_SERVER_NAME = "openviking";
 
 const DEFAULT_CONFIG = Object.freeze({
   endpoint: "http://127.0.0.1:1933",
@@ -31,6 +38,7 @@ const DEFAULT_CONFIG = Object.freeze({
   captureToolMaxChars: 1000000,
   captureAssistantTurns: true,
   requestTimeoutMs: 10000,
+  mcpToolCallTimeoutMs: 60000,
 });
 
 export function resolveConfig(input = {}, env = process.env, cwd = process.cwd()) {
@@ -133,6 +141,12 @@ export function resolveConfig(input = {}, env = process.env, cwd = process.cwd()
     1000,
     120000,
     DEFAULT_CONFIG.requestTimeoutMs,
+  );
+  config.mcpToolCallTimeoutMs = clampInteger(
+    config.mcpToolCallTimeoutMs,
+    1000,
+    600000,
+    DEFAULT_CONFIG.mcpToolCallTimeoutMs,
   );
   config.captureMode = config.captureMode === "keyword" ? "keyword" : "semantic";
   config.syncTurns = config.syncTurns !== false;

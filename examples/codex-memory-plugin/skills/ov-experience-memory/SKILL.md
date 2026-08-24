@@ -50,7 +50,7 @@ context or deeper intent analysis is useful.
 3. Search only the current user's Experience root:
 
    ```text
-   viking://user/memories/experiences
+   viking://~/memories/experiences
    ```
 
    For tools using MCP-style parameters, set `target_uri` to this root. For

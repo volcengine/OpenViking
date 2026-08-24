@@ -118,21 +118,28 @@ class PatchOp(MergeOpBase):
         Returns:
             The replace content, or empty string if not available
         """
-        from openviking.session.memory.merge_op.base import StrPatch
-
-        # Case 1: StrPatch object
+        # Case 1: StrPatch object — concatenate ALL blocks' replace content.
+        # The schema instructs the model to split non-adjacent edits into
+        # separate blocks, so a new memory routinely arrives as a multi-block
+        # patch. Taking only blocks[0] would silently drop every subsequent
+        # fact/preference the model extracted.
         if isinstance(patch_value, StrPatch):
-            replace = patch_value.get_first_replace()
-            return replace if replace is not None else ""
+            replaces = [b.replace for b in patch_value.blocks if b.replace is not None]
+            return "\n".join(replaces) if replaces else ""
 
-        # Case 2: dict form
+        # Case 2: dict form (from JSON parsing) — same, collect every block.
         if isinstance(patch_value, dict) and "blocks" in patch_value:
-            blocks = patch_value.get("blocks", [])
-            if blocks:
-                first_block = blocks[0]
-                if isinstance(first_block, dict):
-                    replace = first_block.get("replace")
-                    return replace if replace is not None else ""
+            replaces = []
+            for block in patch_value.get("blocks", []):
+                if isinstance(block, SearchReplaceBlock):
+                    replace = block.replace
+                elif isinstance(block, dict):
+                    replace = block.get("replace")
+                else:
+                    replace = None
+                if replace is not None:
+                    replaces.append(replace)
+            return "\n".join(replaces) if replaces else ""
 
         # Case 3: Simple string - use as is
         if isinstance(patch_value, str):

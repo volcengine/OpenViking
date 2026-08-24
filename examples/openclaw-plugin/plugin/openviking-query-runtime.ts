@@ -386,7 +386,7 @@ export function createOpenVikingQueryRuntime<TQueryConfigContext>(deps: OpenViki
       };
       const [resourcesSettled, skillsSettled] = await Promise.allSettled([
         runSearch("viking://resources"),
-        runSearch("viking://user/skills"),
+        runSearch("viking://~/skills"),
       ]);
       const successful: FindResult[] = [];
       if (resourcesSettled.status === "fulfilled") {

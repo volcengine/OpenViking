@@ -23,7 +23,7 @@ from openviking.utils import is_git_repo_url
 # the set flow into the unsupported-parameter framework: connector-only
 # sources reject them, shared sources degrade to the standard pipeline.
 CONNECTOR_SUPPORTED_ARGS: Dict[str, FrozenSet[str]] = {
-    "tos": frozenset(),
+    "tos": frozenset({"tos_prefix", "exclude"}),
     "git": frozenset({"branch", "ref", "commit"}),
 }
 

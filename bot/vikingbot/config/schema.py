@@ -763,7 +763,7 @@ class DirectBackendConfig(BaseModel):
     """Direct backend configuration."""
 
     restrict_to_workspace: bool = False  # If true, restrict file access to workspace directory
-    allow_compile_exec: bool = False
+    allow_compile_exec: bool = True
 
 
 class SrtBackendConfig(BaseModel):
@@ -1070,7 +1070,9 @@ class SessionKey(BaseModel):
 
     @staticmethod
     def from_safe_name(safe_name: str):
-        file_name_split = safe_name.split("__")
+        file_name_split = safe_name.split("__", 2)
+        if len(file_name_split) != 3:
+            raise ValueError(f"Invalid session key: {safe_name!r}")
         return SessionKey(
             type=file_name_split[0], channel_id=file_name_split[1], chat_id=file_name_split[2]
         )

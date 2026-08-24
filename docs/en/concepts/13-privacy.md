@@ -93,7 +93,7 @@ fs.read(uri)
 
 Current matching is suffix-based: `/skills/{name}/SKILL.md`, so it supports user-scoped skill paths such as:
 
-- `viking://user/skills/{name}/SKILL.md`
+- `viking://~/skills/{name}/SKILL.md`
 - `viking://user/{user_id}/skills/{name}/SKILL.md`
 
 ### restore Rules

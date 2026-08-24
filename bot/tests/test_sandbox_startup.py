@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from vikingbot.config.schema import Config, SessionKey  # noqa: E402
 from vikingbot.sandbox.backends.srt import SrtBackend  # noqa: E402
 from vikingbot.sandbox.manager import SandboxManager  # noqa: E402
+from vikingbot.utils.session_paths import portable_path_component  # noqa: E402
 
 
 def test_srt_backend_uses_workspace_id_and_nested_config(tmp_path):
@@ -21,7 +22,7 @@ def test_srt_backend_uses_workspace_id_and_nested_config(tmp_path):
 
     backend = SrtBackend(config, "shared", tmp_path / "shared")
 
-    assert backend._settings_path.name == "shared-srt-settings.json"
+    assert backend._settings_path.name == (f"{portable_path_component('shared')}-srt-settings.json")
     settings = json.loads(backend._settings_path.read_text())
     assert settings["network"]["allowedDomains"] == ["example.com"]
     assert settings["filesystem"]["allowWrite"][0] == str((tmp_path / "shared").resolve())

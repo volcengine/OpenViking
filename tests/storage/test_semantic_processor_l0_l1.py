@@ -4,9 +4,9 @@
 from types import SimpleNamespace
 
 from openviking.core.context import ContextLevel
+from openviking.storage.abstract_overview import render_abstract_overview
 from openviking.storage.queuefs import semantic_processor as semantic_processor_module
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
-from openviking.storage.semantic_sidecar import render_semantic_sidecar
 
 
 def _patch_semantic_limits(monkeypatch, *, abstract_max_chars=256, overview_max_chars=4000):
@@ -34,7 +34,7 @@ def test_markdown_overview_uses_brief_description_as_abstract(monkeypatch):
     assert overview == generated
     assert abstract == "This brief description is the retrieval abstract."
 
-    raw = render_semantic_sidecar(
+    raw = render_abstract_overview(
         ContextLevel.OVERVIEW,
         "viking://resources/demo",
         generated,
@@ -65,14 +65,38 @@ def test_markdown_overview_extracts_multiline_brief_description(monkeypatch):
     assert abstract == "This is the first abstract line.\nThis is the second abstract line."
 
 
-def test_index_references_are_replaced_inside_markdown_overview(monkeypatch):
+def test_directory_coverage_section_is_excluded_from_abstract(monkeypatch):
     _patch_semantic_limits(monkeypatch)
     processor = SemanticProcessor()
-    generated = "# README\n\nUse [1] to get started."
+    generated = (
+        "# docs-index\n\n"
+        "OpenViking documentation covering agent context, retrieval, and operations.\n\n"
+        "## Directory Coverage\n\n"
+        "This directory contains 513 direct entries; 32 were sampled.\n\n"
+        "## Quick Navigation\n\n"
+        "- Read the getting-started guide"
+    )
 
-    replaced = processor._replace_index_references(generated, {1: "README.md"})
+    overview, abstract = processor._normalize_overview_generation(generated)
 
-    assert replaced == "# README\n\nUse README.md to get started."
+    assert "513 direct entries" in overview
+    assert abstract == (
+        "OpenViking documentation covering agent context, retrieval, and operations."
+    )
+
+
+def test_link_references_are_replaced_inside_markdown_overview(monkeypatch):
+    _patch_semantic_limits(monkeypatch)
+    processor = SemanticProcessor()
+    generated = "# README\n\nSee [README](viking://input_sample_f1) to get started."
+
+    replaced = processor._replace_link_references(
+        generated, {"viking://input_sample_f1": "viking://resources/docs/README.md"}
+    )
+
+    assert replaced == (
+        "# README\n\nSee [README](viking://resources/docs/README.md) to get started."
+    )
 
 
 def test_abstract_truncation_prefers_complete_sentence(monkeypatch):

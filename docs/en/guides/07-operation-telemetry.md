@@ -339,7 +339,10 @@ from openviking_sdk import AsyncHTTPClient
 client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
 
-result = await client.find("memory dedup", telemetry=True)
+result = await client.find(
+    query="memory dedup",
+    options={"telemetry": True},
+)
 print(result["telemetry"]["summary"]["operation"])
 print(result["telemetry"]["summary"]["duration_ms"])
 ```

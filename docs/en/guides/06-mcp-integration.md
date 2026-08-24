@@ -149,11 +149,17 @@ Once connected, OpenViking exposes 15 tools:
 | `forget` | Delete any `viking://` URI (use `search` to find it first; pass `recursive=true` to delete a directory) | `uri`, `recursive` (optional) |
 | `health` | Check OpenViking service health | none |
 
-For MCP tools, `viking://user` is the authenticated user's workspace. For example,
-`viking://user/notes/todo.md` resolves to
-`viking://user/<current-user>/notes/todo.md`, regardless of the file name or
-extension. Canonical URIs containing that exact current user id are also accepted;
-MCP does not use this shorthand for cross-user access.
+To address your own workspace from an MCP tool, use the home alias `viking://~`. It
+expands to `viking://user/<current-user>` on every control plane (REST API, `ov` CLI,
+SDKs, and MCP alike), so `viking://~/notes/todo.md` resolves to
+`viking://user/<current-user>/notes/todo.md`. Responses always echo the expanded
+canonical URI, and those canonical URIs are accepted as tool input as well.
+
+The uid-less spelling `viking://user/<segment>/...` (`memories`, `resources`, `skills`,
+`peers`, `privacy`, `sessions`) is no longer accepted; such calls fail with an error that
+points at the `viking://~/...` replacement. `viking://user` on its own is the container of
+user spaces, not a shortcut to yours. See
+[Viking URI](../concepts/04-viking-uri.md) for details.
 
 > **Note**: MCP exposes the minimum closure for watch management (`list_watches` + `cancel_watch`). Pause / resume / trigger and the unified `update` verb are intentionally not exposed here — use the REST `/api/v1/watches/*` endpoints or the `ov task watch` CLI for those operations.
 

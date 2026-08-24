@@ -147,3 +147,62 @@ async def test_initialize_memory_files_respects_memory_type_filter(monkeypatch):
     await registry.initialize_memory_files(ctx, allowed_memory_types={"profile"})
 
     assert fake_fs.written_uris == ["viking://user/alice/memories/profile.md"]
+
+
+async def test_initialize_memory_files_renders_fields_without_init_value_as_empty(monkeypatch):
+    """Fields lacking an explicit init_value must not leak ``{{ field }}`` placeholders.
+
+    Regression test for the bug where ``identity.md`` was written to disk with
+    literal Jinja placeholders (e.g. ``{{ vibe }}``) for every field that did not
+    declare an ``init_value``. See issue #4207.
+    """
+
+    class FakeVikingFS:
+        def __init__(self):
+            self.written = {}
+
+        async def read_file(self, uri, ctx=None):
+            raise FileNotFoundError(uri)
+
+        async def write_file(self, uri, content, ctx=None):
+            del ctx
+            self.written[uri] = content
+
+    def schema(memory_type: str, filename: str) -> MemoryTypeSchema:
+        return MemoryTypeSchema(
+            memory_type=memory_type,
+            directory="viking://user/{{ user_space }}/memories",
+            filename_template=filename,
+            content_template=(
+                "- **HasInit:** {{ has_init }}\n"
+                "- **NoInit:** {{ no_init }}\n"
+                "- **AlsoNoInit:** {{ also_no_init }}\n"
+            ),
+            fields=[
+                MemoryField(
+                    name="has_init",
+                    field_type=FieldType.STRING,
+                    init_value="filled",
+                ),
+                MemoryField(name="no_init", field_type=FieldType.STRING),
+                MemoryField(name="also_no_init", field_type=FieldType.STRING),
+            ],
+        )
+
+    fake_fs = FakeVikingFS()
+    monkeypatch.setattr("openviking.storage.viking_fs.get_viking_fs", lambda: fake_fs)
+
+    registry = MemoryTypeRegistry(load_schemas=False)
+    registry.register(schema("identity", "identity.md"))
+
+    ctx = type("Ctx", (), {"user": type("User", (), {"user_id": "bob"})()})()
+    await registry.initialize_memory_files(ctx)
+
+    content = fake_fs.written["viking://user/bob/memories/identity.md"]
+    assert "{{" not in content, f"unrendered placeholder leaked: {content!r}"
+    assert "{{ no_init }}" not in content
+    assert "{{ also_no_init }}" not in content
+    assert "filled" in content
+    # Fields without init_value render as empty, not as the literal placeholder.
+    assert "- **NoInit:** \n" in content
+    assert "- **AlsoNoInit:** \n" in content

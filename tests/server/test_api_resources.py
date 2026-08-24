@@ -527,7 +527,7 @@ async def test_add_resource_with_resources_root_to_uses_child_uri(
     assert body["result"]["root_uri"] == "viking://resources/tt_b"
 
 
-async def test_add_resource_with_user_resources_short_parent_initializes_root(
+async def test_add_resource_with_home_alias_resources_parent_initializes_root(
     app,
     client: httpx.AsyncClient,
     upload_temp_dir,
@@ -546,8 +546,8 @@ async def test_add_resource_with_user_resources_short_parent_initializes_root(
         "/api/v1/resources",
         json={
             "temp_file_id": archive_path.name,
-            "parent": "viking://user/resources",
-            "reason": "test user resource short parent import",
+            "parent": "viking://~/resources",
+            "reason": "test home alias resource parent import",
             "wait": True,
         },
     )

@@ -354,7 +354,7 @@ class _SingleAccountBackend:
                     ]
             except Exception as e:
                 logger.error("Error reading existing record before partial update: %s", e)
-                return ""
+                raise
 
             if existing_records:
                 existing = dict(existing_records[0])
@@ -665,7 +665,7 @@ class _SingleAccountBackend:
             return await self._async_adapter.call("count", filter=filter)
         except Exception as e:
             logger.error("Error counting records: %s", e)
-            return 0
+            raise
 
     async def clear(self) -> bool:
         try:

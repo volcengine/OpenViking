@@ -45,7 +45,7 @@ List directory contents.
 
 ```python
 entries = client.ls(
-    "viking://resources/",
+    uri="viking://resources/",
     node_limit=200,
     sort_by="mtime",
     sort_order="desc",
@@ -141,7 +141,7 @@ Get directory tree structure.
 **Python HTTP SDK**
 
 ```python
-entries = client.tree("viking://resources/")
+entries = client.tree(uri="viking://resources/")
 for entry in entries:
     type_str = "dir" if entry['isDir'] else "file"
     print(f"{entry['rel_path']} - {type_str}")
@@ -225,12 +225,12 @@ Get file or directory status information. For directories, returns the count of 
 **Python HTTP SDK**
 
 ```python
-info = client.stat("viking://resources/docs/api.md")
+info = client.stat(uri="viking://resources/docs/api.md")
 print(f"Size: {info['size']}")
 print(f"Is directory: {info['isDir']}")
 
 # For directories, returns item count
-dir_info = client.stat("viking://resources/docs")
+dir_info = client.stat(uri="viking://resources/docs")
 if dir_info.get('isDir'):
     print(f"Item count: {dir_info.get('count')}")
 ```
@@ -328,7 +328,7 @@ Get logical extended attributes for a file or directory.
 **Python SDK (HTTP)**
 
 ```python
-attrs = client.attrs("viking://resources/docs/api.md")
+attrs = client.attrs(uri="viking://resources/docs/api.md")
 print(attrs["attrs"]["tags"])
 ```
 
@@ -435,8 +435,8 @@ Create a directory.
 **Python HTTP SDK**
 
 ```python
-client.mkdir("viking://resources/new-project/")
-client.mkdir("viking://resources/new-project/", description="API docs directory")
+client.mkdir(uri="viking://resources/new-project/")
+client.mkdir(uri="viking://resources/new-project/", description="API docs directory")
 ```
 
 **TypeScript SDK**
@@ -510,10 +510,10 @@ Invalid URI formats, unsupported schemes, and non-public scopes return `INVALID_
 
 ```python
 # Remove single file
-client.rm("viking://resources/docs/old.md")
+client.rm(uri="viking://resources/docs/old.md")
 
 # Remove directory recursively
-client.rm("viking://resources/old-project/", recursive=True)
+client.rm(uri="viking://resources/old-project/", recursive=True)
 ```
 
 **TypeScript SDK**
@@ -603,8 +603,8 @@ Move file or directory.
 
 ```python
 client.mv(
-    "viking://resources/old-name/",
-    "viking://resources/new-name/"
+    from_uri="viking://resources/old-name/",
+    to_uri="viking://resources/new-name/",
 )
 ```
 

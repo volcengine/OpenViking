@@ -241,6 +241,12 @@ def resolve_uri(
         return _resolve_user_uri(parts)
     if scope == "agent":
         return ResolvedNamespace(uri=canonical_uri, scope=scope)
+    if scope == "~":
+        # The home alias is expanded at the request boundary only. Reaching the
+        # canonical parser with it (root-role requests, internal callers, storage
+        # paths) means no identity is available, so fail closed instead of
+        # creating a literal '~' namespace.
+        raise NamespaceShapeError(f"Home alias URI is not canonical: {'/'.join(parts)}")
     if scope == "session":
         raise NamespaceShapeError(f"Legacy session URI is not canonical: {'/'.join(parts)}")
     if scope in {"resources", "temp", "queue", "upload"}:
@@ -249,17 +255,34 @@ def resolve_uri(
 
 
 def resolve_request_uri(uri: str, ctx: RequestContext) -> str:
-    """Resolve supported current-user shorthands at an authenticated request boundary."""
+    """Resolve supported URI aliases at an authenticated request boundary.
+
+    Supported aliases are the ``~`` home alias and the legacy ``session`` scope.
+    The uid-less ``viking://user/<reserved>`` shorthand is no longer expanded:
+    it fails closed with a hint pointing at ``viking://~/...``.
+    """
     if ctx.role in {Role.USER, Role.ADMIN}:
         return resolve_current_user_uri(uri, ctx)
     return resolve_uri(uri).uri
 
 
 def resolve_current_user_uri(uri: str, ctx: RequestContext) -> str:
-    """Resolve a URI field whose contract explicitly denotes the current user."""
+    """Resolve a URI field whose contract explicitly denotes the current user.
+
+    Supported aliases are ``viking://~`` (the home alias) and the legacy
+    ``viking://session/...`` scope. ``viking://user/<reserved-segment>`` used to
+    expand to the caller's space; it now fails closed with a corrective hint,
+    because the same spelling is a valid explicit-uid URI for a user literally
+    named after the reserved segment.
+    """
     parts = uri_parts(uri)
     if not parts:
         return "viking://"
+
+    if parts[0] == "~":
+        if len(parts) == 1:
+            return canonical_user_root(ctx)
+        return f"{canonical_user_root(ctx)}/{'/'.join(parts[1:])}"
 
     if parts[0] == "session":
         if len(parts) == 1:
@@ -269,12 +292,24 @@ def resolve_current_user_uri(uri: str, ctx: RequestContext) -> str:
             canonical = f"{canonical}/{'/'.join(parts[2:])}"
         return canonical
 
-    if parts[0] == "user":
-        if len(parts) == 1:
-            return canonical_user_root(ctx)
-        if parts[1] != ctx.user.user_id and _is_user_relative_root_segment(parts[1]):
-            return f"{canonical_user_root(ctx)}/{'/'.join(parts[1:])}"
+    if (
+        parts[0] == "user"
+        and len(parts) >= 2
+        # Self-id escape: a caller literally named e.g. "resources" keeps
+        # viking://user/resources as their canonical root.
+        and parts[1] != ctx.user.user_id
+        and _is_reserved_user_root_segment(parts[1])
+    ):
+        rest = "/".join(parts[1:])
+        raise NamespaceShapeError(
+            f"'viking://user/{rest}' no longer expands to the current user's space: "
+            f"'{parts[1]}' is a reserved name, not a user id. Use 'viking://~/{rest}' "
+            f"for the current user, or 'viking://user/{{user_id}}/{rest}' for an "
+            f"explicit user."
+        )
 
+    # Bare 'viking://user' and explicit-uid forms fall through to the canonical
+    # parser; the bare form keeps container semantics (is_container=True).
     return resolve_uri(uri).uri
 
 
@@ -403,5 +438,12 @@ def _resolve_user_uri(
     )
 
 
-def _is_user_relative_root_segment(segment: str) -> bool:
+def _is_reserved_user_root_segment(segment: str) -> bool:
+    """Return whether a first-level user segment is a reserved space name.
+
+    Reserved names (``memories``, ``resources``, ``skills``, ``peers``,
+    ``privacy``, ``sessions``) are rejected at request boundaries when they
+    appear without an explicit user id, because they are ambiguous with a user
+    literally named after them.
+    """
     return segment in _CONTENT_TYPES_BY_SCOPE["user"] or segment in _USER_RELATIVE_ROOT_SEGMENTS

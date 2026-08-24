@@ -44,7 +44,7 @@ class RuntimeActorPeerTrackingClient:
 @pytest.mark.asyncio
 async def test_real_create_agent_resolves_actor_peer_from_runtime_context():
     client = RuntimeActorPeerTrackingClient(
-        {"viking://user/memories/profile.md": "Runtime-scoped memory."}
+        {"viking://~/memories/profile.md": "Runtime-scoped memory."}
     )
 
     def resolve_actor_peer(_state: dict[str, Any], runtime: Any) -> str:

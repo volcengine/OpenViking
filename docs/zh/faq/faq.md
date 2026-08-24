@@ -162,15 +162,15 @@ Embedding、VLM、存储等服务配置由 OpenViking Server 通过 `ov.conf` �
 ```python
 # 添加单个文件
 await client.add_resource(
-    "./document.pdf",
-    reason="项目技术文档",  # 描述资源用途，提升检索质量
-    to="viking://resources/docs/"  # 指定存储位置
+    path="./document.pdf",
+    to="viking://resources/docs/",  # 指定存储位置
+    options={"reason": "项目技术文档"},  # 描述资源用途，提升检索质量
 )
 
 # 添加网页
 await client.add_resource(
-    "https://example.com/api-docs",
-    reason="API 参考文档"
+    path="https://example.com/api-docs",
+    options={"reason": "API 参考文档"},
 )
 
 # 等待处理完成
@@ -189,14 +189,14 @@ await client.wait_processed()
 ```python
 # find(): 简单直接的语义搜索
 results = await client.find(
-    "OAuth 认证流程",
-    target_uri="viking://resources/"
+    query="OAuth 认证流程",
+    target_uri="viking://resources/",
 )
 
 # search(): 复杂任务，需要意图分析
 results = await client.search(
-    "帮我实现用户登录功能",
-    session_info=session
+    query="帮我实现用户登录功能",
+    session_id=session.session_id,
 )
 ```
 
@@ -209,15 +209,21 @@ results = await client.search(
 会话管理是 OpenViking 的核心能力，支持对话追踪和记忆提取：
 
 ```python
+from openviking_sdk import TextPart
+
 # 创建会话
-session = client.session()
+session_info = await client.create_session()
+session = client.session(session_id=session_info["session_id"])
 
 # 添加对话消息
-await session.add_message("user", [{"type": "text", "text": "帮我分析这段代码的性能问题"}])
-await session.add_message("assistant", [{"type": "text", "text": "我来分析一下..."}])
-
-# 标记使用的上下文（用于追踪）
-await session.used(["viking://resources/code/main.py"])
+await session.add_message(
+    role="user",
+    parts=[TextPart(text="帮我分析这段代码的性能问题")],
+)
+await session.add_message(
+    role="assistant",
+    parts=[TextPart(text="我来分析一下...")],
+)
 
 # 提交会话，触发记忆提取
 await session.commit()
@@ -233,16 +239,16 @@ OpenViking 内置 `profile`、`preferences`、`entities`、`events`、`identity`
 
 ```python
 # 列出目录内容
-items = await client.ls("viking://resources/")
+items = await client.ls(uri="viking://resources/")
 
 # 读取完整内容（L2）
-content = await client.read("viking://resources/doc.md")
+content = await client.read(uri="viking://resources/doc.md")
 
 # 获取摘要（L0）
-abstract = await client.abstract("viking://resources")
+abstract = await client.abstract(uri="viking://resources")
 
 # 获取概览（L1）
-overview = await client.overview("viking://resources")
+overview = await client.overview(uri="viking://resources")
 ```
 
 ## 检索优化
@@ -285,7 +291,7 @@ OpenViking 使用分数传播机制：
 
 1. **未等待处理完成**
    ```python
-   await client.add_resource("./doc.pdf")
+   await client.add_resource(path="./doc.pdf")
    await client.wait_processed()  # 必须等待
    ```
 
@@ -310,7 +316,7 @@ OpenViking 使用分数传播机制：
 1. **确认资源已处理完成**
    ```python
    # 检查资源是否存在
-   items = await client.ls("viking://resources/")
+   items = await client.ls(uri="viking://resources/")
    ```
 
 2. **检查 `target_uri` 过滤条件**
@@ -323,7 +329,7 @@ OpenViking 使用分数传播机制：
 
 4. **检查 L0 摘要质量**
    ```python
-   abstract = await client.abstract("viking://resources/your-doc")
+   abstract = await client.abstract(uri="viking://resources/your-doc")
    print(abstract)  # 确认摘要是否准确反映内容
    ```
 
@@ -346,7 +352,10 @@ OpenViking 使用分数传播机制：
 
 4. **查看提取的记忆**
    ```python
-   memories = await client.find("", target_uri="viking://user/memories/")
+   memories = await client.find(
+       query="",
+       target_uri="viking://~/memories/",
+   )
    ```
 
 ### 性能问题

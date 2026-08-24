@@ -96,8 +96,8 @@ _, err := client.AdminRegisterUserWithOptions(ctx, "acme", "alice", "user", &ope
     Seed: &seed,
     UserConfig: map[string]any{
         "add_targets": map[string]any{
-            "resource_uri": "viking://user/resources/project-a",
-            "skill_uri":    "viking://user/skills",
+            "resource_uri": "viking://~/resources/project-a",
+            "skill_uri":    "viking://~/skills",
         },
     },
 })

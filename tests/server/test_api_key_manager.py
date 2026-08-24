@@ -347,6 +347,16 @@ async def test_get_users(manager: APIKeyManager):
     assert roles["alice"] == "admin"
     assert roles["bob"] == "user"
 
+    await manager.begin_user_deletion(
+        acct,
+        "bob",
+        task_id="delete-bob",
+        owner_account_id=acct,
+        owner_user_id="alice",
+    )
+    users = manager.get_users(acct)
+    assert {u["user_id"] for u in users} == {"alice"}
+
 
 # ---- Persistence tests ----
 
@@ -1070,3 +1080,30 @@ async def test_store_signature_stable_without_changes(manager_service):
     first = await writer.compute_store_signature()
     second = await writer.compute_store_signature()
     assert first == second
+
+
+async def test_store_signature_stats_bypass_cache(manager_service, monkeypatch):
+    """Signature stats must bypass plugin-local caches so S3 metadata stays fresh.
+
+    Without bypass_cache the S3FS sliding-TTL stat cache pins stale (size, modTime)
+    and the watcher never observes writer-side changes.
+    """
+    writer = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await writer.load()
+    acct = _uid()
+    await writer.create_account(acct, "alice")
+
+    real_stat = writer._legacy._async_agfs.stat
+    seen_bypass: list = []
+
+    async def _spy_stat(path, *, fs_ctx=None, bypass_cache=False):
+        seen_bypass.append(bypass_cache)
+        return await real_stat(path, fs_ctx=fs_ctx, bypass_cache=bypass_cache)
+
+    monkeypatch.setattr(writer._legacy._async_agfs, "stat", _spy_stat)
+
+    await writer.compute_store_signature()
+
+    # accounts.json + one users.json were stat'd, all with bypass_cache=True.
+    assert seen_bypass
+    assert all(seen_bypass)

@@ -6,11 +6,13 @@ Session 负责管理对话消息、记录上下文使用、提取长期记忆。
 
 **生命周期**：创建 → 交互 → 提交
 
-通过 session_id 获取会话时，默认不会自动创建不存在的会话；如果需要自动创建，请显式使用 `client.get_session(..., auto_create=True)`。
+通过 session_id 获取会话时不会创建会话。请先创建会话，再通过
+`client.session(session_id=...)` 追加消息或提交会话。
 
 ```python
-session = client.session(session_id="chat_001")
-session.add_message("user", [TextPart("...")])
+session_info = client.create_session(session_id="chat_001")
+session = client.session(session_id=session_info["session_id"])
+session.add_message(role="user", content="...")
 session.commit()
 ```
 
@@ -18,49 +20,39 @@ session.commit()
 
 | 方法 | 说明 |
 |------|------|
-| `add_message(role, parts)` | 添加消息 |
-| `used(contexts, skill)` | 记录使用的上下文/技能 |
+| `add_message(role, content=None, parts=None, options=None, peer_id=None)` | 添加消息 |
 | `commit()` | 提交：归档（同步） + 摘要生成和记忆提取（异步后台） |
 | `get_task(task_id)` | 查询后台任务状态 |
 
 ### add_message
 
 ```python
+from openviking_sdk import ContextPart, ImagePart, TextPart
+
 session.add_message(
-    "user",
-    [TextPart("How to configure embedding?")]
+    role="user",
+    content="How to configure embedding?",
 )
 
 session.add_message(
-    "assistant",
-    [
-        TextPart("Here's how..."),
-        ContextPart(uri="viking://user/memories/profile.md"),
+    role="assistant",
+    parts=[
+        TextPart(text="Here's how..."),
+        ContextPart(
+            uri="viking://~/memories/profile.md",
+            context_type="memory",
+            abstract="User profile",
+        ),
     ]
 )
 
 session.add_message(
-    "user",
-    [
-        TextPart("Remember this studio layout."),
+    role="user",
+    parts=[
+        TextPart(text="Remember this studio layout."),
         ImagePart(url="https://example.com/studio.png", detail="auto"),
     ]
 )
-```
-
-### used
-
-```python
-# 记录使用的上下文
-session.used(contexts=["viking://user/memories/profile.md"])
-
-# 记录使用的技能
-session.used(skill={
-    "uri": "viking://user/skills/code-search",
-    "input": "search config",
-    "output": "found 3 files",
-    "success": True
-})
 ```
 
 ### commit
@@ -75,7 +67,7 @@ result = session.commit()
 # }
 
 # 查询后台任务进度
-task = client.get_task(result["task_id"])
+task = client.get_task(task_id=result["task_id"])
 # task["status"]: "pending" | "running" | "completed" | "failed"
 # sum(task["result"]["memories_extracted"].values()): 3
 ```
@@ -205,10 +197,19 @@ LLM 去重决策 → candidate(skip/create/none) + item(merge/delete)
       }
     ]
   },
+  "skipped_operations": [
+    {
+      "memory_type": "events",
+      "page_id": 101,
+      "reason_code": "invalid_ranges",
+      "reason": "无法解析出有效的事件范围"
+    }
+  ],
   "summary": {
     "total_adds": 1,
     "total_updates": 1,
-    "total_deletes": 1
+    "total_deletes": 1,
+    "total_skipped": 1
   }
 }
 ```
@@ -220,9 +221,10 @@ LLM 去重决策 → candidate(skip/create/none) + item(merge/delete)
 | `operations.adds` | 新增的记忆（无 `before`） |
 | `operations.updates` | 修改的记忆（含 `before` 和 `after`） |
 | `operations.deletes` | 删除的记忆（含 `deleted_content`） |
+| `skipped_operations` | 策略性跳过的操作及稳定原因码；不代表文件变更 |
 | `summary` | 各操作类型的计数 |
 
-即使没有记忆操作，也会写入空结构的 `memory_diff.json`（所有计数为零）。
+如果没有实际变更或策略性跳过，也会写入空结构的 `memory_diff.json`（所有计数为零）。
 
 ## 存储结构
 
@@ -242,7 +244,7 @@ viking://user/{user_id}/sessions/{session_id}/
 └── tools/
     └── {tool_id}/tool.json
 
-viking://user/memories/
+viking://~/memories/
 ├── profile.md
 ├── identity.md
 ├── soul.md
@@ -254,10 +256,11 @@ viking://user/memories/
 └── experiences/
 ```
 
-`viking://user/sessions/{session_id}` 是相对当前请求用户的短路径，服务端会将其
-规范化为 `viking://user/{user_id}/sessions/{session_id}`。
-`viking://session/{session_id}` 会作为同一个当前用户 session 路径的向后兼容别名
-被接受，不是独立的存储根。
+`viking://~/sessions/{session_id}` 使用家目录别名，服务端会按认证身份将其展开为
+`viking://user/{user_id}/sessions/{session_id}`。无 uid 的写法
+`viking://user/sessions/{session_id}` 不再被接受，请求会报错并提示改用 `viking://~/...`。
+`viking://session/{session_id}` 仍会作为同一个 session 路径的向后兼容别名被接受，
+不是独立的存储根。
 
 ## 相关文档
 

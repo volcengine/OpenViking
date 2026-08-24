@@ -107,6 +107,21 @@ class TestMatchedContextSearchTags:
         assert d["resources"][0]["tags"] == ["team=infra", "project=viking"]
         assert "search_tags" not in d["resources"][0]
 
+    def test_context_to_dict_discards_legacy_invalid_tags(self):
+        ctx = MatchedContext(
+            uri="viking://resources/docs/arch.md",
+            context_type=ContextType.RESOURCE,
+            level=2,
+            search_tags=["default", "team=infra", "bad=", "project=viking"],
+        )
+
+        result = FindResult(memories=[], resources=[ctx], skills=[])
+
+        assert result.to_dict()["resources"][0]["tags"] == [
+            "team=infra",
+            "project=viking",
+        ]
+
     def test_context_to_dict_defaults_empty_tags(self):
         ctx = MatchedContext(
             uri="viking://resources/docs/arch.md",

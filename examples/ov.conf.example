@@ -157,6 +157,7 @@
         "provider": "openai-codex",
         "model": "gpt-5.3-codex",
         "api_base": "https://chatgpt.com/backend-api/codex",
+        "reasoning_effort": "xhigh",
         "temperature": 0.0,
         "max_retries": 2,
     },

@@ -46,6 +46,10 @@ class VLMCredential(BaseModel):
         default=None, description="Extra JSON body fields"
     )
     stream: Optional[bool] = Field(default=None, description="Enable streaming mode")
+    reasoning_effort: Optional[str] = Field(
+        default=None,
+        description="Reasoning effort for OpenAI-compatible reasoning models",
+    )
     max_tokens: Optional[int] = Field(
         default=None,
         gt=0,
@@ -163,6 +167,11 @@ class VLMConfig(BaseModel):
         default=False, description="Enable streaming mode for OpenAI-compatible providers"
     )
 
+    reasoning_effort: Optional[str] = Field(
+        default=None,
+        description="Reasoning effort for OpenAI-compatible reasoning models",
+    )
+
     # New multi-credential configuration
     credentials: List[VLMCredential] = Field(
         default_factory=list,
@@ -273,6 +282,7 @@ class VLMConfig(BaseModel):
             or self.extra_headers
             or self.extra_request_body
             or self.stream
+            or self.reasoning_effort
             or self.forward_api_key is not None
         ):
             if self.provider not in self.providers:
@@ -295,6 +305,8 @@ class VLMConfig(BaseModel):
                 self.providers[self.provider]["extra_request_body"] = self.extra_request_body
             if self.stream and "stream" not in self.providers[self.provider]:
                 self.providers[self.provider]["stream"] = self.stream
+            if self.reasoning_effort and "reasoning_effort" not in self.providers[self.provider]:
+                self.providers[self.provider]["reasoning_effort"] = self.reasoning_effort
 
     def _normalize_credentials(self):
         """Normalize credentials configuration:
@@ -333,6 +345,7 @@ class VLMConfig(BaseModel):
                     if primary_cfg.get("stream") is not None
                     else self.stream
                 ),
+                reasoning_effort=(primary_cfg.get("reasoning_effort") or self.reasoning_effort),
                 max_tokens=self.max_tokens,
             )
             migrated_credentials.append(primary_cred)
@@ -361,6 +374,9 @@ class VLMConfig(BaseModel):
                     backup_cfg.get("stream")
                     if backup_cfg.get("stream") is not None
                     else self.backup.stream
+                ),
+                reasoning_effort=(
+                    backup_cfg.get("reasoning_effort") or self.backup.reasoning_effort
                 ),
                 max_tokens=self.backup.max_tokens,
             )
@@ -402,6 +418,9 @@ class VLMConfig(BaseModel):
                             if provider_cfg.get("stream") is not None
                             else self.stream
                         ),
+                        reasoning_effort=(
+                            provider_cfg.get("reasoning_effort") or self.reasoning_effort
+                        ),
                     )
                 )
 
@@ -432,6 +451,8 @@ class VLMConfig(BaseModel):
                 cred.extra_request_body = self.extra_request_body
             if cred.stream is None:
                 cred.stream = self.stream
+            if not cred.reasoning_effort:
+                cred.reasoning_effort = self.reasoning_effort
 
     def _has_legacy_provider_config(self) -> bool:
         """Check if there's legacy provider config (not credentials-based)."""
@@ -485,6 +506,8 @@ class VLMConfig(BaseModel):
             config["extra_request_body"] = self.extra_request_body
         if self.stream and "stream" not in config:
             config["stream"] = self.stream
+        if self.reasoning_effort and "reasoning_effort" not in config:
+            config["reasoning_effort"] = self.reasoning_effort
         return config
 
     def _provider_has_usable_credentials(self, provider_name: str, config: Dict[str, Any]) -> bool:
@@ -498,6 +521,26 @@ class VLMConfig(BaseModel):
             return has_codex_auth_available()
         return False
 
+    def _get_provider_config_from_credential(self, cred: VLMCredential) -> Dict[str, Any]:
+        config: Dict[str, Any] = {}
+        if cred.api_key:
+            config["api_key"] = cred.api_key
+        if cred.api_base:
+            config["api_base"] = cred.api_base
+        if cred.api_version:
+            config["api_version"] = cred.api_version
+        if cred.forward_api_key is not None:
+            config["forward_api_key"] = cred.forward_api_key
+        if cred.extra_headers:
+            config["extra_headers"] = cred.extra_headers
+        if cred.extra_request_body:
+            config["extra_request_body"] = cred.extra_request_body
+        if cred.stream:
+            config["stream"] = cred.stream
+        if cred.reasoning_effort:
+            config["reasoning_effort"] = cred.reasoning_effort
+        return config
+
     def _match_provider(self, model: str | None = None) -> tuple[Dict[str, Any] | None, str | None]:
         """Match provider config.
 
@@ -508,18 +551,7 @@ class VLMConfig(BaseModel):
         # If credentials are configured, use the first one
         if self.credentials:
             cred = self.credentials[0]
-            return (
-                {
-                    "api_key": cred.api_key,
-                    "api_base": cred.api_base,
-                    "api_version": cred.api_version,
-                    "forward_api_key": cred.forward_api_key,
-                    "extra_headers": cred.extra_headers,
-                    "extra_request_body": cred.extra_request_body,
-                    "stream": cred.stream,
-                },
-                cred.provider,
-            )
+            return self._get_provider_config_from_credential(cred), cred.provider
 
         if self.provider:
             return self._get_provider_config_by_name(self.provider) or {}, self.provider
@@ -620,6 +652,8 @@ class VLMConfig(BaseModel):
             result["extra_headers"] = credential.extra_headers
         if credential.extra_request_body:
             result["extra_request_body"] = credential.extra_request_body
+        if credential.reasoning_effort:
+            result["reasoning_effort"] = credential.reasoning_effort
 
         return result
 
@@ -656,6 +690,8 @@ class VLMConfig(BaseModel):
                 result["extra_headers"] = config.get("extra_headers")
             if config.get("extra_request_body"):
                 result["extra_request_body"] = config.get("extra_request_body")
+            if config.get("reasoning_effort"):
+                result["reasoning_effort"] = config.get("reasoning_effort")
 
         return result
 

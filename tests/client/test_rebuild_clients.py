@@ -176,6 +176,55 @@ def test_sync_http_client_reindex_forwards_to_async_client():
     )
 
 
+async def test_async_http_client_reindex_sends_non_recursive_flag():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    with patch.object(client, "_handle_response", return_value={"status": "completed"}):
+        await client.reindex(
+            "viking://resources/demo",
+            mode="semantic_and_vectors",
+            recursive=False,
+        )
+
+    fake_http.post.assert_awaited_once_with(
+        "/api/v1/content/reindex",
+        json={
+            "uri": "viking://resources/demo",
+            "mode": "semantic_and_vectors",
+            "wait": True,
+            "dry_run": False,
+            "recursive": False,
+        },
+    )
+
+
+def test_sync_http_client_reindex_forwards_non_recursive_flag():
+    client = SyncHTTPClient(url="http://localhost:1933")
+    with patch.object(
+        client._async_client,
+        "reindex",
+        new_callable=Mock,
+        return_value={"status": "completed"},
+    ) as mock_reindex:
+        with patch(
+            "openviking_sdk.client.run_async", return_value={"status": "completed"}
+        ):
+            client.reindex(
+                "viking://resources/demo",
+                mode="semantic_and_vectors",
+                recursive=False,
+            )
+
+    mock_reindex.assert_called_once_with(
+        uri="viking://resources/demo",
+        mode="semantic_and_vectors",
+        wait=True,
+        dry_run=False,
+        recursive=False,
+    )
+
+
 def test_sync_http_client_batch_add_messages_forwards_to_async_client():
     client = SyncHTTPClient(url="http://localhost:1933")
     messages = [

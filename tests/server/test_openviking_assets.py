@@ -480,7 +480,7 @@ async def test_resolve_endpoint_accepts_single_file_manifest(assets_client: http
     assert body["result"]["catalog"] == "single-file.yaml"
 
 
-async def test_resolve_endpoint_canonicalizes_current_user_target(
+async def test_resolve_endpoint_canonicalizes_home_alias_target(
     assets_client: httpx.AsyncClient,
 ):
     manifest = """\
@@ -488,7 +488,7 @@ protocol: openviking-assets/1
 catalog:
   - name: private
     connector: git
-    to: viking://user/resources/repos/private
+    to: viking://~/resources/repos/private
     params:
       repo_url: https://github.com/org/private
 """

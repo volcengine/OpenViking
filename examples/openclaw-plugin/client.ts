@@ -36,7 +36,7 @@ export type FsListResult = FsListEntry[];
 
 export type CaptureMode = "semantic" | "keyword";
 function userSessionUri(sessionId: string): string {
-  return `viking://user/sessions/${encodeURIComponent(sessionId)}`;
+  return `viking://~/sessions/${encodeURIComponent(sessionId)}`;
 }
 
 export type OpenVikingClientOptions = {

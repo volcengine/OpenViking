@@ -1358,6 +1358,7 @@ pub async fn handle_reindex(
     dry_run: bool,
     tags: Vec<String>,
     tag_mode: String,
+    recursive: bool,
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
@@ -1369,6 +1370,7 @@ pub async fn handle_reindex(
         dry_run,
         tags,
         &tag_mode,
+        recursive,
         ctx.output_format,
         ctx.compact,
     )

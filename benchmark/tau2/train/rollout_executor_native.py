@@ -80,7 +80,7 @@ class NativeTau2RolloutExecutor:
     concurrency: int = 20
     seed: int = 300
     retrieval_mode: str = "first_user_prewrite"
-    search_uri: str = "viking://user/memories/experiences"
+    search_uri: str = "viking://~/memories/experiences"
     retrieval_top_k: int = 4
     first_user_retrieval_top_k: int | None = None
     first_user_inject_top_k: int | None = None

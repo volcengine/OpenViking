@@ -47,7 +47,7 @@ class Settings:
     @property
     def memories_uri(self) -> str:
         """Conventional URI prefix where personal memories live."""
-        return "viking://user/memories/"
+        return "viking://~/memories/"
 
 
 def load_settings() -> Settings:

@@ -33,7 +33,7 @@
 | trae / trae-cn | MCP 透传 | 15 | ✅ | ✅ | ✅ | ✅ | ✅ | ❌¹ | 无类型区分² |
 | zcode | MCP 透传 | 15 | ✅ | ✅ | ✅ | ✅ | ✅ | ❌¹ | 无类型区分² |
 | opencode | MCP 透传（宿主加 `openviking_` 前缀） | 15 | ✅ | ✅ | ✅ | ✅ | ✅ | ❌¹ | 无类型区分² |
-| dsh | 原生注册（7 个 `viking_*`） | 7（全开） | ✅ | ✅ | ✅ | ✅ `viking_remember` | ✅ `viking_add_resource`（仅 URL） | ❌ | 无类型区分；query 删除需 score>0.8³ |
+| dsh | MCP 透传 | 15 | ✅ | ✅ | ✅ | ✅ | ✅ | ❌¹ | 无类型区分² |
 | pi | 原生注册（7 个 `viking_*`） | 7（注册需前置检查⁴） | ✅ | ✅ | ✅ | ✅ `viking_remember` | ✅ `viking_add_resource`（仅 URL） | ❌ | 无类型区分；query 删除需 score>0.8³ |
 | openclaw | 原生注册（15 个 `memory_*`/`ov_*` 等） | 15（默认开 14⁵） | ✅ `memory_recall` | ✅ `ov_search`（默认双 scope） | ✅ `ov_search` | ✅ `memory_store` | 默认关⁵ | ✅ `add_skill` | memory-only 白名单 + 单候选 score≥0.85 才自动删 |
 | hermes | 原生注册（6 个 `viking_*`） | 6（provider 激活即全开） | ✅ | ✅ | ✅ | ✅ `viking_remember`（直写文件，不走抽取） | ✅ 多协议摄取（HTTP/Git/SSH/本地文件/目录 zip） | ❌ | memory-only + `.md` 叶子校验 |
@@ -41,7 +41,7 @@
 
 ¹ MCP `write` 的可写域是 `viking://resources|user|agent`，暂不支持 MCP 新增 skill；新增 skill 的入口是 openclaw `add_skill`、`ov add-skill` 与 REST。
 ² MCP `forget` 不区分 memory/resource/skill 类型；存储层保留了命名空间根保护机制（裸 `viking://`、`viking://user`、`viking://agent` 根拒删），详见 [§3.5](#_3-5-写入与删除的类型边界)。
-³ dsh/pi 的 `viking_forget`：其 `recursive` 参数固定为 false（不删除目录），按 query 删除要求匹配分 >0.8。
+³ pi 的 `viking_forget`：其 `recursive` 参数固定为 false（不删除目录），按 query 删除要求匹配分 >0.8。
 ⁴ pi 工具注册前置：需未命中 bypassPatterns、`client.health()` 通过、`ensureSession` 成功（`index.ts:66-113`）；health 未通过时本轮不注册工具面。
 ⁵ openclaw 的 `add_resource` 需经过双重 opt-in 后方可开启。
 
@@ -57,7 +57,7 @@
 | trae / trae-cn | 4 hook + MCP 代理 | ✅ | ✅ | ❌ | ✅（6000） | ❌ | ✅ | ❌ |
 | zcode | 4 hook + MCP 代理 | ✅ | ✅ | ❌ | ✅（6000） | ❌ | ✅ | ❌ |
 | opencode | 7 plugin hook + MCP 代理 | ✅ | ✅ | ❌ | ✅（10000）+ repo 列表进 system prompt | ❌（compacting 前后各 commit 一次） | ✅ | ❌（有 toast） |
-| dsh | Cordis 原生插件（同进程） | ✅ | ✅ | ❌ | ✅（10000，每 session 一次） | ❌ | ✅ | ❌ |
+| dsh | Cordis 原生插件（同进程）+ MCP 代理 + skill | ✅ | ✅ | ❌ | ✅（10000，每 session 一次） | ❌ | ✅ | ❌ |
 | pi | 原生扩展（8 事件） | ✅ | ✅ | ❌ | ✅（10000，进 systemPrompt 每轮重拼） | ✅ **takeover**（默认开） | ✅ | ✅ |
 | openclaw | context-engine 插件（`ownsCompaction:true`） | ✅ | ❌（走 `/find`，该接口无 session_id 字段） | ❌ | ❌ | ✅ **ContextEngine 全接管** | ❌ 失败轮次不重放 | ❌ |
 | hermes | MemoryProvider 原生插件 | ✅ | 部分（仅 `search/search` 首选路径；降级 `/find` 不带） | ❌ | ❌（静态工具指引块） | ❌ | ✅ 进程内队列（不落盘） | ❌ |
@@ -113,7 +113,7 @@ per-harness 章节（档案卡）只写差异；所有共享事实均在本章�
 
 `examples/memory-plugin-shared/lib/` 下共 18 个 `.mjs` 模块，是 JS 系 harness 的唯一事实源。两种消费形态：
 
-1. **Vendoring（复制）**：由 `sync.mjs` 分发到 7 个目标，每个文件首行加 `// GENERATED FROM ... DO NOT EDIT.`（因此 vendored 副本行号 = lib 源行号 + 1，交叉读行号引用时要换算）。分发清单：claude-code / codex / opencode 各 16 个（HARNESS 13 + mcp-proxy-core + async-writer + batch-send）；dsh / pi 各 13；zcode 全量 18 个；agent-plugins 4 个。当前 HEAD 各目标与 lib 源零漂移。
+1. **Vendoring（复制）**：由 `sync.mjs` 分发到 7 个目标，每个文件首行加 `// GENERATED FROM ... DO NOT EDIT.`（因此 vendored 副本行号 = lib 源行号 + 1，交叉读行号引用时要换算）。分发清单：claude-code / codex / opencode 各 17 个（HARNESS 13 + mcp-proxy-core + mcp-proxy-config + async-writer + batch-send）；dsh 15 个（HARNESS 13 + stdio 代理需要的两个 mcp-proxy-* 模块）；pi 13 个；zcode 全量 19 个；agent-plugins 5 个。当前 HEAD 各目标与 lib 源零漂移。
 2. **相对路径直接 import（不复制）**：cursor / trae / trae-cn 直接 `import "../../memory-plugin-shared/lib/..."`；安装器把包与共享 lib 一起复制到 `~/.openviking/agent-integrations/{<client>,memory-plugin-shared}/`，使相对层级成立。运行期这个共享目录被这几个 harness 共用，任一重装都会整体覆盖。
 
 核心模块速览（细节在各维度章展开）：
@@ -167,7 +167,7 @@ per-harness 章节（档案卡）只写差异；所有共享事实均在本章�
 | trae / trae-cn | 配置驱动（`~/.trae{,-cn}/hooks.json` + 平台相关 mcp.json） | 一键 `--harness trae,trae-cn` | `tr-` / `trcn-` | 仅 env | ❌ |
 | zcode | 配置驱动（合并进 `~/.zcode/cli/config.json`，并强制 `hooks.enabled=true`） | 一键 `--harness zcode` | `zc-<sess_…>` | 仅 env | ❌ |
 | opencode | npm 插件 `@openviking/opencode-plugin`（config hook 自注入 MCP 条目） | 一键 `--harness opencode`（npm 注册 + 代理快照兜底）/ 手动 npm / 源码 | `oc-<id>`；subagent 格式为 `oc-<parent>__subagent-<child>` | `openviking-config.json`（4 级搜索）+ env | ✅ |
-| dsh | Cordis 同进程插件（`cordis.patch.yml` plugin group） | 执行 `dsh plugin add ./examples/dsh-memory-plugin`（统一安装器暂不覆盖 dsh） | `dsh-<session.id 原样>`；subagent 各自独立会话 | cordis patch config + 4 个 env（凭据优先级 patch>env，行为开关优先级 env>patch） | ❌ |
+| dsh | Cordis 同进程插件（`cordis.patch.yml` plugin group） | 统一安装器（会询问 profile，默认 `web`），或执行 `dsh plugin --profile web add @openviking/dsh-memory-plugin` | `dsh-<session.id 原样>`；subagent 各自独立会话 | cordis patch config + 4 个 env（凭据优先级 patch>env，行为开关优先级 env>patch） | ❌ |
 | pi | pi 原生扩展（目录装载，jiti 直译 TS） | 一键 `--harness pi`（含 `pi install` 注册） | `pi-<piSessionId>` | `config.json`（凭据字段由凭据链统一解析）+ env | ✅ |
 | openclaw | context-engine 插件（`ownsCompaction:true`）+ 15 工具 + 5 slash + 4 hook + HTTP 路由 | ClawHub 执行 `openclaw plugins install clawhub:@openviking/openclaw-plugin` 搭配 `openclaw openviking setup` / npm 安装器 / TOS 离线包 | UUID 原样小写，否则 `sha256(sessionKey)`；`memory_store` 临时会话 `memory-store-<ts>-<rand>` | `openclaw.json` 的 `plugins.entries.openviking.config`（严格校验：存在未知键/非法值时插件进入 setup-only 模式）+ 少量 env | ✅ `openclaw openviking setup`（交互/非交互 + key 角色探测 + 版本兼容检查） |
 | hermes | Hermes bundled MemoryProvider（随 Hermes 发布，无需装插件） | 执行 `hermes memory setup openviking`（curses 向导）或手动 `config set memory.provider openviking` + `.env` | 由 Hermes 生成 `%Y%m%d_%H%M%S_<hex6>`，插件原样使用 | `.env`（`OPENVIKING_*`）或 ovcli.conf 联动（`use_ovcli_config` 模式会清空 .env 里的 5 个对应变量）+ config.yaml | ✅（多层菜单） |
@@ -175,7 +175,7 @@ per-harness 章节（档案卡）只写差异；所有共享事实均在本章�
 
 ### 3.1.2 统一安装器
 
-统一安装脚本 `examples/memory-plugin-shared/install.sh`（3253 行）覆盖 9 个 harness id：`claude, codex, cursor, trae, trae-cn, trae-cli, zcode, opencode, pi`（其中 dsh 与 openclaw 走各自渠道；`trae-cli` 则复用 codex 安装流程，[§3.1.1](#_3-1-1-判定矩阵)）。要点如下：
+统一安装脚本 `examples/memory-plugin-shared/install.sh`（3424 行）覆盖 10 个 harness id：`claude, codex, cursor, trae, trae-cn, trae-cli, zcode, opencode, pi, dsh`（其中 openclaw 走自有渠道；`trae-cli` 则复用 codex 安装流程，[§3.1.1](#_3-1-1-判定矩阵)）。要点如下：
 
 - 双分发：`--dist github|tos`；三源：`--source remote|archive|dev`。以 `bash <(curl …)` 方式执行时会从 `/dev/tty` 读取输入，从而保留交互。
 - 官方 docs 的规范一键命令是不带 `--harness` 的裸命令（执行后进入 TUI 多选）；而各插件自带的 setup-helper 转发脚本在调用时会自动补 `--harness`。
@@ -232,7 +232,7 @@ JS 系 harness 的召回逻辑均由 `recall-core.mjs` 中的三级降级链处�
 
 1. **context face**：调用 `POST /api/v1/search/search`，参数设定为 `mode:"context"` 且 `purpose:"coding"`。其核心设计原则为"只声明意图，机制交服务端"：对于 `quotas`/`max_tokens`/`query_expansion`/`rewrite_max_bullets` 等参数，仅在用户显式配置时（带有 configured 哨兵字段）才会发送，否则直接采用服务端的默认设定。
 2. **legacy `/recall`**：若 context face 请求返回 400/422 错误，且响应报文包含 `extra`/`mode`/`unexpected` 等特征字段，则判定对接了旧版服务端。此时会在本地写入 6 小时的负缓存（路径为 `~/.openviking/state/context-face.json`，该文件全机共享，一旦被任一 harness 标记，同机所有 JS 系 harness 均会跳过 context face 阶段）。随后降级调用已弃用的 `/api/v1/search/recall` 接口；若 `peer_scope` 被拒，则去掉该参数重试一次。
-3. **raw find 兜底**：并发请求 `viking://user/memories` 与 `viking://user/skills`，调用两次 `POST /search/find`（注意：resources 被刻意排除在自动召回之外，资源类文档由模型主动调用 `search` 获取）。客户端收到结果后进行本地重排（权重规则为：leaf +0.12 / 时间意图 +0.10 / 偏好意图 +0.08 / 词面重叠 ≤0.2）、去重，最后按客户端 token 预算装填。`recallTokenBudget`、`recallMaxContentChars` 与 `recallPreferAbstract` 三个旋钮只在这一级生效；而在 context face 下，注入预算由服务端 `max_tokens`（默认 1600）决定。
+3. **raw find 兜底**：并发请求 `viking://~/memories` 与 `viking://~/skills`，调用两次 `POST /search/find`（注意：resources 被刻意排除在自动召回之外，资源类文档由模型主动调用 `search` 获取）。客户端收到结果后进行本地重排（权重规则为：leaf +0.12 / 时间意图 +0.10 / 偏好意图 +0.08 / 词面重叠 ≤0.2）、去重，最后按客户端 token 预算装填。`recallTokenBudget`、`recallMaxContentChars` 与 `recallPreferAbstract` 三个旋钮只在这一级生效；而在 context face 下，注入预算由服务端 `max_tokens`（默认 1600）决定。
 
 服务端在处理 session_id 时，分为两条截然不同的执行路径：
 
@@ -455,7 +455,7 @@ MCP `write` / REST `content/write` 的三道 guard（`content_write.py`）：可
 | trae/trae-cn | ❌ | ❌ | 无 | ❌ | — |
 | zcode | ❌ | ❌ | 无 | ❌ | — |
 | opencode | ❌（有 toast） | ❌ | 无（设计上不提供） | ✅ | — |
-| dsh | ❌ | ❌ | 无 | ❌ | 工具调用卡片 presentCall；`ctx.provide("openvikingMemory")` 供其他 Cordis 插件二次开发 |
+| dsh | ❌ | ❌ | 1 个 `openviking-memory` 技能（独立的 `ctx.skills` provider） | ❌ | `ctx.provide("openvikingMemory")` 供其他 Cordis 插件二次开发 |
 | pi | ✅ `ctx.ui.setStatus` | ✅ `/viking` `/viking commit` | 无 | ✅ | e2e-live.sh |
 | openclaw | ❌ | ✅ 5 个（/add-resource /add-skill /ov-search /ov-query-config /ov-recall-trace） | 3 skill 随插件分发 | ✅（key 角色探测 + 版本兼容检查 + `status` 命令） | Gateway HTTP 路由做 recall trace 可视化；feature-gate RPC；健康检查脚本 |
 | hermes | ❌ | ❌ | 无 | ✅ curses 多层菜单 | `hermes memory status`（含 env 覆盖列表）；`hermes backup` 带 ovcli.conf |
@@ -533,7 +533,7 @@ MCP `write` / REST `content/write` 的三道 guard（`content_write.py`）：可
 
 - **形态**：唯一同进程 Cordis 原生插件（`export function apply`），原生注册 7 个 `viking_*` 工具（`viking_search/read/browse/remember/forget/add_resource/archive_expand`），REST 直连。4 事件：agent/session-start（emit）/ agent/pre-step（waterfall）/ session/event / session/flush。版本 0.1.0。
 - **能力亮点**：`ctx.provide("openvikingMemory")` 供其他 Cordis 插件二次开发；pre-step 注入走 user 消息，适配 DSH persona 的 `complete:true` 渲染模式。
-- **行为要点**：安装走 `dsh plugin add ./examples/dsh-memory-plugin`（统一安装器暂不覆盖）；teardown commit 3s 无阈值，SIGHUP/二次 Ctrl+C 不触发（[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)）；compaction 不感知（注入内容随宿主压缩收缩，profile 不重投）；subagent 各自独立会话（[§3.3.5](#_3-3-5-subagent-会话对照)）；工具面较 MCP 面少 write/edit/tree/grep/glob/watch/health；uri-guard 匹配工具名不做大小写归一化。
+- **行为要点**：统一安装器已覆盖 dsh，会询问装到哪个 profile（默认 `web`，可用 `--dsh-profile` 指定）；npm 是该插件唯一的分发渠道，因此 github/tos 选择对它不适用，除 `dev` 外的模式一律装已发布的包；`dev` 会先把 checkout 打包再装——`dsh plugin` 转发给 pnpm，link 一个源码目录无法解析插件 import 的 dsh peer；teardown commit 3s 无阈值，SIGHUP/二次 Ctrl+C 不触发（[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)）；compaction 不感知（注入内容随宿主压缩收缩，profile 不重投）；subagent 各自独立会话（[§3.3.5](#_3-3-5-subagent-会话对照)）；工具面即服务端自身的 MCP 面，经与其他集成同一个 stdio 代理接入、以 `mcp__openviking__*` 发布，服务端升级即可增加工具而无需发版；代价是代理每个 profile 只起一个进程，因此工具调用带的是进程级 actor peer、`remember` 也不绑当前会话（召回/捕获/commit 仍按会话解析 peer）；另随包附带共享的 `openviking-memory` 技能；uri-guard 匹配工具名不做大小写归一化。
 - **配置**：cordis patch + 4 个 env；凭据 patch>env，行为开关 env>patch。
 - **维度索引**：工具面 [§1.1](#_1-1-主动工具面-agentic-调用能力) ｜召回 [§3.2](#_3-2-自动召回与注入) ｜commit [§3.3.2](#_3-3-2-常规-commit-触发条件)/[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵) ｜降级 [§3.6](#_3-6-降级与容错)。
 
@@ -560,7 +560,7 @@ MCP `write` / REST `content/write` 的三道 guard（`content_write.py`）：可
 - **集成文档**：[Hermes Agent](./05-hermes.md)
 - **形态**：Hermes bundled MemoryProvider（Python 单文件实现，共 3725 行，随 Hermes 一同发布）。通过 `httpx` 直连，无需额外安装插件。提供 6 工具及 10+ 生命周期 hook（prefetch/sync_turn/on_session_end/on_session_switch/on_memory_write/…）。基线为发行版 `e12626b3`（= brew 2026.7.7.2）。
 - **能力亮点**：具备最全面的资源摄取面——`viking_add_resource` 支持 HTTP、Git、SSH、`file://`、本地文件 temp_upload 以及本地目录 zip 打包上传（跳过 symlink + 越界文件）；`viking_remember` 直写记忆文件（不依赖 session commit/抽取）；支持本地服务端自启（当 endpoint 位于本地且不可达时，通过 `subprocess.Popen openviking-server` 拉起）；支持 trusted 补身份重试；无论正常退出还是接收到 Ctrl+C、SIGTERM、SIGHUP 信号，均能保证完成 commit（详见 [§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)）。
-- **行为要点**：在召回上，仅有 `search/search` 的首选路径携带 session_id 并落到路径 B（`mode="deep"`；而 `auto`/`fast` 走 `/find` 且不带 session_id，详见 [§3.2.2](#_3-2-2-判定矩阵)）。`queue_prefetch` 为同步实现，无预热；subagent 传入 `skip_memory=True` 时不接 OV（详见 [§3.3.5](#_3-3-5-subagent-会话对照)）。无 profile 注入/statusline/slash；commit 恒 keep 0，drain 不净则本次不 commit；进程内队列不落盘。session id 格式为 `%Y%m%d_%H%M%S_<hex6>`。召回参数：6 条/阈值 0.15/字符预算 4000/总超时 4s。记忆 URI 为 `viking://user/peers/{agent}/memories/{subdir}/mem_<uuid12>.md`。退出机制包含 SIGTERM grace 1.5s 与退出看门狗 30s。互补路径支持 `openviking-server ingest hermes`（离线重放，默认关，详见 [§7](#_7-附录-非-coding-集成速览) E）。
+- **行为要点**：在召回上，仅有 `search/search` 的首选路径携带 session_id 并落到路径 B（`mode="deep"`；而 `auto`/`fast` 走 `/find` 且不带 session_id，详见 [§3.2.2](#_3-2-2-判定矩阵)）。`queue_prefetch` 为同步实现，无预热；subagent 传入 `skip_memory=True` 时不接 OV（详见 [§3.3.5](#_3-3-5-subagent-会话对照)）。无 profile 注入/statusline/slash；commit 恒 keep 0，drain 不净则本次不 commit；进程内队列不落盘。session id 格式为 `%Y%m%d_%H%M%S_<hex6>`。召回参数：6 条/阈值 0.15/字符预算 4000/总超时 4s。记忆 URI 为 `viking://~/peers/{agent}/memories/{subdir}/mem_<uuid12>.md`。退出机制包含 SIGTERM grace 1.5s 与退出看门狗 30s。互补路径支持 `openviking-server ingest hermes`（离线重放，默认关，详见 [§7](#_7-附录-非-coding-集成速览) E）。
 - **配置**：通过 `OPENVIKING_ENDPOINT`（非 `_URL`）、8 个 `OPENVIKING_RECALL_*` env 以及 `config.yaml` 进行配置。在 `use_ovcli_config` 模式下，系统会清空 `.env` 里的对应变量。
 - **维度索引**：工具面 [§1.1](#_1-1-主动工具面-agentic-调用能力) ｜召回 [§3.2](#_3-2-自动召回与注入) ｜commit [§3.3.2](#_3-3-2-常规-commit-触发条件)/[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵) ｜删除 [§3.5](#_3-5-写入与删除的类型边界)。
 

@@ -46,7 +46,7 @@ OpenViking 提供类 Unix 的文件系统操作来管理上下文。
 
 ```python
 entries = client.ls(
-    "viking://resources/",
+    uri="viking://resources/",
     node_limit=200,
     sort_by="mtime",
     sort_order="desc",
@@ -142,7 +142,7 @@ openviking ls viking://resources/ [--simple] [--recursive]
 **Python HTTP SDK**
 
 ```python
-entries = client.tree("viking://resources/")
+entries = client.tree(uri="viking://resources/")
 for entry in entries:
     type_str = "dir" if entry['isDir'] else "file"
     print(f"{entry['rel_path']} - {type_str}")
@@ -226,12 +226,12 @@ openviking tree viking://resources/my-project/
 **Python HTTP SDK**
 
 ```python
-info = client.stat("viking://resources/docs/api.md")
+info = client.stat(uri="viking://resources/docs/api.md")
 print(f"Size: {info['size']}")
 print(f"Is directory: {info['isDir']}")
 
 # 对于目录，会返回项目计数
-dir_info = client.stat("viking://resources/docs")
+dir_info = client.stat(uri="viking://resources/docs")
 if dir_info.get('isDir'):
     print(f"Item count: {dir_info.get('count')}")
 ```
@@ -329,7 +329,7 @@ openviking stat viking://resources/my-project/docs
 **Python SDK (HTTP)**
 
 ```python
-attrs = client.attrs("viking://resources/docs/api.md")
+attrs = client.attrs(uri="viking://resources/docs/api.md")
 print(attrs["attrs"]["tags"])
 ```
 
@@ -436,8 +436,8 @@ openviking attrs set-tags viking://resources/docs --tags team=search --mode appe
 **Python HTTP SDK**
 
 ```python
-client.mkdir("viking://resources/new-project/")
-client.mkdir("viking://resources/new-project/", description="接口文档目录")
+client.mkdir(uri="viking://resources/new-project/")
+client.mkdir(uri="viking://resources/new-project/", description="接口文档目录")
 ```
 
 **TypeScript SDK**
@@ -511,10 +511,10 @@ URI 格式非法、scheme 不支持或使用非公开作用域时返回 `INVALID
 
 ```python
 # 删除单个文件
-client.rm("viking://resources/docs/old.md")
+client.rm(uri="viking://resources/docs/old.md")
 
 # 递归删除目录
-client.rm("viking://resources/old-project/", recursive=True)
+client.rm(uri="viking://resources/old-project/", recursive=True)
 ```
 
 **TypeScript SDK**
@@ -604,8 +604,8 @@ openviking rm viking://resources/old.md [--recursive]
 
 ```python
 client.mv(
-    "viking://resources/old-name/",
-    "viking://resources/new-name/"
+    from_uri="viking://resources/old-name/",
+    to_uri="viking://resources/new-name/",
 )
 ```
 

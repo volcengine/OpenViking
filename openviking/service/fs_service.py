@@ -21,13 +21,14 @@ from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
 from openviking.session.memory.memory_updater import MemoryUpdater
 from openviking.session.memory.utils.content_visibility import visible_content
+from openviking.storage.abstract_overview import (
+    plan_abstract_overview_refresh,
+    render_abstract_overview,
+)
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
-from openviking.storage.semantic_sidecar import (
-    mark_semantic_sidecars_pending,
-    render_semantic_sidecar,
-)
+from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -35,6 +36,7 @@ from openviking.telemetry.resource_summary import build_queue_status_payload
 from openviking.utils.embedding_utils import vectorize_directory_meta
 from openviking_cli.exceptions import DeadlineExceededError, NotInitializedError
 from openviking_cli.utils import VikingURI, get_logger
+from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
@@ -199,7 +201,7 @@ class FSService:
         directory_uri, abstract_uri = self._resolve_directory_uris(uri)
         await viking_fs.write_file(
             abstract_uri,
-            render_semantic_sidecar(
+            render_abstract_overview(
                 ContextLevel.ABSTRACT,
                 directory_uri,
                 abstract,
@@ -257,6 +259,7 @@ class FSService:
         result = await viking_fs.rm(uri, recursive=recursive, ctx=ctx)
         await self._sync_watch_after_rm(uri, account_id=ctx.account_id, context_type=context_type)
         queue_status = None
+        refresh_action: Optional[FreshnessAction] = None
         request_registered = False
         telemetry_id = get_current_telemetry().telemetry_id
         try:
@@ -264,11 +267,12 @@ class FSService:
                 if wait and telemetry_id:
                     get_request_wait_tracker().register_request(telemetry_id)
                     request_registered = True
-                await self._enqueue_delete_refresh(
+                refresh_action = await self._enqueue_delete_refresh(
                     root_uri=refresh_parent_uri,
                     deleted_uri=uri,
                     context_type=context_type,
                     ctx=ctx,
+                    force_refresh=wait,
                 )
             if self._resource_memory_link_service and context_type == "resource":
                 cleanup_result = await self._resource_memory_link_service.before_resource_delete(
@@ -290,7 +294,7 @@ class FSService:
                     directory_uri=cleanup_overview_uri,
                     ctx=ctx,
                 )
-            if refresh_parent_uri and wait:
+            if refresh_parent_uri and wait and refresh_action is not FreshnessAction.MARK_PENDING:
                 queue_status = await self._wait_for_refresh(timeout=timeout)
         finally:
             if request_registered:
@@ -299,9 +303,10 @@ class FSService:
             result["memory_cleanup"] = cleanup_result
         if refresh_parent_uri and isinstance(result, dict):
             result["semantic_root_uri"] = refresh_parent_uri
-            result["semantic_status"] = self._semantic_refresh_status(
-                wait=wait,
-                queue_status=queue_status,
+            result["semantic_status"] = (
+                "deferred"
+                if refresh_action is FreshnessAction.MARK_PENDING
+                else self._semantic_refresh_status(wait=wait, queue_status=queue_status)
             )
             if queue_status is not None:
                 result["queue_status"] = queue_status
@@ -382,18 +387,25 @@ class FSService:
         deleted_uri: str,
         context_type: str,
         ctx: RequestContext,
-    ) -> None:
-        await mark_semantic_sidecars_pending(
+        force_refresh: bool = False,
+    ) -> FreshnessAction:
+        semantic_config = get_openviking_config().semantic
+        decision = await plan_abstract_overview_refresh(
             viking_fs=self._viking_fs,
             dir_uri=root_uri,
             changed_entries=1,
             ctx=ctx,
+            overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
+            refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
+            force_refresh=force_refresh,
         )
+        if decision.action is not FreshnessAction.REFRESH_NOW:
+            return decision.action
         try:
             queue_manager = get_queue_manager()
         except RuntimeError as exc:
             logger.warning("QueueManager not available, skipping delete refresh: %s", exc)
-            return
+            return decision.action
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
         telemetry_id = get_current_telemetry().telemetry_id
         msg = SemanticMsg(
@@ -424,6 +436,7 @@ class FSService:
             if telemetry_id:
                 get_request_wait_tracker().mark_semantic_failed(telemetry_id, msg.id, str(exc))
             raise
+        return decision.action
 
     async def _wait_for_refresh(self, *, timeout: Optional[float]) -> Dict[str, Any]:
         telemetry_id = get_current_telemetry().telemetry_id
@@ -688,7 +701,7 @@ class FSService:
         wait: bool = True,
         timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Apply a preconditioned multi-file write and aggregate downstream refresh."""
+        """Apply multiple file writes and aggregate downstream refresh."""
         viking_fs = self._ensure_initialized()
         coordinator = ContentWriteCoordinator(viking_fs=viking_fs, vikingdb=self._vikingdb)
         return await coordinator.batch_write(

@@ -230,6 +230,7 @@ async def test_resource_rm_enqueues_parent_delete_refresh_and_waits(request_cont
         deleted_uri=uri,
         context_type="resource",
         ctx=request_context,
+        force_refresh=True,
     )
     service._wait_for_refresh.assert_awaited_once_with(timeout=12.0)
     assert result["semantic_root_uri"] == "viking://resources/images/2026/06/10"

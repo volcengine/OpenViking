@@ -26,7 +26,7 @@ from openviking.retrieve.context_assembler.params import (
     Tier,
 )
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
-from openviking.storage.semantic_sidecar import body_for_preview
+from openviking.storage.abstract_overview import body_for_preview
 
 OVERVIEW_HEADING_LIMIT = 24
 OVERVIEW_PARAGRAPH_CHARS = 400

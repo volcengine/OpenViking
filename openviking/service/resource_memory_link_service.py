@@ -32,7 +32,7 @@ from openviking.session.memory.utils.resource_refs import (
     resource_ref_matches,
     unlink_resource_references_from_memory,
 )
-from openviking.storage.semantic_sidecar import body_for_preview
+from openviking.storage.abstract_overview import body_for_preview
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
 from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking_cli.exceptions import NotFoundError

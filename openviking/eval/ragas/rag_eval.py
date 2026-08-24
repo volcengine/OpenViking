@@ -117,7 +117,7 @@ class RAGEvaluator:
             logger.info(f"Adding document: {path}")
             try:
                 result = client.add_resource(
-                    path=str(path),
+                    str(path),
                     wait=True,
                     timeout=300,
                 )
@@ -135,7 +135,7 @@ class RAGEvaluator:
             logger.info(f"Adding code: {path}")
             try:
                 result = client.add_resource(
-                    path=str(path),
+                    str(path),
                     wait=True,
                     timeout=300,
                 )

@@ -111,16 +111,18 @@ def main():
             t0 = time.monotonic()
             try:
                 try:
-                    client.mkdir(parent_uri)
+                    client.mkdir(uri=parent_uri)
                 except OpenVikingError as exc:
                     if exc.code != "ALREADY_EXISTS":
                         raise
                 result = client.add_resource(
                     path=dir_path,
                     parent=parent_uri,
-                    reason=f"benchmark perf: {rel_dir}",
                     wait=True,
-                    processing_mode="vectors_only",
+                    options={
+                        "reason": f"benchmark perf: {rel_dir}",
+                        "processing_mode": "vectors_only",
+                    },
                 )
                 elapsed = time.monotonic() - t0
                 root_uri = result.get("root_uri", "?")

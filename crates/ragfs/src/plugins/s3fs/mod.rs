@@ -28,6 +28,7 @@ use futures::stream::{self, StreamExt};
 use regex::Regex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::core::context::FsContextView;
 use crate::core::filesystem::{relative_depth, relative_match_file, sort_directory_entries};
 use crate::core::glob::PreparedGlob;
 use crate::core::{
@@ -736,9 +737,16 @@ impl FileSystem for S3FileSystem {
             });
         }
 
+        // Bypass the stat cache when the caller demands fresh backend metadata
+        // (e.g. read replicas polling the API-key store for writer-side changes).
+        // The sliding-TTL cache would otherwise pin stale size/modTime forever.
+        let bypass_cache = FsContextView::current().bypass_cache();
+
         // Check stat cache
-        if let Some(cached) = self.stat_cache.get(&normalized).await {
-            return cached.ok_or_else(|| Error::not_found(&normalized));
+        if !bypass_cache {
+            if let Some(cached) = self.stat_cache.get(&normalized).await {
+                return cached.ok_or_else(|| Error::not_found(&normalized));
+            }
         }
 
         let key = self.client.build_key(&normalized);

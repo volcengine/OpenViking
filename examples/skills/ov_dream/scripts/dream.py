@@ -13,7 +13,10 @@ from urllib.request import Request, urlopen
 
 DEFAULT_BASE_URL = "http://127.0.0.1:1933"
 DEFAULT_TARGET_URI = "viking://user/default"
+# Legacy uid-less spelling, still accepted from existing configs.
 LEGACY_TARGET_URI = "viking://user/memories"
+# Home alias for the caller's own user space; emitted URIs stay explicit-uid.
+HOME_MEMORIES_TARGET_URI = "viking://~/memories"
 SERVERLESS_BASE_URL = "https://api.vikingdb.cn-beijing.volces.com/openviking"
 
 
@@ -78,7 +81,7 @@ class OpenVikingClient:
         if normalized == DEFAULT_TARGET_URI:
             user_space = self._headers().get("X-OpenViking-User", "default") or "default"
             return f"viking://user/{user_space}"
-        if normalized == LEGACY_TARGET_URI:
+        if normalized in {LEGACY_TARGET_URI, HOME_MEMORIES_TARGET_URI}:
             user_space = self._headers().get("X-OpenViking-User", "default") or "default"
             return f"viking://user/{user_space}/memories/"
         return target_uri
@@ -260,6 +263,27 @@ def get_active_session(openclaw_root: Path) -> Session | None:
     return sessions[0] if sessions else None
 
 
+def _message_text(content: Any) -> str:
+    """Flatten an OpenClaw message body to plain text.
+
+    `content` is a block list in most rows, but real transcripts also store a
+    bare string for simple messages. Iterating a string yields characters, and
+    `"p".get(...)` raised AttributeError out of `parse_messages()` — which
+    aborted the whole run, so a single such message meant no session was ever
+    committed. Blocks that are not dicts are skipped for the same reason.
+    """
+    if isinstance(content, str):
+        return content.strip()
+    if not isinstance(content, list):
+        return ""
+    parts = [
+        block.get("text", "").strip()
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "text"
+    ]
+    return "\n".join(part for part in parts if part)
+
+
 def parse_messages(
     sessions_root: Path, session: Session, after_timestamp: str | None
 ) -> Iterable[Message]:
@@ -281,11 +305,7 @@ def parse_messages(
         role = message.get("role")
         if role not in {"user", "assistant"}:
             continue
-        blocks = message.get("content", [])
-        text_parts = [
-            block.get("text", "").strip() for block in blocks if block.get("type") == "text"
-        ]
-        content = "\n".join(part for part in text_parts if part)
+        content = _message_text(message.get("content", []))
         if not content:
             continue
         messages.append(Message(role=role, content=content, timestamp=timestamp))

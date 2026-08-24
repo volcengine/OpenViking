@@ -73,7 +73,7 @@ OpenViking 提供多种检索方法，包括简单的向量相似度搜索、带
 **目标解析说明**：
 - `target_uri` 为空时，非 ROOT 检索默认搜索当前用户根 `viking://user/{user}` 和公共 `viking://resources`。
 - 如需在文件系统和检索操作中把当前用户的 peer 集合过滤到某一个 peer，发送 `X-OpenViking-Actor-Peer: <peer_id>`，或用 SDK/CLI client 的 `actor_peer_id` 初始化。见 [多租户：Peer 集合过滤](../concepts/11-multi-tenant.md#peer-restricted-view)。
-- `viking://user/memories`、`viking://user/resources`、`viking://user/skills` 等当前用户短写 target URI 会按认证请求身份 canonicalize。
+- `viking://~/memories`、`viking://~/resources`、`viking://~/skills` 等家目录别名 target URI 会按认证请求身份展开为 canonical 路径。无 uid 的写法 `viking://user/memories`（以及 `resources`、`skills`、`peers`、`privacy`、`sessions` 的同类写法）会被拒绝，并提示改用 `viking://~/...`。
 
 **图片搜索说明**：
 - 图片查询会以图片向量作为 query，默认检索目标范围内的 L2 resource 叶子节点；结果不限于图片文件，图片与文本/图片资源的相似度由 multimodal embedding 模型决定。
@@ -181,42 +181,45 @@ Tags 必须使用严格的 `k=v` 字符串。传入多个 tags 时，`find()` �
 ```python
 import openviking as ov
 from openviking.retrieve import ContextType
+from openviking_sdk import TextPart
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 # 基础搜索
-results = client.find("how to authenticate users")
+results = client.find(query="how to authenticate users")
 
 # 带过滤和时间范围的搜索
 recent_emails = client.find(
-    "invoice",
+    query="invoice",
     target_uri="viking://resources/email",
-    since="7d",
-    time_field="created_at",
+    options={
+        "since": "7d",
+        "time_field": "created_at",
+    },
 )
 
 # 仅搜索 memories 和 resources
 typed_results = client.find(
-    "authentication",
-    context_type=[ContextType.MEMORY, ContextType.RESOURCE],
+    query="authentication",
+    options={"context_type": [ContextType.MEMORY, ContextType.RESOURCE]},
 )
 
 # 按本地图片、bytes、data URI、HTTP URL 或 viking:// URI 搜索
-image_results = client.find(image="/path/to/photo.png")
+image_results = client.find(query="", image="/path/to/photo.png")
 
 # 按显式检索标签搜索。多个 tags 之间是 AND 关系。
 tagged_results = client.find(
-    "rollback runbook",
-    tags=["env=prod", "team=search"],
+    query="rollback runbook",
+    options={"tags": ["env=prod", "team=search"]},
 )
 
 # 遍历结果
-for ctx in results.resources:
-    print(f"URI: {ctx.uri}")
-    print(f"Score: {ctx.score:.3f}")
-    print(f"Type: {ctx.context_type}")
-    print(f"Abstract: {ctx.abstract[:100]}...")
+for context in results.get("resources", []):
+    print(f"URI: {context['uri']}")
+    print(f"Score: {context.get('score', 0.0):.3f}")
+    print(f"Type: {context.get('context_type')}")
+    print(f"Abstract: {context.get('abstract', '')[:100]}...")
     print("---")
 ```
 
@@ -225,20 +228,20 @@ for ctx in results.resources:
 ```python
 # 仅在资源中搜索
 results = client.find(
-    "authentication",
-    target_uri="viking://resources"
+    query="authentication",
+    target_uri="viking://resources",
 )
 
 # 仅在用户记忆中搜索
 results = client.find(
-    "preferences",
-    target_uri="viking://user/memories"
+    query="preferences",
+    target_uri="viking://~/memories"
 )
 
 # 仅在当前用户资源中搜索
 results = client.find(
-    "private docs",
-    target_uri="viking://user/resources"
+    query="private docs",
+    target_uri="viking://~/resources"
 )
 
 # 检索时把 peer 集合过滤到一个 peer
@@ -247,18 +250,18 @@ peer_client = ov.SyncHTTPClient(
     api_key="your-key",
     actor_peer_id="web-visitor-alice",
 )
-peer_results = peer_client.find("invoice follow-up")
+peer_results = peer_client.find(query="invoice follow-up")
 
 # 仅在技能中搜索
 results = client.find(
-    "web search",
-    target_uri="viking://user/skills"
+    query="web search",
+    target_uri="viking://~/skills"
 )
 
 # 在特定项目中搜索
 results = client.find(
-    "API endpoints",
-    target_uri="viking://resources/my-project"
+    query="API endpoints",
+    target_uri="viking://resources/my-project",
 )
 ```
 
@@ -456,31 +459,35 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 ```python
 import openviking as ov
 from openviking.retrieve import ContextType
-from openviking.message import TextPart
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 # 创建带对话上下文的会话
-session = client.session()
-session.add_message("user", [
-    TextPart(text="I'm building a login page with OAuth")
-])
-session.add_message("assistant", [
-    TextPart(text="I can help you with OAuth implementation.")
-])
+session_info = client.create_session()
+session = client.session(session_id=session_info["session_id"])
+session.add_message(
+    role="user",
+    parts=[TextPart(text="I'm building a login page with OAuth")],
+)
+session.add_message(
+    role="assistant",
+    parts=[TextPart(text="I can help you with OAuth implementation.")],
+)
 
 # 搜索能够理解对话上下文
 results = client.search(
-    "best practices",
-    session=session,
-    context_type=ContextType.SKILL,
-    since="2h"
+    query="best practices",
+    session_id=session.session_id,
+    options={
+        "context_type": ContextType.SKILL,
+        "since": "2h",
+    },
 )
 
-for ctx in results.resources:
-    print(f"Found: {ctx.uri}")
-    print(f"Abstract: {ctx.abstract[:200]}...")
+for context in results.get("resources", []):
+    print(f"Found: {context['uri']}")
+    print(f"Abstract: {context.get('abstract', '')[:200]}...")
 ```
 
 **不使用会话的搜索**
@@ -489,17 +496,20 @@ for ctx in results.resources:
 # search 也可以在没有会话的情况下使用
 # 它仍然会对查询进行意图分析
 results = client.search(
-    "how to implement OAuth 2.0 authorization code flow"
+    query="how to implement OAuth 2.0 authorization code flow"
 )
 
-for ctx in results.resources:
-    print(f"Found: {ctx.uri} (score: {ctx.score:.3f})")
+for context in results.get("resources", []):
+    print(f"Found: {context['uri']} (score: {context.get('score', 0.0):.3f})")
 ```
 
 **图片搜索**
 
 ```python
-results = client.search("similar poster", image="/path/to/poster.png")
+results = client.search(
+    query="similar poster",
+    image="/path/to/poster.png",
+)
 ```
 
 **TypeScript SDK**
@@ -824,8 +834,8 @@ client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 results = client.grep(
-    "viking://resources",
-    "authentication",
+    uri="viking://resources",
+    pattern="authentication",
     case_insensitive=True,
     node_limit=1024,
 )
@@ -946,13 +956,17 @@ client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 # 查找所有 markdown 文件（默认最多返回 256 条）
-results = client.glob("**/*.md", "viking://resources")
+results = client.glob(pattern="**/*.md", uri="viking://resources")
 print(f"Found {results['count']} markdown files:")
 for uri in results['matches']:
     print(f"  {uri}")
 
 # 查找所有 Python 文件，并显式放宽返回上限
-results = client.glob("**/*.py", "viking://resources", node_limit=1024)
+results = client.glob(
+    pattern="**/*.py",
+    uri="viking://resources",
+    node_limit=1024,
+)
 print(f"Found {results['count']} Python files")
 ```
 
@@ -1016,19 +1030,19 @@ import openviking as ov
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
-results = client.find("authentication")
+results = client.find(query="authentication")
 
-for ctx in results.resources:
-    # 从 L0（摘要）开始 - 已包含在 ctx.abstract 中
-    print(f"Abstract: {ctx.abstract}")
+for context in results.get("resources", []):
+    # 从 L0（摘要）开始 - 已包含在 context["abstract"] 中
+    print(f"Abstract: {context.get('abstract', '')}")
 
-    if ctx.level < 2:
+    if context.get("level", 0) < 2:
         # 获取 L1（概览）用于目录
-        overview = client.overview(ctx.uri)
+        overview = client.overview(uri=context["uri"])
         print(f"Overview: {overview[:500]}...")
     else:
         # 加载 L2（内容）用于文件
-        content = client.read(ctx.uri)
+        content = client.read(uri=context["uri"])
         print(f"File content: {content}")
 ```
 
@@ -1061,10 +1075,10 @@ client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 # 好 - 具体的查询
-results = client.find("OAuth 2.0 authorization code flow implementation")
+results = client.find(query="OAuth 2.0 authorization code flow implementation")
 
 # 效果较差 - 过于宽泛
-results = client.find("auth")
+results = client.find(query="auth")
 ```
 
 ### 限定搜索范围
@@ -1077,8 +1091,8 @@ client.initialize()
 
 # 在相关范围内搜索以获得更好的结果
 results = client.find(
-    "error handling",
-    target_uri="viking://resources/my-project"
+    query="error handling",
+    target_uri="viking://resources/my-project",
 )
 ```
 
@@ -1086,19 +1100,24 @@ results = client.find(
 
 ```python
 import openviking as ov
-from openviking.message import TextPart
+from openviking_sdk import TextPart
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 # 对于对话式搜索，使用会话
-session = client.session()
-session.add_message("user", [
-    TextPart(text="I'm building a login page")
-])
+session_info = client.create_session()
+session = client.session(session_id=session_info["session_id"])
+session.add_message(
+    role="user",
+    parts=[TextPart(text="I'm building a login page")],
+)
 
 # 搜索能够理解上下文
-results = client.search("best practices", session=session)
+results = client.search(
+    query="best practices",
+    session_id=session.session_id,
+)
 ```
 
 ## 相关文档

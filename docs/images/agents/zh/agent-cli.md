@@ -6,7 +6,7 @@
 
 请在 ~/.openviking/ovcli.conf 写入以下内容：
 {
-  "url": "https://api.vikingdb.cn-beijing.volces.com/openviking",
+  "url": "{{OPENVIKING_BASE_URL}}",
   "api_key": "${OPENVIKING_API_KEY}"
 }
 

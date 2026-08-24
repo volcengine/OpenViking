@@ -264,7 +264,7 @@ async function searchScope(queryText, targetUri, limit) {
 
 async function searchUserScope(queryText, limit) {
   console.log(`${C.dim}Searching user scope...${C.reset}`);
-  const userMems = await searchScope(queryText, "viking://user/memories", limit);
+  const userMems = await searchScope(queryText, "viking://~/memories", limit);
 
   const uriSet = new Set();
   return {
@@ -349,7 +349,7 @@ async function main() {
   const { userMems, combined } = await searchUserScope(query, candidateLimit);
 
   console.log();
-  printSearchResults("User scope (viking://user/memories)", userMems);
+  printSearchResults("User scope (viking://~/memories)", userMems);
   console.log();
   dim(`  Combined (deduplicated): ${combined.length} result${combined.length === 1 ? "" : "s"}`);
 

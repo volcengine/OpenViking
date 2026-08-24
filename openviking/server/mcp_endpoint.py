@@ -91,7 +91,7 @@ def _get_ctx() -> RequestContext:
 
 
 def _resolve_mcp_workspace_uri(uri: str, ctx: RequestContext) -> str:
-    """Resolve MCP's current-user workspace dialect at its request boundary."""
+    """Resolve MCP workspace URIs, expanding the viking://~ home alias, at its boundary."""
     return validate_request_viking_uri(resolve_path_variables(uri), ctx)
 
 
@@ -324,6 +324,11 @@ async def search(
                 "other_peer_penalty cannot be combined with other_peer_penalties "
                 "in mode='context'"
             )
+        # Resolve exclusions with the same strictness as the REST search router,
+        # so alias URIs match the canonical URIs they are compared against.
+        resolved_exclude_uris = [
+            _resolve_mcp_workspace_uri(exclude_uri, ctx) for exclude_uri in (exclude_uris or ())
+        ]
         result = await assemble_context(
             service=service,
             ctx=ctx,
@@ -339,7 +344,7 @@ async def search(
                 purpose=purpose,
                 detail=detail_by_category or (None if detail == "auto" else detail),
                 dedup_turns=dedup_turns,
-                exclude_uris=exclude_uris or (),
+                exclude_uris=resolved_exclude_uris,
                 peer_scope=peer_scope,
                 other_peer_penalty=other_peer_penalties or other_peer_penalty,
                 rewrite=rewrite == "auto",
@@ -556,7 +561,7 @@ async def write(
     - Any new file (whether created by "replace" or "create") must end in one of: .md .txt .json .yaml .yml .toml .py .js .ts
     - mode="append": append to the end of an existing file; fails if the file does not exist.
 
-    Writable scopes: viking://resources/, viking://user/{user_id}/, viking://agent/. Documented current-user roots such as viking://user/resources are expanded at this MCP boundary. The managed user subtrees skills/, peers/, privacy/ and sessions/ are read-only. After a write, semantic search indexes refresh in the background; pass wait=true to block until search reflects the change."""
+    Writable scopes: viking://resources/, viking://user/{user_id}/, viking://agent/. The viking://~ home alias expands to the caller's user root. The managed user subtrees skills/, peers/, privacy/ and sessions/ are read-only. After a write, semantic search indexes refresh in the background; pass wait=true to block until search reflects the change."""
     service = get_service()
     ctx = _get_ctx()
     uri = _resolve_mcp_workspace_uri(uri, ctx)

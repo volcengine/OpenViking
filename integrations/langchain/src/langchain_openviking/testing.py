@@ -386,7 +386,7 @@ class InMemoryOpenVikingClient:
 
     def add_skill(self, data: Any, **_: Any) -> dict[str, Any]:
         name = data.get("name", "skill") if isinstance(data, dict) else "skill"
-        uri = f"viking://user/skills/{name}.md"
+        uri = f"viking://~/skills/{name}.md"
         self.records[uri] = str(data)
         return {"status": "completed", "uri": uri, "name": name}
 

@@ -32,6 +32,7 @@ import { useAppConnection } from '#/hooks/use-app-connection'
 import { getHealth, getObserverSystem, getOvResult } from '#/lib/ov-client'
 import { cn } from '#/lib/utils'
 import { parseObserverStatus } from './-lib/parse-status'
+import { stripVersionPrefix } from './-lib/version'
 
 export const Route = createFileRoute('/monitoring')({
   component: MonitoringRoute,
@@ -236,7 +237,9 @@ function MonitoringRoute() {
             </h1>
             {overview?.version ? (
               <Badge variant="outline" className="font-mono font-normal">
-                {t('version', { version: overview.version })}
+                {t('version', {
+                  version: stripVersionPrefix(overview.version),
+                })}
               </Badge>
             ) : null}
           </div>

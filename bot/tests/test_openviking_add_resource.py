@@ -67,6 +67,6 @@ async def test_viking_client_add_resource_forwards_optional_target(target_uri):
     sdk_client.add_resource.assert_awaited_once_with(
         path="/tmp/doc.md",
         to=target_uri,
-        reason="conversation export",
+        options={"reason": "conversation export"},
     )
     assert result["root_uri"] == expected_uri

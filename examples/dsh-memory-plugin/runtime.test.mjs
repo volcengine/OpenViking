@@ -206,6 +206,64 @@ test("dispose waits for the final commit before deleting session state", async (
   assert.equal(runtime.states.has(session.id), false);
 });
 
+test("persisted profile delivery survives dispose and re-seed", async () => {
+  const runtime = new OpenVikingRuntime({
+    async commitSession() {
+      return { ok: true };
+    },
+  }, config(), { debug() {} });
+  const session = {
+    id: "profile-resume",
+    header: { cwd: "/workspace" },
+    events: [],
+  };
+  const firstState = runtime.stateFor(session);
+  firstState.ready = true;
+  firstState.profileBlock = "profile v1";
+
+  const profile = await runtime.profileMessage({ session });
+  assert.equal(profile?.source?.form, "instructions");
+  session.events.push({ type: "user/message", data: profile });
+  await runtime.dispose(session);
+
+  const resumedSession = {
+    id: session.id,
+    header: session.header,
+    events: [...session.events],
+  };
+  const resumedState = runtime.stateFor(resumedSession);
+  resumedState.ready = true;
+  resumedState.profileBlock = "profile v2";
+  assert.equal(await runtime.profileMessage({ session: resumedSession }), null);
+  assert.equal(resumedState.profileDelivered, true);
+
+  const pendingSession = {
+    id: "profile-pending",
+    header: { cwd: "/workspace" },
+    events: [],
+  };
+  const pendingState = runtime.stateFor(pendingSession);
+  pendingState.ready = true;
+  pendingState.profileBlock = "pending profile";
+  assert.equal(await runtime.profileMessage({
+    session: pendingSession,
+    inbox: { nextTurn: [], nextStep: [profile] },
+  }), null);
+
+  const otherSession = {
+    id: "profile-other",
+    header: { cwd: "/workspace", seedLength: 1 },
+    events: [{ type: "user/message", data: profile }],
+  };
+  const otherState = runtime.stateFor(otherSession);
+  otherState.ready = true;
+  otherState.profileBlock = "other profile";
+  assert.equal(
+    (await runtime.profileMessage({ session: otherSession }))?.source?.form,
+    "instructions",
+  );
+});
+
 test("disposeAll drains every live session", async () => {
   const committed = [];
   const runtime = new OpenVikingRuntime({
