@@ -447,6 +447,52 @@ class TestEmbeddingTextConstruction:
         assert vector_text == "Trip summary"
 
     @pytest.mark.asyncio
+    async def test_plain_case_memory_uses_content_without_missing_variable_warning(self):
+        registry = MemoryTypeRegistry(load_schemas=False)
+        memory_dir = PromptManager._get_bundled_templates_dir() / "memory"
+        registry.load_from_yaml(str(memory_dir / "cases.yaml"))
+
+        case_uri = "viking://user/alice/memories/cases/mem_plain.md"
+        updater = MemoryUpdater(registry=registry, vikingdb=Mock())
+        updater._viking_fs = Mock()
+        updater._viking_fs.read_file = AsyncMock(
+            return_value=MemoryFileUtils.write(
+                MemoryFile(
+                    uri=case_uri,
+                    memory_type="cases",
+                    content="Remember API plain case note.",
+                    extra_fields={"version": 1},
+                )
+            )
+        )
+        updater._vikingdb.enqueue_embedding_msg = AsyncMock(return_value=True)
+
+        result = MemoryUpdateResult()
+        result.add_written(case_uri)
+        ctx = SimpleNamespace(user=None, account_id="default")
+
+        with (
+            patch.object(EmbeddingMsgConverter, "from_context") as mock_from_context,
+            patch("openviking.session.memory.memory_updater.logger.warning") as mock_warning,
+        ):
+            mock_from_context.side_effect = lambda context: SimpleNamespace(
+                telemetry_id=None, id="msg-1", message=context.get_vectorization_text()
+            )
+            await updater._vectorize_memories(
+                result,
+                ctx,
+                extract_context=None,
+                uri_memory_type_map={case_uri: "cases"},
+            )
+
+        vector_text = mock_from_context.call_args[0][0].get_vectorization_text()
+        assert vector_text == "Remember API plain case note."
+        assert not any(
+            "Missing embedding template variables" in str(call.args[0])
+            for call in mock_warning.call_args_list
+        )
+
+    @pytest.mark.asyncio
     async def test_memory_abstract_truncated_to_50000_bytes_before_vector_write(self):
         registry = MemoryTypeRegistry(load_schemas=False)
         registry._types["events"] = registry._parse_memory_type(

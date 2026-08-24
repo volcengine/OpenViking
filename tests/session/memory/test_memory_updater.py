@@ -383,6 +383,48 @@ class TestMemoryUpdater:
         assert "- [workflow.md](./workflow.md)" in viking_fs.store[preference_overview_uri]
 
     @pytest.mark.asyncio
+    async def test_generate_cases_overview_uses_filename_when_case_fields_missing(self):
+        registry = MemoryTypeRegistry(load_schemas=False)
+        registry.load_from_yaml("openviking/prompts/templates/memory/cases.yaml")
+
+        case_dir = "viking://user/alice/memories/cases"
+        case_uri = f"{case_dir}/mem_plain.md"
+        overview_uri = f"{case_dir}/.overview.md"
+
+        class FakeVikingFS:
+            def __init__(self):
+                self.store = {
+                    case_uri: MemoryFileUtils.write(
+                        MemoryFile(
+                            uri=case_uri,
+                            memory_type="cases",
+                            content="Remember API plain case note.",
+                            extra_fields={"version": 1},
+                        )
+                    )
+                }
+
+            async def ls(self, uri, show_all_hidden=False, ctx=None):
+                return [{"name": "mem_plain.md", "isDir": False}]
+
+            async def read_file(self, uri, ctx=None):
+                return self.store[uri]
+
+            async def write_file(self, uri, content, ctx=None, **kwargs):
+                self.store[uri] = content
+
+        viking_fs = FakeVikingFS()
+        updater = MemoryUpdater(registry=registry)
+        updater._get_viking_fs = MagicMock(return_value=viking_fs)
+        ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+
+        await updater.generate_overview("cases", case_dir, ctx, extract_context=None)
+
+        document = parse_abstract_overview(viking_fs.store[overview_uri])
+        assert "- [mem_plain](./mem_plain.md)" in document.body
+        assert "- [](./mem_plain.md)" not in document.body
+
+    @pytest.mark.asyncio
     async def test_apply_operations_preserves_pre_resolved_multi_uris_for_new_page_ids(self):
         registry = MagicMock()
         registry.get.return_value = MemoryTypeSchema(
