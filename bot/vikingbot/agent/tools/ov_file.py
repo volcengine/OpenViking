@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional
 import httpx
 from loguru import logger
 
+from openviking.core.namespace import uri_parts
 from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.openviking_mount.ov_server import VikingClient
 
@@ -149,17 +150,16 @@ class OVFileTool(Tool, ABC):
     def _current_memory_uri(self, client: VikingClient) -> str:
         return client._memory_target_uri(None)
 
-    def _current_skill_uri(self, client: VikingClient) -> str:
-        memory_uri = self._current_memory_uri(client).rstrip("/")
-        if memory_uri.endswith("/memories"):
-            return f"{memory_uri[: -len('/memories')]}/skills/"
-        return "viking://~/skills/"
+    @staticmethod
+    def _memory_sibling_uri(memory_uri: str, segment: str) -> str | None:
+        parts = uri_parts(memory_uri)
+        if not parts or parts[-1] != "memories":
+            return None
+        parts[-1] = segment
+        return f"viking://{'/'.join(parts)}/"
 
-    def _current_resources_uri(self, client: VikingClient) -> str:
-        memory_uri = self._current_memory_uri(client).rstrip("/")
-        if memory_uri.endswith("/memories"):
-            return f"{memory_uri[: -len('/memories')]}/resources/"
-        return "viking://~/resources/"
+    def _current_skill_uri(self, client: VikingClient) -> str:
+        return self._memory_sibling_uri(self._current_memory_uri(client), "skills") or ""
 
     def _fs_retrieval_uris(
         self,
@@ -178,11 +178,19 @@ class OVFileTool(Tool, ABC):
             if not self._is_default_root_uri(uri):
                 return [uri or ""]
 
+            current_memory_uri = self._current_memory_uri(client)
+            peer_memory_uris = self._peer_memory_uris(client, tool_context)
+            resource_uris = ["viking://resources/"]
+            for memory_uri in [current_memory_uri, *peer_memory_uris]:
+                resource_uri = self._memory_sibling_uri(memory_uri, "resources")
+                if resource_uri:
+                    resource_uris.append(resource_uri)
+
             target_uris = [
-                self._current_resources_uri(client),
-                self._current_memory_uri(client),
+                *resource_uris,
+                current_memory_uri,
                 self._current_skill_uri(client),
-                *self._peer_memory_uris(client, tool_context),
+                *peer_memory_uris,
             ]
             return self._dedupe_strings(target_uris)
 
@@ -462,15 +470,16 @@ class VikingSearchTool(OVFileTool):
                 and (memory_owner_user_ids or legacy_memory_user_ids)
             ):
                 user_ids = memory_owner_user_ids or legacy_memory_user_ids
-                search_targets: list[tuple[str, str | None]] = [(self._current_resources_uri(client), None)]
+                search_targets: list[tuple[str, str | None]] = [("viking://resources/", None)]
                 for user_id in self._dedupe_strings(list(user_ids or [])):
                     memory_uri = client._memory_target_uri(user_id)
-                    skill_uri = (
-                        f"{memory_uri.rstrip('/')[: -len('/memories')]}/skills/"
-                        if memory_uri.rstrip("/").endswith("/memories")
-                        else "viking://~/skills/"
+                    resource_uri = self._memory_sibling_uri(memory_uri, "resources")
+                    skill_uri = self._memory_sibling_uri(memory_uri, "skills")
+                    search_targets.extend(
+                        (target, user_id)
+                        for target in (resource_uri, memory_uri, skill_uri)
+                        if target
                     )
-                    search_targets.extend([(memory_uri, user_id), (skill_uri, user_id)])
             else:
                 peer_ids = self._memory_peer_ids(tool_context)
                 if not target_uri:
@@ -478,12 +487,23 @@ class VikingSearchTool(OVFileTool):
                     if actor_peer_id and not peer_ids:
                         peer_ids = [actor_peer_id]
                     if actor_peer_id or peer_ids:
+                        current_memory_uri = self._current_memory_uri(client)
+                        peer_memory_uris = self._peer_memory_uris(
+                            client,
+                            tool_context,
+                            peer_ids=peer_ids,
+                        )
+                        resource_uris = ["viking://resources/"]
+                        for memory_uri in [current_memory_uri, *peer_memory_uris]:
+                            resource_uri = self._memory_sibling_uri(memory_uri, "resources")
+                            if resource_uri:
+                                resource_uris.append(resource_uri)
                         target_uris = self._dedupe_strings(
                             [
-                                self._current_resources_uri(client),
-                                self._current_memory_uri(client),
+                                *resource_uris,
+                                current_memory_uri,
                                 self._current_skill_uri(client),
-                                *self._peer_memory_uris(client, tool_context, peer_ids=peer_ids),
+                                *peer_memory_uris,
                             ]
                         )
                     else:

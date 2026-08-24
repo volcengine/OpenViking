@@ -2558,6 +2558,7 @@ async def test_openviking_search_uses_user_namespace(monkeypatch):
     assert "sender-1/memories" in result
     assert calls == [
         ("viking://resources/", None),
+        ("viking://user/sender-1/resources/", "sender-1"),
         ("viking://user/sender-1/memories/", "sender-1"),
         ("viking://user/sender-1/skills/", "sender-1"),
     ]
@@ -2591,6 +2592,10 @@ async def test_openviking_search_user_key_mode_uses_current_user_namespace(monke
     assert "sender-1/memories" in result
     assert calls == [
         ("viking://resources/", None),
+        ("viking://~/resources/", None),
+        ("viking://~/peers/sender-0/resources/", None),
+        ("viking://~/peers/sender-1/resources/", None),
+        ("viking://~/peers/sender-2/resources/", None),
         ("viking://~/memories/", None),
         ("viking://~/skills/", None),
         ("viking://~/peers/sender-0/memories/", None),
@@ -2644,6 +2649,10 @@ async def test_openviking_search_actor_client_expands_current_peer_scope(monkeyp
     assert "sender-0/memories" in result
     assert calls == [
         ("viking://resources/", None),
+        ("viking://~/resources/", None),
+        ("viking://~/peers/sender-0/resources/", None),
+        ("viking://~/peers/sender-1/resources/", None),
+        ("viking://~/peers/sender-2/resources/", None),
         ("viking://~/memories/", None),
         ("viking://~/skills/", None),
         ("viking://~/peers/sender-0/memories/", None),
@@ -2726,7 +2735,8 @@ async def test_openviking_list_default_memory_expands_current_peer(monkeypatch):
             )
             return uris
 
-        async def list_resources(self, path=None, recursive=False):
+        async def list_resources(self, path=None, recursive=False, node_limit=1000):
+            del node_limit
             calls.append((path, recursive))
             return []
 
@@ -2780,6 +2790,8 @@ async def test_openviking_glob_root_adds_current_peer_memory(monkeypatch):
 
     assert calls == [
         ("*.md", "viking://resources/"),
+        ("*.md", "viking://~/resources/"),
+        ("*.md", "viking://user/default/peers/sender-0/resources/"),
         ("*.md", "viking://~/memories/"),
         ("*.md", "viking://~/skills/"),
         ("*.md", "viking://user/default/peers/sender-0/memories/"),
@@ -2818,6 +2830,8 @@ async def test_openviking_glob_root_uses_namespaced_self_targets_for_root_key(mo
 
     assert calls == [
         ("*.md", "viking://resources/"),
+        ("*.md", "viking://user/admin/resources/"),
+        ("*.md", "viking://user/admin/peers/sender-0/resources/"),
         ("*.md", "viking://user/admin/memories/"),
         ("*.md", "viking://user/admin/skills/"),
         ("*.md", "viking://user/admin/peers/sender-0/memories/"),
