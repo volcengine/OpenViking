@@ -139,7 +139,9 @@ def _normalize_metadata(metadata: Mapping[str, Any]) -> Dict[str, Any]:
             "pending_child_changes",
         }
         if not isinstance(freshness, Mapping) or not required.issubset(freshness):
-            raise AbstractOverviewFormatError("abstract overview freshness has an invalid field set")
+            raise AbstractOverviewFormatError(
+                "abstract overview freshness has an invalid field set"
+            )
         counters: Dict[str, int] = {}
         for field in (
             "total_entries",
@@ -156,8 +158,8 @@ def _normalize_metadata(metadata: Mapping[str, Any]) -> Dict[str, Any]:
         if "missing_summary_entries" in freshness:
             value = freshness["missing_summary_entries"]
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-                raise SemanticSidecarFormatError(
-                    "semantic sidecar freshness.missing_summary_entries "
+                raise AbstractOverviewFormatError(
+                    "abstract overview freshness.missing_summary_entries "
                     "must be a non-negative integer"
                 )
             counters["missing_summary_entries"] = value
@@ -430,19 +432,15 @@ async def write_abstract_overview(
                     )
             next_freshness = dict(requested_freshness)
             consumed = current_pending if consume_pending is None else max(consume_pending, 0)
-            next_freshness["pending_child_changes"] = max(
-                current_pending - consumed, 0
-            )
+            next_freshness["pending_child_changes"] = max(current_pending - consumed, 0)
             merged_metadata["freshness"] = next_freshness
 
-        overview_body_changed = (
-            existing_overview is None
-            or semantic_body_digest(existing_overview.body) != semantic_body_digest(overview)
-        )
-        abstract_body_changed = (
-            existing_abstract is None
-            or semantic_body_digest(existing_abstract.body) != semantic_body_digest(abstract)
-        )
+        overview_body_changed = existing_overview is None or semantic_body_digest(
+            existing_overview.body
+        ) != semantic_body_digest(overview)
+        abstract_body_changed = existing_abstract is None or semantic_body_digest(
+            existing_abstract.body
+        ) != semantic_body_digest(abstract)
 
         rendered_overview = render_abstract_overview(
             ContextLevel.OVERVIEW, dir_uri, overview, merged_metadata

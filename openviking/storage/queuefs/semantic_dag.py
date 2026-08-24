@@ -401,9 +401,7 @@ class SemanticDagExecutor:
                 key=lambda item: item[1].rsplit("/", 1)[-1],
             )
             sampled_entries = deterministic_sample(direct_entries, sample_limit)
-            sampled_children_dirs = {
-                uri for kind, uri in sampled_entries if kind == "directory"
-            }
+            sampled_children_dirs = {uri for kind, uri in sampled_entries if kind == "directory"}
             sampled_file_paths = {uri for kind, uri in sampled_entries if kind == "file"}
             pending_snapshot = (
                 await read_abstract_overview_pending_snapshot(

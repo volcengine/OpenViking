@@ -278,9 +278,7 @@ async def test_pending_refresh_rebuilds_every_sampled_file_summary(monkeypatch):
     file_paths = [f"{root_uri}/{name}" for name in file_names]
     sampled_paths = deterministic_sample(file_paths, 4)
     changed_path = f"{root_uri}/file-020.txt"
-    old_overview = "FILES:\n" + "\n".join(
-        f"- {name}: old-summary" for name in file_names
-    )
+    old_overview = "FILES:\n" + "\n".join(f"- {name}: old-summary" for name in file_names)
     metadata = {"freshness": freshness_metadata(40, 4, pending=4)}
     fake_fs = _FakeVikingFS(
         tree={
@@ -296,9 +294,7 @@ async def test_pending_refresh_rebuilds_every_sampled_file_summary(monkeypatch):
             ),
         },
     )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs
-    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_dag.get_openviking_config",
         lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=4)),
@@ -321,9 +317,7 @@ async def test_pending_refresh_rebuilds_every_sampled_file_summary(monkeypatch):
 
     assert set(processor.summarized_files) == set(sampled_paths) | {changed_path}
     assert processor.vectorized_files == [changed_path]
-    overview = parse_abstract_overview(
-        fake_fs._file_contents[f"{root_uri}/.overview.md"]
-    )
+    overview = parse_abstract_overview(fake_fs._file_contents[f"{root_uri}/.overview.md"])
     assert overview.metadata["freshness"]["pending_child_changes"] == 0
 
 
@@ -343,9 +337,7 @@ async def test_directory_vectorization_retries_after_matching_sidecar_write(monk
             ),
         },
     )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs
-    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_dag.get_openviking_config",
         lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
@@ -401,9 +393,7 @@ async def test_content_copy_rebuilds_target_overview_from_target_l2_summaries(mo
             ),
         },
     )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs
-    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_dag.get_openviking_config",
         lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
@@ -435,12 +425,8 @@ async def test_content_copy_rebuilds_target_overview_from_target_l2_summaries(mo
     assert processor.vectorized_files == []
     assert processor.generated_overviews == [root_uri]
     assert processor.vectorized_dirs == [root_uri]
-    overview = parse_abstract_overview(
-        fake_fs._file_contents[f"{root_uri}/.overview.md"]
-    ).body
-    abstract = parse_abstract_overview(
-        fake_fs._file_contents[f"{root_uri}/.abstract.md"]
-    ).body
+    overview = parse_abstract_overview(fake_fs._file_contents[f"{root_uri}/.overview.md"]).body
+    abstract = parse_abstract_overview(fake_fs._file_contents[f"{root_uri}/.abstract.md"]).body
     assert "- copied.jpg: copied target L2 summary" in overview
     assert "- keep.txt: kept target L2 summary" in overview
     assert abstract.strip() == "abstract"
@@ -568,8 +554,8 @@ async def test_content_copy_with_no_ready_summaries_preserves_existing_sidecars(
 @pytest.mark.asyncio
 async def test_content_copy_rebuilds_semantics_when_move_leaves_source_directory_empty(monkeypatch):
     root_uri = "viking://resources/source"
-    old_overview = render_semantic_sidecar(ContextLevel.OVERVIEW, root_uri, "old file summary")
-    old_abstract = render_semantic_sidecar(ContextLevel.ABSTRACT, root_uri, "old abstract")
+    old_overview = render_abstract_overview(ContextLevel.OVERVIEW, root_uri, "old file summary")
+    old_abstract = render_abstract_overview(ContextLevel.ABSTRACT, root_uri, "old abstract")
     fake_fs = _FakeVikingFS(
         tree={root_uri: []},
         file_contents={
@@ -580,7 +566,7 @@ async def test_content_copy_rebuilds_semantics_when_move_leaves_source_directory
     monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_dag.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(sidecar_sample_size=32)),
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
     )
     processor = _FakeProcessor(fake_fs)
     executor = SemanticDagExecutor(
@@ -599,8 +585,8 @@ async def test_content_copy_rebuilds_semantics_when_move_leaves_source_directory
 
     assert processor.generated_overviews == [root_uri]
     assert processor.vectorized_dirs == [root_uri]
-    overview = parse_semantic_sidecar(fake_fs._file_contents[f"{root_uri}/.overview.md"]).body
-    abstract = parse_semantic_sidecar(fake_fs._file_contents[f"{root_uri}/.abstract.md"]).body
+    overview = parse_abstract_overview(fake_fs._file_contents[f"{root_uri}/.overview.md"]).body
+    abstract = parse_abstract_overview(fake_fs._file_contents[f"{root_uri}/.abstract.md"]).body
     assert overview.strip() == "FILES:"
     assert abstract.strip() == "abstract"
 

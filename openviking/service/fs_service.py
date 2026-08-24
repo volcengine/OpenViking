@@ -22,6 +22,7 @@ from openviking.server.identity import RequestContext
 from openviking.session.memory.memory_updater import MemoryUpdater
 from openviking.session.memory.utils.content_visibility import visible_content
 from openviking.storage.abstract_overview import (
+    mark_abstract_overview_pending,
     plan_abstract_overview_refresh,
     render_abstract_overview,
 )
@@ -540,7 +541,7 @@ class FSService:
         change_kind: Literal["added", "deleted"] = "added",
     ) -> str:
         """Queue a parent-only semantic refresh after a committed transfer."""
-        await mark_semantic_sidecars_pending(
+        await mark_abstract_overview_pending(
             viking_fs=self._viking_fs,
             dir_uri=root_uri,
             changed_entries=1,
