@@ -27,7 +27,7 @@ from urllib.parse import quote
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
-from mcp.types import ContentBlock, ImageContent, TextContent
+from mcp.types import AudioContent, ContentBlock, ImageContent, TextContent
 from pydantic import BaseModel, Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -412,13 +412,25 @@ def _format_search_result(result) -> str:
 
 
 _MCP_IMAGE_EXTENSIONS = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
-# Claude Code's cross-client-safe inline limit: 5 MiB of base64, or 3.75 MiB raw.
-_MCP_IMAGE_MAX_BYTES = 3_932_160
+_MCP_AUDIO_EXTENSIONS = {".flac", ".m4a", ".mp3", ".oga", ".ogg", ".wav"}
+_MCP_VIDEO_EXTENSIONS = {".avi", ".m4v", ".mkv", ".mov", ".mp4", ".webm"}
+# Common clients cap inline base64 at 5 MiB, or 3.75 MiB raw.
+_MCP_MEDIA_MAX_BYTES = 3_932_160
 
 
 def _is_mcp_image_uri(uri: str) -> bool:
     path = uri.split("#", 1)[0].split("?", 1)[0]
     return PurePosixPath(path).suffix.lower() in _MCP_IMAGE_EXTENSIONS
+
+
+def _is_mcp_audio_uri(uri: str) -> bool:
+    path = uri.split("#", 1)[0].split("?", 1)[0]
+    return PurePosixPath(path).suffix.lower() in _MCP_AUDIO_EXTENSIONS
+
+
+def _is_mcp_video_uri(uri: str) -> bool:
+    path = uri.split("#", 1)[0].split("?", 1)[0]
+    return PurePosixPath(path).suffix.lower() in _MCP_VIDEO_EXTENSIONS
 
 
 def _sniff_mcp_image_mime_type(data: bytes) -> Optional[str]:
@@ -439,9 +451,32 @@ def _mcp_image_content(data: bytes, mime_type: str) -> ImageContent:
     return ImageContent(type="image", data=encoded, mimeType=mime_type)
 
 
+def _sniff_mcp_audio_mime_type(data: bytes, uri: str) -> Optional[str]:
+    """Recognize audio formats represented by MCP AudioContent."""
+    suffix = PurePosixPath(uri).suffix.lower()
+    if data.startswith(b"RIFF") and len(data) >= 12 and data[8:12] == b"WAVE":
+        return "audio/wav"
+    if data.startswith(b"fLaC"):
+        return "audio/flac"
+    if data.startswith(b"OggS") and suffix in {".oga", ".ogg"}:
+        return "audio/ogg"
+    if data.startswith(b"ID3") or (
+        len(data) >= 2 and data[0] == 0xFF and data[1] & 0xE0 == 0xE0
+    ):
+        return "audio/mpeg"
+    if len(data) >= 12 and data[4:8] == b"ftyp" and suffix == ".m4a":
+        return "audio/mp4"
+    return None
+
+
+def _mcp_audio_content(data: bytes, mime_type: str) -> AudioContent:
+    encoded = base64.b64encode(data).decode("ascii")
+    return AudioContent(type="audio", data=encoded, mimeType=mime_type)
+
+
 @mcp.tool(structured_output=False)
 async def read(uris: str | list[str]) -> str | list[ContentBlock]:
-    """Read full content from one or more viking:// file URIs. Text files return text. PNG, JPEG, GIF, and WebP images return native MCP ImageContent so vision-capable agents can inspect them. Pass a single URI string or a list for batch reads. For directory listing, use the list tool instead."""
+    """Read full content from one or more viking:// file URIs. Text files return text. Supported raster images and audio files return native MCP content blocks. Pass a single URI string or a list for batch reads. For directory listing, use the list tool instead."""
     import asyncio
 
     service = get_service()
@@ -453,22 +488,36 @@ async def read(uris: str | list[str]) -> str | list[ContentBlock]:
         async with semaphore:
             try:
                 resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
-                if _is_mcp_image_uri(resolved_uri):
+                if _is_mcp_video_uri(resolved_uri):
+                    return (
+                        f"MCP has no standard VideoContent block for {uri}. Use an "
+                        "OpenViking download tool or the content download API to fetch "
+                        "the original video bytes."
+                    )
+                is_image = _is_mcp_image_uri(resolved_uri)
+                is_audio = _is_mcp_audio_uri(resolved_uri)
+                if is_image or is_audio:
                     data = await service.fs.read_file_bytes(resolved_uri, ctx=ctx)
-                    if len(data) > _MCP_IMAGE_MAX_BYTES:
+                    if len(data) > _MCP_MEDIA_MAX_BYTES:
                         return (
-                            f"Image is too large to inline through MCP ({len(data)} bytes; "
-                            f"limit {_MCP_IMAGE_MAX_BYTES} bytes). Use OpenViking get or the "
+                            f"Media file is too large to inline through MCP ({len(data)} bytes; "
+                            f"limit {_MCP_MEDIA_MAX_BYTES} bytes). Use OpenViking get or the "
                             "content download API to fetch the original file."
                         )
-                    mime_type = _sniff_mcp_image_mime_type(data)
+                    mime_type = (
+                        _sniff_mcp_image_mime_type(data)
+                        if is_image
+                        else _sniff_mcp_audio_mime_type(data, resolved_uri)
+                    )
                     if mime_type is None:
                         return (
-                            f"Cannot render {uri}: its bytes do not match PNG, JPEG, GIF, "
-                            "or WebP. Use OpenViking get or the content download API to "
+                            f"Cannot render {uri}: its bytes do not match a supported media "
+                            "format. Use OpenViking get or the content download API to "
                             "fetch the original file."
                         )
-                    return _mcp_image_content(data, mime_type)
+                    if is_image:
+                        return _mcp_image_content(data, mime_type)
+                    return _mcp_audio_content(data, mime_type)
                 content = await service.fs.read_visible(resolved_uri, ctx=ctx)
                 return content
             except OpenVikingError as exc:

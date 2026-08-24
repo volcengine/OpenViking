@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 from fastapi import FastAPI
-from mcp.types import ImageContent, TextContent
+from mcp.types import AudioContent, ImageContent, TextContent
 from starlette.routing import Route
 
 import openviking.server.mcp_endpoint as mcp_endpoint
@@ -654,6 +654,61 @@ async def test_read_mixed_batch_preserves_source_order(monkeypatch):
     assert result[3].mimeType == "image/jpeg"
 
 
+@pytest.mark.parametrize(
+    ("uri", "audio_bytes", "mime_type"),
+    [
+        ("viking://resources/clip.wav", b"RIFF\x00\x00\x00\x00WAVEaudio", "audio/wav"),
+        ("viking://resources/clip.mp3", b"ID3audio", "audio/mpeg"),
+        ("viking://resources/clip.flac", b"fLaCaudio", "audio/flac"),
+        ("viking://resources/clip.ogg", b"OggSaudio", "audio/ogg"),
+        ("viking://resources/clip.m4a", b"\x00\x00\x00\x18ftypM4A audio", "audio/mp4"),
+    ],
+)
+async def test_read_audio_returns_native_mcp_content(
+    monkeypatch, uri, audio_bytes, mime_type
+):
+    read_file_bytes = AsyncMock(return_value=audio_bytes)
+    monkeypatch.setattr(
+        mcp_endpoint,
+        "get_service",
+        lambda: SimpleNamespace(
+            fs=SimpleNamespace(
+                read_file_bytes=read_file_bytes,
+                read_visible=AsyncMock(),
+            )
+        ),
+    )
+
+    result = await mcp_endpoint.mcp.call_tool("read", {"uris": uri})
+
+    assert isinstance(result, list)
+    assert isinstance(result[0], TextContent)
+    assert result[0].text == f"Source: {uri}"
+    assert isinstance(result[1], AudioContent)
+    assert result[1].mimeType == mime_type
+    assert base64.b64decode(result[1].data) == audio_bytes
+
+
+async def test_read_video_returns_download_hint(monkeypatch):
+    read_visible = AsyncMock()
+    monkeypatch.setattr(
+        mcp_endpoint,
+        "get_service",
+        lambda: SimpleNamespace(
+            fs=SimpleNamespace(
+                read_file_bytes=AsyncMock(),
+                read_visible=read_visible,
+            )
+        ),
+    )
+
+    result = await read("viking://resources/demo.mp4")
+
+    assert "no standard VideoContent" in result
+    assert "download" in result
+    read_visible.assert_not_awaited()
+
+
 async def test_read_rejects_spoofed_image_extension(monkeypatch):
     read_file_bytes = AsyncMock(return_value=b"not an image")
     monkeypatch.setattr(
@@ -673,7 +728,7 @@ async def test_read_rejects_spoofed_image_extension(monkeypatch):
 
 
 async def test_read_rejects_images_too_large_for_common_clients(monkeypatch):
-    image_bytes = b"\x89PNG\r\n\x1a\n" + b"x" * mcp_endpoint._MCP_IMAGE_MAX_BYTES
+    image_bytes = b"\x89PNG\r\n\x1a\n" + b"x" * mcp_endpoint._MCP_MEDIA_MAX_BYTES
     monkeypatch.setattr(
         mcp_endpoint,
         "get_service",
