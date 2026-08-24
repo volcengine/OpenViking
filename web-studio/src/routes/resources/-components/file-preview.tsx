@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react'
 import type { ComponentProps, ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import hljs from 'highlight.js/lib/core'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import rehypeRaw from 'rehype-raw'
 import rehypeSanitize from 'rehype-sanitize'
 import remarkGfm from 'remark-gfm'
@@ -327,6 +327,47 @@ function resolveMarkdownAssetUrl(assetPath: string, fileUri: string): string {
     return toDownloadUrl(target.value)
   }
   return target.value
+}
+
+function transformMarkdownUrl(url: string): string {
+  return /^(viking|data|blob):/i.test(url) ? url : defaultUrlTransform(url)
+}
+
+function MarkdownLink({
+  children,
+  fileUri,
+  href,
+  onNavigate,
+}: {
+  children?: ReactNode
+  fileUri: string
+  href?: string
+  onNavigate?: (uri: string) => void
+}) {
+  const target = href ? resolveMarkdownAssetTarget(String(href), fileUri) : null
+  const isInternal = target?.kind === 'viking' && Boolean(onNavigate)
+  const resolvedHref = target
+    ? isInternal
+      ? target.value
+      : resolveMarkdownAssetUrl(target.value, fileUri)
+    : ''
+  const isExternal = /^(https?:|mailto:|tel:)/i.test(resolvedHref)
+
+  return (
+    <a
+      href={resolvedHref}
+      onClick={(event) => {
+        if (target?.kind === 'viking' && onNavigate) {
+          event.preventDefault()
+          onNavigate(target.value)
+        }
+      }}
+      target={isExternal ? '_blank' : undefined}
+      rel={isExternal ? 'noreferrer noopener' : undefined}
+    >
+      {children}
+    </a>
+  )
 }
 
 function MarkdownImage({
@@ -1516,7 +1557,19 @@ export function FilePreview({
                         <article className="prose prose-sm max-w-none break-words rounded-md border bg-muted/20 p-3 dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
                           <ReactMarkdown
                             remarkPlugins={[remarkGfm]}
-                            components={markdownComponents}
+                            urlTransform={transformMarkdownUrl}
+                            components={{
+                              ...markdownComponents,
+                              a: ({ href, children }) => (
+                                <MarkdownLink
+                                  href={href}
+                                  fileUri={file.uri}
+                                  onNavigate={onNavigate}
+                                >
+                                  {children}
+                                </MarkdownLink>
+                              ),
+                            }}
                           >
                             {level.content}
                           </ReactMarkdown>
@@ -1604,7 +1657,7 @@ export function FilePreview({
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm]}
                   rehypePlugins={[rehypeRaw, rehypeSanitize]}
-                  urlTransform={(url) => url}
+                  urlTransform={transformMarkdownUrl}
                   components={{
                     ...markdownComponents,
                     img: ({ src, alt }) => (
@@ -1614,36 +1667,15 @@ export function FilePreview({
                         fileUri={file.uri}
                       />
                     ),
-                    a: ({ href, children }) => {
-                      const target = href
-                        ? resolveMarkdownAssetTarget(String(href), file.uri)
-                        : null
-                      const isInternal =
-                        target?.kind === 'viking' && Boolean(onNavigate)
-                      const resolvedHref = target
-                        ? isInternal
-                          ? target.value
-                          : resolveMarkdownAssetUrl(target.value, file.uri)
-                        : ''
-                      const isExternal = /^(https?:|mailto:|tel:)/i.test(
-                        resolvedHref,
-                      )
-                      return (
-                        <a
-                          href={resolvedHref}
-                          onClick={(event) => {
-                            if (target?.kind === 'viking' && onNavigate) {
-                              event.preventDefault()
-                              onNavigate(target.value)
-                            }
-                          }}
-                          target={isExternal ? '_blank' : undefined}
-                          rel={isExternal ? 'noreferrer noopener' : undefined}
-                        >
-                          {children}
-                        </a>
-                      )
-                    },
+                    a: ({ href, children }) => (
+                      <MarkdownLink
+                        href={href}
+                        fileUri={file.uri}
+                        onNavigate={onNavigate}
+                      >
+                        {children}
+                      </MarkdownLink>
+                    ),
                   }}
                 >
                   {displayContent || emptyFileText}
