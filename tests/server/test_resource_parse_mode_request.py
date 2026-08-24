@@ -50,6 +50,32 @@ async def test_add_resource_route_forwards_no_split_mode(monkeypatch: pytest.Mon
 
 
 @pytest.mark.asyncio
+async def test_add_resource_route_forwards_source_headers(monkeypatch: pytest.MonkeyPatch):
+    add_resource = AsyncMock(
+        return_value={"status": "success", "root_uri": "viking://resources/demo"}
+    )
+    service = SimpleNamespace(resources=SimpleNamespace(add_resource=add_resource))
+    monkeypatch.setattr(resources_router, "get_service", lambda: service)
+    ctx = RequestContext(
+        user=UserIdentifier("test_account", "test_user"),
+        role=Role.USER,
+    )
+
+    await resources_router.add_resource(
+        SimpleNamespace(),
+        AddResourceRequest(
+            path="https://tos.example.com/object",
+            source_headers={"X-Tos-Signature": "signed-value"},
+        ),
+        ctx,
+    )
+
+    assert add_resource.await_args.kwargs["source_headers"] == {
+        "X-Tos-Signature": "signed-value"
+    }
+
+
+@pytest.mark.asyncio
 async def test_signed_temp_upload_forwards_token_bound_parse_mode(
     monkeypatch: pytest.MonkeyPatch,
 ):

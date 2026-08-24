@@ -261,6 +261,44 @@ async def test_rejects_invalid_parse_mode(service: ResourceService, ctx: Request
 
 
 @pytest.mark.asyncio
+async def test_source_headers_require_http_resource_url(
+    service: ResourceService,
+    ctx: RequestContext,
+):
+    with pytest.raises(InvalidArgumentError, match=r"only supported for HTTP\(S\)"):
+        await service.add_resource(
+            path="/test/path",
+            ctx=ctx,
+            to="viking://resources/test",
+            source_headers={"X-Tos-Signature": "signed-value"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_source_headers_are_snapshotted_and_omitted_from_queue(
+    service: ResourceService,
+    ctx: RequestContext,
+):
+    prepare_durable_source = AsyncMock(return_value=None)
+    service._resource_processor.prepare_durable_source = prepare_durable_source
+
+    await service.add_resource(
+        path="https://tos.example.com/object",
+        ctx=ctx,
+        to="viking://resources/test",
+        source_headers={"X-Tos-Signature": "signed-value"},
+        allow_local_path_resolution=False,
+    )
+
+    assert prepare_durable_source.await_args.kwargs["snapshot_required"] is True
+    assert prepare_durable_source.await_args.kwargs["source_headers"] == {
+        "X-Tos-Signature": "signed-value"
+    }
+    message = service._enqueue_add_resource_job.await_args.args[0]
+    assert "source_headers" not in message.args
+
+
+@pytest.mark.asyncio
 async def test_no_split_allows_directory_flattening(
     service: ResourceService,
     ctx: RequestContext,

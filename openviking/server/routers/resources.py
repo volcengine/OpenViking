@@ -103,6 +103,7 @@ class AddResourceRequest(BaseModel):
     telemetry: TelemetryRequest = False
     watch_interval: float = 0
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
+    source_headers: Optional[Dict[str, str]] = None
     tags: Optional[list[str]] = None
     tag_mode: str = "replace"
 
@@ -296,6 +297,7 @@ async def add_resource(
                 tag_mode=request.tag_mode,
                 allow_local_path_resolution=allow_local_path_resolution,
                 enforce_public_remote_targets=True,
+                source_headers=request.source_headers,
                 args=request.args,
                 **kwargs,
             )

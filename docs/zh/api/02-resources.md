@@ -173,6 +173,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 | args | object | 否 | `{}` | 传给特定 parser/accessor 的导入参数。原生 HTTPS Git 导入和 Watch 可通过 `args.auth_config={"username":"oauth2","token":"..."}` 在 TLS 上传递 HTTP Basic 凭据；`username` 默认为 `oauth2`。Git 的 `branch` 或 `commit` 仍放在 `args` 顶层。`args.parse_mode` 支持 `default`（保持现有拆分行为）和 `no_split`（正常解析并将每个源文档正文保存为一个 Markdown 文件）。例如 `args.site=true/false` 强制/禁用整站（sitemap/RSS）导入，`args.max_pages` 等可覆盖 `webfeed` 配置；递归网页爬虫支持 `args.depth`、`args.max_pages`、`args.include_paths`、`args.exclude_paths`、`args.allow_external_links`、`args.skip_download_links`；飞书用户 token 导入传 `args.feishu_access_token`。`path`、`to`、`watch_interval`、`include`、`exclude` 等 `add_resource` 核心字段不能放入 `args` |
 | watch_interval | float | 否 | 0 | 定时更新间隔（分钟）。>0 为 URL/sitemap/RSS 等可重新读取的来源创建任务；通过 `temp_file_id` 上传的内容是一次性快照，变化后需重新添加。≤0 取消任务；显式 `to` 优先，否则绑定本次导入的 `root_uri` |
 | processing_mode | string | 否 | `semantic_and_vectors` | 入库后的处理模式。`semantic_and_vectors` 是默认流程：生成语义产物（`.abstract.md`、`.overview.md`）并生成向量。`vectors_only` 跳过语义理解/VLM 总结，只对当前资源文件生成向量 |
+| source_headers | object | 否 | - | 拉取 HTTP/HTTPS `path` 源资源时附带的请求头。例如 TOS 私有对象可传 `{"X-Tos-Signature": "..."}`。这些 Header 同时用于类型探测的 HEAD 与内容下载的 GET；资源会在当前请求中抓取为快照，Header 不会写入资源元数据或后续队列任务。 |
 | tags | string[] | 否 | None | 导入时写入向量检索记录的显式检索标签，格式必须是 `k=v`，例如 `["team=search", "env=test"]`。搜索接口可用同名 `tags` 参数过滤召回 |
 | tag_mode | string | 否 | `"replace"` | `tags` 的写入模式，可选 `replace` 或 `append`。导入新资源时会随本次生成的每条向量记录写入；不会在完成后额外调用 `set_tags`，响应也不返回 `tags_result` |
 | telemetry | TelemetryRequest | 否 | False | 是否返回遥测数据 |
