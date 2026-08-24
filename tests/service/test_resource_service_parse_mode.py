@@ -275,6 +275,20 @@ async def test_source_headers_require_http_resource_url(
 
 
 @pytest.mark.asyncio
+async def test_source_headers_are_reserved_from_args(
+    service: ResourceService,
+    ctx: RequestContext,
+):
+    with pytest.raises(InvalidArgumentError, match="core add_resource fields: source_headers"):
+        await service.add_resource(
+            path="https://tos.example.com/object",
+            ctx=ctx,
+            to="viking://resources/test",
+            args={"source_headers": {"X-Tos-Signature": "signed-value"}},
+        )
+
+
+@pytest.mark.asyncio
 async def test_source_headers_are_snapshotted_and_omitted_from_queue(
     service: ResourceService,
     ctx: RequestContext,

@@ -104,6 +104,7 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "build_index",
         "summarize",
         "processing_mode",
+        "source_headers",
         "watch_interval",
         "skip_watch_management",
         "allow_local_path_resolution",
@@ -725,7 +726,7 @@ class ResourceService:
         queued_args = {
             key: value
             for key, value in processor_kwargs.items()
-            if key not in _ADD_RESOURCE_ARGS_RESERVED_FIELDS | {"source_headers"}
+            if key not in _ADD_RESOURCE_ARGS_RESERVED_FIELDS
         }
         queued_args = self._sanitize_watch_processor_kwargs(queued_args)
         task_auth: Dict[str, Any] = {}
