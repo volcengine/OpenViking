@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import io
-import os
 import zipfile
 from types import SimpleNamespace
 
@@ -215,23 +214,20 @@ async def test_build_directory_archive_preserves_tree_and_empty_directories():
             return b"hello"
 
     service = SimpleNamespace(fs=FakeFS())
-    archive_path, filename = await content_router._build_directory_archive(
+    payload, filename = await content_router._build_directory_archive(
         service,
         "viking://resources/project",
         {"name": "project", "isDir": True},
         SimpleNamespace(),
     )
-    try:
-        assert filename == "project.zip"
-        with zipfile.ZipFile(archive_path) as archive:
-            assert archive.namelist() == [
-                "project/",
-                "project/empty/",
-                "project/docs/readme.md",
-            ]
-            assert archive.read("project/docs/readme.md") == b"hello"
-    finally:
-        content_router._remove_file(archive_path)
+    assert filename == "project.zip"
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        assert archive.namelist() == [
+            "project/",
+            "project/empty/",
+            "project/docs/readme.md",
+        ]
+        assert archive.read("project/docs/readme.md") == b"hello"
 
 
 async def test_build_directory_archive_rejects_declared_size_over_limit():
@@ -283,8 +279,9 @@ async def test_build_directory_archive_rejects_zip_over_limit(monkeypatch):
 
 
 async def test_build_directory_archive_stops_writing_once_over_limit(monkeypatch):
-    """Header-only entries must not grow the temp archive past the limit."""
+    """Header-only entries must not grow the archive buffer past the limit."""
     limit = 4096
+    peak = {"bytes": 0}
 
     class FakeFS:
         async def tree(self, *args, **kwargs):
@@ -297,15 +294,14 @@ async def test_build_directory_archive_stops_writing_once_over_limit(monkeypatch
                 for index in range(20000)
             ]
 
-    written = {}
-    original_remove = content_router._remove_file
-
-    def record_then_remove(path):
-        written["bytes"] = os.path.getsize(path)
-        original_remove(path)
+    class TrackedBytesIO(io.BytesIO):
+        def write(self, data):
+            count = super().write(data)
+            peak["bytes"] = max(peak["bytes"], self.tell())
+            return count
 
     monkeypatch.setattr(content_router, "_DIRECTORY_ARCHIVE_MAX_BYTES", limit)
-    monkeypatch.setattr(content_router, "_remove_file", record_then_remove)
+    monkeypatch.setattr(content_router, "io", SimpleNamespace(BytesIO=TrackedBytesIO))
 
     with pytest.raises(Exception, match="download limit"):
         await content_router._build_directory_archive(
@@ -316,7 +312,7 @@ async def test_build_directory_archive_stops_writing_once_over_limit(monkeypatch
         )
 
     # Without the in-loop guard this reaches ~1.9 MB for 20k entries.
-    assert written["bytes"] < limit * 4
+    assert peak["bytes"] < limit * 4
 
 
 @pytest.mark.parametrize("path", ["../escape", "/absolute", r"..\\escape"])

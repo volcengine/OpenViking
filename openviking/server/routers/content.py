@@ -3,18 +3,15 @@
 """Content endpoints for OpenViking HTTP Server."""
 
 import asyncio
-import os
-import tempfile
+import io
 import zipfile
 from pathlib import PurePosixPath
 from typing import Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, Query
-from fastapi.responses import FileResponse
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, ConfigDict, model_validator
-from starlette.background import BackgroundTask
 
 from openviking.core.namespace import (
     is_hidden_by_actor_peer_view,
@@ -65,81 +62,75 @@ def _safe_archive_path(root_name: str, rel_path: str = "") -> str:
     return "/".join(parts)
 
 
-def _remove_file(path: str) -> None:
-    try:
-        os.unlink(path)
-    except FileNotFoundError:
-        pass
-
-
 async def _build_directory_archive(
     service, uri: str, stat: dict, ctx: RequestContext
-) -> tuple[str, str]:
-    """Write one visible Viking directory tree to a temporary ZIP archive."""
+) -> tuple[bytes, str]:
+    """Pack one visible Viking directory tree into an in-memory ZIP archive.
+
+    The archive is capped at `_DIRECTORY_ARCHIVE_MAX_BYTES`, so it is built in
+    memory rather than in a temp file: a temp file served through FileResponse
+    outlives the request whenever the response never reaches its cleanup
+    callback (a malformed or unsatisfiable Range header returns early, and
+    cancellation skips it entirely).
+    """
     root_name = str(stat.get("name") or uri.rstrip("/").rsplit("/", 1)[-1] or "download")
     root_path = _safe_archive_path(root_name)
-    fd, archive_path = tempfile.mkstemp(prefix="openviking-download-", suffix=".zip")
-    os.close(fd)
 
-    try:
-        entries = await service.fs.tree(
-            uri,
-            ctx=ctx,
-            output="original",
-            show_all_hidden=True,
-            node_limit=None,
-            level_limit=None,
-        )
+    entries = await service.fs.tree(
+        uri,
+        ctx=ctx,
+        output="original",
+        show_all_hidden=True,
+        node_limit=None,
+        level_limit=None,
+    )
 
-        # Reject oversized trees before loading file contents into memory. The
-        # ZIP itself is checked below as well because headers can push a highly
-        # fragmented archive over the limit even when its files do not.
-        declared_total = 0
-        for entry in entries:
-            if entry.get("isDir", False):
-                continue
-            size = entry.get("size")
-            if isinstance(size, bool) or not isinstance(size, int) or size < 0:
-                file_stat = await service.fs.stat(str(entry["uri"]), ctx=ctx)
-                size = file_stat.get("size")
-            if isinstance(size, bool) or not isinstance(size, int) or size < 0:
-                raise InvalidArgumentError(
-                    f"Cannot determine file size for directory download: {entry['uri']}"
-                )
-            declared_total += size
-            if declared_total > _DIRECTORY_ARCHIVE_MAX_BYTES:
-                raise _archive_size_limit_error(uri)
-
-        actual_total = 0
-        with zipfile.ZipFile(
-            archive_path,
-            mode="w",
-            compression=zipfile.ZIP_DEFLATED,
-            allowZip64=True,
-        ) as archive:
-            archive.writestr(f"{root_path}/", b"")
-            for entry in entries:
-                member_path = _safe_archive_path(root_name, str(entry["rel_path"]))
-                if entry.get("isDir", False):
-                    archive.writestr(f"{member_path.rstrip('/')}/", b"")
-                else:
-                    content = await service.fs.read_file_bytes(str(entry["uri"]), ctx=ctx)
-                    actual_total += len(content)
-                    if actual_total > _DIRECTORY_ARCHIVE_MAX_BYTES:
-                        raise _archive_size_limit_error(uri)
-                    await asyncio.to_thread(archive.writestr, member_path, content)
-                # Bound the archive on disk while it grows. Per-entry ZIP headers
-                # are not counted by `actual_total`, so a tree of many empty
-                # directories or empty files would otherwise only be rejected by
-                # the post-build size check, after it was fully written.
-                if archive.fp.tell() > _DIRECTORY_ARCHIVE_MAX_BYTES:
-                    raise _archive_size_limit_error(uri)
-        if os.path.getsize(archive_path) > _DIRECTORY_ARCHIVE_MAX_BYTES:
+    # Reject oversized trees before loading file contents into memory. The
+    # ZIP itself is checked below as well because headers can push a highly
+    # fragmented archive over the limit even when its files do not.
+    declared_total = 0
+    for entry in entries:
+        if entry.get("isDir", False):
+            continue
+        size = entry.get("size")
+        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+            file_stat = await service.fs.stat(str(entry["uri"]), ctx=ctx)
+            size = file_stat.get("size")
+        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+            raise InvalidArgumentError(
+                f"Cannot determine file size for directory download: {entry['uri']}"
+            )
+        declared_total += size
+        if declared_total > _DIRECTORY_ARCHIVE_MAX_BYTES:
             raise _archive_size_limit_error(uri)
-        return archive_path, f"{root_name}.zip"
-    except Exception:
-        _remove_file(archive_path)
-        raise
+
+    buffer = io.BytesIO()
+    actual_total = 0
+    with zipfile.ZipFile(
+        buffer,
+        mode="w",
+        compression=zipfile.ZIP_DEFLATED,
+        allowZip64=True,
+    ) as archive:
+        archive.writestr(f"{root_path}/", b"")
+        for entry in entries:
+            member_path = _safe_archive_path(root_name, str(entry["rel_path"]))
+            if entry.get("isDir", False):
+                archive.writestr(f"{member_path.rstrip('/')}/", b"")
+            else:
+                content = await service.fs.read_file_bytes(str(entry["uri"]), ctx=ctx)
+                actual_total += len(content)
+                if actual_total > _DIRECTORY_ARCHIVE_MAX_BYTES:
+                    raise _archive_size_limit_error(uri)
+                await asyncio.to_thread(archive.writestr, member_path, content)
+            # Bound the buffer while it grows. Per-entry ZIP headers are not
+            # counted by `actual_total`, so a tree of many empty directories or
+            # empty files would otherwise only be rejected once fully built.
+            if buffer.tell() > _DIRECTORY_ARCHIVE_MAX_BYTES:
+                raise _archive_size_limit_error(uri)
+    if buffer.tell() > _DIRECTORY_ARCHIVE_MAX_BYTES:
+        raise _archive_size_limit_error(uri)
+    return buffer.getvalue(), f"{root_name}.zip"
 
 
 class WriteContentRequest(BaseModel):
@@ -305,12 +296,11 @@ async def download(
     try:
         stat = await service.fs.stat(uri, ctx=_ctx)
         if stat.get("isDir", False):
-            archive_path, filename = await _build_directory_archive(service, uri, stat, _ctx)
-            return FileResponse(
-                path=archive_path,
+            archive, filename = await _build_directory_archive(service, uri, stat, _ctx)
+            return FastAPIResponse(
+                content=archive,
                 media_type="application/zip",
-                filename=filename,
-                background=BackgroundTask(_remove_file, archive_path),
+                headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
             )
         content = await service.fs.read_file_bytes(uri, ctx=_ctx)
     except AGFSNotFoundError:
