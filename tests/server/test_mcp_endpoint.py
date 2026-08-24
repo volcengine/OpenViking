@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 from fastapi import FastAPI
-from mcp.types import AudioContent, ImageContent, TextContent
+from mcp.types import AudioContent, EmbeddedResource, ImageContent, TextContent
 from starlette.routing import Route
 
 import openviking.server.mcp_endpoint as mcp_endpoint
@@ -705,8 +705,35 @@ async def test_read_video_returns_download_hint(monkeypatch):
     result = await read("viking://resources/demo.mp4")
 
     assert "no standard VideoContent" in result
-    assert "download" in result
+    assert 'mode="download"' in result
     read_visible.assert_not_awaited()
+
+
+async def test_read_download_mode_returns_embedded_resource(monkeypatch):
+    video_bytes = b"\x00\x00\x00\x18ftypmp42video"
+    read_file_bytes = AsyncMock(return_value=video_bytes)
+    monkeypatch.setattr(
+        mcp_endpoint,
+        "get_service",
+        lambda: SimpleNamespace(
+            fs=SimpleNamespace(
+                read_file_bytes=read_file_bytes,
+                read_visible=AsyncMock(),
+            )
+        ),
+    )
+    uri = "viking://resources/demo.mp4"
+
+    result = await mcp_endpoint.mcp.call_tool(
+        "read", {"uris": uri, "mode": "download"}
+    )
+
+    assert isinstance(result, list)
+    assert isinstance(result[0], TextContent)
+    assert isinstance(result[1], EmbeddedResource)
+    assert str(result[1].resource.uri) == uri
+    assert result[1].resource.mimeType == "video/mp4"
+    assert base64.b64decode(result[1].resource.blob) == video_bytes
 
 
 async def test_read_rejects_spoofed_image_extension(monkeypatch):

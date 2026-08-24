@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import contextvars
+import mimetypes
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -27,7 +28,14 @@ from urllib.parse import quote
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
-from mcp.types import AudioContent, ContentBlock, ImageContent, TextContent
+from mcp.types import (
+    AudioContent,
+    BlobResourceContents,
+    ContentBlock,
+    EmbeddedResource,
+    ImageContent,
+    TextContent,
+)
 from pydantic import BaseModel, Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -474,9 +482,20 @@ def _mcp_audio_content(data: bytes, mime_type: str) -> AudioContent:
     return AudioContent(type="audio", data=encoded, mimeType=mime_type)
 
 
+def _mcp_embedded_resource(data: bytes, uri: str) -> EmbeddedResource:
+    encoded = base64.b64encode(data).decode("ascii")
+    mime_type = mimetypes.guess_type(uri)[0] or "application/octet-stream"
+    return EmbeddedResource(
+        type="resource",
+        resource=BlobResourceContents(uri=uri, blob=encoded, mimeType=mime_type),
+    )
+
+
 @mcp.tool(structured_output=False)
-async def read(uris: str | list[str]) -> str | list[ContentBlock]:
-    """Read full content from one or more viking:// file URIs. Text files return text. Supported raster images and audio files return native MCP content blocks. Pass a single URI string or a list for batch reads. For directory listing, use the list tool instead."""
+async def read(
+    uris: str | list[str], mode: Literal["content", "download"] = "content"
+) -> str | list[ContentBlock]:
+    """Read one or more viking:// file URIs. Content mode returns text or native image/audio blocks. Download mode exports original bytes as an MCP embedded resource. For directory listing, use the list tool instead."""
     import asyncio
 
     service = get_service()
@@ -488,11 +507,20 @@ async def read(uris: str | list[str]) -> str | list[ContentBlock]:
         async with semaphore:
             try:
                 resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
+                if mode == "download":
+                    data = await service.fs.read_file_bytes(resolved_uri, ctx=ctx)
+                    if len(data) > _MCP_MEDIA_MAX_BYTES:
+                        return (
+                            f"File is too large to export inline through MCP ({len(data)} "
+                            f"bytes; limit {_MCP_MEDIA_MAX_BYTES} bytes). Use OpenViking get "
+                            "or the content download API to fetch the original file."
+                        )
+                    return _mcp_embedded_resource(data, resolved_uri)
                 if _is_mcp_video_uri(resolved_uri):
                     return (
-                        f"MCP has no standard VideoContent block for {uri}. Use an "
-                        "OpenViking download tool or the content download API to fetch "
-                        "the original video bytes."
+                        f"MCP has no standard VideoContent block for {uri}. Call read again "
+                        'with mode="download" to export the original video as an embedded '
+                        "resource."
                     )
                 is_image = _is_mcp_image_uri(resolved_uri)
                 is_audio = _is_mcp_audio_uri(resolved_uri)
