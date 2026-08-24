@@ -180,6 +180,31 @@ func TestFindOmitsSearchFiltersWhenUnset(t *testing.T) {
 	}
 }
 
+func TestFindSendsAndDecodesReadContentWhenEnabled(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		if body["read_content"] != true {
+			t.Fatalf("read_content = %#v", body["read_content"])
+		}
+		writeOK(t, w, map[string]any{
+			"resources": []map[string]any{{
+				"uri":     "viking://resources/auth.md",
+				"content": "full visible content",
+			}},
+		})
+	}))
+	defer closeServer()
+
+	enabled := true
+	result, err := client.Find(context.Background(), "auth", &FindOptions{ReadContent: &enabled})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Resources) != 1 || result.Resources[0].Content != "full visible content" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
 func TestFindUsesDefaultLimitAndPreservesEmptyValues(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body := readJSONBody(t, r)

@@ -642,6 +642,7 @@ impl HttpClient {
         level: Option<Vec<i32>>,
         context_type: Option<Vec<String>>,
         tags: Option<Vec<String>>,
+        read_content: bool,
     ) -> Result<serde_json::Value> {
         let image_url = normalize_image_input(image)?;
         let mut body = serde_json::json!({
@@ -656,6 +657,7 @@ impl HttpClient {
             "level": level,
             "context_type": context_type,
             "tags": tags,
+            "read_content": read_content.then_some(true),
         });
         compact_request_body(&mut body);
         self.post("/api/v1/search/find", &body).await
@@ -675,6 +677,7 @@ impl HttpClient {
         level: Option<Vec<i32>>,
         context_type: Option<Vec<String>>,
         tags: Option<Vec<String>>,
+        read_content: bool,
     ) -> Result<serde_json::Value> {
         let image_url = normalize_image_input(image)?;
         let mut body = serde_json::json!({
@@ -690,6 +693,7 @@ impl HttpClient {
             "level": level,
             "context_type": context_type,
             "tags": tags,
+            "read_content": read_content.then_some(true),
         });
         compact_request_body(&mut body);
         self.post("/api/v1/search/search", &body).await

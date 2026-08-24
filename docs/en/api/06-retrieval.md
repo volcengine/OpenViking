@@ -67,6 +67,7 @@ The `find()` method performs pure vector similarity search for simple query scen
 | time_field | "updated_at" \| "created_at" | No | "updated_at" | Metadata time field used by `since` / `until` |
 | level | str | No | None | Limit results to specific level(s), e.g., `0`, `1`, `2`, or `0,1,2`. CLI `--level`/`-L` maps to this field |
 | include_provenance | bool | No | False | Include provenance/query-plan details in serialized result |
+| read_content | bool | No | False | Read each final matched URI with the visible-content read semantics and inline the result as `content`. Individual read failures leave the hit unchanged. |
 | telemetry | bool \| object | No | False | Attach telemetry data to response |
 
 **Target resolution notes**:
@@ -80,6 +81,8 @@ The `find()` method performs pure vector similarity search for simple query scen
 - Existing image resources keep their existing vectors; image-vector recall applies to images vectorized after this capability is enabled or after a later reindex.
 
 **FindResult Structure**
+
+When `read_content=true`, each successfully read hit additionally contains `content`. This is a full file read, so use `limit` to bound response size. `search(mode="context")` rejects `read_content` because context assembly already enforces its own token budget.
 
 ```python
 class FindResult:
@@ -402,6 +405,7 @@ The `search()` method adds session context understanding and intent analysis cap
 | time_field | "updated_at" \| "created_at" | No | "updated_at" | Metadata time field used by `since` / `until` |
 | level | str | No | None | Limit results to specific level(s), e.g., `0`, `1`, `2`, or `0,1,2`. CLI `--level`/`-L` maps to this field |
 | include_provenance | bool | No | False | Include provenance/query-plan details in serialized result |
+| read_content | bool | No | False | Read each final matched URI with the visible-content read semantics and inline the result as `content`. Individual read failures leave the hit unchanged. Only supported by `mode="list"`. |
 | telemetry | bool \| object | No | False | Attach telemetry data to response |
 
 `search()` uses the same target resolution and explicit tag filtering rules as `find()`, including the peer collection filter selected by `X-OpenViking-Actor-Peer` or SDK `actor_peer_id`. When `image_url` is provided, `search()` uses direct image retrieval and skips session query planning.

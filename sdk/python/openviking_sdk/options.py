@@ -25,6 +25,7 @@ class FindOptions(_ExtraOptions, total=False):
     until: str
     time_field: TimeField
     level: Level
+    read_content: bool
     telemetry: Any
 
 

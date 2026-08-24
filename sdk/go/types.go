@@ -239,6 +239,7 @@ type FindOptions struct {
 	Filter            map[string]any
 	ContextType       any
 	IncludeProvenance *bool
+	ReadContent       *bool
 	Telemetry         any
 	Since             string
 	Until             string
@@ -259,6 +260,7 @@ type SearchOptions struct {
 	Filter            map[string]any
 	ContextType       any
 	IncludeProvenance *bool
+	ReadContent       *bool
 	Telemetry         any
 	Since             string
 	Until             string
@@ -474,6 +476,7 @@ type MatchedContext struct {
 	ContextType string   `json:"context_type,omitempty"`
 	Level       int      `json:"level,omitempty"`
 	Abstract    string   `json:"abstract,omitempty"`
+	Content     string   `json:"content,omitempty"`
 	Overview    string   `json:"overview,omitempty"`
 	Category    string   `json:"category,omitempty"`
 	Score       float64  `json:"score,omitempty"`

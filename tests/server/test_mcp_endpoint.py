@@ -304,6 +304,41 @@ async def test_find_tool_calls_lightweight_find(service, monkeypatch):
     }
 
 
+async def test_find_tool_inlines_visible_content_when_requested(service, monkeypatch):
+    async def fake_find(**kwargs):
+        del kwargs
+        return SimpleNamespace(
+            memories=[],
+            resources=[
+                SimpleNamespace(
+                    uri="viking://resources/visible.md",
+                    abstract="summary",
+                    overview="",
+                    score=0.9,
+                )
+            ],
+            skills=[],
+        )
+
+    async def fake_read_visible(uri, *, ctx):
+        assert uri == "viking://resources/visible.md"
+        assert ctx == DEFAULT_CTX
+        return "full visible content"
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+    monkeypatch.setattr(service.fs, "read_visible", fake_read_visible)
+
+    result = await mcp_endpoint.find(query="visible", read_content=True)
+
+    assert "full visible content" in result
+    assert "Use the read tool" not in result
+
+
+async def test_search_tool_rejects_read_content_in_context_mode():
+    with pytest.raises(InvalidArgumentError, match="read_content"):
+        await mcp_endpoint.search(query="visible", mode="context", read_content=True)
+
+
 async def test_search_tool_calls_context_aware_search_with_session(service, monkeypatch):
     captured = {}
     session = SimpleNamespace(load_called=False)

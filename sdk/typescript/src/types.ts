@@ -147,6 +147,7 @@ export interface FindOptions {
   level?: number[];
   tags?: string[];
   includeProvenance?: boolean;
+  readContent?: boolean;
   extra?: JsonObject;
 }
 /** Session-aware semantic retrieval options. */

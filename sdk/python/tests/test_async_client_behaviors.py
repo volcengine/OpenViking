@@ -662,6 +662,25 @@ async def test_find_forwards_level_and_time_filters_when_provided():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("method_name", "kwargs", "expected_path"),
+    [
+        ("find", {}, "/api/v1/search/find"),
+        ("search", {"session_id": "session-1"}, "/api/v1/search/search"),
+    ],
+)
+async def test_retrieval_forwards_read_content(method_name, kwargs, expected_path):
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._request = AsyncMock(return_value=object())
+    client._handle_response_data = lambda _response: {"result": {}}
+
+    await getattr(client, method_name)("hello", options={"read_content": True}, **kwargs)
+
+    assert client._request.await_args.args == ("POST", expected_path)
+    assert client._request.await_args.kwargs["json"]["read_content"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("method_name", "extra_kwargs", "expected_path"),
     [
         ("find", {}, "/api/v1/search/find"),

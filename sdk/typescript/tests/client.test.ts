@@ -274,6 +274,23 @@ describe("OpenVikingClient", () => {
     });
   });
 
+  it("forwards readContent for ranked retrieval", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(ok({ resources: [] }));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await client.find("hello", { readContent: true });
+
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
+      query: "hello",
+      read_content: true,
+    });
+  });
+
   it("sends dry_run for prune_orphans reindex requests", async () => {
     const fetcher = vi
       .fn<typeof fetch>()

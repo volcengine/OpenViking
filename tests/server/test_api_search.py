@@ -56,6 +56,110 @@ async def test_find_basic(client_with_resource):
     assert "telemetry" not in body
 
 
+@pytest.mark.parametrize("endpoint", ["/api/v1/search/find", "/api/v1/search/search"])
+async def test_search_endpoints_inline_visible_content_when_requested(
+    client: httpx.AsyncClient, service, monkeypatch, endpoint: str
+):
+    async def fake_read_visible(uri, *, ctx):
+        assert ctx is not None
+        return f"visible content for {uri}"
+
+    async def fake_search(**kwargs):
+        del kwargs
+        return FindResult(
+            memories=[],
+            resources=[
+                MatchedContext(
+                    uri="viking://resources/visible.md",
+                    context_type=ContextType.RESOURCE,
+                )
+            ],
+            skills=[],
+        )
+
+    monkeypatch.setattr(service.fs, "read_visible", fake_read_visible)
+    monkeypatch.setattr(
+        service.search, "find" if endpoint.endswith("/find") else "search", fake_search
+    )
+
+    response = await client.post(endpoint, json={"query": "visible", "read_content": True})
+
+    assert response.status_code == 200
+    assert response.json()["result"]["resources"][0]["content"] == (
+        "visible content for viking://resources/visible.md"
+    )
+
+
+async def test_find_omits_content_when_read_is_not_requested(
+    client: httpx.AsyncClient, service, monkeypatch
+):
+    async def fake_search(**kwargs):
+        del kwargs
+        return FindResult(
+            memories=[],
+            resources=[
+                MatchedContext(
+                    uri="viking://resources/visible.md",
+                    context_type=ContextType.RESOURCE,
+                )
+            ],
+            skills=[],
+        )
+
+    monkeypatch.setattr(service.search, "find", fake_search)
+    monkeypatch.setattr(
+        service.fs,
+        "read_visible",
+        lambda *args, **kwargs: pytest.fail("read_visible must not be called"),
+    )
+
+    response = await client.post("/api/v1/search/find", json={"query": "visible"})
+
+    assert response.status_code == 200
+    assert "content" not in response.json()["result"]["resources"][0]
+
+
+async def test_find_keeps_hit_without_content_when_read_fails(
+    client: httpx.AsyncClient, service, monkeypatch
+):
+    async def fake_read_visible(uri, *, ctx):
+        del uri, ctx
+        raise RuntimeError("unavailable")
+
+    async def fake_find(**kwargs):
+        del kwargs
+        return FindResult(
+            memories=[],
+            resources=[
+                MatchedContext(
+                    uri="viking://resources/unavailable.md",
+                    context_type=ContextType.RESOURCE,
+                )
+            ],
+            skills=[],
+        )
+
+    monkeypatch.setattr(service.fs, "read_visible", fake_read_visible)
+    monkeypatch.setattr(service.search, "find", fake_find)
+
+    response = await client.post(
+        "/api/v1/search/find", json={"query": "unavailable", "read_content": True}
+    )
+
+    assert response.status_code == 200
+    assert "content" not in response.json()["result"]["resources"][0]
+
+
+async def test_search_context_rejects_read_content(client: httpx.AsyncClient):
+    response = await client.post(
+        "/api/v1/search/search",
+        json={"query": "visible", "mode": "context", "read_content": True},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
+
+
 @pytest.mark.parametrize(
     ("endpoint", "service_method"),
     [

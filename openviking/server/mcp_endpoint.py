@@ -259,6 +259,7 @@ async def find(
     min_score: float = 0.35,
     level: Optional[List[int]] = None,
     context_type: Optional[Union[str, List[str]]] = None,
+    read_content: bool = False,
 ) -> str:
     """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, and score."""
     service = get_service()
@@ -274,7 +275,7 @@ async def find(
         filter=_resolve_context_type_filter(context_type),
         level=level,
     )
-    return _format_search_result(result)
+    return await _format_search_result(result, service=service, ctx=ctx, read_content=read_content)
 
 
 @mcp.tool()
@@ -300,6 +301,7 @@ async def search(
     other_peer_penalties: Optional[Dict[str, float]] = None,
     rewrite: Literal["off", "auto"] = "off",
     rewrite_max_bullets: int = 6,
+    read_content: bool = False,
 ) -> str:
     """Deep semantic retrieval with optional session context and intent analysis.
 
@@ -313,6 +315,8 @@ async def search(
     ctx = _get_ctx()
     context_filter = _resolve_context_type_filter(context_type)
     if mode == "context":
+        if read_content:
+            raise InvalidArgumentError("read_content is only supported in mode='list'")
         if target_uri:
             raise InvalidArgumentError("target_uri is not supported in mode='context'")
         if detail != "auto" and detail_by_category:
@@ -374,10 +378,10 @@ async def search(
         filter=context_filter,
         level=level,
     )
-    return _format_search_result(result)
+    return await _format_search_result(result, service=service, ctx=ctx, read_content=read_content)
 
 
-def _format_search_result(result) -> str:
+async def _format_search_result(result, *, service, ctx, read_content: bool = False) -> str:
     items = []
     for ctx_type, contexts in [
         ("memory", result.memories),
@@ -390,18 +394,36 @@ def _format_search_result(result) -> str:
     if not items:
         return "No matching context found."
 
+    contents: dict[str, str] = {}
+    if read_content:
+        import asyncio
+
+        semaphore = asyncio.Semaphore(10)
+
+        async def _read(uri: str) -> None:
+            async with semaphore:
+                try:
+                    contents[uri] = await service.fs.read_visible(uri, ctx=ctx)
+                except Exception:
+                    pass
+
+        await asyncio.gather(*(_read(m.uri) for _, m in items))
+
     lines = []
     for ctx_type, m in items:
         abstract = (
             getattr(m, "abstract", "") or getattr(m, "overview", "") or "(no abstract)"
         ).strip()
         score = getattr(m, "score", 0.0)
-        lines.append(f"- [{ctx_type} {score * 100:.0f}%] {m.uri}\n    {abstract}")
+        line = f"- [{ctx_type} {score * 100:.0f}%] {m.uri}\n    {abstract}"
+        if m.uri in contents:
+            line += f"\n\n    {contents[m.uri]}"
+        lines.append(line)
 
     return (
         f"Found {len(items)} item(s):\n\n"
         + "\n".join(lines)
-        + "\n\nUse the read tool to expand a URI."
+        + ("" if read_content else "\n\nUse the read tool to expand a URI.")
     )
 
 
