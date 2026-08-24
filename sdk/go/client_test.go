@@ -687,6 +687,33 @@ func TestAddResourceExtra(t *testing.T) {
 	}
 }
 
+func TestAddResourceForwardsRemoteSources(t *testing.T) {
+	remoteSources := []string{
+		"http://example.com/a.md",
+		"https://example.com/a.md",
+		"git@example.com:team/docs.git",
+		"ssh://git@example.com/team/docs.git",
+		"git://example.com/team/docs.git",
+	}
+
+	for _, source := range remoteSources {
+		t.Run(source, func(t *testing.T) {
+			client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body := readJSONBody(t, r)
+				if body["path"] != source {
+					t.Fatalf("path = %#v, want %q", body["path"], source)
+				}
+				writeOK(t, w, map[string]any{"root_uri": "viking://resources/a"})
+			}))
+			defer closeServer()
+
+			if _, err := client.AddResource(context.Background(), source, nil); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestAddResourceSendsAddTypeAndProcessingMode(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body := readJSONBody(t, r)
