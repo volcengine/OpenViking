@@ -423,6 +423,31 @@ function looksLikeUnknownField(res) {
   return text.includes("extra") || text.includes("mode") || text.includes("unexpected");
 }
 
+/**
+ * Extract the top-level body fields a validation error names as unknown, so the
+ * request can be retried without them. Older servers (e.g. v0.4.x) reject the
+ * newer context-face fields one by one with `extra_forbidden` entries like
+ * `{loc: ["body", "max_tokens"], type: "extra_forbidden"}`; each name here is a
+ * field the caller can drop and retry, instead of writing the whole context
+ * face off as unsupported.
+ */
+export function unknownBodyFields(res) {
+  const details = res?.error?.details ?? res?.error ?? {};
+  const errors = Array.isArray(details.validation_errors) ? details.validation_errors : [];
+  const fields = [];
+  for (const err of errors) {
+    const type = String(err?.type || "").toLowerCase();
+    const message = String(err?.message || "").toLowerCase();
+    if (!type.includes("extra") && !message.includes("extra inputs")) continue;
+    const loc = Array.isArray(err?.loc) ? err.loc : [];
+    const field = loc[loc.length - 1];
+    if (typeof field === "string" && field && field !== "body" && field !== "query") {
+      fields.push(field);
+    }
+  }
+  return [...new Set(fields)];
+}
+
 function wrapContext(body) {
   return [
     "<openviking-context>",
@@ -459,10 +484,25 @@ export async function fetchAssembledContext(fetchJSON, cfg, query, options = {})
 
   const body = buildContextSearchBody(cfg, options);
   body.query = query;
-  const res = await fetchJSON("/api/v1/search/search", {
-    method: "POST",
-    body: JSON.stringify(body),
-  }, { actorPeerId, timeoutMs: contextRequestTimeoutMs(cfg, body) });
+
+  // An older server rejects newer optional fields one by one (extra_forbidden), and it names
+  // them. Strip exactly what it names and retry, instead of marking the whole context face
+  // legacy on the first 400: a v0.4.x server that rejects `mode`/`purpose` still assembles
+  // context perfectly well from the fields it does know.
+  let res;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    res = await fetchJSON("/api/v1/search/search", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }, { actorPeerId, timeoutMs: contextRequestTimeoutMs(cfg, body) });
+    if (res.ok) break;
+    const status = res.status || 0;
+    if (status !== 400 && status !== 422) break;
+    const stripped = unknownBodyFields(res).filter((field) => field in body);
+    if (!stripped.length) break;
+    for (const field of stripped) delete body[field];
+    log("recall_context_face_fields_stripped", { attempt: attempt + 1, stripped });
+  }
 
   if (!res.ok) {
     const status = res.status || 0;
@@ -477,15 +517,28 @@ export async function fetchAssembledContext(fetchJSON, cfg, query, options = {})
 
   const result = res.result || {};
   const stats = result.stats || {};
+  let entries = Array.isArray(result.entries) ? result.entries : [];
+  if (!entries.length && Array.isArray(result.memories) && result.memories.length) {
+    // Older servers answer this endpoint with `memories` (context_type/abstract) instead of
+    // assembled `entries` (category/text). Same information, earlier shape; adapt it so a
+    // strip-retried request on an old server still yields recall instead of an empty block.
+    entries = result.memories.map((memory) => ({
+      uri: memory?.uri || "",
+      category: memory?.context_type || "memory",
+      text: String(memory?.abstract || memory?.overview || "").trim(),
+      score: memory?.score,
+    }));
+    log("recall_context_memories_shape", { entries: entries.length });
+  }
   log("recall_context_assembled", {
-    entries: Array.isArray(result.entries) ? result.entries.length : 0,
+    entries: entries.length,
     usedTokens: stats.used_tokens || 0,
     tiers: stats.tier_counts || {},
     rewrite: stats.rewrite || "off",
   });
   return {
     rendered: String(result.rendered || "").trim(),
-    entries: Array.isArray(result.entries) ? result.entries : [],
+    entries,
     digest: String(result.digest || "").trim(),
     stats,
   };
@@ -538,7 +591,27 @@ async function recallViaContextFace(fetchJSON, cfg, query, options, log) {
     }
   }
 
-  const injected = digest || rendered;
+  // Older servers return entries (or the memories shape adapted above) without any
+  // server-side `rendered` string. Render them locally rather than discarding recall
+  // the endpoint already paid for.
+  let fallbackRendered = rendered;
+  if (!fallbackRendered && entries.length) {
+    const maxContentChars = Math.max(
+      80,
+      Math.floor(Number(cfg.recallMaxContentChars || 500)),
+    );
+    fallbackRendered = entries
+      .map(normalizeContextEntry)
+      .filter((entry) => entry.uri || entry.text)
+      .map((entry) => {
+        const text = entry.text ? entry.text.slice(0, maxContentChars) : "";
+        return text ? `- ${entry.uri}\n  ${text}` : `- ${entry.uri}`;
+      })
+      .join("\n");
+    log("recall_context_rendered_locally", { entries: entries.length });
+  }
+
+  const injected = digest || fallbackRendered;
   if (!injected) return "";
   return wrapContext(injected);
 }
