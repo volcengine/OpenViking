@@ -89,6 +89,27 @@ test("loadConfig prefers env credentials over ovcli and legacy config", async ()
   })
 })
 
+test("loadConfig preserves logit-scale score threshold values", async () => {
+  const snapshot = { ...process.env }
+  await withTempDir("ov-oc-threshold-", async (dir) => {
+    try {
+      for (const key of Object.keys(process.env)) {
+        if (key.startsWith("OPENVIKING_")) delete process.env[key]
+      }
+      const project = join(dir, "project")
+      process.env.OPENVIKING_CLI_CONFIG_FILE = join(dir, "missing-ovcli.conf")
+      process.env.OPENVIKING_CONFIG_FILE = join(dir, "missing-ov.conf")
+      process.env.OPENVIKING_SCORE_THRESHOLD = "-8"
+
+      const cfg = loadConfig(dir, project)
+      assert.equal(cfg.scoreThreshold, -8)
+      assert.equal(cfg.autoRecall.scoreThreshold, -8)
+    } finally {
+      restoreOpenVikingEnv(snapshot)
+    }
+  })
+})
+
 test("loadConfig reads legacy credentials as fallback and marks deprecation", async () => {
   const snapshot = { ...process.env }
   await withTempDir("ov-oc-legacy-", async (dir) => {

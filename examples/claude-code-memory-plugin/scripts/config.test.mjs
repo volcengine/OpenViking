@@ -10,6 +10,7 @@ const OVERRIDES = [
   "OPENVIKING_CLI_CONFIG_FILE",
   "OPENVIKING_API_KEY",
   "OPENVIKING_BEARER_TOKEN",
+  "OPENVIKING_SCORE_THRESHOLD",
 ];
 
 /**
@@ -110,5 +111,21 @@ test("no api_key anywhere reports no source", () => {
     assert.equal(cfg.apiKey, "");
     assert.equal(cfg.credentialSource, "none");
     assert.equal(cfg.credentialPath, null);
+  });
+});
+
+test("score threshold accepts negative reranker logits from the environment", () => {
+  withConfigs({
+    env: { OPENVIKING_SCORE_THRESHOLD: "-8" },
+  }, () => {
+    assert.equal(loadConfig().scoreThreshold, -8);
+  });
+});
+
+test("score threshold accepts positive reranker logits above one from the environment", () => {
+  withConfigs({
+    env: { OPENVIKING_SCORE_THRESHOLD: "4.5" },
+  }, () => {
+    assert.equal(loadConfig().scoreThreshold, 4.5);
   });
 });

@@ -99,6 +99,8 @@ Behavior knobs live in the profile's Cordis patch entry:
             commitTokenThreshold: 20000
 ```
 
+`scoreThreshold` follows the reranker's native score scale. Cosine-like rerankers commonly use `0.0` to `1.0`; logit-scale rerankers may require negative values.
+
 Credentials given in the patch win over the environment; behavior toggles read the environment first. The full list is documented in the [bundle README](https://github.com/volcengine/OpenViking/tree/main/examples/dsh-memory-plugin).
 
 </details>

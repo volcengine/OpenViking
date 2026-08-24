@@ -137,6 +137,8 @@ Create `~/.config/opencode/openviking-config.json`:
 }
 ```
 
+`autoRecall.scoreThreshold` is interpreted in the reranker's native score scale. Cosine-like rerankers commonly use `0.0` to `1.0`; logit-scale rerankers may require negative values.
+
 `autoRecall.limit` is a legacy quota-scaling input, not a final result cap.
 Explicit values from 1 through 5 produce an effective total quota of 6 because
 each coding category keeps one retrieval slot. Use Context `quotas` directly

@@ -13,6 +13,21 @@ import { buildRecallBlock } from "./shared/recall-core.mjs";
 // until a server secret is configured there.
 const enabled = process.env.OPENVIKING_E2E === "1";
 
+test("resolveConfig preserves logit-scale score thresholds", () => {
+  const config = resolveConfig({ workspacePeer: false, scoreThreshold: -8, commitKeepRecentCount: 0 });
+
+  assert.equal(config.scoreThreshold, -8);
+});
+
+test("resolveConfig reads logit-scale score thresholds from the environment", () => {
+  const config = resolveConfig(
+    { workspacePeer: false, commitKeepRecentCount: 0 },
+    { OPENVIKING_SCORE_THRESHOLD: "-8" },
+  );
+
+  assert.equal(config.scoreThreshold, -8);
+});
+
 test("live recall returns a hit for a memory stored by this test", { skip: !enabled, timeout: 300_000 }, async () => {
   // keepRecentCount 0: with the default (10) a single-message session keeps
   // its whole tail verbatim and extraction has nothing to mine.

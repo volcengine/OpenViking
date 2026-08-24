@@ -281,3 +281,57 @@ test("buildRecallBlock falls back to find when neither context endpoint works", 
   assert.match(block, /^<openviking-context>/);
   assert.match(block, /\[memory 90%\]/);
 });
+
+test("fallback recall compares raw reranker logits against configured thresholds", async () => {
+  const logs = [];
+  const legacyCachePath = await tempPath("context-face.json");
+  const fetchJSON = async (path) => {
+    if (path === "/api/v1/search/search") return { ok: false, status: 503 };
+    if (path === "/api/v1/search/recall") return { ok: false, status: 404 };
+    if (path === "/api/v1/system/status") return { ok: true, result: { user: "default" } };
+    if (path.startsWith("/api/v1/fs/ls")) return { ok: true, result: [] };
+    if (path === "/api/v1/search/find") {
+      return {
+        ok: true,
+        result: {
+          memories: [
+            {
+              uri: "viking://user/default/memories/events/relevant.md",
+              score: 5.2,
+              abstract: "relevant logit-scale memory",
+              level: 1,
+              category: "events",
+            },
+            {
+              uri: "viking://user/default/memories/events/noise.md",
+              score: 2.1,
+              abstract: "lower logit-scale memory",
+              level: 1,
+              category: "events",
+            },
+          ],
+          skills: [],
+        },
+      };
+    }
+    return { ok: false, status: 404 };
+  };
+
+  const block = await buildRecallBlock(fetchJSON, {
+    recallLimit: 2,
+    recallMaxContentChars: 500,
+    recallTokenBudget: 200,
+    scoreThreshold: 4,
+    recallPreferAbstract: true,
+  }, "what happened yesterday", {
+    legacyCachePath,
+    log: (stage, data) => logs.push({ stage, data }),
+  });
+
+  assert.match(block, /relevant logit-scale memory/);
+  assert.doesNotMatch(block, /lower logit-scale memory/);
+  assert.deepEqual(
+    logs.find((entry) => entry.stage === "recall_picked").data.items,
+    [{ type: "memory", uri: "viking://user/default/memories/events/relevant.md", score: 5.2 }],
+  );
+});

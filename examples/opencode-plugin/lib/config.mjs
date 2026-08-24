@@ -253,7 +253,9 @@ function normalizeConfig(config) {
     60 * 60 * 1000,
   )
   config.autoRecall.limit = Math.max(1, Math.min(50, Math.round(Number(config.autoRecall.limit) || 10)))
-  config.autoRecall.scoreThreshold = Math.max(0, Math.min(1, Number(config.autoRecall.scoreThreshold) || 0))
+  config.autoRecall.scoreThreshold = Number.isFinite(Number(config.autoRecall.scoreThreshold))
+    ? Number(config.autoRecall.scoreThreshold)
+    : 0
   config.autoRecall.maxContentChars = Math.max(100, Math.min(5000, Math.round(Number(config.autoRecall.maxContentChars) || 500)))
   config.autoRecall.tokenBudget = Math.max(200, Math.min(50000, Math.round(Number(config.autoRecall.tokenBudget) || 2000)))
   config.autoRecall.minQueryLength = Math.max(1, Math.min(64, Math.round(Number(config.autoRecall.minQueryLength) || 3)))

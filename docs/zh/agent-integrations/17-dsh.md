@@ -99,6 +99,8 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
             commitTokenThreshold: 20000
 ```
 
+`scoreThreshold` 按 reranker 原始分数尺度解释；余弦类 reranker 通常是 `0.0` 到 `1.0`，logit-scale reranker 可能需要负值。
+
 patch 中写的凭证优先于环境变量；行为开关则优先读环境变量。完整参数列表见[插件 README](https://github.com/volcengine/OpenViking/tree/main/examples/dsh-memory-plugin)。
 
 </details>
