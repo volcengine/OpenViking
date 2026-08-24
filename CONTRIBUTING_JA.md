@@ -1,530 +1,257 @@
-# コントリビューションガイド
+# OpenVikingへのコントリビューション
 
-OpenVikingに興味をお持ちいただきありがとうございます！あらゆる種類のコントリビューションを歓迎します：
+[English](CONTRIBUTING.md) / [中文](CONTRIBUTING_CN.md) / 日本語
 
-- バグレポート
-- 機能リクエスト
-- ドキュメントの改善
-- コードのコントリビューション
+OpenVikingへのコントリビューションありがとうございます。このガイドは、明確で
+焦点が絞られ、レビューしやすい変更を提出するためのものです。
 
----
+バグ報告、機能リクエスト、ドキュメント改善、コードのコントリビューションを歓迎します。
 
-## 開発環境のセットアップ
+## 重視すること
+
+OpenVikingでは、焦点が絞られ、十分に理解された変更を重視します。AIツールの使用有無に
+かかわらず、コントリビューターは自分の変更を理解し、説明し、検証する責任を負います。
+
+必要十分な最小の変更を優先してください。簡潔なコードとは、必要な行数を削ることではなく、
+概念、分岐、重複ルール、推測に基づく抽象化を減らすことです。良い変更は直接的で読みやすく、
+エントリーポイントから観測可能な動作まで説明できます。
+
+具体的には：
+
+- 1つのPRでは、まとまりのある1つの問題だけを解決してください。無関係な整理や
+  リファクタリングを混ぜないでください。
+- ルールを所有する既存のモジュールを再利用し、並行する仕組みを追加しないでください。
+- 推測に基づくフォールバック、フラグ、状態フィールド、抽象化を避けてください。
+- 新しい実装によって置き換えられたコード、テスト、互換パスは削除してください。
+- 所有権、ライフサイクル、失敗処理を明確にするために必要な構造は残してください。
+
+### レビューの優先度
+
+メンテナーの時間には限りがあるため、焦点を絞ったPRからレビューします：
+
+- **変更行数が100行以下**のPRは、通常より迅速に確認されます。
+- **変更行数が200行以下**のPRは、それより大きなPRより優先して確認されます。
+
+これはレビューの優先度であり、厳格な上限や応答時間の保証ではありません。変更行数は、
+手書きのソース、テスト、ドキュメントにおける追加行と削除行の合計です。生成ファイル、
+ベンダーコード、ロックファイルは規模の判断から除外します。
+
+行数を抑えるために必要なテストやドキュメントを省略しないでください。分割後の各PRが
+単独で理解でき、正しさを保てる場合にのみ大きな変更を分割してください。PRが小さくても、
+正確性、設計品質、互換性の要件が下がることはありません。
+
+## 作業を始める前に
+
+1. 既存のIssue、PR、コードを検索し、同じ動作やドメインルールがないか確認してください。
+2. バグ修正では、可能な限り実際の本番エントリーポイントから再現してください。
+3. 所有モジュールを特定し、値や状態がどこで生成、正規化、保存、利用されるか追跡してください。
+4. 機能追加では、実装を設計する前に、問題と期待する動作を説明してください。
+
+次の変更は、実装前にIssueまたはDiscussionで相談してください：
+
+- 公開REST、SDK、CLI、MCP、設定のセマンティクス
+- 永続データ、ストレージスキーマ、VFS/AGFSパス、暗号化ファイルの動作
+- 非同期タスクの所有権、キュー、キャンセル、クリーンアップ、結果状態
+- リソースのインポート／監視、セッションライフサイクル、メモリ抽出
+- 検索レベル、ディレクトリスコープ、ランキングのセマンティクス
+- テナント、アカウント、ユーザー、ピアの識別境界
+- 複数の所有モジュールにまたがる変更や大規模なアーキテクチャ変更
+
+現在の動作、提案する動作、具体的なリクエストまたは設定例、互換性への影響を記載して
+ください。これにより、実装前にメンテナーが設計境界を確認できます。
+
+リポジトリのGitHubテンプレートを使用して、[バグ報告](https://github.com/volcengine/OpenViking/issues/new?template=bug_report.yml)、
+[機能リクエスト](https://github.com/volcengine/OpenViking/issues/new?template=feature_request.yml)、
+[質問](https://github.com/volcengine/OpenViking/issues/new?template=question.yml)を提出してください。
+
+## 適切な領域を見つける
+
+影響する領域が分かる場合は、IssueまたはPRに記載してください。不明な場合は、まず観測可能な
+動作とユースケースを説明してください。メンテナーが担当領域への振り分けを支援します。
+
+この表は、2026年6月24日から8月24日までにマージされたPRで継続的に確認できる
+作成・レビュー活動に基づいています。排他的なコード所有権ではなく、振り分けのための
+目安です。変更に直接関係する担当者だけにメンションしてください。
+
+| ドメイン | 領域 | 代表的なパスまたはトピック | 最近活動しているメンテナー／レビュアー |
+|---|---|---|---|
+| Platform | Server、API、Auth、Identity、Admin、Task | `openviking/server`、`openviking/service` | `@qin-ctx` |
+| Resource | 取り込み、Watch、タスクパイプライン | `openviking/resource` | `@qin-ctx`、`@KCHENPENGFEI` |
+| Resource | リソース解析 | `openviking/parse` | `@zihengli-bytedance`、`@KCHENPENGFEI` |
+| Memory | Session、メモリ抽出、コンパイル | `openviking/session`、メモリ抽出、`ov compile` | `@chenjw`、`@heaoxiang-ai`、`@fujiajie666` |
+| Retrieval | SearchとVectorDB | `openviking/retrieve`、`openviking/storage/vectordb` | `@zhoujh01`、`@t0saki` |
+| Storage | RAGFS、PathLock、QueueFS、暗号化 | `openviking/storage`、`openviking/pyagfs`、`openviking/crypto`、`crates/ragfs*` | `@baojun-zhang` |
+| Integration | Agent PluginとMCP | `agent-plugins`、メモリPluginの例、Server MCP | `@t0saki`、`@ZaynJarvis` |
+| Integration | VikingBotとAgentコンパイル | `bot`、`ov compile` | `@yeshion23333`、`@fujiajie666` |
+| Client | SDK、CLI、LangChain | `sdk`、`crates/ov_cli`、`integrations/langchain` | `@zhoujh01`、`@t0saki`、`@ehz0ah` |
+| Product | Web Studio | `web-studio` | `@yufeng201`、`@ZaynJarvis` |
+| Project | ドキュメント、CI、Pluginリリース | `docs`、`.github/workflows` | `@yufeng201`、`@ZaynJarvis` |
+
+複数領域にまたがる変更や担当が不明な場合は、主な影響領域を特定したうえで、
+`@qin-ctx`、`@ZaynJarvis`、`@zhoujh01`のいずれかにメンションしてください。
+
+## 開発環境
 
 ### 前提条件
 
-- **Python**: 3.10以上
-- **Go**: 1.22以上（AGFSコンポーネントのソースビルドに必要）
-- **Rust**: 1.91.1以上（ソースビルド時に同梱の `ov` CLI もビルドされるため必須）
-- **C++コンパイラ**: GCC 9以上 または Clang 11以上（コア拡張のビルドに必要、C++17サポートが必須）
-- **CMake**: 3.15以上
+- Python 3.10以上
+- ソースビルド、Rust Binding、同梱`ov` CLIの開発にはRust 1.91.1以上
+- `sdk/go`の開発時のみGo 1.22以上
+- C++17対応コンパイラ：GCC 9以上またはClang 11以上
+- CMake 3.15以上
 
-#### プラットフォーム別のネイティブビルドツール
+Linuxでは`build-essential`をインストールし、必要に応じて`pkg-config`も追加してください。
+macOSではXcode Command Line Toolsをインストールしてください。Windowsでのローカル
+ネイティブビルドにはCMakeとMinGWをインストールしてください。
 
-- **Linux**: `build-essential` の導入を推奨。環境によっては `pkg-config` も必要です
-- **macOS**: Xcode Command Line Tools をインストール（`xcode-select --install`）
-- **Windows**: ローカルのネイティブビルドには CMake と MinGW を推奨
+### インストール
 
-#### サポートされているプラットフォーム（プリコンパイル済みWheel）
-
-OpenVikingは以下の環境向けにプリコンパイル済み**Wheel**パッケージを提供しています：
-
-- **Windows**: x86_64
-- **macOS**: x86_64、arm64（Apple Silicon）
-- **Linux**: x86_64、arm64（manylinux）
-
-その他のプラットフォーム（例：FreeBSD）では、`pip`によるインストール時にソースから自動コンパイルされます。[前提条件](#前提条件)がインストールされていることを確認してください。
-
-### 1. フォークとクローン
+リポジトリをフォークし、自分のフォークをクローンします：
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/openviking.git
-cd openviking
+git clone https://github.com/YOUR_USERNAME/OpenViking.git
+cd OpenViking
 ```
 
-### 2. 依存関係のインストール
-
-Python環境管理には`uv`の使用を推奨します：
+`uv`の使用を推奨します：
 
 ```bash
-# uvのインストール（未インストールの場合）
 curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# 依存関係の同期と仮想環境の作成
 uv sync --all-extras
-source .venv/bin/activate  # Linux/macOS
-# または .venv\Scripts\activate  # Windows
 ```
 
-#### ローカル開発とネイティブコンポーネントの再ビルド
+環境を確認します：
 
-OpenVikingはAGFSに対してデフォルトで`binding-client`モードを使用し、事前にビルドされたネイティブ成果物を利用します。**AGFS（Go）**コード、同梱の**Rust CLI**、または**C++拡張**を変更した場合や、プリビルド成果物が見つからない場合は、再コンパイルと再インストールが必要です。プロジェクトルートで以下のコマンドを実行してください：
+```bash
+uv run python -c "import openviking; print(openviking.__version__)"
+```
+
+ローカルサーバーを設定します：
+
+```bash
+uv run openviking-server init
+uv run openviking-server doctor
+```
+
+設定とProviderの例は[設定ガイド](https://docs.openviking.ai/en/guides/01-configuration)を
+参照してください。
+
+RAGFS Rust Binding、同梱Rust CLI、C++拡張を変更した場合は、ネイティブコンポーネントを
+再ビルドしてください：
 
 ```bash
 uv pip install -e . --force-reinstall
 ```
 
-このコマンドにより`setup.py`が再実行され、AGFS、同梱 `ov` CLI、C++コンポーネントの再ビルドがトリガーされます。
+SDK、Integration、Plugin、Benchmarkには追加のセットアップ手順がある場合があります。
+各ディレクトリのREADMEまたはパッケージマニフェストを確認してください。
 
-### 3. 環境設定
+## 変更の実装
 
-設定ファイル `~/.openviking/ov.conf` を作成します：
+### 所有権と設計
 
-```json
-{
-  "embedding": {
-    "dense": {
-      "provider": "volcengine",
-      "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-251215",
-      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-      "dimension": 1024,
-      "input": "multimodal"
-    }
-  },
-  "vlm": {
-    "api_key": "your-api-key",
-    "model": "doubao-seed-2-0-lite-260428",
-    "api_base": "https://ark.cn-beijing.volces.com/api/v3"
-  }
-}
-```
+- 動作は所有モジュールに実装してください。上位レイヤーは結果を転送または利用し、
+  同じルールを再実装しないでください。
+- 外部の互換表現は境界で1つの正規ドメインモデルに変換してください。内部ビジネスロジックに
+  入力形式の推測を持ち込まないでください。
+- クライアント向けの境界では、Server、Network、Timeout、Auth、Conflictの意味ある
+  エラー区分を維持してください。
+- タスク状態は、その状態を生成したタスクとの因果関係を保つ必要があります。グローバルキューの
+  状態や無関係なコールバックから完了を推測しないでください。
+- 各値とルールには、信頼できる情報源を1つだけ持たせてください。
 
-環境変数を設定します：
+局所的なエッジケースがタスク境界、公開セマンティクス、全体アーキテクチャを変え始めた場合は、
+メインフローに特殊分岐を追加し続けず、実装を止めて設計議論に戻ってください。
+
+### コードスタイル
+
+PythonではRuffをフォーマットとLintに、mypyを型チェックに使用します。設定行幅は100文字です。
+
+変更したパスに対してチェックを実行してください：
 
 ```bash
-export OPENVIKING_CONFIG_FILE=~/.openviking/ov.conf
+uv run ruff format <changed-paths>
+uv run ruff check <changed-paths>
+uv run mypy <changed-paths>
 ```
 
-### 4. インストールの確認
+公開APIには短く有用なDocstringを付けてください。コードを言い換えるコメントより、明確な名前と
+直接的な制御フローを優先してください。
+
+Rust、Go、TypeScript、ドキュメント、Pluginの変更では、各コンポーネントで定義された
+フォーマット、Lint、型チェック、テストコマンドを使用してください。
+
+### テスト
+
+変更の影響を受ける、意味のある最小の公開契約と主要な失敗境界を検証してください。
+
+- 既存の価値の高い契約テストを更新することを優先してください。
+- デフォルトでは、新しいユニットテストやテストファイルを追加しないでください。
+- 長期的な公開契約を保護する場合を除き、プライベートHelperの存在、Mock呼び出し順序、
+  単純なフィールド転送、フレームワークの動作をテストしないでください。
+- 小さく明確な修正では、自動的に新しいテストを追加する必要はありませんが、検証方法を
+  説明する必要があります。
+- 一時的な再現、診断、負荷、検証スクリプトは`test_scripts/`に置き、ソース、Benchmark、
+  メンテナンススクリプトのディレクトリには置かないでください。
+
+関連するテストを絞って実行します。例：
 
 ```bash
-python -c "import openviking; print(openviking.__version__)"
+uv run pytest tests/client/test_http_client_config.py
+uv run pytest tests/server/ -k "search"
 ```
 
-### 5. Rust CLIのビルド（オプション）
-
-Rust CLI（`ov`）は、OpenViking Serverとやり取りするための高性能コマンドラインクライアントを提供します。
-
-`ov` を直接使わない場合でも、OpenViking をソースからビルドするなら Rust ツールチェーンは必要です。パッケージング時に同梱 CLI バイナリも一緒にビルドされるためです。
-
-**前提条件**: Rust >= 1.91.1
+変更範囲とリスクに応じて必要な場合のみ、Pythonテスト全体を実行してください：
 
 ```bash
-# ソースからビルドしてインストール
-cargo install --path crates/ov_cli
-
-# または公開済みの npm CLI パッケージをインストール（プリビルドバイナリをダウンロード）
-npm i -g @openviking/cli
+uv run pytest
 ```
 
-インストール後、`ov --help`を実行して利用可能なすべてのコマンドを確認できます。CLI接続設定は`~/.openviking/ovcli.conf`に記述します。
+## Pull Requestの提出
 
----
+最新の`main`からブランチを作成し、焦点を絞った変更を行って`main`向けにPRを提出します。
 
-## プロジェクト構成
+コミットメッセージとPRタイトルには
+[Conventional Commits](https://www.conventionalcommits.org/)を使用してください：
 
-```
-openviking/
-├── pyproject.toml        # プロジェクト設定
-├── Cargo.toml            # Rustワークスペース設定
-├── third_party/          # サードパーティ依存関係
-│   └── agfs/             # AGFSファイルシステム
-│
-├── openviking/           # Pythonサーバーとコア実装
-│   ├── client/           # HTTPクライアント互換エクスポート
-│   ├── console/          # スタンドアロン console UI とプロキシサービス
-│   ├── core/             # コアデータモデルとディレクトリ抽象
-│   ├── message/          # セッションメッセージと part モデル
-│   ├── models/           # Embedding / VLM バックエンド
-│   ├── parse/            # リソースパーサーと検出器
-│   ├── resource/         # リソース処理と watch 管理
-│   ├── retrieve/         # 検索システム
-│   ├── server/           # HTTPサーバー
-│   ├── service/          # 共通 service レイヤー
-│   ├── session/          # セッション管理と圧縮
-│   ├── storage/          # ストレージレイヤー
-│   ├── telemetry/        # オペレーション telemetry
-│   ├── trace/            # trace とランタイム追跡補助
-│   ├── utils/            # ユーティリティと設定補助
-│   └── prompts/          # プロンプトテンプレート
-│
-├── crates/               # Rustコンポーネント
-│   └── ov_cli/           # Rust CLIクライアント
-│       ├── src/          # CLIソースコード
-│       └── install.sh    # 非推奨スタブ（npm パッケージを使用、Install を参照）
-│
-├── src/                  # C++拡張ソース（Python abi3）
-│
-├── tests/                # テストスイート
-│   ├── client/           # クライアントテスト
-│   ├── console/          # Console テスト
-│   ├── core/             # コアロジックテスト
-│   ├── parse/            # パーサーテスト
-│   ├── resource/         # リソース処理テスト
-│   ├── retrieve/         # 検索テスト
-│   ├── server/           # サーバーテスト
-│   ├── service/          # Service レイヤーテスト
-│   ├── session/          # セッションテスト
-│   ├── storage/          # ストレージテスト
-│   ├── telemetry/        # Telemetry テスト
-│   ├── vectordb/         # ベクトルデータベーステスト
-│   └── integration/      # E2E テスト
-│
-└── docs/                 # ドキュメント
-    ├── en/               # 英語ドキュメント
-    └── zh/               # 中国語ドキュメント
+```text
+feat(parser): support xlsx resources
+fix(retrieval): preserve rerank score order
+docs: clarify server configuration
+refactor(storage): remove duplicate path normalization
 ```
 
----
-
-## コードスタイル
-
-コードの一貫性を維持するために以下のツールを使用しています：
-
-| ツール | 目的 | 設定 |
-|------|---------|--------|
-| **Ruff** | リンティング、フォーマット、インポートソート | `pyproject.toml` |
-| **mypy** | 型チェック | `pyproject.toml` |
-
-### チェックの実行
-
-```bash
-# コードのフォーマット
-ruff format openviking/
-
-# リント
-ruff check openviking/
-
-# 型チェック
-mypy openviking/
-```
-
-### スタイルガイドライン
-
-1. **行幅**: 100文字
-2. **インデント**: スペース4つ
-3. **文字列**: ダブルクォートを推奨
-4. **型ヒント**: 推奨（必須ではない）
-5. **Docstring**: パブリックAPIには必須（最大1〜2行）
-
----
-
-## テスト
-
-### テストの実行
-
-```bash
-# 全テストの実行
-pytest
-
-# 特定のテストモジュールの実行
-pytest tests/client/ -v
-pytest tests/server/ -v
-pytest tests/parse/ -v
-
-# 特定のテストファイルの実行
-pytest tests/client/test_http_client_config.py
-
-# 特定のテストの実行
-pytest tests/client/test_http_client_config.py
-
-# キーワードで実行
-pytest -k "search" -v
-
-# カバレッジ付きで実行
-pytest --cov=openviking --cov-report=term-missing
-```
-
-### テストの書き方
-
-テストは`tests/`配下のサブディレクトリに整理されています。プロジェクトは`asyncio_mode = "auto"`を使用しているため、非同期テストに`@pytest.mark.asyncio`デコレーターは**不要**です：
-
-```python
-# tests/service/test_example.py
-class TestResourceService:
-    async def test_add_resource(self, service, request_context, sample_markdown_file):
-        result = await service.resources.add_resource(
-            path=str(sample_markdown_file),
-            ctx=request_context,
-            reason="test document",
-        )
-        assert "root_uri" in result
-        assert result["root_uri"].startswith("viking://")
-```
-
-共通フィクスチャは`tests/conftest.py`に定義されており、初期化済みの`service`、`request_context`、`temp_dir`、サンプルファイルなどが含まれます。
-
----
-
-## コントリビューションワークフロー
-
-### 1. ブランチの作成
-
-```bash
-git checkout main
-git pull origin main
-git checkout -b feature/your-feature-name
-```
-
-ブランチ命名規則：
-- `feature/xxx` - 新機能
-- `fix/xxx` - バグ修正
-- `docs/xxx` - ドキュメント更新
-- `refactor/xxx` - コードリファクタリング
-
-### 2. 変更の実施
-
-- コードスタイルガイドラインに従う
-- 新機能にはテストを追加する
-- 必要に応じてドキュメントを更新する
-
-### 3. 変更のコミット
-
-```bash
-git add .
-git commit -m "feat: add new parser for xlsx files"
-```
-
-### 4. プッシュとPRの作成
-
-```bash
-git push origin feature/your-feature-name
-```
-
-その後、GitHubでプルリクエストを作成します。
-
----
-
-## コミット規約
-
-[Conventional Commits](https://www.conventionalcommits.org/)に従います：
-
-```
-<type>(<scope>): <subject>
-
-<body>
-
-<footer>
-```
-
-### タイプ
-
-| タイプ | 説明 |
-|------|-------------|
-| `feat` | 新機能 |
-| `fix` | バグ修正 |
-| `docs` | ドキュメント |
-| `style` | コードスタイル（ロジック変更なし） |
-| `refactor` | コードリファクタリング |
-| `perf` | パフォーマンス改善 |
-| `test` | テスト |
-| `chore` | ビルド/ツーリング |
-
-### 例
-
-```bash
-# 新機能
-git commit -m "feat(parser): add support for xlsx files"
-
-# バグ修正
-git commit -m "fix(retrieval): fix score calculation in rerank"
-
-# ドキュメント
-git commit -m "docs: update quick start guide"
-
-# リファクタリング
-git commit -m "refactor(storage): simplify interface methods"
-```
-
----
-
-## プルリクエストガイドライン
-
-### PRタイトル
-
-コミットメッセージと同じフォーマットを使用します。
-
-### PR説明テンプレート
-
-```markdown
-## 概要
-
-変更内容とその目的の簡単な説明。
-
-## 変更の種類
-
-- [ ] 新機能（feat）
-- [ ] バグ修正（fix）
-- [ ] ドキュメント（docs）
-- [ ] リファクタリング（refactor）
-- [ ] その他
-
-## テスト
-
-これらの変更のテスト方法を記述してください：
-- [ ] ユニットテストが通過する
-- [ ] 手動テストが完了している
-
-## 関連Issue
-
-- Fixes #123
-- Related to #456
-
-## チェックリスト
-
-- [ ] コードがプロジェクトのスタイルガイドラインに従っている
-- [ ] 新機能にテストが追加されている
-- [ ] ドキュメントが更新されている（必要な場合）
-- [ ] すべてのテストが通過する
-```
-
----
-
-## CI/CDワークフロー
-
-継続的インテグレーションとデプロイメントに**GitHub Actions**を使用しています。ワークフローはモジュール化され、段階的に設計されています。
-
-### 1. 自動ワークフロー
-
-| イベント | ワークフロー | 説明 |
-|-------|----------|-------------|
-| **プルリクエスト** | `pr.yml` | **Lint**（Ruff、Mypy）と**Test Lite**（Linux + Python 3.10での統合テスト）を実行。コントリビューターに迅速なフィードバックを提供。（**01. Pull Request Checks**として表示） |
-| **mainへのプッシュ** | `ci.yml` | **Test Full**（全OS：Linux/Win/Mac、全Pyバージョン：3.10-3.14）と**CodeQL**（セキュリティスキャン）を実行。mainブランチの安定性を保証。（**02. Main Branch Checks**として表示） |
-| **リリース公開** | `release.yml` | GitHubでリリースを作成すると発動。自動的にソースディストリビューションとwheelをビルドし、Gitタグからバージョンを判定して**PyPI**に公開。（**03. Release**として表示） |
-| **週次Cron** | `schedule.yml` | 毎週日曜日に**CodeQL**セキュリティスキャンを実行。（**04. Weekly Security Scan**として表示） |
-
-このほか、PR review の自動化、Docker イメージのビルド、Rust CLI のパッケージング用ワークフローも用意されています。
-
-### 2. 手動トリガーワークフロー
-
-メンテナーは「Actions」タブから以下のワークフローを手動でトリガーして、特定のタスクを実行したり問題をデバッグしたりできます。
-
-#### A. Lintチェック (`11. _Lint Checks`)
-コードスタイルチェック（Ruff）と型チェック（Mypy）を実行。引数は不要です。
-
-#### B. テストスイート（Lite）(`12. _Test Suite (Lite)`)
-高速統合テストを実行し、カスタムマトリックス設定をサポートします。
-
-*   **入力**:
-    *   `os_json`: 実行するOSのJSON文字列配列（例：`["ubuntu-24.04"]`）。
-    *   `python_json`: Pythonバージョンの JSON文字列配列（例：`["3.10"]`）。
-
-#### C. テストスイート（Full）(`13. _Test Suite (Full)`)
-サポートされているすべてのプラットフォーム（Linux/Mac/Win）とPythonバージョン（3.10-3.14）で完全なテストスイートを実行。手動トリガー時にカスタムマトリックス設定をサポートします。
-
-*   **入力**:
-    *   `os_json`: 実行するOSのリスト（デフォルト：`["ubuntu-24.04", "macos-14", "windows-latest"]`）。
-    *   `python_json`: Pythonバージョンのリスト（デフォルト：`["3.10", "3.11", "3.12", "3.13", "3.14"]`）。
-
-#### D. セキュリティスキャン (`14. _CodeQL Scan`)
-CodeQLセキュリティ分析を実行。引数は不要です。
-
-#### E. ディストリビューションビルド (`15. _Build Distribution`)
-Pythonのwheelパッケージのみをビルドし、公開はしません。
-
-*   **入力**:
-    *   `os_json`: ビルドするOSのリスト（デフォルト：`["ubuntu-24.04", "ubuntu-24.04-arm", "macos-14", "macos-15-intel", "windows-latest"]`）。
-    *   `python_json`: Pythonバージョンのリスト（デフォルト：`["3.10", "3.11", "3.12", "3.13", "3.14"]`）。
-    *   `build_sdist`: ソースディストリビューションをビルドするか（デフォルト：`true`）。
-    *   `build_wheels`: wheelディストリビューションをビルドするか（デフォルト：`true`）。
-
-#### F. ディストリビューション公開 (`16. _Publish Distribution`)
-ビルド済みパッケージをPyPIに公開（ビルドRun IDが必要）。
-
-*   **入力**:
-    *   `target`: 公開先を選択（`testpypi`、`pypi`、`both`）。
-    *   `build_run_id`: ビルドワークフローのRun ID（必須、ビルド実行URLから取得）。
-
-#### G. 手動リリース (`03. Release`)
-ワンストップのビルドと公開（ビルドと公開ステップを含む）。
-
-> **バージョン番号とタグ規約**:
-> このプロジェクトは`setuptools_scm`を使用してGitタグからバージョン番号を自動抽出します。
-> *   **タグ命名規約**: `vX.Y.Z`形式に従う必要があります（例：`v0.1.0`、`v1.2.3`）。タグはセマンティックバージョニングに準拠する必要があります。
-> *   **リリースビルド**: リリースイベントがトリガーされると、バージョン番号はGitタグに直接対応します（例：`v0.1.0` -> `0.1.0`）。
-> *   **手動/非タグビルド**: バージョン番号には最後のタグからのコミット数が含まれます（例：`0.1.1.dev3`）。
-> *   **バージョン確認**: 公開ジョブ完了後、ワークフロー**Summary**ページ上部の**Notifications**エリアで公開バージョンを直接確認できます（例：`Successfully published to PyPI with version: 0.1.8`）。ログまたは**Artifacts**のファイル名でも確認できます。
-
-*   **入力**:
-    *   `target`: 公開先を選択。
-        *   `none`: アーティファクトのビルドのみ（公開なし）。ビルド機能の検証に使用。
-        *   `testpypi`: TestPyPIに公開。ベータテストに使用。
-        *   `pypi`: 公式PyPIに公開。
-        *   `both`: 両方に公開。
-    *   `os_json`: ビルドプラットフォーム（デフォルトはすべて含む）。
-    *   `python_json`: Pythonバージョン（デフォルトはすべて含む）。
-    *   `build_sdist`: ソースディストリビューションをビルドするか（デフォルト：`true`）。
-    *   `build_wheels`: wheelディストリビューションをビルドするか（デフォルト：`true`）。
-
-> **公開に関する注意事項**:
-> *   **先にテスト**: 公式PyPIに公開する前に、**TestPyPI**で検証することを強く推奨します。PyPIとTestPyPIは完全に独立した環境であり、アカウントやパッケージデータは共有されません。
-> *   **上書き不可**: PyPIもTestPyPIも、同じ名前とバージョンの既存パッケージの上書きを許可しません。再公開が必要な場合は、バージョン番号をアップグレードする必要があります（例：新しいバージョンをタグ付けするか、新しいdevバージョンを生成）。既存のバージョンを公開しようとすると、ワークフローが失敗します。
-
----
-
-## Issueガイドライン
-
-### バグレポート
-
-以下を提供してください：
-
-1. **環境**
-   - Pythonバージョン
-   - OpenVikingバージョン
-   - オペレーティングシステム
-
-2. **再現手順**
-   - 詳細な手順
-   - コードスニペット
-
-3. **期待される動作と実際の動作**
-
-4. **エラーログ**（ある場合）
-
-### 機能リクエスト
-
-以下を記述してください：
-
-1. **問題**: どのような問題を解決しようとしていますか？
-2. **解決策**: どのような解決策を提案しますか？
-3. **代替案**: 他のアプローチを検討しましたか？
-
----
+リポジトリのPRテンプレートをすべて記入してください。良いPR説明には次を含めます：
+
+- 変更前後の観測可能な動作
+- バグ修正の場合は、根本原因と実際の実行パス
+- 影響するエントリーポイントと所有モジュール
+- 互換性または移行への影響（該当する場合）
+- 実際に実行した検証コマンド
+- 問題を再現したのか、コードから推測しただけなのか
+
+Human Involvementの項目は正確に選択してください。AI支援によるコントリビューションも
+歓迎しますが、作者は変更に責任を持ち、システムの他の部分との相互作用を説明できる必要が
+あります。
+
+提出前に：
+
+- Diff全体を確認し、無関係な変更や意図せず生成された変更を削除してください。
+- 置き換えられたHelper、分岐、Mock、コメントが削除されていることを確認してください。
+- 公開動作が変わる場合は、関連ドキュメントを更新してください。
+- 実行しなかったチェックと具体的な理由を報告し、未実行のテストを実行済みとしないでください。
+
+CIは影響するパスに応じてチェックを実行します。CIの成功は必要条件ですが、作者による検証や
+メンテナーレビューの代わりにはなりません。
 
 ## ドキュメント
 
-ドキュメントは`docs/`配下にMarkdown形式で管理されています：
+プロジェクトドキュメントは`docs/en/`と`docs/zh/`にあります。コード例は実行可能にし、
+明確で簡潔な表現を使用してください。対応する翻訳がある場合は両言語を更新してください。
 
-- `docs/en/` - 英語ドキュメント
-- `docs/zh/` - 中国語ドキュメント
+## コミュニティ
 
-### ドキュメントガイドライン
-
-1. コード例は実行可能であること
-2. ドキュメントとコードの同期を維持すること
-3. 明確で簡潔な言葉を使用すること
-
----
-
-## 行動規範
-
-このプロジェクトに参加することで、以下に同意するものとします：
-
-1. **敬意を持つ**: 友好的でプロフェッショナルな態度を維持する
-2. **包括的である**: あらゆるバックグラウンドのコントリビューターを歓迎する
-3. **建設的である**: 有益なフィードバックを提供する
-4. **集中する**: 議論を技術的な内容に保つ
-
----
-
-## ヘルプ
-
-質問がある場合：
-
-- [GitHub Issues](https://github.com/volcengine/openviking/issues)
-- [Discussions](https://github.com/volcengine/openviking/discussions)
-
----
-
-コントリビューションありがとうございます！
+敬意を持ち、包括的かつ建設的に、技術的な議論へ集中してください。自由形式の設計や使用方法の
+議論には[GitHub Discussions](https://github.com/volcengine/OpenViking/discussions)を、
+対応可能なバグや機能リクエストには
+[GitHub Issues](https://github.com/volcengine/OpenViking/issues)を使用してください。
