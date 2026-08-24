@@ -6,8 +6,14 @@
 import xml.etree.ElementTree as ET
 
 import httpx
+import pytest
+from starlette.requests import Request
 
-from openviking.server.routers.webdav import _ensure_exposed_path, _exposed_child_entries
+from openviking.server.routers.webdav import (
+    _ensure_exposed_path,
+    _exposed_child_entries,
+    _read_limited_body,
+)
 from openviking_cli.exceptions import NotFoundError
 
 
@@ -178,6 +184,70 @@ async def test_webdav_put_rejects_non_utf8_content(client: httpx.AsyncClient):
     )
 
     assert resp.status_code == 415
+
+
+async def test_webdav_put_rejects_declared_oversize_before_write(client, service, monkeypatch):
+    writes: list[object] = []
+
+    async def _tracked_write(*args, **kwargs):
+        writes.append((args, kwargs))
+
+    monkeypatch.setattr(service.viking_fs, "write_file", _tracked_write)
+
+    resp = await client.request(
+        "PUT",
+        "/webdav/resources/oversize.md",
+        content=b"x" * (16 * 1024 * 1024 + 1),
+    )
+
+    assert resp.status_code == 413
+    assert writes == []
+
+
+@pytest.mark.asyncio
+async def test_webdav_stream_limit_accepts_exactly_configured_size():
+    limit = 16 * 1024 * 1024
+    chunks = [{"type": "http.request", "body": b"x" * limit, "more_body": False}]
+
+    async def receive():
+        return chunks.pop(0)
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "PUT",
+            "scheme": "http",
+            "path": "/webdav/resources/a",
+            "headers": [],
+        },
+        receive=receive,
+    )
+
+    assert len(await _read_limited_body(request, limit=limit) or b"") == limit
+
+
+@pytest.mark.asyncio
+async def test_webdav_stream_limit_rejects_chunked_excess_without_content_length():
+    chunks = [
+        {"type": "http.request", "body": b"abc", "more_body": True},
+        {"type": "http.request", "body": b"def", "more_body": False},
+    ]
+
+    async def receive():
+        return chunks.pop(0)
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "PUT",
+            "scheme": "http",
+            "path": "/webdav/resources/a",
+            "headers": [],
+        },
+        receive=receive,
+    )
+
+    assert await _read_limited_body(request, limit=5) is None
 
 
 async def test_webdav_move_and_delete_text_file(client: httpx.AsyncClient):

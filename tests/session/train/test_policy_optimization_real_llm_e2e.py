@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -33,6 +34,15 @@ from openviking.session.train.components.gradient_estimator import ExperienceGra
 from openviking.telemetry import start_current_span, tracer
 from openviking.telemetry.tracer import init_tracer_from_server_config
 from openviking_cli.utils.config import get_openviking_config
+
+
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        os.environ.get("RUN_OPENVIKING_LIVE_TESTS") != "1",
+        reason="real-LLM training tests require RUN_OPENVIKING_LIVE_TESTS=1",
+    ),
+]
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -573,7 +583,6 @@ def _patch_experience_prefetch(monkeypatch, fs: InMemoryVikingFS, experience_uri
 
 
 @pytest.mark.asyncio
-@pytest.mark.integration
 async def test_policy_optimization_pipeline_real_config_llm_e2e_writes_updated_experience(
     monkeypatch,
 ):
@@ -686,7 +695,6 @@ async def _run_policy_optimization_pipeline_real_config_llm_e2e_writes_updated_e
 
 
 @pytest.mark.asyncio
-@pytest.mark.integration
 @tracer(
     "train.test.real_llm_e2e.gradient_estimator",
     ignore_result=True,

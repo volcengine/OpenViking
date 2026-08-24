@@ -570,6 +570,7 @@ setup(
             "storage/vectordb/engine/*.pyd",
         ],
         "vikingbot": [
+            "console/static/**/*",
             "workspace/**/*",
             "bridge/**/*",
         ],

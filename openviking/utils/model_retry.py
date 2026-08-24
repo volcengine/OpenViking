@@ -6,6 +6,7 @@ import random
 import re
 import threading
 import time
+from collections import deque
 from typing import Awaitable, Callable, TypeVar
 
 from openviking.utils.exceptions import AllCredentialsFailedError
@@ -13,6 +14,22 @@ from openviking.utils.exceptions import AllCredentialsFailedError
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+_NON_RETRYABLE_MARKER = "_openviking_vlm_non_retryable"
+_MAX_EXCEPTION_GRAPH_NODES = 256
+_MAX_EXCEPTION_GRAPH_EDGES = 512
+_MAX_AGGREGATE_CHILDREN = 256
+
+
+class _NonRetryableVLMError(Exception):
+    """Opaque fallback when the original exception rejects instance markers."""
+
+    _openviking_vlm_non_retryable = True
+
+    def __init__(self, original: BaseException):
+        super().__init__("VLM stream interrupted after partial output")
+        self.__cause__ = original
+
 
 # Error classification categories returned by classify_api_error()
 ERROR_CLASS_PERMANENT = "permanent"  # request-level 4xx (e.g. 400 invalid parameter)
@@ -218,8 +235,89 @@ def classify_api_error(error: Exception) -> str:
     return ERROR_CLASS_UNKNOWN
 
 
+def mark_vlm_error_non_retryable(error: BaseException) -> BaseException:
+    """Mark ``error`` in place so outer retry/failover layers cannot replay it."""
+    try:
+        setattr(error, _NON_RETRYABLE_MARKER, True)
+        return error
+    except BaseException:
+        return _NonRetryableVLMError(error)
+
+
+def is_vlm_error_non_retryable(error: BaseException) -> bool:
+    """Find a non-retryable marker in a bounded exception graph.
+
+    Unreadable, malformed, or over-budget graphs fail closed because treating an
+    uncertain partial-stream failure as retryable could replay visible output.
+    """
+    if not isinstance(error, BaseException):
+        return True
+
+    pending: deque[BaseException] = deque([error])
+    seen: set[int] = set()
+    edge_count = 0
+    aggregate_child_count = 0
+
+    while pending:
+        current = pending.popleft()
+        identity = id(current)
+        if identity in seen:
+            continue
+        if len(seen) >= _MAX_EXCEPTION_GRAPH_NODES:
+            return True
+        seen.add(identity)
+
+        try:
+            if bool(getattr(current, _NON_RETRYABLE_MARKER, False)):
+                return True
+            cause = current.__cause__
+            context = current.__context__
+        except Exception:
+            return True
+
+        linked: list[BaseException] = []
+        for child in (cause, context):
+            if child is None:
+                continue
+            if not isinstance(child, BaseException):
+                return True
+            edge_count += 1
+            if edge_count > _MAX_EXCEPTION_GRAPH_EDGES:
+                return True
+            linked.append(child)
+
+        if isinstance(current, AllCredentialsFailedError):
+            try:
+                errors = current.errors
+                if not isinstance(errors, (list, tuple)):
+                    return True
+                if len(errors) > _MAX_AGGREGATE_CHILDREN - aggregate_child_count:
+                    return True
+                for entry in errors:
+                    aggregate_child_count += 1
+                    if aggregate_child_count > _MAX_AGGREGATE_CHILDREN:
+                        return True
+                    if not isinstance(entry, tuple) or len(entry) != 4:
+                        return True
+                    child = entry[2]
+                    if not isinstance(child, BaseException):
+                        return True
+                    edge_count += 1
+                    if edge_count > _MAX_EXCEPTION_GRAPH_EDGES:
+                        return True
+                    linked.append(child)
+            except Exception:
+                return True
+
+        pending.extend(linked)
+
+    return False
+
+
 def is_retryable_api_error(error: Exception) -> bool:
     """Return True if the error should be retried."""
+    if is_vlm_error_non_retryable(error):
+        return False
     return classify_api_error(error) == ERROR_CLASS_TRANSIENT
 
 
@@ -292,6 +390,8 @@ def is_retryable_rate_limit_error(exc: BaseException) -> bool:
     VikingBot provider adapters and benchmark integrations can share the same
     classifier without importing each other's heavier runtime dependencies.
     """
+    if is_vlm_error_non_retryable(exc):
+        return False
     if _structured_rate_limit_match(exc):
         return True
     text = str(exc or "")
@@ -343,6 +443,8 @@ def retry_sync(
         try:
             return func()
         except Exception as e:
+            if is_vlm_error_non_retryable(e):
+                raise
             if max_retries <= 0 or attempt >= max_retries or not is_retryable(e):
                 raise
 
@@ -383,6 +485,8 @@ async def retry_async(
         try:
             return await func()
         except Exception as e:
+            if is_vlm_error_non_retryable(e):
+                raise
             if max_retries <= 0 or attempt >= max_retries or not is_retryable(e):
                 raise
 

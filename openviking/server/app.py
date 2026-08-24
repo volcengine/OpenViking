@@ -28,6 +28,10 @@ from openviking.server.dependencies import set_server_config, set_service
 from openviking.server.error_mapping import map_exception
 from openviking.server.identity import Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
+from openviking.server.public_url import (
+    resolve_configured_public_base_url,
+    validate_public_deployment_config,
+)
 from openviking.server.profile_middleware import create_profile_http_middleware
 from openviking.server.request_id import REQUEST_ID_HEADER, RequestIdMiddleware
 from openviking.server.routers import (
@@ -246,6 +250,7 @@ def create_app(
         )
 
     validate_server_config(config)
+    validate_public_deployment_config(config)
 
     usage_reporter_unset = object()
     usage_reporter = usage_reporter_unset
@@ -351,7 +356,7 @@ def create_app(
         # Start MCP session manager (must be active before /mcp requests)
         from openviking.server.mcp_endpoint import mcp_lifespan
 
-        async with mcp_lifespan():
+        async with mcp_lifespan(getattr(app.state, "mcp_session_manager", None)):
             if service is not None:
                 await _initialize_runtime_state(app, service, config)
             yield
@@ -637,88 +642,82 @@ def create_app(
     # SDK routes inspect request.app.state at call time.
     try:
         ov_cfg = get_openviking_config()
-        if ov_cfg.oauth.enabled:
-            from mcp.server.auth.routes import create_auth_routes
-            from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
-            from pydantic import AnyHttpUrl
-
-            from openviking.server.oauth.router import router as oauth_router
-
-            # Custom routes (authorize page + consent / verify endpoints).
-            app.include_router(oauth_router)
-
-            # SDK-owned routes (DCR / authorize / token / metadata / revoke).
-            # We need a live Provider here; create_auth_routes captures it by
-            # reference. Re-build the same construction the lifespan does so
-            # the routes work as soon as they're hit (lifespan re-binds the
-            # same instance to app.state for the consent / authorize-page path).
-            from pathlib import Path as _Path
-
-            from openviking.server.oauth.provider import OpenVikingOAuthProvider
-            from openviking.server.oauth.storage import OAuthStore
-
-            _workspace = _Path(ov_cfg.storage.workspace).expanduser().resolve()
-            _workspace.mkdir(parents=True, exist_ok=True)
-            _route_store = OAuthStore(_workspace / ov_cfg.oauth.db_filename)
-            # Resolution order for the AS issuer URL:
-            #   1. OPENVIKING_PUBLIC_BASE_URL env var (deployment override)
-            #   2. oauth.issuer in ov.conf (operator config)
-            #   3. http://127.0.0.1:1933 (dev default; SDK accepts loopback http)
-            import os as _os
-
-            _route_issuer = (
-                _os.environ.get("OPENVIKING_PUBLIC_BASE_URL", "").strip().rstrip("/")
-                or ov_cfg.oauth.issuer
-                or "http://127.0.0.1:1933"
-            )
-
-            # Late-binding role resolver: app.state.api_key_manager is wired
-            # during lifespan, after the provider is constructed. Lambda
-            # closes over `app` and looks up at call time.
-            def _current_role(account_id: str, user_id: str) -> Role:
-                mgr = getattr(app.state, "api_key_manager", None)
-                if mgr is None or not hasattr(mgr, "get_user_role"):
-                    return Role.USER
-                return mgr.get_user_role(account_id, user_id)
-
-            _route_provider = OpenVikingOAuthProvider(
-                store=_route_store,
-                issuer=_route_issuer,
-                access_token_ttl_seconds=ov_cfg.oauth.access_token_ttl_seconds,
-                refresh_token_ttl_seconds=ov_cfg.oauth.refresh_token_ttl_seconds,
-                auth_code_ttl_seconds=ov_cfg.oauth.auth_code_ttl_seconds,
-                role_resolver=_current_role,
-            )
-            # Stash the route-time instances; the lifespan replaces these with
-            # initialized copies before the first request lands.
-            app.state.oauth_store = _route_store
-            app.state.oauth_provider = _route_provider
-
-            from openviking.server.oauth.provider import MCP_SCOPE
-
-            sdk_routes = create_auth_routes(
-                provider=_route_provider,
-                issuer_url=AnyHttpUrl(_route_issuer),
-                # default_scopes covers clients whose DCR omits `scope`
-                # (ChatGPT does): without it they register scope-less and then
-                # fail /authorize with invalid_scope when they request the
-                # "mcp" scope advertised in the PRM document. valid_scopes is
-                # deliberately NOT set — the SDK would 400 any DCR that carries
-                # a scope outside the list, and clients like Claude register
-                # with their own scope strings.
-                client_registration_options=ClientRegistrationOptions(
-                    enabled=True, default_scopes=[MCP_SCOPE]
-                ),
-                revocation_options=RevocationOptions(enabled=True),
-            )
-            app.routes.extend(sdk_routes)
-            app.state.oauth_config = ov_cfg.oauth
-            logger.info(
-                "OAuth 2.1 routes mounted (SDK + authorize-page + consent): %s",
-                [r.path for r in sdk_routes],
-            )
     except Exception as e:  # noqa: BLE001
         logger.warning("Skipping OAuth router registration: %s", e)
+    else:
+        # Configuration errors must not be hidden by the optional OAuth import/setup path.
+        validate_public_deployment_config(config, ov_cfg.oauth)
+        if ov_cfg.oauth.enabled:
+            try:
+                from mcp.server.auth.routes import create_auth_routes
+                from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
+                from pydantic import AnyHttpUrl
+
+                from openviking.server.oauth.router import router as oauth_router
+
+                # Custom routes (authorize page + consent / verify endpoints).
+                app.include_router(oauth_router)
+
+                # SDK-owned routes (DCR / authorize / token / metadata / revoke).
+                # We need a live Provider here; create_auth_routes captures it by
+                # reference. Re-build the same construction the lifespan does so
+                # the routes work as soon as they're hit (lifespan re-binds the
+                # same instance to app.state for the consent / authorize-page path).
+                from pathlib import Path as _Path
+
+                from openviking.server.oauth.provider import OpenVikingOAuthProvider
+                from openviking.server.oauth.storage import OAuthStore
+
+                _workspace = _Path(ov_cfg.storage.workspace).expanduser().resolve()
+                _workspace.mkdir(parents=True, exist_ok=True)
+                _route_store = OAuthStore(_workspace / ov_cfg.oauth.db_filename)
+                configured_origin, _ = resolve_configured_public_base_url(config)
+                _route_issuer = (
+                    configured_origin
+                    or ov_cfg.oauth.issuer
+                    or "http://127.0.0.1:1933"
+                )
+
+                # Late-binding role resolver: app.state.api_key_manager is wired
+                # during lifespan, after the provider is constructed. Lambda
+                # closes over `app` and looks up at call time.
+                def _current_role(account_id: str, user_id: str) -> Role:
+                    mgr = getattr(app.state, "api_key_manager", None)
+                    if mgr is None or not hasattr(mgr, "get_user_role"):
+                        return Role.USER
+                    return mgr.get_user_role(account_id, user_id)
+
+                _route_provider = OpenVikingOAuthProvider(
+                    store=_route_store,
+                    issuer=_route_issuer,
+                    access_token_ttl_seconds=ov_cfg.oauth.access_token_ttl_seconds,
+                    refresh_token_ttl_seconds=ov_cfg.oauth.refresh_token_ttl_seconds,
+                    auth_code_ttl_seconds=ov_cfg.oauth.auth_code_ttl_seconds,
+                    role_resolver=_current_role,
+                )
+                # Stash the route-time instances; the lifespan replaces these with
+                # initialized copies before the first request lands.
+                app.state.oauth_store = _route_store
+                app.state.oauth_provider = _route_provider
+
+                from openviking.server.oauth.provider import MCP_SCOPE
+
+                sdk_routes = create_auth_routes(
+                    provider=_route_provider,
+                    issuer_url=AnyHttpUrl(_route_issuer),
+                    client_registration_options=ClientRegistrationOptions(
+                        enabled=True, default_scopes=[MCP_SCOPE]
+                    ),
+                    revocation_options=RevocationOptions(enabled=True),
+                )
+                app.routes.extend(sdk_routes)
+                app.state.oauth_config = ov_cfg.oauth
+                logger.info(
+                    "OAuth 2.1 routes mounted (SDK + authorize-page + consent): %s",
+                    [r.path for r in sdk_routes],
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Skipping OAuth router registration: %s", e)
 
     # Favicon routes — always registered so /favicon.* and /mcp/favicon.* never
     # 404, even when web-studio isn't bundled. Source files live in
@@ -814,8 +813,10 @@ def create_app(
                 child_scope["route"] = self
             return match, child_scope
 
+    _mcp_app = create_mcp_app()
+    app.state.mcp_session_manager = getattr(_mcp_app, "_openviking_session_manager", None)
     app.routes.append(
-        _ScopedRoute("/mcp", endpoint=create_mcp_app(), methods=["GET", "POST", "DELETE"])
+        _ScopedRoute("/mcp", endpoint=_mcp_app, methods=["GET", "POST", "DELETE"])
     )
 
     return app

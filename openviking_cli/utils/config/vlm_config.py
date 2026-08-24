@@ -163,6 +163,17 @@ class VLMConfig(BaseModel):
         default=False, description="Enable streaming mode for OpenAI-compatible providers"
     )
 
+    responses_state_enabled: bool = Field(
+        default=False,
+        description="Enable the opt-in caller-managed Codex Responses state pilot",
+    )
+
+    responses_compact_threshold: Optional[int] = Field(
+        default=None,
+        gt=0,
+        description="Opt-in Codex Responses compaction threshold; requires a capability probe",
+    )
+
     # New multi-credential configuration
     credentials: List[VLMCredential] = Field(
         default_factory=list,
@@ -222,6 +233,7 @@ class VLMConfig(BaseModel):
 
         self._migrate_legacy_config()
         self._normalize_credentials()
+        self._validate_responses_state_pilot()
 
         if self._has_any_config():
             if not self.model:
@@ -256,6 +268,14 @@ class VLMConfig(BaseModel):
                 elif provider_name != "litellm" and not self._get_effective_api_key():
                     raise ValueError("VLM configuration requires 'api_key' to be set")
         return self
+
+    def _validate_responses_state_pilot(self) -> None:
+        if self.responses_compact_threshold is not None and not self.responses_state_enabled:
+            raise ValueError("Responses state must be enabled before configuring compaction")
+        if not self.responses_state_enabled:
+            return
+        if len(self.credentials) != 1 or self.credentials[0].provider != "openai-codex":
+            raise ValueError("Responses state requires exactly one openai-codex credential")
 
     def _validate_no_recursive_backup(self):
         """Prevent recursive backup configurations"""
@@ -609,6 +629,10 @@ class VLMConfig(BaseModel):
             "api_version": credential.api_version,
             "media": self.media.model_dump(),
         }
+        if self.responses_state_enabled:
+            result["responses_state_enabled"] = True
+            if self.responses_compact_threshold is not None:
+                result["responses_compact_threshold"] = self.responses_compact_threshold
 
         if credential.api_key:
             result["api_key"] = credential.api_key
@@ -644,6 +668,10 @@ class VLMConfig(BaseModel):
             "api_version": self.api_version,
             "media": self.media.model_dump(),
         }
+        if self.responses_state_enabled:
+            result["responses_state_enabled"] = True
+            if self.responses_compact_threshold is not None:
+                result["responses_compact_threshold"] = self.responses_compact_threshold
 
         if config:
             if config.get("api_key"):

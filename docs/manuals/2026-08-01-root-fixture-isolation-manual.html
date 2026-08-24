@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>Root-Fixture-Isolation Manual</title>
+</head>
+<body>
+  <h1>Root-Fixture-Isolation</h1>
+  <p>Dieses Manual beschreibt den offline verifizierten Root-Testpfad.</p>
+  <h2>Was wird geschützt?</h2>
+  <p>Embedded-Clients ersetzen den Workspace vor der Config-Validierung. Eine
+  Host-Konfiguration mit <code>/app</code> kann dadurch keinen Containerpfad
+  anlegen. Die Root-Fixtures verwenden eine temporäre, endpointfreie
+  <code>ov.conf</code>, lokale Fakes und pytest-eigene Verzeichnisse.</p>
+  <h2>Verifikation</h2>
+  <pre>PYTHONPATH="$PWD" .venv/bin/python -m pytest \
+tests/test_root_fixture_isolation.py tests/test_config_loader.py \
+-q -o addopts= -p no:cacheprovider</pre>
+  <p>Erwartet: 40 fokussierte Tests PASS (11 Isolation plus 29 Config-Legacy-
+  Fälle). Die vollständige Root-Collection ist
+  wegen des optionalen, nicht installierten <code>vikingbot</code>-Subprojekts
+  und 15 vorbestehender Warnungen separat FAIL/HOLD.</p>
+  <h2>HOLDs</h2>
+  <p>Native <code>ragfs_python</code>-Lifecycle-, OpenClaw-P0-/Service-, H1/H2-
+  und Provider-Live-Tests werden nicht lokal gestartet. Eine Freigabe dieser
+  Gates erfordert eine separat autorisierte Live-Phase.</p>
+  <p>Die vollständige Statusmatrix befindet sich im
+  <code>docs/sessions/2026-08-01-root-fixture-isolation-stp.md</code> unter
+  <em>Evidence matrix</em>.</p>
+</body>
+</html>

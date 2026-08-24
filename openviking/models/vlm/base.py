@@ -14,6 +14,7 @@ from openviking.utils.model_retry import (
     OrderedCredentialSwitcher,
     PrimaryBackupSwitcher,
     classify_api_error,
+    is_vlm_error_non_retryable,
 )
 from openviking_cli.utils import get_logger
 
@@ -420,6 +421,41 @@ class FailoverVLM(VLMBase):
             failback_request_count=failback_request_count,
         )
 
+    def _validate_stream_request(self, tools) -> None:
+        """Reject tool streaming if any reachable wrapper target may stream."""
+        if not tools:
+            return
+
+        pending = [self]
+        seen: set[int] = set()
+        while pending:
+            target = pending.pop()
+            if target is None or id(target) in seen:
+                if target is None:
+                    raise NotImplementedError("stream with tools is not supported")
+                continue
+            if len(seen) >= 256:
+                raise NotImplementedError("stream with tools is not supported")
+            seen.add(id(target))
+            try:
+                if target.stream is not False:
+                    raise NotImplementedError("stream with tools is not supported")
+                if isinstance(target, FailoverVLM):
+                    if not callable(target._validate_stream_request):
+                        raise NotImplementedError("stream with tools is not supported")
+                    pending.extend((target.primary, target.backup))
+                elif isinstance(target, MultiCredentialVLM):
+                    if not callable(target._validate_stream_request):
+                        raise NotImplementedError("stream with tools is not supported")
+                    children = target._vlm_instances
+                    if not isinstance(children, list):
+                        raise NotImplementedError("stream with tools is not supported")
+                    pending.extend(children)
+            except NotImplementedError:
+                raise
+            except Exception as exc:
+                raise NotImplementedError("stream with tools is not supported") from exc
+
     def _get_completion_with_failover(self, method_name: str, *args, **kwargs):
         """Execute a VLM method with failover support.
 
@@ -434,6 +470,7 @@ class FailoverVLM(VLMBase):
         Raises:
             The last exception encountered if both primary and backup fail
         """
+        self._validate_stream_request(kwargs.get("tools"))
         last_error = None
 
         # Try primary if we should
@@ -444,6 +481,8 @@ class FailoverVLM(VLMBase):
                 self._switcher.record_primary_success()
                 return result
             except Exception as e:
+                if is_vlm_error_non_retryable(e):
+                    raise
                 _annotate_vlm_error(e, self.primary)
                 last_error = e
                 if self._switcher.record_primary_failure(e):
@@ -459,6 +498,8 @@ class FailoverVLM(VLMBase):
             method = getattr(self.backup, method_name)
             return method(*args, **kwargs)
         except Exception as e:
+            if is_vlm_error_non_retryable(e):
+                raise
             _annotate_vlm_error(e, self.backup)
             last_error = e
             self._logger.error(f"Backup VLM also failed with error: {e}")
@@ -478,6 +519,7 @@ class FailoverVLM(VLMBase):
         Raises:
             The last exception encountered if both primary and backup fail
         """
+        self._validate_stream_request(kwargs.get("tools"))
         last_error = None
 
         # Try primary if we should
@@ -488,6 +530,8 @@ class FailoverVLM(VLMBase):
                 self._switcher.record_primary_success()
                 return result
             except Exception as e:
+                if is_vlm_error_non_retryable(e):
+                    raise
                 _annotate_vlm_error(e, self.primary)
                 last_error = e
                 if self._switcher.record_primary_failure(e):
@@ -503,6 +547,8 @@ class FailoverVLM(VLMBase):
             method = getattr(self.backup, method_name)
             return await method(*args, **kwargs)
         except Exception as e:
+            if is_vlm_error_non_retryable(e):
+                raise
             _annotate_vlm_error(e, self.backup)
             last_error = e
             self._logger.error(f"Backup VLM also failed with error: {e}")
@@ -781,6 +827,8 @@ class MultiCredentialVLM(VLMBase):
             failback_request_count=failback_request_count,
         )
 
+    _validate_stream_request = FailoverVLM._validate_stream_request
+
     def _get_completion_with_failover(self, method_name: str, *args, **kwargs):
         """Execute a VLM method with multi-credential failover support.
 
@@ -795,6 +843,7 @@ class MultiCredentialVLM(VLMBase):
         Raises:
             AllCredentialsFailedError if all credentials fail
         """
+        self._validate_stream_request(kwargs.get("tools"))
         aggregated_errors = []
 
         # Start from the current (possibly failed-back) active credential, then
@@ -817,6 +866,8 @@ class MultiCredentialVLM(VLMBase):
                 self._switcher.commit_success(idx)
                 return result
             except Exception as exc:
+                if is_vlm_error_non_retryable(exc):
+                    raise
                 _annotate_vlm_error(exc, vlm_instance)
                 error_class = classify_api_error(exc)
                 aggregated_errors.append((credential_id, error_class, exc, idx))
@@ -847,6 +898,7 @@ class MultiCredentialVLM(VLMBase):
         Raises:
             AllCredentialsFailedError if all credentials fail
         """
+        self._validate_stream_request(kwargs.get("tools"))
         aggregated_errors = []
 
         # See the sync variant for the ring-traversal rationale.
@@ -864,6 +916,8 @@ class MultiCredentialVLM(VLMBase):
                 self._switcher.commit_success(idx)
                 return result
             except Exception as exc:
+                if is_vlm_error_non_retryable(exc):
+                    raise
                 _annotate_vlm_error(exc, vlm_instance)
                 error_class = classify_api_error(exc)
                 aggregated_errors.append((credential_id, error_class, exc, idx))

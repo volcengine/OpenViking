@@ -167,7 +167,8 @@ async def lightweight_admin_client(lightweight_admin_app):
 
 
 @pytest_asyncio.fixture(scope="function")
-async def admin_service(temp_dir):
+async def admin_service(temp_dir, offline_test_models):
+    del offline_test_models
     svc = OpenVikingService(
         path=str(temp_dir / "admin_data"), user=UserIdentifier.the_default_user("admin_user")
     )
@@ -1350,15 +1351,18 @@ async def test_legacy_cleanup_removes_only_legacy_namespaces(
     removed = {
         (item["account_id"], item["source"]) for item in task["result"]["cleanup"]["targets"]
     }
-    assert (acct, "viking://agent") in removed
+    # Cleanup removes legacy agent-id children individually so reserved
+    # ``viking://agent/{skills,endpoints,tools,payments}`` namespaces remain
+    # intact.  The parent root is therefore not itself a cleanup target.
+    assert (acct, "viking://agent/code-agent") in removed
     assert (acct, "viking://session") in removed
     assert (acct, "viking://user/alice/agent") in removed
-    assert (other_acct, "viking://agent") in removed
+    assert (other_acct, "viking://agent/code-agent") in removed
 
-    assert not await _agfs_exists(admin_service, f"/local/{acct}/agent")
+    assert not await _agfs_exists(admin_service, f"/local/{acct}/agent/code-agent")
     assert not await _agfs_exists(admin_service, f"/local/{acct}/session")
     assert not await _agfs_exists(admin_service, f"/local/{acct}/user/alice/agent")
-    assert not await _agfs_exists(admin_service, f"/local/{other_acct}/agent")
+    assert not await _agfs_exists(admin_service, f"/local/{other_acct}/agent/code-agent")
     assert (
         await _agfs_read_text(
             admin_service,

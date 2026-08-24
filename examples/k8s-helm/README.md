@@ -139,6 +139,8 @@ openviking:
       api_key: "your-secure-api-key"
       cors_origins:
         - "https://your-domain.com"
+      public_base_url: "https://your-domain.com"
+      webdav_max_body_bytes: 16777216
 ```
 
 ### Secrets Management

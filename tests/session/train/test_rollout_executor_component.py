@@ -242,6 +242,7 @@ def test_tau2_rollout_messages_omit_empty_final_after_done():
 def test_tau2_reward_info_is_json_safe_in_rollout_messages_and_evaluation():
     import json
 
+    pytest.importorskip("tau2", reason="Tau2 benchmark package is optional")
     from tau2.data_model.simulation import RewardInfo, RewardType
 
     from benchmark.tau2.train.rollout_executor import _build_rollout_messages, _tau2_evaluation
@@ -299,7 +300,11 @@ def test_tau2_litellm_generate_rate_limit_retry_patch(monkeypatch):
 
     monkeypatch.setattr(tau2_environment.importlib, "import_module", fake_import_module)
     monkeypatch.setattr(tau2_environment, "_tau2_rate_limit_retry_delay", lambda attempt: attempt)
-    monkeypatch.setattr(tau2_environment.time, "sleep", lambda delay: sleeps.append(delay))
+    monkeypatch.setattr(
+        tau2_environment,
+        "time",
+        SimpleNamespace(sleep=lambda delay: sleeps.append(delay)),
+    )
 
     tau2_environment._install_tau2_litellm_rate_limit_retry()
 
@@ -331,7 +336,7 @@ def test_tau2_litellm_generate_retry_patch_does_not_retry_non_rate_limit(monkeyp
     def fail_on_sleep(_delay):
         raise AssertionError("unexpected sleep")
 
-    monkeypatch.setattr(tau2_environment.time, "sleep", fail_on_sleep)
+    monkeypatch.setattr(tau2_environment, "time", SimpleNamespace(sleep=fail_on_sleep))
 
     tau2_environment._install_tau2_litellm_rate_limit_retry()
 
@@ -341,6 +346,7 @@ def test_tau2_litellm_generate_retry_patch_does_not_retry_non_rate_limit(monkeyp
 
 
 def test_tau2_native_env_reward_handles_required_id_and_tool_call_ids(monkeypatch):
+    pytest.importorskip("tau2", reason="Tau2 benchmark package is optional")
     import benchmark.tau2.common.tau2_env.tau2_environment as tau2_environment
     from benchmark.tau2.common.tau2_env.tau2_environment import Tau2BenchEnv
 
@@ -357,6 +363,7 @@ def test_tau2_native_env_reward_handles_required_id_and_tool_call_ids(monkeypatc
 
 
 def test_tau2_native_env_records_communication_as_assistant_text(monkeypatch):
+    pytest.importorskip("tau2", reason="Tau2 benchmark package is optional")
     import benchmark.tau2.common.tau2_env.tau2_environment as tau2_environment
     from benchmark.tau2.common.tau2_env.tau2_environment import Tau2BenchEnv
 
@@ -372,6 +379,7 @@ def test_tau2_native_env_records_communication_as_assistant_text(monkeypatch):
 
 
 def test_tau2_final_answer_is_appended_for_native_evaluation(monkeypatch):
+    pytest.importorskip("tau2", reason="Tau2 benchmark package is optional")
     import benchmark.tau2.common.tau2_env.tau2_environment as tau2_environment
     from benchmark.tau2.common.tau2_env.tau2_environment import Tau2BenchEnv
     from benchmark.tau2.train.rollout_executor import _append_final_answer_for_tau2_evaluation
@@ -388,6 +396,7 @@ def test_tau2_final_answer_is_appended_for_native_evaluation(monkeypatch):
 
 
 def test_tau2_configure_tools_removes_only_openviking_tools():
+    pytest.importorskip("vikingbot", reason="VikingBot benchmark package is optional")
     from benchmark.tau2.train.rollout_executor import _configure_tools
 
     class FakeTools:
@@ -462,6 +471,7 @@ def test_tau2_rollout_backend_factory_defaults_to_native():
 
 
 def test_tau2_native_rollout_resolves_non_empty_llms(monkeypatch):
+    pytest.importorskip("tau2", reason="Tau2 benchmark package is optional")
     from benchmark.tau2.train.rollout_executor_native import (
         NativeTau2RolloutExecutor,
         _resolve_llm_runtime_config,
@@ -485,6 +495,7 @@ def test_tau2_native_rollout_resolves_non_empty_llms(monkeypatch):
 
 
 def test_tau2_native_rollout_uses_env_llm_when_options_omit_model(monkeypatch):
+    pytest.importorskip("tau2", reason="Tau2 benchmark package is optional")
     from benchmark.tau2.train.rollout_executor_native import (
         NativeTau2RolloutExecutor,
         _resolve_llm_runtime_config,
@@ -563,6 +574,7 @@ def test_tau2_service_rollout_backend_option_overrides_default(monkeypatch):
     assert calls[-1]["factory"]["options"]["show_progress"] is True
 
 
+@pytest.mark.bot
 @pytest.mark.asyncio
 async def test_tau2_vikingbot_rollout_runs_on_current_event_loop():
     from benchmark.tau2.train.rollout_executor_vikingbot import VikingBotTau2RolloutExecutor
@@ -591,6 +603,7 @@ async def test_tau2_vikingbot_rollout_runs_on_current_event_loop():
     assert observed["thread"] == expected_thread
 
 
+@pytest.mark.bot
 @pytest.mark.asyncio
 async def test_tau2_prepare_experience_loader_skill_writes_required_skill(tmp_path):
     import benchmark.tau2.train.rollout_executor_vikingbot as module
@@ -637,6 +650,7 @@ async def test_tau2_prepare_experience_loader_skill_writes_required_skill(tmp_pa
     assert context_builder.latest_experience_loader_skill_content == content
 
 
+@pytest.mark.bot
 @pytest.mark.asyncio
 async def test_tau2_experience_loader_skill_is_required_with_relative_read_path(tmp_path):
     from vikingbot.config.schema import SessionKey
@@ -662,6 +676,7 @@ async def test_tau2_experience_loader_skill_is_required_with_relative_read_path(
     assert f"<location>{tmp_path}" not in system_prompt
 
 
+@pytest.mark.bot
 @pytest.mark.asyncio
 async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(monkeypatch):
     import benchmark.tau2.train.rollout_executor_vikingbot as module
@@ -752,6 +767,7 @@ async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(monkeypatc
     assert call_threads["run_agent"] == event_loop_thread
 
 
+@pytest.mark.bot
 @pytest.mark.asyncio
 async def test_tau2_run_agent_force_loads_experience_loader_skill_before_task_actions(monkeypatch):
     from vikingbot.providers.base import LLMResponse, ToolCallRequest
@@ -837,6 +853,9 @@ async def test_tau2_run_agent_force_loads_experience_loader_skill_before_task_ac
             from vikingbot.agent.tools.filesystem import ReadFileTool
             from vikingbot.agent.tools.registry import ToolRegistry
 
+            # AgentLoop now consults the OpenViking write-tool policy before
+            # executing tool calls; keep this harness explicit and offline.
+            self.config = SimpleNamespace(ov_server=SimpleNamespace(exp_write_tools=[]))
             self.sandbox_manager = FakeSandboxManager()
             self.context = FakeContextBuilder(Path("/tmp/fake-workspace"))
             self.tools = ToolRegistry()

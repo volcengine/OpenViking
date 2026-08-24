@@ -284,9 +284,18 @@ class PipelineReportHook(NoopPipelineLifecycleHook):
         context: Any,
     ) -> dict[str, Any] | None:
         del policy_set
+        rollout_list = list(rollouts)
+        # The lifecycle event is emitted before the policy trainer analyzes a
+        # batch.  Executors may provide an evaluation eagerly, but analyzers
+        # are also allowed to produce it later.  Do not manufacture a
+        # misleading rollout report (or fail the whole training run) while
+        # that valid analysis-only path is still in flight; the epoch report
+        # is built from the trainer's completed analyses below.
+        if any(getattr(rollout, "evaluation", None) is None for rollout in rollout_list):
+            return None
         return _context_report_builder(context).train_rollout_report(
             epoch=epoch,
-            rollouts=list(rollouts),
+            rollouts=rollout_list,
             snapshot_id=snapshot_id,
         )
 

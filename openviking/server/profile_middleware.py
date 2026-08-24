@@ -109,8 +109,12 @@ def _sanitize_profile_path(path: str) -> str:
                 if idx + 1 < len(parts):
                     return "/".join(parts[idx + 1 :])
 
-        for idx, part in enumerate(parts):
-            if part.startswith("python") and idx + 1 < len(parts):
+        # Prefer the last versioned Python directory.  Virtualenv layouts can
+        # contain an earlier ``.../python/cpython-...`` component; using that
+        # component would leak ``lib/pythonX.Y`` into the profile output.
+        for idx in range(len(parts) - 1, -1, -1):
+            part = parts[idx]
+            if part.startswith("python") and any(char.isdigit() for char in part):
                 suffix = parts[idx + 1 :]
                 if suffix:
                     return "/".join(suffix)

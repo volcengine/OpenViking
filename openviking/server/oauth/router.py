@@ -191,9 +191,6 @@ def _render_page(
 # ---------------------------------------------------------------------------
 
 
-PUBLIC_BASE_URL_ENV = "OPENVIKING_PUBLIC_BASE_URL"
-
-
 def _public_origin(request: Request) -> str:
     """Pick the public-facing origin for metadata responses.
 
@@ -207,9 +204,13 @@ def _public_origin(request: Request) -> str:
     (issuer, PRM resource, WWW-Authenticate, authorize-page links) so they
     all agree on a single public address.
     """
-    env_value = os.environ.get(PUBLIC_BASE_URL_ENV, "").strip()
-    if env_value:
-        return env_value.rstrip("/")
+    from openviking.server.public_url import resolve_configured_public_base_url
+
+    server_config = getattr(request.app.state, "config", None)
+    if server_config is not None:
+        configured_origin, _ = resolve_configured_public_base_url(server_config)
+        if configured_origin:
+            return configured_origin
     cfg = getattr(request.app.state, "oauth_config", None)
     configured = getattr(cfg, "issuer", None) if cfg else None
     if configured:

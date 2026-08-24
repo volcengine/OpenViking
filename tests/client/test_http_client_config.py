@@ -48,18 +48,48 @@ def test_async_http_client_loads_missing_fields_from_ovcli_config(tmp_path, monk
         )
     )
     monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
+    monkeypatch.delenv("OPENVIKING_API_KEY", raising=False)
+    monkeypatch.delenv("OPENVIKING_ACCOUNT", raising=False)
+    monkeypatch.delenv("OPENVIKING_USER", raising=False)
+    monkeypatch.delenv("OPENVIKING_ACTOR_PEER_ID", raising=False)
 
     client = AsyncHTTPClient(url="http://explicit-host:1933")
 
     assert client._url == "http://explicit-host:1933"
-    assert client._api_key == "config-key"
-    assert client._gateway_token == "gateway-secret"
-    assert client._extra_headers["X-Gateway-Token"] == "gateway-secret"
-    assert client._account == "config-account"
-    assert client._user_id == "config-user"
-    assert client._actor_peer_id == "config-actor"
-    assert client._timeout == 12.5
-    assert client._profile_enabled is True
+    assert client._api_key is None
+    assert client._account is None
+    assert client._user_id is None
+    assert client._actor_peer_id is None
+    # A gateway token is bound to the origin from which it was loaded.  An
+    # explicit different URL must not receive that credential.
+    assert client._gateway_token is None
+    assert "X-Gateway-Token" not in client._extra_headers
+    assert client._timeout == 60.0
+    assert client._profile_enabled is False
+
+
+def test_async_http_client_does_not_forward_cross_origin_profile_headers(tmp_path, monkeypatch):
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "url": "https://trusted.example",
+                "api_key": "API_KEY_SENTINEL",
+                "extra_headers": {
+                    "Authorization": "Bearer AUTH_SENTINEL",
+                    "X-Custom-Secret": "HEADER_SENTINEL",
+                },
+            }
+        )
+    )
+    monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
+    monkeypatch.delenv("OPENVIKING_URL", raising=False)
+    monkeypatch.delenv("OPENVIKING_API_KEY", raising=False)
+
+    client = AsyncHTTPClient(url="https://attacker.example")
+
+    assert client._api_key is None
+    assert client._extra_headers == {}
 
 
 def test_async_http_client_explicit_values_override_ovcli_config(tmp_path, monkeypatch):

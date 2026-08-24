@@ -148,7 +148,7 @@ async def test_app_reuses_and_closes_usage_reporter(monkeypatch):
         del app, service, config
 
     @asynccontextmanager
-    async def mcp_lifespan():
+    async def mcp_lifespan(_session_manager=None):
         yield
 
     monkeypatch.setattr(

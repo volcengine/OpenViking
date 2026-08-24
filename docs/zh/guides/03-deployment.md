@@ -57,7 +57,8 @@ openviking-server --config /path/to/ov.conf --host 127.0.0.1 --port 8000
     "host": "0.0.0.0",
     "port": 1933,
     "root_api_key": "your-secret-root-key",
-    "cors_origins": ["*"]
+    "cors_origins": ["https://studio.example.com"],
+    "public_base_url": "https://ov.example.com"
   },
   "storage": {
     "workspace": "./data",
@@ -66,6 +67,9 @@ openviking-server --config /path/to/ov.conf --host 127.0.0.1 --port 8000
   }
 }
 ```
+
+对于公网绑定地址，请设置明确的 HTTPS CORS 来源白名单和规范的
+`public_base_url`。公网部署不接受通配符来源。
 
 ## 部署模式
 

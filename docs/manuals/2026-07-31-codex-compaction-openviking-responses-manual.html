@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Manual: Codex Compaction und Responses State</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { max-width: 920px; margin: 2rem auto; padding: 0 1rem; line-height: 1.55; }
+    h1, h2 { line-height: 1.2; }
+    .hold { border-left: .35rem solid #c83b2f; padding: .8rem 1rem; background: color-mix(in srgb, #c83b2f 10%, Canvas); }
+    .ok { border-left: .35rem solid #258a4b; padding: .8rem 1rem; background: color-mix(in srgb, #258a4b 10%, Canvas); }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    pre { overflow-x: auto; padding: 1rem; background: color-mix(in srgb, CanvasText 7%, Canvas); }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid color-mix(in srgb, CanvasText 25%, Canvas); padding: .55rem; text-align: left; }
+  </style>
+</head>
+<body>
+  <h1>Codex Compaction und OpenViking Responses State</h1>
+  <p>Stand: 31. Juli 2026. Dieses Manual beschreibt einen implementierten
+    Offline-Kandidaten. Es aktiviert keine Funktion.</p>
+
+  <div class="hold">
+    <strong>HOLD:</strong> Der State-Modus, der Compaction-Threshold und der
+    globale Hook sind nicht aktiviert. Der Capability-Probe kann einen
+    kostenpflichtigen Provider-Request auslösen und darf nur nach ausdrücklicher
+    Genehmigung ausgeführt werden. Der User hat den Live-Test vertagt. Der
+    Legacy-VLM-H3-Source-Unlock ist nach dem finalen Security-Review verweigert.
+  </div>
+
+  <h2>1. Was der Kandidat bietet</h2>
+  <ul>
+    <li>Aufruferverwalteten, unveränderlichen Responses-State.</li>
+    <li>Sync- und natives Async-Streaming mit State-Commit erst nach
+      <code>response.completed</code>.</li>
+    <li><code>store=false</code>, vollständige Output-Items, Compaction und
+      Tool-Ausgabe genau einmal.</li>
+    <li>Harte Limits, TTL, Chain-Bindings und einen expliziten
+      Capability-Probe.</li>
+    <li>Einen gehärteten Hook-Kandidaten im Repository, noch nicht global
+      installiert.</li>
+  </ul>
+
+  <h2>2. Default-Konfiguration</h2>
+  <p>Der sichere Default bleibt deaktiviert:</p>
+  <pre><code>vlm:
+  provider: openai-codex
+  responses_state_enabled: false
+  responses_compact_threshold: null</code></pre>
+  <p>Ein positiver Threshold ist nur mit aktiviertem State-Modus zulässig. Der
+    Pilot verlangt exakt ein <code>openai-codex</code>-Credential. OAuth darf im
+    State-Modus nur an
+    <code>https://chatgpt.com/backend-api/codex</code> gesendet werden.</p>
+
+  <h2>3. Aufruferverwalteter State</h2>
+  <p>Nach einer später genehmigten Aktivierung hält der Aufrufer den State und
+    reicht bei Folgeturns ausschließlich das neue Delta ein:</p>
+  <pre><code># Beispiel nach genehmigter Aktivierung; nicht in diesem Kandidaten ausführen.
+turn1 = vlm.get_completion_with_state(prompt="Start")
+state = turn1.state
+
+turn2 = vlm.get_completion_with_state(
+    prompt="Nur das neue Turn-Delta",
+    state=state,
+    expected_generation=state.generation,
+)
+state = turn2.state</code></pre>
+  <p>Ein State darf nicht geloggt, serialisiert oder zwischen Principals,
+    Credentials oder Origins übertragen werden. Fehler, Timeout, Cancellation
+    und Teil-Streams lassen den vorherigen State unverändert.</p>
+
+  <h2>4. Async-Nutzung</h2>
+  <pre><code>turn = await vlm.get_completion_with_state_async(
+    prompt="Neues Delta",
+    state=state,
+    expected_generation=state.generation,
+)</code></pre>
+  <p>Der Async-Pfad verwendet natives Async-Streaming. Nach dem ersten
+    Stream-Ereignis erfolgt kein automatischer Retry.</p>
+
+  <h2>5. Tool-Calls</h2>
+  <p>Tool-Ausgaben dürfen nur für eine offene Call-ID der aktuellen
+    Chain-Generation eingespeist werden. Dieselbe ID wird genau einmal
+    akzeptiert. Replay, fremde Chain, stale Generation und Größenüberschreitung
+    schlagen explizit fehl.</p>
+
+  <h2>6. Capability-Probe</h2>
+  <div class="hold">
+    Vor diesem Schritt sind eine ausdrückliche Live-/Kostenfreigabe, der exakte
+    Endpoint und ein Request-Budget erforderlich. Es gibt keinen stillen
+    Fallback.
+  </div>
+  <pre><code># POTENZIELL KOSTENPFLICHTIG — nur nach ausdrücklicher Genehmigung.
+vlm.probe_responses_compaction_capability(
+    probe_input=[{"role": "user", "content": "approved minimal probe"}],
+)</code></pre>
+
+  <h2>7. Hook-Kandidat</h2>
+  <p>Der Hook liegt unter
+    <code>tools/codex_compaction_hooks/codex_compaction_hook.py</code>. Seine
+    Offline-Tests belegen private Rechte, atomare Dateien, Eigentümer- und
+    komponentenweise Symlink-Prüfungen, Directory-FD-Verankerung, eine
+    erzwungene Deadline, begrenzte Retention, Parallelität und konstante
+    prompt-sichere Ausgabe.</p>
+  <p>Dieses Manual enthält absichtlich keine Installationsanweisung. Eine globale
+    Installation ist eine gesonderte Aktivierungsentscheidung und muss die
+    verifizierten Backups respektieren.</p>
+
+  <h2>8. Offline-Verifikation</h2>
+  <pre><code>PYTHONPATH=/tmp/openviking-codex-responses-test-deps-20260731 \
+  /Volumes/ExtremePro/projects/OpenViking/.venv/bin/python -m pytest \
+  -q -o addopts= \
+  tests/unit/test_codex_compaction_hook.py \
+  tests/unit/test_codex_responses_state.py</code></pre>
+  <p>Die endgültigen Zählwerte und bekannten Baseline-HOLDs stehen im
+    <a href="../tests/2026-07-31-codex-compaction-openviking-responses-td.md">Test
+    Dossier</a>.</p>
+
+  <h2>9. Freigabegrenzen</h2>
+  <table>
+    <thead><tr><th>Bereich</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td>Offline-Kandidat</td><td>Implementiert und getestet</td></tr>
+      <tr><td>A/B-Corpus 20 real + 10 synthetisch</td><td>HOLD</td></tr>
+      <tr><td>Exakter Endpoint-Probe und Canary</td><td>HOLD</td></tr>
+      <tr><td>OpenViking MCP Health + read-only Suche</td><td>PASS; kein Provider-Capability-Beleg</td></tr>
+      <tr><td>Gezielter Legacy-VLM-Scope</td><td>272/272 PASS; Offline-HOLD aufgehoben</td></tr>
+      <tr><td>Breite Legacy-Matrix</td><td>364 PASS plus 8 separate VolcEngine-Baselinefehler</td></tr>
+      <tr><td>Legacy-VLM Security Rev2</td><td>96/100, 0C/0H/1M; PASS</td></tr>
+      <tr><td>Aktivierung oder Default-Promotion</td><td>Nicht erfolgt</td></tr>
+    </tbody>
+  </table>
+  <p>Ein neuer, vom User autorisierter Offline-Zyklus schloss H1 sowie die in
+    Security Rev1 gefundenen H6-/M2-Lücken test-first. Fünf direkte
+    Angriffs-Tests, der 272-Fall-Zielsatz und 122 Responses-/Hook-Tests sind
+    grün. Security Rev2 endet bei 96/100 mit 0 Critical, 0 High und 1 Medium;
+    der Offline-HOLD ist aufgehoben. Der Live-Provider-Test bleibt auf Wunsch
+    des Users vertagt. OpenViking MCP Health und read-only Suche sind weiterhin
+    nur Betriebs-, nicht Provider-Capability-Belege.</p>
+
+  <h2>10. Weiterführende Dokumente</h2>
+  <ul>
+    <li><a href="../dossiers/2026-07-31-codex-compaction-openviking-responses-id.md">Implementation Dossier</a></li>
+    <li><a href="../tests/2026-07-31-codex-compaction-openviking-responses-td.md">Test Dossier</a></li>
+    <li><a href="../lessons/2026-07-31-codex-compaction-openviking-responses-lessons-learned.md">Lessons Learned</a></li>
+    <li><a href="../sessions/2026-07-31-codex-compaction-openviking-responses-open-items.md">Open Items</a></li>
+  </ul>
+</body>
+</html>

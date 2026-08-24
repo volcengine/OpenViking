@@ -24,7 +24,10 @@ def _contains_cjk(text: str) -> bool:
 
 def _contains_common_mojibake(text: str) -> bool:
     return any(
-        "\u0370" <= ch <= "\u03ff" or "\u2200" <= ch <= "\u22ff" or "\u2500" <= ch <= "\u257f"
+        "\u00c0" <= ch <= "\u00ff"
+        or "\u0370" <= ch <= "\u03ff"
+        or "\u2200" <= ch <= "\u22ff"
+        or "\u2500" <= ch <= "\u257f"
         for ch in text
     )
 

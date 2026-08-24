@@ -4,7 +4,9 @@
         "port": 1933,
         "timeout_keep_alive": 5,
         "root_api_key": null,
-        "cors_origins": ["*"],
+        "cors_origins": ["https://studio.example.com"],
+        "public_base_url": "https://ov.example.com",
+        "webdav_max_body_bytes": 16777216,
         "agent_evolution": {
             "enabled": false,
         },

@@ -57,7 +57,8 @@ The `server` section in `ov.conf` controls server behavior:
     "host": "0.0.0.0",
     "port": 1933,
     "root_api_key": "your-secret-root-key",
-    "cors_origins": ["*"]
+    "cors_origins": ["https://studio.example.com"],
+    "public_base_url": "https://ov.example.com"
   },
   "storage": {
     "workspace": "./data",
@@ -66,6 +67,9 @@ The `server` section in `ov.conf` controls server behavior:
   }
 }
 ```
+
+For a public bind address, set an explicit HTTPS CORS allowlist and a canonical
+`public_base_url`. Wildcard origins are not accepted for public deployments.
 
 ## Deployment Modes
 

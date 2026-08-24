@@ -11,7 +11,7 @@ from openviking.parse.accessors.base import DataAccessor, LocalResource
 from openviking.parse.accessors.registry import AccessorRegistry, get_accessor_registry
 
 
-class TestAccessor(DataAccessor):
+class RegistryAccessor(DataAccessor):
     """Test accessor implementation."""
 
     def __init__(self, name: str, prefix: str, priority: int = 50):
@@ -45,8 +45,8 @@ class TestAccessorRegistry:
 
     def test_get_accessor(self, registry: AccessorRegistry) -> None:
         """Get an accessor that can handle a source."""
-        accessor1 = TestAccessor("test1", "test1:", 50)
-        accessor2 = TestAccessor("test2", "test2:", 50)
+        accessor1 = RegistryAccessor("test1", "test1:", 50)
+        accessor2 = RegistryAccessor("test2", "test2:", 50)
         registry.register(accessor1)
         registry.register(accessor2)
 
@@ -81,7 +81,7 @@ class TestAccessorRegistry:
     @pytest.mark.asyncio
     async def test_access_with_accessor(self, registry: AccessorRegistry) -> None:
         """access() uses the matching accessor."""
-        accessor = TestAccessor("test", "test:", 50)
+        accessor = RegistryAccessor("test", "test:", 50)
         registry.register(accessor)
 
         result = await registry.access("test:source", extra="value")

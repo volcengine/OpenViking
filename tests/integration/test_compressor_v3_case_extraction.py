@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from datetime import datetime
 from typing import Any
@@ -43,6 +44,14 @@ TASK_POLL_INTERVAL_SECONDS = 1.0
 TASK_TIMEOUT_SECONDS = 240.0
 
 console = Console()
+
+pytestmark = [
+    pytest.mark.cli_remote,
+    pytest.mark.skipif(
+        os.environ.get("RUN_OPENVIKING_LIVE_TESTS") != "1",
+        reason="OpenViking live service tests require RUN_OPENVIKING_LIVE_TESTS=1",
+    ),
+]
 
 # ── Dialogue that should trigger cases extraction ───────────────────────────
 

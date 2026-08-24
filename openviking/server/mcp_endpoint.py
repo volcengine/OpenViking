@@ -17,6 +17,7 @@ are extracted from HTTP request scope and propagated via contextvars.
 from __future__ import annotations
 
 import contextvars
+import copy
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -104,14 +105,15 @@ def _scope_to_origin(scope: Scope) -> Optional[str]:
       3. ``X-Forwarded-Proto`` / ``X-Forwarded-Host``
       4. scope's own scheme + Host header
     """
-    import os as _os
-
-    env_value = _os.environ.get("OPENVIKING_PUBLIC_BASE_URL", "").strip()
-    if env_value:
-        return env_value.rstrip("/")
-
     app = scope.get("app")
     if app is not None:
+        from openviking.server.public_url import resolve_configured_public_base_url
+
+        server_config = getattr(app.state, "config", None)
+        if server_config is not None:
+            configured_origin, _ = resolve_configured_public_base_url(server_config)
+            if configured_origin:
+                return configured_origin
         cfg = getattr(app.state, "oauth_config", None)
         configured = getattr(cfg, "issuer", None) if cfg else None
         if configured:
@@ -672,12 +674,13 @@ def _resolve_public_base_url() -> tuple[str, str]:
     Callers should append a "set OPENVIKING_PUBLIC_BASE_URL if upload fails" hint
     in that case.
     """
-    env_url = os.environ.get("OPENVIKING_PUBLIC_BASE_URL")
-    if env_url:
-        return env_url.rstrip("/"), "env"
     config = get_server_config()
-    if config is not None and config.public_base_url:
-        return config.public_base_url.rstrip("/"), "config"
+    if config is not None:
+        from openviking.server.public_url import resolve_configured_public_base_url
+
+        configured_url, source = resolve_configured_public_base_url(config)
+        if configured_url:
+            return configured_url, source or "config"
 
     url_info = _request_url_ctx.get()
     if url_info:
@@ -1260,9 +1263,17 @@ _apply_portable_schemas()
 
 
 @asynccontextmanager
-async def mcp_lifespan():
-    """Run the MCP session manager. Call this inside the FastAPI lifespan."""
-    async with mcp.session_manager.run():
+async def mcp_lifespan(session_manager=None):
+    """Run one app-owned MCP session manager inside the FastAPI lifespan.
+
+    The MCP SDK deliberately makes a session manager single-use.  Keeping the
+    manager on the module-level ``FastMCP`` object therefore breaks a second
+    application lifespan in the same process (tests, embedded servers, and
+    controlled reloads).  ``create_mcp_app`` supplies the manager belonging to
+    the current FastAPI app; the global fallback is retained for old callers.
+    """
+    manager = session_manager or mcp.session_manager
+    async with manager.run():
         logger.info(
             "MCP endpoint ready (15 tools: find, search, read, write, edit, list, "
             "tree, remember, add_resource, list_watches, cancel_watch, grep, glob, forget, health)"
@@ -1276,6 +1287,15 @@ def create_mcp_app() -> ASGIApp:
     IMPORTANT: call `mcp_lifespan()` inside the FastAPI lifespan BEFORE
     serving requests. The session manager task group must be initialized.
     """
-    starlette_app = mcp.streamable_http_app()
+    # ``FastMCP.streamable_http_app`` caches its manager on the FastMCP
+    # instance, while the SDK manager is deliberately single-use.  A shallow
+    # copy preserves the registered tools and protocol server but gives every
+    # outer FastAPI app an independent manager, so app lifespans can overlap
+    # safely (for example an embedded server plus an in-process test app).
+    app_mcp = copy.copy(mcp)
+    app_mcp._session_manager = None
+    starlette_app = app_mcp.streamable_http_app()
     handler = starlette_app.routes[0].app
-    return _IdentityASGIMiddleware(handler)
+    identity_app = _IdentityASGIMiddleware(handler)
+    setattr(identity_app, "_openviking_session_manager", app_mcp.session_manager)
+    return identity_app

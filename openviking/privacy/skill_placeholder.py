@@ -3,6 +3,7 @@
 """Placeholder helpers for skill privacy values."""
 
 from dataclasses import dataclass, field
+import re
 
 
 @dataclass
@@ -18,29 +19,27 @@ def build_placeholder(skill_name: str, field_name: str) -> str:
 
 
 def _replace_structured_value(content: str, raw_value: str, placeholder: str) -> tuple[str, bool]:
-    replacements = (
-        (f'"{raw_value}"', f'"{placeholder}"'),
-        (f"'{raw_value}'", f"'{placeholder}'"),
-        (f": {raw_value}\n", f": {placeholder}\n"),
-        (f": {raw_value}\r\n", f": {placeholder}\r\n"),
-        (f":{raw_value}\n", f":{placeholder}\n"),
-        (f":{raw_value}\r\n", f":{placeholder}\r\n"),
-        (f": {raw_value}", f": {placeholder}"),
-        (f":{raw_value}", f":{placeholder}"),
-        (f"= {raw_value}\n", f"= {placeholder}\n"),
-        (f"= {raw_value}\r\n", f"= {placeholder}\r\n"),
-        (f"={raw_value}\n", f"={placeholder}\n"),
-        (f"={raw_value}\r\n", f"={placeholder}\r\n"),
-        (f"= {raw_value}", f"= {placeholder}"),
-        (f"={raw_value}", f"={placeholder}"),
+    """Replace values only when they occupy a structured assignment position.
+
+    A global ``str.replace`` is unsafe for privacy redaction: a credential such as
+    ``prod`` can occur in prose or an unrelated field and would be replaced there.
+    Match the value after ``:`` or ``=`` and stop at the logical end of that field.
+    Quoted values are matched exactly; unquoted values are bounded by whitespace,
+    a comma, or the end of the line.
+    """
+    escaped = re.escape(raw_value)
+    pattern = re.compile(
+        rf"(?P<prefix>^[ \t]*[^\n:#=]+?[ \t]*(?::|=)[ \t]*)"
+        rf"(?P<quote>[\"'])?{escaped}(?P=quote)?(?P<suffix>[ \t]*(?:[,#].*)?$)",
+        re.MULTILINE,
     )
 
-    replaced = False
-    for old, new in replacements:
-        if old in content:
-            content = content.replace(old, new)
-            replaced = True
-    return content, replaced
+    def replacement(match: re.Match[str]) -> str:
+        quote = match.group("quote") or ""
+        return f"{match.group('prefix')}{quote}{placeholder}{quote}{match.group('suffix')}"
+
+    updated, count = pattern.subn(replacement, content)
+    return updated, count > 0
 
 
 def placeholderize_skill_content_with_blocks(

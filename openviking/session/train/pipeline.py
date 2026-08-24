@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import time
 from typing import Any
@@ -66,6 +67,7 @@ class OfflinePolicyOptimizationPipeline:
     ) -> None:
         self.snapshotter = snapshotter
         self.rollout_executor = rollout_executor
+        self.rollout_analyzer = rollout_analyzer
         self.policy_trainer = policy_trainer or BatchPolicyTrainer(
             rollout_analyzer=rollout_analyzer,
             gradient_estimator=gradient_estimator,
@@ -314,7 +316,33 @@ class OfflinePolicyOptimizationPipeline:
                 training=False,
             )
             snapshot_ids.append(snapshot_id)
-            all_analyses.extend(_analyses_from_rollout_evaluations(rollouts))
+            if all(rollout.evaluation is not None for rollout in rollouts):
+                analyses = _analyses_from_rollout_evaluations(rollouts)
+            else:
+                # Evaluation can be supplied by the analyzer rather than the
+                # executor.  This is the same contract used by the training
+                # path and keeps ``eval`` faithful to its documented
+                # execute-and-analyze behavior.  Batch runners whose remote
+                # executor owns evaluation still take the fast path above.
+                analyses = list(
+                    await asyncio.gather(
+                        *[
+                            self.rollout_analyzer.analyze(
+                                rollout,
+                                ctx.analysis_context,
+                            )
+                            for rollout in rollouts
+                        ]
+                    )
+                )
+                for rollout, analysis in zip(rollouts, analyses, strict=True):
+                    analysis.metadata.setdefault("rollout", rollout)
+                    analysis.metadata.setdefault("rollout_messages", rollout.messages)
+                    analysis.metadata.setdefault(
+                        "policy_snapshot_id",
+                        rollout.policy_snapshot_id,
+                    )
+            all_analyses.extend(analyses)
         cost_seconds = time.monotonic() - started_at
 
         return PipelineEvaluationResult(

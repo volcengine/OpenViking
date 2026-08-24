@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Manual: OpenViking Root-Test-Collection</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { max-width: 900px; margin: 2rem auto; padding: 0 1rem; line-height: 1.55; }
+    h1, h2 { line-height: 1.2; }
+    .ok, .hold { padding: .8rem 1rem; border-left: .35rem solid; }
+    .ok { border-color: #258a4b; background: color-mix(in srgb, #258a4b 10%, Canvas); }
+    .hold { border-color: #c83b2f; background: color-mix(in srgb, #c83b2f 10%, Canvas); }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    pre { overflow-x: auto; padding: 1rem; background: color-mix(in srgb, CanvasText 7%, Canvas); }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: .5rem; text-align: left; border: 1px solid color-mix(in srgb, CanvasText 25%, Canvas); }
+  </style>
+</head>
+<body>
+  <h1>OpenViking Root-Test-Collection</h1>
+  <p>Stand: 1. August 2026. Dieses Manual beschreibt die reproduzierbare
+    Offline-Sammlung der Root-Tests. Es startet keine Services und fuehrt keine
+    Provider- oder Live-Tests aus.</p>
+
+  <div class="ok">
+    <strong>PASS:</strong> In einer frischen, aus <code>uv.lock</code>
+    erstellten Worktree-Umgebung wurden 6382 Root-Tests in 18.07 Sekunden ohne
+    Collection-Fehler gesammelt.
+  </div>
+
+  <h2>1. Warum die frueheren 20 Fehler entstanden</h2>
+  <table>
+    <thead><tr><th>Anzahl</th><th>Ursache</th><th>Behebung</th></tr></thead>
+    <tbody>
+      <tr><td>8</td><td>Alte venv ohne <code>mcp</code>/<code>scrapy</code></td><td>Frische lockfile-basierte venv</td></tr>
+      <tr><td>11</td><td>Eigenstaendige API-/OpenClaw-Harnesses im Root-Lauf</td><td>Exakte Root-Collection-Grenze</td></tr>
+      <tr><td>1</td><td>Optionaler Gemini-Import bei Collection</td><td>Import erst bei Nutzung</td></tr>
+    </tbody>
+  </table>
+
+  <h2>2. Umgebung herstellen</h2>
+  <pre><code>cd /Volumes/ExtremePro/projects/OpenViking-agent-worktrees/20260801-root-collection-fix
+UV_PROJECT_ENVIRONMENT=.venv-root-collect \
+  uv sync --frozen --python 3.12.11 --extra test</code></pre>
+  <p>Verifizierte Versionen: <code>uv 0.8.20</code>, Python
+    <code>3.12.11</code>, <code>mcp 1.28.1</code> und
+    <code>scrapy 2.16.0</code>.</p>
+
+  <h2>3. Root-Collection ausfuehren</h2>
+  <pre><code>env -u GOOGLE_API_KEY -u OPENAI_API_KEY -u ANTHROPIC_API_KEY \
+  -u OPENAI_ACCESS_TOKEN \
+  .venv-root-collect/bin/python -m pytest \
+  tests --collect-only \
+  -q -o addopts= -p no:cacheprovider --no-cov</code></pre>
+  <p>Erwartung: <code>6382 tests collected</code>, Exitcode 0 und keine
+    Collection-Fehler. Eine andere Zahl ist als Inventardrift zu untersuchen.</p>
+
+  <h2>4. Was die Root-Collection absichtlich nicht besitzt</h2>
+  <p><code>tests/api_test</code> und <code>tests/oc2ov_test</code> sind
+    eigenstaendige Harnesses mit eigenen Umgebungs- und Workflow-Vertraegen.
+    Ihre Ausgrenzung bedeutet nicht, dass ihre Tests bestanden haben.</p>
+
+  <div class="hold">
+    <strong>HOLD:</strong> Die Harness-Suiten selbst, die vollstaendige
+    Root-Testausfuehrung, Gemini-/Provider-Live-Tests, H1 Capability-Probe und
+    H2 Live-Benchmark/Canary wurden nicht ausgefuehrt. Fuer Live-Schritte ist
+    eine neue ausdrueckliche Freigabe erforderlich.
+  </div>
+
+  <h2>5. Bekannte Warnungen</h2>
+  <p>Der Lauf meldet 11 unbekannte <code>cli_remote</code>-Marker, einen
+    unbekannten <code>qdrant</code>-Marker und drei Helper-Class-
+    Collection-Warnungen. Sie verhindern die Collection nicht, bleiben aber
+    offen und duerfen nicht verschwiegen werden.</p>
+
+  <h2>6. Weiterfuehrende Dokumente</h2>
+  <ul>
+    <li><a href="../tests/2026-08-01-root-collection-fix-td.md">Test Dossier</a></li>
+    <li><a href="../sessions/2026-08-01-root-collection-fix-stp.md">Session Transfer Protocol</a></li>
+    <li><a href="../openitem/2026-08-01-root-collection-fix-open-items.md">Open Items</a></li>
+  </ul>
+</body>
+</html>

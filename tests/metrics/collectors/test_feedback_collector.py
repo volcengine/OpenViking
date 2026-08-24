@@ -5,7 +5,11 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from openviking.metrics.collectors.feedback import FeedbackCollector
+
+pytestmark = pytest.mark.bot
 
 
 def test_feedback_collector_exports_summary_and_channel_gauges(

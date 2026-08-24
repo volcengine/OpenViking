@@ -380,9 +380,14 @@ def owner_fields_for_uri(
             "uri": uri.rstrip("/"),
             "owner_user_id": None,
         }
+    # ``viking://session/...`` is the pre-user-namespace alias.  It is
+    # canonicalized for routing, but it never carried an owner id in legacy
+    # records; preserve that distinction while retaining the request's owner
+    # space in Context.
+    owner_user_id = None if uri_parts(uri)[:1] == ["session"] else resolved.owner_user_id
     return {
         "uri": resolved.uri,
-        "owner_user_id": resolved.owner_user_id,
+        "owner_user_id": owner_user_id,
     }
 
 

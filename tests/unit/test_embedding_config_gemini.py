@@ -2,11 +2,14 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Unit tests for Gemini-specific EmbeddingModelConfig and EmbeddingConfig behavior."""
 
+import importlib.util
 from unittest.mock import patch
 
 import pytest
 
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
+
+_GEMINI_SDK_AVAILABLE = importlib.util.find_spec("google.genai") is not None
 
 
 def _gcfg(**kw) -> EmbeddingModelConfig:
@@ -47,6 +50,10 @@ class TestGeminiDimension:
             assert cfg.get_effective_dimension() == 3072
 
 
+@pytest.mark.skipif(
+    not _GEMINI_SDK_AVAILABLE,
+    reason="Gemini provider extra is optional in the offline suite",
+)
 class TestGeminiContextRouting:
     @patch("openviking.models.embedder.gemini_embedders.genai.Client")
     def test_nonsymmetric_passes_query_document_params(self, _mock):

@@ -439,6 +439,47 @@ function escapeHtml(text) {{
     .replace(/'/g, '&#39;');
 }}
 
+function resolveMarkdownLink(rawHref, baseUri = '') {{
+  const href = String(rawHref || '').trim();
+  if (!href || /[\u0000-\u0020\u007f]/.test(href)) {{
+    return null;
+  }}
+
+  let normalizedHref = href;
+  for (let index = 0; index < 2; index += 1) {{
+    try {{
+      const decodedHref = decodeURIComponent(normalizedHref);
+      if (decodedHref === normalizedHref) {{
+        break;
+      }}
+      normalizedHref = decodedHref;
+    }} catch (_) {{
+      break;
+    }}
+  }}
+  normalizedHref = normalizedHref.replace(/[\u0000-\u0020\u007f]/g, '');
+
+  const normalizedScheme = normalizedHref.match(/^([a-z][a-z0-9+.-]*):/i);
+  const rawScheme = href.match(/^([a-z][a-z0-9+.-]*):/i);
+  if (normalizedScheme) {{
+    const scheme = normalizedScheme[1].toLowerCase();
+    if (!['viking', 'http', 'https', 'mailto', 'tel'].includes(scheme) || !rawScheme) {{
+      return null;
+    }}
+
+    if (scheme === 'viking') {{
+      return {{ href, targetUri: href }};
+    }}
+    return {{ href, targetUri: '' }};
+  }}
+
+  const resolvedUri = resolveRelativeUri(baseUri, href);
+  if (!resolvedUri.startsWith('viking://')) {{
+    return null;
+  }}
+  return {{ href: resolvedUri, targetUri: resolvedUri }};
+}}
+
 function escapedPreviewText(text, truncated) {{
   return text || '(empty)';
 }}
@@ -461,11 +502,15 @@ function renderMarkdown(text, baseUri = '') {{
   html = html.replace(/^#\s+(.*)$/gm, '<h1>$1</h1>');
   html = html.replace(/^>\s?(.*)$/gm, '<blockquote>$1</blockquote>');
   html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => {{
-    const resolvedUri = resolveRelativeUri(baseUri, href);
-    if (resolvedUri.startsWith('viking://')) {{
-      return `<a href="${{href}}" data-target-uri="${{resolvedUri}}">${{label}}</a>`;
+    const link = resolveMarkdownLink(href, baseUri);
+    if (!link) {{
+      return `<span class="unsafe-link">${{label}}</span>`;
     }}
-    return `<a href="${{href}}">${{label}}</a>`;
+    const escapedHref = escapeHtml(link.href);
+    if (link.targetUri) {{
+      return `<a href="${{escapedHref}}" data-target-uri="${{escapeHtml(link.targetUri)}}">${{label}}</a>`;
+    }}
+    return `<a href="${{escapedHref}}">${{label}}</a>`;
   }});
   html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');

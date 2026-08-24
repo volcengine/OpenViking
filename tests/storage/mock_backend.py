@@ -179,6 +179,9 @@ class MockCollection(ICollection):
     def upsert_data(self, data_list: List[Dict[str, Any]], ttl=0):
         raise NotImplementedError("MockCollection.upsert_data is not supported")
 
+    def update_data(self, data_list: List[Dict[str, Any]]):
+        raise NotImplementedError("MockCollection.update_data is not supported")
+
     def fetch_data(self, primary_keys: List[Any]):
         raise NotImplementedError("MockCollection.fetch_data is not supported")
 

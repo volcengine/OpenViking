@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -44,19 +45,62 @@ class CodexAuthError(RuntimeError):
     pass
 
 
+def _validate_allowed_url(value: str, *, expected: str, label: str) -> str:
+    """Return an exact pilot endpoint or fail before any network access."""
+    candidate = value.strip().rstrip("/")
+    parsed = urlsplit(candidate)
+    expected_parsed = urlsplit(expected)
+    try:
+        parsed_port = parsed.port
+    except ValueError as exc:
+        raise CodexAuthError(f"Codex {label} endpoint is not an allowed HTTPS origin.") from exc
+    if (
+        parsed.scheme != "https"
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.hostname != expected_parsed.hostname
+        or parsed_port not in (None, 443)
+        or parsed.path.rstrip("/") != expected_parsed.path.rstrip("/")
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise CodexAuthError(f"Codex {label} endpoint is not an allowed HTTPS origin.")
+    return expected
+
+
+def validate_codex_base_url(value: str | None = None) -> str:
+    """Validate the only Responses origin permitted by the OAuth pilot."""
+    configured = (value or os.getenv("OPENVIKING_CODEX_BASE_URL", "")).strip()
+    return _validate_allowed_url(
+        configured or DEFAULT_CODEX_BASE_URL,
+        expected=DEFAULT_CODEX_BASE_URL,
+        label="Responses",
+    )
+
+
 def _resolve_base_url() -> str:
-    return os.getenv("OPENVIKING_CODEX_BASE_URL", "").strip().rstrip("/") or DEFAULT_CODEX_BASE_URL
+    return validate_codex_base_url()
 
 
 def _resolve_codex_oauth_issuer() -> str:
-    return os.getenv("OPENVIKING_CODEX_OAUTH_ISSUER", "").strip().rstrip("/") or CODEX_OAUTH_ISSUER
+    configured = os.getenv("OPENVIKING_CODEX_OAUTH_ISSUER", "").strip()
+    return _validate_allowed_url(
+        configured or CODEX_OAUTH_ISSUER,
+        expected=CODEX_OAUTH_ISSUER,
+        label="OAuth issuer",
+    )
 
 
 def _resolve_codex_oauth_token_url() -> str:
     override = os.getenv("OPENVIKING_CODEX_OAUTH_TOKEN_URL", "").strip()
+    expected = f"{CODEX_OAUTH_ISSUER}/oauth/token"
     if override:
-        return override
-    return f"{_resolve_codex_oauth_issuer()}/oauth/token"
+        return _validate_allowed_url(override, expected=expected, label="OAuth token")
+    return _validate_allowed_url(
+        f"{_resolve_codex_oauth_issuer()}/oauth/token",
+        expected=expected,
+        label="OAuth token",
+    )
 
 
 def _decode_jwt_claims(token: Any) -> Dict[str, Any]:
@@ -102,6 +146,39 @@ def _auth_lock_path() -> Path:
     return get_codex_auth_store_path().with_suffix(".lock")
 
 
+def _ensure_private_auth_parent(path: Path) -> None:
+    """Create/validate the auth parent without following a symlink."""
+    parent = path.parent
+    parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    try:
+        parent_stat = parent.lstat()
+    except OSError as exc:
+        raise CodexAuthError("Codex auth store parent is unavailable.") from exc
+    if stat.S_ISLNK(parent_stat.st_mode):
+        raise CodexAuthError("Codex auth store parent must not be a symlink.")
+    getuid = getattr(os, "getuid", None)
+    if getuid is not None and parent_stat.st_uid != getuid():
+        raise CodexAuthError("Codex auth store parent has an unexpected owner.")
+    try:
+        os.chmod(parent, stat.S_IRWXU)
+    except OSError as exc:
+        raise CodexAuthError("Codex auth store parent permissions could not be secured.") from exc
+
+
+def _reject_auth_symlink(path: Path) -> None:
+    try:
+        path_stat = path.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise CodexAuthError("Codex auth store is unavailable.") from exc
+    if stat.S_ISLNK(path_stat.st_mode):
+        raise CodexAuthError("Codex auth store must not be a symlink.")
+    getuid = getattr(os, "getuid", None)
+    if getuid is not None and path_stat.st_uid != getuid():
+        raise CodexAuthError("Codex auth store has an unexpected owner.")
+
+
 def _acquire_windows_file_lock(handle) -> None:
     handle.seek(0, os.SEEK_END)
     if handle.tell() == 0:
@@ -126,7 +203,8 @@ def _auth_store_lock():
             _auth_lock_holder.depth -= 1
         return
     lock_path = _auth_lock_path()
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_private_auth_parent(lock_path)
+    _reject_auth_symlink(lock_path)
     if fcntl is None and msvcrt is None:
         _auth_lock_holder.depth = 1
         try:
@@ -137,6 +215,10 @@ def _auth_store_lock():
     open_mode = "a+b" if msvcrt is not None and fcntl is None else "a+"
     open_kwargs = {} if open_mode == "a+b" else {"encoding": "utf-8"}
     with open(lock_path, open_mode, **open_kwargs) as handle:
+        try:
+            os.chmod(lock_path, stat.S_IRUSR | stat.S_IWUSR)
+        except OSError as exc:
+            raise CodexAuthError("Codex auth lock permissions could not be secured.") from exc
         _auth_lock_holder.depth = 1
         try:
             if fcntl is not None:
@@ -169,6 +251,17 @@ def _candidate_auth_sources() -> list[tuple[str, Path]]:
 
 
 def _read_json_file(path: Path) -> Dict[str, Any]:
+    try:
+        path_stat = path.lstat()
+    except FileNotFoundError:
+        return {}
+    except OSError:
+        return {}
+    if stat.S_ISLNK(path_stat.st_mode) or not stat.S_ISREG(path_stat.st_mode):
+        return {}
+    getuid = getattr(os, "getuid", None)
+    if getuid is not None and path_stat.st_uid != getuid():
+        return {}
     if not path.is_file():
         return {}
     try:
@@ -179,7 +272,8 @@ def _read_json_file(path: Path) -> Dict[str, Any]:
 
 
 def _atomic_write_json_file(path: Path, payload: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_private_auth_parent(path)
+    _reject_auth_symlink(path)
     fd, tmp_name = tempfile.mkstemp(
         prefix=f"{path.name}.",
         suffix=".tmp",
@@ -195,6 +289,15 @@ def _atomic_write_json_file(path: Path, payload: Dict[str, Any]) -> None:
         except OSError:
             pass
         os.replace(tmp_name, path)
+        try:
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+        except OSError:
+            directory_fd = None
+        if directory_fd is not None:
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
     except Exception:
         try:
             os.unlink(tmp_name)
@@ -322,6 +425,7 @@ def _write_tokens_to_ov_store(
 def delete_codex_auth_store() -> bool:
     path = get_codex_auth_store_path()
     with _auth_store_lock():
+        _reject_auth_symlink(path)
         if not path.exists():
             return False
         path.unlink()
@@ -409,7 +513,10 @@ def login_codex_with_device_code(
     issuer = _resolve_codex_oauth_issuer()
     client_id = _resolve_codex_oauth_client_id()
     token_url = _resolve_codex_oauth_token_url()
-    with httpx.Client(timeout=httpx.Timeout(timeout_seconds)) as client:
+    with httpx.Client(
+        timeout=httpx.Timeout(timeout_seconds),
+        follow_redirects=False,
+    ) as client:
         response = client.post(
             f"{issuer}/api/accounts/deviceauth/usercode",
             json={"client_id": client_id},
@@ -433,7 +540,10 @@ def login_codex_with_device_code(
     start = time.monotonic()
     auth_code_payload = None
     try:
-        with httpx.Client(timeout=httpx.Timeout(timeout_seconds)) as client:
+        with httpx.Client(
+            timeout=httpx.Timeout(timeout_seconds),
+            follow_redirects=False,
+        ) as client:
             while time.monotonic() - start < max_wait_seconds:
                 time.sleep(poll_interval)
                 poll = client.post(
@@ -459,7 +569,10 @@ def login_codex_with_device_code(
         raise CodexAuthError(
             "Codex device login response is missing authorization_code or code_verifier."
         )
-    with httpx.Client(timeout=httpx.Timeout(timeout_seconds)) as client:
+    with httpx.Client(
+        timeout=httpx.Timeout(timeout_seconds),
+        follow_redirects=False,
+    ) as client:
         token_response = client.post(
             token_url,
             data={
@@ -514,22 +627,12 @@ def refresh_codex_oauth(
                 "client_id": client_id,
             },
             timeout=timeout_seconds,
+            follow_redirects=False,
         )
     except Exception as exc:
-        raise CodexAuthError(f"Codex OAuth refresh failed: {exc}") from exc
+        raise CodexAuthError("Codex OAuth refresh failed before a response was received.") from exc
     if response.status_code != 200:
-        message = f"Codex OAuth refresh failed with status {response.status_code}."
-        try:
-            payload = response.json()
-        except Exception:
-            payload = None
-        if isinstance(payload, dict):
-            detail = (
-                payload.get("error_description") or payload.get("message") or payload.get("error")
-            )
-            if isinstance(detail, str) and detail.strip():
-                message = f"Codex OAuth refresh failed: {detail.strip()}"
-        raise CodexAuthError(message)
+        raise CodexAuthError(f"Codex OAuth refresh failed with status {response.status_code}.")
     try:
         payload = response.json()
     except Exception as exc:
@@ -550,7 +653,6 @@ def has_codex_auth_available() -> bool:
         _load_tokens_from_source(source, path) is not None
         for source, path in _candidate_auth_sources()
     )
-
 
 
 def resolve_codex_runtime_credentials(
@@ -648,6 +750,7 @@ def resolve_codex_runtime_credentials(
                     "source": "openviking",
                     "path": str(ov_auth_path),
                     "auth_owner": CODEX_AUTH_OWNER_OPENVIKING,
+                    "client_id": payload.get("client_id"),
                 }
 
             if should_refresh:
@@ -663,6 +766,7 @@ def resolve_codex_runtime_credentials(
                 "source": "codex-cli",
                 "path": str(ov_auth_path),
                 "auth_owner": CODEX_AUTH_OWNER_EXTERNAL,
+                "client_id": payload.get("client_id"),
             }
         should_refresh = force_refresh or (
             refresh_if_expiring
@@ -692,6 +796,7 @@ def resolve_codex_runtime_credentials(
             "source": "openviking",
             "path": str(ov_auth_path),
             "auth_owner": CODEX_AUTH_OWNER_OPENVIKING,
+            "client_id": payload.get("client_id"),
         }
 
     raise CodexAuthError(

@@ -9,8 +9,10 @@ from types import SimpleNamespace
 
 import httpx
 
-from openviking.server.app import _initialize_runtime_state, create_app
+from openviking.server.app import _initialize_auth_plugin, _initialize_runtime_state, create_app
 from openviking.server.config import ServerConfig
+from openviking_cli.utils.config.oauth_config import OAuthConfig
+from openviking.server.identity import ResolvedIdentity, Role
 
 
 async def test_health_endpoint(client: httpx.AsyncClient):
@@ -20,7 +22,7 @@ async def test_health_endpoint(client: httpx.AsyncClient):
     assert body["status"] == "ok"
 
 
-async def test_health_endpoint_resolves_identity_with_api_key(caplog):
+async def test_health_endpoint_resolves_identity_with_api_key(caplog, monkeypatch):
     """When an API key is provided, /health should return identity information."""
     app = create_app(
         config=ServerConfig(
@@ -30,6 +32,19 @@ async def test_health_endpoint_resolves_identity_with_api_key(caplog):
         ),
         service=SimpleNamespace(),
     )
+    class _Manager:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+
+        async def load(self):
+            return None
+
+        def resolve(self, key):
+            assert key == "test-root-key"
+            return ResolvedIdentity(account_id="default", user_id="default", role=Role.ROOT)
+
+    monkeypatch.setattr("openviking.server.auth.plugins.api_key.APIKeyManager", _Manager)
+    await _initialize_auth_plugin(app, SimpleNamespace(viking_fs=object()), app.state.config)
     transport = httpx.ASGITransport(app=app)
 
     with caplog.at_level("WARNING", logger="openviking.server.routers.system"):
@@ -165,7 +180,9 @@ async def test_process_time_header(client: httpx.AsyncClient):
 
 async def test_openviking_error_handler(client: httpx.AsyncClient):
     """Requesting a non-existent resource should return structured error."""
-    resp = await client.get("/api/v1/fs/stat", params={"uri": "viking://nonexistent/path"})
+    resp = await client.get(
+        "/api/v1/fs/stat", params={"uri": "viking://resources/nonexistent/path"}
+    )
     assert resp.status_code == 404
     body = resp.json()
     assert body["status"] == "error"
@@ -188,6 +205,25 @@ async def test_lifespan_shutdown_ignores_cancelled_service_close():
     app = create_app(config=ServerConfig(), service=_Service())
 
     async with app.router.lifespan_context(app):
+        pass
+
+
+async def test_mcp_lifespan_can_be_recreated_for_a_second_app():
+    """Each FastAPI app needs a fresh single-use MCP session manager."""
+
+    class _Service:
+        async def initialize(self):
+            pass
+
+        async def close(self):
+            pass
+
+    first = create_app(config=ServerConfig(), service=_Service())
+    async with first.router.lifespan_context(first):
+        pass
+
+    second = create_app(config=ServerConfig(), service=_Service())
+    async with second.router.lifespan_context(second):
         pass
 
 
@@ -258,6 +294,13 @@ async def test_ready_returns_200_after_initialized(monkeypatch):
         "openviking_cli.utils.ollama.detect_ollama_in_config",
         lambda config: (False, None, None),
     )
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.open_viking_config.OpenVikingConfigSingleton.get_instance",
+        lambda: SimpleNamespace(
+            embedding=SimpleNamespace(get_embedder=lambda: None),
+            oauth=OAuthConfig(),
+        ),
+    )
 
     app = create_app(config=ServerConfig(), service=service)
     transport = httpx.ASGITransport(app=app)
@@ -314,7 +357,9 @@ async def test_initialize_runtime_state_loads_api_key_manager(monkeypatch):
         async def load(self):
             self.loaded = True
 
-    monkeypatch.setattr("openviking.server.app.APIKeyManager", FakeAPIKeyManager)
+    monkeypatch.setattr(
+        "openviking.server.auth.plugins.api_key.APIKeyManager", FakeAPIKeyManager
+    )
 
     app = SimpleNamespace(state=SimpleNamespace(api_key_manager=None))
     service = MockService()

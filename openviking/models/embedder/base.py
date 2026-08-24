@@ -89,9 +89,19 @@ async def embed_compat(
     from openviking.telemetry import bind_telemetry_stage
 
     stage = "embed_query" if is_query else "embed_resource"
-    embedding_input = embedder.prepare_embedding_input(content)
+    # Third-party/custom embedders written against the pre-guard interface
+    # may only expose ``embed``/``embed_async``.  Preserve that contract while
+    # using the input guard whenever the modern method is available.
+    prepare_input = getattr(embedder, "prepare_embedding_input", None)
+    embedding_input = prepare_input(content) if prepare_input is not None else content
     with bind_telemetry_stage(stage):
-        return await embedder.embed_async(embedding_input, is_query=is_query)
+        embed_async = getattr(embedder, "embed_async", None)
+        if embed_async is not None:
+            return await embed_async(embedding_input, is_query=is_query)
+        embed_sync = getattr(embedder, "embed", None)
+        if embed_sync is None:
+            raise AttributeError("embedder must provide embed_async or embed")
+        return await asyncio.to_thread(embed_sync, embedding_input, is_query=is_query)
 
 
 def truncate_and_normalize(embedding: List[float], dimension: Optional[int]) -> List[float]:

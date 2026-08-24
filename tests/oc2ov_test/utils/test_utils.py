@@ -484,7 +484,7 @@ class RetryManager:
 
 
 @dataclass
-class TestData:
+class ScenarioData:
     """
     测试数据类
     用于管理测试数据
@@ -500,16 +500,16 @@ class TestData:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
-class TestDataManager:
+class ScenarioDataManager:
     """
     测试数据管理器
     支持从配置文件加载、数据验证、数据驱动测试
     """
 
     def __init__(self):
-        self._data_registry: Dict[str, TestData] = {}
+        self._data_registry: Dict[str, ScenarioData] = {}
 
-    def register_data(self, data: TestData) -> None:
+    def register_data(self, data: ScenarioData) -> None:
         """
         注册测试数据
 
@@ -519,7 +519,7 @@ class TestDataManager:
         self._data_registry[data.name] = data
         logger.info(f"注册测试数据: {data.name}")
 
-    def get_data(self, name: str) -> Optional[TestData]:
+    def get_data(self, name: str) -> Optional[ScenarioData]:
         """
         获取测试数据
 
@@ -527,20 +527,20 @@ class TestDataManager:
             name: 数据名称
 
         Returns:
-            Optional[TestData]: 测试数据
+            Optional[ScenarioData]: 测试数据
         """
         return self._data_registry.get(name)
 
-    def get_all_data(self) -> Dict[str, TestData]:
+    def get_all_data(self) -> Dict[str, ScenarioData]:
         """
         获取所有测试数据
 
         Returns:
-            Dict[str, TestData]: 所有测试数据
+            Dict[str, ScenarioData]: 所有测试数据
         """
         return self._data_registry.copy()
 
-    def get_data_by_tag(self, tag: str) -> List[TestData]:
+    def get_data_by_tag(self, tag: str) -> List[ScenarioData]:
         """
         根据标签获取测试数据
 
@@ -548,11 +548,11 @@ class TestDataManager:
             tag: 标签
 
         Returns:
-            List[TestData]: 匹配的测试数据列表
+            List[ScenarioData]: 匹配的测试数据列表
         """
         return [data for data in self._data_registry.values() if tag in data.tags]
 
-    def validate_data(self, data: TestData) -> bool:
+    def validate_data(self, data: ScenarioData) -> bool:
         """
         验证测试数据
 
@@ -573,7 +573,7 @@ class TestDataManager:
 
 
 DEFAULT_TEST_DATA = {
-    "user_xiaoming": TestData(
+    "user_xiaoming": ScenarioData(
         name="user_xiaoming",
         description="测试用户小明",
         input_data={
@@ -584,7 +584,7 @@ DEFAULT_TEST_DATA = {
         ],
         tags=["user", "basic"],
     ),
-    "user_xiaohong": TestData(
+    "user_xiaohong": ScenarioData(
         name="user_xiaohong",
         description="测试用户小红",
         input_data={
@@ -600,7 +600,7 @@ DEFAULT_TEST_DATA = {
         ],
         tags=["user", "rich"],
     ),
-    "fruit_cherry": TestData(
+    "fruit_cherry": ScenarioData(
         name="fruit_cherry",
         description="水果偏好 - 樱桃",
         input_data={
@@ -612,7 +612,7 @@ DEFAULT_TEST_DATA = {
         ],
         tags=["fruit", "drink"],
     ),
-    "fruit_mango": TestData(
+    "fruit_mango": ScenarioData(
         name="fruit_mango",
         description="水果偏好 - 芒果",
         input_data={
@@ -624,7 +624,7 @@ DEFAULT_TEST_DATA = {
         ],
         tags=["fruit", "drink"],
     ),
-    "fruit_strawberry": TestData(
+    "fruit_strawberry": ScenarioData(
         name="fruit_strawberry",
         description="水果偏好 - 草莓",
         input_data={
@@ -639,14 +639,14 @@ DEFAULT_TEST_DATA = {
 }
 
 
-def get_default_data_manager() -> TestDataManager:
+def get_default_data_manager() -> ScenarioDataManager:
     """
     获取默认的测试数据管理器
 
     Returns:
-        TestDataManager: 测试数据管理器
+        ScenarioDataManager: 测试数据管理器
     """
-    manager = TestDataManager()
+    manager = ScenarioDataManager()
     for data in DEFAULT_TEST_DATA.values():
         manager.register_data(data)
     return manager

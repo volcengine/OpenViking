@@ -3,7 +3,9 @@
     "host": "0.0.0.0",
     "port": 1933,
     "root_api_key": "<your-root-api-key>",
-    "cors_origins": ["*"]
+    "cors_origins": ["https://studio.example.com"],
+    "public_base_url": "https://ov.example.com",
+    "webdav_max_body_bytes": 16777216
   },
   "storage": {
     "workspace": "/app/data",

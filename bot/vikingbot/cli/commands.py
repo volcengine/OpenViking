@@ -516,6 +516,7 @@ def gateway(
             fastapi_app,
             host=effective_host,
             port=effective_port,
+            ws="websockets-sansio",
             log_level="info",
         )
         server = uvicorn.Server(config_uvicorn)

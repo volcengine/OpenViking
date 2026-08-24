@@ -34,10 +34,9 @@ def test_main_keeps_config_host_when_cli_host_is_omitted(monkeypatch):
         lambda: None,
     )
     monkeypatch.setattr(
-        bootstrap,
-        "OpenVikingConfigSingleton",
-        SimpleNamespace(initialize=lambda config_path: None),
-        raising=False,
+        OpenVikingConfigSingleton,
+        "initialize",
+        classmethod(lambda cls, config_path=None: None),
     )
     monkeypatch.setattr(
         bootstrap.argparse.ArgumentParser,
@@ -66,6 +65,7 @@ def test_main_keeps_config_host_when_cli_host_is_omitted(monkeypatch):
 
     assert captured["host"] == "127.0.0.1"
     assert captured["port"] == 1933
+    assert captured["ws"] == "websockets-sansio"
 
 
 def test_main_coerces_cli_host_all_to_none(monkeypatch):
@@ -88,10 +88,9 @@ def test_main_coerces_cli_host_all_to_none(monkeypatch):
         lambda: None,
     )
     monkeypatch.setattr(
-        bootstrap,
-        "OpenVikingConfigSingleton",
-        SimpleNamespace(initialize=lambda config_path: None),
-        raising=False,
+        OpenVikingConfigSingleton,
+        "initialize",
+        classmethod(lambda cls, config_path=None: None),
     )
     monkeypatch.setattr(
         bootstrap.argparse.ArgumentParser,

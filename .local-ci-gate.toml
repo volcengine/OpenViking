@@ -1,0 +1,11 @@
+# Offline merge gate for the OpenViking worktree.
+# Commands are argument lists; no shell, provider, or GitHub runner is used.
+
+[stages.merge]
+checks = [
+  { name = "git-diff-check", command = ["git", "diff", "--check", "HEAD^"] },
+  { name = "lark-websockets-compatibility", command = ["env", "-u", "OPENVIKING_CONFIG_FILE", "-u", "OPENVIKING_CLI_CONFIG_FILE", "-u", "OPENAI_API_KEY", "-u", "OPENAI_ACCESS_TOKEN", "-u", "GOOGLE_API_KEY", "-u", "ANTHROPIC_API_KEY", "PYTHONPATH=.", ".venv/bin/python", "-m", "pytest", "-q", "--no-cov", "-o", "addopts=", "tests/test_lark_websockets_compat.py"] },
+  { name = "collection-fixture-regressions", command = ["env", "-u", "OPENVIKING_CONFIG_FILE", "-u", "OPENVIKING_CLI_CONFIG_FILE", "-u", "OPENAI_API_KEY", "-u", "OPENAI_ACCESS_TOKEN", "-u", "GOOGLE_API_KEY", "-u", "ANTHROPIC_API_KEY", "PYTHONPATH=.", ".venv/bin/python", "-m", "pytest", "-q", "--no-cov", "-o", "addopts=", "tests/test_collection_warnings.py", "tests/test_root_fixture_isolation.py"] },
+  { name = "root-offline-suite", command = ["env", "-u", "OPENVIKING_CONFIG_FILE", "-u", "OPENVIKING_CLI_CONFIG_FILE", "-u", "OPENAI_API_KEY", "-u", "OPENAI_ACCESS_TOKEN", "-u", "GOOGLE_API_KEY", "-u", "ANTHROPIC_API_KEY", "PYTHONPATH=.", ".venv/bin/python", "-m", "pytest", "-q", "--no-cov", "-o", "addopts=", "-W", "error::pytest.PytestUnraisableExceptionWarning", "-W", "error::pytest.PytestUnhandledThreadExceptionWarning", "tests"] },
+  { name = "bot-standalone-suite", command = ["env", "-u", "OPENVIKING_CONFIG_FILE", "-u", "OPENVIKING_CLI_CONFIG_FILE", "-u", "OPENAI_API_KEY", "-u", "OPENAI_ACCESS_TOKEN", "-u", "GOOGLE_API_KEY", "-u", "ANTHROPIC_API_KEY", "PYTHONPATH=.", ".venv/bin/python", "-m", "pytest", "-q", "-c", "bot/pytest.ini", "bot/tests", "bot/vikingbot/tests"] },
+]

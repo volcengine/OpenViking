@@ -9,6 +9,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+pytest.importorskip("google.genai", reason="Gemini provider extra is optional in the offline suite")
+
 
 def _make_mock_embedding(values):
     emb = MagicMock()

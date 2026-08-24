@@ -928,6 +928,10 @@ class AgentLoop:
         }
         if keep_recent_turn_count is not None:
             kwargs["keep_recent_turn_count"] = keep_recent_turn_count
+            # Compatibility alias for pre-turn-budget hooks and test clients.
+            # The built-in hook consumes ``keep_recent_turn_count``; older
+            # integrations can still observe the legacy count while migrating.
+            kwargs["keep_recent_count"] = keep_recent_turn_count
         if commit_message_threshold is not None:
             kwargs["commit_message_threshold"] = commit_message_threshold
         if openviking_connection:
@@ -1002,12 +1006,25 @@ class AgentLoop:
         if not should_commit:
             return
 
+        agents_fields = getattr(agents_config, "model_fields_set", None)
+        if agents_fields is not None and "commit_keep_recent_turn_count" in agents_fields:
+            keep_recent_turn_count = int(agents_config.commit_keep_recent_turn_count or 0)
+        elif agents_fields is not None and "commit_keep_recent_count" not in agents_fields:
+            keep_recent_turn_count = int(agents_config.commit_keep_recent_turn_count or 0)
+        else:
+            keep_recent_turn_count = int(
+                getattr(
+                    agents_config,
+                    "commit_keep_recent_count",
+                    getattr(agents_config, "commit_keep_recent_turn_count", 3),
+                )
+                or 0
+            )
+
         await self._submit_openviking_session_and_clear_if_committed(
             session,
             force_commit=True,
-            keep_recent_turn_count=int(
-                getattr(agents_config, "commit_keep_recent_turn_count", 3) or 0
-            ),
+            keep_recent_turn_count=keep_recent_turn_count,
             commit_message_threshold=self.memory_window,
             openviking_connection=getattr(msg, "openviking_connection", None),
         )

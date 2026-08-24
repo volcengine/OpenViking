@@ -283,7 +283,9 @@ class TestSessionConversationToolFiltering:
             }
         ]
 
-    async def test_prepare_extraction_messages_skips_image_only_without_description(self):
+    async def test_prepare_extraction_messages_skips_image_only_without_description(
+        self, monkeypatch
+    ):
         messages = [
             Message(
                 id="m1",
@@ -292,7 +294,7 @@ class TestSessionConversationToolFiltering:
             )
         ]
         provider = SessionExtractContextProvider(messages=messages)
-        provider._vision_vlm = None
+        monkeypatch.setattr(provider, "_get_vision_vlm", lambda: None)
 
         await provider.prepare_extraction_messages()
         prompt_message = provider._build_conversation_message()
@@ -300,7 +302,9 @@ class TestSessionConversationToolFiltering:
         assert "[Image description]" not in prompt_message["content"]
         assert "https://example.com/private-family-photo.png" not in prompt_message["content"]
 
-    async def test_prepare_extraction_messages_keeps_text_when_image_is_undescribed(self):
+    async def test_prepare_extraction_messages_keeps_text_when_image_is_undescribed(
+        self, monkeypatch
+    ):
         messages = [
             Message(
                 id="m1",
@@ -312,7 +316,7 @@ class TestSessionConversationToolFiltering:
             )
         ]
         provider = SessionExtractContextProvider(messages=messages)
-        provider._vision_vlm = None
+        monkeypatch.setattr(provider, "_get_vision_vlm", lambda: None)
 
         await provider.prepare_extraction_messages()
         prompt_message = provider._build_conversation_message()

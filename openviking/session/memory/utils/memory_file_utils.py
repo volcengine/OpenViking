@@ -103,7 +103,14 @@ def _serialize_with_metadata(
     clean_metadata.pop("_uri", None)
     links = clean_metadata.get("links")
     if render_links and isinstance(links, list) and source_uri:
-        content = LinkRenderer.render_links(content, str(source_uri), links)
+        # Older metadata may contain URI/match_text-only reference records.
+        # Preserve those records in MEMORY_FIELDS, but only render links that
+        # satisfy the stored-link schema expected by the memory graph.
+        renderable_links = [
+            link for link in links if isinstance(link, dict) and link.get("link_type")
+        ]
+        if renderable_links:
+            content = LinkRenderer.render_links(content, str(source_uri), renderable_links)
 
     metadata_json = json.dumps(
         clean_metadata, indent=2, default=_serialize_datetime, ensure_ascii=False

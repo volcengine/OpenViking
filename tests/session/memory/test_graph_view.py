@@ -1,11 +1,44 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import json
 import py_compile
+import subprocess
 import warnings
 from pathlib import Path
 
 from openviking.session.memory.graph_view import _render_graph_html
+
+
+def _render_generated_markdown(markdown: str, base_uri: str = "") -> str:
+    """Execute the generated graph renderer, not a Python reimplementation."""
+    html = _render_graph_html([], [])
+    helper_start = html.index("function resolveRelativeUri")
+    helper_end = html.index("function showTooltip", helper_start)
+    renderer_source = html[helper_start:helper_end]
+    harness = """
+const fs = require('node:fs');
+const vm = require('node:vm');
+const payload = JSON.parse(fs.readFileSync(0, 'utf8'));
+const context = {};
+vm.createContext(context);
+vm.runInContext(payload.rendererSource, context);
+process.stdout.write(JSON.stringify(context.renderMarkdown(payload.markdown, payload.baseUri)));
+"""
+    result = subprocess.run(
+        ["node", "-e", harness],
+        input=json.dumps(
+            {
+                "rendererSource": renderer_source,
+                "markdown": markdown,
+                "baseUri": base_uri,
+            }
+        ),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return json.loads(result.stdout)
 
 
 def test_graph_view_module_compiles_without_escape_warnings():
@@ -34,8 +67,50 @@ def test_render_graph_html_supports_relative_markdown_links():
     html = _render_graph_html(nodes, [])
 
     assert "function resolveRelativeUri(baseUri, relativeUri)" in html
-    assert "const resolvedUri = resolveRelativeUri(baseUri, href);" in html
-    assert 'data-target-uri="${resolvedUri}"' in html
+    assert "function resolveMarkdownLink(rawHref, baseUri = '')" in html
+    assert "const link = resolveMarkdownLink(href, baseUri);" in html
+    assert 'data-target-uri="${escapeHtml(link.targetUri)}"' in html
+
+
+def test_generated_graph_markdown_renderer_makes_dangerous_schemes_inert():
+    for href in (
+        "javascript:alert(1)",
+        "JaVaScRiPt:alert(1)",
+        " java%73cript:alert(1)",
+        "data:text/html,alert(1)",
+        "blob:https://example.test/identifier",
+    ):
+        rendered = _render_generated_markdown(f"[hostile]({href})")
+
+        assert "<a " not in rendered
+        assert '<span class="unsafe-link">hostile</span>' in rendered
+
+
+def test_generated_graph_markdown_renderer_preserves_safe_links_and_escapes_attributes():
+    base_uri = "viking://user/Caroline/memories/profile.md"
+
+    relative = _render_generated_markdown("[music](./preferences/music.md)", base_uri)
+    viking = _render_generated_markdown(
+        "[music](viking://user/Caroline/memories/preferences/music.md)", base_uri
+    )
+    https = _render_generated_markdown("[web](https://example.test/path?x=1)", base_uri)
+    mailto = _render_generated_markdown("[mail](mailto:user@example.test)", base_uri)
+    tel = _render_generated_markdown("[call](tel:+491234567)", base_uri)
+    quoted = _render_generated_markdown(
+        '[quoted](https://example.test/?title="safe")', base_uri
+    )
+
+    assert (
+        '<a href="viking://user/Caroline/memories/preferences/music.md" '
+        'data-target-uri="viking://user/Caroline/memories/preferences/music.md">music</a>'
+        in relative
+    )
+    assert 'data-target-uri="viking://user/Caroline/memories/preferences/music.md"' in viking
+    assert '<a href="https://example.test/path?x=1">web</a>' in https
+    assert '<a href="mailto:user@example.test">mail</a>' in mailto
+    assert '<a href="tel:+491234567">call</a>' in tel
+    assert 'href="https://example.test/?title=&amp;quot;safe&amp;quot;"' in quoted
+    assert 'href="https://example.test/?title="safe"' not in quoted
 
 
 def test_render_graph_html_renders_tooltip_content_as_markdown():
@@ -242,10 +317,8 @@ def test_render_graph_html_edge_details_include_source_and_target_uris():
     assert "const sourceUri = edge.from || edge.source || '';" in html
     assert "const targetUri = edge.to || edge.target || '';" in html
     assert (
-        """detailContent.innerHTML = renderMarkdown(`- from_uri: ${escapeHtml(sourceUri)}
-- to_uri: ${escapeHtml(targetUri)}
-
-${escapeHtml(edge.description || '(no description)')}`);"""
+        "detailContent.innerHTML = renderMarkdown(`- from_uri: ${escapeHtml(sourceUri)}\\n- "
+        "to_uri: ${escapeHtml(targetUri)}\\n\\n${escapeHtml(edge.description || '(no description)')}`);"
         in html
     )
 
