@@ -89,9 +89,11 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
                        non-symmetric mode with query_param/document_param.
             api_key: API key, if None will read from env vars (OPENVIKING_EMBEDDING_API_KEY or OPENAI_API_KEY)
             api_base: API base URL, optional. Required for third-party OpenAI-compatible APIs.
-            dimension: Target dimension for output vectors. If specified and the model returns vectors
-                      with a different dimension, the output will be truncated to this dimension.
-                      If None, uses the model's default dimension without truncation.
+            dimension: Target dimension for output vectors. For custom OpenAI-compatible
+                      backends this is sent to the API when api_base is configured; otherwise,
+                      if the model returns vectors with a different dimension, the output will
+                      be truncated to this dimension. If None, uses the model's default dimension
+                      without truncation.
             query_param: Parameter for query-side embeddings. Supports simple values (e.g., 'query')
                          or key=value format (e.g., 'input_type=query,task=search'). Defaults to None.
                          Setting this (or document_param) activates non-symmetric mode.
@@ -292,7 +294,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         # Preserve existing behavior for official OpenAI embeddings: only custom
         # OpenAI-compatible backends and Azure send explicit dimensions.
         if self._provider == "openai":
-            return False
+            return bool(self.api_base)
         return bool(self.api_base)
 
     def _get_async_client(self):

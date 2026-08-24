@@ -35,6 +35,31 @@ class TestOpenAIDenseEmbedder:
         assert "dimensions" not in call_kwargs
 
     @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
+    def test_openai_compatible_api_base_sends_dimensions(self, mock_openai_class):
+        """OpenAI-compatible backends should receive explicit dimensions."""
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+
+        mock_embedding = MagicMock()
+        mock_embedding.embedding = [0.1] * 1024
+
+        mock_response = MagicMock()
+        mock_response.data = [mock_embedding]
+        mock_client.embeddings.create.return_value = mock_response
+
+        embedder = OpenAIDenseEmbedder(
+            model_name="Qwen/Qwen3-Embedding-8B",
+            api_key="test-api-key",
+            api_base="https://api.siliconflow.cn/v1",
+            dimension=1024,
+        )
+
+        embedder.embed("Hello world")
+
+        call_kwargs = mock_client.embeddings.create.call_args[1]
+        assert call_kwargs["dimensions"] == 1024
+
+    @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
     def test_embed_with_input_type_none(self, mock_openai_class):
         """OpenAI embed should not include extra_body when input_type is None"""
         mock_client = MagicMock()
