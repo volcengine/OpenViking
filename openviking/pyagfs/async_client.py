@@ -199,12 +199,15 @@ class AsyncAGFSClient:
             kwargs["recursive"] = recursive
         if not force:
             kwargs["force"] = force
-        return await self.run(
-            "rm",
-            path,
-            **kwargs,
-            ctx=_fs_ctx_with_auto_pathlock(path, fs_ctx, auto_pathlock),
-        )
+        ctx = _fs_ctx_with_auto_pathlock(path, fs_ctx, auto_pathlock)
+        try:
+            return await self.run("rm", path, **kwargs, ctx=ctx)
+        except TypeError as exc:
+            if "force" not in kwargs or "unexpected keyword argument 'force'" not in str(exc):
+                raise
+            legacy_kwargs = dict(kwargs)
+            legacy_kwargs.pop("force", None)
+            return await self.run("rm", path, **legacy_kwargs, ctx=ctx)
 
     async def stat(
         self, path: str, *, fs_ctx: Dict[str, str] | None = None, bypass_cache: bool = False

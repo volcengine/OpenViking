@@ -27,6 +27,14 @@ class _SyncAGFS:
         return ("pathlock_is_locked", ctx, path, ignore_stale)
 
 
+class _LegacyRmAGFS:
+    """Synchronous binding stub with the older rm signature."""
+
+    def rm(self, path, recursive=False):
+        """Return remove call arguments without accepting force."""
+        return ("rm", path, recursive)
+
+
 @pytest.mark.asyncio
 async def test_async_agfs_client_hides_threadpool(monkeypatch):
     to_thread_calls = []
@@ -67,3 +75,19 @@ async def test_async_agfs_client_hides_threadpool(monkeypatch):
             {"recursive": True, "ctx": {"account_id": "_system"}},
         ),
     ]
+
+
+@pytest.mark.asyncio
+async def test_async_agfs_client_rm_tolerates_legacy_binding_without_force(monkeypatch):
+    async def fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(async_client.asyncio, "to_thread", fake_to_thread)
+
+    agfs = AsyncAGFSClient(_LegacyRmAGFS())
+
+    assert await agfs.rm("/redo/id", recursive=True, force=False) == (
+        "rm",
+        "/redo/id",
+        True,
+    )
