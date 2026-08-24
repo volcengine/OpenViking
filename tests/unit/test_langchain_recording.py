@@ -58,7 +58,7 @@ def test_recorder_filters_framework_control_messages_and_preserves_tool_parts():
     context_parts = [
         {
             "type": "context",
-            "uri": "viking://user/memories/preference.md",
+            "uri": "viking://~/memories/preference.md",
             "context_type": "memory",
             "abstract": "The user prefers azure.",
         }
@@ -105,7 +105,7 @@ def test_recorder_filters_framework_control_messages_and_preserves_tool_parts():
     assert context_parts == [
         {
             "type": "context",
-            "uri": "viking://user/memories/preference.md",
+            "uri": "viking://~/memories/preference.md",
             "context_type": "memory",
             "abstract": "The user prefers azure.",
         }
@@ -137,7 +137,7 @@ def test_recorder_uses_empty_assistant_as_context_carrier():
     context_parts = [
         {
             "type": "context",
-            "uri": "viking://user/memories/context-carrier.md",
+            "uri": "viking://~/memories/context-carrier.md",
             "context_type": "memory",
         }
     ]
@@ -170,7 +170,7 @@ def test_recorder_leaves_context_unattached_without_assistant_payload():
         context_parts=[
             {
                 "type": "context",
-                "uri": "viking://user/memories/pending.md",
+                "uri": "viking://~/memories/pending.md",
                 "context_type": "memory",
             }
         ],
@@ -191,7 +191,7 @@ def test_recorder_does_not_attribute_context_to_tool_result_payload():
     context_parts = [
         {
             "type": "context",
-            "uri": "viking://user/memories/assistant-only.md",
+            "uri": "viking://~/memories/assistant-only.md",
             "context_type": "memory",
         }
     ]
@@ -563,7 +563,7 @@ def test_chat_message_history_keeps_context_pending_until_assistant_message():
         context_parts_provider=lambda _session_id: [
             {
                 "type": "context",
-                "uri": "viking://user/memories/history-pending.md",
+                "uri": "viking://~/memories/history-pending.md",
                 "context_type": "memory",
             }
         ],
@@ -613,7 +613,7 @@ def test_chat_message_history_lifecycle_discards_pending_context(
         context_parts_provider=lambda _session_id: [
             {
                 "type": "context",
-                "uri": "viking://user/memories/discarded.md",
+                "uri": "viking://~/memories/discarded.md",
                 "context_type": "memory",
             }
         ],
@@ -664,7 +664,7 @@ def test_middleware_resumes_after_last_successful_recorder_batch():
     middleware._pending_context_parts[capture_key] = [
         {
             "type": "context",
-            "uri": "viking://user/memories/retry.md",
+            "uri": "viking://~/memories/retry.md",
             "context_type": "memory",
             "abstract": "Retry context.",
         }
@@ -714,7 +714,7 @@ def test_middleware_retains_pending_context_when_first_recorder_batch_fails():
     middleware._pending_context_parts[capture_key] = [
         {
             "type": "context",
-            "uri": "viking://user/memories/retry.md",
+            "uri": "viking://~/memories/retry.md",
             "context_type": "memory",
             "abstract": "Retained retry context.",
         }
@@ -746,7 +746,7 @@ def test_middleware_keeps_context_pending_until_empty_assistant_arrives():
     middleware._pending_context_parts[capture_key] = [
         {
             "type": "context",
-            "uri": "viking://user/memories/pending-assistant.md",
+            "uri": "viking://~/memories/pending-assistant.md",
             "context_type": "memory",
         }
     ]

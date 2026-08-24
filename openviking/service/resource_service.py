@@ -11,16 +11,14 @@ import contextlib
 import inspect
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from urllib.parse import urlparse
 from uuid import uuid4
 
-from openviking.core.content_targets import ContentTargetSpec
 from openviking.core.namespace import is_content_root_uri
-from openviking.core.uri_validation import validate_optional_content_target_uri
 from openviking.parse.backend import ParserBackend, normalize_parser_backend
 from openviking.parse.mode import ParseMode, normalize_parse_mode
 from openviking.parse.parsers.constants import MPEG_TS_EXTENSION_ALIAS
@@ -271,13 +269,23 @@ class ResourceService:
             return {}
         return {"ingest_options": IngestOptions.from_search_tags(tags, mode=tag_mode)}
 
+    @staticmethod
+    def _ensure_single_resource_target(
+        *,
+        to: Optional[str],
+        parent: Optional[str],
+    ) -> None:
+        if (to or "").strip() and (parent or "").strip():
+            raise InvalidArgumentError("Cannot specify both 'to' and 'parent' at the same time.")
+
     async def _manage_watch_if_needed(
         self,
         *,
         watch_manager: Optional["WatchManager"],
         manage_watch: bool,
         watch_interval: float,
-        target: ContentTargetSpec,
+        to: str,
+        parent: str,
         to_is_directory: bool,
         root_uri: str,
         path: str,
@@ -295,15 +303,10 @@ class ResourceService:
         telemetry = get_current_telemetry()
         with telemetry.measure("resource.watch"):
             if watch_interval > 0:
-                watch_to = target.to
-                parent_uri = target.parent
+                watch_to = to
+                parent_uri = parent
                 if not watch_to:
-                    watch_to = validate_optional_content_target_uri(
-                        root_uri,
-                        ctx,
-                        kind="resource",
-                        field_name="root_uri",
-                    )
+                    watch_to = root_uri
                     parent_uri = None
                 if not watch_to:
                     raise InvalidArgumentError(
@@ -343,12 +346,12 @@ class ResourceService:
                     logger.warning(
                         f"[ResourceService] Failed to create watch task for {watch_to}: {e}"
                     )
-            elif target.to:
+            elif to:
                 try:
-                    await self._handle_watch_task_cancellation(to_uri=target.to, ctx=ctx)
+                    await self._handle_watch_task_cancellation(to_uri=to, ctx=ctx)
                 except Exception as e:
                     logger.warning(
-                        f"[ResourceService] Failed to cancel watch task for {target.to}: {e}"
+                        f"[ResourceService] Failed to cancel watch task for {to}: {e}"
                     )
 
     def _normalize_add_resource_args(
@@ -356,6 +359,7 @@ class ResourceService:
         args: Optional[Dict[str, Any]],
         *,
         watch_interval: float,
+        allowed_reserved_fields: Optional[set[str]] = None,
     ) -> _NormalizedAddResourceArgs:
         if args is None:
             return _NormalizedAddResourceArgs({})
@@ -364,7 +368,10 @@ class ResourceService:
         if not args:
             return _NormalizedAddResourceArgs({})
 
-        reserved = sorted(set(args).intersection(_ADD_RESOURCE_ARGS_RESERVED_FIELDS))
+        reserved_fields = _ADD_RESOURCE_ARGS_RESERVED_FIELDS - (
+            allowed_reserved_fields or set()
+        )
+        reserved = sorted(set(args).intersection(reserved_fields))
         if reserved:
             raise InvalidArgumentError(
                 "args cannot contain core add_resource fields: " + ", ".join(reserved)
@@ -870,7 +877,9 @@ class ResourceService:
         plan: _SourcePlan,
         *,
         ctx: RequestContext,
-        target: ContentTargetSpec,
+        to: str,
+        parent: str,
+        create_parent: bool,
         reason: str,
         instruction: str,
         timeout: Optional[float],
@@ -890,16 +899,14 @@ class ResourceService:
         from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 
         planned_to_is_directory = (
-            to_is_directory if to_is_directory is not None else bool(target.to)
+            to_is_directory if to_is_directory is not None else bool(to)
         )
-        target_to_is_exact = bool(
-            target.to and not is_content_root_uri(target.to, ctx, kind="resource")
-        )
+        target_to_is_exact = bool(to and not is_content_root_uri(to, kind="resource"))
         defer_candidate_resolution = bool(
             (
                 plan.defer_unnamed_target
                 and plan.source_identity.source_name is None
-                and not target.to
+                and not to
             )
             or (mode is ParseMode.NO_SPLIT and not target_to_is_exact)
         )
@@ -911,7 +918,9 @@ class ResourceService:
             root_uri, resource_lock, defer_target_resolution = await self._plan_source_job_target(
                 path=plan.path,
                 ctx=ctx,
-                target=target,
+                to=to,
+                parent=parent,
+                create_parent=create_parent,
                 source_info=plan.source_identity,
                 defer_candidate_resolution=defer_candidate_resolution,
             )
@@ -956,7 +965,7 @@ class ResourceService:
                 exclude=processor_kwargs.get("exclude"),
                 directly_upload_media=bool(processor_kwargs.get("directly_upload_media", True)),
                 preserve_structure=processor_kwargs.get("preserve_structure"),
-                create_parent=bool(processor_kwargs.get("create_parent", False)),
+                create_parent=create_parent,
                 source_name=plan.source_identity.source_name,
                 to_is_directory=planned_to_is_directory,
                 args=plan.processor_args,
@@ -999,7 +1008,9 @@ class ResourceService:
         *,
         path: str,
         ctx: RequestContext,
-        target: ContentTargetSpec,
+        to: str,
+        parent: str,
+        create_parent: bool,
         source_info: _ResourceSourceInfo,
         defer_candidate_resolution: bool,
     ) -> tuple[str, Optional[Dict[str, Any]], bool]:
@@ -1012,11 +1023,11 @@ class ResourceService:
             ctx=ctx,
             doc_name=doc_name,
             scope="resources",
-            to_uri=target.to,
-            parent_uri=target.parent,
+            to_uri=to,
+            parent_uri=parent,
             source_path=source_path,
             source_format=source_info.source_format,
-            create_parent=target.create_parent,
+            create_parent=create_parent,
         )
         if candidate_uri and defer_candidate_resolution:
             return root_uri, None, True
@@ -1156,6 +1167,8 @@ class ResourceService:
         watch_interval: float = 0,
         allow_local_path_resolution: bool = True,
         enforce_public_remote_targets: bool = False,
+        add_type: Optional[str] = None,
+        args: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Submit a scheduled refresh without changing its watch task."""
@@ -1176,7 +1189,8 @@ class ResourceService:
             manage_watch=False,
             allow_local_path_resolution=allow_local_path_resolution,
             enforce_public_remote_targets=enforce_public_remote_targets,
-            args=None,
+            add_type=add_type,
+            args=args,
             **kwargs,
         )
 
@@ -1235,7 +1249,9 @@ class ResourceService:
 
                 Note: Re-adding the same source to the same target updates its active watch
                 task in place. A different source targeting an active watch raises
-                ConflictError; cancel that watch first with watch_interval <= 0.
+                ConflictError; cancel that watch first with watch_interval <= 0. Connector
+                imports create the Watch only after the background import succeeds, so this
+                conflict may be reported after both overlapping imports have written data.
             enforce_public_remote_targets: When True, reject non-public remote hosts and
                 validate each outbound HTTP request URL during fetch.
             args: Parser/accessor-specific options forwarded to the processing chain.
@@ -1251,12 +1267,31 @@ class ResourceService:
         self._ensure_initialized()
         processing_mode = normalize_processing_mode(processing_mode)
         self._validate_add_resource_tag_policy(tags=tags, tag_mode=tag_mode)
-        normalized_args = self._normalize_add_resource_args(args, watch_interval=watch_interval)
+        from openviking.connector.delegate import ConnectorDelegate
+
+        allowed_reserved_fields = ConnectorDelegate.supported_args(path, add_type).intersection(
+            _ADD_RESOURCE_ARGS_RESERVED_FIELDS
+        )
+        normalized_args = self._normalize_add_resource_args(
+            args,
+            watch_interval=watch_interval,
+            allowed_reserved_fields=allowed_reserved_fields,
+        )
         mode = (
             normalize_parse_mode(parse_mode)
             if parse_mode is not None
             else normalized_args.parse_mode
         )
+        duplicated_fields = sorted(
+            field
+            for field in allowed_reserved_fields
+            if field in normalized_args.processor_kwargs and kwargs.get(field) is not None
+        )
+        if duplicated_fields:
+            raise InvalidArgumentError(
+                f"{', '.join(duplicated_fields)} cannot be provided both as a top-level "
+                "field and in args."
+            )
         kwargs.update(normalized_args.processor_kwargs)
         git_repo_source = is_git_repo_url(path)
         if git_repo_source:
@@ -1283,7 +1318,13 @@ class ResourceService:
                 parent = default_parent
                 kwargs["create_parent"] = True
 
-        if self._connector.should_delegate(
+        self._ensure_single_resource_target(to=to, parent=parent)
+        target_to = to or ""
+        target_parent = parent or ""
+        target_create_parent = bool(kwargs.get("create_parent", False))
+
+        connector = self._connector
+        if connector.should_delegate(
             path,
             ctx=ctx,
             declared_add_type=add_type,
@@ -1299,29 +1340,101 @@ class ResourceService:
             connector_args=normalized_args.processor_kwargs,
             kwargs=kwargs,
         ):
-            return await self._connector.submit(
+            resolved = connector.resolve_add_type(path, add_type)
+            if resolved is None:  # pragma: no cover - should_delegate already resolved it
+                raise InvalidArgumentError(f"'{path}' does not match any Connector source type.")
+            watch_manager = self._get_watch_manager()
+            watch_auth_state = None
+            defer_watch_creation = bool(watch_manager and manage_watch and watch_interval > 0)
+            if defer_watch_creation and watch_manager:
+                # Connector imports may run for a long time. This is only a best-effort
+                # precheck: the authoritative conflict check happens when on_success
+                # creates the Watch, after the Connector may already have written data.
+                await watch_manager.get_upsertable_task_by_uri(
+                    path=path,
+                    to_uri=target_to,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                    role=str(ctx.role),
+                )
+                watch_auth_state = await connector.create_watch_auth_state(
+                    api_key=ctx.api_key or "",
+                    account_id=ctx.account_id,
+                    add_type=resolved[0],
+                    path=path,
+                    connector_args=normalized_args.processor_kwargs,
+                )
+            connector_watch_processor_kwargs = self._watch_processor_kwargs(
+                {
+                    key: value
+                    for key, value in kwargs.items()
+                    if key not in normalized_args.processor_kwargs
+                },
+                tags,
+                tag_mode,
+            )
+            on_success: Optional[Callable[[], Awaitable[None]]] = None
+            if defer_watch_creation:
+
+                async def create_watch_after_success() -> None:
+                    await self._manage_watch_if_needed(
+                        watch_manager=watch_manager,
+                        manage_watch=True,
+                        watch_interval=watch_interval,
+                        to=target_to,
+                        parent=target_parent,
+                        to_is_directory=to_is_directory,
+                        root_uri=target_to,
+                        path=path,
+                        reason=reason,
+                        instruction=instruction,
+                        build_index=build_index,
+                        summarize=summarize,
+                        processing_mode=processing_mode,
+                        processor_kwargs=connector_watch_processor_kwargs,
+                        watch_auth_state=watch_auth_state,
+                        ctx=ctx,
+                    )
+
+                on_success = create_watch_after_success
+            result = await connector.submit(
                 path=path,
                 ctx=ctx,
                 declared_add_type=add_type,
-                to=to,
+                to=target_to,
                 reason=reason,
                 connector_args=normalized_args.processor_kwargs,
                 tags=tags,
                 tag_mode=tag_mode,
+                wait_for_completion=not manage_watch and watch_interval > 0,
+                on_success=on_success,
                 **kwargs,
             )
+            if not defer_watch_creation:
+                await self._manage_watch_if_needed(
+                    watch_manager=watch_manager,
+                    manage_watch=manage_watch,
+                    watch_interval=watch_interval,
+                    to=target_to,
+                    parent=target_parent,
+                    to_is_directory=to_is_directory,
+                    root_uri=target_to,
+                    path=path,
+                    reason=reason,
+                    instruction=instruction,
+                    build_index=build_index,
+                    summarize=summarize,
+                    processing_mode=processing_mode,
+                    processor_kwargs=connector_watch_processor_kwargs,
+                    watch_auth_state=watch_auth_state,
+                    ctx=ctx,
+                )
+            return result
 
         if enforce_public_remote_targets and is_remote_resource_source(path):
             path = require_remote_resource_source(path)
             kwargs.setdefault("request_validator", ensure_public_remote_target)
 
-        target = ContentTargetSpec.from_fields(
-            ctx=ctx,
-            kind="resource",
-            to=to,
-            parent=parent,
-            create_parent=bool(kwargs.get("create_parent", False)),
-        )
         source_plan = await self._prepare_standard_source_plan(
             path=path,
             ctx=ctx,
@@ -1334,7 +1447,9 @@ class ResourceService:
             result = await self._enqueue_source_plan(
                 source_plan,
                 ctx=ctx,
-                target=target,
+                to=target_to,
+                parent=target_parent,
+                create_parent=target_create_parent,
                 reason=reason,
                 instruction=instruction,
                 timeout=timeout,
@@ -1355,9 +1470,9 @@ class ResourceService:
             result = await self._execute_resource_ingestion(
                 path=path,
                 ctx=ctx,
-                to=to,
+                to=target_to,
                 to_is_directory=to_is_directory,
-                parent=parent,
+                parent=target_parent,
                 reason=reason,
                 instruction=instruction,
                 defer_post_processing=True,
@@ -1454,15 +1569,11 @@ class ResourceService:
         telemetry.set("resource.flags.watch_enabled", watch_enabled)
 
         try:
-            target = ContentTargetSpec.from_fields(
-                ctx=ctx,
-                kind="resource",
-                to=to,
-                parent=parent,
-                create_parent=bool(kwargs.get("create_parent", False)),
-            )
+            self._ensure_single_resource_target(to=to, parent=parent)
+            target_to = to or ""
+            target_parent = parent or ""
             if to_is_directory is None:
-                to_is_directory = bool(target.to)
+                to_is_directory = bool(target_to)
             watch_to_is_directory = to_is_directory
             if enforce_public_remote_targets and is_remote_resource_source(path):
                 path = require_remote_resource_source(path)
@@ -1476,8 +1587,8 @@ class ResourceService:
                 reason=reason,
                 instruction=instruction,
                 scope="resources",
-                to=target.to,
-                parent=target.parent,
+                to=target_to,
+                parent=target_parent,
                 to_is_directory=to_is_directory,
                 build_index=build_index,
                 summarize=summarize,
@@ -1507,7 +1618,8 @@ class ResourceService:
                 watch_manager=watch_manager,
                 manage_watch=manage_watch,
                 watch_interval=watch_interval,
-                target=target,
+                to=target_to,
+                parent=target_parent,
                 to_is_directory=watch_to_is_directory,
                 root_uri=str(result.get("root_uri") or ""),
                 path=path,
@@ -1681,6 +1793,17 @@ class ResourceService:
             request_wait_tracker.cleanup(telemetry_id)
             unregister_telemetry(telemetry_id)
 
+    @staticmethod
+    def _raise_queue_status_errors(status: Dict[str, Any]) -> None:
+        failed = {
+            name: group
+            for name, group in status.items()
+            if isinstance(group, dict)
+            and (int(group.get("error_count", 0) or 0) > 0 or bool(group.get("errors")))
+        }
+        if failed:
+            raise InternalError(f"queue processing failed: {failed}")
+
     # ── Connector routing ──
 
     @property
@@ -1730,19 +1853,14 @@ class ResourceService:
         if not watch_manager:
             return
 
-        existing_task = await watch_manager.get_task_by_uri(
+        existing_task = await watch_manager.get_upsertable_task_by_uri(
+            path=path,
             to_uri=to_uri,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
             role=str(ctx.role),
         )
         if existing_task:
-            if existing_task.is_active and existing_task.path != path:
-                raise ConflictError(
-                    f"Target URI '{to_uri}' is already being monitored by task {existing_task.task_id}. "
-                    f"Please cancel the existing task first.",
-                    resource=to_uri,
-                )
             was_active = existing_task.is_active
             await watch_manager.update_task(
                 task_id=existing_task.task_id,
@@ -1899,6 +2017,7 @@ class ResourceService:
                     round((time.perf_counter() - wait_start) * 1000, 3),
                 )
                 result["queue_status"] = status
+                self._raise_queue_status_errors(status)
             else:
                 from openviking.service.task_tracker import get_task_tracker
 

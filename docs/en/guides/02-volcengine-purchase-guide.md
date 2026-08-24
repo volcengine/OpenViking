@@ -180,8 +180,8 @@ async def test():
 
     # Test adding a simple resource
     result = await client.add_resource(
-        "https://example.com",
-        reason="Connection Test"
+        path="https://example.com",
+        options={"reason": "Connection Test"},
     )
     print(f"✓ Configuration successful: {result['root_uri']}")
 

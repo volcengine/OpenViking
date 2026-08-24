@@ -60,7 +60,7 @@ class RecallRequest(BaseModel):
 
 
 class AddMemoryRequest(BaseModel):
-    name: str = Field(..., description="Filename under viking://user/memories/, e.g. 'profile.md'")
+    name: str = Field(..., description="Filename under viking://~/memories/, e.g. 'profile.md'")
     content: str = Field(..., description="Memory body, plain text or Markdown")
     mode: Literal["replace", "append", "create"] = "replace"
     wait: bool = Field(False, description="Block until semantic indexing completes")
@@ -171,7 +171,7 @@ async def ov_recall_memories(
     client: OVClient = Depends(get_client),
     settings: Settings = Depends(get_settings),
 ) -> SearchResponse:
-    """Search scoped to viking://user/memories/ for personal memory recall."""
+    """Search scoped to viking://~/memories/ for personal memory recall."""
     payload = {
         "query": body.query,
         "limit": body.limit,
@@ -188,7 +188,7 @@ async def ov_recall_memories(
     "/tools/ov_add_memory",
     response_model=AddMemoryResponse,
     operation_id="ov_add_memory",
-    summary="Persist a new memory under viking://user/memories/.",
+    summary="Persist a new memory under viking://~/memories/.",
 )
 async def ov_add_memory(
     body: AddMemoryRequest,
@@ -213,7 +213,7 @@ async def ov_add_memory(
 @router.post(
     "/tools/ov_list_memories",
     operation_id="ov_list_memories",
-    summary="List entries under viking://user/memories/.",
+    summary="List entries under viking://~/memories/.",
 )
 async def ov_list_memories(
     body: ListMemoriesRequest,

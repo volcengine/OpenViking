@@ -21,7 +21,7 @@ class AgentState(TypedDict, total=False):
 def build_app(client: InMemoryOpenVikingClient | None = None):
     client = client or InMemoryOpenVikingClient(
         {
-            "viking://user/memories/profile.md": (
+            "viking://~/memories/profile.md": (
                 "The user wants LangGraph agents to use OpenViking for durable context."
             ),
             "viking://resources/runbooks/langgraph.md": (

@@ -12,6 +12,7 @@ test("pre-step recalls from the final downstream message batch", async () => {
       return async () => {};
     },
     tools: { register() {} },
+    plugin() {},
     on(name, handler) {
       handlers.set(name, handler);
     },

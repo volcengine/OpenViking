@@ -258,9 +258,11 @@ class MemoryTypeRegistry:
             if "{{" in schema.filename_template:
                 continue
 
-            # Check if any field has init_value
+            # Seed template variables with every field so that placeholders for
+            # fields without an explicit init_value render as empty instead of
+            # leaking the literal "{{ field }}" text into the initialized file.
             fields_with_init = {
-                f.name: f.init_value for f in schema.fields if f.init_value is not None
+                f.name: f.init_value if f.init_value is not None else "" for f in schema.fields
             }
             if not fields_with_init:
                 continue

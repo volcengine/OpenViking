@@ -9,10 +9,10 @@ pip install openviking --upgrade --force-reinstall
 参考 GitHub 提供的规范写入示例，自动填入 API Key 和域名
 
 ```python
-from openviking.client import SyncHTTPClient
+from openviking_sdk import SyncHTTPClient, TextPart
 
-url = "https://api.vikingdb.cn-beijing.volces.com/openviking"
-api_key = "[TODO]your-api-key"
+url = "{{OPENVIKING_BASE_URL}}"
+api_key = "{{OPENVIKING_API_KEY}}"
 
 client = SyncHTTPClient(
     url=url,
@@ -35,7 +35,7 @@ reason = "[TODO]your-reason" # e.g. External API documentation
 client.add_resource(
     path=file_path,
     to=resource_to,
-    reason=reason,
+    options={"reason": reason},
 )
 ```
 
@@ -49,9 +49,9 @@ text = "[TODO]your-message-text" # e.g. I am a developer
 session = client.create_session()
 session_id = session["session_id"]
 client.add_message(
-    session_id,
-    "user",
-    parts=[{"type": "text", "text": text}],
+    session_id=session_id,
+    role="user",
+    parts=[TextPart(text=text)],
 )
-result = client.commit_session(session_id)
+result = client.commit_session(session_id=session_id)
 ```

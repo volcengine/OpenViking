@@ -44,7 +44,7 @@ from openviking.session.tool_result_synopsis import (
     ToolResultSynopsis,
     generate_tool_result_synopsis,
 )
-from openviking.storage.semantic_sidecar import body_for_preview, render_semantic_sidecar
+from openviking.storage.abstract_overview import body_for_preview, render_abstract_overview
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.model_retry import is_retryable_api_error, retry_async
@@ -64,6 +64,9 @@ if TYPE_CHECKING:
     from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
     from openviking.storage.viking_fs import VikingFS
     from openviking.usage_reporter import UsageReporter
+
+MemoryPolicyData = Optional[Dict[str, Any]]
+MemoryPolicyProvider = Callable[[], Awaitable[MemoryPolicyData]]
 
 logger = get_logger(__name__)
 
@@ -595,6 +598,7 @@ class Session:
         agent_evolution_enabled: bool = True,
         usage_reporter: Optional["UsageReporter"] = None,
         agent_evolution_enabled_provider: Optional[Callable[[], bool | Awaitable[bool]]] = None,
+        memory_policy_provider: Optional[MemoryPolicyProvider] = None,
     ):
         self._viking_fs = viking_fs
         self._vikingdb_manager = vikingdb_manager
@@ -627,7 +631,16 @@ class Session:
         )
         self._agent_evolution_enabled = agent_evolution_enabled
         self._agent_evolution_enabled_provider = agent_evolution_enabled_provider
+        self._memory_policy_provider = memory_policy_provider
         self._usage_reporter = usage_reporter
+
+    async def _resolve_memory_policy(
+        self, override: Optional[Dict[str, Any]] = None
+    ) -> MemoryPolicy:
+        policy = override if override is not None else self._meta.memory_policy
+        if policy is None and self._memory_policy_provider is not None:
+            policy = await self._memory_policy_provider()
+        return MemoryPolicy.from_dict(policy)
 
     async def load(self):
         """Load session data from storage."""
@@ -1852,10 +1865,6 @@ class Session:
         if turn_mode and effective_token_budget <= 0:
             raise ValueError("retained_message_token_budget must be greater than 0")
         in_memory_default_memory_policy = self._meta.memory_policy
-        effective_policy = MemoryPolicy.from_dict(
-            memory_policy if memory_policy is not None else self._meta.memory_policy
-        )
-        _validate_memory_policy_types(effective_policy)
         agent_evolution_enabled = self._agent_evolution_enabled
         if self._agent_evolution_enabled_provider is not None:
             provided_enabled = self._agent_evolution_enabled_provider()
@@ -1864,16 +1873,19 @@ class Session:
                 if inspect.isawaitable(provided_enabled)
                 else provided_enabled
             )
-        effective_policy = _apply_agent_evolution_setting(
-            effective_policy,
-            agent_evolution_enabled=agent_evolution_enabled,
-        )
-        effective_memory_policy = effective_policy.to_dict()
-        effective_memory_types = sorted(_effective_memory_types(effective_policy))
-        agent_memory_skip_reason = _agent_memory_skip_reason(
-            agent_evolution_enabled=agent_evolution_enabled,
-            effective_memory_types=set(effective_memory_types),
-        )
+        if memory_policy is not None:
+            effective_policy = await self._resolve_memory_policy(memory_policy)
+            _validate_memory_policy_types(effective_policy)
+            effective_policy = _apply_agent_evolution_setting(
+                effective_policy,
+                agent_evolution_enabled=agent_evolution_enabled,
+            )
+            effective_memory_policy = effective_policy.to_dict()
+            effective_memory_types = sorted(_effective_memory_types(effective_policy))
+            agent_memory_skip_reason = _agent_memory_skip_reason(
+                agent_evolution_enabled=agent_evolution_enabled,
+                effective_memory_types=set(effective_memory_types),
+            )
         logger.info(
             f"[TRACER] session_commit started, trace_id={trace_id}, "
             f"keep_recent_count={keep_recent_count}, retention_mode={retention_mode}, "
@@ -1930,7 +1942,7 @@ class Session:
             # messages being archived, unless this commit supplied an explicit
             # override.
             if memory_policy is None:
-                effective_policy = MemoryPolicy.from_dict(self._meta.memory_policy)
+                effective_policy = await self._resolve_memory_policy()
                 _validate_memory_policy_types(effective_policy)
                 effective_policy = _apply_agent_evolution_setting(
                     effective_policy,
@@ -2356,7 +2368,7 @@ class Session:
         record_auto_commit_success: bool = False,
         event_search_tags: Optional[List[str]] = None,
     ) -> None:
-        """Phase 2: Extract memories, write relations, enqueue — runs in background."""
+        """Phase 2: Extract memories and enqueue semantic work in the background."""
         from openviking.service.task_tracker import get_task_tracker
         from openviking.telemetry import OperationTelemetry, bind_telemetry
         from openviking.telemetry.registry import register_telemetry, unregister_telemetry
@@ -2458,7 +2470,7 @@ class Session:
                             abstract = self._extract_abstract_from_summary(summary)
                             await self._viking_fs.write_file(
                                 uri=f"{archive_uri}/.abstract.md",
-                                content=render_semantic_sidecar(
+                                content=render_abstract_overview(
                                     ContextLevel.ABSTRACT,
                                     archive_uri,
                                     abstract,
@@ -2473,7 +2485,7 @@ class Session:
                             )
                             await self._viking_fs.write_file(
                                 uri=f"{archive_uri}/.overview.md",
-                                content=render_semantic_sidecar(
+                                content=render_abstract_overview(
                                     ContextLevel.OVERVIEW,
                                     archive_uri,
                                     summary,
@@ -2685,16 +2697,6 @@ class Session:
                             )
                         else:
                             await _run_archive_summary()
-
-                    # Write relations (using snapshot, not self._usage_records)
-                    if self._viking_fs:
-                        for usage in usage_records:
-                            try:
-                                await self._viking_fs.link(
-                                    self._session_uri, usage.uri, ctx=self.ctx
-                                )
-                            except Exception as e:
-                                logger.warning(f"Failed to create relation to {usage.uri}: {e}")
 
                     # Update active_count (using snapshot, not self._usage_records)
                     if self._vikingdb_manager:
@@ -5211,7 +5213,7 @@ class Session:
         )
         await viking_fs.write_file(
             uri=f"{self._session_uri}/.abstract.md",
-            content=render_semantic_sidecar(
+            content=render_abstract_overview(
                 ContextLevel.ABSTRACT,
                 self._session_uri,
                 abstract,
@@ -5227,7 +5229,7 @@ class Session:
         )
         await viking_fs.write_file(
             uri=f"{self._session_uri}/.overview.md",
-            content=render_semantic_sidecar(
+            content=render_abstract_overview(
                 ContextLevel.OVERVIEW,
                 self._session_uri,
                 overview,

@@ -166,7 +166,7 @@ test("skill experience hook injects matching experience memories", async () => {
     });
 
     assert.equal(requests.length, 1);
-    assert.equal(requests[0].target_uri, "viking://user/memories/experiences");
+    assert.equal(requests[0].target_uri, "viking://~/memories/experiences");
     assert.equal(requests[0].limit, 3);
   } finally {
     await rm(tmp, { recursive: true, force: true });

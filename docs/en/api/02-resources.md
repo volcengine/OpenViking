@@ -47,7 +47,7 @@ OpenViking supports various resource types, categorized by functionality:
 
 | Type | Description |
 |------|-------------|
-| Feishu/Lark | URL-based, supports docx, wiki, sheets, bitable. By default uses app credentials from FEISHU_APP_ID and FEISHU_APP_SECRET; user-token imports can pass `args.feishu_access_token`, and user-token watches also pass `args.feishu_refresh_token` |
+| Feishu/Lark | URL-based, supports doc/docx, wiki, sheets, bitable. By default uses app credentials from FEISHU_APP_ID and FEISHU_APP_SECRET; user-token imports can pass `args.feishu_access_token`, and user-token watches also pass `args.feishu_refresh_token` |
 
 **Web Pages (recursive web crawler)**
 
@@ -185,7 +185,7 @@ This endpoint is the core entry point for resource management, supporting adding
 **Additional Notes**:
 - `to` and `parent` cannot be specified together. Use `create_parent=true` with `parent` when the parent directory should be created automatically.
 - If both `to` and `parent` are omitted, the server may use the current user's `add_targets.resource_uri` override, then `server.user_config_defaults.add_targets.resource_uri`. If neither is set, legacy target resolution is unchanged.
-- Resource targets may use public `viking://resources/...`, current-user shorthand `viking://user/resources/...`, explicit user `viking://user/{user_id}/resources/...`, or peer `viking://user/{user_id}/peers/{peer_id}/resources/...` paths. Current-user shorthand is canonicalized with the authenticated request identity.
+- Resource targets may use public `viking://resources/...`, the home alias `viking://~/resources/...`, explicit user `viking://user/{user_id}/resources/...`, or peer `viking://user/{user_id}/peers/{peer_id}/resources/...` paths. The home alias is expanded to the canonical path using the authenticated request identity; the uid-less spelling `viking://user/resources/...` is rejected with an error pointing at `viking://~/resources/...`.
 - `user_id` and `peer_id` path segments must be safe single-segment identifiers, for example `alice` or `web-visitor-alice`. Values with path separators, `.`, `..`, `:`, or `+` are rejected.
 - `path` and `temp_file_id` cannot be specified together
 - Raw HTTP calls for local files require first uploading via [temp_upload](#temp_upload) to obtain `temp_file_id`
@@ -293,7 +293,7 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -H "X-API-Key: your-key" \
   -d "{
     \"temp_file_id\": \"$TEMP_FILE_ID\",
-    \"parent\": \"viking://user/resources/docs\",
+    \"parent\": \"viking://~/resources/docs\",
     \"create_parent\": true
   }"
 
@@ -333,49 +333,55 @@ client.initialize()
 
 # Add local file
 result = client.add_resource(
-    "./documents/guide.md",
-    reason="User guide documentation"
+    path="./documents/guide.md",
+    options={"reason": "User guide documentation"},
 )
 print(f"Added: {result['root_uri']}")
 
 # Parse each document to Markdown without splitting its body
 result = client.add_resource(
-    "./documents",
-    args={"parse_mode": "no_split"},
+    path="./documents",
+    options={"args": {"parse_mode": "no_split"}},
 )
 
 # Add from URL to specific location
 result = client.add_resource(
-    "https://example.com/api-docs.md",
+    path="https://example.com/api-docs.md",
     to="viking://resources/external/api-docs.md",
-    reason="External API documentation"
+    options={"reason": "External API documentation"},
 )
 
 # Recursively crawl a site (same-host BFS; depth levels, max_pages cap)
 result = client.add_resource(
-    "https://docs.openviking.ai/getting-started/01-introduction",
+    path="https://docs.openviking.ai/getting-started/01-introduction",
     wait=True,
     timeout=180,
-    args={"depth": 1, "max_pages": 10},
+    options={
+        "args": {"depth": 1, "max_pages": 10},
+    },
 )
 
 # Recursive crawl with path-prefix filters, also downloading file links
 result = client.add_resource(
-    "https://docs.openviking.ai/",
-    args={
-        "depth": 2,
-        "max_pages": 50,
-        "include_paths": ["/docs/"],
-        "exclude_paths": ["/changelog"],
-        "skip_download_links": False,
+    path="https://docs.openviking.ai/",
+    options={
+        "args": {
+            "depth": 2,
+            "max_pages": 50,
+            "include_paths": ["/docs/"],
+            "exclude_paths": ["/changelog"],
+            "skip_download_links": False,
+        },
     },
 )
 
 # Add to the current user's private resource root
 result = client.add_resource(
-    "./documents/guide.md",
-    parent="viking://user/resources/docs",
-    create_parent=True,
+    path="./documents/guide.md",
+    parent="viking://~/resources/docs",
+    options={
+        "create_parent": True,
+    },
 )
 
 # Wait for processing to complete
@@ -383,25 +389,29 @@ client.wait_processed()
 
 # Enable scheduled updates
 client.add_resource(
-    "./documents/guide.md",
+    path="./documents/guide.md",
     to="viking://resources/guide.md",
-    watch_interval=60  # Update every 60 minutes
+    options={
+        "watch_interval": 60,  # Update every 60 minutes
+    },
 )
 
 # Add a Feishu document with a one-time user access token
 client.add_resource(
-    "https://example.feishu.cn/docx/doc_token",
-    args={"feishu_access_token": "u-..."},
+    path="https://example.feishu.cn/docx/doc_token",
+    options={"args": {"feishu_access_token": "u-..."}},
 )
 
 # Add a Feishu document with scheduled user-token refresh
 client.add_resource(
-    "https://example.feishu.cn/docx/doc_token",
+    path="https://example.feishu.cn/docx/doc_token",
     to="viking://resources/feishu/doc",
-    watch_interval=1440,
-    args={
-        "feishu_access_token": "u-...",
-        "feishu_refresh_token": "r-...",
+    options={
+        "watch_interval": 1440,
+        "args": {
+            "feishu_access_token": "u-...",
+            "feishu_refresh_token": "r-...",
+        },
     },
 )
 ```
@@ -481,7 +491,7 @@ ov add-resource https://example.feishu.cn/docx/doc_token \
 ov add-resource ./documents/guide.md --parent viking://resources/docs
 
 # Add under the current user's private resource root
-ov add-resource ./documents/guide.md --parent viking://user/resources/docs
+ov add-resource ./documents/guide.md --parent viking://~/resources/docs
 
 # Add under a specific peer's private resource root
 ov add-resource ./documents/guide.md \

@@ -20,10 +20,9 @@ from openviking.storage.ovpack.format import (
     OVPACK_DENSE_PATH,
     dense_values_bytes,
     internal_zip_path,
-    join_uri,
     sha256_hex,
 )
-from openviking.storage.ovpack.manifest import manifest_dense_info
+from openviking.storage.ovpack.manifest import manifest_dense_info, manifest_entry_target_uri
 from openviking.storage.ovpack.validation import dense_record_count, record_dense_ref
 from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.exceptions import InvalidArgumentError
@@ -279,7 +278,7 @@ async def _upsert_vector_snapshot_record(
 ) -> None:
     level = int(record.get("level", 2))
     scalars = dict(record.get("scalars") or {})
-    owner_fields = owner_fields_for_uri(target_uri, ctx=ctx)
+    owner_fields = owner_fields_for_uri(target_uri)
     timestamp = get_current_timestamp()
     payload = {
         **scalars,
@@ -310,6 +309,7 @@ async def restore_vector_snapshot(
     root_uri: str,
     index_records: list[dict[str, Any]],
     dense_vectors: dict[str, list[float]],
+    manifest_entries: dict[str, dict[str, Any]],
     ctx: RequestContext,
 ) -> None:
     for record in index_records:
@@ -319,7 +319,10 @@ async def restore_vector_snapshot(
         rel_path = record.get("path")
         if not isinstance(rel_path, str):
             continue
-        target_uri = join_uri(root_uri, rel_path)
+        manifest_entry = manifest_entries.get(rel_path)
+        if manifest_entry is None:
+            continue
+        target_uri = manifest_entry_target_uri(root_uri, rel_path, manifest_entry)
         if target_uri == "viking://user" or is_session_uri(target_uri):
             continue
         owner_ctx = content_owner_context_for_uri(target_uri, ctx)

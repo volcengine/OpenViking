@@ -7,7 +7,6 @@ Encapsulates the AGFS binding client, providing file operation interface based o
 Responsibilities:
 - URI conversion (viking:// <-> /local/)
 - L0/L1 reading (.abstract.md, .overview.md)
-- Relation management (.relations.json)
 - Semantic search (vector retrieval + rerank)
 - Vector sync (sync vector store on rm/mv)
 
@@ -22,6 +21,7 @@ import hashlib
 import json
 import os
 import re
+import sys as _sys
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -30,12 +30,11 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, TypeVar, 
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
-    canonicalize_uri,
-    is_hidden_by_actor_peer_view,
-    may_include_hidden_actor_peers,
+    is_accessible as namespace_is_accessible,
 )
 from openviking.core.namespace import (
-    is_accessible as namespace_is_accessible,
+    is_hidden_by_actor_peer_view,
+    may_include_hidden_actor_peers,
 )
 from openviking.core.retrieval_targets import resolve_retrieval_targets
 from openviking.pyagfs import AsyncAGFSClient
@@ -54,34 +53,19 @@ from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.expr import And, PathScope, RawDSL
 from openviking.storage.internal_names import STORAGE_INTERNAL_ENTRY_NAMES
-from openviking.telemetry import get_current_telemetry
-from openviking.utils.image_search import build_multimodal_embedding_input
-from openviking.utils.time_utils import format_iso8601, get_current_timestamp, parse_iso_datetime
-from openviking_cli.exceptions import (
-    FailedPreconditionError,
-    InvalidArgumentError,
-    NotFoundError,
-    PermissionDeniedError,
-    ResourceExhaustedError,
-)
-from openviking_cli.session.user_id import UserIdentifier
-from openviking_cli.utils.config.grep_config import GrepEngine
-from openviking_cli.utils.logger import get_logger
-from openviking_cli.utils.uri import VikingURI
 
 # Import mixins
 from openviking.storage.viking_fs import _base as _base_mod
 from openviking.storage.viking_fs._access import _AccessMixin
 from openviking.storage.viking_fs._base import (
+    _ABSTRACT_WORKER_COUNT,
+    _DEFAULT_GREP_FILE_CONCURRENCY,
+    _T,
     LS_ALL_NODES,
     SNAPSHOT_DIFF_MAX_FILE_BYTES,
     SNAPSHOT_DIFF_MAX_LINES,
     SNAPSHOT_DIFF_MAX_OUTPUT_BYTES,
     SNAPSHOT_DIFF_TIMEOUT_MS,
-    RelationEntry,
-    _ABSTRACT_WORKER_COUNT,
-    _DEFAULT_GREP_FILE_CONCURRENCY,
-    _T,
     _ensure_non_empty_search_query,
     _get_abstract_worker_count,
     _get_cpu_count,
@@ -99,6 +83,20 @@ from openviking.storage.viking_fs._semantic import _SemanticMixin
 from openviking.storage.viking_fs._snapshot import _SnapshotMixin
 from openviking.storage.viking_fs._sync import SyncDiff, _SyncMixin
 from openviking.storage.viking_fs._vector import _VectorMixin
+from openviking.telemetry import get_current_telemetry
+from openviking.utils.image_search import build_multimodal_embedding_input
+from openviking.utils.time_utils import format_iso8601, get_current_timestamp, parse_iso_datetime
+from openviking_cli.exceptions import (
+    FailedPreconditionError,
+    InvalidArgumentError,
+    NotFoundError,
+    PermissionDeniedError,
+    ResourceExhaustedError,
+)
+from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.grep_config import GrepEngine
+from openviking_cli.utils.logger import get_logger
+from openviking_cli.utils.uri import VikingURI
 
 if TYPE_CHECKING:
     from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
@@ -121,7 +119,7 @@ class VikingFS(
 
     APIs are divided into two categories:
     - RAGFS basic commands (direct forwarding): read, ls, write, mkdir, rm, mv, grep, stat
-    - VikingFS specific capabilities: abstract, overview, find, search, relations, link, unlink
+    - VikingFS specific capabilities: abstract, overview, find, search
 
     Uses Rust binding mode: Use RAGFSBindingClient to directly use RAGFS implementation
     """
@@ -163,7 +161,6 @@ VikingFS.__module__ = __name__
 # __getattr__; we also need to intercept writes so that assigning to
 # ``openviking.storage.viking_fs._instance`` updates the real singleton in
 # ``_base`` where ``get_viking_fs``/``init_viking_fs`` read/write it.
-import sys as _sys
 
 
 class _ModuleProxy:  # pragma: no cover - trivial proxy
@@ -196,7 +193,6 @@ __all__ = [
     "SNAPSHOT_DIFF_MAX_LINES",
     "SNAPSHOT_DIFF_MAX_OUTPUT_BYTES",
     "SNAPSHOT_DIFF_TIMEOUT_MS",
-    "RelationEntry",
     "SyncDiff",
     "VikingFS",
     "enable_viking_fs_recorder",

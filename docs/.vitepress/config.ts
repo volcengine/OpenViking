@@ -5,6 +5,7 @@ import { defineConfig, type DefaultTheme } from 'vitepress'
 
 const docsRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const repo = process.env.GITHUB_REPOSITORY || 'volcengine/OpenViking'
+const githubRepositoryUrl = `https://github.com/${repo}?utm_source=docs&utm_medium=referral&utm_campaign=docs`
 const base = process.env.DOCS_BASE || '/'
 const withTrailingSlash = (url: string) => (url.endsWith('/') ? url : `${url}/`)
 const mainSiteBase = withTrailingSlash(process.env.OPENVIKING_SITE_BASE || 'https://www.openviking.ai/')
@@ -34,6 +35,7 @@ const sectionNames: Record<string, string> = {
   concepts: 'Concepts',
   guides: 'Guides',
   'agent-integrations': 'Agent Integrations',
+  'context-compilation': 'Context Compilation',
   migration: 'Migration',
   api: 'API Reference',
   faq: 'FAQ',
@@ -47,6 +49,7 @@ const zhSectionNames: Record<string, string> = {
   concepts: '核心概念',
   guides: '指南',
   'agent-integrations': 'Agent 集成',
+  'context-compilation': '上下文编译',
   migration: '迁移指南',
   api: 'API 参考',
   faq: '常见问题',
@@ -131,7 +134,8 @@ const agentIntegrationSidebar = {
           ['04-codex.md', 'Codex'],
           ['10-opencode.md', 'OpenCode'],
           ['12-cursor.md', 'Cursor'],
-          ['13-trae.md', 'TRAE / TRAE CN']
+          ['13-trae.md', 'TRAE / TRAE CN'],
+          ['17-dsh.md', 'DeepSeek Harness']
         ]
       },
       {
@@ -166,7 +170,8 @@ const agentIntegrationSidebar = {
           ['04-codex.md', 'Codex'],
           ['10-opencode.md', 'OpenCode'],
           ['12-cursor.md', 'Cursor'],
-          ['13-trae.md', 'TRAE / TRAE CN']
+          ['13-trae.md', 'TRAE / TRAE CN'],
+          ['17-dsh.md', 'DeepSeek Harness']
         ]
       },
       {
@@ -209,11 +214,8 @@ const apiReferenceSidebar = {
         ]
       },
       {
-        text: 'Retrieval & Relations',
-        items: [
-          ['06-retrieval.md', 'Retrieval'],
-          ['13-relations.md', 'Relations']
-        ]
+        text: 'Retrieval',
+        items: [['06-retrieval.md', 'Retrieval']]
       },
       {
         text: 'Data Lifecycle',
@@ -269,11 +271,8 @@ const apiReferenceSidebar = {
         ]
       },
       {
-        text: '检索与关系',
-        items: [
-          ['06-retrieval.md', '检索'],
-          ['13-relations.md', '关系']
-        ]
+        text: '检索',
+        items: [['06-retrieval.md', '检索']]
       },
       {
         text: '数据生命周期',
@@ -605,7 +604,17 @@ function guidesSection(
   title: string,
   collapsed = true
 ): DefaultTheme.SidebarItem {
-  return groupedSidebarSection(locale, 'guides', title, guidesSidebar[locale], collapsed)
+  const section = groupedSidebarSection(locale, 'guides', title, guidesSidebar[locale], collapsed)
+  // Nest the Context Compilation pages under the "Integration & Extension" group.
+  const integrationGroupTitle = locale === 'zh' ? '集成与扩展' : 'Integration & Extension'
+  const integrationGroup = section.items?.find((item) => item.text === integrationGroupTitle)
+  if (integrationGroup?.items) {
+    const labels = locale === 'zh' ? zhSectionNames : sectionNames
+    integrationGroup.items.push(
+      sidebarSection(`${locale}/context-compilation`, labels['context-compilation'], true)
+    )
+  }
+  return section
 }
 
 function migrationSection(
@@ -697,7 +706,7 @@ const designSidebar: DefaultTheme.SidebarItem[] = [
 const enNav: DefaultTheme.NavItem[] = [
   { text: navLabels.en.start, link: '/en/getting-started/01-introduction', activeMatch: '/en/(getting-started|configuration|agent-integrations)/' },
   { text: navLabels.en.concepts, link: '/en/concepts/01-architecture', activeMatch: '/en/concepts/' },
-  { text: navLabels.en.guide, link: '/en/guides/01-configuration', activeMatch: '/en/(guides|migration)/' },
+  { text: navLabels.en.guide, link: '/en/guides/01-configuration', activeMatch: '/en/(guides|migration|context-compilation)/' },
   { text: navLabels.en.api, link: '/en/api/01-overview', activeMatch: '/en/api/' },
   { text: navLabels.en.faq, link: '/en/faq/faq', activeMatch: '/en/faq/' },
   { text: navLabels.en.about, link: '/en/about/01-about-us', activeMatch: '/en/about/' }
@@ -706,7 +715,7 @@ const enNav: DefaultTheme.NavItem[] = [
 const zhNav: DefaultTheme.NavItem[] = [
   { text: navLabels.zh.start, link: '/zh/getting-started/01-introduction', activeMatch: '/zh/(getting-started|configuration|agent-integrations)/' },
   { text: navLabels.zh.concepts, link: '/zh/concepts/01-architecture', activeMatch: '/zh/concepts/' },
-  { text: navLabels.zh.guide, link: '/zh/guides/01-configuration', activeMatch: '/zh/(guides|migration)/' },
+  { text: navLabels.zh.guide, link: '/zh/guides/01-configuration', activeMatch: '/zh/(guides|migration|context-compilation)/' },
   { text: navLabels.zh.api, link: '/zh/api/01-overview', activeMatch: '/zh/api/' },
   { text: navLabels.zh.faq, link: '/zh/faq/faq', activeMatch: '/zh/faq/' },
   { text: navLabels.zh.about, link: '/zh/about/01-about-us', activeMatch: '/zh/about/' }
@@ -819,7 +828,7 @@ function buildLlmsTxt(siteConfig: any) {
     '',
     '> Open-source context database for AI Agents. OpenViking unifies memory, resources, and skills management for AI Agents through a file system paradigm.',
     '',
-    `- Source: https://github.com/${process.env.GITHUB_REPOSITORY || 'volcengine/OpenViking'}`,
+    `- Source: ${githubRepositoryUrl}`,
     '',
   ]
 
@@ -914,7 +923,7 @@ export default defineConfig({
     logo: '/ov-logo.png',
     logoLink: mainSiteBase,
     socialLinks: [
-      { icon: 'github', link: `https://github.com/${repo}` }
+      { icon: 'github', link: githubRepositoryUrl }
     ],
     footer: {
       message: 'Released under the Apache-2.0 License.',
@@ -937,6 +946,7 @@ export default defineConfig({
           '/en/concepts/': localizedSectionSidebarItems('en', 'concepts'),
           '/en/guides/': localizedGroupedSidebarItems('en', ['guides', 'migration']),
           '/en/agent-integrations/': localizedGroupedSidebarItems('en', ['getting-started', 'configuration', 'agent-integrations']),
+          '/en/context-compilation/': localizedGroupedSidebarItems('en', ['guides', 'migration']),
           '/en/migration/': localizedGroupedSidebarItems('en', ['guides', 'migration']),
           '/en/api/': localizedReferenceSidebarItems('en'),
           '/en/about/': localizedAboutSidebarItems('en'),
@@ -958,6 +968,7 @@ export default defineConfig({
           '/zh/concepts/': localizedSectionSidebarItems('zh', 'concepts'),
           '/zh/guides/': localizedGroupedSidebarItems('zh', ['guides', 'migration']),
           '/zh/agent-integrations/': localizedGroupedSidebarItems('zh', ['getting-started', 'configuration', 'agent-integrations']),
+          '/zh/context-compilation/': localizedGroupedSidebarItems('zh', ['guides', 'migration']),
           '/zh/migration/': localizedGroupedSidebarItems('zh', ['guides', 'migration']),
           '/zh/api/': localizedReferenceSidebarItems('zh'),
           '/zh/about/': localizedAboutSidebarItems('zh')

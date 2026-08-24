@@ -590,7 +590,7 @@ These are the keys under `plugins.entries.openviking.config` in `openclaw.json`.
 | `peer_prefix` | `""` | Optional prefix for assistant `peer_id` / actor peer values when `peer_role=assistant`. Letters / digits / `_` / `-`. |
 | `accountId` | — | Required when `apiKey` is a root key. |
 | `userId` | — | Required when `apiKey` is a root key. |
-| `targetUri` | `viking://user/memories` | Default search scope URI. |
+| `targetUri` | `viking://~/memories` | Default search scope URI. |
 | `timeoutMs` | (plugin default) | HTTP timeout for OpenViking calls. |
 | `autoCapture` | `true` | Auto-append turn messages to the OpenViking session at `afterTurn`; extraction runs only after a threshold commit, `/compact`, or explicit `memory_store`. |
 | `captureMode` | `"semantic"` | Filter mode used by the server-side extraction pipeline: `semantic` or `keyword`. |

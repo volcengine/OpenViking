@@ -14,7 +14,6 @@ from openviking_cli.retrieve.types import (
     MatchedContext,
     QueryPlan,
     QueryResult,
-    RelatedContext,
     TypedQuery,
 )
 
@@ -23,7 +22,6 @@ __all__ = [
     "ContextType",
     "TypedQuery",
     "QueryPlan",
-    "RelatedContext",
     "MatchedContext",
     "QueryResult",
     "FindResult",

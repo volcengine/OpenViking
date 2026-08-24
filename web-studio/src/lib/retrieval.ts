@@ -19,7 +19,6 @@ export interface FindResultItem {
   overview?: string | null
   category: string
   match_reason: string
-  relations: Array<{ uri: string; abstract: string }>
   result_kind?: 'semantic' | 'grep' | 'glob'
   line?: number
 }
@@ -120,20 +119,6 @@ function normalizeFindItems(
       match_reason:
         typeof item.match_reason === 'string' ? item.match_reason : '',
       overview: typeof item.overview === 'string' ? item.overview : null,
-      relations: Array.isArray(item.relations)
-        ? item.relations
-            .filter(
-              (relation): relation is Record<string, unknown> =>
-                relation !== null &&
-                typeof relation === 'object' &&
-                !Array.isArray(relation),
-            )
-            .map((relation) => ({
-              abstract:
-                typeof relation.abstract === 'string' ? relation.abstract : '',
-              uri: typeof relation.uri === 'string' ? relation.uri : '',
-            }))
-        : [],
       score: typeof item.score === 'number' ? item.score : 0,
       uri: typeof item.uri === 'string' ? item.uri : '',
     }))
@@ -309,7 +294,6 @@ function patternResultItem(
     level: 2,
     line: options.line,
     match_reason: '',
-    relations: [],
     result_kind: kind,
     score: 0,
     uri,

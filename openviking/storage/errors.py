@@ -6,6 +6,24 @@
 class VikingDBException(Exception):
     """Base exception for vector-store operations."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        code: str | None = None,
+        error_type: str | None = None,
+        retryable: bool = False,
+        action: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        # 私有化下游需要结构化判定重试边界；默认值保持其他存储后端原有异常语义。
+        self.status_code = status_code
+        self.code = code
+        self.error_type = error_type
+        self.retryable = retryable
+        self.action = action
+
 
 class StorageException(VikingDBException):
     """Legacy alias for VikingDBException for backward compatibility."""

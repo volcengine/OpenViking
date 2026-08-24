@@ -10,7 +10,7 @@ definitions, with discriminator support for polymorphic fields.
 import re
 from typing import Annotated, Any, Dict, List, Optional, Tuple, Type, Union
 
-from pydantic import BaseModel, Field, WithJsonSchema, create_model
+from pydantic import BaseModel, Field, WithJsonSchema, create_model, model_validator
 from pydantic.config import ConfigDict
 
 from openviking.session.memory.dataclass import (
@@ -37,6 +37,33 @@ def to_pascal_case(s: str) -> str:
     return "".join(word.title() for word in words)
 
 
+# from typing import Literal
+#
+# class PageDecision(BaseModel):
+#     """Temporary page-level reasoning for memory bad-case analysis."""
+#
+#     page_id: int = Field(..., description="The related page_id from read results.")
+#     remove: List[str] = Field(
+#         ...,
+#         description=(
+#             "For UPDATE, list exact affected `- ...` bullets or standalone summary sentences. "
+#             "Use [] for KEEP or DELETE."
+#         ),
+#     )
+#     has_unaffected_facts: bool = Field(
+#         ...,
+#         description="Whether the page contains any fact outside remove that must be preserved.",
+#     )
+#     action: Literal["KEEP", "UPDATE", "DELETE"] = Field(
+#         ...,
+#         description=(
+#             "KEEP when no fact is affected; UPDATE when remove is non-empty and "
+#             "has_unaffected_facts is true; DELETE when the whole page is affected and "
+#             "has_unaffected_facts is false. For DELETE, leave remove empty."
+#         ),
+#     )
+
+
 class SchemaModelGenerator:
     """
     Dynamic Pydantic model generator from memory type schemas.
@@ -49,6 +76,7 @@ class SchemaModelGenerator:
         self,
         schemas: List[MemoryTypeSchema],
         template_context: Optional[Dict[str, Any]] = None,
+        # include_decision_reasoning: bool = True,
     ):
         if hasattr(schemas, "list_all"):
             self._all_schemas = schemas.list_all(include_disabled=True)
@@ -57,6 +85,7 @@ class SchemaModelGenerator:
             self._all_schemas = list(schemas)
         self.schemas = list(schemas)
         self._template_context = dict(template_context or {})
+        # self._include_decision_reasoning = include_decision_reasoning
         self._model_cache: Dict[str, Type[BaseModel]] = {}
         self._flat_data_models: Dict[str, Type[BaseModel]] = {}
         self._operations_model: Optional[Type[BaseModel]] = None
@@ -132,11 +161,14 @@ class SchemaModelGenerator:
             ),
         )
 
+        immutable_field_names = []
+
         # Add business fields from schema
         for field in memory_type.fields:
             base_type = self._map_field_type(field.field_type)
             if field.merge_op == MergeOp.IMMUTABLE:
                 # Immutable fields: only base type, required
+                immutable_field_names.append(field.name)
                 field_definitions[field.name] = (
                     base_type,
                     Field(..., description=self._render_description(field.description)),
@@ -204,10 +236,17 @@ class SchemaModelGenerator:
         # Build field definitions for each memory_type
         field_definitions: Dict[str, Tuple[Type[Any], Any]] = {}
 
-        # field_definitions["reasoning"] = (
-        #     str,
-        #     Field("", description="reasoning"),
-        # )
+        # if self._include_decision_reasoning:
+        #     field_definitions["decision_reasoning"] = (
+        #         List[PageDecision],
+        #         Field(
+        #             default_factory=list,
+        #             description=(
+        #                 "Before choosing operations, return one decision for every related "
+        #                 "read page."
+        #             ),
+        #         ),
+        #     )
 
         for mt in enabled_memory_types:
             flat_model = self.create_flat_data_model(mt, role_scope)
@@ -310,8 +349,7 @@ class SchemaModelGenerator:
         StructuredMemoryOperations.is_empty = is_empty
         StructuredMemoryOperations.to_legacy_operations = to_legacy_operations
         StructuredMemoryOperations._memory_type_fields = memory_type_fields  # type: ignore
-        # Opt this model into treating a bare `[]` LLM response as an empty-ops result
-        # (every field is default_factory=list); see parse_json_with_stability Layer 3.
+        # Every top-level field defaults to a list, so [] is a valid no-operations result.
         StructuredMemoryOperations._allow_empty_list_response = True  # type: ignore
 
         self._operations_model = StructuredMemoryOperations

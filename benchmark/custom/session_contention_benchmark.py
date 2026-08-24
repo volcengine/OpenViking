@@ -284,10 +284,9 @@ class AsyncHTTPAdapter(LoadAdapter):
         return await self._client.add_resource(
             path=path,
             to=to,
-            reason=reason,
             wait=wait,
             timeout=timeout,
-            strict=False,
+            options={"reason": reason, "strict": False},
         )
 
     async def wait_processed(self, timeout: Optional[float]) -> Any:

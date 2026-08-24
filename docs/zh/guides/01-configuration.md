@@ -1339,10 +1339,10 @@ Redis Sentinel 分别配置数据节点和 Sentinel 的 ACL：
 
 | 字段 | 类型 | 默认值 | 上限 | 说明 |
 |------|------|--------|------|------|
-| `pending_token_threshold` | int | 10000 | 50000 | 当未提交的 pending token 超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
-| `message_count_threshold` | int | 50 | 500 | 当未提交的 live message 数量超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
+| `pending_token_threshold` | int | 150000 | 1000000 | 当未提交的 pending token 超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
+| `message_count_threshold` | int | 100 | 1000 | 当未提交的 live message 数量超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
 | `idle_timeout_seconds` | int | 86400 | 604800 | 有未提交内容的 session 在空闲这么多秒后，进入服务端 idle scheduler 的处理范围。idle 触发的 commit 会归档全部积压消息，并忽略 `keep_recent_count`。 |
-| `keep_recent_count` | int | 2 | 500 | 阈值触发的自动 commit 后保留（不归档）的最近 live message 数量。idle 超时触发的 commit 会忽略该值并归档所有消息。 |
+| `keep_recent_count` | int | 0 | 500 | 阈值触发的自动 commit 后保留（不归档）的最近 live message 数量。idle 超时触发的 commit 会忽略该值并归档所有消息。 |
 | `min_commit_interval_seconds` | int | 0 | 604800 | 两次自动 commit 之间的最小间隔秒数（节流）。 |
 
 代码入口：`openviking/session/auto_commit_policy.py:AutoCommitPolicy`。
@@ -1643,8 +1643,11 @@ openviking add-resource ./docs --exclude "*.tmp"
     },
     "user_config_defaults": {
       "add_targets": {
-        "resource_uri": "viking://user/resources",
-        "skill_uri": "viking://user/skills"
+        "resource_uri": "viking://~/resources",
+        "skill_uri": "viking://~/skills"
+      },
+      "memory_policy": {
+        "memory_types": ["profile", "preferences", "events", "entities", "experiences"]
       }
     },
     "agent_evolution": {
@@ -1667,15 +1670,16 @@ openviking add-resource ./docs --exclude "*.tmp"
 | `temp_upload.default_mode` | str | `POST /api/v1/resources/temp_upload` 的服务端默认模式（客户端未显式传 `upload_mode` 时使用）：`"local"`（仅当前实例本地磁盘，单机默认行为）或 `"shared"`（分布式共享存储，多副本部署可跨实例消费）。新的 shared 上传会固定写入内部 `viking://upload/<created_at_ms>-<uuid>/content` 和 `meta` 对象，在 `ttl_seconds` 指定的时间内可重复消费。 | `"local"` |
 | `temp_upload.shared_max_size_bytes` | int | `shared` 模式下接受的最大文件大小（字节）。超过此阈值的请求会在写入对象存储之前被拒绝。 | `536870912`（512 MiB） |
 | `temp_upload.ttl_seconds` | int | local 和 shared 临时上传文件共用的保留时间（秒）。每次对应模式的上传会清理超过此时间的文件；shared 只需一次上传根目录列举，从每个一级目录名解析创建时间，并递归删除过期目录，不依赖文件系统修改时间；设为 `0` 时禁用自动清理。 | `43200`（12 小时） |
-| `user_config_defaults.add_targets.resource_uri` | str | `add_resource` 未传 `to` 和 `parent` 时使用的部署级默认资源添加目录。`viking://user/...` 会按请求用户解析。 | `null` |
-| `user_config_defaults.add_targets.skill_uri` | str | `add_skill` 未传 `target_uri` 时使用的部署级默认技能添加根目录。仅允许 `viking://user/skills` 和 `viking://agent/skills`。 | `null` |
+| `user_config_defaults.add_targets.resource_uri` | str | `add_resource` 未传 `to` 和 `parent` 时使用的部署级默认资源添加目录。`viking://~/...` 会按请求用户解析。 | `null` |
+| `user_config_defaults.add_targets.skill_uri` | str | `add_skill` 未传 `target_uri` 时使用的部署级默认技能添加根目录。仅允许 `viking://~/skills` 和 `viking://agent/skills`。 | `null` |
+| `user_config_defaults.memory_policy` | object | Session 和 User 都未显式配置策略时使用的部署级默认记忆抽取策略。 | `null` |
 | `agent_evolution.enabled` | bool | 实例级 Agent 进化开关。开启时，session commit 可按 session `memory_policy` 生成或更新 cases、trajectories 和 experiences；关闭时，所有账号和用户均停止生产这三类记忆。已有记忆仍可读取和检索。 | `false` |
 
 `api_key` 模式使用 API Key 认证，也是默认模式；`trusted` 模式信任上游网关或受信调用方注入的 `X-OpenViking-Account` / `X-OpenViking-User` 请求头。
 
 在 `api_key` 模式下配置 `root_api_key` 后，服务端启用正式多租户认证，并通过 Admin API 创建工作区和用户 key。在 `trusted` 模式下，普通请求不需要先注册 user key；每个请求都会根据注入的身份头解析成 `USER`。只有在 `auth_mode = "api_key"` 且未配置 `root_api_key` 时，服务端才会进入开发模式。
 
-`user_config_defaults` 仅用于添加目标的用户级默认配置。添加操作中，显式请求目标仍然优先：`add_resource.to` / `add_resource.parent` 优先于用户默认值，`add_skill.target_uri` 优先于用户默认值。`agent_evolution.enabled` 是当前 OpenViking 实例的统一开关，不支持用户级覆盖。HTTP Server 的 worker 会在 session commit 时从启动阶段解析出的 `ov.conf` 路径读取当前值，因此合法的文件更新无需重启服务即可生效。
+`user_config_defaults` 提供添加目标和记忆抽取的部署级默认配置。添加操作中，显式请求目标仍然优先：`add_resource.to` / `add_resource.parent` 优先于用户默认值，`add_skill.target_uri` 优先于用户默认值。记忆策略优先级为 Session 策略 > User `settings/user_config.json` 策略 > `server.user_config_defaults.memory_policy` > 内核默认策略。`agent_evolution.enabled` 是当前 OpenViking 实例的统一开关，不支持用户级覆盖。HTTP Server 的 worker 会在 session commit 时从解析后的 `ov.conf` 读取当前 Agent 进化配置，因此合法的文件更新无需重启服务即可生效。
 
 ### Usage Reporter
 
@@ -1719,8 +1723,9 @@ openviking add-resource ./docs --exclude "*.tmp"
 
 支持的 add target URI：
 
-- `resource_uri` 作为 `add_resource` 的默认父目录使用，等价于 `parent=<uri>, create_parent=true`。它必须是当前请求用户可写的 resource 目录 URI，支持 `viking://resources` 或 `viking://resources/...`、`viking://user/resources` 或 `viking://user/resources/...`、`viking://user/{user_id}/resources` 或 `viking://user/{user_id}/resources/...`、`viking://user/{user_id}/peers/{peer_id}/resources` 或 `viking://user/{user_id}/peers/{peer_id}/resources/...`。`viking://user/...` 短写会按请求用户解析。
-- `skill_uri` 作为 `add_skill` 的默认目标根目录使用。v1 只允许 `viking://user/skills` 和 `viking://agent/skills`；不支持显式写成 `viking://user/{user_id}/skills`。
+- `resource_uri` 作为 `add_resource` 的默认父目录使用，等价于 `parent=<uri>, create_parent=true`。它必须是当前请求用户可写的 resource 目录 URI，支持 `viking://resources` 或 `viking://resources/...`、`viking://~/resources` 或 `viking://~/resources/...`、`viking://user/{user_id}/resources` 或 `viking://user/{user_id}/resources/...`、`viking://user/{user_id}/peers/{peer_id}/resources` 或 `viking://user/{user_id}/peers/{peer_id}/resources/...`。`viking://~/...` 家目录别名会按请求用户解析。
+- `skill_uri` 作为 `add_skill` 的默认目标根目录使用。v1 只允许 `viking://~/skills` 和 `viking://agent/skills`；不支持显式写成 `viking://user/{user_id}/skills`。
+- 旧写法兼容：早期配置中的 `viking://user/resources` 和 `viking://user/skills` 会在配置加载时自动归一化为 `viking://~/resources` 和 `viking://~/skills`，并打印一条 info 日志。新配置请直接使用 `viking://~/...`；在 `add_targets` 之外，无 uid 的写法会在请求入口被拒绝。
 
 启动方式和部署详情见 [服务部署](./03-deployment.md)，认证详情见 [认证](./04-authentication.md)。
 

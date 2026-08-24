@@ -461,6 +461,7 @@ impl HttpClient {
         dry_run: bool,
         tags: Vec<String>,
         tag_mode: &str,
+        recursive: bool,
     ) -> Result<serde_json::Value> {
         let mut body = serde_json::json!({
             "uri": uri,
@@ -468,6 +469,9 @@ impl HttpClient {
             "wait": wait,
             "dry_run": dry_run,
         });
+        if !recursive {
+            body["recursive"] = serde_json::json!(false);
+        }
         if !tags.is_empty() {
             let obj = body
                 .as_object_mut()
@@ -1248,12 +1252,20 @@ impl HttpClient {
     // ============ Task Methods ============
 
     pub async fn get_task(&self, task_id: &str) -> Result<serde_json::Value> {
-        let path = format!("/api/v1/tasks/{}", task_id);
+        let path = if task_id.starts_with("cmp_") {
+            format!("/bot/v1/compile/{task_id}")
+        } else {
+            format!("/api/v1/tasks/{task_id}")
+        };
         self.get(&path, &[]).await
     }
 
     pub async fn cancel_task(&self, task_id: &str) -> Result<serde_json::Value> {
-        let path = format!("/api/v1/tasks/{}/cancel", task_id);
+        let path = if task_id.starts_with("cmp_") {
+            format!("/bot/v1/compile/{task_id}/cancel")
+        } else {
+            format!("/api/v1/tasks/{task_id}/cancel")
+        };
         self.post(&path, &serde_json::json!({})).await
     }
 
@@ -1270,35 +1282,6 @@ impl HttpClient {
             params.push(("status".to_string(), s.to_string()));
         }
         self.get("/api/v1/tasks", &params).await
-    }
-
-    // ============ Relation Methods ============
-
-    pub async fn relations(&self, uri: &str) -> Result<serde_json::Value> {
-        let params = vec![("uri".to_string(), uri.to_string())];
-        self.get("/api/v1/relations", &params).await
-    }
-
-    pub async fn link(
-        &self,
-        from_uri: &str,
-        to_uris: &[String],
-        reason: &str,
-    ) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
-            "from_uri": from_uri,
-            "to_uris": to_uris,
-            "reason": reason,
-        });
-        self.post("/api/v1/relations/link", &body).await
-    }
-
-    pub async fn unlink(&self, from_uri: &str, to_uri: &str) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
-            "from_uri": from_uri,
-            "to_uri": to_uri,
-        });
-        self.delete_with_body("/api/v1/relations/link", &body).await
     }
 
     // ============ Pack Methods ============
@@ -2353,6 +2336,31 @@ mod tests {
             .await
             .expect("202 response body should deserialize");
         assert_eq!(accepted.task_id, "cmp_1");
+    }
+
+    #[tokio::test]
+    async fn task_methods_route_compile_ids_to_compile_endpoints() {
+        let (base_url, status_request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        client
+            .get_task("cmp_1")
+            .await
+            .expect("compile status request should succeed");
+        let status_request = status_request_rx
+            .await
+            .expect("status request should be captured");
+        assert!(status_request.starts_with("GET /bot/v1/compile/cmp_1 "));
+
+        let (base_url, cancel_request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        client
+            .cancel_task("cmp_1")
+            .await
+            .expect("compile cancellation request should succeed");
+        let cancel_request = cancel_request_rx
+            .await
+            .expect("cancel request should be captured");
+        assert!(cancel_request.starts_with("POST /bot/v1/compile/cmp_1/cancel "));
     }
 
     #[tokio::test]

@@ -19,16 +19,17 @@ class VikingURI:
 
     Scopes:
     - resources: Independent resource scope (viking://resources/{project}/...)
-    - user: User scope (viking://user/...), including sessions under
-      viking://user/{user_id}/sessions/{session_id}
+    - user: Explicit user scope (viking://user/{user_id}/...), including sessions under
+      viking://user/{user_id}/sessions/{session_id}.
     - session: Legacy alias for user sessions (viking://session/{session_id}/...)
     - agent: Agent capabilities scope (viking://agent/skills/..., viking://agent/endpoints/...)
     - queue: Queue scope (viking://queue/...)
+    - ~: Server-side alias for the caller's user root, expanded to viking://user/{user_id}
 
     Examples:
     - viking://resources/my_project/docs/api
-    - viking://user/memories/preferences/code_style
-    - viking://user/skills/pdf
+    - viking://user/alice/memories/preferences/code_style
+    - viking://user/alice/skills/pdf
     - viking://user/alice/sessions/session123/messages.jsonl
     """
 
@@ -42,21 +43,21 @@ class VikingURI:
     PUBLIC_SCOPES = frozenset(LISTABLE_SCOPES)
     LEGACY_SCOPES = frozenset({"session"})
     INTERNAL_SCOPES = frozenset({"temp", "queue", "upload"})
+    # Server-side alias for the caller's user namespace root. Only valid as segment 0,
+    # and never persisted or echoed back: the server always expands it to viking://user/{user_id}.
+    ALIAS_SCOPES = frozenset({"~"})
     # All valid scopes that can be addressed by the URI parser/storage internals.
     # Public API handlers must not use this as their external whitelist.
-    VISITABLE_SCOPES = PUBLIC_SCOPES | LEGACY_SCOPES | INTERNAL_SCOPES
+    VISITABLE_SCOPES = PUBLIC_SCOPES | LEGACY_SCOPES | INTERNAL_SCOPES | ALIAS_SCOPES
 
     def __init__(self, uri: str):
         """
         Initialize URI handler.
 
-        Accepts both full-format (viking://...) and short-format (/resources, resources)
-        URIs. Short-format URIs are automatically normalized to full format.
-
         Args:
-            uri: URI string (full or short format)
+            uri: URI string in full ``viking://`` format
         """
-        self.uri = self.normalize(uri)
+        self.uri = uri
         self._parsed = self._parse()
 
     def _parse(self) -> Dict[str, str]:
@@ -83,7 +84,9 @@ class VikingURI:
         # Parse scope
         scope = path.split("/")[0]
         if scope not in self.VISITABLE_SCOPES:
-            raise ValueError(f"Invalid scope '{scope}'")
+            # Alias scopes are accepted but never advertised in scope error messages.
+            scope_names = ", ".join(sorted(self.VISITABLE_SCOPES - self.ALIAS_SCOPES))
+            raise ValueError(f"Invalid scope '{scope}'. Must be one of: {scope_names}")
 
         return {
             "scheme": self.SCHEME,
@@ -196,7 +199,8 @@ class VikingURI:
         Returns:
             Viking URI string
         """
-        if scope not in VikingURI.VISITABLE_SCOPES:
+        # Alias scopes are inputs only: the server never mints a '~' URI.
+        if scope not in VikingURI.VISITABLE_SCOPES or scope in VikingURI.ALIAS_SCOPES:
             raise ValueError(f"Invalid scope '{scope}'")
 
         parts = [scope] + list(path_parts)
@@ -271,33 +275,6 @@ class VikingURI:
 
     def __hash__(self) -> int:
         return hash(self.uri)
-
-    @staticmethod
-    def normalize(uri: str) -> str:
-        """
-        Normalize URI by ensuring it has the viking:// scheme.
-
-        If the input already starts with viking://, returns it as-is.
-        If it starts with /, prepends viking:// (resulting in viking:///... which is invalid,
-        so we strip leading / first).
-        Otherwise, prepends viking://.
-
-        Examples:
-            "/resources/images" -> "viking://resources/images"
-            "resources/images" -> "viking://resources/images"
-            "viking://resources/images" -> "viking://resources/images"
-
-        Args:
-            uri: Input URI string
-
-        Returns:
-            Normalized URI with viking:// scheme
-        """
-        if uri.startswith(f"{VikingURI.SCHEME}://"):
-            return uri
-        # Strip leading slashes
-        uri = uri.lstrip("/")
-        return f"{VikingURI.SCHEME}://{uri}"
 
     @classmethod
     def create_temp_uri(cls, space: Optional[str] = None) -> str:

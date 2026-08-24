@@ -110,9 +110,9 @@ class TestSessionCommitUsedContext:
                 contexts=[
                     "viking://resources/context1",
                     "viking://resources/context2",
-                    "viking://user/skills/skill1",
+                    "viking://~/skills/skill1",
                 ],
-                skill={"name": "multi-context-skill", "uri": "viking://user/skills/multi"},
+                skill={"name": "multi-context-skill", "uri": "viking://~/skills/multi"},
             )
             assert used_resp.status_code == 200
             data = used_resp.json()

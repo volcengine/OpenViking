@@ -572,7 +572,7 @@ async def viking_ingest(
         # Create session. Safe to retry: no messages have been written yet.
         create_res = await _retry_transient_http(
             "create_session",
-            lambda: client.create_session(memory_policy=memory_policy),
+            lambda: client.create_session(options={"memory_policy": memory_policy}),
         )
         session_id = create_res["session_id"]
 
@@ -589,8 +589,15 @@ async def viking_ingest(
                 session_id=session_id,
                 role=msg["role"],
                 parts=[{"type": "text", "text": msg["text"]}],
-                created_at=msg_created_at,
-                peer_id=msg.get("peer_id"),
+                options={
+                    key: value
+                    for key, value in {
+                        "created_at": msg_created_at,
+                        "peer_id": msg.get("peer_id"),
+                    }.items()
+                    if value is not None
+                }
+                or None,
             )
 
         before_commit = await _retry_transient_http(
@@ -605,7 +612,7 @@ async def viking_ingest(
         try:
             result = await _retry_transient_http(
                 f"commit_session session={session_id}",
-                lambda: client.commit_session(session_id, telemetry=True),
+                lambda: client.commit_session(session_id, options={"telemetry": True}),
                 attempts=2,
             )
         except _TRANSIENT_HTTP_ERRORS as exc:

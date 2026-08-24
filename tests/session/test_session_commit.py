@@ -166,6 +166,31 @@ class TestCommit:
         assert call_kwargs["agent_evolution_enabled"] is True
         assert call_kwargs["allowed_memory_types"] is None
 
+    async def test_commit_reads_latest_user_memory_policy_when_session_has_no_override(
+        self, session_with_messages: Session
+    ):
+        memory_policy_provider = AsyncMock(
+            return_value={
+                "memory_types": ["profile"],
+            }
+        )
+        session_with_messages._memory_policy_provider = memory_policy_provider
+        session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
+            return_value=[]
+        )
+
+        result = await session_with_messages.commit_async()
+        task_result = await _wait_for_task(result["task_id"])
+
+        assert task_result["status"] == "completed"
+        assert task_result["result"]["effective_memory_types"] == ["profile"]
+        call_kwargs = (
+            session_with_messages._session_compressor.extract_long_term_memories.call_args.kwargs
+        )
+        assert call_kwargs["allowed_memory_types"] == {"profile"}
+        assert call_kwargs["allowed_peer_ids"] == set()
+        memory_policy_provider.assert_awaited_once_with()
+
     async def test_disabled_agent_evolution_keeps_working_memory(
         self, session_with_messages: Session, monkeypatch
     ):

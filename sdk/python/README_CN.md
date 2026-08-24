@@ -96,7 +96,7 @@ client = SyncHTTPClient(
 client.initialize()
 
 with use_actor_peer("assistant-a"):
-    memories = client.find("部署偏好")
+    memories = client.find(query="部署偏好")
 ```
 
 该作用域通过 Python `ContextVar` 隔离，因此并发 async task 以及由 SDK worker loop
@@ -121,11 +121,19 @@ client.initialize()
 healthy = client.health()
 print("health:", healthy)
 
-session = client.create_session("demo-session")
+session = client.create_session(session_id="demo-session")
 print("session:", session)
 
-client.session("demo-session").add_message("user", "hello from sdk")
-context = client.session("demo-session").get_session_context(token_budget=4096)
+client.session(session_id="demo-session").add_message(
+    role="user",
+    content="hello from sdk",
+)
+client.session(session_id="demo-session").add_message(
+    role="assistant",
+    content="hello from a specific peer",
+    peer_id="peer-alice",
+)
+context = client.session(session_id="demo-session").get_session_context(token_budget=4096)
 print("context:", context)
 
 client.close()
@@ -149,11 +157,14 @@ async def main() -> None:
     healthy = await client.health()
     print("health:", healthy)
 
-    session = await client.create_session("demo-session-async")
+    session = await client.create_session(session_id="demo-session-async")
     print("session:", session)
 
-    session_client = client.session("demo-session-async")
-    await session_client.add_message("user", "hello from async sdk")
+    session_client = client.session(session_id="demo-session-async")
+    await session_client.add_message(
+        role="user",
+        content="hello from async sdk",
+    )
     context = await session_client.get_session_context(token_budget=4096)
     print("context:", context)
 
@@ -178,21 +189,33 @@ event_config = {
     }
 }
 result = client.create_session(
-    "demo-session",
-    memory_extraction_config=event_config,
+    session_id="demo-session",
+    options={
+        "memory_extraction_config": event_config,
+    },
 )
 # 创建时显式传 None，可覆盖服务端默认并禁用自动提交。
-client.create_session("manual-session", auto_commit_policy=None)
+client.create_session(
+    session_id="manual-session",
+    options={"auto_commit_policy": None},
+)
 client.update_session_config(
-    "demo-session",
-    auto_commit_policy={"message_count_threshold": 25},
-    memory_extraction_config={
-        "events": {"tags": ["team=search", "channel=app"]}
+    session_id="demo-session",
+    options={
+        "auto_commit_policy": {"message_count_threshold": 25},
+        "memory_extraction_config": {
+            "events": {"tags": ["team=search", "channel=app"]}
+        },
     },
 )
 # 显式传 None 会禁用自动 commit；省略参数则保持不变。
-client.update_session_config("demo-session", auto_commit_policy=None)
-client.session("demo-session").commit(event_tags=["team=search", "channel=web"])
+client.update_session_config(
+    session_id="demo-session",
+    options={"auto_commit_policy": None},
+)
+client.session(session_id="demo-session").commit(
+    options={"event_tags": ["team=search", "channel=web"]}
+)
 # 单次 commit 传 event_tags=[] 可显式跳过 session 默认 tags。
 print(result)
 ```
@@ -208,10 +231,12 @@ client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
 client.initialize()
 
 result = client.add_resource(
-    "/path/to/notes.md",
+    path="/path/to/notes.md",
     to="viking://resources/demo-notes",
-    reason="knowledge import",
     wait=True,
+    options={
+        "reason": "knowledge import",
+    },
 )
 print(result)
 ```
@@ -221,10 +246,12 @@ print(result)
 
 ```python
 result = client.add_resource(
-    "/path/to/notes.md",
+    path="/path/to/notes.md",
     to="viking://resources/demo-notes",
-    processing_mode="vectors_only",
     wait=True,
+    options={
+        "processing_mode": "vectors_only",
+    },
 )
 ```
 
@@ -236,9 +263,9 @@ from openviking_sdk import SyncHTTPClient
 client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
 client.initialize()
 
-client.mkdir("viking://resources/demo-dir")
-print(client.ls("viking://resources"))
-print(client.read("viking://resources/demo-dir/example.md"))
+client.mkdir(uri="viking://resources/demo-dir")
+print(client.ls(uri="viking://resources"))
+print(client.read(uri="viking://resources/demo-dir/example.md"))
 ```
 
 ### 检索
@@ -249,15 +276,40 @@ from openviking_sdk import SyncHTTPClient
 client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
 client.initialize()
 
-result = client.find("hello", limit=5)
+result = client.find(query="hello", limit=5)
 print(result)
 ```
 
-图片搜索也使用同一组方法。`image` 支持本地路径、bytes、data URI、HTTP URL 或 `viking://` URI；服务端需要使用 multimodal embedding 模型。
+### 高频参数与 Options
+
+高频字段使用显式参数。为保证可读性，推荐使用参数名，例如 `add_resource` 的
+`to`、`wait`，检索的 `target_uri`、`limit`，以及 `add_message` 的
+`role`、`content`、`parts`、`peer_id`；位置参数调用仍然支持。批量写入时，
+请在每条消息字典中传入 `peer_id`。
+
+进阶字段统一放入带类型提示的 `options` 字典，例如 `processing_mode`、检索
+过滤条件、Session 提取配置和 `telemetry`。不要把进阶字段作为裸关键字参数传入。同一个字段
+只能通过一个入口传递；`options` 或 `extra` 中的 SDK 已定义字段不能覆盖显式参数。
+
+图片搜索也使用同一组方法。通过显式的 `image` 参数传入本地路径、bytes、data URI、HTTP URL 或 `viking://` URI；服务端需要使用 multimodal embedding 模型。
 
 ```python
-result = client.find(image="/path/to/photo.png", limit=5)
-result = client.search("similar poster", image="viking://resources/poster.png")
+result = client.find(query="", limit=5, image="/path/to/photo.png")
+result = client.search(
+    query="similar poster",
+    image="viking://resources/poster.png",
+)
+```
+
+复杂请求统一使用带类型提示的 Options 字典。只有服务端已经增加、当前 SDK
+版本尚未正式暴露的字段才通过 `extra` 临时传递：
+
+```python
+result = client.find(
+    query="authentication",
+    limit=10,
+    options={"extra": {"future_server_field": False}},
+)
 ```
 
 ## 管理员操作
@@ -296,8 +348,8 @@ root_client.admin_register_user(
     seed="alice-seed",
     user_config={
         "add_targets": {
-            "resource_uri": "viking://user/resources/project-a",
-            "skill_uri": "viking://user/skills",
+            "resource_uri": "viking://~/resources/project-a",
+            "skill_uri": "viking://~/skills",
         }
     },
 )
@@ -323,7 +375,7 @@ client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
 client.initialize()
 
 try:
-    print(client.read("viking://resources/not-exists.md"))
+    print(client.read(uri="viking://resources/not-exists.md"))
 except OpenVikingError as exc:
     print(type(exc).__name__, exc)
 ```

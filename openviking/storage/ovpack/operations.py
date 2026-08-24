@@ -39,6 +39,7 @@ from openviking.storage.ovpack.format import (
 from openviking.storage.ovpack.index import build_manifest, read_text_if_exists
 from openviking.storage.ovpack.manifest import (
     manifest_entries_by_path,
+    manifest_entry_target_uri,
     read_manifest,
     validate_manifest_root_matches_zip,
 )
@@ -73,7 +74,7 @@ from openviking_cli.utils.uri import VikingURI
 
 logger = get_logger(__name__)
 
-OPTIONAL_SEMANTIC_SIDECARS = frozenset({".abstract.md", ".overview.md"})
+OPTIONAL_ABSTRACT_OVERVIEW_FILES = frozenset({".abstract.md", ".overview.md"})
 
 
 def _index_records_by_level(
@@ -133,17 +134,6 @@ async def _remove_existing_root(viking_fs, root_uri: str, ctx: RequestContext) -
         return
 
 
-async def _existing_scope_roots(
-    viking_fs, scopes: tuple[str, ...], ctx: RequestContext
-) -> list[str]:
-    existing: list[str] = []
-    for scope in scopes:
-        scope_uri = f"viking://{scope}"
-        if await _root_exists(viking_fs, scope_uri, ctx):
-            existing.append(scope_uri)
-    return existing
-
-
 def _exportable_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     exportable: list[dict[str, Any]] = []
     for entry in entries:
@@ -154,11 +144,11 @@ def _exportable_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return exportable
 
 
-def _is_optional_semantic_sidecar(entry: dict[str, Any]) -> bool:
+def _is_optional_abstract_overview(entry: dict[str, Any]) -> bool:
     if entry.get("isDir"):
         return False
     rel_path = str(entry.get("rel_path") or "")
-    return leaf_name(rel_path) in OPTIONAL_SEMANTIC_SIDECARS
+    return leaf_name(rel_path) in OPTIONAL_ABSTRACT_OVERVIEW_FILES
 
 
 async def _filter_existing_optional_sidecars(
@@ -169,7 +159,7 @@ async def _filter_existing_optional_sidecars(
 ) -> list[dict[str, Any]]:
     filtered: list[dict[str, Any]] = []
     for entry in entries:
-        if not _is_optional_semantic_sidecar(entry):
+        if not _is_optional_abstract_overview(entry):
             filtered.append(entry)
             continue
 
@@ -182,7 +172,7 @@ async def _filter_existing_optional_sidecars(
         if exists:
             filtered.append(entry)
         else:
-            logger.info(f"[ovpack] Skipping missing semantic sidecar: {uri}")
+            logger.info(f"[ovpack] Skipping missing abstract overview: {uri}")
     return filtered
 
 
@@ -362,7 +352,14 @@ async def import_ovpack(
 
     if not is_session_uri(root_uri):
         if vector_action == "restore":
-            await restore_vector_snapshot(vector_store, root_uri, index_records, dense_vectors, ctx)
+            await restore_vector_snapshot(
+                vector_store,
+                root_uri,
+                index_records,
+                dense_vectors,
+                manifest_entries_by_path(manifest),
+                ctx,
+            )
             logger.info(f"[ovpack] Restored vector snapshot for: {root_uri}")
         else:
             await _enqueue_direct_vectorization(
@@ -638,6 +635,7 @@ async def restore_ovpack(
     index_records: list[dict[str, Any]] = []
     dense_vectors: dict[str, list[float]] = {}
     vector_action = "recompute"
+    manifest_entries: dict[str, dict[str, Any]] = {}
     restored_entries: list[dict[str, Any]] = []
 
     with zipfile.ZipFile(file_path, "r") as zf:
@@ -661,7 +659,11 @@ async def restore_ovpack(
         index_records = validate_manifest_content(zf, manifest, infolist, base_name)
         dense_vectors = read_dense_vectors(zf, manifest, base_name, index_records)
 
-        existing_roots = await _existing_scope_roots(viking_fs, backup_scopes, ctx)
+        existing_roots = []
+        for scope in backup_scopes:
+            scope_uri = f"viking://{scope}"
+            if await _root_exists(viking_fs, scope_uri, ctx):
+                existing_roots.append(scope_uri)
         if existing_roots:
             if conflict_action == "skip":
                 logger.info("[ovpack] Skipped backup restore because target scopes exist")
@@ -688,7 +690,8 @@ async def restore_ovpack(
         content_members.sort(key=lambda member: (member[2] != "directory", member[3].count("/")))
 
         for _, safe_zip_path, kind, rel_path in content_members:
-            target_uri = join_uri(root_uri, rel_path)
+            manifest_entry = manifest_entries[rel_path]
+            target_uri = manifest_entry_target_uri(root_uri, rel_path, manifest_entry)
             if target_uri == "viking://user":
                 continue
 
@@ -718,13 +721,21 @@ async def restore_ovpack(
     logger.info(f"[ovpack] Successfully restored backup {file_path}")
 
     if vector_action == "restore":
-        await restore_vector_snapshot(vector_store, root_uri, index_records, dense_vectors, ctx)
+        await restore_vector_snapshot(
+            vector_store,
+            root_uri,
+            index_records,
+            dense_vectors,
+            manifest_entries,
+            ctx,
+        )
         logger.info("[ovpack] Restored vector snapshot for backup")
         return root_uri
 
     vectorization_groups: dict[str, list[dict[str, Any]]] = {}
     for entry in restored_entries:
-        parts = entry["rel_path"].split("/")
+        target_uri = entry["uri"]
+        parts = target_uri.removeprefix("viking://").split("/")
         if parts[0] == "resources":
             group_uri = "viking://resources"
         elif parts[0] == "user" and len(parts) >= 2:

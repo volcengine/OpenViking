@@ -50,7 +50,7 @@ context or deeper intent analysis is useful.
 3. Search only the current user's Experience root:
 
    ```text
-   viking://user/memories/experiences
+   viking://~/memories/experiences
    ```
 
    For tools using MCP-style parameters, set `target_uri` to this root. For
@@ -62,8 +62,7 @@ context or deeper intent analysis is useful.
    do not broaden the search to unrelated memory directories.
 5. Select only the one to three Experience files likely to change execution.
    Require an exact file URI without a query or fragment. Ignore directories,
-   unrelated memory types, and sidecars such as `.abstract.md`, `.overview.md`,
-   and `.relations.json`.
+   unrelated memory types, and sidecars such as `.abstract.md` and `.overview.md`.
 6. Read every selected canonical `viking://.../memories/experiences/...` URI
    with the runtime's OpenViking read tool. Search abstracts help selection but
    are not a substitute for reading the Experience body.

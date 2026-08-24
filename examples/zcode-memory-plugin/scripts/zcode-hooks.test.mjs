@@ -16,7 +16,7 @@ const PLUGIN_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 test("uri guard deny output contains only recognized keys", () => {
   const output = evaluateZcodeUriGuard({
     tool_name: "Read",
-    tool_input: { file_path: "viking://user/memories/profile.md" },
+    tool_input: { file_path: "viking://~/memories/profile.md" },
   });
   assert.ok(output.hookSpecificOutput);
   assert.equal(output.hookSpecificOutput.hookEventName, "PreToolUse");

@@ -476,14 +476,14 @@ class TestContextWithUser:
         ctx = Context(uri="viking://user/test/memories/test.md", user=user)
 
         assert ctx.owner_user_id == "test"
-        assert ctx.owner_space == user.user_id
+        assert ctx.owner_space == "test"
 
     def test_owner_fields_session(self):
         """Test owner fields for session URI."""
         user = UserIdentifier(account_id="account-123", user_id="user-123")
-        ctx = Context(uri="viking://session/test/msg/1.md", user=user)
+        ctx = Context(uri="viking://user/user-123/sessions/test/msg/1.md", user=user)
 
-        assert ctx.owner_user_id is None
+        assert ctx.owner_user_id == user.user_id
         assert ctx.owner_space == user.user_id
 
     def test_owner_fields_resource_default(self):

@@ -14,6 +14,7 @@ from typing import Optional
 from fastapi import APIRouter, Body, Depends, Path, Query
 from pydantic import BaseModel, ConfigDict, field_validator
 
+from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.resource import watch_manager as wm_mod
 from openviking.resource.watch_manager import WatchManager, WatchTask
 from openviking.server.auth import get_request_context
@@ -111,6 +112,8 @@ async def _resolve_task(
     """
     if not task_id and not to_uri:
         raise InvalidArgumentError("Either {task_id} or ?to_uri= is required")
+    if to_uri:
+        to_uri = validate_request_viking_uri(to_uri, ctx, field_name="to_uri")
 
     wm = _wm()
     account_id, user_id, role = _identity(ctx)
@@ -157,6 +160,7 @@ async def list_or_get_watch(
     wm = _wm()
     account_id, user_id, role = _identity(_ctx)
     if to_uri:
+        to_uri = validate_request_viking_uri(to_uri, _ctx, field_name="to_uri")
         task = await wm.get_task_by_uri(to_uri, account_id, user_id, role)
         if task is None or (active_only and not task.is_active):
             raise NotFoundError(to_uri, "watch_task")

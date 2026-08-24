@@ -78,9 +78,9 @@ async def test_skill_read_restores_placeholder(service):
 
 
 @pytest.mark.asyncio
-async def test_skill_read_restores_placeholder_with_user_shorthand(service):
+async def test_skill_read_restores_placeholder_for_agent_segment_name(service):
     ctx = RequestContext(
-        user=UserIdentifier.the_default_user("privacy_restore_user_shorthand"), role=Role.ROOT
+        user=UserIdentifier.the_default_user("privacy_restore_agent_segment"), role=Role.ROOT
     )
     await service.initialize_user_directories(ctx)
 
@@ -95,7 +95,7 @@ async def test_skill_read_restores_placeholder_with_user_shorthand(service):
     )
 
     restored = await service.fs.read(
-        "viking://user/skills/restore-skill-agent-segment/SKILL.md",
+        f"{canonical_user_root(ctx)}/skills/restore-skill-agent-segment/SKILL.md",
         ctx=ctx,
     )
 

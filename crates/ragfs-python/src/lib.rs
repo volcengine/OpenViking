@@ -1040,14 +1040,19 @@ fn py_to_json_value(v: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
 /// When the dict contains `"disable_auto_pathlock": "true"`, the `PathLockWrappedFS` auto-lock
 /// layer is suppressed so callers that already hold a pathlock lease can safely delegate to the
 /// inner filesystem without double-locking.
+///
+/// When the dict contains `"bypass_cache": "true"`, plugin-local metadata caches (e.g. the S3FS
+/// stat cache) are bypassed so the operation observes fresh backend state.
 fn build_fs_context(ctx: Option<HashMap<String, String>>) -> FsContext {
     let mut account_id = String::new();
     let mut disable_auto_pathlock = false;
     let mut lease_ref: Option<String> = None;
+    let mut bypass_cache = false;
     if let Some(m) = &ctx {
         account_id = m.get("account_id").cloned().unwrap_or_default();
         disable_auto_pathlock = m.get("disable_auto_pathlock").map(|s| s == "true").unwrap_or(false);
         lease_ref = m.get("lease_ref").cloned();
+        bypass_cache = m.get("bypass_cache").map(|s| s == "true").unwrap_or(false);
     }
     let pathlock = if disable_auto_pathlock || lease_ref.is_some() {
         Some(PathLockContext {
@@ -1057,7 +1062,10 @@ fn build_fs_context(ctx: Option<HashMap<String, String>>) -> FsContext {
     } else {
         None
     };
-    Arc::new(FsContextInner::with_pathlock(account_id, pathlock.unwrap_or_default()))
+    Arc::new(
+        FsContextInner::with_pathlock(account_id, pathlock.unwrap_or_default())
+            .with_bypass_cache(bypass_cache),
+    )
 }
 
 /// Convert an OwnedPathLockLease to a Python dict.

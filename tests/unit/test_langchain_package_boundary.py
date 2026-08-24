@@ -218,6 +218,13 @@ def test_legacy_imports_resolve_to_canonical_objects():
     ("uri", "expected_parts", "expected_scope", "expected_content_index"),
     [
         (
+            "viking://~/memories/store/data/users/ada.json",
+            ("~", "memories", "store", "data", "users", "ada.json"),
+            "user",
+            1,
+        ),
+        # Legacy uid-less roots may still sit in older store configs; keep classifying them.
+        (
             "viking://user/memories/store/data/users/ada.json",
             ("user", "memories", "store", "data", "users", "ada.json"),
             "user",
@@ -234,6 +241,12 @@ def test_legacy_imports_resolve_to_canonical_objects():
             ("user", "default", "peers", "assistant", "resources", "store", "data.json"),
             "user",
             4,
+        ),
+        (
+            "viking://~/peers/assistant/memories/store/index.md",
+            ("~", "peers", "assistant", "memories", "store", "index.md"),
+            "user",
+            3,
         ),
         (
             "viking://user/peers/assistant/memories/store/index.md",

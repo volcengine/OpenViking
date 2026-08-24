@@ -68,10 +68,13 @@ async def test():
     # add_resource expects a file path or URL
     sample = Path("./encrypted-sample.txt")
     sample.write_text("Hello, encrypted world!", encoding="utf-8")
-    await client.add_resource(str(sample), reason="Test encryption")
+    await client.add_resource(
+        path=str(sample),
+        options={"reason": "Test encryption"},
+    )
 
     # Read resource (automatically decrypted)
-    results = await client.find("encrypted")
+    results = await client.find(query="encrypted")
     print(f"Found {len(results)} results")
 
     await client.close()
@@ -412,7 +415,7 @@ ov backup ./backups/before-encryption.ovpack
 ov restore ./backups/before-encryption.ovpack --on-conflict fail
 ```
 
-4. Verify resource, user, session, and index data before switching traffic. OVPack excludes runtime/internal state such as queues, uploads, locks, watches, and relation files; recreate or validate those separately.
+4. Verify resource, user, session, and index data before switching traffic. OVPack excludes runtime/internal state such as queues, uploads, locks, and watches; recreate or validate those separately.
 
 See [OVPack Import and Export](09-ovpack.md#full-backup-and-restore) for supported scopes and restore options.
 

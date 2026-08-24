@@ -8,6 +8,7 @@ const DEFAULT_PRIMARY = { model: "gpt-5.3-codex-spark", thinking: "default", sou
 const DEFAULT_FALLBACK = { model: "gpt-5.6-luna", thinking: "low", source: "default_fallback" };
 const PROFILE_SCHEMA_VERSION = 3;
 const DEFAULT_CODEX_HOME = join(homedir(), ".codex");
+const COMPRESSOR_PROVIDER = "openviking_compressor";
 
 function isOff(value) {
   return /^(?:0|false|no|off|none|disabled)$/i.test(String(value || "").trim());
@@ -27,11 +28,18 @@ export function recallCompressionExplicitlyOff(cfg) {
   return !cfg.recallCompress || isOff(cfg.recallCompressModel) || isOff(cfg.recallCompressThinking);
 }
 
-export function buildCodexExecArgs(profile, outputPath) {
+export function buildCodexExecArgs(profile, outputPath, cfg = {}) {
   const args = [];
   if (profile.model) args.push("-m", profile.model);
   if (profile.thinking && profile.thinking !== "default") {
     args.push("-c", `model_reasoning_effort=${JSON.stringify(profile.thinking)}`);
+  }
+  if (cfg.recallCompressBaseUrl) {
+    args.push(
+      "-c", `model_provider=${JSON.stringify(COMPRESSOR_PROVIDER)}`,
+      "-c", `model_providers.${COMPRESSOR_PROVIDER}.name=${JSON.stringify(COMPRESSOR_PROVIDER)}`,
+      "-c", `model_providers.${COMPRESSOR_PROVIDER}.base_url=${JSON.stringify(cfg.recallCompressBaseUrl)}`,
+    );
   }
   args.push(
     "--sandbox",

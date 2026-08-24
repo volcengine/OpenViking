@@ -73,9 +73,6 @@ class TreeBuilder:
             if media_type:
                 return get_media_base_uri(media_type)
             return "viking://resources"
-        if scope == "user":
-            # user resources go to memories (no separate resources dir)
-            return "viking://user"
         raise ValueError(f"unsupported tree scope: {scope}")
 
     # ============================================================================
@@ -104,7 +101,7 @@ class TreeBuilder:
 
         auto_base_uri = self._get_base_uri(scope, source_path, source_format)
         base_uri = parent_uri or auto_base_uri
-        use_to_as_parent = bool(to_uri and is_content_root_uri(to_uri, ctx, kind="resource"))
+        use_to_as_parent = bool(to_uri and is_content_root_uri(to_uri, kind="resource"))
         if to_uri and not use_to_as_parent:
             return to_uri, None
 
@@ -115,7 +112,6 @@ class TreeBuilder:
             viking_fs = get_viking_fs()
             parent_is_content_root = is_content_root_uri(
                 effective_parent_uri,
-                ctx,
                 kind="resource",
             )
             try:

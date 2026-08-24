@@ -25,6 +25,7 @@ export interface OVConfig {
   recallPreferAbstract: boolean;
   recallLimit: number;
   recallLimitConfigured: boolean;
+  recallLedger: boolean;
   scoreThreshold: number;
   minQueryLength: number;
   profileTokenBudget: number;
@@ -66,6 +67,9 @@ const DEFAULT_CONFIG: OVConfig = {
   recallPreferAbstract: true,
   recallLimit: 10,
   recallLimitConfigured: false,
+  // Persist injected recall blocks and re-apply them to historical user
+  // messages so provider prompt-prefix caches keep hitting (#4137).
+  recallLedger: true,
   scoreThreshold: 0.35,
   minQueryLength: 3,
   profileTokenBudget: 10000,
@@ -144,6 +148,9 @@ export function loadConfig(extensionDir: string): OVConfig {
     config.recallQueryExpansion = process.env.OPENVIKING_RECALL_QUERY_EXPANSION === "off" ? "off" : "auto";
     config.recallQueryExpansionConfigured = true;
   }
+  if (process.env.OPENVIKING_RECALL_LEDGER !== undefined) {
+    config.recallLedger = envBool(process.env.OPENVIKING_RECALL_LEDGER, config.recallLedger);
+  }
 
   config.recallLimit = clampInt(config.recallLimit, 1, 50, DEFAULT_CONFIG.recallLimit);
   config.recallMaxContentChars = clampInt(config.recallMaxContentChars, 100, 5000, DEFAULT_CONFIG.recallMaxContentChars);
@@ -165,6 +172,7 @@ export function loadConfig(extensionDir: string): OVConfig {
   config.captureMode = config.captureMode === "keyword" ? "keyword" : "semantic";
   config.recallPeerScope = config.recallPeerScope === "actor" ? "actor" : "all";
   config.recallQueryExpansion = config.recallQueryExpansion === "off" ? "off" : "auto";
+  config.recallLedger = config.recallLedger !== false;
   if (!Array.isArray(config.bypassPatterns)) config.bypassPatterns = [];
   config.peerId = resolveEffectivePeerId({ cfg: config as any, cwd: process.cwd() }).peerId;
   return config;

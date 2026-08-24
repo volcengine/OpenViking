@@ -1,4 +1,4 @@
-## 安装
+## 步骤1：安装
 
 ```bash
 # TRAE
@@ -8,9 +8,11 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness trae-cn --dist tos
 ```
 
-选 **火山引擎 OpenViking 云服务**，把本页 API Key 贴进去。
+选 **火山引擎 OpenViking 云服务**，把 API Key 贴进去：
 
-## 验证
+{{OPENVIKING_API_KEY_BLOCK}}
+
+## 步骤2：验证
 
 重启 TRAE。在设置里确认 `openviking` 已连接。
 

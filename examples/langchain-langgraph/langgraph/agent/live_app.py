@@ -16,13 +16,12 @@ import uuid
 from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_openviking import OpenVikingContextMiddleware
+from langchain_openviking.client import extract_message_text
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from openai import OpenAI
 from typing_extensions import Annotated, TypedDict
-
-from langchain_openviking import OpenVikingContextMiddleware
-from langchain_openviking.client import extract_message_text
 
 
 class LiveState(TypedDict, total=False):
@@ -178,12 +177,12 @@ def main() -> str:
         print(answer)
         if code not in answer.lower():
             raise RuntimeError(f"Expected {code!r} in live answer: {answer!r}")
-        commit = client.commit_session(session_id)
+        commit = client.commit_session(session_id=session_id)
         wait_for_commit_task(client, commit)
         return answer
     finally:
         try:
-            client.delete_session(session_id)
+            client.delete_session(session_id=session_id)
         except Exception:
             pass
 
@@ -195,7 +194,7 @@ def wait_for_commit_task(client, commit: dict[str, object]) -> None:
     deadline = time.monotonic() + timeout
     last_task = None
     while time.monotonic() < deadline:
-        task = client.get_task(str(commit["task_id"]))
+        task = client.get_task(task_id=str(commit["task_id"]))
         last_task = task
         if task and task.get("status") == "completed":
             return

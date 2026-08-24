@@ -14,9 +14,10 @@ OpenViking supports multiple skill definition formats:
 
 ### Skill Storage Structure
 
-Skills are stored under the current user's skills root. The short URI
-`viking://user/skills/` resolves to `viking://user/{user_id}/skills/` for the
-authenticated request:
+Skills are stored under the current user's skills root. The home alias
+`viking://~/skills/` expands to `viking://user/{user_id}/skills/` for the
+authenticated request (the uid-less spelling `viking://user/skills/` is no longer
+accepted):
 
 ```
 viking://user/{user_id}/skills/
@@ -93,7 +94,7 @@ OpenViking automatically detects and converts MCP tool definitions to skill form
 **Conversion Example**:
 
 Input (MCP format):
-```python
+```json
 {
     "name": "search_web",
     "description": "Search the web",
@@ -115,7 +116,7 @@ Input (MCP format):
 ```
 
 Output (Skill format):
-```python
+```json
 {
     "name": "search-web",
     "description": "Search the web",
@@ -189,7 +190,7 @@ Skills are a special type of resource that define actions or tools agents can pe
 - **Targeting**:
   - Skills are always user-scoped. `add_skill` does not accept `to`, `parent`, or `root_uri`.
   - Peer-scoped skill roots are not supported; actor peer filtering only applies to peer memories/resources, not peer skills.
-  - Use `viking://user/skills/...` as current-user shorthand when listing, reading, deleting, or searching skills.
+  - Use the home alias `viking://~/skills/...` to address your own skills when listing, reading, deleting, or searching. The uid-less `viking://user/skills/...` spelling returns an error with a corrective hint.
 
 - **Supported data formats**:
   1. **Dict (Skill format)**: Includes `name`, `description`, `content`, etc.
@@ -286,7 +287,7 @@ Search the web for current information.
 - **limit** (integer, optional): Max results, default 10
 """
 }
-result = client.add_skill(skill)
+result = client.add_skill(data=skill)
 print(f"Added: {result['root_uri']}")
 
 # Approach 2: Using MCP Tool format (auto-detected and converted
@@ -304,20 +305,20 @@ mcp_tool = {
         "required": ["expression"]
     }
 }
-result = client.add_skill(mcp_tool)
+result = client.add_skill(data=mcp_tool)
 print(f"Added: {result['uri']}")
 
 # Approach 3: Add from local SKILL.md file
-result = client.add_skill("./skills/search-web/SKILL.md")
+result = client.add_skill(data="./skills/search-web/SKILL.md")
 print(f"Added: {result['uri']}")
 
 # Approach 4: Add from directory containing SKILL.md (auxiliary files included
-result = client.add_skill("./skills/code-runner/")
+result = client.add_skill(data="./skills/code-runner/")
 print(f"Added: {result['uri']}")
 print(f"Auxiliary files: {result['auxiliary_files']}")
 
 # Wait for processing completion
-result = client.add_skill("./skills/my-skill/", wait=True)
+result = client.add_skill(data="./skills/my-skill/", wait=True)
 client.wait_processed()
 ```
 
@@ -473,7 +474,11 @@ curl -X GET "http://localhost:1933/api/v1/skills?node_limit=1000" \
 **Python SDK**
 
 ```python
-skill = client.get_skill("search-web", include_content=True, include_files=True)
+skill = client.get_skill(
+    skill_name="search-web",
+    include_content=True,
+    include_files=True,
+)
 print(skill["name"])
 print(skill.get("content"))
 ```
@@ -506,7 +511,7 @@ curl -X GET "http://localhost:1933/api/v1/skills/search-web?include_content=true
 **Python SDK**
 
 ```python
-results = client.find_skills("search the internet", limit=5)
+results = client.find_skills(query="search the internet", limit=5)
 
 for skill in results["skills"]:
     print(skill["name"], skill["score"])
@@ -544,8 +549,12 @@ curl -X POST http://localhost:1933/api/v1/skills/find \
 **Python SDK**
 
 ```python
-validated = client.validate_skill({"name": "search-web", "description": "..."})
-updated = client.update_skill("search-web", "./skills/search-web", wait=True)
+validated = client.validate_skill(data={"name": "search-web", "description": "..."})
+updated = client.update_skill(
+    skill_name="search-web",
+    data="./skills/search-web",
+    wait=True,
+)
 ```
 
 **TypeScript SDK**
@@ -599,7 +608,7 @@ curl -X PUT http://localhost:1933/api/v1/skills/search-web \
 **Python SDK**
 
 ```python
-client.delete_skill("old-skill")
+client.delete_skill(skill_name="old-skill")
 ```
 
 **TypeScript SDK**
@@ -707,14 +716,14 @@ A successful update returns the same processing result as `add_skill` with an ad
 skill = {
     "name": "search-web",
     "description": "Search the web for current information using Google",
-    ...
+    # Additional skill fields
 }
 
 # Less helpful - too vague
 skill = {
     "name": "search",
     "description": "Search",
-    ...
+    # Additional skill fields
 }
 ```
 

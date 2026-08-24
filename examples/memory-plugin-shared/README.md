@@ -3,6 +3,10 @@
 This directory contains shared JavaScript modules that are vendored into the
 Claude Code, Codex, OpenCode, and pi memory plugins by `sync.mjs`.
 
+> **Requires an OpenViking server with `viking://~` home-alias support.** Recall targets the
+> caller's own context space through `viking://~/memories` and `viking://~/skills`; the uid-less
+> `viking://user/memories` shorthand is rejected by newer servers.
+
 ## Workspace Peers
 
 `lib/workspace-peer.mjs` derives the default actor peer from the current

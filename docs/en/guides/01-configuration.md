@@ -1253,10 +1253,10 @@ When a session carries an `auto_commit_policy`, any field you omit falls back to
 
 | Field | Type | Default | Max | Description |
 |-------|------|---------|-----|-------------|
-| `pending_token_threshold` | int | 10000 | 50000 | When uncommitted pending tokens exceed this value (strictly greater-than), an auto commit is triggered after a message write. |
-| `message_count_threshold` | int | 50 | 500 | When the uncommitted live message count exceeds this value (strictly greater-than), an auto commit is triggered after a message write. |
+| `pending_token_threshold` | int | 150000 | 1000000 | When uncommitted pending tokens exceed this value (strictly greater-than), an auto commit is triggered after a message write. |
+| `message_count_threshold` | int | 100 | 1000 | When the uncommitted live message count exceeds this value (strictly greater-than), an auto commit is triggered after a message write. |
 | `idle_timeout_seconds` | int | 86400 | 604800 | After this many idle seconds, a session with uncommitted content becomes eligible for the server-side idle scheduler. Idle-timeout commits archive the full backlog and ignore `keep_recent_count`. |
-| `keep_recent_count` | int | 2 | 500 | Number of recent live messages to keep (not archived) on a threshold-triggered auto commit. Idle-timeout commits ignore this and commit everything. |
+| `keep_recent_count` | int | 0 | 500 | Number of recent live messages to keep (not archived) on a threshold-triggered auto commit. Idle-timeout commits ignore this and commit everything. |
 | `min_commit_interval_seconds` | int | 0 | 604800 | Minimum seconds between two automatic commits (throttle). |
 
 Code entry: `openviking/session/auto_commit_policy.py:AutoCommitPolicy`.
@@ -1561,8 +1561,11 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
     },
     "user_config_defaults": {
       "add_targets": {
-        "resource_uri": "viking://user/resources",
-        "skill_uri": "viking://user/skills"
+        "resource_uri": "viking://~/resources",
+        "skill_uri": "viking://~/skills"
+      },
+      "memory_policy": {
+        "memory_types": ["profile", "preferences", "events", "entities", "experiences"]
       }
     },
     "agent_evolution": {
@@ -1585,15 +1588,16 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 | `temp_upload.default_mode` | str | Server-side default for `POST /api/v1/resources/temp_upload` when the client does not send `upload_mode`: `"local"` (per-instance disk, current single-node behavior) or `"shared"` (distributed shared store usable across replicas). New shared uploads are stored in internal `viking://upload/<created_at_ms>-<uuid>/content` and `meta` objects, and can be consumed repeatedly for `ttl_seconds`. | `"local"` |
 | `temp_upload.shared_max_size_bytes` | int | Maximum size accepted in `shared` mode, in bytes. Requests above this size are rejected before object-store write. | `536870912` (512 MiB) |
 | `temp_upload.ttl_seconds` | int | Retention time shared by local and shared temporary uploads, in seconds. Each upload cleans files older than this for its mode; shared cleanup uses one upload-root listing, parses creation time from each first-level directory name, and recursively removes expired directories without filesystem modification times. Set to `0` to disable automatic cleanup. | `43200` (12 hours) |
-| `user_config_defaults.add_targets.resource_uri` | str | Deployment default resource add directory used when `add_resource` omits both `to` and `parent`. `viking://user/...` resolves per request user. | `null` |
-| `user_config_defaults.add_targets.skill_uri` | str | Deployment default skill add root used when `add_skill` omits `target_uri`. Only `viking://user/skills` and `viking://agent/skills` are accepted. | `null` |
+| `user_config_defaults.add_targets.resource_uri` | str | Deployment default resource add directory used when `add_resource` omits both `to` and `parent`. `viking://~/...` resolves per request user. | `null` |
+| `user_config_defaults.add_targets.skill_uri` | str | Deployment default skill add root used when `add_skill` omits `target_uri`. Only `viking://~/skills` and `viking://agent/skills` are accepted. | `null` |
+| `user_config_defaults.memory_policy` | object | Deployment default memory extraction policy used when neither the Session nor the User has an explicit policy. | `null` |
 | `agent_evolution.enabled` | bool | Instance-wide Agent Evolution switch. When enabled, session commits may generate or update cases, trajectories, and experiences according to the session `memory_policy`. When disabled, production of these memory types stops for every account and user. Existing memories remain readable and searchable. | `false` |
 
 `api_key` mode uses API keys and is the default. `trusted` mode trusts `X-OpenViking-Account` / `X-OpenViking-User` headers from a trusted gateway or internal caller.
 
 When `root_api_key` is configured in `api_key` mode, the server enables multi-tenant authentication. Use the Admin API to create accounts and user keys. In `trusted` mode, ordinary requests do not require user registration first; each request is resolved as `USER` from the injected identity headers. However, skipping `root_api_key` in `trusted` mode is allowed only on localhost. Development mode only applies when `auth_mode = "api_key"` and `root_api_key` is not set.
 
-`user_config_defaults` only provides per-user defaults for add targets. For add operations, explicit request targets still win: `add_resource.to` / `add_resource.parent` take precedence over user defaults, and `add_skill.target_uri` takes precedence over user defaults. `agent_evolution.enabled` is shared by the entire OpenViking instance and has no per-user override. Running HTTP server workers read the current value from the resolved `ov.conf` when a session commits, so a valid file update applies without restarting the server.
+`user_config_defaults` provides deployment defaults for add targets and memory extraction. For add operations, explicit request targets still win: `add_resource.to` / `add_resource.parent` take precedence over user defaults, and `add_skill.target_uri` takes precedence over user defaults. Memory policy precedence is Session policy > User `settings/user_config.json` policy > `server.user_config_defaults.memory_policy` > kernel default. `agent_evolution.enabled` is shared by the entire OpenViking instance and has no per-user override. Running HTTP server workers read the current Agent Evolution value from the resolved `ov.conf` when a session commits, so a valid file update applies without restarting the server.
 
 ### Usage Reporter
 
@@ -1638,8 +1642,9 @@ Each line has the following form:
 
 Supported add target URIs:
 
-- `resource_uri` is used as the default `add_resource` parent directory, equivalent to `parent=<uri>, create_parent=true`. It must be a writable resource directory URI for the request user. Supported forms are `viking://resources` or `viking://resources/...`, `viking://user/resources` or `viking://user/resources/...`, `viking://user/{user_id}/resources` or `viking://user/{user_id}/resources/...`, and `viking://user/{user_id}/peers/{peer_id}/resources` or `viking://user/{user_id}/peers/{peer_id}/resources/...`. The `viking://user/...` shorthand resolves per request user.
-- `skill_uri` is used as the default `add_skill` target root. In v1, only `viking://user/skills` and `viking://agent/skills` are accepted; explicit `viking://user/{user_id}/skills` is not accepted.
+- `resource_uri` is used as the default `add_resource` parent directory, equivalent to `parent=<uri>, create_parent=true`. It must be a writable resource directory URI for the request user. Supported forms are `viking://resources` or `viking://resources/...`, `viking://~/resources` or `viking://~/resources/...`, `viking://user/{user_id}/resources` or `viking://user/{user_id}/resources/...`, and `viking://user/{user_id}/peers/{peer_id}/resources` or `viking://user/{user_id}/peers/{peer_id}/resources/...`. The `viking://~/...` home alias resolves per request user.
+- `skill_uri` is used as the default `add_skill` target root. In v1, only `viking://~/skills` and `viking://agent/skills` are accepted; explicit `viking://user/{user_id}/skills` is not accepted.
+- Legacy spellings: `viking://user/resources` and `viking://user/skills` written in earlier configs are auto-normalized to `viking://~/resources` and `viking://~/skills` when the config is loaded, and the server logs an info message. Prefer the `viking://~/...` form in new configs — outside `add_targets`, the uid-less spelling is rejected at the request boundary.
 
 For startup and deployment details see [Deployment](./03-deployment.md), for authentication see [Authentication](./04-authentication.md).
 

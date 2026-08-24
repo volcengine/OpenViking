@@ -166,6 +166,9 @@ class ExtractLoop:
         self.schema_model_generator = SchemaModelGenerator(
             schemas,
             template_context={"language": output_language},
+            # include_decision_reasoning=(
+            #     type(self.context_provider).__name__ != "PatchMergeContextProvider"
+            # ),
         )
         self.schema_model_generator.generate_all_models()
 
@@ -208,6 +211,7 @@ class ExtractLoop:
 - For new items, assign a unique page_id >= 100.
 - When editing an existing item, reuse its existing page_id.
 - To delete an existing item, add an entry to `delete_ids` using its page_id.
+- `delete_ids` deletes the whole item: use it only if every substantive fact is in scope; otherwise MUST use DELETE blocks for affected lines, preserving the rest and not inferring scope from the file name/topic.
 - For canonical merges, set `replacement_page_id` to the surviving page that should inherit the deleted page's existing links/backlinks; for pure deletes, set `replacement_page_id` to null.
 """
         link_rules = ""
@@ -227,7 +231,7 @@ class ExtractLoop:
 ## Read Format Rules
 - The read tool accepts `uri`, optional `offset` (0-indexed), and optional `limit`.
 - Read content is returned in Claude Code format: each visible line is prefixed with `line_number<TAB>`.
-- When you copy text from read results into SEARCH/REPLACE operations, copy the exact text after the line-number prefix. Never include the line-number prefix itself in `search` or `replace`.
+- When you copy text from read results into SEARCH/REPLACE or DELETE operations, copy the exact text after the line-number prefix. Never include the line-number prefix itself in `search`, `replace`, or `delete`.
 ## Output Format
 The final output of the model must strictly follow the JSON Schema format shown below:
 ```json
@@ -783,7 +787,11 @@ The final output of the model must strictly follow the JSON Schema format shown 
         self,
         operations: ResolvedOperations,
     ) -> List[Dict[str, Any]]:
-        from openviking.session.memory.merge_op.base import SearchReplaceBlock, StrPatch
+        from openviking.session.memory.merge_op.base import (
+            DeleteBlock,
+            SearchReplaceBlock,
+            StrPatch,
+        )
         from openviking.session.memory.merge_op.patch_handler import unescape_markers
 
         errors = []
@@ -802,10 +810,10 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     blocks = patch_value.blocks
                 elif isinstance(patch_value, dict) and "blocks" in patch_value:
                     for raw_block in patch_value.get("blocks", []):
-                        if isinstance(raw_block, SearchReplaceBlock):
+                        if isinstance(raw_block, (SearchReplaceBlock, DeleteBlock)):
                             blocks.append(raw_block)
                         elif isinstance(raw_block, dict):
-                            blocks.append(SearchReplaceBlock(**raw_block))
+                            blocks.extend(StrPatch.model_validate({"blocks": [raw_block]}).blocks)
                 if not blocks:
                     continue
                 working_content = current_content
@@ -854,18 +862,18 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     )
                     break
         if errors:
-            tracer.info(f"SEARCH/REPLACE patch validation failed before apply: {errors}")
+            tracer.info(f"String patch validation failed before apply: {errors}")
         return errors
 
     def _build_patch_repair_instruction(self, patch_errors: List[Dict[str, Any]]) -> str:
         details = json.dumps(patch_errors, ensure_ascii=False, indent=2)
         return (
-            "SEARCH/REPLACE patch could not be applied to the target memory file. "
-            "The SEARCH text must be copied exactly from the read result of the file bound to that operation's page_id. "
-            "The SEARCH text must occur exactly once in the target file. "
-            "If it occurs more than once, include enough contiguous surrounding context to make the SEARCH text unique. "
-            "Do not use SEARCH text from the conversation or from another page. "
-            "If you copy from numbered read output, exclude the `line_number<TAB>` prefix from SEARCH and REPLACE text. "
+            "The SEARCH/REPLACE or DELETE patch could not be applied to the target memory file. "
+            "The SEARCH or DELETE text must be copied exactly from the read result of the file bound to that operation's page_id. "
+            "The matched text must occur exactly once in the target file. "
+            "If it occurs more than once, include enough contiguous surrounding context to make it unique. "
+            "Do not use match text from the conversation or from another page. "
+            "If you copy from numbered read output, exclude the `line_number<TAB>` prefix from SEARCH, REPLACE, and DELETE text. "
             "If found_in_other_uris is non-empty, diagnose this as a possible page_id mismatch and choose the correct target page_id or rewrite the patch for the current page_id; do not silently move the patch. "
             "Regenerate the complete operations JSON, including previous successful operations and fixed failed operations. "
             "Output ONLY the complete JSON object matching the required schema.\n\n"

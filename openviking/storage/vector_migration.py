@@ -58,10 +58,6 @@ def _root_ctx(account_id: str) -> RequestContext:
     return RequestContext(user=UserIdentifier(account_id, "default"), role=Role.ROOT)
 
 
-def _normalize_uri(uri: str) -> str:
-    return VikingURI.normalize(uri).rstrip("/")
-
-
 def _seed_uri_for_id(uri: str, level: Any) -> str:
     try:
         level_int = int(level)
@@ -154,8 +150,8 @@ async def copy_vector_records(
         result.warnings.append(f"Skipped vector copy for {source_uri}: vector store is unavailable")
         return result
 
-    source_uri = _normalize_uri(source_uri)
-    target_uri = _normalize_uri(target_uri)
+    source_uri = source_uri.rstrip("/")
+    target_uri = target_uri.rstrip("/")
     ctx = _root_ctx(account_id)
     try:
         records = await _records_in_scope(
@@ -183,11 +179,7 @@ async def copy_vector_records(
             continue
 
         rewritten_uri = _rewrite_uri(source_record_uri, source_uri, target_uri)
-        owner_fields = owner_fields_for_uri(
-            rewritten_uri,
-            user=ctx.user,
-            account_id=account_id,
-        )
+        owner_fields = owner_fields_for_uri(rewritten_uri)
         level = record.get("level", 2)
         payload = {
             key: value
@@ -236,7 +228,7 @@ async def delete_vector_records(
         result.warnings.append(f"Skipped vector cleanup for {uri}: vector store is unavailable")
         return result
 
-    uri = _normalize_uri(uri)
+    uri = uri.rstrip("/")
     ctx = _root_ctx(account_id)
     try:
         records = await _records_in_scope(

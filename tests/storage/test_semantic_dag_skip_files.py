@@ -39,7 +39,7 @@ class _FakeProcessor:
         self.summarized_files.append(file_path)
         return {"name": file_path.split("/")[-1], "summary": "summary"}
 
-    async def _generate_overview(self, dir_uri, file_summaries, children_abstracts):
+    async def _generate_overview(self, dir_uri, file_summaries, children_abstracts, **kwargs):
         return "overview"
 
     def _normalize_overview_generation(self, overview):
@@ -73,15 +73,9 @@ class _FakeProcessor:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "root_uri",
-    [
-        "viking://session/test-session",
-        "viking://user/user1/sessions/test-session",
-    ],
-)
-async def test_messages_jsonl_excluded_from_summary(monkeypatch, root_uri):
+async def test_messages_jsonl_excluded_from_summary(monkeypatch):
     """messages.jsonl should be skipped by _list_dir and never summarized."""
+    root_uri = "viking://user/user1/sessions/test-session"
     tree = {
         root_uri: [
             {"name": "messages.jsonl", "isDir": False},
@@ -109,15 +103,9 @@ async def test_messages_jsonl_excluded_from_summary(monkeypatch, root_uri):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "root_uri",
-    [
-        "viking://session/test-session",
-        "viking://user/user1/sessions/test-session",
-    ],
-)
-async def test_messages_jsonl_excluded_in_subdirectory(monkeypatch, root_uri):
+async def test_messages_jsonl_excluded_in_subdirectory(monkeypatch):
     """messages.jsonl in a subdirectory should also be skipped."""
+    root_uri = "viking://user/user1/sessions/test-session"
     tree = {
         root_uri: [
             {"name": "subdir", "isDir": True},

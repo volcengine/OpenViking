@@ -55,6 +55,113 @@ def _is_tool_result_success(result: Any) -> bool:
     return bool(text) and not text.startswith("Error:")
 
 
+def _compact_msg_chars(messages: list[dict]) -> int:
+    return sum(len(json.dumps(m, ensure_ascii=False, default=str)) for m in messages)
+
+
+def _compact_render_message(message: dict) -> str:
+    role = message.get("role")
+    content = message.get("content")
+    if isinstance(content, (list, dict)):
+        text_parts: list[str] = []
+
+        def _collect(value: Any) -> None:
+            if isinstance(value, str):
+                if value.strip():
+                    text_parts.append(value)
+            elif isinstance(value, list):
+                for item in value:
+                    _collect(item)
+            elif isinstance(value, dict):
+                for key in ("text", "content"):
+                    if key in value:
+                        _collect(value[key])
+
+        _collect(content)
+        content = "\n".join(text_parts)
+
+    body = str(content or "").strip()
+    if role == "assistant":
+        lines: list[str] = []
+        if body:
+            lines.append(body)
+        for tool_call in message.get("tool_calls") or []:
+            function = tool_call.get("function") or {}
+            name = function.get("name") or "?"
+            args = str(function.get("arguments") or "")
+            lines.append(f"[tool_call] {name}({args})")
+        if message.get("reasoning_content"):
+            lines.append(f"[reasoning] {str(message.get('reasoning_content'))[:2_000]}")
+        body = "\n".join(lines) or "(assistant)"
+        label = "assistant"
+    elif role == "tool":
+        label = f"tool result: {message.get('name') or message.get('tool_name') or '?'}"
+    else:
+        label = str(role or "message")
+    if len(body) > 6_000:
+        body = body[:6_000] + "\n...<truncated>"
+    return f"[{label}]\n{body}"
+
+
+def _compact_split_into_blocks(messages: list[dict]) -> list[list[dict]]:
+    blocks: list[list[dict]] = []
+    i, n = 0, len(messages)
+    while i < n:
+        message = messages[i]
+        if message.get("role") == "assistant" and message.get("tool_calls"):
+            j = i + 1
+            while j < n and messages[j].get("role") == "tool":
+                j += 1
+            blocks.append(messages[i:j])
+            i = j
+        else:
+            blocks.append([messages[i]])
+            i += 1
+    return blocks
+
+
+def _compact_render_transcript(messages: list[dict]) -> str:
+    text = "\n\n".join(_compact_render_message(m) for m in messages)
+    if len(text) > 256_000:
+        text = "[... older transcript omitted ...]\n\n" + text[-256_000:]
+    return text
+
+
+def _compact_split_chunks(text: str) -> list[str]:
+    if len(text) <= 32_000:
+        return [text]
+    return [text[i : i + 32_000] for i in range(0, len(text), 32_000)]
+
+
+def _compact_strip_note_header(content: str) -> str:
+    text = str(content or "").strip()
+    if text.startswith("[Context compaction]"):
+        text = text[len("[Context compaction]"):].strip()
+    if text.startswith("Findings so far:"):
+        text = text[len("Findings so far:"):].strip()
+    return text.strip()
+
+
+def _compact_build_note(previous_summary: str, new_summary: str) -> str:
+    previous = (previous_summary or "").strip()
+    new = (new_summary or "").strip()
+    if len(previous) > 24_000:
+        previous = previous[:24_000] + "\n...<older summary trimmed>"
+    if len(new) > 24_000:
+        new = new[:24_000] + "\n...<summary trimmed>"
+    parts = ["[Context compaction]"]
+    if previous:
+        parts.append(previous)
+    if new:
+        parts.append(f"## Progress since last compaction\n{new}" if previous else new)
+    if not previous and not new:
+        parts.append(
+            "Earlier turns were compacted to fit the context window; earlier tool "
+            "results are no longer quoted verbatim."
+        )
+    return "\n\n".join(parts)
+
+
 @dataclass(slots=True)
 class _PlainTextContext:
     """Context passed to an `on_plain_text` callback when the model emits plain text."""
@@ -91,11 +198,48 @@ class _PlainTextFinal:
 class AgentIterationLimitExceeded(RuntimeError):
     """A structured task used every available AgentLoop iteration without submitting."""
 
-    def __init__(self, max_iterations: int):
+    def __init__(self, max_iterations: int, *, usage: dict[str, Any] | None = None):
         self.max_iterations = max_iterations
+        self.usage = usage or {}
         super().__init__(
             f"Agent reached its {max_iterations}-iteration limit without submitting a valid bundle"
         )
+
+
+_BUDGET_REMINDER_CONSEQUENCE = (
+    "若在轮次耗尽前未成功调用 submit_wiki_bundle，系统会把工作区所有文件"
+    "（含中间临时文件）原样写入目标目录，且不经校验。"
+)
+
+
+def render_budget_reminder(
+    remaining: int,
+    thresholds: tuple[int, int, int] = (15, 8, 3),
+) -> str | None:
+    """Render the per-iteration budget countdown reminder for a structured task.
+
+    ``thresholds`` is a descending ``(heads_up, warn, critical)`` triple. A short,
+    action-oriented reminder is returned only once ``remaining`` has crossed the
+    corresponding threshold; otherwise ``None``. The consequence sentence keeps the
+    reminder tied to the real salvage failure mode instead of a vague deadline.
+    """
+    heads_up, warn, critical = thresholds
+    remaining = max(0, remaining)
+    if remaining <= critical:
+        action = f"还剩 {remaining} 轮。立即提交当前最好结果，禁止再开启新的探索/读取。"
+    elif remaining <= warn:
+        action = (
+            f"还剩 {remaining} 轮。必须开始提交：把当前最好结果通过 submit_wiki_bundle "
+            "提交；不足的部分明确记为“未覆盖/待确认”，不要追求完美。"
+        )
+    elif remaining <= heads_up:
+        action = (
+            f"还剩 {remaining} 轮。请停止对已读文件的全量重扫，开始把已有发现收敛成最终产物，"
+            "并准备调用 submit_wiki_bundle。"
+        )
+    else:
+        return None
+    return f"{action}\n{_BUDGET_REMINDER_CONSEQUENCE}"
 
 
 class AgentLoop:
@@ -723,9 +867,16 @@ class AgentLoop:
                 context_payload,
                 provider_name=provider_name,
             )
+            unsynced_messages = get_unsynced_messages(session)
+            if not ov_history and len(unsynced_messages) < len(session.messages):
+                logger.warning(
+                    f"OpenViking returned no session context for {session_id}; "
+                    "falling back to complete local session history."
+                )
+                unsynced_messages = session.messages
             local_tail = self._format_history_messages(
                 session,
-                get_unsynced_messages(session),
+                unsynced_messages,
                 provider_name=provider_name,
             )
             combined_history = ov_history + local_tail
@@ -920,6 +1071,192 @@ class AgentLoop:
         self._running = False
         logger.info("Agent loop stopping")
 
+    async def _compact_tool_loop(
+        self,
+        messages: list[dict],
+        session_key: SessionKey,
+        *,
+        budget_chars: int | None = None,
+    ) -> list[dict]:
+        """Compress older tool turns to fit the context window.
+
+        Keeps system messages and the original task, folds older turns into a
+        structured summary note (the previous note is reused verbatim, only the
+        region since it is summarized), and retains the most recent complete turns.
+        Cuts only between complete turns and stays within ``budget_chars``; best
+        effort on summarization failure.
+        """
+        budget = budget_chars or 240_000
+
+        i = 0
+        while i < len(messages) and messages[i].get("role") == "system":
+            i += 1
+        system_msgs = messages[:i]
+        task_msg = messages[i] if i < len(messages) and messages[i].get("role") == "user" else None
+        rest = messages[i + 1 :] if task_msg is not None else messages[i:]
+
+        blocks = _compact_split_into_blocks(rest)
+        if len(blocks) <= 3:
+            return messages
+        to_compact_blocks = blocks[:-3]
+        window_blocks = blocks[-3:]
+
+        flat = [m for block in to_compact_blocks for m in block]
+        previous_summary = ""
+        marker_idx: int | None = None
+        for idx, message in enumerate(flat):
+            content = str(message.get("content") or "")
+            if content.strip().startswith("[Context compaction]"):
+                marker_idx = idx
+                previous_summary = _compact_strip_note_header(content)
+        to_summarize = flat[marker_idx + 1 :] if marker_idx is not None else flat
+
+        new_summary = ""
+        if to_summarize:
+            system_text = str(system_msgs[0].get("content") or "") if system_msgs else ""
+            task_text = str(task_msg.get("content") or "") if task_msg else ""
+            chunks = _compact_split_chunks(_compact_render_transcript(to_summarize))
+            try:
+                if len(chunks) == 1:
+                    new_summary = await self._summarize_compact_chunk(
+                        session_key, chunks[0], system_text=system_text, task_text=task_text
+                    )
+                else:
+                    summaries = await asyncio.gather(
+                        *(
+                            self._summarize_compact_chunk(
+                                session_key,
+                                chunk,
+                                system_text=system_text if idx == 0 else "",
+                                task_text=task_text,
+                            )
+                            for idx, chunk in enumerate(chunks)
+                        )
+                    )
+                    new_summary = await self._merge_compact_summaries(
+                        session_key,
+                        [s for s in summaries if s],
+                        system_text=system_text,
+                        task_text=task_text,
+                    )
+            except Exception as exc:
+                logger.warning("Tool-loop compaction summarization failed: {}", exc)
+                new_summary = ""
+
+        note_msg = {"role": "user", "content": _compact_build_note(previous_summary, new_summary)}
+
+        fixed_chars = _compact_msg_chars(system_msgs) + _compact_msg_chars([note_msg])
+        if task_msg is not None:
+            fixed_chars += _compact_msg_chars([task_msg])
+        remaining = max(0, budget - fixed_chars)
+        keep_blocks: list[list[dict]] = []
+        kept_chars = 0
+        for block in reversed(window_blocks):
+            if block[0].get("role") == "tool":
+                continue
+            size = _compact_msg_chars(block)
+            if keep_blocks and kept_chars + size > remaining:
+                break
+            keep_blocks.append(block)
+            kept_chars += size
+        keep_blocks.reverse()
+
+        out: list[dict] = list(system_msgs)
+        if task_msg is not None:
+            out.append(task_msg)
+        out.append(note_msg)
+        for block in keep_blocks:
+            out.extend(block)
+        return out
+
+    async def _summarize_compact_chunk(
+        self,
+        session_key: SessionKey,
+        chunk_text: str,
+        *,
+        system_text: str = "",
+        task_text: str = "",
+    ) -> str:
+        user_content = f"Original task:\n{task_text[:20_000]}\n\nTranscript segment:\n{chunk_text}"
+        if system_text:
+            user_content = (
+                "Original system instructions (preserve any hard constraints verbatim):\n"
+                f"{system_text[:40_000]}\n\n{user_content}"
+            )
+        return await self._chat_compact_summary(
+            session_key,
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a context-compaction summarizer for a long-running tool-use "
+                        "agent. Produce a dense, factual summary that preserves everything "
+                        "needed to continue the task without re-reading the transcript, using "
+                        "exactly these headings:\n## Current goal\n## Key facts & progress\n"
+                        "## Decisions\n## Constraints\n## Next steps / open questions\n"
+                        "Be precise about names, paths, tools, and numbers. Do not invent anything."
+                    ),
+                },
+                {"role": "user", "content": user_content},
+            ],
+        )
+
+    async def _merge_compact_summaries(
+        self,
+        session_key: SessionKey,
+        segment_summaries: list[str],
+        *,
+        system_text: str = "",
+        task_text: str = "",
+    ) -> str:
+        if not segment_summaries:
+            return ""
+        joined = "\n\n".join(
+            f"## Segment {idx}\n{text}" for idx, text in enumerate(segment_summaries, start=1)
+        )
+        user_content = f"Original task:\n{task_text[:20_000]}\n\nSegment summaries:\n{joined}"
+        if system_text:
+            user_content = (
+                "Original system instructions (preserve any hard constraints verbatim):\n"
+                f"{system_text[:40_000]}\n\n{user_content}"
+            )
+        return await self._chat_compact_summary(
+            session_key,
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are the final assembly step of a context-compaction pipeline. "
+                        "Merge the segment summaries below into ONE note with exactly these "
+                        "headings:\n## Current goal\n## Key facts & progress\n## Decisions\n"
+                        "## Constraints\n## Next steps / open questions\n"
+                        "Preserve ALL distinct facts across segments; drop only duplicates. "
+                        "Keep names, paths, tools, numbers. Carry over hard constraints from "
+                        "the system instructions verbatim."
+                    ),
+                },
+                {"role": "user", "content": user_content},
+            ],
+        )
+
+    async def _chat_compact_summary(self, session_key: SessionKey, messages: list[dict]) -> str:
+        for attempt in range(1, 4):
+            try:
+                response = await self.provider.chat(
+                    messages=messages,
+                    tools=[],
+                    model=self.model,
+                    temperature=0.0,
+                    session_id=session_key.safe_name(),
+                )
+                summary = (response.content or "").strip()
+                if summary:
+                    return summary
+                logger.warning("Tool-loop compaction summary attempt {}/3 was empty", attempt)
+            except Exception as exc:
+                logger.warning("Tool-loop compaction summary attempt {}/3 failed: {}", attempt, exc)
+        return ""
+
     async def _run_agent_loop(
         self,
         messages: list[dict],
@@ -940,6 +1277,8 @@ class AgentLoop:
         openviking_tool_names: list[str] | set[str] | None = None,
         allow_final_fallback: bool = True,
         inject_write_experience: bool = True,
+        context_compact_budget: int | None = None,
+        status_note_provider: Any | None = None,
         skill_runtime: Any | None = None,
     ) -> tuple[str | None, str | None, list[dict], dict[str, int], int]:
         """
@@ -977,6 +1316,11 @@ class AgentLoop:
                 tool-use iteration limit is reached.
             inject_write_experience: Whether to retrieve and inject relevant agent experience
                 before executing configured write tools.
+            status_note_provider: Optional async callback ``(iteration) -> str | None``.
+                When set, its result is appended to the model-facing messages right before
+                every model call. Compile uses this to inject the per-iteration budget
+                countdown and read/unread summary; ordinary chat leaves it ``None`` so its
+                behavior is unchanged.
 
         Returns:
             tuple of (final_content, final_reasoning_content, tools_used, token_usage, iteration)
@@ -993,6 +1337,7 @@ class AgentLoop:
             "prompt_tokens": 0,
             "completion_tokens": 0,
             "total_tokens": 0,
+            "cache_read_input_tokens": 0,
         }
         write_exp_injected = False
         stop_tools = set(stop_tool_names or [])
@@ -1004,9 +1349,20 @@ class AgentLoop:
             token_usage["prompt_tokens"] += cur_token.get("prompt_tokens", 0)
             token_usage["completion_tokens"] += cur_token.get("completion_tokens", 0)
             token_usage["total_tokens"] += cur_token.get("total_tokens", 0)
+            token_usage["cache_read_input_tokens"] += cur_token.get("cache_read_input_tokens", 0)
 
         while iteration < self.max_iterations:
             iteration += 1
+
+            if context_compact_budget is not None:
+                current_chars = sum(
+                    len(json.dumps(message, ensure_ascii=False, default=str))
+                    for message in messages
+                )
+                if current_chars > context_compact_budget:
+                    messages = await self._compact_tool_loop(
+                        messages, session_key, budget_chars=context_compact_budget
+                    )
 
             if publish_events:
                 await self.bus.publish_outbound(
@@ -1016,6 +1372,11 @@ class AgentLoop:
                         event_type=OutboundEventType.ITERATION,
                     )
                 )
+
+            if status_note_provider is not None:
+                note = await status_note_provider(iteration)
+                if note:
+                    messages.append({"role": "user", "content": note})
 
             tool_definitions = active_tools.get_definitions(
                 ov_tools_enable=ov_tools_enable,
@@ -1340,6 +1701,19 @@ class AgentLoop:
                         final_reasoning_content = response.reasoning_content
                         break
                     # Unknown / None result: fall through to default final-answer handling.
+                if not text and on_plain_text is not None:
+                    # Structured tasks treat an empty model response as a
+                    # transient hiccup, not a final answer: nudge and continue.
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Your response was empty. Continue the task and call the "
+                                "designated final submission tool with the complete bundle."
+                            ),
+                        }
+                    )
+                    continue
                 final_content = response.content
                 final_reasoning_content = response.reasoning_content
                 if routed:
@@ -1408,8 +1782,37 @@ class AgentLoop:
         openviking_tool_names: list[str] | set[str],
         stop_tool_names: list[str],
         openviking_connection: dict[str, Any] | None,
+        context_compact_budget: int | None = None,
+        budget_reminder_thresholds: tuple[int, int, int] | None = None,
+        readlist_provider: Any | None = None,
     ) -> tuple[Any, list[dict], dict[str, int], int]:
-        """Run a tool-terminated structured task through the existing agent loop."""
+        """Run a tool-terminated structured task through the existing agent loop.
+
+        ``budget_reminder_thresholds`` and ``readlist_provider`` enable the two Compile
+        efficiency optimizations (iteration budget countdown and the read/unread list).
+        Both default to ``None`` so this method's behavior is unchanged for callers that
+        do not opt in.
+        """
+
+        max_iterations = getattr(self, "max_iterations", 0)
+
+        async def status_note_provider(iteration: int) -> str | None:
+            sections: list[str] = []
+            if budget_reminder_thresholds:
+                reminder = render_budget_reminder(
+                    max(0, max_iterations - iteration), budget_reminder_thresholds
+                )
+                if reminder:
+                    sections.append(reminder)
+            if readlist_provider is not None:
+                try:
+                    summary = await readlist_provider.summary()
+                except Exception as exc:
+                    logger.warning("[READLIST]: summary failed: {}", exc)
+                    summary = None
+                if summary:
+                    sections.append(summary)
+            return "\n\n".join(sections) if sections else None
 
         async def require_submission(context: _PlainTextContext) -> _PlainTextDelivered:
             messages = self.context.add_assistant_message(context.messages, context.text, [])
@@ -1418,7 +1821,7 @@ class AgentLoop:
                     "role": "user",
                     "content": (
                         "Your response was not submitted. Continue the task and call "
-                        "submit_wiki_bundle with the complete final bundle."
+                        "submit_wiki_bundle once the complete final output is ready."
                     ),
                 }
             )
@@ -1440,12 +1843,14 @@ class AgentLoop:
             openviking_tool_names=openviking_tool_names,
             allow_final_fallback=False,
             inject_write_experience=False,
+            context_compact_budget=context_compact_budget,
+            status_note_provider=status_note_provider,
         )
         submit_tool = tool_registry.get("submit_wiki_bundle")
         bundle = getattr(submit_tool, "bundle", None)
         if bundle is None:
             if iteration >= self.max_iterations:
-                raise AgentIterationLimitExceeded(self.max_iterations)
+                raise AgentIterationLimitExceeded(self.max_iterations, usage=token_usage)
             raise ValueError("AGENT_OUTPUT_INVALID: Agent did not submit a valid Wiki bundle")
         return bundle, tools_used, token_usage, iteration
 

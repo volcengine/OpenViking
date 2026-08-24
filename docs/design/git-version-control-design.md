@@ -169,7 +169,7 @@ sequenceDiagram
 | 向量缓存目录        | 任意非叶段等于 `embedding_cache`                               | embedding 缓存为派生数据                                               |
 | 向量索引文件        | 叶子文件以 `.faiss` 或 `.index` 结尾                            | 纯计算产物,体积大且可重建                                                   |
 
-L0/L1 派生文件(`.abstract.md`、`.overview.md`、`.relations.json`)未命中任一剪枝规则,**会**纳入主线 commit。restore 时随源文件一起回滚,无需重新生成;Python 层在 `restore` 完成后按 `(written_paths, deleted_paths)` 精确触发 L0/L1/DETAIL 向量异步重建(`.relations.json` 不触发向量任务)。
+L0/L1 派生文件(`.abstract.md`、`.overview.md`)未命中任一剪枝规则,**会**纳入主线 commit。restore 时随源文件一起回滚,无需重新生成;Python 层在 `restore` 完成后按 `(written_paths, deleted_paths)` 精确触发 L0/L1/DETAIL 向量异步重建。
 
 此外,版本管理支持账号级 `.ovgitignore` 控制文件,物理路径为 `/local/{account_id}/.ovgitignore`,Git tree path 为 `.ovgitignore`。该文件使用账号根相对的 glob 子集规则,在 `commit` 枚举当前 VFS 文件和扫描上一版 tree 时共同生效;匹配的文件不会进入新的 snapshot commit,即使它们曾存在于历史 commit 中。`.ovgitignore` 文件自身始终进入版本管理,规则无法把它排除。
 
@@ -707,7 +707,7 @@ pub async fn restore(&self, req: RestoreRequest) -> Result<RestoreResponse> {
 >
 > - **空目录清理(步骤 6b)**：删除完文件后会沿祖先链 rmdir 至 `project_dir` 或第一个非空目录,避免 VFS 残留空目录。
 > - **幂等删除**：`vfs.rm` 返回 NotFound 视为成功,使 restore 可以在已被并发清理的路径上继续推进。
-> - **written\_paths / deleted\_paths**：`Applied` 响应除了 `written/deleted` 计数外,还返回**全量受影响路径(已加 project\_dir 前缀)**;Python 层按 marker / 源文件 / `.relations.json` 分类,精确触发 L0/L1/DETAIL 向量更新,不再依赖广义的 `_trigger_vector_rebuild(paths)`。
+> - **written\_paths / deleted\_paths**：`Applied` 响应除了 `written/deleted` 计数外,还返回**全量受影响路径(已加 project\_dir 前缀)**;Python 层按 marker / 源文件分类,精确触发 L0/L1/DETAIL 向量更新,不再依赖广义的 `_trigger_vector_rebuild(paths)`。
 > - **没有 commit\_index 刷新**：对应 §8.1 的 Fast Path 1 未实现,restore 末尾也无须刷新 index。
 > - **回写并发度**：当前硬编码 `buffer_unordered(32)`，尚未提供配置项。
 >
@@ -1216,7 +1216,7 @@ current=commit_a]
 
 ### Python 侧
 
-- **VikingFS.commit / restore / show / log 已实现**(`openviking/storage/viking_fs.py`),`_uri_to_tree_path` / `_tree_path_to_uri` / `_classify_restore_path` / `_schedule_vector_rebuild` / `_run_vector_rebuild` 均已实现,精确按 marker / source-file / `.relations.json` 调度 `ReindexExecutor`。
+- **VikingFS.commit / restore / show / log 已实现**(`openviking/storage/viking_fs.py`),`_uri_to_tree_path` / `_tree_path_to_uri` / `_classify_restore_path` / `_schedule_vector_rebuild` / `_run_vector_rebuild` 均已实现,精确按 marker / source-file 调度 `ReindexExecutor`。
 - **VikingFS.\_trigger\_vector\_rebuild(account, paths)(早期设计)** 已被更精确的 `_schedule_vector_rebuild(written, deleted)` 替代,**不会**再实现旧 API。
 
 ***
@@ -1258,7 +1258,7 @@ current=commit_a]
 | CAS          | Compare-And-Swap,本文特指 ref 更新时"仅当当前值 = 期望值才写入"                                                    |
 | Root Tree    | commit 对象指向的最顶层 tree 对象,代表整个仓库快照                                                                 |
 | Tree Editor  | `gix_object::tree::Editor`,gitoxide 提供的内存中 tree 构建器,支持 upsert/remove/write                       |
-| 派生文件         | `.abstract.md` / `.overview.md` / `.relations.json`,由 OpenViking 模型异步生成的 L0/L1 摘要文件,已纳入 Git 版本管理 |
+| 派生文件         | `.abstract.md` / `.overview.md`,由 OpenViking 模型异步生成的 L0/L1 摘要文件,已纳入 Git 版本管理 |
 
 ## 20.2 参考资料
 

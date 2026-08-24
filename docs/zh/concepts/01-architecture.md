@@ -53,7 +53,7 @@ OpenViking 是为 AI Agent 设计的上下文数据库，将所有上下文（Me
 | 模块 | 职责 | 关键能力 |
 |------|------|---------|
 | **Client** | 统一入口 | 提供所有操作接口，委托给 Service 层 |
-| **Service** | 业务逻辑 | FSService、SearchService、SessionService、ResourceService、RelationService、PackService、DebugService |
+| **Service** | 业务逻辑 | FSService、SearchService、SessionService、ResourceService、PackService、DebugService |
 | **Retrieve** | 上下文检索 | 意图分析（IntentAnalyzer）、层级检索（HierarchicalRetriever）、Rerank 精排 |
 | **Session** | 会话管理 | 消息记录、使用追踪、会话压缩、记忆提交 |
 | **Parse** | 上下文提取 | 文档解析（PDF/MD/HTML）、树构建（TreeBuilder）、异步语义生成 |
@@ -70,7 +70,6 @@ Service 层将业务逻辑与传输层解耦，便于 HTTP Server 和 CLI 复用
 | **SearchService** | 语义搜索 | search, find |
 | **SessionService** | 会话管理 | session, sessions, commit, delete |
 | **ResourceService** | 资源导入 | add_resource, add_skill, wait_processed |
-| **RelationService** | 关联管理 | relations, link, unlink |
 | **PackService** | 导入导出、备份恢复 | export_ovpack, import_ovpack, backup_ovpack, restore_ovpack |
 | **DebugService** | 调试服务 | observer (ObserverService) |
 

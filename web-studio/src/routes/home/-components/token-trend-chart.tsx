@@ -112,7 +112,7 @@ export function TokenTrendChart({
               tick={{ fill: 'currentColor', fontSize: 12 }}
               tickFormatter={(value) => Number(value).toLocaleString()}
               tickLine={false}
-              width={64}
+              width="auto"
             />
             <Tooltip
               cursor={{ stroke: 'currentColor', strokeOpacity: 0.12 }}

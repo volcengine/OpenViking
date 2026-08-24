@@ -279,22 +279,14 @@ async def test_no_split_allows_directory_flattening(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "to_uri",
-    [
-        "viking://resources/0803_shendiao_01",
-        "viking://resources/0803_shendiao_01/",
-    ],
-)
 async def test_no_split_treats_explicit_to_as_directory_target(
     service: ResourceService,
     ctx: RequestContext,
-    to_uri: str,
 ):
     await service.add_resource(
         path="/test/神雕.md",
         ctx=ctx,
-        to=to_uri,
+        to="viking://resources/0803_shendiao_01",
         args={"parse_mode": "no_split"},
     )
 

@@ -4,6 +4,8 @@
 集成包。框架适配逻辑不再依赖 OpenViking 服务端实现，远程访问统一通过轻量的
 `openviking-sdk` 完成。
 
+> **OpenViking Server 要求**：文档中的示例使用 `viking://~` Home 别名（例如 `viking://~/memories`），Server 会将其展开为当前调用方自己的用户空间，因此需要一个支持 `viking://~` 的 Server。不带 uid 的 `viking://user/memories` 旧写法会被新版 Server 拒绝；要访问其他用户请显式传入 `viking://user/<uid>/...`。
+
 ## 安装
 
 LangChain Retriever、Tools、Message History 和 Context Wrapper：
@@ -31,7 +33,7 @@ client = SyncHTTPClient(
 client.initialize()
 retriever = OpenVikingRetriever(
     client=client,
-    target_uri="viking://user/memories",
+    target_uri="viking://~/memories",
 )
 
 try:

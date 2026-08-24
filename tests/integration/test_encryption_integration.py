@@ -261,9 +261,6 @@ class TestVikingFSEncryptionWithAccounts:
                     if entry["isDir"]:
                         await _check_recursive(entry_uri)
                     else:
-                        # Skip .relations.json files
-                        if ".relations.json" in entry.get("name", ""):
-                            continue
                         try:
                             self._assert_uri_encrypted(svc, ctx, test_data_dir, entry_uri)
                             if print_paths:
@@ -529,7 +526,7 @@ This is a test skill for verifying encryption functionality.
         """
         Complete encryption workflow test, implemented according to user plan:
         - Prerequisites: Create random account, user
-        - Execute tests: resource, skill, memory, session, relation operations
+        - Execute tests: resource, skill, memory, and session operations
         - Post operations: Cleanup
         """
         data = openviking_service_with_encryption
@@ -949,57 +946,31 @@ This is a test skill for verifying encryption functionality.
         assert test_message in reloaded_session2.messages[0].content
         print("  ✓ read operation returns unencrypted message")
 
-        # ========== 5. Relation operations ==========
+        # ========== 5. Additional resource operations ==========
         print("\n" + "=" * 80)
-        print("Execute tests: 5. Relation operations")
+        print("Execute tests: 5. Additional resource operations")
         print("=" * 80)
 
         print("[5.1] Create two resource files directly using VikingFS")
-        # Create relation_test directory
-        relation_test_dir_uri = "viking://resources/relation_test"
-        await svc.viking_fs.mkdir(relation_test_dir_uri, ctx=ctx)
+        # Create additional_resource_test directory
+        resource_test_dir_uri = "viking://resources/additional_resource_test"
+        await svc.viking_fs.mkdir(resource_test_dir_uri, ctx=ctx)
 
         # Create resource A directory and file
-        dir_a_uri = "viking://resources/relation_test/resource_a"
+        dir_a_uri = "viking://resources/additional_resource_test/resource_a"
         await svc.viking_fs.mkdir(dir_a_uri, ctx=ctx)
-        resource_a_content = "This is resource A content for testing relation functionality."
+        resource_a_content = "This is resource A content for testing encrypted resource writes."
         resource_a_file_uri = f"{dir_a_uri}/resource_a.txt"
         await svc.viking_fs.write_file(resource_a_file_uri, resource_a_content, ctx=ctx)
         print(f"  ✓ Resource A created: {dir_a_uri}")
 
         # Create resource B directory and file
-        dir_b_uri = "viking://resources/relation_test/resource_b"
+        dir_b_uri = "viking://resources/additional_resource_test/resource_b"
         await svc.viking_fs.mkdir(dir_b_uri, ctx=ctx)
-        resource_b_content = "This is resource B content for testing relation functionality."
+        resource_b_content = "This is resource B content for testing encrypted resource writes."
         resource_b_file_uri = f"{dir_b_uri}/resource_b.txt"
         await svc.viking_fs.write_file(resource_b_file_uri, resource_b_content, ctx=ctx)
         print(f"  ✓ Resource B created: {dir_b_uri}")
-
-        # 5.2 Create relation and check relation.json encryption
-        print("[5.2] Create relation A -> B")
-        test_reason = "Resource A and resource B are related test resources"
-        await svc.relations.link(from_uri=dir_a_uri, uris=dir_b_uri, ctx=ctx, reason=test_reason)
-        print(f"  ✓ Relation created: {dir_a_uri} -> {dir_b_uri}")
-
-        # Verify relation created successfully
-        relations = await svc.relations.relations(dir_a_uri, ctx=ctx)
-        assert len(relations) == 1
-        assert relations[0]["uri"] == dir_b_uri
-        print("  ✓ Relation created successfully")
-
-        # Check relation file encryption
-        print("[5.2] Check relation.json file encryption")
-        try:
-            relation_file_uri = f"{dir_a_uri}/.relations.json"
-            raw_content = self._backend_file_bytes(
-                svc, ctx, data["test_data_dir"], relation_file_uri
-            )
-            assert raw_content.startswith(b"OVE1"), (
-                f"relation.json not encrypted: {relation_file_uri}"
-            )
-            print(f"  ✓ [ENCRYPTED] {relation_file_uri}")
-        except Exception as e:
-            print(f"  [WARNING] Error checking relation.json: {e}")
 
         # ========== Post operations ==========
         print("\n" + "=" * 80)
@@ -1264,8 +1235,6 @@ This is a file in subdir2.
                     if entry["isDir"]:
                         await check_encrypted_files(entry_uri)
                     else:
-                        if ".relations.json" in entry_name:
-                            continue
                         try:
                             raw_content = self._backend_file_bytes(
                                 svc, ctx, data["test_data_dir"], entry_uri

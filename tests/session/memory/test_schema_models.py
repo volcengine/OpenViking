@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for schema_models.py - dynamic Pydantic model generation."""
 
+import json
 import tempfile
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from openviking.session.memory.schema_model_generator import (
     SchemaModelGenerator,
     to_pascal_case,
 )
+from openviking.session.memory.utils.json_parser import parse_json_with_stability
 
 
 class TestToPascalCase:
@@ -270,6 +272,74 @@ class TestSchemaModelGenerator:
         assert schema["properties"]["page_id"]["description"] == (
             "Temporary page_id for identifying the target memory item."
         )
+
+    def test_existing_patch_can_omit_immutable_fields_but_new_item_cannot(
+        self, real_registry
+    ):
+        entities = real_registry.get("entities")
+        model = SchemaModelGenerator([entities]).create_flat_data_model(entities)
+
+        existing = model.model_validate(
+            {
+                "page_id": 2,
+                "content": {"blocks": [{"search": "old", "replace": "new"}]},
+            }
+        )
+
+        assert existing.category is None
+        assert existing.name is None
+        schema = model.model_json_schema()
+        assert schema["required"] == ["page_id"]
+        assert schema["allOf"][0]["then"]["required"] == ["category", "name"]
+
+        for page_id in (100, "100"):
+            with pytest.raises(ValueError, match="category, name"):
+                model.model_validate({"page_id": page_id, "content": "new entity"})
+
+        created = model.model_validate(
+            {
+                "page_id": 100,
+                "category": "activity",
+                "name": "horse riding",
+                "content": "new entity",
+            }
+        )
+        assert created.category == "activity"
+        assert created.name == "horse riding"
+
+    def test_parser_keeps_existing_patch_without_immutable_fields_alongside_delete(
+        self, real_registry
+    ):
+        generator = SchemaModelGenerator(
+            [real_registry.get("preferences"), real_registry.get("entities")]
+        )
+        operations_model = generator.create_structured_operations_model()
+        content = json.dumps(
+            {
+                "entities": [
+                    {
+                        "page_id": 2,
+                        "content": {
+                            "blocks": [{"search": "一周学习计划", "replace": ""}]
+                        },
+                    }
+                ],
+                "delete_ids": [
+                    {"delete_page_id": 1, "replacement_page_id": None}
+                ],
+            }
+        )
+
+        parsed, error = parse_json_with_stability(
+            content,
+            model_class=operations_model,
+            expected_fields=list(operations_model.model_fields),
+        )
+
+        assert error is None
+        assert len(parsed.entities) == 1
+        assert parsed.entities[0].page_id == 2
+        assert len(parsed.delete_ids) == 1
 
     def test_links_field_is_not_emitted_when_links_disabled(self, registry_with_sample):
         from unittest.mock import patch

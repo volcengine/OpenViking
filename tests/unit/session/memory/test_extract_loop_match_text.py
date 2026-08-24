@@ -31,7 +31,7 @@ class TestResolveOperations:
             directory="viking://user/{{ user_space }}/memories/entities",
             filename_template="{{ name }}.md",
             fields=[
-                MemoryField(name="name", field_type=FieldType.STRING, merge_op=MergeOp.REPLACE),
+                MemoryField(name="name", field_type=FieldType.STRING, merge_op=MergeOp.IMMUTABLE),
                 MemoryField(name="content", field_type=FieldType.STRING, merge_op=MergeOp.PATCH),
             ],
         )
@@ -64,7 +64,7 @@ class TestResolveOperations:
 
         operations, _ = await loop.resolve_operations(
             AttrDict(
-                entities=[{"name": "WrongName", "content": "new content", "page_id": 7}],
+                entities=[{"content": "new content", "page_id": 7}],
                 delete_uris=[],
             )
         )

@@ -175,7 +175,7 @@ OpenViking URI                    本地路径
 -------------------               ------------------
 viking://resources/foo     ->    {mount_point}/resources/foo
 viking://session/bar       ->    {mount_point}/session/bar
-viking://user/baz          ->    {mount_point}/user/baz
+viking://user/<uid>/baz    ->    {mount_point}/user/<uid>/baz
 ```
 
 ## 测试

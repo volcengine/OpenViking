@@ -282,7 +282,6 @@ This group appears on memory-extraction flows such as `session.commit`.
 | `summary.memory.extract.stages.create_memory_ms` | Time spent creating new memories |
 | `summary.memory.extract.stages.merge_existing_ms` | Time spent merging into existing memories |
 | `summary.memory.extract.stages.delete_existing_ms` | Time spent deleting older memories |
-| `summary.memory.extract.stages.create_relations_ms` | Time spent creating used-URI relations |
 | `summary.memory.extract.stages.flush_semantic_ms` | Time spent flushing semantic queue work |
 
 ### `summary.search`
@@ -340,7 +339,10 @@ from openviking_sdk import AsyncHTTPClient
 client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
 
-result = await client.find("memory dedup", telemetry=True)
+result = await client.find(
+    query="memory dedup",
+    options={"telemetry": True},
+)
 print(result["telemetry"]["summary"]["operation"])
 print(result["telemetry"]["summary"]["duration_ms"])
 ```

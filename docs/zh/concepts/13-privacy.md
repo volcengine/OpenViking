@@ -93,7 +93,7 @@ fs.read(uri)
 
 当前支持通过后缀识别 Skill：`/skills/{name}/SKILL.md`，可兼容 user-scoped skill 路径，例如：
 
-- `viking://user/skills/{name}/SKILL.md`
+- `viking://~/skills/{name}/SKILL.md`
 - `viking://user/{user_id}/skills/{name}/SKILL.md`
 
 ### restore 规则

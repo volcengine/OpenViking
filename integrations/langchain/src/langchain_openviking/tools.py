@@ -754,7 +754,7 @@ def _grep_session_history(
     max_matches: int,
 ) -> dict[str, Any]:
     session = call_openviking(client, "get_session", session_id=session_id, auto_create=False)
-    session_uri = item_value(session, "uri", f"viking://user/sessions/{session_id}")
+    session_uri = item_value(session, "uri", f"viking://~/sessions/{session_id}")
     history_uri = f"{str(session_uri).rstrip('/')}/history"
     tokens = _archive_query_tokens(query)
     try:

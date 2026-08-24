@@ -13,6 +13,11 @@ VikingBot is the multi-channel AI agent built into OpenViking. You can use it di
 
 ## Installation
 
+> **OpenViking Server requirement**: VikingBot addresses the caller's own context space through the
+> `viking://~` home alias (for example `viking://~/memories/`), so it requires a server with
+> `viking://~` support. The uid-less shorthand `viking://user/memories` is no longer emitted and is
+> rejected by newer servers.
+
 ### Install from PyPI
 
 ```bash
@@ -314,7 +319,7 @@ Restart `vikingbot gateway` after changing the configuration.
 | `bot.gateway.port` | `18790` | Gateway listen port |
 | `bot.sandbox.backend` | `direct` | Execution backend |
 | `bot.sandbox.mode` | `shared` | Workspace isolation mode |
-| `bot.sandbox.backends.direct.allow_compile_exec` | `false` | Unsafe opt-in that adds `exec` to Compile when using the `direct` backend; ordinary Compile tasks still run without it |
+| `bot.sandbox.backends.direct.allow_compile_exec` | `true` | Set to `false` to disable |
 | `bot.heartbeat.enabled` | `true` | Whether to check `HEARTBEAT.md` periodically |
 | `bot.heartbeat.interval_seconds` | `600` | Heartbeat interval |
 | `bot.mode` | `normal` | One of `normal`, `readonly`, or `debug` |

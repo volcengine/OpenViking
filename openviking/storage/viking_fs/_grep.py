@@ -6,9 +6,8 @@ import asyncio
 import re
 import sys
 import time
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
-from openviking.core.namespace import canonicalize_uri
 from openviking.pyagfs.exceptions import AGFSNotSupportedError
 from openviking.server.identity import RequestContext
 from openviking.storage.expr import And, PathScope, RawDSL
@@ -18,11 +17,6 @@ from openviking_cli.utils.config.grep_config import GrepEngine
 
 def _pkg():
     return sys.modules[__package__]
-
-
-if TYPE_CHECKING:
-    from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
-    from openviking_cli.utils.config import GrepConfig, RerankConfig, RetrievalConfig
 
 
 class _GrepMixin:
@@ -63,10 +57,6 @@ class _GrepMixin:
         Returns:
             Dict with matches, count, match_count, files_scanned
         """
-        real_ctx = self._ctx_or_default(ctx)
-        uri = canonicalize_uri(uri, real_ctx)
-        if exclude_uri:
-            exclude_uri = canonicalize_uri(exclude_uri, real_ctx)
         self._ensure_access(uri, ctx)
         # Skip vector_store.count() — the count field is not needed for grep,
         # and avoiding it saves one VikingDB API call.

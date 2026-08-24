@@ -105,25 +105,13 @@ class Context:
         self.session_id = session_id
         self.user = user
         self.account_id = account_id or (user.account_id if user else "default")
-        owner_fields = owner_fields_for_uri(
-            uri,
-            user=user,
-            account_id=self.account_id,
-        )
+        owner_fields = owner_fields_for_uri(uri)
         self.owner_user_id = (
             owner_user_id if owner_user_id is not None else owner_fields["owner_user_id"]
         )
-        self.owner_space = owner_space or self._derive_owner_space(user)
+        self.owner_space = owner_space or owner_fields["owner_user_id"] or ""
         self.vector: Optional[List[float]] = None
         self.vectorize = Vectorize(abstract)
-
-    def _derive_owner_space(self, user: Optional[UserIdentifier]) -> str:
-        """Best-effort owner space derived from URI and user."""
-        if not user:
-            return ""
-        if self.uri.startswith("viking://user/") or self.uri.startswith("viking://session/"):
-            return user.user_id
-        return ""
 
     def _derive_category(self) -> str:
         """Derive category from URI using substring matching."""

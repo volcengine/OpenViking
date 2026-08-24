@@ -21,7 +21,7 @@ class AgentState(TypedDict, total=False):
 def build_app(client: InMemoryOpenVikingClient | None = None):
     client = client or InMemoryOpenVikingClient(
         {
-            "viking://user/memories/profile.md": (
+            "viking://~/memories/profile.md": (
                 "OpenViking middleware examples should answer with azure."
             )
         }
@@ -29,7 +29,7 @@ def build_app(client: InMemoryOpenVikingClient | None = None):
     session_id = "langgraph-middleware-demo"
     middleware = OpenVikingContextMiddleware(
         client=client,
-        target_uri="viking://user/memories",
+        target_uri="viking://~/memories",
         session_id_resolver=lambda _state, _runtime: session_id,
         include_active_messages=True,
     )

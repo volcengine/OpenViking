@@ -13,6 +13,7 @@ from openviking.session.memory.dataclass import (
     MemoryField,
 )
 from openviking.session.memory.merge_op import (
+    DeleteBlock,
     ImmutableOp,
     MergeOp,
     MergeOpFactory,
@@ -125,12 +126,19 @@ class TestPatchOp:
     async def test_apply_dict_patch_propagates_patch_parse_error(self):
         """Patch errors raised after dict conversion must reach the caller."""
         op = PatchOp(FieldType.STRING)
-        patch = {
-            "blocks": [{"search": "status: pending", "replace": "status: done"}]
-        }
+        patch = {"blocks": [{"search": "status: pending", "replace": "status: done"}]}
 
         with pytest.raises(PatchParseError, match="matched 2 locations"):
             await op.apply("status: pending\nstatus: pending", patch)
+
+    @pytest.mark.asyncio
+    async def test_apply_dict_delete_patch(self):
+        """Dict-form DELETE blocks should remove complete lines."""
+        op = PatchOp(FieldType.STRING)
+        patch = {"blocks": [{"delete": "line 2\nline 3"}]}
+
+        assert await op.apply("line 1\nline 2\nline 3\nline 4", patch) == "line 1\nline 4"
+
 
 class TestSumOp:
     """Tests for SumOp."""
@@ -285,6 +293,29 @@ class TestSearchReplaceBlock:
         assert description is not None
         assert "line_number<TAB>" in description
         assert "Never include" in description
+        assert "Use a DELETE block for complete-line deletion" in description
+
+
+class TestDeleteBlock:
+    """Tests for DeleteBlock."""
+
+    def test_create_basic(self):
+        block = DeleteBlock(delete="line 2\nline 3")
+
+        assert block.delete == "line 2\nline 3"
+        assert block.search == "line 2\nline 3"
+        assert block.replace == ""
+
+    def test_delete_description_requires_complete_contiguous_lines(self):
+        description = DeleteBlock.model_fields["delete"].description
+
+        assert description is not None
+        assert "complete, contiguous lines" in description
+        assert "unique" in description
+        assert "line_number<TAB>" in description
+        assert "other content must remain" in description
+        assert "delete_ids deletes the whole item" in description
+        assert "non-contiguous" in description
 
 
 class TestStrPatch:
@@ -301,6 +332,34 @@ class TestStrPatch:
         block2 = SearchReplaceBlock(search="c", replace="d")
         patch = StrPatch(blocks=[block1, block2])
         assert len(patch.blocks) == 2
+
+    def test_create_with_mixed_blocks(self):
+        patch = StrPatch(
+            blocks=[
+                SearchReplaceBlock(search="a", replace="A"),
+                DeleteBlock(delete="b"),
+            ]
+        )
+
+        assert isinstance(patch.blocks[0], SearchReplaceBlock)
+        assert isinstance(patch.blocks[1], DeleteBlock)
+
+    def test_parse_delete_block_from_json_shape(self):
+        patch = StrPatch.model_validate({"blocks": [{"delete": "line 2"}]})
+
+        assert patch.blocks == [DeleteBlock(delete="line 2")]
+
+    def test_json_schema_exposes_delete_block(self):
+        schema = StrPatch.model_json_schema()
+
+        assert schema["$defs"]["DeleteBlock"]["required"] == ["delete"]
+        block_refs = {
+            option["$ref"] for option in schema["properties"]["blocks"]["items"]["anyOf"]
+        }
+        assert block_refs == {
+            "#/$defs/SearchReplaceBlock",
+            "#/$defs/DeleteBlock",
+        }
 
 
 # ============================================================================
@@ -325,6 +384,34 @@ class TestApplyStrPatch:
         result = apply_str_patch(original, patch)
         # Directly test apply_str_patch
         assert result == "hello there"
+
+    @pytest.mark.parametrize(
+        ("original", "delete", "expected"),
+        [
+            ("line 1\nline 2\nline 3", "line 2", "line 1\nline 3"),
+            ("line 1\nline 2\nline 3\nline 4", "line 2\nline 3", "line 1\nline 4"),
+            ("line 1\nline 2\nline 3", "line 2\nline 3", "line 1"),
+            ("line 1\nline 2", "line 1", "line 2"),
+            ("line 1", "line 1", ""),
+            ("line 1\r\nline 2\r\nline 3", "line 2", "line 1\r\nline 3"),
+        ],
+    )
+    def test_delete_complete_lines(self, original, delete, expected):
+        patch = StrPatch(blocks=[DeleteBlock(delete=delete)])
+
+        assert apply_str_patch(original, patch) == expected
+
+    def test_delete_rejects_partial_line(self):
+        patch = StrPatch(blocks=[DeleteBlock(delete="world")])
+
+        with pytest.raises(PatchParseError, match="complete lines"):
+            apply_str_patch("hello world", patch)
+
+    def test_duplicate_delete_is_rejected(self):
+        patch = StrPatch(blocks=[DeleteBlock(delete="duplicate")])
+
+        with pytest.raises(PatchParseError, match="matched 2 locations"):
+            apply_str_patch("duplicate\nduplicate", patch)
 
     def test_duplicate_search_is_rejected(self):
         """Ambiguous SEARCH content must fail instead of replacing globally."""

@@ -46,7 +46,14 @@ _OPENVIKING_SEARCH_SIMPLE_ROW_RE = re.compile(
     r"^\s*\d+\s+(?:memory|resource|skill)\s+(viking://\S+)\s*$"
 )
 _LIST_FILE_RE = re.compile(r"^\s*\[file\]\s+(.+?)\s*$")
+# Historical transcripts recorded the removed uid-less shorthand; newer ones use
+# the viking://~ home alias. Both are canonicalized to the caller's user root.
 _USER_MEMORY_SHORTHAND_PREFIX = "viking://user/memories/"
+_USER_MEMORY_HOME_ALIAS_PREFIX = "viking://~/memories/"
+_USER_MEMORY_RELATIVE_PREFIXES = (
+    _USER_MEMORY_SHORTHAND_PREFIX,
+    _USER_MEMORY_HOME_ALIAS_PREFIX,
+)
 
 
 class UsageExtractor(Protocol):
@@ -148,9 +155,10 @@ def _unique_uris(uris: Iterable[str], context: UsageContext) -> list[str]:
 
 def _canonicalize_usage_uri(uri: str, context: UsageContext) -> str:
     normalized = uri.strip()
-    if normalized.startswith(_USER_MEMORY_SHORTHAND_PREFIX):
-        relative = normalized.removeprefix(_USER_MEMORY_SHORTHAND_PREFIX)
-        return f"viking://user/{context.user_id}/memories/{relative}"
+    for prefix in _USER_MEMORY_RELATIVE_PREFIXES:
+        if normalized.startswith(prefix):
+            relative = normalized.removeprefix(prefix)
+            return f"viking://user/{context.user_id}/memories/{relative}"
     return normalized
 
 
@@ -209,7 +217,8 @@ def _read_failed_in_text(uri: str, texts: Iterable[str], context: UsageContext) 
     aliases = [uri]
     canonical_prefix = f"viking://user/{context.user_id}/memories/"
     if uri.startswith(canonical_prefix):
-        aliases.append(f"{_USER_MEMORY_SHORTHAND_PREFIX}{uri.removeprefix(canonical_prefix)}")
+        relative = uri.removeprefix(canonical_prefix)
+        aliases.extend(f"{prefix}{relative}" for prefix in _USER_MEMORY_RELATIVE_PREFIXES)
     for text in texts:
         for alias in aliases:
             if f"(nothing found at {alias})" in text:

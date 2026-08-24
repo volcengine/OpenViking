@@ -19,6 +19,7 @@ from vikingbot.channels.openapi_models import ChatRequest, ChatResponse
 from vikingbot.compile.models import CompileAccepted
 from vikingbot.config.schema import BotChannelConfig, SessionKey
 from vikingbot.session.manager import Session
+from vikingbot.utils.session_paths import portable_session_name
 
 
 @pytest.fixture
@@ -52,9 +53,7 @@ class _AsyncBytesStream(httpx.AsyncByteStream):
 
 
 class TestOpenAPIAuth:
-    def test_compile_routes_use_existing_principal_resolver(
-        self, message_bus, temp_workspace
-    ):
+    def test_compile_routes_use_existing_principal_resolver(self, message_bus, temp_workspace):
         class FakeCompileService:
             def __init__(self):
                 self.scope = None
@@ -73,6 +72,13 @@ class TestOpenAPIAuth:
                     "created_at": "2026-07-20T00:00:00Z",
                     "updated_at": "2026-07-20T00:00:01Z",
                 }
+
+            async def cancel_task(self, task_id, *, principal_scope):
+                task = await self.get_task(task_id, principal_scope=principal_scope)
+                if task is not None:
+                    task["status"] = "cancelled"
+                    task["stage"] = "cancelled"
+                return task
 
         service = FakeCompileService()
         channel = OpenAPIChannel(
@@ -94,6 +100,10 @@ class TestOpenAPIAuth:
         assert created.json()["task_id"] == "cmp_test"
         assert client.get("/bot/v1/compile/cmp_test").status_code == 200
         assert client.get("/bot/v1/compile/cmp_other").status_code == 404
+        cancelled = client.post("/bot/v1/compile/cmp_test/cancel")
+        assert cancelled.status_code == 200
+        assert cancelled.json()["status"] == "cancelled"
+        assert client.post("/bot/v1/compile/cmp_other/cancel").status_code == 404
 
     def test_dev_compile_with_forwarded_connection_uses_same_principal_for_status(
         self, message_bus, temp_workspace, monkeypatch
@@ -208,6 +218,20 @@ class TestOpenAPIAuth:
 
         assert response.status_code == 409
         assert message_bus.inbound_size == 0
+
+    def test_scoped_session_id_stays_logical_while_storage_path_is_portable(
+        self, message_bus, temp_workspace
+    ):
+        channel = OpenAPIChannel(OpenAPIChannelConfig(), message_bus, temp_workspace)
+        scope = channel._principal_scope("standalone")
+        storage_key = channel._scoped_session_id(scope, "order:123")
+        session_key = SessionKey(type="cli", channel_id="default", chat_id=storage_key)
+
+        assert storage_key == f"{scope}:order:123"
+        assert session_key.safe_name() == f"cli__default__{scope}:order:123"
+        assert channel._session_manager._get_session_path(session_key).name == (
+            f"{portable_session_name(session_key)}.jsonl"
+        )
 
     def test_delete_rotation_survives_restart_and_session_id_reuse(
         self, message_bus, temp_workspace
@@ -1570,7 +1594,7 @@ class TestOpenAPIAuth:
 
         assert response.status_code == 200
 
-        session_path = temp_workspace / "sessions" / "cli__default__session-1.jsonl"
+        session_path = channel._session_manager._get_session_path(session_key)
         lines = session_path.read_text(encoding="utf-8").splitlines()
         metadata = json.loads(lines[0])
         messages = [json.loads(line) for line in lines[1:]]
