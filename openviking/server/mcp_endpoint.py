@@ -477,6 +477,17 @@ def _mcp_audio_content(data: bytes, mime_type: str) -> AudioContent:
     return AudioContent(type="audio", data=encoded, mimeType=mime_type)
 
 
+def _mcp_media_download_hint(uri: str) -> str:
+    """Return actionable fallbacks when media cannot be inlined."""
+    path = uri.split("#", 1)[0].split("?", 1)[0]
+    filename = PurePosixPath(path).name or "download"
+    encoded_uri = quote(uri, safe="")
+    return (
+        f'Use `ov get "{uri}" "./{filename}"` or GET '
+        f"`/api/v1/content/download?uri={encoded_uri}` to fetch the original file."
+    )
+
+
 @mcp.tool(structured_output=False)
 async def read(uris: str | list[str]) -> str | list[ContentBlock]:
     """Read one or more viking:// file URIs. Raster images and supported audio return native MCP content blocks. For directory listing, use the list tool instead."""
@@ -496,7 +507,7 @@ async def read(uris: str | list[str]) -> str | list[ContentBlock]:
                     resolved_uri,
                     None,
                     f"Cannot render {uri}: MCP has no standard VideoContent block. "
-                    "Use OpenViking get or the content download API to fetch the original file.",
+                    f"{_mcp_media_download_hint(uri)}",
                 )
             if not (_is_mcp_image_uri(resolved_uri) or _is_mcp_audio_uri(resolved_uri)):
                 return resolved_uri, None, None
@@ -507,8 +518,8 @@ async def read(uris: str | list[str]) -> str | list[ContentBlock]:
                 return (
                     resolved_uri,
                     None,
-                    f"Cannot render {uri}: file size is unavailable. Use OpenViking get "
-                    "or the content download API to fetch the original file.",
+                    f"Cannot render {uri}: file size is unavailable. "
+                    f"{_mcp_media_download_hint(uri)}",
                 )
             if stat.get("isDir"):
                 return resolved_uri, None, f"Cannot render {uri}: URI points to a directory."
@@ -524,14 +535,13 @@ async def read(uris: str | list[str]) -> str | list[ContentBlock]:
             if size > _MCP_MEDIA_MAX_BYTES:
                 error = (
                     f"Media file is too large to inline through MCP ({size} bytes; limit "
-                    f"{_MCP_MEDIA_MAX_BYTES} bytes). Use OpenViking get or the content "
-                    "download API to fetch the original file."
+                    f"{_MCP_MEDIA_MAX_BYTES} bytes). {_mcp_media_download_hint(uri)}"
                 )
             elif media_total + size > _MCP_MEDIA_MAX_BYTES:
                 error = (
                     f"Cannot inline {uri}: combined media size would exceed the MCP tool-call "
-                    f"limit of {_MCP_MEDIA_MAX_BYTES} bytes. Read fewer media files at once, "
-                    "or use OpenViking get or the content download API."
+                    f"limit of {_MCP_MEDIA_MAX_BYTES} bytes. Read fewer media files at once. "
+                    f"{_mcp_media_download_hint(uri)}"
                 )
             else:
                 media_total += size
@@ -562,8 +572,7 @@ async def read(uris: str | list[str]) -> str | list[ContentBlock]:
                     if mime_type is None:
                         return (
                             f"Cannot render {uri}: its bytes do not match a supported media "
-                            "format. Use OpenViking get or the content download API to "
-                            "fetch the original file."
+                            f"format. {_mcp_media_download_hint(uri)}"
                         )
                     if is_image:
                         return _mcp_image_content(data, mime_type)

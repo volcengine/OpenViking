@@ -705,7 +705,7 @@ async def test_read_video_returns_unsupported_hint(monkeypatch):
     result = await read("viking://resources/demo.mp4")
 
     assert "no standard VideoContent" in result
-    assert "OpenViking get" in result
+    assert 'ov get "viking://resources/demo.mp4" "./demo.mp4"' in result
     read_visible.assert_not_awaited()
 
 
@@ -746,6 +746,8 @@ async def test_read_rejects_images_too_large_for_common_clients(monkeypatch):
     result = await read("viking://resources/huge.png")
 
     assert "too large to inline" in result
+    assert 'ov get "viking://resources/huge.png" "./huge.png"' in result
+    assert "/api/v1/content/download?uri=viking%3A%2F%2Fresources%2Fhuge.png" in result
     read_file_bytes.assert_not_awaited()
 
 
@@ -771,6 +773,7 @@ async def test_read_rejects_media_batch_over_aggregate_limit_before_read(monkeyp
 
     assert isinstance(result, list)
     assert "combined media size" in result[3].text
+    assert f'ov get "{second_uri}" "./second.png"' in result[3].text
     read_file_bytes.assert_awaited_once_with(first_uri, ctx=DEFAULT_CTX)
 
 
