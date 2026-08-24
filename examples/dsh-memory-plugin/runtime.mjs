@@ -109,6 +109,10 @@ export class OpenVikingRuntime {
   async profileMessage(agent) {
     const state = await this.initialize(agent);
     if (!state.ready || !state.profileBlock || state.profileDelivered) return null;
+    if (hasStartupProfile(agent)) {
+      state.profileDelivered = true;
+      return null;
+    }
     state.profileDelivered = true;
     return pluginMessage(state.profileBlock, "instructions");
   }
@@ -313,4 +317,22 @@ function pluginMessage(content, form) {
       form,
     },
   });
+}
+
+function hasStartupProfile(agent) {
+  const session = agent.session;
+  const ownEvents = (session?.events || []).slice(session?.header?.seedLength ?? 0);
+  const inHistory = ownEvents.some(event => (
+    event?.type === "user/message" && isStartupProfile(event.data)
+  ));
+  if (inHistory) return true;
+  return [agent.inbox?.nextTurn, agent.inbox?.nextStep].some(messages => (
+    (messages || []).some(isStartupProfile)
+  ));
+}
+
+function isStartupProfile(message) {
+  return message?.source?.kind === "plugin"
+    && message.source.plugin === OPENVIKING_PLUGIN_SOURCE
+    && message.source.form === "instructions";
 }
