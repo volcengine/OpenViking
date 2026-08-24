@@ -15,16 +15,16 @@ OpenViking supports various resource types, categorized by functionality:
 | PDF | `.pdf` | Supports local parsing and MinerU API conversion |
 | Markdown | `.md`, `.markdown`, `.mdown`, `.mkd` | Native support, extracts structure and stores in segments |
 | HTML | `.html`, `.htm` | Cleans navigation/ads and extracts content, converts to Markdown |
-| Word | `.docx` | Extracts text, headings, tables and converts to Markdown |
+| Word | `.doc`, `.docx`, `.docm`, `.odt`, `.rtf` | Uses anydoc to extract text, headings, tables, and embedded images into Markdown |
 | Plain Text | `.txt`, `.text` | Direct import and processing |
-| EPUB | `.epub` | E-book format, supports ebooklib or manual extraction |
+| EPUB | `.epub` | Uses anydoc to convert e-book content and embedded images to Markdown |
 
 **Spreadsheets & Presentations**
 
 | Type | Extensions | Description |
 |------|------------|-------------|
-| Excel | `.xlsx`, `.xls`, `.xlsm` | Supports new and legacy Excel formats, converts to Markdown tables by worksheet |
-| PowerPoint | `.pptx` | Extracts content by slide, supports extracting notes |
+| Excel | `.xlsx`, `.xls`, `.xlsm`, `.xlsb`, `.ods`, `.csv` | Uses anydoc to convert worksheets to Markdown tables |
+| PowerPoint | `.pptx`, `.ppt`, `.pptm`, `.pps`, `.ppsx`, `.ppsm`, `.pot`, `.odp` | Uses anydoc to extract slide content and embedded images into Markdown |
 
 **Code**
 

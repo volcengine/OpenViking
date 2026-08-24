@@ -60,13 +60,41 @@ class ParserRegistry:
         self._register("html", HTMLParser(config=self._parser_configs.get("html")))
 
         # Register markitdown-inspired parsers (built-in)
-        self._register("word", WordParser(config=self._parser_configs.get("word")))
-        self._register("legacy_doc", LegacyDocParser(config=self._parser_configs.get("legacy_doc")))
         self._register(
-            "powerpoint", PowerPointParser(config=self._parser_configs.get("powerpoint"))
+            "word",
+            WordParser(
+                config=self._parser_configs.get("word"),
+                anydoc_config=self._parser_configs.get("anydoc"),
+            ),
         )
-        self._register("excel", ExcelParser(config=self._parser_configs.get("excel")))
-        self._register("epub", EPubParser(config=self._parser_configs.get("epub")))
+        self._register(
+            "legacy_doc",
+            LegacyDocParser(
+                config=self._parser_configs.get("legacy_doc"),
+                anydoc_config=self._parser_configs.get("anydoc"),
+            ),
+        )
+        self._register(
+            "powerpoint",
+            PowerPointParser(
+                config=self._parser_configs.get("powerpoint"),
+                anydoc_config=self._parser_configs.get("anydoc"),
+            ),
+        )
+        self._register(
+            "excel",
+            ExcelParser(
+                config=self._parser_configs.get("excel"),
+                anydoc_config=self._parser_configs.get("anydoc"),
+            ),
+        )
+        self._register(
+            "epub",
+            EPubParser(
+                config=self._parser_configs.get("epub"),
+                anydoc_config=self._parser_configs.get("anydoc"),
+            ),
+        )
         self._register("zip", ZipParser())
         self._register("directory", DirectoryParser())
 
@@ -178,6 +206,7 @@ def get_registry() -> ParserRegistry:
                 "html": config.html,
                 "word": config.markdown,
                 "legacy_doc": config.markdown,
+                "anydoc": getattr(config, "anydoc", None),
                 "powerpoint": config.markdown,
                 # Excel had no dedicated config section and reused
                 # ``config.markdown``. Keep unset sectioning fields following

@@ -16,10 +16,12 @@ import pytest
 
 from openviking.parse.parsers import excel as excel_module
 from openviking.parse.parsers.excel import (
-    ExcelParser,
     _EXCEL_PROCESS_POOL_MIN_BYTES,
+    ExcelParser,
+    truncate_excel_markdown_tables,
 )
 from openviking_cli.utils.config.parser_config import (
+    AnydocConfig,
     ExcelConfig,
     MarkdownConfig,
     ParserConfig,
@@ -28,7 +30,10 @@ from openviking_cli.utils.config.parser_config import (
 
 class TestShouldUseProcessPool:
     def _parser(self, **excel_kwargs) -> ExcelParser:
-        return ExcelParser(config=ExcelConfig(**excel_kwargs))
+        return ExcelParser(
+            config=ExcelConfig(**excel_kwargs),
+            anydoc_config=AnydocConfig(enable=False),
+        )
 
     def _make_file(self, tmp_path: Path, suffix: str = ".xlsx", size: int = 10) -> Path:
         path = tmp_path / f"sheet{suffix}"
@@ -77,6 +82,57 @@ class TestShouldUseProcessPool:
             self._parser(enable_process_pool=True)._should_use_process_pool(path, {})
             is True
         )
+
+    def test_anydoc_enabled_disables_process_pool(self, tmp_path):
+        path = self._make_file(tmp_path, size=_EXCEL_PROCESS_POOL_MIN_BYTES)
+        parser = ExcelParser(
+            config=ExcelConfig(enable_process_pool=True),
+            anydoc_config=AnydocConfig(enable=True),
+        )
+
+        assert parser._should_use_process_pool(path, {}) is False
+
+
+def test_truncate_excel_markdown_tables_per_sheet():
+    markdown = (
+        "# Workbook\n\n"
+        "## Sheet1\n\n"
+        "|a|b|\n|---|---|\n|1|2|\n|3|4|\n"
+        "\n## Sheet2\n\n"
+        "|c|d|\n|---|---|\n|5|6|\n|7|8|\n"
+    )
+
+    output = truncate_excel_markdown_tables(markdown, 1)
+
+    assert "|1|2|" in output
+    assert "|3|4|" not in output
+    assert "|5|6|" in output
+    assert "|7|8|" not in output
+    assert output.count("<!-- truncated to 1 rows -->") == 2
+
+
+def test_truncate_excel_markdown_tables_without_sheet_heading():
+    markdown = "Intro\n\n|a|b|\n|---|---|\n|1|2|\n|3|4|\n\nAfter\n"
+
+    output = truncate_excel_markdown_tables(markdown, 1)
+
+    assert "|1|2|" in output
+    assert "|3|4|" not in output
+    assert "After" in output
+
+
+def test_truncate_excel_markdown_tables_warns_when_sheet_table_is_not_recognized(caplog):
+    markdown = "## Sheet1\n\nconverted content is not a Markdown table\n"
+
+    excel_module.logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level("WARNING"):
+            output = truncate_excel_markdown_tables(markdown, 1)
+    finally:
+        excel_module.logger.removeHandler(caplog.handler)
+
+    assert output == markdown
+    assert "could not recognize a table" in caplog.text
 
 
 @pytest.mark.asyncio

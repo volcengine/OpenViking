@@ -28,6 +28,7 @@ from .log_config import LogConfig
 from .memory_config import MemoryConfig
 from .oauth_config import OAuthConfig
 from .parser_config import (
+    AnydocConfig,
     AudioConfig,
     CodeConfig,
     DirectoryConfig,
@@ -212,6 +213,11 @@ class OpenVikingConfig(BaseModel):
         # still follows parsers.markdown for deployments predating this section.
         default_factory=lambda: ExcelConfig.from_dict({}),
         description="Excel parsing configuration",
+    )
+
+    anydoc: AnydocConfig = Field(
+        default_factory=AnydocConfig,
+        description="Shared anydoc Office conversion configuration",
     )
 
     html: HTMLConfig = Field(default_factory=HTMLConfig, description="HTML parsing configuration")
@@ -408,6 +414,7 @@ class OpenVikingConfig(BaseModel):
                 "video",
                 "markdown",
                 "excel",
+                "anydoc",
                 "html",
                 "text",
                 "directory",
