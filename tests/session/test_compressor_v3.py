@@ -30,6 +30,7 @@ from openviking.session.memory.dataclass import (
 )
 from openviking.session.memory.memory_updater import MemoryUpdateResult
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.session.skill.session_skill_context_provider import SESSION_SKILL_MEMORY_TYPE
 from openviking.session.train import (
     Case,
     ExperienceSet,
@@ -301,6 +302,46 @@ async def test_v3_skill_only_extraction_submits_gradients_without_agent_memories
         "skill_submitted": 1,
         "skill_uris": [skill_uri],
     }
+
+
+@pytest.mark.asyncio
+async def test_session_skill_trainer_uses_session_skill_schema_registry(monkeypatch):
+    captured = {}
+
+    async def fake_load(self, root_uri, ctx=None):
+        del self, ctx
+        return ExperienceSet(root_uri=root_uri, policies=[])
+
+    async def fake_get_streaming_policy_trainer(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setattr("openviking.session.compressor_v3.SkillSetLoader.load", fake_load)
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.get_streaming_policy_trainer",
+        fake_get_streaming_policy_trainer,
+    )
+
+    compressor = SessionCompressorV3(
+        vikingdb=None,
+        rollout_analyzer=SimpleNamespace(),
+        skill_processor=SimpleNamespace(),
+    )
+
+    trainer = await compressor._get_session_skill_trainer(
+        viking_fs=SimpleNamespace(),
+        ctx=_ctx(),
+        messages=_messages(),
+        strict_extract_errors=False,
+        archive_uri="viking://user/u/sessions/s1/history/archive_001",
+    )
+
+    optimizer = captured["policy_optimizer"]
+    assert trainer is not None
+    assert optimizer.memory_type == SESSION_SKILL_MEMORY_TYPE
+    schema = optimizer.memory_registry.get(SESSION_SKILL_MEMORY_TYPE)
+    assert schema is not None
+    assert schema.enabled is True
 
 
 @pytest.mark.asyncio
