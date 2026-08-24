@@ -28,7 +28,7 @@ from typing import Optional
 from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 from mcp.shared.auth import ProtectedResourceMetadata
 from pydantic import AnyHttpUrl, BaseModel, Field
 
@@ -36,6 +36,7 @@ from openviking.server.auth import get_request_context
 from openviking.server.identity import RequestContext
 from openviking.server.oauth.provider import MCP_SCOPE, OpenVikingOAuthProvider
 from openviking.server.oauth.storage import OAuthStore
+from openviking.server.responses import SafeJSONResponse as JSONResponse
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     PermissionDeniedError,

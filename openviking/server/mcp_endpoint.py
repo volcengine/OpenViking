@@ -27,7 +27,6 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel, Field
 from starlette.requests import Request
-from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from openviking.core.path_variables import resolve_path_variables
@@ -50,6 +49,7 @@ from openviking.server.local_input_guard import (
     is_remote_resource_source,
 )
 from openviking.server.resource_ingest import ingest_temp_upload
+from openviking.server.responses import SafeJSONResponse as JSONResponse
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.server.upload_token_store import upload_token_store
 from openviking.telemetry.span_models import update_root_span_identity

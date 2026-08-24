@@ -13,7 +13,7 @@ from typing import Callable, Optional
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.exceptions import ExceptionMiddleware
 
@@ -30,6 +30,7 @@ from openviking.server.identity import Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.server.profile_middleware import create_profile_http_middleware
 from openviking.server.request_id import REQUEST_ID_HEADER, RequestIdMiddleware
+from openviking.server.responses import SafeJSONResponse
 from openviking.server.routers import (
     admin_router,
     agent_evolution_router,
@@ -397,6 +398,7 @@ def create_app(
         description="OpenViking HTTP Server - Agent-native context database",
         version="0.1.0",
         lifespan=lifespan,
+        default_response_class=SafeJSONResponse,
     )
 
     app.state.config = config
@@ -489,7 +491,7 @@ def create_app(
     async def openviking_error_handler(request: Request, exc: OpenVikingError):
         http_status = ERROR_CODE_TO_HTTP_STATUS.get(exc.code, 500)
         capture_public_http_error(code=exc.code, message=exc.message, details=exc.details)
-        return JSONResponse(
+        return SafeJSONResponse(
             status_code=http_status,
             content=Response(
                 status="error",
@@ -512,7 +514,7 @@ def create_app(
             message=message,
             details=details,
         )
-        return JSONResponse(
+        return SafeJSONResponse(
             status_code=ERROR_CODE_TO_HTTP_STATUS[code],
             content=Response(
                 status="error",
@@ -535,7 +537,7 @@ def create_app(
             details = {"original_http_status_code": exc.status_code}
         message = _message_from_http_detail(exc.detail)
         capture_public_http_error(code=code, message=message, details=details)
-        return JSONResponse(
+        return SafeJSONResponse(
             status_code=response_status,
             headers=exc.headers,
             content=Response(
@@ -558,7 +560,7 @@ def create_app(
                 extra={"error_code": mapped.code, "error_message": mapped.message},
                 exc_info=exc,
             )
-            return JSONResponse(
+            return SafeJSONResponse(
                 status_code=http_status,
                 content=Response(
                     status="error",
@@ -571,7 +573,7 @@ def create_app(
             )
 
         logger.exception("Unhandled exception")
-        return JSONResponse(
+        return SafeJSONResponse(
             status_code=500,
             content=Response(
                 status="error",

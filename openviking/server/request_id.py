@@ -10,9 +10,9 @@ import re
 import time
 import uuid
 
-from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from openviking.server.responses import SafeJSONResponse as JSONResponse
 from openviking_cli.utils.logger import bind_log_request_id
 
 REQUEST_ID_HEADER = "X-Request-ID"

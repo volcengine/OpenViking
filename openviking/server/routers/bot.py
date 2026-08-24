@@ -9,12 +9,13 @@ from typing import AsyncGenerator, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 
 from openviking.server.auth import _auth_mode, get_request_context
 from openviking.server.config import get_server_url_from_server_data
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
+from openviking.server.responses import SafeJSONResponse as JSONResponse
 from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.utils.logger import get_logger
 

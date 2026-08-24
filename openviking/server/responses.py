@@ -8,6 +8,17 @@ from fastapi.responses import JSONResponse
 
 from openviking.observability.http_error_context import capture_public_http_error
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
+from openviking.storage.vectordb.utils.json_safety import sanitize_unicode_for_json
+
+
+class SafeJSONResponse(JSONResponse):
+    """JSON response that replaces lone surrogates before UTF-8 encoding."""
+
+    def render(self, content: Any) -> bytes:
+        try:
+            return super().render(content)
+        except UnicodeEncodeError:
+            return super().render(sanitize_unicode_for_json(content))
 
 
 def _message_from_business_error(result: Dict[str, Any]) -> str:
@@ -61,7 +72,7 @@ def response_from_result(
             error=error,
             telemetry=telemetry,
         ).model_dump(exclude_none=True)
-        return JSONResponse(
+        return SafeJSONResponse(
             status_code=ERROR_CODE_TO_HTTP_STATUS.get(code, 500),
             content=content,
         )
@@ -87,7 +98,7 @@ def error_response(
         error=ErrorInfo(code=code, message=message, details=details),
         telemetry=telemetry,
     ).model_dump(exclude_none=True)
-    return JSONResponse(
+    return SafeJSONResponse(
         status_code=ERROR_CODE_TO_HTTP_STATUS.get(code, 500),
         content=content,
     )

@@ -6,7 +6,6 @@ import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from openviking.core.path_variables import resolve_path_variables
@@ -16,6 +15,7 @@ from openviking.server.auth import get_request_context, require_role
 from openviking.server.dependencies import get_service
 from openviking.server.identity import AuthMode, RequestContext, Role
 from openviking.server.models import Response
+from openviking.server.responses import SafeJSONResponse as JSONResponse
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.utils import get_logger
 
