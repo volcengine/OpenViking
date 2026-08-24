@@ -8,6 +8,7 @@ directory, which causes silent failures in AGFS and VectorDB.
 
 import atexit
 import os
+import subprocess
 import sys
 import threading
 
@@ -77,6 +78,28 @@ def _is_pid_alive(pid: int) -> bool:
                 return False
         except OSError:
             # /proc not available or process exited between kill and open
+            pass
+    elif sys.platform == "darwin":
+        try:
+            proc = subprocess.run(
+                ["ps", "-p", str(pid), "-o", "command="],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            if proc.returncode != 0:
+                return False
+            cmdline = (proc.stdout or "").lower()
+            if "openviking" not in cmdline and "python" not in cmdline:
+                logger.info(
+                    "PID %d is alive but not an OpenViking process (cmdline: %.100s). "
+                    "Assuming stale lock from recycled PID.",
+                    pid,
+                    cmdline[:100],
+                )
+                return False
+        except (OSError, subprocess.SubprocessError):
+            # Keep the existing liveness result if process inspection is unavailable.
             pass
 
     return True

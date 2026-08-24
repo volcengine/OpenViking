@@ -5,6 +5,7 @@
 
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -78,9 +79,9 @@ class TestIsPidAlive:
         current_pid = os.getpid()
         assert _is_pid_alive(current_pid) is True
 
-    def test_pid_1_is_alive(self):
-        """Test that PID 1 (init) is typically alive."""
-        # PID 1 is usually init process on Linux
+    def test_pid_1_is_alive_without_platform_identity_check(self, monkeypatch):
+        """Test that a live PID is detected on platforms without identity checks."""
+        monkeypatch.setattr(process_lock_module.sys, "platform", "freebsd")
         assert _is_pid_alive(1) is True
 
     def test_nonexistent_pid_not_alive(self):
@@ -119,6 +120,25 @@ class TestIsPidAlive:
         with pytest.raises(SystemError):
             _is_pid_alive(12345)
 
+    def test_darwin_recycled_pid_with_unrelated_process_is_stale(self, monkeypatch):
+        """macOS should not keep a stale lock when the PID was reused."""
+
+        def _pid_exists(_pid: int, _sig: int) -> None:
+            return None
+
+        def _sysctl_process(_args, **_kwargs):
+            return SimpleNamespace(
+                returncode=0,
+                stdout="mdwrite\0/System/Library/Spotlight/mdwrite",
+                stderr="",
+            )
+
+        monkeypatch.setattr(process_lock_module.sys, "platform", "darwin")
+        monkeypatch.setattr(process_lock_module.os, "kill", _pid_exists)
+        monkeypatch.setattr(process_lock_module.subprocess, "run", _sysctl_process)
+
+        assert _is_pid_alive(857) is False
+
 
 class TestAcquireDataDirLock:
     """Test acquire_data_dir_lock function."""
@@ -155,16 +175,16 @@ class TestAcquireDataDirLock:
         lock_path = acquire_data_dir_lock(str(tmp_path))
         assert lock_path == str(tmp_path / LOCK_FILENAME)
 
-    def test_acquire_with_live_process_raises(self, tmp_path: Path):
+    def test_acquire_with_live_process_raises(self, tmp_path: Path, monkeypatch):
         """Test acquiring lock with live process raises DataDirectoryLocked."""
-        # Use PID 1 (init) which is typically alive
-        (tmp_path / LOCK_FILENAME).write_text("1")
+        (tmp_path / LOCK_FILENAME).write_text("12345")
+        monkeypatch.setattr(process_lock_module, "_is_pid_alive", lambda _pid: True)
 
         with pytest.raises(DataDirectoryLocked) as exc_info:
             acquire_data_dir_lock(str(tmp_path))
 
         assert "Another OpenViking process" in str(exc_info.value)
-        assert "PID 1" in str(exc_info.value)
+        assert "PID 12345" in str(exc_info.value)
 
     def test_acquire_creates_directory(self, tmp_path: Path):
         """Test acquiring lock creates directory if it doesn't exist."""
@@ -188,9 +208,10 @@ class TestAcquireDataDirLock:
 
         assert not (workspace / LOCK_FILENAME).exists()
 
-    def test_error_message_suggests_http_server(self, tmp_path: Path):
+    def test_error_message_suggests_http_server(self, tmp_path: Path, monkeypatch):
         """Test error message suggests using one HTTP server."""
-        (tmp_path / LOCK_FILENAME).write_text("1")
+        (tmp_path / LOCK_FILENAME).write_text("12345")
+        monkeypatch.setattr(process_lock_module, "_is_pid_alive", lambda _pid: True)
 
         with pytest.raises(DataDirectoryLocked) as exc_info:
             acquire_data_dir_lock(str(tmp_path))
@@ -199,19 +220,21 @@ class TestAcquireDataDirLock:
         assert "OpenViking server" in error_msg
         assert "connect clients over HTTP" in error_msg
 
-    def test_error_message_shows_pid(self, tmp_path: Path):
+    def test_error_message_shows_pid(self, tmp_path: Path, monkeypatch):
         """Test error message shows conflicting PID."""
-        (tmp_path / LOCK_FILENAME).write_text("1")
+        (tmp_path / LOCK_FILENAME).write_text("12345")
+        monkeypatch.setattr(process_lock_module, "_is_pid_alive", lambda _pid: True)
 
         with pytest.raises(DataDirectoryLocked) as exc_info:
             acquire_data_dir_lock(str(tmp_path))
 
         error_msg = str(exc_info.value)
-        assert "PID 1" in error_msg
+        assert "PID 12345" in error_msg
 
-    def test_error_message_shows_directory(self, tmp_path: Path):
+    def test_error_message_shows_directory(self, tmp_path: Path, monkeypatch):
         """Test error message shows directory path."""
-        (tmp_path / LOCK_FILENAME).write_text("1")
+        (tmp_path / LOCK_FILENAME).write_text("12345")
+        monkeypatch.setattr(process_lock_module, "_is_pid_alive", lambda _pid: True)
 
         with pytest.raises(DataDirectoryLocked) as exc_info:
             acquire_data_dir_lock(str(tmp_path))
