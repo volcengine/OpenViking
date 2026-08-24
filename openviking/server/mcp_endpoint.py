@@ -42,7 +42,12 @@ from openviking.retrieve.context_assembler import (
     AssembleParams,
     assemble_context,
 )
-from openviking.server.auth import _extract_api_key, normalize_actor_peer_header, resolve_identity
+from openviking.server.auth import (
+    _build_request_context,
+    _extract_api_key,
+    normalize_actor_peer_header,
+    resolve_identity,
+)
 from openviking.server.dependencies import get_server_config, get_service
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import (
@@ -52,7 +57,6 @@ from openviking.server.local_input_guard import (
 from openviking.server.resource_ingest import ingest_temp_upload
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.server.upload_token_store import upload_token_store
-from openviking.telemetry.span_models import update_root_span_identity
 from openviking.utils.search_filters import SearchContextTypeInput, merge_search_filter
 from openviking_cli.exceptions import (
     InvalidArgumentError,
@@ -61,7 +65,6 @@ from openviking_cli.exceptions import (
     PermissionDeniedError,
     UnauthenticatedError,
 )
-from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -166,6 +169,12 @@ class _IdentityASGIMiddleware:
             actor_peer_id = normalize_actor_peer_header(
                 request.headers.get("x-openviking-actor-peer")
             )
+            ctx = _build_request_context(
+                request,
+                identity,
+                actor_peer_id=actor_peer_id,
+                api_key=_extract_api_key(x_api_key, authorization),
+            )
         except (UnauthenticatedError, PermissionDeniedError, InvalidArgumentError) as exc:
             status = (
                 401
@@ -190,30 +199,6 @@ class _IdentityASGIMiddleware:
             )
             return await resp(scope, receive, send)
 
-        # Mirror the identity fallback RequestContext applies below, so the
-        # observability stamp and the request context never disagree.
-        effective_account_id = identity.account_id or "default"
-        effective_user_id = identity.user_id or "default"
-        # Stamp the resolved identity onto the outer request's root
-        # observability context, mirroring what get_request_context does for
-        # REST routes. MCP authentication bypasses FastAPI's REST context
-        # dependency; request.state shares scope["state"] with the outer app,
-        # where the observability middleware attached root_span_attrs.
-        update_root_span_identity(
-            request_state=request.state,
-            account_id=effective_account_id,
-            user_id=effective_user_id,
-        )
-        ctx = RequestContext(
-            user=UserIdentifier(
-                effective_account_id,
-                effective_user_id,
-            ),
-            role=identity.role,
-            actor_peer_id=actor_peer_id,
-            from_oauth=identity.from_oauth,
-            api_key=_extract_api_key(x_api_key, authorization),
-        )
         url_info = {
             "x_forwarded_proto": request.headers.get("x-forwarded-proto"),
             "x_forwarded_host": request.headers.get("x-forwarded-host"),
