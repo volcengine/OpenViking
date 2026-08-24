@@ -46,6 +46,10 @@ class _MetaVikingFS:
             raise FileNotFoundError(uri)
         return self.files[uri]
 
+    async def exists(self, uri, ctx=None):
+        del ctx
+        return uri in self.files
+
     async def write_file(self, uri, content, ctx=None, lease_ref=None):
         del ctx
         self.files[uri] = content

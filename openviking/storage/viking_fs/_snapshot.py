@@ -28,6 +28,7 @@ from openviking_cli.exceptions import (
 def _pkg():
     return sys.modules[__package__]
 
+
 class _SnapshotMixin:
     """Snapshot/git-like version control (commit/restore/show/diff/log)."""
 
@@ -639,11 +640,11 @@ class _SnapshotMixin:
         swallowed (and logged) inside :py:meth:`_run_vector_rebuild`, preserving
         the "failures do not block" semantics.
         """
+        from openviking.service.task_context import bind_task_context
         from openviking.service.task_tracker import get_task_tracker
-        from openviking.service.task_work_index import bind_task_context
 
         tracker = get_task_tracker()
-        tracker.register_running_task(task_id)
+        tracker.register_active(task_id, account_id=ctx.account_id, user_id=ctx.user.user_id)
         try:
             await tracker.start(
                 task_id,
@@ -668,7 +669,7 @@ class _SnapshotMixin:
                 user_id=ctx.user.user_id,
             )
         except asyncio.CancelledError:
-            # TaskWorkIndex finalizes after this active task and its queue work settle.
+            # TaskTracker finalizes after this coroutine and its queue work settle.
             return
         except Exception as exc:
             await tracker.fail(
@@ -678,7 +679,9 @@ class _SnapshotMixin:
                 user_id=ctx.user.user_id,
             )
         finally:
-            await tracker.unregister_running_task(task_id)
+            await tracker.unregister_active(
+                task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
+            )
 
     async def _run_vector_rebuild(
         self,

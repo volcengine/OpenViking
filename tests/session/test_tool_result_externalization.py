@@ -14,14 +14,29 @@ from openviking.session.tool_result_store import ToolResultStore
 from openviking_cli.exceptions import NotFoundError
 
 
+class _MemoryPathLock:
+    async def pathlock_acquire_tree(self, path, timeout_secs=None):  # noqa: ANN001
+        del path, timeout_secs
+        return "lease-1"
+
+    async def pathlock_release(self, lease):  # noqa: ANN001
+        del lease
+
+
 class MemoryVikingFS:
     def __init__(self):
         self.files = {}
+        self._async_agfs = _MemoryPathLock()
+
+    def _uri_to_path(self, uri, ctx=None):  # noqa: ANN001
+        del ctx
+        return uri
 
     async def write_file(self, uri, content, *, ctx=None, lease_ref=None):  # noqa: ANN001
         self.files[uri] = content
 
-    async def append_file(self, uri, content, *, ctx=None):  # noqa: ANN001
+    async def append_file(self, uri, content, *, ctx=None, lease_ref=None):  # noqa: ANN001
+        del lease_ref
         self.files[uri] = self.files.get(uri, "") + content
 
     async def read_file(self, uri, *, ctx=None):  # noqa: ANN001

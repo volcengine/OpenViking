@@ -13,6 +13,7 @@ from openviking.server.identity import RequestContext
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
+from openviking.storage.abstract_overview import body_for_preview
 
 
 async def _wait_for_task(task_id: str, timeout: float = 30.0) -> dict:
@@ -683,8 +684,9 @@ class TestCommit:
         task_result = await _wait_for_task(result2["task_id"])
 
         assert task_result["status"] == "completed"
-        assert seen["summary"] == previous_overview
-        assert seen["extract"] == previous_overview
+        previous_overview_body = body_for_preview(previous_overview)
+        assert seen["summary"] == previous_overview_body
+        assert seen["extract"] == previous_overview_body
 
     async def test_active_count_incremented_after_commit(self, client_with_resource_sync: tuple):
         service, client_ctx, uri = client_with_resource_sync

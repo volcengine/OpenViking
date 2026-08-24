@@ -49,15 +49,13 @@ from openviking.server.user_config import (
     effective_resource_add_target,
     effective_skill_add_target,
 )
+from openviking.service.task_context import bind_task_context
+from openviking.service.task_tracker import get_task_tracker
 from openviking.storage.queuefs import QueueManager, get_queue_manager
 from openviking.storage.queuefs.add_resource_msg import AddResourcePhase
 from openviking.storage.viking_fs import VikingFS
 from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.telemetry import get_current_telemetry, register_telemetry, unregister_telemetry
-from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
-from openviking.telemetry.resource_summary import (
-    build_queue_status_payload,
-)
 from openviking.utils import is_git_repo_url, parse_code_hosting_url
 from openviking.utils.git_auth import (
     GitHttpAuthConfig,
@@ -351,9 +349,7 @@ class ResourceService:
                 try:
                     await self._handle_watch_task_cancellation(to_uri=to, ctx=ctx)
                 except Exception as e:
-                    logger.warning(
-                        f"[ResourceService] Failed to cancel watch task for {to}: {e}"
-                    )
+                    logger.warning(f"[ResourceService] Failed to cancel watch task for {to}: {e}")
 
     def _normalize_add_resource_args(
         self,
@@ -369,9 +365,7 @@ class ResourceService:
         if not args:
             return _NormalizedAddResourceArgs({})
 
-        reserved_fields = _ADD_RESOURCE_ARGS_RESERVED_FIELDS - (
-            allowed_reserved_fields or set()
-        )
+        reserved_fields = _ADD_RESOURCE_ARGS_RESERVED_FIELDS - (allowed_reserved_fields or set())
         reserved = sorted(set(args).intersection(reserved_fields))
         if reserved:
             raise InvalidArgumentError(
@@ -520,16 +514,16 @@ class ResourceService:
                 account_id=msg.account_id,
                 user_id=msg.user_id,
             )
-        except BaseException:
-            if resource_lock is not None:
-                await self._release_lock_ref(resource_lock)
-            if task is not None and not enqueued:
+        except BaseException as exc:
+            with contextlib.suppress(Exception):
                 await tracker.fail(
-                    task.task_id,
-                    "Failed to enqueue resource processing",
+                    msg.task_id,
+                    str(exc),
                     account_id=msg.account_id,
                     user_id=msg.user_id,
                 )
+            if resource_lock is not None:
+                await self._release_lock_ref(resource_lock)
             raise
 
         return task
@@ -900,16 +894,10 @@ class ResourceService:
     ) -> Dict[str, Any]:
         from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 
-        planned_to_is_directory = (
-            to_is_directory if to_is_directory is not None else bool(to)
-        )
+        planned_to_is_directory = to_is_directory if to_is_directory is not None else bool(to)
         target_to_is_exact = bool(to and not is_content_root_uri(to, kind="resource"))
         defer_candidate_resolution = bool(
-            (
-                plan.defer_unnamed_target
-                and plan.source_identity.source_name is None
-                and not to
-            )
+            (plan.defer_unnamed_target and plan.source_identity.source_name is None and not to)
             or (mode is ParseMode.NO_SPLIT and not target_to_is_exact)
         )
         root_uri = ""
@@ -1000,7 +988,11 @@ class ResourceService:
                 await self._viking_fs.delete_temp(plan.staged_source.temp_uri, ctx=ctx)
             raise
 
-        response = {"status": "success", "task_id": task.task_id}
+        response = {
+            "status": "success",
+            "task_id": task.task_id,
+            "source_path": msg.source_path,
+        }
         if not defer_target_resolution:
             response["root_uri"] = root_uri
         return response
@@ -1629,7 +1621,27 @@ class ResourceService:
             ):
                 watch_to_is_directory = not prepared["root_is_file"]
             if not isinstance(prepared, dict):
-                raise InternalError("Deferred resource processing payload is missing")
+                if defer_post_processing:
+                    raise InternalError("Deferred resource processing payload is missing")
+                await self._manage_watch_if_needed(
+                    watch_manager=watch_manager,
+                    manage_watch=manage_watch,
+                    watch_interval=watch_interval,
+                    to=target_to,
+                    parent=target_parent,
+                    to_is_directory=watch_to_is_directory,
+                    root_uri=str(result.get("root_uri") or ""),
+                    path=path,
+                    reason=reason,
+                    instruction=instruction,
+                    build_index=build_index,
+                    summarize=summarize,
+                    processing_mode=processing_mode,
+                    processor_kwargs=self._watch_processor_kwargs(kwargs, tags, tag_mode),
+                    watch_auth_state=watch_auth_state,
+                    ctx=ctx,
+                )
+                return result
             await self._manage_watch_if_needed(
                 watch_manager=watch_manager,
                 manage_watch=manage_watch,
@@ -1783,11 +1795,11 @@ class ResourceService:
         from openviking.service.task_tracker import get_task_tracker
 
         task_tracker = get_task_tracker()
-        request_wait_tracker = get_request_wait_tracker()
         await task_tracker.start(task_id, account_id=account_id, user_id=user_id)
         try:
-            await request_wait_tracker.wait_for_request(telemetry_id)
-            status = request_wait_tracker.build_queue_status(telemetry_id)
+            status = await task_tracker.wait_for_work(
+                task_id, account_id=account_id, user_id=user_id
+            )
             errors = sum(int(group.get("error_count", 0) or 0) for group in status.values())
             if errors:
                 await task_tracker.fail(
@@ -1806,7 +1818,6 @@ class ResourceService:
         except Exception as exc:
             await task_tracker.fail(task_id, str(exc), account_id=account_id, user_id=user_id)
         finally:
-            request_wait_tracker.cleanup(telemetry_id)
             unregister_telemetry(telemetry_id)
 
     @staticmethod
@@ -1983,44 +1994,48 @@ class ResourceService:
                 server_config=get_server_config(),
             )
         telemetry_id = get_current_telemetry().telemetry_id
-        request_wait_tracker = get_request_wait_tracker()
+        task_tracker = get_task_tracker()
+        task = await task_tracker.create(
+            "add_skill",
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+        )
+        await task_tracker.start(task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id)
         monitor_started = False
-        if telemetry_id:
-            request_wait_tracker.register_request(telemetry_id)
 
         try:
-            if isinstance(data, SkillProcessingPreparation):
-                result = await self._skill_processor.process_prepared_skill(
-                    data,
-                    viking_fs=self._viking_fs,
-                    ctx=ctx,
-                    apply_privacy=apply_privacy,
-                    privacy_change_reason=privacy_change_reason,
-                    target_uri=target_uri,
-                )
-            else:
-                result = await self._skill_processor.process_skill(
-                    data=data,
-                    viking_fs=self._viking_fs,
-                    ctx=ctx,
-                    allow_local_path_resolution=allow_local_path_resolution,
-                    source_path_hint=source_path_hint,
-                    apply_privacy=apply_privacy,
-                    privacy_change_reason=privacy_change_reason,
-                    target_uri=target_uri,
-                )
+            with bind_task_context(task.task_id, ctx.account_id, ctx.user.user_id):
+                if isinstance(data, SkillProcessingPreparation):
+                    result = await self._skill_processor.process_prepared_skill(
+                        data,
+                        viking_fs=self._viking_fs,
+                        ctx=ctx,
+                        apply_privacy=apply_privacy,
+                        privacy_change_reason=privacy_change_reason,
+                        target_uri=target_uri,
+                    )
+                else:
+                    result = await self._skill_processor.process_skill(
+                        data=data,
+                        viking_fs=self._viking_fs,
+                        ctx=ctx,
+                        allow_local_path_resolution=allow_local_path_resolution,
+                        source_path_hint=source_path_hint,
+                        apply_privacy=apply_privacy,
+                        privacy_change_reason=privacy_change_reason,
+                        target_uri=target_uri,
+                    )
             if isinstance(result, dict) and "root_uri" not in result and result.get("uri"):
                 result["root_uri"] = result["uri"]
-
             if wait:
                 wait_start = time.perf_counter()
                 try:
-                    if telemetry_id:
-                        await request_wait_tracker.wait_for_request(telemetry_id, timeout=timeout)
-                        status = request_wait_tracker.build_queue_status(telemetry_id)
-                    else:
-                        qm = get_queue_manager()
-                        status = build_queue_status_payload(await qm.wait_complete(timeout=timeout))
+                    status = await task_tracker.wait_for_work(
+                        task.task_id,
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                        timeout=timeout,
+                    )
                 except TimeoutError as exc:
                     get_current_telemetry().set_error(
                         "resource_service.wait_complete",
@@ -2035,40 +2050,35 @@ class ResourceService:
                 result["queue_status"] = status
                 self._raise_queue_status_errors(status)
             else:
-                from openviking.service.task_tracker import get_task_tracker
+                result["task_id"] = task.task_id
+                monitor = asyncio.create_task(
+                    self._monitor_queue_processing(
+                        task.task_id,
+                        telemetry_id,
+                        ctx.account_id,
+                        ctx.user.user_id,
+                    )
+                )
+                self._background_tasks.add(monitor)
+                monitor.add_done_callback(self._background_tasks.discard)
+                monitor_started = True
 
-                task_tracker = get_task_tracker()
-                task = await task_tracker.create(
-                    "add_skill",
+            if wait:
+                await task_tracker.complete(
+                    task.task_id,
+                    {"queue_status": result.get("queue_status", {})},
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
                 )
-                result["task_id"] = task.task_id
-                if telemetry_id:
-                    monitor_started = True
-                    asyncio.create_task(
-                        self._monitor_queue_processing(
-                            task.task_id,
-                            telemetry_id,
-                            ctx.account_id,
-                            ctx.user.user_id,
-                        )
-                    )
-                else:
-                    await task_tracker.start(
-                        task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
-                    )
-                    await task_tracker.complete(
-                        task.task_id,
-                        {},
-                        account_id=ctx.account_id,
-                        user_id=ctx.user.user_id,
-                    )
 
             return result
+        except Exception as exc:
+            await task_tracker.fail(
+                task.task_id, str(exc), account_id=ctx.account_id, user_id=ctx.user.user_id
+            )
+            raise
         finally:
-            if wait or not telemetry_id or not monitor_started:
-                request_wait_tracker.cleanup(telemetry_id)
+            if wait or not monitor_started:
                 unregister_telemetry(telemetry_id)
 
     async def build_index(

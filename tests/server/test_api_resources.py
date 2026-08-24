@@ -143,6 +143,17 @@ async def test_add_resource_with_wait(
     body = resp.json()
     assert body["status"] == "ok"
     assert "root_uri" in body["result"]
+    assert "task_id" not in body["result"]
+
+    listed = await client.get(
+        "/api/v1/tasks",
+        params={
+            "task_type": "add_resource",
+            "resource_id": body["result"]["root_uri"],
+        },
+    )
+    assert listed.status_code == 200
+    assert listed.json()["result"]
 
 
 async def test_add_resource_forwards_args_to_service(
@@ -1024,7 +1035,7 @@ async def test_add_resource_non_wait_returns_queue_task_id(
     assert body["result"]["root_uri"].startswith("viking://")
 
 
-async def test_add_resource_sync_no_task_id(
+async def test_add_resource_sync_keeps_legacy_response_without_task_id(
     client: httpx.AsyncClient,
     sample_markdown_file,
     upload_temp_dir,
@@ -1048,10 +1059,6 @@ async def test_add_resource_non_wait_queue_task_queryable(
     sample_markdown_file,
     upload_temp_dir,
 ):
-    from openviking.service.task_tracker import set_task_tracker
-
-    set_task_tracker(None)
-
     resp = await client.post(
         "/api/v1/resources",
         json={

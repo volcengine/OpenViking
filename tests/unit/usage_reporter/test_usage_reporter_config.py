@@ -138,10 +138,10 @@ async def test_app_reuses_and_closes_usage_reporter(monkeypatch):
         sessions = Sessions()
 
     class TaskTracker:
-        def start_cleanup_loop(self):
+        def start_background_loops(self):
             return None
 
-        def stop_cleanup_loop(self):
+        def stop_background_loops(self):
             return None
 
     async def initialize_runtime_state(app, service, config):

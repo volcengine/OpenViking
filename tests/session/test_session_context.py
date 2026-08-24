@@ -49,11 +49,13 @@ async def client(
     queued_commit_tasks: set[str] = set()
     tracker = get_task_tracker()
     original_has_work = tracker.has_work
-    monkeypatch.setattr(
-        tracker,
-        "has_work",
-        lambda task_id: task_id in queued_commit_tasks or original_has_work(task_id),
-    )
+
+    async def has_work(task_id, *, account_id, user_id):
+        return task_id in queued_commit_tasks or await original_has_work(
+            task_id, account_id=account_id, user_id=user_id
+        )
+
+    monkeypatch.setattr(tracker, "has_work", has_work)
 
     async def enqueue_with_session_commit_fallback(queue_name, data):
         if queue_name != QueueManager.SESSION_COMMIT:
@@ -92,7 +94,7 @@ def _estimate_tokens(text: str) -> int:
 async def _wait_for_task(task_id: str, timeout: float = 30.0) -> dict:
     tracker = get_task_tracker()
     for _ in range(int(timeout / 0.1)):
-        task = await tracker.get(task_id)
+        task = await tracker.get(task_id, account_id="default", user_id="default")
         if task and task.status.value in ("completed", "failed"):
             return task.to_dict()
         await asyncio.sleep(0.1)

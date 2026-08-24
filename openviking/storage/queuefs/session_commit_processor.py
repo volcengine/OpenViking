@@ -1,6 +1,12 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Queue consumer for restart-safe Session Phase 2 work."""
+"""Run persisted session memory-extraction jobs on the service event loop.
+
+Queue workers use separate event loops, while Session objects belong to the
+service loop. The processor forwards work with ``run_coroutine_threadsafe`` and
+keeps the current queue work ID so the job can wait for descendants without
+waiting for itself.
+"""
 
 import asyncio
 import concurrent.futures
@@ -12,9 +18,11 @@ from openviking.observability.context import (
     reset_root_observability_context,
 )
 from openviking.server.identity import RequestContext, Role
+from openviking.service.task_context import bind_task_context
 from openviking.service.task_tracker import get_task_tracker
-from openviking.service.task_work_index import bind_task_context
+from openviking.service.task_work_hook import extract_task_metadata
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
+from openviking.storage.queuefs.queue_hook import DiscardReason, ProcessResult
 from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
 from openviking.telemetry.span_models import create_root_span_attributes
 from openviking_cli.session.user_id import UserIdentifier
@@ -44,12 +52,14 @@ class SessionCommitProcessor(DequeueHandlerBase):
         )
         return msg, ctx
 
-    async def _process(self, msg: SessionCommitMsg, ctx: RequestContext) -> bool:
-        # Bind a root observability context so Phase-2 extraction VLM/embedding
-        # token events are attributed to the committing account/user rather than
-        # "__unknown__" (mirrors SemanticProcessor.on_dequeue). Must bind inside
-        # this coroutine: on_dequeue hops loops via run_coroutine_threadsafe, so
-        # a context bound there would not propagate here.
+    async def _process(
+        self,
+        msg: SessionCommitMsg,
+        ctx: RequestContext,
+        *,
+        current_work_id: Optional[str] = None,
+    ) -> bool:
+        # Bind after switching loops so extraction telemetry has the task owner.
         root_attrs = create_root_span_attributes(
             http_method="QUEUE",
             http_route="/queuefs/session_commit",
@@ -84,15 +94,7 @@ class SessionCommitProcessor(DequeueHandlerBase):
                 return True
             await session.load()
             with bind_task_context(msg.task_id, ctx.account_id, ctx.user.user_id):
-                processed = await session.resume_queued_commit(msg)
-            if not processed:
-                from openviking.storage.queuefs import QueueManager, get_queue_manager
-
-                await get_queue_manager().enqueue(
-                    QueueManager.SESSION_COMMIT,
-                    msg.to_dict(),
-                )
-                self.report_requeue()
+                processed = await session.resume_queued_commit(msg, current_work_id=current_work_id)
             return processed
         finally:
             reset_root_observability_context(root_context_token)
@@ -106,15 +108,21 @@ class SessionCommitProcessor(DequeueHandlerBase):
         if await session.exists():
             await session.finalize_cancelled_commit(msg.archive_uri)
 
-    async def on_cancelled(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    async def on_discard(
+        self,
+        data: Optional[Dict[str, Any]],
+        *,
+        reason: DiscardReason,
+        handler_started: bool,
+    ) -> ProcessResult:
+        del reason, handler_started
         if not data:
-            return None
+            return ProcessResult.failed("Queue message is empty")
 
         try:
             msg, ctx = self._parse_message(data)
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-            self.report_error(str(exc), data)
-            return None
+            return ProcessResult.failed(exc)
 
         future = asyncio.run_coroutine_threadsafe(
             self._finalize_cancelled(msg, ctx),
@@ -122,29 +130,30 @@ class SessionCommitProcessor(DequeueHandlerBase):
         )
         try:
             await asyncio.wrap_future(future)
-            self.report_success()
         except asyncio.CancelledError:
             future.cancel()
             raise
-        return None
+        return ProcessResult.cancelled()
 
-    async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> ProcessResult:
         if not data:
-            return None
+            return ProcessResult.failed("Queue message is empty")
 
         try:
             msg, ctx = self._parse_message(data)
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-            self.report_error(str(exc), data)
-            return None
+            return ProcessResult.failed(exc)
+        metadata = extract_task_metadata(data)
+        current_work_id = metadata.work_id if metadata is not None else None
         future: concurrent.futures.Future[bool] = asyncio.run_coroutine_threadsafe(
-            self._process(msg, ctx),
+            self._process(msg, ctx, current_work_id=current_work_id),
             self._service_loop,
         )
         try:
-            await asyncio.wrap_future(future)
-            self.report_success()
+            processed = await asyncio.wrap_future(future)
         except asyncio.CancelledError:
             future.cancel()
             raise
-        return None
+        if not processed:
+            return ProcessResult.requeue(msg.to_dict(), max_attempts=None)
+        return ProcessResult.success()

@@ -10,6 +10,11 @@ from openviking.parse.parsers.media.utils import (
     MPEG_TS_PACKET_SIZE,
     MPEG_TS_PROBE_BYTES,
 )
+from openviking.service.task_context import bind_task_context
+from openviking.service.task_domain import WorkState
+from openviking.service.task_store import CachingTaskWorkStore, PersistentTaskStore
+from openviking.service.task_tracker import TaskTracker, set_task_tracker
+from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.utils import embedding_utils
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.utils.config.parser_config import ImageConfig
@@ -20,20 +25,26 @@ class DummyQueue:
         self.items = []
 
     async def enqueue(self, msg):
-        self.items.append(msg)
+        self.items.append(EmbeddingMsg.from_dict(msg) if isinstance(msg, dict) else msg)
         return "queue-message-id"
 
 
 class DummyQueueWithId(DummyQueue):
     async def enqueue(self, msg):
-        self.items.append(msg)
+        self.items.append(EmbeddingMsg.from_dict(msg) if isinstance(msg, dict) else msg)
         return "queue-message-id"
 
 
 class FailingQueue(DummyQueue):
     async def enqueue(self, msg):
-        self.items.append(msg)
+        self.items.append(EmbeddingMsg.from_dict(msg) if isinstance(msg, dict) else msg)
         raise RuntimeError("queue unavailable")
+
+
+class RejectingQueue(DummyQueue):
+    async def enqueue(self, msg):
+        self.items.append(EmbeddingMsg.from_dict(msg) if isinstance(msg, dict) else msg)
+        return False
 
 
 class DummyQueueManager:
@@ -73,6 +84,29 @@ class DummyFS:
 
     async def ls(self, _uri, ctx=None):
         return []
+
+
+class DummyTaskAgfs:
+    def __init__(self):
+        self.files = {}
+
+    def mkdir(self, path, mode="755"):
+        return None
+
+    def write(self, path, data):
+        self.files[path] = data
+        return "OK"
+
+    def read(self, path, offset=0, size=-1, stream=False):
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        return self.files[path]
+
+    def ls(self, path="/"):
+        return [{"path": key} for key in self.files if key.startswith(path + "/")]
+
+    def rm(self, path, recursive=False, force=True):
+        self.files.pop(path, None)
 
 
 class DummyUser:
@@ -225,9 +259,8 @@ async def test_vectorize_image_downsamples_large_embedding_input(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_vectorize_file_registers_request_wait_with_embedding_msg_id(monkeypatch):
+async def test_vectorize_file_preserves_embedding_msg_id_before_enqueue(monkeypatch):
     queue = DummyQueueWithId()
-    registered = []
     monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
     monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("hello"))
     monkeypatch.setattr(
@@ -235,15 +268,6 @@ async def test_vectorize_file_registers_request_wait_with_embedding_msg_id(monke
         "get_openviking_config",
         lambda: types.SimpleNamespace(
             embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
-        ),
-    )
-    monkeypatch.setattr(
-        embedding_utils,
-        "get_request_wait_tracker",
-        lambda: types.SimpleNamespace(
-            register_embedding_root=lambda telemetry_id, root_id: registered.append(
-                (telemetry_id, root_id)
-            )
         ),
     )
 
@@ -255,15 +279,12 @@ async def test_vectorize_file_registers_request_wait_with_embedding_msg_id(monke
     )
 
     assert len(queue.items) == 1
-    assert registered == [(queue.items[0].telemetry_id, queue.items[0].id)]
-    assert registered[0][1] != "queue-message-id"
+    assert queue.items[0].id != "queue-message-id"
 
 
 @pytest.mark.asyncio
-async def test_vectorize_file_marks_registered_wait_root_failed_when_enqueue_raises(monkeypatch):
+async def test_vectorize_file_propagates_enqueue_error_without_secondary_tracker(monkeypatch):
     queue = FailingQueue()
-    registered = []
-    failed = []
     monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
     monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("hello"))
     monkeypatch.setattr(
@@ -271,18 +292,6 @@ async def test_vectorize_file_marks_registered_wait_root_failed_when_enqueue_rai
         "get_openviking_config",
         lambda: types.SimpleNamespace(
             embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
-        ),
-    )
-    monkeypatch.setattr(
-        embedding_utils,
-        "get_request_wait_tracker",
-        lambda: types.SimpleNamespace(
-            register_embedding_root=lambda telemetry_id, root_id: registered.append(
-                (telemetry_id, root_id)
-            ),
-            mark_embedding_failed=lambda telemetry_id, root_id, message: failed.append(
-                (telemetry_id, root_id, message)
-            ),
         ),
     )
 
@@ -295,9 +304,6 @@ async def test_vectorize_file_marks_registered_wait_root_failed_when_enqueue_rai
         )
 
     assert len(queue.items) == 1
-    assert registered == [(queue.items[0].telemetry_id, queue.items[0].id)]
-    assert failed
-    assert failed[0][0:2] == registered[0]
 
 
 @pytest.mark.asyncio
@@ -320,6 +326,89 @@ async def test_vectorize_file_propagates_enqueue_failure(monkeypatch):
             "viking://user/default/resources",
             ctx=DummyReq(),
         )
+
+
+@pytest.mark.asyncio
+async def test_embedding_enqueue_false_marks_bound_task_work_failed():
+    tracker = TaskTracker(CachingTaskWorkStore(PersistentTaskStore(DummyTaskAgfs())))
+    set_task_tracker(tracker)
+    try:
+        task = await tracker.create("content_write", account_id="default", user_id="default")
+        queue = RejectingQueue()
+        msg = EmbeddingMsg(
+            message="hello",
+            context_data={
+                "uri": "viking://user/default/resources/test.md",
+                "level": 2,
+                "context_type": "resource",
+            },
+        )
+
+        with bind_task_context(task.task_id, "default", "default"):
+            enqueued = await embedding_utils._enqueue_embedding_message(
+                queue,
+                msg,
+                failure_message="Failed to enqueue file vector for test.md",
+            )
+
+        assert enqueued is False
+        assert msg.task_id == task.task_id
+        assert msg._task_work_id
+        assert (
+            await tracker.get_work_state(
+                task.task_id,
+                msg._task_work_id,
+                account_id="default",
+                user_id="default",
+            )
+            is WorkState.FAILED
+        )
+        status = await tracker.queue_status(
+            task.task_id,
+            account_id="default",
+            user_id="default",
+        )
+        assert status["Embedding"]["errors"] == [
+            {"message": "Failed to enqueue file vector for test.md"}
+        ]
+    finally:
+        set_task_tracker(None)
+
+
+@pytest.mark.asyncio
+async def test_embedding_enqueue_exception_marks_original_error():
+    tracker = TaskTracker(CachingTaskWorkStore(PersistentTaskStore(DummyTaskAgfs())))
+    set_task_tracker(tracker)
+    try:
+        task = await tracker.create("content_write", account_id="default", user_id="default")
+        queue = FailingQueue()
+        msg = EmbeddingMsg(
+            message="hello",
+            context_data={
+                "uri": "viking://user/default/resources/test.md",
+                "level": 2,
+                "context_type": "resource",
+            },
+        )
+
+        with bind_task_context(task.task_id, "default", "default"):
+            with pytest.raises(RuntimeError, match="queue unavailable"):
+                await embedding_utils._enqueue_embedding_message(
+                    queue,
+                    msg,
+                    failure_message="Failed to enqueue file vector for test.md",
+                )
+
+        status = await tracker.queue_status(
+            task.task_id,
+            account_id="default",
+            user_id="default",
+        )
+        assert status["Embedding"]["errors"] == [
+            {"message": "Failed to enqueue file vector for test.md: queue unavailable"}
+        ]
+    finally:
+        set_task_tracker(None)
 
 
 @pytest.mark.asyncio
@@ -582,7 +671,9 @@ async def test_vectorize_directory_meta_l1_abstract_is_overview(monkeypatch):
     }
     await embedding_utils.vectorize_directory_meta(
         uri=uri,
-        abstract=render_abstract_overview(ContextLevel.ABSTRACT, uri, "Visible abstract.", metadata),
+        abstract=render_abstract_overview(
+            ContextLevel.ABSTRACT, uri, "Visible abstract.", metadata
+        ),
         overview=render_abstract_overview(ContextLevel.OVERVIEW, uri, overview, metadata),
         ctx=DummyReq(),
     )

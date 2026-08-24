@@ -1,7 +1,12 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
+"""Reusable asyncio cancellation, scheduling, locking, and concurrency helpers.
 
-"""Concurrency primitives used by the task tracker."""
+These helpers coordinate work inside one process. Cross-process ordering and
+conflict detection remain the responsibility of the caller's storage backend.
+"""
+
+from __future__ import annotations
 
 import asyncio
 import threading
@@ -20,14 +25,12 @@ _ResultT = TypeVar("_ResultT")
 logger = get_logger(__name__)
 
 
-async def run_to_completion(
-    factory: Callable[[], Awaitable[_ResultT]],
-) -> _ResultT:
+async def run_to_completion(factory: Callable[[], Awaitable[_ResultT]]) -> _ResultT:
     """Finish started work before propagating caller cancellation.
 
     ``asyncio.to_thread`` cancellation cannot stop the underlying synchronous
-    call. Waiting for the work to settle keeps lock and concurrency accounting
-    aligned with the physical I/O lifetime.
+    call. Waiting for it to settle keeps transaction/rollback decisions aligned
+    with the physical I/O result.
     """
     work: asyncio.Future[_ResultT] = asyncio.ensure_future(factory())
     caller = asyncio.current_task()
@@ -40,8 +43,6 @@ async def run_to_completion(
                 raise
             cancellation = exc
         except BaseException:
-            # A completion exception can race with delivery of caller
-            # cancellation. Honour the already-requested cancellation below.
             caller_with_cancellation_count: Any = caller
             if (
                 caller is None
@@ -53,8 +54,6 @@ async def run_to_completion(
 
     if cancellation is not None:
         if not work.cancelled():
-            # Caller cancellation wins once it has been observed. Consume a
-            # later work failure so asyncio does not report it as unhandled.
             work.exception()
         raise cancellation
     return work.result()
@@ -175,8 +174,8 @@ class OwnerLoopDispatcher:
                 return future.result()
 
 
-class StoreIOLimiter:
-    """Bound task-store concurrency and expose low-cardinality diagnostics."""
+class AsyncConcurrencyLimiter:
+    """Bound concurrent async operations and report slow executions."""
 
     def __init__(self, max_concurrent: int, slow_threshold_seconds: float = 1.0) -> None:
         if max_concurrent <= 0:
@@ -213,7 +212,7 @@ class StoreIOLimiter:
                 duration_seconds = time.monotonic() - started_at
                 if duration_seconds >= self._slow_threshold_seconds:
                     logger.warning(
-                        "Slow task store operation: operation=%s duration_ms=%.1f",
+                        "Slow async operation: operation=%s duration_ms=%.1f",
                         operation,
                         duration_seconds * 1000,
                     )
@@ -254,3 +253,11 @@ class KeyedAsyncLockPool(Generic[_KeyT]):
             entry.users -= 1
             if entry.users == 0 and self._entries.get(key) is entry:
                 del self._entries[key]
+
+
+__all__ = [
+    "AsyncConcurrencyLimiter",
+    "KeyedAsyncLockPool",
+    "OwnerLoopDispatcher",
+    "run_to_completion",
+]

@@ -7,14 +7,11 @@ from types import SimpleNamespace
 import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking.service.task_work_index import (
-    TaskWorkIndex,
-    TaskWorkRejected,
-    bind_task_context,
-    get_task_context,
-)
+from openviking.service.task_context import bind_task_context, get_task_context
+from openviking.service.task_domain import TaskWorkRejected
 from openviking.storage.abstract_overview import parse_abstract_overview
 from openviking.storage.queuefs.named_queue import NamedQueue
+from openviking.storage.queuefs.queue_hook import QueueMiddleware
 from openviking.storage.queuefs.semantic_dag import (
     DagStats,
     DagWork,
@@ -156,7 +153,9 @@ class _ScheduledExecutor:
 def _patch_semantic_config(monkeypatch, *, overview_sample_limit=32):
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_dag.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=overview_sample_limit)),
+        lambda: SimpleNamespace(
+            semantic=SimpleNamespace(overview_sample_limit=overview_sample_limit)
+        ),
     )
 
 
@@ -402,20 +401,16 @@ async def test_semantic_dag_shares_node_scheduler_across_roots(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_task_work_rejection_does_not_stop_shared_semantic_worker():
-    work_index = TaskWorkIndex()
+    class RejectTaskWorkMiddleware(QueueMiddleware):
+        async def enqueue(self, ctx, call_next):
+            del ctx, call_next
+            raise TaskWorkRejected("task is cancelling")
 
-    async def finalize_before_ack(_metadata):
-        return None
-
-    work_index.set_callbacks(
-        finalize_before_ack=finalize_before_ack,
-        is_cancellation_requested=lambda _task_id: True,
-    )
     embedding_queue = NamedQueue(
         None,
         "/queue",
         "Embedding",
-        task_work_index=work_index,
+        middlewares=[RejectTaskWorkMiddleware()],
     )
     embedding_queue._initialized = True
     unrelated_ran = asyncio.Event()

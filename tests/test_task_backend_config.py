@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-from openviking.service.task_store import PersistentTaskStore
+from openviking.service.task_store import CachingTaskWorkStore, PersistentTaskStore
 from openviking.service.task_tracker import TaskTracker
 from openviking_cli.utils.config import storage_config as storage_config_module
 from openviking_cli.utils.config.storage_config import StorageConfig
@@ -53,4 +53,5 @@ def test_storage_config_accepts_skip_process_lock():
 def test_storage_config_builds_persistent_task_tracker():
     tracker = StorageConfig().build_task_tracker(_FakeAgfs())
     assert isinstance(tracker, TaskTracker)
-    assert isinstance(tracker._store, PersistentTaskStore)
+    assert isinstance(tracker._store, CachingTaskWorkStore)
+    assert isinstance(tracker._store._inner, PersistentTaskStore)

@@ -12,6 +12,10 @@ class EmbeddingMsg:
     context_data: Dict[str, Any]
     id: str = field(default_factory=lambda: str(uuid4()))
     telemetry_id: str = ""
+    task_id: str = ""
+    _task_work_id: str = ""
+    _task_account_id: str = ""
+    _task_user_id: str = ""
 
     def __init__(
         self,
@@ -23,6 +27,10 @@ class EmbeddingMsg:
         self.message = message
         self.context_data = context_data
         self.telemetry_id = telemetry_id
+        self.task_id = ""
+        self._task_work_id = ""
+        self._task_account_id = ""
+        self._task_user_id = ""
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert embedding message to dictionary format."""
@@ -41,6 +49,10 @@ class EmbeddingMsg:
             telemetry_id=data.get("telemetry_id", ""),
         )
         obj.id = data.get("id", obj.id)
+        obj.task_id = data.get("task_id", "")
+        obj._task_work_id = data.get("_task_work_id", "")
+        obj._task_account_id = data.get("_task_account_id", "")
+        obj._task_user_id = data.get("_task_user_id", "")
         return obj
 
     @classmethod

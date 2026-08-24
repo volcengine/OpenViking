@@ -20,6 +20,7 @@ from openviking.core.context import ContextLevel
 from openviking.message import Message
 from openviking.message.part import TextPart
 from openviking.server.identity import RequestContext
+from openviking.service.task_work_hook import enqueue_with_task_work
 from openviking.session.memory.dataclass import (
     MemoryFile,
     MemoryOperationSkipCode,
@@ -45,7 +46,6 @@ from openviking.session.memory.utils.uri import render_template
 from openviking.storage.abstract_overview import freshness_metadata, render_abstract_overview
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
-from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.tracer import get_trace_id
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import NotFoundError
@@ -1404,7 +1404,6 @@ class MemoryUpdater:
         uri_memory_type_map = uri_memory_type_map or {}
         search_tags_by_uri = search_tags_by_uri or {}
         viking_fs = self._get_viking_fs()
-        request_wait_tracker = get_request_wait_tracker()
         attempted_count = 0
 
         # Collect all URIs to vectorize (skip .overview.md and .abstract.md - they are handled separately)
@@ -1489,27 +1488,13 @@ class MemoryUpdater:
                         embedding_msg.context_data["_upsert_options"] = {
                             "search_tag_mode": "append"
                         }
-                    if embedding_msg.telemetry_id:
-                        request_wait_tracker.register_embedding_root(
-                            embedding_msg.telemetry_id, embedding_msg.id
-                        )
                     attempted_count += 1
-                    try:
-                        enqueued = await self._vikingdb.enqueue_embedding_msg(embedding_msg)
-                    except Exception as e:
-                        if embedding_msg.telemetry_id:
-                            request_wait_tracker.mark_embedding_failed(
-                                embedding_msg.telemetry_id,
-                                embedding_msg.id,
-                                str(e),
-                            )
-                        raise
-                    if not enqueued and embedding_msg.telemetry_id:
-                        request_wait_tracker.mark_embedding_failed(
-                            embedding_msg.telemetry_id,
-                            embedding_msg.id,
-                            "embedding enqueue returned false",
-                        )
+                    await enqueue_with_task_work(
+                        embedding_msg,
+                        "Embedding",
+                        self._vikingdb.enqueue_embedding_msg,
+                        false_failure_message="embedding enqueue returned false",
+                    )
                     logger.debug(f"Enqueued memory for vectorization: {uri}")
 
             except Exception as e:

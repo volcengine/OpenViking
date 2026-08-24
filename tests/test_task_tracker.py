@@ -3,6 +3,7 @@
 
 """Unit tests for TaskTracker."""
 
+import asyncio
 import json
 import time
 
@@ -11,7 +12,7 @@ import pytest
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError
 from openviking.server.identity import RequestContext, Role
 from openviking.service.session_service import SessionService
-from openviking.service.task_store import PersistentTaskStore
+from openviking.service.task_store import CachingTaskWorkStore, PersistentTaskStore
 from openviking.service.task_tracker import (
     TaskStatus,
     TaskTracker,
@@ -34,7 +35,7 @@ def clean_singleton():
 
 @pytest.fixture
 def tracker() -> TaskTracker:
-    return TaskTracker(store=PersistentTaskStore(_FakeAgfs()))
+    return TaskTracker(store=CachingTaskWorkStore(PersistentTaskStore(_FakeAgfs())))
 
 
 def _owner_kwargs(account_id: str = "acme", user_id: str = "alice"):
@@ -52,7 +53,7 @@ def _make_ctx(account_id: str = "acme", user_id: str = "alice") -> RequestContex
 
 
 def _set_fake_global_tracker() -> TaskTracker:
-    tracker = TaskTracker(store=PersistentTaskStore(_FakeAgfs()))
+    tracker = TaskTracker(store=CachingTaskWorkStore(PersistentTaskStore(_FakeAgfs())))
     set_task_tracker(tracker)
     return tracker
 
@@ -131,17 +132,17 @@ async def test_create_task(tracker: TaskTracker):
 
 async def test_start_task(tracker: TaskTracker):
     task = await tracker.create("session_commit", **_owner_kwargs())
-    await tracker.start(task.task_id)
-    retrieved = await tracker.get(task.task_id)
+    await tracker.start(task.task_id, **_owner_kwargs())
+    retrieved = await tracker.get(task.task_id, **_owner_kwargs())
     assert retrieved is not None
     assert retrieved.status == TaskStatus.RUNNING
 
 
 async def test_update_stage(tracker: TaskTracker):
     task = await tracker.create("add_resource", **_owner_kwargs())
-    await tracker.start(task.task_id, stage="queued")
-    await tracker.update_stage(task.task_id, "parsing")
-    retrieved = await tracker.get(task.task_id)
+    await tracker.start(task.task_id, stage="queued", **_owner_kwargs())
+    await tracker.update_stage(task.task_id, "parsing", **_owner_kwargs())
+    retrieved = await tracker.get(task.task_id, **_owner_kwargs())
     assert retrieved is not None
     assert retrieved.status == TaskStatus.RUNNING
     assert retrieved.stage == "parsing"
@@ -149,13 +150,57 @@ async def test_update_stage(tracker: TaskTracker):
 
 async def test_complete_task(tracker: TaskTracker):
     task = await tracker.create("session_commit", resource_id="s1", **_owner_kwargs())
-    await tracker.start(task.task_id)
-    await tracker.complete(task.task_id, {"memories_extracted": 3})
-    retrieved = await tracker.get(task.task_id)
+    await tracker.start(task.task_id, **_owner_kwargs())
+    await tracker.complete(task.task_id, {"memories_extracted": 3}, **_owner_kwargs())
+    retrieved = await tracker.get(task.task_id, **_owner_kwargs())
     assert retrieved is not None
     assert retrieved.status == TaskStatus.COMPLETED
     assert retrieved.stage == "completed"
     assert retrieved.result == {"memories_extracted": 3}
+
+
+async def test_wait_observes_short_lived_task_with_default_poll_interval(tracker: TaskTracker):
+    task = await tracker.create("session_commit", **_owner_kwargs())
+    await tracker.start(task.task_id, **_owner_kwargs())
+
+    async def complete_soon():
+        await asyncio.sleep(0.01)
+        await tracker.complete(task.task_id, {"ok": True}, **_owner_kwargs())
+
+    completing = asyncio.create_task(complete_soon())
+    completed = await tracker.wait(task.task_id, timeout=0.2, **_owner_kwargs())
+    await completing
+
+    assert completed.status == TaskStatus.COMPLETED
+
+
+async def test_finalize_projects_queue_status_into_async_result(tracker: TaskTracker):
+    task = await tracker.create("content_write", **_owner_kwargs())
+    await tracker.start(task.task_id, **_owner_kwargs())
+    await tracker.register_work(
+        task.task_id,
+        "semantic-work",
+        "Semantic",
+        **_owner_kwargs(),
+    )
+    await tracker.complete(
+        task.task_id,
+        {
+            "queue_status": None,
+            "semantic_status": "queued",
+            "vector_status": "queued",
+        },
+        **_owner_kwargs(),
+    )
+
+    await tracker.settle_work(task.task_id, "semantic-work", **_owner_kwargs())
+    completed = await tracker.get(task.task_id, **_owner_kwargs())
+
+    assert completed is not None
+    assert completed.status == TaskStatus.COMPLETED
+    assert completed.result["semantic_status"] == "complete"
+    assert completed.result["vector_status"] == "complete"
+    assert completed.result["queue_status"]["Semantic"]["processed"] == 1
 
 
 async def test_complete_task_updates_resource_id(tracker: TaskTracker):
@@ -165,12 +210,15 @@ async def test_complete_task_updates_resource_id(tracker: TaskTracker):
         task.task_id,
         {"root_uri": "viking://resources/real-title"},
         resource_id="viking://resources/real-title",
+        **_owner_kwargs(),
     )
 
-    retrieved = await tracker.get(task.task_id)
+    retrieved = await tracker.get(task.task_id, **_owner_kwargs())
     assert retrieved is not None
     assert retrieved.resource_id == "viking://resources/real-title"
-    assert await tracker.list_tasks(resource_id="viking://resources/real-title") == [retrieved]
+    assert await tracker.list_tasks(
+        resource_id="viking://resources/real-title", **_owner_kwargs()
+    ) == [retrieved]
 
 
 async def test_task_result_redacts_user_key(tracker: TaskTracker):
@@ -181,9 +229,10 @@ async def test_task_result_redacts_user_key(tracker: TaskTracker):
             "created_users": [{"account_id": "acme", "user_id": "bob", "user_key": "secret-key"}],
             "nested": {"user_key": "nested-secret"},
         },
+        **_owner_kwargs(),
     )
 
-    retrieved = await tracker.get(task.task_id)
+    retrieved = await tracker.get(task.task_id, **_owner_kwargs())
 
     assert retrieved is not None
     assert retrieved.result == {
@@ -195,9 +244,9 @@ async def test_task_result_redacts_user_key(tracker: TaskTracker):
 
 async def test_fail_task(tracker: TaskTracker):
     task = await tracker.create("session_commit", **_owner_kwargs())
-    await tracker.start(task.task_id)
-    await tracker.fail(task.task_id, "LLM timeout")
-    retrieved = await tracker.get(task.task_id)
+    await tracker.start(task.task_id, **_owner_kwargs())
+    await tracker.fail(task.task_id, "LLM timeout", **_owner_kwargs())
+    retrieved = await tracker.get(task.task_id, **_owner_kwargs())
     assert retrieved is not None
     assert retrieved.status == TaskStatus.FAILED
     assert retrieved.stage == "failed"
@@ -205,7 +254,7 @@ async def test_fail_task(tracker: TaskTracker):
 
 
 async def test_get_nonexistent_returns_none(tracker: TaskTracker):
-    assert await tracker.get("does-not-exist") is None
+    assert await tracker.get("does-not-exist", **_owner_kwargs()) is None
 
 
 # ── List / Filter ──
@@ -214,14 +263,14 @@ async def test_get_nonexistent_returns_none(tracker: TaskTracker):
 async def test_list_all(tracker: TaskTracker):
     await tracker.create("session_commit", resource_id="s1", **_owner_kwargs())
     await tracker.create("resource_ingest", resource_id="r1", **_owner_kwargs())
-    tasks = await tracker.list_tasks()
+    tasks = await tracker.list_tasks(**_owner_kwargs())
     assert len(tasks) == 2
 
 
 async def test_list_filter_by_type(tracker: TaskTracker):
     await tracker.create("session_commit", **_owner_kwargs())
     await tracker.create("resource_ingest", **_owner_kwargs())
-    tasks = await tracker.list_tasks(task_type="session_commit")
+    tasks = await tracker.list_tasks(task_type="session_commit", **_owner_kwargs())
     assert len(tasks) == 1
     assert tasks[0].task_type == "session_commit"
 
@@ -229,19 +278,19 @@ async def test_list_filter_by_type(tracker: TaskTracker):
 async def test_list_filter_by_status(tracker: TaskTracker):
     t1 = await tracker.create("session_commit", **_owner_kwargs())
     await tracker.create("session_commit", **_owner_kwargs())
-    await tracker.start(t1.task_id)
-    await tracker.complete(t1.task_id, {})
+    await tracker.start(t1.task_id, **_owner_kwargs())
+    await tracker.complete(t1.task_id, {}, **_owner_kwargs())
 
-    completed = await tracker.list_tasks(status="completed")
+    completed = await tracker.list_tasks(status="completed", **_owner_kwargs())
     assert len(completed) == 1
-    pending = await tracker.list_tasks(status="pending")
+    pending = await tracker.list_tasks(status="pending", **_owner_kwargs())
     assert len(pending) == 1
 
 
 async def test_list_filter_by_resource_id(tracker: TaskTracker):
     await tracker.create("session_commit", resource_id="s1", **_owner_kwargs())
     await tracker.create("session_commit", resource_id="s2", **_owner_kwargs())
-    tasks = await tracker.list_tasks(resource_id="s1")
+    tasks = await tracker.list_tasks(resource_id="s1", **_owner_kwargs())
     assert len(tasks) == 1
     assert tasks[0].resource_id == "s1"
 
@@ -287,14 +336,14 @@ async def test_list_tasks_filters_by_owner(tracker: TaskTracker):
 async def test_list_limit(tracker: TaskTracker):
     for i in range(10):
         await tracker.create("session_commit", resource_id=f"s{i}", **_owner_kwargs())
-    tasks = await tracker.list_tasks(limit=3)
+    tasks = await tracker.list_tasks(limit=3, **_owner_kwargs())
     assert len(tasks) == 3
 
 
 async def test_list_order_most_recent_first(tracker: TaskTracker):
     await tracker.create("session_commit", resource_id="first", **_owner_kwargs())
     await tracker.create("session_commit", resource_id="second", **_owner_kwargs())
-    tasks = await tracker.list_tasks()
+    tasks = await tracker.list_tasks(**_owner_kwargs())
     assert tasks[0].resource_id == "second"
     assert tasks[1].resource_id == "first"
 
@@ -304,27 +353,27 @@ async def test_list_order_most_recent_first(tracker: TaskTracker):
 
 async def test_has_running_detects_pending(tracker: TaskTracker):
     await tracker.create("session_commit", resource_id="s1", **_owner_kwargs())
-    assert await tracker.has_running("session_commit", "s1") is True
+    assert await tracker.has_running("session_commit", "s1", **_owner_kwargs()) is True
 
 
 async def test_has_running_detects_running(tracker: TaskTracker):
     t = await tracker.create("session_commit", resource_id="s1", **_owner_kwargs())
-    await tracker.start(t.task_id)
-    assert await tracker.has_running("session_commit", "s1") is True
+    await tracker.start(t.task_id, **_owner_kwargs())
+    assert await tracker.has_running("session_commit", "s1", **_owner_kwargs()) is True
 
 
 async def test_has_running_false_after_complete(tracker: TaskTracker):
     t = await tracker.create("session_commit", resource_id="s1", **_owner_kwargs())
-    await tracker.start(t.task_id)
-    await tracker.complete(t.task_id, {})
-    assert await tracker.has_running("session_commit", "s1") is False
+    await tracker.start(t.task_id, **_owner_kwargs())
+    await tracker.complete(t.task_id, {}, **_owner_kwargs())
+    assert await tracker.has_running("session_commit", "s1", **_owner_kwargs()) is False
 
 
 async def test_has_running_false_after_fail(tracker: TaskTracker):
     t = await tracker.create("session_commit", resource_id="s1", **_owner_kwargs())
-    await tracker.start(t.task_id)
-    await tracker.fail(t.task_id, "error")
-    assert await tracker.has_running("session_commit", "s1") is False
+    await tracker.start(t.task_id, **_owner_kwargs())
+    await tracker.fail(t.task_id, "error", **_owner_kwargs())
+    assert await tracker.has_running("session_commit", "s1", **_owner_kwargs()) is False
 
 
 async def test_create_if_no_running_isolated_by_owner(tracker: TaskTracker):
@@ -410,57 +459,65 @@ async def test_sanitize_preserves_safe_error():
 
 async def test_evict_expired_completed(tracker: TaskTracker):
     t = await tracker.create("session_commit", **_owner_kwargs())
-    await tracker.start(t.task_id)
-    await tracker.complete(t.task_id, {})
+    await tracker.start(t.task_id, **_owner_kwargs())
+    await tracker.complete(t.task_id, {}, **_owner_kwargs())
     assert await tracker._store.get(t.task_id, **_owner_kwargs()) is not None
     # Simulate old timestamp (access internal state; get() returns defensive copies)
-    tracker._tasks[t.task_id].updated_at = time.time() - tracker.TTL_COMPLETED - 1
-    await tracker._evict_expired()
-    assert await tracker.get(t.task_id) is None
+    aggregate = await tracker._store.get(t.task_id, **_owner_kwargs())
+    store = tracker._store
+    aggregate.task.updated_at = time.time() - store.TTL_COMPLETED - 1
+    store._replace_cached_for_test(aggregate)
+    await store.cleanup()
+    assert await tracker.get(t.task_id, **_owner_kwargs()) is None
     assert await tracker._store.get(t.task_id, **_owner_kwargs()) is None
 
 
 async def test_evict_keeps_cached_task_when_persistent_delete_fails():
     agfs = _FakeAgfs()
-    tracker = TaskTracker(store=PersistentTaskStore(agfs))
+    tracker = TaskTracker(store=CachingTaskWorkStore(PersistentTaskStore(agfs)))
     t = await tracker.create("session_commit", **_owner_kwargs())
-    await tracker.start(t.task_id)
-    await tracker.complete(t.task_id, {})
-    tracker._tasks[t.task_id].updated_at = time.time() - tracker.TTL_COMPLETED - 1
+    await tracker.start(t.task_id, **_owner_kwargs())
+    await tracker.complete(t.task_id, {}, **_owner_kwargs())
+    aggregate = await tracker._store.get(t.task_id, **_owner_kwargs())
+    store = tracker._store
+    aggregate.task.updated_at = time.time() - store.TTL_COMPLETED - 1
+    store._replace_cached_for_test(aggregate)
     agfs.fail_rm = True
 
-    await tracker._evict_expired()
+    await store.cleanup()
 
-    assert await tracker.get(t.task_id) is not None
+    assert await tracker.get(t.task_id, **_owner_kwargs()) is not None
     assert await tracker._store.get(t.task_id, **_owner_kwargs()) is not None
 
     agfs.fail_rm = False
-    await tracker._evict_expired()
+    await store.cleanup()
 
-    assert await tracker.get(t.task_id) is None
+    assert await tracker.get(t.task_id, **_owner_kwargs()) is None
     assert await tracker._store.get(t.task_id, **_owner_kwargs()) is None
 
 
 async def test_evict_keeps_recent_completed(tracker: TaskTracker):
     t = await tracker.create("session_commit", **_owner_kwargs())
-    await tracker.start(t.task_id)
-    await tracker.complete(t.task_id, {})
-    await tracker._evict_expired()
-    assert await tracker.get(t.task_id) is not None
+    await tracker.start(t.task_id, **_owner_kwargs())
+    await tracker.complete(t.task_id, {}, **_owner_kwargs())
+    await tracker._store.cleanup()
+    assert await tracker.get(t.task_id, **_owner_kwargs()) is not None
 
 
 async def test_evict_fifo_when_over_limit(tracker: TaskTracker):
-    tracker.MAX_TASKS = 5
+    store = tracker._store
+    store.MAX_TASKS = 5
     tasks = []
     for i in range(7):
         tasks.append(await tracker.create("session_commit", resource_id=f"s{i}", **_owner_kwargs()))
-    await tracker._evict_expired()
+    await store.cleanup()
     assert tracker.count() == 5
-    # Oldest should be gone
-    assert await tracker.get(tasks[0].task_id) is None
-    assert await tracker.get(tasks[1].task_id) is None
-    # Newest should remain
-    assert await tracker.get(tasks[6].task_id) is not None
+    cached_ids = {aggregate.task.task_id for aggregate in store._cached_snapshot()}
+    # MAX_TASKS evicts only the local cache; durable task records remain readable.
+    assert tasks[0].task_id not in cached_ids
+    assert tasks[1].task_id not in cached_ids
+    assert tasks[6].task_id in cached_ids
+    assert await tracker.get(tasks[0].task_id, **_owner_kwargs()) is not None
 
 
 # ── Singleton ──
@@ -501,6 +558,69 @@ async def test_persistent_store_cross_tracker_visibility():
     assert loaded.result == {"ok": True}
 
 
+async def test_ownerless_task_operations_use_local_cache_only():
+    agfs = _FakeAgfs()
+    tracker = TaskTracker(CachingTaskWorkStore(PersistentTaskStore(agfs)))
+    task = await tracker.create("session_commit", **_owner_kwargs())
+
+    await tracker.start(task.task_id)
+    await tracker.complete(task.task_id, {"ok": True})
+
+    cached = await tracker.get(task.task_id)
+    assert cached is not None
+    assert cached.status == TaskStatus.COMPLETED
+
+    cold_tracker = TaskTracker(CachingTaskWorkStore(PersistentTaskStore(agfs)))
+    assert await cold_tracker.get(task.task_id) is None
+    persisted = await cold_tracker.get(task.task_id, **_owner_kwargs())
+    assert persisted is not None
+    assert persisted.status == TaskStatus.COMPLETED
+
+
+async def test_ownerless_task_list_uses_local_cache_only():
+    agfs = _FakeAgfs()
+    tracker = TaskTracker(CachingTaskWorkStore(PersistentTaskStore(agfs)))
+    alice = await tracker.create("session_commit", account_id="acme", user_id="alice")
+    bob = await tracker.create("session_commit", account_id="other", user_id="bob")
+
+    assert {task.task_id for task in await tracker.list_tasks()} == {
+        alice.task_id,
+        bob.task_id,
+    }
+    assert {task.task_id for task in await tracker.list_tasks(account_id="acme")} == {alice.task_id}
+    assert [
+        task.task_id
+        for task in await tracker.list_tasks(task_type="session_commit", account_id="acme", limit=1)
+    ] == [alice.task_id]
+
+    cold_tracker = TaskTracker(CachingTaskWorkStore(PersistentTaskStore(agfs)))
+    assert await cold_tracker.list_tasks() == []
+    assert await cold_tracker.list_tasks(account_id="acme") == []
+    assert {
+        task.task_id for task in await cold_tracker.list_tasks(account_id="acme", user_id="alice")
+    } == {alice.task_id}
+
+
+async def test_store_list_filters_are_applied_with_owner():
+    agfs = _FakeAgfs()
+    tracker = TaskTracker(PersistentTaskStore(agfs))
+    alice = await tracker.create("session_commit", account_id="acme", user_id="alice")
+    await tracker.start(alice.task_id, account_id="acme", user_id="alice")
+    await tracker.complete(alice.task_id, {}, account_id="acme", user_id="alice")
+    content_write = await tracker.create("content_write", account_id="acme", user_id="alice")
+
+    cold_tracker = TaskTracker(PersistentTaskStore(agfs))
+    tasks = await cold_tracker.list_tasks(
+        task_type="session_commit",
+        status="completed",
+        account_id="acme",
+        user_id="alice",
+    )
+
+    assert [task.task_id for task in tasks] == [alice.task_id]
+    assert content_write.task_id not in {task.task_id for task in tasks}
+
+
 async def test_persistent_store_writes_task_record_json():
     agfs = _FakeAgfs()
     store = PersistentTaskStore(agfs)
@@ -534,10 +654,40 @@ async def test_persistent_store_writes_task_record_json():
     assert terminal_payload["auth"] == {}
 
 
-async def test_persistent_store_keeps_tasktracker_tasks_dict():
-    tracker = TaskTracker(store=PersistentTaskStore(_FakeAgfs()))
+async def test_persistent_store_loads_legacy_task_json_without_version_or_works():
+    agfs = _FakeAgfs()
+    path = "/local/acme/_system/tasks/alice/legacy-task.json"
+    agfs.files[path] = json.dumps(
+        {
+            "task_id": "legacy-task",
+            "task_type": "session_commit",
+            "status": "running",
+            "created_at": 1.0,
+            "updated_at": 2.0,
+            "resource_id": "session-1",
+            "meta": {},
+            "stage": "running",
+            "result": None,
+            "error": None,
+        }
+    ).encode()
+
+    aggregate = await PersistentTaskStore(agfs).get(
+        "legacy-task", account_id="acme", user_id="alice"
+    )
+
+    assert aggregate is not None
+    assert aggregate.task.version == 0
+    assert aggregate.task.account_id == "acme"
+    assert aggregate.task.user_id == "alice"
+    assert aggregate.works == {}
+
+
+async def test_caching_store_keeps_tasktracker_aggregate_cache():
+    store = CachingTaskWorkStore(PersistentTaskStore(_FakeAgfs()))
+    tracker = TaskTracker(store=store)
     task = await tracker.create("session_commit", **_owner_kwargs())
-    assert task.task_id in tracker._tasks
+    assert task.task_id in {aggregate.task.task_id for aggregate in store._cached_snapshot()}
 
 
 async def test_persistent_store_survives_tracker_reset():

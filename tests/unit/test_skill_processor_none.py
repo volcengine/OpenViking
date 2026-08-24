@@ -161,7 +161,7 @@ async def test_process_skill_preserves_hyphenated_allowed_tools_in_meta(monkeypa
     )
 
     vikingdb = MagicMock()
-    vikingdb.enqueue_embedding_msg = AsyncMock(return_value=False)
+    vikingdb.enqueue_embedding_msg = AsyncMock(return_value=True)
     viking_fs = MagicMock()
     viking_fs.write_context = AsyncMock()
 

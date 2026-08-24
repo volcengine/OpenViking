@@ -218,8 +218,14 @@ async def test_memory_directory_summarizes_all_uncached_files(monkeypatch):
         name = file_path.rsplit("/", 1)[-1]
         return {"name": name, "summary": f"summary:{name}"}
 
-    async def generate_overview(dir_uri, file_summaries, children_abstracts, llm_sem=None):
-        del dir_uri, children_abstracts, llm_sem
+    async def generate_overview(
+        dir_uri,
+        file_summaries,
+        children_abstracts,
+        llm_sem=None,
+        total_files=None,
+    ):
+        del dir_uri, children_abstracts, llm_sem, total_files
         summaries.extend(file_summaries)
         return "overview"
 
@@ -267,8 +273,14 @@ async def test_memory_directory_vectorizes_changed_files_with_generated_summary(
         name = file_path.rsplit("/", 1)[-1]
         return {"name": name, "summary": f"summary:{name}", "content": "raw content"}
 
-    async def generate_overview(dir_uri, file_summaries, children_abstracts, llm_sem=None):
-        del dir_uri, children_abstracts, llm_sem
+    async def generate_overview(
+        dir_uri,
+        file_summaries,
+        children_abstracts,
+        llm_sem=None,
+        total_files=None,
+    ):
+        del dir_uri, children_abstracts, llm_sem, total_files
         assert len(captured_file_vectorize) == 1
         assert all("content" not in summary for summary in file_summaries)
         return "overview"

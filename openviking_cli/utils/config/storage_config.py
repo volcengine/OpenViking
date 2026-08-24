@@ -126,7 +126,10 @@ class StorageConfig(BaseModel):
 
     def build_task_tracker(self, agfs: Any):
         """Build the persistent TaskTracker from storage config."""
-        from openviking.service.task_store import PersistentTaskStore
+        from openviking.service.task_store import (
+            CachingTaskWorkStore,
+            PersistentTaskStore,
+        )
         from openviking.service.task_tracker import TaskTracker
 
-        return TaskTracker(store=PersistentTaskStore(agfs))
+        return TaskTracker(store=CachingTaskWorkStore(PersistentTaskStore(agfs)))

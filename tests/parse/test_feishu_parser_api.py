@@ -12,12 +12,12 @@ from openviking.parse.understanding_api import PREPARED_RESPONSE_ID_ARG, Underst
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_service import ResourceService
 from openviking.service.task_tracker import TaskStatus
-from openviking.service.task_work_index import TASK_WORK_ID_FIELD
+from openviking.service.task_work_hook import TASK_WORK_ID_FIELD
 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg, AddResourcePhase
 from openviking.storage.queuefs.add_resource_processor import AddResourceProcessor
+from openviking.storage.queuefs.queue_hook import ProcessOutcome
 from openviking.storage.queuefs.queue_manager import QueueManager
-from openviking.telemetry import get_current_telemetry, resolve_telemetry
-from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+from openviking.telemetry import get_current_telemetry
 from openviking.utils.media_processor import UnifiedResourceProcessor
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
@@ -464,6 +464,10 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(
         SimpleNamespace(should_delegate=Mock(return_value=False)),
     )
     monkeypatch.setattr(
+        "openviking.connector.delegate.ConnectorDelegate.supported_args",
+        Mock(return_value=set()),
+    )
+    monkeypatch.setattr(
         "openviking.service.resource_service.is_git_repo_url",
         Mock(return_value=False),
     )
@@ -726,12 +730,9 @@ async def test_uat_producer_cancellation_respects_queue_ownership(
     else:
         release.assert_awaited_once_with(lock_lease)
         task_tracker.create.assert_awaited_once()
+        task_tracker.fail.assert_awaited_once()
         enqueue.assert_awaited_once()
         assert enqueue.await_args.args[0] == QueueManager.EXTERNAL_PARSE
-        if cancel_stage == "enqueue":
-            task_tracker.fail.assert_awaited_once()
-        else:
-            task_tracker.fail.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -867,7 +868,20 @@ async def test_add_resource_processor_persists_final_uri_and_cleans_staged_sourc
     monkeypatch,
 ):
     final_uri = "viking://resources/真实文档标题"
-    telemetry_id = "telemetry-final-resource"
+    queue_status = {
+        "Semantic": {
+            "processed": 0,
+            "requeue_count": 0,
+            "error_count": 0,
+            "errors": [],
+        },
+        "Embedding": {
+            "processed": 9,
+            "requeue_count": 0,
+            "error_count": 0,
+            "errors": [],
+        },
+    }
     task_tracker = SimpleNamespace(
         create=AsyncMock(return_value=SimpleNamespace(status=TaskStatus.PENDING)),
         start=AsyncMock(),
@@ -876,6 +890,7 @@ async def test_add_resource_processor_persists_final_uri_and_cleans_staged_sourc
         fail=AsyncMock(),
         get_task_auth=AsyncMock(return_value={}),
         wait_for_descendants=AsyncMock(),
+        queue_status=AsyncMock(return_value=queue_status),
     )
 
     service = SimpleNamespace(
@@ -888,11 +903,6 @@ async def test_add_resource_processor_persists_final_uri_and_cleans_staged_sourc
         "openviking.storage.queuefs.add_resource_processor.get_task_tracker",
         Mock(return_value=task_tracker),
     )
-    queue_manager = SimpleNamespace(enqueue=AsyncMock())
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.get_queue_manager",
-        Mock(return_value=queue_manager),
-    )
     viking_fs = SimpleNamespace(
         _async_agfs=SimpleNamespace(pathlock_release=AsyncMock()),
         delete_temp=AsyncMock(),
@@ -900,7 +910,6 @@ async def test_add_resource_processor_persists_final_uri_and_cleans_staged_sourc
     processor = AddResourceProcessor(
         service,
         asyncio.get_running_loop(),
-        QueueManager.ADD_RESOURCE,
         viking_fs,
     )
     msg = AddResourceMsg(
@@ -910,7 +919,6 @@ async def test_add_resource_processor_persists_final_uri_and_cleans_staged_sourc
         account_id="account-1",
         user_id="user-1",
         role="user",
-        telemetry_id=telemetry_id,
         defer_target_resolution=True,
         staged_source={
             "temp_uri": "viking://temp/account-1/task-1",
@@ -921,12 +929,6 @@ async def test_add_resource_processor_persists_final_uri_and_cleans_staged_sourc
         },
     )
 
-    wait_tracker = get_request_wait_tracker()
-    wait_tracker.register_request(telemetry_id)
-    for index in range(9):
-        embedding_id = f"embedding-{index}"
-        wait_tracker.register_embedding_root(telemetry_id, embedding_id)
-        wait_tracker.mark_embedding_done(telemetry_id, embedding_id, vector_written=True)
     data = msg.to_dict()
     data[TASK_WORK_ID_FIELD] = "work-1"
     await processor._process(msg, data)
@@ -939,41 +941,17 @@ async def test_add_resource_processor_persists_final_uri_and_cleans_staged_sourc
         task_id="task-1",
         meta={"source_path": ""},
     )
-    assert task_tracker.complete.await_count == 2
-    first_complete = task_tracker.complete.await_args_list[0]
-    assert first_complete.args == (
-        "task-1",
-        {"status": "success", "root_uri": final_uri},
-    )
-    assert first_complete.kwargs == {
-        "account_id": "account-1",
-        "user_id": "user-1",
-        "resource_id": final_uri,
-    }
-    final_complete = task_tracker.complete.await_args_list[-1]
-    assert final_complete.args == (
+    complete_call = task_tracker.complete.await_args
+    assert complete_call.args == (
         "task-1",
         {
             "status": "success",
             "root_uri": final_uri,
+            "queue_status": queue_status,
             "context_count": 9,
-            "queue_status": {
-                "Semantic": {
-                    "processed": 0,
-                    "requeue_count": 0,
-                    "error_count": 0,
-                    "errors": [],
-                },
-                "Embedding": {
-                    "processed": 9,
-                    "requeue_count": 0,
-                    "error_count": 0,
-                    "errors": [],
-                },
-            },
         },
     )
-    assert final_complete.kwargs == {
+    assert complete_call.kwargs == {
         "account_id": "account-1",
         "user_id": "user-1",
         "resource_id": final_uri,
@@ -983,18 +961,19 @@ async def test_add_resource_processor_persists_final_uri_and_cleans_staged_sourc
     assert cleanup_call.args == ("viking://temp/account-1/task-1",)
     assert cleanup_call.kwargs["ctx"].account_id == "account-1"
     assert cleanup_call.kwargs["ctx"].user.user_id == "user-1"
-    assert await processor._requeue_lock_handoff(msg, RuntimeError("stale lock"))
-    assert queue_manager.enqueue.await_args.args[0] == QueueManager.ADD_RESOURCE
+    retry = processor._requeue_lock_handoff(msg, RuntimeError("stale lock"))
+    assert retry is not None
+    assert retry.outcome is ProcessOutcome.REQUEUE
+    assert retry.retry_payload["lock_handoff_retry"] == 1
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("telemetry_id", [None, "telemetry-unregistered-resource"])
-async def test_add_resource_processor_collects_stats_without_registered_telemetry(
-    monkeypatch,
-    telemetry_id: str | None,
-):
+async def test_add_resource_processor_collects_stats_and_token_usage(monkeypatch):
     final_uri = "viking://resources/unregistered"
-    observed_telemetry_ids = []
+    queue_status = {
+        "Semantic": {"processed": 0, "requeue_count": 0, "error_count": 0, "errors": []},
+        "Embedding": {"processed": 1, "requeue_count": 0, "error_count": 0, "errors": []},
+    }
     task_tracker = SimpleNamespace(
         create=AsyncMock(return_value=SimpleNamespace(status=TaskStatus.PENDING)),
         start=AsyncMock(),
@@ -1003,6 +982,7 @@ async def test_add_resource_processor_collects_stats_without_registered_telemetr
         fail=AsyncMock(),
         get_task_auth=AsyncMock(return_value={}),
         wait_for_descendants=AsyncMock(),
+        queue_status=AsyncMock(return_value=queue_status),
     )
     monkeypatch.setattr(
         "openviking.storage.queuefs.add_resource_processor.get_task_tracker",
@@ -1011,22 +991,8 @@ async def test_add_resource_processor_collects_stats_without_registered_telemetr
 
     async def execute_add_resource_job(*_args, **_kwargs):
         telemetry = get_current_telemetry()
-        effective_telemetry_id = telemetry.telemetry_id
-        observed_telemetry_ids.append(effective_telemetry_id)
-        if telemetry_id is not None:
-            assert effective_telemetry_id == telemetry_id
-        assert resolve_telemetry(effective_telemetry_id) is telemetry
-        assert telemetry.enabled
         telemetry.record_token_usage("embedding", 21)
         telemetry.add_token_usage(13, 5)
-
-        wait_tracker = get_request_wait_tracker()
-        wait_tracker.register_embedding_root(effective_telemetry_id, "embedding-1")
-        wait_tracker.mark_embedding_done(
-            effective_telemetry_id,
-            "embedding-1",
-            vector_written=True,
-        )
         return {"status": "success", "root_uri": final_uri}
 
     processor = AddResourceProcessor(
@@ -1035,7 +1001,6 @@ async def test_add_resource_processor_collects_stats_without_registered_telemetr
             _link_resource_reason_memory=AsyncMock(),
         ),
         asyncio.get_running_loop(),
-        QueueManager.ADD_RESOURCE,
         SimpleNamespace(_async_agfs=SimpleNamespace(pathlock_release=AsyncMock())),
     )
     msg = AddResourceMsg(
@@ -1045,7 +1010,6 @@ async def test_add_resource_processor_collects_stats_without_registered_telemetr
         account_id="account-1",
         user_id="user-1",
         role="user",
-        telemetry_id=telemetry_id,
     )
     data = msg.to_dict()
     data[TASK_WORK_ID_FIELD] = "work-1"
@@ -1061,14 +1025,15 @@ async def test_add_resource_processor_collects_stats_without_registered_telemetr
         "output": 5,
         "total": 18,
     }
-    assert len(observed_telemetry_ids) == 1
-    assert resolve_telemetry(observed_telemetry_ids[0]) is None
 
 
 @pytest.mark.asyncio
 async def test_add_resource_processor_replay_skips_lock_adopt_when_result_exists(monkeypatch):
     final_uri = "viking://resources/replayed"
-    telemetry_id = "telemetry-replayed-resource"
+    queue_status = {
+        "Semantic": {"processed": 0, "requeue_count": 0, "error_count": 0, "errors": []},
+        "Embedding": {"processed": 4, "requeue_count": 0, "error_count": 0, "errors": []},
+    }
     service = SimpleNamespace(
         execute_add_resource_job=AsyncMock(
             return_value={"status": "success", "root_uri": "viking://resources/duplicated"}
@@ -1086,7 +1051,9 @@ async def test_add_resource_processor_replay_skips_lock_adopt_when_result_exists
         update_stage=AsyncMock(),
         complete=AsyncMock(),
         fail=AsyncMock(),
+        get_task_auth=AsyncMock(return_value={}),
         wait_for_descendants=AsyncMock(),
+        queue_status=AsyncMock(return_value=queue_status),
     )
     monkeypatch.setattr(
         "openviking.storage.queuefs.add_resource_processor.get_task_tracker",
@@ -1099,7 +1066,6 @@ async def test_add_resource_processor_replay_skips_lock_adopt_when_result_exists
     processor = AddResourceProcessor(
         service,
         asyncio.get_running_loop(),
-        QueueManager.ADD_RESOURCE,
         SimpleNamespace(_async_agfs=async_agfs),
     )
     msg = AddResourceMsg(
@@ -1109,7 +1075,6 @@ async def test_add_resource_processor_replay_skips_lock_adopt_when_result_exists
         account_id="account-1",
         user_id="user-1",
         role="user",
-        telemetry_id=telemetry_id,
         lock_handoff={"owner_id": "owner-1", "lock_paths": ["/resource/.path.ovlock"]},
     )
     data = msg.to_dict()
@@ -1120,7 +1085,12 @@ async def test_add_resource_processor_replay_skips_lock_adopt_when_result_exists
     async_agfs.pathlock_adopt.assert_not_awaited()
     service.execute_add_resource_job.assert_not_awaited()
     task_tracker.start.assert_not_awaited()
-    task_tracker.wait_for_descendants.assert_awaited_once_with("task-1", "work-1")
+    task_tracker.wait_for_descendants.assert_awaited_once_with(
+        "task-1",
+        "work-1",
+        account_id="account-1",
+        user_id="user-1",
+    )
     task_tracker.complete.assert_awaited_once()
     completed_result = task_tracker.complete.await_args.args[1]
     assert completed_result["root_uri"] == final_uri
@@ -1130,6 +1100,10 @@ async def test_add_resource_processor_replay_skips_lock_adopt_when_result_exists
 @pytest.mark.asyncio
 async def test_add_resource_processor_reports_zero_vectors(monkeypatch):
     final_uri = "viking://resources/no-vectors"
+    queue_status = {
+        "Semantic": {"processed": 0, "requeue_count": 0, "error_count": 0, "errors": []},
+        "Embedding": {"processed": 0, "requeue_count": 0, "error_count": 0, "errors": []},
+    }
     service = SimpleNamespace(
         execute_add_resource_job=AsyncMock(
             return_value={"status": "success", "root_uri": final_uri}
@@ -1144,6 +1118,7 @@ async def test_add_resource_processor_reports_zero_vectors(monkeypatch):
         fail=AsyncMock(),
         get_task_auth=AsyncMock(return_value={}),
         wait_for_descendants=AsyncMock(),
+        queue_status=AsyncMock(return_value=queue_status),
     )
     monkeypatch.setattr(
         "openviking.storage.queuefs.add_resource_processor.get_task_tracker",
@@ -1152,7 +1127,6 @@ async def test_add_resource_processor_reports_zero_vectors(monkeypatch):
     processor = AddResourceProcessor(
         service,
         asyncio.get_running_loop(),
-        QueueManager.ADD_RESOURCE,
         SimpleNamespace(_async_agfs=SimpleNamespace(pathlock_release=AsyncMock())),
     )
     msg = AddResourceMsg(

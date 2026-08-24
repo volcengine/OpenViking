@@ -12,6 +12,7 @@ import os
 import secrets
 import shutil
 import tempfile
+from copy import deepcopy
 from pathlib import Path
 from typing import Tuple
 
@@ -23,6 +24,7 @@ from openviking.pyagfs.exceptions import (
     AGFSNotSupportedError,
 )
 from openviking.server.identity import RequestContext, Role
+from openviking.service.task_domain import TaskAggregate
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
@@ -124,8 +126,7 @@ class TestUriToTreePath:
     def test_session_uri(self, vfs):
         ctx = _make_ctx()
         assert (
-            vfs._uri_to_tree_path("viking://user/user1/sessions", ctx=ctx)
-            == "user/user1/sessions"
+            vfs._uri_to_tree_path("viking://user/user1/sessions", ctx=ctx) == "user/user1/sessions"
         )
 
     def test_trailing_slash_kept_as_directory(self, vfs):
@@ -846,16 +847,38 @@ async def test_restore_returns_pollable_task_id(vfs, monkeypatch):
     )
 
     class _MemTaskStore:
+        def __init__(self):
+            self.tasks = {}
+
+        @staticmethod
+        def _key(task):
+            return task.account_id, task.user_id, task.task_id
+
         async def create(self, task):
-            return None
+            self.tasks[self._key(task)] = TaskAggregate(task=deepcopy(task))
 
         async def update(self, task):
-            return None
+            key = self._key(task)
+            current = self.tasks[key]
+            self.tasks[key] = TaskAggregate(
+                task=deepcopy(task),
+                works=deepcopy(current.works),
+            )
+            return True
 
         async def get(self, task_id, *, account_id=None, user_id=None):
-            return None
+            return deepcopy(self.tasks.get((account_id, user_id, task_id)))
 
-        async def list(self, account_id, *, user_id=None):
+        async def list(
+            self,
+            account_id=None,
+            *,
+            user_id=None,
+            task_type=None,
+            status=None,
+            resource_id=None,
+            limit=None,
+        ):
             return []
 
         async def delete(self, task_id, *, account_id, user_id=None):

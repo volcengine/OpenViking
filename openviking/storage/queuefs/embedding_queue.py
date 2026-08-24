@@ -16,14 +16,6 @@ class EmbeddingQueue(NamedQueue):
     Supports direct enqueue and dequeue of EmbeddingMsg objects.
     """
 
-    async def enqueue(self, msg: Optional[EmbeddingMsg]) -> str:
-        """Serialize EmbeddingMsg object and store in queue."""
-        if msg is None:
-            logger.warning("Embedding message is None, skipping enqueuing")
-            return ""
-        logger.debug("Enqueued embedding message: uri=%s", msg.context_data.get("uri", ""))
-        return await super().enqueue(msg.to_dict())
-
     async def dequeue(self) -> Optional[EmbeddingMsg]:
         """Get message from queue and deserialize to EmbeddingMsg object."""
         data_dict = await super().dequeue()

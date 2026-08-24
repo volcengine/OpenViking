@@ -105,6 +105,7 @@ async def test_write_replaces_existing_resource_file(client_with_resource):
     assert body["status"] == "ok"
     assert body["result"]["uri"] == file_uri
     assert body["result"]["mode"] == "replace"
+    assert "task_id" not in body["result"]
 
     read_resp = await client.get("/api/v1/content/read", params={"uri": file_uri})
     assert read_resp.status_code == 200
@@ -151,6 +152,7 @@ async def test_write_without_wait_is_immediately_readable(client_with_resource):
     assert body["result"]["content_updated"] is True
     assert body["result"]["semantic_status"] == "queued"
     assert body["result"]["vector_status"] == "queued"
+    assert body["result"]["task_id"]
 
     read_resp = await client.get("/api/v1/content/read", params={"uri": file_uri})
     assert read_resp.status_code == 200

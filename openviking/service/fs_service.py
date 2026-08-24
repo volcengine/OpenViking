@@ -19,6 +19,9 @@ from openviking.privacy import (
 from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
+from openviking.service.task_context import bind_task_context
+from openviking.service.task_tracker import get_task_tracker
+from openviking.service.task_work_hook import enqueue_with_task_work
 from openviking.session.memory.memory_updater import MemoryUpdater
 from openviking.session.memory.utils.content_visibility import visible_content
 from openviking.storage.abstract_overview import (
@@ -31,8 +34,6 @@ from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
-from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
-from openviking.telemetry.resource_summary import build_queue_status_payload
 from openviking.utils.embedding_utils import vectorize_directory_meta
 from openviking_cli.exceptions import DeadlineExceededError, NotInitializedError
 from openviking_cli.utils import VikingURI, get_logger
@@ -259,49 +260,66 @@ class FSService:
         context_type = context_type_for_uri(uri)
         refresh_parent_uri = self._semantic_refresh_parent_uri(uri, context_type)
         memory_overview_uri = self._memory_overview_parent_uri(uri, context_type)
-        result = await viking_fs.rm(uri, recursive=recursive, ctx=ctx)
-        await self._sync_watch_after_rm(uri, account_id=ctx.account_id, context_type=context_type)
         queue_status = None
         refresh_action: Optional[FreshnessAction] = None
-        request_registered = False
-        telemetry_id = get_current_telemetry().telemetry_id
+        tracker = get_task_tracker()
+        task = await tracker.create(
+            "content_remove", resource_id=uri, account_id=ctx.account_id, user_id=ctx.user.user_id
+        )
+        await tracker.start(task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id)
         try:
-            if refresh_parent_uri:
-                if wait and telemetry_id:
-                    get_request_wait_tracker().register_request(telemetry_id)
-                    request_registered = True
-                refresh_action = await self._enqueue_delete_refresh(
-                    root_uri=refresh_parent_uri,
-                    deleted_uri=uri,
-                    context_type=context_type,
-                    ctx=ctx,
-                    force_refresh=wait,
-                )
-            if self._resource_memory_link_service and context_type == "resource":
-                cleanup_result = await self._resource_memory_link_service.before_resource_delete(
-                    ctx=ctx,
-                    resource_uri=uri,
-                    recursive=recursive,
-                )
-            if memory_overview_uri:
-                await MemoryUpdater.refresh_schema_overview(
-                    viking_fs=viking_fs,
-                    directory_uri=memory_overview_uri,
-                    ctx=ctx,
-                )
-            for cleanup_overview_uri in self._memory_overview_parent_uris_from_cleanup(
-                cleanup_result
-            ):
-                await MemoryUpdater.refresh_schema_overview(
-                    viking_fs=viking_fs,
-                    directory_uri=cleanup_overview_uri,
-                    ctx=ctx,
-                )
-            if refresh_parent_uri and wait and refresh_action is not FreshnessAction.MARK_PENDING:
-                queue_status = await self._wait_for_refresh(timeout=timeout)
-        finally:
-            if request_registered:
-                get_request_wait_tracker().cleanup(telemetry_id)
+            result = await viking_fs.rm(uri, recursive=recursive, ctx=ctx)
+            await self._sync_watch_after_rm(
+                uri, account_id=ctx.account_id, context_type=context_type
+            )
+            with bind_task_context(task.task_id, ctx.account_id, ctx.user.user_id):
+                if refresh_parent_uri:
+                    refresh_action = await self._enqueue_delete_refresh(
+                        root_uri=refresh_parent_uri,
+                        deleted_uri=uri,
+                        context_type=context_type,
+                        ctx=ctx,
+                        force_refresh=wait,
+                    )
+                if self._resource_memory_link_service and context_type == "resource":
+                    cleanup_result = (
+                        await self._resource_memory_link_service.before_resource_delete(
+                            ctx=ctx, resource_uri=uri, recursive=recursive
+                        )
+                    )
+                if memory_overview_uri:
+                    await MemoryUpdater.refresh_schema_overview(
+                        viking_fs=viking_fs,
+                        directory_uri=memory_overview_uri,
+                        ctx=ctx,
+                    )
+                for cleanup_overview_uri in self._memory_overview_parent_uris_from_cleanup(
+                    cleanup_result
+                ):
+                    await MemoryUpdater.refresh_schema_overview(
+                        viking_fs=viking_fs,
+                        directory_uri=cleanup_overview_uri,
+                        ctx=ctx,
+                    )
+                if (
+                    refresh_parent_uri
+                    and wait
+                    and refresh_action is not FreshnessAction.MARK_PENDING
+                ):
+                    try:
+                        queue_status = await tracker.wait_for_work(
+                            task.task_id,
+                            account_id=ctx.account_id,
+                            user_id=ctx.user.user_id,
+                            timeout=timeout,
+                        )
+                    except TimeoutError as exc:
+                        raise DeadlineExceededError("queue processing", timeout) from exc
+        except Exception as exc:
+            await tracker.fail(
+                task.task_id, str(exc), account_id=ctx.account_id, user_id=ctx.user.user_id
+            )
+            raise
         if cleanup_result is not None and isinstance(result, dict):
             result["memory_cleanup"] = cleanup_result
         if refresh_parent_uri and isinstance(result, dict):
@@ -313,6 +331,16 @@ class FSService:
             )
             if queue_status is not None:
                 result["queue_status"] = queue_status
+        if not isinstance(result, dict):
+            result = {}
+        await tracker.complete(
+            task.task_id,
+            result,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+        )
+        if not wait:
+            return {**result, "task_id": task.task_id}
         return result
 
     @staticmethod
@@ -431,30 +459,12 @@ class FSService:
             changes={"deleted": [deleted_uri]},
             generation_trigger="content_delete",
         )
-        if telemetry_id:
-            get_request_wait_tracker().register_semantic_root(telemetry_id, msg.id)
-        try:
-            await semantic_queue.enqueue(msg)
-        except Exception as exc:
-            if telemetry_id:
-                get_request_wait_tracker().mark_semantic_failed(telemetry_id, msg.id, str(exc))
-            raise
+        await enqueue_with_task_work(
+            msg,
+            "Semantic",
+            semantic_queue.enqueue,
+        )
         return decision.action
-
-    async def _wait_for_refresh(self, *, timeout: Optional[float]) -> Dict[str, Any]:
-        telemetry_id = get_current_telemetry().telemetry_id
-        if telemetry_id:
-            try:
-                await get_request_wait_tracker().wait_for_request(telemetry_id, timeout=timeout)
-            except TimeoutError as exc:
-                raise DeadlineExceededError("queue processing", timeout) from exc
-            return get_request_wait_tracker().build_queue_status(telemetry_id)
-        try:
-            return build_queue_status_payload(
-                await get_queue_manager().wait_complete(timeout=timeout)
-            )
-        except TimeoutError as exc:
-            raise DeadlineExceededError("queue processing", timeout) from exc
 
     async def mv(self, from_uri: str, to_uri: str, ctx: RequestContext) -> None:
         """Move resource."""
@@ -685,15 +695,33 @@ class FSService:
         """Write to an existing file and refresh semantics/vectors."""
         viking_fs = self._ensure_initialized()
         coordinator = ContentWriteCoordinator(viking_fs=viking_fs, vikingdb=self._vikingdb)
-        return await coordinator.write(
-            uri=uri,
-            content=content,
-            ctx=ctx,
-            mode=mode,
-            wait=wait,
-            timeout=timeout,
-            processing_mode=processing_mode,
+        tracker = get_task_tracker()
+        task = await tracker.create(
+            "content_write", resource_id=uri, account_id=ctx.account_id, user_id=ctx.user.user_id
         )
+        await tracker.start(task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id)
+        try:
+            with bind_task_context(task.task_id, ctx.account_id, ctx.user.user_id):
+                result = await coordinator.write(
+                    uri=uri,
+                    content=content,
+                    ctx=ctx,
+                    mode=mode,
+                    wait=wait,
+                    timeout=timeout,
+                    processing_mode=processing_mode,
+                )
+            await tracker.complete(
+                task.task_id, result, account_id=ctx.account_id, user_id=ctx.user.user_id
+            )
+            if not wait:
+                return {**result, "task_id": task.task_id}
+            return result
+        except Exception as exc:
+            await tracker.fail(
+                task.task_id, str(exc), account_id=ctx.account_id, user_id=ctx.user.user_id
+            )
+            raise
 
     async def batch_write(
         self,
@@ -707,13 +735,34 @@ class FSService:
         """Apply multiple file writes and aggregate downstream refresh."""
         viking_fs = self._ensure_initialized()
         coordinator = ContentWriteCoordinator(viking_fs=viking_fs, vikingdb=self._vikingdb)
-        return await coordinator.batch_write(
-            root_uri=root_uri,
-            operations=operations,
-            ctx=ctx,
-            wait=wait,
-            timeout=timeout,
+        tracker = get_task_tracker()
+        task = await tracker.create(
+            "content_batch_write",
+            resource_id=root_uri,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
         )
+        await tracker.start(task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id)
+        try:
+            with bind_task_context(task.task_id, ctx.account_id, ctx.user.user_id):
+                result = await coordinator.batch_write(
+                    root_uri=root_uri,
+                    operations=operations,
+                    ctx=ctx,
+                    wait=wait,
+                    timeout=timeout,
+                )
+            await tracker.complete(
+                task.task_id, result, account_id=ctx.account_id, user_id=ctx.user.user_id
+            )
+            if not wait:
+                return {**result, "task_id": task.task_id}
+            return result
+        except Exception as exc:
+            await tracker.fail(
+                task.task_id, str(exc), account_id=ctx.account_id, user_id=ctx.user.user_id
+            )
+            raise
 
     async def set_tags(
         self,

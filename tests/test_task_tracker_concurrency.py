@@ -8,10 +8,16 @@ from typing import Any
 
 import pytest
 
+from openviking.service.task_domain import TaskAggregate
+from openviking.service.task_store import CachingTaskWorkStore
+
+OWNER = {"account_id": "acme", "user_id": "alice"}
+
 
 class _ControllableTaskStore:
     def __init__(self) -> None:
         self.payloads: dict[str, dict[str, Any]] = {}
+        self.aggregates: dict[str, TaskAggregate] = {}
         self.create_calls = 0
         self.update_started: dict[str, asyncio.Event] = {}
         self.update_release: dict[str, asyncio.Event] = {}
@@ -42,8 +48,23 @@ class _ControllableTaskStore:
         self.operation_loops.append(asyncio.get_running_loop())
         self.create_calls += 1
         self.payloads[task.task_id] = self._payload(task)
+        self.aggregates[task.task_id] = TaskAggregate(task=deepcopy(task))
 
-    async def update(self, task: Any) -> None:
+    async def create_if_no_active(self, task: Any) -> bool:
+        for aggregate in self.aggregates.values():
+            current = aggregate.task
+            if (
+                current.account_id == task.account_id
+                and current.user_id == task.user_id
+                and current.task_type == task.task_type
+                and current.resource_id == task.resource_id
+                and current.status.value in {"pending", "running", "cancelling"}
+            ):
+                return False
+        await self.create(task)
+        return True
+
+    async def update(self, task: Any) -> bool:
         self.operation_loops.append(asyncio.get_running_loop())
         started = self.update_started.get(task.task_id)
         if started is not None:
@@ -55,6 +76,12 @@ class _ControllableTaskStore:
         if error is not None:
             raise error
         self.payloads[task.task_id] = self._payload(task)
+        existing = self.aggregates.get(task.task_id)
+        self.aggregates[task.task_id] = TaskAggregate(
+            task=deepcopy(task),
+            works=deepcopy(existing.works) if existing is not None else {},
+        )
+        return True
 
     async def get(
         self,
@@ -62,36 +89,44 @@ class _ControllableTaskStore:
         *,
         account_id: str | None = None,
         user_id: str | None = None,
-    ) -> dict[str, Any] | None:
+    ) -> TaskAggregate | None:
         self.operation_loops.append(asyncio.get_running_loop())
         self.get_calls += 1
-        payload = self.payloads.get(task_id)
-        if payload is None:
+        aggregate = self.aggregates.get(task_id)
+        if aggregate is None:
             return None
-        if account_id is not None and payload["account_id"] != account_id:
+        if account_id is not None and aggregate.task.account_id != account_id:
             return None
-        if user_id is not None and payload["user_id"] != user_id:
+        if user_id is not None and aggregate.task.user_id != user_id:
             return None
-        return deepcopy(payload)
+        return deepcopy(aggregate)
 
     async def list(
         self,
-        account_id: str,
+        account_id: str | None = None,
         *,
         user_id: str | None = None,
-    ) -> list[dict[str, Any]]:
+        task_type: str | None = None,
+        status: str | None = None,
+        resource_id: str | None = None,
+        limit: int | None = None,
+    ) -> list[TaskAggregate]:
         self.operation_loops.append(asyncio.get_running_loop())
         snapshot = [
-            deepcopy(payload)
-            for payload in self.payloads.values()
-            if payload["account_id"] == account_id
-            and (user_id is None or payload["user_id"] == user_id)
+            deepcopy(aggregate)
+            for aggregate in self.aggregates.values()
+            if (account_id is None or aggregate.task.account_id == account_id)
+            and (user_id is None or aggregate.task.user_id == user_id)
+            and (task_type is None or aggregate.task.task_type == task_type)
+            and (status is None or aggregate.task.status.value == status)
+            and (resource_id is None or aggregate.task.resource_id == resource_id)
         ]
         if self.list_started is not None:
             self.list_started.set()
         if self.list_release is not None:
             await self.list_release.wait()
-        return snapshot
+        snapshot.sort(key=lambda aggregate: aggregate.task.created_at, reverse=True)
+        return snapshot if limit is None else snapshot[:limit]
 
     async def delete(
         self,
@@ -101,6 +136,14 @@ class _ControllableTaskStore:
         user_id: str | None = None,
     ) -> None:
         self.payloads.pop(task_id, None)
+        self.aggregates.pop(task_id, None)
+
+    async def list_cancelling_tasks(self) -> set[tuple[str, str, str]]:
+        return {
+            (aggregate.task.account_id, aggregate.task.user_id, task_id)
+            for task_id, aggregate in self.aggregates.items()
+            if aggregate.task.status.value == "cancelling"
+        }
 
 
 class _BlockingCreateTaskStore(_ControllableTaskStore):
@@ -131,10 +174,9 @@ class _ThreadBlockingUpdateTaskStore(_ControllableTaskStore):
         self.thread_update_release = threading.Event()
         self._block_next_update = True
 
-    async def update(self, task: Any) -> None:
+    async def update(self, task: Any) -> bool:
         if not self._block_next_update:
-            await super().update(task)
-            return
+            return await super().update(task)
         self._block_next_update = False
         payload = self._payload(task)
 
@@ -142,383 +184,39 @@ class _ThreadBlockingUpdateTaskStore(_ControllableTaskStore):
             self.thread_update_started.set()
             self.thread_update_release.wait()
             self.payloads[task.task_id] = payload
+            existing = self.aggregates.get(task.task_id)
+            self.aggregates[task.task_id] = TaskAggregate(
+                task=deepcopy(task),
+                works=deepcopy(existing.works) if existing is not None else {},
+            )
 
         self.operation_loops.append(asyncio.get_running_loop())
         await asyncio.to_thread(blocking_write)
+        return True
 
 
-@pytest.mark.asyncio
-async def test_owner_loop_dispatcher_runs_foreign_loop_work_on_owner_loop():
-    from openviking.service.task_tracker_concurrency import OwnerLoopDispatcher
+def _tracker(store: _ControllableTaskStore, **kwargs) -> Any:
+    from openviking.service.task_tracker import TaskTracker
 
-    dispatcher = OwnerLoopDispatcher()
-    dispatcher.bind_current_loop()
-    owner_loop = asyncio.get_running_loop()
-    work_loop: asyncio.AbstractEventLoop | None = None
-
-    async def work() -> str:
-        nonlocal work_loop
-        work_loop = asyncio.get_running_loop()
-        return "done"
-
-    def run_from_foreign_loop() -> str:
-        return asyncio.run(dispatcher.run(work))
-
-    result = await asyncio.to_thread(run_from_foreign_loop)
-
-    assert result == "done"
-    assert work_loop is owner_loop
-
-
-@pytest.mark.asyncio
-async def test_owner_loop_dispatcher_propagates_foreign_cancellation():
-    from openviking.service.task_tracker_concurrency import OwnerLoopDispatcher
-
-    dispatcher = OwnerLoopDispatcher()
-    dispatcher.bind_current_loop()
-    work_started = asyncio.Event()
-    work_cancelled = asyncio.Event()
-    foreign_ready = threading.Event()
-    cancel_foreign = threading.Event()
-
-    async def work() -> None:
-        work_started.set()
-        try:
-            await asyncio.Future()
-        except asyncio.CancelledError:
-            work_cancelled.set()
-            raise
-
-    def run_from_foreign_loop() -> None:
-        async def invoke() -> None:
-            task = asyncio.create_task(dispatcher.run(work))
-            foreign_ready.set()
-            await asyncio.to_thread(cancel_foreign.wait)
-            task.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await task
-
-        asyncio.run(invoke())
-
-    foreign_call = asyncio.create_task(asyncio.to_thread(run_from_foreign_loop))
-    await work_started.wait()
-    await asyncio.to_thread(foreign_ready.wait)
-    cancel_foreign.set()
-    await foreign_call
-    await asyncio.wait_for(work_cancelled.wait(), timeout=1)
-
-
-def test_owner_loop_dispatcher_rejects_calls_after_owner_loop_closes():
-    from openviking.service.task_tracker_concurrency import OwnerLoopDispatcher
-
-    dispatcher = OwnerLoopDispatcher()
-
-    async def bind() -> None:
-        dispatcher.bind_current_loop()
-
-    asyncio.run(bind())
-
-    async def invoke() -> None:
-        with pytest.raises(RuntimeError, match="owner event loop is closed"):
-            await dispatcher.run(lambda: asyncio.sleep(0))
-
-    asyncio.run(invoke())
-
-
-def test_owner_loop_dispatcher_rejects_stopped_owner_loop():
-    from openviking.service.task_tracker_concurrency import OwnerLoopDispatcher
-
-    dispatcher = OwnerLoopDispatcher()
-    owner_loop = asyncio.new_event_loop()
-    owner_loop.run_until_complete(asyncio.sleep(0))
-    owner_loop.run_until_complete(_bind_dispatcher(dispatcher))
-
-    async def invoke() -> None:
-        with pytest.raises(RuntimeError, match="owner event loop is not running"):
-            await dispatcher.run(lambda: asyncio.sleep(0))
-
-    try:
-        asyncio.run(invoke())
-    finally:
-        owner_loop.close()
-
-
-async def _bind_dispatcher(dispatcher: Any) -> None:
-    dispatcher.bind_current_loop()
-
-
-def test_owner_loop_dispatcher_concurrent_first_calls_share_winning_loop():
-    from openviking.service.task_tracker_concurrency import OwnerLoopDispatcher
-
-    dispatcher = OwnerLoopDispatcher()
-    calls_started = threading.Barrier(2)
-    work_started = threading.Barrier(2)
-    results: list[int] = []
-    errors: list[BaseException] = []
-
-    async def work() -> int:
-        await asyncio.to_thread(work_started.wait)
-        return id(asyncio.get_running_loop())
-
-    def invoke() -> None:
-        try:
-            calls_started.wait()
-            results.append(asyncio.run(dispatcher.run(work)))
-        except BaseException as exc:
-            errors.append(exc)
-
-    threads = [threading.Thread(target=invoke) for _ in range(2)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(timeout=2)
-
-    assert not errors
-    assert len(results) == 2
-    assert results[0] == results[1]
-
-
-def test_owner_loop_dispatcher_fails_if_loop_stops_during_dispatch():
-    from openviking.service.task_tracker_concurrency import OwnerLoopDispatcher
-
-    dispatcher = OwnerLoopDispatcher()
-    owner_loop = asyncio.new_event_loop()
-    owner_ready = threading.Event()
-    stop_requested = threading.Event()
-    let_stop_callback_return = threading.Event()
-    first_run_stopped = threading.Event()
-    cleanup_queued_callbacks = threading.Event()
-
-    def owner_thread_main() -> None:
-        asyncio.set_event_loop(owner_loop)
-
-        def bind() -> None:
-            dispatcher.bind_current_loop()
-            owner_ready.set()
-
-        owner_loop.call_soon(bind)
-        owner_loop.run_forever()
-        first_run_stopped.set()
-        cleanup_queued_callbacks.wait()
-        owner_loop.call_soon(owner_loop.stop)
-        owner_loop.run_forever()
-        owner_loop.close()
-
-    owner_thread = threading.Thread(target=owner_thread_main)
-    owner_thread.start()
-    assert owner_ready.wait(timeout=1)
-
-    def stop_inside_owner_callback() -> None:
-        owner_loop.stop()
-        stop_requested.set()
-        let_stop_callback_return.wait()
-
-    owner_loop.call_soon_threadsafe(stop_inside_owner_callback)
-    assert stop_requested.wait(timeout=1)
-
-    async def invoke() -> None:
-        async def release_callback() -> None:
-            await asyncio.sleep(0.05)
-            let_stop_callback_return.set()
-
-        release_task = asyncio.create_task(release_callback())
-        with pytest.raises(RuntimeError, match="owner event loop stopped"):
-            await asyncio.wait_for(
-                dispatcher.run(lambda: asyncio.sleep(0)),
-                timeout=1,
-            )
-        await release_task
-
-    asyncio.run(invoke())
-    assert first_run_stopped.wait(timeout=1)
-    cleanup_queued_callbacks.set()
-    owner_thread.join(timeout=2)
-    assert not owner_thread.is_alive()
-
-
-def test_owner_loop_dispatcher_prefers_completed_result_over_simultaneous_stop():
-    from openviking.service.task_tracker_concurrency import OwnerLoopDispatcher
-
-    dispatcher = OwnerLoopDispatcher()
-    owner_loop = asyncio.new_event_loop()
-    owner_ready = threading.Event()
-
-    def owner_thread_main() -> None:
-        asyncio.set_event_loop(owner_loop)
-
-        def bind() -> None:
-            dispatcher.bind_current_loop()
-            owner_ready.set()
-
-        owner_loop.call_soon(bind)
-        owner_loop.run_forever()
-        owner_loop.close()
-
-    owner_thread = threading.Thread(target=owner_thread_main)
-    owner_thread.start()
-    assert owner_ready.wait(timeout=1)
-
-    async def finish_and_stop() -> str:
-        owner_loop.stop()
-        return "committed"
-
-    result = asyncio.run(dispatcher.run(finish_and_stop))
-
-    owner_thread.join(timeout=2)
-    assert result == "committed"
-    assert not owner_thread.is_alive()
-
-
-@pytest.mark.asyncio
-async def test_store_io_limiter_bounds_concurrency():
-    from openviking.service.task_tracker_concurrency import StoreIOLimiter
-
-    limiter = StoreIOLimiter(max_concurrent=3)
-    release = asyncio.Event()
-    entered = 0
-    max_entered = 0
-    limit_reached = asyncio.Event()
-
-    async def operation() -> None:
-        nonlocal entered, max_entered
-        entered += 1
-        max_entered = max(max_entered, entered)
-        if entered == 3:
-            limit_reached.set()
-        await release.wait()
-        entered -= 1
-
-    tasks = [asyncio.create_task(limiter.run("test", operation)) for _ in range(20)]
-    await asyncio.wait_for(limit_reached.wait(), timeout=1)
-    await asyncio.sleep(0)
-
-    assert max_entered == 3
-    release.set()
-    await asyncio.gather(*tasks)
-    assert limiter.inflight == 0
-    assert limiter.max_observed_inflight == 3
-
-
-def test_store_io_limiter_rejects_non_positive_limit():
-    from openviking.service.task_tracker_concurrency import StoreIOLimiter
-
-    with pytest.raises(ValueError, match="max_concurrent must be positive"):
-        StoreIOLimiter(max_concurrent=0)
-
-
-@pytest.mark.asyncio
-async def test_run_to_completion_preserves_caller_cancellation_when_work_fails_later():
-    from openviking.service.task_tracker_concurrency import run_to_completion
-
-    started = asyncio.Event()
-    release = asyncio.Event()
-
-    async def fail_later() -> None:
-        started.set()
-        await release.wait()
-        raise RuntimeError("late store failure")
-
-    operation = asyncio.create_task(run_to_completion(fail_later))
-    await started.wait()
-    operation.cancel()
-    release.set()
-
-    with pytest.raises(asyncio.CancelledError):
-        await operation
-
-
-@pytest.mark.asyncio
-async def test_keyed_lock_serializes_same_key_and_allows_different_keys():
-    from openviking.service.task_tracker_concurrency import KeyedAsyncLockPool
-
-    pool = KeyedAsyncLockPool[str]()
-    first_entered = asyncio.Event()
-    release_first = asyncio.Event()
-    same_key_entered = asyncio.Event()
-    other_key_entered = asyncio.Event()
-
-    async def hold_first_key() -> None:
-        async with pool.acquire("task-1"):
-            first_entered.set()
-            await release_first.wait()
-
-    async def wait_for_same_key() -> None:
-        await first_entered.wait()
-        async with pool.acquire("task-1"):
-            same_key_entered.set()
-
-    async def use_other_key() -> None:
-        await first_entered.wait()
-        async with pool.acquire("task-2"):
-            other_key_entered.set()
-
-    tasks = [
-        asyncio.create_task(hold_first_key()),
-        asyncio.create_task(wait_for_same_key()),
-        asyncio.create_task(use_other_key()),
-    ]
-
-    await asyncio.wait_for(other_key_entered.wait(), timeout=1)
-    assert not same_key_entered.is_set()
-
-    release_first.set()
-    await asyncio.wait_for(same_key_entered.wait(), timeout=1)
-    await asyncio.gather(*tasks)
-
-
-@pytest.mark.asyncio
-async def test_keyed_lock_registry_is_cleaned_after_use_and_cancellation():
-    from openviking.service.task_tracker_concurrency import KeyedAsyncLockPool
-
-    pool = KeyedAsyncLockPool[str]()
-
-    async with pool.acquire("completed"):
-        assert pool.entry_count == 1
-    assert pool.entry_count == 0
-
-    blocker_entered = asyncio.Event()
-    release_blocker = asyncio.Event()
-
-    async def blocker() -> None:
-        async with pool.acquire("cancelled"):
-            blocker_entered.set()
-            await release_blocker.wait()
-
-    async def waiter() -> None:
-        await blocker_entered.wait()
-        async with pool.acquire("cancelled"):
-            pass
-
-    blocker_task = asyncio.create_task(blocker())
-    waiter_task = asyncio.create_task(waiter())
-    await blocker_entered.wait()
-    await asyncio.sleep(0)
-
-    waiter_task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await waiter_task
-
-    release_blocker.set()
-    await blocker_task
-    assert pool.entry_count == 0
+    return TaskTracker(store=CachingTaskWorkStore(store), **kwargs)
 
 
 @pytest.mark.asyncio
 async def test_task_tracker_different_task_updates_do_not_block_each_other():
-    from openviking.service.task_tracker import TaskStatus, TaskTracker
+    from openviking.service.task_tracker import TaskStatus
 
     store = _ControllableTaskStore()
-    tracker = TaskTracker(store=store)
+    tracker = _tracker(store)
     first = await tracker.create("add_resource", account_id="acme", user_id="alice")
     second = await tracker.create("add_resource", account_id="acme", user_id="alice")
     store.update_started[first.task_id] = asyncio.Event()
     store.update_release[first.task_id] = asyncio.Event()
 
-    first_update = asyncio.create_task(tracker.start(first.task_id))
+    first_update = asyncio.create_task(tracker.start(first.task_id, **OWNER))
     await store.update_started[first.task_id].wait()
 
-    await asyncio.wait_for(tracker.start(second.task_id), timeout=1)
-    second_snapshot = await tracker.get(second.task_id)
+    await asyncio.wait_for(tracker.start(second.task_id, **OWNER), timeout=1)
+    second_snapshot = await tracker.get(second.task_id, **OWNER)
     assert second_snapshot is not None
     assert second_snapshot.status == TaskStatus.RUNNING
 
@@ -528,18 +226,18 @@ async def test_task_tracker_different_task_updates_do_not_block_each_other():
 
 @pytest.mark.asyncio
 async def test_task_tracker_cache_hit_get_is_not_blocked_by_in_flight_update():
-    from openviking.service.task_tracker import TaskStatus, TaskTracker
+    from openviking.service.task_tracker import TaskStatus
 
     store = _ControllableTaskStore()
-    tracker = TaskTracker(store=store)
+    tracker = _tracker(store)
     task = await tracker.create("add_resource", account_id="acme", user_id="alice")
     store.update_started[task.task_id] = asyncio.Event()
     store.update_release[task.task_id] = asyncio.Event()
 
-    update = asyncio.create_task(tracker.start(task.task_id))
+    update = asyncio.create_task(tracker.start(task.task_id, **OWNER))
     await store.update_started[task.task_id].wait()
 
-    snapshot = await asyncio.wait_for(tracker.get(task.task_id), timeout=0.1)
+    snapshot = await asyncio.wait_for(tracker.get(task.task_id, **OWNER), timeout=0.1)
     assert snapshot is not None
     assert snapshot.status == TaskStatus.PENDING
 
@@ -549,33 +247,33 @@ async def test_task_tracker_cache_hit_get_is_not_blocked_by_in_flight_update():
 
 @pytest.mark.asyncio
 async def test_task_tracker_failed_update_does_not_contaminate_cached_snapshot():
-    from openviking.service.task_tracker import TaskStatus, TaskTracker
+    from openviking.service.task_tracker import TaskStatus
 
     store = _ControllableTaskStore()
-    tracker = TaskTracker(store=store)
+    tracker = _tracker(store)
     task = await tracker.create("add_resource", account_id="acme", user_id="alice")
     store.update_errors[task.task_id] = RuntimeError("store unavailable")
 
     with pytest.raises(RuntimeError, match="store unavailable"):
-        await tracker.start(task.task_id)
+        await tracker.start(task.task_id, **OWNER)
 
-    snapshot = await tracker.get(task.task_id)
+    snapshot = await tracker.get(task.task_id, **OWNER)
     assert snapshot is not None
     assert snapshot.status == TaskStatus.PENDING
 
 
 @pytest.mark.asyncio
 async def test_cancelled_thread_write_settles_before_later_same_task_mutation():
-    from openviking.service.task_tracker import TaskStatus, TaskTracker
+    from openviking.service.task_tracker import TaskStatus
 
     store = _ThreadBlockingUpdateTaskStore()
-    tracker = TaskTracker(store=store)
+    tracker = _tracker(store)
     task = await tracker.create("add_resource", account_id="acme", user_id="alice")
 
-    starting = asyncio.create_task(tracker.start(task.task_id))
+    starting = asyncio.create_task(tracker.start(task.task_id, **OWNER))
     await asyncio.to_thread(store.thread_update_started.wait)
     starting.cancel()
-    completing = asyncio.create_task(tracker.complete(task.task_id, {"done": True}))
+    completing = asyncio.create_task(tracker.complete(task.task_id, {"done": True}, **OWNER))
     await asyncio.sleep(0)
     assert not completing.done()
 
@@ -584,7 +282,7 @@ async def test_cancelled_thread_write_settles_before_later_same_task_mutation():
         await starting
     await completing
 
-    snapshot = await tracker.get(task.task_id)
+    snapshot = await tracker.get(task.task_id, **OWNER)
     assert snapshot is not None
     assert snapshot.status == TaskStatus.COMPLETED
     assert store.payloads[task.task_id]["status"] == TaskStatus.COMPLETED.value
@@ -598,16 +296,15 @@ async def test_cancelled_thread_write_settles_before_later_same_task_mutation():
     [("complete", "completed"), ("fail", "failed")],
 )
 async def test_cancelled_outcome_finishes_terminal_transition(outcome, expected_status):
-    from openviking.service.task_tracker import TaskTracker
 
     store = _ThreadBlockingUpdateTaskStore()
-    tracker = TaskTracker(store=store)
+    tracker = _tracker(store)
     task = await tracker.create("add_resource", account_id="acme", user_id="alice")
 
     if outcome == "complete":
-        operation = asyncio.create_task(tracker.complete(task.task_id, {"done": True}))
+        operation = asyncio.create_task(tracker.complete(task.task_id, {"done": True}, **OWNER))
     else:
-        operation = asyncio.create_task(tracker.fail(task.task_id, "failed on purpose"))
+        operation = asyncio.create_task(tracker.fail(task.task_id, "failed on purpose", **OWNER))
     await asyncio.to_thread(store.thread_update_started.wait)
     operation.cancel()
     store.thread_update_release.set()
@@ -615,7 +312,7 @@ async def test_cancelled_outcome_finishes_terminal_transition(outcome, expected_
     with pytest.raises(asyncio.CancelledError):
         await operation
 
-    snapshot = await tracker.get(task.task_id)
+    snapshot = await tracker.get(task.task_id, **OWNER)
     assert snapshot is not None
     assert snapshot.status.value == expected_status
     assert store.payloads[task.task_id]["status"] == expected_status
@@ -625,16 +322,16 @@ async def test_cancelled_outcome_finishes_terminal_transition(outcome, expected_
 
 @pytest.mark.asyncio
 async def test_cancelled_cancel_request_still_cancels_active_work_and_finalizes():
-    from openviking.service.task_tracker import TaskStatus, TaskTracker
+    from openviking.service.task_tracker import TaskStatus
 
     store = _ThreadBlockingUpdateTaskStore()
-    tracker = TaskTracker(store=store)
+    tracker = _tracker(store)
     task = await tracker.create("add_resource", account_id="acme", user_id="alice")
     work_started = asyncio.Event()
     work_cancelled = asyncio.Event()
 
     async def active_work() -> None:
-        tracker.register_running_task(task.task_id)
+        tracker.register_active(task.task_id, **OWNER)
         work_started.set()
         try:
             await asyncio.Future()
@@ -642,11 +339,11 @@ async def test_cancelled_cancel_request_still_cancels_active_work_and_finalizes(
             work_cancelled.set()
             raise
         finally:
-            await tracker.unregister_running_task(task.task_id)
+            await tracker.unregister_active(task.task_id, **OWNER)
 
     worker = asyncio.create_task(active_work())
     await work_started.wait()
-    cancelling = asyncio.create_task(tracker.cancel(task.task_id))
+    cancelling = asyncio.create_task(tracker.cancel(task.task_id, **OWNER))
     await asyncio.to_thread(store.thread_update_started.wait)
     cancelling.cancel()
     store.thread_update_release.set()
@@ -657,7 +354,7 @@ async def test_cancelled_cancel_request_still_cancels_active_work_and_finalizes(
         await asyncio.wait_for(worker, timeout=1)
     await asyncio.wait_for(work_cancelled.wait(), timeout=1)
 
-    snapshot = await tracker.get(task.task_id)
+    snapshot = await tracker.get(task.task_id, **OWNER)
     assert snapshot is not None
     assert snapshot.status == TaskStatus.CANCELLED
     assert store.payloads[task.task_id]["status"] == TaskStatus.CANCELLED.value
@@ -666,35 +363,92 @@ async def test_cancelled_cancel_request_still_cancels_active_work_and_finalizes(
 
 
 @pytest.mark.asyncio
+async def test_register_active_rechecks_cancellation_without_poll_loop():
+    store = _ControllableTaskStore()
+    tracker = _tracker(store)
+    task = await tracker.create("add_resource", **OWNER)
+    aggregate = store.aggregates[task.task_id]
+    from openviking.service.task_domain import WorkRecord
+
+    aggregate.works["work-1"] = WorkRecord(
+        work_id="work-1", task_id=task.task_id, queue_name="Semantic"
+    )
+    tracker._store._replace_cached_for_test(aggregate)
+    await tracker.cancel(task.task_id, **OWNER)
+    cancelled = asyncio.Event()
+
+    async def late_registration() -> None:
+        tracker.register_active(task.task_id, **OWNER)
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        finally:
+            await tracker.unregister_active(task.task_id, **OWNER)
+
+    worker = asyncio.create_task(late_registration())
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(worker, timeout=1)
+    assert cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_user_cancel_signal_is_claimed_once_per_active_handle():
+    tracker = _tracker(_ControllableTaskStore())
+    release = asyncio.Event()
+
+    async def active_work() -> None:
+        await release.wait()
+
+    worker = asyncio.create_task(active_work())
+    key = ("acme", "alice", "task-1")
+    with tracker._active_lock:
+        tracker._active[key] = {worker: False}
+
+    first, second = await asyncio.gather(
+        asyncio.to_thread(tracker._claim_user_cancel_handles, {key}),
+        asyncio.to_thread(tracker._claim_user_cancel_handles, {key}),
+    )
+
+    assert sorted([len(first), len(second)]) == [0, 1]
+    assert (first or second) == [worker]
+    release.set()
+    await worker
+
+
+@pytest.mark.asyncio
 async def test_cancel_request_cancelled_before_store_admission_does_not_cancel_work():
-    from openviking.service.task_tracker import TaskStatus, TaskTracker
+    from openviking.service.task_tracker import TaskStatus
 
     store = _ControllableTaskStore()
-    tracker = TaskTracker(store=store, max_concurrent_store_io=1)
+    tracker = _tracker(store, max_concurrent_store_io=1)
     blocker = await tracker.create("add_resource", account_id="acme", user_id="alice")
     target = await tracker.create("add_resource", account_id="acme", user_id="alice")
-    await tracker.start(target.task_id)
+    await tracker.start(target.task_id, **OWNER)
     store.update_started[blocker.task_id] = asyncio.Event()
     store.update_release[blocker.task_id] = asyncio.Event()
 
-    blocking_update = asyncio.create_task(tracker.start(blocker.task_id))
+    blocking_update = asyncio.create_task(tracker.start(blocker.task_id, **OWNER))
     await store.update_started[blocker.task_id].wait()
 
     work_started = asyncio.Event()
     work_cancelled = asyncio.Event()
 
     async def active_work() -> None:
-        tracker.register_running_task(target.task_id)
+        tracker.register_active(target.task_id, **OWNER)
         work_started.set()
         try:
             await asyncio.Future()
         except asyncio.CancelledError:
             work_cancelled.set()
             raise
+        finally:
+            await tracker.unregister_active(target.task_id, **OWNER)
 
     worker = asyncio.create_task(active_work())
     await work_started.wait()
-    cancelling = asyncio.create_task(tracker.cancel(target.task_id))
+    cancelling = asyncio.create_task(tracker.cancel(target.task_id, **OWNER))
     for _ in range(100):
         if tracker._task_locks.entry_count == 2:
             break
@@ -704,7 +458,7 @@ async def test_cancel_request_cancelled_before_store_admission_does_not_cancel_w
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(cancelling, timeout=1)
 
-    snapshot = await tracker.get(target.task_id)
+    snapshot = await tracker.get(target.task_id, **OWNER)
     assert snapshot is not None
     assert snapshot.status == TaskStatus.RUNNING
     assert not work_cancelled.is_set()
@@ -719,35 +473,79 @@ async def test_cancel_request_cancelled_before_store_admission_does_not_cancel_w
 
 @pytest.mark.asyncio
 async def test_same_task_late_mutations_cannot_revert_terminal_status():
-    from openviking.service.task_tracker import TaskStatus, TaskTracker
+    from openviking.service.task_tracker import TaskStatus
 
     store = _ControllableTaskStore()
-    tracker = TaskTracker(store=store)
+    tracker = _tracker(store)
     task = await tracker.create("add_resource", account_id="acme", user_id="alice")
-    await tracker.start(task.task_id)
+    await tracker.start(task.task_id, **OWNER)
     store.update_started[task.task_id] = asyncio.Event()
     store.update_release[task.task_id] = asyncio.Event()
 
-    completing = asyncio.create_task(tracker.complete(task.task_id, {"done": True}))
+    completing = asyncio.create_task(tracker.complete(task.task_id, {"done": True}, **OWNER))
     await store.update_started[task.task_id].wait()
-    late_start = asyncio.create_task(tracker.start(task.task_id, stage="late-start"))
-    late_stage = asyncio.create_task(tracker.update_stage(task.task_id, "late-stage"))
+    late_start = asyncio.create_task(tracker.start(task.task_id, stage="late-start", **OWNER))
+    late_stage = asyncio.create_task(tracker.update_stage(task.task_id, "late-stage", **OWNER))
 
     store.update_release[task.task_id].set()
     await asyncio.gather(completing, late_start, late_stage)
 
-    snapshot = await tracker.get(task.task_id)
+    snapshot = await tracker.get(task.task_id, **OWNER)
     assert snapshot is not None
     assert snapshot.status == TaskStatus.COMPLETED
     assert snapshot.stage == "completed"
 
 
 @pytest.mark.asyncio
-async def test_concurrent_create_with_fixed_task_id_is_idempotent():
+async def test_finalize_cas_conflict_reloads_new_work_before_terminalizing():
+    from openviking.service.task_domain import WorkRecord
+    from openviking.service.task_tracker import TaskStatus
+
+    class WorkRacingStore(_ControllableTaskStore):
+        def __init__(self):
+            super().__init__()
+            self.update_count = 0
+
+        async def update(self, task):
+            self.update_count += 1
+            # start=1, outcome=2, first finalize attempt=3. Simulate another
+            # node inserting work and advancing the aggregate revision there.
+            if self.update_count == 3:
+                aggregate = self.aggregates[task.task_id]
+                aggregate.works["remote-work"] = WorkRecord(
+                    work_id="remote-work",
+                    task_id=task.task_id,
+                    queue_name="Semantic",
+                )
+                return False
+            return await super().update(task)
+
+        async def mark_work_done(self, task_id, work_id, *, account_id, user_id):
+            aggregate = self.aggregates[task_id]
+            aggregate.mark_work_done(work_id)
+            aggregate.task.version += 1
+
     from openviking.service.task_tracker import TaskTracker
 
+    tracker = TaskTracker(WorkRacingStore())
+    task = await tracker.create("add_resource", **OWNER)
+    await tracker.start(task.task_id, **OWNER)
+    await tracker.complete(task.task_id, {"ok": True}, **OWNER)
+
+    blocked = await tracker.get(task.task_id, **OWNER)
+    assert blocked is not None and blocked.status == TaskStatus.RUNNING
+    assert await tracker.has_work(task.task_id, **OWNER)
+
+    await tracker.settle_work(task.task_id, "remote-work", **OWNER)
+    completed = await tracker.get(task.task_id, **OWNER)
+    assert completed is not None and completed.status == TaskStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_concurrent_create_with_fixed_task_id_is_idempotent():
+
     store = _ControllableTaskStore()
-    tracker = TaskTracker(store=store)
+    tracker = _tracker(store)
 
     first, second = await asyncio.gather(
         tracker.create(
@@ -766,21 +564,125 @@ async def test_concurrent_create_with_fixed_task_id_is_idempotent():
 
     assert first.task_id == second.task_id == "fixed"
     assert store.create_calls == 1
-    with pytest.raises(ValueError, match="already belongs to another owner"):
-        await tracker.create(
-            "add_resource",
-            task_id="fixed",
-            account_id="acme",
-            user_id="bob",
-        )
+
+
+@pytest.mark.asyncio
+async def test_same_task_id_is_isolated_by_owner_in_cache_and_locks():
+    from openviking.service.task_tracker import TaskStatus, TaskTracker
+
+    # The file layout and public APIs are owner-scoped, so identical opaque IDs
+    # must coexist without one owner's cache or cancellation touching another.
+    class OwnerStore:
+        def __init__(self):
+            self.tasks = {}
+
+        @staticmethod
+        def key(task):
+            return task.account_id, task.user_id, task.task_id
+
+        async def create(self, task):
+            self.tasks[self.key(task)] = TaskAggregate(task=deepcopy(task))
+
+        async def update(self, task):
+            key = self.key(task)
+            current = self.tasks.get(key)
+            self.tasks[key] = TaskAggregate(
+                task=deepcopy(task),
+                works=deepcopy(current.works) if current else {},
+            )
+            return True
+
+        async def get(self, task_id, *, account_id, user_id):
+            return deepcopy(self.tasks.get((account_id, user_id, task_id)))
+
+        async def list(
+            self,
+            account_id=None,
+            *,
+            user_id=None,
+            task_type=None,
+            status=None,
+            resource_id=None,
+            limit=None,
+        ):
+            tasks = [
+                deepcopy(aggregate)
+                for (account, user, _), aggregate in self.tasks.items()
+                if (account_id is None or account == account_id)
+                and (user_id is None or user == user_id)
+                and (task_type is None or aggregate.task.task_type == task_type)
+                and (status is None or aggregate.task.status.value == status)
+                and (resource_id is None or aggregate.task.resource_id == resource_id)
+            ]
+            tasks.sort(key=lambda aggregate: aggregate.task.created_at, reverse=True)
+            return tasks if limit is None else tasks[:limit]
+
+        async def list_cancelling_tasks(self):
+            return {
+                key
+                for key, aggregate in self.tasks.items()
+                if aggregate.task.status == TaskStatus.CANCELLING
+            }
+
+        async def delete(self, task_id, *, account_id, user_id):
+            self.tasks.pop((account_id, user_id, task_id), None)
+
+    store = CachingTaskWorkStore(OwnerStore())
+    tracker = TaskTracker(store)
+    alice = {"account_id": "acme", "user_id": "alice"}
+    bob = {"account_id": "acme", "user_id": "bob"}
+
+    await tracker.create("add_resource", task_id="shared", **alice)
+    await tracker.create("add_resource", task_id="shared", **bob)
+
+    bob_ready = asyncio.Event()
+    bob_release = asyncio.Event()
+
+    async def hold_bob_active(task_id, ready, release):
+        tracker.register_active(task_id, **bob)
+        ready.set()
+        try:
+            await release.wait()
+        finally:
+            await tracker.unregister_active(task_id, **bob)
+
+    bob_worker = asyncio.create_task(hold_bob_active("shared", bob_ready, bob_release))
+    await bob_ready.wait()
+    await tracker.start("shared", **alice)
+    await tracker.complete("shared", {"owner": "alice"}, **alice)
+
+    alice_task = await tracker.get("shared", **alice)
+    bob_task = await tracker.get("shared", **bob)
+    assert alice_task is not None and alice_task.status == TaskStatus.COMPLETED
+    assert alice_task.result == {"owner": "alice"}
+    assert bob_task is not None and bob_task.status == TaskStatus.PENDING
+    assert bob_task.result is None
+    bob_release.set()
+    await bob_worker
+
+    await tracker.create("add_resource", task_id="shared-cancel", **alice)
+    await tracker.create("add_resource", task_id="shared-cancel", **bob)
+    bob_cancel_ready = asyncio.Event()
+    bob_cancel_release = asyncio.Event()
+    bob_worker = asyncio.create_task(
+        hold_bob_active("shared-cancel", bob_cancel_ready, bob_cancel_release)
+    )
+    await bob_cancel_ready.wait()
+
+    cancelled = await tracker.cancel("shared-cancel", **alice)
+    await asyncio.sleep(0)
+
+    assert cancelled.status == TaskStatus.CANCELLED
+    assert not bob_worker.done()
+    bob_cancel_release.set()
+    await bob_worker
 
 
 @pytest.mark.asyncio
 async def test_task_tracker_cache_hit_does_not_read_store():
-    from openviking.service.task_tracker import TaskTracker
 
     store = _ControllableTaskStore()
-    tracker = TaskTracker(store=store)
+    tracker = _tracker(store)
     task = await tracker.create("add_resource", account_id="acme", user_id="alice")
 
     snapshot = await tracker.get(task.task_id, account_id="acme", user_id="alice")
@@ -792,14 +694,14 @@ async def test_task_tracker_cache_hit_does_not_read_store():
 
 @pytest.mark.asyncio
 async def test_task_tracker_list_does_not_replace_newer_cache_with_stale_store_data():
-    from openviking.service.task_tracker import TaskStatus, TaskTracker
+    from openviking.service.task_tracker import TaskStatus
 
     store = _ControllableTaskStore()
-    tracker = TaskTracker(store=store)
+    tracker = _tracker(store)
     task = await tracker.create("add_resource", account_id="acme", user_id="alice")
     stale_payload = deepcopy(store.payloads[task.task_id])
 
-    await tracker.start(task.task_id)
+    await tracker.start(task.task_id, **OWNER)
     store.payloads[task.task_id] = stale_payload
 
     snapshots = await tracker.list_tasks(account_id="acme", user_id="alice")
@@ -810,10 +712,9 @@ async def test_task_tracker_list_does_not_replace_newer_cache_with_stale_store_d
 
 @pytest.mark.asyncio
 async def test_blocked_store_list_does_not_block_cached_get():
-    from openviking.service.task_tracker import TaskTracker
 
     store = _ControllableTaskStore()
-    tracker = TaskTracker(store=store)
+    tracker = _tracker(store)
     task = await tracker.create("add_resource", account_id="acme", user_id="alice")
     store.list_started = asyncio.Event()
     store.list_release = asyncio.Event()
@@ -821,7 +722,7 @@ async def test_blocked_store_list_does_not_block_cached_get():
     listing = asyncio.create_task(tracker.list_tasks(account_id="acme", user_id="alice"))
     await store.list_started.wait()
 
-    snapshot = await asyncio.wait_for(tracker.get(task.task_id), timeout=0.1)
+    snapshot = await asyncio.wait_for(tracker.get(task.task_id, **OWNER), timeout=0.1)
     assert snapshot is not None
     assert snapshot.task_id == task.task_id
 
@@ -831,43 +732,43 @@ async def test_blocked_store_list_does_not_block_cached_get():
 
 @pytest.mark.asyncio
 async def test_stale_in_flight_list_does_not_overwrite_completed_cache():
-    from openviking.service.task_tracker import TaskStatus, TaskTracker
+    from openviking.service.task_tracker import TaskStatus
 
     store = _ControllableTaskStore()
-    tracker = TaskTracker(store=store)
+    tracker = _tracker(store)
     task = await tracker.create("add_resource", account_id="acme", user_id="alice")
-    await tracker.start(task.task_id)
+    await tracker.start(task.task_id, **OWNER)
     store.list_started = asyncio.Event()
     store.list_release = asyncio.Event()
 
     listing = asyncio.create_task(tracker.list_tasks(account_id="acme", user_id="alice"))
     await store.list_started.wait()
-    await tracker.complete(task.task_id, {"root_uri": "viking://resources/done"})
+    await tracker.complete(task.task_id, {"root_uri": "viking://resources/done"}, **OWNER)
 
     store.list_release.set()
     await listing
 
-    snapshot = await tracker.get(task.task_id)
+    snapshot = await tracker.get(task.task_id, **OWNER)
     assert snapshot is not None
     assert snapshot.status == TaskStatus.COMPLETED
 
 
 @pytest.mark.asyncio
 async def test_clock_rollback_cannot_make_stale_store_snapshot_look_newer(monkeypatch):
-    from openviking.service.task_tracker import TaskStatus, TaskTracker
+    from openviking.service.task_tracker import TaskStatus
 
     store = _ControllableTaskStore()
-    tracker = TaskTracker(store=store)
+    tracker = _tracker(store)
     task = await tracker.create("add_resource", account_id="acme", user_id="alice")
-    await tracker.start(task.task_id)
+    await tracker.start(task.task_id, **OWNER)
     stale_payload = deepcopy(store.payloads[task.task_id])
     monkeypatch.setattr("openviking.service.task_tracker.time.time", lambda: 0.0)
 
-    await tracker.complete(task.task_id, {"done": True})
+    await tracker.complete(task.task_id, {"done": True}, **OWNER)
     store.payloads[task.task_id] = stale_payload
     await tracker.list_tasks(account_id="acme", user_id="alice")
 
-    snapshot = await tracker.get(task.task_id)
+    snapshot = await tracker.get(task.task_id, **OWNER)
     assert snapshot is not None
     assert snapshot.status == TaskStatus.COMPLETED
     assert snapshot.updated_at > stale_payload["updated_at"]
@@ -875,10 +776,9 @@ async def test_clock_rollback_cannot_make_stale_store_snapshot_look_newer(monkey
 
 @pytest.mark.asyncio
 async def test_task_tracker_store_io_limit_allows_bounded_parallelism():
-    from openviking.service.task_tracker import TaskTracker
 
     store = _BlockingCreateTaskStore(expected_concurrency=3)
-    tracker = TaskTracker(store=store, max_concurrent_store_io=3)
+    tracker = _tracker(store, max_concurrent_store_io=3)
 
     creates = [
         asyncio.create_task(tracker.create("add_resource", account_id="acme", user_id="alice"))
@@ -896,10 +796,9 @@ async def test_task_tracker_store_io_limit_allows_bounded_parallelism():
 
 @pytest.mark.asyncio
 async def test_cancelled_create_waiting_for_store_slot_has_no_side_effect():
-    from openviking.service.task_tracker import TaskTracker
 
     store = _BlockingCreateTaskStore(expected_concurrency=1)
-    tracker = TaskTracker(store=store, max_concurrent_store_io=1)
+    tracker = _tracker(store, max_concurrent_store_io=1)
 
     first = asyncio.create_task(tracker.create("add_resource", account_id="acme", user_id="alice"))
     await asyncio.wait_for(store.expected_entered.wait(), timeout=1)
@@ -931,10 +830,9 @@ async def test_cancelled_create_waiting_for_store_slot_has_no_side_effect():
 
 @pytest.mark.asyncio
 async def test_cancelled_create_waiting_for_task_lock_finishes_before_lock_release():
-    from openviking.service.task_tracker import TaskTracker
 
     store = _BlockingCreateTaskStore(expected_concurrency=1)
-    tracker = TaskTracker(store=store)
+    tracker = _tracker(store)
     create_args = {
         "task_type": "add_resource",
         "task_id": "fixed",
@@ -961,22 +859,21 @@ async def test_cancelled_create_waiting_for_task_lock_finishes_before_lock_relea
 
 @pytest.mark.asyncio
 async def test_task_tracker_public_mutation_from_foreign_loop_runs_on_owner():
-    from openviking.service.task_tracker import TaskStatus, TaskTracker
+    from openviking.service.task_tracker import TaskStatus
 
     store = _ControllableTaskStore()
-    tracker = TaskTracker(store=store)
+    tracker = _tracker(store)
     owner_loop = asyncio.get_running_loop()
     task = await tracker.create("add_resource", account_id="acme", user_id="alice")
 
-    await asyncio.to_thread(lambda: asyncio.run(tracker.start(task.task_id)))
+    await asyncio.to_thread(lambda: asyncio.run(tracker.start(task.task_id, **OWNER)))
 
-    with tracker._lock:
-        tracker._tasks.pop(task.task_id)
+    tracker._store._invalidate(task.task_id, **OWNER)
     loaded = await asyncio.to_thread(
         lambda: asyncio.run(tracker.get(task.task_id, account_id="acme", user_id="alice"))
     )
 
-    snapshot = await tracker.get(task.task_id)
+    snapshot = await tracker.get(task.task_id, **OWNER)
     assert loaded is not None
     assert snapshot is not None
     assert snapshot.status == TaskStatus.RUNNING
@@ -985,10 +882,10 @@ async def test_task_tracker_public_mutation_from_foreign_loop_runs_on_owner():
 
 @pytest.mark.asyncio
 async def test_cancelling_foreign_mutation_cleans_task_lock_and_store_slot():
-    from openviking.service.task_tracker import TaskStatus, TaskTracker
+    from openviking.service.task_tracker import TaskStatus
 
     store = _ControllableTaskStore()
-    tracker = TaskTracker(store=store)
+    tracker = _tracker(store)
     task = await tracker.create("add_resource", account_id="acme", user_id="alice")
     store.update_started[task.task_id] = asyncio.Event()
     store.update_release[task.task_id] = asyncio.Event()
@@ -996,7 +893,7 @@ async def test_cancelling_foreign_mutation_cleans_task_lock_and_store_slot():
 
     def run_from_foreign_loop() -> None:
         async def invoke() -> None:
-            mutation = asyncio.create_task(tracker.start(task.task_id))
+            mutation = asyncio.create_task(tracker.start(task.task_id, **OWNER))
             await asyncio.to_thread(cancel_foreign.wait)
             mutation.cancel()
             with pytest.raises(asyncio.CancelledError):
@@ -1013,7 +910,7 @@ async def test_cancelling_foreign_mutation_cleans_task_lock_and_store_slot():
     await foreign_call
 
     assert not returned_before_store_settled
-    snapshot = await tracker.get(task.task_id)
+    snapshot = await tracker.get(task.task_id, **OWNER)
     assert snapshot is not None
     assert snapshot.status == TaskStatus.RUNNING
     assert tracker._task_locks.entry_count == 0
@@ -1023,10 +920,9 @@ async def test_cancelling_foreign_mutation_cleans_task_lock_and_store_slot():
 
 @pytest.mark.asyncio
 async def test_create_if_no_running_is_unique_per_business_key():
-    from openviking.service.task_tracker import TaskTracker
 
     store = _ControllableTaskStore()
-    tracker = TaskTracker(store=store)
+    tracker = _tracker(store)
 
     results = await asyncio.gather(
         *[
@@ -1048,10 +944,9 @@ async def test_create_if_no_running_is_unique_per_business_key():
 
 @pytest.mark.asyncio
 async def test_create_if_no_running_uses_independent_business_keys():
-    from openviking.service.task_tracker import TaskTracker
 
     store = _BlockingCreateTaskStore(expected_concurrency=2)
-    tracker = TaskTracker(store=store)
+    tracker = _tracker(store)
 
     first_call = asyncio.create_task(
         tracker.create_if_no_running(
@@ -1081,15 +976,14 @@ async def test_create_if_no_running_uses_independent_business_keys():
 
 @pytest.mark.asyncio
 async def test_task_and_business_lock_registries_do_not_grow_with_completed_calls():
-    from openviking.service.task_tracker import TaskTracker
 
     store = _ControllableTaskStore()
-    tracker = TaskTracker(store=store)
+    tracker = _tracker(store)
 
     tasks = await asyncio.gather(
         *[tracker.create("add_resource", account_id="acme", user_id="alice") for _ in range(100)]
     )
-    await asyncio.gather(*(tracker.start(task.task_id) for task in tasks))
+    await asyncio.gather(*(tracker.start(task.task_id, **OWNER) for task in tasks))
     await asyncio.gather(
         *[
             tracker.create_if_no_running(

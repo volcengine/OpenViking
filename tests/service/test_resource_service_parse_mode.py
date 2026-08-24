@@ -95,7 +95,7 @@ async def test_no_split_is_forwarded_and_persisted_for_watch_replay(
     ctx: RequestContext,
 ):
     watch_manager = SimpleNamespace(
-        get_task_by_uri=AsyncMock(return_value=None),
+        get_upsertable_task_by_uri=AsyncMock(return_value=None),
         create_task=AsyncMock(return_value=SimpleNamespace(task_id="watch-1")),
     )
     scheduler = SimpleNamespace(watch_manager=watch_manager)
@@ -107,6 +107,14 @@ async def test_no_split_is_forwarded_and_persisted_for_watch_replay(
         to="viking://resources/no_split_watch",
         watch_interval=30.0,
         args={"parse_mode": "no_split"},
+    )
+    message = service._enqueue_add_resource_job.await_args.args[0]
+    await service.execute_add_resource_job(
+        message,
+        ctx=ctx,
+        resource_lock=None,
+        stage_callback=AsyncMock(),
+        task_auth={},
     )
 
     processor = service._resource_processor

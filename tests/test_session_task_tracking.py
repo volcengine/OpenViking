@@ -351,12 +351,30 @@ async def test_add_resource_async_returns_task_id(api_client):
     assert task_data["task_type"] == "add_resource"
 
 
-async def test_add_resource_sync_no_task_id(api_client):
-    """add_resource with wait=True should NOT return a task_id."""
+async def test_add_resource_sync_keeps_legacy_response_without_task_id(api_client):
+    """add_resource with wait=True keeps its historical response shape."""
     client, service = api_client
 
     async def fake_add_resource(**kwargs):
+        tracker = get_task_tracker()
         root_uri = "viking://resources/sync-test"
+        task = await tracker.create(
+            "add_resource",
+            resource_id=root_uri,
+            account_id=kwargs["ctx"].account_id,
+            user_id=kwargs["ctx"].user.user_id,
+        )
+        await tracker.start(
+            task.task_id,
+            account_id=kwargs["ctx"].account_id,
+            user_id=kwargs["ctx"].user.user_id,
+        )
+        await tracker.complete(
+            task.task_id,
+            {"root_uri": root_uri},
+            account_id=kwargs["ctx"].account_id,
+            user_id=kwargs["ctx"].user.user_id,
+        )
         return {"status": "success", "root_uri": root_uri}
 
     service.resources.add_resource = fake_add_resource
@@ -365,9 +383,14 @@ async def test_add_resource_sync_no_task_id(api_client):
     from openviking_cli.session.user_id import UserIdentifier
 
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
-    result = await service.resources.add_resource(ctx=ctx, reason="test sync resource")
+    result = await service.resources.add_resource(ctx=ctx, reason="test sync resource", wait=True)
 
     assert "task_id" not in result
+    listed = await client.get("/api/v1/tasks", params={"task_type": "add_resource"})
+    assert listed.status_code == 200
+    assert any(
+        task["resource_id"] == "viking://resources/sync-test" for task in listed.json()["result"]
+    )
 
 
 async def test_add_resource_async_task_lifecycle(api_client):
@@ -511,11 +534,28 @@ async def test_add_skill_async_returns_task_id(api_client):
     assert task_data["task_type"] == "add_skill"
 
 
-async def test_add_skill_sync_no_task_id(api_client):
-    """add_skill with wait=True should NOT return a task_id."""
+async def test_add_skill_sync_keeps_legacy_response_without_task_id(api_client):
+    """add_skill with wait=True keeps its historical response shape."""
     client, service = api_client
 
     async def fake_add_skill(**kwargs):
+        tracker = get_task_tracker()
+        task = await tracker.create(
+            "add_skill",
+            account_id=kwargs["ctx"].account_id,
+            user_id=kwargs["ctx"].user.user_id,
+        )
+        await tracker.start(
+            task.task_id,
+            account_id=kwargs["ctx"].account_id,
+            user_id=kwargs["ctx"].user.user_id,
+        )
+        await tracker.complete(
+            task.task_id,
+            {},
+            account_id=kwargs["ctx"].account_id,
+            user_id=kwargs["ctx"].user.user_id,
+        )
         return {"status": "success"}
 
     service.resources.add_skill = fake_add_skill
@@ -527,3 +567,6 @@ async def test_add_skill_sync_no_task_id(api_client):
     result = await service.resources.add_skill(data="test skill", ctx=ctx, wait=True)
 
     assert "task_id" not in result
+    listed = await client.get("/api/v1/tasks", params={"task_type": "add_skill"})
+    assert listed.status_code == 200
+    assert any(task["task_type"] == "add_skill" for task in listed.json()["result"])

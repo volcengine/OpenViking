@@ -1,22 +1,23 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""
-QueueManager: Encapsulates AGFS QueueFS plugin operations.
-All queues are managed through NamedQueue.
+"""Create, run, and stop QueueFS-backed named queues.
+
+QueueManager owns queue worker threads and queue-wide middleware registration. It does
+not depend on business services; integrations attach behavior through
+``QueueMiddleware``.
 """
 
 import asyncio
 import atexit
 import threading
 import time
-import traceback
-from typing import Any, Dict, Optional, Set, Union
+from typing import Any, Dict, List, Optional, Set, Union
 
-from openviking.service.task_work_index import TaskWorkIndex
 from openviking_cli.utils.logger import get_logger
 
 from .embedding_queue import EmbeddingQueue
-from .named_queue import DequeueHandlerBase, EnqueueHookBase, NamedQueue, QueueStatus
+from .named_queue import DequeueHandlerBase, NamedQueue, QueueStatus
+from .queue_hook import QueueMiddleware
 from .semantic_queue import SemanticQueue
 
 logger = get_logger(__name__)
@@ -71,10 +72,7 @@ def get_queue_manager() -> "QueueManager":
 
 
 class QueueManager:
-    """
-    QueueManager: Encapsulates AGFS QueueFS plugin operations.
-    Integrates NamedQueue to manage multiple named queues.
-    """
+    """Manage named queues and their worker threads."""
 
     # Standard queue names
     EMBEDDING = "Embedding"
@@ -112,7 +110,7 @@ class QueueManager:
         self._queue_threads: Dict[str, threading.Thread] = {}
         self._queue_stop_events: Dict[str, threading.Event] = {}
         self._poll_interval = 0.2
-        self._task_work_index = TaskWorkIndex()
+        self._middlewares: List[QueueMiddleware] = []
 
         atexit.register(self.stop)
         logger.info(
@@ -132,12 +130,19 @@ class QueueManager:
 
         logger.info(f"[QueueManager] mount_point={self.mount_point} Started")
 
-    async def prepare_task_tracking(self, tracker: Any) -> None:
-        """Rebuild task work from QueueFS before any consumer starts."""
-        snapshots = {name: await queue.snapshot() for name, queue in self._queues.items()}
-        owners = self._task_work_index.rebuild(snapshots)
-        tracker.attach_work_index(self._task_work_index)
-        await tracker.restore_work_tasks(owners)
+    def register_middleware(self, middleware: QueueMiddleware) -> None:
+        """Register middleware globally before queue workers start."""
+        if self._started:
+            raise RuntimeError("Queue middleware must be registered before workers start")
+        if any(existing is middleware for existing in self._middlewares):
+            return
+        self._middlewares.append(middleware)
+        for queue in self._queues.values():
+            queue.add_middleware(middleware)
+
+    async def snapshot_all(self) -> Dict[str, List[Dict[str, Any]]]:
+        """Return transport snapshots for every currently registered queue."""
+        return {name: await queue.snapshot() for name, queue in self._queues.items()}
 
     def setup_standard_queues(self, vector_store: Any, start: bool = True) -> None:
         """
@@ -210,39 +215,13 @@ class QueueManager:
     def _queue_worker_loop(
         self, queue: NamedQueue, stop_event: threading.Event, max_concurrent: int = 1
     ) -> None:
-        """Worker loop for a single queue.
-
-        When max_concurrent > 1, items are fetched and processed in parallel
-        (up to max_concurrent at a time). Otherwise items are processed one by one.
-        """
+        """Run one queue scheduler on its dedicated event-loop thread."""
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        poll_interval = (
-            self._SESSION_COMMIT_POLL_INTERVAL
-            if queue.name == self.SESSION_COMMIT
-            else self._poll_interval
-        )
         try:
-            if max_concurrent > 1:
-                loop.run_until_complete(
-                    self._worker_async_concurrent(queue, stop_event, max_concurrent)
-                )
-            else:
-                while not stop_event.is_set():
-                    try:
-                        queue_size = loop.run_until_complete(queue.size())
-                        if queue.has_dequeue_handler() and queue_size > 0:
-                            data = loop.run_until_complete(queue.dequeue())
-                            if data is not None:
-                                logger.debug("[QueueManager] Dequeued message from %s", queue.name)
-                            if queue.name == self.SESSION_COMMIT:
-                                stop_event.wait(poll_interval)
-                        else:
-                            stop_event.wait(poll_interval)
-                    except Exception as e:
-                        logger.error(f"[QueueManager] Worker error for {queue.name}: {e}")
-                        traceback.print_exc()
-                        stop_event.wait(poll_interval)
+            loop.run_until_complete(
+                self._worker_async_concurrent(queue, stop_event, max(1, max_concurrent))
+            )
         finally:
             loop.close()
 
@@ -251,28 +230,23 @@ class QueueManager:
     ) -> None:
         """Concurrent worker: drains the queue and processes items in parallel.
 
-        A Semaphore caps inflight tasks at max_concurrent.
+        NamedQueue owns dequeue, processing, retry, counters, and ACK. The
+        manager only creates and drains consume_one tasks.
         """
         poll_interval = (
             self._SESSION_COMMIT_POLL_INTERVAL
             if queue.name == self.SESSION_COMMIT
             else self._poll_interval
         )
-        sem = asyncio.Semaphore(max_concurrent)
         active_tasks: Set[asyncio.Task] = set()
 
-        async def process_one(data: Dict[str, Any]) -> None:
-            async with sem:
-                msg_id = data.get("id", "") if isinstance(data, dict) else ""
-                try:
-                    await queue.process_dequeued(data)
-                    # Ack after successful processing (delete from persistent storage).
-                    await queue.ack(msg_id, data)
-                except Exception as e:
-                    # Handler did not call report_error; decrement in_progress manually.
-                    # Do NOT ack — let RecoverStale re-queue on next startup.
-                    queue._on_process_error(str(e), data)
-                    logger.error(f"[QueueManager] Concurrent worker error for {queue.name}: {e}")
+        async def process_one() -> None:
+            try:
+                await queue.consume_one()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("[QueueManager] Worker error for %s", queue.name)
 
         while not stop_event.is_set():
             # Prune completed tasks
@@ -286,13 +260,7 @@ class QueueManager:
                     break
                 if not queue.has_dequeue_handler() or queue_size == 0:
                     break
-                data = await queue.dequeue_raw()
-                if data is None:
-                    break
-                # Increment before task creation to close the race window where
-                # size=0 and in_progress=0 between dequeue_raw() and task execution.
-                queue._on_dequeue_start()
-                task = asyncio.create_task(process_one(data))
+                task = asyncio.create_task(process_one())
                 active_tasks.add(task)
                 logger.debug(
                     f"[QueueManager] Dispatched concurrent task for {queue.name} "
@@ -349,7 +317,6 @@ class QueueManager:
     def get_queue(
         self,
         name: str,
-        enqueue_hook: Optional[EnqueueHookBase] = None,
         dequeue_handler: Optional[DequeueHandlerBase] = None,
         allow_create: bool = False,
     ) -> NamedQueue:
@@ -362,27 +329,24 @@ class QueueManager:
                     self._agfs,
                     self.mount_point,
                     name,
-                    enqueue_hook=enqueue_hook,
                     dequeue_handler=dequeue_handler,
-                    task_work_index=self._task_work_index,
+                    middlewares=list(self._middlewares),
                 )
             elif name == self.SEMANTIC:
                 self._queues[name] = SemanticQueue(
                     self._agfs,
                     self.mount_point,
                     name,
-                    enqueue_hook=enqueue_hook,
                     dequeue_handler=dequeue_handler,
-                    task_work_index=self._task_work_index,
+                    middlewares=list(self._middlewares),
                 )
             else:
                 self._queues[name] = NamedQueue(
                     self._agfs,
                     self.mount_point,
                     name,
-                    enqueue_hook=enqueue_hook,
                     dequeue_handler=dequeue_handler,
-                    task_work_index=self._task_work_index,
+                    middlewares=list(self._middlewares),
                 )
             if self._started:
                 self._start_queue_worker(self._queues[name])
