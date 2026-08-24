@@ -109,7 +109,7 @@ try:
 
     # Add a resource
     result = client.add_resource(
-        "https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md"
+        path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md",
     )
     root_uri = result["root_uri"]
 
@@ -117,9 +117,12 @@ try:
     client.wait_processed()
 
     # Search
-    results = client.find("what is openviking", target_uri=root_uri)
-    for r in results.resources:
-        print(f"  {r.uri} (score: {r.score:.4f})")
+    results = client.find(
+        query="what is openviking",
+        target_uri=root_uri,
+    )
+    for result in results.get("resources", []):
+        print(f"  {result['uri']} (score: {result.get('score', 0.0):.4f})")
 
 finally:
     client.close()

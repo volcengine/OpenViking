@@ -100,7 +100,7 @@ async function findExperiences(query) {
     method: "POST",
     body: JSON.stringify({
       query,
-      target_uri: "viking://user/memories/experiences",
+      target_uri: "viking://~/memories/experiences",
       context_type: "memory",
       limit: cfg.skillExperienceLimit,
       score_threshold: cfg.scoreThreshold,

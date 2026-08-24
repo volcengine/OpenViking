@@ -909,7 +909,6 @@ describe("Tool: ov_search (behavioral)", () => {
                 score: 0.82,
                 category: "",
                 match_reason: "",
-                relations: [],
                 abstract: "OpenViking install guide",
                 overview: null,
               },
@@ -929,7 +928,6 @@ describe("Tool: ov_search (behavioral)", () => {
               score: 0.7,
               category: "",
               match_reason: "",
-              relations: [],
               abstract: "Install OpenViking memory integration",
               overview: null,
             },
@@ -960,7 +958,7 @@ describe("Tool: ov_search (behavioral)", () => {
       .filter((call) => String(call[0]).endsWith("/api/v1/search/find"))
       .map((call) => JSON.parse(String((call[1] as RequestInit).body)));
     expect(findBodies.some((body) => body.target_uri === "viking://resources")).toBe(true);
-    expect(findBodies.some((body) => String(body.target_uri).startsWith("viking://user/") && String(body.target_uri).endsWith("/skills"))).toBe(true);
+    expect(findBodies.some((body) => String(body.target_uri) === "viking://~/skills")).toBe(true);
   });
 
   it("returns partial results when one default scope search fails", async () => {
@@ -984,7 +982,6 @@ describe("Tool: ov_search (behavioral)", () => {
                 score: 0.82,
                 category: "",
                 match_reason: "",
-                relations: [],
                 abstract: "OpenViking install guide",
                 overview: null,
               },
@@ -1021,7 +1018,6 @@ describe("Tool: ov_search (behavioral)", () => {
               score: 0.91,
               category: "preferences",
               match_reason: "",
-              relations: [],
               abstract: "User prefers dark theme",
               overview: null,
             },
@@ -1204,7 +1200,6 @@ describe("Tool: ov_search (behavioral)", () => {
                 score: 0.92,
                 category: "",
                 match_reason: "",
-                relations: [],
                 abstract: "OpenCompass evaluation details",
                 overview: null,
               },
@@ -1245,7 +1240,6 @@ describe("Tool: ov_search (behavioral)", () => {
               score: 0.88,
               category: "",
               match_reason: "",
-              relations: [],
               abstract: "Runtime default search result",
               overview: null,
             },

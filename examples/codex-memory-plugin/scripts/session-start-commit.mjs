@@ -134,7 +134,7 @@ function truncateText(text, maxChars) {
 function formatResumeArchiveContext(ovSessionId, context) {
   const overview = String(context?.latest_archive_overview || "").trim();
   if (!overview) return "";
-  const archiveUri = `viking://user/sessions/${ovSessionId}/history/`;
+  const archiveUri = `viking://~/sessions/${ovSessionId}/history/`;
   const body = truncateText(overview, cfg.resumeArchiveMaxChars);
   return [
     "OpenViking session archive digest:",

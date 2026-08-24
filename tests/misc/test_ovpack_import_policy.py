@@ -28,10 +28,13 @@ from openviking_cli.session.user_id import UserIdentifier
 
 
 class FakeVikingFS:
-    def __init__(self) -> None:
+    def __init__(self, existing_roots: set[str] | None = None) -> None:
         self.written_files: list[str] = []
         self.created_dirs: list[str] = []
         self.tree_calls: list[str] = []
+        self.write_contexts: list[RequestContext] = []
+        self.existing_roots = existing_roots or set()
+        self.removed_roots: list[str] = []
 
     async def stat(self, uri: str, ctx=None):
         return {"uri": uri, "isDir": True}
@@ -40,10 +43,17 @@ class FakeVikingFS:
         self.created_dirs.append(uri)
 
     async def ls(self, uri: str, ctx=None):
+        if uri in self.existing_roots:
+            return []
         raise NotFoundError(uri, "file")
+
+    async def rm(self, uri: str, recursive: bool = False, ctx=None):
+        assert recursive is True
+        self.removed_roots.append(uri)
 
     async def write_file_bytes(self, uri: str, data: bytes, ctx=None):
         self.written_files.append(uri)
+        self.write_contexts.append(ctx)
 
     async def tree(self, uri: str, node_limit=None, level_limit=None, ctx=None):
         self.tree_calls.append(uri)
@@ -171,7 +181,10 @@ class FakeBackupVikingFS:
     def __init__(self) -> None:
         self.binary_files = {
             "viking://resources/README.md": b"hello",
-            "viking://user/alice/sessions/sess_1/.meta.json": b'{"session_id":"sess_1"}',
+            "viking://resources/.watch_tasks.json": b"{}",
+            "viking://resources/.watch_tasks.json.bak": b"{}",
+            "viking://resources/.watch_tasks.json.tmp": b"{}",
+            "viking://user/resources/sessions/sess_1/.meta.json": b'{"session_id":"sess_1"}',
         }
         self.tree_contexts: list[tuple[str, RequestContext]] = []
 
@@ -194,31 +207,49 @@ class FakeBackupVikingFS:
                     "uri": "viking://resources/README.md",
                     "isDir": False,
                     "size": 5,
-                }
+                },
+                {
+                    "rel_path": ".watch_tasks.json",
+                    "uri": "viking://resources/.watch_tasks.json",
+                    "isDir": False,
+                    "size": 2,
+                },
+                {
+                    "rel_path": ".watch_tasks.json.bak",
+                    "uri": "viking://resources/.watch_tasks.json.bak",
+                    "isDir": False,
+                    "size": 2,
+                },
+                {
+                    "rel_path": ".watch_tasks.json.tmp",
+                    "uri": "viking://resources/.watch_tasks.json.tmp",
+                    "isDir": False,
+                    "size": 2,
+                },
             ]
         if uri == "viking://user":
             return [
                 {
-                    "rel_path": "alice",
-                    "uri": "viking://user/alice",
+                    "rel_path": "resources",
+                    "uri": "viking://user/resources",
                     "isDir": True,
                     "size": 0,
                 },
                 {
-                    "rel_path": "alice/sessions",
-                    "uri": "viking://user/alice/sessions",
+                    "rel_path": "resources/sessions",
+                    "uri": "viking://user/resources/sessions",
                     "isDir": True,
                     "size": 0,
                 },
                 {
-                    "rel_path": "alice/sessions/sess_1",
-                    "uri": "viking://user/alice/sessions/sess_1",
+                    "rel_path": "resources/sessions/sess_1",
+                    "uri": "viking://user/resources/sessions/sess_1",
                     "isDir": True,
                     "size": 0,
                 },
                 {
-                    "rel_path": "alice/sessions/sess_1/.meta.json",
-                    "uri": "viking://user/alice/sessions/sess_1/.meta.json",
+                    "rel_path": "resources/sessions/sess_1/.meta.json",
+                    "uri": "viking://user/resources/sessions/sess_1/.meta.json",
                     "isDir": False,
                     "size": 23,
                 },
@@ -529,7 +560,7 @@ def test_index_consistency_report_limits_public_and_error_records():
 
 
 @pytest.mark.asyncio
-async def test_export_ovpack_writes_v3_manifest_with_semantic_sidecars(
+async def test_export_ovpack_writes_v3_manifest_with_abstract_overviews(
     temp_ovpack_path: Path, request_ctx: RequestContext
 ):
     await export_ovpack(
@@ -570,7 +601,7 @@ async def test_export_ovpack_writes_v3_manifest_with_semantic_sidecars(
 
 
 @pytest.mark.asyncio
-async def test_export_ovpack_skips_missing_semantic_sidecars(
+async def test_export_ovpack_skips_missing_abstract_overviews(
     temp_ovpack_path: Path,
     request_ctx: RequestContext,
 ):
@@ -604,8 +635,15 @@ async def test_backup_restore_contract(
         names = set(zf.namelist())
         manifest = json.loads(zf.read("openviking-backup/_ovpack/manifest.json").decode("utf-8"))
 
+    manifest_paths = {entry["path"] for entry in manifest["entries"]}
     assert "openviking-backup/files/resources/README.md" in names
-    assert "openviking-backup/files/user/alice/sessions/sess_1/.meta.json" in names
+    assert "openviking-backup/files/user/resources/sessions/sess_1/.meta.json" in names
+    assert "openviking-backup/files/resources/.watch_tasks.json" not in names
+    assert "openviking-backup/files/resources/.watch_tasks.json.bak" not in names
+    assert "openviking-backup/files/resources/.watch_tasks.json.tmp" not in names
+    assert "resources/.watch_tasks.json" not in manifest_paths
+    assert "resources/.watch_tasks.json.bak" not in manifest_paths
+    assert "resources/.watch_tasks.json.tmp" not in manifest_paths
     assert all(ctx.role == Role.ROOT for _, ctx in backup_fs.tree_contexts)
     assert manifest["root"] == {
         "name": "openviking-backup",
@@ -614,39 +652,55 @@ async def test_backup_restore_contract(
         "package_type": "backup",
     }
     assert manifest["scopes"] == ["resources", "user"]
+    user_entries = {
+        entry["path"]: entry
+        for entry in manifest["entries"]
+        if entry["path"].startswith("user/resources")
+    }
+    assert user_entries
+    assert {entry["user_id"] for entry in user_entries.values()} == {"resources"}
 
     with pytest.raises(InvalidArgumentError, match=r"must be restored"):
         await import_ovpack(FakeVikingFS(), str(temp_ovpack_path), "viking://", admin_ctx)
 
+    vectorization_calls: list[tuple[str, RequestContext]] = []
+
+    async def capture_vectorization(viking_fs, uri, ctx, **kwargs):
+        vectorization_calls.append((uri, ctx))
+
     monkeypatch.setattr(
         "openviking.storage.ovpack.operations._enqueue_direct_vectorization",
-        AsyncMock(),
+        capture_vectorization,
     )
 
     fake_fs = FakeVikingFS()
     fake_fs.ls = AsyncMock(return_value=[])
     fake_fs.stat = AsyncMock(side_effect=FileNotFoundError())
     fake_fs.rm = AsyncMock()
-    restore_service = PackService(fake_fs)
-
     assert (
-        await restore_service.restore_ovpack(
-            str(temp_ovpack_path),
-            admin_ctx,
-            on_conflict="overwrite",
+        await PackService(fake_fs).restore_ovpack(
+            str(temp_ovpack_path), ctx=admin_ctx, on_conflict="overwrite"
         )
         == "viking://"
     )
     assert fake_fs.written_files == [
         "viking://resources/README.md",
-        "viking://user/alice/sessions/sess_1/.meta.json",
+        "viking://user/resources/sessions/sess_1/.meta.json",
     ]
     fake_fs.rm.assert_not_awaited()
+    assert all(ctx.role == Role.ROOT for ctx in fake_fs.write_contexts)
+    assert [uri for uri, _ in vectorization_calls] == [
+        "viking://resources",
+        "viking://user/resources",
+    ]
+    user_vector_ctx = vectorization_calls[1][1]
+    assert user_vector_ctx.user.user_id == "resources"
+    assert user_vector_ctx.role == Role.ROOT
     assert "viking://user" not in fake_fs.created_dirs
 
 
 @pytest.mark.asyncio
-async def test_backup_skips_missing_semantic_sidecars(
+async def test_backup_skips_missing_abstract_overviews(
     temp_ovpack_path: Path,
     request_ctx: RequestContext,
 ):

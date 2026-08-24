@@ -169,6 +169,39 @@ class MemoryOperationSource(BaseModel):
     extracted_at: Optional[str] = None
 
 
+class MemoryOperationSkipCode(str, Enum):
+    """Stable reason codes for intentionally skipped memory operations."""
+
+    MEMORY_TYPE_FILTERED = "memory_type_filtered"
+    SELF_MEMORY_DISABLED = "self_memory_disabled"
+    PEER_MEMORY_DISABLED = "peer_memory_disabled"
+    INVALID_PEER_ID = "invalid_peer_id"
+    PEER_NOT_ALLOWED = "peer_not_allowed"
+    INVALID_RANGES = "invalid_ranges"
+    AMBIGUOUS_TARGET = "ambiguous_target"
+    NO_WRITABLE_TARGET = "no_writable_target"
+
+
+class MemoryOperationSkip(BaseModel):
+    """Internal policy/validation decision explaining why no URI was produced."""
+
+    reason_code: MemoryOperationSkipCode
+    reason: str
+
+
+class SkippedMemoryOperation(BaseModel):
+    """Structured, task-visible record for one intentionally skipped operation."""
+
+    memory_type: str
+    page_id: Optional[int] = None
+    uri: Optional[str] = None
+    reason_code: MemoryOperationSkipCode
+    reason: str
+    # Source is used only to scope shared streaming-batch results back to the
+    # submitting commit. It must never be serialized into the public task result.
+    source: Optional[MemoryOperationSource] = Field(default=None, exclude=True)
+
+
 # ============================================================================
 # Memory Field and Schema Definitions
 # ============================================================================
@@ -298,6 +331,9 @@ class ResolvedOperation(BaseModel):
     uris: List[str]
     page_id: Optional[int] = None  # Temporary page_id for link resolution (not persisted)
     source: Optional[MemoryOperationSource] = None
+    # Runtime-only resolution decision. It is deliberately excluded from model
+    # serialization so it cannot enter later LLM merge prompts or memory files.
+    resolution_skip: Optional[MemoryOperationSkip] = Field(default=None, exclude=True)
     # Custom scalar tags (already normalized as "key=value") to attach to this
     # operation's memories in the vector index. None means "no tags"; used by
     # event-memory auto-tagging. Not persisted in the memory file content.

@@ -269,7 +269,7 @@ They serve different roles:
 Resource and skill imports are intentionally separate because they land in different OpenViking namespaces and use different server APIs:
 
 - resources go through `/api/v1/resources` and land under `viking://resources/...`
-- skills go through `/api/v1/skills` and land under `viking://user/skills/...`
+- skills go through `/api/v1/skills` and land under `viking://user/<uid>/skills/...`
 
 The plugin also registers explicit slash commands for manual imports:
 
@@ -277,7 +277,7 @@ The plugin also registers explicit slash commands for manual imports:
 /add-resource ./README.md --to viking://resources/openviking-readme --wait
 /add-skill ./skills/install-openviking-memory --wait
 /ov-search "OpenViking install" --uri viking://resources/openviking-readme
-/ov-search "memory install skill" --uri viking://user/skills
+/ov-search "memory install skill" --uri viking://~/skills
 ```
 
 Resource import supports remote URLs, Git URLs, local files, local directories, and uploaded zip files. OpenViking's built-in parsers cover common documents and media such as Markdown, text, PDF, HTML, Word, PowerPoint, Excel, EPUB, images, audio, and video. Directory imports also accept common code, documentation, and config file extensions such as `.py`, `.js`, `.ts`, `.go`, `.rs`, `.java`, `.cpp`, `.json`, `.yaml`, `.toml`, `.csv`, `.rst`, `.proto`, `.tf`, and `.vue`.

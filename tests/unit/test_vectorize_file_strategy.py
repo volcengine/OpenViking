@@ -562,7 +562,7 @@ async def test_vectorize_directory_meta_l1_abstract_is_overview(monkeypatch):
     """L1 records must carry the overview in the abstract scalar so Rerank
     sees L1 text instead of the L0 abstract."""
     from openviking.core.context import ContextLevel
-    from openviking.storage.semantic_sidecar import render_semantic_sidecar
+    from openviking.storage.abstract_overview import render_abstract_overview
 
     queue = DummyQueue()
     monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
@@ -582,8 +582,8 @@ async def test_vectorize_directory_meta_l1_abstract_is_overview(monkeypatch):
     }
     await embedding_utils.vectorize_directory_meta(
         uri=uri,
-        abstract=render_semantic_sidecar(ContextLevel.ABSTRACT, uri, "Visible abstract.", metadata),
-        overview=render_semantic_sidecar(ContextLevel.OVERVIEW, uri, overview, metadata),
+        abstract=render_abstract_overview(ContextLevel.ABSTRACT, uri, "Visible abstract.", metadata),
+        overview=render_abstract_overview(ContextLevel.OVERVIEW, uri, overview, metadata),
         ctx=DummyReq(),
     )
 

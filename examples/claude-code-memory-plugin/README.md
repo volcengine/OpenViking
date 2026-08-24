@@ -2,6 +2,10 @@
 
 Long-term semantic memory for Claude Code, powered by [OpenViking](https://github.com/volcengine/OpenViking). Recall happens automatically before every prompt, capture happens automatically after every turn — no MCP tool calls required from the model.
 
+> **Requires an OpenViking server with `viking://~` home-alias support.** Recall targets the
+> caller's own context space through `viking://~/memories` and `viking://~/skills`; the uid-less
+> `viking://user/memories` shorthand is rejected by newer servers.
+
 > Installable straight from the repo's marketplace catalog — no separate distribution repo. See [Manual setup](#manual-setup) for the two-command remote install.
 
 ## Quick Start

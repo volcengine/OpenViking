@@ -1,12 +1,12 @@
-## 安装
+## 步骤1：安装
 
 ```bash
 bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness claude --dist tos
 ```
 
-选 **火山引擎 OpenViking 云服务**，把本页 API Key 贴进去。
+选 **火山引擎 OpenViking 云服务**，把 API Key 贴进去：
 
-## 验证
+## 步骤2：验证
 
 重启 Claude Code，然后：
 
@@ -20,7 +20,7 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 |---|---|
 | 插件未激活 | 重跑安装，或检查 `~/.openviking/ovcli.conf` |
 | 召回为空 | `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
-| 401 / 403 | 重新粘贴本页 API Key |
+| 401 / 403 | 重新粘贴 API Key |
 | 需要日志 | `OPENVIKING_DEBUG=1`，看 `~/.openviking/logs/cc-hooks.log` |
 
 ## 参考

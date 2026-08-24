@@ -19,4 +19,3 @@ client.importOVPack("./docs.ovpack", "viking://resources", {
 // @ts-expect-error OVPack conflict policies are restricted by the server.
 client.restoreOVPack("./docs.ovpack", { onConflict: "replace" });
 client.gitCommit({ message: "snapshot", branch: "main" });
-client.relations("viking://resources/docs");

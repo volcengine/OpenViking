@@ -1259,7 +1259,7 @@ async def test_extract_session_jsonable_regression(client: httpx.AsyncClient, se
             return {"uri": self.uri}
 
     async def fake_extract(_session_id: str, _ctx):
-        return [FakeMemory("viking://user/memories/mock.md")]
+        return [FakeMemory("viking://user/default/memories/mock.md")]
 
     monkeypatch.setattr(service.sessions, "extract", fake_extract)
 
@@ -1270,7 +1270,7 @@ async def test_extract_session_jsonable_regression(client: httpx.AsyncClient, se
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
-    assert body["result"] == [{"uri": "viking://user/memories/mock.md"}]
+    assert body["result"] == [{"uri": "viking://user/default/memories/mock.md"}]
 
 
 async def test_get_session_context_endpoint_returns_trimmed_latest_archive_and_messages(

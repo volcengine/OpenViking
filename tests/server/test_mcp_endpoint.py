@@ -7,6 +7,7 @@ Tests the tool functions directly by setting up the identity contextvar
 and service dependency, avoiding MCP protocol complexity.
 """
 
+import re
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -44,6 +45,7 @@ from openviking_cli.exceptions import (
     AlreadyExistsError,
     FailedPreconditionError,
     InvalidArgumentError,
+    InvalidURIError,
     NotFoundError,
     PermissionDeniedError,
     UnauthenticatedError,
@@ -87,21 +89,32 @@ def test_get_ctx_raises_when_unset():
 @pytest.mark.parametrize(
     ("uri", "expected"),
     [
-        ("viking://user", "viking://user/test_user"),
-        ("viking://user/notes.md", "viking://user/test_user/notes.md"),
+        ("viking://user", "viking://user"),
+        ("viking://user/notes.md", "viking://user/notes.md"),
         (
             "viking://user/project/notes.md",
-            "viking://user/test_user/project/notes.md",
+            "viking://user/project/notes.md",
         ),
         (
             "viking://user/test_user/project/notes.md",
             "viking://user/test_user/project/notes.md",
         ),
         ("viking://resources/project/notes.md", "viking://resources/project/notes.md"),
+        ("viking://~/resources", "viking://user/test_user/resources"),
     ],
 )
-def test_resolve_mcp_workspace_uri_is_current_user_relative(uri, expected):
-    assert _resolve_mcp_workspace_uri(uri, DEFAULT_CTX) == expected
+def test_resolve_mcp_workspace_uri_only_expands_documented_aliases(uri, expected):
+    user_ctx = RequestContext(DEFAULT_CTX.user, Role.USER)
+    assert _resolve_mcp_workspace_uri(uri, user_ctx) == expected
+
+
+@pytest.mark.parametrize(
+    "segment", ["memories", "resources", "skills", "peers", "privacy", "sessions"]
+)
+def test_resolve_mcp_workspace_uri_rejects_reserved_user_root_shorthand(segment):
+    user_ctx = RequestContext(DEFAULT_CTX.user, Role.USER)
+    with pytest.raises(InvalidURIError, match=re.escape(f"viking://~/{segment}")):
+        _resolve_mcp_workspace_uri(f"viking://user/{segment}", user_ctx)
 
 
 def test_resolve_mcp_workspace_uri_supports_dotted_current_user_id():
@@ -114,9 +127,13 @@ def test_resolve_mcp_workspace_uri_supports_dotted_current_user_id():
         _resolve_mcp_workspace_uri("viking://user/alice.smith@corp.com/notes/todo.md", ctx)
         == "viking://user/alice.smith@corp.com/notes/todo.md"
     )
-    assert (
-        _resolve_mcp_workspace_uri("viking://user/notes/todo.md", ctx)
-        == "viking://user/alice.smith@corp.com/notes/todo.md"
+    assert _resolve_mcp_workspace_uri("viking://user/notes/todo.md", ctx) == (
+        "viking://user/notes/todo.md"
+    )
+    # DEFAULT_CTX is ROOT: root-role requests skip current-user resolution
+    # entirely, so a reserved first segment stays a literal user id.
+    assert _resolve_mcp_workspace_uri("viking://user/resources", DEFAULT_CTX) == (
+        "viking://user/resources"
     )
 
 
@@ -268,7 +285,7 @@ async def test_find_tool_calls_lightweight_find(service, monkeypatch):
 
     result = await mcp_endpoint.find(
         query="fast lookup",
-        target_uri="viking://user/project",
+        target_uri="viking://user/test_user/project",
         limit=2,
         min_score=0.2,
         context_type=["memory", "resource"],
@@ -285,6 +302,41 @@ async def test_find_tool_calls_lightweight_find(service, monkeypatch):
         "field": "context_type",
         "conds": ["memory", "resource"],
     }
+
+
+async def test_find_tool_inlines_visible_content_when_requested(service, monkeypatch):
+    async def fake_find(**kwargs):
+        del kwargs
+        return SimpleNamespace(
+            memories=[],
+            resources=[
+                SimpleNamespace(
+                    uri="viking://resources/visible.md",
+                    abstract="summary",
+                    overview="",
+                    score=0.9,
+                )
+            ],
+            skills=[],
+        )
+
+    async def fake_read_visible(uri, *, ctx):
+        assert uri == "viking://resources/visible.md"
+        assert ctx == DEFAULT_CTX
+        return "full visible content"
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+    monkeypatch.setattr(service.fs, "read_visible", fake_read_visible)
+
+    result = await mcp_endpoint.find(query="visible", read_content=True)
+
+    assert "full visible content" in result
+    assert "Use the read tool" not in result
+
+
+async def test_search_tool_rejects_read_content_in_context_mode():
+    with pytest.raises(InvalidArgumentError, match="read_content"):
+        await mcp_endpoint.search(query="visible", mode="context", read_content=True)
 
 
 async def test_search_tool_calls_context_aware_search_with_session(service, monkeypatch):
@@ -314,7 +366,7 @@ async def test_search_tool_calls_context_aware_search_with_session(service, monk
 
     result = await search(
         query="deep lookup",
-        target_uri="viking://user/project",
+        target_uri="viking://user/test_user/project",
         session_id="session-1",
         limit=4,
         min_score=0.1,
@@ -529,7 +581,7 @@ async def test_mcp_middleware_rejects_invalid_actor_peer_header():
 
 
 async def test_read_nonexistent_uri(service):
-    result = await read("viking://user/memories/does_not_exist.md")
+    result = await read("viking://user/test_user/memories/does_not_exist.md")
     assert "not found" in result.lower()
 
 
@@ -548,8 +600,8 @@ async def test_read_directory_uri_returns_recoverable_hint(service):
 async def test_read_batch(service):
     result = await read(
         [
-            "viking://user/memories/does_not_exist_1.md",
-            "viking://user/memories/does_not_exist_2.md",
+            "viking://user/test_user/memories/does_not_exist_1.md",
+            "viking://user/test_user/memories/does_not_exist_2.md",
         ]
     )
     assert "===" in result
@@ -563,7 +615,7 @@ async def test_read_delegates_to_visible_read(monkeypatch):
         "get_service",
         lambda: SimpleNamespace(fs=SimpleNamespace(read_visible=read_visible)),
     )
-    uri = "viking://user/project/private.md"
+    uri = "viking://user/test_user/project/private.md"
 
     assert await read(uri) == "visible memory"
     read_visible.assert_awaited_once_with(
@@ -587,7 +639,7 @@ async def test_list_empty_dir(service):
     await service.viking_fs.mkdir(
         "viking://user/test_user/memories/empty_test", ctx=ctx, exist_ok=True
     )
-    result = await list_tool("viking://user/memories/empty_test")
+    result = await list_tool("viking://user/test_user/memories/empty_test")
     assert isinstance(result, str)
 
 
@@ -1007,12 +1059,16 @@ async def test_cancel_watch_not_found(service):
 
 async def test_forget_by_uri_deletes_memory(service):
     ctx = DEFAULT_CTX
-    uri = "viking://user/memories/test_forget.md"
+    uri = "viking://~/memories/test_forget.md"
     canonical_uri = "viking://user/test_user/memories/test_forget.md"
     await service.viking_fs.mkdir("viking://user/test_user/memories", ctx=ctx, exist_ok=True)
     await service.viking_fs.write(canonical_uri, "test data", ctx=ctx)
 
-    result = await forget(uri=uri)
+    token = _mcp_ctx.set(RequestContext(DEFAULT_CTX.user, Role.USER))
+    try:
+        result = await forget(uri=uri)
+    finally:
+        _mcp_ctx.reset(token)
     assert "deleted" in result.lower()
     assert "test_forget.md" in result
 
@@ -1051,19 +1107,29 @@ async def test_forget_directory_with_recursive_succeeds(service):
 
 
 @pytest.mark.parametrize(
-    ("uri", "sentinel_uri"),
+    ("uri", "sentinel_uri", "expected_message"),
     [
+        # 'viking://user' is the container of user spaces, never a deletable path.
         (
             "viking://user",
             "viking://user/test_user/memories/forget_root_guard.md",
+            "Deleting viking://user is not supported",
+        ),
+        (
+            "viking://~",
+            "viking://user/test_user/memories/forget_home_guard.md",
+            "namespace root",
         ),
         (
             "viking://resources",
             "viking://resources/forget_root_guard/sentinel.md",
+            "namespace root",
         ),
     ],
 )
-async def test_forget_rejects_namespace_roots_for_non_root(service, uri, sentinel_uri):
+async def test_forget_rejects_namespace_roots_for_non_root(
+    service, uri, sentinel_uri, expected_message
+):
     ctx = RequestContext(
         user=UserIdentifier.the_default_user("test_user"),
         role=Role.USER,
@@ -1074,7 +1140,7 @@ async def test_forget_rejects_namespace_roots_for_non_root(service, uri, sentine
 
     token = _mcp_ctx.set(ctx)
     try:
-        with pytest.raises(PermissionDeniedError, match="namespace root"):
+        with pytest.raises(PermissionDeniedError, match=re.escape(expected_message)):
             await forget(uri=uri, recursive=True)
     finally:
         _mcp_ctx.reset(token)
@@ -1135,6 +1201,8 @@ async def test_write_create_rejects_disallowed_extension(service):
 async def test_write_rejects_derived_semantic_file(service):
     with pytest.raises(InvalidArgumentError):
         await write(uri="viking://resources/test_write_derived/.abstract.md", content="x")
+    with pytest.raises(InvalidArgumentError):
+        await write(uri="viking://resources/test_write_derived/.relations.json", content="x")
 
 
 async def test_write_read_tool_roundtrip(service):
@@ -1203,7 +1271,7 @@ async def test_edit_noop_reports_no_changes(service):
 
 
 async def test_edit_memory_file_preserves_metadata(service):
-    uri = "viking://user/memories/preferences/test_edit_memory.md"
+    uri = "viking://user/test_user/memories/preferences/test_edit_memory.md"
     await write(uri=uri, content="likes: tea\n")
     raw_before = await service.fs.read(uri, ctx=DEFAULT_CTX)
     assert "MEMORY_FIELDS" in raw_before
@@ -1217,29 +1285,64 @@ async def test_edit_memory_file_preserves_metadata(service):
     assert visible.strip() == "likes: coffee"
 
 
-async def test_write_user_shorthand_uri(service):
-    uri = "viking://user/memories/preferences/shorthand_write.md"
-    result = await write(uri=uri, content="x")
-    assert "shorthand_write.md" in result
-    visible = await service.fs.read_visible(uri, ctx=DEFAULT_CTX)
+async def test_write_home_alias_uri(service):
+    """`viking://~/...` writes into the caller's canonical user root."""
+    user_ctx = RequestContext(DEFAULT_CTX.user, Role.USER)
+    canonical = f"viking://user/{DEFAULT_CTX.user.user_id}/memories/preferences/home_alias.md"
+    token = _mcp_ctx.set(user_ctx)
+    try:
+        result = await write(uri="viking://~/memories/preferences/home_alias.md", content="x")
+        listing = await list_tool(uri="viking://~/memories/preferences")
+        read_back = await read(uris="viking://~/memories/preferences/home_alias.md")
+    finally:
+        _mcp_ctx.reset(token)
+    # Responses echo the expanded canonical URI, never the alias.
+    assert canonical in result
+    assert "viking://~" not in result
+    assert "home_alias.md" in listing
+    assert "x" in read_back
+    assert "viking://~" not in read_back
+    visible = await service.fs.read_visible(canonical, ctx=DEFAULT_CTX)
     assert visible.strip() == "x"
 
 
-async def test_write_user_root_file_via_shorthand(service):
-    # The first relative segment can be any file or directory name; MCP does
-    # not guess from a file-extension allowlist.
-    result = await write(uri="viking://user/project/zeus-persona.md", content="# Zeus persona\n")
+async def test_home_alias_rejected_for_root_role(service):
+    """Root-role MCP calls skip current-user resolution, so the alias fails closed."""
+    with pytest.raises(InvalidURIError, match="Home alias URI is not canonical"):
+        await list_tool(uri="viking://~/memories")
+
+
+async def test_write_home_alias_memory_uri(service):
+    uri = "viking://~/memories/preferences/home_alias_write.md"
+    user_ctx = RequestContext(DEFAULT_CTX.user, Role.USER)
+    token = _mcp_ctx.set(user_ctx)
+    try:
+        result = await write(uri=uri, content="x")
+    finally:
+        _mcp_ctx.reset(token)
+    assert "home_alias_write.md" in result
+    visible = await service.fs.read_visible(
+        "viking://user/test_user/memories/preferences/home_alias_write.md",
+        ctx=DEFAULT_CTX,
+    )
+    assert visible.strip() == "x"
+
+
+async def test_write_user_root_file_via_canonical_uri(service):
+    result = await write(
+        uri="viking://user/test_user/project/zeus-persona.md",
+        content="# Zeus persona\n",
+    )
     assert "viking://user/test_user/project/zeus-persona.md" in result
     body = await service.fs.read("viking://user/test_user/project/zeus-persona.md", ctx=DEFAULT_CTX)
     assert body == "# Zeus persona\n"
 
 
 async def test_write_plain_file_directly_at_user_root(service):
-    # A file with no intermediate directory: the write coordinator anchors its
-    # refresh at the user root itself, which is the shape the shorthand exists for.
-    result = await write(uri="viking://user/persona.md", content="# Persona\n")
-    assert "viking://user/test_user/persona.md" in result
-    assert "# Persona" in await read(uris="viking://user/persona.md")
+    uri = "viking://user/test_user/persona.md"
+    result = await write(uri=uri, content="# Persona\n")
+    assert uri in result
+    assert "# Persona" in await read(uris=uri)
 
 
 async def test_write_user_root_subdirectory_file(service):
@@ -1248,8 +1351,8 @@ async def test_write_user_root_subdirectory_file(service):
     assert "- buy milk" in await read(uris=uri)
 
 
-async def test_edit_user_root_file_via_same_shorthand(service):
-    uri = "viking://user/project/editable.md"
+async def test_edit_user_root_file_via_canonical_uri(service):
+    uri = "viking://user/test_user/project/editable.md"
     await write(uri=uri, content="before\n")
 
     result = await edit(uri=uri, old_string="before", new_string="after")

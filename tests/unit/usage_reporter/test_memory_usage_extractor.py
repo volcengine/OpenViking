@@ -317,6 +317,31 @@ async def test_memory_usage_extractor_canonicalizes_short_user_list_uri():
 
 
 @pytest.mark.asyncio
+async def test_memory_usage_extractor_canonicalizes_home_alias_list_uri():
+    messages = [
+        Message(
+            id="msg-home-alias-list",
+            role="user",
+            parts=[
+                ToolPart(
+                    tool_id="call-list",
+                    tool_name="mcp__openviking__list",
+                    tool_status="completed",
+                    tool_input={"uri": "viking://~/memories/experiences"},
+                    tool_output="[file] listed experience.md",
+                )
+            ],
+        )
+    ]
+
+    events = await MemoryUsageExtractor().extract(messages=messages, context=_context())
+
+    assert [event.resource_uri for event in events] == [
+        "viking://user/test/memories/experiences/listed experience.md"
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("tool_name", "tool_input"),
     [
@@ -465,6 +490,30 @@ async def test_memory_usage_extractor_ignores_short_user_read_not_found_result()
                     tool_status="completed",
                     tool_input={"uris": short_uri},
                     tool_output=f"(nothing found at {short_uri})",
+                )
+            ],
+        )
+    ]
+
+    events = await MemoryUsageExtractor().extract(messages=messages, context=_context())
+
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_memory_usage_extractor_ignores_home_alias_read_not_found_result():
+    alias_uri = "viking://~/memories/experiences/missing.md"
+    messages = [
+        Message(
+            id="msg-missing-home-alias-read",
+            role="user",
+            parts=[
+                ToolPart(
+                    tool_id="call-read",
+                    tool_name="mcp__openviking__read",
+                    tool_status="completed",
+                    tool_input={"uris": alias_uri},
+                    tool_output=f"(nothing found at {alias_uri})",
                 )
             ],
         )

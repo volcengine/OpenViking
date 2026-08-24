@@ -12,7 +12,7 @@ OpenViking 使用三层信息模型，在检索效率、导航能力和原始内
 
 L0/L1 是**目录级语义 sidecar**。它们描述一个目录，不是为每个普通文件创建的同名伴生文件。文件摘要会作为输入，聚合到所在目录的 L1 中。
 
-L0 和 L1 通常成对生成，但系统允许只存在其中一个。例如，`mkdir(description=...)` 会先创建 L0，因此只有 `.abstract.md` 的目录也是合法状态。读取和向量重建只处理实际存在的层级。
+L0 和 L1 通常成对生成，但系统允许只存在其中一个。例如，`mkdir()` 会先创建 L0：未传入 `description` 时使用目录名作为默认正文，传入后使用该说明。因此只有 `.abstract.md` 的目录也是合法状态。读取和向量重建只处理实际存在的层级。
 
 正文上限由 `semantic.abstract_max_chars` 和 `semantic.overview_max_chars` 配置；上表是默认值。限制只作用于 Markdown 正文，不会截断 sidecar 元数据。
 
@@ -27,7 +27,7 @@ API 认证指南，涵盖 OAuth 2.0、JWT 令牌和 API 密钥的安全访问方
 通过语义 accessor 读取时，只返回可见正文：
 
 ```python
-abstract = client.abstract("viking://resources/docs/auth")
+abstract = client.abstract(uri="viking://resources/docs/auth")
 ```
 
 ## L1：概览
@@ -47,7 +47,7 @@ L1 提供更完整的目录摘要和导航信息，用于 Rerank 和决定是否
 ```
 
 ```python
-overview = client.overview("viking://resources/docs/auth")
+overview = client.overview(uri="viking://resources/docs/auth")
 ```
 
 L0 从 L1 正文中提取：取 H1 标题之后、第一个 `##` 标题之前的 Brief Description 段落。YAML frontmatter 不参与提取。
@@ -57,7 +57,7 @@ L0 从 L1 正文中提取：取 H1 标题之后、第一个 `##` 标题之前的
 L2 是原始文件或解析后的完整内容，只在需要时加载，并保留源格式和结构。
 
 ```python
-content = client.read("viking://resources/docs/auth/oauth.md")
+content = client.read(uri="viking://resources/docs/auth/oauth.md")
 ```
 
 ## 目录结构
@@ -68,10 +68,9 @@ content = client.read("viking://resources/docs/auth/oauth.md")
 viking://resources/docs/auth/
 ├── .abstract.md          # L0，隐藏的目录级 sidecar
 ├── .overview.md          # L1，隐藏的目录级 sidecar
-├── .relations.json       # 关系数据
-├── oauth.md              # L2
-├── jwt.md                # L2
-└── api-keys.md           # L2
+├── oauth.md              # L2，完整内容
+├── jwt.md                # L2，完整内容
+└── api-keys.md           # L2，完整内容
 ```
 
 普通 `ls` 默认隐藏 `.abstract.md` 和 `.overview.md`。它们不一定同时存在；不要依赖“每个目录始终具有两个 sidecar”的假设。
@@ -147,7 +146,7 @@ API 认证指南，涵盖 OAuth 2.0、JWT 令牌和 API 密钥。
 - `unsampled_entries`：未采样的直接子项数，满足 `sampled + unsampled = total`。
 - `pending_child_changes`：已知发生变化、但尚未反映到当前正文中的直接子项数。
 
-当直接子项超过 `semantic.sidecar_sample_size`（默认 32）时，系统使用确定性、保序的稳定采样。相同目录树重复刷新会选择相同样本，避免无意义的正文和 Git diff 抖动。
+当直接子项超过 `semantic.overview_sample_limit`（默认 32）时，系统使用确定性、保序的稳定采样。相同目录树重复刷新会选择相同样本，避免无意义的正文和 Git diff 抖动。
 
 `pending_child_changes > 0` 表示正文仍然可读，但已知落后于下层变化。父目录刷新成功后，该值会随新的覆盖率元数据重置为 0。
 

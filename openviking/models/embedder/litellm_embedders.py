@@ -206,6 +206,7 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
             response = await litellm.aembedding(**kwargs)
             self._update_telemetry_token_usage(response)
             vector = response.data[0]["embedding"]
+            vector = self._truncate_vector(vector)
             return EmbedResult(dense_vector=vector)
 
         try:

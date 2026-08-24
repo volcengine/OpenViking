@@ -44,9 +44,11 @@ Version: 1.0
         result = await client.add_resource(
             path=str(test_file),
             to=to_uri,
-            reason="Example: monitoring a document",
-            instruction="Check for updates and re-index",
-            watch_interval=60.0,
+            options={
+                "reason": "Example: monitoring a document",
+                "instruction": "Check for updates and re-index",
+                "watch_interval": 60.0,
+            },
         )
 
         print("Resource added successfully!")
@@ -67,13 +69,15 @@ async def example_update_watch_interval():
         await client.add_resource(
             path=str(test_file),
             to=to_uri,
-            watch_interval=0,
+            options={"watch_interval": 0},
         )
         await client.add_resource(
             path=str(test_file),
             to=to_uri,
-            reason="Updated: more frequent monitoring",
-            watch_interval=120.0,
+            options={
+                "reason": "Updated: more frequent monitoring",
+                "watch_interval": 120.0,
+            },
         )
         print("Watch task updated successfully!")
     finally:
@@ -92,7 +96,7 @@ async def example_cancel_watch():
         await client.add_resource(
             path=str(test_file),
             to=to_uri,
-            watch_interval=0,
+            options={"watch_interval": 0},
         )
         print("Watch task cancelled successfully!")
     finally:
@@ -111,7 +115,7 @@ async def example_handle_conflict():
         await client.add_resource(
             path=str(test_file),
             to=to_uri,
-            watch_interval=30.0,
+            options={"watch_interval": 30.0},
         )
         print("  First watch task created successfully")
 
@@ -120,7 +124,7 @@ async def example_handle_conflict():
             await client.add_resource(
                 path=str(test_file),
                 to=to_uri,
-                watch_interval=60.0,
+                options={"watch_interval": 60.0},
             )
             print("  ERROR: This should not happen!")
         except ConflictError as e:

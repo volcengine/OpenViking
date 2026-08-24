@@ -409,7 +409,7 @@ class OpenVikingInspector:
         return result
 
     def search_memories(
-        self, query: str, target_uri: str = "viking://user/memories", limit: int = 10
+        self, query: str, target_uri: str = "viking://~/memories", limit: int = 10
     ) -> list:
         result = self._post(
             "/api/v1/search/find",

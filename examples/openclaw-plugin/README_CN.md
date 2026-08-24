@@ -73,7 +73,7 @@ Agent 会自动完成安装 → 配置 → 重启 → 验证。详见 [INSTALL-A
 | `ov_archive_search` | 对当前 session 已归档的原始对话消息做关键词 grep |
 | `ov_archive_expand` | 按 archive ID 展开原始消息 |
 | `ov_recall_trace` | 查看 auto-recall 和显式 recall/search 记录的召回链路 |
-| `add_skill` | 将 `SKILL.md`、skill 目录、原始 skill 内容或 MCP tool dict 导入 `viking://user/skills/...` |
+| `add_skill` | 将 `SKILL.md`、skill 目录、原始 skill 内容或 MCP tool dict 导入 `viking://user/<uid>/skills/...` |
 | `ov_search` | 检索已导入的 resources 和 skills |
 | `ov_read` | 读取 `ov_search` / trace 返回的 `viking://...` OpenViking 虚拟 URI 完整内容 |
 | `ov_multi_read` | 一次读取多个精确 `viking://...` URI，适合同时读取 overview 和同级切片 |
@@ -314,7 +314,7 @@ preflight 阶段的 `assemble()` 并不是简单地把旧聊天记录塞回来�
 Resource 和 skill 保持两个入口，因为它们落在不同 OpenViking 命名空间，并使用不同服务端 API：
 
 - resource 走 `/api/v1/resources`，落到 `viking://resources/...`
-- skill 走 `/api/v1/skills`，落到 `viking://user/skills/...`
+- skill 走 `/api/v1/skills`，落到 `viking://user/<uid>/skills/...`
 
 插件也提供显式 slash command，方便手动导入：
 
@@ -322,7 +322,7 @@ Resource 和 skill 保持两个入口，因为它们落在不同 OpenViking 命�
 /add-resource ./README.md --to viking://resources/openviking-readme --wait
 /add-skill ./skills/install-openviking-memory --wait
 /ov-search "OpenViking install" --uri viking://resources/openviking-readme
-/ov-search "memory install skill" --uri viking://user/skills
+/ov-search "memory install skill" --uri viking://~/skills
 /ov-recall-trace --turn latest --include-content
 ```
 

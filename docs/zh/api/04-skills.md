@@ -14,8 +14,8 @@ OpenViking 支持多种技能定义格式：
 
 ### 技能存储结构
 
-技能存储在当前用户的 skills 根。短 URI `viking://user/skills/` 会按认证请求身份解析为
-`viking://user/{user_id}/skills/`：
+技能存储在当前用户的 skills 根。家目录别名 `viking://~/skills/` 会按认证请求身份展开为
+`viking://user/{user_id}/skills/`（无 uid 的写法 `viking://user/skills/` 不再被接受）：
 
 ```
 viking://user/{user_id}/skills/
@@ -92,7 +92,7 @@ OpenViking 会自动检测并将 MCP Tool 定义转换为技能格式。
 **转换示例**：
 
 输入（MCP 格式）：
-```python
+```json
 {
     "name": "search_web",
     "description": "Search the web",
@@ -114,7 +114,7 @@ OpenViking 会自动检测并将 MCP Tool 定义转换为技能格式。
 ```
 
 输出（技能格式）：
-```python
+```json
 {
     "name": "search-web",
     "description": "Search the web",
@@ -189,7 +189,7 @@ This tool wraps the MCP tool `search-web`. Call this when the user needs functio
 - **目标规则**：
   - Skills 始终是 user-scoped；`add_skill` 不接受 `to`、`parent` 或 `root_uri`。
   - 不支持 peer-scoped skill 根；actor peer 过滤只作用于 peer memories/resources，不作用于 peer skills。
-  - 列出、读取、删除或搜索技能时，可以使用 `viking://user/skills/...` 作为当前用户短写。
+  - 列出、读取、删除或搜索技能时，使用家目录别名 `viking://~/skills/...` 访问自己的技能；无 uid 的 `viking://user/skills/...` 写法会报错并提示正确写法。
 
 - **支持的数据格式**：
   1. **字典（技能格式）**：包含 `name`、`description`、`content` 等字段
@@ -292,7 +292,7 @@ Search the web for current information.
 - **limit** (integer, optional): Max results, default 10
 """
 }
-result = client.add_skill(skill)
+result = client.add_skill(data=skill)
 print(f"Added: {result['root_uri']}")
 
 # 方式 2：使用 MCP Tool 格式（自动检测并转换）
@@ -310,20 +310,20 @@ mcp_tool = {
         "required": ["expression"]
     }
 }
-result = client.add_skill(mcp_tool)
+result = client.add_skill(data=mcp_tool)
 print(f"Added: {result['uri']}")
 
 # 方式 3：从本地 SKILL.md 文件添加
-result = client.add_skill("./skills/search-web/SKILL.md")
+result = client.add_skill(data="./skills/search-web/SKILL.md")
 print(f"Added: {result['uri']}")
 
 # 方式 4：从包含 SKILL.md 的目录添加（辅助文件会一并包含）
-result = client.add_skill("./skills/code-runner/")
+result = client.add_skill(data="./skills/code-runner/")
 print(f"Added: {result['uri']}")
 print(f"Auxiliary files: {result['auxiliary_files']}")
 
 # 等待处理完成
-result = client.add_skill("./skills/my-skill/", wait=True)
+result = client.add_skill(data="./skills/my-skill/", wait=True)
 client.wait_processed()
 ```
 
@@ -473,7 +473,11 @@ curl -X GET "http://localhost:1933/api/v1/skills?node_limit=1000" \
 **Python SDK**：
 
 ```python
-skill = client.get_skill("search-web", include_content=True, include_files=True)
+skill = client.get_skill(
+    skill_name="search-web",
+    include_content=True,
+    include_files=True,
+)
 print(skill["name"])
 print(skill.get("content"))
 ```
@@ -507,7 +511,7 @@ curl -X GET "http://localhost:1933/api/v1/skills/search-web?include_content=true
 **Python SDK**：
 
 ```python
-results = client.find_skills("search the internet", limit=5)
+results = client.find_skills(query="search the internet", limit=5)
 
 for skill in results["skills"]:
     print(skill["name"], skill["score"])
@@ -546,8 +550,12 @@ curl -X POST http://localhost:1933/api/v1/skills/find \
 **Python SDK**：
 
 ```python
-validated = client.validate_skill({"name": "search-web", "description": "..."})
-updated = client.update_skill("search-web", "./skills/search-web", wait=True)
+validated = client.validate_skill(data={"name": "search-web", "description": "..."})
+updated = client.update_skill(
+    skill_name="search-web",
+    data="./skills/search-web",
+    wait=True,
+)
 ```
 
 **TypeScript SDK**
@@ -602,7 +610,7 @@ curl -X PUT http://localhost:1933/api/v1/skills/search-web \
 **Python SDK**：
 
 ```python
-client.delete_skill("old-skill")
+client.delete_skill(skill_name="old-skill")
 ```
 
 **TypeScript SDK**
@@ -710,14 +718,14 @@ curl -X DELETE "http://localhost:1933/api/v1/skills/old-skill" \
 skill = {
     "name": "search-web",
     "description": "Search the web for current information using Google",
-    ...
+    # 其他技能字段
 }
 
 # 不够好 - 过于模糊
 skill = {
     "name": "search",
     "description": "Search",
-    ...
+    # 其他技能字段
 }
 ```
 

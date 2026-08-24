@@ -4,10 +4,8 @@
 
 import asyncio
 import sys
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
-from openviking.core.context import ContextLevel
-from openviking.core.namespace import canonicalize_uri
 from openviking.pyagfs.exceptions import (
     AGFSInvalidOperationError,
     AGFSNotFoundError,
@@ -29,11 +27,6 @@ from openviking_cli.exceptions import (
 
 def _pkg():
     return sys.modules[__package__]
-
-if TYPE_CHECKING:
-    from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
-    from openviking_cli.utils.config import GrepConfig, RerankConfig, RetrievalConfig
-
 
 class _SnapshotMixin:
     """Snapshot/git-like version control (commit/restore/show/diff/log)."""
@@ -441,7 +434,6 @@ class _SnapshotMixin:
     ) -> Dict[str, Any]:
         """Return a unified text diff for one path between two snapshots."""
         real_ctx = self._ctx_or_default(ctx)
-        path = canonicalize_uri(path, ctx=real_ctx)
         self._ensure_access(path, real_ctx)
 
         from_meta: Optional[Dict[str, Any]] = None

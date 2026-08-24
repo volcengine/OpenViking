@@ -93,9 +93,6 @@ const INTERACTIVE_ADMIN: &[HelpCommand] = help_commands![
     "admin",
     "system",
     "reindex",
-    "relations",
-    "link",
-    "unlink"
 ];
 
 const HELP_SECTIONS: &[HelpSection] = &[
@@ -321,10 +318,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov read <uri>",
                 description: "Read the resource content.",
-            },
-            HelpItem {
-                label: "ov relations <uri>",
-                description: "Inspect related resources.",
             },
         ],
     },
@@ -737,48 +730,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         }],
     },
     CommandHelpSpec {
-        path: &["relations"],
-        purpose: "List relation links for one resource. Experimental.",
-        examples: &[HelpItem {
-            label: "ov relations viking://projects/acme/spec.md",
-            description: "Inspect linked resources.",
-        }],
-        next_steps: &[
-            HelpItem {
-                label: "ov link <from-uri> <to-uri>",
-                description: "Create a relation.",
-            },
-            HelpItem {
-                label: "ov unlink <from-uri> <to-uri>",
-                description: "Remove a relation.",
-            },
-        ],
-    },
-    CommandHelpSpec {
-        path: &["link"],
-        purpose: "Create one or more relation links between resources. Experimental.",
-        examples: &[HelpItem {
-            label: "ov link viking://a.md viking://b.md --reason \"related design\"",
-            description: "Link two resources with a reason.",
-        }],
-        next_steps: &[HelpItem {
-            label: "ov relations <from-uri>",
-            description: "Confirm the relation.",
-        }],
-    },
-    CommandHelpSpec {
-        path: &["unlink"],
-        purpose: "Remove one relation link between resources. Experimental.",
-        examples: &[HelpItem {
-            label: "ov unlink viking://a.md viking://b.md",
-            description: "Remove a relation.",
-        }],
-        next_steps: &[HelpItem {
-            label: "ov relations <from-uri>",
-            description: "Confirm the relation is gone.",
-        }],
-    },
-    CommandHelpSpec {
         path: &["export"],
         purpose: "Export context from a URI as an .ovpack file.",
         examples: &[HelpItem {
@@ -881,10 +832,20 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Generate or update one shared Skill package.",
             },
         ],
-        next_steps: &[HelpItem {
-            label: "ov tree <target-uri>",
-            description: "Inspect the generated output.",
-        }],
+        next_steps: &[
+            HelpItem {
+                label: "ov task status <cmp-task-id>",
+                description: "Inspect the Compile task.",
+            },
+            HelpItem {
+                label: "ov task cancel <cmp-task-id>",
+                description: "Cancel the Compile task.",
+            },
+            HelpItem {
+                label: "ov tree <target-uri>",
+                description: "Inspect the generated output.",
+            },
+        ],
     },
     CommandHelpSpec {
         path: &["wait"],
@@ -918,7 +879,7 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             },
             HelpItem {
                 label: "ov task cancel <task-id>",
-                description: "Cancel one task.",
+                description: "Cancel one task, including a cmp_ Compile task.",
             },
         ],
         next_steps: &[HelpItem {
@@ -1371,6 +1332,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov reindex viking://projects/acme --mode semantic_and_vectors --wait true",
                 description: "Regenerate semantic artifacts, then vectors.",
+            },
+            HelpItem {
+                label: "ov reindex viking://projects/acme --mode semantic_and_vectors --recursive=false",
+                description: "Refresh only the target directory semantics and vectors, without sub-directory.",
             },
             HelpItem {
                 label: "ov reindex viking://projects/acme --mode prune_orphans --dry-run",
@@ -2362,9 +2327,6 @@ fn localized_command_description<'a>(
         "glob" => "Glob 路径搜索",
         "overview" => "生成资源概览",
         "abstract" => "生成资源摘要",
-        "relations" => "列出资源关系",
-        "link" => "创建关系链接",
-        "unlink" => "删除关系链接",
         "config" => "添加、编辑、删除或切换配置",
         "config show" => "显示当前配置",
         "config validate" => "验证当前配置",
@@ -2929,6 +2891,7 @@ mod tests {
 
         assert!(rendered.contains("--mode <vectors_only|semantic_and_vectors|prune_orphans>"));
         assert!(rendered.contains("--dry-run"));
+        assert!(rendered.contains("--recursive <true|false>"));
         assert!(rendered.contains("Regenerate semantic artifacts, then vectors."));
     }
 

@@ -1,601 +1,238 @@
-# 贡献指南
+# 为 OpenViking 做贡献
 
-感谢你对 OpenViking 感兴趣！我们欢迎各种形式的贡献：
+[English](CONTRIBUTING.md) / 中文 / [日本語](CONTRIBUTING_JA.md)
 
-- 报告 Bug
-- 提交功能请求
-- 改进文档
-- 贡献代码
+感谢你参与 OpenViking。本指南旨在帮助贡献者提交清晰、聚焦且便于评审的改动。
 
----
+我们欢迎 Bug 报告、功能请求、文档改进和代码贡献。
 
-## 开发环境设置
+## 我们重视什么
+
+OpenViking 重视聚焦且经过充分理解的改动。无论是否使用 AI 工具，贡献者都要对
+理解、解释和验证自己的改动负责。
+
+优先提交最小而完整的改动。代码简洁，是减少概念、分支、重复规则和猜测式抽象，
+不是压缩必要的代码行数。好的改动应当直接、易读，并且能从入口到可观察行为解释清楚。
+
+具体来说：
+
+- 一个 PR 只解决一个内聚的问题，不要混入无关清理或重构。
+- 复用现有规则的 Owner，不要引入平行机制。
+- 避免猜测式 Fallback、Flag、状态字段和抽象。
+- 删除被新实现替代的代码、测试和兼容路径。
+- 当必要结构能让职责、生命周期或失败处理更清楚时，应当保留它。
+
+### 评审优先级
+
+维护者精力有限，因此会优先查看聚焦的 PR：
+
+- **改动不超过 100 行**的 PR，通常能得到更及时的查看。
+- **改动不超过 200 行**的 PR，会比更大的 PR 优先查看。
+
+这只是评审优先级，不是硬性限制或响应时间承诺。改动行数按手写源码、测试和文档的
+新增行与删除行之和计算；生成文件、第三方代码和锁文件不计入规模判断。
+
+不要为了控制行数省略必要的测试或文档。只有当拆分后的每个 PR 都能独立理解且保持
+正确时，才拆分大改动。PR 小不代表可以降低正确性、设计质量或兼容性要求。
+
+## 开始之前
+
+1. 全局搜索已有 Issue、PR 和代码，确认是否已经存在相同的行为或领域规则。
+2. 修复 Bug 时，尽量通过真实生产入口复现问题。
+3. 确认 Owner 模块，并追踪相关值或状态在哪里创建、规范化、存储和消费。
+4. 开发功能时，先说明要解决的问题和预期行为，再设计实现。
+
+以下改动应在实现前先提交 Issue 或发起讨论：
+
+- 公开的 REST、SDK、CLI、MCP 或配置语义；
+- 持久化数据、存储 Schema、VFS/AGFS 路径或加密文件行为；
+- 异步任务归属、队列、取消、清理或结果状态；
+- 资源导入与监听、Session 生命周期或记忆抽取；
+- 检索 Level、目录范围或排序语义；
+- Tenant、Account、User 或 Peer 身份边界；
+- 涉及多个 Owner 模块或大型架构重构。
+
+讨论中请给出当前行为、目标行为、具体请求或配置示例，以及兼容性影响。这样维护者
+可以在开始实现前确认设计边界。
+
+请使用仓库提供的 GitHub 模板提交 [Bug 报告](https://github.com/volcengine/OpenViking/issues/new?template=bug_report.yml)、
+[功能请求](https://github.com/volcengine/OpenViking/issues/new?template=feature_request.yml)和
+[使用问题](https://github.com/volcengine/OpenViking/issues/new?template=question.yml)。
+
+## 找到正确的模块
+
+如果已知受影响模块，请在 Issue 或 PR 中注明。如果不确定，先描述可观察行为和使用场景，
+维护者会协助路由。
+
+这张表根据 2026 年 6 月 24 日至 8 月 24 日已合并 PR 中持续的提交和评审活动整理。
+它用于协助路由，不代表排他性的代码所有权；只需 @ 与改动直接相关的联系人。
+
+| 领域 | 模块 | 代表路径或主题 | 近期活跃维护者 / 评审者 |
+|---|---|---|---|
+| Platform | Server、API、Auth、Identity、Admin、Task | `openviking/server`、`openviking/service` | `@qin-ctx` |
+| Resource | 导入、Watch 与任务流水线 | `openviking/resource` | `@qin-ctx`、`@KCHENPENGFEI` |
+| Resource | 资源解析 | `openviking/parse` | `@zihengli-bytedance`、`@KCHENPENGFEI` |
+| Memory | Session、记忆抽取与编译 | `openviking/session`、记忆抽取、`ov compile` | `@chenjw`、`@heaoxiang-ai`、`@fujiajie666` |
+| Retrieval | Search 与 VectorDB | `openviking/retrieve`、`openviking/storage/vectordb` | `@zhoujh01`、`@t0saki` |
+| Storage | RAGFS、PathLock、QueueFS 与加密 | `openviking/storage`、`openviking/pyagfs`、`openviking/crypto`、`crates/ragfs*` | `@baojun-zhang` |
+| Integration | Agent Plugin 与 MCP | `agent-plugins`、记忆插件示例、Server MCP | `@t0saki`、`@ZaynJarvis` |
+| Integration | VikingBot 与 Agent 编译 | `bot`、`ov compile` | `@yeshion23333`、`@fujiajie666` |
+| Client | SDK、CLI 与 LangChain | `sdk`、`crates/ov_cli`、`integrations/langchain` | `@zhoujh01`、`@t0saki`、`@ehz0ah` |
+| Product | Web Studio | `web-studio` | `@yufeng201`、`@ZaynJarvis` |
+| Project | 文档、CI 与 Plugin 发布 | `docs`、`.github/workflows` | `@yufeng201`、`@ZaynJarvis` |
+
+跨模块改动或 Owner 不明确时，请先确认主要影响域，再 @ `@qin-ctx`、`@ZaynJarvis` 或 `@zhoujh01`。
+
+## 开发环境
 
 ### 前置要求
 
-- **Python**: 3.10+
-- **Go**: 1.22+ (从源码构建 AGFS 组件需要)
-- **Rust**: 1.91.1+（从源码构建需要；打包流程会同时构建内置 `ov` CLI）
-- **C++ 编译器**: GCC 9+ 或 Clang 11+ (构建核心扩展需要，必须支持 C++17)
-- **CMake**: 3.15+
+- Python 3.10+
+- 从源码构建、开发 Rust Binding 或内置 `ov` CLI 时需要 Rust 1.91.1+
+- 仅开发 `sdk/go` 时需要 Go 1.22+
+- 支持 C++17 的编译器：GCC 9+ 或 Clang 11+
+- CMake 3.15+
 
-#### 平台相关的本地构建工具
+Linux 请安装 `build-essential`，部分环境还需要 `pkg-config`。macOS 请安装 Xcode
+Command Line Tools。Windows 本地原生构建请安装 CMake 和 MinGW。
 
-- **Linux**: 建议安装 `build-essential`；某些环境下还可能需要 `pkg-config`
-- **macOS**: 安装 Xcode Command Line Tools（`xcode-select --install`）
-- **Windows**: 本地原生构建建议安装 CMake 和 MinGW
+### 安装
 
-#### 支持的平台 (预编译 Wheel 包)
-
-OpenViking 为以下环境提供预编译的 **Wheel** 包，安装时无需本地编译：
-
-- **Windows**: x86_64
-- **macOS**: x86_64, arm64 (Apple Silicon)
-- **Linux**: x86_64, arm64 (manylinux)
-
-对于其他平台（如 FreeBSD 等），安装时 `pip` 将会自动从源码进行编译。请确保已安装上述[前置要求](#前置要求)中的工具。
-
-### 1. Fork 并克隆
+Fork 仓库，然后克隆自己的 Fork：
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/openviking.git
-cd openviking
+git clone https://github.com/YOUR_USERNAME/OpenViking.git
+cd OpenViking
 ```
 
-### 2. 安装依赖
-
-我们推荐使用 `uv` 进行 Python 环境管理：
+推荐使用 `uv`：
 
 ```bash
-# 安装 uv (如果尚未安装)
 curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# 同步依赖并创建虚拟环境
 uv sync --all-extras
-source .venv/bin/activate  # Linux/macOS
-# 或者 .venv\Scripts\activate  # Windows
 ```
 
-#### 本地开发与原生组件重建
+验证环境：
 
-OpenViking 默认使用 `binding-client` 模式，这依赖预先构建的原生产物。如果你修改了 **AGFS (Go)** 代码、内置的 **Rust CLI**，或 **C++ 扩展**，或者这些预编译产物未找到，你需要重新编译并安装它们，以使更改在本地环境中生效。在项目根目录下运行以下命令：
+```bash
+uv run python -c "import openviking; print(openviking.__version__)"
+```
+
+配置本地 Server：
+
+```bash
+uv run openviking-server init
+uv run openviking-server doctor
+```
+
+配置说明和 Provider 示例见[配置指南](https://docs.openviking.ai/zh/guides/01-configuration)。
+
+修改 RAGFS Rust Binding、内置 Rust CLI 或 C++ 扩展后，需要重新构建原生组件：
 
 ```bash
 uv pip install -e . --force-reinstall
 ```
 
-该命令会强制重新执行 `setup.py`，触发 AGFS、内置 `ov` CLI 和 C++ 组件的重新编译与安装。
+SDK、Integration、Plugin 和 Benchmark 可能有额外要求，请查看对应目录中的 README 或
+包配置。
 
-### 3. 配置环境
+## 修改代码
 
-创建配置文件 `~/.openviking/ov.conf`：
+### 职责与设计
 
-```json
-{
-  "embedding": {
-    "dense": {
-      "provider": "volcengine",
-      "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-251215",
-      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-      "dimension": 1024,
-      "input": "multimodal"
-    }
-  },
-  "vlm": {
-    "api_key": "your-api-key",
-    "model": "doubao-seed-2-0-lite-260428",
-    "api_base": "https://ark.cn-beijing.volces.com/api/v3"
-  }
-}
-```
+- 行为应放在所属模块中。上层只负责传输或消费结果，不要重复实现相同规则。
+- 在边界把外部兼容表达转换为唯一的规范领域模型，内层业务逻辑不应猜测输入形态。
+- 面向客户端的边界应保留有意义的 Server、Network、Timeout、Auth 和 Conflict 错误。
+- 任务状态必须与产生它的任务保持因果关联，不能通过全局队列状态或无关回调推断完成。
+- 每个值和规则只保留一个权威来源。
 
-设置环境变量：
+如果局部边缘 Case 开始改变任务边界、公开语义或整体架构，应暂停实现并回到设计讨论，
+不要在主流程中不断增加特殊分支。
+
+### 代码风格
+
+Python 使用 Ruff 进行格式化和 Lint，使用 mypy 进行类型检查，配置行宽为 100 字符。
+
+对改动路径运行检查：
 
 ```bash
-export OPENVIKING_CONFIG_FILE=~/.openviking/ov.conf
+uv run ruff format <changed-paths>
+uv run ruff check <changed-paths>
+uv run mypy <changed-paths>
 ```
 
-### 4. 验证安装
+公开 API 应包含简短且有用的 Docstring。优先使用清晰命名和直接控制流，不要用注释
+重复解释代码本身。
+
+Rust、Go、TypeScript、文档和 Plugin 改动，请使用对应组件定义的格式化、Lint、类型检查
+和测试命令。
+
+### 测试
+
+验证受影响的最小有效公开契约和主要失败边界。
+
+- 优先修改已有的高价值契约测试。
+- 默认不要新增单元测试或测试文件。
+- 不要测试私有 Helper 是否存在、Mock 调用顺序、简单字段透传或框架行为，除非它保护
+  长期公开契约。
+- 小而明确的修复不必自动新增测试，但必须说明验证方式。
+- 临时复现、诊断、压测和验证脚本统一放在 `test_scripts/`，不要放入源码、Benchmark
+  或维护脚本目录。
+
+运行相关的聚焦测试，例如：
 
 ```bash
-python -c "import openviking; print(openviking.__version__)"
+uv run pytest tests/client/test_http_client_config.py
+uv run pytest tests/server/ -k "search"
 ```
 
-### 5. 构建 Rust CLI（可选）
-
-Rust CLI (`ov`) 提供高性能的命令行客户端，用于连接 OpenViking Server 进行操作。
-
-即使你不打算直接使用 `ov`，只要走 OpenViking 的源码构建流程，Rust 工具链仍然是必需的，因为打包过程也会构建内置 CLI 二进制。
+只有改动范围和风险需要时才运行完整 Python 测试：
 
 ```bash
-# 从源码编译安装
-cargo install --path crates/ov_cli
-
-# 或者安装已发布的 npm CLI 包（下载预编译二进制）
-npm i -g @openviking/cli
+uv run pytest
 ```
 
-安装后通过 `ov --help` 查看所有可用命令。CLI 连接配置见 `~/.openviking/ovcli.conf`。
+## 提交 Pull Request
 
----
+基于最新的 `main` 创建分支，完成聚焦改动后向 `main` 提交 PR。
 
-## 项目结构
+Commit Message 和 PR 标题使用 [Conventional Commits](https://www.conventionalcommits.org/)：
 
-```
-openviking/
-├── pyproject.toml        # 项目配置
-├── Cargo.toml            # Rust workspace 配置
-├── third_party/          # 第三方依赖
-│   └── agfs/             # AGFS 文件系统
-│
-├── openviking/           # Python 服务端与核心实现
-│   ├── client/           # HTTP 客户端兼容导出
-│   ├── console/          # 独立 console UI 与代理服务
-│   ├── core/             # 核心数据模型与目录抽象
-│   ├── message/          # 会话消息与 part 模型
-│   ├── models/           # Embedding 与 VLM 后端
-│   ├── parse/            # 资源解析器与检测器
-│   ├── resource/         # 资源处理与 watch 管理
-│   ├── retrieve/         # 检索系统
-│   ├── server/           # HTTP 服务端
-│   ├── service/          # 共享 service 层
-│   ├── session/          # 会话管理与压缩
-│   ├── storage/          # 存储层
-│   ├── telemetry/        # 操作级 telemetry
-│   ├── trace/            # trace 与运行时跟踪辅助
-│   ├── utils/            # 工具类与配置辅助
-│   └── prompts/          # 提示词模板
-│
-├── crates/               # Rust 组件
-│   └── ov_cli/           # Rust CLI 客户端
-│       ├── src/          # CLI 源码
-│       └── install.sh    # 已废弃 stub (改用 npm 包, 见 Install)
-│
-├── src/                  # C++ 扩展源码（Python abi3）
-│
-├── tests/                # 测试套件
-│   ├── client/           # 客户端测试
-│   ├── console/          # Console 测试
-│   ├── core/             # 核心逻辑测试
-│   ├── parse/            # 解析器测试
-│   ├── resource/         # 资源处理测试
-│   ├── retrieve/         # 检索测试
-│   ├── server/           # 服务端测试
-│   ├── service/          # Service 层测试
-│   ├── session/          # 会话测试
-│   ├── storage/          # 存储测试
-│   ├── telemetry/        # Telemetry 测试
-│   ├── vectordb/         # 向量数据库测试
-│   └── integration/      # 端到端测试
-│
-└── docs/                 # 文档
-    ├── en/               # 英文文档
-    └── zh/               # 中文文档
+```text
+feat(parser): support xlsx resources
+fix(retrieval): preserve rerank score order
+docs: clarify server configuration
+refactor(storage): remove duplicate path normalization
 ```
 
----
+完整填写仓库的 PR 模板。有效的 PR 描述应说明：
 
-## 代码风格
+- 改动前后的可观察行为；
+- Bug 的根因和真实执行路径；
+- 受影响的入口和 Owner 模块；
+- 兼容性或迁移影响；
+- 实际执行的验证命令；
+- 问题已经复现，还是仅根据代码推断。
 
-我们使用以下工具来保持代码一致性：
+请准确选择 Human Involvement。项目接受 AI 辅助贡献，但作者仍对改动负责，并且必须
+能解释它与系统其他部分如何交互。
 
-| 工具 | 用途 | 配置 |
-|------|---------|--------|
-| **Ruff** | Linting, 格式化, 导入排序 | `pyproject.toml` |
-| **mypy** | 类型检查 | `pyproject.toml` |
+提交前：
 
-### 运行检查
+- 完整检查 Diff，删除无关或意外生成的改动。
+- 确认被替代的 Helper、分支、Mock 和注释已经删除。
+- 公开行为变化时更新相关文档。
+- 如实说明未运行的检查及具体原因，不要声称执行了实际未运行的测试。
 
-```bash
-# 格式化代码
-ruff format openviking/
-
-# Lint 检查
-ruff check openviking/
-
-# 类型检查
-mypy openviking/
-```
-
-### 风格指南
-
-1. **行宽**：100 字符
-2. **缩进**：4 个空格
-3. **字符串**：推荐使用双引号
-4. **类型提示**：鼓励但不强制
-5. **Docstrings**：公共 API 必须包含（最多 1-2 行）
-
----
-
-## 测试
-
-### 运行测试
-
-```bash
-# 运行所有测试
-pytest
-
-# 运行特定测试模块
-pytest tests/client/ -v
-pytest tests/server/ -v
-pytest tests/parse/ -v
-
-# 运行特定测试文件
-pytest tests/client/test_http_client_config.py
-
-# 运行特定测试
-pytest tests/client/test_http_client_config.py
-
-# 按关键字运行
-pytest -k "search" -v
-
-# 运行并生成覆盖率报告
-pytest --cov=openviking --cov-report=term-missing
-```
-
-### 编写测试
-
-测试按模块组织在 `tests/` 的子目录中。项目使用 `asyncio_mode = "auto"`，异步测试**不需要** `@pytest.mark.asyncio` 装饰器：
-
-```python
-# tests/service/test_example.py
-class TestResourceService:
-    async def test_add_resource(self, service, request_context, sample_markdown_file):
-        result = await service.resources.add_resource(
-            path=str(sample_markdown_file),
-            ctx=request_context,
-            reason="test document",
-        )
-        assert "root_uri" in result
-        assert result["root_uri"].startswith("viking://")
-```
-
-常用 fixture 定义在 `tests/conftest.py` 中，包括已初始化的 `service`、`request_context`、`temp_dir` 和示例文件等。
-
----
-
-## 维护者路由与贡献入口
-
-### 面向贡献者的模块地图
-
-如果你还不确定问题、issue 或 PR 属于哪个方向，可以先看这张表：
-
-| 领域 | 模块 | 主要联系人 |
-|------|------|------------|
-| Integration | Bot | `@yeshion23333` |
-| Integration | OpenClaw Plugin | `@Mijamind719`、`@wlff123` |
-| Platform | Framework / Multi-tenant / Resources / Session | `@qin-ctx` |
-| Platform | Incremental / Scheduled Update | `@myysy` |
-| Knowledge | Memory | `@chenjw` |
-| Knowledge | Retrieval / Directory Semantics | `@zhoujh01` |
-| Storage & Security | Virtual FS / File Encryption | `@chuanbao666`、`@baojun-zhang` |
-
-如果还是无法判断归属，可以直接 @ 下方的跨模块维护支持成员。
-
-### 面向维护者的路由表
-
-当需要把 issue、PR 或设计问题路由到更具体的 owner 时，可以参考下表：
-
-| 领域 | 子域 | 代表路径或主题 | 主要联系人 | 备援 / 跨模块支持 |
-|------|------|----------------|------------|-------------------|
-| Integration | Bot Runtime | `bot/vikingbot`、`bot/bridge`、部署脚本、bot 文档 | `@yeshion23333` | `@chenjw` |
-| Integration | OpenClaw Plugin | `examples/openclaw-plugin`、安装、remote mode、兼容性 | `@Mijamind719`、`@wlff123` | `@LinQiang391` |
-| Platform | Server & Multi-tenant | `openviking/server`、`openviking/service`、auth、identity、admin、租户边界 | `@qin-ctx` | `@MaojiaSheng` |
-| Platform | Resource & Session Lifecycle | `openviking/resource`、`openviking/session`、资源导入、session 生命周期 | `@qin-ctx` | `@MaojiaSheng` |
-| Platform | Incremental & Scheduled Update | `openviking/resource/watch_manager.py`、`openviking/resource/watch_scheduler.py` | `@myysy` | `@qin-ctx` |
-| Knowledge | Memory Engine | `openviking/session/memory`、`memory_extractor.py`、`memory_deduplicator.py` | `@chenjw` | `@qin-ctx` |
-| Knowledge | Retrieval & Directory Semantics | `openviking/retrieve`、意图分析、分层检索、目录语义 | `@zhoujh01` | `@qin-ctx` |
-| Storage & Security | VFS / AGFS Path Semantics | `openviking/storage`、`openviking/pyagfs`、文件系统行为、路径语义 | `@chuanbao666`、`@baojun-zhang` | `@zhoujh01` |
-| Storage & Security | Encryption & Data Safety | `openviking/crypto`、文件加密、存储安全 | `@chuanbao666`、`@baojun-zhang` | `@zhoujh01` |
-
-对于暂时还没有稳定 owner 的方向，先由跨模块维护支持成员协助路由。
-
-### 跨模块维护支持
-
-- `@MaojiaSheng`
-- `@qin-ctx`
-- `@zhoujh01`
-
-跨模块维护支持成员主要负责 issue 路由、跨模块设计问题，以及 owner 繁忙时的补位 review。
-
-### 如何获得帮助
-
-- 如果你已经知道受影响模块，请在 issue 或 PR 描述中直接写明。
-- 如果暂时无法判断模块归属，优先描述使用场景和受影响行为。
-- 如果你想认领某个 issue，建议先留言说明，尤其是跨模块改动。
-- 如果你的 PR 涉及多个模块，请在描述中标明主要影响域。
-
-### 贡献入口标签
-
-Issue 模板已经会对 `bug`、`enhancement`、`question` 等问题类型做基础分类。为了让贡献入口更清晰，维护者还可能补充以下标签：
-
-| 标签 | 含义 |
-|------|------|
-| `good first issue` | 适合新贡献者上手，范围清晰且验收标准明确 |
-| `help wanted` | 更适合已经熟悉仓库或 review 风格的贡献者参与 |
-| `needs-design` | 实现前需要维护者先澄清设计边界 |
-| `needs-review` | 正在等待首轮 review 的 PR |
-
-### 贡献成长路径
-
-我们希望贡献成长路径足够实际，让贡献者能清楚看到下一步可以怎么参与：
-
-| 阶段 | 常见信号 | 下一步建议 |
-|------|----------|------------|
-| 新贡献者 | 第一次提 issue 或 PR，通常从文档、测试或小范围修复开始 | 从 `good first issue` 入手，熟悉本地开发和提交流程 |
-| 活跃贡献者 | 已经有一个或多个合入贡献 | 在自己熟悉的模块下开始认领 `help wanted` |
-| 模块贡献者 | 在同一子域持续贡献 | 开始参与该模块的 issue 分流、问题复现、文档补充或 review 建议 |
-| 备援 Reviewer 候选 | 在某个子域形成稳定贡献记录 | 协助首轮 review、问题路由和贡献者支持 |
-
-## 贡献流程
-
-### 1. 创建分支
-
-```bash
-git checkout main
-git pull origin main
-git checkout -b feature/your-feature-name
-```
-
-分支命名规范：
-- `feature/xxx` - 新功能
-- `fix/xxx` - Bug 修复
-- `docs/xxx` - 文档更新
-- `refactor/xxx` - 代码重构
-
-### 2. 修改代码
-
-- 遵循代码风格指南
-- 为新功能添加测试
-- 根据需要更新文档
-
-### 3. 提交更改
-
-```bash
-git add .
-git commit -m "feat: add new parser for xlsx files"
-```
-
-### 4. 推送并创建 PR
-
-```bash
-git push origin feature/your-feature-name
-```
-
-然后在 GitHub 上创建一个 Pull Request。
-
----
-
-## 提交规范
-
-我们遵循 [Conventional Commits](https://www.conventionalcommits.org/)：
-
-```
-<type>(<scope>): <subject>
-
-<body>
-
-<footer>
-```
-
-### 类型
-
-| 类型 | 描述 |
-|------|-------------|
-| `feat` | 新功能 |
-| `fix` | Bug 修复 |
-| `docs` | 文档 |
-| `style` | 代码风格（不影响逻辑） |
-| `refactor` | 代码重构 |
-| `perf` | 性能优化 |
-| `test` | 测试 |
-| `chore` | 构建/工具 |
-
-### 示例
-
-```bash
-# 新功能
-git commit -m "feat(parser): add support for xlsx files"
-
-# Bug 修复
-git commit -m "fix(retrieval): fix score calculation in rerank"
-
-# 文档
-git commit -m "docs: update quick start guide"
-
-# 重构
-git commit -m "refactor(storage): simplify interface methods"
-```
-
----
-
-## Pull Request 指南
-
-### PR 标题
-
-使用与提交消息相同的格式。
-
-### PR 描述模板
-
-```markdown
-## Summary
-
-简要描述更改及其目的。
-
-## Type of Change
-
-- [ ] New feature (feat)
-- [ ] Bug fix (fix)
-- [ ] Documentation (docs)
-- [ ] Refactoring (refactor)
-- [ ] Other
-
-## Testing
-
-描述如何测试这些更改：
-- [ ] Unit tests pass
-- [ ] Manual testing completed
-
-## Related Issues
-
-- Fixes #123
-- Related to #456
-
-## Checklist
-
-- [ ] Code follows project style guidelines
-- [ ] Tests added for new functionality
-- [ ] Documentation updated (if needed)
-- [ ] All tests pass
-```
-
----
-
-## CI/CD 工作流
-
-我们使用 **GitHub Actions** 进行持续集成和持续部署。我们的工作流设计为模块化和分层的。
-
-### 1. 自动工作流
-
-| 事件 | 工作流 | 描述 |
-|-------|----------|-------------|
-| **Pull Request** | `pr.yml` | 运行 **Lint** (Ruff, Mypy) 和 **Test Lite** (Linux + Python 3.10 上的集成测试)。为贡献者提供快速反馈。(显示为 **01. Pull Request Checks**) |
-| **Push to Main** | `ci.yml` | 运行 **Test Full** (所有操作系统：Linux/Win/Mac，所有 Py版本：3.10-3.14) 和 **CodeQL** (安全扫描)。确保主分支稳定性。(显示为 **02. Main Branch Checks**) |
-| **Release Published** | `release.yml` | 当您在 GitHub 上创建 Release 时触发。自动构建源码包和 wheel 包，基于 Git Tag 确定版本号，并发布到 **PyPI**。(显示为 **03. Release**) |
-| **Weekly Cron** | `schedule.yml` | 每周日运行 **CodeQL** 安全扫描。(显示为 **04. Weekly Security Scan**) |
-
-仓库中另外还有用于 PR review 自动化、Docker 镜像构建和 Rust CLI 打包的工作流。
-
-### 2. 手动触发工作流
-
-维护者可以从 "Actions" 选项卡手动触发以下工作流，以执行特定任务或调试问题。
-
-#### A. 代码检查 (`11. _Lint Checks`)
-运行代码风格检查 (Ruff) 和类型检查 (Mypy) 。无需参数。
-
-#### B. 简易测试 (`12. _Test Suite (Lite)`)
-运行快速集成测试，支持自定义矩阵配置。
-
-*   **Inputs**:
-    *   `os_json`: 操作系统列表的 JSON 字符串数组 (例如 `["ubuntu-24.04"]`)。
-    *   `python_json`: Python 版本列表的 JSON 字符串数组 (例如 `["3.10"]`)。
-
-#### C. 完整测试 (`13. _Test Suite (Full)`)
-在所有支持的平台 (Linux/Mac/Win) 和 Python 版本 (3.10-3.14) 上运行完整的测试套件。手动触发时支持自定义矩阵配置。
-
-*   **Inputs**:
-    *   `os_json`: 操作系统列表 (默认: `["ubuntu-24.04", "macos-14", "windows-latest"]`)。
-    *   `python_json`: Python 版本列表 (默认: `["3.10", "3.11", "3.12", "3.13", "3.14"]`)。
-
-#### D. 安全扫描 (`14. _CodeQL Scan`)
-运行 CodeQL 安全分析。无需参数。
-
-#### E. 构建发行版 (`15. _Build Distribution`)
-仅构建 Python wheel 包，不发布。
-
-*   **Inputs**:
-    *   `os_json`: 操作系统列表 (默认: `["ubuntu-24.04", "ubuntu-24.04-arm", "macos-14", "macos-15-intel", "windows-latest"]`)。
-    *   `python_json`: Python 版本列表 (默认: `["3.10", "3.11", "3.12", "3.13", "3.14"]`)。
-    *   `build_sdist`: 是否构建源码包 (默认: `true`)。
-    *   `build_wheels`: 是否构建 Wheel 包 (默认: `true`)。
-
-#### F. 发布发行版 (`16. _Publish Distribution`)
-将已构建的包（需要提供构建运行 ID）发布到 PyPI。
-
-*   **Inputs**:
-    *   `target`: 选择发布目标 (`testpypi`, `pypi`, `both`)。
-    *   `build_run_id`: 构建 Workflow 的 Run ID (必需，从构建运行的 URL 中获取)。
-
-#### G. 手动发布 (`03. Release`)
-一站式构建并发布（包含构建和发布步骤）。
-
-> **版本号与 Tag 规范**：
-> 本项目使用 `setuptools_scm` 自动从 Git Tag 提取版本号。
-> *   **Tag 命名规范**：必须遵循 `vX.Y.Z` 格式（例如 `v0.1.0`, `v1.2.3`）。Tag 必须是符合语义化版本规范的。
-> *   **Release 构建**：当触发 Release 事件时，版本号直接对应 Git Tag（例如 `v0.1.0` -> `0.1.0`）。
-> *   **手动构建/非 Tag 构建**：版本号会包含距离上一个 Tag 的提交次数（例如 `0.1.1.dev3`）。
-> *   **确认版本号**：发布任务完成后，您可以在 Workflow 运行详情页的 **Summary** 页面顶部（**Notifications** 区域）直接看到发布的版本号（例如 `Successfully published to PyPI with version: 0.1.8`）。您也可以在日志或 **Artifacts** 产物文件名中确认。
-
-*   **Inputs**:
-    *   `target`: 选择发布目标。
-        *   `none`: 仅构建工件（不发布）。用于验证构建能力。
-        *   `testpypi`: 发布到 TestPyPI。用于 Beta 测试。
-        *   `pypi`: 发布到官方 PyPI。
-        *   `both`: 发布到两者。
-    *   `os_json`: 构建平台 (默认包含所有)。
-    *   `python_json`: Python 版本 (默认包含所有)。
-    *   `build_sdist`: 是否构建源码包 (默认: `true`)。
-    *   `build_wheels`: 是否构建 Wheel 包 (默认: `true`)。
-
-> **发布注意事项**：
-> *   **测试优先**：强烈建议在发布到正式 PyPI 之前，先发布到 **TestPyPI** 进行验证。请注意，PyPI 和 TestPyPI 是两个完全独立的环境，账号和包数据互不相通。
-> *   **版本不可覆盖**：PyPI 和 TestPyPI 均**不允许覆盖**已发布的同名同版本包。如果您需要重新发布，必须升级版本号（例如打一个新的 Tag 或产生新的 dev 版本）。如果尝试发布已存在的版本，工作流将会失败。
-
----
-
-## Issue 指南
-
-### Bug 报告
-
-请提供：
-
-1. **环境**
-   - Python 版本
-   - OpenViking 版本
-   - 操作系统
-
-2. **复现步骤**
-   - 详细步骤
-   - 代码片段
-
-3. **预期与实际行为**
-
-4. **错误日志**（如果有）
-
-### 功能请求
-
-请描述：
-
-1. **问题**：您试图解决什么问题？
-2. **解决方案**：您建议什么解决方案？
-3. **替代方案**：您是否考虑过其他方法？
-
----
+CI 会根据受影响路径运行相应检查。CI 通过是必要条件，但不能替代作者验证和维护者评审。
 
 ## 文档
 
-文档采用 Markdown 格式，位于 `docs/` 目录下：
+项目文档位于 `docs/en/` 和 `docs/zh/`。代码示例必须可运行，语言应清晰简洁；当对应
+翻译存在时，应同步更新两种语言。
 
-- `docs/en/` - 英文文档
-- `docs/zh/` - 中文文档
+## 社区
 
-### 文档指南
-
-1. 代码示例必须可运行
-2. 保持文档与代码同步
-3. 使用清晰、简洁的语言
-
----
-
-## 行为准则
-
-参与本项目即表示您同意：
-
-1. **尊重**：保持友好和专业的态度
-2. **包容**：欢迎来自不同背景的贡献者
-3. **建设性**：提供有帮助的反馈
-4. **专注**：保持讨论集中在技术层面
-
----
-
-## 获取帮助
-
-如果您有问题：
-
-- [GitHub Issues](https://github.com/volcengine/openviking/issues)
-- [Discussions](https://github.com/volcengine/openviking/discussions)
-
----
-
-感谢您的贡献！
+请保持尊重、包容、建设性，并聚焦技术讨论。开放式设计或使用讨论请前往
+[GitHub Discussions](https://github.com/volcengine/OpenViking/discussions)，可执行的 Bug
+和功能请求请提交到 [GitHub Issues](https://github.com/volcengine/OpenViking/issues)。

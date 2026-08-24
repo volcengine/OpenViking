@@ -15,6 +15,7 @@ import { dirname } from "node:path";
 import { loadConfigFromModuleUrl, type OVConfig } from "./config.js";
 import { OVClient } from "./client.js";
 import { RecallManager } from "./recall.js";
+import { RecallLedger } from "./shared/recall-ledger.mjs";
 import { SyncManager } from "./sync.js";
 import { buildProfileBlock } from "./shared/profile-inject.mjs";
 import { guardVikingUriToolCall } from "./lib/uri-guard-adapter.mjs";
@@ -31,7 +32,14 @@ export default async function (pi: ExtensionAPI) {
   // --- Initialize modules ---
   const client = new OVClient(config);
   const sync = new SyncManager(client, config);
-  const recall = new RecallManager(client, config, () => sync.sessionId);
+  const recall = new RecallManager(
+    client,
+    config,
+    () => sync.sessionId,
+    // The ledger keeps request prefixes byte-stable for provider prompt
+    // caches (#4137); it is per pi session and opened once the id is known.
+    config.recallLedger ? new RecallLedger() : null,
+  );
   const debugLog = (message: string) => {
     const file = process.env.OV_DEBUG_LOG;
     if (!file) return;
@@ -84,6 +92,7 @@ export default async function (pi: ExtensionAPI) {
 
       // Ensure OV session
       const piSessionId = ctx.sessionManager.getSessionId();
+      recall.openLedger(piSessionId);
       const ok = await sync.ensureSession(piSessionId);
       if (!ok) {
         if (config.logLevel !== "silent") {
@@ -158,17 +167,37 @@ export default async function (pi: ExtensionAPI) {
   });
 
   // --- context ---
-  pi.on("context", async (event, _ctx) => {
+  pi.on("context", async (event, ctx) => {
     if (!connected || bypassed) return;
 
     // Keep recall synchronous with the provider request so the current prompt
     // still receives current-query memory, without blocking user-message UI.
     await recall.searchPending();
 
+    // The context hook omits persisted entry ids, but its user messages are a
+    // deep copy of the active SessionManager context. Associate those objects
+    // with stable ids before takeover may filter the array; retained messages
+    // keep object identity through that transform.
+    const userEntryIds = ctx.sessionManager.buildContextEntries()
+      .filter((entry: any) => entry?.type === "message" && entry.message?.role === "user")
+      .map((entry: any) => entry.id as string);
+    const messageIds = new WeakMap<object, string>();
+    let userIndex = 0;
+    for (const message of event.messages as any[]) {
+      if (message?.role !== "user") continue;
+      const entryId = userEntryIds[userIndex++];
+      if (entryId && typeof message === "object") {
+        messageIds.set(message, entryId);
+      }
+    }
+
     const afterTakeover = config.takeoverEnabled
       ? takeover.transformContext(event.messages as any)
       : event.messages;
-    const messages = recall.injectRecall(afterTakeover);
+    const messages = recall.injectRecall(
+      afterTakeover,
+      (message) => messageIds.get(message) ?? null,
+    );
     return { messages };
   });
 

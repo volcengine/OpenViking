@@ -42,7 +42,7 @@ OpenViking 支持多种资源类型，按照功能分类如下：
 云文档类
 | 类型 | 说明 |
 |------|------|
-| 飞书/Lark | URL 方式，支持 docx, wiki, sheets, bitable。默认使用 FEISHU_APP_ID 和 FEISHU_APP_SECRET 应用凭证；用户 token 导入可传 `args.feishu_access_token`，用户 token watch 还需传 `args.feishu_refresh_token` |
+| 飞书/Lark | URL 方式，支持 doc/docx, wiki, sheets, bitable。默认使用 FEISHU_APP_ID 和 FEISHU_APP_SECRET 应用凭证；用户 token 导入可传 `args.feishu_access_token`，用户 token watch 还需传 `args.feishu_refresh_token` |
 
 网页类（递归网页爬虫）
 | 类型 | 资源名 | 说明 |
@@ -170,7 +170,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 | exclude | string | 否 | None | 排除的文件模式（glob） |
 | directly_upload_media | bool | 否 | True | 是否直接上传媒体文件 |
 | preserve_structure | bool | 否 | None | 是否保留目录结构 |
-| args | object | 否 | `{}` | 传给特定 parser/accessor 的导入参数。原生 HTTPS Git 导入和 Watch 可通过 `args.auth_config={"username":"oauth2","token":"..."}` 在 TLS 上传递 HTTP Basic 凭据；`username` 默认为 `oauth2`。Git 的 `branch` 或 `commit` 仍放在 `args` 顶层。`args.parse_mode` 支持 `default`（保持现有拆分行为）和 `no_split`（正常解析并将每个源文档正文保存为一个 Markdown 文件）。例如 `args.site=true/false` 强制/禁用整站（sitemap/RSS）导入，`args.max_pages` 等可覆盖 `webfeed` 配置；递归网页爬虫支持 `args.depth`、`args.max_pages`、`args.include_paths`、`args.exclude_paths`、`args.allow_external_links`、`args.skip_download_links`；飞书用户 token 导入传 `args.feishu_access_token`。`path`、`to`、`watch_interval`、`include`、`exclude` 等 `add_resource` 核心字段不能放入 `args` |
+| args | object | 否 | `{}` | 传给特定 parser/accessor 的导入参数。原生 HTTPS Git 导入和 Watch 可通过 `args.auth_config={"username":"oauth2","token":"..."}` 在 TLS 上传递 HTTP Basic 凭据；`username` 默认为 `oauth2`。Git 的 `branch` 或 `commit` 仍放在 `args` 顶层。通过 HTTP(S) URL 导入私有 TOS 对象时，二选一传入非空字符串：`args.tos_signature`（映射为 `X-Tos-Signature`）或 `args.tos_access`（映射为 `X-Tos-Access`）。TOS 凭证只用于当前 HEAD/GET 抓取；资源会先保存为快照，凭证不会写入资源元数据或队列任务。`args.parse_mode` 支持 `default`（保持现有拆分行为）和 `no_split`（正常解析并将每个源文档正文保存为一个 Markdown 文件）。例如 `args.site=true/false` 强制/禁用整站（sitemap/RSS）导入，`args.max_pages` 等可覆盖 `webfeed` 配置；递归网页爬虫支持 `args.depth`、`args.max_pages`、`args.include_paths`、`args.exclude_paths`、`args.allow_external_links`、`args.skip_download_links`；飞书用户 token 导入传 `args.feishu_access_token`。`path`、`to`、`watch_interval`、`include`、`exclude` 等 `add_resource` 核心字段不能放入 `args` |
 | watch_interval | float | 否 | 0 | 定时更新间隔（分钟）。>0 为 URL/sitemap/RSS 等可重新读取的来源创建任务；通过 `temp_file_id` 上传的内容是一次性快照，变化后需重新添加。≤0 取消任务；显式 `to` 优先，否则绑定本次导入的 `root_uri` |
 | processing_mode | string | 否 | `semantic_and_vectors` | 入库后的处理模式。`semantic_and_vectors` 是默认流程：生成语义产物（`.abstract.md`、`.overview.md`）并生成向量。`vectors_only` 跳过语义理解/VLM 总结，只对当前资源文件生成向量 |
 | tags | string[] | 否 | None | 导入时写入向量检索记录的显式检索标签，格式必须是 `k=v`，例如 `["team=search", "env=test"]`。搜索接口可用同名 `tags` 参数过滤召回 |
@@ -180,7 +180,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 **补充说明**：
 - `to` 和 `parent` 不能同时使用；如果使用 `parent` 且希望父目录不存在时自动创建，请传 `create_parent=true`。指定 `to` 且目标已存在时，触发增量更新。
 - 如果同时省略 `to` 和 `parent`，服务端会先尝试使用当前用户的 `add_targets.resource_uri` 覆盖配置，再使用 `server.user_config_defaults.add_targets.resource_uri`。两者都没有配置时，保持旧的目标解析行为。
-- 资源目标可以使用公共 `viking://resources/...`、当前用户短写 `viking://user/resources/...`、显式用户 `viking://user/{user_id}/resources/...`，或 peer 级 `viking://user/{user_id}/peers/{peer_id}/resources/...`。当前用户短写会按请求身份 canonicalize。
+- 资源目标可以使用公共 `viking://resources/...`、家目录别名 `viking://~/resources/...`、显式用户 `viking://user/{user_id}/resources/...`，或 peer 级 `viking://user/{user_id}/peers/{peer_id}/resources/...`。家目录别名会按请求身份展开为 canonical 路径；无 uid 的写法 `viking://user/resources/...` 会被拒绝，并提示改用 `viking://~/resources/...`。
 - `user_id` 和 `peer_id` 路径片段必须是安全的单段标识，例如 `alice` 或 `web-visitor-alice`。包含路径分隔符、`.`、`..`、`:` 或 `+` 的值会被拒绝。
 - `path` 和 `temp_file_id` 不能同时指定，上传本地文件需要先通过 [temp_upload](#temp_upload) 上传获取 `temp_file_id`，在 SDK 和 CLI 中已经封装好。
 - `tags` 会在资源解析后、向量记录写入时同步写入底层向量库。`add_resource(tags=...)` 不返回 `tags_result`；需要验证时，可在 `/api/v1/search/find` 或 `/api/v1/search/search` 中传相同 `tags` 过滤召回。
@@ -286,7 +286,7 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -H "X-API-Key: your-key" \
   -d "{
     \"temp_file_id\": \"$TEMP_FILE_ID\",
-    \"parent\": \"viking://user/resources/docs\",
+    \"parent\": \"viking://~/resources/docs\",
     \"create_parent\": true
   }"
 
@@ -338,49 +338,55 @@ client.initialize()
 
 ## 添加本地文件
 result = client.add_resource(
-    "./documents/guide.md",
-    reason="User guide documentation"
+    path="./documents/guide.md",
+    options={"reason": "User guide documentation"},
 )
 print(f"Added: {result['root_uri']}")
 
 ## 正常解析并转换为 Markdown，但每个文档正文不拆分
 result = client.add_resource(
-    "./documents",
-    args={"parse_mode": "no_split"},
+    path="./documents",
+    options={"args": {"parse_mode": "no_split"}},
 )
 
 ## 从 URL 添加到指定位置
 result = client.add_resource(
-    "https://example.com/api-docs.md",
+    path="https://example.com/api-docs.md",
     to="viking://resources/external/api-docs.md",
-    reason="External API docs"
+    options={"reason": "External API docs"},
 )
 
 ## 递归抓取网页（同域 BFS，depth 层数、max_pages 页数上限）
 result = client.add_resource(
-    "https://docs.openviking.ai/zh/getting-started/01-introduction",
+    path="https://docs.openviking.ai/zh/getting-started/01-introduction",
     wait=True,
     timeout=180,
-    args={"depth": 1, "max_pages": 10},
+    options={
+        "args": {"depth": 1, "max_pages": 10},
+    },
 )
 
 ## 递归抓取并按路径前缀过滤，同时下载页面中的文件链接
 result = client.add_resource(
-    "https://docs.openviking.ai/",
-    args={
-        "depth": 2,
-        "max_pages": 50,
-        "include_paths": ["/zh/"],
-        "exclude_paths": ["/changelog"],
-        "skip_download_links": False,
+    path="https://docs.openviking.ai/",
+    options={
+        "args": {
+            "depth": 2,
+            "max_pages": 50,
+            "include_paths": ["/zh/"],
+            "exclude_paths": ["/changelog"],
+            "skip_download_links": False,
+        },
     },
 )
 
 ## 添加到当前用户私有资源根
 result = client.add_resource(
-    "./documents/guide.md",
-    parent="viking://user/resources/docs",
-    create_parent=True,
+    path="./documents/guide.md",
+    parent="viking://~/resources/docs",
+    options={
+        "create_parent": True,
+    },
 )
 
 ## 等待处理完成
@@ -388,25 +394,29 @@ client.wait_processed()
 
 ## 开启定时更新
 client.add_resource(
-    "./documents/guide.md",
+    path="./documents/guide.md",
     to="viking://resources/guide.md",
-    watch_interval=60  # 每60分钟更新一次
+    options={
+        "watch_interval": 60,  # 每60分钟更新一次
+    },
 )
 
 # 使用一次性用户 access token 添加飞书文档
 client.add_resource(
-    "https://example.feishu.cn/docx/doc_token",
-    args={"feishu_access_token": "u-..."},
+    path="https://example.feishu.cn/docx/doc_token",
+    options={"args": {"feishu_access_token": "u-..."}},
 )
 
 # 使用用户 token 自动刷新添加飞书文档
 client.add_resource(
-    "https://example.feishu.cn/docx/doc_token",
+    path="https://example.feishu.cn/docx/doc_token",
     to="viking://resources/feishu/doc",
-    watch_interval=1440,
-    args={
-        "feishu_access_token": "u-...",
-        "feishu_refresh_token": "r-...",
+    options={
+        "watch_interval": 1440,
+        "args": {
+            "feishu_access_token": "u-...",
+            "feishu_refresh_token": "r-...",
+        },
     },
 )
 ```
@@ -486,7 +496,7 @@ ov add-resource https://example.feishu.cn/docx/doc_token \
 ov add-resource ./documents/guide.md --parent viking://resources/docs
 
 # 添加到当前用户私有资源根
-ov add-resource ./documents/guide.md --parent viking://user/resources/docs
+ov add-resource ./documents/guide.md --parent viking://~/resources/docs
 
 # 添加到指定 peer 的私有资源根
 ov add-resource ./documents/guide.md \

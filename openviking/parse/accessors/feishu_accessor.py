@@ -35,10 +35,19 @@ _FEISHU_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(feishu://image/([^)]+)\)")
 _FEISHU_DOCUMENT_FORBIDDEN = 1770032
 _FEISHU_WIKI_NODE_PERMISSION_DENIED = 131006
 _FEISHU_BITABLE_PERMISSION_REQUIRED = 99991672
+_FEISHU_LEGACY_DOC_LOGIN_REQUIRED = 91404
+_FEISHU_PERMISSION_DENIED_CODES = {
+    _FEISHU_DOCUMENT_FORBIDDEN,
+    _FEISHU_WIKI_NODE_PERMISSION_DENIED,
+    91403,
+    95008,
+    95009,
+}
+_FEISHU_NOT_FOUND_CODES = {91402, 95006, 95007}
 _MAX_MEDIA_DOWNLOAD_CONTEXTS = 8
-_FEISHU_DOC_PATH_TYPES = {"docx", "wiki", "sheets", "base"}
+_FEISHU_DOC_PATH_TYPES = {"doc", "docs", "docx", "wiki", "sheets", "base"}
 _FEISHU_DRIVE_DOC_TYPES = {
-    "doc": "docx",
+    "doc": "docs",
     "docx": "docx",
     "sheet": "sheets",
     "sheets": "sheets",
@@ -189,11 +198,14 @@ def _raise_from_lark_response(
             f"Feishu application is missing required Bitable permissions: code={code}, msg={msg}"
         )
     else:
-        public_code = (
-            "PERMISSION_DENIED"
-            if code in {_FEISHU_DOCUMENT_FORBIDDEN, _FEISHU_WIKI_NODE_PERMISSION_DENIED}
-            else error_code_from_http_status(http_status)
-        )
+        if code in _FEISHU_PERMISSION_DENIED_CODES:
+            public_code = "PERMISSION_DENIED"
+        elif code in _FEISHU_NOT_FOUND_CODES:
+            public_code = "NOT_FOUND"
+        elif code == _FEISHU_LEGACY_DOC_LOGIN_REQUIRED:
+            public_code = "UNAUTHENTICATED"
+        else:
+            public_code = error_code_from_http_status(http_status)
         message = f"Feishu {operation} failed: code={code}, msg={msg}"
 
     raise OpenVikingError(message, code=public_code, details=details)
@@ -227,6 +239,7 @@ class FeishuAccessor(DataAccessor):
 
     Supports:
     - Documents: https://*.feishu.cn/docx/{document_id}
+    - Legacy documents: https://*.feishu.cn/docs/{doc_token}
     - Wiki pages: https://*.feishu.cn/wiki/{token}
     - Spreadsheets: https://*.feishu.cn/sheets/{token}
     - Bitable: https://*.feishu.cn/base/{app_token}
@@ -243,8 +256,9 @@ class FeishuAccessor(DataAccessor):
     PRIORITY = 100  # Higher than Git/HTTP, very specific
 
     # Wiki obj_type normalization (API returns short names)
-    _WIKI_TYPE_MAP = {"doc": "docx", "sheet": "sheets", "bitable": "base"}
+    _WIKI_TYPE_MAP = {"doc": "doc", "sheet": "sheets", "bitable": "base"}
     _DOC_TYPE_HANDLERS = {
+        "doc": "_parse_legacy_doc",
         "docx": "_parse_docx",
         "sheets": "_parse_sheets",
         "base": "_parse_bitable",
@@ -573,6 +587,13 @@ class FeishuAccessor(DataAccessor):
         table_id: Optional[str],
         view_id: Optional[str],
     ) -> Optional[str]:
+        if doc_type == "doc":
+            metadata = self._fetch_legacy_doc_metadata(
+                token,
+                feishu_access_token=feishu_access_token,
+            )
+            title = metadata.get("title") or None
+            return _title_as_filename(str(title)) if title else None
         if doc_type == "docx":
             self._probe_docx_document(token, feishu_access_token=feishu_access_token)
             return None
@@ -732,7 +753,7 @@ class FeishuAccessor(DataAccessor):
             return "folder", path_parts[2]
         if path_parts[0] == "file":
             return "file", path_parts[1]
-        doc_type = path_parts[0]  # docx, wiki, sheets, base
+        doc_type = "doc" if path_parts[0] in {"doc", "docs"} else path_parts[0]
         token = path_parts[1]
         return doc_type, token
 
@@ -940,7 +961,7 @@ class FeishuAccessor(DataAccessor):
                 resource=folder_token,
             )
 
-        data = self._drive_response_data(response)
+        data = self._raw_response_data(response)
         items = _getattr_safe(data, "files", None) or _getattr_safe(data, "items", None) or []
         has_more = bool(_getattr_safe(data, "has_more", False))
         next_page_token = _getattr_safe(data, "next_page_token", None) or _getattr_safe(
@@ -1038,7 +1059,7 @@ class FeishuAccessor(DataAccessor):
                 resource=folder_token,
             )
 
-        data = self._drive_response_data(response)
+        data = self._raw_response_data(response)
         folder_meta = _getattr_safe(data, "folder", None) or _getattr_safe(data, "meta", None)
         name = _getattr_safe(data, "name", None) or _getattr_safe(folder_meta, "name", None)
         return str(name) if name else None
@@ -1109,7 +1130,7 @@ class FeishuAccessor(DataAccessor):
         return path
 
     @staticmethod
-    def _drive_response_data(response: Any) -> Any:
+    def _raw_response_data(response: Any) -> Any:
         data = getattr(response, "data", None)
         if data is not None:
             return data
@@ -1136,6 +1157,8 @@ class FeishuAccessor(DataAccessor):
 
     @staticmethod
     def _build_feishu_doc_url(doc_type: str, token: str) -> str:
+        if doc_type == "doc":
+            doc_type = "docs"
         return f"https://open.feishu.cn/{doc_type}/{token}"
 
     @staticmethod
@@ -1305,6 +1328,88 @@ class FeishuAccessor(DataAccessor):
         doc_type = self._WIKI_TYPE_MAP.get(obj_type, obj_type)
 
         return doc_type, obj_token, title
+
+    # ========== Legacy Doc Parsing ==========
+
+    def _parse_legacy_doc(
+        self,
+        doc_token: str,
+        feishu_access_token: Optional[str] = None,
+    ) -> Tuple[str, str]:
+        metadata = self._fetch_legacy_doc_metadata(
+            doc_token,
+            feishu_access_token=feishu_access_token,
+        )
+        title = str(metadata.get("title") or "Untitled")
+        content = self._fetch_legacy_doc_raw_content(
+            doc_token,
+            feishu_access_token=feishu_access_token,
+        ).strip()
+
+        if title and title != "Untitled":
+            markdown = f"# {title}\n\n{content}" if content else f"# {title}"
+        else:
+            markdown = content
+        return markdown, title
+
+    def _fetch_legacy_doc_metadata(
+        self,
+        doc_token: str,
+        *,
+        feishu_access_token: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        import lark_oapi as lark
+
+        client = self._get_client(use_user_token=bool(feishu_access_token))
+        token_type = (
+            lark.AccessTokenType.USER if feishu_access_token else lark.AccessTokenType.TENANT
+        )
+        request = (
+            lark.BaseRequest.builder()
+            .http_method(lark.HttpMethod.GET)
+            .uri(f"/open-apis/doc/v2/meta/{doc_token}")
+            .token_types({token_type})
+            .build()
+        )
+        response = self._call_api(client.request, request, feishu_access_token)
+        if not response.success():
+            _raise_from_lark_response(
+                response,
+                operation=f"fetch legacy document metadata for {doc_token}",
+                resource=doc_token,
+            )
+        data = self._raw_response_data(response)
+        return data if isinstance(data, dict) else {}
+
+    def _fetch_legacy_doc_raw_content(
+        self,
+        doc_token: str,
+        *,
+        feishu_access_token: Optional[str] = None,
+    ) -> str:
+        import lark_oapi as lark
+
+        client = self._get_client(use_user_token=bool(feishu_access_token))
+        token_type = (
+            lark.AccessTokenType.USER if feishu_access_token else lark.AccessTokenType.TENANT
+        )
+        request = (
+            lark.BaseRequest.builder()
+            .http_method(lark.HttpMethod.GET)
+            .uri(f"/open-apis/doc/v2/{doc_token}/raw_content")
+            .token_types({token_type})
+            .build()
+        )
+        response = self._call_api(client.request, request, feishu_access_token)
+        if not response.success():
+            _raise_from_lark_response(
+                response,
+                operation=f"fetch legacy document content for {doc_token}",
+                resource=doc_token,
+            )
+        data = self._raw_response_data(response)
+        content = _getattr_safe(data, "content", "")
+        return str(content or "")
 
     # ========== Docx Parsing ==========
 

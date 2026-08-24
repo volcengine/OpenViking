@@ -158,6 +158,7 @@ class URLTypeDetector:
         url: str,
         timeout: Optional[float] = None,
         request_validator=None,
+        headers: Optional[Mapping[str, str]] = None,
     ) -> Tuple[URLType, Dict[str, Any]]:
         """
         Detect URL content type using IANA standards.
@@ -206,7 +207,7 @@ class URLTypeDetector:
                 client_kwargs["trust_env"] = False
 
             async with httpx.AsyncClient(**client_kwargs) as client:
-                response = await client.head(url)
+                response = await client.head(url, headers=headers)
 
                 meta["status_code"] = response.status_code
                 if not (200 <= response.status_code < 300):
@@ -443,12 +444,16 @@ class HTTPAccessor(DataAccessor):
         """
         source_str = str(source)
         request_validator = kwargs.get("request_validator")
+        tos_signature = kwargs.get("tos_signature")
+        tos_access = kwargs.get("tos_access")
 
         # Download the URL
-        temp_path, url_type, meta = await self._download_url(
-            source_str,
-            request_validator=request_validator,
-        )
+        download_kwargs = {"request_validator": request_validator}
+        if tos_signature is not None:
+            download_kwargs["tos_signature"] = tos_signature
+        if tos_access is not None:
+            download_kwargs["tos_access"] = tos_access
+        temp_path, url_type, meta = await self._download_url(source_str, **download_kwargs)
 
         # Both an extensionless text/html page (WEBPAGE) and an explicit
         # ``.html``/``.htm`` URL (DOWNLOAD_HTML) are webpages the user may want
@@ -532,6 +537,8 @@ class HTTPAccessor(DataAccessor):
         self,
         url: str,
         request_validator=None,
+        tos_signature: Optional[str] = None,
+        tos_access: Optional[str] = None,
     ) -> Tuple[str, URLType, Dict[str, Any]]:
         """
         Download URL content to a temporary file.
@@ -552,6 +559,7 @@ class HTTPAccessor(DataAccessor):
         url_type, detect_meta = await self._url_detector.detect(
             url,
             request_validator=request_validator,
+            headers=self._request_headers(tos_signature, tos_access),
         )
 
         temp_path: Optional[str] = None
@@ -568,7 +576,7 @@ class HTTPAccessor(DataAccessor):
                 client_kwargs["trust_env"] = False
 
             async with httpx.AsyncClient(**client_kwargs) as client:
-                headers = {"User-Agent": self.user_agent}
+                headers = self._request_headers(tos_signature, tos_access)
                 try:
                     response = await client.get(url, headers=headers)
                     response.raise_for_status()
@@ -626,6 +634,20 @@ class HTTPAccessor(DataAccessor):
                 except Exception:
                     pass
             raise
+
+    def _request_headers(
+        self,
+        tos_signature: Optional[str],
+        tos_access: Optional[str],
+    ) -> Dict[str, str]:
+        headers = {"User-Agent": self.user_agent}
+        if tos_signature is not None and tos_access is not None:
+            raise ValueError("tos_signature and tos_access cannot both be provided")
+        if tos_signature is not None:
+            headers["X-Tos-Signature"] = tos_signature
+        elif tos_access is not None:
+            headers["X-Tos-Access"] = tos_access
+        return headers
 
     def _finalize_download_metadata(
         self,

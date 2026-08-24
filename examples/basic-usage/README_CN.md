@@ -105,14 +105,14 @@ client = SyncHTTPClient(
 ```python
 result = client.add_resource(
     path="https://example.com/docs",
-    wait=False,
+    options={"wait": False},
 )
 
 result = client.add_resource(path="/path/to/manual.pdf")
 
 result = client.add_resource(
     path="/path/to/repo",
-    instruction="这是一个 Python Web 应用",
+    options={"instruction": "这是一个 Python Web 应用"},
 )
 ```
 
@@ -124,16 +124,16 @@ result = client.add_resource(
 OpenViking 的上下文统一组织在虚拟文件系统里：
 
 ```python
-files = client.ls("viking://resources/")
-tree = client.tree("viking://resources/my-project", level_limit=3)
-content = client.read("viking://resources/my-project/README.md")
+files = client.ls(uri="viking://resources/")
+tree = client.tree(uri="viking://resources/my-project", level_limit=3)
+content = client.read(uri="viking://resources/my-project/README.md")
 ```
 
 同样的 URI 模型也适用于记忆和技能：
 
 - `viking://resources/`
-- `viking://user/memories/`
-- `viking://user/skills/`
+- `viking://~/memories/`
+- `viking://~/skills/`
 
 ### 检索
 
@@ -142,14 +142,12 @@ content = client.read("viking://resources/my-project/README.md")
 ```python
 results = client.find(
     query="认证逻辑是怎么做的",
-    target_uri="viking://resources/my-project",
-    limit=5,
+    options={"target_uri": "viking://resources/my-project", "limit": 5},
 )
 
 results = client.search(
     query="数据库配置和故障处理",
-    target_uri="viking://resources/",
-    limit=10,
+    options={"target_uri": "viking://resources/", "limit": 10},
 )
 ```
 
@@ -158,15 +156,19 @@ results = client.search(
 ```python
 uri = "viking://resources/my-project/docs/api.md"
 
-abstract = client.abstract(uri)
-overview = client.overview(uri)
-content = client.read(uri)
+abstract = client.abstract(uri=uri)
+overview = client.overview(uri=uri)
+content = client.read(uri=uri)
 ```
 
 如果你要的是字面匹配而不是语义检索，用 `grep`：
 
 ```python
-result = client.grep("viking://resources/my-project", "Agent", case_insensitive=True)
+result = client.grep(
+    uri="viking://resources/my-project",
+    pattern="Agent",
+    case_insensitive=True,
+)
 matches = result.get("matches", [])
 ```
 
@@ -178,14 +180,22 @@ matches = result.get("matches", [])
 session_info = client.create_session()
 session_id = session_info["session_id"]
 
-client.add_message(session_id, "user", "我更喜欢 TypeScript 而不是 JavaScript")
-client.add_message(session_id, "assistant", "明白了，在合适场景下我会优先使用 TypeScript。")
+client.add_message(
+    session_id=session_id,
+    role="user",
+    content="我更喜欢 TypeScript 而不是 JavaScript",
+)
+client.add_message(
+    session_id=session_id,
+    role="assistant",
+    content="明白了，在合适场景下我会优先使用 TypeScript。",
+)
 ```
 
 如果要把这段对话真正提取成长期记忆，需要提交 session：
 
 ```python
-client.commit_session(session_id)
+client.commit_session(session_id=session_id)
 ```
 
 提交后，记忆可以通过正常检索接口再次找回：
@@ -193,7 +203,7 @@ client.commit_session(session_id)
 ```python
 memories = client.find(
     query="用户编程偏好",
-    target_uri="viking://user/memories/",
+    target_uri="viking://~/memories/",
 )
 ```
 

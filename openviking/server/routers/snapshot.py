@@ -12,6 +12,7 @@ from fastapi import APIRouter, Body, Depends, Query
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, ConfigDict
 
+from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.pyagfs.exceptions import (
     AGFSClientError,
     AGFSNotFoundError,
@@ -53,10 +54,15 @@ async def commit(
 ):
     """Create a new snapshot of the current workspace state."""
     service = get_service()
+    paths = (
+        [validate_request_viking_uri(path, _ctx, field_name="paths") for path in request.paths]
+        if request.paths is not None
+        else None
+    )
     try:
         result = await service.fs.commit(
             message=request.message,
-            paths=request.paths,
+            paths=paths,
             branch=request.branch,
             author_name=request.author_name,
             author_email=request.author_email,
@@ -86,8 +92,15 @@ async def log(
 ):
     """Walk commit history newest-first along parents[0]."""
     service = get_service()
+    canonical_paths = (
+        [validate_request_viking_uri(path, _ctx, field_name="paths") for path in paths]
+        if paths is not None
+        else None
+    )
     try:
-        result = await service.fs.log(branch=branch, limit=limit, paths=paths, ctx=_ctx)
+        result = await service.fs.log(
+            branch=branch, limit=limit, paths=canonical_paths, ctx=_ctx
+        )
     except AGFSNotFoundError:
         raise NotFoundError(branch, "git_ref")
     except (AGFSClientError, ValueError) as e:
@@ -119,9 +132,14 @@ async def restore(
 ):
     """Forward-commit restore: rebuild project_dir from source_commit on top of HEAD."""
     service = get_service()
+    project_dir = (
+        validate_request_viking_uri(request.project_dir, _ctx, field_name="project_dir")
+        if request.project_dir
+        else None
+    )
     try:
         result = await service.fs.restore(
-            project_dir=request.project_dir,
+            project_dir=project_dir,
             source_commit=request.source_commit,
             branch=request.branch,
             dry_run=request.dry_run,
@@ -168,15 +186,20 @@ async def show(
 ):
     """Without ``path``: commit metadata JSON. With ``path``: raw blob bytes + X-Snapshot-* headers."""
     service = get_service()
+    canonical_path = (
+        validate_request_viking_uri(path, _ctx, field_name="path") if path is not None else None
+    )
     try:
-        if path is None:
+        if canonical_path is None:
             result = await service.fs.show(target_ref, ctx=_ctx)
             return Response(status="ok", result=result)
 
-        blob = await service.fs.show_blob_raw(target_ref, path=path, ctx=_ctx)
+        blob = await service.fs.show_blob_raw(target_ref, path=canonical_path, ctx=_ctx)
     except AGFSNotFoundError as e:
-        resource = path if path is not None else target_ref
-        raise NotFoundError(resource, "git_blob" if path is not None else "git_ref") from e
+        resource = canonical_path if canonical_path is not None else target_ref
+        raise NotFoundError(
+            resource, "git_blob" if canonical_path is not None else "git_ref"
+        ) from e
     except (AGFSClientError, ValueError) as e:
         mapped = map_exception(e)
         if mapped is not None:
@@ -192,7 +215,7 @@ async def show(
 
         from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 
-        content = MemoryFileUtils.read(text, uri=path).content.encode("utf-8")
+        content = MemoryFileUtils.read(text, uri=canonical_path).content.encode("utf-8")
 
     return FastAPIResponse(
         content=content,
@@ -218,6 +241,7 @@ async def diff(
 ):
     """Return a unified text diff for one path between two snapshots."""
     service = get_service()
+    path = validate_request_viking_uri(path, _ctx, field_name="path")
     try:
         result = await service.fs.diff(
             path=path,

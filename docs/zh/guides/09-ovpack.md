@@ -107,7 +107,7 @@ ov system consistency viking://resources/my-project
 Python SDK：
 
 ```python
-report = await client.check_consistency("viking://resources/my-project")
+report = await client.check_consistency(uri="viking://resources/my-project")
 print(report["ok"], report["missing_records"])
 ```
 
@@ -178,9 +178,12 @@ async def migrate_project():
 全量备份：
 
 ```python
-await client.backup_ovpack("./backups/openviking.ovpack", include_vectors=True)
+await client.backup_ovpack(
+    to="./backups/openviking.ovpack",
+    include_vectors=True,
+)
 await client.restore_ovpack(
-    "./backups/openviking.ovpack",
+    file_path="./backups/openviking.ovpack",
     on_conflict="overwrite",
     vector_mode="auto",
 )

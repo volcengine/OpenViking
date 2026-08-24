@@ -211,11 +211,8 @@ ov session commit s1 --no-event-tags
 - `snapshot log` - 查看快照历史。
 - `snapshot ignore-get` / `snapshot ignore-set` / `snapshot ignore-delete` - 管理 account `.ovgitignore`。
 
-### 关系与隐私
+### 隐私
 
-- `relations` - 列出资源关系，实验特性。
-- `link` - 创建关系链接，实验特性。
-- `unlink` - 删除关系链接，实验特性。
 - `privacy` - 管理隐私配置分类、目标、版本和 active 配置。
 
 ### 管理员命令

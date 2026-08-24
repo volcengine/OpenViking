@@ -20,6 +20,9 @@ func (c *Client) AddSkill(ctx context.Context, data any, opts *AddSkillOptions) 
 	if err := c.attachSkillData(ctx, payload, data); err != nil {
 		return nil, err
 	}
+	if err := mergeExtra(payload, opts.Extra); err != nil {
+		return nil, err
+	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/skills", nil, payload, &result)
 	return result, err
@@ -119,6 +122,9 @@ func (c *Client) UpdateSkill(ctx context.Context, skillName string, data any, op
 	setAny(payload, "telemetry", opts.Telemetry)
 	setAny(payload, "target_uri", opts.TargetURI)
 	if err := c.attachSkillData(ctx, payload, data); err != nil {
+		return nil, err
+	}
+	if err := mergeExtra(payload, opts.Extra); err != nil {
 		return nil, err
 	}
 	var result map[string]any

@@ -11,6 +11,7 @@ from loguru import logger
 from vikingbot.config.schema import SandboxConfig
 from vikingbot.sandbox.backends import register_backend
 from vikingbot.sandbox.base import SandboxBackend, SandboxNotStartedError
+from vikingbot.utils.session_paths import portable_path_component
 
 
 @register_backend("srt")
@@ -41,7 +42,8 @@ class SrtBackend(SandboxBackend):
         srt_config = self._load_config()
 
         # Place settings file in workspace/sandboxes/ directory
-        settings_path = self._workspace / "sandboxes" / f"{self.workspace_id}-srt-settings.json"
+        settings_name = portable_path_component(self.workspace_id)
+        settings_path = self._workspace / "sandboxes" / f"{settings_name}-srt-settings.json"
         settings_path.parent.mkdir(parents=True, exist_ok=True)
 
         with open(settings_path, "w") as f:

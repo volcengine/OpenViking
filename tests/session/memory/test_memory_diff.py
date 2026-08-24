@@ -477,7 +477,14 @@ class TestMemoryDiffStructure:
     def test_memory_diff_structure(self):
         """Verify memory_diff.json structure."""
         # This test validates the expected structure
-        expected_keys = ["archive_uri", "trace_id", "extracted_at", "operations", "summary"]
+        expected_keys = [
+            "archive_uri",
+            "trace_id",
+            "extracted_at",
+            "operations",
+            "skipped_operations",
+            "summary",
+        ]
 
         # We verify this through the actual implementation tests above
         # This is a placeholder for documentation
@@ -487,6 +494,7 @@ class TestMemoryDiffStructure:
                 "trace_id",
                 "extracted_at",
                 "operations",
+                "skipped_operations",
                 "summary",
             }
         )

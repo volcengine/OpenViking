@@ -86,7 +86,7 @@ class RAGQueryPipeline:
 
             logger.info(f"Adding document: {path}")
             result = client.add_resource(
-                path=str(path),
+                str(path),
                 wait=wait,
                 timeout=timeout,
             )
@@ -141,7 +141,7 @@ class RAGQueryPipeline:
         # Retrieve contexts
         logger.debug(f"Searching for: {question}")
         search_result = client.search(
-            query=question,
+            question,
             limit=top_k,
         )
 

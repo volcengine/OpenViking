@@ -80,7 +80,6 @@ class TelemetrySummaryBuilder:
         "create_memory_ms": "memory.extract.stage.create_memory.duration_ms",
         "merge_existing_ms": "memory.extract.stage.merge_existing.duration_ms",
         "delete_existing_ms": "memory.extract.stage.delete_existing.duration_ms",
-        "create_relations_ms": "memory.extract.stage.create_relations.duration_ms",
         "flush_semantic_ms": "memory.extract.stage.flush_semantic.duration_ms",
     }
     _RESOURCE_FLAG_KEYS = {

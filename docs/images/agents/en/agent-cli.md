@@ -5,7 +5,7 @@ First ask the user for the OpenViking API Key and store it as OPENVIKING_API_KEY
 
 Write the following content to ~/.openviking/ovcli.conf, replacing ${OPENVIKING_API_KEY} with the actual value provided by the user:
 {
-  "url": "https://api.vikingdb.cn-beijing.volces.com/openviking",
+  "url": "{{OPENVIKING_BASE_URL}}",
   "api_key": "${OPENVIKING_API_KEY}"
 }
 

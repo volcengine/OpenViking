@@ -8,8 +8,6 @@ Provides ovpack export/import and backup/restore operations.
 
 from typing import Optional
 
-from openviking.core.namespace import canonicalize_uri
-from openviking.core.uri_validation import validate_viking_uri
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.ovpack.operations import backup_ovpack as local_backup_ovpack
 from openviking.storage.ovpack.operations import export_ovpack as local_export_ovpack
@@ -46,7 +44,7 @@ class PackService:
 
     @staticmethod
     def _account_maintenance_ctx(ctx: RequestContext) -> RequestContext:
-        """Return an account-scoped context that can traverse every user namespace."""
+        """Use account-wide authority for backup/restore without changing URI ownership."""
         if ctx.role not in {Role.ROOT, Role.ADMIN}:
             raise PermissionDeniedError("OVPack backup and restore require ROOT or ADMIN role")
         return RequestContext(
@@ -72,7 +70,6 @@ class PackService:
             Exported file path
         """
         viking_fs = self._ensure_initialized()
-        uri = canonicalize_uri(validate_viking_uri(uri), ctx)
         return await local_export_ovpack(
             viking_fs,
             uri,
@@ -118,7 +115,6 @@ class PackService:
             Imported root resource URI
         """
         viking_fs = self._ensure_initialized()
-        parent = canonicalize_uri(validate_viking_uri(parent, field_name="parent"), ctx)
         return await local_import_ovpack(
             viking_fs,
             file_path,

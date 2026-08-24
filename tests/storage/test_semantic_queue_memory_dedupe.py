@@ -8,11 +8,14 @@ from uuid import uuid4
 
 import pytest
 
+from openviking.storage.abstract_overview import (
+    AbstractOverviewWriteResult,
+    parse_abstract_overview,
+)
 from openviking.storage.queuefs.named_queue import NamedQueue
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.queuefs.semantic_queue import SemanticQueue, is_semantic_msg_stale
-from openviking.storage.semantic_sidecar import parse_semantic_sidecar
 
 
 @pytest.mark.asyncio
@@ -141,10 +144,10 @@ class _FakeMemoryDirFS:
         ]
 
 
-def _patch_semantic_config(monkeypatch, *, sidecar_sample_size=32):
+def _patch_semantic_config(monkeypatch, *, overview_sample_limit=32):
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_processor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(sidecar_sample_size=sidecar_sample_size)),
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=overview_sample_limit)),
     )
 
 
@@ -199,7 +202,7 @@ async def test_stale_memory_semantic_write_is_skipped(monkeypatch):
         "viking://user/default/memories/preferences/.overview.md",
         "viking://user/default/memories/preferences/.abstract.md",
     ]
-    assert [parse_semantic_sidecar(raw).body.strip() for _, raw in viking_fs.writes] == [
+    assert [parse_abstract_overview(raw).body.strip() for _, raw in viking_fs.writes] == [
         "latest overview",
         "latest abstract",
     ]
@@ -222,7 +225,9 @@ async def test_memory_directory_summarizes_all_uncached_files(monkeypatch):
 
     async def write_semantics(**kwargs):
         del kwargs
-        return True
+        return AbstractOverviewWriteResult(
+            wrote=True, overview_body_changed=True, abstract_body_changed=True
+        )
 
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_processor.get_viking_fs",
@@ -270,7 +275,9 @@ async def test_memory_directory_vectorizes_changed_files_with_generated_summary(
 
     async def write_semantics(**kwargs):
         del kwargs
-        return True
+        return AbstractOverviewWriteResult(
+            wrote=True, overview_body_changed=True, abstract_body_changed=True
+        )
 
     async def vectorize_single_file(**kwargs):
         captured_file_vectorize.append(kwargs)
@@ -314,3 +321,44 @@ async def test_memory_directory_vectorizes_changed_files_with_generated_summary(
     assert captured_file_vectorize[0]["preserve_existing_created_at"] is True
     assert len(captured_directory_vectorize) == 1
     assert captured_directory_vectorize[0]["uri"] == dir_uri
+
+
+@pytest.mark.asyncio
+async def test_memory_directory_skips_vectorization_when_visible_semantics_are_unchanged(
+    monkeypatch,
+):
+    processor = SemanticProcessor(max_concurrent_llm=4)
+    vectorize_directory = AsyncMock()
+    vectorize_file = AsyncMock()
+
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: _FakeMemoryDirFS(),
+    )
+    _patch_semantic_config(monkeypatch)
+    monkeypatch.setattr(
+        processor,
+        "_generate_single_file_summary",
+        AsyncMock(return_value={"name": "file.md", "summary": "summary"}),
+    )
+    monkeypatch.setattr(processor, "_generate_overview", AsyncMock(return_value="overview"))
+    monkeypatch.setattr(
+        processor, "_normalize_overview_generation", lambda overview: (overview, "abstract")
+    )
+    monkeypatch.setattr(
+        processor,
+        "_write_memory_directory_semantics",
+        AsyncMock(return_value=AbstractOverviewWriteResult(wrote=True)),
+    )
+    monkeypatch.setattr(processor, "_vectorize_single_file", vectorize_file)
+    monkeypatch.setattr(processor, "_vectorize_directory", vectorize_directory)
+
+    await processor._process_memory_directory(
+        SemanticMsg(
+            uri="viking://user/default/memories/preferences",
+            context_type="memory",
+        )
+    )
+
+    assert vectorize_file.await_count == 2
+    vectorize_directory.assert_not_awaited()

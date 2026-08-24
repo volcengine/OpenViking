@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Search endpoints for OpenViking HTTP Server."""
 
+import asyncio
 import math
 from typing import Any, Dict, List, Literal, Optional, Sequence, Union
 
@@ -10,6 +11,7 @@ from fastapi import Response as FastAPIResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
+from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
 from openviking.retrieve.context_assembler import (
     CATEGORY_KEYS,
@@ -34,6 +36,7 @@ from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
+from openviking.utils.image_search import is_viking_uri
 from openviking.utils.search_filters import (
     SearchContextTypeInput,
     _resolve_levels,
@@ -92,11 +95,28 @@ def _resolve_search_filter(
         raise InvalidArgumentError(str(exc)) from exc
 
 
-def _resolve_uri_or_uris(uri: Union[str, List[str]]) -> Union[str, List[str]]:
+def _resolve_uri_or_uris(
+    uri: Union[str, List[str]], ctx: RequestContext
+) -> Union[str, List[str]]:
     """Resolve path variables in a single URI or list of URIs."""
     if isinstance(uri, list):
-        return [resolve_path_variables(u) for u in uri]
-    return resolve_path_variables(uri)
+        return [validate_request_viking_uri(resolve_path_variables(u), ctx) for u in uri]
+    if not uri:
+        return ""
+    return validate_request_viking_uri(resolve_path_variables(uri), ctx)
+
+
+def _resolve_uri_list(uris: Sequence[str], ctx: RequestContext) -> list[str]:
+    return [validate_request_viking_uri(resolve_path_variables(uri), ctx) for uri in uris]
+
+
+def _resolve_image_url(image_url: Optional[str], ctx: RequestContext) -> Optional[str]:
+    if not image_url:
+        return image_url
+    resolved = resolve_path_variables(image_url)
+    if is_viking_uri(resolved):
+        return validate_request_viking_uri(resolved, ctx, field_name="image_url")
+    return resolved
 
 
 class FindRequest(BaseModel):
@@ -118,6 +138,7 @@ class FindRequest(BaseModel):
     until: Optional[str] = None
     time_field: Optional[TimeField] = None
     level: Optional[Union[int, str, List[int]]] = None
+    read_content: bool = False
     telemetry: TelemetryRequest = False
 
 
@@ -179,6 +200,7 @@ class SearchRequest(BaseModel):
     until: Optional[str] = None
     time_field: Optional[TimeField] = None
     level: Optional[Union[int, str, List[int]]] = None
+    read_content: bool = False
     telemetry: TelemetryRequest = False
 
     mode: Literal["list", "context"] = "list"
@@ -206,10 +228,41 @@ class SearchRequest(BaseModel):
                 )
             return self
 
+        if self.read_content:
+            raise ValueError("read_content is only supported in mode='list'")
         if self.target_uri:
             raise ValueError("target_uri is not supported in mode='context'")
         _reject_unknown_quota_and_detail(self.quotas, self.detail)
         return self
+
+
+async def _inline_read_content(
+    result: Any,
+    *,
+    service: Any,
+    ctx: RequestContext,
+) -> Any:
+    """Attach visible file content to ranked hits when it can be read."""
+    if not isinstance(result, dict):
+        return result
+
+    hits = [
+        hit
+        for category in ("memories", "resources", "skills")
+        for hit in result.get(category, [])
+        if isinstance(hit, dict) and isinstance(hit.get("uri"), str)
+    ]
+    semaphore = asyncio.Semaphore(10)
+
+    async def _read(hit: Dict[str, Any]) -> None:
+        async with semaphore:
+            try:
+                hit["content"] = await service.fs.read_visible(hit["uri"], ctx=ctx)
+            except Exception:
+                pass
+
+    await asyncio.gather(*(_read(hit) for hit in hits))
+    return result
 
 
 class RecallRequest(BaseModel):
@@ -283,7 +336,8 @@ async def find(
         request.time_field,
         request.tags,
     )
-    resolved_target_uri = _resolve_uri_or_uris(request.target_uri)
+    resolved_target_uri = _resolve_uri_or_uris(request.target_uri, _ctx)
+    resolved_image_url = _resolve_image_url(request.image_url, _ctx)
     execution = await run_operation(
         operation="search.find",
         telemetry=request.telemetry,
@@ -295,12 +349,14 @@ async def find(
             score_threshold=request.score_threshold,
             filter=effective_filter,
             level=_resolve_levels(request.level) or None,
-            image_url=request.image_url,
+            image_url=resolved_image_url,
         ),
     )
     result = execution.result
     if hasattr(result, "to_dict"):
         result = result.to_dict(include_provenance=request.include_provenance)
+    if request.read_content:
+        result = await _inline_read_content(result, service=service, ctx=_ctx)
     result = _sanitize_floats(result)
     return Response(
         status="ok",
@@ -332,7 +388,7 @@ async def _search_context(
     """Assemble an injection-ready context block for one request."""
     params = AssembleParams(
         query=request.query,
-        image_url=request.image_url,
+        image_url=_resolve_image_url(request.image_url, ctx),
         limit=actual_limit,
         score_threshold=request.score_threshold,
         filter=effective_filter,
@@ -343,7 +399,7 @@ async def _search_context(
         purpose=request.purpose,
         detail=request.detail,
         dedup_turns=request.dedup_turns,
-        exclude_uris=request.exclude_uris,
+        exclude_uris=_resolve_uri_list(request.exclude_uris, ctx),
         peer_scope=request.peer_scope,
         other_peer_penalty=request.other_peer_penalty,
         rewrite=request.rewrite,
@@ -389,7 +445,8 @@ async def search(
             effective_filter=effective_filter,
             actual_limit=actual_limit,
         )
-    resolved_target_uri = _resolve_uri_or_uris(request.target_uri)
+    resolved_target_uri = _resolve_uri_or_uris(request.target_uri, _ctx)
+    resolved_image_url = _resolve_image_url(request.image_url, _ctx)
 
     async def _search():
         session = None
@@ -406,7 +463,7 @@ async def search(
             score_threshold=request.score_threshold,
             filter=effective_filter,
             level=_resolve_levels(request.level) or None,
-            image_url=request.image_url,
+            image_url=resolved_image_url,
         )
 
     execution = await run_operation(
@@ -417,6 +474,8 @@ async def search(
     result = execution.result
     if hasattr(result, "to_dict"):
         result = result.to_dict(include_provenance=request.include_provenance)
+    if request.read_content:
+        result = await _inline_read_content(result, service=service, ctx=_ctx)
     result = _sanitize_floats(result)
     return Response(
         status="ok",
@@ -434,6 +493,8 @@ async def recall(
     """Deprecated preset over context assembly; use /search with mode="context"."""
     service = get_service()
     params, aliases = fold_recall_request(request.model_dump(), request.model_fields_set)
+    params.image_url = _resolve_image_url(params.image_url, _ctx)
+    params.exclude_uris = _resolve_uri_list(params.exclude_uris, _ctx)
     execution = await run_operation(
         operation="search.recall",
         telemetry=request.telemetry,
@@ -457,10 +518,12 @@ async def grep(
 ):
     """Content search with pattern."""
     service = get_service()
-    resolved_uri = resolve_path_variables(request.uri)
+    resolved_uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
     resolved_exclude_uri = None
     if request.exclude_uri:
-        resolved_exclude_uri = resolve_path_variables(request.exclude_uri)
+        resolved_exclude_uri = validate_request_viking_uri(
+            resolve_path_variables(request.exclude_uri), _ctx, field_name="exclude_uri"
+        )
     try:
         result = await service.fs.grep(
             resolved_uri,
@@ -493,7 +556,7 @@ async def glob(
 ):
     """File pattern matching."""
     service = get_service()
-    resolved_uri = resolve_path_variables(request.uri)
+    resolved_uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
     try:
         result = await service.fs.glob(
             request.pattern, ctx=_ctx, uri=resolved_uri, node_limit=request.node_limit

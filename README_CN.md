@@ -94,6 +94,8 @@ viking://resources/my_project/
 
 OpenViking 0.3.22 的评测覆盖长对话用户记忆（LoCoMo）和多轮智能体任务（tau2-bench）。完整结果和实验设置（含知识库问答）见[评测报告](https://blog.openviking.ai/post/openviking-benchmark-results/)，复现脚本在 [./benchmark](./benchmark)。
 
+记忆评测使用 [Doubao 2.0 Pro](https://console.volcengine.com/ark/region:cn-beijing/model/detail?Id=doubao-seed-2-0-pro) 作为 VLM，使用 [Doubao-embedding-vision-251215](https://console.volcengine.com/ark/region:cn-beijing/model/detail?Id=doubao-embedding-vision) 作为 Embedding 模型。
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/benchmark-dark.svg">
   <img alt="Benchmark results. LoCoMo accuracy: OpenClaw 24.20% native vs 82.08% with OpenViking; Hermes 33.38% vs 82.86%; Claude Code 57.21% vs 80.32%. tau2-bench task success: Retail 70.94% vs 77.81%; Airline 54.38% vs 66.25%." src="docs/images/benchmark-light.svg">
@@ -137,7 +139,7 @@ ov find "what is openviking"
 ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
 ```
 
-重建已有索引：`ov reindex <uri> --mode vectors_only` 只刷新向量；`--mode semantic_and_vectors` 先重新生成语义产物（`.abstract.md`、`.overview.md`）再刷新向量；`--mode prune_orphans` 清理源文件已不存在的向量记录（加 `--dry-run` 可预览）。没有 `semantic` 或 `full` 这样的模式别名。
+重建已有索引：`ov reindex <uri> --mode vectors_only` 只刷新向量；`--mode semantic_and_vectors` 先重新生成语义产物（`.abstract.md`、`.overview.md`）再刷新向量；添加 `--recursive=false` 可只刷新目标目录自身的语义产物及 L0/L1 向量；`--mode prune_orphans` 清理源文件已不存在的向量记录（加 `--dry-run` 可预览）。没有 `semantic` 或 `full` 这样的模式别名。
 
 客户端配置可以用 `ov config` 交互式初始化；有多台服务器时，用 `ov config switch` 切换。
 

@@ -161,9 +161,9 @@ def _normalize_asset_target_uri(
         raise InvalidArgumentError(f"{where}: 'to' must be a non-empty string when set")
 
     if ctx is not None:
-        # Use the same canonicalization, namespace-shape and access checks as
-        # add_resource itself. In particular, this expands current-user
-        # shorthand before the plan reaches the CLI and its local State file.
+        # Use the same request-boundary URI, namespace-shape and access checks as
+        # add_resource itself. In particular, this expands the viking://~ home
+        # alias before the plan reaches the CLI and its local State file.
         return validate_content_target_uri(target, ctx, kind="resource", field_name="to")
 
     # Direct resolver callers do not always have a request identity. Preserve

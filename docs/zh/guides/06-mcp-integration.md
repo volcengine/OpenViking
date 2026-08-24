@@ -141,10 +141,15 @@ claude mcp add --transport http openviking \
 | `forget` | 删除任意 `viking://` URI（先用 `search` 查找；删除目录需 `recursive=true`） | `uri`, `recursive`(可选) |
 | `health` | 检查 OpenViking 服务健康状态 | 无 |
 
-在 MCP 工具中，`viking://user` 表示当前认证用户的工作区。例如，
-`viking://user/notes/todo.md` 会解析成
-`viking://user/<当前用户>/notes/todo.md`，不依赖文件名或扩展名判断。工具返回的、
-包含当前用户 ID 的 canonical URI 也可以直接使用；这套简写不用于跨用户访问。
+在 MCP 工具中访问自己的工作区，请使用家目录别名 `viking://~`。它在所有控制面
+（REST API、`ov` CLI、SDK 和 MCP）上都会展开为 `viking://user/<当前用户>`，因此
+`viking://~/notes/todo.md` 会解析成 `viking://user/<当前用户>/notes/todo.md`。
+响应始终回显展开后的 canonical URI，这些 canonical URI 也可以直接作为工具入参使用。
+
+无 uid 的写法 `viking://user/<segment>/...`（`memories`、`resources`、`skills`、`peers`、
+`privacy`、`sessions`）不再被接受，这类调用会报错并提示改用 `viking://~/...`。
+`viking://user` 本身是所有用户空间的容器，而不是自己空间的快捷方式。详见
+[Viking URI](../concepts/04-viking-uri.md)。
 
 > **注**：MCP 仅暴露 watch 管理的最小闭包（`list_watches` + `cancel_watch`）。pause / resume / trigger 和统一的 `update` 动作刻意不在此处暴露，请通过 REST `/api/v1/watches/*` 接口或 `ov task watch` CLI 使用上述操作。
 

@@ -309,7 +309,7 @@ def test_true_live_langgraph_create_agent_middleware_e2e():
 def test_true_live_retriever_and_langgraph_store_e2e():
     _require_openviking_live_env()
     client = _build_real_client()
-    root_uri = f"viking://user/memories/langgraph_store_live_{uuid.uuid4().hex}"
+    root_uri = f"viking://~/memories/langgraph_store_live_{uuid.uuid4().hex}"
     code = f"store_live_{uuid.uuid4().hex[:10]}"
 
     try:

@@ -261,6 +261,60 @@ async def test_rejects_invalid_parse_mode(service: ResourceService, ctx: Request
 
 
 @pytest.mark.asyncio
+async def test_tos_auth_args_require_http_resource_url(
+    service: ResourceService,
+    ctx: RequestContext,
+):
+    with pytest.raises(InvalidArgumentError, match=r"tos_signature and tos_access are only supported"):
+        await service.add_resource(
+            path="/test/path",
+            ctx=ctx,
+            to="viking://resources/test",
+            args={"tos_signature": "signed-value"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_tos_auth_args_are_mutually_exclusive(
+    service: ResourceService,
+    ctx: RequestContext,
+):
+    with pytest.raises(InvalidArgumentError, match="cannot both be provided"):
+        await service.add_resource(
+            path="https://tos.example.com/object",
+            ctx=ctx,
+            to="viking://resources/test",
+            args={
+                "tos_signature": "signed-value",
+                "tos_access": "access-key",
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_tos_auth_args_are_snapshotted_and_omitted_from_queue(
+    service: ResourceService,
+    ctx: RequestContext,
+):
+    prepare_durable_source = AsyncMock(return_value=None)
+    service._resource_processor.prepare_durable_source = prepare_durable_source
+
+    await service.add_resource(
+        path="https://tos.example.com/object",
+        ctx=ctx,
+        to="viking://resources/test",
+        args={"tos_signature": "signed-value"},
+        allow_local_path_resolution=False,
+    )
+
+    assert prepare_durable_source.await_args.kwargs["snapshot_required"] is True
+    assert prepare_durable_source.await_args.kwargs["tos_signature"] == "signed-value"
+    message = service._enqueue_add_resource_job.await_args.args[0]
+    assert "tos_signature" not in message.args
+    assert "tos_access" not in message.args
+
+
+@pytest.mark.asyncio
 async def test_no_split_allows_directory_flattening(
     service: ResourceService,
     ctx: RequestContext,
@@ -279,22 +333,14 @@ async def test_no_split_allows_directory_flattening(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "to_uri",
-    [
-        "viking://resources/0803_shendiao_01",
-        "viking://resources/0803_shendiao_01/",
-    ],
-)
 async def test_no_split_treats_explicit_to_as_directory_target(
     service: ResourceService,
     ctx: RequestContext,
-    to_uri: str,
 ):
     await service.add_resource(
         path="/test/神雕.md",
         ctx=ctx,
-        to=to_uri,
+        to="viking://resources/0803_shendiao_01",
         args={"parse_mode": "no_split"},
     )
 

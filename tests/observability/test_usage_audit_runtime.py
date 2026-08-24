@@ -41,6 +41,8 @@ async def test_usage_audit_runtime_subscribes_to_shared_event_bus(tmp_path):
                 "route": "/api/v1/search/find",
                 "status": "200",
                 "duration_seconds": 0.01,
+                "error_code": "SHOULD_NOT_PERSIST",
+                "error_message": "success response",
             },
         )
         await runtime.worker.close(timeout_seconds=1.0)
@@ -60,3 +62,6 @@ async def test_usage_audit_runtime_subscribes_to_shared_event_bus(tmp_path):
     assert retrievals["find"] == 1
     assert audit["total"] == 1
     assert audit["items"][0]["request_id"] == "req-runtime"
+    assert audit["items"][0]["error_code"] is None
+    assert audit["items"][0]["error_message"] is None
+    assert audit["items"][0]["error_details"] is None

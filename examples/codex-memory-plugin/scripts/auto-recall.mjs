@@ -240,13 +240,13 @@ async function searchScope(query, targetUri, limit, bucket = "memories", session
 
 // Candidate target URIs for a bucket, most-specific first. In trusted mode a
 // user's memories live under viking://user/<user>/<bucket>; in api_key mode the
-// server canonicalizes the generic viking://user/<bucket> to the authenticated
-// user. Trying the user-scoped path first with the generic path as a fallback
-// recalls correctly in both modes. De-duped so a missing/blank user never
-// doubles the request count.
+// configured user may be unknown, so the viking://~ home alias lets the server
+// resolve the authenticated caller's own space. Trying the user-scoped path
+// first with the home alias as a fallback recalls correctly in both modes.
+// De-duped so a missing/blank user never doubles the request count.
 function userScopedTargets(kind) {
   const suffix = kind.replace(/^\/+/, "");
-  const targets = [`viking://user/${suffix}`];
+  const targets = [`viking://~/${suffix}`];
   if (cfg.user) {
     targets.unshift(`viking://user/${cfg.user}/${suffix}`);
   }
@@ -421,7 +421,7 @@ async function getRecallCompressorProfile() {
 async function runCodexCompressor(prompt, profile) {
   const tmp = await mkdtemp(join(tmpdir(), "ov-recall-compress-"));
   const outputPath = join(tmp, "last-message.txt");
-  const args = buildCodexExecArgs(profile, outputPath);
+  const args = buildCodexExecArgs(profile, outputPath, cfg);
 
   try {
     return await new Promise((resolve) => {

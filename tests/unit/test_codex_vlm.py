@@ -97,6 +97,35 @@ def test_codex_text_completion_uses_responses_api(mock_resolve, mock_openai_clas
 
 @patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI")
 @patch("openviking.models.vlm.backends.codex_vlm.resolve_codex_runtime_credentials")
+def test_codex_text_completion_passes_reasoning_effort_to_responses(
+    mock_resolve, mock_openai_class
+):
+    mock_resolve.return_value = {
+        "api_key": "oauth-token",
+        "base_url": "https://chatgpt.com/backend-api/codex",
+    }
+    mock_real_client = MagicMock()
+    mock_real_client.responses.create.return_value = _MockResponsesStream(
+        _build_final_response("reasoned answer")
+    )
+    mock_openai_class.return_value = mock_real_client
+
+    vlm = CodexVLM(
+        {
+            "provider": "openai-codex",
+            "model": "gpt-5.3-codex",
+            "reasoning_effort": "xhigh",
+        }
+    )
+    result = vlm.get_completion("hello")
+
+    assert result == "reasoned answer"
+    call_kwargs = mock_real_client.responses.create.call_args.kwargs
+    assert call_kwargs["reasoning"] == {"effort": "xhigh"}
+
+
+@patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI")
+@patch("openviking.models.vlm.backends.codex_vlm.resolve_codex_runtime_credentials")
 def test_codex_vision_completion_converts_images(mock_resolve, mock_openai_class):
     mock_resolve.return_value = {
         "api_key": "oauth-token",
@@ -191,6 +220,17 @@ def test_vlm_config_accepts_codex_without_api_key(_mock_auth_available):
 
     assert config.is_available() is True
     assert config.get_vlm_instance().__class__.__name__ == "CodexVLM"
+
+
+@patch("openviking.models.vlm.backends.codex_auth.has_codex_auth_available", return_value=True)
+def test_vlm_config_passes_codex_reasoning_effort(_mock_auth_available):
+    config = VLMConfig(
+        provider="openai-codex",
+        model="gpt-5.3-codex",
+        reasoning_effort="high",
+    )
+
+    assert config._build_vlm_config_dict()["reasoning_effort"] == "high"
 
 
 @patch("openviking.models.vlm.backends.codex_auth.has_codex_auth_available", return_value=True)

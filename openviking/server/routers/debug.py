@@ -13,10 +13,11 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 
 from openviking.core.path_variables import resolve_path_variables
+from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
-from openviking.server.models import ErrorInfo, Response
+from openviking.server.models import Response
 from openviking.server.responses import error_response
 from openviking.storage.vikingdb_manager import VikingDBManagerProxy
 
@@ -52,7 +53,7 @@ async def debug_vector_scroll(
     filter_expr = None
     if uri:
         # Resolve path variables before using URI
-        uri = resolve_path_variables(uri)
+        uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
         filter_expr = {"op": "must", "field": "uri", "conds": [uri]}
 
     records, next_cursor = await proxy.scroll(filter=filter_expr, limit=limit, cursor=cursor)
@@ -88,7 +89,7 @@ async def debug_vector_count(
 
     if uri:
         # Resolve path variables before using URI
-        uri = resolve_path_variables(uri)
+        uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
         uri_filter = {"op": "must", "field": "uri", "conds": [uri]}
         if filter_expr:
             # For combining filters, we should use And from expr, but for simplicity, let's use RawDSL for now

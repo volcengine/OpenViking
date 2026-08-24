@@ -240,6 +240,8 @@ class UnifiedResourceProcessor:
             and self._has_prepared_understanding_response(kwargs)
         ):
             parse_kwargs = dict(kwargs)
+            parse_kwargs.pop("tos_signature", None)
+            parse_kwargs.pop("tos_access", None)
             parse_kwargs["instruction"] = instruction
             parse_kwargs["vlm_processor"] = self._get_vlm_processor()
             parse_kwargs["storage"] = self.storage
@@ -262,6 +264,8 @@ class UnifiedResourceProcessor:
             and self.should_use_understanding_directly(source, **kwargs)
         ):
             parse_kwargs = dict(kwargs)
+            parse_kwargs.pop("tos_signature", None)
+            parse_kwargs.pop("tos_access", None)
             parse_kwargs["instruction"] = instruction
             parse_kwargs["vlm_processor"] = self._get_vlm_processor()
             parse_kwargs["storage"] = self.storage
@@ -291,6 +295,8 @@ class UnifiedResourceProcessor:
             # Source credentials are consumed by the accessor. Never forward
             # them into parser kwargs, parse results, or later queue payloads.
             parse_kwargs.pop("auth_config", None)
+            parse_kwargs.pop("tos_signature", None)
+            parse_kwargs.pop("tos_access", None)
             parse_kwargs["instruction"] = instruction
             parse_kwargs["_source_meta"] = local_resource.meta
             parse_kwargs["resolved_extension"] = kwargs.get(

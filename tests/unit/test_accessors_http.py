@@ -3,7 +3,9 @@
 """Unit tests for HTTPAccessor."""
 
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
+
+import httpx
 
 import pytest
 
@@ -83,6 +85,122 @@ class TestHTTPAccessor:
     def test_extract_filename_from_url(self, url: str, expected: str) -> None:
         """Test filename extraction from URLs."""
         assert HTTPAccessor._extract_filename_from_url(url) == expected
+
+    @pytest.mark.parametrize(
+        ("tos_args", "header_name", "header_value"),
+        [
+            ({"tos_signature": "signed-value"}, "X-Tos-Signature", "signed-value"),
+            ({"tos_access": "access-key"}, "X-Tos-Access", "access-key"),
+        ],
+    )
+    async def test_tos_auth_is_sent_for_head_and_get(
+        self, accessor: HTTPAccessor, monkeypatch: pytest.MonkeyPatch, tos_args, header_name, header_value
+    ) -> None:
+        seen: list[tuple[str, str | None]] = []
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            seen.append((request.method, request.headers.get(header_name)))
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "text/plain"},
+                content=b"TOS resource",
+                request=request,
+            )
+
+        class Client:
+            def __init__(self, **_kwargs):
+                self._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+            async def __aenter__(self):
+                return self._client
+
+            async def __aexit__(self, *args):
+                await self._client.aclose()
+
+        monkeypatch.setattr(
+            "openviking.parse.accessors.http_accessor.lazy_import",
+            lambda _name: SimpleNamespace(AsyncClient=Client),
+        )
+
+        resource = await accessor.access(
+            "https://tos.example.com/object",
+            **tos_args,
+        )
+
+        try:
+            assert seen == [("HEAD", header_value), ("GET", header_value)]
+        finally:
+            resource.cleanup()
+
+    async def test_tos_auth_args_do_not_reach_parser(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from openviking.parse.accessors.base import LocalResource, SourceType
+        from openviking.utils.media_processor import UnifiedResourceProcessor
+
+        source = tmp_path / "resource.txt"
+        source.write_text("content", encoding="utf-8")
+        local = LocalResource(
+            path=source,
+            source_type=SourceType.HTTP,
+            original_source="https://tos.example.com/object",
+            is_temporary=False,
+        )
+        received: dict[str, object] = {}
+
+        class Registry:
+            async def access(self, *_args, **_kwargs):
+                return local
+
+        class Router:
+            def should_use_understanding_directly(self, *_args, **_kwargs):
+                return False
+
+            async def parse(self, _source, **kwargs):
+                received.update(kwargs)
+                return SimpleNamespace()
+
+        processor = UnifiedResourceProcessor()
+        processor._accessor_registry = Registry()
+        processor._parser_router = Router()
+        monkeypatch.setattr(processor, "_get_vlm_processor", lambda: None)
+
+        await processor.process(
+            "https://tos.example.com/object",
+            tos_signature="signed-value",
+            tos_access="access-key",
+        )
+
+        assert "tos_signature" not in received
+        assert "tos_access" not in received
+
+    async def test_tos_auth_args_do_not_reach_direct_understanding_parser(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from openviking.utils.media_processor import UnifiedResourceProcessor
+
+        received: dict[str, object] = {}
+
+        class Router:
+            def should_use_understanding_directly(self, *_args, **_kwargs):
+                return True
+
+            async def parse(self, _source, **kwargs):
+                received.update(kwargs)
+                return SimpleNamespace()
+
+        processor = UnifiedResourceProcessor()
+        processor._parser_router = Router()
+        monkeypatch.setattr(processor, "_get_vlm_processor", lambda: None)
+
+        await processor.process(
+            "https://tos.example.com/object",
+            tos_signature="signed-value",
+            tos_access="access-key",
+        )
+
+        assert "tos_signature" not in received
+        assert "tos_access" not in received
 
     @pytest.mark.parametrize("entry_url_type", [URLType.WEBPAGE, URLType.DOWNLOAD_HTML])
     async def test_webpage_uses_web_importer_directory(

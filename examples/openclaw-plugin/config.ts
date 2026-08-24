@@ -136,7 +136,7 @@ export type ParsedMemoryOpenVikingConfig = Required<
 };
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:1933";
-const DEFAULT_TARGET_URI = "viking://user/memories";
+const DEFAULT_TARGET_URI = "viking://~/memories";
 const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_CAPTURE_MODE = "semantic";
 const DEFAULT_CAPTURE_MAX_LENGTH = 24000;

@@ -8,7 +8,7 @@
 # One-liner (TOS mirror, for regions where GitHub is unreachable):
 #   bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --dist tos
 # Non-interactive:
-#   bash install.sh --harness claude,codex,cursor,trae,trae-cn,trae-cli,zcode,opencode,pi --dist github --lang en --url http://127.0.0.1:1933
+#   bash install.sh --harness claude,codex,cursor,trae,trae-cn,trae-cli,zcode,opencode,pi,dsh --dist github --lang en --url http://127.0.0.1:1933
 # Format-compatible CLI aliases:
 #   bash install.sh --harness trae-cli
 #   bash install.sh --harness claude --claude-bin claude,seed
@@ -61,6 +61,7 @@ OVCLI_CONF="${OPENVIKING_CLI_CONFIG_FILE:-$OV_HOME/ovcli.conf}"
 # (openviking-memory@openviking) and its per-id config stable across modes.
 MARKETPLACE_NAME="${OPENVIKING_MARKETPLACE_NAME:-openviking}"
 PLUGIN_NAME="openviking-memory"
+DSH_PACKAGE="@openviking/dsh-memory-plugin"
 PLUGIN_ID="${PLUGIN_NAME}@${MARKETPLACE_NAME}"
 
 # Pre-unification names, cleaned up on upgrade.
@@ -83,6 +84,9 @@ PUBLIC_SELECTED_HARNESSES=""
 TRAECODE_CLI_BIN=""
 CLAUDE_BINS_ARG="${OPENVIKING_CLAUDE_BINS:-${OPENVIKING_CLAUDE_BIN:-}}"
 CODEX_BINS_ARG="${OPENVIKING_CODEX_BINS:-${OPENVIKING_CODEX_BIN:-}}"
+DSH_PROFILE_ARG="${OPENVIKING_DSH_PROFILE:-}"
+DSH_PROFILE_DEFAULT="web"
+DSH_PROFILE=""
 SOURCE_ARG=""
 DIST_ARG=""
 LANG_ARG=""
@@ -145,10 +149,11 @@ usage() {
 Usage: install.sh [options]
 
 Options:
-  --harness LIST     Comma-separated harnesses: claude, codex, cursor, trae, trae-cn, trae-cli, zcode, opencode, pi.
+  --harness LIST     Comma-separated harnesses: claude, codex, cursor, trae, trae-cn, trae-cli, zcode, opencode, pi, dsh.
                      Use trae-cli for TraeCode CLI 2.0 (installed through its Codex-compatible plugin format).
   --claude-bin LIST  Comma-separated Claude-format CLI commands (default: claude).
   --codex-bin LIST   Comma-separated Codex-format CLI commands (default: codex).
+  --dsh-profile NAME DeepSeek Harness profile to install into (default: web).
   --dist CHANNEL     github (default) | tos (mirror for GitHub-blocked regions).
   --lang LANG        en | zh (interactive prompts language; auto-detected).
   --source MODE      Advanced: remote | archive | dev (default: auto-detect).
@@ -170,6 +175,7 @@ while [ "$#" -gt 0 ]; do
     --harness) REQUESTED_HARNESSES="${2:-}"; shift 2 ;;
     --claude-bin|--claude-bins) CLAUDE_BINS_ARG="${2:-}"; shift 2 ;;
     --codex-bin|--codex-bins) CODEX_BINS_ARG="${2:-}"; shift 2 ;;
+    --dsh-profile) DSH_PROFILE_ARG="${2:-}"; shift 2 ;;
     --dist) DIST_ARG="${2:-}"; shift 2 ;;
     --lang) LANG_ARG="${2:-}"; shift 2 ;;
     --source) SOURCE_ARG="${2:-}"; shift 2 ;;
@@ -374,7 +380,7 @@ EOF
 }
 
 refresh_available_harnesses() {
-  HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0
+  HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0; HAVE_DSH=0
   has_available_bin "$CLAUDE_BINS" && HAVE_CLAUDE=1
   has_available_bin "$CODEX_BINS" && HAVE_CODEX=1
   { command -v cursor >/dev/null 2>&1 || command -v cursor-agent >/dev/null 2>&1 || [ -d "/Applications/Cursor.app" ] || [ -d "$HOME/.cursor" ]; } && HAVE_CURSOR=1
@@ -383,6 +389,7 @@ refresh_available_harnesses() {
   { command -v trae-cli >/dev/null 2>&1 || command -v traecli >/dev/null 2>&1 || command -v traex >/dev/null 2>&1; } && HAVE_TRAE_CLI=1
   command -v opencode >/dev/null 2>&1 && HAVE_OPENCODE=1
   command -v pi >/dev/null 2>&1 && HAVE_PI=1
+  command -v dsh >/dev/null 2>&1 && HAVE_DSH=1
   { command -v zcode >/dev/null 2>&1 || [ -d "$HOME/.zcode" ]; } && HAVE_ZCODE=1
   return 0
 }
@@ -505,7 +512,7 @@ NODE
 CLAUDE_BINS="$(normalize_bin_list "$CLAUDE_BINS_ARG" claude)"
 CODEX_BINS="$(normalize_bin_list "$CODEX_BINS_ARG" codex)"
 
-HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0
+HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0; HAVE_DSH=0
 refresh_available_harnesses
 
 TUI_CLAUDE_BINS="$CLAUDE_BINS"
@@ -516,6 +523,7 @@ SEL_CLAUDE_BINS=""
 SEL_CODEX_BINS=""
 SEL_OPENCODE=0
 SEL_PI=0
+SEL_DSH=0
 SEL_CURSOR_APP=0
 SEL_TRAE=0
 SEL_TRAE_CN=0
@@ -533,7 +541,7 @@ EOF
 }
 
 tui_selectable_count() {
-  printf '%s' $(( $(list_count "$TUI_CLAUDE_BINS") + $(list_count "$TUI_CODEX_BINS") + 6 ))
+  printf '%s' $(( $(list_count "$TUI_CLAUDE_BINS") + $(list_count "$TUI_CODEX_BINS") + 7 ))
 }
 
 tui_total_count() {
@@ -559,6 +567,8 @@ EOF
   if [ "$i" -eq "$idx" ]; then printf 'opencode|opencode'; return 0; fi
   i=$((i + 1))
   if [ "$i" -eq "$idx" ]; then printf 'pi|pi'; return 0; fi
+  i=$((i + 1))
+  if [ "$i" -eq "$idx" ]; then printf 'dsh|dsh'; return 0; fi
   i=$((i + 1))
   if [ "$i" -eq "$idx" ]; then printf 'cursor|cursor'; return 0; fi
   i=$((i + 1))
@@ -594,6 +604,7 @@ tui_bin_label() {
     codex:trae-cli|codex:traecli|codex:traex) printf 'TraeCode CLI 2.0' ;;
     opencode:*) printf 'OpenCode' ;;
     pi:*) printf 'pi' ;;
+    dsh:*) printf 'DeepSeek Harness' ;;
     cursor:*) printf 'Cursor' ;;
     trae:*) printf 'TRAE' ;;
     trae-cn:*) printf 'TRAE CN' ;;
@@ -613,6 +624,8 @@ tui_bin_selected() {
     [ "$SEL_OPENCODE" -eq 1 ]
   elif [ "$kind" = "pi" ]; then
     [ "$SEL_PI" -eq 1 ]
+  elif [ "$kind" = "dsh" ]; then
+    [ "$SEL_DSH" -eq 1 ]
   elif [ "$kind" = "cursor" ]; then
     [ "$SEL_CURSOR_APP" -eq 1 ]
   elif [ "$kind" = "trae" ]; then
@@ -639,6 +652,7 @@ tui_set_all_bins() {
   SEL_CODEX_BINS="$TUI_CODEX_BINS"
   SEL_OPENCODE=1
   SEL_PI=1
+  SEL_DSH=1
   SEL_CURSOR_APP=1
   SEL_TRAE=1
   SEL_TRAE_CN=1
@@ -656,6 +670,9 @@ tui_toggle_bin() {
     return 0
   elif [ "$kind" = "pi" ]; then
     SEL_PI=$((1 - SEL_PI))
+    return 0
+  elif [ "$kind" = "dsh" ]; then
+    SEL_DSH=$((1 - SEL_DSH))
     return 0
   elif [ "$kind" = "cursor" ]; then
     SEL_CURSOR_APP=$((1 - SEL_CURSOR_APP)); return 0
@@ -730,6 +747,7 @@ tui_reset_bin_selection() {
   SEL_CODEX_BINS=""
   SEL_OPENCODE=0
   SEL_PI=0
+  SEL_DSH=0
   SEL_CURSOR_APP=0
   SEL_TRAE=0
   SEL_TRAE_CN=0
@@ -754,6 +772,7 @@ $TUI_CODEX_BINS
 EOF
   if command -v opencode >/dev/null 2>&1; then SEL_OPENCODE=1; any=1; fi
   if command -v pi >/dev/null 2>&1; then SEL_PI=1; any=1; fi
+  if command -v dsh >/dev/null 2>&1; then SEL_DSH=1; any=1; fi
   if [ "$HAVE_CURSOR" -eq 1 ]; then SEL_CURSOR_APP=1; any=1; fi
   if [ "$HAVE_TRAE" -eq 1 ]; then SEL_TRAE=1; any=1; fi
   if [ "$HAVE_TRAE_CN" -eq 1 ]; then SEL_TRAE_CN=1; any=1; fi
@@ -844,7 +863,7 @@ tui_add_compatible_cli() {
 
 tui_has_selection() {
   [ -n "$(list_words "$SEL_CLAUDE_BINS")" ] || [ -n "$(list_words "$SEL_CODEX_BINS")" ] \
-    || [ "$SEL_OPENCODE" -eq 1 ] || [ "$SEL_PI" -eq 1 ] || [ "$SEL_CURSOR_APP" -eq 1 ] \
+    || [ "$SEL_OPENCODE" -eq 1 ] || [ "$SEL_PI" -eq 1 ] || [ "$SEL_DSH" -eq 1 ] || [ "$SEL_CURSOR_APP" -eq 1 ] \
     || [ "$SEL_TRAE" -eq 1 ] || [ "$SEL_TRAE_CN" -eq 1 ] || [ "$SEL_ZCODE" -eq 1 ]
 }
 
@@ -856,6 +875,7 @@ tui_finish_selection() {
   [ -n "$(list_words "$CODEX_BINS")" ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}codex"
   [ "$SEL_OPENCODE" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}opencode"
   [ "$SEL_PI" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}pi"
+  [ "$SEL_DSH" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}dsh"
   [ "$SEL_CURSOR_APP" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}cursor"
   [ "$SEL_TRAE" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}trae"
   [ "$SEL_TRAE_CN" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}trae-cn"
@@ -930,6 +950,7 @@ select_harnesses() {
   [ "$HAVE_TRAE_CN" -eq 1 ] && detected="${detected:+$detected,}trae-cn"
   [ "$HAVE_OPENCODE" -eq 1 ] && detected="${detected:+$detected,}opencode"
   [ "$HAVE_PI" -eq 1 ] && detected="${detected:+$detected,}pi"
+  [ "$HAVE_DSH" -eq 1 ] && detected="${detected:+$detected,}dsh"
   [ "$HAVE_ZCODE" -eq 1 ] && detected="${detected:+$detected,}zcode"
 
   if [ -n "$REQUESTED_HARNESSES" ]; then
@@ -948,6 +969,113 @@ select_harnesses() {
   else
     SELECTED_HARNESSES="$default"
   fi
+}
+
+select_dsh_profile() {
+  local reply
+  contains_harness dsh || return 0
+  if [ -n "$DSH_PROFILE_ARG" ]; then
+    DSH_PROFILE="$DSH_PROFILE_ARG"
+    return 0
+  fi
+  DSH_PROFILE="$DSH_PROFILE_DEFAULT"
+  [ "$INTERACTIVE" -eq 1 ] || return 0
+  ask "$(t 'DeepSeek Harness profile to install into' '要安装到的 DeepSeek Harness profile') [$DSH_PROFILE_DEFAULT]: "
+  read_tty reply
+  DSH_PROFILE="${reply:-$DSH_PROFILE_DEFAULT}"
+}
+
+install_dsh() {
+  heading "$(t '4. DeepSeek Harness bundle' '4. DeepSeek Harness 插件')"
+  if ! command -v dsh >/dev/null 2>&1; then
+    warn "$(t 'dsh CLI not found; skipping DeepSeek Harness install.' '未找到 dsh 命令，跳过 DeepSeek Harness 安装。')"
+    return 0
+  fi
+  # `@latest` rather than a bare name: pnpm keeps an already-satisfying install
+  # when the name carries no version, so a profile holding a dev build would
+  # never fall back to the published package.
+  local profile="${DSH_PROFILE:-$DSH_PROFILE_DEFAULT}" spec="$DSH_PACKAGE@latest" origin="npm" local_dir
+  # npm is the bundle's only distribution channel, so the github/tos choice does
+  # not apply here; only dev mode installs something other than the published
+  # package. It still has to arrive as a real package rather than a link: a
+  # linked source tree resolves its dsh peers from its own realpath and misses
+  # the profile's hoisted node_modules, so the checkout gets packed first.
+  if [ "$SOURCE_MODE" = "dev" ] && local_dir="$(plugin_dir_on_disk dsh-memory-plugin)"; then
+    local packed
+    if packed="$(dsh_pack_local "$local_dir")"; then
+      spec="$packed"
+      origin="$local_dir"
+      # A dev re-install usually carries the same version, and pnpm treats an
+      # already-satisfied version as a no-op no matter which tarball it is
+      # pointed at, so the edited sources would never reach the profile.
+      # Dropping the package first forces the reinstall. Only done for local
+      # sources: it is a downgrade in robustness when `add` can fail on network.
+      dsh plugin --profile "$profile" rm "$DSH_PACKAGE" >/dev/null 2>&1 || true
+    fi
+  fi
+  if dsh plugin --profile "$profile" add "$spec" >/dev/null 2>&1; then
+    info "$(t 'DeepSeek Harness bundle installed into profile:' 'DeepSeek Harness 插件已安装到 profile：') $profile ($(t 'source' '来源'): $origin)"
+  else
+    warn "$(t 'dsh plugin add failed; run it manually:' 'dsh plugin add 失败；请手动执行：') dsh plugin --profile $profile add $spec"
+  fi
+}
+
+# Fingerprint of the checkout's shipped sources. pnpm keys a file: dependency by
+# path, so a re-pack under the same name is treated as already satisfied and the
+# edited sources never reach the profile. Naming the tarball after its content
+# means an unchanged checkout stays a no-op while an edited one reinstalls.
+dsh_sha256() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum
+  else
+    return 1
+  fi
+}
+
+dsh_have_sha256() {
+  command -v shasum >/dev/null 2>&1 || command -v sha256sum >/dev/null 2>&1
+}
+
+dsh_source_files() { # dsh_source_files <plugin-dir>
+  ( cd "$1" 2>/dev/null && find . -type f \
+      -not -path "./node_modules/*" -not -name "*.tgz" -print0 ) | LC_ALL=C sort -z
+}
+
+dsh_source_fingerprint() { # dsh_source_fingerprint <plugin-dir>
+  local dir="$1"
+  dsh_have_sha256 || return 1
+  {
+    dsh_source_files "$dir" | tr '\0' '\n'
+    dsh_source_files "$dir" | ( cd "$dir" && xargs -0 cat 2>/dev/null )
+  } | dsh_sha256 | cut -c1-12
+}
+
+dsh_pack_local() { # dsh_pack_local <plugin-dir> -> tarball path
+  local dir="$1" dest="$OV_HOME/dsh-memory-plugin" name fingerprint target
+  command -v npm >/dev/null 2>&1 || {
+    warn "$(t 'npm not found; installing the published dsh package instead of the local checkout.' '未找到 npm，将安装已发布的 dsh 包而非本地 checkout。')" >&2
+    return 1
+  }
+  fingerprint="$(dsh_source_fingerprint "$dir")" || {
+    warn "$(t 'no sha256 tool found; installing the published dsh package instead of the local checkout.' '未找到 sha256 工具，将安装已发布的 dsh 包而非本地 checkout。')" >&2
+    return 1
+  }
+  target="$dest/$fingerprint/openviking-dsh-memory-plugin.tgz"
+  if [ -f "$target" ]; then
+    printf '%s' "$target"
+    return 0
+  fi
+  rm -rf "$dest"
+  mkdir -p "$dest/$fingerprint" || return 1
+  name="$( (cd "$dir" && npm pack --pack-destination "$dest/$fingerprint" 2>/dev/null) | tail -1 )"
+  [ -n "$name" ] && [ -f "$dest/$fingerprint/$name" ] || {
+    warn "$(t 'npm pack failed for the local dsh checkout; installing the published package instead.' '本地 dsh checkout 打包失败，将改装已发布的包。')" >&2
+    return 1
+  }
+  mv "$dest/$fingerprint/$name" "$target" || return 1
+  printf '%s' "$target"
 }
 
 select_compatible_bins() {
@@ -977,7 +1105,7 @@ validate_selected_harnesses() {
   local h bad=0
   while IFS= read -r h; do
     case "$h" in
-      claude|codex|cursor|trae|trae-cn|opencode|pi|zcode) ;;
+      claude|codex|cursor|trae|trae-cn|opencode|pi|zcode|dsh) ;;
       trae-cli) [ "$UNINSTALL" -eq 1 ] || bad=1 ;;
       *) err "Unsupported harness: $h"; bad=1 ;;
     esac
@@ -1015,6 +1143,7 @@ EOF
   fi
   if contains_harness opencode && command -v opencode >/dev/null 2>&1; then ok=1; fi
   if contains_harness pi && command -v pi >/dev/null 2>&1; then ok=1; fi
+  if contains_harness dsh && command -v dsh >/dev/null 2>&1; then ok=1; fi
   # Cursor and TRAE are config-driven integrations. They may be installed
   # before the desktop app itself, so a CLI in PATH is not required.
   if contains_harness cursor || contains_harness trae || contains_harness trae-cn || contains_harness trae-cli || contains_harness zcode; then ok=1; fi
@@ -3257,6 +3386,21 @@ EOF
       node --check "$HOME/.pi/agent/extensions/openviking/shared/recall-core.mjs" || ok=0
     fi
   fi
+  if contains_harness dsh && command -v dsh >/dev/null 2>&1; then
+    local dsh_profile="${DSH_PROFILE:-$DSH_PROFILE_DEFAULT}"
+    if dsh plugin --profile "$dsh_profile" ls 2>/dev/null | grep -q "$DSH_PACKAGE"; then
+      info "dsh: $DSH_PACKAGE $(t 'installed in profile' '已安装到 profile') $dsh_profile"
+    else
+      warn "dsh: $DSH_PACKAGE $(t 'not found in profile' '未在 profile 中找到') $dsh_profile"
+      ok=0
+    fi
+    if dsh --profile "$dsh_profile" --dump-config 2>/dev/null | grep -q 'openviking-memory'; then
+      info "dsh: $(t 'plugin group composed into the profile' '插件组已合入 profile')"
+    else
+      warn "dsh: $(t 'plugin group not present in the composed profile' '合成后的 profile 中没有插件组')"
+      ok=0
+    fi
+  fi
   if [ -n "$MKT_DIR" ] && [ -f "$MKT_DIR/claude-code-memory-plugin/scripts/marketplace.test.mjs" ] && [ -d "$MKT_DIR/../.git" ]; then
     node --test "$MKT_DIR/claude-code-memory-plugin/scripts/marketplace.test.mjs" \
       "$MKT_DIR/codex-memory-plugin/scripts/marketplace.test.mjs" || ok=0
@@ -3291,11 +3435,13 @@ resolve_self_checkout
 select_harnesses
 validate_selected_harnesses
 select_compatible_bins
+select_dsh_profile
 refresh_available_harnesses
 info "$(t 'Selected harnesses:' '已选择：') $(printf '%s' "${PUBLIC_SELECTED_HARNESSES:-$SELECTED_HARNESSES}" | tr ',' ' ')"
 if contains_harness claude; then info "$(t 'Claude-format commands:' 'Claude 格式命令：') $(list_words "$CLAUDE_BINS")"; fi
 if [ -n "$TRAECODE_CLI_BIN" ]; then info "TraeCode CLI 2.0: $TRAECODE_CLI_BIN"; fi
 if contains_harness codex && [ -z "$TRAECODE_CLI_BIN" ]; then info "$(t 'Codex-format commands:' 'Codex 格式命令：') $(list_words "$CODEX_BINS")"; fi
+if contains_harness dsh; then info "$(t 'DeepSeek Harness profile:' 'DeepSeek Harness profile：') ${DSH_PROFILE:-$DSH_PROFILE_DEFAULT}"; fi
 validate_selected_bins
 if [ "$UNINSTALL" -eq 1 ]; then
   uninstall_agent_integrations
@@ -3330,6 +3476,7 @@ if contains_harness trae-cn; then install_trae_variant trae-cn; fi
 if contains_harness zcode; then install_zcode; fi
 if contains_harness opencode; then install_opencode; fi
 if contains_harness pi; then install_pi; fi
+if contains_harness dsh; then install_dsh; fi
 validate_install
 
 heading "$(t 'Done' '完成')"
@@ -3350,3 +3497,4 @@ if contains_harness trae-cn; then info "TRAE CN: ~/.trae-cn/hooks.json + MCP"; f
 if contains_harness zcode; then info "ZCode: ~/.zcode/cli/config.json (hooks + MCP)"; fi
 if contains_harness opencode; then info "OpenCode: @openviking/opencode-plugin"; fi
 if contains_harness pi; then info "pi: ~/.pi/agent/extensions/openviking"; fi
+if contains_harness dsh; then info "DeepSeek Harness: $DSH_PACKAGE ($(t 'profile' '配置档') ${DSH_PROFILE:-$DSH_PROFILE_DEFAULT})"; fi

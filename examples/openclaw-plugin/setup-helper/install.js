@@ -2446,7 +2446,7 @@ async function configureOpenClawPlugin({
     const candidates = {
       mode: "remote",
       baseUrl: effectiveRuntimeConfig.baseUrl || remoteBaseUrl,
-      targetUri: "viking://user/memories",
+      targetUri: "viking://~/memories",
       autoRecall: true,
       autoCapture: true,
       apiKey: effectiveRuntimeConfig.apiKey || undefined,

@@ -246,6 +246,9 @@ class CodexCompletionsAdapter:
         tools = _convert_tools_for_responses(kwargs.get("tools"))
         if tools:
             response_kwargs["tools"] = tools
+        reasoning_effort = kwargs.get("reasoning_effort")
+        if reasoning_effort:
+            response_kwargs["reasoning"] = {"effort": reasoning_effort}
         collected_output_items: List[Any] = []
         collected_text_deltas: List[str] = []
         has_function_calls = False

@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from openviking.utils.tags import normalize_search_tags
+
 
 class ContextType(str, Enum):
     """Context type for retrieval."""
@@ -272,14 +274,6 @@ class QueryPlan:
 
 
 @dataclass
-class RelatedContext:
-    """Related context with summary."""
-
-    uri: str
-    abstract: str
-
-
-@dataclass
 class MatchedContext:
     """Matched context from retrieval."""
 
@@ -292,7 +286,6 @@ class MatchedContext:
     score: float = 0.0
     match_reason: str = ""
 
-    relations: List[RelatedContext] = field(default_factory=list)
     search_tags: List[str] = field(default_factory=list)
 
 
@@ -386,7 +379,7 @@ class FindResult:
             "level": ctx.level,
             "score": ctx.score,
             "abstract": ctx.abstract,
-            "tags": ctx.search_tags,
+            "tags": normalize_search_tags(ctx.search_tags, discard_invalid=True),
         }
 
     def _query_to_dict(self, q: TypedQuery) -> Dict[str, Any]:
@@ -430,10 +423,6 @@ class FindResult:
                 category=d.get("category", ""),
                 score=d.get("score", 0.0),
                 match_reason=d.get("match_reason", ""),
-                relations=[
-                    RelatedContext(uri=r.get("uri", ""), abstract=r.get("abstract", ""))
-                    for r in d.get("relations", [])
-                ],
                 search_tags=list(d.get("tags") or d.get("search_tags") or []),
             )
 

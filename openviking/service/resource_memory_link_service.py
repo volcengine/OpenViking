@@ -17,7 +17,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 from openviking.core.namespace import (
     NamespaceShapeError,
     canonical_user_root,
-    canonicalize_uri,
     context_type_for_uri,
     uri_parts,
 )
@@ -33,7 +32,7 @@ from openviking.session.memory.utils.resource_refs import (
     resource_ref_matches,
     unlink_resource_references_from_memory,
 )
-from openviking.storage.semantic_sidecar import body_for_preview
+from openviking.storage.abstract_overview import body_for_preview
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
 from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking_cli.exceptions import NotFoundError
@@ -92,7 +91,7 @@ def _resource_reason_peer_id(ctx: RequestContext, resource_uri: str) -> Optional
 
 def _peer_id_from_resource_uri(resource_uri: str, ctx: RequestContext) -> Optional[str]:
     try:
-        parts = uri_parts(canonicalize_uri(resource_uri, ctx))
+        parts = uri_parts(resource_uri)
     except (NamespaceShapeError, ValueError):
         return None
     if len(parts) >= 5 and parts[0] == "user" and parts[2] == "peers":

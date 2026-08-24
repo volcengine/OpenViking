@@ -10,6 +10,7 @@ underlying hourly rows into user-local days / hours.
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from pathlib import Path
@@ -71,10 +72,9 @@ class SQLiteUsageAuditStore:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA foreign_keys=ON")
-        # Reset incompatible pre-v3 local tables before creating the new
-        # UTC/hourly layout. The SQLite backend has short retention and may live
-        # inside one workspace, so dropping stale rollups is safer than mixing
-        # old daily/local columns with the new UTC columns.
+        # Preserve the compatible v4 layout through its additive migration.
+        # Unknown newer transitions fail closed; older daily/local layouts
+        # remain incompatible and use the reset path.
         self._migrate_legacy_sync(conn)
         conn.executescript(SQLITE_SCHEMA)
         conn.execute(
@@ -90,10 +90,41 @@ class SQLiteUsageAuditStore:
         except sqlite3.OperationalError:
             row = None
         current = int(row["value"]) if row and row["value"] else 0
-        if current >= SCHEMA_VERSION:
+        if current > SCHEMA_VERSION:
+            raise RuntimeError(
+                "Usage/audit database schema "
+                f"version {current} is newer than supported version {SCHEMA_VERSION}"
+            )
+        if current == SCHEMA_VERSION:
             return
+        if current == 4 and SCHEMA_VERSION == 5:
+            SQLiteUsageAuditStore._migrate_v4_to_v5_sync(conn)
+            return
+        if current >= 4:
+            raise RuntimeError(
+                f"No usage/audit schema migration path from version {current} to {SCHEMA_VERSION}"
+            )
         for table in RESET_ON_SCHEMA_UPGRADE_TABLES:
             conn.execute(f"DROP TABLE IF EXISTS {table}")
+
+    @staticmethod
+    def _migrate_v4_to_v5_sync(conn: sqlite3.Connection) -> None:
+        """Add nullable audit error fields without deleting v4 usage data."""
+        table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'request_audit'"
+        ).fetchone()
+        if table is None:
+            return
+        columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(request_audit)")}
+        conn.execute("BEGIN")
+        try:
+            for name in ("error_code", "error_message", "error_details"):
+                if name not in columns:
+                    conn.execute(f"ALTER TABLE request_audit ADD COLUMN {name} TEXT")
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
 
     async def close(self) -> None:
         await asyncio.to_thread(self._close_sync)
@@ -224,9 +255,10 @@ class SQLiteUsageAuditStore:
             """
             INSERT INTO request_audit (
                 request_id, account_id, user_id, method, route,
-                api_type, status_code, duration_ms, created_at
+                api_type, status_code, duration_ms,
+                error_code, error_message, error_details, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
@@ -710,7 +742,8 @@ class SQLiteUsageAuditStore:
         rows = self._conn.execute(
             f"""
             SELECT request_id, account_id, user_id, method, route, api_type,
-                   status_code, duration_ms, created_at
+                   status_code, duration_ms, error_code, error_message,
+                   error_details, created_at
             FROM request_audit
             WHERE {where_sql}
             ORDER BY created_at DESC, id DESC
@@ -723,8 +756,22 @@ class SQLiteUsageAuditStore:
             "success_rate": (success / total) if total else 0.0,
             "page": page,
             "page_size": page_size,
-            "items": [dict(row) for row in rows],
+            "items": [self._audit_item(row) for row in rows],
         }
+
+    @staticmethod
+    def _audit_item(row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        raw_details = item.get("error_details")
+        if raw_details:
+            try:
+                decoded = json.loads(raw_details)
+            except (TypeError, ValueError):
+                decoded = None
+            item["error_details"] = decoded if isinstance(decoded, dict) else None
+        else:
+            item["error_details"] = None
+        return item
 
     @staticmethod
     def _status_filter_sql(statuses: list[str]) -> tuple[str, list[Any]]:

@@ -67,12 +67,13 @@ The `find()` method performs pure vector similarity search for simple query scen
 | time_field | "updated_at" \| "created_at" | No | "updated_at" | Metadata time field used by `since` / `until` |
 | level | str | No | None | Limit results to specific level(s), e.g., `0`, `1`, `2`, or `0,1,2`. CLI `--level`/`-L` maps to this field |
 | include_provenance | bool | No | False | Include provenance/query-plan details in serialized result |
+| read_content | bool | No | False | Read each final matched URI with the visible-content read semantics and inline the result as `content`. Individual read failures leave the hit unchanged. |
 | telemetry | bool \| object | No | False | Attach telemetry data to response |
 
 **Target resolution notes**:
 - With empty `target_uri`, non-ROOT retrieval searches the current user root (`viking://user/{user}`) and shared `viking://resources`.
 - To filter the current user's peer collection to one peer for filesystem and retrieval operations, send `X-OpenViking-Actor-Peer: <peer_id>` or construct the SDK/CLI client with `actor_peer_id`. See [Multi-Tenant: Peer Collection Filter](../concepts/11-multi-tenant.md#peer-restricted-view).
-- Current-user shorthand target URIs such as `viking://user/memories`, `viking://user/resources`, and `viking://user/skills` are canonicalized from the authenticated request identity.
+- Home-alias target URIs such as `viking://~/memories`, `viking://~/resources`, and `viking://~/skills` are expanded to the canonical path from the authenticated request identity. The uid-less spelling `viking://user/memories` (and the same shape for `resources`, `skills`, `peers`, `privacy`, `sessions`) is rejected with an error pointing at the `viking://~/...` form.
 
 **Image search notes**:
 - Image queries use the image vector as the query and search L2 resource leaf nodes in the target scope by default. Results are not limited to image files; multimodal embedding decides similarity between the query image and text/image resources.
@@ -80,6 +81,8 @@ The `find()` method performs pure vector similarity search for simple query scen
 - Existing image resources keep their existing vectors; image-vector recall applies to images vectorized after this capability is enabled or after a later reindex.
 
 **FindResult Structure**
+
+When `read_content=true`, each successfully read hit additionally contains `content`. This is a full file read, so use `limit` to bound response size. `search(mode="context")` rejects `read_content` because context assembly already enforces its own token budget.
 
 ```python
 class FindResult:
@@ -103,7 +106,6 @@ class MatchedContext:
     category: str                    # Category
     score: float                     # Relevance score (0-1)
     match_reason: str                # Why this matched
-    relations: List[RelatedContext]  # Related contexts
 ```
 
 #### 3. Usage Examples
@@ -181,42 +183,45 @@ Tags must use strict `k=v` strings. When multiple tags are provided, `find()` re
 ```python
 import openviking as ov
 from openviking.retrieve import ContextType
+from openviking_sdk import TextPart
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 # Basic search
-results = client.find("how to authenticate users")
+results = client.find(query="how to authenticate users")
 
 # Search with filter and time range
 recent_emails = client.find(
-    "invoice",
+    query="invoice",
     target_uri="viking://resources/email",
-    since="7d",
-    time_field="created_at",
+    options={
+        "since": "7d",
+        "time_field": "created_at",
+    },
 )
 
 # Search only memories and resources
 typed_results = client.find(
-    "authentication",
-    context_type=[ContextType.MEMORY, ContextType.RESOURCE],
+    query="authentication",
+    options={"context_type": [ContextType.MEMORY, ContextType.RESOURCE]},
 )
 
 # Search by local image, bytes, data URI, HTTP URL, or viking:// URI
-image_results = client.find(image="/path/to/photo.png")
+image_results = client.find(query="", image="/path/to/photo.png")
 
 # Search by explicit retrieval tags. Multiple tags are AND-ed.
 tagged_results = client.find(
-    "rollback runbook",
-    tags=["env=prod", "team=search"],
+    query="rollback runbook",
+    options={"tags": ["env=prod", "team=search"]},
 )
 
 # Iterate through results
-for ctx in results.resources:
-    print(f"URI: {ctx.uri}")
-    print(f"Score: {ctx.score:.3f}")
-    print(f"Type: {ctx.context_type}")
-    print(f"Abstract: {ctx.abstract[:100]}...")
+for context in results.get("resources", []):
+    print(f"URI: {context['uri']}")
+    print(f"Score: {context.get('score', 0.0):.3f}")
+    print(f"Type: {context.get('context_type')}")
+    print(f"Abstract: {context.get('abstract', '')[:100]}...")
     print("---")
 ```
 
@@ -225,20 +230,20 @@ for ctx in results.resources:
 ```python
 # Search only in resources
 results = client.find(
-    "authentication",
-    target_uri="viking://resources"
+    query="authentication",
+    target_uri="viking://resources",
 )
 
 # Search only in user memories
 results = client.find(
-    "preferences",
-    target_uri="viking://user/memories"
+    query="preferences",
+    target_uri="viking://~/memories"
 )
 
 # Search only in current-user resources
 results = client.find(
-    "private docs",
-    target_uri="viking://user/resources"
+    query="private docs",
+    target_uri="viking://~/resources"
 )
 
 # Search with the peer collection filtered to one peer
@@ -247,18 +252,18 @@ peer_client = ov.SyncHTTPClient(
     api_key="your-key",
     actor_peer_id="web-visitor-alice",
 )
-peer_results = peer_client.find("invoice follow-up")
+peer_results = peer_client.find(query="invoice follow-up")
 
 # Search only in skills
 results = client.find(
-    "web search",
-    target_uri="viking://user/skills"
+    query="web search",
+    target_uri="viking://~/skills"
 )
 
 # Search in specific project
 results = client.find(
-    "API endpoints",
-    target_uri="viking://resources/my-project"
+    query="API endpoints",
+    target_uri="viking://resources/my-project",
 )
 ```
 
@@ -336,7 +341,6 @@ openviking find "red poster style" --image ./poster.png --uri "viking://resource
                 "score": 0.12808319406977778,
                 "category": "",
                 "match_reason": "",
-                "relations": [],
                 "abstract": "This document is an API documentation reading plan that outlines the structure of subsequent API reference materials organized by functional module. Main sections or topics covered include resource management API, search API, file system operations, ses...",
                 "overview": null
             },
@@ -347,7 +351,6 @@ openviking find "red poster style" --image ./poster.png --uri "viking://resource
                 "score": 0.12054087276495282,
                 "category": "",
                 "match_reason": "",
-                "relations": [],
                 "abstract": "This directory contains structured API reference documentation for the OpenViking platform, compiling detailed HTTP endpoint specifications for core and extended platform capabilities. It covers functional modules including system health checks, semanti...",
                 "overview": null
             }
@@ -402,6 +405,7 @@ The `search()` method adds session context understanding and intent analysis cap
 | time_field | "updated_at" \| "created_at" | No | "updated_at" | Metadata time field used by `since` / `until` |
 | level | str | No | None | Limit results to specific level(s), e.g., `0`, `1`, `2`, or `0,1,2`. CLI `--level`/`-L` maps to this field |
 | include_provenance | bool | No | False | Include provenance/query-plan details in serialized result |
+| read_content | bool | No | False | Read each final matched URI with the visible-content read semantics and inline the result as `content`. Individual read failures leave the hit unchanged. Only supported by `mode="list"`. |
 | telemetry | bool \| object | No | False | Attach telemetry data to response |
 
 `search()` uses the same target resolution and explicit tag filtering rules as `find()`, including the peer collection filter selected by `X-OpenViking-Actor-Peer` or SDK `actor_peer_id`. When `image_url` is provided, `search()` uses direct image retrieval and skips session query planning.
@@ -457,31 +461,35 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 ```python
 import openviking as ov
 from openviking.retrieve import ContextType
-from openviking.message import TextPart
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 # Create session with conversation context
-session = client.session()
-session.add_message("user", [
-    TextPart(text="I'm building a login page with OAuth")
-])
-session.add_message("assistant", [
-    TextPart(text="I can help you with OAuth implementation.")
-])
+session_info = client.create_session()
+session = client.session(session_id=session_info["session_id"])
+session.add_message(
+    role="user",
+    parts=[TextPart(text="I'm building a login page with OAuth")],
+)
+session.add_message(
+    role="assistant",
+    parts=[TextPart(text="I can help you with OAuth implementation.")],
+)
 
 # Search understands conversation context
 results = client.search(
-    "best practices",
-    session=session,
-    context_type=ContextType.SKILL,
-    since="2h"
+    query="best practices",
+    session_id=session.session_id,
+    options={
+        "context_type": ContextType.SKILL,
+        "since": "2h",
+    },
 )
 
-for ctx in results.resources:
-    print(f"Found: {ctx.uri}")
-    print(f"Abstract: {ctx.abstract[:200]}...")
+for context in results.get("resources", []):
+    print(f"Found: {context['uri']}")
+    print(f"Abstract: {context.get('abstract', '')[:200]}...")
 ```
 
 **Search without Session**
@@ -490,17 +498,20 @@ for ctx in results.resources:
 # search can also be used without session
 # It still performs intent analysis on the query
 results = client.search(
-    "how to implement OAuth 2.0 authorization code flow"
+    query="how to implement OAuth 2.0 authorization code flow"
 )
 
-for ctx in results.resources:
-    print(f"Found: {ctx.uri} (score: {ctx.score:.3f})")
+for context in results.get("resources", []):
+    print(f"Found: {context['uri']} (score: {context.get('score', 0.0):.3f})")
 ```
 
 **Image Search**
 
 ```python
-results = client.search("similar poster", image="/path/to/poster.png")
+results = client.search(
+    query="similar poster",
+    image="/path/to/poster.png",
+)
 ```
 
 **TypeScript SDK**
@@ -563,7 +574,6 @@ openviking search "similar poster" --image ./poster.png --uri "viking://resource
                 "score": 0.95,
                 "category": "",
                 "match_reason": "Context-aware match: OAuth login best practices",
-                "relations": [],
                 "abstract": "OAuth 2.0 best practices for login pages...",
                 "overview": "This guide covers OAuth 2.0 best practices including secure token handling, redirect URI validation, and state parameter usage..."
             }
@@ -827,8 +837,8 @@ client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 results = client.grep(
-    "viking://resources",
-    "authentication",
+    uri="viking://resources",
+    pattern="authentication",
     case_insensitive=True,
     node_limit=1024,
 )
@@ -949,13 +959,17 @@ client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 # Find all markdown files (defaults to returning at most 256 matches)
-results = client.glob("**/*.md", "viking://resources")
+results = client.glob(pattern="**/*.md", uri="viking://resources")
 print(f"Found {results['count']} markdown files:")
 for uri in results['matches']:
     print(f"  {uri}")
 
 # Find all Python files with a higher explicit cap
-results = client.glob("**/*.py", "viking://resources", node_limit=1024)
+results = client.glob(
+    pattern="**/*.py",
+    uri="viking://resources",
+    node_limit=1024,
+)
 print(f"Found {results['count']} Python files")
 ```
 
@@ -1019,19 +1033,19 @@ import openviking as ov
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
-results = client.find("authentication")
+results = client.find(query="authentication")
 
-for ctx in results.resources:
-    # Start with L0 (abstract) - already in ctx.abstract
-    print(f"Abstract: {ctx.abstract}")
+for context in results.get("resources", []):
+    # Start with L0 (abstract) - already in context["abstract"]
+    print(f"Abstract: {context.get('abstract', '')}")
 
-    if ctx.level < 2:
+    if context.get("level", 0) < 2:
         # Get L1 (overview) for directories
-        overview = client.overview(ctx.uri)
+        overview = client.overview(uri=context["uri"])
         print(f"Overview: {overview[:500]}...")
     else:
         # Load L2 (content) for files
-        content = client.read(ctx.uri)
+        content = client.read(uri=context["uri"])
         print(f"File content: {content}")
 ```
 
@@ -1053,35 +1067,6 @@ curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://resources/do
     -H "X-API-Key: your-key"
 ```
 
-### Get Related Resources
-
-**Python SDK**
-
-```python
-import openviking as ov
-
-client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-client.initialize()
-
-results = client.find("OAuth implementation")
-
-for ctx in results.resources:
-    print(f"Found: {ctx.uri}")
-
-    # Get related resources
-    relations = client.relations(ctx.uri)
-    for rel in relations:
-        print(f"  Related: {rel['uri']} - {rel['reason']}")
-```
-
-**HTTP API**
-
-```bash
-# Get relations for resource
-curl -X GET "http://localhost:1933/api/v1/relations?uri=viking://resources/docs/auth" \
-    -H "X-API-Key: your-key"
-```
-
 ## Best Practices
 
 ### Use Specific Queries
@@ -1093,10 +1078,10 @@ client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 # Good - specific query
-results = client.find("OAuth 2.0 authorization code flow implementation")
+results = client.find(query="OAuth 2.0 authorization code flow implementation")
 
 # Less effective - too broad
-results = client.find("auth")
+results = client.find(query="auth")
 ```
 
 ### Scope Your Searches
@@ -1109,8 +1094,8 @@ client.initialize()
 
 # Search in relevant scope for better results
 results = client.find(
-    "error handling",
-    target_uri="viking://resources/my-project"
+    query="error handling",
+    target_uri="viking://resources/my-project",
 )
 ```
 
@@ -1118,19 +1103,24 @@ results = client.find(
 
 ```python
 import openviking as ov
-from openviking.message import TextPart
+from openviking_sdk import TextPart
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 # For conversational search, use session
-session = client.session()
-session.add_message("user", [
-    TextPart(text="I'm building a login page")
-])
+session_info = client.create_session()
+session = client.session(session_id=session_info["session_id"])
+session.add_message(
+    role="user",
+    parts=[TextPart(text="I'm building a login page")],
+)
 
 # Search understands context
-results = client.search("best practices", session=session)
+results = client.search(
+    query="best practices",
+    session_id=session.session_id,
+)
 ```
 
 ## Related Documentation

@@ -67,7 +67,7 @@ Core config lives under `plugins.entries.openviking.config`:
 | `peer_role` | `assistant` | Peer identity mode: `none`, `assistant`, or `person`. Session messages use body `peer_id`; data-plane recall/search uses `X-OpenViking-Actor-Peer`. |
 | `peer_prefix` | empty | Optional prefix for assistant `peer_id` / actor peer values when `peer_role=assistant`. |
 | `accountId` / `userId` | empty | Advanced tenant identity headers for root-key or trusted deployments. |
-| `targetUri` | `viking://user/memories` | Default search scope for legacy targeted memory search. |
+| `targetUri` | `viking://~/memories` | Default search scope for legacy targeted memory search. |
 | `autoCapture` | `true` | Append sanitized turn text to OpenViking sessions. |
 | `captureMode` | `semantic` | `semantic` or `keyword`; affects server-side extraction filtering. |
 | `captureMaxLength` | `24000` | Max sanitized text length per captured turn. |
@@ -196,7 +196,7 @@ The current OpenClaw tool exposes the parameters above. The underlying client al
 
 ### `add_skill`
 
-Import Agent Skills into `viking://user/skills/...`.
+Import Agent Skills into `viking://~/skills/...`.
 
 | Parameter | Required | Description |
 |---|---|---|

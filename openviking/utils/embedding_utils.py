@@ -26,9 +26,9 @@ from openviking.parse.parsers.media.utils import (
 from openviking.parse.parsers.upload_utils import is_text_file
 from openviking.server.identity import RequestContext
 from openviking.service.task_work_index import TaskWorkRejected
+from openviking.storage.abstract_overview import body_for_preview, embedding_text_for_body
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
-from openviking.storage.semantic_sidecar import body_for_preview, embedding_text_for_body
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.embedding_input import truncate_embedding_input
@@ -384,7 +384,7 @@ async def vectorize_directory_meta(
         embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING)
 
         parent_uri = VikingURI(uri).parent.uri
-        owner_space = owner_space_for_uri(uri, ctx)
+        owner_space = owner_space_for_uri(uri)
 
         created_at, updated_at = await _resolve_context_timestamps(uri, ctx)
         # Cap the abstract scalar below the bytes_row 65535-byte limit. #2774
@@ -539,7 +539,7 @@ async def vectorize_file(
             updated_at=updated_at,
             user=ctx.user,
             account_id=ctx.account_id,
-            owner_space=owner_space_for_uri(file_path, ctx),
+            owner_space=owner_space_for_uri(file_path),
         )
 
         content_type = await _resolve_resource_content_type(file_path, file_name, viking_fs, ctx)

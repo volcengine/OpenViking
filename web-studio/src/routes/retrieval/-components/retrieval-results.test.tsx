@@ -30,7 +30,6 @@ describe('RetrievalResults', () => {
                 context_type: 'resource',
                 level: 2,
                 match_reason: '',
-                relations: [],
                 score: 0.8,
                 uri: 'viking://resources/result.md',
               },

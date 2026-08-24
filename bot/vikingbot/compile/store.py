@@ -92,6 +92,13 @@ class CompileTaskStore:
 
                 def interrupt(task: CompileTask) -> None:
                     nonlocal count
+                    if task.status == "cancelling":
+                        task.status = "cancelled"
+                        task.stage = "cancelled"
+                        task.result = None
+                        task.error = None
+                        count += 1
+                        return
                     task.status = "failed"
                     task.error = CompileErrorInfo(
                         code="BOT_RESTARTED",

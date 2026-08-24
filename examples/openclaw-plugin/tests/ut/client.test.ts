@@ -60,6 +60,13 @@ describe("isMemoryUri", () => {
     expect(isMemoryUri("viking://user/memories/")).toBe(true);
   });
 
+  it("accepts the ~ home alias", () => {
+    expect(isMemoryUri("viking://~/memories")).toBe(true);
+    expect(isMemoryUri("viking://~/memories/abc-123")).toBe(true);
+    expect(isMemoryUri("viking://~/peers/assistant/memories/item-1")).toBe(true);
+    expect(isMemoryUri("viking://~/skills/abc")).toBe(false);
+  });
+
   it("returns false for user skills URI", () => {
     expect(isMemoryUri("viking://user/skills/abc")).toBe(false);
   });
@@ -564,14 +571,14 @@ describe("OpenVikingClient canonical namespace policy", () => {
       true,
       { transport },
     );
-    await client.find("test query", { targetUri: "viking://user/memories" }, "my-agent");
+    await client.find("test query", { targetUri: "viking://~/memories" }, "my-agent");
 
     const findCall = transport.mock.calls.find((c) =>
       String(c[0]).endsWith("/api/v1/search/find"),
     )!;
     const body = JSON.parse(String((findCall[1] as RequestInit).body));
     const headers = new Headers((findCall[1] as RequestInit).headers);
-    expect(body.target_uri).toBe("viking://user/memories");
+    expect(body.target_uri).toBe("viking://~/memories");
     expect(headers.get("X-OpenViking-Actor-Peer")).toBe("my-agent");
   });
 
@@ -593,14 +600,14 @@ describe("OpenVikingClient canonical namespace policy", () => {
       true,
       { transport },
     );
-    await client.find("test query", { targetUri: "viking://user/memories" }, "my-agent");
+    await client.find("test query", { targetUri: "viking://~/memories" }, "my-agent");
 
     const findCall = transport.mock.calls.find((c) =>
       String(c[0]).endsWith("/api/v1/search/find"),
     )!;
     const body = JSON.parse(String((findCall[1] as RequestInit).body));
     const headers = new Headers((findCall[1] as RequestInit).headers);
-    expect(body.target_uri).toBe("viking://user/memories");
+    expect(body.target_uri).toBe("viking://~/memories");
     expect(headers.get("X-OpenViking-Actor-Peer")).toBe("my-agent");
   });
 
@@ -622,13 +629,13 @@ describe("OpenVikingClient canonical namespace policy", () => {
       true,
       { transport },
     );
-    await client.find("test", { targetUri: "viking://user/memories" }, "shared-agent");
+    await client.find("test", { targetUri: "viking://~/memories" }, "shared-agent");
 
     const findCall = transport.mock.calls.find((c) =>
       String(c[0]).endsWith("/api/v1/search/find"),
     )!;
     const body = JSON.parse(String((findCall[1] as RequestInit).body));
-    expect(body.target_uri).toBe("viking://user/memories");
+    expect(body.target_uri).toBe("viking://~/memories");
   });
 
   it("keeps user skill target URI unchanged while using actor peer routing", async () => {
@@ -649,13 +656,13 @@ describe("OpenVikingClient canonical namespace policy", () => {
       false,
       { transport },
     );
-    await client.find("test", { targetUri: "viking://user/skills" }, "shared-agent");
+    await client.find("test", { targetUri: "viking://~/skills" }, "shared-agent");
 
     const findCall = transport.mock.calls.find((c) =>
       String(c[0]).endsWith("/api/v1/search/find"),
     )!;
     const body = JSON.parse(String((findCall[1] as RequestInit).body));
-    expect(body.target_uri).toBe("viking://user/skills");
+    expect(body.target_uri).toBe("viking://~/skills");
   });
 
   it("includes peer_id when addSessionMessage receives one", async () => {

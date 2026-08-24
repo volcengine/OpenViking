@@ -14,8 +14,8 @@ from openviking_cli.session.user_id import UserIdentifier
     ("uri", "expected_uri", "expected_owner_user_id"),
     [
         (
-            "viking://user/memories/preferences/me.md",
-            lambda user: f"viking://user/{user.user_id}/memories/preferences/me.md",
+            "viking://user/alice/memories/preferences/me.md",
+            "viking://user/alice/memories/preferences/me.md",
             lambda user: user.user_id,
         ),
         (

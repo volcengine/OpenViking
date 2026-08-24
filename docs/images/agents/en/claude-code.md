@@ -1,12 +1,12 @@
-## Install
+## Step 1: Install
 
 ```bash
 bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness claude --dist tos
 ```
 
-Select **Volcengine OpenViking Cloud**. Paste the API key from this page.
+Select **Volcengine OpenViking Cloud**. Paste the API key:
 
-## Verify
+## Step 2: Verify
 
 Restart Claude Code, then:
 
@@ -20,7 +20,7 @@ Restart Claude Code, then:
 |---|---|
 | Plugin is not active | Re-run Install, or check `~/.openviking/ovcli.conf` |
 | Recall is empty | `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
-| 401 / 403 | Paste the API key from this page again |
+| 401 / 403 | Paste the API key again |
 | Need logs | `OPENVIKING_DEBUG=1` and `~/.openviking/logs/cc-hooks.log` |
 
 ## Reference

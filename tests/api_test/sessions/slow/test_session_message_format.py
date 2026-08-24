@@ -257,7 +257,7 @@ class TestSessionMessageFormat:
 
             used_resp = api_client.session_used(
                 session_id,
-                skill={"name": "test-skill", "uri": "viking://user/skills/test"},
+                skill={"name": "test-skill", "uri": "viking://~/skills/test"},
             )
             assert used_resp.status_code == 200
             result = used_resp.json().get("result", {})

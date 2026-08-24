@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict
 from starlette.background import BackgroundTask
 
 from openviking.core.path_variables import resolve_path_variables
+from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.server.auth import (
     get_request_context,
     require_auth_role,
@@ -81,7 +82,7 @@ async def export_ovpack(
     service = get_service()
 
     # Resolve path variables
-    uri = resolve_path_variables(body.uri)
+    uri = validate_request_viking_uri(resolve_path_variables(body.uri), ctx)
 
     # Create temp file for export
     temp_dir = tempfile.gettempdir()
@@ -175,7 +176,9 @@ async def import_ovpack(
     resolved = await store.resolve_for_consume(body.temp_file_id, ctx)
 
     # Resolve path variables
-    parent = resolve_path_variables(body.parent)
+    parent = validate_request_viking_uri(
+        resolve_path_variables(body.parent), ctx, field_name="parent"
+    )
 
     try:
         result = await service.pack.import_ovpack(

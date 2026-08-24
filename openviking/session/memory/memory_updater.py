@@ -22,8 +22,10 @@ from openviking.message.part import TextPart
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import (
     MemoryFile,
+    MemoryOperationSkipCode,
     ResolvedOperation,
     ResolvedOperations,
+    SkippedMemoryOperation,
     StoredLink,
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
@@ -40,7 +42,7 @@ from openviking.session.memory.utils.resource_refs import (
 )
 from openviking.session.memory.utils.template_utils import TemplateUtils
 from openviking.session.memory.utils.uri import render_template
-from openviking.storage.semantic_sidecar import freshness_metadata, render_semantic_sidecar
+from openviking.storage.abstract_overview import freshness_metadata, render_abstract_overview
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -711,6 +713,7 @@ class MemoryUpdateResult:
         self.written_uris: List[str] = []
         self.edited_uris: List[str] = []
         self.deleted_uris: List[str] = []
+        self.skipped_operations: List[SkippedMemoryOperation] = []
         self.errors: List[Tuple[str, Exception]] = []
 
     def add_written(self, uri: str) -> None:
@@ -724,6 +727,9 @@ class MemoryUpdateResult:
 
     def add_error(self, uri: str, error: Exception) -> None:
         self.errors.append((uri, error))
+
+    def add_skipped(self, operation: SkippedMemoryOperation) -> None:
+        self.skipped_operations.append(operation)
 
     def summary(self) -> str:
         return (
@@ -779,16 +785,16 @@ class MemoryUpdater:
         directory_uri: str,
         ctx: RequestContext,
         strict: bool = False,
-    ) -> None:
+    ) -> bool:
         memory_type = cls.memory_type_from_uri(directory_uri)
         if not memory_type:
-            return
+            return False
         try:
             from openviking.session.memory.memory_type_registry import create_default_registry
 
             updater = cls(registry=create_default_registry())
             updater._viking_fs = viking_fs
-            await updater.generate_overview(memory_type, directory_uri, ctx)
+            return await updater.generate_overview(memory_type, directory_uri, ctx)
         except Exception:
             logger.warning(
                 "Failed to refresh memory overview for %s",
@@ -797,6 +803,7 @@ class MemoryUpdater:
             )
             if strict:
                 raise
+            return False
 
     @classmethod
     async def refresh_file_embedding(
@@ -878,6 +885,32 @@ class MemoryUpdater:
                 continue
             has_unresolved_upserts = True
             error_target = f"{resolved_op.memory_type}(page_id={resolved_op.page_id})"
+            resolution_skip = getattr(resolved_op, "resolution_skip", None)
+            if resolution_skip is not None:
+                # Reporting-only: the operation remains unresolved, preserving
+                # the legacy delete-suppression behavior for direct mixed batches.
+                skipped = SkippedMemoryOperation(
+                    memory_type=resolved_op.memory_type,
+                    page_id=resolved_op.page_id,
+                    reason_code=resolution_skip.reason_code,
+                    reason=resolution_skip.reason,
+                    source=resolved_op.source,
+                )
+                result.add_skipped(skipped)
+                message = (
+                    "Skipping memory operation by resolution policy: "
+                    f"memory_type={resolved_op.memory_type} "
+                    f"page_id={resolved_op.page_id} "
+                    f"reason_code={resolution_skip.reason_code.value}"
+                )
+                if resolution_skip.reason_code in {
+                    MemoryOperationSkipCode.INVALID_PEER_ID,
+                    MemoryOperationSkipCode.INVALID_RANGES,
+                }:
+                    logger.warning(message)
+                else:
+                    tracer.info(message)
+                continue
             resolution_error = ValueError("Missing resolved URI")
             result.add_error(error_target, resolution_error)
             tracer.error(
@@ -1498,7 +1531,7 @@ class MemoryUpdater:
         ctx: RequestContext,
         extract_context: Any = None,
         lease_ref: Any = None,
-    ) -> None:
+    ) -> bool:
         """
         Generate .overview.md file for a directory based on overview_template.
 
@@ -1515,7 +1548,7 @@ class MemoryUpdater:
 
         if not schema or not schema.overview_template:
             logger.debug(f"No overview_template for memory type: {memory_type}")
-            return
+            return False
 
         viking_fs = self._get_viking_fs()
 
@@ -1538,10 +1571,10 @@ class MemoryUpdater:
 
         except (NotFoundError, FileNotFoundError):
             logger.debug("Skip overview generation for deleted directory: %s", directory)
-            return
+            return False
         except Exception as e:
             tracer.error(f"Failed to list files in {directory}: {e}")
-            return
+            return False
 
         # If no memory files, delete the .overview.md and the directory if empty
         if not md_files:
@@ -1569,7 +1602,7 @@ class MemoryUpdater:
                     )
                 except Exception:
                     pass
-            return
+            return True
 
         # Parse each file and collect items
         items = []
@@ -1594,7 +1627,7 @@ class MemoryUpdater:
 
         if not items:
             logger.debug(f"No valid memory files parsed in {directory}")
-            return
+            return False
 
         overview_context = {
             "memory_type": memory_type,
@@ -1611,14 +1644,14 @@ class MemoryUpdater:
             )
         except Exception as e:
             tracer.error(f"Failed to render overview template for {memory_type}: {e}")
-            return
+            return False
 
         # Write .overview.md to the directory
         overview_path = f"{directory.rstrip('/')}/.overview.md"
         try:
             await viking_fs.write_file(
                 overview_path,
-                render_semantic_sidecar(
+                render_abstract_overview(
                     ContextLevel.OVERVIEW,
                     directory,
                     rendered,
@@ -1633,5 +1666,7 @@ class MemoryUpdater:
                 ctx=ctx,
                 lease_ref=lease_ref,
             )
+            return True
         except Exception as e:
             tracer.error(f"Failed to write overview {overview_path}: {e}")
+            return False

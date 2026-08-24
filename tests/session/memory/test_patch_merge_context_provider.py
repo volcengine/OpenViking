@@ -134,6 +134,35 @@ async def test_patch_merge_context_provider_prefetch_searches_and_reads_extra_ca
 
 
 @pytest.mark.asyncio
+async def test_patch_merge_context_provider_skips_extra_candidates_for_existing_files():
+    uri = "viking://user/u/memories/experiences/booking.md"
+    provider = PatchMergeContextProvider(
+        memory_type="experiences",
+        required_file_uris=[uri],
+        patches=[
+            PatchMergePatch(
+                before_file=_memory_file(name="booking", uri=uri, content="old line"),
+                after_file=_memory_file(name="booking", uri=uri, content="new line"),
+            )
+        ],
+    )
+    provider.search_files = AsyncMock(return_value=["viking://user/u/memories/experiences/other.md"])
+    provider.read_file = AsyncMock(
+        return_value={
+            "memory_type": "experiences",
+            "experience_name": "booking",
+            "content": "1\told line",
+        }
+    )
+
+    messages = await provider.prefetch()
+
+    provider.search_files.assert_not_awaited()
+    provider.read_file.assert_awaited_once_with(uri)
+    assert len(messages) == 2
+
+
+@pytest.mark.asyncio
 async def test_patch_merge_context_provider_caps_extra_candidate_reads_at_ten():
     schema = MemoryTypeSchema(
         memory_type="experiences",

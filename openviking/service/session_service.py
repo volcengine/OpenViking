@@ -15,6 +15,7 @@ from openviking.core.namespace import canonical_session_uri
 from openviking.server.agent_evolution_config import AgentEvolutionConfigProvider
 from openviking.server.config import AgentEvolutionConfig, ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext
+from openviking.server.user_config import read_user_memory_policy
 from openviking.service.session_auto_commit import (
     compute_next_check_at,
     get_idle_timeout_seconds,
@@ -66,6 +67,7 @@ class SessionService:
         self._agent_evolution_enabled = AgentEvolutionConfig().enabled
         self._agent_evolution_config_provider: Optional[AgentEvolutionConfigProvider] = None
         self._agent_evolution_config_path: Optional[str] = None
+        self._default_user_memory_policy: Optional[Dict[str, Any]] = None
         self._configure_agent_evolution_provider()
         self._usage_reporter: Optional["UsageReporter"] = None
         # Server-wide controls remain disabled until configured during app setup.
@@ -94,6 +96,15 @@ class SessionService:
     ) -> None:
         """Set tool output externalization controls for newly created sessions."""
         self._tool_output_externalization_config = config.model_copy(deep=True)
+
+    def set_default_user_memory_policy(self, memory_policy: Optional[Dict[str, Any]]) -> None:
+        """Set the server fallback used when a User has no persisted policy."""
+        if memory_policy is None:
+            self._default_user_memory_policy = None
+            return
+        policy = MemoryPolicy.from_dict(memory_policy)
+        policy.validate_memory_types(set(MemoryTypeRegistry().list_names(include_disabled=False)))
+        self._default_user_memory_policy = policy.to_dict()
 
     def set_agent_evolution_config(self, config: AgentEvolutionConfig) -> None:
         """Set the default used when an account has no persisted override."""
@@ -200,8 +211,16 @@ class SessionService:
             agent_evolution_enabled_provider=lambda: self.get_agent_evolution_enabled(
                 ctx.account_id
             ),
+            memory_policy_provider=lambda: self._get_user_memory_policy(ctx),
             usage_reporter=self._usage_reporter,
         )
+
+    async def _get_user_memory_policy(self, ctx: RequestContext) -> Optional[Dict[str, Any]]:
+        """Resolve the latest User policy with the configured server fallback."""
+        memory_policy = await read_user_memory_policy(self._viking_fs, ctx)
+        if memory_policy is not None:
+            return memory_policy
+        return self._default_user_memory_policy
 
     async def create(
         self,
@@ -319,25 +338,6 @@ class SessionService:
         except Exception:
             logger.debug("Failed to list sessions", exc_info=True)
 
-        try:
-            entries = await self._viking_fs.ls(
-                "viking://session",
-                sort_by="mtime",
-                sort_order="desc",
-                ctx=ctx,
-            )
-            for entry in entries:
-                name = entry.get("name", "")
-                if name in [".", ".."] or name in sessions_by_id:
-                    continue
-                sessions_by_id[name] = {
-                    "session_id": name,
-                    "uri": entry.get("uri", f"viking://session/{name}"),
-                    "is_dir": entry.get("isDir", False),
-                    "mod_time": entry.get("modTime", ""),
-                }
-        except Exception:
-            logger.debug("Failed to list legacy sessions", exc_info=True)
         return list(sessions_by_id.values())
 
     async def delete(self, session_id: str, ctx: RequestContext) -> bool:

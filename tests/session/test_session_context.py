@@ -15,8 +15,8 @@ from openviking.server.identity import RequestContext
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
+from openviking.storage.abstract_overview import body_for_preview
 from openviking.storage.queuefs import QueueManager, SessionCommitMsg, get_queue_manager
-from openviking.storage.semantic_sidecar import body_for_preview
 from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.config.vlm_config import VLMConfig
 

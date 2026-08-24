@@ -279,7 +279,7 @@ describe("plugin module seams", () => {
     });
 
     const search = await runtime.searchOpenViking({ query: "spec" }, "agent-main", { agentId: "agent-main", sessionId: "session-1" }) as any;
-    expect(find.mock.calls.map(([, options]) => options.targetUri)).toEqual(["viking://resources", "viking://user/skills"]);
+    expect(find.mock.calls.map(([, options]) => options.targetUri)).toEqual(["viking://resources", "viking://~/skills"]);
     expect(search.content[0].text).toContain("Found 2 OpenViking results for \"spec\"");
     expect(search.details).toMatchObject({ action: "searched", total: 2 });
     expect(recordAndFlush).toHaveBeenCalledWith(expect.objectContaining({

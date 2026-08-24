@@ -14,8 +14,8 @@ const STOPWORDS = new Set([
 ]);
 const USER_RESERVED_DIRS = new Set(["memories", "skills"]);
 const SOURCES = [
-  { type: "memory", uri: "viking://user/memories", bucket: "memories" },
-  { type: "skill", uri: "viking://user/skills", bucket: "skills" },
+  { type: "memory", uri: "viking://~/memories", bucket: "memories" },
+  { type: "skill", uri: "viking://~/skills", bucket: "skills" },
 ];
 const DEFAULT_CONTEXT_LIMIT = 10;
 const DEFAULT_CONTEXT_MAX_TOKENS = 1600;
@@ -272,6 +272,11 @@ async function resolveUserSpace(fetchJSON, actorPeerId = "") {
 
 async function resolveTargetUri(fetchJSON, targetUri, actorPeerId = "") {
   const trimmed = targetUri.trim().replace(/\/+$/, "");
+  // viking://~ is the home alias: the server expands it to the caller's own user
+  // space, so it needs no client-side rewrite.
+  if (trimmed === "viking://~" || trimmed.startsWith("viking://~/")) return trimmed;
+  // Legacy compat: uid-less viking://user/<reserved> URIs may still sit in plugin
+  // configs. Newer servers reject them, so rewrite to an explicit-uid URI here.
   const m = trimmed.match(/^viking:\/\/user(?:\/(.*))?$/);
   if (!m) return trimmed;
   const rawRest = (m[1] ?? "").trim();

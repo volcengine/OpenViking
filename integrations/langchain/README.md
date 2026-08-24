@@ -5,6 +5,12 @@ LangChain and LangGraph applications. It keeps framework-specific adapters
 separate from the OpenViking server and communicates with remote OpenViking
 instances through the lightweight `openviking-sdk` package.
 
+> **OpenViking Server requirement**: examples here use the `viking://~` home alias
+> (for example `viking://~/memories`), which the server expands to the authenticated
+> caller's own user space, so they require a server with `viking://~` support. The
+> uid-less `viking://user/memories` shorthand is rejected by newer servers; pass an
+> explicit `viking://user/<uid>/...` URI when targeting another user.
+
 ## Installation
 
 For LangChain retrievers, tools, message history, and context wrappers:
@@ -32,7 +38,7 @@ client = SyncHTTPClient(
 client.initialize()
 retriever = OpenVikingRetriever(
     client=client,
-    target_uri="viking://user/memories",
+    target_uri="viking://~/memories",
 )
 
 try:

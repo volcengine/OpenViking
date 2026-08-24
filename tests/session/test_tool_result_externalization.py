@@ -136,7 +136,7 @@ async def test_list_tool_results_filters_tool_name_before_limit():
 
     store = ToolResultStore(
         FakeVikingFS(),
-        "viking://session/filter-before-limit",
+        "viking://user/alice/sessions/filter-before-limit",
         "filter-before-limit",
         ctx=None,
     )

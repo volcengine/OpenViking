@@ -499,4 +499,6 @@ ov add-resource --help
 - `--mode semantic_and_vectors` —— 先重新生成语义产物（`.abstract.md`、`.overview.md`），再刷新向量。
 - `--mode prune_orphans` —— 清理源文件已不存在的向量记录，加 `--dry-run` 可预览而不实际执行。
 
+`semantic_and_vectors` 默认递归处理整个子树。对已经具有下级摘要、只需要重新生成目标目录 `.abstract.md` / `.overview.md` 的场景，可添加 `--recursive=false`；此时仅刷新目标目录语义产物和该目录的 L0/L1 向量。
+
 没有 `semantic` 或 `full` 这样的模式别名。

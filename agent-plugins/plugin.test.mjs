@@ -174,6 +174,24 @@ test("every skills/* child ships a SKILL.md with name + description frontmatter"
   }
 });
 
+test("relative markdown links inside skills resolve to real files", () => {
+  const skillsDir = join(PLUGIN_ROOT, "skills");
+  const children = readdirSync(skillsDir).filter((entry) =>
+    statSync(join(skillsDir, entry)).isDirectory(),
+  );
+  for (const child of children) {
+    const skillPath = join(skillsDir, child, "SKILL.md");
+    const raw = readFileSync(skillPath, "utf-8");
+    const links = [...raw.matchAll(/\]\((?!https?:|#)([^)]+)\)/g)].map((m) => m[1]);
+    for (const rel of links) {
+      assert.ok(
+        existsSync(join(skillsDir, child, rel)),
+        `${child}/SKILL.md links to missing file: ${rel}`,
+      );
+    }
+  }
+});
+
 test("all .mjs files in the plugin pass node --check", () => {
   const files = listMjsFiles(PLUGIN_ROOT);
   assert.ok(files.length > 0, "expected vendored .mjs files");

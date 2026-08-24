@@ -416,7 +416,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | GET | `/api/v1/agent-evolution/experiences/trajectories` | List trajectories that consumed an Experience |
 | GET | `/api/v1/agent-evolution/experiences/outcomes` | Aggregate outcomes of trajectories that consumed an Experience |
 
-### [Retrieval](06-retrieval.md) and [Relations](13-relations.md)
+### [Retrieval](06-retrieval.md)
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -424,10 +424,6 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/api/v1/search/search` | Context-aware search; `mode="context"` returns assembled, injection-ready context |
 | POST | `/api/v1/search/grep` | Content pattern search |
 | POST | `/api/v1/search/glob` | File pattern matching |
-| GET | `/api/v1/relations` | Get resource relations |
-| POST | `/api/v1/relations/link` | Create a resource link |
-| DELETE | `/api/v1/relations/link` | Delete a resource link |
-| POST | `/api/v1/relations/build_graph` | Build a relation graph |
 
 ### [Watches](15-watches.md), [Snapshots](11-snapshot.md), and [OVPack](14-ovpack.md)
 
@@ -484,6 +480,8 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | DELETE | `/api/v1/admin/accounts/{account_id}` | Delete an account |
 | POST | `/api/v1/admin/accounts/{account_id}/users` | Register a user |
 | GET | `/api/v1/admin/accounts/{account_id}/users` | List users |
+| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | Get a user's memory policy |
+| PATCH | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | Update a user's memory policy |
 | DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | Remove a user |
 | PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | Promote a user to ADMIN |
 | POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | Regenerate a user key |
@@ -514,6 +512,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/bot/v1/feedback` | Submit feedback for a VikingBot answer |
 | POST | `/bot/v1/compile` | Start a Skill-driven Compile task |
 | GET | `/bot/v1/compile/{task_id}` | Get Compile task status |
+| POST | `/bot/v1/compile/{task_id}/cancel` | Cancel a Compile task |
 
 ---
 
@@ -524,7 +523,7 @@ The sidebar is organized by responsibility rather than historical file size:
 | Group | What to look for |
 |-------|------------------|
 | Core Data | Resources, content, filesystem, skills, sessions, and memory |
-| Retrieval & Relations | Semantic retrieval, code retrieval, and resource relations |
+| Retrieval | Semantic retrieval and code retrieval |
 | Data Lifecycle | Watches, snapshots, and OVPack |
 | Operations & Observability | System, tasks, Observer, and Metrics |
 | Identity & Governance | Administration and privacy configuration |

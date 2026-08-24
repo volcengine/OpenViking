@@ -23,9 +23,9 @@ Seven curated tools, all auto-discovered by Open WebUI:
 | Tool | OpenViking endpoint | Purpose |
 | --- | --- | --- |
 | `ov_search` | `POST /api/v1/search/find` | Semantic search across memories, resources, skills |
-| `ov_recall_memories` | `POST /api/v1/search/find` (scoped to `viking://user/memories/`) | Recall personal memories for the current query |
-| `ov_add_memory` | `POST /api/v1/content/write` to `viking://user/memories/<name>` | Persist a new memory |
-| `ov_list_memories` | `GET /api/v1/fs/ls?uri=viking://user/memories/` | Browse the memories directory |
+| `ov_recall_memories` | `POST /api/v1/search/find` (scoped to `viking://~/memories/`) | Recall personal memories for the current query |
+| `ov_add_memory` | `POST /api/v1/content/write` to `viking://~/memories/<name>` | Persist a new memory |
+| `ov_list_memories` | `GET /api/v1/fs/ls?uri=viking://~/memories/` | Browse the memories directory |
 | `ov_read_resource` | `GET /api/v1/content/read` | Read full text content of any `viking://` URI |
 | `ov_add_resource` | `POST /api/v1/resources` | Ingest a remote URL or path-reachable file |
 | `ov_session_status` | `GET /api/v1/sessions/{id}` | Inspect counts and archive state of a session |
@@ -88,17 +88,17 @@ and returns `{hits: [{uri, score, snippet?}], raw}`. Use this when you want to
 search across memories, resources, and skills together.
 
 ### `ov_recall_memories`
-Same as `ov_search` but `target_uri` is forced to `viking://user/memories/`,
+Same as `ov_search` but `target_uri` is forced to `viking://~/memories/`,
 so only personal memories are searched. Use this in chat to ask "what do you
 remember about me re: X?".
 
 ### `ov_add_memory`
 Persists a memory. Takes `{name, content, mode?, wait?}` and writes
-`viking://user/memories/<name>` via OpenViking's content write API. `mode` is
+`viking://~/memories/<name>` via OpenViking's content write API. `mode` is
 one of `replace | append | create`.
 
 ### `ov_list_memories`
-Lists entries directly under `viking://user/memories/`. Takes
+Lists entries directly under `viking://~/memories/`. Takes
 `{recursive?, limit?}`.
 
 ### `ov_read_resource`
