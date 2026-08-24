@@ -41,9 +41,11 @@ from openviking.utils.search_filters import (
     SearchContextTypeInput,
     _resolve_levels,
     merge_search_filter,
+    resolve_context_types,
 )
 from openviking.utils.tags import build_search_tags_filter
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
+from openviking_cli.retrieve import ContextType
 
 
 def _sanitize_floats(obj: Any) -> Any:
@@ -93,6 +95,16 @@ def _resolve_search_filter(
         return tag_filter
     except ValueError as exc:
         raise InvalidArgumentError(str(exc)) from exc
+
+
+def _resolve_scope_context_type(
+    context_type: Optional[SearchContextTypeInput],
+) -> Optional[ContextType]:
+    """Return a single context type suitable for narrowing default target scope."""
+    resolved = resolve_context_types(context_type)
+    if len(resolved) != 1:
+        return None
+    return ContextType(resolved[0])
 
 
 def _resolve_uri_or_uris(uri: Union[str, List[str]], ctx: RequestContext) -> Union[str, List[str]]:
@@ -353,6 +365,7 @@ async def find(
             filter=effective_filter,
             level=_resolve_levels(request.level) or None,
             image_url=resolved_image_url,
+            context_type=_resolve_scope_context_type(request.context_type),
         ),
     )
     result = execution.result
@@ -467,6 +480,7 @@ async def search(
             filter=effective_filter,
             level=_resolve_levels(request.level) or None,
             image_url=resolved_image_url,
+            context_type=_resolve_scope_context_type(request.context_type),
         )
 
     execution = await run_operation(

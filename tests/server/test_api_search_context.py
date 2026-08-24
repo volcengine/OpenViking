@@ -2,10 +2,13 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import json
+from types import SimpleNamespace
 
 import httpx
 
 from openviking.server.identity import RequestContext, Role
+from openviking.server.routers import search as search_router
+from openviking.server.routers.search import FindRequest, SearchRequest
 from openviking_cli.retrieve import ContextType, MatchedContext
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -88,6 +91,54 @@ async def test_context_mode_quotas_use_category_ownership_roots(
     assert any(target.endswith("/memories/events") for target in targets)
     assert any(target.endswith("/user/default/skills") for target in targets)
     assert "viking://agent/skills" in targets
+
+
+async def test_find_forwards_context_type_to_search_service(
+    monkeypatch,
+):
+    calls = []
+
+    async def fake_find(**kwargs):
+        calls.append(kwargs)
+        return _FakeFindResult()
+
+    service = SimpleNamespace(search=SimpleNamespace(find=fake_find))
+    monkeypatch.setattr(search_router, "get_service", lambda: service)
+
+    response = await search_router.find(
+        FindRequest(query="company brand", context_type="skill"),
+        _ctx=RequestContext(
+            user=UserIdentifier("acct", "test_user"),
+            role=Role.USER,
+        ),
+    )
+
+    assert response["status"] == "ok"
+    assert calls[0]["context_type"] == ContextType.SKILL
+
+
+async def test_search_forwards_context_type_to_search_service(
+    monkeypatch,
+):
+    calls = []
+
+    async def fake_search(**kwargs):
+        calls.append(kwargs)
+        return _FakeFindResult()
+
+    service = SimpleNamespace(search=SimpleNamespace(search=fake_search))
+    monkeypatch.setattr(search_router, "get_service", lambda: service)
+
+    response = await search_router.search(
+        SearchRequest(query="company brand", context_type="skill"),
+        _ctx=RequestContext(
+            user=UserIdentifier("acct", "test_user"),
+            role=Role.USER,
+        ),
+    )
+
+    assert response["status"] == "ok"
+    assert calls[0]["context_type"] == ContextType.SKILL
 
 
 async def test_coding_purpose_searches_all_domains_and_actor_resource(
