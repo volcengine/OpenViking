@@ -8,6 +8,7 @@ import threading
 from contextlib import nullcontext
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from openviking.core.namespace import NamespaceShapeError, resolve_uri, uri_parts
 from openviking.observability.context import (
     bind_root_observability_context,
     reset_root_observability_context,
@@ -66,6 +67,28 @@ from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+_NAMESPACE_SCOPE_ROOTS = frozenset({"user", "agent"})
+
+
+def _is_namespace_scope_root(uri: str) -> bool:
+    """Return True when uri is a tenant container, not a content directory.
+
+    ``viking://user`` and ``viking://agent`` are namespace containers. Parent
+    refresh used to treat them as ordinary directories and then read
+    ``viking://user/.overview.md``, which ACL parses as another user id.
+    """
+    canonical = (uri or "").rstrip("/")
+    if canonical in {"", "viking://", "viking:"}:
+        return True
+    try:
+        resolved = resolve_uri(canonical)
+    except NamespaceShapeError:
+        return True
+    if resolved.is_container:
+        return True
+    parts = uri_parts(canonical)
+    return len(parts) == 1 and parts[0] in _NAMESPACE_SCOPE_ROOTS
 
 
 class RequestQueueStats:
@@ -253,11 +276,7 @@ class SemanticProcessor(DequeueHandlerBase):
         if parent is None:
             return
         parent_uri = parent.uri.rstrip("/")
-        if (
-            not parent_uri
-            or parent_uri in {"viking://", "viking:"}
-            or parent_uri == uri.rstrip("/")
-        ):
+        if _is_namespace_scope_root(parent_uri) or parent_uri == uri.rstrip("/"):
             return
         semantic_config = get_openviking_config().semantic
         decision = await plan_abstract_overview_refresh(
@@ -348,8 +367,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     # maintenance. Let the newest message aggregate while this
                     # one still summarizes/vectorizes its changed files.
                     logger.info(
-                        "Downgrading stale semantic message to file-only work: "
-                        "uri=%s version=%s",
+                        "Downgrading stale semantic message to file-only work: uri=%s version=%s",
                         msg.uri,
                         msg.coalesce_version,
                     )
@@ -766,10 +784,7 @@ class SemanticProcessor(DequeueHandlerBase):
         if msg.skip_vectorization:
             logger.info(f"Skipping vectorization for {dir_uri} (requested via SemanticMsg)")
             return
-        if not (
-            wrote_semantics.overview_body_changed
-            or wrote_semantics.abstract_body_changed
-        ):
+        if not (wrote_semantics.overview_body_changed or wrote_semantics.abstract_body_changed):
             logger.info(
                 "Skipping directory vectorization for %s (visible semantics unchanged)",
                 dir_uri,
