@@ -662,6 +662,8 @@ async def test_read_mixed_batch_preserves_source_order(monkeypatch):
         ("viking://resources/clip.flac", b"fLaCaudio", "audio/flac"),
         ("viking://resources/clip.ogg", b"OggSaudio", "audio/ogg"),
         ("viking://resources/clip.m4a", b"\x00\x00\x00\x18ftypM4A audio", "audio/mp4"),
+        # suffix sniffing must ignore a query string, like the extension gate does
+        ("viking://resources/clip.ogg?v=2", b"OggSaudio", "audio/ogg"),
     ],
 )
 async def test_read_audio_returns_native_mcp_content(monkeypatch, uri, audio_bytes, mime_type):

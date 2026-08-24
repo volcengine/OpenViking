@@ -423,19 +423,22 @@ _MCP_VIDEO_EXTENSIONS = {".avi", ".m4v", ".mkv", ".mov", ".mp4", ".webm"}
 _MCP_MEDIA_MAX_BYTES = 3_932_160
 
 
-def _is_mcp_image_uri(uri: str) -> bool:
+def _mcp_uri_suffix(uri: str) -> str:
+    """Lowercased file extension of a URI, ignoring any query or fragment."""
     path = uri.split("#", 1)[0].split("?", 1)[0]
-    return PurePosixPath(path).suffix.lower() in _MCP_IMAGE_EXTENSIONS
+    return PurePosixPath(path).suffix.lower()
+
+
+def _is_mcp_image_uri(uri: str) -> bool:
+    return _mcp_uri_suffix(uri) in _MCP_IMAGE_EXTENSIONS
 
 
 def _is_mcp_audio_uri(uri: str) -> bool:
-    path = uri.split("#", 1)[0].split("?", 1)[0]
-    return PurePosixPath(path).suffix.lower() in _MCP_AUDIO_EXTENSIONS
+    return _mcp_uri_suffix(uri) in _MCP_AUDIO_EXTENSIONS
 
 
 def _is_mcp_video_uri(uri: str) -> bool:
-    path = uri.split("#", 1)[0].split("?", 1)[0]
-    return PurePosixPath(path).suffix.lower() in _MCP_VIDEO_EXTENSIONS
+    return _mcp_uri_suffix(uri) in _MCP_VIDEO_EXTENSIONS
 
 
 def _sniff_mcp_image_mime_type(data: bytes) -> Optional[str]:
@@ -458,7 +461,7 @@ def _mcp_image_content(data: bytes, mime_type: str) -> ImageContent:
 
 def _sniff_mcp_audio_mime_type(data: bytes, uri: str) -> Optional[str]:
     """Recognize audio formats represented by MCP AudioContent."""
-    suffix = PurePosixPath(uri).suffix.lower()
+    suffix = _mcp_uri_suffix(uri)
     if data.startswith(b"RIFF") and len(data) >= 12 and data[8:12] == b"WAVE":
         return "audio/wav"
     if data.startswith(b"fLaC"):
@@ -512,7 +515,8 @@ async def read(uris: str | list[str]) -> str | list[ContentBlock]:
             if not (_is_mcp_image_uri(resolved_uri) or _is_mcp_audio_uri(resolved_uri)):
                 return resolved_uri, None, None
 
-            stat = await service.fs.stat(resolved_uri, ctx=ctx)
+            async with semaphore:
+                stat = await service.fs.stat(resolved_uri, ctx=ctx)
             size = stat.get("size") if stat else None
             if isinstance(size, bool) or not isinstance(size, int) or size < 0:
                 return (
@@ -522,7 +526,12 @@ async def read(uris: str | list[str]) -> str | list[ContentBlock]:
                     f"{_mcp_media_download_hint(uri)}",
                 )
             if stat.get("isDir"):
-                return resolved_uri, None, f"Cannot render {uri}: URI points to a directory."
+                return (
+                    resolved_uri,
+                    None,
+                    f"Cannot render {uri}: URI points to a directory. "
+                    "Use the list tool (or `ov ls` / `ov tree`) to browse its contents.",
+                )
             return resolved_uri, size, None
         except OpenVikingError as exc:
             return uri, None, str(exc)
