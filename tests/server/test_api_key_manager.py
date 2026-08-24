@@ -347,6 +347,16 @@ async def test_get_users(manager: APIKeyManager):
     assert roles["alice"] == "admin"
     assert roles["bob"] == "user"
 
+    await manager.begin_user_deletion(
+        acct,
+        "bob",
+        task_id="delete-bob",
+        owner_account_id=acct,
+        owner_user_id="alice",
+    )
+    users = manager.get_users(acct)
+    assert {u["user_id"] for u in users} == {"alice"}
+
 
 # ---- Persistence tests ----
 
