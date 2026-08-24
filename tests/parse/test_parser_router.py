@@ -1,10 +1,13 @@
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
 from openviking.parse.accessors.base import LocalResource, SourceType
+from openviking.parse.accessors.http_accessor import URLType, URLTypeDetector
 from openviking.parse.parser_router import ParserRouter
+from openviking.parse.parsers.media.video import VideoParser
 from openviking.parse.parsers.media.utils import MPEG_TS_PACKET_SIZE, MPEG_TS_PROBE_BYTES
 from openviking.parse.registry import ParserRegistry
 from openviking.parse.understanding_api import PREPARED_RESPONSE_ID_ARG
@@ -173,6 +176,14 @@ def test_parser_registry_keeps_typescript_ts_on_text_fallback(tmp_path):
     path.write_text("export const answer: number = 42;\n")
 
     assert ParserRegistry().get_parser_for_file(path) is None
+
+
+def test_typescript_ts_extension_remains_text_for_url_detection():
+    assert URLTypeDetector.EXTENSION_MAP[".ts"] == URLType.DOWNLOAD_TXT
+
+
+def test_video_parser_does_not_claim_typescript_sources():
+    assert not VideoParser().can_parse(Path("source.ts"))
 
 
 def test_should_use_understanding_api_for_feishu_url(monkeypatch):
