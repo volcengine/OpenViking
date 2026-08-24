@@ -12,7 +12,7 @@ OpenViking uses a three-layer information model to balance retrieval efficiency,
 
 L0 and L1 are **directory-level semantic sidecars**. They describe a directory; OpenViking does not create a matching L0/L1 sidecar for every ordinary file. File summaries are inputs aggregated into the containing directory's L1.
 
-L0 and L1 are normally generated together, but either one may exist independently. For example, `mkdir(description=...)` initially creates only L0, so a directory with `.abstract.md` but no `.overview.md` is valid. Reads and vector rebuilds process only the levels that actually exist.
+L0 and L1 are normally generated together, but either one may exist independently. For example, `mkdir()` initially creates only L0: it uses the directory name as the default body when `description` is omitted, or the provided description otherwise. A directory with `.abstract.md` but no `.overview.md` is therefore valid. Reads and vector rebuilds process only the levels that actually exist.
 
 The body limits are configured by `semantic.abstract_max_chars` and `semantic.overview_max_chars`; the table shows their defaults. These limits apply to the Markdown body only and do not truncate sidecar metadata.
 

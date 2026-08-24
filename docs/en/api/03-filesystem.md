@@ -429,7 +429,7 @@ Create a directory.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI for the new directory |
-| description | str | No | `null` | Initial directory description. When provided, it is written to `.abstract.md` and queued for L0 vectorization. |
+| description | str | No | `null` | Initial directory description. When omitted, the directory name is used as the default L0; when provided, this description is used. Both forms write `.abstract.md` and queue L0 vectorization. |
 
 
 **Python HTTP SDK**

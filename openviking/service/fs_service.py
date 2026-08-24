@@ -10,7 +10,7 @@ import asyncio
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.core.context import ContextLevel
-from openviking.core.namespace import classify_uri, context_type_for_uri
+from openviking.core.namespace import classify_uri, context_type_for_uri, uri_leaf_name
 from openviking.privacy import (
     UserPrivacyConfigService,
     get_skill_name_from_uri,
@@ -194,11 +194,14 @@ class FSService:
         """Create directory."""
         viking_fs = self._ensure_initialized()
         await viking_fs.mkdir(uri, ctx=ctx)
-        abstract = self._normalize_directory_description(description)
-        if not abstract:
-            return
 
         directory_uri, abstract_uri = self._resolve_directory_uris(uri)
+        abstract = self._normalize_directory_description(description)
+        if not abstract:
+            if await viking_fs.exists(abstract_uri, ctx=ctx):
+                return
+            abstract = f"# {uri_leaf_name(directory_uri)}"
+
         await viking_fs.write_file(
             abstract_uri,
             render_abstract_overview(

@@ -152,7 +152,11 @@ async def test_sdk_ls(http_client):
 
 async def test_sdk_mkdir_and_ls(http_client):
     client, _ = http_client
-    await client.mkdir("viking://resources/sdk_dir/")
+    uri = "viking://resources/sdk_dir/"
+
+    await client.mkdir(uri)
+
+    assert await client.abstract(uri) == "# sdk_dir"
     result = await client.ls("viking://resources/")
     assert isinstance(result, list)
 
@@ -164,8 +168,11 @@ async def test_sdk_mkdir_with_description_sets_abstract(http_client):
 
     await client.mkdir(uri, description=description)
 
-    abstract = await client.abstract(uri)
-    assert abstract == description
+    assert await client.abstract(uri) == description
+
+    await client.mkdir(uri)
+
+    assert await client.abstract(uri) == description
 
 
 async def test_sdk_tree(http_client):
