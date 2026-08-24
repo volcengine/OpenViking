@@ -1,5 +1,5 @@
 export declare function defaultLedgerDir(): string;
-export declare function ledgerKey(ordinal: number, originalContent: string): string;
+export declare function ledgerKey(messageIdentity: string, originalContent: string): string;
 export declare class RecallLedger {
   constructor(dir?: string);
   open(sessionId: string): void;

@@ -24,7 +24,7 @@ function clientReturning(rendered) {
 
 /** One provider request: run recall for the newest prompt, then inject into a
  * fresh deep copy of the history — exactly what pi's context hook sees. */
-async function turn(recall, block, history) {
+async function turn(recall, block, history, userEntryIds = null) {
   recall.client = clientReturning(block);
   const last = history[history.length - 1].content;
   const prompt = typeof last === "string"
@@ -33,7 +33,17 @@ async function turn(recall, block, history) {
   recall.queueSearch(prompt);
   await recall.searchPending();
   const view = structuredClone(history);
-  return recall.injectRecall(view);
+  const entryIds = userEntryIds ?? view
+    .filter((message) => message.role === "user")
+    .map((_, index) => `entry-${index}`);
+  const messageIds = new WeakMap();
+  let userIndex = 0;
+  for (const message of view) {
+    if (message.role !== "user") continue;
+    const entryId = entryIds[userIndex++];
+    if (entryId) messageIds.set(message, entryId);
+  }
+  return recall.injectRecall(view, (message) => messageIds.get(message) ?? null);
 }
 
 test("historical user messages get their original block back, so the request prefix is stable across turns (#4137)", async () => {
@@ -77,7 +87,7 @@ test("historical user messages get their original block back, so the request pre
   assert.match(sent3[4].content, /b3 memory/);
 });
 
-test("repeated identical prompts keep distinct blocks via the ordinal in the key", async () => {
+test("repeated identical prompts keep distinct blocks via stable entry ids", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ov-ledger-"));
   const recall = new RecallManager(clientReturning(""), config(), () => null, new RecallLedger(dir));
   recall.openLedger("session-2");
@@ -95,6 +105,26 @@ test("repeated identical prompts keep distinct blocks via the ordinal in the key
   assert.equal(sent2[0].content, sent1[0].content);
   assert.match(sent2[2].content, /second continue block/);
   assert.doesNotMatch(sent2[2].content, /first continue block/);
+});
+
+test("missing entry ids fail closed without recording ordinal keys", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ov-ledger-"));
+  const recall = new RecallManager(clientReturning(""), config(), () => null, new RecallLedger(dir));
+  recall.openLedger("session-no-ids");
+
+  const sent1 = await turn(recall, "- fresh b1", [
+    { role: "user", content: "u1 prompt" },
+  ], [null]);
+  assert.match(sent1[0].content, /fresh b1/);
+  recall.invalidate();
+
+  const sent2 = await turn(recall, "- fresh b2", [
+    { role: "user", content: "u1 prompt" },
+    { role: "assistant", content: "a1" },
+    { role: "user", content: "u2 prompt" },
+  ], [null, null]);
+  assert.equal(sent2[0].content, "u1 prompt", "historical message must not replay an ordinal key");
+  assert.match(sent2[2].content, /fresh b2/);
 });
 
 test("a short prompt records nothing and history it appears in stays un-injected", async () => {
@@ -115,7 +145,7 @@ test("a short prompt records nothing and history it appears in stays un-injected
   assert.match(sent2[2].content, /b2/);
 });
 
-test("rewritten history (stale ordinals) misses cleanly instead of injecting into the wrong message", async () => {
+test("rewritten history misses cleanly instead of injecting into the wrong message", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ov-ledger-"));
   const recall = new RecallManager(clientReturning(""), config(), () => null, new RecallLedger(dir));
   recall.openLedger("session-4");
@@ -130,6 +160,55 @@ test("rewritten history (stale ordinals) misses cleanly instead of injecting int
     { role: "user", content: "u2 prompt" },
   ]);
   assert.equal(sent[0].content, "totally different message");
+});
+
+test("stable entry ids restore the right blocks across compaction and /tree navigation", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ov-ledger-"));
+  const recall = new RecallManager(clientReturning(""), config(), () => null, new RecallLedger(dir));
+  recall.openLedger("session-compact");
+
+  const beforeCompact = await turn(recall, "- first continue block", [
+    { role: "user", content: "continue" },
+  ], ["entry-0"]);
+  recall.invalidate();
+
+  // Record another identical prompt at a later position before compaction.
+  const longHistory = await turn(recall, "- retained continue block", [
+    { role: "user", content: "continue" },
+    { role: "assistant", content: "a0" },
+    { role: "user", content: "u1" },
+    { role: "assistant", content: "a1" },
+    { role: "user", content: "u2" },
+    { role: "assistant", content: "a2" },
+    { role: "user", content: "u3" },
+    { role: "assistant", content: "a3" },
+    { role: "user", content: "u4" },
+    { role: "assistant", content: "a4" },
+    { role: "user", content: "continue" },
+  ], ["entry-0", "entry-1", "entry-2", "entry-3", "entry-4", "entry-5"]);
+  recall.invalidate();
+
+  // Compaction keeps entry-5 but renumbers it from user position 5 to 0. Its
+  // stable id must restore its own block, not entry-0's same-text block.
+  const afterCompact = await turn(recall, "- post-compact block", [
+    { role: "compactionSummary", summary: "older history", content: "" },
+    { role: "user", content: "continue" },
+    { role: "assistant", content: "a5" },
+    { role: "user", content: "new prompt after compaction" },
+  ], ["entry-5", "entry-6"]);
+  assert.equal(afterCompact[1].content, longHistory[10].content);
+  assert.doesNotMatch(afterCompact[1].content, /first continue block/);
+  recall.invalidate();
+
+  // /tree can return to the pre-compaction branch. The original entry id must
+  // recover the exact bytes that branch sent before compaction.
+  const afterTreeBack = await turn(recall, "- tree branch block", [
+    { role: "user", content: "continue" },
+    { role: "assistant", content: "a0" },
+    { role: "user", content: "new prompt on old branch" },
+  ], ["entry-0", "entry-tree"]);
+  assert.equal(afterTreeBack[0].content, beforeCompact[0].content);
+  assert.doesNotMatch(afterTreeBack[0].content, /retained continue block/);
 });
 
 test("array-content user messages round-trip through the ledger", async () => {
@@ -156,7 +235,7 @@ test("a corrupt ledger file degrades to pre-ledger behaviour", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ov-ledger-"));
   const ledgerA = new RecallLedger(dir);
   ledgerA.open("session-6");
-  ledgerA.record(ledgerKey(0, "u1 prompt"), "- b1");
+  ledgerA.record(ledgerKey("entry-corrupt", "u1 prompt"), "- b1");
   ledgerA.flush();
 
   const files = readdirSync(dir).filter((f) => f.endsWith(".json"));
@@ -178,7 +257,7 @@ test("ledger file is written atomically with owner-only permissions", async () =
   const dir = mkdtempSync(join(tmpdir(), "ov-ledger-"));
   const ledger = new RecallLedger(dir);
   ledger.open("session-7");
-  ledger.record(ledgerKey(0, "u1"), "- b1");
+  ledger.record(ledgerKey("entry-permissions", "u1"), "- b1");
   ledger.flush();
 
   const files = readdirSync(dir);

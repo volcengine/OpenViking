@@ -128,12 +128,14 @@ storage. Without compensation, every request's history diverges from what the
 provider saw last turn, and strict-prefix prompt caches (DeepSeek and other
 OpenAI-compatible providers) miss from the first injected message onward
 (#4137). The ledger records exactly which block was injected into which user
-message (keyed by position + content hash) in
+message (keyed by stable Pi entry id + content hash) in
 `~/.openviking/pi-recall-ledger/<session>.json` and re-applies them on every
 request, keeping the prefix byte-identical across turns while the newest
 message still gets fresh, current-query recall. Disable with
 `"recallLedger": false` or `OPENVIKING_RECALL_LEDGER=0`. Losing the ledger
-file only costs one cache miss; alignment resumes on the next turn.
+file only costs one cache miss; alignment resumes on the next turn. Stable
+entry ids let compacted retained messages and `/tree` branches recover their
+own original blocks even when active-context positions change.
 
 Explicit `recallLimit` values from 1 through 5 produce an effective total
 quota of 6 because each coding category keeps one retrieval slot. Direct API

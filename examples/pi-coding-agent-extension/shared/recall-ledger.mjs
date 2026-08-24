@@ -9,8 +9,8 @@
  * miss from the first divergent token (#4137).
  *
  * The ledger fixes that on the extension side: it records exactly which block
- * was injected into which user message, keyed by the message's position and a
- * hash of its ORIGINAL (un-injected) content. On every context event the
+ * was injected into which user message, keyed by the stable Pi session-entry
+ * id and a hash of its ORIGINAL (un-injected) content. On every context event the
  * recorded blocks are re-applied to the historical user messages in the fresh
  * deep copy, so the bytes sent to the provider this turn are identical to the
  * bytes sent last turn, and only the newest user message extends the prefix.
@@ -38,14 +38,13 @@ export function defaultLedgerDir() {
 }
 
 /**
- * Key = user-message ordinal + hash of the original content. The ordinal
- * disambiguates repeated identical prompts ("continue"); the hash guards
- * against injecting into the wrong message after history is rewritten
- * (compaction, takeover), where a stale ordinal must simply miss.
+ * Key = stable Pi session-entry id + hash of the original content. Entry ids
+ * survive compaction and /tree navigation, disambiguate repeated identical
+ * prompts, and remain unique across branches in the same session.
  */
-export function ledgerKey(ordinal, originalContent) {
+export function ledgerKey(messageIdentity, originalContent) {
   const digest = createHash("sha256").update(originalContent).digest("hex").slice(0, 16);
-  return `${ordinal}:${digest}`;
+  return `${messageIdentity}:${digest}`;
 }
 
 export class RecallLedger {

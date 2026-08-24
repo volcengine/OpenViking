@@ -78,7 +78,10 @@ export class RecallManager {
    * with them before, and only the newest user message receives this turn's
    * fresh block (which is then recorded for future re-injection).
    */
-  injectRecall(messages: any[]): any[] {
+  injectRecall(
+    messages: any[],
+    messageIdFor: (message: any) => string | null = () => null,
+  ): any[] {
     const ledger = this.ledger?.isOpen ? this.ledger : null;
     if (!this.cache.block && !ledger) return messages;
 
@@ -92,16 +95,19 @@ export class RecallManager {
     }
     if (lastUserIndex === -1) return messages;
 
-    let ordinal = 0;
     for (let i = 0; i <= lastUserIndex; i++) {
       const msg = messages[i];
       if (msg.role !== "user") continue;
       const content = textOf(msg);
       const isNewest = i === lastUserIndex;
+      // Pi entry ids survive compaction and branch navigation. Missing ids
+      // fail closed: fresh recall may still reach the newest message, but no
+      // historical block is replayed or recorded under an unstable ordinal.
+      const messageIdentity = messageIdFor(msg);
+      const key = messageIdentity ? ledgerKey(messageIdentity, content) : null;
 
       // Idempotency: never stack a second block onto an already-injected copy.
       if (content.includes("<openviking-context")) {
-        ordinal++;
         continue;
       }
 
@@ -111,13 +117,12 @@ export class RecallManager {
           prependBlock(msg, block);
           // Key by the ORIGINAL content: that is what the next turn's deep
           // copy of this message will contain.
-          ledger?.record(ledgerKey(ordinal, content), block);
+          if (key) ledger?.record(key, block);
         }
-      } else if (ledger) {
-        const block = ledger.get(ledgerKey(ordinal, content));
+      } else if (ledger && key) {
+        const block = ledger.get(key);
         if (block) prependBlock(msg, block);
       }
-      ordinal++;
     }
 
     ledger?.flush();
