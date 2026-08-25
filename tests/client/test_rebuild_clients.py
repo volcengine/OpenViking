@@ -1,14 +1,17 @@
 import asyncio
+import json
 import threading
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
+import httpx
 import pytest
 
 import openviking_cli.client.http as http_module
 import openviking_cli.utils.async_utils as async_utils
+from openviking.message import ImagePart, TextPart
 from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.client.sync_http import SyncHTTPClient
 from openviking_cli.utils.config import OPENVIKING_CLI_CONFIG_ENV
@@ -251,7 +254,77 @@ def test_sync_http_client_batch_add_messages_forwards_to_async_client():
 
     assert result == {"session_id": "batch-session", "message_count": 2, "added": 2}
     assert mock_run.called
-    mock_batch.assert_called_once_with("batch-session", messages)
+    mock_batch.assert_called_once_with("batch-session", messages, None)
+
+
+def test_sync_http_client_serializes_openviking_message_parts():
+    captured = {}
+
+    async def handle_request(request: httpx.Request) -> httpx.Response:
+        captured["payload"] = json.loads(request.content)
+        return httpx.Response(200, json={"status": "ok", "result": {"status": "ok"}})
+
+    client = SyncHTTPClient(url="http://localhost:1933")
+    text_part = TextPart(text="hello")
+    raw_part = {"type": "text", "text": "already serialized", "metadata": {"source": "raw"}}
+    client._async_client._http = httpx.AsyncClient(
+        base_url="http://localhost:1933",
+        transport=httpx.MockTransport(handle_request),
+    )
+    try:
+        result = client.add_message(
+            "structured-session",
+            "assistant",
+            parts=[
+                text_part,
+                ImagePart(url="https://example.com/image.png", detail="auto"),
+                raw_part,
+            ],
+        )
+    finally:
+        client.close()
+
+    assert result == {"status": "ok"}
+    assert captured["payload"] == {
+        "role": "assistant",
+        "parts": [
+            {"type": "text", "text": "hello"},
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": "https://example.com/image.png",
+                    "detail": "auto",
+                },
+            },
+            raw_part,
+        ],
+    }
+    assert text_part.text == "hello"
+
+
+async def test_async_http_client_empty_parts_falls_back_to_content():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {"result": {"status": "ok"}}
+
+    result = await client.add_message(
+        "content-session",
+        "user",
+        content="hello",
+        parts=[],
+        created_at="2026-05-28T00:00:00+00:00",
+    )
+
+    assert result == {"status": "ok"}
+    fake_http.post.assert_awaited_once_with(
+        "/api/v1/sessions/content-session/messages",
+        json={
+            "role": "user",
+            "content": "hello",
+            "created_at": "2026-05-28T00:00:00+00:00",
+        },
+    )
 
 
 def test_run_async_from_foreign_event_loop_uses_shared_background_loop():

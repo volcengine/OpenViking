@@ -173,7 +173,7 @@ class AsyncHTTPClient(import_openviking_sdk().AsyncHTTPClient):
         session_id: str,
         role: str,
         content: str | None = None,
-        parts: list[dict] | None = None,
+        parts: list[Any] | None = None,
         created_at: str | None = None,
         peer_id: str | None = None,
         telemetry: Any = False,
@@ -181,13 +181,11 @@ class AsyncHTTPClient(import_openviking_sdk().AsyncHTTPClient):
         message_kind: str | None = None,
         source_message_ids: list[str] | None = None,
     ) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {"role": role}
-        if parts is not None:
-            payload["parts"] = parts
-        elif content is not None:
-            payload["content"] = content
-        else:
-            raise ValueError("Either content or parts must be provided")
+        payload: Dict[str, Any] = {
+            "role": role,
+            "content": content,
+            "parts": parts,
+        }
         optional = {
             "created_at": created_at,
             "peer_id": peer_id,
@@ -198,6 +196,7 @@ class AsyncHTTPClient(import_openviking_sdk().AsyncHTTPClient):
         payload.update({key: value for key, value in optional.items() if value is not None})
         if telemetry is not False:
             payload["telemetry"] = telemetry
+        payload = self._normalize_message_payload(payload)
         session_path = self._path_segment(session_id)
         response = await self._request(
             "POST", f"/api/v1/sessions/{session_path}/messages", json=payload
@@ -272,7 +271,7 @@ class SyncHTTPClient(import_openviking_sdk().SyncHTTPClient):
         session_id: str,
         role: str,
         content: str | None = None,
-        parts: list[dict] | None = None,
+        parts: list[Any] | None = None,
         created_at: str | None = None,
         peer_id: str | None = None,
         telemetry: Any = False,
