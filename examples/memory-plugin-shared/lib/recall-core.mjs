@@ -271,9 +271,22 @@ async function resolveUserSpace(fetchJSON, actorPeerId = "") {
 
 async function resolveTargetUri(fetchJSON, targetUri, actorPeerId = "") {
   const trimmed = targetUri.trim().replace(/\/+$/, "");
-  // viking://~ is the home alias: the server expands it to the caller's own user
-  // space, so it needs no client-side rewrite.
-  if (trimmed === "viking://~" || trimmed.startsWith("viking://~/")) return trimmed;
+  // The viking://~ home alias is expanded server-side for USER and ADMIN, but a
+  // server in the default dev auth mode resolves every request as ROOT and
+  // rejects it outright ("Home alias URI is not canonical"), which took recall
+  // down on local deployments while profile injection kept working. Resolve the
+  // reserved home directories here instead, exactly as the uid-less branch below
+  // already does — an explicit-uid URI is accepted by every role.
+  const home = trimmed.match(/^viking:\/\/~\/(.*)$/);
+  if (home) {
+    const homeParts = (home[1] ?? "").trim().split("/").filter(Boolean);
+    if (homeParts.length > 0 && USER_RESERVED_DIRS.has(homeParts[0])) {
+      const homeSpace = await resolveUserSpace(fetchJSON, actorPeerId);
+      return `viking://user/${homeSpace}/${homeParts.join("/")}`;
+    }
+    return trimmed;
+  }
+  if (trimmed === "viking://~") return trimmed;
   // Legacy compat: uid-less viking://user/<reserved> URIs may still sit in plugin
   // configs. Newer servers reject them, so rewrite to an explicit-uid URI here.
   const m = trimmed.match(/^viking:\/\/user(?:\/(.*))?$/);

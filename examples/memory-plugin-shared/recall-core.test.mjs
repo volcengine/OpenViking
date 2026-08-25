@@ -281,3 +281,33 @@ test("buildRecallBlock falls back to find when neither context endpoint works", 
   assert.match(block, /^<openviking-context>/);
   assert.match(block, /\[memory 90%\]/);
 });
+
+test("recall resolves the viking://~ home alias client-side (#4314)", async () => {
+  // A server in the default dev auth mode resolves every request as ROOT and
+  // rejects viking://~ with INVALID_URI, which took recall down on local
+  // deployments while profile injection kept working.
+  const seen = [];
+  const fetchJSON = async (pathname, init = {}) => {
+    if (pathname.startsWith("/api/v1/system/status")) return { ok: true, result: { user: "default" } };
+    if (pathname.startsWith("/api/v1/fs/ls")) return { ok: true, result: [{ name: "default", isDir: true }] };
+    if (pathname === "/api/v1/search/find") {
+      const body = JSON.parse(init.body);
+      seen.push(body.target_uri);
+      // The dev-mode server: the home alias is not canonical for ROOT.
+      if (body.target_uri.includes("viking://~")) return { ok: false, error: { code: "INVALID_URI" } };
+      return {
+        ok: true,
+        result: { memories: [{ uri: `${body.target_uri}/m.md`, score: 0.9, content: "hello world" }], skills: [] },
+      };
+    }
+    return { ok: false, status: 404 };
+  };
+
+  const block = await buildRecallBlock(fetchJSON, { recallLimit: 5, scoreThreshold: 0 }, "hello");
+
+  assert.deepEqual(seen, [
+    "viking://user/default/memories",
+    "viking://user/default/skills",
+  ]);
+  assert.ok(block, "recall must return a block against a server that rejects viking://~");
+});
