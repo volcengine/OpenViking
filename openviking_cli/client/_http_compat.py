@@ -133,37 +133,9 @@ class AsyncHTTPClient(import_openviking_sdk().AsyncHTTPClient):
             if len(args) <= timeout_index and not _timeout_configured_outside_call():
                 kwargs["timeout"] = 180.0
         super().__init__(*args, **kwargs)
-
-    async def initialize(self) -> None:
-        # The upstream SDK uses httpx defaults (max_connections=100). High-parallel
-        # tau2 rollouts can exceed that from one shared client and hit PoolTimeout
-        # while waiting for a free connection, so raise the pool ceiling.
-        headers: Dict[str, str] = {}
-        if getattr(self, "_api_key", None):
-            headers["X-API-Key"] = self._api_key
-        if getattr(self, "_account", None):
-            headers["X-OpenViking-Account"] = self._account
-        if getattr(self, "_user_id", None):
-            headers["X-OpenViking-User"] = self._user_id
-        if getattr(self, "_actor_peer_id", None):
-            headers["X-OpenViking-Actor-Peer"] = self._actor_peer_id
-        headers.update(getattr(self, "_extra_headers", {}) or {})
-
-        max_connections = 512
-        max_keepalive = 128
-        self._http = httpx.AsyncClient(
-            base_url=self._url,
-            headers=headers,
-            timeout=self._timeout,
-            params={"profile": "1"} if self._profile_enabled else None,
-            limits=httpx.Limits(
-                max_connections=max_connections,
-                max_keepalive_connections=max_keepalive,
-            ),
-        )
-        observer_cls = getattr(import_openviking_sdk().client, "_HTTPObserver", None)
-        if observer_cls is not None:
-            self._observer = observer_cls(self)
+        # High-parallel tau2 rollouts can exceed httpx defaults from one shared
+        # client and hit PoolTimeout while waiting for a free connection.
+        self._http_limits = httpx.Limits(max_connections=512, max_keepalive_connections=128)
 
     def _raise_exception(self, error: Dict[str, Any]) -> None:
         _raise_legacy_exception(error)

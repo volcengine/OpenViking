@@ -344,6 +344,7 @@ class AsyncHTTPClient:
         self._ldap_password = config.ldap_password
         self._oidc_token = config.oidc_token
         self._event_hooks = {event: list(hooks) for event, hooks in (event_hooks or {}).items()}
+        self._http_limits: Optional[httpx.Limits] = None
         self._http: Optional[httpx.AsyncClient] = None
         self._observer: Optional[_HTTPObserver] = None
         self._snapshot: Optional["AsyncHTTPSnapshotNamespace"] = None
@@ -377,13 +378,16 @@ class AsyncHTTPClient:
                 headers["Authorization"] = f"Bearer {token}"
 
         headers.update(self._extra_headers)
-        self._http = httpx.AsyncClient(
-            base_url=self._url,
-            headers=headers,
-            timeout=self._timeout,
-            event_hooks=self._event_hooks,
-            params={"profile": "1"} if self._profile_enabled else None,
-        )
+        client_kwargs: Dict[str, Any] = {
+            "base_url": self._url,
+            "headers": headers,
+            "timeout": self._timeout,
+            "event_hooks": self._event_hooks,
+            "params": {"profile": "1"} if self._profile_enabled else None,
+        }
+        if self._http_limits is not None:
+            client_kwargs["limits"] = self._http_limits
+        self._http = httpx.AsyncClient(**client_kwargs)
         self._observer = _HTTPObserver(self)
 
     @staticmethod
