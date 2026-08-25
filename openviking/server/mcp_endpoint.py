@@ -505,18 +505,29 @@ async def read(uris: str | list[str]) -> str | list[ContentBlock]:
         """Resolve a URI and stat media before any binary bytes are loaded."""
         try:
             resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
-            if _is_mcp_video_uri(resolved_uri):
+            is_image = _is_mcp_image_uri(resolved_uri)
+            is_audio = _is_mcp_audio_uri(resolved_uri)
+            is_video = _is_mcp_video_uri(resolved_uri)
+            if not (is_image or is_audio or is_video):
+                return resolved_uri, None, None
+
+            async with semaphore:
+                stat = await service.fs.stat(resolved_uri, ctx=ctx)
+            if stat.get("isDir"):
+                return (
+                    resolved_uri,
+                    None,
+                    f"Cannot render {uri}: URI points to a directory. "
+                    "Use the list tool (or `ov ls` / `ov tree`) to browse its contents.",
+                )
+            if is_video:
                 return (
                     resolved_uri,
                     None,
                     f"Cannot render {uri}: MCP has no standard VideoContent block. "
                     f"{_mcp_media_download_hint(uri)}",
                 )
-            if not (_is_mcp_image_uri(resolved_uri) or _is_mcp_audio_uri(resolved_uri)):
-                return resolved_uri, None, None
 
-            async with semaphore:
-                stat = await service.fs.stat(resolved_uri, ctx=ctx)
             size = stat.get("size") if stat else None
             if isinstance(size, bool) or not isinstance(size, int) or size < 0:
                 return (
@@ -524,13 +535,6 @@ async def read(uris: str | list[str]) -> str | list[ContentBlock]:
                     None,
                     f"Cannot render {uri}: file size is unavailable. "
                     f"{_mcp_media_download_hint(uri)}",
-                )
-            if stat.get("isDir"):
-                return (
-                    resolved_uri,
-                    None,
-                    f"Cannot render {uri}: URI points to a directory. "
-                    "Use the list tool (or `ov ls` / `ov tree`) to browse its contents.",
                 )
             return resolved_uri, size, None
         except OpenVikingError as exc:

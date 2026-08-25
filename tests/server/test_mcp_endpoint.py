@@ -692,6 +692,7 @@ async def test_read_audio_returns_native_mcp_content(monkeypatch, uri, audio_byt
 
 
 async def test_read_video_returns_unsupported_hint(monkeypatch):
+    stat = AsyncMock(return_value={"size": 1024, "isDir": False})
     read_visible = AsyncMock()
     monkeypatch.setattr(
         mcp_endpoint,
@@ -700,6 +701,7 @@ async def test_read_video_returns_unsupported_hint(monkeypatch):
             fs=SimpleNamespace(
                 read_file_bytes=AsyncMock(),
                 read_visible=read_visible,
+                stat=stat,
             )
         ),
     )
@@ -708,6 +710,53 @@ async def test_read_video_returns_unsupported_hint(monkeypatch):
 
     assert "no standard VideoContent" in result
     assert 'ov get "viking://resources/demo.mp4" "./demo.mp4"' in result
+    stat.assert_awaited_once_with("viking://resources/demo.mp4", ctx=DEFAULT_CTX)
+    read_visible.assert_not_awaited()
+
+
+async def test_read_video_nonexistent_uri_preserves_not_found(monkeypatch):
+    stat = AsyncMock(side_effect=NotFoundError("viking://resources/missing.mp4", "file"))
+    read_visible = AsyncMock()
+    monkeypatch.setattr(
+        mcp_endpoint,
+        "get_service",
+        lambda: SimpleNamespace(
+            fs=SimpleNamespace(
+                read_file_bytes=AsyncMock(),
+                read_visible=read_visible,
+                stat=stat,
+            )
+        ),
+    )
+
+    result = await read("viking://resources/missing.mp4")
+
+    assert "not found" in result.lower()
+    assert "VideoContent" not in result
+    stat.assert_awaited_once_with("viking://resources/missing.mp4", ctx=DEFAULT_CTX)
+    read_visible.assert_not_awaited()
+
+
+async def test_read_video_directory_uri_preserves_directory_hint(monkeypatch):
+    stat = AsyncMock(return_value={"size": 0, "isDir": True})
+    read_visible = AsyncMock()
+    monkeypatch.setattr(
+        mcp_endpoint,
+        "get_service",
+        lambda: SimpleNamespace(
+            fs=SimpleNamespace(
+                read_file_bytes=AsyncMock(),
+                read_visible=read_visible,
+                stat=stat,
+            )
+        ),
+    )
+
+    result = await read("viking://resources/archive.mp4")
+
+    assert "URI points to a directory" in result
+    assert "VideoContent" not in result
+    stat.assert_awaited_once_with("viking://resources/archive.mp4", ctx=DEFAULT_CTX)
     read_visible.assert_not_awaited()
 
 
