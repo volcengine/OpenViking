@@ -6,6 +6,9 @@ import asyncio
 import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+from pydantic import ValidationError
+
 from openviking.models.vlm.backends.litellm_vlm import (
     LiteLLMVLMProvider,
     detect_provider_by_model,
@@ -666,6 +669,51 @@ class TestVLMConfigExtraRequestBody:
 
         result = config._build_vlm_config_dict()
         assert result["extra_request_body"] == {"think": False}
+
+    def test_thinking_request_body_propagates_through_supported_config_shapes(self):
+        from openviking_cli.utils.config.vlm_config import VLMConfig
+
+        policy = {"enabled": {"reasoning": {"effort": "medium"}}}
+        configs = [
+            VLMConfig(model="LocalModel", provider="litellm", thinking_extra_request_body=policy),
+            VLMConfig(
+                model="LocalModel",
+                provider="litellm",
+                providers={"litellm": {"thinking_extra_request_body": policy}},
+            ),
+            VLMConfig(
+                model="LocalModel",
+                credentials=[{"provider": "litellm", "thinking_extra_request_body": policy}],
+            ),
+        ]
+        failover = VLMConfig(
+            model="LocalModel",
+            provider="litellm",
+            thinking_extra_request_body=policy,
+            backup={
+                "model": "BackupModel",
+                "provider": "litellm",
+                "thinking_extra_request_body": policy,
+            },
+        )
+
+        assert [
+            config._build_vlm_config_dict()["thinking_extra_request_body"] for config in configs
+        ] == [policy] * 3
+        assert all(item.thinking_extra_request_body == policy for item in failover.credentials)
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            {"thinking_extra_request_body": {"enabled": ["invalid"]}},
+            {"providers": {"litellm": {"thinking_extra_request_body": {"other": {}}}}},
+        ],
+    )
+    def test_thinking_request_body_rejects_invalid_shapes(self, config):
+        from openviking_cli.utils.config.vlm_config import VLMConfig
+
+        with pytest.raises(ValidationError, match="thinking_extra_request_body"):
+            VLMConfig(model="LocalModel", provider="litellm", **config)
 
     def test_vlm_config_accepts_flat_extra_request_body(self):
         from openviking_cli.utils.config.vlm_config import VLMConfig

@@ -5,9 +5,12 @@ import importlib
 import threading
 import weakref
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
+from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field, PrivateAttr, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter, ValidationError, model_validator
+
+ThinkingExtraRequestBody = Dict[Literal["enabled", "disabled"], Dict[str, Any]]
+_THINKING_EXTRA_REQUEST_BODY_ADAPTER = TypeAdapter(ThinkingExtraRequestBody)
 
 
 def _load_codex_auth_module():
@@ -45,6 +48,7 @@ class VLMCredential(BaseModel):
     extra_request_body: Optional[Dict[str, Any]] = Field(
         default=None, description="Extra JSON body fields"
     )
+    thinking_extra_request_body: Optional[ThinkingExtraRequestBody] = None
     stream: Optional[bool] = Field(default=None, description="Enable streaming mode")
     reasoning_effort: Optional[str] = Field(
         default=None,
@@ -163,6 +167,11 @@ class VLMConfig(BaseModel):
         ),
     )
 
+    thinking_extra_request_body: Optional[ThinkingExtraRequestBody] = Field(
+        default=None,
+        description="Request body fragments selected by the per-call thinking policy",
+    )
+
     stream: bool = Field(
         default=False, description="Enable streaming mode for OpenAI-compatible providers"
     )
@@ -218,6 +227,21 @@ class VLMConfig(BaseModel):
                             "Duplicate VLM provider config after normalization: "
                             f"{existing_name} and {name}"
                         )
+                    if (
+                        isinstance(config, dict)
+                        and config.get("thinking_extra_request_body") is not None
+                    ):
+                        config = dict(config)
+                        try:
+                            config["thinking_extra_request_body"] = (
+                                _THINKING_EXTRA_REQUEST_BODY_ADAPTER.validate_python(
+                                    config["thinking_extra_request_body"]
+                                )
+                            )
+                        except ValidationError as exc:
+                            raise ValueError(
+                                f"Invalid thinking_extra_request_body for VLM provider {name!r}"
+                            ) from exc
                     normalized[normalized_name] = config
                     provider_sources[normalized_name] = str(name)
                 data["providers"] = normalized
@@ -281,6 +305,7 @@ class VLMConfig(BaseModel):
             or self.api_base
             or self.extra_headers
             or self.extra_request_body
+            or self.thinking_extra_request_body
             or self.stream
             or self.reasoning_effort
             or self.forward_api_key is not None
@@ -303,6 +328,13 @@ class VLMConfig(BaseModel):
                 and "extra_request_body" not in self.providers[self.provider]
             ):
                 self.providers[self.provider]["extra_request_body"] = self.extra_request_body
+            if (
+                self.thinking_extra_request_body
+                and "thinking_extra_request_body" not in self.providers[self.provider]
+            ):
+                self.providers[self.provider]["thinking_extra_request_body"] = (
+                    self.thinking_extra_request_body
+                )
             if self.stream and "stream" not in self.providers[self.provider]:
                 self.providers[self.provider]["stream"] = self.stream
             if self.reasoning_effort and "reasoning_effort" not in self.providers[self.provider]:
@@ -340,6 +372,10 @@ class VLMConfig(BaseModel):
                 extra_request_body=(
                     primary_cfg.get("extra_request_body") or self.extra_request_body
                 ),
+                thinking_extra_request_body=(
+                    primary_cfg.get("thinking_extra_request_body")
+                    or self.thinking_extra_request_body
+                ),
                 stream=(
                     primary_cfg.get("stream")
                     if primary_cfg.get("stream") is not None
@@ -369,6 +405,10 @@ class VLMConfig(BaseModel):
                 extra_headers=backup_cfg.get("extra_headers") or self.backup.extra_headers,
                 extra_request_body=(
                     backup_cfg.get("extra_request_body") or self.backup.extra_request_body
+                ),
+                thinking_extra_request_body=(
+                    backup_cfg.get("thinking_extra_request_body")
+                    or self.backup.thinking_extra_request_body
                 ),
                 stream=(
                     backup_cfg.get("stream")
@@ -413,6 +453,10 @@ class VLMConfig(BaseModel):
                         extra_request_body=(
                             provider_cfg.get("extra_request_body") or self.extra_request_body
                         ),
+                        thinking_extra_request_body=(
+                            provider_cfg.get("thinking_extra_request_body")
+                            or self.thinking_extra_request_body
+                        ),
                         stream=(
                             provider_cfg.get("stream")
                             if provider_cfg.get("stream") is not None
@@ -449,6 +493,8 @@ class VLMConfig(BaseModel):
                 cred.extra_headers = self.extra_headers
             if not cred.extra_request_body:
                 cred.extra_request_body = self.extra_request_body
+            if not cred.thinking_extra_request_body:
+                cred.thinking_extra_request_body = self.thinking_extra_request_body
             if cred.stream is None:
                 cred.stream = self.stream
             if not cred.reasoning_effort:
@@ -504,6 +550,8 @@ class VLMConfig(BaseModel):
             config["extra_headers"] = self.extra_headers
         if self.extra_request_body and "extra_request_body" not in config:
             config["extra_request_body"] = self.extra_request_body
+        if self.thinking_extra_request_body and "thinking_extra_request_body" not in config:
+            config["thinking_extra_request_body"] = self.thinking_extra_request_body
         if self.stream and "stream" not in config:
             config["stream"] = self.stream
         if self.reasoning_effort and "reasoning_effort" not in config:
@@ -535,6 +583,8 @@ class VLMConfig(BaseModel):
             config["extra_headers"] = cred.extra_headers
         if cred.extra_request_body:
             config["extra_request_body"] = cred.extra_request_body
+        if cred.thinking_extra_request_body:
+            config["thinking_extra_request_body"] = cred.thinking_extra_request_body
         if cred.stream:
             config["stream"] = cred.stream
         if cred.reasoning_effort:
@@ -652,6 +702,8 @@ class VLMConfig(BaseModel):
             result["extra_headers"] = credential.extra_headers
         if credential.extra_request_body:
             result["extra_request_body"] = credential.extra_request_body
+        if credential.thinking_extra_request_body:
+            result["thinking_extra_request_body"] = credential.thinking_extra_request_body
         if credential.reasoning_effort:
             result["reasoning_effort"] = credential.reasoning_effort
 
@@ -690,6 +742,8 @@ class VLMConfig(BaseModel):
                 result["extra_headers"] = config.get("extra_headers")
             if config.get("extra_request_body"):
                 result["extra_request_body"] = config.get("extra_request_body")
+            if config.get("thinking_extra_request_body"):
+                result["thinking_extra_request_body"] = config.get("thinking_extra_request_body")
             if config.get("reasoning_effort"):
                 result["reasoning_effort"] = config.get("reasoning_effort")
 
