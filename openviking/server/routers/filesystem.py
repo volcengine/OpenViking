@@ -25,6 +25,17 @@ from openviking_cli.exceptions import NotFoundError
 
 router = APIRouter(prefix="/api/v1/fs", tags=["filesystem"])
 
+# Ceilings for caller-supplied listing limits. Without them one authenticated
+# request can ask the server to collect and serialize an arbitrarily large tree
+# in memory (`node_limit=1000000&level_limit=100`), stalling the event loop for
+# every other tenant. Each ceiling sits above the largest value anything in the
+# tree asks for over HTTP -- the MCP tools and the agent file tool cap
+# themselves at 1000, the WebDAV PROPFIND path asks for 10000 -- so raising a
+# limit stays useful; it just cannot be unbounded. Same pattern as
+# routers/debug.py, which already caps its scroll `limit` with `le=1000`.
+MAX_NODE_LIMIT = 10_000
+MAX_LEVEL_LIMIT = 32
+MAX_ABS_LIMIT = 4_096
 
 _ATTR_INDEX_FIELDS = ["level", "search_tags"]
 
@@ -72,10 +83,14 @@ async def ls(
     simple: bool = Query(False, description="Return only relative path list"),
     recursive: bool = Query(False, description="List all subdirectories recursively"),
     output: str = Query("agent", description="Output format: original or agent"),
-    abs_limit: int = Query(256, description="Abstract limit (only for agent output)"),
+    abs_limit: int = Query(
+        256, ge=0, le=MAX_ABS_LIMIT, description="Abstract limit (only for agent output)"
+    ),
     show_all_hidden: bool = Query(False, description="List all hidden files, like -a"),
-    node_limit: int = Query(1000, description="Maximum number of nodes to list"),
-    limit: Optional[int] = Query(None, description="Alias for node_limit"),
+    node_limit: int = Query(
+        1000, ge=1, le=MAX_NODE_LIMIT, description="Maximum number of nodes to list"
+    ),
+    limit: Optional[int] = Query(None, ge=1, le=MAX_NODE_LIMIT, description="Alias for node_limit"),
     sort_by: Optional[Literal["name", "mtime"]] = Query(
         None,
         description="Sort directory and file groups before applying node_limit",
@@ -115,11 +130,17 @@ async def ls(
 async def tree(
     uri: str = Query(..., description="Viking URI"),
     output: str = Query("agent", description="Output format: original or agent"),
-    abs_limit: int = Query(256, description="Abstract limit (only for agent output)"),
+    abs_limit: int = Query(
+        256, ge=0, le=MAX_ABS_LIMIT, description="Abstract limit (only for agent output)"
+    ),
     show_all_hidden: bool = Query(False, description="List all hidden files, like -a"),
-    node_limit: int = Query(1000, description="Maximum number of nodes to list"),
-    limit: Optional[int] = Query(None, description="Alias for node_limit"),
-    level_limit: int = Query(3, description="Maximum depth level to traverse"),
+    node_limit: int = Query(
+        1000, ge=1, le=MAX_NODE_LIMIT, description="Maximum number of nodes to list"
+    ),
+    limit: Optional[int] = Query(None, ge=1, le=MAX_NODE_LIMIT, description="Alias for node_limit"),
+    level_limit: int = Query(
+        3, ge=1, le=MAX_LEVEL_LIMIT, description="Maximum depth level to traverse"
+    ),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get directory tree."""
