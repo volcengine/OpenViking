@@ -8,6 +8,10 @@ pub(crate) struct Rgb(pub(crate) u8, pub(crate) u8, pub(crate) u8);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ThemeColor {
     TrueColor(Rgb),
+    /// Terminal default foreground (SGR 39). Follows the current light/dark theme.
+    DefaultFg,
+    /// Dim/faint (SGR 2). Secondary text relative to the default foreground.
+    Dim,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,6 +26,9 @@ impl ThemeColor {
     pub(crate) fn rgb_fallback(&self) -> Rgb {
         match self {
             ThemeColor::TrueColor(rgb) => *rgb,
+            ThemeColor::DefaultFg | ThemeColor::Dim => {
+                unreachable!("semantic text colors follow the terminal palette")
+            }
         }
     }
 }
@@ -69,8 +76,8 @@ pub(crate) fn palette() -> CliTheme {
         border: ThemeColor::TrueColor(Rgb(0, 128, 128)),
         version: ThemeColor::TrueColor(Rgb(0, 128, 128)),
         brand_title: ThemeColor::TrueColor(Rgb(0, 128, 128)),
-        body: ThemeColor::TrueColor(Rgb(96, 111, 126)),
-        muted: ThemeColor::TrueColor(Rgb(104, 112, 120)),
+        body: ThemeColor::DefaultFg,
+        muted: ThemeColor::Dim,
         command: ThemeColor::TrueColor(Rgb(0, 128, 128)),
         heading: ThemeColor::TrueColor(Rgb(0, 128, 128)),
         value: ThemeColor::TrueColor(Rgb(0, 112, 190)),
@@ -89,7 +96,24 @@ pub(crate) fn colorize(text: impl Into<String>, color: ThemeColor) -> ColoredStr
     let text = text.into();
     match color {
         ThemeColor::TrueColor(Rgb(red, green, blue)) => text.truecolor(red, green, blue),
+        ThemeColor::DefaultFg => default_foreground(text),
+        ThemeColor::Dim => text.dimmed(),
     }
+}
+
+fn default_foreground(text: String) -> ColoredString {
+    paint_default_foreground(text, false)
+}
+
+fn paint_default_foreground(text: String, bold: bool) -> ColoredString {
+    if !colored::control::SHOULD_COLORIZE.should_colorize() {
+        return ColoredString::from(text);
+    }
+
+    // colored 2.x has no Default color. Emit SGR 39 so body text uses the
+    // terminal default foreground instead of a hardcoded gray, black, or white.
+    let code = if bold { "1;39" } else { "39" };
+    ColoredString::from(format!("\u{1b}[{code}m{text}\u{1b}[0m"))
 }
 
 pub(crate) fn terminal_color_level() -> ColorLevel {
@@ -320,7 +344,7 @@ pub(crate) fn selection(text: impl Into<String>) -> ColoredString {
 }
 
 pub(crate) fn strong(text: impl Into<String>) -> ColoredString {
-    body(text).bold()
+    paint_default_foreground(text.into(), true)
 }
 
 #[cfg(test)]
@@ -384,11 +408,9 @@ mod tests {
         assert!(!styled.contains("38;2"));
     }
 
-    fn functional_colors(palette: CliTheme) -> [(&'static str, ThemeColor); 13] {
+    fn accent_colors(palette: CliTheme) -> [(&'static str, ThemeColor); 11] {
         [
             ("brand_title", palette.brand_title),
-            ("body", palette.body),
-            ("muted", palette.muted),
             ("command", palette.command),
             ("heading", palette.heading),
             ("value", palette.value),
@@ -424,7 +446,7 @@ mod tests {
     #[test]
     fn single_palette_uses_explicit_balanced_functional_colors() {
         let palette = palette();
-        for (name, color) in functional_colors(palette) {
+        for (name, color) in accent_colors(palette) {
             assert_ne!(
                 color.rgb_fallback(),
                 PALE_PEARL,
@@ -436,20 +458,57 @@ mod tests {
     }
 
     #[test]
-    fn single_palette_separates_neutral_text_from_teal_structure() {
+    fn body_and_muted_follow_the_terminal_instead_of_fixed_gray() {
         let palette = palette();
+        assert_eq!(palette.body, ThemeColor::DefaultFg);
+        assert_eq!(palette.muted, ThemeColor::Dim);
+    }
 
-        for (name, color) in [("body", palette.body), ("muted", palette.muted)] {
-            let Rgb(red, green, blue) = color.rgb_fallback();
-            assert!(
-                red >= 80,
-                "{name} should be a readable neutral, not another teal accent"
-            );
-            assert!(
-                green.abs_diff(blue) <= 35,
-                "{name} should stay neutral enough for descriptions"
-            );
-        }
+    #[test]
+    fn body_uses_default_foreground_instead_of_black_white_or_rgb_gray() {
+        colored::control::set_override(true);
+        let rendered = super::body("The context database").to_string();
+        colored::control::unset_override();
+
+        assert_eq!(rendered, "\u{1b}[39mThe context database\u{1b}[0m");
+        assert!(!rendered.contains("38;2"));
+        assert!(!rendered.contains("\u{1b}[30m"));
+        assert!(!rendered.contains("\u{1b}[37m"));
+        assert!(!rendered.contains("\u{1b}[90m"));
+        assert!(!rendered.contains("\u{1b}[97m"));
+    }
+
+    #[test]
+    fn muted_uses_dim_instead_of_gray_rgb() {
+        colored::control::set_override(true);
+        let rendered = super::muted("optional hint").to_string();
+        colored::control::unset_override();
+
+        assert!(
+            rendered.contains("\u{1b}[2m"),
+            "muted text should use SGR 2 (dim): {rendered:?}"
+        );
+        assert!(rendered.contains("optional hint"));
+        assert!(!rendered.contains("38;2"));
+        assert!(!rendered.contains("\u{1b}[30m"));
+        assert!(!rendered.contains("\u{1b}[37m"));
+        assert!(!rendered.contains("\u{1b}[90m"));
+        assert!(!rendered.contains("\u{1b}[97m"));
+    }
+
+    #[test]
+    fn strong_bolds_the_default_foreground() {
+        colored::control::set_override(true);
+        let rendered = super::strong("Normal commands").to_string();
+        colored::control::unset_override();
+
+        assert_eq!(rendered, "\u{1b}[1;39mNormal commands\u{1b}[0m");
+        assert!(!rendered.contains("38;2"));
+    }
+
+    #[test]
+    fn single_palette_keeps_teal_structure_and_sky_values() {
+        let palette = palette();
 
         let Rgb(command_red, command_green, _) = palette.command.rgb_fallback();
         assert!(

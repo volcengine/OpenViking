@@ -405,8 +405,16 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
 
     @property
     def supports_multimodal(self) -> bool:
-        """Multimodal inputs are supported when using the multimodal endpoint."""
-        return self.input_type == "multimodal"
+        """Sparse vectors require text-only input even on the multimodal endpoint.
+
+        The provider accepts the request at the endpoint level, but rejects
+        non-text parts (images and videos) whenever ``sparse_embedding`` is
+        enabled. Returning ``False`` makes the common embedder guard retain the
+        extracted text and drop those parts before the provider call. Image-only
+        search remains unsupported and is rejected by the retrieval capability
+        check instead of embedding empty text.
+        """
+        return False
 
 
 class VolcengineHybridEmbedder(HybridEmbedderBase):
@@ -489,8 +497,14 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
 
     @property
     def supports_multimodal(self) -> bool:
-        """Hybrid embeddings always use the multimodal endpoint."""
-        return True
+        """Hybrid vectors include sparse output and therefore require text input.
+
+        A hybrid provider request enables sparse embedding, for which image and
+        video parts are unsupported. The base guard performs a deterministic
+        text-only downgrade for mixed content. Image-only search remains
+        unsupported because dropping its only input would produce an empty query.
+        """
+        return False
 
     def embed(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
         """Perform hybrid embedding on text or multimodal content

@@ -66,6 +66,10 @@ RUN --mount=type=cache,target=/root/.cache/uv,id=uv-${TARGETPLATFORM} \
     --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-${TARGETPLATFORM} \
     --mount=type=cache,target=/usr/local/cargo/git,id=cargo-git-${TARGETPLATFORM} \
     --mount=type=cache,target=/root/.ccache,id=ccache-${TARGETPLATFORM} \
+    # The source checkout may contain a previously generated Studio bundle.
+    # Remove it so setup.py rebuilds the SPA from the current TypeScript source
+    # instead of silently packaging stale browser code into the image.
+    rm -rf openviking/web_studio/dist; \
     if [ -n "${OPENVIKING_VERSION:-}" ]; then \
         export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING="${OPENVIKING_VERSION}"; \
     elif [ -f openviking/_version.py ]; then \
@@ -76,13 +80,13 @@ RUN --mount=type=cache,target=/root/.cache/uv,id=uv-${TARGETPLATFORM} \
     fi; \
     case "${UV_LOCK_STRATEGY}" in \
         locked) \
-            uv sync --locked --no-editable --extra bot --extra gemini \
+            uv sync --locked --no-editable --reinstall-package openviking --extra bot --extra gemini \
             ;; \
         auto) \
             if ! uv lock --check; then \
                 uv lock; \
             fi; \
-            uv sync --locked --no-editable --extra bot --extra gemini \
+            uv sync --locked --no-editable --reinstall-package openviking --extra bot --extra gemini \
             ;; \
         *) \
             echo "Unsupported UV_LOCK_STRATEGY: ${UV_LOCK_STRATEGY}" >&2; \
@@ -107,6 +111,7 @@ COPY --from=py-builder /app/.venv /app/.venv
 COPY docker/openviking-entrypoint.sh /usr/local/bin/openviking-entrypoint
 COPY docker/pending_health_server.py /usr/local/bin/openviking-pending-health
 RUN mkdir -p /app/.openviking \
+ && sed -i 's/\r$//' /usr/local/bin/openviking-entrypoint /usr/local/bin/openviking-pending-health \
  && chmod +x /usr/local/bin/openviking-entrypoint /usr/local/bin/openviking-pending-health
 ENV HOME="/app" \
     PATH="/app/.venv/bin:$PATH" \
