@@ -1891,7 +1891,7 @@ class ReindexExecutor:
             uri=uri,
             parent_uri=parent_uri,
             is_leaf=is_leaf,
-            abstract=abstract or "",
+            abstract=_truncate_abstract_bytes(abstract or ""),
             context_type=context_type,
             level=level,
             user=owner_ctx.user,

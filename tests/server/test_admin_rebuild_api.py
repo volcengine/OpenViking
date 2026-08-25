@@ -748,6 +748,43 @@ async def test_reindex_upsert_uses_uri_owner_for_user_scoped_records(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_reindex_upsert_caps_oversized_abstract_by_utf8_bytes(monkeypatch):
+    from openviking.service.reindex_executor import ReindexExecutor
+
+    captured = {}
+
+    class FakeVikingDB:
+        async def enqueue_embedding_msg(self, msg):
+            captured["msg"] = msg
+            return True
+
+    fake_service = type("Svc", (), {"vikingdb_manager": FakeVikingDB()})()
+    monkeypatch.setattr("openviking.service.reindex_executor.get_service", lambda: fake_service)
+
+    service = ReindexExecutor()
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="acct", user_id="admin"),
+        role=Role.ROOT,
+    )
+    oversized_abstract = "א" * 60_000
+
+    await service._upsert_context(
+        uri="viking://user/bob/memories/events/large.md",
+        parent_uri="viking://user/bob/memories/events",
+        abstract=oversized_abstract,
+        vector_text="large memory",
+        is_leaf=True,
+        context_type="memory",
+        level=ContextLevel.DETAIL,
+        ctx=ctx,
+    )
+
+    abstract = captured["msg"].context_data["abstract"]
+    assert len(abstract.encode("utf-8")) == 50_000
+    assert abstract == oversized_abstract[:25_000]
+
+
+@pytest.mark.asyncio
 async def test_reindex_semantic_processor_uses_uri_owner_for_user_scoped_records(monkeypatch):
     from openviking.service.reindex_executor import ReindexExecutor
 
