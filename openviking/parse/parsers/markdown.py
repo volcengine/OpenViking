@@ -623,8 +623,10 @@ class MarkdownParser(BaseParser):
         """
         Split oversized content by paragraphs, force split single oversized paragraphs.
 
-        Enforces both a token estimate limit (max_size) and a hard character limit
-        (self.config.max_section_chars) to guard against token estimation errors.
+        Targets both the token estimate limit (max_size) and the character limit
+        (self.config.max_section_chars). A single oversized Markdown table row is
+        kept intact so downstream semantic and embedding stages can apply their own
+        input limits without destroying the source table structure.
 
         Args:
             content: Content to split
@@ -720,7 +722,8 @@ class MarkdownParser(BaseParser):
         The first two table rows are treated as the header/separator and repeated
         in subsequent chunks when they are small enough to fit. Any prefix before
         the table, such as a section heading merged into the oversized paragraph,
-        is kept on the first chunk only.
+        is kept on the first chunk only. A single row may exceed the requested
+        limits because row integrity takes precedence at this source-storage stage.
         """
         lines = content.splitlines()
         table_start = -1
@@ -1664,9 +1667,9 @@ class MarkdownParser(BaseParser):
     ) -> None:
         """Plan merged sections as a single file with smart naming into ``ops``.
 
-        If the joined content exceeds max_section_chars it is split further
-        by _smart_split_content before writing, so no single file ever exceeds
-        the hard character limit.
+        If the joined content exceeds max_section_chars it is split further by
+        _smart_split_content before writing. A single oversized Markdown table row
+        remains intact to preserve the source table structure.
         """
         name = self._generate_merged_filename(sections)
         content = "\n\n".join(c for _, c, _ in sections)

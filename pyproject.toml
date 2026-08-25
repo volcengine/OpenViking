@@ -182,6 +182,7 @@ benchmark = [
     "tiktoken>=0.5.0",
     "datasets>=2.0.0",
     "pandas>=2.0.0",
+    "python-docx>=1.0.0",
 ]
 local-embed = [
     "llama-cpp-python>=0.3.0",

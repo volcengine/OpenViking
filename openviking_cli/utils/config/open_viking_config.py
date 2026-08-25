@@ -52,7 +52,7 @@ from .telemetry_config import TelemetryConfig
 from .vlm_config import VLMConfig
 
 
-def _get_config_warning_logger():
+def _get_config_logger():
     """Use stdlib logging during config bootstrap to avoid early logger side effects."""
     return logging.getLogger(__name__)
 
@@ -299,7 +299,7 @@ class OpenVikingConfig(BaseModel):
     @model_validator(mode="after")
     def _warn_on_deprecated_language_fallback(self) -> "OpenVikingConfig":
         if self.language_fallback and self.language_fallback != "en":
-            _get_config_warning_logger().warning(
+            _get_config_logger().warning(
                 "Config field 'language_fallback=%s' is deprecated and has no effect; "
                 "remove it, or set 'output_language_override' to pin an explicit language.",
                 self.language_fallback,
@@ -429,6 +429,13 @@ class OpenVikingConfig(BaseModel):
                     parser_configs = {}
                 if not isinstance(parser_configs, dict):
                     raise ValueError("Invalid parsers config: 'parsers' section must be an object")
+                parser_configs = parser_configs.copy()
+                if "excel" in parser_configs:
+                    parser_configs.pop("excel")
+                    _get_config_logger().error(
+                        "Config field 'parsers.excel' was removed and is ignored; "
+                        "spreadsheet parsing now uses 'parsers.anydoc'."
+                    )
             raise_unknown_config_fields(
                 data=parser_configs,
                 valid_fields=set(parser_types),

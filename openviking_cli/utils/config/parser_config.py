@@ -33,7 +33,8 @@ class ParserConfig:
         encoding: Default file encoding
         max_section_size: Maximum tokens per section before splitting
         section_size_flexibility: Allow overflow to maintain coherence (0.0-1.0)
-        max_section_chars: Hard character limit per section (guards against token estimation errors)
+        max_section_chars: Target character limit per section. A single oversized
+            Markdown table row may remain intact to preserve table semantics.
     """
 
     enabled: bool = True
@@ -43,9 +44,7 @@ class ParserConfig:
     # Smart splitting configuration
     max_section_size: int = 2048  # Maximum tokens per section before splitting
     section_size_flexibility: float = 0.3  # Allow 30% overflow to maintain coherence
-    max_section_chars: int = (
-        6000  # Hard character limit per section (guards against token estimation errors)
-    )
+    max_section_chars: int = 6000  # Target character limit per section
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ParserConfig":
