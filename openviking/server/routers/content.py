@@ -2,10 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Content endpoints for OpenViking HTTP Server."""
 
-import asyncio
-import io
-import zipfile
-from pathlib import PurePosixPath
 from typing import Literal
 from urllib.parse import quote
 
@@ -32,116 +28,10 @@ from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
-from openviking_cli.exceptions import (
-    InvalidArgumentError,
-    NotFoundError,
-    PayloadTooLargeError,
-    PermissionDeniedError,
-)
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, PermissionDeniedError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
-
-_DIRECTORY_ARCHIVE_MAX_BYTES = 10 * 1024 * 1024
-_DIRECTORY_ARCHIVE_MAX_ENTRIES = 10_000
-
-
-def _archive_size_limit_error(uri: str) -> PayloadTooLargeError:
-    # 413, not 429: the limit is a property of the directory, so retrying the
-    # same URI can only fail again. A 429 would send clients into backoff-retry.
-    return PayloadTooLargeError(
-        f"Directory archive exceeds the {_DIRECTORY_ARCHIVE_MAX_BYTES}-byte download limit: {uri}"
-    )
-
-
-def _archive_entry_limit_error(uri: str) -> PayloadTooLargeError:
-    return PayloadTooLargeError(
-        f"Directory archive exceeds the {_DIRECTORY_ARCHIVE_MAX_ENTRIES}-entry download limit: {uri}"
-    )
-
-
-def _safe_archive_path(root_name: str, rel_path: str = "") -> str:
-    """Build a portable ZIP member path from server-produced tree entries."""
-    relative = PurePosixPath(rel_path)
-    if relative.is_absolute():
-        raise InvalidArgumentError(f"Unsafe path in directory download: {rel_path}")
-    parts = [root_name, *relative.parts]
-    if any(part in {"", ".", ".."} or "\\" in part for part in parts):
-        raise InvalidArgumentError(f"Unsafe path in directory download: {rel_path or root_name}")
-    return "/".join(parts)
-
-
-async def _build_directory_archive(
-    service, uri: str, stat: dict, ctx: RequestContext
-) -> tuple[bytes, str]:
-    """Pack one visible Viking directory tree into an in-memory ZIP archive.
-
-    The archive is capped at `_DIRECTORY_ARCHIVE_MAX_BYTES`, so it is built in
-    memory rather than in a temp file: a temp file served through FileResponse
-    outlives the request whenever the response never reaches its cleanup
-    callback (a malformed or unsatisfiable Range header returns early, and
-    cancellation skips it entirely).
-    """
-    root_name = str(stat.get("name") or uri.rstrip("/").rsplit("/", 1)[-1] or "download")
-    root_path = _safe_archive_path(root_name)
-
-    entries = await service.fs.tree(
-        uri,
-        ctx=ctx,
-        output="original",
-        show_all_hidden=True,
-        node_limit=_DIRECTORY_ARCHIVE_MAX_ENTRIES + 1,
-        level_limit=None,
-    )
-    if len(entries) > _DIRECTORY_ARCHIVE_MAX_ENTRIES:
-        raise _archive_entry_limit_error(uri)
-
-    # Reject oversized trees before loading file contents into memory. The
-    # ZIP itself is checked below as well because headers can push a highly
-    # fragmented archive over the limit even when its files do not.
-    declared_total = 0
-    for entry in entries:
-        if entry.get("isDir", False):
-            continue
-        size = entry.get("size")
-        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
-            file_stat = await service.fs.stat(str(entry["uri"]), ctx=ctx)
-            size = file_stat.get("size")
-        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
-            raise InvalidArgumentError(
-                f"Cannot determine file size for directory download: {entry['uri']}"
-            )
-        declared_total += size
-        if declared_total > _DIRECTORY_ARCHIVE_MAX_BYTES:
-            raise _archive_size_limit_error(uri)
-
-    buffer = io.BytesIO()
-    actual_total = 0
-    with zipfile.ZipFile(
-        buffer,
-        mode="w",
-        compression=zipfile.ZIP_DEFLATED,
-        allowZip64=True,
-    ) as archive:
-        archive.writestr(f"{root_path}/", b"")
-        for entry in entries:
-            member_path = _safe_archive_path(root_name, str(entry["rel_path"]))
-            if entry.get("isDir", False):
-                archive.writestr(f"{member_path.rstrip('/')}/", b"")
-            else:
-                content = await service.fs.read_file_bytes(str(entry["uri"]), ctx=ctx)
-                actual_total += len(content)
-                if actual_total > _DIRECTORY_ARCHIVE_MAX_BYTES:
-                    raise _archive_size_limit_error(uri)
-                await asyncio.to_thread(archive.writestr, member_path, content)
-            # Bound the buffer while it grows. Per-entry ZIP headers are not
-            # counted by `actual_total`, so a tree of many empty directories or
-            # empty files would otherwise only be rejected once fully built.
-            if buffer.tell() > _DIRECTORY_ARCHIVE_MAX_BYTES:
-                raise _archive_size_limit_error(uri)
-    if buffer.tell() > _DIRECTORY_ARCHIVE_MAX_BYTES:
-        raise _archive_size_limit_error(uri)
-    return buffer.getvalue(), f"{root_name}.zip"
 
 
 class WriteContentRequest(BaseModel):
@@ -301,27 +191,10 @@ async def download(
     uri: str = Query(..., description="Viking URI"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Download a file as raw bytes or a directory as a ZIP archive."""
+    """Download file as raw bytes (for images, binaries, etc.)."""
     service = get_service()
     uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
-        stat = await service.fs.stat(uri, ctx=_ctx)
-        if stat.get("isDir", False):
-            archive, filename = await _build_directory_archive(service, uri, stat, _ctx)
-            # Buffering the whole archive is only safe because of the 10 MiB
-            # cap in _build_directory_archive; directories over it fail with
-            # 413 rather than downloading. To raise that ceiling, stream from a
-            # temp file with starlette.responses.FileResponse instead — but
-            # note that a BackgroundTask cleanup is NOT sufficient on its own:
-            # starlette skips `background` on the Range-header error paths and
-            # on cancellation, so the temp archive leaks. Whatever replaces
-            # this must own its own cleanup (e.g. unlink the file as soon as it
-            # is opened, and stream from the surviving descriptor).
-            return FastAPIResponse(
-                content=archive,
-                media_type="application/zip",
-                headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
-            )
         content = await service.fs.read_file_bytes(uri, ctx=_ctx)
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
@@ -331,7 +204,14 @@ async def download(
             raise mapped from e
         raise
 
-    filename = stat.get("name", "download")
+    # Try to get filename from stat
+    filename = "download"
+    try:
+        stat = await service.fs.stat(uri, ctx=_ctx)
+        if stat and "name" in stat:
+            filename = stat["name"]
+    except Exception:
+        pass
     filename = quote(filename)
     return FastAPIResponse(
         content=content,

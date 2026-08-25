@@ -433,11 +433,11 @@ The TypeScript and Go SDKs and the CLI do not currently expose batch write direc
 
 ### download()
 
-Download a file as raw bytes, or a directory as a ZIP archive. File responses use `application/octet-stream`; directory responses use `application/zip` and preserve the downloaded directory as the archive root. Both return the filename through `Content-Disposition`. Directory downloads are limited to 10 MiB of source content, 10 MiB final ZIP size, and 10,000 tree entries; oversized archives return `PAYLOAD_TOO_LARGE` (HTTP `413`). That failure is a property of the directory, not a rate limit, so it is permanent for that URI — do not retry it.
+Download a file as raw bytes. This is intended for images, PDFs, and other non-text content. The response uses `application/octet-stream` and returns the filename through `Content-Disposition`.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `uri` | string | Yes | File or directory URI to download |
+| `uri` | string | Yes | File URI to download |
 
 **HTTP API**
 
@@ -450,10 +450,6 @@ curl --get http://localhost:1933/api/v1/content/download \
   -H "X-API-Key: your-key" \
   --data-urlencode "uri=viking://resources/images/logo.png" \
   --output logo.png
-
-# A directory is returned as a ZIP archive.
-# Writes ./project.zip, named after the directory.
-ov get viking://resources/project
 ```
 
 **Response**
@@ -468,7 +464,7 @@ Content-Disposition: attachment; filename*=UTF-8''logo.png
 <binary body>
 ```
 
-The CLI exposes the same endpoint through `ov get <uri> [local-path]`. When the local path is an existing directory — or omitted, which means the current directory — the download is written inside it under the resource's own name, with a `.zip` suffix for a directory URI. Any other local path is used verbatim, and must not already exist. The CLI never extracts the archive.
+The public SDKs and CLI do not currently expose a dedicated raw-byte download method, so this section shows only the HTTP tab.
 
 ---
 

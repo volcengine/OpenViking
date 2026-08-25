@@ -25,7 +25,6 @@ from openviking_cli.exceptions import (
     NotFoundError,
     NotInitializedError,
     OpenVikingError,
-    PayloadTooLargeError,
     PermissionDeniedError,
     ProcessingError,
     ResourceExhaustedError,
@@ -50,7 +49,6 @@ ERROR_CODE_TO_EXCEPTION = {
     "UNAUTHENTICATED": UnauthenticatedError,
     "PERMISSION_DENIED": PermissionDeniedError,
     "RESOURCE_EXHAUSTED": ResourceExhaustedError,
-    "PAYLOAD_TOO_LARGE": PayloadTooLargeError,
     "UNAVAILABLE": UnavailableError,
     "INTERNAL": InternalError,
     "DEADLINE_EXCEEDED": DeadlineExceededError,
@@ -92,7 +90,6 @@ def _raise_legacy_exception(error: Dict[str, Any]) -> None:
     if exc_class in (
         InvalidArgumentError,
         FailedPreconditionError,
-        PayloadTooLargeError,
         ResourceExhaustedError,
         AbortedError,
         UnimplementedError,

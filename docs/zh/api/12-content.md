@@ -433,11 +433,11 @@ TypeScript、Go SDK 和 CLI 当前不直接暴露 batch write。
 
 ### download()
 
-以原始字节流下载文件，或将目录打包成 ZIP 下载。文件响应使用 `application/octet-stream`；目录响应使用 `application/zip`，并以所下载目录作为压缩包根目录。两者都会通过 `Content-Disposition` 返回文件名。目录下载的源文件总大小、最终 ZIP 大小均限制为 10 MiB，且最多包含 10,000 个目录树条目；超限返回 `PAYLOAD_TOO_LARGE`（HTTP `413`）。该失败取决于目录本身而非速率限制，对同一 URI 是永久性的，不要重试。
+以原始字节流下载文件，适用于图片、PDF 和其他非文本内容。响应使用 `application/octet-stream`，并通过 `Content-Disposition` 返回文件名。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `uri` | string | 是 | 要下载的文件或目录 URI |
+| `uri` | string | 是 | 要下载的文件 URI |
 
 **HTTP API**
 
@@ -450,10 +450,6 @@ curl --get http://localhost:1933/api/v1/content/download \
   -H "X-API-Key: your-key" \
   --data-urlencode "uri=viking://resources/images/logo.png" \
   --output logo.png
-
-# 目录会以 ZIP 压缩包返回
-# 写出 ./project.zip，以目录名命名
-ov get viking://resources/project
 ```
 
 **响应**
@@ -468,7 +464,7 @@ Content-Disposition: attachment; filename*=UTF-8''logo.png
 <binary body>
 ```
 
-CLI 通过 `ov get <uri> [local-path]` 调用同一接口。当本地路径是已存在的目录、或省略（即当前目录）时，文件会以资源自身的名字写入该目录下，目录 URI 会带上 `.zip` 后缀。其他本地路径按原样使用，且必须尚不存在。CLI 不会自动解压。
+公共 SDK 和 CLI 当前没有独立的原始字节下载方法，因此本节只展示 HTTP Tab。
 
 ---
 

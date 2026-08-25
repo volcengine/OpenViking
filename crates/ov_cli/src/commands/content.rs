@@ -3,8 +3,8 @@ use crate::error::Result;
 use crate::output::OutputFormat;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
-use std::io::{ErrorKind, Write};
-use std::path::{Path, PathBuf};
+use std::io::Write;
+use std::path::Path;
 
 pub async fn read(
     client: &HttpClient,
@@ -88,80 +88,31 @@ pub async fn reindex(
     Ok(())
 }
 
-pub async fn get(client: &HttpClient, uri: &str, local_path: Option<&str>) -> Result<()> {
-    preflight_explicit_download_target(local_path)?;
-
-    // The body has to arrive before the target can be named: a directory URI
-    // comes back as a ZIP, and that decides the `.zip` suffix.
-    let (bytes, content_type) = client.get_bytes_with_type(uri).await?;
-    let is_zip = content_type
-        .as_deref()
-        .is_some_and(|value| value.starts_with("application/zip"));
-
-    let path = download_target(uri, local_path, is_zip);
-    let display = path.display().to_string();
+pub async fn get(client: &HttpClient, uri: &str, local_path: &str) -> Result<()> {
+    // Check if target path already exists
+    let path = Path::new(local_path);
     if path.exists() {
         return Err(crate::error::Error::Client(format!(
-            "File already exists: {display}"
+            "File already exists: {}",
+            local_path
         )));
     }
 
     // Ensure parent directory exists
     if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
+        std::fs::create_dir_all(parent)?;
     }
 
+    // Download file
+    let bytes = client.get_bytes(uri).await?;
+
     // Write to local file
-    let mut file = create_download_target(&path, &display)?;
+    let mut file = create_download_target(path, local_path)?;
     file.write_all(&bytes)?;
     file.flush()?;
 
-    println!("Downloaded {} bytes to {}", bytes.len(), display);
+    println!("Downloaded {} bytes to {}", bytes.len(), local_path);
     Ok(())
-}
-
-/// Resolve where the downloaded bytes go.
-///
-/// A target that is an existing directory — or omitted, meaning the current
-/// directory — receives a file named after the resource, so downloading a
-/// folder lands a real `<name>.zip` instead of an extension-less file carrying
-/// ZIP bytes. Any other path is used verbatim, which keeps
-/// `ov get <uri> ./explicit-name.zip` working as documented.
-fn download_target(uri: &str, local_path: Option<&str>, is_zip: bool) -> PathBuf {
-    let base = Path::new(local_path.unwrap_or("."));
-    if local_path.is_some() && !base.is_dir() {
-        return base.to_path_buf();
-    }
-
-    let mut name = uri
-        .trim_end_matches('/')
-        .rsplit('/')
-        .find(|segment| !segment.is_empty() && !segment.ends_with(':'))
-        .unwrap_or("download")
-        .to_string();
-    if is_zip && !name.ends_with(".zip") {
-        name.push_str(".zip");
-    }
-    base.join(name)
-}
-
-fn preflight_explicit_download_target(local_path: Option<&str>) -> Result<()> {
-    let Some(local_path) = local_path else {
-        return Ok(());
-    };
-    let path = Path::new(local_path);
-    if path.is_dir() {
-        return Ok(());
-    }
-    match path.symlink_metadata() {
-        Ok(_) => Err(crate::error::Error::Client(format!(
-            "File already exists: {local_path}"
-        ))),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.into()),
-    }
 }
 
 fn create_download_target(path: &Path, local_path: &str) -> Result<std::fs::File> {
@@ -283,83 +234,6 @@ mod tests {
             output.push(ch);
         }
         output
-    }
-
-    #[test]
-    fn download_target_names_archives_inside_a_directory() {
-        use super::download_target;
-        use std::path::PathBuf;
-
-        let dir = tempfile::tempdir().expect("tempdir");
-        let dir_path = dir.path().to_str().expect("utf-8 tempdir");
-
-        // Omitted target -> current directory, named after the resource.
-        assert_eq!(
-            download_target("viking://resources/myfolder", None, true),
-            PathBuf::from("./myfolder.zip")
-        );
-        assert_eq!(
-            download_target("viking://resources/logo.png", None, false),
-            PathBuf::from("./logo.png")
-        );
-        // Existing directory -> the archive lands inside it, not over it.
-        assert_eq!(
-            download_target("viking://resources/myfolder", Some(dir_path), true),
-            dir.path().join("myfolder.zip")
-        );
-        // An explicit non-directory path stays verbatim.
-        assert_eq!(
-            download_target("viking://resources/myfolder", Some("./explicit.zip"), true),
-            PathBuf::from("./explicit.zip")
-        );
-        // Already-suffixed names are not doubled up.
-        assert_eq!(
-            download_target("viking://resources/bundle.zip", None, true),
-            PathBuf::from("./bundle.zip")
-        );
-        // Scope-only URIs still produce a usable name.
-        assert_eq!(
-            download_target("viking://", None, true),
-            PathBuf::from("./download.zip")
-        );
-    }
-
-    #[test]
-    fn preflight_rejects_explicit_existing_file_target() {
-        let dir = tempfile::tempdir().expect("tempdir should be created");
-        let path = dir.path().join("result.bin");
-        std::fs::write(&path, b"existing").expect("fixture should be written");
-
-        let error = super::preflight_explicit_download_target(Some(&path.to_string_lossy()))
-            .expect_err("explicit existing file targets must fail before download");
-
-        assert!(matches!(error, Error::Client(_)));
-    }
-
-    #[test]
-    fn preflight_allows_directory_or_missing_explicit_targets() {
-        let dir = tempfile::tempdir().expect("tempdir should be created");
-        let missing_path = dir.path().join("new-result.bin");
-
-        super::preflight_explicit_download_target(None).expect("omitted target is named later");
-        super::preflight_explicit_download_target(Some(&missing_path.to_string_lossy()))
-            .expect("missing explicit file target is usable");
-        super::preflight_explicit_download_target(Some(&dir.path().to_string_lossy()))
-            .expect("directory target is named after the response type");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn preflight_rejects_broken_symlink_target() {
-        let dir = tempfile::tempdir().expect("tempdir should be created");
-        let link_path = dir.path().join("broken-link");
-        std::os::unix::fs::symlink(dir.path().join("missing-target"), &link_path)
-            .expect("symlink fixture should be created");
-
-        let error = super::preflight_explicit_download_target(Some(&link_path.to_string_lossy()))
-            .expect_err("existing symlink targets must fail before download");
-
-        assert!(matches!(error, Error::Client(_)));
     }
 
     #[test]

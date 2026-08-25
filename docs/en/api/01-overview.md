@@ -321,7 +321,6 @@ JSON output - error:
 | `UNAUTHENTICATED` | 401 | Missing or invalid API key |
 | `PERMISSION_DENIED` | 403 | Insufficient permissions |
 | `RESOURCE_EXHAUSTED` | 429 | Rate limit exceeded |
-| `PAYLOAD_TOO_LARGE` | 413 | Response body exceeds a hard size limit (not retryable) |
 | `FAILED_PRECONDITION` | 412 | Precondition failed |
 | `CONFLICT` | 409 | Operation conflicts with an in-progress task or existing state |
 | `DEADLINE_EXCEEDED` | 504 | Operation timed out |
@@ -376,7 +375,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | GET | `/api/v1/content/read` | Read full content (L2) |
 | GET | `/api/v1/content/abstract` | Read an abstract (L0) |
 | GET | `/api/v1/content/overview` | Read an overview (L1) |
-| GET | `/api/v1/content/download` | Download original file bytes, or a directory as a ZIP archive |
+| GET | `/api/v1/content/download` | Download original file bytes |
 | POST | `/api/v1/content/write` | Write content and refresh semantic indexes |
 | POST | `/api/v1/content/batch-write` | Apply preconditioned multi-file writes |
 | POST | `/api/v1/content/set_tags` | Set retrieval tags |

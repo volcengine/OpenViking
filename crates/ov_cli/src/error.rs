@@ -123,7 +123,6 @@ fn code_from_http_status(status: Option<u16>) -> &'static str {
         Some(404) => "NOT_FOUND",
         Some(409) => "CONFLICT",
         Some(412) => "FAILED_PRECONDITION",
-        Some(413) => "PAYLOAD_TOO_LARGE",
         Some(429) => "RESOURCE_EXHAUSTED",
         Some(502 | 503) => "UNAVAILABLE",
         Some(504) => "DEADLINE_EXCEEDED",

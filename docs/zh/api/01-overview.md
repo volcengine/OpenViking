@@ -316,7 +316,6 @@ JSON 输出 - 错误：
 | `UNAUTHENTICATED` | 401 | 缺少或无效的 API Key |
 | `PERMISSION_DENIED` | 403 | 权限不足 |
 | `RESOURCE_EXHAUSTED` | 429 | 超出速率限制 |
-| `PAYLOAD_TOO_LARGE` | 413 | 响应体超出硬性大小限制（不可重试） |
 | `FAILED_PRECONDITION` | 412 | 前置条件不满足 |
 | `CONFLICT` | 409 | 操作与正在进行的任务或已有状态冲突 |
 | `DEADLINE_EXCEEDED` | 504 | 操作超时 |
@@ -371,7 +370,7 @@ JSON 输出 - 错误：
 | GET | `/api/v1/content/read` | 读取完整内容（L2） |
 | GET | `/api/v1/content/abstract` | 读取摘要（L0） |
 | GET | `/api/v1/content/overview` | 读取概览（L1） |
-| GET | `/api/v1/content/download` | 下载原始文件字节，或将目录打包为 ZIP 归档 |
+| GET | `/api/v1/content/download` | 下载原始文件字节 |
 | POST | `/api/v1/content/write` | 写入内容并刷新语义索引 |
 | POST | `/api/v1/content/batch-write` | 执行带前置条件的多文件写入 |
 | POST | `/api/v1/content/set_tags` | 设置检索标签 |

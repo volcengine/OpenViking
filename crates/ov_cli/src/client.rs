@@ -503,14 +503,8 @@ impl HttpClient {
         self.post("/api/v1/system/backend/sync-retry", &body).await
     }
 
-    /// Download file bytes, or a directory as ZIP bytes
+    /// Download file as raw bytes
     pub async fn get_bytes(&self, uri: &str) -> Result<Vec<u8>> {
-        Ok(self.get_bytes_with_type(uri).await?.0)
-    }
-
-    /// Download bytes together with the response `Content-Type`, which is how
-    /// the caller tells a raw file apart from a directory served as a ZIP.
-    pub async fn get_bytes_with_type(&self, uri: &str) -> Result<(Vec<u8>, Option<String>)> {
         let url = format!("{}/api/v1/content/download", self.base.base_url);
         let params = vec![
             ("uri".to_string(), uri.to_string()),
@@ -538,16 +532,10 @@ impl HttpClient {
             return Err(crate::base_client::api_error_from_body(&bytes, status));
         }
 
-        let content_type = response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .map(|value| value.to_string());
-
         response
             .bytes()
             .await
-            .map(|b| (b.to_vec(), content_type))
+            .map(|b| b.to_vec())
             .map_err(|e| Error::from_reqwest("Failed to read response bytes", e))
     }
 

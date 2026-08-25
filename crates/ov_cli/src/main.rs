@@ -678,15 +678,14 @@ enum Commands {
         #[arg(long, default_value = "false")]
         recursive: bool,
     },
-    /// [Data] Download a file, or archive a directory as ZIP, to a local path
+    /// [Data] Download file to local path (supports binaries/images)
     Get {
         /// Viking URI
         #[arg(value_name = "uri")]
         uri: String,
-        /// Destination directory, or an exact file path. A directory (the
-        /// default: the current one) receives <name>.zip for a directory URI.
+        /// Local path (must not exist yet)
         #[arg(value_name = "local-path")]
-        local_path: Option<String>,
+        local_path: String,
     },
     /// [Data] Run semantic retrieval
     Find {
