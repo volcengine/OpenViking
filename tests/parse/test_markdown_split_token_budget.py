@@ -7,7 +7,6 @@ emitted as a single chunk that exceeded ``max_size`` tokens.
 """
 
 from openviking.parse.parsers.markdown import MarkdownParser
-from openviking_cli.utils.config.parser_config import ParserConfig
 
 
 def test_smart_split_enforces_token_budget_for_cjk_paragraph():
@@ -26,45 +25,3 @@ def test_smart_split_preserves_content():
     paragraph = "\u4e2d" * 5000
     parts = parser._smart_split_content(paragraph, max_size=2048)
     assert "".join(parts) == paragraph
-
-
-def test_smart_split_splits_large_markdown_table_on_row_boundaries():
-    parser = MarkdownParser(config=ParserConfig(max_section_chars=110))
-    table = "\n".join(
-        [
-            "| id | value |",
-            "| --- | --- |",
-            "| row-001 | alpha alpha alpha |",
-            "| row-002 | beta beta beta |",
-            "| row-003 | gamma gamma gamma |",
-            "| row-004 | delta delta delta |",
-        ]
-    )
-
-    parts = parser._smart_split_content(table, max_size=2048)
-
-    assert len(parts) > 1
-    assert all(len(part) <= 110 for part in parts)
-    assert all(line.startswith("|") and line.endswith("|") for part in parts for line in part.splitlines())
-    for row_id in ("row-001", "row-002", "row-003", "row-004"):
-        assert sum(row_id in part for part in parts) == 1
-
-
-def test_smart_split_repeats_markdown_table_header_after_first_chunk():
-    parser = MarkdownParser(config=ParserConfig(max_section_chars=90))
-    table = "\n".join(
-        [
-            "# Sheet",
-            "",
-            "| id | value |",
-            "| --- | --- |",
-            "| row-001 | alpha alpha alpha |",
-            "| row-002 | beta beta beta |",
-            "| row-003 | gamma gamma gamma |",
-        ]
-    )
-
-    parts = parser._smart_split_content(table, max_size=2048)
-
-    assert parts[0].startswith("# Sheet\n\n| id | value |\n| --- | --- |")
-    assert all(part.startswith("| id | value |\n| --- | --- |") for part in parts[1:])

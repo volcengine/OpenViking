@@ -10,6 +10,7 @@ import pytest
 
 from openviking.parse.base import NodeType, ResourceNode, create_parse_result
 from openviking.parse.parsers import anydoc, anydoc_converter
+from openviking_cli.utils.config.parser_config import AnydocConfig
 
 
 def _stub_markdown_parse(parser) -> dict[str, Any]:
@@ -59,7 +60,7 @@ def _conversion(markdown: str = "# converted docx", source_format: str = "docx")
 
 @pytest.mark.asyncio
 async def test_anydoc_parser_offloads_docx_conversion(monkeypatch, tmp_path: Path):
-    parser = anydoc.AnyDocParser()
+    parser = anydoc.AnyDocParser(anydoc_config=AnydocConfig(max_table_rows=7))
     seen = _stub_markdown_parse(parser)
     calls = _patch_to_thread(monkeypatch, anydoc)
 
@@ -77,7 +78,7 @@ async def test_anydoc_parser_offloads_docx_conversion(monkeypatch, tmp_path: Pat
     assert func.__func__ is convert
     assert args == (source,)
     assert call_kwargs["resource_name"] == "sample"
-    assert call_kwargs["max_table_rows"] == 1000
+    assert call_kwargs["max_table_rows"] == 7
     storage = call_kwargs["storage"]
     assert seen["content"] == "# converted docx"
     assert seen["kwargs"]["allowed_media_dirs"] == [storage.media_dir]

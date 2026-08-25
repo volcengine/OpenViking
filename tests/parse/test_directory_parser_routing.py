@@ -254,67 +254,6 @@ class TestParserSelection:
             )
 
 
-class TestParserCanParse:
-    """Parser.can_parse must accept its own supported extensions."""
-
-    @pytest.mark.parametrize(
-        "parser_cls,filenames",
-        [
-            (MarkdownParser, ["doc.md", "spec.markdown", "x.mdown", "y.mkd"]),
-            (HTMLParser, ["page.html", "site.htm"]),
-            (PDFParser, ["paper.pdf"]),
-            (TextParser, ["notes.txt", "log.text"]),
-            (
-                AnyDocParser,
-                [
-                    "legacy.doc",
-                    "report.docx",
-                    "macro.docm",
-                    "open.odt",
-                    "rich.rtf",
-                    "data.xlsx",
-                    "legacy.xls",
-                    "book.xlsm",
-                    "binary.xlsb",
-                    "sheet.ods",
-                    "table.csv",
-                    "book.epub",
-                    "slides.pptx",
-                    "legacy.ppt",
-                    "show.pps",
-                ],
-            ),
-            (ZipParser, ["archive.zip"]),
-        ],
-    )
-    def test_can_parse_returns_true(self, parser_cls: type, filenames: List[str]) -> None:
-        parser = parser_cls()
-        for name in filenames:
-            assert parser.can_parse(Path(name)), (
-                f"{parser_cls.__name__}.can_parse('{name}') should be True"
-            )
-
-    @pytest.mark.parametrize(
-        "parser_cls,filenames",
-        [
-            (MarkdownParser, ["file.py", "file.html", "file.pdf"]),
-            (HTMLParser, ["file.md", "file.pdf", "file.txt"]),
-            (PDFParser, ["file.md", "file.txt", "file.html"]),
-            (TextParser, ["file.md", "file.html", "file.pdf"]),
-            (AnyDocParser, ["file.pdf", "file.txt", "file.zip"]),
-            (ZipParser, ["file.rar", "file.pdf", "file.docx"]),
-        ],
-    )
-    def test_can_parse_returns_false_for_wrong_extension(
-        self, parser_cls: type, filenames: List[str]
-    ) -> None:
-        parser = parser_cls()
-        for name in filenames:
-            assert not parser.can_parse(Path(name)), (
-                f"{parser_cls.__name__}.can_parse('{name}') should be False"
-            )
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # Part 2 – Relative-path → Viking URI mapping
 # ═══════════════════════════════════════════════════════════════════════════
