@@ -14,6 +14,7 @@ from openviking.parse.accessors.feishu_accessor import (
     _MAX_MEDIA_DOWNLOAD_CONTEXTS,
     FeishuAccessor,
 )
+from openviking_cli.exceptions import OpenVikingError
 
 
 class _SuccessResponse:
@@ -588,6 +589,110 @@ def test_access_writes_downloaded_images_next_to_markdown(monkeypatch):
     assert not resource.path.parent.exists()
 
 
+@pytest.mark.parametrize("path_type", ["mindnote", "mindnotes"])
+def test_mindnote_url_is_supported(path_type):
+    accessor = FeishuAccessor()
+    url = f"https://example.feishu.cn/{path_type}/mindnote_token"
+
+    assert accessor.can_handle(url)
+    assert accessor._parse_feishu_url(url) == ("mindnote", "mindnote_token")
+
+
+def test_mindnote_preflight_requires_user_token(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+
+    with pytest.raises(OpenVikingError, match="args.feishu_access_token") as exc_info:
+        asyncio.run(
+            FeishuAccessor().preflight_source(
+                "https://example.feishu.cn/mindnote/mindnote_token"
+            )
+        )
+
+    assert exc_info.value.code == "UNAUTHENTICATED"
+
+
+def test_access_mindnote_preserves_user_token_for_media(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    nodes = {
+        "data": {
+            "nodes": [
+                {
+                    "node_id": "root",
+                    "texts": [{"text": {"content": "Launch Plan"}}],
+                },
+                {
+                    "node_id": "child",
+                    "parent_id": "root",
+                    "texts": [
+                        {
+                            "element_type": "link",
+                            "link": {"content": "Spec", "url": "https://example.com/spec"},
+                        }
+                    ],
+                    "highlight": "yellow",
+                    "images": [{"token": "image_token"}],
+                },
+            ]
+        }
+    }
+    request = MagicMock(
+        side_effect=[
+            _FakeMediaResponse(json.dumps(nodes).encode()),
+            _FakeMediaResponse(b"\x89PNG\r\n\x1a\nimage"),
+        ]
+    )
+    accessor = FeishuAccessor()
+    accessor._config = SimpleNamespace(download_images=True)
+    accessor._user_token_client = SimpleNamespace(request=request)
+
+    resource = asyncio.run(
+        accessor.access(
+            "https://example.feishu.cn/mindnote/mindnote_token",
+            feishu_access_token="u-test",
+        )
+    )
+
+    try:
+        assert resource.path.read_text(encoding="utf-8") == (
+            "# Launch Plan\n\n"
+            "- Launch Plan\n"
+            '  - <mark data-color="yellow">[Spec](<https://example.com/spec>)</mark>\n'
+            "    ![mindnote image](images/image_token.png)"
+        )
+        assert (resource.path.parent / "images" / "image_token.png").read_bytes() == (
+            b"\x89PNG\r\n\x1a\nimage"
+        )
+        node_request, media_request = [call.args[0] for call in request.call_args_list]
+        assert node_request.uri == "/open-apis/mindnote/v1/mindnotes/mindnote_token/nodes"
+        assert media_request.uri == "/open-apis/drive/v1/medias/image_token/download"
+        assert node_request.token_types == media_request.token_types == {"user"}
+        assert all(call.args[1].user_access_token == "u-test" for call in request.call_args_list)
+    finally:
+        resource.cleanup()
+
+
+def test_wiki_mindnote_uses_resolved_object_token(monkeypatch):
+    accessor = FeishuAccessor()
+    monkeypatch.setattr(
+        accessor,
+        "_resolve_wiki_node",
+        MagicMock(return_value=("mindnote", "mindnote_token", "Wiki Mindnote")),
+    )
+    parse = MagicMock(return_value=("# Mindnote\n\n- Root", "Root"))
+    monkeypatch.setattr(accessor, "_parse_mindnote", parse)
+
+    document = asyncio.run(
+        accessor._fetch_document(
+            "https://example.feishu.cn/wiki/wiki_token",
+            feishu_access_token="u-test",
+        )
+    )
+
+    parse.assert_called_once_with("mindnote_token", "u-test")
+    assert document.doc_type == "mindnote"
+    assert document.title == "Wiki Mindnote"
+
+
 def test_fetch_document_dispatches_all_supported_types(monkeypatch):
     _install_fake_lark_modules(monkeypatch)
     accessor = FeishuAccessor()
@@ -595,6 +700,7 @@ def test_fetch_document_dispatches_all_supported_types(monkeypatch):
         "_parse_docx": MagicMock(return_value=("docx body", "Doc")),
         "_parse_sheets": MagicMock(return_value=("sheet body", "Sheet")),
         "_parse_bitable": MagicMock(return_value=("base body", "Base")),
+        "_parse_mindnote": MagicMock(return_value=("mindnote body", "Mindnote")),
     }
     for name, handler in handlers.items():
         monkeypatch.setattr(accessor, name, handler)
@@ -650,6 +756,12 @@ def test_fetch_document_dispatches_all_supported_types(monkeypatch):
     )
     sheets = asyncio.run(accessor._fetch_document("https://example.feishu.cn/sheets/sht_token"))
     base = asyncio.run(accessor._fetch_document("https://example.feishu.cn/base/app_token"))
+    mindnote = asyncio.run(
+        accessor._fetch_document(
+            "https://example.feishu.cn/mindnote/mindnote_token",
+            feishu_access_token="u-test",
+        )
+    )
     monkeypatch.setattr(
         accessor,
         "_resolve_wiki_node",
@@ -662,12 +774,14 @@ def test_fetch_document_dispatches_all_supported_types(monkeypatch):
         docx.doc_type,
         sheets.doc_type,
         base.doc_type,
+        mindnote.doc_type,
         wiki.doc_type,
     ) == (
         "doc",
         "docx",
         "sheets",
         "base",
+        "mindnote",
         "base",
     )
     assert legacy_doc.title == "Legacy Doc"
@@ -679,6 +793,7 @@ def test_fetch_document_dispatches_all_supported_types(monkeypatch):
         None,
         media_download_extras=sheets.media_download_extras,
     )
+    handlers["_parse_mindnote"].assert_called_once_with("mindnote_token", "u-test")
     assert handlers["_parse_bitable"].call_args_list[-1].args == ("wiki_app_token", None)
 
     monkeypatch.setattr(accessor, "_probe_docx_document", MagicMock())
