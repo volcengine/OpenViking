@@ -99,6 +99,38 @@ def test_link_references_are_replaced_inside_markdown_overview(monkeypatch):
     )
 
 
+def test_parse_overview_uses_decoded_link_target_name_as_cache_key(monkeypatch):
+    _patch_semantic_limits(monkeypatch)
+    processor = SemanticProcessor()
+    overview = (
+        "# docs\n\n"
+        "## Detailed Description\n\n"
+        "### [Friendly title](viking://resources/docs/README%20guide%23intro.md)\n"
+        "Reusable summary.\n"
+    )
+
+    assert processor._parse_overview_md(overview) == {"README guide#intro.md": "Reusable summary."}
+
+
+def test_parse_overview_keeps_plain_heading_cache_key(monkeypatch):
+    _patch_semantic_limits(monkeypatch)
+    processor = SemanticProcessor()
+    overview = "# docs\n\n## Detailed Description\n\n### README.md\nLegacy summary.\n"
+
+    assert processor._parse_overview_md(overview) == {"README.md": "Legacy summary."}
+
+
+def test_markdown_link_target_percent_encodes_uri_path_characters(monkeypatch):
+    _patch_semantic_limits(monkeypatch)
+    processor = SemanticProcessor()
+
+    target = processor._markdown_link_target(
+        "viking://resources/product docs", "file #1(approved).md"
+    )
+
+    assert target == ("viking://resources/product%20docs/file%20%231%28approved%29.md")
+
+
 def test_abstract_truncation_prefers_complete_sentence(monkeypatch):
     _patch_semantic_limits(monkeypatch, abstract_max_chars=80)
     processor = SemanticProcessor()
