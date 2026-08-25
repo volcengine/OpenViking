@@ -4,7 +4,7 @@
 
 import asyncio
 import math
-from typing import Any, Dict, List, Literal, Optional, Sequence, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, Sequence, Union
 
 from fastapi import APIRouter, Depends
 from fastapi import Response as FastAPIResponse
@@ -60,6 +60,24 @@ def _sanitize_floats(obj: Any) -> Any:
 
 
 router = APIRouter(prefix="/api/v1/search", tags=["search"])
+
+# Ceilings for caller-supplied search limits. `_resolve_search_limit` prefers
+# `node_limit` over `limit`, so bounding only one would leave the other as the
+# documented way around it.
+#
+# grep and glob are directory traversals and carry traversal bounds; semantic
+# search returns a result page, which is what routers/debug.py already caps with
+# le=1000. The traversal numbers match the ones proposed for routers/filesystem.py
+# in #4289 deliberately — if that lands, the two definitions should collapse into
+# one shared pair rather than drift.
+MAX_SEARCH_LIMIT = 1_000
+MAX_NODE_LIMIT = 10_000
+MAX_LEVEL_LIMIT = 32
+
+SearchLimit = Annotated[int, Field(ge=1, le=MAX_SEARCH_LIMIT)]
+TraversalNodeLimit = Annotated[int, Field(ge=1, le=MAX_NODE_LIMIT)]
+TraversalLevelLimit = Annotated[int, Field(ge=1, le=MAX_LEVEL_LIMIT)]
+
 TimeField = Literal["updated_at", "created_at"]
 
 
@@ -128,8 +146,8 @@ class FindRequest(BaseModel):
     image_url: Optional[str] = None
     target_uri: Union[str, List[str]] = ""
     context_type: Optional[Union[str, List[str]]] = None
-    limit: int = DEFAULT_LIMIT
-    node_limit: Optional[int] = None
+    limit: SearchLimit = DEFAULT_LIMIT
+    node_limit: Optional[SearchLimit] = None
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
     include_provenance: bool = False
@@ -189,8 +207,8 @@ class SearchRequest(BaseModel):
     target_uri: Union[str, List[str]] = ""
     context_type: Optional[Union[str, List[str]]] = None
     session_id: Optional[str] = None
-    limit: int = DEFAULT_LIMIT
-    node_limit: Optional[int] = None
+    limit: SearchLimit = DEFAULT_LIMIT
+    node_limit: Optional[SearchLimit] = None
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
     include_provenance: bool = False
@@ -308,8 +326,8 @@ class GrepRequest(BaseModel):
     exclude_uri: Optional[str] = None
     pattern: str
     case_insensitive: bool = False
-    node_limit: Optional[int] = 256
-    level_limit: int = 10
+    node_limit: Optional[TraversalNodeLimit] = 256
+    level_limit: TraversalLevelLimit = 10
 
 
 class GlobRequest(BaseModel):
@@ -317,7 +335,7 @@ class GlobRequest(BaseModel):
 
     pattern: str
     uri: str = "viking://"
-    node_limit: Optional[int] = 256
+    node_limit: Optional[TraversalNodeLimit] = 256
 
 
 @router.post("/find")
