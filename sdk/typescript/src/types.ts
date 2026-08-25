@@ -98,17 +98,12 @@ export interface WriteOptions extends WaitOptions {
   processingMode?: ProcessingMode;
   extra?: JsonObject;
 }
-/** One batch-write precondition. */
-export interface BatchWritePrecondition {
-  kind: "create_if_absent" | "replace_if_hash";
-  baseHash?: string;
-}
-/** One preconditioned batch-write operation. */
+/** One file write in a batch. */
 export interface BatchWriteOperation {
   uri: string;
   content?: string;
   contentBase64?: string;
-  precondition: BatchWritePrecondition;
+  mode?: "replace" | "append" | "create" | "upsert";
 }
 /** Batch-write request options. */
 export interface BatchWriteOptions extends WaitOptions {

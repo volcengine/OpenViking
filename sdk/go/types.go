@@ -186,18 +186,12 @@ type WriteOptions struct {
 	Extra          map[string]any
 }
 
-// BatchWritePrecondition protects one batch write operation.
-type BatchWritePrecondition struct {
-	Kind     string  `json:"kind"`
-	BaseHash *string `json:"base_hash,omitempty"`
-}
-
-// BatchWriteOperation is one preconditioned file write.
+// BatchWriteOperation is one file write in a batch.
 type BatchWriteOperation struct {
-	URI           string                 `json:"uri"`
-	Content       *string                `json:"content,omitempty"`
-	ContentBase64 *string                `json:"content_base64,omitempty"`
-	Precondition  BatchWritePrecondition `json:"precondition"`
+	URI           string  `json:"uri"`
+	Content       *string `json:"content,omitempty"`
+	ContentBase64 *string `json:"content_base64,omitempty"`
+	Mode          string  `json:"mode,omitempty"`
 }
 
 // BatchWriteOptions controls BatchWrite.

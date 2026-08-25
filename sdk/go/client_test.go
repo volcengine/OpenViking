@@ -637,6 +637,18 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 			if body["root_uri"] != "viking://resources/project" || body["future_flag"] != float64(0) {
 				t.Fatalf("body = %#v", body)
 			}
+			operations, ok := body["operations"].([]any)
+			if !ok || len(operations) != 1 {
+				t.Fatalf("operations = %#v", body["operations"])
+			}
+			operation, ok := operations[0].(map[string]any)
+			if !ok || !reflect.DeepEqual(operation, map[string]any{
+				"uri":     "viking://resources/project/a.txt",
+				"content": "hello",
+				"mode":    "upsert",
+			}) {
+				t.Fatalf("operation = %#v", operations[0])
+			}
 			writeOK(t, w, map[string]any{"updated": 1})
 		case "GET /api/v1/content/download":
 			if r.URL.Query().Get("uri") != "viking://resources/project/a.txt" {
@@ -653,9 +665,7 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 		{
 			URI:     "resources/project/a.txt",
 			Content: String("hello"),
-			Precondition: BatchWritePrecondition{
-				Kind: "create_if_absent",
-			},
+			Mode:    "upsert",
 		},
 	}, &BatchWriteOptions{Extra: map[string]any{"future_flag": 0}}); err != nil {
 		t.Fatal(err)
