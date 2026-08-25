@@ -313,7 +313,7 @@ async def test_async_http_client_empty_parts_falls_back_to_content():
         "user",
         content="hello",
         parts=[],
-        created_at="2026-05-28T00:00:00+00:00",
+        options={"created_at": "2026-05-28T00:00:00+00:00"},
     )
 
     assert result == {"status": "ok"}

@@ -168,41 +168,6 @@ class AsyncHTTPClient(import_openviking_sdk().AsyncHTTPClient):
     def _raise_exception(self, error: Dict[str, Any]) -> None:
         _raise_legacy_exception(error)
 
-    async def add_message(
-        self,
-        session_id: str,
-        role: str,
-        content: str | None = None,
-        parts: list[Any] | None = None,
-        created_at: str | None = None,
-        peer_id: str | None = None,
-        telemetry: Any = False,
-        turn_id: str | None = None,
-        message_kind: str | None = None,
-        source_message_ids: list[str] | None = None,
-    ) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {
-            "role": role,
-            "content": content,
-            "parts": parts,
-        }
-        optional = {
-            "created_at": created_at,
-            "peer_id": peer_id,
-            "turn_id": turn_id,
-            "message_kind": message_kind,
-            "source_message_ids": source_message_ids,
-        }
-        payload.update({key: value for key, value in optional.items() if value is not None})
-        if telemetry is not False:
-            payload["telemetry"] = telemetry
-        payload = self._normalize_message_payload(payload)
-        session_path = self._path_segment(session_id)
-        response = await self._request(
-            "POST", f"/api/v1/sessions/{session_path}/messages", json=payload
-        )
-        return self._handle_response_data(response).get("result", {})
-
     async def update_session_config(
         self,
         session_id: str,
@@ -265,34 +230,6 @@ class SyncHTTPClient(import_openviking_sdk().SyncHTTPClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._async_client = AsyncHTTPClient(*args, **kwargs)
-
-    def add_message(
-        self,
-        session_id: str,
-        role: str,
-        content: str | None = None,
-        parts: list[Any] | None = None,
-        created_at: str | None = None,
-        peer_id: str | None = None,
-        telemetry: Any = False,
-        turn_id: str | None = None,
-        message_kind: str | None = None,
-        source_message_ids: list[str] | None = None,
-    ) -> Dict[str, Any]:
-        return run_async(
-            self._async_client.add_message(
-                session_id,
-                role,
-                content=content,
-                parts=parts,
-                created_at=created_at,
-                peer_id=peer_id,
-                telemetry=telemetry,
-                turn_id=turn_id,
-                message_kind=message_kind,
-                source_message_ids=source_message_ids,
-            )
-        )
 
     def update_session_config(
         self,
