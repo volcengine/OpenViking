@@ -35,8 +35,8 @@ from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
+    PayloadTooLargeError,
     PermissionDeniedError,
-    ResourceExhaustedError,
 )
 from openviking_cli.utils import get_logger
 
@@ -45,8 +45,10 @@ logger = get_logger(__name__)
 _DIRECTORY_ARCHIVE_MAX_BYTES = 10 * 1024 * 1024
 
 
-def _archive_size_limit_error(uri: str) -> ResourceExhaustedError:
-    return ResourceExhaustedError(
+def _archive_size_limit_error(uri: str) -> PayloadTooLargeError:
+    # 413, not 429: the limit is a property of the directory, so retrying the
+    # same URI can only fail again. A 429 would send clients into backoff-retry.
+    return PayloadTooLargeError(
         f"Directory archive exceeds the {_DIRECTORY_ARCHIVE_MAX_BYTES}-byte download limit: {uri}"
     )
 
@@ -297,6 +299,15 @@ async def download(
         stat = await service.fs.stat(uri, ctx=_ctx)
         if stat.get("isDir", False):
             archive, filename = await _build_directory_archive(service, uri, stat, _ctx)
+            # Buffering the whole archive is only safe because of the 10 MiB
+            # cap in _build_directory_archive; directories over it fail with
+            # 413 rather than downloading. To raise that ceiling, stream from a
+            # temp file with starlette.responses.FileResponse instead — but
+            # note that a BackgroundTask cleanup is NOT sufficient on its own:
+            # starlette skips `background` on the Range-header error paths and
+            # on cancellation, so the temp archive leaks. Whatever replaces
+            # this must own its own cleanup (e.g. unlink the file as soon as it
+            # is opened, and stream from the surviving descriptor).
             return FastAPIResponse(
                 content=archive,
                 media_type="application/zip",

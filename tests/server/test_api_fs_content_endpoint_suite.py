@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from openviking.pyagfs.exceptions import AGFSHTTPError
+from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS
 from openviking.server.routers import content as content_router
 
 
@@ -185,7 +186,7 @@ async def test_download_directory_returns_zip_archive(client_with_resource):
         assert all(not name.startswith("/") and ".." not in name.split("/") for name in names)
 
 
-async def test_download_directory_over_limit_returns_resource_exhausted(
+async def test_download_directory_over_limit_returns_payload_too_large(
     client_with_resource, monkeypatch
 ):
     client, uri = client_with_resource
@@ -193,7 +194,7 @@ async def test_download_directory_over_limit_returns_resource_exhausted(
 
     response = await client.get("/api/v1/content/download", params={"uri": uri})
 
-    _assert_error(response, status_code=429, error_code="RESOURCE_EXHAUSTED")
+    _assert_error(response, status_code=413, error_code="PAYLOAD_TOO_LARGE")
 
 
 async def test_build_directory_archive_preserves_tree_and_empty_directories():
@@ -313,6 +314,13 @@ async def test_build_directory_archive_stops_writing_once_over_limit(monkeypatch
 
     # Without the in-loop guard this reaches ~1.9 MB for 20k entries.
     assert peak["bytes"] < limit * 4
+
+
+def test_archive_size_limit_error_is_not_retryable():
+    """Oversize is a property of the directory, so it must be 413, not 429."""
+    error = content_router._archive_size_limit_error("viking://resources/big")
+    assert error.code == "PAYLOAD_TOO_LARGE"
+    assert ERROR_CODE_TO_HTTP_STATUS[error.code] == 413
 
 
 @pytest.mark.parametrize("path", ["../escape", "/absolute", r"..\\escape"])

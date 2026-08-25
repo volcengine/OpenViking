@@ -321,6 +321,7 @@ JSON output - error:
 | `UNAUTHENTICATED` | 401 | Missing or invalid API key |
 | `PERMISSION_DENIED` | 403 | Insufficient permissions |
 | `RESOURCE_EXHAUSTED` | 429 | Rate limit exceeded |
+| `PAYLOAD_TOO_LARGE` | 413 | Response body exceeds a hard size limit (not retryable) |
 | `FAILED_PRECONDITION` | 412 | Precondition failed |
 | `CONFLICT` | 409 | Operation conflicts with an in-progress task or existing state |
 | `DEADLINE_EXCEEDED` | 504 | Operation timed out |

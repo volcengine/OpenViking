@@ -136,6 +136,17 @@ class ResourceExhaustedError(OpenVikingError):
         super().__init__(message, code="RESOURCE_EXHAUSTED", details=details)
 
 
+class PayloadTooLargeError(OpenVikingError):
+    """Response or request body exceeds a hard size limit.
+
+    Distinct from ResourceExhaustedError: this failure is permanent for the
+    given input, so clients must not retry it the way they back off on 429.
+    """
+
+    def __init__(self, message: str = "Payload too large", details: Optional[dict] = None):
+        super().__init__(message, code="PAYLOAD_TOO_LARGE", details=details)
+
+
 class InternalError(OpenVikingError):
     """Internal server error."""
 

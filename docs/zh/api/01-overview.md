@@ -316,6 +316,7 @@ JSON 输出 - 错误：
 | `UNAUTHENTICATED` | 401 | 缺少或无效的 API Key |
 | `PERMISSION_DENIED` | 403 | 权限不足 |
 | `RESOURCE_EXHAUSTED` | 429 | 超出速率限制 |
+| `PAYLOAD_TOO_LARGE` | 413 | 响应体超出硬性大小限制（不可重试） |
 | `FAILED_PRECONDITION` | 412 | 前置条件不满足 |
 | `CONFLICT` | 409 | 操作与正在进行的任务或已有状态冲突 |
 | `DEADLINE_EXCEEDED` | 504 | 操作超时 |
