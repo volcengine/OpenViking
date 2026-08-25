@@ -3,7 +3,7 @@ use crate::error::Result;
 use crate::output::OutputFormat;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 pub async fn read(
@@ -152,12 +152,16 @@ fn preflight_explicit_download_target(local_path: Option<&str>) -> Result<()> {
         return Ok(());
     };
     let path = Path::new(local_path);
-    if !path.is_dir() && path.exists() {
-        return Err(crate::error::Error::Client(format!(
-            "File already exists: {local_path}"
-        )));
+    if path.is_dir() {
+        return Ok(());
     }
-    Ok(())
+    match path.symlink_metadata() {
+        Ok(_) => Err(crate::error::Error::Client(format!(
+            "File already exists: {local_path}"
+        ))),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn create_download_target(path: &Path, local_path: &str) -> Result<std::fs::File> {
@@ -342,6 +346,20 @@ mod tests {
             .expect("missing explicit file target is usable");
         super::preflight_explicit_download_target(Some(&dir.path().to_string_lossy()))
             .expect("directory target is named after the response type");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preflight_rejects_broken_symlink_target() {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let link_path = dir.path().join("broken-link");
+        std::os::unix::fs::symlink(dir.path().join("missing-target"), &link_path)
+            .expect("symlink fixture should be created");
+
+        let error = super::preflight_explicit_download_target(Some(&link_path.to_string_lossy()))
+            .expect_err("existing symlink targets must fail before download");
+
+        assert!(matches!(error, Error::Client(_)));
     }
 
     #[test]
