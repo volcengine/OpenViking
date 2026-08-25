@@ -9,6 +9,7 @@ import time
 from typing import Awaitable, Callable, TypeVar
 
 from openviking.utils.exceptions import AllCredentialsFailedError
+from openviking_cli.exceptions import PermissionDeniedError
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,13 @@ QUOTA_EXCEEDED_PATTERNS = (
 )
 
 _PERMANENT_IO_ERRORS = (FileNotFoundError, PermissionError, IsADirectoryError, NotADirectoryError)
+
+# An ACL denial from OpenViking's own authorization layer. Deterministic: a retry
+# re-runs the same check for the same principal against the same resource, so a
+# queued message carrying one is poison, not transient. Distinct from
+# ERROR_CLASS_AUTH, which means "try a different model credential" — there is no
+# credential to switch to here.
+_PERMANENT_PERMISSION_ERRORS = (PermissionDeniedError,)
 
 TRANSIENT_API_ERROR_PATTERNS = (
     "429",
@@ -146,6 +154,9 @@ def classify_api_error(error: Exception) -> str:
       credential-level and may be resolved by switching credentials, whereas a
       400 is a request-level error that fails on every credential of the same
       model.
+    - a ``PermissionDeniedError`` from OpenViking's own ACL layer is ``permanent``,
+      not ``auth``: ``auth`` means the caller should try another model credential,
+      and an ACL denial has none to try.
     - ``quota_exceeded`` is checked before ``transient`` because quota errors
       typically include "429" / "TooManyRequests" which would otherwise match
       the transient category.
@@ -163,7 +174,7 @@ def classify_api_error(error: Exception) -> str:
         return ERROR_CLASS_UNKNOWN
 
     for exc in (error, getattr(error, "__cause__", None)):
-        if exc is not None and isinstance(exc, _PERMANENT_IO_ERRORS):
+        if exc is not None and isinstance(exc, _PERMANENT_IO_ERRORS + _PERMANENT_PERMISSION_ERRORS):
             return ERROR_CLASS_PERMANENT
 
     texts = [str(error)]

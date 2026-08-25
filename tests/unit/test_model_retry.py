@@ -13,9 +13,11 @@ from openviking.utils.model_retry import (
     ERROR_CLASS_QUOTA_EXCEEDED,
     ERROR_CLASS_TRANSIENT,
     classify_api_error,
+    is_retryable_api_error,
     retry_async,
     retry_sync,
 )
+from openviking_cli.exceptions import PermissionDeniedError as CliPermissionDeniedError
 
 
 def test_classify_api_error_recognizes_request_burst_too_fast():
@@ -250,3 +252,30 @@ def test_numeric_status_code_with_compact_error_code_context_still_matches():
     assert classify_api_error(RuntimeError("Error code:413-Payload Too Large")) == (
         ERROR_CLASS_INPUT_TOO_LARGE
     )
+
+
+def test_classify_cli_permission_denied_is_permanent():
+    """An ACL denial is deterministic — retrying re-runs the same check.
+
+    Left unclassified it fell through to ``unknown``, and SemanticProcessor's
+    handler re-enqueues everything that is not ``input_too_large`` or
+    ``permanent``. One denied message then re-enqueued every ~30s forever and
+    pinned the semantic queue (issue #4312).
+    """
+    assert classify_api_error(CliPermissionDeniedError()) == ERROR_CLASS_PERMANENT
+
+
+def test_classify_cli_permission_denied_with_resource_is_permanent():
+    err = CliPermissionDeniedError("Permission denied", resource="viking://user/.overview.md")
+    assert classify_api_error(err) == ERROR_CLASS_PERMANENT
+
+
+def test_classify_cli_permission_denied_as_cause_is_permanent():
+    """The ACL error usually reaches the handler wrapped by a caller."""
+    err = RuntimeError("failed to refresh parent overview")
+    err.__cause__ = CliPermissionDeniedError()
+    assert classify_api_error(err) == ERROR_CLASS_PERMANENT
+
+
+def test_classify_cli_permission_denied_is_not_retryable():
+    assert is_retryable_api_error(CliPermissionDeniedError()) is False
