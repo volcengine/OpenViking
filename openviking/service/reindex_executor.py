@@ -448,6 +448,21 @@ class ReindexExecutor:
         except Exception as exc:
             raise NotFoundError(uri, "resource") from exc
 
+        # tree() returns descendants only, so rebuild the namespace's own L0/L1
+        # markers explicitly before walking the individual skill roots.
+        await self._reindex_resource_vectors_from_entries(
+            **self._with_ingest_options(
+                {
+                    "root_uri": uri,
+                    "directories": [uri],
+                    "files": [],
+                    "counters": counters,
+                    "ctx": ctx,
+                },
+                run.ingest_options,
+            )
+        )
+
         skill_roots = []
         for entry in entries:
             entry_uri = entry.get("uri")
@@ -1331,11 +1346,26 @@ class ReindexExecutor:
                         mode=mode,
                         run=run,
                     )
+                # tree() does not include the requested container itself.
+                await self._reindex_resource_vectors_from_entries(
+                    **self._with_ingest_options(
+                        {
+                            "root_uri": target_root,
+                            "directories": [target_root],
+                            "files": [],
+                            "counters": counters,
+                            "ctx": ctx,
+                        },
+                        run.ingest_options,
+                    )
+                )
                 return
 
         memory_roots: list[str] = []
         skill_roots: list[str] = []
-        resource_directories: list[str] = []
+        # Include the requested user namespace itself; tree() only contributes
+        # descendants and would otherwise omit its L0/L1 vector records.
+        resource_directories: list[str] = [target_root]
         resource_files: list[str] = []
 
         for entry in entries:
