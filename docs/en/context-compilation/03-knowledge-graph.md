@@ -66,11 +66,11 @@ Unlike the LLM Wiki script, `knowledge_graph.py` reads from a **local directory*
 Download the whole artifact tree as a ZIP archive, then extract it:
 
 ```bash
-ov get viking://resources/journal-kg ./journal-kg.zip
+ov get viking://resources/journal-kg
 unzip -o ./journal-kg.zip
 ```
 
-> `ov get` requires the local target path to not exist yet, so remove the old archive (`rm -f ./journal-kg.zip`) before re-downloading. `unzip -o` overwrites the previously extracted `./journal-kg/` instead of prompting.
+> `ov get` writes `./journal-kg.zip`, named after the directory. It refuses to overwrite, so remove the old archive (`rm -f ./journal-kg.zip`) before re-downloading. `unzip -o` overwrites the previously extracted `./journal-kg/` instead of prompting.
 
 Confirm the local layout is correct:
 

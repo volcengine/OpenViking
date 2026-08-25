@@ -1377,9 +1377,9 @@ pub async fn handle_reindex(
     .await
 }
 
-pub async fn handle_get(uri: String, local_path: String, ctx: CliContext) -> Result<()> {
+pub async fn handle_get(uri: String, local_path: Option<String>, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-    commands::content::get(&client, &uri, &local_path).await
+    commands::content::get(&client, &uri, local_path.as_deref()).await
 }
 
 pub async fn handle_find(

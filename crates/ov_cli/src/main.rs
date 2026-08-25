@@ -683,9 +683,10 @@ enum Commands {
         /// Viking URI
         #[arg(value_name = "uri")]
         uri: String,
-        /// Local path (must not exist yet)
+        /// Destination directory, or an exact file path. A directory (the
+        /// default: the current one) receives <name>.zip for a directory URI.
         #[arg(value_name = "local-path")]
-        local_path: String,
+        local_path: Option<String>,
     },
     /// [Data] Run semantic retrieval
     Find {

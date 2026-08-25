@@ -66,11 +66,11 @@ ov read viking://resources/journal-kg/entities/孙悟空.md
 先把整棵工件树打包成 ZIP 下载，再解压：
 
 ```bash
-ov get viking://resources/journal-kg ./journal-kg.zip
+ov get viking://resources/journal-kg
 unzip -o ./journal-kg.zip
 ```
 
-> `ov get` 要求本地目标路径尚不存在，所以重新下载前先删除旧压缩包（`rm -f ./journal-kg.zip`）。`unzip -o` 会直接覆盖上次解压出的 `./journal-kg/`，不会停下来等确认。
+> `ov get` 会写出 `./journal-kg.zip`，以目录名命名。它不会覆盖已有文件，所以重新下载前先删除旧压缩包（`rm -f ./journal-kg.zip`）。`unzip -o` 会直接覆盖上次解压出的 `./journal-kg/`，不会停下来等确认。
 
 确认本地目录结构正确：
 

@@ -4,7 +4,7 @@ use crate::output::OutputFormat;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub async fn read(
     client: &HttpClient,
@@ -88,31 +88,61 @@ pub async fn reindex(
     Ok(())
 }
 
-pub async fn get(client: &HttpClient, uri: &str, local_path: &str) -> Result<()> {
-    // Check if target path already exists
-    let path = Path::new(local_path);
+pub async fn get(client: &HttpClient, uri: &str, local_path: Option<&str>) -> Result<()> {
+    // The body has to arrive before the target can be named: a directory URI
+    // comes back as a ZIP, and that decides the `.zip` suffix.
+    let (bytes, content_type) = client.get_bytes_with_type(uri).await?;
+    let is_zip = content_type
+        .as_deref()
+        .is_some_and(|value| value.starts_with("application/zip"));
+
+    let path = download_target(uri, local_path, is_zip);
+    let display = path.display().to_string();
     if path.exists() {
         return Err(crate::error::Error::Client(format!(
-            "File already exists: {}",
-            local_path
+            "File already exists: {display}"
         )));
     }
 
     // Ensure parent directory exists
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
     }
 
-    // Download file
-    let bytes = client.get_bytes(uri).await?;
-
     // Write to local file
-    let mut file = create_download_target(path, local_path)?;
+    let mut file = create_download_target(&path, &display)?;
     file.write_all(&bytes)?;
     file.flush()?;
 
-    println!("Downloaded {} bytes to {}", bytes.len(), local_path);
+    println!("Downloaded {} bytes to {}", bytes.len(), display);
     Ok(())
+}
+
+/// Resolve where the downloaded bytes go.
+///
+/// A target that is an existing directory — or omitted, meaning the current
+/// directory — receives a file named after the resource, so downloading a
+/// folder lands a real `<name>.zip` instead of an extension-less file carrying
+/// ZIP bytes. Any other path is used verbatim, which keeps
+/// `ov get <uri> ./explicit-name.zip` working as documented.
+fn download_target(uri: &str, local_path: Option<&str>, is_zip: bool) -> PathBuf {
+    let base = Path::new(local_path.unwrap_or("."));
+    if local_path.is_some() && !base.is_dir() {
+        return base.to_path_buf();
+    }
+
+    let mut name = uri
+        .trim_end_matches('/')
+        .rsplit('/')
+        .find(|segment| !segment.is_empty() && !segment.ends_with(':'))
+        .unwrap_or("download")
+        .to_string();
+    if is_zip && !name.ends_with(".zip") {
+        name.push_str(".zip");
+    }
+    base.join(name)
 }
 
 fn create_download_target(path: &Path, local_path: &str) -> Result<std::fs::File> {
@@ -234,6 +264,45 @@ mod tests {
             output.push(ch);
         }
         output
+    }
+
+    #[test]
+    fn download_target_names_archives_inside_a_directory() {
+        use super::download_target;
+        use std::path::PathBuf;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dir_path = dir.path().to_str().expect("utf-8 tempdir");
+
+        // Omitted target -> current directory, named after the resource.
+        assert_eq!(
+            download_target("viking://resources/myfolder", None, true),
+            PathBuf::from("./myfolder.zip")
+        );
+        assert_eq!(
+            download_target("viking://resources/logo.png", None, false),
+            PathBuf::from("./logo.png")
+        );
+        // Existing directory -> the archive lands inside it, not over it.
+        assert_eq!(
+            download_target("viking://resources/myfolder", Some(dir_path), true),
+            dir.path().join("myfolder.zip")
+        );
+        // An explicit non-directory path stays verbatim.
+        assert_eq!(
+            download_target("viking://resources/myfolder", Some("./explicit.zip"), true),
+            PathBuf::from("./explicit.zip")
+        );
+        // Already-suffixed names are not doubled up.
+        assert_eq!(
+            download_target("viking://resources/bundle.zip", None, true),
+            PathBuf::from("./bundle.zip")
+        );
+        // Scope-only URIs still produce a usable name.
+        assert_eq!(
+            download_target("viking://", None, true),
+            PathBuf::from("./download.zip")
+        );
     }
 
     #[test]

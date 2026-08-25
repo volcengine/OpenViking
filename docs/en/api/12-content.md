@@ -433,7 +433,7 @@ The TypeScript and Go SDKs and the CLI do not currently expose batch write direc
 
 ### download()
 
-Download a file as raw bytes, or a directory as a ZIP archive. File responses use `application/octet-stream`; directory responses use `application/zip` and preserve the downloaded directory as the archive root. Both return the filename through `Content-Disposition`. Directory downloads are limited to 10 MiB of source content and final ZIP size; oversized archives return `RESOURCE_EXHAUSTED`.
+Download a file as raw bytes, or a directory as a ZIP archive. File responses use `application/octet-stream`; directory responses use `application/zip` and preserve the downloaded directory as the archive root. Both return the filename through `Content-Disposition`. Directory downloads are limited to 10 MiB of source content and final ZIP size; oversized archives return `PAYLOAD_TOO_LARGE` (HTTP `413`). That failure is a property of the directory, not a rate limit, so it is permanent for that URI — do not retry it.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -452,7 +452,8 @@ curl --get http://localhost:1933/api/v1/content/download \
   --output logo.png
 
 # A directory is returned as a ZIP archive.
-ov get viking://resources/project ./project.zip
+# Writes ./project.zip, named after the directory.
+ov get viking://resources/project
 ```
 
 **Response**
@@ -467,7 +468,7 @@ Content-Disposition: attachment; filename*=UTF-8''logo.png
 <binary body>
 ```
 
-The CLI exposes the same endpoint through `ov get <uri> <local-path>`. The local path must not already exist.
+The CLI exposes the same endpoint through `ov get <uri> [local-path]`. When the local path is an existing directory — or omitted, which means the current directory — the download is written inside it under the resource's own name, with a `.zip` suffix for a directory URI. Any other local path is used verbatim, and must not already exist. The CLI never extracts the archive.
 
 ---
 
