@@ -256,6 +256,37 @@ async def test_build_directory_archive_rejects_declared_size_over_limit():
         )
 
 
+async def test_build_directory_archive_rejects_too_many_entries_before_reading():
+    observed = {}
+
+    class FakeFS:
+        async def tree(self, *args, **kwargs):
+            observed["node_limit"] = kwargs.get("node_limit")
+            return [
+                {
+                    "uri": f"viking://resources/project/d{index}",
+                    "rel_path": f"d{index}",
+                    "isDir": True,
+                    "size": 0,
+                }
+                for index in range(content_router._DIRECTORY_ARCHIVE_MAX_ENTRIES + 1)
+            ]
+
+        async def read_file_bytes(self, *args, **kwargs):
+            raise AssertionError("entry cap must fail before reading file contents")
+
+    service = SimpleNamespace(fs=FakeFS())
+    with pytest.raises(Exception, match="entry download limit"):
+        await content_router._build_directory_archive(
+            service,
+            "viking://resources/project",
+            {"name": "project", "isDir": True},
+            SimpleNamespace(),
+        )
+
+    assert observed["node_limit"] == content_router._DIRECTORY_ARCHIVE_MAX_ENTRIES + 1
+
+
 async def test_build_directory_archive_rejects_zip_over_limit(monkeypatch):
     class FakeFS:
         async def tree(self, *args, **kwargs):

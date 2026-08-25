@@ -43,6 +43,7 @@ from openviking_cli.utils import get_logger
 logger = get_logger(__name__)
 
 _DIRECTORY_ARCHIVE_MAX_BYTES = 10 * 1024 * 1024
+_DIRECTORY_ARCHIVE_MAX_ENTRIES = 10_000
 
 
 def _archive_size_limit_error(uri: str) -> PayloadTooLargeError:
@@ -50,6 +51,12 @@ def _archive_size_limit_error(uri: str) -> PayloadTooLargeError:
     # same URI can only fail again. A 429 would send clients into backoff-retry.
     return PayloadTooLargeError(
         f"Directory archive exceeds the {_DIRECTORY_ARCHIVE_MAX_BYTES}-byte download limit: {uri}"
+    )
+
+
+def _archive_entry_limit_error(uri: str) -> PayloadTooLargeError:
+    return PayloadTooLargeError(
+        f"Directory archive exceeds the {_DIRECTORY_ARCHIVE_MAX_ENTRIES}-entry download limit: {uri}"
     )
 
 
@@ -83,9 +90,11 @@ async def _build_directory_archive(
         ctx=ctx,
         output="original",
         show_all_hidden=True,
-        node_limit=None,
+        node_limit=_DIRECTORY_ARCHIVE_MAX_ENTRIES + 1,
         level_limit=None,
     )
+    if len(entries) > _DIRECTORY_ARCHIVE_MAX_ENTRIES:
+        raise _archive_entry_limit_error(uri)
 
     # Reject oversized trees before loading file contents into memory. The
     # ZIP itself is checked below as well because headers can push a highly

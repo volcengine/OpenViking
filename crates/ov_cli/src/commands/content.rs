@@ -89,6 +89,8 @@ pub async fn reindex(
 }
 
 pub async fn get(client: &HttpClient, uri: &str, local_path: Option<&str>) -> Result<()> {
+    preflight_explicit_download_target(local_path)?;
+
     // The body has to arrive before the target can be named: a directory URI
     // comes back as a ZIP, and that decides the `.zip` suffix.
     let (bytes, content_type) = client.get_bytes_with_type(uri).await?;
@@ -143,6 +145,19 @@ fn download_target(uri: &str, local_path: Option<&str>, is_zip: bool) -> PathBuf
         name.push_str(".zip");
     }
     base.join(name)
+}
+
+fn preflight_explicit_download_target(local_path: Option<&str>) -> Result<()> {
+    let Some(local_path) = local_path else {
+        return Ok(());
+    };
+    let path = Path::new(local_path);
+    if !path.is_dir() && path.exists() {
+        return Err(crate::error::Error::Client(format!(
+            "File already exists: {local_path}"
+        )));
+    }
+    Ok(())
 }
 
 fn create_download_target(path: &Path, local_path: &str) -> Result<std::fs::File> {
@@ -303,6 +318,30 @@ mod tests {
             download_target("viking://", None, true),
             PathBuf::from("./download.zip")
         );
+    }
+
+    #[test]
+    fn preflight_rejects_explicit_existing_file_target() {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let path = dir.path().join("result.bin");
+        std::fs::write(&path, b"existing").expect("fixture should be written");
+
+        let error = super::preflight_explicit_download_target(Some(&path.to_string_lossy()))
+            .expect_err("explicit existing file targets must fail before download");
+
+        assert!(matches!(error, Error::Client(_)));
+    }
+
+    #[test]
+    fn preflight_allows_directory_or_missing_explicit_targets() {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let missing_path = dir.path().join("new-result.bin");
+
+        super::preflight_explicit_download_target(None).expect("omitted target is named later");
+        super::preflight_explicit_download_target(Some(&missing_path.to_string_lossy()))
+            .expect("missing explicit file target is usable");
+        super::preflight_explicit_download_target(Some(&dir.path().to_string_lossy()))
+            .expect("directory target is named after the response type");
     }
 
     #[test]

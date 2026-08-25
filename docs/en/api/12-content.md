@@ -433,7 +433,7 @@ The TypeScript and Go SDKs and the CLI do not currently expose batch write direc
 
 ### download()
 
-Download a file as raw bytes, or a directory as a ZIP archive. File responses use `application/octet-stream`; directory responses use `application/zip` and preserve the downloaded directory as the archive root. Both return the filename through `Content-Disposition`. Directory downloads are limited to 10 MiB of source content and final ZIP size; oversized archives return `PAYLOAD_TOO_LARGE` (HTTP `413`). That failure is a property of the directory, not a rate limit, so it is permanent for that URI — do not retry it.
+Download a file as raw bytes, or a directory as a ZIP archive. File responses use `application/octet-stream`; directory responses use `application/zip` and preserve the downloaded directory as the archive root. Both return the filename through `Content-Disposition`. Directory downloads are limited to 10 MiB of source content, 10 MiB final ZIP size, and 10,000 tree entries; oversized archives return `PAYLOAD_TOO_LARGE` (HTTP `413`). That failure is a property of the directory, not a rate limit, so it is permanent for that URI — do not retry it.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|

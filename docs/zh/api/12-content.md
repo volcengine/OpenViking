@@ -433,7 +433,7 @@ TypeScript、Go SDK 和 CLI 当前不直接暴露 batch write。
 
 ### download()
 
-以原始字节流下载文件，或将目录打包成 ZIP 下载。文件响应使用 `application/octet-stream`；目录响应使用 `application/zip`，并以所下载目录作为压缩包根目录。两者都会通过 `Content-Disposition` 返回文件名。目录下载的源文件总大小和最终 ZIP 大小均限制为 10 MiB；超限返回 `PAYLOAD_TOO_LARGE`（HTTP `413`）。该失败取决于目录本身而非速率限制，对同一 URI 是永久性的，不要重试。
+以原始字节流下载文件，或将目录打包成 ZIP 下载。文件响应使用 `application/octet-stream`；目录响应使用 `application/zip`，并以所下载目录作为压缩包根目录。两者都会通过 `Content-Disposition` 返回文件名。目录下载的源文件总大小、最终 ZIP 大小均限制为 10 MiB，且最多包含 10,000 个目录树条目；超限返回 `PAYLOAD_TOO_LARGE`（HTTP `413`）。该失败取决于目录本身而非速率限制，对同一 URI 是永久性的，不要重试。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
