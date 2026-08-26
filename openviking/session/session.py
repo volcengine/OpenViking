@@ -80,6 +80,20 @@ _MEMORY_STEP_NAMES = ("long_term",)
 _CUMULATIVE_CHECKPOINT_VERSION = 2
 
 
+def _publish_telemetry_summary_best_effort(snapshot: Any) -> None:
+    """Publish a completed session telemetry summary without affecting the task outcome."""
+    if snapshot is None:
+        return
+    try:
+        from openviking.metrics.datasources.telemetry_bridge import (
+            TelemetryBridgeEventDataSource,
+        )
+
+        TelemetryBridgeEventDataSource.record_summary(snapshot.summary)
+    except Exception:
+        logger.debug("failed to publish session telemetry summary to metrics bridge", exc_info=True)
+
+
 class _ArchiveMessagesCorruptError(ValueError):
     """Raised when an archive messages file cannot be deserialized."""
 
@@ -2752,6 +2766,7 @@ class Session:
 
             # Phase 2 complete — update meta with telemetry and commit info
             snapshot = telemetry.finish("ok")
+            _publish_telemetry_summary_best_effort(snapshot)
             await self._merge_and_save_commit_meta(
                 archive_index=archive_index,
                 memories_extracted=memories_extracted,
@@ -2818,6 +2833,9 @@ class Session:
             )
             logger.info(f"Session {self.session_id} memory extraction completed")
         except asyncio.CancelledError:
+            telemetry.set_error("session.commit.phase2", "CANCELLED", "session commit cancelled")
+            snapshot = telemetry.finish("cancelled")
+            _publish_telemetry_summary_best_effort(snapshot)
             await self._write_failed_marker(
                 archive_uri,
                 stage="cancelled",
@@ -2825,6 +2843,9 @@ class Session:
             )
             raise
         except Exception as e:
+            telemetry.set_error("session.commit.phase2", type(e).__name__, str(e))
+            snapshot = telemetry.finish("error")
+            _publish_telemetry_summary_best_effort(snapshot)
             await self._write_failed_marker(
                 archive_uri,
                 stage="memory_extraction",

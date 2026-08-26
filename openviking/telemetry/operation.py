@@ -371,6 +371,7 @@ class TelemetrySummaryBuilder:
                         "merged": cls._i(gauges.get("memory.extract.merged"), 0),
                         "deleted": cls._i(gauges.get("memory.extract.deleted"), 0),
                         "skipped": cls._i(gauges.get("memory.extract.skipped"), 0),
+                        "failed": cls._i(gauges.get("memory.extract.failed"), 0),
                     },
                     "stages": {
                         public_key: cls._f(gauges.get(metric_key), 0.0)

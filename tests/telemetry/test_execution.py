@@ -18,7 +18,8 @@ def test_operation_telemetry_summary_includes_memory_extract_breakdown():
     telemetry.set("memory.extract.created", 3)
     telemetry.set("memory.extract.merged", 1)
     telemetry.set("memory.extract.deleted", 0)
-    telemetry.set("memory.extract.skipped", 3)
+    telemetry.set("memory.extract.skipped", 2)
+    telemetry.set("memory.extract.failed", 1)
     telemetry.set("memory.extract.stage.prepare_inputs.duration_ms", 8.4)
     telemetry.set("memory.extract.stage.llm_extract.duration_ms", 410.2)
     telemetry.set("memory.extract.stage.normalize_candidates.duration_ms", 6.7)
@@ -44,7 +45,8 @@ def test_operation_telemetry_summary_includes_memory_extract_breakdown():
         "actions": {
             "created": 3,
             "merged": 1,
-            "skipped": 3,
+            "skipped": 2,
+            "failed": 1,
         },
         "stages": {
             "prepare_inputs_ms": 8.4,
