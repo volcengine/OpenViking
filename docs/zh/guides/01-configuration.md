@@ -931,6 +931,7 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
 | `api_base` | str | 接口地址（用于 `openai` 提供方） |
 | `model` | str | 模型名称（用于 `openai` 提供方） |
 | `timeout` | float | OpenAI 兼容 provider 的 HTTP 请求超时时间，单位为秒。对于较慢或冷启动的本地 rerank 服务可适当增大。默认：`30.0` |
+| `trust_env` | bool | 是否使用进程环境中的代理和认证设置。对于需要绕过环境代理发现的受信任局域网端点，设为 `false`。默认：`true` |
 | `max_input_tokens` | int | 每个 query-document 对发送给 reranker 的最大估算原始文本 token 数；超长输入会保留开头和结尾。`0` 表示不截断。默认：`0` |
 | `threshold` | float | 分数阈值，范围为 `0.0` 到 `1.0`。低于此值的结果会被过滤。默认：`0.1` |
 | `extra_headers` | object | 自定义 HTTP 请求头（OpenAI 兼容 provider 可用，可选） |

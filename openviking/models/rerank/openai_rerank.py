@@ -51,6 +51,7 @@ class OpenAIRerankClient(RerankBase):
         model_name: str,
         extra_headers: Optional[Dict[str, str]] = None,
         timeout: float = 30.0,
+        trust_env: bool = True,
     ) -> None:
         """
         Initialize OpenAI-compatible rerank client.
@@ -62,6 +63,9 @@ class OpenAIRerankClient(RerankBase):
             extra_headers: Optional extra headers for API requests
             timeout: HTTP request timeout in seconds. Defaults to 30. Increase for
                 local LLM servers that incur model cold-start latency on the first call.
+            trust_env: Whether to use proxy and authentication settings from the
+                process environment. Set False for trusted LAN endpoints that must
+                bypass ambient proxy discovery.
         """
         super().__init__()
         self.api_key = api_key
@@ -69,6 +73,7 @@ class OpenAIRerankClient(RerankBase):
         self.model_name = model_name
         self.extra_headers = extra_headers or {}
         self.timeout = timeout
+        self.trust_env = trust_env
         self.provider = "openai"
         self._uses_nested_envelope = _uses_nested_envelope(api_base)
 
@@ -140,12 +145,25 @@ class OpenAIRerankClient(RerankBase):
             if self.extra_headers:
                 headers.update(self.extra_headers)
 
-            response = requests.post(
-                url=self.api_base,
-                headers=headers,
-                json=req_body,
-                timeout=self.timeout,
-            )
+            if self.trust_env:
+                response = requests.post(
+                    url=self.api_base,
+                    headers=headers,
+                    json=req_body,
+                    timeout=self.timeout,
+                )
+            else:
+                session = requests.Session()
+                try:
+                    session.trust_env = False
+                    response = session.post(
+                        url=self.api_base,
+                        headers=headers,
+                        json=req_body,
+                        timeout=self.timeout,
+                    )
+                finally:
+                    session.close()
             response.raise_for_status()
             result = response.json()
 
@@ -204,4 +222,5 @@ class OpenAIRerankClient(RerankBase):
             model_name=config.model or "qwen3-rerank",
             extra_headers=config.extra_headers,
             timeout=config.timeout,
+            trust_env=config.trust_env,
         )
