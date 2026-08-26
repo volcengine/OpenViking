@@ -7,9 +7,11 @@ All queues are managed through NamedQueue.
 
 import asyncio
 import atexit
+import json
 import threading
 import time
 import traceback
+from collections import deque
 from typing import Any, Dict, Optional, Set, Union
 
 from openviking.service.task_work_index import TaskWorkIndex
@@ -25,6 +27,20 @@ DEFAULT_MAX_CONCURRENT_SESSION_COMMIT = 8
 
 # ========== Singleton Pattern ==========
 _instance: Optional["QueueManager"] = None
+
+
+def _session_commit_session_id(data: Dict[str, Any]) -> Optional[str]:
+    payload = data.get("data")
+    if not isinstance(payload, str):
+        return None
+    try:
+        message = json.loads(payload)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(message, dict):
+        return None
+    session_id = message.get("session_id")
+    return str(session_id) if session_id else None
 
 
 def init_queue_manager(
@@ -223,7 +239,11 @@ class QueueManager:
             else self._poll_interval
         )
         try:
-            if max_concurrent > 1:
+            if queue.name == self.SESSION_COMMIT and max_concurrent > 1:
+                loop.run_until_complete(
+                    self._worker_async_session_fifo(queue, stop_event, max_concurrent)
+                )
+            elif max_concurrent > 1:
                 loop.run_until_complete(
                     self._worker_async_concurrent(queue, stop_event, max_concurrent)
                 )
@@ -311,6 +331,99 @@ class QueueManager:
             except asyncio.TimeoutError:
                 logger.warning(
                     f"[QueueManager] Drain timeout for {queue.name}, "
+                    f"cancelling {len(active_tasks)} in-flight task(s)"
+                )
+                for t in active_tasks:
+                    t.cancel()
+                await asyncio.gather(*active_tasks, return_exceptions=True)
+
+    async def _worker_async_session_fifo(
+        self, queue: NamedQueue, stop_event: threading.Event, max_concurrent: int
+    ) -> None:
+        """Concurrent SessionCommit worker with per-session in-process serialization."""
+        poll_interval = self._SESSION_COMMIT_POLL_INTERVAL
+        sem = asyncio.Semaphore(max_concurrent)
+        active_tasks: Set[asyncio.Task] = set()
+        active_sessions: Set[str] = set()
+        task_sessions: Dict[asyncio.Task, str] = {}
+        deferred: deque[Dict[str, Any]] = deque()
+
+        async def process_one(data: Dict[str, Any]) -> None:
+            async with sem:
+                msg_id = data.get("id", "") if isinstance(data, dict) else ""
+                try:
+                    await queue.process_dequeued(data)
+                    await queue.ack(msg_id, data)
+                except Exception as e:
+                    queue._on_process_error(str(e), data)
+                    logger.error(f"[QueueManager] SessionCommit worker error: {e}")
+
+        def dispatch(data: Dict[str, Any], session_id: Optional[str]) -> None:
+            if session_id is not None:
+                active_sessions.add(session_id)
+            queue._on_dequeue_start()
+            task = asyncio.create_task(process_one(data))
+            active_tasks.add(task)
+            if session_id is not None:
+                task_sessions[task] = session_id
+            logger.debug(
+                "[QueueManager] Dispatched SessionCommit task "
+                "(session_id=%s, active=%s)",
+                session_id,
+                len(active_tasks),
+            )
+
+        def dispatch_deferred() -> bool:
+            if not deferred:
+                return False
+            for _ in range(len(deferred)):
+                data = deferred.popleft()
+                session_id = _session_commit_session_id(data)
+                if session_id is not None and session_id in active_sessions:
+                    deferred.append(data)
+                    continue
+                dispatch(data, session_id)
+                return True
+            return False
+
+        while not stop_event.is_set():
+            done_tasks = {task for task in active_tasks if task.done()}
+            for task in done_tasks:
+                active_tasks.discard(task)
+                session_id = task_sessions.pop(task, None)
+                if session_id is not None:
+                    active_sessions.discard(session_id)
+
+            while len(active_tasks) < max_concurrent and dispatch_deferred():
+                pass
+
+            while len(active_tasks) < max_concurrent:
+                try:
+                    queue_size = await queue.size()
+                except Exception:
+                    break
+                if not queue.has_dequeue_handler() or queue_size == 0:
+                    break
+                data = await queue.dequeue_raw()
+                if data is None:
+                    break
+                session_id = _session_commit_session_id(data)
+                if session_id is not None and session_id in active_sessions:
+                    deferred.append(data)
+                    continue
+                dispatch(data, session_id)
+
+            await asyncio.sleep(poll_interval)
+
+        if active_tasks:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*active_tasks, return_exceptions=True),
+                    timeout=5.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "[QueueManager] Drain timeout for SessionCommit, "
                     f"cancelling {len(active_tasks)} in-flight task(s)"
                 )
                 for t in active_tasks:
