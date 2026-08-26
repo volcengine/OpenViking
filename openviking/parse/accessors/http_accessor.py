@@ -23,12 +23,13 @@ from typing import Any, Dict, Mapping, Optional, Tuple, Union
 from urllib.parse import unquote, urlparse
 
 from openviking.parse.base import lazy_import
-from openviking.parse.parsers.constants import CODE_EXTENSIONS
+from openviking.parse.parsers.constants import CODE_EXTENSIONS, TYPESCRIPT_MPEG_TS_EXTENSION
 from openviking.parse.parsers.media.constants import (
     AUDIO_EXTENSIONS,
     IMAGE_EXTENSIONS,
     VIDEO_EXTENSIONS,
 )
+from openviking.parse.parsers.media.utils import MPEG_TS_PROBE_BYTES, is_mpeg_ts
 from openviking.utils import is_code_hosting_blob_url
 from openviking.utils.network_guard import build_httpx_request_validation_hooks
 from openviking_cli.exceptions import PermissionDeniedError
@@ -694,6 +695,18 @@ class HTTPAccessor(DataAccessor):
             meta["detected_by"] = "magic_bytes"
             meta["magic_extension"] = magic_ext
             meta["refined_by_magic_bytes"] = True
+        elif (
+            url_type == URLType.DOWNLOAD_VIDEO
+            and meta.get("extension") == TYPESCRIPT_MPEG_TS_EXTENSION
+            and not self._looks_like_mpeg_ts(content)
+        ):
+            # A ".ts" extension is ambiguous: MPEG-TS video stream or TypeScript
+            # source. Extension-based detection alone routes it to DOWNLOAD_VIDEO,
+            # so verify the content; fall back to text when the bytes are not an
+            # MPEG-TS stream (fixes #3266).
+            url_type = URLType.DOWNLOAD_TXT
+            meta["detected_by"] = "mpeg_ts_probe"
+            meta["refined_by_mpeg_ts_probe"] = True
 
         meta["resolved_url_type"] = url_type
         if meta.get("refined_by_magic_bytes") and magic_ext:
@@ -733,6 +746,13 @@ class HTTPAccessor(DataAccessor):
             URLType.DOWNLOAD_TXT,
             URLType.DOWNLOAD_HTML,
         }
+
+    @staticmethod
+    def _looks_like_mpeg_ts(content: bytes) -> bool:
+        """Check whether downloaded bytes start with MPEG-TS packet sync bytes."""
+        if len(content) < MPEG_TS_PROBE_BYTES:
+            return False
+        return is_mpeg_ts(content[:MPEG_TS_PROBE_BYTES])
 
     @staticmethod
     def _detect_from_magic_bytes(content: bytes) -> Tuple[URLType, Optional[str]]:
