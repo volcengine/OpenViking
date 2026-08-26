@@ -210,22 +210,22 @@ openviking read viking://resources/docs/api.md
 
 ### write()
 
-修改一个已存在的文件，或在 `mode="create"` 时创建新文件，并自动刷新相关语义与向量。
+写入文件，并自动刷新相关语义与向量。
 
 **参数**
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| uri | str | 是 | - | 要写入的文件 URI。`mode="create"` 时目标文件必须不存在 |
+| uri | str | 是 | - | 要写入的文件 URI |
 | content | str | 是 | - | 要写入的新内容 |
-| mode | str | 否 | `replace` | `replace`、`append` 或 `create` |
+| mode | str | 否 | `replace` | `replace` 覆盖已有文件、缺失时创建；`append` 追加已有文件、缺失时创建；`create` 仅创建缺失文件，目标已存在时返回 `409 Conflict` |
 | wait | bool | 否 | `false` | 是否等待后台语义/向量刷新完成 |
 | timeout | float | 否 | `null` | 当 `wait=true` 时的超时时间（秒） |
 
 **说明**
 
-- `replace` 和 `append` 要求文件已存在；`create` 仅用于创建新文件，目标路径已存在时返回 `409 Conflict`。目录始终会被拒绝。
-- `create` 只允许以下文本类扩展名：`.md`、`.txt`、`.json`、`.yaml`、`.yml`、`.toml`、`.py`、`.js`、`.ts`。父目录会自动创建。
+- `replace` 和 `append` 在目标文件缺失时都会创建文件；其中 `append` 会以传入内容作为新文件的初始内容。`create` 仅用于创建缺失文件，目标路径已存在时返回 `409 Conflict`。目录始终会被拒绝。
+- 显式 `create` 只允许以下文本类扩展名：`.md`、`.txt`、`.json`、`.yaml`、`.yml`、`.toml`、`.py`、`.js`、`.ts`。所有写入模式都会自动创建父目录。
 - 已存在的 `.abstract.md` / `.overview.md` 可以修改正文，但不能通过公共 API 创建；只提交正文时会保留现有 OKF metadata，提交完整 OKF 时 metadata 必须与存量值一致。未知 metadata 字段会静默丢弃。sidecar 正文写入只重建该目录实际存在的 L0/L1 向量，不触发语义重新生成。
 - 文件内容会在 API 返回前完成更新；`wait` 只控制是否等待语义/向量刷新完成。
 - 公共 API 已不再接受 `regenerate_semantics` 或 `revectorize`；写入后一定会自动刷新相关语义与向量。

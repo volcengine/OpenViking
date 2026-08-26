@@ -94,7 +94,7 @@ per-harness 章节（档案卡）只写差异；所有共享事实均在本章�
 | 4 | `list` | 列目录（函数名 `ls`，注册名显式改写为 `list`） | `recursive=False`（`:423`） |
 | 5 | `tree` | 递归目录树 | `level_limit=3, node_limit=1000, include_abstract=False`（`:449`） |
 | 6 | `remember` | 写长期记忆 | 内部建一次性会话 `mcp-store-<uuid12>` 并立即 `commit_async`（`:504-523`）——这是 MCP 面唯一的 commit 入口；MCP 没有显式 commit 工具 |
-| 7 | `write` | 写 `viking://` 文件 | `mode=replace\|append\|create`，replace 遇 NotFound 自动降级 create；新建文件扩展名白名单 `.md .txt .json .yaml .yml .toml .py .js .ts`；可写域 `resources/user/agent`；用户根下 `skills/ peers/ privacy/ sessions/` 只读；已存在的 `.abstract.md/.overview.md` sidecar 可改正文，但公共 API 不能创建（`:529`；`content_write.py:60-81`） |
+| 7 | `write` | 写 `viking://` 文件 | `mode=replace\|append\|create`：replace 覆盖或在缺失时创建，append 追加或在缺失时创建，create 仅创建缺失文件且已存在时返回冲突；显式 create 的文件扩展名白名单为 `.md .txt .json .yaml .yml .toml .py .js .ts`；可写域 `resources/user/agent`；用户根下 `skills/ peers/ privacy/ sessions/` 只读；已存在的 `.abstract.md/.overview.md` sidecar 可改正文，但公共 API 不能创建（`:529`；`content_write.py:60-81`） |
 | 8 | `edit` | 精确字符串替换 | `old_string` 空/0 命中/多命中且非 replace_all 均报错，且文件内容不变（`:569`） |
 | 9 | `add_resource` | 资源摄取（远程 URL / 本地文件签名上传 / Connector） | `watch_interval` 单位为分钟（0=不 watch）；本地路径分支返回签名上传 URL（TTL 默认 600s），上传后自动入库，无需二次调用（`:723-947`） |
 | 10 | `list_watches` | 列 watch 订阅，商业版尚未支持 | scheduler 未运行时返回错误串（`:958`） |
