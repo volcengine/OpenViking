@@ -831,11 +831,18 @@ async def test_replace_and_append_create_missing_file(monkeypatch, mode):
     coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
 
     refresh_calls = []
+    write_calls = []
+
+    async def _fake_write_in_place(uri, content, *, mode, ctx, lease_ref=None, existing_raw=None):
+        del ctx, lease_ref, existing_raw
+        write_calls.append((uri, content, mode))
+        viking_fs.content[uri] = content
 
     async def _fake_enqueue_semantic_refresh(**kwargs):
         refresh_calls.append(kwargs)
         return None
 
+    monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
     monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh", _fake_enqueue_semantic_refresh)
 
     result = await coordinator.write(
@@ -844,6 +851,7 @@ async def test_replace_and_append_create_missing_file(monkeypatch, mode):
 
     assert result["mode"] == mode
     assert viking_fs.content[file_uri] == "new content"
+    assert write_calls == [(file_uri, "new content", "create")]
     assert refresh_calls[0]["change_type"] == "added"
 
 

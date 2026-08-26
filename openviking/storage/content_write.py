@@ -799,7 +799,7 @@ class ContentWriteCoordinator:
             await self._write_in_place(
                 uri,
                 content,
-                mode=response_mode or mode,
+                mode=mode,
                 ctx=ctx,
                 lease_ref=lease,
                 existing_raw=previous_content,
