@@ -24,6 +24,7 @@ from .semantic_queue import SemanticQueue
 logger = get_logger(__name__)
 
 DEFAULT_MAX_CONCURRENT_SESSION_COMMIT = 8
+DEFAULT_MAX_DEFERRED_SESSION_COMMIT = 64
 
 # ========== Singleton Pattern ==========
 _instance: Optional["QueueManager"] = None
@@ -343,6 +344,7 @@ class QueueManager:
         """Concurrent SessionCommit worker with per-session in-process serialization."""
         poll_interval = self._SESSION_COMMIT_POLL_INTERVAL
         sem = asyncio.Semaphore(max_concurrent)
+        max_deferred = DEFAULT_MAX_DEFERRED_SESSION_COMMIT
         active_tasks: Set[asyncio.Task] = set()
         active_sessions: Set[str] = set()
         task_sessions: Dict[asyncio.Task, str] = {}
@@ -358,10 +360,16 @@ class QueueManager:
                     queue._on_process_error(str(e), data)
                     logger.error(f"[QueueManager] SessionCommit worker error: {e}")
 
-        def dispatch(data: Dict[str, Any], session_id: Optional[str]) -> None:
+        def dispatch(
+            data: Dict[str, Any],
+            session_id: Optional[str],
+            *,
+            counted: bool = False,
+        ) -> None:
             if session_id is not None:
                 active_sessions.add(session_id)
-            queue._on_dequeue_start()
+            if not counted:
+                queue._on_dequeue_start()
             task = asyncio.create_task(process_one(data))
             active_tasks.add(task)
             if session_id is not None:
@@ -382,7 +390,7 @@ class QueueManager:
                 if session_id is not None and session_id in active_sessions:
                     deferred.append(data)
                     continue
-                dispatch(data, session_id)
+                dispatch(data, session_id, counted=True)
                 return True
             return False
 
@@ -397,7 +405,7 @@ class QueueManager:
             while len(active_tasks) < max_concurrent and dispatch_deferred():
                 pass
 
-            while len(active_tasks) < max_concurrent:
+            while len(active_tasks) < max_concurrent and len(deferred) < max_deferred:
                 try:
                     queue_size = await queue.size()
                 except Exception:
@@ -409,11 +417,36 @@ class QueueManager:
                     break
                 session_id = _session_commit_session_id(data)
                 if session_id is not None and session_id in active_sessions:
+                    queue._on_dequeue_start()
                     deferred.append(data)
                     continue
                 dispatch(data, session_id)
 
             await asyncio.sleep(poll_interval)
+
+        drain_deadline = time.monotonic() + 5.0
+        while active_tasks or deferred:
+            done_tasks = {task for task in active_tasks if task.done()}
+            if not done_tasks and active_tasks:
+                timeout = max(0.0, drain_deadline - time.monotonic())
+                if timeout == 0.0:
+                    break
+                done_tasks, _ = await asyncio.wait(
+                    active_tasks,
+                    timeout=timeout,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if not done_tasks:
+                    break
+
+            for task in done_tasks:
+                active_tasks.discard(task)
+                session_id = task_sessions.pop(task, None)
+                if session_id is not None:
+                    active_sessions.discard(session_id)
+
+            while len(active_tasks) < max_concurrent and dispatch_deferred():
+                pass
 
         if active_tasks:
             try:
@@ -429,6 +462,11 @@ class QueueManager:
                 for t in active_tasks:
                     t.cancel()
                 await asyncio.gather(*active_tasks, return_exceptions=True)
+        if deferred:
+            logger.warning(
+                "[QueueManager] SessionCommit worker stopped with "
+                f"{len(deferred)} deferred message(s) left for stale recovery"
+            )
 
     def stop(self) -> None:
         """Stop QueueManager and release resources."""

@@ -11,6 +11,7 @@ import threading
 from collections import deque
 from typing import Any, Dict, Optional
 
+from openviking.storage.queuefs.named_queue import QueueStatus
 from openviking.storage.queuefs.queue_manager import QueueManager
 
 
@@ -70,6 +71,8 @@ class _FakeSessionCommitQueue:
         self.started: list[str] = []
         self.acked: list[str] = []
         self.in_progress_count = 0
+        self.processed_count = 0
+        self.error_count = 0
         self.errors: list[str] = []
         self.first_started = asyncio.Event()
         self.second_started = asyncio.Event()
@@ -95,6 +98,7 @@ class _FakeSessionCommitQueue:
                 await self.release_first.wait()
         elif len(self.started) == 2:
             self.second_started.set()
+        self._on_process_success()
 
     async def ack(self, msg_id: str, message: Optional[Dict[str, Any]] = None) -> None:
         self.acked.append(msg_id)
@@ -102,8 +106,22 @@ class _FakeSessionCommitQueue:
     def _on_dequeue_start(self) -> None:
         self.in_progress_count += 1
 
+    def _on_process_success(self) -> None:
+        self.in_progress_count -= 1
+        self.processed_count += 1
+
     def _on_process_error(self, error_msg: str, data: Optional[Dict[str, Any]] = None) -> None:
+        self.in_progress_count -= 1
+        self.error_count += 1
         self.errors.append(error_msg)
+
+    async def get_status(self) -> QueueStatus:
+        return QueueStatus(
+            pending=len(self._messages),
+            in_progress=self.in_progress_count,
+            processed=self.processed_count,
+            error_count=self.error_count,
+        )
 
 
 async def test_session_commit_worker_serializes_same_session() -> None:
@@ -125,9 +143,11 @@ async def test_session_commit_worker_serializes_same_session() -> None:
     await asyncio.sleep(0.05)
 
     assert queue.started == ["commit-1"]
-    assert queue.in_progress_count == 1
+    assert queue.in_progress_count == 2
     assert queue.acked == []
     assert queue.errors == []
+    manager._queues[manager.SESSION_COMMIT] = queue
+    assert not await manager.is_all_complete(manager.SESSION_COMMIT)
 
     queue.release_first.set()
     await asyncio.wait_for(queue.second_started.wait(), timeout=1.0)
@@ -136,6 +156,7 @@ async def test_session_commit_worker_serializes_same_session() -> None:
 
     assert queue.started == ["commit-1", "commit-2"]
     assert queue.acked == ["commit-1", "commit-2"]
+    assert queue.in_progress_count == 0
 
 
 async def test_session_commit_worker_allows_different_sessions_concurrently() -> None:
@@ -156,7 +177,7 @@ async def test_session_commit_worker_allows_different_sessions_concurrently() ->
     await asyncio.wait_for(queue.second_started.wait(), timeout=1.0)
 
     assert queue.started == ["commit-1", "commit-2"]
-    assert queue.in_progress_count == 2
+    assert queue.in_progress_count == 1
     assert queue.acked == ["commit-2"]
     assert queue.errors == []
 
@@ -165,3 +186,66 @@ async def test_session_commit_worker_allows_different_sessions_concurrently() ->
     await asyncio.wait_for(worker, timeout=1.0)
 
     assert queue.acked == ["commit-2", "commit-1"]
+    assert queue.in_progress_count == 0
+
+
+async def test_session_commit_worker_lookahead_reaches_later_different_session() -> None:
+    manager = QueueManager(agfs=object())
+    manager._SESSION_COMMIT_POLL_INTERVAL = 0.01
+    queue = _FakeSessionCommitQueue(
+        [
+            _session_commit_queue_item("commit-a1", "session-a"),
+            _session_commit_queue_item("commit-a2", "session-a"),
+            _session_commit_queue_item("commit-a3", "session-a"),
+            _session_commit_queue_item("commit-b1", "session-b"),
+        ],
+        block_first=True,
+    )
+    stop_event = threading.Event()
+    worker = asyncio.create_task(
+        manager._worker_async_session_fifo(queue, stop_event, max_concurrent=3)
+    )
+
+    await asyncio.wait_for(queue.second_started.wait(), timeout=1.0)
+
+    assert queue.started == ["commit-a1", "commit-b1"]
+    assert queue.in_progress_count == 3
+    assert queue.acked == ["commit-b1"]
+    assert len(queue._messages) == 0
+
+    queue.release_first.set()
+    stop_event.set()
+    await asyncio.wait_for(worker, timeout=1.0)
+
+    assert queue.started == ["commit-a1", "commit-b1", "commit-a2", "commit-a3"]
+    assert queue.acked == ["commit-b1", "commit-a1", "commit-a2", "commit-a3"]
+    assert queue.in_progress_count == 0
+
+
+async def test_session_commit_worker_bounds_deferred_messages() -> None:
+    manager = QueueManager(agfs=object())
+    manager._SESSION_COMMIT_POLL_INTERVAL = 0.01
+    queue = _FakeSessionCommitQueue(
+        [_session_commit_queue_item(f"commit-{i}", "session-a") for i in range(70)],
+        block_first=True,
+    )
+    stop_event = threading.Event()
+    worker = asyncio.create_task(
+        manager._worker_async_session_fifo(queue, stop_event, max_concurrent=3)
+    )
+
+    await asyncio.wait_for(queue.first_started.wait(), timeout=1.0)
+    await asyncio.sleep(0.05)
+
+    assert queue.started == ["commit-0"]
+    assert queue.in_progress_count == 65
+    assert len(queue._messages) == 5
+
+    queue.release_first.set()
+    stop_event.set()
+    await asyncio.wait_for(worker, timeout=1.0)
+
+    assert len(queue.started) == 65
+    assert len(queue.acked) == 65
+    assert queue.in_progress_count == 0
+    assert len(queue._messages) == 5
