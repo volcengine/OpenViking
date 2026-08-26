@@ -1542,7 +1542,7 @@ async def test_concurrent_stale_workers_append_without_losing_messages(
     ]
 
 
-async def test_phase2_meta_merge_serializes_with_concurrent_append(
+async def test_session_state_lock_serializes_root_meta_without_blocking_archive_write(
     client,
     monkeypatch,
 ):
@@ -1574,6 +1574,12 @@ async def test_phase2_meta_merge_serializes_with_concurrent_append(
     )
     await phase2_inside_save.wait()
 
+    memory_diff_uri = f"{initial._session_uri}/history/archive_001/memory_diff.json"
+    await asyncio.wait_for(
+        phase2._viking_fs.write_file(memory_diff_uri, "{}", ctx=phase2.ctx),
+        timeout=1.0,
+    )
+
     append_task = asyncio.create_task(
         appending.add_message_async("assistant", [TextPart("second")])
     )
@@ -1585,6 +1591,7 @@ async def test_phase2_meta_merge_serializes_with_concurrent_append(
 
     fresh = client(session_id=initial.session_id)
     await fresh.load()
+    assert await fresh._viking_fs.read_file(memory_diff_uri, ctx=fresh.ctx) == "{}"
     assert [message.content for message in fresh.messages] == ["first", "second"]
     assert fresh.meta.message_count == 2
     assert fresh.meta.total_message_count == 2

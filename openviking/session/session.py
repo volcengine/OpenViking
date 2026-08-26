@@ -813,7 +813,7 @@ class Session:
         """Update mutable session config without overwriting concurrent meta changes."""
         update_auto_commit_policy = update_auto_commit_policy or auto_commit_policy is not None
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
-        lease = await self._viking_fs._async_agfs.pathlock_acquire_tree(
+        lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
             session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
         )
         try:
@@ -835,7 +835,7 @@ class Session:
                     existing = dict(self._meta.auto_commit_policy or {})
                     existing.update(auto_commit_policy)
                     self._meta.auto_commit_policy = AutoCommitPolicy.from_dict(existing).to_dict()
-            await self._save_meta(lease_ref=lease)
+            await self._save_meta()
         finally:
             await self._viking_fs._async_agfs.pathlock_release(lease)
 
@@ -1252,7 +1252,7 @@ class Session:
             return
 
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
-        lease = await self._viking_fs._async_agfs.pathlock_acquire_tree(
+        lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
             session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
         )
         try:
@@ -1283,16 +1283,14 @@ class Session:
                     f"{self._session_uri}/messages.jsonl",
                     batch_content,
                     ctx=self.ctx,
-                    lease_ref=lease,
                 )
             else:
                 await self._viking_fs.append_file(
                     f"{self._session_uri}/messages.jsonl",
                     batch_content,
                     ctx=self.ctx,
-                    lease_ref=lease,
                 )
-            await self._save_meta(lease_ref=lease)
+            await self._save_meta()
         finally:
             await self._viking_fs._async_agfs.pathlock_release(lease)
 
@@ -1671,7 +1669,7 @@ class Session:
             return False
 
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
-        lease = await self._viking_fs._async_agfs.pathlock_acquire_tree(
+        lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
             session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
         )
         try:
@@ -1692,7 +1690,6 @@ class Session:
                     archive_uri,
                     stage="phase1_recovery",
                     error=error,
-                    lease_ref=lease,
                 )
                 if task_id:
                     await tracker.fail(
@@ -1718,7 +1715,6 @@ class Session:
                     archive_uri,
                     stage="phase1_recovery",
                     error=f"Cannot verify Phase 1 state: {exc}",
-                    lease_ref=lease,
                 )
                 return False
 
@@ -1732,7 +1728,6 @@ class Session:
                     archive_uri,
                     stage="phase1_recovery",
                     error="Root rewrite was not durably completed before process interruption",
-                    lease_ref=lease,
                 )
                 return False
 
@@ -1763,8 +1758,8 @@ class Session:
             )
             self._meta.last_commit_at = get_current_timestamp()
             self._rebuild_pending_tokens()
-            await self._save_meta(lease_ref=lease)
-            await self._write_phase1_ready_marker(archive_uri, lease_ref=lease)
+            await self._save_meta()
+            await self._write_phase1_ready_marker(archive_uri)
             logger.warning("Recovered interrupted Session Phase 1: %s", archive_uri)
             return True
         finally:
@@ -1896,11 +1891,11 @@ class Session:
         )
 
         # ===== Phase 1: authoritative snapshot + split (path-lock protected) =====
-        # Use a waiting filesystem lock and reload inside it. Different workers
-        # can hold stale Session objects, so in-memory emptiness is never a
-        # correctness boundary.
+        # The exact lock on the Session directory is the mutex for root Session
+        # state and archive-number allocation. Child files use their own exact
+        # locks, so Phase 2 can keep writing an earlier archive concurrently.
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
-        lease = await self._viking_fs._async_agfs.pathlock_acquire_tree(
+        lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
             session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
         )
         try:
@@ -1979,7 +1974,7 @@ class Session:
                     retained_message_token_budget=effective_token_budget if turn_mode else 0,
                     min_raw_tail_steps=effective_min_tail,
                 )
-                await self._save_meta(lease_ref=lease)
+                await self._save_meta()
                 get_current_telemetry().set("memory.extracted", 0)
                 return {
                     "session_id": self.session_id,
@@ -2019,7 +2014,7 @@ class Session:
             # remember the policy for subsequent add_message accounting.
             if not messages_to_archive:
                 self._messages = retained_messages
-                await self._write_to_agfs_async(messages=self._messages, lease_ref=lease)
+                await self._write_to_agfs_async(messages=self._messages)
                 self._meta.pending_tokens = 0
                 self._meta.message_count = total
                 self._remember_retention_policy(
@@ -2029,7 +2024,7 @@ class Session:
                     retained_message_token_budget=effective_token_budget if turn_mode else 0,
                     min_raw_tail_steps=effective_min_tail,
                 )
-                await self._save_meta(lease_ref=lease)
+                await self._save_meta()
                 get_current_telemetry().set("memory.extracted", 0)
                 return {
                     "session_id": self.session_id,
@@ -2078,7 +2073,6 @@ class Session:
                     min_raw_tail_steps=effective_min_tail,
                     agent_evolution_enabled=agent_evolution_enabled,
                     agent_memory_skip_reason=agent_memory_skip_reason,
-                    lease_ref=lease,
                 )
 
                 # Archive raw remains durable and recoverable before any live
@@ -2089,7 +2083,6 @@ class Session:
                         uri=f"{archive_uri}/messages.jsonl",
                         content="\n".join(lines) + "\n",
                         ctx=self.ctx,
-                        lease_ref=lease,
                     )
                     if retention_plan is not None:
                         await self._merge_archive_meta(
@@ -2102,7 +2095,6 @@ class Session:
                                     min_raw_tail_steps=effective_min_tail,
                                 )
                             },
-                            lease_ref=lease,
                         )
 
                 phase1_stage = "queue_enqueue"
@@ -2122,7 +2114,7 @@ class Session:
 
                 phase1_stage = "phase1_persist"
                 self._messages = retained_messages
-                await self._write_to_agfs_async(messages=self._messages, lease_ref=lease)
+                await self._write_to_agfs_async(messages=self._messages)
                 self._meta.message_count = len(self._messages)
                 self._meta.pending_tokens = 0
                 self._remember_retention_policy(
@@ -2142,8 +2134,8 @@ class Session:
                     # commit boundary, so an idle scan and a concurrent worker
                     # never see a stale state.
                     self._meta.last_auto_commit_at = get_current_timestamp()
-                await self._save_meta(lease_ref=lease)
-                await self._write_phase1_ready_marker(archive_uri, lease_ref=lease)
+                await self._save_meta()
+                await self._write_phase1_ready_marker(archive_uri)
             except Exception as e:
                 logger.error(f"[commit] Failed during {phase1_stage}: {e}")
                 # Whether the queue write failed or a queued Phase 1 stopped
@@ -2154,7 +2146,6 @@ class Session:
                         archive_uri,
                         stage=phase1_stage,
                         error=str(e),
-                        lease_ref=lease,
                     )
                 except Exception:
                     logger.exception(
@@ -3967,7 +3958,7 @@ class Session:
     ) -> None:
         """Merge Phase 2 results without overwriting concurrent root updates."""
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
-        lease = await self._viking_fs._async_agfs.pathlock_acquire_tree(
+        lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
             session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
         )
         try:
@@ -4008,7 +3999,7 @@ class Session:
                 # a clean auto-commit even after Phase 2 reloads the latest meta.
                 latest_meta.last_auto_commit_at = get_current_timestamp()
             self._meta = latest_meta
-            await self._save_meta(lease_ref=lease)
+            await self._save_meta()
         finally:
             await self._viking_fs._async_agfs.pathlock_release(lease)
 

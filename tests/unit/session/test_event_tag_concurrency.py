@@ -15,7 +15,7 @@ class _PathLock:
         self.acquired = 0
         self.released = 0
 
-    async def pathlock_acquire_tree(self, path, timeout_secs):
+    async def pathlock_acquire_exact(self, path, timeout_secs):
         del path, timeout_secs
         self.acquired += 1
         return "lease-1"
@@ -133,6 +133,6 @@ async def test_update_config_updates_policy_and_tags_in_one_locked_write():
     assert saved_meta.message_count == 41
     assert saved_meta.pending_tokens == 8200
     assert len(viking_fs.writes) == 1
-    assert viking_fs.writes[0][2] == "lease-1"
+    assert viking_fs.writes[0][2] is None
     assert viking_fs._async_agfs.acquired == 1
     assert viking_fs._async_agfs.released == 1
