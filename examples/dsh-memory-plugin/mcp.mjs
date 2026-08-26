@@ -28,7 +28,7 @@ export function buildMcpConfig(config) {
   return {
     transport: "stdio",
     serverName: MCP_SERVER_NAME,
-    command: "node",
+    command: process.execPath,
     args: [PROXY_PATH],
     env,
     toolCallTimeoutMs: config.mcpToolCallTimeoutMs,
