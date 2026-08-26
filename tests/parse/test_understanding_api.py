@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openviking.parse.understanding_api import UnderstandingAPI
+from openviking_cli.exceptions import InvalidArgumentError
 
 
 @pytest.mark.asyncio
@@ -56,10 +57,21 @@ async def test_parse_uses_downloaded_file_and_resolved_extension(monkeypatch, tm
 
 
 @pytest.mark.asyncio
-async def test_submit_file_returns_response_id(tmp_path):
+async def test_submit_file_validates_input_and_returns_response_id(tmp_path):
+    empty_source = tmp_path / "empty.pdf"
+    empty_source.touch()
+    api = UnderstandingAPI.__new__(UnderstandingAPI)
+
+    with pytest.raises(
+        InvalidArgumentError,
+        match="Understanding parser does not support empty files",
+    ) as exc_info:
+        await api.submit_file(empty_source)
+
+    assert exc_info.value.code == "INVALID_ARGUMENT"
+
     source = tmp_path / "download.pdf"
     source.write_bytes(b"%PDF-1.7")
-    api = UnderstandingAPI.__new__(UnderstandingAPI)
     api._create_file = AsyncMock(return_value={"id": "file-1"})
     api._create_response_for_file = AsyncMock(return_value={"id": "response-1"})
 
