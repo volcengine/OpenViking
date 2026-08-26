@@ -18,7 +18,7 @@ test("the mount config validates against the pinned bridge's own schema", () => 
   // server through this same proxy, and it owns the transport quirks.
   assert.equal(parsed.transport, "stdio");
   assert.equal(parsed.serverName, "openviking");
-  assert.equal(parsed.command, "node");
+  assert.equal(parsed.command, process.execPath);
   assert.deepEqual(parsed.args, [PROXY_PATH]);
   assert.equal(parsed.env.ELECTRON_RUN_AS_NODE, "1");
   assert.equal(parsed.toolCallTimeoutMs, 60000);
