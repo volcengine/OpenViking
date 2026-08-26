@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Union
 
 from openviking.core.context import ContextLevel
 from openviking.core.retrieval_targets import resolve_retrieval_targets
+from openviking.retrieve.query_embedding_cache import QueryEmbeddingCache
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext
 from openviking.storage.abstract_overview import body_for_preview, render_abstract_overview
@@ -190,6 +191,7 @@ class _SemanticMixin:
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
         image_url: Optional[str] = None,
+        query_embedding_cache: Optional[QueryEmbeddingCache] = None,
     ):
         """Semantic search.
 
@@ -256,6 +258,7 @@ class _SemanticMixin:
             score_threshold=score_threshold,
             scope_dsl=filter,
             level=level,
+            query_embedding_cache=query_embedding_cache,
         )
 
         # Convert QueryResult to FindResult

@@ -21,6 +21,7 @@ from openviking.retrieve.context_assembler.params import (
     OTHER_PEER_OVERFETCH,
     REPORTED_CATEGORY_KEYS,
 )
+from openviking.retrieve.query_embedding_cache import QueryEmbeddingCache
 from openviking.server.identity import RequestContext
 from openviking.utils.search_filters import merge_context_type_filter
 from openviking_cli.exceptions import InvalidArgumentError
@@ -222,6 +223,7 @@ async def gather_candidates(
 
     searched: Dict[str, int] = {}
     retrieval_errors: List[str] = []
+    query_embedding_cache = QueryEmbeddingCache()
     excluded_count = 0
 
     def _build(items: Sequence[Tuple[Any, Optional[str]]]) -> List[Candidate]:
@@ -285,6 +287,7 @@ async def gather_candidates(
             filter=find_filter if find_filter is not None else filter,
             image_url=image_url,
             level=None,
+            query_embedding_cache=query_embedding_cache,
         )
 
     async def gather_bucket(bucket: str, quota: int) -> List[Candidate]:
@@ -399,6 +402,7 @@ async def gather_candidates(
         "origins": origins,
         "peer_scope": peer_scope,
         "quotas": dict(quotas) if quotas is not None else None,
+        "query_embeddings": query_embedding_cache.size,
     }
     if retrieval_errors:
         stats["retrieval_errors"] = retrieval_errors[:5]
