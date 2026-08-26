@@ -15,12 +15,18 @@ export function normalizeToolName(value) {
 }
 
 export function findVikingUri(args = {}, keys = DEFAULT_URI_KEYS) {
+  const uri = findVikingUriInKeys(args, keys);
+  if (uri) return uri;
+  return findVikingUriInValue(args);
+}
+
+export function findVikingUriInKeys(args = {}, keys = []) {
   if (!args || typeof args !== "object") return null;
   for (const key of keys) {
     const uri = findVikingUriInValue(args[key]);
     if (uri) return uri;
   }
-  return findVikingUriInValue(args);
+  return null;
 }
 
 export function findVikingUriInValue(value) {

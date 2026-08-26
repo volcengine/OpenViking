@@ -1,6 +1,12 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { buildGuardMessage, findVikingUri, findVikingUriInValue, normalizeToolName } from "./lib/uri-guard.mjs"
+import {
+  buildGuardMessage,
+  findVikingUri,
+  findVikingUriInKeys,
+  findVikingUriInValue,
+  normalizeToolName,
+} from "./lib/uri-guard.mjs"
 
 test("findVikingUri detects common path and URI argument keys", () => {
   assert.equal(findVikingUri({ filePath: "viking://resources/a.md" }), "viking://resources/a.md")
@@ -16,6 +22,33 @@ test("findVikingUri detects nested command strings", () => {
   )
   assert.equal(
     findVikingUriInValue(["grep", "needle", "viking://resources/project/"]),
+    "viking://resources/project/",
+  )
+  assert.equal(
+    findVikingUri("viking://resources/direct-value.md"),
+    "viking://resources/direct-value.md",
+  )
+})
+
+test("findVikingUriInKeys scans only explicitly selected argument fields", () => {
+  const args = {
+    file_path: "/tmp/notes.md",
+    content: "Read viking://resources/docs/ later",
+    metadata: { source: "viking://resources/metadata/" },
+  }
+
+  assert.equal(findVikingUriInKeys(args, ["file_path"]), null)
+  assert.equal(findVikingUriInKeys(args, ["content"]), "viking://resources/docs/")
+  assert.equal(findVikingUriInKeys(null, ["file_path"]), null)
+  assert.equal(findVikingUriInKeys("viking://resources/a.md", ["file_path"]), null)
+})
+
+test("findVikingUriInKeys preserves recursive scanning inside a selected field", () => {
+  assert.equal(
+    findVikingUriInKeys(
+      { path: ["/tmp/a", { nested: "viking://resources/project/" }] },
+      ["path"],
+    ),
     "viking://resources/project/",
   )
 })
