@@ -4,6 +4,7 @@ import importlib
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Type
 
+from openviking.storage.vectordb.collection.diversity import VectorDiversityOptions
 from openviking.storage.vectordb.collection.result import AggregateResult, SearchResult
 from openviking.storage.vectordb.index.index import IIndex
 
@@ -66,6 +67,7 @@ class ICollection(ABC):
         filters: Optional[Dict[str, Any]] = None,
         sparse_vector: Optional[Dict[str, float]] = None,
         output_fields: Optional[List[str]] = None,
+        diversity: Optional[VectorDiversityOptions] = None,
     ) -> SearchResult:
         raise NotImplementedError
 
@@ -342,6 +344,7 @@ class Collection:
         filters: Optional[Dict[str, Any]] = None,
         sparse_vector: Optional[Dict[str, float]] = None,
         output_fields: Optional[List[str]] = None,
+        diversity: Optional[VectorDiversityOptions] = None,
     ):
         """Perform vector similarity search on the specified index.
 
@@ -355,14 +358,26 @@ class Collection:
                 Defaults to None.
             output_fields (Optional[List[str]]): List of field names to include in results.
                 If None, returns all fields. Defaults to None.
+            diversity: Optional vector-index MMR and duplicate-suppression settings.
 
         Returns:
             SearchResult: Search results containing matching documents with scores and field values.
         """
         if self.__collection is None:
             raise RuntimeError("Collection is closed")
+        if diversity is None:
+            return self.__collection.search_by_vector(
+                index_name, dense_vector, limit, offset, filters, sparse_vector, output_fields
+            )
         return self.__collection.search_by_vector(
-            index_name, dense_vector, limit, offset, filters, sparse_vector, output_fields
+            index_name,
+            dense_vector,
+            limit,
+            offset,
+            filters,
+            sparse_vector,
+            output_fields,
+            diversity=diversity,
         )
 
     def search_by_keywords(

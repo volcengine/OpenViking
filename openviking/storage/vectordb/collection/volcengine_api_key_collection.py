@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from openviking.storage.errors import ConnectionError
 from openviking.storage.vectordb.collection.collection import ICollection
+from openviking.storage.vectordb.collection.diversity import VectorDiversityOptions
 from openviking.storage.vectordb.collection.result import (
     AggregateResult,
     DataItem,
@@ -372,7 +373,12 @@ class VolcengineApiKeyCollection(ICollection):
         filters: Optional[Dict[str, Any]] = None,
         sparse_vector: Optional[Dict[str, float]] = None,
         output_fields: Optional[List[str]] = None,
+        diversity: Optional[VectorDiversityOptions] = None,
     ) -> SearchResult:
+        if diversity is not None:
+            raise NotImplementedError(
+                "vector diversity is only supported by the built-in vector index"
+            )
         if dense_vector is None and sparse_vector is None:
             raise ValueError("At least one of dense_vector or sparse_vector is required")
 

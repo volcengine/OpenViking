@@ -423,10 +423,13 @@ async def search_by_vector(request: SearchByVectorRequest, req: Request):
             filters=filters,
             sparse_vector=sparse_vector,
             output_fields=output_fields,
+            diversity=request.diversity,
         )
         return success_response("search success", asdict(result), request=req)
     except VikingDBException as e:
         return error_response(e.message, e.code.value, request=req)
+    except (NotImplementedError, ValueError) as e:
+        return error_response(str(e), ErrorCode.INVALID_PARAM.value, request=req)
 
 
 @search_router.post("/id", response_model=ApiResponse)
