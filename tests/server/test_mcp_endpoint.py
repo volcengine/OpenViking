@@ -105,9 +105,10 @@ def test_get_ctx_raises_when_unset():
         ("viking://~/resources", "viking://user/test_user/resources"),
     ],
 )
-def test_resolve_mcp_workspace_uri_only_expands_documented_aliases(uri, expected):
-    user_ctx = RequestContext(DEFAULT_CTX.user, Role.USER)
-    assert _resolve_mcp_workspace_uri(uri, user_ctx) == expected
+@pytest.mark.parametrize("role", [Role.USER, Role.ADMIN, Role.ROOT])
+def test_resolve_mcp_workspace_uri_only_expands_documented_aliases(uri, expected, role):
+    ctx = RequestContext(DEFAULT_CTX.user, role)
+    assert _resolve_mcp_workspace_uri(uri, ctx) == expected
 
 
 @pytest.mark.parametrize(
@@ -132,8 +133,8 @@ def test_resolve_mcp_workspace_uri_supports_dotted_current_user_id():
     assert _resolve_mcp_workspace_uri("viking://user/notes/todo.md", ctx) == (
         "viking://user/notes/todo.md"
     )
-    # DEFAULT_CTX is ROOT: root-role requests skip current-user resolution
-    # entirely, so a reserved first segment stays a literal user id.
+    # DEFAULT_CTX is ROOT: only the '~' alias uses its effective user identity,
+    # so a reserved first segment stays a literal user id.
     assert _resolve_mcp_workspace_uri("viking://user/resources", DEFAULT_CTX) == (
         "viking://user/resources"
     )
@@ -1550,9 +1551,10 @@ async def test_edit_memory_file_preserves_metadata(service):
     assert visible.strip() == "likes: coffee"
 
 
-async def test_write_home_alias_uri(service):
-    """`viking://~/...` writes into the caller's canonical user root."""
-    user_ctx = RequestContext(DEFAULT_CTX.user, Role.USER)
+@pytest.mark.parametrize("role", [Role.USER, Role.ADMIN, Role.ROOT])
+async def test_write_home_alias_uri(service, role):
+    """Every MCP request role writes `viking://~/...` under its effective user."""
+    user_ctx = RequestContext(DEFAULT_CTX.user, role)
     canonical = f"viking://user/{DEFAULT_CTX.user.user_id}/memories/preferences/home_alias.md"
     token = _mcp_ctx.set(user_ctx)
     try:
@@ -1569,12 +1571,6 @@ async def test_write_home_alias_uri(service):
     assert "viking://~" not in read_back
     visible = await service.fs.read_visible(canonical, ctx=DEFAULT_CTX)
     assert visible.strip() == "x"
-
-
-async def test_home_alias_rejected_for_root_role(service):
-    """Root-role MCP calls skip current-user resolution, so the alias fails closed."""
-    with pytest.raises(InvalidURIError, match="Home alias URI is not canonical"):
-        await list_tool(uri="viking://~/memories")
 
 
 async def test_write_home_alias_memory_uri(service):
@@ -1741,7 +1737,7 @@ def test_mcp_route_unmatched_paths_keep_falling_back(app):
     assert "route" not in child_scope
 
 
-async def test_mcp_middleware_stamps_root_span_identity():
+async def test_mcp_middleware_stamps_and_uses_root_identity_for_home_alias():
     """Identity resolved from the auth headers must be stamped onto the outer
     request's root span attributes, so MCP traffic is audited under the real
     account/user instead of ``__unknown__``."""
@@ -1753,7 +1749,12 @@ async def test_mcp_middleware_stamps_root_span_identity():
         request_id="req-test",
     )
 
+    seen = {}
+
     async def downstream(scope, receive, send):
+        ctx = _get_ctx()
+        seen["ctx"] = ctx
+        seen["uri"] = _resolve_mcp_workspace_uri("viking://~/memories", ctx)
         response = httpx.Response(200, json={"ok": True})
         await send(
             {
@@ -1787,6 +1788,9 @@ async def test_mcp_middleware_stamps_root_span_identity():
     assert response.status_code == 200
     assert root_attrs.account_id == "acct-1"
     assert root_attrs.user_id == "user-1"
+    assert seen["ctx"].role == Role.ROOT
+    assert seen["ctx"].account_id == "acct-1"
+    assert seen["uri"] == "viking://user/user-1/memories"
 
 
 # ---- tree tool ----
