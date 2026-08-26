@@ -822,6 +822,32 @@ class _FakeVikingFSForCreate:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["replace", "append"])
+async def test_replace_and_append_create_missing_file(monkeypatch, mode):
+    file_uri = "viking://resources/demo/missing.csv"
+    root_uri = "viking://resources/demo"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    viking_fs = _FakeVikingFSForCreate(file_uri=file_uri, root_uri=root_uri, file_exists=False)
+    coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+
+    refresh_calls = []
+
+    async def _fake_enqueue_semantic_refresh(**kwargs):
+        refresh_calls.append(kwargs)
+        return None
+
+    monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh", _fake_enqueue_semantic_refresh)
+
+    result = await coordinator.write(
+        uri=file_uri, content="new content", mode=mode, ctx=ctx, wait=False
+    )
+
+    assert result["mode"] == mode
+    assert viking_fs.content[file_uri] == "new content"
+    assert refresh_calls[0]["change_type"] == "added"
+
+
+@pytest.mark.asyncio
 async def test_create_mode_new_file_success(monkeypatch):
     file_uri = "viking://user/default/memories/new_file.md"
     root_uri = "viking://user/default/memories"
