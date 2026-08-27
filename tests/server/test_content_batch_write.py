@@ -4,6 +4,8 @@ import pytest
 
 import openviking.storage.content_write as content_write_module
 from openviking.server.identity import RequestContext, Role
+from openviking.session.memory.dataclass import MemoryFile
+from openviking.session.memory.utils import MemoryFileUtils
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
 from openviking_cli.exceptions import (
@@ -182,6 +184,48 @@ async def test_batch_releases_tree_lock_before_one_aggregated_refresh(monkeypatc
     assert result["created"] == [a, b]
     assert calls == [{a: "added", b: "added"}]
     assert locks.releases == 1
+
+
+@pytest.mark.asyncio
+async def test_batch_replace_memory_preserves_metadata(monkeypatch):
+    root = "viking://user/default/memories/preferences"
+    memory_uri = f"{root}/theme.md"
+    metadata = {
+        "tags": ["ui", "preference"],
+        "fields": {"topic": "theme"},
+        "version": 7,
+    }
+    original = MemoryFileUtils.write(
+        MemoryFile(content="Original preference", extra_fields=metadata)
+    )
+    expected = MemoryFileUtils.read(original, uri=memory_uri)
+    vfs = _VFS(root, {memory_uri: original})
+    coordinator = ContentWriteCoordinator(vfs)
+
+    async def refresh(**kwargs):
+        del kwargs
+        return None
+
+    monkeypatch.setattr(coordinator, "_refresh_batch", refresh)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+
+    result = await coordinator.batch_write(
+        root_uri=root,
+        operations=[
+            {
+                "uri": memory_uri,
+                "content": "Updated preference",
+                "mode": "replace",
+            }
+        ],
+        ctx=ctx,
+        wait=False,
+    )
+
+    stored = MemoryFileUtils.read(vfs.files[memory_uri], uri=memory_uri)
+    assert result["updated"] == [memory_uri]
+    assert stored.content == "Updated preference"
+    assert stored.extra_fields == expected.extra_fields
 
 
 @pytest.mark.asyncio

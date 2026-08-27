@@ -261,21 +261,13 @@ class ContentWriteCoordinator:
             for operation, existed, write_mode in pending:
                 uri = operation["uri"]
                 try:
-                    if context_type_for_uri(uri) == "memory":
-                        await self._viking_fs.write_file(
-                            uri,
-                            operation["content"],
-                            ctx=ctx,
-                            lease_ref=lease,
-                        )
-                    else:
-                        await self._write_in_place(
-                            uri,
-                            operation["content"],
-                            mode=write_mode,
-                            ctx=ctx,
-                            lease_ref=lease,
-                        )
+                    await self._write_in_place(
+                        uri,
+                        operation["content"],
+                        mode=write_mode,
+                        ctx=ctx,
+                        lease_ref=lease,
+                    )
                 except Exception as exc:
                     write_error = exc
                     break
