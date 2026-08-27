@@ -338,7 +338,8 @@ List all workspaces (ROOT only).
 **Processing Flow:**
 1. Verify requester has ROOT privileges
 2. Call API Key Manager to get all accounts
-3. Return list with account ID, creation time, and user count
+3. Apply optional `name` filter and pagination `limit`
+4. Return list with account ID, creation time, and user count
 
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:list_accounts` - HTTP route
@@ -347,7 +348,10 @@ List all workspaces (ROOT only).
 
 #### 2. Interface and Parameters
 
-No parameters.
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| limit | int | No | 100 | Maximum number of accounts to return |
+| name | str | No | null | Filter by account ID (wildcard `*` and `?` matching) |
 
 #### 3. Usage Examples
 
@@ -358,7 +362,12 @@ GET /api/v1/admin/accounts
 ```
 
 ```bash
+# List all accounts
 curl -X GET http://localhost:1933/api/v1/admin/accounts \
+  -H "X-API-Key: <root-key>"
+
+# With filters (wildcard name matching)
+curl -X GET "http://localhost:1933/api/v1/admin/accounts?name=*acme*&limit=50" \
   -H "X-API-Key: <root-key>"
 ```
 
@@ -370,7 +379,7 @@ import openviking as ov
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
 
-accounts = client.admin_list_accounts()
+accounts = client.admin_list_accounts(name="*acme*")
 for account in accounts:
     print(f"Account: {account['account_id']}, created: {account['created_at']}, users: {account['user_count']}")
 ```
@@ -378,7 +387,7 @@ for account in accounts:
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.adminListAccounts());
+console.log(await client.adminListAccounts({ name: "*acme*" }));
 ```
 
 **Go SDK**
@@ -396,6 +405,9 @@ fmt.Println(accounts)
 ```bash
 # Requires ROOT privileges, use --sudo
 ov --sudo admin list-accounts
+
+# Filter by wildcard name
+ov --sudo admin list-accounts --name '*acme*'
 ```
 
 **Response Example**
@@ -666,7 +678,7 @@ List active users in a workspace. Users with deletion in progress are omitted.
 |-----------|------|----------|---------|-------------|
 | account_id | str | Yes | - | Workspace ID |
 | limit | int | No | 100 | Maximum number of users to return |
-| name | str | No | null | Filter by user ID (prefix match) |
+| name | str | No | null | Filter by user ID (wildcard `*` and `?` matching) |
 | role | str | No | null | Filter by role |
 
 **Notes:**
@@ -687,8 +699,8 @@ GET /api/v1/admin/accounts/{account_id}/users
 curl -X GET http://localhost:1933/api/v1/admin/accounts/acme/users \
   -H "X-API-Key: <root-or-admin-key>"
 
-# With filters
-curl -X GET "http://localhost:1933/api/v1/admin/accounts/acme/users?role=admin&limit=50" \
+# With filters (wildcard name matching)
+curl -X GET "http://localhost:1933/api/v1/admin/accounts/acme/users?name=*ali*&role=admin&limit=50" \
   -H "X-API-Key: <root-or-admin-key>"
 ```
 
@@ -700,7 +712,7 @@ import openviking as ov
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
 
-users = client.admin_list_users(account_id="acme")
+users = client.admin_list_users(account_id="acme", name="*ali*")
 for user in users:
     print(f"User: {user['user_id']}, role: {user['role']}")
 ```
@@ -708,7 +720,7 @@ for user in users:
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.adminListUsers("account-id"));
+console.log(await client.adminListUsers("account-id", { name: "*ali*" }));
 ```
 
 **Go SDK**
@@ -729,6 +741,8 @@ fmt.Println(users)
 ov admin list-users acme
 # If using root_api_key (--sudo):
 ov --sudo admin list-users acme
+# Filter by wildcard name
+ov admin list-users acme --name '*ali*'
 ```
 
 **Response Example**

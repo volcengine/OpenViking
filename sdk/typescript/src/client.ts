@@ -1091,9 +1091,16 @@ export class OpenVikingClient {
       }),
     });
   }
-  /** List tenant accounts. */
-  adminListAccounts(): Promise<unknown[]> {
-    return this.request("GET", "/api/v1/admin/accounts");
+  /** List tenant accounts. `name` supports wildcard (* and ?) matching. */
+  adminListAccounts(
+    options: { limit?: number; name?: string } = {},
+  ): Promise<unknown[]> {
+    return this.request("GET", "/api/v1/admin/accounts", {
+      query: {
+        limit: options.limit ?? 100,
+        name: options.name,
+      },
+    });
   }
   /** Delete a tenant account. */
   adminDeleteAccount(accountId: string): Promise<JsonObject> {
@@ -1122,11 +1129,21 @@ export class OpenVikingClient {
       },
     );
   }
-  /** List users in an account. */
-  adminListUsers(accountId: string): Promise<unknown[]> {
+  /** List users in an account. `name` supports wildcard (* and ?) matching. */
+  adminListUsers(
+    accountId: string,
+    options: { limit?: number; name?: string; role?: string } = {},
+  ): Promise<unknown[]> {
     return this.request(
       "GET",
       `/api/v1/admin/accounts/${pathPart(accountId)}/users`,
+      {
+        query: {
+          limit: options.limit ?? 100,
+          name: options.name,
+          role: options.role,
+        },
+      },
     );
   }
   /** Remove a user from an account. */

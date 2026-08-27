@@ -30,8 +30,21 @@ func (c *Client) AdminCreateAccountWithOptions(ctx context.Context, accountID, a
 
 // AdminListAccounts lists accounts.
 func (c *Client) AdminListAccounts(ctx context.Context) ([]any, error) {
+	return c.AdminListAccountsWithOptions(ctx, nil)
+}
+
+// AdminListAccountsWithOptions lists accounts, optionally filtering by a
+// wildcard name pattern and capping the result count.
+func (c *Client) AdminListAccountsWithOptions(ctx context.Context, opts *AdminListAccountsOptions) ([]any, error) {
+	query := url.Values{}
+	if opts != nil {
+		if opts.Limit != nil {
+			queryInt(query, "limit", *opts.Limit)
+		}
+		setQueryString(query, "name", opts.Name)
+	}
 	var result []any
-	err := c.doJSON(ctx, http.MethodGet, "/api/v1/admin/accounts", nil, nil, &result)
+	err := c.doJSON(ctx, http.MethodGet, "/api/v1/admin/accounts", query, nil, &result)
 	return result, err
 }
 
@@ -69,8 +82,22 @@ func (c *Client) AdminRegisterUserWithOptions(ctx context.Context, accountID, us
 
 // AdminListUsers lists users in an account.
 func (c *Client) AdminListUsers(ctx context.Context, accountID string) ([]any, error) {
+	return c.AdminListUsersWithOptions(ctx, accountID, nil)
+}
+
+// AdminListUsersWithOptions lists users in an account, optionally filtering by a
+// wildcard name pattern, role, and capping the result count.
+func (c *Client) AdminListUsersWithOptions(ctx context.Context, accountID string, opts *AdminListUsersOptions) ([]any, error) {
+	query := url.Values{}
+	if opts != nil {
+		if opts.Limit != nil {
+			queryInt(query, "limit", *opts.Limit)
+		}
+		setQueryString(query, "name", opts.Name)
+		setQueryString(query, "role", opts.Role)
+	}
 	var result []any
-	err := c.doJSON(ctx, http.MethodGet, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/users", nil, nil, &result)
+	err := c.doJSON(ctx, http.MethodGet, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/users", query, nil, &result)
 	return result, err
 }
 

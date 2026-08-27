@@ -648,10 +648,27 @@ class LegacyAPIKeyManager:
 
         await self._save_users_json(account_id)
 
-    def get_accounts(self) -> list:
-        """List all accounts."""
+    def get_accounts(
+        self,
+        limit: int | None = None,
+        name_filter: str | None = None,
+    ) -> list:
+        """List all accounts.
+
+        ``name_filter`` uses the same wildcard (``*`` and ``?``) matching as
+        ``get_users``. ``limit`` defaults to None (return all) so internal
+        callers that rely on the full account set are unaffected.
+        """
         result = []
+        count = 0
         for account_id, info in self._accounts.items():
+            # Apply name filter if provided (fnmatch wildcard matching)
+            if name_filter and not fnmatch.fnmatch(account_id, name_filter):
+                continue
+
+            if limit is not None and count >= limit:
+                break
+
             result.append(
                 {
                     "account_id": account_id,
@@ -659,6 +676,7 @@ class LegacyAPIKeyManager:
                     "user_count": len(info.users),
                 }
             )
+            count += 1
         return result
 
     def get_users(

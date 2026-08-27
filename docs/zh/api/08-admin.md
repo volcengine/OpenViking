@@ -330,7 +330,8 @@ ov --sudo admin create-account acme-private --admin alice \
 **处理流程：**
 1. 验证请求者具有 ROOT 权限
 2. 调用 API Key Manager 获取所有账户列表
-3. 返回包含账户 ID、创建时间和用户数量的列表
+3. 应用可选的 `name` 过滤和分页 `limit`
+4. 返回包含账户 ID、创建时间和用户数量的列表
 
 **代码入口：**
 - `openviking/server/routers/admin.py:list_accounts` - HTTP 路由
@@ -339,7 +340,10 @@ ov --sudo admin create-account acme-private --admin alice \
 
 #### 2. 接口和参数说明
 
-无参数。
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| limit | int | 否 | 100 | 返回账户的最大数量 |
+| name | str | 否 | null | 按账户 ID 过滤（通配符 `*` 和 `?` 匹配） |
 
 #### 3. 使用示例
 
@@ -350,7 +354,12 @@ GET /api/v1/admin/accounts
 ```
 
 ```bash
+# 列出所有账户
 curl -X GET http://localhost:1933/api/v1/admin/accounts \
+  -H "X-API-Key: <root-key>"
+
+# 带过滤条件（通配符 name 匹配）
+curl -X GET "http://localhost:1933/api/v1/admin/accounts?name=*acme*&limit=50" \
   -H "X-API-Key: <root-key>"
 ```
 
@@ -362,7 +371,7 @@ import openviking as ov
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
 
-accounts = client.admin_list_accounts()
+accounts = client.admin_list_accounts(name="*acme*")
 for account in accounts:
     print(f"Account: {account['account_id']}, created: {account['created_at']}, users: {account['user_count']}")
 ```
@@ -370,7 +379,7 @@ for account in accounts:
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.adminListAccounts());
+console.log(await client.adminListAccounts({ name: "*acme*" }));
 ```
 
 **Go SDK**
@@ -388,6 +397,9 @@ fmt.Println(accounts)
 ```bash
 # 需要 ROOT 权限，使用 --sudo
 ov --sudo admin list-accounts
+
+# 按通配符 name 过滤
+ov --sudo admin list-accounts --name '*acme*'
 ```
 
 **响应示例**
@@ -658,7 +670,7 @@ ov admin register-user acme bob-private --role user \
 |------|------|------|--------|------|
 | account_id | str | 是 | - | 工作区 ID |
 | limit | int | 否 | 100 | 返回用户数量上限 |
-| name | str | 否 | null | 按用户 ID 过滤（前缀匹配） |
+| name | str | 否 | null | 按用户 ID 过滤（通配符 `*` 和 `?` 匹配） |
 | role | str | 否 | null | 按角色过滤 |
 
 **说明：**
@@ -679,8 +691,8 @@ GET /api/v1/admin/accounts/{account_id}/users
 curl -X GET http://localhost:1933/api/v1/admin/accounts/acme/users \
   -H "X-API-Key: <root-or-admin-key>"
 
-# 带过滤条件
-curl -X GET "http://localhost:1933/api/v1/admin/accounts/acme/users?role=admin&limit=50" \
+# 带过滤条件（通配符 name 匹配）
+curl -X GET "http://localhost:1933/api/v1/admin/accounts/acme/users?name=*ali*&role=admin&limit=50" \
   -H "X-API-Key: <root-or-admin-key>"
 ```
 
@@ -692,7 +704,7 @@ import openviking as ov
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
 
-users = client.admin_list_users(account_id="acme")
+users = client.admin_list_users(account_id="acme", name="*ali*")
 for user in users:
     print(f"User: {user['user_id']}, role: {user['role']}")
 ```
@@ -700,7 +712,7 @@ for user in users:
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.adminListUsers("account-id"));
+console.log(await client.adminListUsers("account-id", { name: "*ali*" }));
 ```
 
 **Go SDK**
@@ -721,6 +733,8 @@ fmt.Println(users)
 ov admin list-users acme
 # 如果使用 root_api_key（--sudo）：
 ov --sudo admin list-users acme
+# 按通配符 name 过滤
+ov admin list-users acme --name '*ali*'
 ```
 
 **响应示例**

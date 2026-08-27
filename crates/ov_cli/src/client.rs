@@ -1420,8 +1420,16 @@ impl HttpClient {
             .await
     }
 
-    pub async fn admin_list_accounts(&self) -> Result<Value> {
-        self.get("/api/v1/admin/accounts", &[]).await
+    pub async fn admin_list_accounts(
+        &self,
+        limit: u32,
+        name: Option<String>,
+    ) -> Result<Value> {
+        let mut params = vec![("limit".to_string(), limit.to_string())];
+        if let Some(n) = name {
+            params.push(("name".to_string(), n));
+        }
+        self.get("/api/v1/admin/accounts", &params).await
     }
 
     pub async fn admin_delete_account(&self, account_id: &str) -> Result<Value> {

@@ -315,11 +315,13 @@ async def create_account(
 @require_auth_root
 async def list_accounts(
     request: Request,
+    limit: int = 100,
+    name: str | None = None,
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """List all accounts."""
+    """List all accounts. `name` supports wildcard (* and ?) matching."""
     manager = _get_api_key_manager(request)
-    accounts = manager.get_accounts()
+    accounts = manager.get_accounts(limit=limit, name_filter=name)
     return Response(status="ok", result=accounts)
 
 

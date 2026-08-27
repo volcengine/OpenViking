@@ -1832,7 +1832,14 @@ enum AdminCommands {
         user_config_json: Option<String>,
     },
     /// List all accounts (ROOT only)
-    ListAccounts,
+    ListAccounts {
+        /// Maximum number of accounts to list (default: 100)
+        #[arg(long, default_value = "100", value_name = "n")]
+        limit: u32,
+        /// Filter accounts by ID (supports wildcard * and ?)
+        #[arg(long, value_name = "pattern")]
+        name: Option<String>,
+    },
     /// Delete an account and all associated users (ROOT only)
     DeleteAccount {
         /// Account ID to delete

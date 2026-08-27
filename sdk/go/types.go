@@ -69,6 +69,21 @@ type AdminRegisterUserOptions struct {
 	Seed       *string
 }
 
+// AdminListAccountsOptions controls AdminListAccountsWithOptions.
+// Name uses wildcard (* and ?) matching against account IDs.
+type AdminListAccountsOptions struct {
+	Limit *int
+	Name  string
+}
+
+// AdminListUsersOptions controls AdminListUsersWithOptions.
+// Name uses wildcard (* and ?) matching against user IDs.
+type AdminListUsersOptions struct {
+	Limit *int
+	Name  string
+	Role  string
+}
+
 // AdminRegenerateKeyOptions controls AdminRegenerateKeyWithOptions.
 type AdminRegenerateKeyOptions struct {
 	Seed *string

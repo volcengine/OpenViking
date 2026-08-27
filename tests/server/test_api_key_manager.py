@@ -358,7 +358,50 @@ async def test_get_users(manager: APIKeyManager):
     assert {u["user_id"] for u in users} == {"alice"}
 
 
-# ---- Persistence tests ----
+async def test_get_users_name_filter(manager: APIKeyManager):
+    """get_users name_filter uses fnmatch wildcard matching against user IDs."""
+    acct = _uid()
+    await manager.create_account(acct, "alice")
+    await manager.register_user(acct, "alan", "user")
+    await manager.register_user(acct, "bob", "user")
+
+    # Wildcard substring match
+    matched = {u["user_id"] for u in manager.get_users(acct, name_filter="al*")}
+    assert matched == {"alice", "alan"}
+
+    # Exact match (no wildcard) only hits the literal ID
+    assert {u["user_id"] for u in manager.get_users(acct, name_filter="alice")} == {"alice"}
+
+    # No match
+    assert manager.get_users(acct, name_filter="zzz*") == []
+
+    # No filter returns all
+    assert {u["user_id"] for u in manager.get_users(acct)} == {"alice", "alan", "bob"}
+
+
+async def test_get_accounts_filter(manager: APIKeyManager):
+    """get_accounts supports fnmatch name_filter and limit, mirroring get_users."""
+    prefix = f"acme_{uuid.uuid4().hex[:8]}"
+    first = f"{prefix}_alpha"
+    second = f"{prefix}_beta"
+    other = f"other_{uuid.uuid4().hex[:8]}"
+    await manager.create_account(first, "u1")
+    await manager.create_account(second, "u2")
+    await manager.create_account(other, "u3")
+
+    # Wildcard match returns only the two prefixed accounts
+    matched = {a["account_id"] for a in manager.get_accounts(name_filter=f"{prefix}*")}
+    assert matched == {first, second}
+
+    # Exact match (no wildcard) hits a single account
+    assert {a["account_id"] for a in manager.get_accounts(name_filter=first)} == {first}
+
+    # limit truncates the result set
+    assert len(manager.get_accounts(name_filter=f"{prefix}*", limit=1)) == 1
+
+    # No filter / no limit returns all accounts (including the default one)
+    all_ids = {a["account_id"] for a in manager.get_accounts()}
+    assert {first, second, other} <= all_ids
 
 
 async def test_persistence_across_reload(manager_service):

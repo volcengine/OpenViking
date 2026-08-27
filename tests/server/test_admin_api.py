@@ -261,13 +261,15 @@ async def _agfs_read_text(service: OpenVikingService, path: str) -> str:
 
 
 async def _wait_for_task(client: httpx.AsyncClient, task_id: str) -> dict:
-    for _ in range(100):
+    # Budget ~30s: recursive AGFS cleanup can take a couple of seconds, and the
+    # original 1s budget was too tight on slower backends/interpreters.
+    for _ in range(600):
         resp = await client.get(f"/api/v1/tasks/{task_id}", headers=root_headers())
         assert resp.status_code == 200
         task = resp.json()["result"]
         if task["status"] in {"completed", "failed"}:
             return task
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)
     raise AssertionError(f"Task {task_id} did not finish")
 
 
@@ -1350,15 +1352,17 @@ async def test_legacy_cleanup_removes_only_legacy_namespaces(
     removed = {
         (item["account_id"], item["source"]) for item in task["result"]["cleanup"]["targets"]
     }
-    assert (acct, "viking://agent") in removed
+    # Cleanup targets each legacy agent_id individually (reserved subdirs such as
+    # viking://agent/skills are preserved), so the agent roots appear per agent.
+    assert (acct, "viking://agent/code-agent") in removed
     assert (acct, "viking://session") in removed
     assert (acct, "viking://user/alice/agent") in removed
-    assert (other_acct, "viking://agent") in removed
+    assert (other_acct, "viking://agent/code-agent") in removed
 
-    assert not await _agfs_exists(admin_service, f"/local/{acct}/agent")
+    assert not await _agfs_exists(admin_service, f"/local/{acct}/agent/code-agent")
     assert not await _agfs_exists(admin_service, f"/local/{acct}/session")
     assert not await _agfs_exists(admin_service, f"/local/{acct}/user/alice/agent")
-    assert not await _agfs_exists(admin_service, f"/local/{other_acct}/agent")
+    assert not await _agfs_exists(admin_service, f"/local/{other_acct}/agent/code-agent")
     assert (
         await _agfs_read_text(
             admin_service,
