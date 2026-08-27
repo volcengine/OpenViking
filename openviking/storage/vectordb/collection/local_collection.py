@@ -514,11 +514,12 @@ class LocalCollection(ICollection):
         if not index:
             return search_result
 
+        query_vector = dense_vector or []
         diversity_store: Optional[StoreManager] = None
         if diversity is not None:
             if limit <= 0:
                 return search_result
-            if not dense_vector:
+            if not query_vector:
                 raise ValueError("vector diversity requires a dense query vector")
             diversity_store = self.store_mgr
             if diversity_store is None:
@@ -534,7 +535,7 @@ class LocalCollection(ICollection):
         requested = limit + offset
         actual_limit = diversity.candidate_limit(requested) if diversity is not None else requested
         label_list, scores_list = index.search(
-            dense_vector or [], actual_limit, filters, sparse_raw_terms, sparse_values
+            query_vector, actual_limit, filters, sparse_raw_terms, sparse_values
         )
         if diversity is not None and not label_list:
             return search_result
@@ -545,14 +546,30 @@ class LocalCollection(ICollection):
                 raise ValueError("candidate labels and scores must have equal lengths")
             if diversity_store is None:
                 raise RuntimeError("Store manager is not initialized")
+            # Diversity needs full payloads for up to 500 candidates. Sparse-only
+            # hybrid hits cannot participate in cosine selection, so skip them.
             fetched_cands = diversity_store.fetch_cands_data(label_list)
-            if any(candidate is None or not candidate.vector for candidate in fetched_cands):
-                raise ValueError(
-                    "vector diversity requires stored dense vectors for all candidates"
-                )
-            prefetched_cands = [candidate for candidate in fetched_cands if candidate is not None]
+            dense_candidate_indices = []
+            prefetched_cands = []
+            for candidate_index, candidate in enumerate(fetched_cands):
+                if candidate is None or not candidate.vector:
+                    logger.debug(
+                        f"Skipping vector diversity candidate without a dense vector "
+                        f"(label={label_list[candidate_index]})"
+                    )
+                    continue
+                dense_candidate_indices.append(candidate_index)
+                prefetched_cands.append(candidate)
+
+            label_list = [label_list[i] for i in dense_candidate_indices]
+            scores_list = [scores_list[i] for i in dense_candidate_indices]
+            if not label_list:
+                return search_result
+
+            # Candidate order remains the engine's relevance order for duplicate
+            # retention and stable ties; raw engine scores are only returned.
             selected_indices = select_diverse_indices(
-                scores_list,
+                query_vector,
                 [candidate.vector for candidate in prefetched_cands],
                 requested,
                 diversity,

@@ -18,36 +18,42 @@ class VectorDiversityOptions(BaseModel):
     similarity_threshold: float = Field(default=0.98, ge=0.8, le=1.0)
 
     def candidate_limit(self, requested: int) -> int:
-        """Return the bounded number of candidates to request from the index."""
+        """Bound selection cost and full-payload reads for deep or large result windows."""
         return min(requested * self.candidate_multiplier, 500)
 
 
+def _validate_vector(vector: Sequence[float]) -> float:
+    if not vector:
+        raise ValueError("dense vectors must be non-empty")
+    norm = math.sqrt(sum(value * value for value in vector))
+    if norm == 0.0:
+        raise ValueError("dense vectors must have non-zero magnitude")
+    return norm
+
+
 def _cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:
-    if not left or len(left) != len(right):
-        raise ValueError("candidate dense vectors must be non-empty and have equal dimensions")
-    left_norm = math.sqrt(sum(value * value for value in left))
-    right_norm = math.sqrt(sum(value * value for value in right))
-    if left_norm == 0.0 or right_norm == 0.0:
-        raise ValueError("candidate dense vectors must have non-zero magnitude")
+    if len(left) != len(right):
+        raise ValueError("dense vectors must have equal dimensions")
+    left_norm = _validate_vector(left)
+    right_norm = _validate_vector(right)
     similarity = sum(a * b for a, b in zip(left, right, strict=True)) / (left_norm * right_norm)
     return max(-1.0, min(1.0, similarity))
 
 
 def select_diverse_indices(
-    scores: Sequence[float],
+    query_vector: Sequence[float],
     vectors: Sequence[Sequence[float]],
     limit: int,
     options: VectorDiversityOptions,
 ) -> List[int]:
-    """Select stable MMR candidates while suppressing vector near-duplicates."""
-    if limit <= 0 or not scores:
+    """Select stable MMR candidates ordered by the index's original relevance rank."""
+    if limit <= 0 or not vectors:
         return []
-    if len(scores) != len(vectors):
-        raise ValueError("candidate scores and dense vectors must have equal lengths")
+    _validate_vector(query_vector)
 
     deduplicated: List[int] = []
     for candidate_index, vector in enumerate(vectors):
-        _cosine_similarity(vector, vector)
+        _validate_vector(vector)
         if any(
             _cosine_similarity(vector, vectors[retained_index]) >= options.similarity_threshold
             for retained_index in deduplicated
@@ -56,7 +62,7 @@ def select_diverse_indices(
         deduplicated.append(candidate_index)
 
     selected: List[int] = []
-    remaining = deduplicated
+    remaining = list(deduplicated)
     while remaining and len(selected) < limit:
         best_index = None
         best_key = None
@@ -66,7 +72,7 @@ def select_diverse_indices(
                 for selected_index in selected
             ]
             maximum_similarity = max(similarities, default=0.0)
-            relevance = scores[candidate_index]
+            relevance = _cosine_similarity(query_vector, vectors[candidate_index])
             mmr_score = (
                 options.relevance_weight * relevance
                 - (1.0 - options.relevance_weight) * maximum_similarity
