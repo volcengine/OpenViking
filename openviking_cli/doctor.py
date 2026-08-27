@@ -351,7 +351,7 @@ def check_vlm() -> tuple[bool, str, Optional[str]]:
 
     raw_vlm = data.get("vlm", {})
     normalized_vlm = VLMConfig.sync_provider_backend(dict(raw_vlm))
-    vlm = VLMConfig.model_construct(**normalized_vlm)
+    vlm = VLMConfig.model_validate(normalized_vlm)
     _, provider = vlm.get_provider_config()
     model = vlm.model or ""
 
