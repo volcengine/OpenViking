@@ -222,6 +222,13 @@ def _probe_embedding_provider(
             else embedder.get_dimension()
         )
     except Exception as exc:
+        if "google-genai" in str(exc):
+            return (
+                False,
+                f"{label} ({exc})",
+                "Install the Gemini embedding dependency with: "
+                'pip install "openviking[gemini]" or pip install google-genai',
+            )
         return (
             False,
             f"{label} (invalid embedding config: {exc})",

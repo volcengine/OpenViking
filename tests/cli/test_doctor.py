@@ -371,6 +371,24 @@ class TestCheckEmbedding:
         assert "model not found" in detail
         assert "model name" in fix
 
+    def test_embedding_probe_names_missing_gemini_dependency(self):
+        with patch("openviking.models.embedder.GeminiDenseEmbedder", None):
+            ok, detail, fix = _probe_embedding_provider(
+                {},
+                {
+                    "provider": "gemini",
+                    "model": "gemini-embedding-2-preview",
+                    "api_key": "sk-test",
+                    "dimension": 3072,
+                },
+            )
+
+        assert not ok
+        assert "google-genai" in detail
+        assert "NoneType" not in detail
+        assert "openviking[gemini]" in fix
+        assert "google-genai" in fix
+
     def test_embedding_probe_fails_on_empty_dense_vector(self):
         class FakeEmbedder:
             pass

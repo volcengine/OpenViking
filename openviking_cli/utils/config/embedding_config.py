@@ -738,6 +738,11 @@ class EmbeddingConfig(BaseModel):
 
         if provider == "litellm" and LiteLLMDenseEmbedder is None:
             raise ValueError("LiteLLM is not installed. Install it with: pip install litellm")
+        if provider == "gemini" and GeminiDenseEmbedder is None:
+            raise ValueError(
+                "Gemini embedding requires google-genai. Install it with: "
+                'pip install "openviking[gemini]" or pip install google-genai'
+            )
 
         # Factory registry: (provider, type) -> (embedder_class, param_builder)
         runtime_config = {
