@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.utils.summarizer import Summarizer
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -16,7 +17,7 @@ class _DummyQueue:
         self.msgs = []
 
     async def enqueue(self, msg):
-        self.msgs.append(msg)
+        self.msgs.append(SemanticMsg.from_dict(msg) if isinstance(msg, dict) else msg)
 
 
 class _FailingQueue:
@@ -32,18 +33,6 @@ class _DummyQueueManager:
 
     def get_queue(self, _name, allow_create=False):
         return self._queue
-
-
-class _DummyWaitTracker:
-    def __init__(self):
-        self.registered = []
-        self.failed = []
-
-    def register_semantic_root(self, telemetry_id, msg_id):
-        self.registered.append((telemetry_id, msg_id))
-
-    def mark_semantic_failed(self, telemetry_id, msg_id, error):
-        self.failed.append((telemetry_id, msg_id, error))
 
 
 class _DummyVikingFS:
@@ -73,9 +62,6 @@ async def test_resources_root_is_split_into_children():
         patch(
             "openviking.utils.summarizer.get_current_telemetry",
             return_value=SimpleNamespace(telemetry_id="tid"),
-        ),
-        patch(
-            "openviking.utils.summarizer.get_request_wait_tracker", return_value=_DummyWaitTracker()
         ),
         patch("openviking.utils.summarizer.get_viking_fs", return_value=vfs),
     ):
@@ -111,9 +97,6 @@ async def test_resources_root_single_file_child():
             "openviking.utils.summarizer.get_current_telemetry",
             return_value=SimpleNamespace(telemetry_id="tid"),
         ),
-        patch(
-            "openviking.utils.summarizer.get_request_wait_tracker", return_value=_DummyWaitTracker()
-        ),
         patch("openviking.utils.summarizer.get_viking_fs", return_value=vfs),
     ):
         summarizer = Summarizer(vlm_processor=None)
@@ -141,9 +124,6 @@ async def test_explicit_subpath_not_split():
         patch(
             "openviking.utils.summarizer.get_current_telemetry",
             return_value=SimpleNamespace(telemetry_id="tid"),
-        ),
-        patch(
-            "openviking.utils.summarizer.get_request_wait_tracker", return_value=_DummyWaitTracker()
         ),
         patch("openviking.utils.summarizer.get_viking_fs", return_value=vfs),
     ):
@@ -180,9 +160,6 @@ async def test_resources_root_empty_import_is_error():
             "openviking.utils.summarizer.get_current_telemetry",
             return_value=SimpleNamespace(telemetry_id="tid"),
         ),
-        patch(
-            "openviking.utils.summarizer.get_request_wait_tracker", return_value=_DummyWaitTracker()
-        ),
         patch("openviking.utils.summarizer.get_viking_fs", return_value=vfs),
     ):
         summarizer = Summarizer(vlm_processor=None)
@@ -200,7 +177,6 @@ async def test_resources_root_empty_import_is_error():
 async def test_flat_file_refresh_enqueues_incremental_parent_summary():
     queue = _DummyQueue()
     qm = _DummyQueueManager(queue)
-    wait_tracker = _DummyWaitTracker()
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
 
     with (
@@ -208,10 +184,6 @@ async def test_flat_file_refresh_enqueues_incremental_parent_summary():
         patch(
             "openviking.utils.summarizer.get_current_telemetry",
             return_value=SimpleNamespace(telemetry_id="tid"),
-        ),
-        patch(
-            "openviking.utils.summarizer.get_request_wait_tracker",
-            return_value=wait_tracker,
         ),
     ):
         result = await Summarizer(vlm_processor=None).refresh_file_parent(
@@ -228,13 +200,11 @@ async def test_flat_file_refresh_enqueues_incremental_parent_summary():
     assert msg.changes == {"modified": ["viking://resources/神雕.md"]}
     assert msg.skip_vectorization is False
     assert msg.telemetry_id == "tid"
-    assert wait_tracker.registered == [("tid", msg.id)]
 
 
 @pytest.mark.asyncio
 async def test_flat_file_refresh_marks_wait_failed_when_enqueue_fails():
     qm = _DummyQueueManager(_FailingQueue())
-    wait_tracker = _DummyWaitTracker()
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
 
     with (
@@ -243,18 +213,9 @@ async def test_flat_file_refresh_marks_wait_failed_when_enqueue_fails():
             "openviking.utils.summarizer.get_current_telemetry",
             return_value=SimpleNamespace(telemetry_id="tid"),
         ),
-        patch(
-            "openviking.utils.summarizer.get_request_wait_tracker",
-            return_value=wait_tracker,
-        ),
     ):
         with pytest.raises(RuntimeError, match="queue unavailable"):
             await Summarizer(vlm_processor=None).refresh_file_parent(
                 file_uri="viking://resources/神雕.md",
                 ctx=ctx,
             )
-
-    assert len(wait_tracker.registered) == 1
-    assert wait_tracker.failed == [
-        (*wait_tracker.registered[0], "queue unavailable"),
-    ]

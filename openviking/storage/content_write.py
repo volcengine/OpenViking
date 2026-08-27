@@ -25,6 +25,9 @@ from openviking.resource.processing_mode import (
 )
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
+from openviking.service.task_context import get_task_context
+from openviking.service.task_tracker import get_task_tracker
+from openviking.service.task_work_hook import enqueue_with_task_work
 from openviking.session.memory.memory_updater import MemoryUpdater
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.resource_refs import (
@@ -43,7 +46,6 @@ from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
-from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import build_queue_status_payload
 from openviking.utils.embedding_utils import vectorize_directory_meta, vectorize_file
 from openviking.utils.path_safety import validate_safe_viking_uri_path
@@ -161,11 +163,8 @@ class ContentWriteCoordinator:
             )
 
         context_type = context_type_for_uri(normalized_uri)
-        root_uri = await self._resolve_root_uri(
-            normalized_uri, ctx=ctx, anchor_to_parent=True
-        )
+        root_uri = await self._resolve_root_uri(normalized_uri, ctx=ctx, anchor_to_parent=True)
         written_bytes = len(content.encode("utf-8"))
-        telemetry_id = get_current_telemetry().telemetry_id
 
         if context_type == "memory" and not is_abstract_overview_uri(normalized_uri):
             return await self._write_memory_with_refresh(
@@ -177,7 +176,6 @@ class ContentWriteCoordinator:
                 timeout=timeout,
                 ctx=ctx,
                 written_bytes=written_bytes,
-                telemetry_id=telemetry_id,
                 processing_mode=processing_mode,
             )
 
@@ -191,7 +189,6 @@ class ContentWriteCoordinator:
             timeout=timeout,
             ctx=ctx,
             written_bytes=written_bytes,
-            telemetry_id=telemetry_id,
             processing_mode=processing_mode,
         )
 
@@ -295,70 +292,54 @@ class ContentWriteCoordinator:
             lock_released = True
 
         assert lock_released
-        telemetry_id = get_current_telemetry().telemetry_id
-        request_registered = False
         refresh_outcome: Optional[_BatchRefreshOutcome] = None
-        try:
-            if refresh_kinds or sidecar_directories:
-                if wait and telemetry_id:
-                    get_request_wait_tracker().register_request(telemetry_id)
-                    request_registered = True
-                try:
-                    for directory_uri in sorted(sidecar_directories):
-                        await self._vectorize_semantic_directory(
-                            directory_uri=directory_uri, ctx=ctx
-                        )
-                    refresh_result = (
-                        await self._refresh_batch(
-                            refresh_kinds=refresh_kinds,
-                            ctx=ctx,
-                            wait=wait,
-                            timeout=timeout,
-                            telemetry_id=telemetry_id,
-                        )
-                        if refresh_kinds
-                        else (
-                            await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
-                            if wait
-                            else None
-                        )
+        if refresh_kinds or sidecar_directories:
+            try:
+                for directory_uri in sorted(sidecar_directories):
+                    await self._vectorize_semantic_directory(directory_uri=directory_uri, ctx=ctx)
+                refresh_result = (
+                    await self._refresh_batch(
+                        refresh_kinds=refresh_kinds,
+                        ctx=ctx,
+                        wait=wait,
+                        timeout=timeout,
                     )
-                    if isinstance(refresh_result, _BatchRefreshOutcome):
-                        refresh_outcome = refresh_result
-                        queue_status = refresh_result.queue_status
-                    else:
-                        # Preserve compatibility for tests/extensions replacing
-                        # the private refresh hook with its historical result.
-                        queue_status = refresh_result
-                except Exception as exc:
-                    if write_error is not None:
-                        logger.error(
-                            "Batch refresh failed while preserving an earlier write error",
-                            exc_info=True,
-                        )
-                        queue_status = None
-                    else:
-                        if isinstance(exc, DeadlineExceededError):
-                            raise
-                        cause = str(exc).strip() or type(exc).__name__
-                        raise OpenVikingError(
-                            "Content is already at the requested state, but semantic/index "
-                            f"refresh failed: {cause}. Re-run the same batch-write or ov compile "
-                            "command to rewrite the final state and retry the refresh.",
-                            code="REFRESH_FAILED",
-                            details={
-                                "root_uri": normalized_root,
-                                "created": created,
-                                "updated": updated,
-                                "unchanged": unchanged,
-                                "cause": cause,
-                            },
-                        ) from exc
-            else:
-                queue_status = None
-        finally:
-            if request_registered:
-                get_request_wait_tracker().cleanup(telemetry_id)
+                    if refresh_kinds
+                    else (await self._wait_for_task_work(timeout=timeout) if wait else None)
+                )
+                if isinstance(refresh_result, _BatchRefreshOutcome):
+                    refresh_outcome = refresh_result
+                    queue_status = refresh_result.queue_status
+                else:
+                    # Preserve compatibility for tests/extensions replacing
+                    # the private refresh hook with its historical result.
+                    queue_status = refresh_result
+            except Exception as exc:
+                if write_error is not None:
+                    logger.error(
+                        "Batch refresh failed while preserving an earlier write error",
+                        exc_info=True,
+                    )
+                    queue_status = None
+                else:
+                    if isinstance(exc, DeadlineExceededError):
+                        raise
+                    cause = str(exc).strip() or type(exc).__name__
+                    raise OpenVikingError(
+                        "Content is already at the requested state, but semantic/index "
+                        f"refresh failed: {cause}. Re-run the same batch-write or ov compile "
+                        "command to rewrite the final state and retry the refresh.",
+                        code="REFRESH_FAILED",
+                        details={
+                            "root_uri": normalized_root,
+                            "created": created,
+                            "updated": updated,
+                            "unchanged": unchanged,
+                            "cause": cause,
+                        },
+                    ) from exc
+        else:
+            queue_status = None
 
         if write_error is not None:
             raise write_error
@@ -501,7 +482,6 @@ class ContentWriteCoordinator:
         ctx: RequestContext,
         wait: bool,
         timeout: Optional[float],
-        telemetry_id: str,
     ) -> _BatchRefreshOutcome:
         resource_groups: dict[tuple[str, str], dict[str, list[str]]] = defaultdict(
             lambda: {"added": [], "modified": []}
@@ -553,10 +533,7 @@ class ContentWriteCoordinator:
                 memory_refreshed=bool(memory_groups),
                 embedding_requested=embedding_requested,
             )
-        queue_status = await self._wait_for_request(
-            telemetry_id=telemetry_id,
-            timeout=timeout,
-        )
+        queue_status = await self._wait_for_task_work(timeout=timeout)
         self._raise_refresh_errors(queue_status)
         return _BatchRefreshOutcome(
             queue_status=queue_status,
@@ -622,14 +599,11 @@ class ContentWriteCoordinator:
             generation_trigger="content_write",
             aggregate_directory=aggregate_directory,
         )
-        if msg.telemetry_id:
-            get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)
-        try:
-            await semantic_queue.enqueue(msg)
-        except Exception as exc:
-            if msg.telemetry_id:
-                get_request_wait_tracker().mark_semantic_failed(msg.telemetry_id, msg.id, str(exc))
-            raise
+        await enqueue_with_task_work(
+            msg,
+            "Semantic",
+            semantic_queue.enqueue,
+        )
         return decision.action
 
     @staticmethod
@@ -769,7 +743,6 @@ class ContentWriteCoordinator:
         timeout: Optional[float],
         ctx: RequestContext,
         written_bytes: int,
-        telemetry_id: str,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
     ) -> Dict[str, Any]:
         lock_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
@@ -794,8 +767,6 @@ class ContentWriteCoordinator:
                 raise InvalidArgumentError(
                     f"cannot create generated abstract overview directly: {uri}"
                 )
-            if wait and telemetry_id:
-                get_request_wait_tracker().register_request(telemetry_id)
             await self._write_in_place(
                 uri,
                 content,
@@ -827,11 +798,7 @@ class ContentWriteCoordinator:
                 post_process_started = True
             await self._viking_fs._async_agfs.pathlock_release(lease)
             lock_released = True
-            queue_status = (
-                await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
-                if wait
-                else None
-            )
+            queue_status = await self._wait_for_task_work(timeout=timeout) if wait else None
             result_kwargs = {}
             if is_abstract_overview_uri(uri):
                 _, vector_status = (
@@ -858,9 +825,7 @@ class ContentWriteCoordinator:
             elif refresh_action is FreshnessAction.MARK_PENDING:
                 # Changed-file semantic/vector work may still be queued, while
                 # the directory aggregation itself is intentionally deferred.
-                _, vector_status = self._refresh_statuses(
-                    wait=wait, queue_status=queue_status
-                )
+                _, vector_status = self._refresh_statuses(wait=wait, queue_status=queue_status)
                 result_kwargs = {
                     "semantic_status": "deferred",
                     "vector_status": vector_status,
@@ -887,9 +852,6 @@ class ContentWriteCoordinator:
             if not lock_released:
                 await self._viking_fs._async_agfs.pathlock_release(lease)
             raise
-        finally:
-            if wait and telemetry_id:
-                get_request_wait_tracker().cleanup(telemetry_id)
 
     async def _rollback_direct_write(
         self,
@@ -1045,7 +1007,6 @@ class ContentWriteCoordinator:
             uri, ctx=ctx, _allow_not_found=True, anchor_to_parent=True
         )
         written_bytes = len(content.encode("utf-8"))
-        telemetry_id = get_current_telemetry().telemetry_id
 
         if context_type == "memory":
             return await self._write_memory_with_refresh(
@@ -1058,7 +1019,6 @@ class ContentWriteCoordinator:
                 timeout=timeout,
                 ctx=ctx,
                 written_bytes=written_bytes,
-                telemetry_id=telemetry_id,
                 processing_mode=processing_mode,
             )
 
@@ -1073,7 +1033,6 @@ class ContentWriteCoordinator:
             timeout=timeout,
             ctx=ctx,
             written_bytes=written_bytes,
-            telemetry_id=telemetry_id,
             processing_mode=processing_mode,
         )
 
@@ -1173,20 +1132,19 @@ class ContentWriteCoordinator:
             raise DeadlineExceededError("queue processing", timeout) from exc
         return build_queue_status_payload(status)
 
-    async def _wait_for_request(
-        self,
-        *,
-        telemetry_id: str,
-        timeout: Optional[float],
-    ) -> Dict[str, Any]:
-        if not telemetry_id:
+    async def _wait_for_task_work(self, *, timeout: Optional[float]) -> Dict[str, Any]:
+        context = get_task_context()
+        if context is None:
             return await self._wait_for_queues(timeout=timeout)
-        tracker = get_request_wait_tracker()
         try:
-            await tracker.wait_for_request(telemetry_id, timeout=timeout)
+            return await get_task_tracker().wait_for_work(
+                context.task_id,
+                account_id=context.account_id,
+                user_id=context.user_id,
+                timeout=timeout,
+            )
         except TimeoutError as exc:
             raise DeadlineExceededError("queue processing", timeout) from exc
-        return tracker.build_queue_status(telemetry_id)
 
     async def _write_memory_with_refresh(
         self,
@@ -1200,7 +1158,6 @@ class ContentWriteCoordinator:
         timeout: Optional[float],
         ctx: RequestContext,
         written_bytes: int,
-        telemetry_id: str,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
     ) -> Dict[str, Any]:
         del processing_mode
@@ -1215,14 +1172,10 @@ class ContentWriteCoordinator:
             ) from exc
 
         released = False
-        request_registered = False
         try:
             await self._write_in_place(uri, content, mode=mode, ctx=ctx, lease_ref=lease)
             await self._viking_fs._async_agfs.pathlock_release(lease)
             released = True
-            if wait and telemetry_id and self._vikingdb_has_queue():
-                get_request_wait_tracker().register_request(telemetry_id)
-                request_registered = True
             overview_refreshed = await MemoryUpdater.refresh_schema_overview(
                 viking_fs=self._viking_fs,
                 directory_uri=root_uri,
@@ -1237,11 +1190,7 @@ class ContentWriteCoordinator:
             )
             queue_status = None
             if embedding_requested and wait:
-                queue_status = (
-                    await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
-                    if telemetry_id
-                    else await self._wait_for_queues(timeout=timeout)
-                )
+                queue_status = await self._wait_for_task_work(timeout=timeout)
             vector_status = self._memory_vector_status(
                 embedding_requested=embedding_requested,
                 wait=wait,
@@ -1263,9 +1212,6 @@ class ContentWriteCoordinator:
             if not released:
                 await self._viking_fs._async_agfs.pathlock_release(lease)
             raise
-        finally:
-            if request_registered:
-                get_request_wait_tracker().cleanup(telemetry_id)
 
     def _vikingdb_has_queue(self) -> bool:
         if not self._vikingdb:

@@ -71,6 +71,10 @@ class SemanticMsg:
     aggregate_directory: bool = True
     use_hierarchical_aggregation: bool = False
     propagate_to_parent: bool = True
+    task_id: str = ""
+    _task_work_id: str = ""
+    _task_account_id: str = ""
+    _task_user_id: str = ""
 
     def __init__(
         self,
@@ -120,6 +124,10 @@ class SemanticMsg:
         self.aggregate_directory = bool(aggregate_directory)
         self.use_hierarchical_aggregation = bool(use_hierarchical_aggregation)
         self.propagate_to_parent = bool(propagate_to_parent)
+        self.task_id = ""
+        self._task_work_id = ""
+        self._task_account_id = ""
+        self._task_user_id = ""
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert object to dictionary."""
@@ -184,6 +192,10 @@ class SemanticMsg:
             obj.status = data["status"]
         if "timestamp" in data:
             obj.timestamp = data["timestamp"]
+        obj.task_id = data.get("task_id", "")
+        obj._task_work_id = data.get("_task_work_id", "")
+        obj._task_account_id = data.get("_task_account_id", "")
+        obj._task_user_id = data.get("_task_user_id", "")
         return obj
 
     @classmethod

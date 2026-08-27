@@ -25,12 +25,12 @@ from openviking.parse.parsers.media.utils import (
 )
 from openviking.parse.parsers.upload_utils import is_text_file
 from openviking.server.identity import RequestContext
-from openviking.service.task_work_index import TaskWorkRejected
+from openviking.service.task_domain import TaskWorkRejected
+from openviking.service.task_work_hook import enqueue_with_task_work
 from openviking.storage.abstract_overview import body_for_preview, embedding_text_for_body
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
-from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.embedding_input import truncate_embedding_input
 from openviking.utils.image_search import image_bytes_to_model_data_uri
 from openviking.utils.ingest_options import IngestOptions
@@ -101,26 +101,20 @@ async def _enqueue_embedding_message(
     *,
     failure_message: str,
 ) -> bool:
-    """Persist one embedding message and settle request tracking on enqueue failure."""
-    wait_tracker = get_request_wait_tracker()
-    wait_tracker.register_embedding_root(embedding_msg.telemetry_id, embedding_msg.id)
+    """Persist one embedding message and keep task waiters informed on enqueue failure."""
 
-    try:
-        enqueue_id = await embedding_queue.enqueue(embedding_msg)
-    except BaseException as exc:
-        wait_tracker.mark_embedding_failed(
-            embedding_msg.telemetry_id,
-            embedding_msg.id,
-            f"{failure_message}: {exc}",
-        )
-        raise
+    async def enqueue(stamped_msg):
+        return await embedding_queue.enqueue(stamped_msg.to_dict())
+
+    enqueue_id = await enqueue_with_task_work(
+        embedding_msg,
+        "Embedding",
+        enqueue,
+        false_failure_message=failure_message,
+        exception_message_prefix=failure_message,
+    )
 
     if not enqueue_id:
-        wait_tracker.mark_embedding_failed(
-            embedding_msg.telemetry_id,
-            embedding_msg.id,
-            failure_message,
-        )
         return False
     return True
 

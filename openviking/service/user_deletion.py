@@ -14,8 +14,9 @@ from openviking.core.namespace import canonical_user_root
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_store import SYSTEM_TASK_ACCOUNT_ID, SYSTEM_TASK_USER_ID
 from openviking.service.task_tracker import TaskStatus, get_task_tracker
-from openviking.service.task_work_index import extract_task_metadata
+from openviking.service.task_work_hook import extract_task_metadata
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
+from openviking.storage.queuefs.queue_hook import ProcessResult
 from openviking.storage.viking_fs import LS_ALL_NODES
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
@@ -498,14 +499,13 @@ class _UserDeletionProcessor(DequeueHandlerBase):
             },
         }
 
-    async def on_dequeue(self, data: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    async def on_dequeue(self, data: Optional[dict[str, Any]]) -> ProcessResult:
         if not data:
-            return None
+            return ProcessResult.failed("Queue message is empty")
         try:
             message = self._parse_message(data)
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            self.report_error(str(exc), data)
-            return None
+            return ProcessResult.failed(exc)
 
         future = asyncio.run_coroutine_threadsafe(
             self._deletion_service._process(message),
@@ -517,10 +517,8 @@ class _UserDeletionProcessor(DequeueHandlerBase):
             future.cancel()
             raise
         if error is None:
-            self.report_success()
-        else:
-            self.report_error(error, data)
-        return None
+            return ProcessResult.success()
+        return ProcessResult.failed(error)
 
 
 async def setup_user_deletion(

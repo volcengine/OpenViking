@@ -4,7 +4,7 @@
 
 import threading
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from openviking_cli.utils.logger import get_logger
 
@@ -71,6 +71,11 @@ class SemanticQueue(NamedQueue):
                 msg.coalesce_version = version
 
         return await super().enqueue(msg.to_dict())
+
+    async def enqueue_retry(self, data: Any, *, attempt: int = 1) -> str:
+        """Retry without treating the replacement as a new coalescible event."""
+        msg = data if isinstance(data, SemanticMsg) else SemanticMsg.from_dict(data)
+        return await super().enqueue_retry(msg.to_dict(), attempt=attempt)
 
     async def dequeue(self) -> Optional[SemanticMsg]:
         """Get message from queue and deserialize to SemanticMsg object."""

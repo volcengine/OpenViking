@@ -11,11 +11,11 @@ worker binds the committing account/user (so tokens are not attributed to
 import asyncio
 import concurrent.futures
 import json
-from unittest.mock import Mock
 
 from openviking.observability.context import get_root_observability_context
 from openviking.server.identity import RequestContext, Role
 from openviking.session.session import Session
+from openviking.storage.queuefs.queue_hook import DiscardReason, ProcessOutcome
 from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
 from openviking.storage.queuefs.session_commit_processor import SessionCommitProcessor
 from openviking_cli.session.user_id import UserIdentifier
@@ -32,10 +32,11 @@ class _FakeSession:
     async def load(self) -> None:
         return None
 
-    async def resume_queued_commit(self, msg) -> bool:
+    async def resume_queued_commit(self, msg, *, current_work_id=None) -> bool:
         root = get_root_observability_context()
         self._captured["account_id"] = root.account_id if root else None
         self._captured["user_id"] = root.user_id if root else None
+        self._captured["current_work_id"] = current_work_id
         return self._processed
 
 
@@ -85,50 +86,32 @@ async def test_process_binds_committing_identity_to_root_context():
     )
     ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
-    await processor._process(_make_msg(), ctx)
+    await processor._process(_make_msg(), ctx, current_work_id="work-1")
 
     assert captured["account_id"] == "acme"
     assert captured["user_id"] == "alice"
+    assert captured["current_work_id"] == "work-1"
 
 
-async def test_process_requeues_deferred_commit_and_resets_root_context(monkeypatch):
-    queued = []
-
-    class _QueueManager:
-        async def enqueue(self, queue_name, data):
-            queued.append((queue_name, data))
-
+async def test_process_reports_deferred_commit_and_resets_root_context():
     processor = SessionCommitProcessor(
         _FakeSessionService({}, processed=False),
         asyncio.get_running_loop(),
     )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.get_queue_manager",
-        lambda: _QueueManager(),
-    )
     ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
-    await processor._process(_make_msg(), ctx)
+    processed = await processor._process(_make_msg(), ctx)
 
-    assert queued == [("SessionCommit", _make_msg().to_dict())]
+    assert processed is False
     assert get_root_observability_context() is None
 
 
-async def test_cancelled_queued_commit_writes_terminal_marker_before_success(monkeypatch):
-    msg = _make_msg()
-    viking_fs = _MemoryVikingFS()
-    session = Session(
-        viking_fs=viking_fs,
-        session_id=msg.session_id,
-        session_uri=msg.session_uri,
-    )
+async def test_on_dequeue_passes_envelope_work_id_to_service_loop(monkeypatch):
+    captured: dict = {}
     processor = SessionCommitProcessor(
-        _SingleSessionService(session),
+        _FakeSessionService(captured),
         asyncio.get_running_loop(),
     )
-    marker_uri = f"{msg.archive_uri}/.failed.json"
-    on_success = Mock(side_effect=lambda: viking_fs.files[marker_uri])
-    processor.set_callbacks(on_success, Mock(), Mock())
 
     def run_on_current_loop(coro, _loop):
         task = asyncio.create_task(coro)
@@ -152,9 +135,59 @@ async def test_cancelled_queued_commit_writes_terminal_marker_before_success(mon
         run_on_current_loop,
     )
 
-    await processor.on_cancelled({"data": json.dumps(msg.to_dict())})
+    await processor.on_dequeue(
+        {
+            "id": "queue-message-1",
+            "data": json.dumps(_make_msg().to_dict()),
+        }
+    )
+
+    assert captured["current_work_id"] == "queuefs:queue-message-1"
+
+
+async def test_cancelled_queued_commit_writes_terminal_marker(monkeypatch):
+    msg = _make_msg()
+    viking_fs = _MemoryVikingFS()
+    session = Session(
+        viking_fs=viking_fs,
+        session_id=msg.session_id,
+        session_uri=msg.session_uri,
+    )
+    processor = SessionCommitProcessor(
+        _SingleSessionService(session),
+        asyncio.get_running_loop(),
+    )
+    marker_uri = f"{msg.archive_uri}/.failed.json"
+
+    def run_on_current_loop(coro, _loop):
+        task = asyncio.create_task(coro)
+        future: concurrent.futures.Future[None] = concurrent.futures.Future()
+
+        def complete(completed: asyncio.Task) -> None:
+            if completed.cancelled():
+                future.cancel()
+                return
+            error = completed.exception()
+            if error is not None:
+                future.set_exception(error)
+            else:
+                future.set_result(completed.result())
+
+        task.add_done_callback(complete)
+        return future
+
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.session_commit_processor.asyncio.run_coroutine_threadsafe",
+        run_on_current_loop,
+    )
+
+    result = await processor.on_discard(
+        {"data": json.dumps(msg.to_dict())},
+        reason=DiscardReason.USER_CANCELLED,
+        handler_started=False,
+    )
 
     marker = json.loads(viking_fs.files[marker_uri])
     assert marker["stage"] == "cancelled"
     assert marker["error"] == "session commit cancelled"
-    on_success.assert_called_once_with()
+    assert result.outcome is ProcessOutcome.CANCELLED

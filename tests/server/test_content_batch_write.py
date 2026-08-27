@@ -397,7 +397,6 @@ async def test_batch_refresh_groups_resource_and_memory_work(monkeypatch):
         ctx=ctx,
         wait=False,
         timeout=None,
-        telemetry_id="",
     )
     assert len(semantic_calls) == 1
     assert semantic_calls[0]["changes"] == {
@@ -439,6 +438,7 @@ async def test_batch_write_api_upserts_files(client_with_resource):
     assert first.status_code == 200
     assert first.json()["result"]["updated"] == [existing]
     assert first.json()["result"]["created"] == [created]
+    assert first.json()["result"]["task_id"]
 
     retry = await client.post(
         "/api/v1/content/batch-write",
@@ -446,6 +446,33 @@ async def test_batch_write_api_upserts_files(client_with_resource):
     )
     assert retry.status_code == 200
     assert retry.json()["result"]["updated"] == sorted([existing, created])
+    assert retry.json()["result"]["task_id"]
+
+
+@pytest.mark.asyncio
+async def test_batch_write_wait_keeps_legacy_response_without_task_id(client_with_resource):
+    client, root = client_with_resource
+    created = f"{root}/sync-batch-created.md"
+
+    response = await client.post(
+        "/api/v1/content/batch-write",
+        json={
+            "root_uri": root,
+            "wait": True,
+            "operations": [
+                {
+                    "uri": created,
+                    "content": "# Sync batch",
+                    "mode": "create",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    result = response.json()["result"]
+    assert result["created"] == [created]
+    assert "task_id" not in result
 
 
 @pytest.mark.asyncio

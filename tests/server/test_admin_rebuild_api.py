@@ -2,12 +2,14 @@
 
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 
 from openviking.core.context import ContextLevel
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.queuefs.queue_hook import ProcessResult
 from openviking_cli.exceptions import OpenVikingError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 from tests.server.test_admin_api import ROOT_KEY
@@ -213,6 +215,7 @@ async def test_reindex_resource_vectors_only_wait_true(monkeypatch):
     response = await reindex(body=request, ctx=ctx)
 
     assert response.status == "ok"
+    assert "task_id" not in response.result
     assert response.result["status"] == "completed"
     assert response.result["object_type"] == "resource"
     assert response.result["rebuilt_records"] == 1
@@ -403,8 +406,23 @@ async def test_reindex_executor_ignores_tags_for_prune_orphans(monkeypatch):
         return {"status": "completed"}
 
     class FakeTracker:
-        async def has_running(self, *args, **kwargs):
-            return False
+        async def create_if_no_running(self, *args, **kwargs):
+            return SimpleNamespace(task_id="reindex-task")
+
+        def register_active(self, *args, **kwargs):
+            return None
+
+        async def start(self, *args, **kwargs):
+            return None
+
+        async def complete(self, *args, **kwargs):
+            return None
+
+        async def fail(self, *args, **kwargs):
+            return None
+
+        async def unregister_active(self, *args, **kwargs):
+            return None
 
     monkeypatch.setattr(executor, "_run", fake_run)
     monkeypatch.setattr(
@@ -711,6 +729,213 @@ async def test_reindex_resource_passes_run_tags_to_vector_rebuild(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_reindex_executor_uses_same_tracked_lifecycle_when_waiting(monkeypatch):
+    from openviking.service import reindex_executor as reindex_module
+    from openviking.service.reindex_executor import REINDEX_TASK_TYPE, ReindexExecutor
+    from openviking.service.task_context import get_task_context
+
+    events = []
+
+    class Tracker:
+        async def create_if_no_running(self, task_type, resource_id, *, account_id, user_id):
+            events.append(("create", task_type, resource_id, account_id, user_id))
+            return SimpleNamespace(task_id="reindex-task")
+
+        def register_active(self, task_id, *, account_id, user_id):
+            events.append(("register", task_id, account_id, user_id))
+
+        async def start(self, task_id, *, account_id, user_id):
+            events.append(("start", task_id, account_id, user_id))
+
+        async def wait_for_work(self, task_id, *, account_id, user_id):
+            events.append(("wait_for_work", task_id, account_id, user_id))
+            return {}
+
+        async def complete(self, task_id, result, *, account_id, user_id):
+            events.append(("complete", task_id, account_id, user_id))
+
+        async def fail(self, task_id, error, *, account_id, user_id):
+            events.append(("fail", task_id, error, account_id, user_id))
+
+        def is_cancelling(self, task_id, *, account_id, user_id):
+            return False
+
+        async def unregister_active(self, task_id, *, account_id, user_id):
+            events.append(("unregister_active", task_id, account_id, user_id))
+
+        async def cancel(self, task_id, *, account_id, user_id):
+            events.append(("cancel", task_id, account_id, user_id))
+
+    tracker = Tracker()
+    monkeypatch.setattr(reindex_module, "get_task_tracker", lambda: tracker)
+    executor = ReindexExecutor()
+
+    async def run(**_kwargs):
+        task_context = get_task_context()
+        assert task_context is not None
+        assert task_context.task_id == "reindex-task"
+        return {
+            "status": "completed",
+            "rebuilt_records": 0,
+            "failed_records": 0,
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(executor, "_run", run)
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="alice"),
+        role=Role.ROOT,
+    )
+
+    result = await executor.execute(
+        uri="viking://resources/demo",
+        mode="vectors_only",
+        wait=True,
+        ctx=ctx,
+    )
+
+    assert "task_id" not in result
+    assert events == [
+        ("create", REINDEX_TASK_TYPE, "viking://resources/demo", "test", "alice"),
+        ("register", "reindex-task", "test", "alice"),
+        ("start", "reindex-task", "test", "alice"),
+        ("complete", "reindex-task", "test", "alice"),
+        ("unregister_active", "reindex-task", "test", "alice"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_reindex_executor_runs_same_tracked_lifecycle_in_background(monkeypatch):
+    from openviking.service import reindex_executor as reindex_module
+    from openviking.service.reindex_executor import ReindexExecutor
+
+    finished = asyncio.Event()
+
+    class Tracker:
+        async def create_if_no_running(self, *_args, **_kwargs):
+            return SimpleNamespace(task_id="background-reindex")
+
+        def register_active(self, *_args, **_kwargs):
+            pass
+
+        async def start(self, *_args, **_kwargs):
+            pass
+
+        async def wait_for_work(self, *_args, **_kwargs):
+            return {}
+
+        async def complete(self, *_args, **_kwargs):
+            finished.set()
+
+        async def fail(self, *_args, **_kwargs):
+            finished.set()
+
+        def is_cancelling(self, *_args, **_kwargs):
+            return False
+
+        async def unregister_active(self, *_args, **_kwargs):
+            pass
+
+        async def cancel(self, *_args, **_kwargs):
+            pass
+
+    monkeypatch.setattr(reindex_module, "get_task_tracker", lambda: Tracker())
+    executor = ReindexExecutor()
+    monkeypatch.setattr(
+        executor,
+        "_run",
+        lambda **_kwargs: _completed_reindex_result(),
+    )
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="alice"),
+        role=Role.ROOT,
+    )
+
+    result = await executor.execute(
+        uri="viking://resources/demo",
+        mode="prune_orphans",
+        wait=False,
+        ctx=ctx,
+    )
+
+    assert result["task_id"] == "background-reindex"
+    assert result["status"] == "accepted"
+    await asyncio.wait_for(finished.wait(), timeout=1)
+
+
+async def _completed_reindex_result():
+    return {
+        "status": "completed",
+        "rebuilt_records": 0,
+        "failed_records": 0,
+        "warnings": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_reindex_run_waits_for_task_work_before_releasing_lock(monkeypatch):
+    from openviking.service import reindex_executor as reindex_module
+    from openviking.service.reindex_executor import ReindexExecutor
+    from openviking.service.task_context import bind_task_context
+
+    events = []
+
+    class Agfs:
+        async def pathlock_acquire_tree(self, path):
+            events.append(("acquire", path))
+            return "lease"
+
+        async def pathlock_as_borrowed(self, lease):
+            return {"lease": lease}
+
+        async def pathlock_release(self, lease):
+            events.append(("release", lease))
+
+    class Tracker:
+        async def wait_for_work(self, task_id, *, account_id, user_id):
+            events.append(("wait_for_work", task_id, account_id, user_id))
+            return {}
+
+    viking_fs = SimpleNamespace(
+        _async_agfs=Agfs(),
+        _uri_to_path=lambda uri, ctx: f"/local/test/{uri.rsplit('/', 1)[-1]}",
+        exists=AsyncMock(return_value=False),
+    )
+    service = SimpleNamespace(
+        viking_fs=viking_fs,
+        vikingdb_manager=SimpleNamespace(has_queue_manager=True),
+    )
+    monkeypatch.setattr(reindex_module, "get_service", lambda: service)
+    monkeypatch.setattr(reindex_module, "get_task_tracker", lambda: Tracker())
+    executor = ReindexExecutor()
+
+    async def prune(**_kwargs):
+        events.append("prune")
+
+    monkeypatch.setattr(executor, "_prune_orphan_vectors", prune)
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="alice"),
+        role=Role.ROOT,
+    )
+
+    with bind_task_context("reindex-task", "test", "alice"):
+        result = await executor._run(
+            uri="viking://resources/demo",
+            object_type="resource",
+            mode="prune_orphans",
+            ctx=ctx,
+        )
+
+    assert result["status"] == "completed"
+    assert events == [
+        ("acquire", "/local/test/demo"),
+        "prune",
+        ("wait_for_work", "reindex-task", "test", "alice"),
+        ("release", "lease"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_reindex_upsert_uses_uri_owner_for_user_scoped_records(monkeypatch):
     from openviking.service.reindex_executor import ReindexExecutor
 
@@ -760,6 +985,7 @@ async def test_reindex_semantic_processor_uses_uri_owner_for_user_scoped_records
         async def on_dequeue(self, payload, lock=None):
             captured["payload"] = payload
             captured["lock"] = lock
+            return ProcessResult.success()
 
     monkeypatch.setattr(
         "openviking.service.reindex_executor.SemanticProcessor",
@@ -1362,6 +1588,7 @@ async def test_reindex_semantic_processor_uses_configured_vlm_concurrency(monkey
 
         async def on_dequeue(self, data, lock=None):
             seen["data"] = data
+            return ProcessResult.success()
 
     monkeypatch.setattr(reindex_mod, "SemanticProcessor", FakeSemanticProcessor)
     monkeypatch.setattr(
@@ -2141,6 +2368,7 @@ async def test_reindex_semantic_processor_runs_with_skip_vectorization(monkeypat
 
         async def on_dequeue(self, payload, lock=None):
             seen["payload"] = payload
+            return ProcessResult.success()
 
     monkeypatch.setattr(
         "openviking.service.reindex_executor.SemanticProcessor",
@@ -2180,6 +2408,8 @@ async def test_reindex_semantic_processor_passes_non_recursive_message(monkeypat
 
         async def on_dequeue(self, payload, lock=None):
             seen["payload"] = payload
+            return ProcessResult.success()
+            return ProcessResult.success()
 
     monkeypatch.setattr(
         "openviking.service.reindex_executor.SemanticProcessor",
@@ -2216,6 +2446,7 @@ async def test_reindex_semantic_processor_sets_memory_aggregation_policy(monkeyp
 
         async def on_dequeue(self, payload, lock=None):
             seen["payload"] = payload
+            return ProcessResult.success()
 
     monkeypatch.setattr(
         "openviking.service.reindex_executor.SemanticProcessor",
@@ -3179,10 +3410,6 @@ async def test_reindex_upsert_applies_empty_replace_tags_to_embedding_message(mo
     monkeypatch.setattr(
         "openviking.service.reindex_executor.get_service",
         lambda: SimpleNamespace(vikingdb_manager=FakeVikingDB()),
-    )
-    monkeypatch.setattr(
-        "openviking.service.reindex_executor.get_request_wait_tracker",
-        lambda: SimpleNamespace(register_embedding_root=lambda *args: None),
     )
 
     ctx = RequestContext(

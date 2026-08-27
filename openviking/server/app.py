@@ -338,9 +338,9 @@ def create_app(
             app.state.oauth_gc_task = oauth_gc_task
             logger.info("OAuth 2.1 store initialized at %s", oauth_store._db_path)
 
-        # Start TaskTracker cleanup loop
+        # Start task retention and cross-worker cancellation polling.
         task_tracker = get_task_tracker()
-        task_tracker.start_cleanup_loop()
+        task_tracker.start_background_loops()
 
         # Initialize tracing and OTLP log export from server.observability.
         from openviking.telemetry import tracer_module
@@ -362,7 +362,7 @@ def create_app(
 
         await shutdown_usage_audit(app=app)
         await shutdown_metrics_async(app=app)
-        task_tracker.stop_cleanup_loop()
+        task_tracker.stop_background_loops()
         auth_plugin_state = getattr(app.state, "auth_plugin", None)
         if auth_plugin_state is not None:
             try:

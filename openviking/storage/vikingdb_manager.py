@@ -133,7 +133,7 @@ class VikingDBManager(VikingVectorIndexBackend):
             embedding_queue = self.embedding_queue
             if not embedding_queue:
                 raise RuntimeError("Embedding queue not initialized")
-            await embedding_queue.enqueue(embedding_msg)
+            await embedding_queue.enqueue(embedding_msg.to_dict())
             logger.debug(f"Enqueued embedding message: {embedding_msg.id}")
             return True
         except Exception as e:

@@ -241,7 +241,9 @@ async def test_memory_write_linkifies_resource_uri_marker_with_readable_anchor(s
     refs = mf.extra_fields["resource_refs"]
     assert refs[0]["resource_uri"] == resource_uri
     assert refs[0]["source"] == "content.write"
-    assert refs[0]["match_text"] == "2026-06-12，用户保存了粉丝创作的越前龙马动漫插画资源，资源URI为"
+    assert (
+        refs[0]["match_text"] == "2026-06-12，用户保存了粉丝创作的越前龙马动漫插画资源，资源URI为"
+    )
     assert mf.links == []
 
 
@@ -472,7 +474,7 @@ async def test_resource_write_wait_forces_directory_refresh(monkeypatch):
     )
     enqueue = AsyncMock(return_value=FreshnessAction.REFRESH_NOW)
     monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh", enqueue)
-    monkeypatch.setattr(coordinator, "_wait_for_request", AsyncMock(return_value=None))
+    monkeypatch.setattr(coordinator, "_wait_for_task_work", AsyncMock(return_value=None))
 
     await coordinator.write(
         uri=file_uri,
@@ -496,12 +498,11 @@ async def test_write_timeout_after_enqueue_releases_resource_lock(monkeypatch):
         del kwargs
         return None
 
-    async def _fake_wait_for_request(*, telemetry_id, timeout):
-        del telemetry_id
+    async def _fake_wait_for_task_work(*, timeout):
         raise DeadlineExceededError("queue processing", timeout)
 
     monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh", _fake_enqueue_semantic_refresh)
-    monkeypatch.setattr(coordinator, "_wait_for_request", _fake_wait_for_request)
+    monkeypatch.setattr(coordinator, "_wait_for_task_work", _fake_wait_for_task_work)
 
     with pytest.raises(DeadlineExceededError):
         await coordinator.write(
@@ -606,7 +607,6 @@ async def test_write_direct_reuses_outer_lease_for_viking_fs(monkeypatch):
         timeout=None,
         ctx=ctx,
         written_bytes=len("updated".encode("utf-8")),
-        telemetry_id="",
     )
 
     assert result["uri"] == file_uri
@@ -717,16 +717,16 @@ async def test_memory_write_wait_skips_semantic_queue_and_releases_write_lock(mo
         del uri, content, mode, ctx, lock_handle, lease_ref
         return None
 
-    async def _fail_wait_for_request(*, telemetry_id, timeout):
-        del telemetry_id, timeout
+    async def _fail_wait_for_task_work(*, timeout):
+        del timeout
         raise AssertionError("memory write should not wait for semantic refresh")
 
     async def _fake_refresh_schema_overview(**kwargs):
         del kwargs
-        return None
+        return True
 
     monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
-    monkeypatch.setattr(coordinator, "_wait_for_request", _fail_wait_for_request)
+    monkeypatch.setattr(coordinator, "_wait_for_task_work", _fail_wait_for_task_work)
     monkeypatch.setattr(
         "openviking.storage.content_write.MemoryUpdater.refresh_schema_overview",
         _fake_refresh_schema_overview,

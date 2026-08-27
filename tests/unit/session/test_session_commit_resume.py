@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openviking.message import Message, TextPart
+from openviking.service.task_domain import TaskAggregate
 from openviking.service.task_tracker import TaskStatus, TaskTracker, set_task_tracker
 from openviking.session.session import Session
 from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
@@ -17,16 +18,51 @@ class _TaskStore:
         self.tasks = {}
 
     async def create(self, task):
-        self.tasks[task.task_id] = task
+        self.tasks[task.task_id] = TaskAggregate(task=task)
+
+    async def create_if_no_active(self, task):
+        await self.create(task)
+        return True
 
     async def update(self, task):
-        self.tasks[task.task_id] = task
+        current = self.tasks.get(task.task_id)
+        self.tasks[task.task_id] = TaskAggregate(task=task, works=current.works if current else {})
+        return True
 
     async def get(self, task_id, *, account_id=None, user_id=None):
-        return None
+        aggregate = self.tasks.get(task_id)
+        if aggregate is None:
+            return None
+        if account_id and aggregate.task.account_id != account_id:
+            return None
+        if user_id and aggregate.task.user_id != user_id:
+            return None
+        return aggregate
 
-    async def list(self, account_id, *, user_id=None):
-        return []
+    async def list(
+        self,
+        account_id=None,
+        *,
+        user_id=None,
+        task_type=None,
+        status=None,
+        resource_id=None,
+        limit=None,
+    ):
+        tasks = [
+            aggregate
+            for aggregate in self.tasks.values()
+            if (account_id is None or aggregate.task.account_id == account_id)
+            and (user_id is None or aggregate.task.user_id == user_id)
+            and (task_type is None or aggregate.task.task_type == task_type)
+            and (status is None or aggregate.task.status.value == status)
+            and (resource_id is None or aggregate.task.resource_id == resource_id)
+        ]
+        tasks.sort(key=lambda aggregate: aggregate.task.created_at, reverse=True)
+        return tasks if limit is None else tasks[:limit]
+
+    async def list_cancelling_tasks(self):
+        return set()
 
     async def delete(self, task_id, *, account_id, user_id=None):
         self.tasks.pop(task_id, None)
@@ -77,16 +113,17 @@ async def test_resume_queued_commit_continues_phase2(monkeypatch):
     )
 
     try:
-        await session.resume_queued_commit(message)
+        await session.resume_queued_commit(message, current_work_id="work-1")
     finally:
         set_task_tracker(None)
 
     session._run_memory_extraction.assert_awaited_once()
     assert session._run_memory_extraction.await_args.kwargs["task_id"] == "task-1"
+    assert session._run_memory_extraction.await_args.kwargs["current_work_id"] == "work-1"
     assert session._run_memory_extraction.await_args.kwargs["agent_evolution_enabled"] is True
-    assert [
-        item.id for item in session._run_memory_extraction.await_args.kwargs["messages"]
-    ] == ["archived"]
+    assert [item.id for item in session._run_memory_extraction.await_args.kwargs["messages"]] == [
+        "archived"
+    ]
 
 
 @pytest.mark.asyncio
@@ -114,7 +151,7 @@ async def test_resume_queued_commit_fails_terminally_for_unreadable_archive(
 
     try:
         await session.resume_queued_commit(message)
-        task = await tracker.get("task-1")
+        task = await tracker.get("task-1", account_id="default", user_id="default")
     finally:
         set_task_tracker(None)
 
@@ -137,9 +174,7 @@ async def test_session_context_skips_pending_archive_with_missing_messages(monke
         session,
         "_list_archive_refs",
         AsyncMock(
-            return_value=[
-                {"archive_id": "archive_001", "archive_uri": archive_uri, "index": 1}
-            ]
+            return_value=[{"archive_id": "archive_001", "archive_uri": archive_uri, "index": 1}]
         ),
     )
 

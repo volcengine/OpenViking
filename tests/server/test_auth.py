@@ -22,7 +22,7 @@ from openviking.server.dependencies import set_service
 from openviking.server.identity import ResolvedIdentity, Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.service.core import OpenVikingService
-from openviking.service.task_store import PersistentTaskStore
+from openviking.service.task_store import CachingTaskWorkStore, PersistentTaskStore
 from openviking.service.task_tracker import (
     TaskTracker,
     get_task_tracker,
@@ -62,11 +62,28 @@ class _FakeAgfs:
         prefix = path.rstrip("/") or "/"
         if prefix not in self.dirs:
             return []
-        return [
-            {"name": file_path[len(prefix) + 1 :], "path": file_path, "is_dir": False}
-            for file_path in self.files
-            if file_path.startswith(prefix + "/") and "/" not in file_path[len(prefix) + 1 :]
-        ]
+        children = {}
+        for directory in self.dirs:
+            if directory in {prefix, "/"}:
+                continue
+            if directory.startswith(prefix + "/"):
+                name = directory[len(prefix) + 1 :].split("/", 1)[0]
+                if name:
+                    children[name] = {
+                        "name": name,
+                        "path": f"{prefix}/{name}",
+                        "is_dir": True,
+                    }
+        for file_path in self.files:
+            if file_path.startswith(prefix + "/"):
+                name = file_path[len(prefix) + 1 :].split("/", 1)[0]
+                if name and "/" not in file_path[len(prefix) + 1 :]:
+                    children[name] = {
+                        "name": name,
+                        "path": f"{prefix}/{name}",
+                        "is_dir": False,
+                    }
+        return list(children.values())
 
     def rm(self, path: str, recursive: bool = False, force: bool = True):
         self.files.pop(path, None)
@@ -74,7 +91,7 @@ class _FakeAgfs:
 
 
 def _set_fake_task_tracker():
-    set_task_tracker(TaskTracker(store=PersistentTaskStore(_FakeAgfs())))
+    set_task_tracker(TaskTracker(store=CachingTaskWorkStore(PersistentTaskStore(_FakeAgfs()))))
 
 
 ROOT_KEY = "root-secret-key-for-testing-only-1234567890abcdef"
@@ -469,6 +486,40 @@ async def test_task_endpoints_are_user_scoped():
         bob_list = await bob_client.get("/api/v1/tasks")
         assert bob_list.status_code == 200
         assert {task["task_id"] for task in bob_list.json()["result"]} == {bob_task.task_id}
+
+    set_task_tracker(None)
+
+
+async def test_root_task_list_merges_cached_owners_and_persisted_system_tasks():
+    """ROOT preserves the historical process-cache plus system-owner view."""
+    from openviking.service.task_store import SYSTEM_TASK_ACCOUNT_ID, SYSTEM_TASK_USER_ID
+
+    set_task_tracker(None)
+    _set_fake_task_tracker()
+    tracker = get_task_tracker()
+    root_task = await tracker.create("session_commit", account_id="default", user_id="default")
+    system_task = await tracker.create(
+        "legacy_migration",
+        account_id=SYSTEM_TASK_ACCOUNT_ID,
+        user_id=SYSTEM_TASK_USER_ID,
+    )
+    hidden_task = await tracker.create("session_commit", account_id="default", user_id="alice")
+
+    app = _build_task_http_test_app(
+        ResolvedIdentity(role=Role.ROOT, account_id="default", user_id="default")
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        listed = await client.get("/api/v1/tasks")
+        assert listed.status_code == 200
+        assert {task["task_id"] for task in listed.json()["result"]} == {
+            root_task.task_id,
+            system_task.task_id,
+            hidden_task.task_id,
+        }
+        assert (await client.get(f"/api/v1/tasks/{root_task.task_id}")).status_code == 200
+        assert (await client.get(f"/api/v1/tasks/{system_task.task_id}")).status_code == 200
+        assert (await client.get(f"/api/v1/tasks/{hidden_task.task_id}")).status_code == 200
 
     set_task_tracker(None)
 
@@ -1515,9 +1566,7 @@ async def test_watcher_reloads_on_signature_change(auth_service):
     from openviking.server.auth.plugins import ApiKeyAuthPlugin
 
     manager = _FakeManager(signatures=[("sig-a",), ("sig-b",)])
-    task = asyncio.create_task(
-        ApiKeyAuthPlugin._watch_key_store(manager, interval=0.01)
-    )
+    task = asyncio.create_task(ApiKeyAuthPlugin._watch_key_store(manager, interval=0.01))
     try:
         await asyncio.sleep(0.1)
     finally:
@@ -1533,9 +1582,7 @@ async def test_watcher_skips_reload_when_unchanged(auth_service):
     from openviking.server.auth.plugins import ApiKeyAuthPlugin
 
     manager = _FakeManager(signatures=[("sig-stable",)])
-    task = asyncio.create_task(
-        ApiKeyAuthPlugin._watch_key_store(manager, interval=0.01)
-    )
+    task = asyncio.create_task(ApiKeyAuthPlugin._watch_key_store(manager, interval=0.01))
     try:
         await asyncio.sleep(0.08)
     finally:

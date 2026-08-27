@@ -38,9 +38,7 @@ def _clean_memory_attrs(raw: str) -> dict[str, Any]:
     return attrs
 
 
-async def _tags_attr(
-    service: Any, uri: str, ctx: RequestContext, *, is_dir: bool
-) -> list[str]:
+async def _tags_attr(service: Any, uri: str, ctx: RequestContext, *, is_dir: bool) -> list[str]:
     vikingdb_manager = getattr(service, "vikingdb_manager", None)
     if not vikingdb_manager:
         return []
@@ -193,9 +191,7 @@ async def attrs(
             },
         }
         if result["context_type"] == "memory" and not stat_result.get("isDir", False):
-            result["attrs"]["memory"] = _clean_memory_attrs(
-                await service.fs.read(uri, ctx=_ctx)
-            )
+            result["attrs"]["memory"] = _clean_memory_attrs(await service.fs.read(uri, ctx=_ctx))
         return Response(status="ok", result=result)
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
@@ -274,6 +270,8 @@ async def rm(
         raise
     # Build response with uri and estimated_deleted_count
     response_result = {"uri": uri}
+    if isinstance(result, dict) and "task_id" in result:
+        response_result["task_id"] = result["task_id"]
     if isinstance(result, dict) and "estimated_deleted_count" in result:
         response_result["estimated_deleted_count"] = result["estimated_deleted_count"]
     if isinstance(result, dict) and "memory_cleanup" in result:

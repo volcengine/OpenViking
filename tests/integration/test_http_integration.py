@@ -10,7 +10,7 @@ import pytest
 import pytest_asyncio
 
 from openviking_cli.client.http import AsyncHTTPClient
-from openviking_cli.exceptions import NotFoundError
+from openviking_cli.exceptions import InvalidURIError
 
 
 class TestHTTPClientIntegration:
@@ -41,8 +41,8 @@ class TestHTTPClientIntegration:
         """Test find operation."""
         result = await client.find(query="test", limit=5)
         assert result is not None
-        assert hasattr(result, "resources")
-        assert hasattr(result, "total")
+        assert "resources" in result
+        assert "total" in result
 
     @pytest.mark.asyncio
     async def test_search(self, client):
@@ -52,8 +52,8 @@ class TestHTTPClientIntegration:
 
     @pytest.mark.asyncio
     async def test_stat_not_found(self, client):
-        """Test stat on non-existent path raises NotFoundError."""
-        with pytest.raises(NotFoundError):
+        """Test stat on an invalid scope raises InvalidURIError."""
+        with pytest.raises(InvalidURIError):
             await client.stat("viking://nonexistent/path")
 
     @pytest.mark.asyncio

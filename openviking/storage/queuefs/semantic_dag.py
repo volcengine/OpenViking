@@ -12,7 +12,7 @@ from weakref import WeakKeyDictionary
 
 from openviking.parse.parsers.media import get_media_type
 from openviking.server.identity import RequestContext
-from openviking.service.task_work_index import bind_task_context, get_task_context
+from openviking.service.task_context import bind_task_context, get_task_context
 from openviking.storage.abstract_overview import (
     AbstractOverviewFormatError,
     AbstractOverviewWriteResult,
@@ -376,9 +376,7 @@ class SemanticDagExecutor:
                 key=lambda item: item[1].rsplit("/", 1)[-1],
             )
             sampled_entries = deterministic_sample(direct_entries, sample_limit)
-            sampled_children_dirs = {
-                uri for kind, uri in sampled_entries if kind == "directory"
-            }
+            sampled_children_dirs = {uri for kind, uri in sampled_entries if kind == "directory"}
             sampled_file_paths = {uri for kind, uri in sampled_entries if kind == "file"}
             pending_snapshot = (
                 await read_abstract_overview_pending_snapshot(

@@ -22,6 +22,7 @@ from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSHTTPError, AGFSNotFoundError
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext, Role
+from openviking.service.task_context import bind_task_context
 from openviking.session.auto_commit_policy import AutoCommitPolicy
 from openviking.session.memory.constants import AGENT_EVOLUTION_MEMORY_TYPES
 from openviking.session.memory_policy import MemoryPolicy
@@ -46,7 +47,6 @@ from openviking.session.tool_result_synopsis import (
 )
 from openviking.storage.abstract_overview import body_for_preview, render_abstract_overview
 from openviking.telemetry import get_current_telemetry, tracer
-from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.model_retry import is_retryable_api_error, retry_async
 from openviking.utils.time_utils import get_current_timestamp
 from openviking.utils.token_estimation import estimate_text_tokens, truncate_text_to_token_budget
@@ -1698,7 +1698,11 @@ class Session:
             from openviking.service.task_tracker import get_task_tracker
 
             tracker = get_task_tracker()
-            if not task_id or not tracker.has_work(str(task_id)):
+            if not task_id or not await tracker.has_work(
+                str(task_id),
+                account_id=self.ctx.account_id,
+                user_id=self.ctx.user.user_id,
+            ):
                 error = "Phase 1 has no QueueFS work to resume"
                 await self._write_failed_marker(
                     archive_uri,
@@ -2111,12 +2115,6 @@ class Session:
                             },
                         )
 
-                phase1_stage = "queue_enqueue"
-                await get_queue_manager().enqueue(
-                    QueueManager.SESSION_COMMIT,
-                    queue_msg.to_dict(),
-                )
-
                 phase1_stage = "task_tracker_create"
                 await get_task_tracker().create(
                     "session_commit",
@@ -2124,6 +2122,12 @@ class Session:
                     account_id=self.ctx.account_id,
                     user_id=self.ctx.user.user_id,
                     task_id=task_id,
+                )
+
+                phase1_stage = "queue_enqueue"
+                await get_queue_manager().enqueue(
+                    QueueManager.SESSION_COMMIT,
+                    queue_msg.to_dict(),
                 )
 
                 phase1_stage = "phase1_persist"
@@ -2152,6 +2156,19 @@ class Session:
                 await self._write_phase1_ready_marker(archive_uri)
             except Exception as e:
                 logger.error(f"[commit] Failed during {phase1_stage}: {e}")
+                if phase1_stage != "task_tracker_create":
+                    try:
+                        await get_task_tracker().fail(
+                            task_id,
+                            str(e),
+                            account_id=self.ctx.account_id,
+                            user_id=self.ctx.user.user_id,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Failed to terminalize task after commit Phase 1 error: %s",
+                            task_id,
+                        )
                 # Whether the queue write failed or a queued Phase 1 stopped
                 # before publication, a terminal marker makes archive raw
                 # logically live and prevents a permanent pending directory.
@@ -2201,7 +2218,12 @@ class Session:
             error="session commit cancelled",
         )
 
-    async def resume_queued_commit(self, msg: "SessionCommitMsg") -> bool:
+    async def resume_queued_commit(
+        self,
+        msg: "SessionCommitMsg",
+        *,
+        current_work_id: Optional[str] = None,
+    ) -> bool:
         """Run one durable Phase 2 job from its archived messages."""
         from openviking.service.task_tracker import get_task_tracker
 
@@ -2334,6 +2356,7 @@ class Session:
             user_config_error=user_config_error,
             record_auto_commit_success=msg.record_auto_commit_success,
             event_search_tags=list(msg.event_search_tags or []),
+            current_work_id=current_work_id,
         )
         return True
 
@@ -2374,6 +2397,7 @@ class Session:
         user_config_error: Optional[str] = None,
         record_auto_commit_success: bool = False,
         event_search_tags: Optional[List[str]] = None,
+        current_work_id: Optional[str] = None,
     ) -> None:
         """Phase 2: Extract memories and enqueue semantic work in the background."""
         from openviking.service.task_tracker import get_task_tracker
@@ -2381,7 +2405,6 @@ class Session:
         from openviking.telemetry.registry import register_telemetry, unregister_telemetry
 
         tracker = get_task_tracker()
-        request_wait_tracker = get_request_wait_tracker()
 
         memories_extracted: Dict[str, int] = {}
         usage_events_extracted = 0
@@ -2411,10 +2434,12 @@ class Session:
                 account_id=self.ctx.account_id,
                 user_id=self.ctx.user.user_id,
             )
-            request_wait_tracker.register_request(telemetry.telemetry_id)
             register_telemetry(telemetry)
             try:
-                with bind_telemetry(telemetry):
+                with (
+                    bind_telemetry(telemetry),
+                    bind_task_context(task_id, self.ctx.account_id, self.ctx.user.user_id),
+                ):
                     ov_config = get_openviking_config()
                     effective_policy = MemoryPolicy.from_dict(memory_policy)
                     working_memory_enabled = effective_policy.working_memory_enabled
@@ -2744,24 +2769,36 @@ class Session:
                             )
 
                 try:
-                    await request_wait_tracker.wait_for_request(
-                        telemetry.telemetry_id,
-                        timeout=_PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS,
-                    )
+                    if current_work_id:
+                        await asyncio.wait_for(
+                            tracker.wait_for_descendants(
+                                task_id,
+                                current_work_id,
+                                account_id=self.ctx.account_id,
+                                user_id=self.ctx.user.user_id,
+                            ),
+                            timeout=_PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS,
+                        )
+                    else:
+                        await tracker.wait_for_work(
+                            task_id,
+                            account_id=self.ctx.account_id,
+                            user_id=self.ctx.user.user_id,
+                            timeout=_PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS,
+                        )
                 except TimeoutError as exc:
                     telemetry.set_error(
-                        "session.commit.phase2.wait_for_request",
+                        "session.commit.phase2.wait_for_descendants",
                         "DEADLINE_EXCEEDED",
                         str(exc),
                     )
                     logger.warning(
-                        "Timed out waiting for request-scoped queues for "
-                        "telemetry_id=%s after %.1fs; continuing phase2 completion",
-                        telemetry.telemetry_id,
+                        "Timed out waiting for session commit descendant work for "
+                        "task_id=%s after %.1fs; continuing phase2 completion",
+                        task_id,
                         _PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS,
                     )
             finally:
-                request_wait_tracker.cleanup(telemetry.telemetry_id)
                 unregister_telemetry(telemetry.telemetry_id)
 
             # Phase 2 complete — update meta with telemetry and commit info
@@ -3927,7 +3964,11 @@ class Session:
         from openviking.service.task_tracker import get_task_tracker
 
         tracker = get_task_tracker()
-        if tracker.has_work(str(task_id)):
+        if await tracker.has_work(
+            str(task_id),
+            account_id=self.ctx.account_id,
+            user_id=self.ctx.user.user_id,
+        ):
             return False
 
         error = "Session commit queue work is missing"

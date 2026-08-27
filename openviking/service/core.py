@@ -26,6 +26,7 @@ from openviking.service.search_service import SearchService
 from openviking.service.session_auto_commit import SessionAutoCommitScheduler
 from openviking.service.session_service import SessionService
 from openviking.service.task_tracker import get_task_tracker, set_task_tracker
+from openviking.service.task_work_hook import install_task_work_tracking
 from openviking.session import create_session_compressor
 from openviking.storage.collection_schemas import init_context_collection
 from openviking.storage.index_consistency import check_index_consistency
@@ -457,7 +458,6 @@ class OpenVikingService:
                     dequeue_handler=AddResourceProcessor(
                         self._resource_service,
                         asyncio.get_running_loop(),
-                        queue_name,
                         self._viking_fs,
                     ),
                     allow_create=True,
@@ -477,7 +477,7 @@ class OpenVikingService:
                 self._queue_manager.USER_DELETION,
                 allow_create=True,
             )
-            await self._queue_manager.prepare_task_tracking(get_task_tracker())
+            await install_task_work_tracking(self._queue_manager, get_task_tracker())
 
         if self._config.enable_watch_scheduler:
             await self._watch_scheduler.start()

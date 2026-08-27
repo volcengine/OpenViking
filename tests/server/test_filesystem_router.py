@@ -8,6 +8,7 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import filesystem
+from openviking_cli.exceptions import DeadlineExceededError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -33,6 +34,28 @@ async def test_rm_preserves_memory_cleanup(monkeypatch):
     assert response.result["uri"] == "viking://resources/id_card.pdf"
     assert response.result["estimated_deleted_count"] == 1
     assert response.result["memory_cleanup"] == cleanup
+
+
+@pytest.mark.asyncio
+async def test_rm_wait_timeout_preserves_deadline_error(monkeypatch):
+    async def fake_rm(uri, ctx=None, recursive=False, wait=False, timeout=None):
+        raise DeadlineExceededError("queue processing", timeout)
+
+    monkeypatch.setattr(
+        filesystem,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(rm=fake_rm)),
+    )
+
+    with pytest.raises(DeadlineExceededError) as exc_info:
+        await filesystem.rm(
+            uri="viking://resources/id_card.pdf",
+            wait=True,
+            timeout=0.01,
+            _ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER),
+        )
+
+    assert exc_info.value.code == "DEADLINE_EXCEEDED"
 
 
 @pytest.mark.asyncio

@@ -26,17 +26,17 @@ from openviking.core.namespace import (
 )
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
+from openviking.service.task_context import bind_task_context, get_task_context
 from openviking.service.task_tracker import get_task_tracker
-from openviking.service.task_work_index import bind_task_context
+from openviking.service.task_work_hook import enqueue_with_task_work
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage.abstract_overview import body_for_preview, embedding_text_for_body
 from openviking.storage.expr import And, Eq, Or, PathScope
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
+from openviking.storage.queuefs.queue_hook import ProcessOutcome
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.viking_fs import get_viking_fs
-from openviking.telemetry import get_current_telemetry
-from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.embedding_input import truncate_embedding_input
 from openviking.utils.embedding_utils import (
     _apply_ingest_options,
@@ -196,28 +196,6 @@ class ReindexExecutor:
         )
 
         tracker = get_task_tracker()
-        if wait:
-            if await tracker.has_running(
-                REINDEX_TASK_TYPE,
-                uri,
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-            ):
-                raise OpenVikingError(
-                    f"URI {uri} already has a reindex in progress",
-                    code="CONFLICT",
-                    details={"uri": uri},
-                )
-            return await self._run(
-                uri=uri,
-                object_type=object_type,
-                mode=mode,
-                dry_run=dry_run,
-                recursive=recursive,
-                ingest_options=ingest_options,
-                ctx=ctx,
-            )
-
         task = await tracker.create_if_no_running(
             REINDEX_TASK_TYPE,
             uri,
@@ -231,18 +209,21 @@ class ReindexExecutor:
                 details={"uri": uri},
             )
 
-        asyncio.create_task(
-            self._run_tracked(
-                task.task_id,
-                uri=uri,
-                object_type=object_type,
-                mode=mode,
-                dry_run=dry_run,
-                recursive=recursive,
-                ingest_options=ingest_options,
-                ctx=ctx,
-            )
+        execution = self._run_tracked(
+            task.task_id,
+            uri=uri,
+            object_type=object_type,
+            mode=mode,
+            dry_run=dry_run,
+            recursive=recursive,
+            ingest_options=ingest_options,
+            ctx=ctx,
         )
+        if wait:
+            return await execution
+
+        background = asyncio.create_task(execution)
+        background.add_done_callback(self._consume_background_result)
         return {
             "task_id": task.task_id,
             "status": "accepted",
@@ -502,11 +483,6 @@ class ReindexExecutor:
         path = service.viking_fs._uri_to_path(uri, ctx=ctx)
         started_at = time.perf_counter()
         counters = _ReindexCounters()
-        telemetry_id = get_current_telemetry().telemetry_id
-        wait_tracker = get_request_wait_tracker()
-        if telemetry_id:
-            wait_tracker.register_request(telemetry_id)
-
         acquire_lock = service.viking_fs._async_agfs.pathlock_acquire_tree
         if mode != "prune_orphans" or await service.viking_fs.exists(uri, ctx=ctx):
             stat = await service.viking_fs.stat(uri, ctx=ctx)
@@ -569,16 +545,18 @@ class ReindexExecutor:
                     details={"uri": uri},
                 )
 
-            if telemetry_id and mode != "prune_orphans":
-                await wait_tracker.wait_for_request(telemetry_id)
-                self._apply_embedding_wait_status(
-                    counters,
-                    wait_tracker.build_queue_status(telemetry_id),
+            # Keep the tree lock until queue work created by this reindex settles.
+            task_context = get_task_context()
+            if task_context is not None:
+                queue_status = await get_task_tracker().wait_for_work(
+                    task_context.task_id,
+                    account_id=task_context.account_id,
+                    user_id=task_context.user_id,
                 )
+                self._apply_embedding_wait_status(counters, queue_status)
+
         finally:
             await service.viking_fs._async_agfs.pathlock_release(lease)
-            if telemetry_id:
-                wait_tracker.cleanup(telemetry_id)
 
         return {
             "status": "completed",
@@ -606,9 +584,9 @@ class ReindexExecutor:
         recursive: bool = True,
         ingest_options: IngestOptions | None = None,
         ctx: RequestContext,
-    ) -> None:
+    ) -> dict[str, Any]:
         tracker = get_task_tracker()
-        tracker.register_running_task(task_id)
+        tracker.register_active(task_id, account_id=ctx.account_id, user_id=ctx.user.user_id)
         try:
             await tracker.start(task_id, account_id=ctx.account_id, user_id=ctx.user.user_id)
             with bind_task_context(task_id, ctx.account_id, ctx.user.user_id):
@@ -627,9 +605,18 @@ class ReindexExecutor:
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
             )
+            return result
         except asyncio.CancelledError:
-            # TaskWorkIndex finalizes after this active task and its queue work settle.
-            return
+            if not tracker.is_cancelling(
+                task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
+            ):
+                # The caller cancelled this coroutine rather than the Task API.
+                # Unregister first so cancel() does not cancel it a second time.
+                await tracker.unregister_active(
+                    task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
+                )
+                await tracker.cancel(task_id, account_id=ctx.account_id, user_id=ctx.user.user_id)
+            raise
         except Exception as exc:
             await tracker.fail(
                 task_id,
@@ -637,8 +624,20 @@ class ReindexExecutor:
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
             )
+            raise
         finally:
-            await tracker.unregister_running_task(task_id)
+            await tracker.unregister_active(
+                task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
+            )
+
+    @staticmethod
+    def _consume_background_result(task: asyncio.Task[dict[str, Any]]) -> None:
+        """Consume errors already persisted by ``_run_tracked``."""
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            logger.error("Background reindex failed: %s", error)
 
     async def _prune_orphan_vectors(
         self,
@@ -1063,7 +1062,16 @@ class ReindexExecutor:
             use_hierarchical_aggregation=context_type == "memory",
             propagate_to_parent=recursive,
         )
-        await processor.on_dequeue({"data": msg.to_json()}, lock=lock)
+        result = await processor.on_dequeue({"data": msg.to_json()}, lock=lock)
+        if result.outcome is ProcessOutcome.FAILED:
+            raise RuntimeError(result.error or "Semantic processing failed")
+        if result.outcome is ProcessOutcome.REQUEUE:
+            from openviking.storage.queuefs import QueueManager, get_queue_manager
+
+            manager = get_queue_manager()
+            if manager is None:
+                raise RuntimeError(result.error or "Semantic processing requested retry")
+            await manager.get_queue(QueueManager.SEMANTIC).schedule_retry(result)
 
     async def _reindex_resource_vectors(
         self,
@@ -1878,15 +1886,13 @@ class ReindexExecutor:
                 code="FAILED_PRECONDITION",
                 details={"uri": uri},
             )
-        wait_tracker = get_request_wait_tracker()
-        wait_tracker.register_embedding_root(msg.telemetry_id, msg.id)
-        enqueued = await service.vikingdb_manager.enqueue_embedding_msg(msg)
+        enqueued = await enqueue_with_task_work(
+            msg,
+            "Embedding",
+            service.vikingdb_manager.enqueue_embedding_msg,
+            false_failure_message="Failed to enqueue reindex vector for {uri}",
+        )
         if not enqueued:
-            wait_tracker.mark_embedding_failed(
-                msg.telemetry_id,
-                msg.id,
-                f"Failed to enqueue reindex vector for {uri}",
-            )
             raise OpenVikingError(
                 f"Failed to enqueue reindex vector for {uri}",
                 code="PROCESSING_ERROR",

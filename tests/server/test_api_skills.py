@@ -46,7 +46,12 @@ async def _add_skill(client, name: str = "api-skill", description: str = "API sk
         json={"data": _skill_md(name, description), "wait": True},
     )
     assert response.status_code == 200, response.text
-    return response.json()["result"]
+    result = response.json()["result"]
+    assert "task_id" not in result
+    listed = await client.get("/api/v1/tasks", params={"task_type": "add_skill"})
+    assert listed.status_code == 200
+    assert listed.json()["result"]
+    return result
 
 
 async def test_skills_api_list_empty_collection(client):

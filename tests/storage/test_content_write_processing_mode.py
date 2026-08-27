@@ -8,6 +8,7 @@ import pytest
 
 from openviking.core.context import ContextLevel
 from openviking.server.identity import RequestContext, Role
+from openviking.service.task_context import bind_task_context
 from openviking.storage import content_write as content_write_module
 from openviking.storage.abstract_overview import (
     parse_abstract_overview,
@@ -86,7 +87,6 @@ async def test_direct_write_skips_semantic_refresh_for_vectors_only_and_sidecar_
         timeout=None,
         ctx=ctx,
         written_bytes=7,
-        telemetry_id="",
         processing_mode="vectors_only",
     )
 
@@ -126,7 +126,6 @@ async def test_direct_write_skips_semantic_refresh_for_vectors_only_and_sidecar_
         timeout=None,
         ctx=ctx,
         written_bytes=len("Updated body only.".encode()),
-        telemetry_id="",
     )
 
     written = sidecar_fs.write_file.await_args.args[1]
@@ -149,7 +148,7 @@ async def test_vectors_only_write_wait_reports_embedding_status(monkeypatch, ctx
         content_write_module, "vectorize_file", AsyncMock(return_value=True), raising=False
     )
     coordinator = ContentWriteCoordinator(viking_fs=fake_fs)
-    coordinator._wait_for_request = AsyncMock(return_value=queue_status)
+    coordinator._wait_for_task_work = AsyncMock(return_value=queue_status)
 
     result = await coordinator._write_direct_with_refresh(
         uri="viking://resources/demo.md",
@@ -161,7 +160,6 @@ async def test_vectors_only_write_wait_reports_embedding_status(monkeypatch, ctx
         timeout=3.0,
         ctx=ctx,
         written_bytes=7,
-        telemetry_id="tm-test",
         processing_mode="vectors_only",
     )
 
@@ -177,7 +175,7 @@ async def test_vectors_only_write_wait_reports_skipped_when_nothing_enqueued(mon
         content_write_module, "vectorize_file", AsyncMock(return_value=False), raising=False
     )
     coordinator = ContentWriteCoordinator(viking_fs=fake_fs)
-    coordinator._wait_for_request = AsyncMock(return_value=None)
+    coordinator._wait_for_queues = AsyncMock(return_value=None)
 
     result = await coordinator._write_direct_with_refresh(
         uri="viking://resources/obsolete.md",
@@ -189,7 +187,6 @@ async def test_vectors_only_write_wait_reports_skipped_when_nothing_enqueued(mon
         timeout=3.0,
         ctx=ctx,
         written_bytes=0,
-        telemetry_id="tm-test",
         processing_mode="vectors_only",
     )
 
@@ -201,9 +198,7 @@ async def test_vectors_only_write_wait_reports_skipped_when_nothing_enqueued(mon
 async def test_automatic_wide_directory_delay_reports_deferred(monkeypatch, ctx):
     fake_fs = _FakeVikingFS()
     coordinator = ContentWriteCoordinator(viking_fs=fake_fs)
-    coordinator._enqueue_semantic_refresh = AsyncMock(
-        return_value=FreshnessAction.MARK_PENDING
-    )
+    coordinator._enqueue_semantic_refresh = AsyncMock(return_value=FreshnessAction.MARK_PENDING)
 
     result = await coordinator._write_direct_with_refresh(
         uri="viking://resources/wide/demo.md",
@@ -215,7 +210,6 @@ async def test_automatic_wide_directory_delay_reports_deferred(monkeypatch, ctx)
         timeout=None,
         ctx=ctx,
         written_bytes=7,
-        telemetry_id="",
     )
 
     assert result["semantic_status"] == "deferred"
@@ -258,7 +252,6 @@ async def test_memory_write_accepts_processing_mode_without_switching_refresh(
         timeout=3.0,
         ctx=ctx,
         written_bytes=7,
-        telemetry_id="tm-test",
         processing_mode="vectors_only",
     )
 
@@ -267,3 +260,23 @@ async def test_memory_write_accepts_processing_mode_without_switching_refresh(
     assert result["context_type"] == "memory"
     assert result["semantic_status"] == "skipped"
     assert result["overview_status"] == expected_overview_status
+
+
+@pytest.mark.asyncio
+async def test_wait_for_task_work_uses_bound_task_scope(monkeypatch, ctx):
+    queue_status = {"Embedding": {"processed": 1, "error_count": 0, "errors": []}}
+    tracker = SimpleNamespace(wait_for_work=AsyncMock(return_value=queue_status))
+    monkeypatch.setattr(content_write_module, "get_task_tracker", lambda: tracker)
+    coordinator = ContentWriteCoordinator(viking_fs=_FakeVikingFS())
+    coordinator._wait_for_queues = AsyncMock(
+        side_effect=AssertionError("task-scoped writes must not wait for all queues")
+    )
+
+    with bind_task_context("task-1", "account-1", "user-1"):
+        result = await coordinator._wait_for_task_work(timeout=3.0)
+
+    assert result == queue_status
+    tracker.wait_for_work.assert_awaited_once_with(
+        "task-1", account_id="account-1", user_id="user-1", timeout=3.0
+    )
+    coordinator._wait_for_queues.assert_not_awaited()
