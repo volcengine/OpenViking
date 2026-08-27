@@ -67,6 +67,19 @@ class TestGeminiContextRouting:
         assert embedder.document_param is None
 
 
+def test_factory_raises_clear_error_when_google_genai_not_installed():
+    cfg = _gcfg()
+
+    with patch("openviking.models.embedder.GeminiDenseEmbedder", None):
+        with pytest.raises(ValueError) as excinfo:
+            EmbeddingConfig(dense=cfg).get_embedder()
+
+    message = str(excinfo.value)
+    assert "google-genai" in message
+    assert "pip install openviking[gemini]" in message
+    assert "NoneType" not in message
+
+
 class TestGeminiConfigValidation:
     def test_missing_api_key_raises(self):
         with pytest.raises(ValueError, match="api_key"):
