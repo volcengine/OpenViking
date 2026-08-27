@@ -504,7 +504,7 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(
     assert task_tracker.create.await_args.kwargs["resource_id"] == (
         None if preflight_name is None else root_uri
     )
-    assert task_tracker.create.await_args.kwargs["meta"] is None
+    assert task_tracker.create.await_args.kwargs["meta"] == {"source_path": source}
     submit_understanding.assert_awaited_once_with(
         source,
         feishu_access_token="u-secret",
@@ -941,7 +941,7 @@ async def test_add_resource_processor_persists_final_uri_and_cleans_staged_sourc
         account_id="account-1",
         user_id="user-1",
         task_id="task-1",
-        meta={"internal": True},
+        meta={"source_path": "", "internal": True},
     )
     assert task_tracker.complete.await_count == 2
     first_complete = task_tracker.complete.await_args_list[0]

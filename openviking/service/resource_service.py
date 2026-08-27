@@ -562,7 +562,10 @@ class ResourceService:
                 account_id=msg.account_id,
                 user_id=msg.user_id,
                 task_id=msg.task_id,
-                meta={"internal": True} if msg.internal_task else None,
+                meta={
+                    "source_path": msg.source_path,
+                    **({"internal": True} if msg.internal_task else {}),
+                },
                 auth=task_auth,
             )
             await get_queue_manager().enqueue(queue_name, msg.to_dict())
