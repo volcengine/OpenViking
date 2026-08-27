@@ -164,10 +164,9 @@ export function contextRequestTimeoutMs(cfg = {}, body = {}) {
   // `query_expansion` defaults to "auto" server-side, so only an explicit "off"
   // takes the expansion fuse back out of the budget.
   const wantsExpansion = Boolean(body.session_id) && body.query_expansion !== "off";
-  if (!wantsRewrite && !wantsExpansion) return undefined;
-
   const configured = Number(cfg.recallContextTimeoutMs);
   if (Number.isFinite(configured) && configured > 0) return Math.max(1000, Math.floor(configured));
+  if (!wantsRewrite && !wantsExpansion) return undefined;
   const floor = wantsRewrite ? SERVER_REWRITE_REQUEST_TIMEOUT_MS : EXPANSION_REQUEST_TIMEOUT_MS;
   return Math.max(Number(cfg.timeoutMs) || 0, floor);
 }

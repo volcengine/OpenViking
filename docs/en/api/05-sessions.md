@@ -1031,8 +1031,8 @@ Add a message to the session. Supports two modes: simple text mode and Parts mod
 | role | str | Yes | - | Message role: "user" or "assistant" |
 | parts | List[dict \| MessagePart] | Conditional | - | SDK part dictionaries or `TextPart`/`ContextPart`/`ImagePart`/`ToolPart` objects; HTTP API accepts dictionaries only; mutually exclusive with content |
 | content | str | Conditional | - | Message text content (simple mode; mutually exclusive with parts) |
-| created_at | str | No | None | Optional ISO 8601 timestamp to persist on the message |
 | peer_id | str | No | None | Optional stable interaction peer identity |
+| options | AddMessageOptions | No | None | Advanced message options such as `created_at`, `telemetry`, `turn_id`, `message_kind`, and `source_message_ids` |
 
 > **Note**: HTTP API supports two modes:
 > 1. **Simple mode**: Use `content` string (backward compatible)
@@ -1136,6 +1136,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
 
 ```python
 import openviking as ov
+from openviking_sdk import ContextPart, ImagePart, TextPart
 
 client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
@@ -1236,7 +1237,7 @@ Add multiple messages to a session in a single request. Suitable for scenarios t
 |------|------|------|--------|------|
 | session_id | str | Yes | - | Session ID |
 | messages | List[AddMessageRequest] | Yes | - | List of messages, each following the same format as `add_message()`, max 100 |
-| telemetry | bool | No | False | Whether to attach operation telemetry data |
+| options | BatchAddMessagesOptions | No | None | Advanced batch options such as `telemetry`; pass `options={"telemetry": true}` to include operation telemetry data |
 
 > **Note**: Each message follows the exact same format as `add_message()`, supporting both `content` (simple mode) and `parts` (Parts mode). If you need to add more than 100 messages, call in batches.
 

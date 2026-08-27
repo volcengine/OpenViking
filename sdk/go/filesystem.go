@@ -208,7 +208,7 @@ func (c *Client) Write(ctx context.Context, uri string, content string, opts *Wr
 	return result, err
 }
 
-// BatchWrite applies preconditioned file writes in one request.
+// BatchWrite applies file writes in one request and refreshes their indexes once.
 func (c *Client) BatchWrite(
 	ctx context.Context,
 	rootURI string,

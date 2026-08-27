@@ -16,15 +16,23 @@ are extracted from HTTP request scope and propagated via contextvars.
 
 from __future__ import annotations
 
+import base64
 import contextvars
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import PurePosixPath
 from typing import Any, Dict, List, Literal, Optional, Union
 from urllib.parse import quote
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+from mcp.types import (
+    AudioContent,
+    ContentBlock,
+    ImageContent,
+    TextContent,
+)
 from pydantic import BaseModel, Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -43,9 +51,9 @@ from openviking.retrieve.context_assembler import (
     assemble_context,
 )
 from openviking.server.auth import (
+    _build_request_context,
     _extract_api_key,
     normalize_actor_peer_header,
-    resolve_group_ids,
     resolve_identity,
 )
 from openviking.server.dependencies import get_server_config, get_service
@@ -57,7 +65,6 @@ from openviking.server.local_input_guard import (
 from openviking.server.resource_ingest import ingest_temp_upload
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.server.upload_token_store import upload_token_store
-from openviking.telemetry.span_models import update_root_span_identity
 from openviking.utils.search_filters import SearchContextTypeInput, merge_search_filter
 from openviking_cli.exceptions import (
     InvalidArgumentError,
@@ -66,7 +73,6 @@ from openviking_cli.exceptions import (
     PermissionDeniedError,
     UnauthenticatedError,
 )
-from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -171,6 +177,12 @@ class _IdentityASGIMiddleware:
             actor_peer_id = normalize_actor_peer_header(
                 request.headers.get("x-openviking-actor-peer")
             )
+            ctx = _build_request_context(
+                request,
+                identity,
+                actor_peer_id=actor_peer_id,
+                api_key=_extract_api_key(x_api_key, authorization),
+            )
         except (UnauthenticatedError, PermissionDeniedError, InvalidArgumentError) as exc:
             status = (
                 401
@@ -195,31 +207,6 @@ class _IdentityASGIMiddleware:
             )
             return await resp(scope, receive, send)
 
-        # Mirror the identity fallback RequestContext applies below, so the
-        # observability stamp and the request context never disagree.
-        effective_account_id = identity.account_id or "default"
-        effective_user_id = identity.user_id or "default"
-        # Stamp the resolved identity onto the outer request's root
-        # observability context, mirroring what get_request_context does for
-        # REST routes. MCP authentication bypasses FastAPI's REST context
-        # dependency; request.state shares scope["state"] with the outer app,
-        # where the observability middleware attached root_span_attrs.
-        update_root_span_identity(
-            request_state=request.state,
-            account_id=effective_account_id,
-            user_id=effective_user_id,
-        )
-        ctx = RequestContext(
-            user=UserIdentifier(
-                effective_account_id,
-                effective_user_id,
-            ),
-            role=identity.role,
-            group_ids=resolve_group_ids(request, effective_account_id, effective_user_id),
-            actor_peer_id=actor_peer_id,
-            from_oauth=identity.from_oauth,
-            api_key=_extract_api_key(x_api_key, authorization),
-        )
         url_info = {
             "x_forwarded_proto": request.headers.get("x-forwarded-proto"),
             "x_forwarded_host": request.headers.get("x-forwarded-host"),
@@ -331,8 +318,7 @@ async def search(
             )
         if other_peer_penalty is not None and other_peer_penalties:
             raise InvalidArgumentError(
-                "other_peer_penalty cannot be combined with other_peer_penalties "
-                "in mode='context'"
+                "other_peer_penalty cannot be combined with other_peer_penalties in mode='context'"
             )
         # Resolve exclusions with the same strictness as the REST search router,
         # so alias URIs match the canonical URIs they are compared against.
@@ -436,9 +422,85 @@ async def _format_search_result(result, *, service, ctx, read_content: bool = Fa
 # -- read ------------------------------------------------------------------
 
 
-@mcp.tool()
-async def read(uris: str | list[str]) -> str:
-    """Read full content from one or more viking:// file URIs. Pass a single URI string or a list for batch reads. For directory listing, use the list tool instead."""
+_MCP_IMAGE_EXTENSIONS = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
+_MCP_AUDIO_EXTENSIONS = {".flac", ".m4a", ".mp3", ".oga", ".ogg", ".wav"}
+_MCP_VIDEO_EXTENSIONS = {".avi", ".m4v", ".mkv", ".mov", ".mp4", ".webm"}
+# Common clients cap an inline result at 5 MiB base64, or 3.75 MiB raw.
+# Apply the same limit to one file and to the aggregate media in one tool call.
+_MCP_MEDIA_MAX_BYTES = 3_932_160
+
+
+def _mcp_uri_suffix(uri: str) -> str:
+    """Lowercased file extension of a URI, ignoring any query or fragment."""
+    path = uri.split("#", 1)[0].split("?", 1)[0]
+    return PurePosixPath(path).suffix.lower()
+
+
+def _is_mcp_image_uri(uri: str) -> bool:
+    return _mcp_uri_suffix(uri) in _MCP_IMAGE_EXTENSIONS
+
+
+def _is_mcp_audio_uri(uri: str) -> bool:
+    return _mcp_uri_suffix(uri) in _MCP_AUDIO_EXTENSIONS
+
+
+def _is_mcp_video_uri(uri: str) -> bool:
+    return _mcp_uri_suffix(uri) in _MCP_VIDEO_EXTENSIONS
+
+
+def _sniff_mcp_image_mime_type(data: bytes) -> Optional[str]:
+    """Recognize the raster formats shared by common MCP coding clients."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def _mcp_image_content(data: bytes, mime_type: str) -> ImageContent:
+    encoded = base64.b64encode(data).decode("ascii")
+    return ImageContent(type="image", data=encoded, mimeType=mime_type)
+
+
+def _sniff_mcp_audio_mime_type(data: bytes, uri: str) -> Optional[str]:
+    """Recognize audio formats represented by MCP AudioContent."""
+    suffix = _mcp_uri_suffix(uri)
+    if data.startswith(b"RIFF") and len(data) >= 12 and data[8:12] == b"WAVE":
+        return "audio/wav"
+    if data.startswith(b"fLaC"):
+        return "audio/flac"
+    if data.startswith(b"OggS") and suffix in {".oga", ".ogg"}:
+        return "audio/ogg"
+    if data.startswith(b"ID3") or (len(data) >= 2 and data[0] == 0xFF and data[1] & 0xE0 == 0xE0):
+        return "audio/mpeg"
+    if len(data) >= 12 and data[4:8] == b"ftyp" and suffix == ".m4a":
+        return "audio/mp4"
+    return None
+
+
+def _mcp_audio_content(data: bytes, mime_type: str) -> AudioContent:
+    encoded = base64.b64encode(data).decode("ascii")
+    return AudioContent(type="audio", data=encoded, mimeType=mime_type)
+
+
+def _mcp_media_download_hint(uri: str) -> str:
+    """Return actionable fallbacks when media cannot be inlined."""
+    path = uri.split("#", 1)[0].split("?", 1)[0]
+    filename = PurePosixPath(path).name or "download"
+    encoded_uri = quote(uri, safe="")
+    return (
+        f'Use `ov get "{uri}" "./{filename}"` or GET '
+        f"`/api/v1/content/download?uri={encoded_uri}` to fetch the original file."
+    )
+
+
+@mcp.tool(structured_output=False)
+async def read(uris: str | list[str]) -> str | list[ContentBlock]:
+    """Read one or more viking:// file URIs. Raster images and supported audio return native MCP content blocks. For directory listing, use the list tool instead."""
     import asyncio
 
     service = get_service()
@@ -446,19 +508,119 @@ async def read(uris: str | list[str]) -> str:
     uri_list = uris if isinstance(uris, list) else [uris]
     semaphore = asyncio.Semaphore(10)
 
-    async def _read_one(uri: str) -> str:
+    async def _preflight_one(uri: str) -> tuple[str, Optional[int], Optional[str]]:
+        """Resolve a URI and stat media before any binary bytes are loaded."""
+        try:
+            resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
+            is_image = _is_mcp_image_uri(resolved_uri)
+            is_audio = _is_mcp_audio_uri(resolved_uri)
+            is_video = _is_mcp_video_uri(resolved_uri)
+            if not (is_image or is_audio or is_video):
+                return resolved_uri, None, None
+
+            async with semaphore:
+                stat = await service.fs.stat(resolved_uri, ctx=ctx)
+            if stat.get("isDir"):
+                return (
+                    resolved_uri,
+                    None,
+                    f"Cannot render {uri}: URI points to a directory. "
+                    "Use the list tool (or `ov ls` / `ov tree`) to browse its contents.",
+                )
+            if is_video:
+                return (
+                    resolved_uri,
+                    None,
+                    f"Cannot render {uri}: MCP has no standard VideoContent block. "
+                    f"{_mcp_media_download_hint(uri)}",
+                )
+
+            size = stat.get("size") if stat else None
+            if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+                return (
+                    resolved_uri,
+                    None,
+                    f"Cannot render {uri}: file size is unavailable. "
+                    f"{_mcp_media_download_hint(uri)}",
+                )
+            return resolved_uri, size, None
+        except OpenVikingError as exc:
+            return uri, None, str(exc)
+
+    preflight = await asyncio.gather(*[_preflight_one(uri) for uri in uri_list])
+    checked: list[tuple[str, Optional[int], Optional[str]]] = []
+    media_total = 0
+    for uri, (resolved_uri, size, error) in zip(uri_list, preflight, strict=True):
+        if error is None and size is not None:
+            if size > _MCP_MEDIA_MAX_BYTES:
+                error = (
+                    f"Media file is too large to inline through MCP ({size} bytes; limit "
+                    f"{_MCP_MEDIA_MAX_BYTES} bytes). {_mcp_media_download_hint(uri)}"
+                )
+            elif media_total + size > _MCP_MEDIA_MAX_BYTES:
+                error = (
+                    f"Cannot inline {uri}: combined media size would exceed the MCP tool-call "
+                    f"limit of {_MCP_MEDIA_MAX_BYTES} bytes. Read fewer media files at once. "
+                    f"{_mcp_media_download_hint(uri)}"
+                )
+            else:
+                media_total += size
+        checked.append((resolved_uri, size, error))
+
+    async def _read_one(
+        uri: str, prepared: tuple[str, Optional[int], Optional[str]]
+    ) -> str | ContentBlock:
         async with semaphore:
             try:
-                resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
+                resolved_uri, declared_size, error = prepared
+                if error is not None:
+                    return error
+                is_image = _is_mcp_image_uri(resolved_uri)
+                is_audio = _is_mcp_audio_uri(resolved_uri)
+                if is_image or is_audio:
+                    data = await service.fs.read_file_bytes(resolved_uri, ctx=ctx)
+                    if declared_size is None or len(data) > declared_size:
+                        return (
+                            f"Cannot render {uri}: file changed after its size was checked. "
+                            "Retry the read."
+                        )
+                    mime_type = (
+                        _sniff_mcp_image_mime_type(data)
+                        if is_image
+                        else _sniff_mcp_audio_mime_type(data, resolved_uri)
+                    )
+                    if mime_type is None:
+                        return (
+                            f"Cannot render {uri}: its bytes do not match a supported media "
+                            f"format. {_mcp_media_download_hint(uri)}"
+                        )
+                    if is_image:
+                        return _mcp_image_content(data, mime_type)
+                    return _mcp_audio_content(data, mime_type)
                 content = await service.fs.read_visible(resolved_uri, ctx=ctx)
                 return content
             except OpenVikingError as exc:
                 return str(exc)
 
     if len(uri_list) == 1:
-        return await _read_one(uri_list[0])
+        result = await _read_one(uri_list[0], checked[0])
+        if isinstance(result, str):
+            return result
+        return [TextContent(type="text", text=f"Source: {uri_list[0]}"), result]
 
-    results = await asyncio.gather(*[_read_one(u) for u in uri_list])
+    results = await asyncio.gather(
+        *[_read_one(uri, prepared) for uri, prepared in zip(uri_list, checked, strict=True)]
+    )
+    if any(not isinstance(result, str) for result in results):
+        blocks: list[ContentBlock] = []
+        for uri, result in zip(uri_list, results, strict=True):
+            blocks.append(TextContent(type="text", text=f"=== {uri} ==="))
+            if isinstance(result, str):
+                blocks.append(TextContent(type="text", text=result))
+            else:
+                blocks.append(result)
+        return blocks
+
     parts = []
     for uri, text in zip(uri_list, results, strict=True):
         parts.append(f"=== {uri} ===\n{text}")

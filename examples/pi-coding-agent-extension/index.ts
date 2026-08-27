@@ -378,7 +378,7 @@ function updateStatus(
     : ` · ✎ ${threshold}`;
   const status = `${connected ? "OV ✓" : "OV ✗"} · ↩${added}${pending} · ${sessionId ? sessionId.slice(0, 12) : "none"}`;
   try {
-    setter(status);
+    setter("openviking", status);
   } catch {
     // Best effort; pi API shape may vary across fast-moving versions.
   }

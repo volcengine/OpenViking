@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { extractCaptureTurns } from "./capture-utils.mjs";
+import { extractCaptureTurns, findLastHumanTurnIndex } from "./capture-utils.mjs";
 
 const CAPTURE_CONFIG = {
   captureAssistantTurns: true,
@@ -496,4 +496,36 @@ test("captureToolMaxChars still caps tool output when an operator lowers it", ()
     .find((part) => part.tool_status === "completed");
   assert.ok(completed.tool_output.length <= 1000);
   assert.match(completed.tool_output, /\[truncated\]$/);
+});
+
+test("findLastHumanTurnIndex skips tool results mapped onto the user role", () => {
+  const turns = extractCaptureTurns(
+    [
+      { payload: { message: { role: "user", content: "compacted historical summary" } } },
+      { payload: { message: { role: "user", content: "current user request" } } },
+      { payload: { type: "function_call", id: "call-1", name: "shell", arguments: "{}" } },
+      { payload: { type: "function_call_output", call_id: "call-1", output: "tool result" } },
+      { payload: { message: { role: "assistant", content: "current assistant response" } } },
+    ],
+    CAPTURE_CONFIG,
+  );
+
+  const index = findLastHumanTurnIndex(turns);
+  assert.equal(turns[index].text, "current user request");
+  assert.equal(turns.at(-2).role, "user");
+  assert.equal(turns.at(-2).parts[0].type, "tool");
+});
+
+test("findLastHumanTurnIndex reports -1 when no human turn survives", () => {
+  const turns = extractCaptureTurns(
+    [
+      { payload: { type: "function_call", id: "call-1", name: "shell", arguments: "{}" } },
+      { payload: { type: "function_call_output", call_id: "call-1", output: "tool result" } },
+      { payload: { message: { role: "assistant", content: "assistant only" } } },
+    ],
+    CAPTURE_CONFIG,
+  );
+
+  assert.equal(findLastHumanTurnIndex(turns), -1);
+  assert.equal(findLastHumanTurnIndex([]), -1);
 });

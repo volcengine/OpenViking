@@ -347,7 +347,9 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
     "audio": {},
     "video": {},
     "markdown": {},
-    "excel": {},
+    "anydoc": {
+      "enabled": true
+    },
     "html": {},
     "text": {},
     "directory": {},
@@ -369,7 +371,7 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
 | `image` | 图片理解和 OCR |
 | `audio`、`video` | 音视频内容解析 |
 | `markdown`、`html`、`text` | 文本文档分段 |
-| `excel` | Excel 工作表解析与分段 |
+| `anydoc` | Office 和 EPUB 转换；`enabled=false` 时拒绝这些格式 |
 | `directory` | 目录扫描和忽略规则 |
 | `feishu` | 飞书文档访问与解析 |
 | `webfeed` | Sitemap、RSS 和 Atom 导入 |

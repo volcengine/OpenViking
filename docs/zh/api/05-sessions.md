@@ -1028,8 +1028,8 @@ ov session delete a1b2c3d4
 | role | str | 是 | - | 消息角色："user" 或 "assistant" |
 | parts | List[dict \| MessagePart] | 条件必填 | - | SDK 可传消息片段字典或 `TextPart`/`ContextPart`/`ImagePart`/`ToolPart` 对象；HTTP API 仅接受字典；与 content 二选一 |
 | content | str | 条件必填 | - | 消息文本内容（简单模式，与 parts 二选一） |
-| created_at | str | 否 | None | 可选的 ISO 8601 时间戳，会原样保存到消息中 |
 | peer_id | str | 否 | None | 可选的稳定交互对象 ID |
+| options | AddMessageOptions | 否 | None | 进阶消息选项，例如 `created_at`、`telemetry`、`turn_id`、`message_kind` 和 `source_message_ids` |
 
 > **注意**：HTTP API 支持两种模式：
 > 1. **简单模式**：使用 `content` 字符串（向后兼容）
@@ -1117,6 +1117,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
 
 ```python
 import openviking as ov
+from openviking_sdk import ContextPart, TextPart
 
 client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
@@ -1207,7 +1208,7 @@ ov session add-message a1b2c3d4 --role user --content "How do I authenticate use
 |------|------|------|--------|------|
 | session_id | str | 是 | - | 会话 ID |
 | messages | List[AddMessageRequest] | 是 | - | 消息列表，每条消息格式与 `add_message()` 相同，最多 100 条 |
-| telemetry | bool | 否 | False | 是否附加操作遥测数据 |
+| options | BatchAddMessagesOptions | 否 | None | 进阶批量选项，例如 `telemetry`；传入 `options={"telemetry": True}` 可附加操作遥测数据 |
 
 > **注意**：每条消息的格式与 `add_message()` 完全一致，支持 `content`（简单模式）和 `parts`（Parts 模式）。超过 100 条需分批调用。
 

@@ -34,7 +34,7 @@ function readProxyConfig() {
     debug: cfg.debug,
     debugLogPath: cfg.debugLogPath,
     credentialSource: creds.credentialSource,
-    credentialPath: creds.cliPath || creds.ovPath,
+    credentialPath: creds.credentialPath,
     watchedPaths: [creds.cliPath, creds.ovPath, creds.cliPathCandidate],
   });
 }

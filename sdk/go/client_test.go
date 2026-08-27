@@ -637,6 +637,18 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 			if body["root_uri"] != "viking://resources/project" || body["future_flag"] != float64(0) {
 				t.Fatalf("body = %#v", body)
 			}
+			operations, ok := body["operations"].([]any)
+			if !ok || len(operations) != 1 {
+				t.Fatalf("operations = %#v", body["operations"])
+			}
+			operation, ok := operations[0].(map[string]any)
+			if !ok || !reflect.DeepEqual(operation, map[string]any{
+				"uri":     "viking://resources/project/a.txt",
+				"content": "hello",
+				"mode":    "upsert",
+			}) {
+				t.Fatalf("operation = %#v", operations[0])
+			}
 			writeOK(t, w, map[string]any{"updated": 1})
 		case "GET /api/v1/content/download":
 			if r.URL.Query().Get("uri") != "viking://resources/project/a.txt" {
@@ -653,9 +665,7 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 		{
 			URI:     "resources/project/a.txt",
 			Content: String("hello"),
-			Precondition: BatchWritePrecondition{
-				Kind: "create_if_absent",
-			},
+			Mode:    "upsert",
 		},
 	}, &BatchWriteOptions{Extra: map[string]any{"future_flag": 0}}); err != nil {
 		t.Fatal(err)
@@ -684,6 +694,33 @@ func TestAddResourceExtra(t *testing.T) {
 		Extra:        map[string]any{"future_flag": false},
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAddResourceForwardsRemoteSources(t *testing.T) {
+	remoteSources := []string{
+		"http://example.com/a.md",
+		"https://example.com/a.md",
+		"git@example.com:team/docs.git",
+		"ssh://git@example.com/team/docs.git",
+		"git://example.com/team/docs.git",
+	}
+
+	for _, source := range remoteSources {
+		t.Run(source, func(t *testing.T) {
+			client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body := readJSONBody(t, r)
+				if body["path"] != source {
+					t.Fatalf("path = %#v, want %q", body["path"], source)
+				}
+				writeOK(t, w, map[string]any{"root_uri": "viking://resources/a"})
+			}))
+			defer closeServer()
+
+			if _, err := client.AddResource(context.Background(), source, nil); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

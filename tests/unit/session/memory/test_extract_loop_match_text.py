@@ -32,6 +32,8 @@ class TestResolveOperations:
             filename_template="{{ name }}.md",
             fields=[
                 MemoryField(name="name", field_type=FieldType.STRING, merge_op=MergeOp.IMMUTABLE),
+                MemoryField(name="owner", field_type=FieldType.STRING, merge_op=MergeOp.REPLACE),
+                MemoryField(name="count", field_type=FieldType.INT64, merge_op=MergeOp.SUM),
                 MemoryField(name="content", field_type=FieldType.STRING, merge_op=MergeOp.PATCH),
             ],
         )
@@ -40,7 +42,7 @@ class TestResolveOperations:
             uri=existing_uri,
             content="old content",
             memory_type="entities",
-            extra_fields={"name": "Melanie"},
+            extra_fields={"name": "Melanie", "owner": "Alice", "count": 2},
         )
 
         context_provider = Mock()
@@ -73,8 +75,60 @@ class TestResolveOperations:
         assert operation.uris == [existing_uri]
         assert operation.old_memory_file_content is old_file
         assert operation.memory_fields["name"] == "Melanie"
+        assert "owner" not in operation.memory_fields
+        assert "count" not in operation.memory_fields
         assert operation.memory_fields["content"] == "new content"
         isolation_handler.calculate_memory_uris.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_existing_page_id_keeps_new_replace_and_sum_values(self):
+        schema = MemoryTypeSchema(
+            memory_type="entities",
+            description="entity memory",
+            fields=[
+                MemoryField(name="name", field_type=FieldType.STRING, merge_op=MergeOp.IMMUTABLE),
+                MemoryField(name="owner", field_type=FieldType.STRING, merge_op=MergeOp.REPLACE),
+                MemoryField(name="count", field_type=FieldType.INT64, merge_op=MergeOp.SUM),
+            ],
+        )
+        existing_uri = "viking://user/alice/memories/entities/Melanie.md"
+        old_file = MemoryFile(
+            uri=existing_uri,
+            content="old content",
+            memory_type="entities",
+            extra_fields={"name": "Melanie", "owner": "Alice", "count": 2},
+        )
+
+        context_provider = Mock()
+        context_provider.get_memory_schemas.return_value = [schema]
+        context_provider.read_file_contents = {existing_uri: old_file}
+
+        isolation_handler = Mock()
+        isolation_handler.get_read_scope.return_value = None
+        isolation_handler.fill_identity_fields.side_effect = lambda item, role_scope=None: item
+
+        loop = ExtractLoop(
+            vlm=Mock(model="test-model"),
+            viking_fs=Mock(),
+            context_provider=context_provider,
+            isolation_handler=isolation_handler,
+        )
+        loop._extract_context = SimpleNamespace(
+            page_id_map=SimpleNamespace(resolve=lambda page_id: existing_uri)
+        )
+
+        operations, _ = await loop.resolve_operations(
+            AttrDict(
+                entities=[
+                    {"name": "Ignored", "owner": "Bob", "count": 3, "page_id": 7}
+                ]
+            )
+        )
+
+        operation = operations.upsert_operations[0]
+        assert operation.memory_fields["name"] == "Melanie"
+        assert operation.memory_fields["owner"] == "Bob"
+        assert operation.memory_fields["count"] == 3
 
     def test_unresolved_page_ids_are_ignored(self):
         loop = ExtractLoop(vlm=Mock(model="test-model"), viking_fs=Mock(), context_provider=Mock())

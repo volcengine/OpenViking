@@ -125,6 +125,7 @@ def _initialize_extraction_telemetry() -> None:
         "memory.extract.merged",
         "memory.extract.deleted",
         "memory.extract.skipped",
+        "memory.extract.failed",
     ):
         telemetry.set(name, 0)
 
@@ -138,7 +139,8 @@ def _report_extraction_telemetry(result: Any) -> None:
     telemetry.set("memory.extract.created", len(result.written_uris))
     telemetry.set("memory.extract.merged", len(result.edited_uris))
     telemetry.set("memory.extract.deleted", len(result.deleted_uris))
-    telemetry.set("memory.extract.skipped", len(result.errors))
+    telemetry.set("memory.extract.skipped", len(result.skipped_operations))
+    telemetry.set("memory.extract.failed", len(result.errors))
 
 
 async def _commit_experience_snapshot(

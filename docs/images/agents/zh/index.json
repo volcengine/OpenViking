@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-08-18",
+  "updatedAt": "2026-08-25",
   "cdnBaseUrl": "https://docs.openviking.net/",
   "accessMethods": [
     {
@@ -41,22 +41,6 @@
   ],
   "agents": [
     {
-      "id": "openclaw",
-      "name": "OpenClaw",
-      "tags": ["Plugin"],
-      "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/OpenClaw.png",
-      "summary": "Plugin 接入，作为 OpenClaw 的 context engine，支持多 Agent 跨会话记忆与自迭代，通过 npm 安装助手工具一键完成配置",
-      "detailPath": "https://docs.openviking.net/agents/zh/openclaw.md"
-    },
-    {
-      "id": "hermes",
-      "name": "Hermes Agent",
-      "tags": ["Provider"],
-      "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Hermes-Agent.png",
-      "summary": "Hermes 官方内置 OpenViking。跑 hermes memory setup openviking，默认选火山云，再贴上 API Key 即可",
-      "detailPath": "https://docs.openviking.net/agents/zh/hermes.md"
-    },
-    {
       "id": "claude-code",
       "name": "Claude Code",
       "tags": ["Plugin"],
@@ -73,12 +57,20 @@
       "detailPath": "https://docs.openviking.net/agents/zh/codex.md"
     },
     {
-      "id": "cursor",
-      "name": "Cursor",
-      "tags": ["Plugin", "Memory"],
-      "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Cursor.png",
-      "summary": "一条命令安装 Cursor 生命周期 Hook、MCP 工具、Rules 与 Skills，实现自动记忆召回和会话捕获",
-      "detailPath": "https://docs.openviking.net/agents/zh/cursor.md"
+      "id": "doubao-work",
+      "name": "豆包工作",
+      "tags": ["MCP"],
+      "logo": "https://docs.openviking.net/agents/image/doubao-work/logo.png",
+      "summary": "通过连接器接入，为豆包工作提供持久化上下文记忆，接入后可在对话中自动召回相关记忆并存储新内容。",
+      "detailPath": "https://docs.openviking.net/agents/zh/doubao-work.md"
+    },
+    {
+      "id": "workbuddy",
+      "name": "WorkBuddy",
+      "tags": ["MCP"],
+      "logo": "https://docs.openviking.net/agents/image/workbuddy/logo.png",
+      "summary": "通过 MCP 工具，为 WorkBuddy 提供记忆召回与存储、知识资源管理、代码上下文检索等能力。",
+      "detailPath": "https://docs.openviking.net/agents/zh/workbuddy.md"
     },
     {
       "id": "trae",
@@ -89,12 +81,44 @@
       "detailPath": "https://docs.openviking.net/agents/zh/trae.md"
     },
     {
+      "id": "cursor",
+      "name": "Cursor",
+      "tags": ["Plugin", "Memory"],
+      "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Cursor.png",
+      "summary": "一条命令安装 Cursor 生命周期 Hook、MCP 工具、Rules 与 Skills，实现自动记忆召回和会话捕获",
+      "detailPath": "https://docs.openviking.net/agents/zh/cursor.md"
+    },
+    {
+      "id": "openclaw",
+      "name": "OpenClaw",
+      "tags": ["Plugin"],
+      "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/OpenClaw.png",
+      "summary": "Plugin 接入，作为 OpenClaw 的 context engine，支持多 Agent 跨会话记忆与自迭代，通过 npm 安装助手工具一键完成配置",
+      "detailPath": "https://docs.openviking.net/agents/zh/openclaw.md"
+    },
+    {
+      "id": "hermes",
+      "name": "Hermes Agent",
+      "tags": ["Provider"],
+      "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Hermes-Agent.png",
+      "summary": "Hermes 官方内置 OpenViking。跑 hermes memory setup openviking，默认选火山云，再贴上 API Key 即可",
+      "detailPath": "https://docs.openviking.net/agents/zh/hermes.md"
+    },
+    {
       "id": "opencode",
       "name": "OpenCode",
       "tags": ["Plugin"],
       "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/OpenCode.png",
       "summary": "提供一个统一 OpenCode 插件，支持仓库上下文、记忆工具、session 同步与自动 recall",
       "detailPath": "https://docs.openviking.net/agents/zh/opencode.md"
+    },
+    {
+      "id": "deepseek-harness",
+      "name": "DeepSeek Harness",
+      "tags": ["Plugin"],
+      "logo": "https://docs.openviking.net/agents/image/deepseek-harness/logo.png",
+      "summary": "为 DeepSeek Harness 提供跨项目、跨会话的长期记忆；安装后可自动召回相关记忆、捕获新内容，并直接使用 OpenViking 工具与 openviking-memory 技能，无需额外配置。",
+      "detailPath": "https://docs.openviking.net/agents/zh/deepseek-harness.md"
     },
     {
       "id": "deerflow",

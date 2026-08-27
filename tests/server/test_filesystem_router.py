@@ -86,7 +86,8 @@ async def test_attrs_returns_memory_fields_and_tags(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_mkdir_echoes_canonical_home_alias(monkeypatch):
+@pytest.mark.parametrize("role", [Role.USER, Role.ADMIN, Role.ROOT])
+async def test_mkdir_echoes_canonical_home_alias(monkeypatch, role):
     seen = {}
 
     async def fake_mkdir(uri, ctx=None, description=None):
@@ -100,11 +101,44 @@ async def test_mkdir_echoes_canonical_home_alias(monkeypatch):
 
     response = await filesystem.mkdir(
         filesystem.MkdirRequest(uri="viking://~/resources/notes"),
-        _ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER),
+        _ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=role),
     )
 
     assert seen["uri"] == "viking://user/alice/resources/notes"
     assert response.result["uri"] == "viking://user/alice/resources/notes"
+
+
+@pytest.mark.asyncio
+async def test_dev_root_http_mkdir_expands_home_alias_from_request_identity(
+    app, client, monkeypatch
+):
+    """Exercise the REST auth dependency and router with a dev-mode ROOT request."""
+    seen = {}
+
+    async def fake_mkdir(uri, ctx=None, description=None):
+        seen.update(uri=uri, ctx=ctx, description=description)
+
+    monkeypatch.setattr(
+        filesystem,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(mkdir=fake_mkdir)),
+    )
+
+    response = await client.post(
+        "/api/v1/fs/mkdir",
+        json={"uri": "viking://~/resources/notes", "description": "private notes"},
+        headers={
+            "X-OpenViking-Account": "acct",
+            "X-OpenViking-User": "alice",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["uri"] == "viking://user/alice/resources/notes"
+    assert seen["uri"] == "viking://user/alice/resources/notes"
+    assert seen["ctx"].role == Role.ROOT
+    assert seen["ctx"].account_id == "acct"
+    assert seen["ctx"].user.user_id == "alice"
 
 
 @pytest.mark.asyncio

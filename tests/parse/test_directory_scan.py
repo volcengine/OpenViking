@@ -135,7 +135,7 @@ class TestScanDirectoryClassification:
         assert "readme.md" in processable_rel
         assert "doc.html" in processable_rel
         assert "note.txt" in processable_rel
-        # Word, Excel, EPub, PowerPoint, Zip parsers
+        # AnyDoc Office/EPUB and Zip parsers
         assert "report.docx" in processable_rel
         assert "data.xlsx" in processable_rel
         assert "book.epub" in processable_rel

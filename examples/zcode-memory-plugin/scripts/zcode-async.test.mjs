@@ -9,6 +9,12 @@ import { fileURLToPath } from "node:url";
 
 const hook = fileURLToPath(new URL("./auto-capture.mjs", import.meta.url));
 
+// Mirrors OPENVIKING_TIMEOUT_MS below: the parent must never stall this long.
+const HOOK_TIMEOUT_MS = 5000;
+// Slow CI runners need a generous budget for the detached worker to finish
+// (cold start + two delayed responses + state writes).
+const WORKER_WAIT_MS = 20000;
+
 function waitFor(predicate, timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs;
   return new Promise((resolve, reject) => {
@@ -84,7 +90,7 @@ test("Stop returns before slow writes while detached worker finishes capture", a
       HOME: home,
       OPENVIKING_URL: `http://127.0.0.1:${server.address().port}`,
       OPENVIKING_WRITE_PATH_ASYNC: "1",
-      OPENVIKING_TIMEOUT_MS: "5000",
+      OPENVIKING_TIMEOUT_MS: String(HOOK_TIMEOUT_MS),
     },
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -98,10 +104,17 @@ test("Stop returns before slow writes while detached worker finishes capture", a
 
   assert.equal(exitCode, 0, stderr);
   assert.equal(stdout, "");
+  // Core async-path guarantee, independent of wall-clock speed: every server
+  // response is delayed 700ms, so a parent that exits with zero completed
+  // responses provably never awaited the network. A synchronous fallback
+  // would have completed both responses before exiting.
   assert.equal(completedResponses, 0, "parent waited for a network response");
-  assert.ok(elapsedMs < 650, `parent hook took ${elapsedMs}ms`);
+  // Hang guard only (not a latency budget): the parent must exit well before
+  // the fetch timeout. Node cold start on a loaded CI runner can easily
+  // exceed any tighter wall-clock bound, which made this flaky.
+  assert.ok(elapsedMs < HOOK_TIMEOUT_MS, `parent hook took ${elapsedMs}ms`);
 
-  await waitFor(() => requests.some(({ url }) => url?.endsWith("/commit")));
+  await waitFor(() => requests.some(({ url }) => url?.endsWith("/commit")), WORKER_WAIT_MS);
   assert.equal(requests.length, 2);
   const batch = requests.find(({ url }) => url?.endsWith("/messages/batch"));
   assert.ok(batch);
@@ -113,7 +126,7 @@ test("Stop returns before slow writes while detached worker finishes capture", a
   });
 
   const statePath = join(home, ".openviking", "hook-state", "zcode", `${sessionId}.json`);
-  await waitFor(() => existsSync(statePath));
+  await waitFor(() => existsSync(statePath), WORKER_WAIT_MS);
   const state = JSON.parse(readFileSync(statePath, "utf8"));
   assert.equal(state.lastTurnId, "turn-001");
   assert.deepEqual(state.capturedTurnIds, [
@@ -168,7 +181,7 @@ test("400 failure does not advance state and successful retry prevents duplicate
     HOME: home,
     OPENVIKING_URL: `http://127.0.0.1:${server.address().port}`,
     OPENVIKING_WRITE_PATH_ASYNC: "0",
-    OPENVIKING_TIMEOUT_MS: "5000",
+    OPENVIKING_TIMEOUT_MS: String(HOOK_TIMEOUT_MS),
   };
 
   const first = await runHook({ session_id: sessionId, cwd: home }, env);

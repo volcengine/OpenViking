@@ -309,6 +309,14 @@ Set `claude_code.debug: true` in `ov.conf` or `OPENVIKING_DEBUG=1` to write hook
 
 ## Troubleshooting
 
+Start with the bundled doctor — it checks the install (marketplace, enablement, hooks, MCP wiring), the resolved config (which file won, API key shown masked), the connection (reachability, auth, `/mcp`) and recent hook activity, and prints a fix for every finding:
+
+```bash
+node "$(jq -r '.plugins["openviking-memory@openviking"][0].installPath' ~/.claude/plugins/installed_plugins.json)/scripts/ov-memory-doctor.mjs"
+```
+
+Or just ask Claude to check the plugin: the `ov-memory-doctor` skill runs the same script and walks the report. When the server runs on the same machine (loopback url) the report adds a Server health section — whether anything listens on the port, plugin-only keys in ov.conf that stop the server from starting, and `GET /ready`; everything else server-side (config validation, live embedding probe, native engine, disk) stays with `openviking-server doctor`.
+
 | Symptom                                    | Cause                                                        | Fix                                                                                                |
 |--------------------------------------------|--------------------------------------------------------------|----------------------------------------------------------------------------------------------------|
 | Plugin not activating                      | No `ov.conf` / `ovcli.conf` found                            | Create one, or set `OPENVIKING_MEMORY_ENABLED=1` plus the URL/API_KEY env vars                     |
@@ -401,6 +409,12 @@ claude-code-memory-plugin/
 │   └── plugin.json          # plugin manifest
 ├── hooks/
 │   └── hooks.json           # 9 hook registrations
+├── commands/
+│   └── ov.md                # /ov status command
+├── skills/
+│   ├── openviking-memory/   # how to use the memory tools
+│   ├── ov-experience-memory/
+│   └── ov-memory-doctor/    # install / config / connection / local-server troubleshooting
 ├── servers/
 │   └── mcp-proxy.mjs        # stdio -> OpenViking /mcp bridge
 ├── scripts/
@@ -415,6 +429,8 @@ claude-code-memory-plugin/
 │   ├── subagent-stop.mjs    # SubagentStop
 │   ├── debug-recall.mjs     # standalone diagnostic for recall
 │   ├── debug-capture.mjs    # standalone diagnostic for capture
+│   ├── ov-status.mjs        # /ov status report
+│   ├── ov-memory-doctor.mjs # diagnostics script (ov-memory-doctor skill)
 │   └── lib/
 │       ├── ov-session.mjs   # OV HTTP client + session helpers + bypass check
 │       └── async-writer.mjs # detached-worker helper for write-path hooks

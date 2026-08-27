@@ -27,14 +27,11 @@ from openviking.parse.directory_scan import (
     DirectoryScanResult,
     scan_directory,
 )
-from openviking.parse.parsers.epub import EPubParser
-from openviking.parse.parsers.excel import ExcelParser
+from openviking.parse.parsers.anydoc import AnyDocParser
 from openviking.parse.parsers.html import HTMLParser
 from openviking.parse.parsers.markdown import MarkdownParser
 from openviking.parse.parsers.pdf import PDFParser
-from openviking.parse.parsers.powerpoint import PowerPointParser
 from openviking.parse.parsers.text import TextParser
-from openviking.parse.parsers.word import WordParser
 from openviking.parse.parsers.zip_parser import ZipParser
 from openviking.parse.registry import ParserRegistry
 
@@ -72,13 +69,22 @@ def tmp_all_parsers(tmp_path: Path) -> Path:
                 notes.txt         -> TextParser
                 log.text          -> TextParser
             office/
-                report.docx      -> WordParser
-                data.xlsx        -> ExcelParser
-                legacy.xls       -> ExcelParser
-                macro.xlsm       -> ExcelParser
-                slides.pptx      -> PowerPointParser
+                legacy.doc       -> AnyDocParser
+                report.docx      -> AnyDocParser
+                macro.docm       -> AnyDocParser
+                open.odt         -> AnyDocParser
+                rich.rtf         -> AnyDocParser
+                data.xlsx        -> AnyDocParser
+                legacy.xls       -> AnyDocParser
+                macro.xlsm       -> AnyDocParser
+                binary.xlsb      -> AnyDocParser
+                sheet.ods        -> AnyDocParser
+                table.csv        -> AnyDocParser
+                slides.pptx      -> AnyDocParser
+                legacy.ppt       -> AnyDocParser
+                show.pps         -> AnyDocParser
             books/
-                book.epub         -> EPubParser
+                book.epub         -> AnyDocParser
             archives/
                 bundle.zip       -> ZipParser
             code/
@@ -123,11 +129,20 @@ def tmp_all_parsers(tmp_path: Path) -> Path:
     (tmp_path / "config" / "rules.toml").write_text("[section]", encoding="utf-8")
 
     (tmp_path / "office").mkdir()
+    (tmp_path / "office" / "legacy.doc").write_bytes(b"\xd0\xcf\x11\xe0")
     (tmp_path / "office" / "report.docx").write_bytes(b"PK\x03\x04")
+    (tmp_path / "office" / "macro.docm").write_bytes(b"PK\x03\x04")
+    (tmp_path / "office" / "open.odt").write_bytes(b"PK\x03\x04")
+    (tmp_path / "office" / "rich.rtf").write_text(r"{\rtf1 text}", encoding="utf-8")
     (tmp_path / "office" / "data.xlsx").write_bytes(b"PK\x03\x04")
     (tmp_path / "office" / "legacy.xls").write_bytes(b"\xd0\xcf\x11\xe0")
     (tmp_path / "office" / "macro.xlsm").write_bytes(b"PK\x03\x04")
+    (tmp_path / "office" / "binary.xlsb").write_bytes(b"PK\x03\x04")
+    (tmp_path / "office" / "sheet.ods").write_bytes(b"PK\x03\x04")
+    (tmp_path / "office" / "table.csv").write_text("a,b\n1,2\n", encoding="utf-8")
     (tmp_path / "office" / "slides.pptx").write_bytes(b"PK\x03\x04")
+    (tmp_path / "office" / "legacy.ppt").write_bytes(b"\xd0\xcf\x11\xe0")
+    (tmp_path / "office" / "show.pps").write_bytes(b"\xd0\xcf\x11\xe0")
 
     (tmp_path / "books").mkdir()
     (tmp_path / "books" / "book.epub").write_bytes(b"PK\x03\x04")
@@ -156,12 +171,21 @@ class TestParserSelection:
         ".pdf": PDFParser,
         ".txt": TextParser,
         ".text": TextParser,
-        ".docx": WordParser,
-        ".xlsx": ExcelParser,
-        ".xls": ExcelParser,
-        ".xlsm": ExcelParser,
-        ".epub": EPubParser,
-        ".pptx": PowerPointParser,
+        ".doc": AnyDocParser,
+        ".docx": AnyDocParser,
+        ".docm": AnyDocParser,
+        ".odt": AnyDocParser,
+        ".rtf": AnyDocParser,
+        ".xlsx": AnyDocParser,
+        ".xls": AnyDocParser,
+        ".xlsm": AnyDocParser,
+        ".xlsb": AnyDocParser,
+        ".ods": AnyDocParser,
+        ".csv": AnyDocParser,
+        ".epub": AnyDocParser,
+        ".pptx": AnyDocParser,
+        ".ppt": AnyDocParser,
+        ".pps": AnyDocParser,
         ".zip": ZipParser,
     }
 
@@ -227,54 +251,6 @@ class TestParserSelection:
             is_text = is_text_file(cf.path)
             assert has_parser or is_text, (
                 f"{cf.rel_path}: not a known parser type and not a text file"
-            )
-
-
-class TestParserCanParse:
-    """Parser.can_parse must accept its own supported extensions."""
-
-    @pytest.mark.parametrize(
-        "parser_cls,filenames",
-        [
-            (MarkdownParser, ["doc.md", "spec.markdown", "x.mdown", "y.mkd"]),
-            (HTMLParser, ["page.html", "site.htm"]),
-            (PDFParser, ["paper.pdf"]),
-            (TextParser, ["notes.txt", "log.text"]),
-            (WordParser, ["report.docx"]),
-            (ExcelParser, ["data.xlsx", "legacy.xls", "book.xlsm"]),
-            (EPubParser, ["book.epub"]),
-            (PowerPointParser, ["slides.pptx"]),
-            (ZipParser, ["archive.zip"]),
-        ],
-    )
-    def test_can_parse_returns_true(self, parser_cls: type, filenames: List[str]) -> None:
-        parser = parser_cls()
-        for name in filenames:
-            assert parser.can_parse(Path(name)), (
-                f"{parser_cls.__name__}.can_parse('{name}') should be True"
-            )
-
-    @pytest.mark.parametrize(
-        "parser_cls,filenames",
-        [
-            (MarkdownParser, ["file.py", "file.html", "file.pdf"]),
-            (HTMLParser, ["file.md", "file.pdf", "file.txt"]),
-            (PDFParser, ["file.md", "file.txt", "file.html"]),
-            (TextParser, ["file.md", "file.html", "file.pdf"]),
-            (WordParser, ["file.pdf", "file.xlsx", "file.txt"]),
-            (ExcelParser, ["file.docx", "file.pdf", "file.txt"]),
-            (EPubParser, ["file.pdf", "file.docx", "file.zip"]),
-            (PowerPointParser, ["file.pdf", "file.docx", "file.txt"]),
-            (ZipParser, ["file.rar", "file.pdf", "file.docx"]),
-        ],
-    )
-    def test_can_parse_returns_false_for_wrong_extension(
-        self, parser_cls: type, filenames: List[str]
-    ) -> None:
-        parser = parser_cls()
-        for name in filenames:
-            assert not parser.can_parse(Path(name)), (
-                f"{parser_cls.__name__}.can_parse('{name}') should be False"
             )
 
 

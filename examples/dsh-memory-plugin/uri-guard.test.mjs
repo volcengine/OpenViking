@@ -52,3 +52,58 @@ test("uri guard delegates the bridged OpenViking tools and ordinary filesystem p
     );
   }
 });
+
+// #4188 — the guard scanned every argument value, so a local write or edit whose
+// CONTENT merely mentioned a viking URI was denied and no file was created.
+// Measured before the fix, with an ordinary local file_path:
+//
+//   write { content: "docs say viking://user/default/ is virtual" } -> deny
+//   edit  { new_string: "see viking://user/default/" }              -> deny
+test("uri guard ignores a viking URI that appears in file content", async () => {
+  const next = async () => ({ kind: "allow", marker: true });
+  const cases = [
+    ["write", { file_path: "/home/me/notes.md", content: "docs say viking://user/default/ is virtual" }],
+    ["edit", {
+      file_path: "/home/me/notes.md",
+      old_string: "old",
+      new_string: "see viking://user/default/memories/",
+    }],
+    ["str_replace_editor", {
+      command: "create",
+      path: "/tmp/notes.md",
+      file_text: "viking://user/default/",
+    }],
+  ];
+
+  for (const [name, args] of cases) {
+    assert.deepEqual(
+      await guardVikingUri({ name, arguments: args }, next),
+      { kind: "allow", marker: true },
+      name,
+    );
+  }
+});
+
+test("uri guard still denies a viking URI used as a location", async () => {
+  const next = async () => ({ kind: "allow" });
+  const cases = [
+    // Same tools as above, with the URI where a path belongs — content is
+    // skipped by key name, so the path argument still decides.
+    ["write", { file_path: "viking://user/default/memories/p.md", content: "harmless text" }],
+    ["edit", {
+      file_path: "viking://user/default/memories/p.md",
+      old_string: "a",
+      new_string: "b",
+    }],
+    // A path key the list does not know about is still swept, so the fallback
+    // keeps its reason to exist.
+    ["glob", { targets: { primary: "viking://user/default/memories" } }],
+    // bash carries its path inside `command`, which is not content.
+    ["bash", { command: "cat viking://user/default/memories/p.md" }],
+  ];
+
+  for (const [name, args] of cases) {
+    const decision = await guardVikingUri({ name, arguments: args }, next);
+    assert.equal(decision.kind, "deny", name);
+  }
+});

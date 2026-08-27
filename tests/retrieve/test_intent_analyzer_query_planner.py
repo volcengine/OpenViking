@@ -136,6 +136,34 @@ async def test_intent_analyzer_normalizes_non_string_reasoning(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_intent_analyzer_handles_bare_array_response(monkeypatch):
+    planner = RecordingModel(
+        """[
+          {
+            "query": "bare array query",
+            "context_type": "memory",
+            "intent": "test intent",
+            "priority": 1
+          }
+        ]"""
+    )
+    config = SimpleNamespace(get_query_planner=lambda: planner)
+
+    monkeypatch.setattr(intent_module, "get_openviking_config", lambda: config)
+    monkeypatch.setattr(intent_module, "render_prompt", lambda prompt_id, variables: "prompt")
+
+    result = await IntentAnalyzer().analyze(
+        compression_summary="",
+        messages=[],
+        current_message="where is my preference?",
+    )
+
+    assert len(result.queries) == 1
+    assert result.queries[0].query == "bare array query"
+    assert result.reasoning == ""
+
+
+@pytest.mark.asyncio
 async def test_intent_analyzer_uses_model_specific_prompt(monkeypatch):
     planner = RecordingModel(
         _query_plan_response("planned query"),

@@ -10,24 +10,18 @@ from pathlib import Path
 from typing import Dict, List, Optional, Union
 
 from openviking.parse.base import ParseResult
+from openviking.parse.parsers.anydoc import AnyDocParser
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.constants import TYPESCRIPT_MPEG_TS_EXTENSION
 from openviking.parse.parsers.directory import DirectoryParser
-from openviking.parse.parsers.epub import EPubParser
-from openviking.parse.parsers.excel import ExcelParser
 
 # Import will be handled dynamically to avoid dependency issues
 from openviking.parse.parsers.html import HTMLParser
-
-# Import markitdown-inspired parsers
-from openviking.parse.parsers.legacy_doc import LegacyDocParser
 from openviking.parse.parsers.markdown import MarkdownParser
 from openviking.parse.parsers.media import AudioParser, ImageParser, VideoParser
 from openviking.parse.parsers.media.utils import is_mpeg_ts, read_mpeg_ts_probe
 from openviking.parse.parsers.pdf import PDFParser
-from openviking.parse.parsers.powerpoint import PowerPointParser
 from openviking.parse.parsers.text import TextParser
-from openviking.parse.parsers.word import WordParser
 from openviking.parse.parsers.zip_parser import ZipParser
 from openviking_cli.utils.config.parser_config import ParserConfig
 
@@ -59,14 +53,14 @@ class ParserRegistry:
         self._register("pdf", PDFParser(config=self._parser_configs.get("pdf")))
         self._register("html", HTMLParser(config=self._parser_configs.get("html")))
 
-        # Register markitdown-inspired parsers (built-in)
-        self._register("word", WordParser(config=self._parser_configs.get("word")))
-        self._register("legacy_doc", LegacyDocParser(config=self._parser_configs.get("legacy_doc")))
+        # Register Office/EPUB through the unified AnyDoc parser.
         self._register(
-            "powerpoint", PowerPointParser(config=self._parser_configs.get("powerpoint"))
+            "anydoc",
+            AnyDocParser(
+                config=self._parser_configs.get("markdown"),
+                anydoc_config=self._parser_configs.get("anydoc"),
+            ),
         )
-        self._register("excel", ExcelParser(config=self._parser_configs.get("excel")))
-        self._register("epub", EPubParser(config=self._parser_configs.get("epub")))
         self._register("zip", ZipParser())
         self._register("directory", DirectoryParser())
 
@@ -176,15 +170,7 @@ def get_registry() -> ParserRegistry:
                 "markdown": config.markdown,
                 "pdf": config.pdf,
                 "html": config.html,
-                "word": config.markdown,
-                "legacy_doc": config.markdown,
-                "powerpoint": config.markdown,
-                # Excel had no dedicated config section and reused
-                # ``config.markdown``. Keep unset sectioning fields following
-                # Markdown so existing deployments keep their node structure and
-                # stable URIs after this upgrade.
-                "excel": config.excel.with_sectioning_defaults_from(config.markdown),
-                "epub": config.markdown,
+                "anydoc": getattr(config, "anydoc", None),
                 "image": config.image,
             }
         except Exception:

@@ -96,6 +96,11 @@ class TelemetryBridgeCollector(EventMetricCollector):
     MEMORY_EXTRACTED_TOTAL: ClassVar[str] = MetricCollector.metric_name(
         DOMAIN_MEMORY, "extracted", unit="total"
     )
+    # rule: <METRICS_NAMESPACE>_<DOMAIN_MEMORY>_operations_total
+    # e.g.: openviking_memory_operations_total
+    MEMORY_OPERATIONS_TOTAL: ClassVar[str] = MetricCollector.metric_name(
+        DOMAIN_MEMORY, "operations", unit="total"
+    )
     # rule: <METRICS_NAMESPACE>_<DOMAIN_RESOURCE>_stage_total
     # e.g.: openviking_resource_stage_total
     RESOURCE_STAGE_TOTAL: ClassVar[str] = MetricCollector.metric_name(
@@ -259,6 +264,31 @@ class TelemetryBridgeCollector(EventMetricCollector):
                 label_names=("operation",),
                 amount=extracted,
             )
+
+        extract = memory.get("extract") or {}
+        actions = extract.get("actions") or {}
+        if isinstance(actions, Mapping):
+            for action, result in (
+                ("created", "success"),
+                ("merged", "success"),
+                ("deleted", "success"),
+                ("skipped", "skipped"),
+                ("failed", "failed"),
+            ):
+                value = int(actions.get(action, 0) or 0)
+                if value <= 0:
+                    continue
+                metric_action = "updated" if action == "merged" else action
+                registry.inc_counter(
+                    self.MEMORY_OPERATIONS_TOTAL,
+                    labels={
+                        "operation": operation,
+                        "action": metric_action,
+                        "result": result,
+                    },
+                    label_names=("operation", "action", "result"),
+                    amount=value,
+                )
 
         resource = summary.get("resource") or {}
         if resource:

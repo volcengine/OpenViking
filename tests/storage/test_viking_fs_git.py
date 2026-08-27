@@ -225,6 +225,7 @@ async def test_diff_checks_access_before_reading_snapshot_content():
         role=Role.USER,
     )
     vfs = object.__new__(VikingFS)
+    vfs.acl_manager = None
     show_calls = []
 
     async def show(*args, **kwargs):

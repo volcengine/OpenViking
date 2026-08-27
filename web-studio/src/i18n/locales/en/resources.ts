@@ -331,6 +331,11 @@ const resources = {
       title: 'File Processing Tasks',
       empty: 'No processing tasks',
       toggleError: 'Toggle error details',
+      errors: {
+        tempUploadMissingId: 'The temporary upload did not return a file ID.',
+        cancelled: 'Processing cancelled',
+        failed: 'Processing failed',
+      },
       columns: {
         fileName: 'File Name',
         status: 'Status',

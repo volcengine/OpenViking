@@ -64,10 +64,21 @@ export async function loadState(codexSessionId) {
   }
 }
 
-export async function saveState(state) {
+/**
+ * Persist state. `touch: false` keeps the existing `lastUpdatedAt` so a write
+ * that isn't transcript activity (e.g. releasing `ovSessionId` after a commit)
+ * doesn't make a dead session look freshly used to the active-window heuristic
+ * and the retention sweep.
+ */
+export async function saveState(state, { touch = true } = {}) {
   if (!state || !state.codexSessionId) return;
   await mkdir(getStateDir(), { recursive: true });
-  const next = { ...state, lastUpdatedAt: Date.now() };
+  const next = {
+    ...state,
+    lastUpdatedAt: touch || typeof state.lastUpdatedAt !== "number"
+      ? Date.now()
+      : state.lastUpdatedAt,
+  };
   // Atomic write (tmpfile + rename) so a crash mid-write can't leave a
   // truncated/corrupt state file. See DESIGN.md "State file schema".
   const final = statePath(state.codexSessionId);

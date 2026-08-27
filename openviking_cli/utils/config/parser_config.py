@@ -8,9 +8,9 @@ scattered across different modules. All configurations inherit from ParserConfig
 and can be loaded from ov.conf files.
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 from openviking_cli.utils.logger import get_logger
 
@@ -33,7 +33,8 @@ class ParserConfig:
         encoding: Default file encoding
         max_section_size: Maximum tokens per section before splitting
         section_size_flexibility: Allow overflow to maintain coherence (0.0-1.0)
-        max_section_chars: Hard character limit per section (guards against token estimation errors)
+        max_section_chars: Target character limit per section. A single oversized
+            Markdown table row may remain intact to preserve table semantics.
     """
 
     enabled: bool = True
@@ -43,9 +44,7 @@ class ParserConfig:
     # Smart splitting configuration
     max_section_size: int = 2048  # Maximum tokens per section before splitting
     section_size_flexibility: float = 0.3  # Allow 30% overflow to maintain coherence
-    max_section_chars: int = (
-        6000  # Hard character limit per section (guards against token estimation errors)
-    )
+    max_section_chars: int = 6000  # Target character limit per section
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ParserConfig":
@@ -466,92 +465,21 @@ class MarkdownConfig(ParserConfig):
 
 
 @dataclass
-class ExcelConfig(ParserConfig):
-    """
-    Configuration for Excel parsing.
+class AnydocConfig(ParserConfig):
+    """Configuration for the shared anydoc Office converter."""
 
-    Attributes:
-        enable_process_pool: Offload Excel→Markdown conversion and layout
-            planning to a ProcessPoolExecutor (default off).
-        process_pool_workers: Max worker processes when the pool is enabled.
-    """
-
-    enable_process_pool: bool = False
-    process_pool_workers: int = 2
-
-    # Excel is converted to Markdown and then sectioned by MarkdownParser, so
-    # these fields decide the resulting node structure and stable URIs.
-    _SECTIONING_FIELDS = (
-        "max_content_length",
-        "encoding",
-        "max_section_size",
-        "section_size_flexibility",
-        "max_section_chars",
-    )
-
-    # Names of keys a config source actually provided. Tracked as a plain
-    # instance attribute rather than a dataclass field so it never appears in
-    # asdict/model_dump output, cannot be injected from a config file, and does
-    # not affect equality. Absent means "provenance unknown".
-    _EXPLICIT_ATTR = "_openviking_explicit_keys"
+    max_table_rows: int = 1000
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ExcelConfig":
-        """Build the config while remembering which keys were actually present.
-
-        ``with_sectioning_defaults_from`` needs to tell "the user wrote this
-        value" from "the key was absent". Comparing against class defaults
-        cannot do that, so record the provided keys here instead.
-        """
-        config = super().from_dict(data)
-        return config.with_explicit_keys(data)
-
-    def with_explicit_keys(self, names: Iterable[str]) -> "ExcelConfig":
-        """Return this config marked as having ``names`` explicitly configured."""
-        object.__setattr__(self, self._EXPLICIT_ATTR, frozenset(names))
-        return self
-
-    @property
-    def explicit_keys(self) -> Optional[frozenset]:
-        """Keys a config source provided, or ``None`` when unknown."""
-        return getattr(self, self._EXPLICIT_ATTR, None)
-
-    def with_sectioning_defaults_from(self, markdown: "ParserConfig") -> "ExcelConfig":
-        """Inherit sectioning fields that ``parsers.excel`` did not set.
-
-        Excel used to be registered with ``config.markdown`` directly, so a
-        deployment that tuned ``parsers.markdown`` also tuned Excel imports.
-        Introducing a dedicated ``parsers.excel`` section must not silently
-        change that node structure, so a sectioning field absent from
-        ``parsers.excel`` keeps following Markdown. Explicit ``parsers.excel``
-        values always win, including one that happens to equal the class
-        default.
-
-        Configs built without ``from_dict`` carry no key information; those are
-        treated as fully explicit so a hand-constructed ``ExcelConfig`` is never
-        silently rewritten.
-        """
-        if markdown is None:
-            return self
-
-        explicit = self.explicit_keys
-        if explicit is None:
-            return self
-
-        overrides = {
-            name: getattr(markdown, name)
-            for name in self._SECTIONING_FIELDS
-            if hasattr(markdown, name) and name not in explicit
-        }
-        if not overrides:
-            return self
-        return replace(self, **overrides).with_explicit_keys(explicit)
+    def from_dict(cls, data: Dict[str, Any]) -> "AnydocConfig":
+        valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
+        raise_unknown_config_fields(data=data, valid_fields=valid_fields, context_name=cls.__name__)
+        return cls(**data)
 
     def validate(self) -> None:
-        """Validate Excel-specific configuration."""
         super().validate()
-        if self.process_pool_workers < 1:
-            raise ValueError("process_pool_workers must be at least 1")
+        if self.max_table_rows < 0:
+            raise ValueError("max_table_rows must be non-negative")
 
 
 @dataclass
@@ -790,7 +718,7 @@ PARSER_CONFIG_REGISTRY = {
     "audio": AudioConfig,
     "video": VideoConfig,
     "markdown": MarkdownConfig,
-    "excel": ExcelConfig,
+    "anydoc": AnydocConfig,
     "html": HTMLConfig,
     "text": TextConfig,
     "directory": DirectoryConfig,

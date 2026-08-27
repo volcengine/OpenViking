@@ -29,4 +29,32 @@ describe('parseObserverStatus', () => {
       },
     ])
   })
+
+  it('keeps adjacent ASCII tables as separate blocks', () => {
+    expect(
+      parseObserverStatus(`
++-----------+-------+
+| Operation | Count |
++-----------+-------+
+| read      | 12    |
++-----------+-------+
++------------------+-------+
+| Metric           | Value |
++------------------+-------+
+| Total Operations | 12    |
++------------------+-------+
+`),
+    ).toEqual([
+      {
+        headers: ['Operation', 'Count'],
+        kind: 'table',
+        rows: [['read', '12']],
+      },
+      {
+        headers: ['Metric', 'Value'],
+        kind: 'table',
+        rows: [['Total Operations', '12']],
+      },
+    ])
+  })
 })

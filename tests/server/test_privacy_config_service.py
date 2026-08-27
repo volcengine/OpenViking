@@ -280,3 +280,29 @@ def test_placeholderization_replaces_all_structured_occurrences_for_same_value()
         'api_key: "{{ov_privacy:skill:multi-hit-skill:api_key}}"\n'
         "backup={{ov_privacy:skill:multi-hit-skill:api_key}}\n"
     )
+
+
+def test_placeholderization_preserves_crlf_spacing_and_regex_special_values():
+    result = placeholderize_skill_content_with_blocks(
+        "token:\ta.b+c?[x]  \r\ntext: a.b+c?[x] should stay here\r\n",
+        "regex-skill",
+        {"token": "a.b+c?[x]"},
+    )
+
+    assert result.replaced_values == {"token": "a.b+c?[x]"}
+    assert result.sanitized_content == (
+        "token:\t{{ov_privacy:skill:regex-skill:token}}  \r\ntext: a.b+c?[x] should stay here\r\n"
+    )
+
+
+def test_placeholderization_preserves_quoted_value_matching():
+    result = placeholderize_skill_content_with_blocks(
+        'note: use "secret" in prose\n',
+        "quoted-skill",
+        {"api_key": "secret"},
+    )
+
+    assert result.replaced_values == {"api_key": "secret"}
+    assert result.sanitized_content == (
+        'note: use "{{ov_privacy:skill:quoted-skill:api_key}}" in prose\n'
+    )

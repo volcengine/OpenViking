@@ -37,6 +37,7 @@ from openviking.parse.parsers.media.constants import (
 )
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.utils.zip_safe import normalize_zip_filenames, safe_extract_zip
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -333,6 +334,8 @@ class UnderstandingAPI(BaseParser):
 
     async def _create_file(self, *, local_path: Path) -> Dict[str, Any]:
         file_size = local_path.stat().st_size
+        if file_size == 0:
+            raise InvalidArgumentError("Understanding parser does not support empty files.")
         if file_size > self._upload_simple_max_bytes:
             if not self._enable_resumable_upload:
                 raise ValueError(

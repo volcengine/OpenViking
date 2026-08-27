@@ -192,9 +192,20 @@ export function resolveOpenVikingCredentials(env = process.env) {
   const explicitMcpUrl = str(env.OPENVIKING_MCP_URL, "");
   const mcpUrl = (mode !== "cli" && explicitMcpUrl) ? explicitMcpUrl : `${baseUrl.replace(/\/+$/, "")}/mcp`;
 
+  // The file that actually supplied the api_key, following the same chain —
+  // empty when the key came from the environment or was never found.
+  let credentialPath = "";
+  if (apiKey) {
+    if (useCli) credentialPath = files.cliPath;
+    else if (str(env.OPENVIKING_BEARER_TOKEN, str(env.OPENVIKING_API_KEY, ""))) credentialPath = "";
+    else if (str(files.cliFile.api_key, "")) credentialPath = files.cliPath;
+    else credentialPath = files.ovPath;
+  }
+
   return {
     ...files,
     credentialSource: useCli ? "ovcli" : ((mode === "env" || envHasCredentials) ? "env" : "auto"),
+    credentialPath,
     baseUrl,
     mcpUrl,
     apiKey,

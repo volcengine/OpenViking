@@ -29,9 +29,9 @@ function readProxyConfig() {
     timeoutMs: cfg.timeoutMs,
     debug: cfg.debug,
     debugLogPath: cfg.debugLogPath,
-    credentialSource: cfg.configPath?.endsWith("ovcli.conf") ? "ovcli" : "auto",
-    credentialPath: cfg.configPath,
-    watchedPaths: [cfg.configPath],
+    credentialSource: cfg.credentialSource,
+    credentialPath: cfg.credentialPath || "",
+    watchedPaths: [cfg.credentialPath, cfg.configPath].filter(Boolean),
   });
 }
 

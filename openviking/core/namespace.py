@@ -243,9 +243,9 @@ def resolve_uri(
         return ResolvedNamespace(uri=canonical_uri, scope=scope)
     if scope == "~":
         # The home alias is expanded at the request boundary only. Reaching the
-        # canonical parser with it (root-role requests, internal callers, storage
-        # paths) means no identity is available, so fail closed instead of
-        # creating a literal '~' namespace.
+        # canonical parser with it (internal callers or storage paths) means no
+        # identity is available, so fail closed instead of creating a literal
+        # '~' namespace.
         raise NamespaceShapeError(f"Home alias URI is not canonical: {'/'.join(parts)}")
     if scope == "session":
         raise NamespaceShapeError(f"Legacy session URI is not canonical: {'/'.join(parts)}")
@@ -261,6 +261,13 @@ def resolve_request_uri(uri: str, ctx: RequestContext) -> str:
     The uid-less ``viking://user/<reserved>`` shorthand is no longer expanded:
     it fails closed with a hint pointing at ``viking://~/...``.
     """
+    # Every authenticated request context carries an effective user identity,
+    # including ROOT contexts produced by dev, API-key, and trusted auth modes.
+    # Resolve only the unambiguous home alias for every role; preserve the
+    # existing role-dependent handling of legacy/ambiguous spellings below.
+    parts = uri_parts(uri)
+    if parts and parts[0] == "~":
+        return resolve_current_user_uri(uri, ctx)
     if ctx.role in {Role.USER, Role.ADMIN}:
         return resolve_current_user_uri(uri, ctx)
     return resolve_uri(uri).uri

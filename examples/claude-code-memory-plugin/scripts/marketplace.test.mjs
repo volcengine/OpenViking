@@ -91,3 +91,12 @@ test("Claude hooks include PreToolUse URI guard for filesystem tools", () => {
   );
   execFileSync("node", ["--check", join(pluginDir, "scripts", "uri-guard.mjs")], { stdio: "pipe" });
 });
+
+test("Claude plugin ships the memory doctor skill and script", () => {
+  const skill = join(pluginDir, "skills", "ov-memory-doctor", "SKILL.md");
+  assert.ok(existsSync(skill), "missing skills/ov-memory-doctor/SKILL.md");
+  assert.match(readFileSync(skill, "utf-8"), /node \$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/ov-memory-doctor\.mjs/);
+  assert.ok(existsSync(join(pluginDir, "skills", "ov-memory-doctor", "reference.md")));
+  execFileSync("node", ["--check", join(pluginDir, "scripts", "ov-memory-doctor.mjs")], { stdio: "pipe" });
+  execFileSync("node", ["--check", join(pluginDir, "scripts", "shared", "doctor-core.mjs")], { stdio: "pipe" });
+});

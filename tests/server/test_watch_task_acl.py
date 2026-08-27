@@ -32,6 +32,7 @@ def user_ctx() -> RequestContext:
 @pytest.fixture
 def bare_viking_fs() -> VikingFS:
     fs = object.__new__(VikingFS)
+    fs.acl_manager = None
     fs._bound_ctx = contextvars.ContextVar("vikingfs_bound_ctx", default=None)
     return fs
 

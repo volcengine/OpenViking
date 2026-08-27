@@ -46,9 +46,9 @@ each caller.
   `Invalid scope ... Must be one of:` error message never mentions it.
 - Responses always echo the expanded canonical URI, never `viking://~`, and persisted
   data (vector records, watch keys) stays canonical as well.
-- Requires an authenticated user identity. Expansion happens at the request boundary for
-  user and admin callers; root-role and unauthenticated contexts, along with places that
-  demand an already-canonical URI (internal storage paths, background tasks), reject the
+- Requires an authenticated request identity. Expansion uses that identity's effective
+  `user_id` for every request role, including root. Places that demand an already-canonical
+  URI (internal storage paths and background tasks without a request context) reject the
   alias instead of guessing a user.
 - Replaces the removed uid-less shorthand: `viking://user/<segment>/...` for `memories`,
   `resources`, `skills`, `peers`, `privacy`, and `sessions` is rejected at USER/ADMIN

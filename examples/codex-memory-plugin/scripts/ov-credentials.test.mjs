@@ -92,3 +92,29 @@ test("ovcli source can be forced explicitly without inheriting env key", async (
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("credentialPath names the file that supplied the api_key", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "ov-creds-path-"));
+  const cliPath = join(dir, "ovcli.conf");
+  const ovPath = join(dir, "ov.conf");
+  await writeFile(cliPath, JSON.stringify({ url: "http://127.0.0.1:1933", api_key: "cli-key" }));
+  await writeFile(ovPath, JSON.stringify({ server: { root_api_key: "root-key" } }));
+  const env = { OPENVIKING_CLI_CONFIG_FILE: cliPath, OPENVIKING_CONFIG_FILE: ovPath };
+  try {
+    assert.equal(resolveOpenVikingCredentials(env).credentialPath, cliPath);
+
+    // env beats both files, so no file is named.
+    assert.equal(
+      resolveOpenVikingCredentials({ ...env, OPENVIKING_API_KEY: "env-key" }).credentialPath,
+      "",
+    );
+
+    // A tuning-only ovcli.conf carries no credentials, so the chain lands on ov.conf.
+    await writeFile(cliPath, JSON.stringify({ plugin: { recallCompress: "off" } }));
+    const creds = resolveOpenVikingCredentials(env);
+    assert.equal(creds.apiKey, "root-key");
+    assert.equal(creds.credentialPath, ovPath);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

@@ -68,6 +68,7 @@ class TestBuildRequestBody:
         assert body["query"] == "hello"
         assert body["documents"] == ["doc1", "doc2"]
         assert body["model"] == "qwen3-rerank"
+        assert body["top_n"] == 2
         # nested keys should NOT be present
         assert "input" not in body
         assert "parameters" not in body
@@ -81,6 +82,7 @@ class TestBuildRequestBody:
         body = client._build_request_body("hello", ["doc1", "doc2"])
         assert body["query"] == "hello"
         assert body["documents"] == ["doc1", "doc2"]
+        assert body["top_n"] == 2
         assert "input" not in body
 
 
@@ -211,6 +213,7 @@ class TestRerankBatch:
         sent_body = kwargs["json"]
         assert sent_body["query"] == "hello"
         assert sent_body["documents"] == ["doc1", "doc2"]
+        assert sent_body["top_n"] == 2
         assert "input" not in sent_body
 
     def test_standard_full_flow(self):

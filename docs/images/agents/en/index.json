@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-08-18",
+  "updatedAt": "2026-08-25",
   "cdnBaseUrl": "https://docs.openviking.net/",
   "accessMethods": [
     {
@@ -41,22 +41,6 @@
   ],
   "agents": [
     {
-      "id": "openclaw",
-      "name": "OpenClaw",
-      "tags": ["Plugin"],
-      "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/OpenClaw.png",
-      "summary": "Plugin integration for OpenClaw as a context engine, with cross-agent memory and one-command setup through the npm helper.",
-      "detailPath": "https://docs.openviking.net/agents/en/openclaw.md"
-    },
-    {
-      "id": "hermes",
-      "name": "Hermes Agent",
-      "tags": ["Provider"],
-      "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Hermes-Agent.png",
-      "summary": "Hermes includes OpenViking as a native memory provider. Run hermes memory setup openviking, keep VolcEngine Cloud, and paste the API key.",
-      "detailPath": "https://docs.openviking.net/agents/en/hermes.md"
-    },
-    {
       "id": "claude-code",
       "name": "Claude Code",
       "tags": ["Plugin"],
@@ -73,12 +57,20 @@
       "detailPath": "https://docs.openviking.net/agents/en/codex.md"
     },
     {
-      "id": "cursor",
-      "name": "Cursor",
-      "tags": ["Plugin", "Memory"],
-      "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Cursor.png",
-      "summary": "One command installs Cursor lifecycle hooks, MCP tools, rules, and skills for automatic memory recall and capture.",
-      "detailPath": "https://docs.openviking.net/agents/en/cursor.md"
+      "id": "doubao-work",
+      "name": "Doubao Work",
+      "tags": ["MCP"],
+      "logo": "https://docs.openviking.net/agents/image/doubao-work/logo.png",
+      "summary": "Connect through the built-in connector to give Doubao Work persistent context memory, with automatic recall and capture during conversations.",
+      "detailPath": "https://docs.openviking.net/agents/en/doubao-work.md"
+    },
+    {
+      "id": "workbuddy",
+      "name": "WorkBuddy",
+      "tags": ["MCP"],
+      "logo": "https://docs.openviking.net/agents/image/workbuddy/logo.png",
+      "summary": "Use MCP tools in WorkBuddy for memory recall and storage, knowledge resource management, and code context retrieval.",
+      "detailPath": "https://docs.openviking.net/agents/en/workbuddy.md"
     },
     {
       "id": "trae",
@@ -89,12 +81,44 @@
       "detailPath": "https://docs.openviking.net/agents/en/trae.md"
     },
     {
+      "id": "cursor",
+      "name": "Cursor",
+      "tags": ["Plugin", "Memory"],
+      "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Cursor.png",
+      "summary": "One command installs Cursor lifecycle hooks, MCP tools, rules, and skills for automatic memory recall and capture.",
+      "detailPath": "https://docs.openviking.net/agents/en/cursor.md"
+    },
+    {
+      "id": "openclaw",
+      "name": "OpenClaw",
+      "tags": ["Plugin"],
+      "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/OpenClaw.png",
+      "summary": "Plugin integration for OpenClaw as a context engine, with cross-agent memory and one-command setup through the npm helper.",
+      "detailPath": "https://docs.openviking.net/agents/en/openclaw.md"
+    },
+    {
+      "id": "hermes",
+      "name": "Hermes Agent",
+      "tags": ["Provider"],
+      "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Hermes-Agent.png",
+      "summary": "Hermes includes OpenViking as a native memory provider. Run hermes memory setup openviking, keep VolcEngine Cloud, and paste the API key.",
+      "detailPath": "https://docs.openviking.net/agents/en/hermes.md"
+    },
+    {
       "id": "opencode",
       "name": "OpenCode",
       "tags": ["Plugin"],
       "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/OpenCode.png",
       "summary": "Provides one unified OpenCode plugin for repository context, memory tools, session sync, and automatic recall.",
       "detailPath": "https://docs.openviking.net/agents/en/opencode.md"
+    },
+    {
+      "id": "deepseek-harness",
+      "name": "DeepSeek Harness",
+      "tags": ["Plugin"],
+      "logo": "https://docs.openviking.net/agents/image/deepseek-harness/logo.png",
+      "summary": "Give DeepSeek Harness long-term memory across projects and sessions, with automatic recall, capture, OpenViking tools, and the openviking-memory skill.",
+      "detailPath": "https://docs.openviking.net/agents/en/deepseek-harness.md"
     },
     {
       "id": "deerflow",

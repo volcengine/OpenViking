@@ -133,10 +133,10 @@ async function main() {
     : (cliConf?.url) ? cliShort
     : (ovConf?.server?.url) ? ovShort
     : "default";
-  const keySrc = (process.env.OPENVIKING_API_KEY || process.env.OPENVIKING_BEARER_TOKEN) ? "env"
-    : (cliConf?.api_key) ? cliShort
-    : (ovConf?.claude_code?.apiKey) ? ovShort
-    : (ovConf?.server?.root_api_key) ? ovShort
+  // Taken from loadConfig() so this line and the MCP proxy always name the
+  // same file.
+  const keySrc = cfg.credentialSource === "env" ? "env"
+    : cfg.credentialPath ? homeShort(cfg.credentialPath)
     : "(none)";
   console.log(`Auth: url from ${urlSrc}, api_key from ${keySrc}`);
 }

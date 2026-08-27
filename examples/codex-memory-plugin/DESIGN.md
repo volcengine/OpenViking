@@ -90,6 +90,12 @@ fired and bumped `lastUpdatedAt`; we commit it. The multi-recent case
 implies concurrent codex sessions are active; we can't tell which one (if
 any) ended, so we defer to idle TTL to clean up genuinely-dead ones.
 
+The count is over *activity*, including cursor-only states: a session
+`PreCompact` just committed has no live `ovSessionId` but may well still be
+running, and counting it keeps the `≥2` branch from sealing a sibling
+session mid-flight. Only a state that still has a live `ovSessionId` is
+actually committed; the single-recent case with nothing live is a no-op.
+
 ### 4. `SessionStart` source=`resume` — never commits, optional archive inject
 
 Short reconnects and `/resume` re-fire `SessionStart` for the same
@@ -120,11 +126,16 @@ transcript.
 
 ### 5. Idle TTL sweep — fallback
 
-State files whose `lastUpdatedAt` is older than `IDLE_TTL_MS` (default 30
-min) get committed and cleared. Mental model: a session not touched for
-30 min is "temporarily concluded"; if the user resumes later, subsequent
-turns append under the same deterministic OV session id, and the next
-commit creates another archive there.
+State files with a live `ovSessionId` whose `lastUpdatedAt` is older than
+`IDLE_TTL_MS` (default 30 min) get committed. Their transcript cursor is
+preserved while `ovSessionId` is cleared. Mental model: a session not touched
+for 30 min is "temporarily concluded"; if the user resumes later, subsequent
+turns append under the same deterministic OV session id, and the next commit
+creates another archive there.
+
+Releasing the session id instead of deleting the file writes state without
+touching `lastUpdatedAt`, so a committed session doesn't look freshly active
+to the next `SessionStart`.
 
 This covers:
 - SIGTERM / Ctrl+C / `/exit` (no hook fires; state file rots)
@@ -144,6 +155,21 @@ arbitrarily-orphaned state files accumulate.
 machine, no sweep ever runs and the OV session stays open server-side
 forever. Accepted. Future work could add an MCP tool
 `openviking_commit_pending` so the model can commit explicitly.
+
+### 6. Cursor retention — same pass
+
+A committed state file keeps living as a cursor (`ovSessionId: null`) so a
+later resume appends instead of replaying. Kept forever that would leak one
+file per codex session and make `listStates()` — which reads every file on
+every `SessionStart` — slower over time, so the same pass retires them:
+
+| State | Retired after |
+|---|---|
+| cursor-only, `capturedTurnCount > 0` | `COMMITTED_TTL_MS` (default 30 days) |
+| cursor-only, nothing ever captured | `IDLE_TTL_MS` (default 30 min) |
+
+A cursor that outlives its codex rollout has nothing left to resume from, and
+a state file that never captured a turn is identical to no state file at all.
 
 ## Stop hook — append + threshold commit
 
@@ -194,9 +220,19 @@ compatibility fallbacks.
 
 Codex's `/compact` may rewrite or truncate `transcript_path`. After
 compaction, if `allTurns.length < state.capturedTurnCount`, our slice
-math underflows and we silently drop new turns. Defensive fix: when this
-inequality is detected on `Stop`, reset `capturedTurnCount = 0` so the
-next slice captures everything in the new transcript.
+math underflows and we silently drop new turns. When this inequality is
+detected on `Stop`, move `capturedTurnCount` to the latest human turn
+so the current interaction is captured without replaying compacted history.
+
+"Human turn" is not just `role === "user"` — `normalizeCaptureRole()` maps
+tool results onto the user role as well, so `findLastHumanTurnIndex()`
+additionally requires a `text` part. If the rewrite left no human turn at
+all (index `-1`), we fall back to capturing the whole transcript and log
+`fallback: "full_transcript"`; replaying beats losing the interaction.
+
+**Trade-off**: turns older than that human turn are assumed captured. If
+earlier `Stop` hooks failed to reach OV and compaction happened before they
+were retried, those turns are dropped rather than duplicated.
 
 ### Commit failure
 
@@ -226,7 +262,7 @@ OV session id, while commits create additional archives under that session.
 ```json
 {
   "codexSessionId": "0193af...",   // codex thread id
-  "ovSessionId": "cx-0193af...-or-null", // null means "committed, awaiting next Stop"
+  "ovSessionId": "cx-0193af...-or-null", // null means "committed, awaiting next Stop or retirement"
   "capturedTurnCount": 7,            // turns from transcript already appended
   "createdAt": 1715000000000,
   "lastUpdatedAt": 1715000300000
@@ -249,6 +285,7 @@ Env var overrides for tuning without rebuilding:
 | `OPENVIKING_CODEX_STATE_DIR` | `~/.openviking/codex-plugin-state` | state file dir |
 | `OPENVIKING_CODEX_ACTIVE_WINDOW_MS` | `120000` (2 min) | rule-3 active window |
 | `OPENVIKING_CODEX_IDLE_TTL_MS` | `1800000` (30 min) | idle sweep TTL |
+| `OPENVIKING_CODEX_COMMITTED_TTL_MS` | `2592000000` (30 days) | how long a committed cursor is kept for resume |
 | `OPENVIKING_RECALL_TIMEOUT_MS` | `120000` (2 min) | whole UserPromptSubmit auto-recall deadline |
 | `OPENVIKING_RECALL_COMPRESS` | `1` | set `0` / `off` to skip `codex exec` compression |
 | `OPENVIKING_RECALL_COMPRESS_MODEL` | unset | custom first-choice compressor model; `off` disables compression |

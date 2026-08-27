@@ -309,6 +309,9 @@
             "include_metadata": true,
             "max_heading_depth": 3,
         },
+        "anydoc": {
+            "enabled": true,
+        },
         "html": {
             "extract_text_only": false,
             "preserve_structure": true,

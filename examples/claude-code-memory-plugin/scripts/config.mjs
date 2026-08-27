@@ -167,11 +167,31 @@ export function loadConfig() {
 
   // apiKey: env → ovcli.api_key → cc.apiKey → server.root_api_key
   // Accepts OPENVIKING_BEARER_TOKEN or OPENVIKING_API_KEY (sent as Bearer either way).
-  const apiKey = str(process.env.OPENVIKING_BEARER_TOKEN, null)
-    || str(process.env.OPENVIKING_API_KEY, null)
+  const envApiKey = str(process.env.OPENVIKING_BEARER_TOKEN, null)
+    || str(process.env.OPENVIKING_API_KEY, null);
+  const apiKey = envApiKey
     || str(cliFile.api_key, null)
     || str(cc.apiKey, null)
     || str(server.root_api_key, "");
+
+  // Which source actually supplied the api_key. `configPath` only reports the
+  // file that parsed, so debug logs and 401 hints pointed at the wrong file
+  // whenever both configs existed.
+  const ccApiKeyFromCli = hasOwn(pluginSettings, "apiKey");
+  let credentialSource = "none";
+  let credentialPath = null;
+  if (envApiKey) {
+    credentialSource = "env";
+  } else if (str(cliFile.api_key, null)) {
+    credentialSource = "ovcli";
+    credentialPath = cliConf?.configPath || null;
+  } else if (str(cc.apiKey, null)) {
+    credentialSource = ccApiKeyFromCli ? "ovcli" : "ov";
+    credentialPath = (ccApiKeyFromCli ? cliConf?.configPath : ovConf?.configPath) || null;
+  } else if (str(server.root_api_key, null)) {
+    credentialSource = "ov";
+    credentialPath = ovConf?.configPath || null;
+  }
 
   // accountId: env → ovcli.account → cc.accountId → ""
   const accountId = str(process.env.OPENVIKING_ACCOUNT, null)
@@ -225,6 +245,8 @@ export function loadConfig() {
 
   return {
     configPath,
+    credentialSource,
+    credentialPath,
     baseUrl,
     apiKey,
     accountId,

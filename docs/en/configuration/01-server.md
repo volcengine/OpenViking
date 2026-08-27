@@ -347,7 +347,9 @@ Parsers live under `parsers`:
     "audio": {},
     "video": {},
     "markdown": {},
-    "excel": {},
+    "anydoc": {
+      "enabled": true
+    },
     "html": {},
     "text": {},
     "directory": {},
@@ -369,7 +371,7 @@ Parsers live under `parsers`:
 | `image` | Image understanding and OCR |
 | `audio`, `video` | Audio/video parsing |
 | `markdown`, `html`, `text` | Text document chunking |
-| `excel` | Workbook parsing and chunking |
+| `anydoc` | Office and EPUB conversion; `enabled=false` rejects those formats |
 | `directory` | Directory scanning and ignore rules |
 | `feishu` | Feishu/Lark access and parsing |
 | `webfeed` | Sitemap, RSS, and Atom ingestion |

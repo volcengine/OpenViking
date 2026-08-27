@@ -9,6 +9,7 @@ from openviking.session.memory.merge_op.base import (
     FieldType,
     MergeOp,
     MergeOpBase,
+    SearchReplaceBlock,
     StrPatch,
     get_python_type_for_field,
 )

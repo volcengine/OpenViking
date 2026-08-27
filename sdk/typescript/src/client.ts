@@ -583,7 +583,7 @@ export class OpenVikingClient {
       body: mergeExtra(body, options.extra),
     });
   }
-  /** Apply preconditioned file writes in one request. */
+  /** Apply file writes in one request and refresh their indexes once. */
   batchWrite(
     rootUri: string,
     operations: BatchWriteOperation[],
@@ -596,10 +596,7 @@ export class OpenVikingClient {
           uri: normalizeURI(operation.uri),
           content: operation.content,
           content_base64: operation.contentBase64,
-          precondition: compact({
-            kind: operation.precondition.kind,
-            base_hash: operation.precondition.baseHash,
-          }),
+          mode: operation.mode,
         }),
       ),
       wait: options.wait,

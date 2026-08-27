@@ -184,6 +184,9 @@ class _AccessMixin:
 
         pending: List[str] = []
         for uri in valid:
+            if is_watch_task_control_uri(uri):
+                result[uri] = self._is_accessible(uri, real_ctx)
+                continue
             if not is_acl_uri(uri):
                 result[uri] = self._is_accessible(uri, real_ctx)
                 continue

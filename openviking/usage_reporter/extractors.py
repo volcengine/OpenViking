@@ -36,7 +36,10 @@ _INJECTION_TOOL_OPERATIONS: dict[str, ToolOperation] = {
     "ov_read": "read",
     "ov_multi_read": "multi_read",
 }
-_MCP_OPENVIKING_TOOL_RE = re.compile(r"^mcp__openviking__(find|search|list|read|multi_read)$")
+_MCP_OPENVIKING_TOOL_RE = re.compile(
+    r"^mcp__(?:openviking|plugin_.+_openviking)__(find|search|list|read|multi_read)$",
+    re.IGNORECASE,
+)
 _MCP_SEARCH_RESULT_RE = re.compile(r"^- \[[^]]+\]\s+(viking://.+?)\s*$")
 _OPENVIKING_SEARCH_TABLE_ROW_RE = re.compile(
     r"^\s*\d+\s{2,}(?:memory|resource|skill)\s{2,}"
@@ -90,7 +93,7 @@ def _tool_usage(tool_name: str) -> tuple[UsageKind, ToolOperation] | None:
     match = _MCP_OPENVIKING_TOOL_RE.fullmatch(name)
     if match is None:
         return None
-    operation = cast(ToolOperation, match.group(1))
+    operation = cast(ToolOperation, match.group(1).lower())
     if operation in {"find", "search", "list"}:
         return "recall", operation
     return "injection", operation

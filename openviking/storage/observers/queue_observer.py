@@ -122,4 +122,15 @@ class QueueObserver(BaseObserver):
         return not self.has_errors()
 
     def has_errors(self) -> bool:
-        return self._queue_manager.has_errors()
+        return run_async(self.has_active_errors_async())
+
+    async def has_active_errors_async(self) -> bool:
+        statuses = await self._queue_manager.check_status()
+        return self._has_active_errors(statuses)
+
+    @staticmethod
+    def _has_active_errors(statuses: Dict[str, QueueStatus]) -> bool:
+        return any(
+            status.error_count > 0 and not status.is_complete
+            for status in statuses.values()
+        )

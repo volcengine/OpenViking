@@ -14,15 +14,15 @@ OpenViking 支持多种资源类型，按照功能分类如下：
 | PDF | `.pdf` | 支持本地解析和 MinerU API 转换 |
 | Markdown | `.md`, `.markdown`, `.mdown`, `.mkd` | 原生支持，会提取结构并分段存储 |
 | HTML | `.html`, `.htm` | 清理导航/广告后提取内容，转换为 Markdown |
-| Word | `.docx` | 提取文本、标题、表格并转换为 Markdown |
+| Word | `.doc`, `.docx`, `.docm`, `.odt`, `.rtf` | 基于 anydoc 提取文本、标题、表格和嵌入图片并转换为 Markdown |
 | 纯文本 | `.txt`, `.text` | 直接导入处理 |
-| EPUB | `.epub` | 电子书格式，支持 ebooklib 或手动提取 |
+| EPUB | `.epub` | 基于 anydoc 将电子书内容和嵌入图片转换为 Markdown |
 
 表格类
 | 类型 | 扩展名 | 说明 |
 |------|--------|------|
-| Excel | `.xlsx`, `.xls`, `.xlsm` | 支持新版和老版 Excel，按工作表转换为 Markdown 表格 |
-| PowerPoint | `.pptx` | 按幻灯片提取内容，支持提取备注 |
+| Excel | `.xlsx`, `.xls`, `.xlsm`, `.xlsb`, `.ods`, `.csv` | 基于 anydoc 按工作表转换为 Markdown 表格 |
+| PowerPoint | `.pptx`, `.ppt`, `.pptm`, `.pps`, `.ppsx`, `.ppsm`, `.pot`, `.odp` | 基于 anydoc 按幻灯片提取内容和嵌入图片并转换为 Markdown |
 
 代码类
 | 类型 | 资源名 | 说明 |
@@ -157,7 +157,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 |------|------|------|--------|------|
 | path | string | 否 | - | 远程资源 URL（HTTP/HTTPS/Git）。与 `temp_file_id` 二选一 |
 | temp_file_id | string | 否 | - | 临时上传文件 ID。与 `path` 二选一 |
-| to | string | 否 | - | 目标 Viking URI（精确位置）。与 `parent` 互斥 |
+| to | string | 否 | - | 本次导入的最终保存位置。目标已存在时会覆盖该目标；与 `parent` 互斥 |
 | parent | string | 否 | - | 父级 Viking URI（资源放入此目录下）。与 `to` 互斥 |
 | create_parent | bool | 否 | False | 如果父目录不存在，自动创建父目录（服务端标志） |
 | reason | string | 否 | "" | 添加资源的原因；非空时会随资源 URI 进入常规 session 记忆抽取链路，并在生成的记忆中记录资源引用 |
@@ -178,7 +178,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 | telemetry | TelemetryRequest | 否 | False | 是否返回遥测数据 |
 
 **补充说明**：
-- `to` 和 `parent` 不能同时使用；如果使用 `parent` 且希望父目录不存在时自动创建，请传 `create_parent=true`。指定 `to` 且目标已存在时，触发增量更新。
+- `to` 和 `parent` 不能同时使用。`to` 是最终保存位置：目标不存在就创建，目标已存在就覆盖该目标；如果目标是目录，目录里本次导入没有生成的旧文件或子目录会被删除。`parent` 是保存目录，适合向已有目录追加新资源；父目录不存在时使用 `create_parent=true` 或 CLI 的 `--parent-auto-create`。当导入后的 `root_uri` 与 `to` 相同时，语义与向量处理会复用未变化内容，只处理变化部分。
 - 创建新资源要求目标父目录可写；显式更新已有 `to` 要求该目标可写。权限校验在任务入队前完成。自动命名按实际 URI 占用判断，即使同名资源不可读也会选择 `_1`、`_2` 等后缀，而不会尝试覆盖。
 - `wait=false` 返回的 `status=accepted` 表示任务已通过预检查并入队，不表示资源处理已经完成；最终状态以对应 `task_id` 为准。
 - 如果同时省略 `to` 和 `parent`，服务端会先尝试使用当前用户的 `add_targets.resource_uri` 覆盖配置，再使用 `server.user_config_defaults.add_targets.resource_uri`。两者都没有配置时，保持旧的目标解析行为。

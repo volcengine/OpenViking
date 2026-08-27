@@ -80,7 +80,42 @@ def test_collect_read_experience_uris_supports_generic_openviking_reads():
     assert collect_read_experience_uris(messages, ctx=_ctx()) == [uri, opencode_uri]
 
 
-@pytest.mark.parametrize("tool_name", ["multi_read", "openviking_multi_read"])
+@pytest.mark.parametrize(
+    "tool_name",
+    [
+        "mcp__plugin_openviking-memory_openviking__read",
+        "mcp__PLUGIN_openviking-memory_OpenViking__READ",
+    ],
+)
+def test_collect_read_experience_uris_supports_plugin_namespaced_reads(tool_name):
+    uri = "viking://user/alice/memories/experiences/plugin-read.md"
+    messages = [
+        Message(
+            id="plugin-read",
+            role="user",
+            parts=[
+                ToolPart(
+                    tool_id="plugin-read-1",
+                    tool_name=tool_name,
+                    tool_input={"uri": uri},
+                    tool_status="completed",
+                )
+            ],
+        )
+    ]
+
+    assert collect_read_experience_uris(messages, ctx=_ctx()) == [uri]
+
+
+@pytest.mark.parametrize(
+    "tool_name",
+    [
+        "multi_read",
+        "openviking_multi_read",
+        "mcp__plugin_openviking-memory_openviking__multi_read",
+        "mcp__PLUGIN_openviking-memory_OpenViking__MULTI_READ",
+    ],
+)
 def test_collect_read_experience_uris_filters_failed_multi_read_results(tool_name):
     first_uri = "viking://user/alice/memories/experiences/first.md"
     failed_uri = "viking://user/alice/memories/experiences/failed.md"
@@ -105,6 +140,25 @@ def test_collect_read_experience_uris_filters_failed_multi_read_results(tool_nam
     ]
 
     assert collect_read_experience_uris(messages, ctx=_ctx()) == [first_uri]
+
+
+def test_collect_read_experience_uris_ignores_other_plugin_read_tools():
+    messages = [
+        Message(
+            id="other-plugin-read",
+            role="user",
+            parts=[
+                ToolPart(
+                    tool_id="other-plugin-read-1",
+                    tool_name="mcp__plugin_other-memory_other__read",
+                    tool_input={"uri": "viking://user/alice/memories/experiences/other.md"},
+                    tool_status="completed",
+                )
+            ],
+        )
+    ]
+
+    assert collect_read_experience_uris(messages, ctx=_ctx()) == []
 
 
 def test_collect_read_experience_uris_ignores_removed_dedicated_tool():

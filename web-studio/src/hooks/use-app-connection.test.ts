@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  createConnectionError,
   createManagementAccountConnection,
   createIdentityScopeKey,
   createConnectionRoleProbeKey,
@@ -11,9 +12,28 @@ import {
   synchronizeConnectionRuntime,
   synchronizeResolvedDataIdentity,
 } from './use-app-connection'
+import i18n from '#/i18n'
 import { ovClient } from '#/lib/ov-client'
 
 const acceptClientError = () => true
+
+describe('createConnectionError', () => {
+  it('reads the active locale when the asynchronous error is created', async () => {
+    const originalLanguage = i18n.resolvedLanguage || i18n.language
+    try {
+      await i18n.changeLanguage('en')
+      const english = createConnectionError('credentialMismatch').message
+
+      await i18n.changeLanguage('zh-CN')
+      const chinese = createConnectionError('credentialMismatch').message
+
+      expect(chinese).toBe('所选凭证与目标账号和用户不匹配。')
+      expect(chinese).not.toBe(english)
+    } finally {
+      await i18n.changeLanguage(originalLanguage)
+    }
+  })
+})
 
 describe('createConnectionRoleProbeKey', () => {
   it('matches the connection produced by an internal identity synchronization', () => {

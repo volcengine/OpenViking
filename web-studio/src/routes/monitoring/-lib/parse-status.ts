@@ -25,31 +25,34 @@ export function parseObserverStatus(status: string): ObserverStatusBlock[] {
 
   for (let index = 0; index < lines.length; ) {
     if (lines[index].startsWith('+') && lines[index + 1]?.startsWith('|')) {
+      const headers = parseRow(lines[index + 1])
       const rows: string[][] = []
-      index += 1
+      index += 2
+
+      if (lines[index]?.startsWith('+')) index += 1
 
       while (index < lines.length) {
         const line = lines[index]
         if (line.startsWith('|')) {
           rows.push(parseRow(line))
+          index += 1
+          continue
         }
-        index += 1
-        if (
-          line.startsWith('+') &&
-          !lines[index]?.startsWith('|') &&
-          !lines[index]?.startsWith('+')
-        ) {
+
+        if (line.startsWith('+')) {
+          index += 1
+          if (lines[index]?.startsWith('|')) continue
           break
         }
+
+        break
       }
 
-      if (rows.length > 0) {
-        blocks.push({
-          headers: rows[0],
-          kind: 'table',
-          rows: rows.slice(1),
-        })
-      }
+      blocks.push({
+        headers,
+        kind: 'table',
+        rows,
+      })
       continue
     }
 

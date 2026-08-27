@@ -142,7 +142,20 @@ class ContentWriteCoordinator:
                 processing_mode=processing_mode,
             )
 
-        stat = await self._safe_stat(normalized_uri, ctx=ctx)
+        stat = await self._safe_stat(normalized_uri, ctx=ctx, allow_not_found=True)
+        if stat.get("not_found"):
+            # replace and append are idempotent writes: a missing target starts
+            # from an empty file while retaining the caller's requested mode.
+            return await self._create_and_write(
+                uri=normalized_uri,
+                content=content,
+                ctx=ctx,
+                wait=wait,
+                timeout=timeout,
+                processing_mode=processing_mode,
+                result_mode=mode,
+                validate_extension=False,
+            )
         if stat.get("isDir"):
             raise InvalidArgumentError(
                 f"write only supports existing files, got directory: {normalized_uri}"
@@ -754,6 +767,7 @@ class ContentWriteCoordinator:
         root_uri: str,
         content: str,
         mode: str,
+        response_mode: Optional[str] = None,
         context_type: str,
         wait: bool,
         timeout: Optional[float],
@@ -1021,10 +1035,13 @@ class ContentWriteCoordinator:
         wait: bool,
         timeout: Optional[float],
         processing_mode: ProcessingMode,
+        result_mode: str = "create",
+        validate_extension: bool = True,
     ) -> Dict[str, Any]:
         if is_abstract_overview_uri(uri):
             raise InvalidArgumentError(f"cannot create generated abstract overview directly: {uri}")
-        self._validate_create_extension(uri)
+        if validate_extension:
+            self._validate_create_extension(uri)
 
         stat = await self._safe_stat(uri, ctx=ctx, allow_not_found=True)
         if not stat.get("not_found"):
@@ -1043,6 +1060,7 @@ class ContentWriteCoordinator:
                 root_uri=root_uri,
                 content=content,
                 mode="create",
+                response_mode=result_mode,
                 wait=wait,
                 timeout=timeout,
                 ctx=ctx,
@@ -1056,6 +1074,7 @@ class ContentWriteCoordinator:
             root_uri=root_uri,
             content=content,
             mode="create",
+            response_mode=result_mode,
             context_type=context_type,
             wait=wait,
             timeout=timeout,
@@ -1183,6 +1202,7 @@ class ContentWriteCoordinator:
         root_uri: str,
         content: str,
         mode: str,
+        response_mode: Optional[str] = None,
         wait: bool,
         timeout: Optional[float],
         ctx: RequestContext,
@@ -1238,7 +1258,7 @@ class ContentWriteCoordinator:
                 uri=uri,
                 root_uri=root_uri,
                 context_type="memory",
-                mode=mode,
+                mode=response_mode or mode,
                 written_bytes=written_bytes,
                 wait=wait,
                 queue_status=queue_status,

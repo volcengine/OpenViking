@@ -186,7 +186,7 @@ def _resolve_api_key() -> str:
     user_id = CLI_USER or "test-user"
     admin_user_id = f"{user_id}-admin"
 
-    for attempt in range(5):
+    for _attempt in range(5):
         try:
             list_resp = httpx.get(
                 f"{BASE_URL}/api/v1/admin/accounts/{account_id}/users",
@@ -355,10 +355,12 @@ def pytest_collection_modifyitems(config, items):
     elif not API_KEY:
         skip_reason = "Could not obtain a valid user API key for data-plane operations"
 
-    if skip_reason:
-        skip_cli = pytest.mark.skip(reason=skip_reason)
-        for item in items:
-            if item.get_closest_marker("cli_remote"):
+    skip_cli = pytest.mark.skip(reason=skip_reason) if skip_reason else None
+    for item in items:
+        if item.get_closest_marker("cli_remote"):
+            if "ensure_resources_dir" not in item.fixturenames:
+                item.fixturenames.append("ensure_resources_dir")
+            if skip_cli is not None:
                 item.add_marker(skip_cli)
 
 
@@ -602,15 +604,6 @@ def _find_file_in_pack(pack_uri, retries=10, interval=5):
                     return item["uri"]
         time.sleep(interval)
     return None
-
-
-def pytest_collection_modifyitems(items):
-    for item in items:
-        if (
-            item.get_closest_marker("cli_remote")
-            and "ensure_resources_dir" not in item.fixturenames
-        ):
-            item.fixturenames.append("ensure_resources_dir")
 
 
 @pytest.fixture(scope="session")

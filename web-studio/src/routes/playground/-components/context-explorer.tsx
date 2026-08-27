@@ -25,6 +25,8 @@ const TREE_INDENT_WIDTH = 16
 const TREE_ROW_PADDING = 6
 const TREE_GUIDE_OFFSET = 8
 const TREE_CHILD_CONTENT_OFFSET = 26
+const TREE_CONTROL_SIZE = 16
+const TREE_CONTROL_GAP = 6
 
 export function ContextExplorerHeader({
   activeTaskCount,
@@ -188,28 +190,34 @@ export function ContextTree({
           {t('explorer.empty')}
         </div>
       ) : (
-        namespaces.map((entry) => {
-          const normalizedName = entry.name.toLowerCase()
-          const descriptionKey = NAMESPACE_DESCRIPTION_KEYS[normalizedName]
+        <ul
+          role="list"
+          aria-label={t('explorer.title')}
+          className="m-0 min-w-0 list-none p-0"
+        >
+          {namespaces.map((entry) => {
+            const normalizedName = entry.name.toLowerCase()
+            const descriptionKey = NAMESPACE_DESCRIPTION_KEYS[normalizedName]
 
-          return (
-            <ContextTreeNode
-              key={entry.uri}
-              currentUri={currentUri}
-              entry={{
-                ...entry,
-                name: entry.name,
-                abstract: descriptionKey ? t(descriptionKey) : entry.abstract,
-              }}
-              expandedKeys={expandedKeys}
-              level={0}
-              onExpandedKeysChange={onExpandedKeysChange}
-              onSelectDirectory={onSelectDirectory}
-              onSelectFile={onSelectFile}
-              selectedFileUri={selectedFileUri}
-            />
-          )
-        })
+            return (
+              <ContextTreeNode
+                key={entry.uri}
+                currentUri={currentUri}
+                entry={{
+                  ...entry,
+                  name: entry.name,
+                  abstract: descriptionKey ? t(descriptionKey) : entry.abstract,
+                }}
+                expandedKeys={expandedKeys}
+                level={0}
+                onExpandedKeysChange={onExpandedKeysChange}
+                onSelectDirectory={onSelectDirectory}
+                onSelectFile={onSelectFile}
+                selectedFileUri={selectedFileUri}
+              />
+            )
+          })}
+        </ul>
       )}
     </div>
   )
@@ -265,6 +273,11 @@ export function ContextTreeNode({
   const isSelected = isDirSelected || isFileSelected
   const namespaceHint = level === 0 ? entry.abstract : ''
   const rowRef = useRef<HTMLDivElement>(null)
+  const disclosureLabel = entry.isDir
+    ? t(isOpen ? 'explorer.collapseDirectory' : 'explorer.expandDirectory', {
+        name: entry.name,
+      })
+    : ''
   const shouldLoadChildren = entry.isDir && isOpen
   const listQuery = useVikingFsList(
     entry.uri,
@@ -311,85 +324,99 @@ export function ContextTreeNode({
   }, [entry, isOpen, isSelected, onSelectDirectory, onSelectFile, toggle])
 
   return (
-    <div className="relative min-w-0">
+    <li className="relative min-w-0 list-none">
       <TreeIndentGuides level={level} />
       <div
         ref={rowRef}
         className={cn(
-          'group relative z-10 flex h-7 cursor-pointer select-none items-center gap-1.5 rounded-md px-1.5 text-xs transition-colors',
+          'group relative z-10 h-7 select-none rounded-md text-xs transition-colors',
           isSelected
             ? 'bg-muted text-foreground'
             : 'text-muted-foreground hover:bg-muted/55 hover:text-foreground',
         )}
-        style={{ paddingLeft: treeRowPadding(level) }}
-        onClick={select}
       >
         {entry.isDir ? (
           <button
             type="button"
-            className="inline-flex size-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors group-hover:text-foreground"
-            onClick={(event) => {
-              event.stopPropagation()
-              toggle()
-            }}
+            aria-expanded={isOpen}
+            aria-label={disclosureLabel}
+            title={disclosureLabel}
+            className="absolute top-1/2 z-20 inline-flex size-4 -translate-y-1/2 cursor-pointer items-center justify-center rounded-sm text-muted-foreground outline-none transition-colors group-hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+            style={{ left: treeRowPadding(level) }}
+            onClick={toggle}
           >
             <ChevronRightIcon
+              aria-hidden="true"
               className={cn(
                 'size-3 transition-transform',
                 isOpen && 'rotate-90',
               )}
             />
           </button>
-        ) : (
-          <span className="size-4 shrink-0" />
-        )}
-        {entry.isDir ? (
-          <FolderIcon
-            className={cn(
-              'size-4 shrink-0',
-              isOpen ? 'text-primary/80' : 'text-muted-foreground',
-            )}
-          />
-        ) : (
-          <FileTextIcon className="size-4 shrink-0 text-muted-foreground" />
-        )}
-        <span
-          className={cn(
-            'truncate',
-            namespaceHint ? 'shrink-0 text-foreground' : 'min-w-0 flex-1',
-          )}
+        ) : null}
+        <button
+          type="button"
+          aria-label={entry.name}
+          aria-current={isSelected ? 'location' : undefined}
+          className="absolute inset-0 z-10 flex min-w-0 cursor-pointer items-center gap-1.5 rounded-md pr-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+          style={{ paddingLeft: treeSelectionPadding(level, entry.isDir) }}
+          onClick={select}
         >
-          {entry.name}
-        </span>
-        {namespaceHint ? (
-          <span className="min-w-0 flex-1 truncate font-sans text-xs text-muted-foreground">
-            {namespaceHint}
+          {!entry.isDir ? (
+            <span aria-hidden="true" className="size-4 shrink-0" />
+          ) : null}
+          {entry.isDir ? (
+            <FolderIcon
+              aria-hidden="true"
+              className={cn(
+                'size-4 shrink-0',
+                isOpen ? 'text-primary/80' : 'text-muted-foreground',
+              )}
+            />
+          ) : (
+            <FileTextIcon
+              aria-hidden="true"
+              className="size-4 shrink-0 text-muted-foreground"
+            />
+          )}
+          <span
+            className={cn(
+              'truncate',
+              namespaceHint ? 'shrink-0 text-foreground' : 'min-w-0 flex-1',
+            )}
+          >
+            {entry.name}
           </span>
-        ) : null}
-        {entry.name === '_abstract.md' ? (
-          <span className="shrink-0 rounded bg-muted px-1 font-sans text-[10px] text-muted-foreground">
-            {t('explorer.abstractLevel')}
-          </span>
-        ) : entry.name === '_overview.md' ? (
-          <span className="shrink-0 rounded bg-muted px-1 font-sans text-[10px] text-muted-foreground">
-            {t('explorer.overviewLevel')}
-          </span>
-        ) : null}
+          {namespaceHint ? (
+            <span className="min-w-0 flex-1 truncate font-sans text-xs text-muted-foreground">
+              {namespaceHint}
+            </span>
+          ) : null}
+          {entry.name === '_abstract.md' ? (
+            <span className="shrink-0 rounded bg-muted px-1 font-sans text-[10px] text-muted-foreground">
+              {t('explorer.abstractLevel')}
+            </span>
+          ) : entry.name === '_overview.md' ? (
+            <span className="shrink-0 rounded bg-muted px-1 font-sans text-[10px] text-muted-foreground">
+              {t('explorer.overviewLevel')}
+            </span>
+          ) : null}
+        </button>
       </div>
 
       {entry.isDir && isOpen ? (
-        <div className="relative min-w-0">
-          {listQuery.isLoading ? (
-            <div
-              className="relative flex h-7 items-center gap-2 px-1.5 text-xs text-muted-foreground"
-              style={{ paddingLeft: treeChildContentPadding(level) }}
-            >
-              <TreeIndentGuides level={level + 1} />
-              <Loader2Icon className="size-3 animate-spin" />
-              {t('explorer.loading')}
-            </div>
-          ) : children.length > 0 ? (
-            children.map((child) => (
+        listQuery.isLoading ? (
+          <div
+            className="relative flex h-7 items-center gap-2 px-1.5 text-xs text-muted-foreground"
+            style={{ paddingLeft: treeChildContentPadding(level) }}
+          >
+            <TreeIndentGuides level={level + 1} />
+            <Loader2Icon className="size-3 animate-spin" />
+            {t('explorer.loading')}
+          </div>
+        ) : children.length > 0 ? (
+          <ul role="list" className="m-0 min-w-0 list-none p-0">
+            {children.map((child) => (
               <ContextTreeNode
                 key={child.uri}
                 currentUri={currentUri}
@@ -401,19 +428,19 @@ export function ContextTreeNode({
                 onSelectFile={onSelectFile}
                 selectedFileUri={selectedFileUri}
               />
-            ))
-          ) : (
-            <div
-              className="relative h-7 px-1.5 text-xs leading-7 text-muted-foreground/60"
-              style={{ paddingLeft: treeChildContentPadding(level) }}
-            >
-              <TreeIndentGuides level={level + 1} />
-              {t('explorer.empty')}
-            </div>
-          )}
-        </div>
+            ))}
+          </ul>
+        ) : (
+          <div
+            className="relative h-7 px-1.5 text-xs leading-7 text-muted-foreground/60"
+            style={{ paddingLeft: treeChildContentPadding(level) }}
+          >
+            <TreeIndentGuides level={level + 1} />
+            {t('explorer.empty')}
+          </div>
+        )
       ) : null}
-    </div>
+    </li>
   )
 }
 
@@ -439,6 +466,13 @@ export function treeGuideLeft(index: number): string {
 
 export function treeRowPadding(level: number): string {
   return `${level * TREE_INDENT_WIDTH + TREE_ROW_PADDING}px`
+}
+
+function treeSelectionPadding(level: number, hasDisclosure: boolean): string {
+  const disclosureOffset = hasDisclosure
+    ? TREE_CONTROL_SIZE + TREE_CONTROL_GAP
+    : 0
+  return `${level * TREE_INDENT_WIDTH + TREE_ROW_PADDING + disclosureOffset}px`
 }
 
 export function treeChildContentPadding(level: number): string {

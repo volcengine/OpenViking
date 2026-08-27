@@ -443,7 +443,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
                             immutable_fields = {
                                 field.name
                                 for field in schema.fields
-                                if field.merge_op != MergeOp.PATCH
+                                if field.merge_op == MergeOp.IMMUTABLE
                             }
                             for field_name in immutable_fields:
                                 if field_name in old_content.extra_fields:

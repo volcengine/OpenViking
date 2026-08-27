@@ -28,6 +28,7 @@ import type { CapabilityProbeResult } from '#/lib/admin'
 import { DEFAULT_ACCOUNT_ID, DEFAULT_USER_ID } from '#/lib/admin-options'
 import { PLAIN_INPUT_PROPS } from '#/lib/form-input'
 import { cn } from '#/lib/utils'
+import { localizeCapabilityDetail } from './-lib/localize-capability-probe'
 import type { ConnectionDraft } from '#/hooks/use-app-connection'
 
 export const Route = createFileRoute('/settings')({
@@ -58,6 +59,7 @@ function CapabilityStatus({
 }) {
   const { t } = useTranslation('settings')
   const state = isLoading ? 'checking' : result?.state || 'skipped'
+  const detail = localizeCapabilityDetail(result, t)
 
   return (
     <div
@@ -77,9 +79,9 @@ function CapabilityStatus({
             {t(`health.state.${state}`)}
           </span>
         </div>
-        {result?.detail ? (
+        {detail ? (
           <p className="mt-1 truncate text-xs text-muted-foreground">
-            {result.detail}
+            {detail}
           </p>
         ) : null}
       </div>
@@ -288,7 +290,9 @@ function ConnectionSettingsRoute() {
           ) : isUnsupportedAuthMode ? (
             <Alert variant="destructive" className="border-destructive/50">
               <TriangleAlertIcon className="size-5" />
-              <AlertTitle>{t('connection.unsupportedAuthMode.title')}</AlertTitle>
+              <AlertTitle>
+                {t('connection.unsupportedAuthMode.title')}
+              </AlertTitle>
               <AlertDescription className="grid gap-2">
                 <p>
                   {t('connection.unsupportedAuthMode.primary', {

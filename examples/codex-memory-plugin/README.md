@@ -198,11 +198,12 @@ On `startup` or `clear`, the script:
 
 1. Counts state files (excluding the new session_id) whose `lastUpdatedAt` is within `OPENVIKING_CODEX_ACTIVE_WINDOW_MS` (default 2 min) of "now":
    - **0 active** → no-op (no orphan to commit)
-   - **1 active** → commit it (the just-ended session)
+   - **1 active** → commit it (the just-ended session), unless it has no live `ovSessionId` left to commit
    - **≥2 active** → skip; rely on idle TTL (we can't tell which one ended)
-2. **Idle-TTL sweep at the tail**: any state file (regardless of session_id) older than `OPENVIKING_CODEX_IDLE_TTL_MS` (default 30 min) gets committed and cleared.
+2. **Idle-TTL sweep at the tail**: any live session state older than `OPENVIKING_CODEX_IDLE_TTL_MS` (default 30 min) gets committed while preserving its transcript cursor for resume.
+3. **Cursor retention in the same pass**: a state file with no live OV session is kept as a resume cursor until `OPENVIKING_CODEX_COMMITTED_TTL_MS` (default 30 days), or dropped after the idle TTL if it never captured a turn.
 
-On any /commit failure (OV unreachable, non-2xx, timeout) we **preserve state** (don't `clearState`) so the next sweep can retry.
+On any /commit failure (OV unreachable, non-2xx, timeout) we **preserve state** (keep `ovSessionId` set) so the next sweep can retry.
 
 On `resume`, the script skips commit/sweep. It still injects the profile block. If local state has no live `ovSessionId`, it also reads `/api/v1/sessions/{cx-session-id}/context` and combines the latest committed archive overview into the same `SessionStart` output. The archive block includes a `viking://~/sessions/{cx-session-id}/history/` URI and tells the model to use the OpenViking MCP `read`/`search` tools for exact prior commands, file paths, tool outputs, or messages. Set `OPENVIKING_RESUME_ARCHIVE_INJECT=0` to disable the archive half without disabling profile injection.
 
@@ -290,6 +291,16 @@ Codex's hook output schema differs from Claude Code's. Notably:
 
 Unlike Claude Code, **Codex does not support `decision: "approve"`**; only `decision: "block"`. A no-op is `{}` (which is what these scripts emit when there's nothing to add).
 
+## Troubleshooting
+
+Start with the bundled doctor — it checks the install (marketplace, `config.toml` enablement, hook trust records, MCP wiring), the resolved config (which file won, API key shown masked), the connection (reachability, auth, `/mcp`) and the session state left by the hooks, and prints a fix for every finding:
+
+```bash
+node "$(ls -d ~/.codex/plugins/cache/openviking/openviking-memory/*/ | sort -V | tail -1)scripts/ov-memory-doctor.mjs"
+```
+
+Or invoke the `$ov-memory-doctor` skill in Codex, which runs the same script and walks the report. When the server runs on the same machine (loopback url) the report adds a Server health section — whether anything listens on the port, plugin-only keys in ov.conf that stop the server from starting, and `GET /ready`; everything else server-side (config validation, live embedding probe, native engine, disk) stays with `openviking-server doctor`.
+
 ## Plugin Structure
 
 ```
@@ -300,8 +311,13 @@ codex-memory-plugin/
 │   └── hooks.json               # SessionStart + UserPromptSubmit + Stop + PreCompact
 │                                  (uses Codex's native ${PLUGIN_ROOT} token; no
 │                                   rendering needed on modern Codex)
+├── skills/
+│   ├── openviking-memory/       # How to use the memory tools
+│   ├── ov-experience-memory/
+│   └── ov-memory-doctor/        # Install / config / connection / local-server troubleshooting
 ├── scripts/
 │   ├── config.mjs               # Shared config loader (ovcli.conf + env)
+│   ├── ov-memory-doctor.mjs     # Diagnostics script ($ov-memory-doctor skill)
 │   ├── capture-utils.mjs        # Transcript text extraction, filtering, tool compression
 │   ├── debug-log.mjs            # Structured JSONL logger
 │   ├── recall-compressor-profile.mjs # Compressor profile detection/cache

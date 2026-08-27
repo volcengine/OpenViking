@@ -206,9 +206,10 @@ def test_generic_code_hosting_domains_load_from_config():
     assert config.code_hosting_domains == ["git.generic.example.com"]
 
 
-def test_openviking_config_rejects_unknown_nested_parser_section(monkeypatch):
+def test_openviking_config_handles_nested_parser_compatibility(monkeypatch):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 
+    from openviking_cli.utils.config import open_viking_config as config_module
     from openviking_cli.utils.config.open_viking_config import (
         OpenVikingConfig,
         OpenVikingConfigSingleton,
@@ -227,6 +228,28 @@ def test_openviking_config_rejects_unknown_nested_parser_section(monkeypatch):
                 "parsers": {"markdwon": {}},
             }
         )
+
+    errors: list[str] = []
+    monkeypatch.setattr(
+        config_module._get_config_logger(),
+        "error",
+        lambda message, *args, **kwargs: errors.append(message % args if args else message),
+    )
+    config = OpenVikingConfig.from_dict(
+        {
+            "embedding": {
+                "dense": {
+                    "provider": "openai",
+                    "api_key": "test-key",
+                    "model": "text-embedding-3-small",
+                }
+            },
+            "parsers": {"excel": {"enable_process_pool": True}},
+        }
+    )
+
+    assert config.anydoc.enabled is True
+    assert any("Config field 'parsers.excel' was removed and is ignored" in item for item in errors)
 
     OpenVikingConfigSingleton.reset_instance()
 

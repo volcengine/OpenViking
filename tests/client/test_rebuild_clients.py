@@ -251,7 +251,7 @@ def test_sync_http_client_batch_add_messages_forwards_to_async_client():
 
     assert result == {"session_id": "batch-session", "message_count": 2, "added": 2}
     assert mock_run.called
-    mock_batch.assert_called_once_with("batch-session", messages)
+    mock_batch.assert_called_once_with("batch-session", messages, None)
 
 
 def test_run_async_from_foreign_event_loop_uses_shared_background_loop():

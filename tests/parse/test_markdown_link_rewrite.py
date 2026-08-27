@@ -9,7 +9,7 @@ import pytest
 
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.directory import DirectoryParser
-from openviking.parse.parsers.markdown import MarkdownParser
+from openviking.parse.parsers.markdown import MarkdownParser, _RewriteContext
 
 
 class TestRewriteRelativeLinks:
@@ -28,12 +28,21 @@ class TestRewriteRelativeLinks:
         return kb
 
     async def _rewrite(self, parser, kb, content, section_subpath=""):
-        return await parser._rewrite_relative_links(
-            content,
+        rewrite_ctx = _RewriteContext(
             source_path=str(kb / "文档.md"),
             doc_name="文档",
-            section_subpath=section_subpath,
+            root_dir="viking://temp/test/文档",
             import_root=str(kb),
+            base_dir=kb,
+            allowed_media_dirs=None,
+            split_content=True,
+            adaptive_flatten_requested=False,
+            flatten_single_output=False,
+        )
+        return await parser._rewrite_relative_links(
+            content,
+            section_subpath=section_subpath,
+            rewrite_ctx=rewrite_ctx,
         )
 
     async def test_md_target_becomes_directory(self, tmp_path: Path):
@@ -172,7 +181,8 @@ class TestRewriteRelativeLinks:
         kb = self._make_tree(tmp_path)
         p = self._parser()
 
-        async def fake_bare_layout(_path):  # 模拟未来：目标入库为单个裸文件，无 <dir>/ 包裹
+        async def fake_bare_layout(_path, _context):
+            # 模拟未来：目标入库为单个裸文件，无 <dir>/ 包裹
             return {"文档.md": "# 目标\n\n内容"}
 
         p._target_split_files = fake_bare_layout  # type: ignore[method-assign]

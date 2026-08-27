@@ -23,6 +23,7 @@ def _make_viking_fs() -> VikingFS:
     fs.rerank_config = None
     fs.grep_config = None
     fs.vector_store = None
+    fs.acl_manager = None
     fs._encryptor = None
     fs._bound_ctx = contextvars.ContextVar("vikingfs_bound_ctx_test", default=None)
     return fs

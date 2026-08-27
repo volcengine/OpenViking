@@ -11,6 +11,7 @@ from openviking_cli.session.user_id import UserIdentifier
 async def test_mv_preserves_canonical_user_uris_for_vector_update(monkeypatch):
     ctx = RequestContext(user=UserIdentifier("acc", "default"), role=Role.ROOT)
     fs = VikingFS.__new__(VikingFS)
+    fs.acl_manager = None
     fs._async_agfs = AsyncMock()
     fs._async_agfs.stat.return_value = {"isDir": False}
     fs._async_agfs.pathlock_acquire_batch.return_value = {"lease_ref": "lease-1"}

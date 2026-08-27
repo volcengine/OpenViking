@@ -295,7 +295,7 @@ export function createOpenVikingMcpProxy({
     return errorResponse(
       id,
       -32001,
-      `OpenViking MCP request failed. Check the configured URL (${proxyConfig.mcpUrl}) and that 'ov serve' is running.`,
+      `OpenViking MCP request failed. Check the configured URL (${proxyConfig.mcpUrl}) and that the OpenViking server (\`openviking-server\`) is reachable.`,
       { cause: msg },
     );
   }

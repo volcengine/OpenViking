@@ -120,6 +120,11 @@ test("required plugin files are present", () => {
     ".mcp.json",
     "hooks/hooks.json",
     "skills/ov-experience-memory/SKILL.md",
+    "skills/openviking-memory/SKILL.md",
+    "skills/ov-memory-doctor/SKILL.md",
+    "skills/ov-memory-doctor/reference.md",
+    "scripts/ov-memory-doctor.mjs",
+    "scripts/shared/doctor-core.mjs",
   ]) {
     assert.ok(existsSync(join(pluginDir, rel)), `missing required plugin file: ${rel}`);
   }
@@ -180,7 +185,16 @@ test("Codex MCP entrypoint forwards only native OpenViking tools", () => {
 test("canonical MCP tool list matches server registrations", () => {
   const source = readFileSync(mcpEndpointPath, "utf-8");
   const registered = [
-    ...source.matchAll(/@mcp\.tool\((?:name="([a-z_]+)")?\)\s*\nasync def ([a-z_]+)\(/g),
-  ].map((match) => match[1] || match[2]);
+    ...source.matchAll(/@mcp\.tool\(([^)]*)\)\s*\nasync def ([a-z_]+)\(/g),
+  ].map((match) => match[1].match(/(?:^|,\s*)name="([a-z_]+)"/)?.[1] || match[2]);
   assert.deepEqual(registered, REAL_MCP_TOOLS);
+});
+
+test("plugin.json declares the skills directory so Codex loads bundled skills", () => {
+  const manifest = readJson(manifestPath);
+  assert.equal(manifest.skills, "./skills/");
+});
+
+test("memory doctor script parses", () => {
+  execFileSync("node", ["--check", join(pluginDir, "scripts", "ov-memory-doctor.mjs")], { stdio: "pipe" });
 });

@@ -9,6 +9,7 @@ import {
 } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import i18n from '#/i18n'
 import {
   ResourceUploadProvider,
   useResourceUpload,
@@ -48,7 +49,7 @@ function UploadHarness({
   onCompleted: () => void
   onFailed?: () => void
 }) {
-  const { refreshTasks, startRemote } = useResourceUpload()
+  const { refreshTasks, startRemote, tasks } = useResourceUpload()
 
   return (
     <>
@@ -70,6 +71,7 @@ function UploadHarness({
         data-testid="refresh"
         onClick={() => void refreshTasks()}
       />
+      <output data-testid="task-error">{tasks[0]?.errorMessage}</output>
     </>
   )
 }
@@ -149,5 +151,41 @@ describe('ResourceUploadProvider remote completion', () => {
     fireEvent.click(screen.getByTestId('start'))
 
     await waitFor(() => expect(onFailed).toHaveBeenCalledOnce())
+  })
+
+  it('updates an empty server error fallback when the language changes', async () => {
+    const previousLanguage = i18n.language
+    try {
+      await i18n.changeLanguage('en')
+      apiMocks.getTasks.mockResolvedValue([
+        {
+          created_at: 1,
+          status: 'failed',
+          task_id: 'resource-task',
+          task_type: 'add_resource',
+          updated_at: 2,
+        },
+      ])
+
+      render(
+        <ResourceUploadProvider>
+          <UploadHarness onAccepted={vi.fn()} onCompleted={vi.fn()} />
+        </ResourceUploadProvider>,
+      )
+
+      await waitFor(() =>
+        expect(screen.getByTestId('task-error').textContent).toBe(
+          'Processing failed',
+        ),
+      )
+
+      await i18n.changeLanguage('zh-CN')
+
+      await waitFor(() =>
+        expect(screen.getByTestId('task-error').textContent).toBe('处理失败'),
+      )
+    } finally {
+      await i18n.changeLanguage(previousLanguage)
+    }
   })
 })
