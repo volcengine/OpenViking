@@ -24,7 +24,8 @@ class _FakeVikingFS:
         return "viking://temp/pdf-no-split"
 
     async def mkdir(self, uri: str, exist_ok: bool = False) -> None:
-        del exist_ok
+        if uri in self.directories and not exist_ok:
+            raise FileExistsError(uri)
         self.directories.add(uri)
 
     async def write_file(self, uri: str, content: str) -> None:
@@ -49,14 +50,35 @@ def test_normalize_parse_mode_accepts_no_split_and_rejects_no_parse() -> None:
 
 
 @pytest.mark.asyncio
+async def test_flattened_no_split_markdown_creates_temp_root_once(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "document.md"
+    content = "# Document\n\nBody"
+    source.write_text(content, encoding="utf-8")
+    fake_fs = _FakeVikingFS()
+    parser = MarkdownParser()
+    monkeypatch.setattr(parser, "_get_viking_fs", lambda: fake_fs)
+
+    result = await parser.parse(
+        source,
+        split_content=False,
+        flatten_single_output=True,
+    )
+
+    assert result.warnings == []
+    assert fake_fs.directories == {"viking://temp/pdf-no-split"}
+    assert fake_fs.files == {"viking://temp/pdf-no-split/document.md": content}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("with_headings", [False, True])
 async def test_long_markdown_no_split_plans_one_complete_file(
     with_headings: bool,
 ) -> None:
     content = _long_markdown(with_headings=with_headings)
-    parser = MarkdownParser(
-        config=ParserConfig(max_section_size=32, max_section_chars=128)
-    )
+    parser = MarkdownParser(config=ParserConfig(max_section_size=32, max_section_chars=128))
 
     layout = await parser._compute_layout(
         content,
@@ -78,9 +100,7 @@ async def test_long_markdown_no_split_plans_one_complete_file(
 @pytest.mark.asyncio
 async def test_long_markdown_default_mode_still_splits() -> None:
     content = _long_markdown()
-    parser = MarkdownParser(
-        config=ParserConfig(max_section_size=32, max_section_chars=128)
-    )
+    parser = MarkdownParser(config=ParserConfig(max_section_size=32, max_section_chars=128))
 
     layout = await parser._compute_layout(
         content,
@@ -102,9 +122,7 @@ async def test_pdf_no_split_converts_to_one_complete_markdown(
     source.write_bytes(b"%PDF-fixture")
     content = _long_markdown(with_headings=True)
     fake_fs = _FakeVikingFS()
-    parser = PDFParser(
-        PDFConfig(strategy="local", max_section_size=32, max_section_chars=128)
-    )
+    parser = PDFParser(PDFConfig(strategy="local", max_section_size=32, max_section_chars=128))
     markdown_parser = parser._get_markdown_parser()
     monkeypatch.setattr(markdown_parser, "_get_viking_fs", lambda: fake_fs)
     monkeypatch.setattr(
@@ -125,9 +143,6 @@ async def test_pdf_no_split_converts_to_one_complete_markdown(
 
     assert result.parser_name == "PDFParser"
     assert fake_fs.files == {
-        (
-            "viking://temp/pdf-no-split/社交网络中英文剧本/"
-            "社交网络中英文剧本.md"
-        ): content
+        ("viking://temp/pdf-no-split/社交网络中英文剧本/社交网络中英文剧本.md"): content
     }
     assert not any(uri.endswith(".pdf") for uri in fake_fs.files)

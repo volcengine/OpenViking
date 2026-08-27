@@ -414,9 +414,7 @@ class MarkdownParser(BaseParser):
         doc_name = self._sanitize_for_path(doc_title)
         # Preserve code source filenames as the temp document directory.
         source_name = kwargs.get("source_name")
-        root_name = (
-            source_name if source_name and supports_code_skeleton(source_name) else doc_name
-        )
+        root_name = source_name if source_name and supports_code_skeleton(source_name) else doc_name
         root_dir = (
             temp_uri
             if kwargs.get("flatten_single_output", False)
@@ -426,8 +424,12 @@ class MarkdownParser(BaseParser):
         # Find all headings
         headings = self._find_headings(content)
 
-        # The temp dir is the first thing materialized on apply.
-        ops: List[_LayoutOp] = [_LayoutOp("mkdir", temp_uri)]
+        # The temp dir is the first thing materialized on apply. A flattened
+        # document uses the temp dir itself as its root, which _build_structure
+        # creates below, so do not enqueue the same mkdir twice.
+        ops: List[_LayoutOp] = []
+        if root_dir != temp_uri:
+            ops.append(_LayoutOp("mkdir", temp_uri))
         await self._build_structure(
             ops,
             content,
@@ -782,9 +784,11 @@ class MarkdownParser(BaseParser):
         for row in rows:
             candidate_lines = [*current_lines, row]
             candidate = "\n".join(candidate_lines)
-            if current_lines and (
-                len(candidate) > max_chars or self._estimate_token_count(candidate) > max_size
-            ) and current_data_rows > 0:
+            if (
+                current_lines
+                and (len(candidate) > max_chars or self._estimate_token_count(candidate) > max_size)
+                and current_data_rows > 0
+            ):
                 flush()
                 current_lines = [*header, row] if repeat_header else [row]
                 current_data_rows = 1
