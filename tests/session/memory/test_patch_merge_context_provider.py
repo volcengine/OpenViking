@@ -14,6 +14,7 @@ from openviking.session.memory.patch_merge_context_provider import (
     PatchMergeContextProvider,
     PatchMergePatch,
 )
+from openviking.session.skill.session_skill_context_provider import load_skill_extract_registry
 
 
 def _memory_file(
@@ -352,6 +353,21 @@ def test_patch_merge_context_provider_get_memory_schema_raises_for_missing_type(
 
     with pytest.raises(ValueError, match="Memory schema not found or disabled: missing"):
         provider.get_memory_schemas(ctx=None)
+
+
+def test_patch_merge_context_provider_uses_registry_override_for_session_skills():
+    provider = PatchMergeContextProvider(
+        memory_type="session_skills",
+        memory_registry=load_skill_extract_registry(),
+        required_file_uris=[],
+        patches=[],
+    )
+
+    schemas = provider.get_memory_schemas(ctx=None)
+
+    assert len(schemas) == 1
+    assert schemas[0].memory_type == "session_skills"
+    assert schemas[0].enabled is True
 
 
 def test_patch_merge_context_provider_instruction_mentions_path_field_normalization():
