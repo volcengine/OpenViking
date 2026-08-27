@@ -216,6 +216,59 @@ async def test_init_context_collection_backfills_metadata_for_empty_legacy_colle
 
 
 @pytest.mark.asyncio
+async def test_init_context_collection_appends_missing_schema_fields(monkeypatch):
+    field_updates = []
+    config = _DummyConfig(_DummyEmbedder(), backend="local")
+    embedding_meta = _build_embedding_metadata(config)
+
+    legacy_fields = [
+        {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+        {"FieldName": "uri", "FieldType": "path"},
+        {"FieldName": "context_type", "FieldType": "string"},
+        {"FieldName": "vector", "FieldType": "vector", "Dim": 2},
+        {"FieldName": "active_count", "FieldType": "int64"},
+        {"FieldName": "account_id", "FieldType": "string"},
+        {"FieldName": "owner_space", "FieldType": "string"},
+    ]
+
+    class _FakeStorage:
+        async def create_collection(self, name, schema):
+            del name, schema
+            return False
+
+        async def get_collection_meta(self):
+            return {
+                "CollectionName": "context",
+                "Description": (
+                    "Unified context collection\n\n[openviking.embedding]\n"
+                    f"{json.dumps(embedding_meta, sort_keys=True, ensure_ascii=False)}"
+                ),
+                "Fields": list(field_updates[-1] if field_updates else legacy_fields),
+            }
+
+        async def update_collection_fields(self, fields):
+            field_updates.append(fields)
+            return True
+
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: config,
+    )
+
+    created = await init_context_collection(_FakeStorage())
+
+    assert created is False
+    assert len(field_updates) == 1
+    updated_field_names = [field["FieldName"] for field in field_updates[0]]
+    assert updated_field_names[: len(legacy_fields)] == [
+        field["FieldName"] for field in legacy_fields
+    ]
+    assert "owner_space" in updated_field_names
+    assert "search_tags" in updated_field_names
+    assert "owner_user_id" in updated_field_names
+
+
+@pytest.mark.asyncio
 async def test_init_context_collection_rejects_mismatched_nonempty_collection(monkeypatch):
     """When embedding dimension mismatches for a non-empty collection, vectors are
     incompatible and the function requires a rebuild.

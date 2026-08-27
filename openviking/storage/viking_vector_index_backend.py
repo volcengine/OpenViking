@@ -133,6 +133,9 @@ class _AsyncVectorAdapter:
             lambda: self._adapter.get_collection().update(description=description)
         )
 
+    async def update_collection_fields(self, fields: List[Dict[str, Any]]) -> None:
+        await asyncio.to_thread(lambda: self._adapter.get_collection().update(fields=fields))
+
 
 class _SingleAccountBackend:
     """绑定单个 account 的后端实现（内部类）"""
@@ -324,6 +327,13 @@ class _SingleAccountBackend:
         if not await self.collection_exists():
             return False
         await self._async_adapter.update_collection_description(description)
+        await self._refresh_meta_data_async()
+        return True
+
+    async def update_collection_fields(self, fields: List[Dict[str, Any]]) -> bool:
+        if not await self.collection_exists():
+            return False
+        await self._async_adapter.update_collection_fields(fields)
         await self._refresh_meta_data_async()
         return True
 
@@ -868,6 +878,9 @@ class VikingVectorIndexBackend:
 
     async def update_collection_description(self, description: str) -> bool:
         return await self._get_default_backend().update_collection_description(description)
+
+    async def update_collection_fields(self, fields: List[Dict[str, Any]]) -> bool:
+        return await self._get_default_backend().update_collection_fields(fields)
 
     # =========================================================================
     # 公开数据操作 API（强制要求 ctx）

@@ -8,6 +8,7 @@ similar to how init_viking_fs encapsulates VikingFS initialization.
 """
 
 import asyncio
+import copy
 import hashlib
 import json
 import threading
@@ -233,6 +234,32 @@ def _collection_has_content_fulltext(meta: Dict[str, Any]) -> bool:
     return has_content and has_content_fulltext
 
 
+def _append_missing_schema_fields(
+    existing_meta: Dict[str, Any],
+    current_schema: Dict[str, Any],
+) -> Optional[List[Dict[str, Any]]]:
+    """Return an append-only field list if an older collection misses current fields."""
+
+    existing_fields = existing_meta.get("Fields") or []
+    current_fields = current_schema.get("Fields") or []
+    if not existing_fields or not current_fields:
+        return None
+
+    existing_names = {
+        field.get("FieldName")
+        for field in existing_fields
+        if isinstance(field, dict) and field.get("FieldName")
+    }
+    missing_fields = [
+        copy.deepcopy(field)
+        for field in current_fields
+        if isinstance(field, dict) and field.get("FieldName") not in existing_names
+    ]
+    if not missing_fields:
+        return None
+    return [copy.deepcopy(field) for field in existing_fields] + missing_fields
+
+
 def _encode_collection_description(
     base_description: str,
     embedding_meta: Dict[str, Any],
@@ -305,6 +332,19 @@ async def init_context_collection(storage) -> bool:
         raise EmbeddingConfigurationError(
             "Existing collection metadata is unavailable; cannot validate embedding compatibility"
         )
+
+    reconciled_fields = _append_missing_schema_fields(existing_meta, schema)
+    if reconciled_fields is not None and hasattr(storage, "update_collection_fields"):
+        updated = await storage.update_collection_fields(reconciled_fields)
+        if updated is not False:
+            refreshed_meta = await storage.get_collection_meta()
+            if refreshed_meta:
+                existing_meta = refreshed_meta
+            else:
+                existing_meta = dict(existing_meta)
+                existing_meta["Fields"] = reconciled_fields
+        else:
+            logger.warning("Failed to append missing fields to existing collection schema")
 
     base_description, existing_embedding_meta = _decode_collection_description(
         existing_meta.get("Description")
