@@ -15,6 +15,19 @@ SYSTEM_TASK_ACCOUNT_ID = "_system"
 SYSTEM_TASK_USER_ID = "root"
 
 
+def task_user_dir_path(account_id: str, user_id: str) -> str:
+    system_dir = (
+        f"/local/{account_id}"
+        if account_id == SYSTEM_TASK_ACCOUNT_ID
+        else f"/local/{account_id}/_system"
+    )
+    return f"{system_dir}/tasks/{user_id}"
+
+
+def task_record_path(account_id: str, user_id: str, task_id: str) -> str:
+    return f"{task_user_dir_path(account_id, user_id)}/{task_id}.json"
+
+
 class TaskStore(Protocol):
     async def create(self, task: Any) -> None: ...
 
@@ -133,10 +146,10 @@ class PersistentTaskStore:
         return f"{self._system_dir(account_id)}/{self.TASKS_DIRNAME}"
 
     def _task_dir(self, account_id: str, user_id: str) -> str:
-        return f"{self._task_root_dir(account_id)}/{user_id}"
+        return task_user_dir_path(account_id, user_id)
 
     def _task_path(self, account_id: str, user_id: str, task_id: str) -> str:
-        return f"{self._task_dir(account_id, user_id)}/{task_id}.json"
+        return task_record_path(account_id, user_id, task_id)
 
 
 def _task_to_payload(task: Any) -> Dict[str, Any]:

@@ -21,6 +21,7 @@ from openviking.server.routers.skills import router as skills_router
 from openviking.server.routers.snapshot import router as snapshot_router
 from openviking.server.routers.stats import router as stats_router
 from openviking.server.routers.system import router as system_router
+from openviking.server.routers.task_queues import router as task_queues_router
 from openviking.server.routers.tasks import router as tasks_router
 from openviking.server.routers.user_settings import router as user_settings_router
 from openviking.server.routers.watches import router as watches_router
@@ -46,6 +47,7 @@ __all__ = [
     "metrics_router",
     "observer_router",
     "openviking_assets_router",
+    "task_queues_router",
     "tasks_router",
     "user_settings_router",
     "watches_router",

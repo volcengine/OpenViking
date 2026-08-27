@@ -50,6 +50,7 @@ from openviking.server.routers import (
     snapshot_router,
     stats_router,
     system_router,
+    task_queues_router,
     tasks_router,
     user_settings_router,
     watches_router,
@@ -624,6 +625,7 @@ def create_app(
     app.include_router(observer_router)
     app.include_router(openviking_assets_router)
     app.include_router(metrics_router)
+    app.include_router(task_queues_router)
     app.include_router(tasks_router)
     app.include_router(user_settings_router)
     app.include_router(watches_router)
