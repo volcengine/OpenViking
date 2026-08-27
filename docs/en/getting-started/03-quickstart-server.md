@@ -343,8 +343,15 @@ ps aux | grep openviking-server
 
 * **Check Logs:**
 ```bash
-tail -f /data/log/openviking.log # TODO: Implement log rotation
+tail -f /data/log/openviking.log
 ```
+
+`nohup` redirects the server's stdout/stderr, so this file is not rotated automatically.
+In production, hand it to `systemd/journald` or another log manager. If you need
+OpenViking-managed rotating diagnostic logs, configure local trace output in the
+[observability guide](../guides/05-observability.md); the Usage Reporter also supports
+a dedicated JSONL file that rotates hourly in UTC, as described in the
+[configuration guide](../guides/01-configuration.md#usage-reporter).
 
 ### 5. Client Configuration and Testing (CLI)
 

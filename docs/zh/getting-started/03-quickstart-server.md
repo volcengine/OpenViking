@@ -331,8 +331,13 @@ ps aux | grep openviking-server
 
 - 查看日志： 如果进程在，看看有没有报错：
 ```
-tail -f /data/log/openviking.log # TODO 支持日志滚动
+tail -f /data/log/openviking.log
 ```
+
+`nohup` 重定向的是服务进程的 stdout/stderr，默认不会自动滚动；生产环境请交给
+`systemd/journald` 或其他日志管理器处理。需要 OpenViking 自己生成可滚动的诊断日志时，
+请按[可观测性指南](../guides/05-observability.md)配置本地 trace 文件；Usage Reporter
+也支持按 UTC 小时滚动的专用 JSONL 文件，详见[配置指南](../guides/01-configuration.md#usage-reporter)。
 **配置客户端并测试 (CLI)**
 
 本地注意也要先安装 openviking 才能使用 CLI 工具, 然后在 ovcli.conf 配置好服务端地址
