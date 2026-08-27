@@ -50,6 +50,7 @@ from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.config.embedding_config import SUMMARY_TEXT_SOURCES
+from openviking.utils.background_tasks import spawn_background_task
 
 logger = get_logger(__name__)
 
@@ -231,7 +232,7 @@ class ReindexExecutor:
                 details={"uri": uri},
             )
 
-        asyncio.create_task(
+        spawn_background_task(
             self._run_tracked(
                 task.task_id,
                 uri=uri,

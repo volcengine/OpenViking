@@ -53,6 +53,7 @@ from openviking_cli.exceptions import (
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
+from openviking.utils.background_tasks import spawn_background_task
 
 logger = get_logger(__name__)
 
@@ -361,7 +362,7 @@ async def migrate_legacy_data(
         account_id=SYSTEM_TASK_ACCOUNT_ID,
         user_id=SYSTEM_TASK_USER_ID,
     )
-    asyncio.create_task(
+    spawn_background_task(
         _run_legacy_migration_task(
             task.task_id,
             migration,

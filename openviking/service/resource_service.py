@@ -78,6 +78,7 @@ from openviking_cli.exceptions import (
     NotInitializedError,
 )
 from openviking_cli.utils import get_logger
+from openviking.utils.background_tasks import spawn_background_task
 
 if TYPE_CHECKING:
     from openviking.connector.delegate import ConnectorDelegate
@@ -2046,7 +2047,7 @@ class ResourceService:
                 result["task_id"] = task.task_id
                 if telemetry_id:
                     monitor_started = True
-                    asyncio.create_task(
+                    spawn_background_task(
                         self._monitor_queue_processing(
                             task.task_id,
                             telemetry_id,

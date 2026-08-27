@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 
 from openviking.session.train.context import ExecutionContext
 from openviking.session.train.domain import (
+from openviking.utils.background_tasks import spawn_background_task
     Case,
     CriterionResult,
     Experience,
@@ -389,7 +390,10 @@ def create_dataset_service_app(
     async def execute_rollout(request: RolloutExecuteRequest) -> dict[str, Any]:
         case = case_from_dict(request.case)
         execution = await app.state.rollout_executions.create(case_name=case.name)
-        asyncio.create_task(_run_rollout_execution(app, execution.execution_id, request))
+        spawn_background_task(
+            _run_rollout_execution(app, execution.execution_id, request),
+            name=f"rollout:{execution.execution_id}",
+        )
         return execution_to_dict(execution)
 
     @app.get("/v1/rollouts/executions/{execution_id}")
