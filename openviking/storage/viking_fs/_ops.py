@@ -3,6 +3,7 @@
 """Core filesystem operations mixin for VikingFS."""
 
 import asyncio
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
@@ -137,7 +138,9 @@ class _OpsMixin:
         """
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 
-        await self._ensure_access(uri, ctx, action=AclAction.MANAGE)
+        guard_ctx = replace(self._ctx_or_default(ctx), bypass_acl=True)
+        await self._ensure_access(uri, guard_ctx, action=AclAction.MANAGE)
+        await self._ensure_access(uri, ctx, action=AclAction.WRITE)
         path = self._uri_to_path(uri, ctx=ctx)
         target_uri = self._path_to_uri(path, ctx=ctx)
 
@@ -164,6 +167,8 @@ class _OpsMixin:
                 if mapped is not None:
                     raise mapped from exc
                 raise
+            if recursive:
+                await self._ensure_access(target_uri, ctx, action=AclAction.MANAGE)
             # Path does not exist: clean up any orphan index records and return
             uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
             uris_to_delete.append(target_uri)
@@ -174,6 +179,7 @@ class _OpsMixin:
             return {"estimated_deleted_count": estimated_count}
 
         if is_dir:
+            await self._ensure_access(target_uri, ctx, action=AclAction.MANAGE)
             if not recursive:
                 raise FailedPreconditionError(
                     f"Cannot remove directory without --recursive: {uri}",
@@ -203,7 +209,8 @@ class _OpsMixin:
                 else []
             )
             uris_to_delete.append(target_uri)
-            await self._ensure_access_many(uris_to_delete, ctx, action=AclAction.MANAGE)
+            if is_dir:
+                await self._ensure_access_many(uris_to_delete, ctx, action=AclAction.MANAGE)
             real_ctx = self._ctx_or_default(ctx)
             estimated_count = await _estimate_deleted_count(path, real_ctx)
             await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
@@ -248,7 +255,9 @@ class _OpsMixin:
         """
 
         acl_manager = self.acl_manager
-        await self._ensure_access(old_uri, ctx, action=AclAction.MANAGE)
+        guard_ctx = replace(self._ctx_or_default(ctx), bypass_acl=True)
+        await self._ensure_access(old_uri, guard_ctx, action=AclAction.MANAGE)
+        await self._ensure_access(old_uri, ctx, action=AclAction.WRITE)
         await self._ensure_access(new_uri, ctx, action=AclAction.WRITE)
         old_path = self._uri_to_path(old_uri, ctx=ctx)
         new_path = self._uri_to_path(new_uri, ctx=ctx)
@@ -266,6 +275,9 @@ class _OpsMixin:
                     raise mapped from exc
                 raise
             raise FileNotFoundError(f"mv source not found: {old_uri}") from exc
+
+        if is_dir:
+            await self._ensure_access(old_uri, ctx, action=AclAction.MANAGE)
 
         if not is_dir:
             if new_uri.rstrip("/") != new_uri:
@@ -317,7 +329,8 @@ class _OpsMixin:
                 else []
             )
             uris_to_move.append(target_uri)
-            await self._ensure_access_many(uris_to_move, ctx, action=AclAction.MANAGE)
+            if is_dir:
+                await self._ensure_access_many(uris_to_move, ctx, action=AclAction.MANAGE)
 
             # Check if it's temp directory (files already encrypted)
             is_temp = old_uri.startswith("viking://temp/")
@@ -1403,7 +1416,7 @@ class _OpsMixin:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Move file."""
-        await self._ensure_access(from_uri, ctx, action=AclAction.MANAGE)
+        await self._ensure_access(from_uri, ctx, action=AclAction.WRITE)
         await self._ensure_access(to_uri, ctx, action=AclAction.WRITE)
         from_path = self._uri_to_path(from_uri, ctx=ctx)
 
