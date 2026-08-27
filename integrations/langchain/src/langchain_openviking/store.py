@@ -52,10 +52,6 @@ else:
 
 logger = logging.getLogger(__name__)
 
-_PATH_KEY_MARKER = "__openviking_path_key_v1__"
-_ABSOLUTE_PATH_KIND = "abs"
-_RELATIVE_PATH_KIND = "rel"
-
 
 class OpenVikingStore(BaseStore):
     """LangGraph ``BaseStore`` persisted and indexed through OpenViking.
@@ -63,9 +59,9 @@ class OpenVikingStore(BaseStore):
     Values are stored as JSON records under ``<root_uri>/data``. A separate
     markdown projection under ``<root_uri>/index`` gives OpenViking semantic
     retrieval a compact document to index for query-based ``search`` calls.
-    Keys without slashes keep the original one-segment URI layout. Absolute
-    and relative POSIX path keys use a versioned hierarchy so separators are
-    represented as URI path segments instead of the rejected ``%2F`` escape.
+    Every key remains one URI path segment. Encoded slash and backslash
+    separators use adapter-level escape tokens because OpenViking rejects
+    ``%2F`` and ``%5C`` within a URI segment.
 
     Args:
         root_uri: Base URI for the store. Defaults to the ``viking://~`` home alias,
@@ -151,14 +147,9 @@ class OpenVikingStore(BaseStore):
         return await asyncio.to_thread(lambda: self.batch(list(ops)))
 
     def get(self, namespace: tuple[str, ...], key: str, *, refresh_ttl: Any = None) -> Any:
-        record = None
-        for uri in self._data_uri_candidates(namespace, key):
-            try:
-                record = self._read_record(uri)
-                break
-            except Exception:
-                continue
-        if record is None:
+        try:
+            record = self._read_record(self._data_uri(namespace, key))
+        except Exception:
             return None
         return Item(
             namespace=tuple(record["namespace"]),
@@ -195,10 +186,8 @@ class OpenVikingStore(BaseStore):
         self._write(index_uri, self._index_document(record, effective_index))
 
     def delete(self, namespace: tuple[str, ...], key: str) -> None:
-        for uri in self._data_uri_candidates(namespace, key):
-            self._remove(uri)
-        for uri in self._index_uri_candidates(namespace, key):
-            self._remove(uri)
+        self._remove(self._data_uri(namespace, key))
+        self._remove(self._index_uri(namespace, key))
 
     def search(
         self,
@@ -384,12 +373,6 @@ class OpenVikingStore(BaseStore):
     def _index_uri(self, namespace: tuple[str, ...], key: str) -> str:
         return _record_uri(self._index_prefix_uri(namespace), key, ".md")
 
-    def _data_uri_candidates(self, namespace: tuple[str, ...], key: str) -> tuple[str, ...]:
-        return _record_uri_candidates(self._data_prefix_uri(namespace), key, ".json")
-
-    def _index_uri_candidates(self, namespace: tuple[str, ...], key: str) -> tuple[str, ...]:
-        return _record_uri_candidates(self._index_prefix_uri(namespace), key, ".md")
-
     def _data_prefix_uri(self, namespace: tuple[str, ...]) -> str:
         return _join_uri(self.root_uri, "data", *namespace)
 
@@ -464,38 +447,17 @@ def _join_uri(root: str, *segments: str) -> str:
 
 
 def _record_uri(prefix: str, key: str, suffix: str) -> str:
-    path = _path_key_parts(key)
-    if path is None:
-        return f"{prefix}/{_segment(key)}{suffix}"
-    kind, parts = path
-    return _join_uri(
-        prefix,
-        _PATH_KEY_MARKER,
-        kind,
-        *parts[:-1],
-        f"{parts[-1]}{suffix}",
-    )
+    return f"{prefix}/{_encode_key_segment(key)}{suffix}"
 
 
-def _record_uri_candidates(prefix: str, key: str, suffix: str) -> tuple[str, ...]:
-    uri = _record_uri(prefix, key, suffix)
-    if "/" not in key:
-        return (uri,)
-    legacy_uri = f"{prefix}/{_segment(key)}{suffix}"
-    return (uri, legacy_uri) if legacy_uri != uri else (uri,)
+def _encode_key_segment(key: str) -> str:
+    # quote(..., safe="") encodes a literal "!" as "%21", leaving bare "!"
+    # available as an unambiguous adapter escape marker.
+    return _segment(key).replace("%2F", "!s").replace("%5C", "!b")
 
 
-def _path_key_parts(key: str) -> tuple[str, tuple[str, ...]] | None:
-    if "/" not in key:
-        return None
-    kind = _ABSOLUTE_PATH_KIND if key.startswith("/") else _RELATIVE_PATH_KIND
-    parts = tuple(key.split("/")[1:] if kind == _ABSOLUTE_PATH_KIND else key.split("/"))
-    if not parts or any(not part or part in {".", ".."} or "\\" in part for part in parts):
-        raise ValueError(
-            "OpenVikingStore path keys must be canonical POSIX paths without "
-            "empty, '.', '..', or backslash segments."
-        )
-    return kind, parts
+def _decode_key_segment(segment: str) -> str:
+    return unquote(segment.replace("!s", "%2F").replace("!b", "%5C"))
 
 
 def _parse_canonicalized_record_uri(
@@ -542,26 +504,8 @@ def _identity_relative_root_tail(classification: UriClassification) -> tuple[str
 def _parse_record_parts(parts: list[str]) -> tuple[tuple[str, ...], str] | None:
     if not parts or not parts[-1]:
         return None
-    decoded = [unquote(part) for part in parts]
-    try:
-        marker_index = decoded.index(_PATH_KEY_MARKER)
-    except ValueError:
-        namespace = tuple(decoded[:-1])
-        key = decoded[-1]
-        return namespace, key
-
-    if marker_index + 2 >= len(decoded):
-        return tuple(decoded[:-1]), decoded[-1]
-    kind = decoded[marker_index + 1]
-    if kind not in {_ABSOLUTE_PATH_KIND, _RELATIVE_PATH_KIND}:
-        return tuple(decoded[:-1]), decoded[-1]
-    key_parts = decoded[marker_index + 2 :]
-    if any(not part or part in {".", ".."} or "\\" in part for part in key_parts):
-        return None
-    namespace = tuple(decoded[:marker_index])
-    key = "/".join(key_parts)
-    if kind == _ABSOLUTE_PATH_KIND:
-        key = f"/{key}"
+    namespace = tuple(unquote(part) for part in parts[:-1])
+    key = _decode_key_segment(parts[-1])
     return namespace, key
 
 

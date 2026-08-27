@@ -1224,79 +1224,108 @@ def test_langgraph_store_round_trip_and_semantic_search():
     assert store.list_namespaces(prefix=("users",)) == [("users", "ada")]
 
 
-def test_langgraph_store_round_trips_hierarchical_path_keys():
+def test_langgraph_store_round_trips_separator_keys_as_single_uri_segments():
     client = InMemoryOpenVikingClient()
     store = OpenVikingStore(client=client)
     namespace = ("filesystem", "user-a")
+    cases = {
+        "profile": "profile",
+        "/docs/readme.md": "!sdocs!sreadme.md",
+        "notes/todo.md": "notes!stodo.md",
+        "/": "!s",
+        "/docs/": "!sdocs!s",
+        "docs//readme.md": "docs!s!sreadme.md",
+        r"docs\readme.md": "docs!breadme.md",
+        "!sAGENTS.md": "%21sAGENTS.md",
+        "!bAGENTS.md": "%21bAGENTS.md",
+        "%2F": "%252F",
+        ".": ".",
+        "..": "..",
+        "中/文": "%E4%B8%AD!s%E6%96%87",
+    }
 
-    store.put(namespace, "/docs/readme.md", {"policy": "cobalt deployment"})
-    store.put(namespace, "notes/todo.md", {"task": "amber checklist"})
+    for key, encoded in cases.items():
+        policy = "cobalt deployment" if key == "/docs/readme.md" else "amber checklist"
+        store.put(namespace, key, {"key": key, "policy": policy})
+        data_uri = f"viking://~/memories/langgraph_store/data/filesystem/user-a/{encoded}.json"
+        index_uri = f"viking://~/memories/langgraph_store/index/filesystem/user-a/{encoded}.md"
+        assert data_uri in client.records
+        assert index_uri in client.records
 
-    absolute_data_uri = (
-        "viking://~/memories/langgraph_store/data/filesystem/user-a/"
-        "__openviking_path_key_v1__/abs/docs/readme.md.json"
-    )
-    absolute_index_uri = (
-        "viking://~/memories/langgraph_store/index/filesystem/user-a/"
-        "__openviking_path_key_v1__/abs/docs/readme.md.md"
-    )
-    relative_data_uri = (
-        "viking://~/memories/langgraph_store/data/filesystem/user-a/"
-        "__openviking_path_key_v1__/rel/notes/todo.md.json"
-    )
-    assert absolute_data_uri in client.records
-    assert absolute_index_uri in client.records
-    assert relative_data_uri in client.records
     assert all("%2F" not in uri for uri in client.records)
 
-    assert store.get(namespace, "/docs/readme.md").value["policy"] == "cobalt deployment"
-    assert store.get(namespace, "notes/todo.md").value["task"] == "amber checklist"
-    assert {item.key for item in store.search(namespace)} == {
-        "/docs/readme.md",
-        "notes/todo.md",
-    }
+    for key in cases:
+        item = store.get(namespace, key)
+        assert item is not None
+        assert item.key == key
+        assert item.value["key"] == key
+
+    assert {item.key for item in store.search(namespace, limit=100)} == set(cases)
     semantic = store.search(namespace, query="cobalt", limit=5)
     assert [item.key for item in semantic] == ["/docs/readme.md"]
     assert store.list_namespaces(prefix=("filesystem",)) == [namespace]
 
     store.delete(namespace, "/docs/readme.md")
-    assert absolute_data_uri not in client.records
-    assert absolute_index_uri not in client.records
+    assert (
+        "viking://~/memories/langgraph_store/data/filesystem/user-a/!sdocs!sreadme.md.json"
+    ) not in client.records
+    assert (
+        "viking://~/memories/langgraph_store/index/filesystem/user-a/!sdocs!sreadme.md.md"
+    ) not in client.records
 
 
-def test_langgraph_store_reads_legacy_percent_encoded_path_key():
-    namespace = ("filesystem", "user-a")
-    key = "/AGENTS.md"
-    legacy_uri = "viking://~/memories/langgraph_store/data/filesystem/user-a/%2FAGENTS.md.json"
-    now = "2026-08-26T00:00:00+00:00"
-    client = InMemoryOpenVikingClient(
-        {
-            legacy_uri: json.dumps(
-                {
-                    "namespace": list(namespace),
-                    "key": key,
-                    "value": {"content": "legacy record"},
-                    "created_at": now,
-                    "updated_at": now,
-                }
-            )
-        }
-    )
+def test_langgraph_store_distinguishes_separator_escapes_from_literal_markers():
+    client = InMemoryOpenVikingClient()
     store = OpenVikingStore(client=client)
+    namespace = ("filesystem", "user-a")
+    cases = {
+        "/AGENTS.md": "!sAGENTS.md",
+        "!sAGENTS.md": "%21sAGENTS.md",
+        r"\AGENTS.md": "!bAGENTS.md",
+        "!bAGENTS.md": "%21bAGENTS.md",
+    }
 
-    item = store.get(namespace, key)
+    for key in cases:
+        store.put(namespace, key, {"key": key})
 
-    assert item is not None
-    assert item.key == key
-    assert item.value["content"] == "legacy record"
+    expected_data_uris = {
+        f"viking://~/memories/langgraph_store/data/filesystem/user-a/{encoded}.json"
+        for encoded in cases.values()
+    }
+    assert expected_data_uris.issubset(client.records)
+    assert len(expected_data_uris) == len(cases)
+
+    for key in cases:
+        item = store.get(namespace, key)
+        assert item is not None
+        assert item.key == key
+        assert item.value["key"] == key
 
 
-@pytest.mark.parametrize("key", ["/", "/docs//readme.md", "/docs/../readme.md", r"/docs\readme.md"])
-def test_langgraph_store_rejects_noncanonical_path_keys(key):
-    store = OpenVikingStore(client=InMemoryOpenVikingClient())
+def test_langgraph_store_keeps_namespace_and_key_identity_collision_free():
+    client = InMemoryOpenVikingClient()
+    store = OpenVikingStore(client=client)
+    marker = "__openviking_path_key_v1__"
+    path_identity = (("filesystem", "user-a"), "/docs")
+    namespace_identity = (("filesystem", "user-a", marker, "abs"), "docs")
 
-    with pytest.raises(ValueError, match="canonical POSIX paths"):
-        store.put(("filesystem",), key, {"content": "invalid"})
+    store.put(*path_identity, {"identity": "path-key"})
+    store.put(*namespace_identity, {"identity": "namespace"})
+
+    path_uri = "viking://~/memories/langgraph_store/data/filesystem/user-a/!sdocs.json"
+    namespace_uri = (
+        "viking://~/memories/langgraph_store/data/filesystem/user-a/"
+        "__openviking_path_key_v1__/abs/docs.json"
+    )
+    assert path_uri in client.records
+    assert namespace_uri in client.records
+    assert path_uri != namespace_uri
+    assert store.get(*path_identity).value["identity"] == "path-key"
+    assert store.get(*namespace_identity).value["identity"] == "namespace"
+    assert store.list_namespaces(prefix=("filesystem",)) == [
+        ("filesystem", "user-a"),
+        ("filesystem", "user-a", marker, "abs"),
+    ]
 
 
 def test_langgraph_store_semantic_search_keeps_peer_id_out_of_retrieval():
