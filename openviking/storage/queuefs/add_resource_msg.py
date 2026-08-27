@@ -51,6 +51,7 @@ class AddResourceMsg:
     skip_watch_management: bool = True
     defer_target_resolution: bool = False
     understanding_response_id: Optional[str] = None
+    understanding_file_id: Optional[str] = None
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
     parse_mode: str = "default"
     tags: Optional[list[str]] = None
@@ -69,10 +70,20 @@ class AddResourceMsg:
         if phase is AddResourcePhase.SOURCE and self.prepared is not None:
             raise ValueError("source jobs cannot contain prepared post-process data")
         if self.prepared is not None and (
-            self.staged_source is not None or self.understanding_response_id is not None
+            self.staged_source is not None
+            or self.understanding_response_id is not None
+            or self.understanding_file_id is not None
         ):
             raise ValueError("post_process jobs cannot contain source payloads")
-        if self.staged_source is not None and self.understanding_response_id is not None:
+        source_payload_count = sum(
+            payload is not None
+            for payload in (
+                self.staged_source,
+                self.understanding_response_id,
+                self.understanding_file_id,
+            )
+        )
+        if source_payload_count > 1:
             raise ValueError("source jobs cannot contain multiple source payloads")
         self.job_phase = phase
 
@@ -168,6 +179,11 @@ class AddResourceMsg:
             understanding_response_id=(
                 data.get("understanding_response_id")
                 if isinstance(data.get("understanding_response_id"), str)
+                else None
+            ),
+            understanding_file_id=(
+                data.get("understanding_file_id")
+                if isinstance(data.get("understanding_file_id"), str)
                 else None
             ),
             processing_mode=data.get("processing_mode", DEFAULT_PROCESSING_MODE),

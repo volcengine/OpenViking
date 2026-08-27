@@ -158,6 +158,9 @@ class UnifiedResourceProcessor:
     async def submit_understanding(self, source: str | Path | LocalResource, **kwargs) -> str:
         return await self._get_parser_router().submit(source, **kwargs)
 
+    async def upload_understanding_file(self, source: str | Path | LocalResource) -> str:
+        return await self._get_parser_router().upload_file(source)
+
     @staticmethod
     def _set_resolved_identity(resource: LocalResource, source_name: Optional[str]) -> None:
         meta = resource.meta
@@ -361,7 +364,12 @@ class UnifiedResourceProcessor:
 
     @staticmethod
     def _has_prepared_understanding_response(kwargs: dict) -> bool:
-        from openviking.parse.understanding_api import PREPARED_RESPONSE_ID_ARG
+        from openviking.parse.understanding_api import (
+            PREPARED_FILE_ID_ARG,
+            PREPARED_RESPONSE_ID_ARG,
+        )
 
-        value = kwargs.get(PREPARED_RESPONSE_ID_ARG)
-        return isinstance(value, str) and bool(value.strip())
+        return any(
+            isinstance(kwargs.get(key), str) and bool(kwargs[key].strip())
+            for key in (PREPARED_RESPONSE_ID_ARG, PREPARED_FILE_ID_ARG)
+        )

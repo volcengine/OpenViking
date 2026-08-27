@@ -8,7 +8,11 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from openviking.parse.accessors.base import LocalResource, SourceType
-from openviking.parse.understanding_api import PREPARED_RESPONSE_ID_ARG, UnderstandingAPI
+from openviking.parse.understanding_api import (
+    PREPARED_FILE_ID_ARG,
+    PREPARED_RESPONSE_ID_ARG,
+    UnderstandingAPI,
+)
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_service import ResourceService
 from openviking.service.task_tracker import TaskStatus
@@ -738,6 +742,7 @@ async def test_uat_producer_cancellation_respects_queue_ownership(
     ("field", "value"),
     [
         (PREPARED_RESPONSE_ID_ARG, "response-1"),
+        (PREPARED_FILE_ID_ARG, "file-1"),
         ("parser_backend", "understanding"),
         ("resolved_extension", ".pdf"),
     ],
@@ -788,6 +793,43 @@ async def test_add_resource_job_defers_target_and_expands_prepared_response():
     assert call.kwargs["parent"] == "viking://resources/lark"
     assert call.kwargs[PREPARED_RESPONSE_ID_ARG] == "response-1"
     assert result["root_uri"] == "viking://resources/真实文档标题"
+
+
+@pytest.mark.asyncio
+async def test_add_resource_job_expands_prepared_file_id():
+    service = ResourceService()
+    service._execute_resource_ingestion = AsyncMock(
+        return_value={
+            "status": "success",
+            "root_uri": "viking://resources/uploaded",
+        }
+    )
+    msg = AddResourceMsg(
+        task_id="task-1",
+        path="/tmp/upload_already_cleaned.pdf",
+        source_name="uploaded.pdf",
+        root_uri="viking://resources/uploaded",
+        account_id="account-1",
+        user_id="user-1",
+        role="user",
+        understanding_file_id="file-1",
+    )
+    ctx = RequestContext(
+        user=UserIdentifier("account-1", "user-1"),
+        role=Role.USER,
+    )
+
+    result = await service.execute_add_resource_job(
+        msg,
+        ctx=ctx,
+        resource_lock=None,
+        stage_callback=AsyncMock(),
+    )
+
+    call = service._execute_resource_ingestion.await_args
+    assert call.kwargs[PREPARED_FILE_ID_ARG] == "file-1"
+    assert call.kwargs["parser_backend"] == "understanding"
+    assert result["root_uri"] == "viking://resources/uploaded"
 
 
 @pytest.mark.asyncio
