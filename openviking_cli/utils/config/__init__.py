@@ -53,6 +53,7 @@ from .consts import (
 from .embedding_config import EmbeddingConfig
 from .git_config import GitConfig, GitLocalConfig, GitS3Config
 from .grep_config import GrepConfig, GrepEngine
+from .keyword_config import HybridRetrievalConfig, KeywordConfig
 from .log_config import LogConfig
 from .open_viking_config import (
     OpenVikingConfig,

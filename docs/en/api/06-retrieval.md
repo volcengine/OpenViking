@@ -12,6 +12,14 @@ OpenViking provides multiple retrieval methods, including simple vector similari
 | Default Limit | 10 | 10 |
 | Use Case | Simple queries | Conversational search |
 
+> **Local keyword hybrid (experimental config).** When `keyword.enabled` is on
+> and the local FTS5 sidecar is built, set `retrieval.hybrid.enabled: true` (or
+> pass `hybrid: true` on a request) so `find`/`search` fuse search-time BM25
+> candidates with the dense results. This improves exact-token recall for code
+> names, acronyms, tickers and version strings. Without a remote VikingDB
+> full-text index, `grep` also uses the sidecar for BM25 recall (engine `auto`
+> / `local`), falling back to a filesystem scan when the sidecar is missing.
+
 ## Retrieval Pipeline
 
 The core retrieval pipeline is as follows:

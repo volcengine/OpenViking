@@ -87,7 +87,7 @@ class _GrepMixin:
                 ctx=ctx,
                 content_transform=content_transform,
             )
-        else:  # "vikingdb_then_fs"
+        if resolved_engine == "vikingdb_then_fs":
             return await self._grep_vikingdb_then_fs(
                 uri=uri,
                 pattern=pattern,
@@ -97,45 +97,63 @@ class _GrepMixin:
                 level_limit=level_limit,
                 ctx=ctx,
             )
+        # "local_then_fs"
+        return await self._grep_local_then_fs(
+            uri=uri,
+            pattern=pattern,
+            exclude_uri=exclude_uri,
+            case_insensitive=case_insensitive,
+            node_limit=node_limit,
+            level_limit=level_limit,
+            ctx=ctx,
+        )
 
     async def _resolve_grep_engine(
         self, engine: GrepEngine, uri: str, ctx, switch_to_remote_threshold: int = 10000
     ) -> str:
-        """Resolve the actual grep engine to use."""
+        """Resolve the actual grep engine to use.
+
+        Resolution order for ``engine="auto"``:
+        1. remote VikingDB BM25 when the backend stores the ``content`` field and
+           the record count is at/above ``switch_to_remote_threshold``;
+        2. the local FTS5 keyword sidecar when enabled and ready;
+        3. filesystem scan.
+        """
         if engine == "fs":
             return "fs"
 
-        # auto mode: check vikingdb availability
         vector_store = self._get_vector_store()
-        if not vector_store:
-            return "fs"
+        remote_available = False
+        if vector_store is not None:
+            backend_type = getattr(vector_store, "_backend_type", "unknown")
+            # Keep this set consistent with ``CollectionAdapter.USE_CONTENT_FIELD``:
+            # only these backends store the ``content`` field required for full-text grep.
+            if backend_type in ("volcengine", "vikingdb"):
+                remote_available = await self._collection_has_fulltext(vector_store, ctx)
 
-        backend_type = getattr(vector_store, "_backend_type", "unknown")
-        # Keep this set consistent with ``CollectionAdapter.USE_CONTENT_FIELD``:
-        # only these backends store the ``content`` field required for full-text grep.
-        if backend_type not in ("volcengine", "vikingdb"):
-            return "fs"
+        if engine == "vikingdb":
+            if remote_available:
+                return "vikingdb_then_fs"
+            return "local_then_fs" if self._keyword_available(ctx) else "fs"
 
-        # Check collection has content field and FullText config
-        if not await self._collection_has_fulltext(vector_store, ctx):
-            return "fs"
+        if engine == "local":
+            return "local_then_fs" if self._keyword_available(ctx) else "fs"
 
-        # switch_to_remote_threshold=0 means always use vikingdb
-        if switch_to_remote_threshold == 0:
-            return "vikingdb_then_fs"
-
-        # Check data volume threshold
-        try:
-            count = await self._get_cached_count(uri, ctx)
-            if count < switch_to_remote_threshold:
-                return "fs"
-        except Exception:
-            logger.debug(
-                "grep engine=auto: count() check failed, falling back to fs", exc_info=True
-            )
-            return "fs"
-
-        return "vikingdb_then_fs"
+        # engine == "auto"
+        if remote_available:
+            # switch_to_remote_threshold=0 means always use vikingdb
+            if switch_to_remote_threshold == 0:
+                return "vikingdb_then_fs"
+            try:
+                count = await self._get_cached_count(uri, ctx)
+                if count >= switch_to_remote_threshold:
+                    return "vikingdb_then_fs"
+            except Exception:
+                logger.debug(
+                    "grep engine=auto: count() check failed, checking local keyword",
+                    exc_info=True,
+                )
+        return "local_then_fs" if self._keyword_available(ctx) else "fs"
 
     async def _collection_has_fulltext(self, vector_store, ctx) -> bool:
         """Check if collection has content field and FullText config.
@@ -305,6 +323,82 @@ class _GrepMixin:
             return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
 
         # Step 2: local fs precise matching on candidate files
+        return await self._grep_in_files(
+            candidate_uris,
+            pattern,
+            case_insensitive,
+            node_limit,
+            ctx,
+        )
+
+    async def _grep_local_then_fs(
+        self,
+        uri: str,
+        pattern: str,
+        exclude_uri: Optional[str],
+        case_insensitive: bool,
+        node_limit: Optional[int],
+        level_limit: int,
+        ctx: Optional[RequestContext] = None,
+    ) -> Dict:
+        """Local FTS5 keyword recall + local fs precise matching.
+
+        Mirrors ``_grep_vikingdb_then_fs`` but recalls candidate URIs from the
+        local SQLite FTS5 sidecar instead of a remote VikingDB BM25 index. The
+        final regex match always runs against the on-disk content
+        (``_grep_in_files``), so the sidecar only accelerates recall.
+        """
+        kfs = self._get_keyword_fs()
+        if kfs is None or not self._keyword_available(ctx):
+            return await self._grep_fs(
+                uri=uri,
+                pattern=pattern,
+                exclude_uri=exclude_uri,
+                case_insensitive=case_insensitive,
+                node_limit=node_limit,
+                level_limit=level_limit,
+                ctx=ctx,
+            )
+
+        real_ctx = self._ctx_or_default(ctx)
+        query = " ".join(kw.strip() for kw in pattern.split("|") if kw.strip())
+        if not query.strip():
+            return await self._grep_fs(
+                uri=uri,
+                pattern=pattern,
+                exclude_uri=exclude_uri,
+                case_insensitive=case_insensitive,
+                node_limit=node_limit,
+                level_limit=level_limit,
+                ctx=ctx,
+            )
+
+        remote_return_limit = min(node_limit * 5, 100000) if node_limit else 100000
+        try:
+            candidates = kfs.lookup(
+                account_id=real_ctx.account_id,
+                query=query,
+                scope_uri=uri,
+                exclude_uri=exclude_uri.rstrip("/") if exclude_uri else "",
+                limit=remote_return_limit,
+            )
+        except Exception as e:
+            logger.warning(f"grep local keyword recall failed, falling back to fs: {e}")
+            return await self._grep_fs(
+                uri=uri,
+                pattern=pattern,
+                exclude_uri=exclude_uri,
+                case_insensitive=case_insensitive,
+                node_limit=node_limit,
+                level_limit=level_limit,
+                ctx=ctx,
+            )
+
+        candidate_uris = [u for u, _score in candidates]
+        if not candidate_uris:
+            # The keyword index confirms no matching content.
+            return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
+
         return await self._grep_in_files(
             candidate_uris,
             pattern,
