@@ -21,6 +21,10 @@ class SessionCommitMsg:
     # Resolved custom scalar tags to attach to event memories extracted in this
     # commit. Already normalized by the producer; empty means "no tags".
     event_search_tags: List[str] = field(default_factory=list)
+    # How many times this message has already been put back because an earlier
+    # commit for the same session had not reached a terminal state. Only the
+    # consumer sets it; producers leave it at 0.
+    dependency_wait_count: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
