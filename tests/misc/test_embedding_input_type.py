@@ -137,6 +137,74 @@ class TestEmbeddingConfigContextualEmbedders:
         call_kwargs = mock_embedder_class.call_args[1]
         assert "query_param" not in call_kwargs
         assert "document_param" not in call_kwargs
+        assert "input_type" not in call_kwargs
+
+    @patch("openviking.models.embedder.OpenAIDenseEmbedder")
+    def test_get_embedder_openai_passes_explicit_multimodal_input(
+        self, mock_embedder_class
+    ):
+        """Explicit input=multimodal should opt OpenAI-compatible embedders into multimodal."""
+        mock_embedder_class.return_value = MagicMock()
+        config = EmbeddingConfig(
+            dense=EmbeddingModelConfig(
+                model="custom-multimodal-embedding",
+                provider="openai",
+                api_key="sk-test",
+                input="multimodal",
+            )
+        )
+
+        config.get_embedder()
+
+        mock_embedder_class.assert_called_once()
+        call_kwargs = mock_embedder_class.call_args[1]
+        assert call_kwargs.get("input_type") == "multimodal"
+
+    @patch("openviking.models.embedder.OpenAIDenseEmbedder")
+    def test_get_embedder_openai_failover_omits_default_input(self, mock_embedder_class):
+        """Failover merging must not turn the default input value into explicit opt-in."""
+        mock_embedder_class.return_value = MagicMock()
+        config = EmbeddingConfig(
+            dense=EmbeddingModelConfig(
+                model="text-embedding-3-small",
+                provider="openai",
+                credentials=[
+                    {"id": "primary", "api_key": "sk-primary"},
+                    {"id": "backup", "api_key": "sk-backup"},
+                ],
+            )
+        )
+
+        config.get_embedder()
+
+        assert mock_embedder_class.call_count == 2
+        for call in mock_embedder_class.call_args_list:
+            assert "input_type" not in call.kwargs
+
+    @patch("openviking.models.embedder.OpenAIDenseEmbedder")
+    def test_get_embedder_openai_failover_passes_explicit_multimodal_input(
+        self, mock_embedder_class
+    ):
+        """Failover credentials should inherit explicit input=multimodal from parent config."""
+        mock_embedder_class.return_value = MagicMock()
+        config = EmbeddingConfig(
+            dense=EmbeddingModelConfig(
+                model="custom-multimodal-embedding",
+                provider="openai",
+                input="multimodal",
+                dimension=1536,
+                credentials=[
+                    {"id": "primary", "api_key": "sk-primary"},
+                    {"id": "backup", "api_key": "sk-backup"},
+                ],
+            )
+        )
+
+        config.get_embedder()
+
+        assert mock_embedder_class.call_count == 2
+        for call in mock_embedder_class.call_args_list:
+            assert call.kwargs.get("input_type") == "multimodal"
 
     @patch("openviking.models.embedder.JinaDenseEmbedder")
     def test_get_embedder_jina_no_params_when_not_set(self, mock_embedder_class):

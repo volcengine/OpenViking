@@ -767,6 +767,11 @@ class EmbeddingConfig(BaseModel):
                         if cfg.encoding_format is not None
                         else {}
                     ),
+                    **(
+                        {"input_type": "multimodal"}
+                        if "input" in cfg.model_fields_set and cfg.input == "multimodal"
+                        else {}
+                    ),
                     **({"extra_body": cfg.extra_body} if cfg.extra_body else {}),
                 },
             ),
@@ -1050,12 +1055,12 @@ class EmbeddingConfig(BaseModel):
         credential_ids = []
 
         for cred in config.credentials:
-            # Create a temporary config merged from the model config and credential
+            # Preserve whether `input` was explicitly set; the default multimodal
+            # value must not opt OpenAI-compatible failover configs into image input.
             merged_config = EmbeddingModelConfig(
                 model=cred.model or config.model,
                 dimension=config.dimension,
                 batch_size=config.batch_size,
-                input=config.input,
                 query_param=config.query_param,
                 document_param=config.document_param,
                 provider=cred.provider or config.provider,
@@ -1077,6 +1082,7 @@ class EmbeddingConfig(BaseModel):
                 enable_fusion=config.enable_fusion,
                 res_level=config.res_level,
                 max_video_frames=config.max_video_frames,
+                **({"input": config.input} if "input" in config.model_fields_set else {}),
             )
             provider = self._require_provider(merged_config.provider)
             embedders.append(self._create_embedder(provider, embedder_type, merged_config))
