@@ -48,6 +48,10 @@ class _MemoryVikingFS:
     async def write_file(self, uri, content, ctx=None, lease_ref=None):
         self.files[uri] = content
 
+    async def rm(self, uri, recursive=False, ctx=None, lease_ref=None):
+        del recursive, ctx, lease_ref
+        self.files.pop(uri, None)
+
 
 @pytest.mark.asyncio
 async def test_resume_queued_commit_continues_phase2(monkeypatch):
@@ -87,6 +91,42 @@ async def test_resume_queued_commit_continues_phase2(monkeypatch):
     assert [
         item.id for item in session._run_memory_extraction.await_args.kwargs["messages"]
     ] == ["archived"]
+
+
+@pytest.mark.asyncio
+async def test_resume_queued_commit_retries_recoverable_memory_failure(monkeypatch):
+    session_uri = "viking://user/default/sessions/session-1"
+    archive_uri = f"{session_uri}/history/archive_001"
+    archived = Message(id="archived", role="user", parts=[TextPart("old")])
+    failed_uri = f"{archive_uri}/.failed.json"
+    files = {
+        f"{archive_uri}/messages.jsonl": f"{archived.to_jsonl()}\n",
+        failed_uri: json.dumps({
+            "stage": "memory_extraction",
+            "error": "temporary model backend failure",
+        }),
+    }
+    viking_fs = _MemoryVikingFS(files)
+    session = Session(viking_fs=viking_fs, session_id="session-1", session_uri=session_uri)
+    tracker = TaskTracker(_TaskStore())
+    set_task_tracker(tracker)
+    monkeypatch.setattr(session, "_run_memory_extraction", AsyncMock())
+    message = SessionCommitMsg(
+        task_id="task-1",
+        session_id="session-1",
+        session_uri=session_uri,
+        archive_uri=archive_uri,
+        user={"account_id": "default", "user_id": "default"},
+        memory_policy={"memory_types": []},
+    )
+
+    try:
+        await session.resume_queued_commit(message)
+    finally:
+        set_task_tracker(None)
+
+    assert failed_uri not in files
+    session._run_memory_extraction.assert_awaited_once()
 
 
 @pytest.mark.asyncio

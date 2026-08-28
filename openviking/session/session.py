@@ -2238,13 +2238,26 @@ class Session:
             if not _is_storage_not_found(exc):
                 raise
         else:
-            await tracker.fail(
-                msg.task_id,
-                str(failed.get("error") or "session commit failed"),
-                account_id=self.ctx.account_id,
-                user_id=self.ctx.user.user_id,
+            failed_stage = str(failed.get("stage") or "")
+            if failed_stage != "memory_extraction":
+                await tracker.fail(
+                    msg.task_id,
+                    str(failed.get("error") or "session commit failed"),
+                    account_id=self.ctx.account_id,
+                    user_id=self.ctx.user.user_id,
+                )
+                return True
+
+            # Phase 1 and messages.jsonl are still durable when only the
+            # model-backed Phase 2 failed. Keep the failure marker for
+            # observability, but remove it before phase-1 reconciliation so a
+            # later queue replay can retry the recoverable extraction.
+            logger.info(
+                "Retrying recoverable Phase 2 failure for session %s: %s",
+                self.session_id,
+                failed.get("error") or "unknown error",
             )
-            return True
+            await self._viking_fs.rm(f"{msg.archive_uri}/.failed.json", ctx=self.ctx)
 
         if not await self._ensure_phase1_ready(msg.archive_uri):
             try:
