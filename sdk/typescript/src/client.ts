@@ -1093,11 +1093,10 @@ export class OpenVikingClient {
   }
   /** List tenant accounts. `name` supports wildcard (* and ?) matching. */
   adminListAccounts(
-    options: { limit?: number; name?: string } = {},
+    options: { name?: string } = {},
   ): Promise<unknown[]> {
     return this.request("GET", "/api/v1/admin/accounts", {
       query: {
-        limit: options.limit ?? 100,
         name: options.name,
       },
     });

@@ -72,8 +72,7 @@ type AdminRegisterUserOptions struct {
 // AdminListAccountsOptions controls AdminListAccountsWithOptions.
 // Name uses wildcard (* and ?) matching against account IDs.
 type AdminListAccountsOptions struct {
-	Limit *int
-	Name  string
+	Name string
 }
 
 // AdminListUsersOptions controls AdminListUsersWithOptions.

@@ -451,13 +451,9 @@ class NewAPIKeyManager:
         """Update a user's role."""
         await self._legacy.set_role(account_id, user_id, role)
 
-    def get_accounts(
-        self,
-        limit: int | None = None,
-        name_filter: str | None = None,
-    ) -> list:
+    def get_accounts(self, name_filter: str | None = None) -> list:
         """List all accounts."""
-        return self._legacy.get_accounts(limit=limit, name_filter=name_filter)
+        return self._legacy.get_accounts(name_filter=name_filter)
 
     def get_users(
         self,

@@ -1420,12 +1420,8 @@ impl HttpClient {
             .await
     }
 
-    pub async fn admin_list_accounts(
-        &self,
-        limit: u32,
-        name: Option<String>,
-    ) -> Result<Value> {
-        let mut params = vec![("limit".to_string(), limit.to_string())];
+    pub async fn admin_list_accounts(&self, name: Option<String>) -> Result<Value> {
+        let mut params = vec![];
         if let Some(n) = name {
             params.push(("name".to_string(), n));
         }

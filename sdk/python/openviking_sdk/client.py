@@ -1694,10 +1694,9 @@ class AsyncHTTPClient:
 
     async def admin_list_accounts(
         self,
-        limit: int = 100,
         name: Optional[str] = None,
     ) -> List[Any]:
-        params: Dict[str, Any] = {"limit": limit}
+        params: Dict[str, Any] = {}
         if name is not None:
             params["name"] = name
         response = await self._request("GET", "/api/v1/admin/accounts", params=params)
@@ -2606,10 +2605,9 @@ class SyncHTTPClient:
 
     def admin_list_accounts(
         self,
-        limit: int = 100,
         name: Optional[str] = None,
     ) -> List[Any]:
-        return run_async(self._async_client.admin_list_accounts(limit=limit, name=name))
+        return run_async(self._async_client.admin_list_accounts(name=name))
 
     def admin_delete_account(self, account_id: str) -> Dict[str, Any]:
         return run_async(self._async_client.admin_delete_account(account_id))

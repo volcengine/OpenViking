@@ -330,7 +330,7 @@ ov --sudo admin create-account acme-private --admin alice \
 **处理流程：**
 1. 验证请求者具有 ROOT 权限
 2. 调用 API Key Manager 获取所有账户列表
-3. 应用可选的 `name` 过滤和分页 `limit`
+3. 应用可选的 `name` 过滤
 4. 返回包含账户 ID、创建时间和用户数量的列表
 
 **代码入口：**
@@ -342,7 +342,6 @@ ov --sudo admin create-account acme-private --admin alice \
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| limit | int | 否 | 100 | 返回账户的最大数量 |
 | name | str | 否 | null | 按账户 ID 过滤（通配符 `*` 和 `?` 匹配） |
 
 #### 3. 使用示例
@@ -359,7 +358,7 @@ curl -X GET http://localhost:1933/api/v1/admin/accounts \
   -H "X-API-Key: <root-key>"
 
 # 带过滤条件（通配符 name 匹配）
-curl -X GET "http://localhost:1933/api/v1/admin/accounts?name=*acme*&limit=50" \
+curl -X GET "http://localhost:1933/api/v1/admin/accounts?name=*acme*" \
   -H "X-API-Key: <root-key>"
 ```
 

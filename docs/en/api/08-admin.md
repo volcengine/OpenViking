@@ -338,7 +338,7 @@ List all workspaces (ROOT only).
 **Processing Flow:**
 1. Verify requester has ROOT privileges
 2. Call API Key Manager to get all accounts
-3. Apply optional `name` filter and pagination `limit`
+3. Apply optional `name` filter
 4. Return list with account ID, creation time, and user count
 
 **Code Entry Points:**
@@ -350,7 +350,6 @@ List all workspaces (ROOT only).
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| limit | int | No | 100 | Maximum number of accounts to return |
 | name | str | No | null | Filter by account ID (wildcard `*` and `?` matching) |
 
 #### 3. Usage Examples
@@ -366,8 +365,8 @@ GET /api/v1/admin/accounts
 curl -X GET http://localhost:1933/api/v1/admin/accounts \
   -H "X-API-Key: <root-key>"
 
-# With filters (wildcard name matching)
-curl -X GET "http://localhost:1933/api/v1/admin/accounts?name=*acme*&limit=50" \
+# With filter (wildcard name matching)
+curl -X GET "http://localhost:1933/api/v1/admin/accounts?name=*acme*" \
   -H "X-API-Key: <root-key>"
 ```
 

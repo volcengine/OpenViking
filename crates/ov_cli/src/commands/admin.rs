@@ -27,12 +27,11 @@ pub async fn create_account(
 
 pub async fn list_accounts(
     client: &HttpClient,
-    limit: u32,
     name: Option<String>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let response = client.admin_list_accounts(limit, name).await?;
+    let response = client.admin_list_accounts(name).await?;
     output_success(&response, output_format, compact);
     Ok(())
 }

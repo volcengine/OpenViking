@@ -34,13 +34,10 @@ func (c *Client) AdminListAccounts(ctx context.Context) ([]any, error) {
 }
 
 // AdminListAccountsWithOptions lists accounts, optionally filtering by a
-// wildcard name pattern and capping the result count.
+// wildcard name pattern.
 func (c *Client) AdminListAccountsWithOptions(ctx context.Context, opts *AdminListAccountsOptions) ([]any, error) {
 	query := url.Values{}
 	if opts != nil {
-		if opts.Limit != nil {
-			queryInt(query, "limit", *opts.Limit)
-		}
 		setQueryString(query, "name", opts.Name)
 	}
 	var result []any

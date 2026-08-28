@@ -380,7 +380,7 @@ async def test_get_users_name_filter(manager: APIKeyManager):
 
 
 async def test_get_accounts_filter(manager: APIKeyManager):
-    """get_accounts supports fnmatch name_filter and limit, mirroring get_users."""
+    """get_accounts supports fnmatch name_filter, mirroring get_users."""
     prefix = f"acme_{uuid.uuid4().hex[:8]}"
     first = f"{prefix}_alpha"
     second = f"{prefix}_beta"
@@ -396,10 +396,7 @@ async def test_get_accounts_filter(manager: APIKeyManager):
     # Exact match (no wildcard) hits a single account
     assert {a["account_id"] for a in manager.get_accounts(name_filter=first)} == {first}
 
-    # limit truncates the result set
-    assert len(manager.get_accounts(name_filter=f"{prefix}*", limit=1)) == 1
-
-    # No filter / no limit returns all accounts (including the default one)
+    # No filter returns all accounts (including the default one)
     all_ids = {a["account_id"] for a in manager.get_accounts()}
     assert {first, second, other} <= all_ids
 

@@ -623,9 +623,8 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
             )
             .await
         }
-        AdminCommands::ListAccounts { limit, name } => {
-            commands::admin::list_accounts(&client, limit, name, ctx.output_format, ctx.compact)
-                .await
+        AdminCommands::ListAccounts { name } => {
+            commands::admin::list_accounts(&client, name, ctx.output_format, ctx.compact).await
         }
         AdminCommands::DeleteAccount { account_id } => {
             commands::admin::delete_account(&client, &account_id, ctx.output_format, ctx.compact)
