@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
+import email.utils
 import logging
 import random
 import re
@@ -9,6 +11,7 @@ import time
 from typing import Awaitable, Callable, TypeVar
 
 from openviking.utils.exceptions import AllCredentialsFailedError
+from openviking_cli.exceptions import NotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +23,7 @@ ERROR_CLASS_AUTH = "auth"  # credential-level 401/403 (key invalid / no permissi
 ERROR_CLASS_CONTENT_SAFETY = "content_safety"  # request content rejected by moderation
 ERROR_CLASS_INPUT_TOO_LARGE = "input_too_large"
 ERROR_CLASS_QUOTA_EXCEEDED = "quota_exceeded"
+ERROR_CLASS_INVALID_RESOURCE = "invalid_resource"
 ERROR_CLASS_TRANSIENT = "transient"
 ERROR_CLASS_UNKNOWN = "unknown"
 
@@ -72,6 +76,7 @@ QUOTA_EXCEEDED_PATTERNS = (
     "usage quota",
 )
 
+_INVALID_RESOURCE_ERRORS = (NotFoundError,)
 _PERMANENT_IO_ERRORS = (FileNotFoundError, PermissionError, IsADirectoryError, NotADirectoryError)
 
 TRANSIENT_API_ERROR_PATTERNS = (
@@ -163,6 +168,8 @@ def classify_api_error(error: Exception) -> str:
         return ERROR_CLASS_UNKNOWN
 
     for exc in (error, getattr(error, "__cause__", None)):
+        if exc is not None and isinstance(exc, _INVALID_RESOURCE_ERRORS):
+            return ERROR_CLASS_INVALID_RESOURCE
         if exc is not None and isinstance(exc, _PERMANENT_IO_ERRORS):
             return ERROR_CLASS_PERMANENT
 
@@ -312,6 +319,35 @@ def rate_limit_retry_delay(attempt: int) -> float:
     return delay * random.uniform(0.8, 1.2)
 
 
+def retry_after_seconds(error: BaseException) -> float | None:
+    """Return a provider Retry-After hint in seconds, if one is available."""
+    for exc in _iter_exception_chain(error):
+        candidates = [getattr(exc, "retry_after", None)]
+        response = getattr(exc, "response", None)
+        headers = getattr(response, "headers", None)
+        if headers is not None:
+            candidates.extend(headers.get(name) for name in ("retry-after", "Retry-After"))
+        for value in candidates:
+            if value is None or not str(value).strip():
+                continue
+            try:
+                raw_value = str(value).strip()
+                try:
+                    seconds = float(raw_value)
+                except ValueError:
+                    retry_at = email.utils.parsedate_to_datetime(raw_value)
+                    if retry_at is None:
+                        continue
+                    if retry_at.tzinfo is None:
+                        retry_at = retry_at.replace(tzinfo=datetime.timezone.utc)
+                    seconds = retry_at.timestamp() - time.time()
+            except (TypeError, ValueError, OverflowError, IndexError):
+                continue
+            if seconds >= 0:
+                return min(seconds, RATE_LIMIT_RETRY_MAX_DELAY_SECONDS)
+    return None
+
+
 def _compute_delay(
     attempt: int,
     *,
@@ -346,12 +382,18 @@ def retry_sync(
             if max_retries <= 0 or attempt >= max_retries or not is_retryable(e):
                 raise
 
-            delay = _compute_delay(
-                attempt,
-                base_delay=base_delay,
-                max_delay=max_delay,
-                jitter=jitter,
-            )
+            if is_retryable_rate_limit_error(e):
+                delay = max(
+                    retry_after_seconds(e) or 0.0,
+                    rate_limit_retry_delay(attempt + 1),
+                )
+            else:
+                delay = _compute_delay(
+                    attempt,
+                    base_delay=base_delay,
+                    max_delay=max_delay,
+                    jitter=jitter,
+                )
             if logger:
                 logger.warning(
                     "%s failed with retryable error (retry %d/%d): %s; retrying in %.2fs",
@@ -386,12 +428,18 @@ async def retry_async(
             if max_retries <= 0 or attempt >= max_retries or not is_retryable(e):
                 raise
 
-            delay = _compute_delay(
-                attempt,
-                base_delay=base_delay,
-                max_delay=max_delay,
-                jitter=jitter,
-            )
+            if is_retryable_rate_limit_error(e):
+                delay = max(
+                    retry_after_seconds(e) or 0.0,
+                    rate_limit_retry_delay(attempt + 1),
+                )
+            else:
+                delay = _compute_delay(
+                    attempt,
+                    base_delay=base_delay,
+                    max_delay=max_delay,
+                    jitter=jitter,
+                )
             if logger:
                 logger.warning(
                     "%s failed with retryable error (retry %d/%d): %s; retrying in %.2fs",

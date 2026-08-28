@@ -41,6 +41,7 @@ from openviking.utils.circuit_breaker import (
 from openviking.utils.model_retry import (
     ERROR_CLASS_AUTH,
     ERROR_CLASS_INPUT_TOO_LARGE,
+    ERROR_CLASS_INVALID_RESOURCE,
     ERROR_CLASS_PERMANENT,
 )
 from openviking_cli.session.user_id import UserIdentifier
@@ -684,6 +685,13 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             pass
 
                         if error_class == ERROR_CLASS_INPUT_TOO_LARGE:
+                            logger.error(error_msg)
+                            self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
+                            request_failed_message = error_msg
+                            report_error_args = (error_msg, data)
+                            return None
+
+                        if error_class == ERROR_CLASS_INVALID_RESOURCE:
                             logger.error(error_msg)
                             self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
                             request_failed_message = error_msg

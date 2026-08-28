@@ -41,6 +41,8 @@ class SemanticMsg:
                    update path.
         propagate_to_parent: Whether a completed directory refresh may enqueue
                    a freshness refresh for its parent.
+        retry_count: Number of queue-level requeues already attempted for this
+                     message. Persisted so worker restarts preserve retry limits.
     """
 
     id: str  # UUID
@@ -71,6 +73,9 @@ class SemanticMsg:
     aggregate_directory: bool = True
     use_hierarchical_aggregation: bool = False
     propagate_to_parent: bool = True
+    # Queue-level retries are durable so worker restarts cannot reset a poison
+    # message back to an unlimited retry loop.
+    retry_count: int = 0
 
     def __init__(
         self,
@@ -96,6 +101,7 @@ class SemanticMsg:
         aggregate_directory: bool = True,
         use_hierarchical_aggregation: bool = False,
         propagate_to_parent: bool = True,
+        retry_count: int = 0,
     ):
         self.id = str(uuid4())
         self.uri = uri
@@ -120,6 +126,10 @@ class SemanticMsg:
         self.aggregate_directory = bool(aggregate_directory)
         self.use_hierarchical_aggregation = bool(use_hierarchical_aggregation)
         self.propagate_to_parent = bool(propagate_to_parent)
+        try:
+            self.retry_count = max(0, int(retry_count or 0))
+        except (TypeError, ValueError):
+            self.retry_count = 0
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert object to dictionary."""
@@ -177,6 +187,7 @@ class SemanticMsg:
             aggregate_directory=data.get("aggregate_directory", True),
             use_hierarchical_aggregation=data.get("use_hierarchical_aggregation", False),
             propagate_to_parent=data.get("propagate_to_parent", True),
+            retry_count=data.get("retry_count", 0),
         )
         if "id" in data and data["id"]:
             obj.id = data["id"]

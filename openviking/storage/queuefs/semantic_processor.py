@@ -3,6 +3,7 @@
 """SemanticProcessor: Processes messages from SemanticQueue, generates .abstract.md and .overview.md."""
 
 import asyncio
+import random
 import re
 import threading
 from contextlib import nullcontext
@@ -60,7 +61,11 @@ from openviking.utils.circuit_breaker import (
     classify_api_error,
 )
 from openviking.utils.ingest_options import IngestOptions
-from openviking.utils.model_retry import ERROR_CLASS_INPUT_TOO_LARGE, ERROR_CLASS_PERMANENT
+from openviking.utils.model_retry import (
+    ERROR_CLASS_INPUT_TOO_LARGE,
+    ERROR_CLASS_INVALID_RESOURCE,
+    ERROR_CLASS_PERMANENT,
+)
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.config import get_openviking_config
@@ -93,6 +98,9 @@ class SemanticProcessor(DequeueHandlerBase):
     _request_stats_by_telemetry_id: Dict[str, RequestQueueStats] = {}
     _request_stats_order: List[str] = []
     _max_cached_stats = 256
+    LOCK_RETRY_BASE_DELAY_SECONDS = 1.0
+    LOCK_RETRY_MAX_DELAY_SECONDS = 10.0
+    DEFAULT_MAX_SEMANTIC_RETRIES = 5
 
     def __init__(self, max_concurrent_llm: int = 32):
         """
@@ -102,6 +110,7 @@ class SemanticProcessor(DequeueHandlerBase):
             max_concurrent_llm: Maximum concurrent LLM calls
         """
         self.max_concurrent_llm = max_concurrent_llm
+        self.max_semantic_retries = self.DEFAULT_MAX_SEMANTIC_RETRIES
         self._default_ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
         self._circuit_breaker = CircuitBreaker()
 
@@ -224,6 +233,52 @@ class SemanticProcessor(DequeueHandlerBase):
         else:
             logger.warning(f"No queue manager available, cannot re-enqueue: {msg.uri}")
 
+    def _record_terminal_semantic_failure(
+        self,
+        msg: SemanticMsg,
+        error: Exception | str,
+        *,
+        reason: str,
+        data: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Record a terminal queue failure before the message is acknowledged."""
+        message = (
+            f"semantic message failed permanently ({reason}, "
+            f"retry_count={msg.retry_count}, uri={msg.uri}): {error}"
+        )
+        self._merge_request_stats(msg.telemetry_id, error_count=1)
+        if msg.telemetry_id and msg.id:
+            get_request_wait_tracker().mark_semantic_failed(msg.telemetry_id, msg.id, message)
+        logger.error(message)
+        self.report_error(message, data if data is not None else {"data": msg.to_dict()})
+
+    def _prepare_semantic_retry(
+        self,
+        msg: SemanticMsg,
+        error: Exception | str,
+        *,
+        data: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Increment the durable retry counter or record a terminal failure."""
+        if msg.retry_count >= self.max_semantic_retries:
+            self._record_terminal_semantic_failure(
+                msg,
+                error,
+                reason="retry_limit_exceeded",
+                data=data,
+            )
+            return False
+        msg.retry_count += 1
+        return True
+
+    @classmethod
+    def _lock_retry_delay(cls, retry_count: int) -> float:
+        delay = min(
+            cls.LOCK_RETRY_MAX_DELAY_SECONDS,
+            cls.LOCK_RETRY_BASE_DELAY_SECONDS * (2 ** max(0, retry_count - 1)),
+        )
+        return delay * random.uniform(0.8, 1.2)
+
     async def _requeue_semantic_msg_after_error(
         self,
         msg: SemanticMsg,
@@ -231,6 +286,10 @@ class SemanticProcessor(DequeueHandlerBase):
         error: Exception,
     ) -> None:
         try:
+            if not self._prepare_semantic_retry(msg, error, data=data):
+                return
+            if isinstance(error, LockAcquisitionError):
+                await asyncio.sleep(self._lock_retry_delay(msg.retry_count))
             await self._reenqueue_semantic_msg(msg)
             self._merge_request_stats(msg.telemetry_id, requeue_count=1)
             get_request_wait_tracker().record_semantic_requeue(msg.telemetry_id)
@@ -349,8 +408,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     # maintenance. Let the newest message aggregate while this
                     # one still summarizes/vectorizes its changed files.
                     logger.info(
-                        "Downgrading stale semantic message to file-only work: "
-                        "uri=%s version=%s",
+                        "Downgrading stale semantic message to file-only work: uri=%s version=%s",
                         msg.uri,
                         msg.coalesce_version,
                     )
@@ -375,6 +433,8 @@ class SemanticProcessor(DequeueHandlerBase):
                 logger.warning(
                     f"Circuit breaker is open, re-enqueueing semantic message: {msg.uri}"
                 )
+                if not self._prepare_semantic_retry(msg, "circuit_breaker_open", data=data):
+                    return None
                 await self._reenqueue_semantic_msg(msg)
                 self._merge_request_stats(msg.telemetry_id, requeue_count=1)
                 get_request_wait_tracker().record_semantic_requeue(msg.telemetry_id)
@@ -538,12 +598,18 @@ class SemanticProcessor(DequeueHandlerBase):
                         msg.telemetry_id, msg.id, str(e)
                     )
                 self.report_error(str(e), data)
-            elif error_class == ERROR_CLASS_PERMANENT:
-                logger.critical(
-                    f"Permanent API error processing semantic message, dropping: {e}",
-                    exc_info=True,
-                )
-                self._circuit_breaker.record_failure(e)
+            elif error_class in (ERROR_CLASS_PERMANENT, ERROR_CLASS_INVALID_RESOURCE):
+                if error_class == ERROR_CLASS_INVALID_RESOURCE:
+                    logger.error(
+                        f"Invalid resource in semantic message, quarantining: {e}",
+                        exc_info=True,
+                    )
+                else:
+                    logger.critical(
+                        f"Permanent API error processing semantic message, dropping: {e}",
+                        exc_info=True,
+                    )
+                    self._circuit_breaker.record_failure(e)
                 if msg is not None:
                     self._merge_request_stats(msg.telemetry_id, error_count=1)
                     get_request_wait_tracker().mark_semantic_failed(
@@ -767,10 +833,7 @@ class SemanticProcessor(DequeueHandlerBase):
         if msg.skip_vectorization:
             logger.info(f"Skipping vectorization for {dir_uri} (requested via SemanticMsg)")
             return
-        if not (
-            wrote_semantics.overview_body_changed
-            or wrote_semantics.abstract_body_changed
-        ):
+        if not (wrote_semantics.overview_body_changed or wrote_semantics.abstract_body_changed):
             logger.info(
                 "Skipping directory vectorization for %s (visible semantics unchanged)",
                 dir_uri,

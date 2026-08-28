@@ -74,3 +74,15 @@ def test_semantic_msg_round_trips_hierarchical_aggregation_policy():
 
     assert restored.use_hierarchical_aggregation is True
     assert restored.propagate_to_parent is False
+
+
+def test_semantic_msg_round_trips_retry_count():
+    msg = SemanticMsg(
+        uri="viking://resources/retry",
+        context_type="resource",
+        retry_count=3,
+    )
+
+    restored = SemanticMsg.from_json(msg.to_json())
+
+    assert restored.retry_count == 3

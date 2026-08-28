@@ -12,8 +12,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+from openviking_cli.exceptions import NotFoundError
 
 
 def _make_msg(uri="viking://user/usr1/memories", context_type="memory", **kwargs):
@@ -195,6 +197,80 @@ async def test_memory_ls_transient_error_requeues():
     assert success_called, "report_success() must fire after successful re-enqueue"
     assert not error_called, "report_error() must NOT fire for transient errors"
     reenqueue_mock.assert_awaited_once()
+    assert reenqueue_mock.await_args.args[0].retry_count == 1
+
+
+@pytest.mark.asyncio
+async def test_memory_transient_retry_limit_reports_terminal_error():
+    processor = SemanticProcessor()
+    processor.max_semantic_retries = 0
+    fake_fs = MagicMock()
+    fake_fs.ls = AsyncMock(side_effect=RuntimeError("500 Internal Server Error"))
+    processor.set_callbacks(
+        lambda: None, lambda: None, lambda message, _data: setattr(processor, "error", message)
+    )
+
+    with (
+        patch(
+            "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+            return_value=fake_fs,
+        ),
+        patch(
+            "openviking.storage.queuefs.semantic_processor.resolve_telemetry",
+            return_value=None,
+        ),
+        patch.object(processor, "_reenqueue_semantic_msg", new=AsyncMock()) as reenqueue,
+    ):
+        await processor.on_dequeue(_build_data(_make_msg()))
+
+    reenqueue.assert_not_awaited()
+    assert "retry_limit_exceeded" in processor.error
+
+
+@pytest.mark.asyncio
+async def test_memory_invalid_resource_is_terminal_without_opening_breaker():
+    processor = SemanticProcessor()
+    fake_fs = MagicMock()
+    fake_fs.ls = AsyncMock(side_effect=NotFoundError("viking://resources/missing", "directory"))
+    processor.set_callbacks(lambda: None, lambda: None, lambda *_: None)
+
+    with (
+        patch(
+            "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+            return_value=fake_fs,
+        ),
+        patch(
+            "openviking.storage.queuefs.semantic_processor.resolve_telemetry",
+            return_value=None,
+        ),
+        patch.object(processor, "_reenqueue_semantic_msg", new=AsyncMock()) as reenqueue,
+    ):
+        await processor.on_dequeue(_build_data(_make_msg()))
+
+    reenqueue.assert_not_awaited()
+    assert processor._circuit_breaker._failure_count == 0
+
+
+@pytest.mark.asyncio
+async def test_lock_error_uses_bounded_retry_backoff():
+    processor = SemanticProcessor()
+    processor.max_semantic_retries = 1
+    processor.set_callbacks(lambda: None, lambda: None, lambda *_: None)
+    lock_error = LockAcquisitionError("path busy")
+
+    with (
+        patch(
+            "openviking.storage.queuefs.semantic_processor.SemanticLockScope.resolve",
+            new=AsyncMock(side_effect=lock_error),
+        ),
+        patch.object(processor, "_reenqueue_semantic_msg", new=AsyncMock()) as reenqueue,
+        patch.object(processor, "_lock_retry_delay", return_value=0) as delay,
+    ):
+        await processor.on_dequeue(_build_data(_make_msg()))
+
+    reenqueue.assert_awaited_once()
+    assert reenqueue.await_args.args[0].retry_count == 1
+    delay.assert_called_once_with(1)
 
 
 @pytest.mark.asyncio
@@ -210,9 +286,7 @@ async def test_memory_write_error_reports_error():
     fake_fs.ls = AsyncMock(return_value=[{"name": "file1.md", "isDir": False}])
     fake_fs.read_file = AsyncMock(return_value="some content")
     fake_fs.write_file = AsyncMock(side_effect=PermissionError("Permission denied"))
-    fake_fs._async_agfs.pathlock_acquire_exact_batch = AsyncMock(
-        return_value={"lease_ref": "test"}
-    )
+    fake_fs._async_agfs.pathlock_acquire_exact_batch = AsyncMock(return_value={"lease_ref": "test"})
     fake_fs._async_agfs.pathlock_release = AsyncMock()
     fake_fs._uri_to_path = MagicMock(
         side_effect=lambda uri, ctx=None: f"/local/acc1/{uri.removeprefix('viking://')}"

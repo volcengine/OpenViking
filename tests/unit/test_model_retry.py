@@ -9,17 +9,90 @@ from openviking.utils.model_retry import (
     ERROR_CLASS_AUTH,
     ERROR_CLASS_CONTENT_SAFETY,
     ERROR_CLASS_INPUT_TOO_LARGE,
+    ERROR_CLASS_INVALID_RESOURCE,
     ERROR_CLASS_PERMANENT,
     ERROR_CLASS_QUOTA_EXCEEDED,
     ERROR_CLASS_TRANSIENT,
     classify_api_error,
+    retry_after_seconds,
     retry_async,
     retry_sync,
 )
+from openviking_cli.exceptions import NotFoundError
 
 
 def test_classify_api_error_recognizes_request_burst_too_fast():
     assert classify_api_error(RuntimeError("RequestBurstTooFast")) == ERROR_CLASS_TRANSIENT
+
+
+def test_classify_not_found_as_invalid_resource():
+    assert (
+        classify_api_error(NotFoundError("viking://resources/missing", "directory"))
+        == ERROR_CLASS_INVALID_RESOURCE
+    )
+
+
+def test_retry_after_supports_seconds_and_http_date(monkeypatch):
+    seconds_error = RuntimeError("429 TooManyRequests")
+    seconds_error.response = type("Response", (), {"headers": {"Retry-After": "19"}})()
+    assert retry_after_seconds(seconds_error) == 19.0
+
+    date_error = RuntimeError("429 TooManyRequests")
+    date_error.response = type(
+        "Response",
+        (),
+        {"headers": {"Retry-After": "Wed, 21 Oct 2015 07:28:00 GMT"}},
+    )()
+    monkeypatch.setattr("openviking.utils.model_retry.time.time", lambda: 1445412450.0)
+    assert retry_after_seconds(date_error) == 30.0
+
+
+def test_retry_after_ignores_invalid_and_expired_values():
+    error = RuntimeError("429 TooManyRequests")
+    error.response = type("Response", (), {"headers": {"Retry-After": "not-a-date"}})()
+    assert retry_after_seconds(error) is None
+
+
+def test_retry_sync_prefers_retry_after_hint(monkeypatch):
+    attempts = {"count": 0}
+    sleeps = []
+    error = RuntimeError("429 TooManyRequests")
+    error.response = type("Response", (), {"headers": {"Retry-After": "19"}})()
+
+    def _call():
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise error
+        return "ok"
+
+    monkeypatch.setattr("openviking.utils.model_retry.time.sleep", sleeps.append)
+    monkeypatch.setattr("openviking.utils.model_retry.random.uniform", lambda *_: 1.0)
+
+    assert retry_sync(_call, max_retries=1) == "ok"
+    assert sleeps == [19.0]
+
+
+@pytest.mark.asyncio
+async def test_retry_async_prefers_retry_after_hint(monkeypatch):
+    attempts = {"count": 0}
+    sleeps = []
+    error = RuntimeError("429 TooManyRequests")
+    error.response = type("Response", (), {"headers": {"Retry-After": "19"}})()
+
+    async def _call():
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise error
+        return "ok"
+
+    async def _sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr("openviking.utils.model_retry.asyncio.sleep", _sleep)
+    monkeypatch.setattr("openviking.utils.model_retry.random.uniform", lambda *_: 1.0)
+
+    assert await retry_async(_call, max_retries=1) == "ok"
+    assert sleeps == [19.0]
 
 
 def test_classify_all_credentials_failed_prefers_transient_over_auth():

@@ -45,7 +45,7 @@ from openviking.storage.viking_vector_index_backend import (
     VikingVectorIndexBackend,
     _SingleAccountBackend,
 )
-from openviking_cli.exceptions import InternalError
+from openviking_cli.exceptions import InternalError, NotFoundError
 from openviking_cli.utils.config.vectordb_config import (
     VectorDBBackendConfig,
     VolcengineConfig,
@@ -615,6 +615,49 @@ async def test_embedding_handler_drops_input_too_large_without_requeue(monkeypat
     monkeypatch.setattr(
         "openviking_cli.utils.config.get_openviking_config",
         lambda: _DummyConfig(_OversizedInputEmbedder()),
+    )
+
+    handler = TextEmbeddingHandler(vikingdb)
+    status = {"success": 0, "requeue": 0, "error": 0}
+    handler.set_callbacks(
+        on_success=lambda: status.__setitem__("success", status["success"] + 1),
+        on_requeue=lambda: status.__setitem__("requeue", status["requeue"] + 1),
+        on_error=lambda *_: status.__setitem__("error", status["error"] + 1),
+    )
+
+    result = await handler.on_dequeue(_build_queue_payload())
+
+    assert result is None
+    assert vikingdb.enqueued == []
+    assert status == {"success": 0, "requeue": 0, "error": 1}
+    assert handler._circuit_breaker._failure_count == 0
+
+
+@pytest.mark.asyncio
+async def test_embedding_handler_drops_invalid_resource_without_requeue(monkeypatch):
+    class _QueueingVikingDB:
+        is_closing = False
+        has_queue_manager = True
+
+        def __init__(self):
+            self.enqueued = []
+
+        async def enqueue_embedding_msg(self, msg):
+            self.enqueued.append(msg)
+            return None
+
+    class _MissingResourceEmbedder:
+        def prepare_embedding_input(self, content):
+            return content
+
+        async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+            del text, is_query
+            raise NotFoundError("viking://resources/missing", "file")
+
+    vikingdb = _QueueingVikingDB()
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(_MissingResourceEmbedder()),
     )
 
     handler = TextEmbeddingHandler(vikingdb)
