@@ -1134,6 +1134,11 @@ class SemanticProcessor(DequeueHandlerBase):
         for line in lines:
             if in_header and line.startswith("#"):
                 continue
+            # A horizontal rule is Markdown structure, not abstract prose.
+            # In particular, keeping a leading `---` would make the generated
+            # `.abstract.md` look like an unterminated YAML frontmatter block.
+            elif in_header and re.fullmatch(r"\s{0,3}([-*_])(?:\s*\1){2,}\s*", line):
+                continue
             elif in_header and line.strip():
                 in_header = False
 

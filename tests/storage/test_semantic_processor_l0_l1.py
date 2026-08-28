@@ -65,6 +65,22 @@ def test_markdown_overview_extracts_multiline_brief_description(monkeypatch):
     assert abstract == "This is the first abstract line.\nThis is the second abstract line."
 
 
+def test_markdown_overview_skips_thematic_break_before_brief_description(monkeypatch):
+    _patch_semantic_limits(monkeypatch)
+    processor = SemanticProcessor()
+    generated = (
+        "### Directory\n"
+        "#### wiki\n\n"
+        "---\n\n"
+        "#### Brief Description:\n"
+        "This directory contains public-service and legal-aid documents.\n"
+    )
+
+    _overview, abstract = processor._normalize_overview_generation(generated)
+
+    assert abstract == "This directory contains public-service and legal-aid documents."
+
+
 def test_directory_coverage_section_is_excluded_from_abstract(monkeypatch):
     _patch_semantic_limits(monkeypatch)
     processor = SemanticProcessor()
