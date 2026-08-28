@@ -132,6 +132,10 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         self.document_param = document_param
         self.encoding_format = encoding_format
         self.extra_body = extra_body
+        # OpenAI-compatible providers may expose embedding models that accept
+        # the same content-part shape used by OpenViking's multimodal pipeline.
+        # Keep this opt-in: official OpenAI text models remain text-only.
+        self.input_type = input_type
         self._provider = provider.lower()
         self.provider = (configured_provider or provider).lower()
         self._client_kwargs: Dict[str, Any] = {"api_key": self.api_key or "no-key"}
@@ -161,6 +165,11 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         self._actual_model_dimension = None
         if self._dimension is None:
             self._dimension = self._detect_dimension()
+
+    @property
+    def supports_multimodal(self) -> bool:
+        """Whether this configured OpenAI-compatible model accepts content parts."""
+        return self.input_type == "multimodal"
 
     def _detect_dimension(self) -> int:
         """Detect dimension by making an actual API call"""
