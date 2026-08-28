@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react'
 import type { PropsWithChildren } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -15,6 +21,24 @@ import {
 
 const previewState = vi.hoisted(() => ({
   override: null as { content: string; fileType: string } | null,
+}))
+
+const previewMocks = vi.hoisted(() => ({
+  renderMermaid: vi.fn(async (_id: string, _source: string) => ({
+    svg: '<svg viewBox="0 0 120 40"><text>Client to server</text></svg>',
+  })),
+}))
+
+vi.mock('@streamdown/mermaid', () => ({
+  mermaid: {
+    getMermaid: () => ({
+      initialize: vi.fn(),
+      render: previewMocks.renderMermaid,
+    }),
+    language: 'mermaid',
+    name: 'mermaid',
+    type: 'diagram',
+  },
 }))
 
 vi.mock('react-i18next', () => ({
@@ -112,7 +136,35 @@ function renderPreview(
   )
 }
 
-describe('FilePreview Markdown links', () => {
+function installImmediateIntersectionObserver() {
+  const originalIntersectionObserver = globalThis.IntersectionObserver
+  class ImmediateIntersectionObserver {
+    disconnect() {}
+    observe(target: Element) {
+      this.callback(
+        [{ isIntersecting: true, target } as IntersectionObserverEntry],
+        this as unknown as IntersectionObserver,
+      )
+    }
+    takeRecords() {
+      return []
+    }
+    unobserve() {}
+
+    constructor(private readonly callback: IntersectionObserverCallback) {}
+  }
+  vi.stubGlobal('IntersectionObserver', ImmediateIntersectionObserver)
+  return () => {
+    vi.stubGlobal('IntersectionObserver', originalIntersectionObserver)
+  }
+}
+
+describe('FilePreview Markdown rendering', () => {
+  beforeEach(() => {
+    previewState.override = null
+    previewMocks.renderMermaid.mockClear()
+  })
+
   it('opens internal Markdown links in the resource preview', () => {
     const onNavigate = vi.fn()
     renderPreview(file, onNavigate)
@@ -124,6 +176,7 @@ describe('FilePreview Markdown links', () => {
 
     expect(onNavigate).toHaveBeenCalledOnce()
     expect(onNavigate).toHaveBeenCalledWith('viking://resources/wiki/target.md')
+    expect(previewMocks.renderMermaid).not.toHaveBeenCalled()
   })
 
   it('opens viking links from a directory overview', () => {
@@ -204,6 +257,58 @@ describe('FilePreview Markdown links', () => {
     expect(screen.queryByRole('link', { name: 'Data' })).toBeNull()
     expect(screen.queryByRole('link', { name: 'Blob' })).toBeNull()
     expect(onNavigate).not.toHaveBeenCalled()
+  })
+
+  it('renders Mermaid fences as diagrams', async () => {
+    previewState.override = {
+      content: [
+        '```mermaid',
+        'graph TD',
+        '    A[Client] --> B[Server]',
+        '```',
+      ].join('\n'),
+      fileType: 'markdown',
+    }
+
+    const restoreIntersectionObserver = installImmediateIntersectionObserver()
+
+    try {
+      const { container } = renderPreview(file, vi.fn())
+
+      const diagram = await screen.findByRole('img', {
+        name: 'Mermaid chart',
+      })
+      await waitFor(() => {
+        expect(diagram.innerHTML).toContain('<svg')
+        expect(diagram.textContent).toContain('Client to server')
+      })
+      expect(previewMocks.renderMermaid).toHaveBeenCalledWith(
+        expect.stringMatching(/^mermaid-/),
+        expect.stringContaining('graph TD\n    A[Client] --> B[Server]'),
+      )
+      expect(container.querySelector('code.language-mermaid')).toBeNull()
+    } finally {
+      restoreIntersectionObserver()
+    }
+  })
+
+  it('shows Mermaid errors with the original source', async () => {
+    previewState.override = {
+      content: ['```mermaid', 'this is not a diagram', '```'].join('\n'),
+      fileType: 'markdown',
+    }
+    previewMocks.renderMermaid.mockRejectedValueOnce(new Error('parse error'))
+    const restoreIntersectionObserver = installImmediateIntersectionObserver()
+
+    try {
+      const { container } = renderPreview(file, vi.fn())
+
+      await screen.findByText(/Mermaid Error:/)
+      expect(container.textContent).toContain('parse error')
+      expect(container.textContent).toContain('this is not a diagram')
+    } finally {
+      restoreIntersectionObserver()
+    }
   })
 
   it('renders directory L0 and L1 frontmatter as independent metadata panels', () => {
