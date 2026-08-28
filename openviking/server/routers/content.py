@@ -9,6 +9,11 @@ from fastapi import APIRouter, Body, Depends, Query
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, ConfigDict, model_validator
 
+from openviking.core.namespace import (
+    is_hidden_by_actor_peer_view,
+    may_include_hidden_actor_peers,
+    resolve_uri,
+)
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
@@ -23,7 +28,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, PermissionDeniedError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -93,6 +98,25 @@ class ReindexRequest(BaseModel):
 
 
 router = APIRouter(prefix="/api/v1/content", tags=["content"])
+
+
+def _authorize_reindex_uri(uri: str, ctx: RequestContext) -> str:
+    """Allow users to reindex only their own private namespace."""
+    if ctx.role != Role.USER:
+        return uri
+
+    target = resolve_uri(uri)
+    if (
+        target.scope != "user"
+        or target.owner_user_id != ctx.user.user_id
+        or is_hidden_by_actor_peer_view(uri, ctx)
+        or may_include_hidden_actor_peers(uri, ctx)
+    ):
+        raise PermissionDeniedError(
+            "USER can only reindex their own user namespace.",
+            resource=uri,
+        )
+    return uri
 
 
 @router.get("/read")
@@ -284,12 +308,13 @@ async def set_tags(
 @router.post("/reindex")
 async def reindex(
     body: ReindexRequest = Body(...),
-    ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN),
+    ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN, Role.USER),
 ):
     """Reindex semantic/vector artifacts for a URI-scoped maintenance target."""
     if body.dry_run and body.mode != "prune_orphans":
         raise InvalidArgumentError("dry_run is only supported for prune_orphans reindex mode.")
     uri = validate_request_viking_uri(resolve_path_variables(body.uri), ctx)
+    uri = _authorize_reindex_uri(uri, ctx)
     service = get_service()
     reindex_kwargs = {
         "uri": uri,
