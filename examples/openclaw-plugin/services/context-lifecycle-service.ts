@@ -372,7 +372,7 @@ export async function commitOpenVikingSession({
         `openviking: commit Phase 2 failed for session=${sessionId}: ${commitResult.error ?? "unknown"}, ` +
           `trace_id=${commitResult.trace_id ?? "none"}`,
       );
-      return false;
+      return commitResult.archived === true;
     }
     if (commitResult.status === "timeout") {
       logger.warn?.(
@@ -1072,22 +1072,30 @@ export async function compactOpenVikingSession({
       keepRecentCount: 0,
     });
     const memCount = totalExtractedMemories(commitResult.memories_extracted);
+    const archived = commitResult.archived === true;
+    let compactReason = "commit_completed";
+    const failCommit = (reason: string, extra: Record<string, unknown> = {}) => {
+      diag("compact_result", ovSessionId, {
+        ok: false,
+        compacted: false,
+        reason,
+        status: commitResult.status,
+        archived: commitResult.archived ?? false,
+        taskId: commitResult.task_id ?? null,
+        ...extra,
+      });
+      return compactFailureResult(reason, tokensBefore, { commit: commitResult });
+    };
 
     if (commitResult.status === "failed") {
       logger.warn?.(
         `openviking: compact commit Phase 2 failed for session=${ovSessionId}: ` +
           `${commitResult.error ?? "unknown"}, trace_id=${commitResult.trace_id ?? "none"}`,
       );
-      diag("compact_result", ovSessionId, {
-        ok: false,
-        compacted: false,
-        reason: "commit_failed",
-        status: commitResult.status,
-        archived: commitResult.archived ?? false,
-        taskId: commitResult.task_id ?? null,
-        error: commitResult.error ?? null,
-      });
-      return compactFailureResult("commit_failed", tokensBefore, { commit: commitResult });
+      if (!archived) {
+        return failCommit("commit_failed", { error: commitResult.error ?? null });
+      }
+      compactReason = "commit_archived_phase2_failed";
     }
 
     if (commitResult.status === "timeout") {
@@ -1095,22 +1103,14 @@ export async function compactOpenVikingSession({
         `openviking: compact commit Phase 2 timed out for session=${ovSessionId}, ` +
           `task_id=${commitResult.task_id ?? "none"}, trace_id=${commitResult.trace_id ?? "none"}`,
       );
-      diag("compact_result", ovSessionId, {
-        ok: false,
-        compacted: false,
-        reason: "commit_timeout",
-        status: commitResult.status,
-        archived: commitResult.archived ?? false,
-        taskId: commitResult.task_id ?? null,
-      });
-      return compactFailureResult("commit_timeout", tokensBefore, { commit: commitResult });
+      return failCommit("commit_timeout");
     }
 
     logger.info(
       `openviking: compact committed session=${ovSessionId}, archived=${commitResult.archived ?? false}, memories=${memCount}, task_id=${commitResult.task_id ?? "none"}, trace_id=${commitResult.trace_id ?? "none"}`,
     );
 
-    if (!commitResult.archived) {
+    if (!archived) {
       logger.info(
         `openviking: compact no archive for session=${ovSessionId}, ` +
           `tokensBefore=${tokensBefore}, tokensAfter=${tokensBefore}`,
@@ -1203,7 +1203,7 @@ export async function compactOpenVikingSession({
     diag("compact_result", ovSessionId, {
       ok: true,
       compacted: true,
-      reason: "commit_completed",
+      reason: compactReason,
       status: commitResult.status,
       archived: commitResult.archived ?? false,
       taskId: commitResult.task_id ?? null,
@@ -1217,7 +1217,7 @@ export async function compactOpenVikingSession({
     return {
       ok: true,
       compacted: true,
-      reason: "commit_completed",
+      reason: compactReason,
       result: {
         summary,
         firstKeptEntryId,

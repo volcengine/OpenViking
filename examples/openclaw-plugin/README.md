@@ -229,6 +229,7 @@ Use it as a complement to auto-capture, not a replacement:
 - it calls `commit(wait=true)` and blocks for completion
 - when an archive exists, it re-reads `latest_archive_overview`
 - it returns updated token estimates, the latest archive id, and summary content
+- if archiving succeeds but Phase 2 reaches a failed terminal state, the compact boundary is still reported as established, with a degraded reason and the task details attached
 - if the summary is too coarse, the model can call `ov_archive_expand` to reopen a specific archive
 
 So `afterTurn()` is closer to "incremental append plus threshold-triggered async commit", while `compact()` is the explicit "wait for archive and compaction to finish" boundary.
