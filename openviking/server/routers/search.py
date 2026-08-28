@@ -44,6 +44,7 @@ from openviking.utils.search_filters import (
 )
 from openviking.utils.tags import build_search_tags_filter
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
+from openviking_cli.retrieve import ContextType
 
 
 def _sanitize_floats(obj: Any) -> Any:
@@ -117,6 +118,17 @@ def _resolve_image_url(image_url: Optional[str], ctx: RequestContext) -> Optiona
     if is_viking_uri(resolved):
         return validate_request_viking_uri(resolved, ctx, field_name="image_url")
     return resolved
+
+
+def _resolve_target_context_type(value: Optional[SearchContextTypeInput]) -> Optional[ContextType]:
+    """Return the context type used for implicit target selection.
+
+    A multi-type filter cannot select one default target tree, so implicit
+    target expansion is only applied for the single ``skill`` value.
+    """
+    if value == ContextType.SKILL.value:
+        return ContextType.SKILL
+    return None
 
 
 class FindRequest(BaseModel):
@@ -350,6 +362,7 @@ async def find(
             filter=effective_filter,
             level=_resolve_levels(request.level) or None,
             image_url=resolved_image_url,
+            context_type=_resolve_target_context_type(request.context_type),
         ),
     )
     result = execution.result
@@ -464,6 +477,7 @@ async def search(
             filter=effective_filter,
             level=_resolve_levels(request.level) or None,
             image_url=resolved_image_url,
+            context_type=_resolve_target_context_type(request.context_type),
         )
 
     execution = await run_operation(

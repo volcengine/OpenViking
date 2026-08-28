@@ -17,6 +17,7 @@ from openviking.storage.viking_fs._base import (
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.image_search import build_multimodal_embedding_input
 from openviking_cli.exceptions import NotFoundError
+from openviking_cli.retrieve import ContextType
 
 
 class _SemanticMixin:
@@ -190,6 +191,7 @@ class _SemanticMixin:
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
         image_url: Optional[str] = None,
+        context_type: Optional[ContextType] = None,
     ):
         """Semantic search.
 
@@ -213,7 +215,7 @@ class _SemanticMixin:
         )
 
         real_ctx = self._ctx_or_default(ctx)
-        retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx)
+        retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx, context_type=context_type)
 
         for target_dir in retrieval_targets.target_directories:
             self._ensure_access(target_dir, ctx)
