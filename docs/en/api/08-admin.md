@@ -58,26 +58,26 @@ Configure `root_api_key` in `~/.openviking/ovcli.conf`:
 
 ## Groups
 
-A group belongs to one account and lets one ACL principal grant access to multiple users. The name is display-only. The server generates an immutable `group_id` and never reuses it after deletion. Only existing users from the same account can be members, and groups cannot be nested.
+A group belongs to one account and lets one ACL principal grant access to multiple users. Its caller-supplied `group_id` follows the same identifier rules as `user_id` and is the account-unique, stable identifier; there is no separate group name. Only existing users from the same account can be members, and groups cannot be nested.
 
 The server adds memberships to `RequestContext.group_ids` for each request. Adding or removing a member takes effect on the next request without rewriting resource ACL or context records. Removing a user also removes all memberships. A group must be empty before deletion.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/admin/accounts/{account_id}/groups` | Create an empty group with `{"name":"Engineering"}` |
+| POST | `/api/v1/admin/accounts/{account_id}/groups` | Create an empty group with `{"group_id":"engineering"}` |
 | GET | `/api/v1/admin/accounts/{account_id}/groups` | List groups |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | Delete an empty group |
 | GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | List members |
-| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Add a member; repeated calls return `added=false` |
+| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Add a member idempotently; repeated calls return `added=true` |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Remove a member; repeated calls return `removed=false` |
 
 ```bash
-ov --sudo admin create-group acme Engineering
-ov --sudo admin add-group-member acme grp_0123 alice
+ov --sudo admin create-group acme engineering
+ov --sudo admin add-group-member acme engineering alice
 ov acl grant viking://resources/project-a \
-  --principal group:grp_0123 --level viewer
-ov --sudo admin remove-group-member acme grp_0123 alice
-ov --sudo admin delete-group acme grp_0123
+  --principal group:engineering --level read
+ov --sudo admin remove-group-member acme engineering alice
+ov --sudo admin delete-group acme engineering
 ```
 
 The Python SDK exposes `admin_create_group`, `admin_list_groups`, `admin_list_group_members`, `admin_add_group_member`, `admin_remove_group_member`, and `admin_delete_group`. The Go SDK uses matching PascalCase method names.
@@ -146,7 +146,7 @@ Content-Type: application/json
 
 `resource_acl.auto_protect_new_content` defaults to `false`. When enabled, newly
 created shared files, directories, and `add-resource` roots grant their creator
-direct `manager` while inheriting the parent ACL. Existing content is not migrated
+direct `manage` while inheriting the parent ACL. Existing content is not migrated
 or modified. Disabling it again affects only later creations; existing ACLs remain
 effective.
 

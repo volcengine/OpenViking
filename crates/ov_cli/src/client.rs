@@ -1556,9 +1556,10 @@ impl HttpClient {
         self.post(&path, &body).await
     }
 
-    pub async fn admin_create_group(&self, account_id: &str, name: &str) -> Result<Value> {
+    pub async fn admin_create_group(&self, account_id: &str, group_id: &str) -> Result<Value> {
         let path = format!("/api/v1/admin/accounts/{}/groups", account_id);
-        self.post(&path, &serde_json::json!({"name": name})).await
+        self.post(&path, &serde_json::json!({"group_id": group_id}))
+            .await
     }
 
     pub async fn admin_list_groups(&self, account_id: &str) -> Result<Value> {

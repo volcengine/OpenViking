@@ -28,7 +28,7 @@ pub async fn set(
     for raw in raw_entries {
         let Some((principal, level)) = raw.split_once('=') else {
             return Err(Error::Client(format!(
-                "Invalid ACL entry '{raw}'. Expected principal=viewer|editor|manager."
+                "Invalid ACL entry '{raw}'. Expected principal=read|write|manage."
             )));
         };
         entries.push(json!({"principal": principal, "level": level}));

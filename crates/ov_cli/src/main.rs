@@ -1914,8 +1914,8 @@ enum AdminCommands {
     CreateGroup {
         #[arg(value_name = "account-id")]
         account_id: String,
-        #[arg(value_name = "name")]
-        name: String,
+        #[arg(value_name = "group-id")]
+        group_id: String,
     },
     /// List groups in an account
     ListGroups {

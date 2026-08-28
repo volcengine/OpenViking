@@ -9,7 +9,6 @@ import hashlib
 import hmac
 import json
 import secrets
-import uuid
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
@@ -33,7 +32,11 @@ from openviking_cli.exceptions import (
     NotFoundError,
     UnauthenticatedError,
 )
-from openviking_cli.session.user_id import validate_account_id, validate_user_id
+from openviking_cli.session.user_id import (
+    validate_account_id,
+    validate_identifier_part,
+    validate_user_id,
+)
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -778,15 +781,16 @@ class LegacyAPIKeyManager:
         """Return the account-scoped groups currently containing the user."""
         return self._user_group_ids.get((account_id, user_id), ())
 
-    async def create_group(self, account_id: str, name: str) -> dict:
-        name = self._normalize_group_name(name)
+    async def create_group(self, account_id: str, group_id: str) -> dict:
+        error = validate_identifier_part(group_id, "group_id")
+        if error:
+            raise InvalidArgumentError(error)
         async with self._reload_lock:
             account = self._require_account(account_id)
-            if any(group.get("name") == name for group in account.groups.values()):
-                raise AlreadyExistsError(name, "group")
-            group_id = f"grp_{uuid.uuid4().hex}"
+            if group_id in account.groups:
+                raise AlreadyExistsError(group_id, "group")
             groups = copy.deepcopy(account.groups)
-            groups[group_id] = {"name": name, "members": []}
+            groups[group_id] = {"members": []}
             await self._replace_groups(account_id, account, groups)
             return self._group_result(group_id, groups[group_id])
 
@@ -794,9 +798,7 @@ class LegacyAPIKeyManager:
         account = self._require_account(account_id)
         return [
             self._group_result(group_id, group)
-            for group_id, group in sorted(
-                account.groups.items(), key=lambda item: (str(item[1].get("name", "")), item[0])
-            )
+            for group_id, group in sorted(account.groups.items())
         ]
 
     def get_group_members(self, account_id: str, group_id: str) -> list[str]:
@@ -810,7 +812,7 @@ class LegacyAPIKeyManager:
                 raise NotFoundError(user_id, "user")
             group = self._require_group(account_id, group_id)
             if user_id in group.get("members", []):
-                return False
+                return True
             groups = copy.deepcopy(account.groups)
             groups[group_id].setdefault("members", []).append(user_id)
             groups[group_id]["members"].sort()
@@ -885,21 +887,9 @@ class LegacyAPIKeyManager:
         return group
 
     @staticmethod
-    def _normalize_group_name(name: str) -> str:
-        if not isinstance(name, str):
-            raise InvalidArgumentError("group name must be a string")
-        normalized = name.strip()
-        if not normalized:
-            raise InvalidArgumentError("group name must not be empty")
-        if len(normalized) > 100:
-            raise InvalidArgumentError("group name must not exceed 100 characters")
-        return normalized
-
-    @staticmethod
     def _group_result(group_id: str, group: dict) -> dict:
         return {
             "group_id": group_id,
-            "name": group.get("name", ""),
             "member_count": len(set(group.get("members", []))),
         }
 

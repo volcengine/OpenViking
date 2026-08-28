@@ -29,16 +29,16 @@ OpenViking 在 VikingFS 之上提供了一套基于 Git 的多版本管理能力
 
 | 操作 | 权限要求 |
 |------|----------|
-| `show(path=...)` / `diff` / `log` | `viewer`（READ） |
-| `commit` | `editor`（WRITE）；目录会递归检查当前全部子节点，任一子节点无权则整次失败 |
-| `restore` 覆盖已有文件 | 文件的 `editor`（WRITE） |
-| `restore` 新建文件 | 父目录的 `editor`（WRITE） |
-| `restore` 删除文件 | 文件的 `manager`（MANAGE） |
+| `show(path=...)` / `diff` / `log` | `read` |
+| `commit` | `write`；目录会递归检查当前全部子节点，任一子节点无权则整次失败 |
+| `restore` 覆盖已有文件 | 文件的 `write` |
+| `restore` 新建文件 | 父目录的 `write` |
+| `restore` 删除文件 | 文件的 `manage` |
 | `.ovgitignore` 读写删除 | ADMIN |
 
 USER 和 ADMIN 调用 `commit`、`log`、`restore` 时必须显式传入 `paths` 或 `project_dir`；`show` 必须传入 `path`，不带 `path` 的全局提交元数据查询只保留给本地 ROOT 模式。用户可以操作自己有权访问的公共资源和自己的 `viking://user/{user_id}/...`，不能访问其他用户空间。目录操作会先完整鉴权，不会静默跳过无权子节点；`restore` 会先鉴权全部写入和删除项，再开始修改。
 
-恢复后的既有节点保留当前 ACL。被恢复的新节点继承当前父目录 ACL，不会把执行 `restore` 的用户额外写成 manager。后台向量重建属于已授权操作的系统工作，不会再次受父目录 ACL 阻断。
+恢复后的既有节点保留当前 ACL。被恢复的新节点继承当前父目录 ACL，不会给执行 `restore` 的用户额外授予 `manage`。后台向量重建属于已授权操作的系统工作，不会再次受父目录 ACL 阻断。
 
 ## API 实现介绍
 

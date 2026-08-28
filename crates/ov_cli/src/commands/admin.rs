@@ -132,12 +132,12 @@ pub async fn remove_user(
 pub async fn create_group(
     client: &HttpClient,
     account_id: &str,
-    name: &str,
+    group_id: &str,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     show_admin(
-        client.admin_create_group(account_id, name).await?,
+        client.admin_create_group(account_id, group_id).await?,
         output_format,
         compact,
     )

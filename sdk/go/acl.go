@@ -6,7 +6,7 @@ import (
 	"net/url"
 )
 
-// ACLEntry grants one user or group a viewer, editor, or manager level.
+// ACLEntry grants one user or group a read, write, or manage level.
 type ACLEntry struct {
 	Principal string `json:"principal"`
 	Level     string `json:"level"`

@@ -369,8 +369,12 @@ async def test_user_and_group_persistence_across_reload(manager_service):
     acct = _uid()
     key = await mgr1.create_account(acct, "alice")
     await mgr1.register_user(acct, "bob")
-    group_id = (await mgr1.create_group(acct, "Engineering"))["group_id"]
-    await mgr1.add_group_member(acct, group_id, "bob")
+    created_group = await mgr1.create_group(acct, "engineering")
+    assert created_group == {"group_id": "engineering", "member_count": 0}
+    group_id = created_group["group_id"]
+    assert await mgr1.add_group_member(acct, group_id, "bob") is True
+    assert await mgr1.add_group_member(acct, group_id, "bob") is True
+    assert mgr1._accounts[acct].groups == {"engineering": {"members": ["bob"]}}
 
     mgr2 = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
     await mgr2.load()

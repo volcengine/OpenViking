@@ -355,7 +355,7 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Show direct and effective permissions.",
             },
             HelpItem {
-                label: "ov acl grant viking://resources/project-a --principal user:bob --level viewer",
+                label: "ov acl grant viking://resources/project-a --principal user:bob --level read",
                 description: "Grant read access to a user.",
             },
         ],

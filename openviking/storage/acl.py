@@ -17,9 +17,9 @@ if TYPE_CHECKING:
 
 
 class AclLevel(str, Enum):
-    VIEWER = "viewer"
-    EDITOR = "editor"
-    MANAGER = "manager"
+    READ = "read"
+    WRITE = "write"
+    MANAGE = "manage"
 
 
 class AclAction(str, Enum):
@@ -34,9 +34,9 @@ class CreatorAclGrant(str, Enum):
 
 
 _LEVEL_RANK = {
-    AclLevel.VIEWER: 1,
-    AclLevel.EDITOR: 2,
-    AclLevel.MANAGER: 3,
+    AclLevel.READ: 1,
+    AclLevel.WRITE: 2,
+    AclLevel.MANAGE: 3,
 }
 _ACL_PREFIXES = ("acl_direct", "acl_inherited")
 ACL_PRINCIPAL_FIELDS = tuple(
@@ -152,7 +152,7 @@ def normalize_acl_level(value: Any) -> AclLevel:
     try:
         return AclLevel(str(value).strip())
     except ValueError as exc:
-        raise InvalidArgumentError("ACL level must be viewer, editor, or manager") from exc
+        raise InvalidArgumentError("ACL level must be read, write, or manage") from exc
 
 
 def _normalize_entries(entries: Iterable[AclEntry | Mapping[str, Any]]) -> list[AclEntry]:
@@ -177,9 +177,9 @@ def entries_to_direct(entries: Iterable[AclEntry | Mapping[str, Any]]) -> Direct
     manage: set[str] = set()
     for entry in _normalize_entries(entries):
         read.add(entry.principal)
-        if entry.level in {AclLevel.EDITOR, AclLevel.MANAGER}:
+        if entry.level in {AclLevel.WRITE, AclLevel.MANAGE}:
             write.add(entry.principal)
-        if entry.level is AclLevel.MANAGER:
+        if entry.level is AclLevel.MANAGE:
             manage.add(entry.principal)
     return DirectAcl(frozenset(read), frozenset(write), frozenset(manage))
 
@@ -188,11 +188,11 @@ def direct_to_entries(acl: DirectAcl) -> list[AclEntry]:
     entries: list[AclEntry] = []
     for principal in sorted(acl.read | acl.write | acl.manage):
         if principal in acl.manage:
-            level = AclLevel.MANAGER
+            level = AclLevel.MANAGE
         elif principal in acl.write:
-            level = AclLevel.EDITOR
+            level = AclLevel.WRITE
         else:
-            level = AclLevel.VIEWER
+            level = AclLevel.READ
         entries.append(AclEntry(principal, level))
     return entries
 
@@ -209,7 +209,7 @@ def acl_ancestors(uri: str) -> list[str]:
     return [f"viking://{'/'.join(parts[:depth])}" for depth in range(1, len(parts) + 1)]
 
 
-def is_implicit_manager(ctx: RequestContext, uri: str) -> bool:
+def has_implicit_manage(ctx: RequestContext, uri: str) -> bool:
     return is_acl_uri(uri) and ctx.role == Role.ADMIN
 
 
@@ -407,7 +407,7 @@ class AclManager:
                         )
                     protect_created = auto_protect_new_content
                 if creator and creator_grant is not None and protect_created:
-                    creator_acl = entries_to_direct([AclEntry(f"user:{creator}", AclLevel.MANAGER)])
+                    creator_acl = entries_to_direct([AclEntry(f"user:{creator}", AclLevel.MANAGE)])
                     if creator_grant == CreatorAclGrant.DIRECT:
                         direct = creator_acl
                     else:

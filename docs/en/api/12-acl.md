@@ -20,9 +20,9 @@ Every endpoint requires `manage` on the target node. Account `ADMIN`s implicitly
 account setting `resource_acl.auto_protect_new_content` defaults to `false`: new
 content under a parent without ACLs keeps the legacy shared behavior, while a new
 file or directory under an ACL-controlled parent inherits the parent permissions
-and grants its creator direct `manager`. When the setting is enabled, newly created
+and grants its creator direct `manage`. When the setting is enabled, newly created
 shared files, directories, and `add-resource` roots grant the creator direct
-`manager` even under an ACL-free parent; existing content remains unchanged.
+`manage` even under an ACL-free parent; existing content remains unchanged.
 Descendants within an `add-resource` import only inherit that grant.
 
 ## Data Structures
@@ -32,16 +32,16 @@ Descendants within an `add-resource` import only inherit that grant.
 ```json
 {
   "principal": "user:bob",
-  "level": "viewer"
+  "level": "read"
 }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `principal` | string | `user:{user_id}`, `group:{group_id}`, or `user:*` |
-| `level` | string | `viewer`, `editor`, or `manager` |
+| `level` | string | `read`, `write`, or `manage` |
 
-The [Admin API](./08-admin.md#groups) generates immutable, non-reusable group IDs. After a group is deleted, an old group principal left in an ACL no longer matches any request.
+The caller supplies the account-unique, stable `group_id` through the [Admin API](./08-admin.md#groups). A group has no separate display name. After a group is deleted, its old principal no longer matches any request unless the same `group_id` is created again.
 
 ### ACL report
 
@@ -50,14 +50,14 @@ The [Admin API](./08-admin.md#groups) generates immutable, non-reusable group ID
   "uri": "viking://resources/project-a",
   "acl_enabled": true,
   "direct_entries": [
-    {"principal": "user:bob", "level": "viewer"}
+    {"principal": "user:bob", "level": "read"}
   ],
   "inherited_entries": [
-    {"principal": "group:grp_engineering", "level": "editor"}
+    {"principal": "group:engineering", "level": "write"}
   ],
   "effective_entries": [
-    {"principal": "group:grp_engineering", "level": "editor"},
-    {"principal": "user:bob", "level": "viewer"}
+    {"principal": "group:engineering", "level": "write"},
+    {"principal": "user:bob", "level": "read"}
   ]
 }
 ```
@@ -69,7 +69,7 @@ The [Admin API](./08-admin.md#groups) generates immutable, non-reusable group ID
 | `effective_entries` | The merged direct and inherited entries |
 | `acl_enabled` | `true` when this node or an ancestor has a direct ACL; read-only and derived |
 
-Implicit managers are not included in these lists.
+The account `ADMIN` implicit `manage` permission is not included in these lists.
 
 ## Get an ACL
 
@@ -108,8 +108,8 @@ Request body:
 {
   "uri": "viking://resources/project-a",
   "entries": [
-    {"principal": "user:bob", "level": "viewer"},
-    {"principal": "group:grp_engineering", "level": "editor"}
+    {"principal": "user:bob", "level": "read"},
+    {"principal": "group:engineering", "level": "write"}
   ]
 }
 ```
@@ -123,8 +123,8 @@ curl -X PUT http://localhost:1933/api/v1/acl \
   -d '{
     "uri": "viking://resources/project-a",
     "entries": [
-      {"principal": "user:bob", "level": "viewer"},
-      {"principal": "group:grp_engineering", "level": "editor"}
+      {"principal": "user:bob", "level": "read"},
+      {"principal": "group:engineering", "level": "write"}
     ]
   }'
 ```
@@ -135,8 +135,8 @@ curl -X PUT http://localhost:1933/api/v1/acl \
 report = client.acl_set(
     "viking://resources/project-a",
     [
-        {"principal": "user:bob", "level": "viewer"},
-        {"principal": "group:grp_engineering", "level": "editor"},
+        {"principal": "user:bob", "level": "read"},
+        {"principal": "group:engineering", "level": "write"},
     ],
 )
 ```
@@ -151,8 +151,8 @@ report = await client.acl_set(uri, entries)
 
 ```go
 report, err := client.SetACL(ctx, "viking://resources/project-a", []openviking.ACLEntry{
-    {Principal: "user:bob", Level: "viewer"},
-    {Principal: "group:grp_engineering", Level: "editor"},
+    {Principal: "user:bob", Level: "read"},
+    {Principal: "group:engineering", Level: "write"},
 })
 ```
 
@@ -160,8 +160,8 @@ report, err := client.SetACL(ctx, "viking://resources/project-a", []openviking.A
 
 ```bash
 ov acl set viking://resources/project-a \
-  --entry user:bob=viewer \
-  --entry group:grp_engineering=editor
+  --entry user:bob=read \
+  --entry group:engineering=write
 ```
 
 ## Set One Principal's Level
@@ -174,11 +174,11 @@ POST /api/v1/acl/grant
 {
   "uri": "viking://resources/project-a",
   "principal": "user:bob",
-  "level": "editor"
+  "level": "write"
 }
 ```
 
-This sets Bob's direct level on the current node to `editor`. It updates an existing direct entry without changing other principals.
+This sets Bob's direct level on the current node to `write`. It updates an existing direct entry without changing other principals.
 
 ```bash
 curl -X POST http://localhost:1933/api/v1/acl/grant \
@@ -187,7 +187,7 @@ curl -X POST http://localhost:1933/api/v1/acl/grant \
   -d '{
     "uri": "viking://resources/project-a",
     "principal": "user:bob",
-    "level": "editor"
+    "level": "write"
   }'
 ```
 
@@ -195,12 +195,12 @@ curl -X POST http://localhost:1933/api/v1/acl/grant \
 report = client.acl_grant(
     "viking://resources/project-a",
     principal="user:bob",
-    level="editor",
+    level="write",
 )
 ```
 
 ```bash
-ov acl grant viking://resources/project-a --principal user:bob --level editor
+ov acl grant viking://resources/project-a --principal user:bob --level write
 ```
 
 ## Remove One Direct Grant
@@ -259,7 +259,7 @@ The API checks manage permission before confirming existence to an authorized ca
 | Authorized caller targets a URI that does not exist | `NOT_FOUND` |
 | ACL mutation targets a URI without a context record | `INVALID_ARGUMENT`; index it first |
 | Invalid `principal` syntax or `group:*` | `INVALID_ARGUMENT` |
-| Level is not `viewer/editor/manager` | `INVALID_ARGUMENT` |
+| Level is not `read/write/manage` | `INVALID_ARGUMENT` |
 | Request includes unknown fields such as `acl_enabled` | `INVALID_ARGUMENT` |
 
 Direct and inherited ACL fields are both stored in context records. An update changes the target direct ACL and recalculates descendant inherited ACLs in one subtree batch; a failed write restores the previous context ACL fields.

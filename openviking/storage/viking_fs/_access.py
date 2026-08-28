@@ -26,8 +26,8 @@ from openviking.storage.acl import (
     acl_allows,
     acl_ancestors,
     direct_to_entries,
+    has_implicit_manage,
     is_acl_uri,
-    is_implicit_manager,
     normalize_acl_level,
     normalize_acl_principal,
 )
@@ -190,7 +190,7 @@ class _AccessMixin:
             if not is_acl_uri(uri):
                 result[uri] = self._is_accessible(uri, real_ctx)
                 continue
-            if real_ctx.bypass_acl or is_implicit_manager(real_ctx, uri):
+            if real_ctx.bypass_acl or has_implicit_manage(real_ctx, uri):
                 result[uri] = True
             else:
                 pending.append(uri)
@@ -276,7 +276,7 @@ class _AccessMixin:
         real_ctx = self._ctx_or_default(ctx)
         self._safe_uri_parts(uri)
         acl_ancestors(uri)
-        if is_implicit_manager(real_ctx, uri):
+        if has_implicit_manage(real_ctx, uri):
             return real_ctx
         effective = await self.acl_manager.resolve(uri, real_ctx)
         if effective.enabled and acl_allows(effective, real_ctx, AclAction.MANAGE):

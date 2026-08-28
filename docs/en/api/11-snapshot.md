@@ -29,16 +29,16 @@ Snapshots use the current ACL at operation time. ACLs are not stored in snapshot
 
 | Operation | Required permission |
 |-----------|---------------------|
-| `show(path=...)` / `diff` / `log` | `viewer` (READ) |
-| `commit` | `editor` (WRITE); directories recursively check every current descendant and fail as a whole if any node is denied |
-| `restore` overwriting a file | `editor` (WRITE) on the file |
-| `restore` creating a file | `editor` (WRITE) on the parent directory |
-| `restore` deleting a file | `manager` (MANAGE) on the file |
+| `show(path=...)` / `diff` / `log` | `read` |
+| `commit` | `write`; directories recursively check every current descendant and fail as a whole if any node is denied |
+| `restore` overwriting a file | `write` on the file |
+| `restore` creating a file | `write` on the parent directory |
+| `restore` deleting a file | `manage` on the file |
 | Read/write/delete `.ovgitignore` | ADMIN |
 
 USER and ADMIN callers must provide `paths` for `commit` and `log`, `project_dir` for `restore`, and `path` for `show`; account-wide commit metadata lookup without `path` is reserved for local ROOT mode. A user can operate on accessible shared resources and their own `viking://user/{user_id}/...` space, but not another user's space. Directory operations preflight the complete scope instead of silently skipping denied descendants. `restore` authorizes every planned write and deletion before it mutates the workspace.
 
-Existing nodes keep their current ACL after restore. Newly restored nodes inherit the current parent ACL; the user who runs `restore` is not added as a manager. The background vector rebuild is system work for an already-authorized operation, so parent ACLs do not block it again.
+Existing nodes keep their current ACL after restore. Newly restored nodes inherit the current parent ACL; the user who runs `restore` is not granted `manage`. The background vector rebuild is system work for an already-authorized operation, so parent ACLs do not block it again.
 
 ## Implementation
 

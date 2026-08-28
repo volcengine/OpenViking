@@ -107,9 +107,9 @@ func (c *Client) AdminRegenerateKeyWithOptions(ctx context.Context, accountID, u
 }
 
 // AdminCreateGroup creates an empty account-scoped group.
-func (c *Client) AdminCreateGroup(ctx context.Context, accountID, name string) (map[string]any, error) {
+func (c *Client) AdminCreateGroup(ctx context.Context, accountID, groupID string) (map[string]any, error) {
 	var result map[string]any
-	err := c.doJSON(ctx, http.MethodPost, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/groups", nil, map[string]any{"name": name}, &result)
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/groups", nil, map[string]any{"group_id": groupID}, &result)
 	return result, err
 }
 

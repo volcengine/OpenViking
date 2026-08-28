@@ -1790,10 +1790,10 @@ class AsyncHTTPClient:
         )
         return self._handle_response(response)
 
-    async def admin_create_group(self, account_id: str, name: str) -> Dict[str, Any]:
+    async def admin_create_group(self, account_id: str, group_id: str) -> Dict[str, Any]:
         response = await self._http.post(
             f"/api/v1/admin/accounts/{account_id}/groups",
-            json={"name": name},
+            json={"group_id": group_id},
         )
         return self._handle_response(response)
 
@@ -2717,8 +2717,8 @@ class SyncHTTPClient:
     ) -> Dict[str, Any]:
         return run_async(self._async_client.admin_regenerate_key(account_id, user_id, seed=seed))
 
-    def admin_create_group(self, account_id: str, name: str) -> Dict[str, Any]:
-        return run_async(self._async_client.admin_create_group(account_id, name))
+    def admin_create_group(self, account_id: str, group_id: str) -> Dict[str, Any]:
+        return run_async(self._async_client.admin_create_group(account_id, group_id))
 
     def admin_list_groups(self, account_id: str) -> List[Any]:
         return run_async(self._async_client.admin_list_groups(account_id))

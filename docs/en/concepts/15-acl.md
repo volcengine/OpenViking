@@ -12,7 +12,7 @@ ACL applies only to shared resources:
 viking://resources/...
 ```
 
-- An account `ADMIN` is an implicit manager of `viking://resources/...`.
+- An account `ADMIN` implicitly has `manage` on `viking://resources/...`.
 - `viking://resources` is a fixed shared scope and cannot carry a direct ACL. ACLs start on files and directories below it.
 - `viking://user/{user_id}/resources/...` is private and does not accept ACLs. To share it, move the resource into a writable shared directory and inherit that directory's ACL.
 
@@ -23,19 +23,19 @@ Implicit management is not stored as an ACL entry and cannot be removed by ACL c
 ACL entries use typed principals:
 
 - `user:{user_id}`: a user in the current account.
-- `group:{group_id}`: a server-generated group ID in the current account.
+- `group:{group_id}`: a caller-supplied, account-unique group ID.
 - `user:*`: any user in the current account.
 
 `group:*` is not supported. Groups are flat. Membership changes do not rewrite resource ACL or context records; they take effect when the next request builds `RequestContext.group_ids`.
-Asynchronous parse and semantic tasks created by a request carry the same group identity. After an `add-resource` destination write has been authorized, its automatic ancestor summary refresh is account-internal maintenance and runs as `ADMIN`.
+Asynchronous parse and semantic tasks created by a request carry the same group identity. After an `add-resource` destination write has been authorized, automatic semantic maintenance preserves that identity and uses an explicit internal ACL bypass instead of changing the caller's role.
 
 | Level | Allowed operations |
 |-------|--------------------|
-| `viewer` | Read, list, and `find/search/grep` |
-| `editor` | `viewer` capabilities plus write, create, and tag updates |
-| `manager` | `editor` capabilities plus delete, move, and ACL management |
+| `read` | Read, list, and `find/search/grep` |
+| `write` | `read` capabilities plus write, create, file delete/move, and tag updates |
+| `manage` | `write` capabilities plus directory delete/move and ACL management |
 
-Each higher level includes the lower levels. A `manager` therefore has read, write, and manage capabilities.
+Each higher level includes the lower levels. A `manage` grant therefore includes `read` and `write`.
 
 ## Inheritance
 
@@ -48,16 +48,16 @@ effective(node) = UNION(direct_acl(each ancestor), direct_acl(node))
 For example:
 
 ```text
-viewer user:bob   on viking://resources/A
-editor group:grp_engineering on viking://resources/A/B
-viewer user:carol on viking://resources/A/B/C/report.md
+read user:bob   on viking://resources/A
+write group:engineering on viking://resources/A/B
+read user:carol on viking://resources/A/B/C/report.md
 ```
 
 The effective permissions on `report.md` are:
 
-- Bob: `viewer`
-- Members of `grp_engineering`: `editor`
-- Carol: `viewer`
+- Bob: `read`
+- Members of `engineering`: `write`
+- Carol: `read`
 
 Removing the group's direct ACL from `A/B` does not remove entries from `A` or `report.md`. Descendants only lose the permissions contributed by that entry.
 
@@ -66,11 +66,11 @@ Removing the group's direct ACL from `A/B` does not remove entries from `A` or `
 The account-level `resource_acl.auto_protect_new_content` setting is disabled by
 default. While disabled, creating a file or directory under an ACL-free parent
 keeps the existing URI namespace visibility and write rules. Under an
-ACL-controlled parent, the creator receives direct `manager` and inherits the
+ACL-controlled parent, the creator receives direct `manage` and inherits the
 parent permissions.
 
 When enabled, a newly created shared file or directory grants its creator direct
-`manager` on its first context record even under an ACL-free parent; parent
+`manage` on its first context record even under an ACL-free parent; parent
 permissions are still merged as inherited ACL. Existing content is not migrated
 or modified, and disabling the setting again affects only later creations.
 `add-resource` treats only the generated import root (or the root file with
@@ -94,15 +94,16 @@ All filesystem APIs use the same permission mapping:
 |-----------|---------------------|
 | read, stat, list, tree, find, search, grep, glob, relations | read |
 | write, create, mkdir, set tags | write |
-| delete, manage ACL | manage |
-| move source | manage |
+| delete or move a file | write |
+| delete or move a directory | manage on the directory and complete subtree |
+| manage ACL | manage |
 | move destination parent | write |
 
 The server canonicalizes the URI, then uses one authorization entry point for account/owner/actor-peer boundaries, the effective ACL or legacy fallback, and write/delete namespace guards.
 
 Under an ACL-controlled parent, or when the account enables
 `auto_protect_new_content`, a new shared node is bootstrapped by its creator's
-direct `manager` grant. Otherwise only the shared scope's implicit manager can
+direct `manage` grant. Otherwise only the shared scope's implicit `manage` identity can
 establish the first ACL. Later ACL changes require effective `manage` capability.
 
 An ACL grant on a directory is inherited by every descendant. `list`, `tree`, and other batch results still check every returned node because an ACL-free directory may be visible under legacy URI rules while one of its descendants has entered the ACL-controlled domain through its own ACL.
@@ -135,7 +136,7 @@ A retrieval target URI is only a search scope; the caller does not need to read 
 
 Shared-scope context writes preserve an existing direct ACL for the same URI.
 Under an ACL-controlled parent, or when the account enables
-`auto_protect_new_content`, a newly created node receives direct `manager` for its
+`auto_protect_new_content`, a newly created node receives direct `manage` for its
 creator and derives inherited ACL fields from its parent; otherwise it remains
 `acl_enabled=false`. Descendants created by `add-resource` only inherit from the
 import root. Re-embedding and ordinary replacement writes cannot reset controlled
@@ -146,13 +147,13 @@ records to default visibility or modify ACLs through regular context fields.
 Grant Bob read-only access to a directory:
 
 ```bash
-ov acl grant viking://resources/project-a --principal user:bob --level viewer
+ov acl grant viking://resources/project-a --principal user:bob --level read
 ```
 
-Bob can read and retrieve descendants, but cannot write or delete them. Upgrade the grant to editor:
+Bob can read and retrieve descendants, but cannot write or delete them. Upgrade the grant to `write`:
 
 ```bash
-ov acl grant viking://resources/project-a --principal user:bob --level editor
+ov acl grant viking://resources/project-a --principal user:bob --level write
 ```
 
 Remove Bob's direct grant from this node:

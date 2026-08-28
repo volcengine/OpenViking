@@ -488,8 +488,8 @@ class NewAPIKeyManager:
     def get_user_group_ids(self, account_id: str, user_id: str) -> tuple[str, ...]:
         return self._legacy.get_user_group_ids(account_id, user_id)
 
-    async def create_group(self, account_id: str, name: str) -> dict:
-        return await self._legacy.create_group(account_id, name)
+    async def create_group(self, account_id: str, group_id: str) -> dict:
+        return await self._legacy.create_group(account_id, group_id)
 
     def get_groups(self, account_id: str) -> list[dict]:
         return self._legacy.get_groups(account_id)

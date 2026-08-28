@@ -112,17 +112,17 @@ async def test_memory_replace_preserves_metadata(service):
 async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
     service, sample_markdown_file
 ):
-    """New shared content gets creator management without changing file content."""
+    """New shared content grants creator manage without changing file content."""
     creator = RequestContext(
         user=service.user,
         role=Role.USER,
-        group_ids=("grp_writers",),
+        group_ids=("writers",),
     )
     admin = RequestContext(user=service.user, role=Role.ADMIN)
     reader = RequestContext(
         user=UserIdentifier(admin.account_id, "reader"),
         role=Role.USER,
-        group_ids=("grp_readers",),
+        group_ids=("readers",),
     )
     outsider = RequestContext(
         user=UserIdentifier(admin.account_id, "outsider"),
@@ -144,7 +144,7 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
     auto_protected_acl = await service.fs.get_acl(auto_protected_dir, ctx=creator)
     creator_entry = {
         "principal": f"user:{creator.user.user_id}",
-        "level": "manager",
+        "level": "manage",
     }
     assert auto_protected_acl["direct_entries"] == [creator_entry]
 
@@ -163,16 +163,16 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
     await service.fs.set_acl(
         parent_uri,
         [
-            {"principal": "group:grp_readers", "level": "viewer"},
-            {"principal": "group:grp_writers", "level": "editor"},
+            {"principal": "group:readers", "level": "read"},
+            {"principal": "group:writers", "level": "write"},
         ],
         ctx=admin,
     )
 
     await service.fs.write(uri, content="line1\n", ctx=creator, mode="create", wait=True)
     inherited_entries = [
-        {"principal": "group:grp_readers", "level": "viewer"},
-        {"principal": "group:grp_writers", "level": "editor"},
+        {"principal": "group:readers", "level": "read"},
+        {"principal": "group:writers", "level": "write"},
     ]
     created_acl = await service.fs.get_acl(uri, ctx=creator)
     assert created_acl["direct_entries"] == [creator_entry]

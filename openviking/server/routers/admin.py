@@ -83,7 +83,9 @@ class RegenerateKeyRequest(BaseModel):
 
 
 class CreateGroupRequest(BaseModel):
-    name: str
+    model_config = {"extra": "forbid"}
+
+    group_id: str
 
 
 class MigrateLegacyDataRequest(BaseModel):
@@ -651,7 +653,7 @@ async def create_group(
     ctx: RequestContext = Depends(get_request_context),
 ):
     _check_account_access(ctx, account_id)
-    result = await _get_api_key_manager(request).create_group(account_id, body.name)
+    result = await _get_api_key_manager(request).create_group(account_id, body.group_id)
     return Response(status="ok", result=result)
 
 

@@ -194,16 +194,16 @@ async def client_with_resource_and_blob(client_with_resource, service):
 async def test_restore_dry_run_does_not_mutate(client_with_resource, service):
     _, _root = client_with_resource
     admin = RequestContext(user=service.user, role=Role.ADMIN)
-    editor = RequestContext(
-        user=UserIdentifier(admin.account_id, "snapshot_editor"),
+    writer = RequestContext(
+        user=UserIdentifier(admin.account_id, "snapshot_writer"),
         role=Role.USER,
     )
-    viewer = RequestContext(
-        user=UserIdentifier(admin.account_id, "snapshot_viewer"),
+    reader = RequestContext(
+        user=UserIdentifier(admin.account_id, "snapshot_reader"),
         role=Role.USER,
     )
-    manager = RequestContext(
-        user=UserIdentifier(admin.account_id, "snapshot_manager"),
+    managing_user = RequestContext(
+        user=UserIdentifier(admin.account_id, "snapshot_managing_user"),
         role=Role.USER,
     )
     root = "viking://resources/snapshot_acl_restore"
@@ -225,36 +225,36 @@ async def test_restore_dry_run_does_not_mutate(client_with_resource, service):
     await service.fs.set_acl(
         root,
         [
-            {"principal": "user:snapshot_editor", "level": "editor"},
-            {"principal": "user:snapshot_viewer", "level": "viewer"},
-            {"principal": "user:snapshot_manager", "level": "manager"},
+            {"principal": "user:snapshot_writer", "level": "write"},
+            {"principal": "user:snapshot_reader", "level": "read"},
+            {"principal": "user:snapshot_managing_user", "level": "manage"},
         ],
         ctx=admin,
     )
     await service.fs.write(file_uri, content="v1", mode="create", wait=True, ctx=admin)
-    v1 = await service.fs.commit(message="acl restore v1", paths=[root], ctx=editor)
+    v1 = await service.fs.commit(message="acl restore v1", paths=[root], ctx=writer)
 
-    assert await service.fs.show(v1["commit_oid"], path=file_uri, ctx=viewer)
-    assert await service.fs.log(paths=[root], ctx=viewer)
+    assert await service.fs.show(v1["commit_oid"], path=file_uri, ctx=reader)
+    assert await service.fs.log(paths=[root], ctx=reader)
     with pytest.raises(PermissionDeniedError):
-        await service.fs.commit(message="viewer cannot commit", paths=[root], ctx=viewer)
+        await service.fs.commit(message="reader cannot commit", paths=[root], ctx=reader)
 
-    await service.fs.write(file_uri, content="v2", mode="replace", wait=True, ctx=editor)
-    await service.fs.commit(message="acl restore v2", paths=[root], ctx=editor)
+    await service.fs.write(file_uri, content="v2", mode="replace", wait=True, ctx=writer)
+    await service.fs.commit(message="acl restore v2", paths=[root], ctx=writer)
 
     with pytest.raises(PermissionDeniedError):
         await service.fs.restore(
             project_dir=root,
             source_commit=v1["commit_oid"],
             dry_run=True,
-            ctx=viewer,
+            ctx=reader,
         )
 
     write_plan = await service.fs.restore(
         project_dir=root,
         source_commit=v1["commit_oid"],
         dry_run=True,
-        ctx=editor,
+        ctx=writer,
     )
     assert [item["path"] for item in write_plan["diff"]["to_write"]] == ["document.md"]
 
@@ -265,17 +265,17 @@ async def test_restore_dry_run_does_not_mutate(client_with_resource, service):
             project_dir=root,
             source_commit=v1["commit_oid"],
             dry_run=True,
-            ctx=editor,
+            ctx=writer,
         )
 
     delete_plan = await service.fs.restore(
         project_dir=root,
         source_commit=v1["commit_oid"],
         dry_run=True,
-        ctx=manager,
+        ctx=managing_user,
     )
     assert delete_plan["diff"]["to_delete"] == ["remove.md"]
-    assert await service.fs.read(file_uri, ctx=editor) == "v2"
+    assert await service.fs.read(file_uri, ctx=writer) == "v2"
 
 
 async def test_show_commit_metadata(client_with_resource):

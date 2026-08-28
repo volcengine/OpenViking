@@ -669,11 +669,14 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
             )
             .await
         }
-        AdminCommands::CreateGroup { account_id, name } => {
+        AdminCommands::CreateGroup {
+            account_id,
+            group_id,
+        } => {
             commands::admin::create_group(
                 &client,
                 &account_id,
-                &name,
+                &group_id,
                 ctx.output_format,
                 ctx.compact,
             )

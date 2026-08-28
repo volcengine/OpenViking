@@ -19,8 +19,8 @@ ACL API 管理 `viking://resources/...` 共享资源的直接授权，并返回�
 `viking://resources` 是固定共享 scope，不能设置直接 ACL。账号配置
 `resource_acl.auto_protect_new_content` 默认为 `false`：父目录没有 ACL 时，新建内容
 继续使用原有公开规则；父目录已有 ACL 时，新建文件或目录会继承父权限，并给创建者
-直接 `manager`。开启该配置后，即使父目录没有 ACL，新建共享文件、目录和
-`add-resource` 根节点也会给创建者直接 `manager`；已有内容保持原样。
+直接 `manage`。开启该配置后，即使父目录没有 ACL，新建共享文件、目录和
+`add-resource` 根节点也会给创建者直接 `manage`；已有内容保持原样。
 `add-resource` 的内部节点只继承，不重复写直接权限。
 
 ## 数据结构
@@ -30,16 +30,16 @@ ACL API 管理 `viking://resources/...` 共享资源的直接授权，并返回�
 ```json
 {
   "principal": "user:bob",
-  "level": "viewer"
+  "level": "read"
 }
 ```
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `principal` | string | `user:{user_id}`、`group:{group_id}` 或 `user:*` |
-| `level` | string | `viewer`、`editor` 或 `manager` |
+| `level` | string | `read`、`write` 或 `manage` |
 
-`group_id` 由 [Admin API](./08-admin.md#用户组) 生成且不可修改或复用。删除用户组后，ACL 中保留的旧 principal 不再匹配任何请求。
+`group_id` 由调用者通过 [Admin API](./08-admin.md#用户组) 指定，是 account 内唯一且稳定的标识；用户组没有单独的展示名称。删除用户组后，旧 principal 不再匹配请求，除非重新创建同一个 `group_id`。
 
 ### ACL report
 
@@ -48,14 +48,14 @@ ACL API 管理 `viking://resources/...` 共享资源的直接授权，并返回�
   "uri": "viking://resources/project-a",
   "acl_enabled": true,
   "direct_entries": [
-    {"principal": "user:bob", "level": "viewer"}
+    {"principal": "user:bob", "level": "read"}
   ],
   "inherited_entries": [
-    {"principal": "group:grp_engineering", "level": "editor"}
+    {"principal": "group:engineering", "level": "write"}
   ],
   "effective_entries": [
-    {"principal": "group:grp_engineering", "level": "editor"},
-    {"principal": "user:bob", "level": "viewer"}
+    {"principal": "group:engineering", "level": "write"},
+    {"principal": "user:bob", "level": "read"}
   ]
 }
 ```
@@ -67,7 +67,7 @@ ACL API 管理 `viking://resources/...` 共享资源的直接授权，并返回�
 | `effective_entries` | `direct_entries` 与 `inherited_entries` 的合并结果 |
 | `acl_enabled` | 当前节点或任一祖先存在直接 ACL 时为 `true`；只读派生字段 |
 
-隐式 manager 不出现在这些列表中。
+account `ADMIN` 的隐式 `manage` 权限不出现在这些列表中。
 
 ## 获取 ACL
 
@@ -106,8 +106,8 @@ PUT /api/v1/acl
 {
   "uri": "viking://resources/project-a",
   "entries": [
-    {"principal": "user:bob", "level": "viewer"},
-    {"principal": "group:grp_engineering", "level": "editor"}
+    {"principal": "user:bob", "level": "read"},
+    {"principal": "group:engineering", "level": "write"}
   ]
 }
 ```
@@ -121,8 +121,8 @@ curl -X PUT http://localhost:1933/api/v1/acl \
   -d '{
     "uri": "viking://resources/project-a",
     "entries": [
-      {"principal": "user:bob", "level": "viewer"},
-      {"principal": "group:grp_engineering", "level": "editor"}
+      {"principal": "user:bob", "level": "read"},
+      {"principal": "group:engineering", "level": "write"}
     ]
   }'
 ```
@@ -133,8 +133,8 @@ curl -X PUT http://localhost:1933/api/v1/acl \
 report = client.acl_set(
     "viking://resources/project-a",
     [
-        {"principal": "user:bob", "level": "viewer"},
-        {"principal": "group:grp_engineering", "level": "editor"},
+        {"principal": "user:bob", "level": "read"},
+        {"principal": "group:engineering", "level": "write"},
     ],
 )
 ```
@@ -149,8 +149,8 @@ report = await client.acl_set(uri, entries)
 
 ```go
 report, err := client.SetACL(ctx, "viking://resources/project-a", []openviking.ACLEntry{
-    {Principal: "user:bob", Level: "viewer"},
-    {Principal: "group:grp_engineering", Level: "editor"},
+    {Principal: "user:bob", Level: "read"},
+    {Principal: "group:engineering", Level: "write"},
 })
 ```
 
@@ -158,8 +158,8 @@ report, err := client.SetACL(ctx, "viking://resources/project-a", []openviking.A
 
 ```bash
 ov acl set viking://resources/project-a \
-  --entry user:bob=viewer \
-  --entry group:grp_engineering=editor
+  --entry user:bob=read \
+  --entry group:engineering=write
 ```
 
 ## 设置单个 principal 权限
@@ -172,11 +172,11 @@ POST /api/v1/acl/grant
 {
   "uri": "viking://resources/project-a",
   "principal": "user:bob",
-  "level": "editor"
+  "level": "write"
 }
 ```
 
-该接口将 Bob 在当前节点上的直接 level 设置为 `editor`。如果已有直接条目，则更新该条目；其他用户条目不变。
+该接口将 Bob 在当前节点上的直接 level 设置为 `write`。如果已有直接条目，则更新该条目；其他用户条目不变。
 
 ```bash
 curl -X POST http://localhost:1933/api/v1/acl/grant \
@@ -185,7 +185,7 @@ curl -X POST http://localhost:1933/api/v1/acl/grant \
   -d '{
     "uri": "viking://resources/project-a",
     "principal": "user:bob",
-    "level": "editor"
+    "level": "write"
   }'
 ```
 
@@ -193,12 +193,12 @@ curl -X POST http://localhost:1933/api/v1/acl/grant \
 report = client.acl_grant(
     "viking://resources/project-a",
     principal="user:bob",
-    level="editor",
+    level="write",
 )
 ```
 
 ```bash
-ov acl grant viking://resources/project-a --principal user:bob --level editor
+ov acl grant viking://resources/project-a --principal user:bob --level write
 ```
 
 ## 删除单个 principal 的直接授权
@@ -257,7 +257,7 @@ ov acl rm viking://resources/project-a
 | 已授权调用者访问不存在的 URI | `NOT_FOUND` |
 | 修改 ACL 时 URI 尚无 context 记录 | `INVALID_ARGUMENT`，需先完成索引 |
 | `principal` 格式非法，或使用 `group:*` | `INVALID_ARGUMENT` |
-| level 不是 `viewer/editor/manager` | `INVALID_ARGUMENT` |
+| level 不是 `read/write/manage` | `INVALID_ARGUMENT` |
 | 请求包含 `acl_enabled` 等未知字段 | `INVALID_ARGUMENT` |
 
 ACL 的 direct 和 inherited 字段都保存在 context。更新会在同一子树批处理中修改目标 direct 并重算后代 inherited；写入失败时恢复原 context ACL 字段。

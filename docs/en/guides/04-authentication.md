@@ -655,7 +655,7 @@ Or explicitly:
 | ADMIN | Own account | Regular operations + manage users in own account |
 | USER | Own account | Regular operations (ls, read, find, sessions, etc.) |
 
-Regular resource operations in this table are still subject to resource ACLs. Account roles determine identity administration and implicit management of public resources; [Resource Access Control (ACL)](../concepts/15-acl.md) determines `viewer/editor/manager` permissions on individual directories and files.
+Regular resource operations in this table are still subject to resource ACLs. Account roles determine identity administration and implicit management of public resources; [Resource Access Control (ACL)](../concepts/15-acl.md) determines `read/write/manage` permissions on individual directories and files.
 
 In `trusted` mode, ordinary tenant requests default to `USER` unless the account/user is registered with a higher role or the gateway asserts `X-OpenViking-Role: admin` with the configured root API key. `X-OpenViking-Role: root` is rejected. Admin routes also allow a trusted ROOT fallback when no explicit identity is provided.
 
