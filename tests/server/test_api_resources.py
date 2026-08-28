@@ -171,6 +171,30 @@ async def test_add_resource_forwards_args_to_service(
 
     assert resp.status_code == 200
     assert seen["args"] == {"feishu_access_token": "u-test"}
+    assert seen["internal_task"] is False
+
+
+async def test_add_resource_marks_connector_child_task_internal(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+):
+    seen = {}
+
+    async def fake_add_resource(**kwargs):
+        seen.update(kwargs)
+        return {"status": "success", "root_uri": "viking://resources/demo"}
+
+    monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
+
+    resp = await client.post(
+        "/api/v1/resources",
+        headers={"X-OpenViking-Task-Origin": "connector_import"},
+        json={"path": "https://example.com/demo.md"},
+    )
+
+    assert resp.status_code == 200
+    assert seen["internal_task"] is True
 
 
 async def test_add_resource_forwards_processing_mode_to_service(monkeypatch):
@@ -187,7 +211,10 @@ async def test_add_resource_forwards_processing_mode_to_service(monkeypatch):
     monkeypatch.setattr(resources_router, "get_service", lambda: service)
 
     response = await resources_router.add_resource(
-        SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(config=None))),
+        SimpleNamespace(
+            app=SimpleNamespace(state=SimpleNamespace(config=None)),
+            headers={},
+        ),
         AddResourceRequest(
             path="https://example.com/demo.md",
             processing_mode="vectors_only",

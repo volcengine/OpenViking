@@ -62,6 +62,22 @@ async def mock_viking_fs(temp_storage: Path) -> MockVikingFS:
     return MockVikingFS(root_path=str(temp_storage))
 
 
+@pytest_asyncio.fixture
+async def watch_manager(mock_viking_fs: MockVikingFS) -> WatchManager:
+    """Create an initialized WatchManager with isolated storage."""
+    manager = WatchManager(viking_fs=mock_viking_fs)
+    await manager.initialize()
+    return manager
+
+
+@pytest_asyncio.fixture
+async def watch_manager_no_fs() -> WatchManager:
+    """Create an initialized in-memory WatchManager."""
+    manager = WatchManager(viking_fs=None)
+    await manager.initialize()
+    return manager
+
+
 class TestWatchTask:
     """Tests for WatchTask data model."""
 
@@ -70,6 +86,7 @@ class TestWatchTask:
         task = WatchTask(path="/test/path")
 
         assert task.path == "/test/path"
+        assert task.source_type is None
         assert task.task_id is not None
         assert task.to_uri is None
         assert task.parent_uri is None
@@ -88,6 +105,7 @@ class TestWatchTask:
         task = WatchTask(
             task_id="test-task-id",
             path="/test/path",
+            source_type="feishu_project",
             to_uri="viking://resources/test",
             parent_uri="viking://resources",
             reason="Test reason",
@@ -102,6 +120,7 @@ class TestWatchTask:
 
         assert task.task_id == "test-task-id"
         assert task.path == "/test/path"
+        assert task.source_type == "feishu_project"
         assert task.to_uri == "viking://resources/test"
         assert task.parent_uri == "viking://resources"
         assert task.reason == "Test reason"
@@ -118,6 +137,7 @@ class TestWatchTask:
         task = WatchTask(
             task_id="test-id",
             path="/test/path",
+            source_type="url",
             to_uri="viking://test",
             auth_state={
                 "provider": "feishu",
@@ -132,6 +152,7 @@ class TestWatchTask:
 
         assert data["task_id"] == "test-id"
         assert data["path"] == "/test/path"
+        assert data["source_type"] == "url"
         assert data["to_uri"] == "viking://test"
         assert data["created_at"] == now.isoformat()
         assert data["is_active"] is True
@@ -144,6 +165,7 @@ class TestWatchTask:
         data = {
             "task_id": "test-id",
             "path": "/test/path",
+            "source_type": "git",
             "to_uri": "viking://test",
             "parent_uri": "viking://parent",
             "reason": "Test",
@@ -160,6 +182,7 @@ class TestWatchTask:
 
         assert task.task_id == "test-id"
         assert task.path == "/test/path"
+        assert task.source_type == "git"
         assert task.to_uri == "viking://test"
         assert task.watch_interval == 45.0
         assert task.processing_mode == "vectors_only"
@@ -172,6 +195,7 @@ class TestWatchTask:
 
         assert task.processing_mode == "semantic_and_vectors"
         assert task.to_is_directory is None
+        assert task.source_type is None
 
     def test_calculate_next_execution_time(self):
         """Test calculating next execution time."""
@@ -596,6 +620,7 @@ class TestWatchManagerPersistence:
 
         task = await manager1.create_task(
             path="/test/path",
+            source_type="local",
             to_uri="viking://resources/test",
             reason="Test task",
             watch_interval=45.0,
@@ -609,6 +634,7 @@ class TestWatchManagerPersistence:
 
         assert loaded_task is not None
         assert loaded_task.path == "/test/path"
+        assert loaded_task.source_type == "local"
         assert loaded_task.to_uri == "viking://resources/test"
         assert loaded_task.reason == "Test task"
         assert loaded_task.watch_interval == 45.0

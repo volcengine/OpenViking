@@ -13,6 +13,8 @@ from typing import Any, Dict, Optional
 FEISHU_AUTH_PROVIDER = "feishu"
 FEISHU_ACCESS_TOKEN_ARG = "feishu_access_token"
 FEISHU_REFRESH_TOKEN_ARG = "feishu_refresh_token"
+FEISHU_APP_ID_ARG = "feishu_app_id"
+FEISHU_APP_SECRET_ARG = "feishu_app_secret"
 FEISHU_REFRESH_GRANT_TYPE = "refresh_token"
 FEISHU_REFRESH_SKEW = timedelta(minutes=5)
 
@@ -44,34 +46,50 @@ class FeishuTenantTokenError(Exception):
     """Raised when an app credential cannot produce a tenant token."""
 
 
-def load_feishu_app_credentials() -> FeishuAppCredentials:
+def load_feishu_app_credentials(
+    *,
+    app_id: Optional[str] = None,
+    app_secret: Optional[str] = None,
+) -> FeishuAppCredentials:
     """Load Feishu app credentials from OpenViking config or environment."""
     from openviking_cli.utils.config import get_openviking_config
 
     config = get_openviking_config().feishu
-    app_id = (config.app_id or os.getenv("FEISHU_APP_ID", "")).strip()
-    app_secret = (config.app_secret or os.getenv("FEISHU_APP_SECRET", "")).strip()
-    if not app_id or not app_secret:
+    if app_id is None and app_secret is None:
+        resolved_app_id = (config.app_id or os.getenv("FEISHU_APP_ID", "")).strip()
+        resolved_app_secret = (config.app_secret or os.getenv("FEISHU_APP_SECRET", "")).strip()
+    else:
+        resolved_app_id = app_id.strip() if isinstance(app_id, str) else ""
+        resolved_app_secret = app_secret.strip() if isinstance(app_secret, str) else ""
+    if not resolved_app_id or not resolved_app_secret:
         raise ValueError(
             "Feishu credentials not configured. Set FEISHU_APP_ID and "
             "FEISHU_APP_SECRET environment variables, or configure in ov.conf."
         )
     return FeishuAppCredentials(
-        app_id=app_id,
-        app_secret=app_secret,
+        app_id=resolved_app_id,
+        app_secret=resolved_app_secret,
         domain=(config.domain or "https://open.feishu.cn").strip(),
         request_timeout=float(config.request_timeout or 30.0),
     )
 
 
-def create_feishu_auth_state(access_token: str, refresh_token: str) -> Dict[str, Any]:
+def create_feishu_auth_state(
+    access_token: str,
+    refresh_token: str,
+    app_credentials: Optional[FeishuAppCredentials] = None,
+) -> Dict[str, Any]:
     """Create the private watch auth state for Feishu user-token watch tasks."""
-    return {
+    state = {
         "provider": FEISHU_AUTH_PROVIDER,
         "access_token": access_token,
         "refresh_token": refresh_token,
         "expires_at": None,
     }
+    if app_credentials is not None:
+        state["app_id"] = app_credentials.app_id
+        state["app_secret"] = app_credentials.app_secret
+    return state
 
 
 def is_feishu_auth_state(auth_state: Optional[Dict[str, Any]]) -> bool:
@@ -126,6 +144,21 @@ class FeishuOAuthClient:
     @classmethod
     def from_config(cls) -> "FeishuOAuthClient":
         return cls(load_feishu_app_credentials())
+
+    @classmethod
+    def from_auth_state(cls, auth_state: Dict[str, Any]) -> "FeishuOAuthClient":
+        app_id = auth_state.get("app_id")
+        app_secret = auth_state.get("app_secret")
+        if app_id is None and app_secret is None:
+            return cls.from_config()
+        try:
+            credentials = load_feishu_app_credentials(app_id=app_id, app_secret=app_secret)
+        except ValueError as exc:
+            raise FeishuTokenRefreshError(
+                "Feishu app credentials in watch task are invalid.",
+                permanent=True,
+            ) from exc
+        return cls(credentials)
 
     async def get_tenant_access_token(self) -> str:
         return await asyncio.to_thread(self._get_tenant_access_token_sync)

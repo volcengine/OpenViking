@@ -75,7 +75,6 @@ class WatchScheduler:
         self._scheduler_task: Optional[asyncio.Task] = None
         self._executing_tasks: Set[str] = set()
         self._lock = asyncio.Lock()
-        self._feishu_oauth_client: Optional[Any] = None
 
     @property
     def watch_manager(self) -> Optional[WatchManager]:
@@ -435,16 +434,13 @@ class WatchScheduler:
             return auth_state
 
         refresh_token = auth_state.get("refresh_token")
-        refreshed = await self._get_feishu_oauth_client().refresh_user_access_token(refresh_token)
+        refreshed = await FeishuOAuthClient.from_auth_state(auth_state).refresh_user_access_token(
+            refresh_token
+        )
         updated = apply_feishu_refreshed_token(auth_state, refreshed)
         if self._watch_manager is not None:
             await self._watch_manager.update_auth_state(task.task_id, updated)
         return updated
-
-    def _get_feishu_oauth_client(self):
-        if self._feishu_oauth_client is None:
-            self._feishu_oauth_client = FeishuOAuthClient.from_config()
-        return self._feishu_oauth_client
 
     def _check_resource_exists(self, path: str) -> bool:
         """Check if a resource path exists.

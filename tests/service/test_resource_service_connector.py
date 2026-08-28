@@ -248,6 +248,7 @@ async def test_connector_watch_stores_only_encrypted_replay_state(
         role=str(Role.USER),
     )
     assert task is not None
+    assert task.source_type == "tos"
     assert task.auth_state["provider"] == "connector_encrypted"
     assert "secret" not in json.dumps(task.auth_state)
     assert "auth_state" not in task.to_dict()
@@ -504,6 +505,41 @@ async def test_connector_watch_allows_plaintext_private_state_without_encryption
         account_id="acct",
         path="tos://bucket/docs/",
     ) == ("secret", "tos", {})
+
+
+@pytest.mark.asyncio
+async def test_declared_connector_watch_returns_original_add_type(
+    connector_config,
+    ctx,
+    service,
+):
+    connector_config.allowed_add_types = ["feishu_project"]
+    watch_manager = WatchManager()
+    service._watch_scheduler = SimpleNamespace(watch_manager=watch_manager)
+    submitted = {}
+
+    async def submit(**kwargs):
+        submitted.update(kwargs)
+        return {"status": "accepted"}
+
+    service._connector.submit = AsyncMock(side_effect=submit)
+    await service.add_resource(
+        path="project-ptat4n",
+        ctx=ctx,
+        add_type="feishu_project",
+        to="viking://resources/Project/ptat4n",
+        watch_interval=5,
+    )
+    await submitted["on_success"]()
+
+    task = await watch_manager.get_task_by_uri(
+        "viking://resources/Project/ptat4n",
+        account_id="acct",
+        user_id="alice",
+        role=str(Role.USER),
+    )
+    assert task is not None
+    assert task.source_type == "feishu_project"
 
 
 @pytest.mark.asyncio

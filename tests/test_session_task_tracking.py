@@ -265,6 +265,34 @@ async def test_list_tasks(api_client):
     assert tasks[0]["task_type"] == "session_commit"
 
 
+async def test_list_tasks_hides_internal_tasks_by_default(api_client):
+    client, _ = api_client
+    tracker = get_task_tracker()
+    visible = await tracker.create(
+        "add_resource",
+        account_id="default",
+        user_id="default",
+    )
+    internal = await tracker.create(
+        "add_resource",
+        account_id="default",
+        user_id="default",
+        meta={"internal": True},
+    )
+
+    resp = await client.get("/api/v1/tasks", params={"task_type": "add_resource"})
+    task_ids = {task["task_id"] for task in resp.json()["result"]}
+    assert visible.task_id in task_ids
+    assert internal.task_id not in task_ids
+
+    resp = await client.get(
+        "/api/v1/tasks",
+        params={"task_type": "add_resource", "include_internal": True},
+    )
+    assert internal.task_id in {task["task_id"] for task in resp.json()["result"]}
+    assert (await client.get(f"/api/v1/tasks/{internal.task_id}")).status_code == 200
+
+
 async def test_list_tasks_filter_status(api_client):
     client, service = api_client
 

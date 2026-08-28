@@ -89,6 +89,7 @@ async def list_tasks(
         description="Filter by status (pending/running/cancelling/completed/failed/cancelled)",
     ),
     resource_id: Optional[str] = Query(None, description="Filter by resource ID (e.g. session_id)"),
+    include_internal: bool = Query(False, description="Include internal Connector child tasks"),
     limit: int = Query(50, le=200, description="Max results"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
@@ -102,12 +103,14 @@ async def list_tasks(
             limit=limit,
             account_id=SYSTEM_TASK_ACCOUNT_ID,
             user_id=SYSTEM_TASK_USER_ID,
+            include_internal=include_internal,
         )
         cached_tasks = await tracker.list_tasks(
             task_type=task_type,
             status=status,
             resource_id=resource_id,
             limit=limit,
+            include_internal=include_internal,
         )
         tasks_by_id = {task.task_id: task for task in cached_tasks}
         tasks_by_id.update({task.task_id: task for task in system_tasks})
@@ -120,5 +123,6 @@ async def list_tasks(
             limit=limit,
             account_id=_ctx.account_id,
             user_id=_ctx.user.user_id,
+            include_internal=include_internal,
         )
     return Response(status="ok", result=[t.to_dict() for t in tasks])

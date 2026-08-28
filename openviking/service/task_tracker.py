@@ -877,6 +877,7 @@ class TaskTracker:
         limit: int = 50,
         account_id: Optional[str] = None,
         user_id: Optional[str] = None,
+        include_internal: bool = True,
     ) -> List[TaskRecord]:
         """List tasks with optional filters. Most-recent first. Returns snapshot copies."""
         return await self._dispatcher.run(
@@ -887,6 +888,7 @@ class TaskTracker:
                 limit,
                 account_id,
                 user_id,
+                include_internal,
             )
         )
 
@@ -898,11 +900,14 @@ class TaskTracker:
         limit: int,
         account_id: Optional[str],
         user_id: Optional[str],
+        include_internal: bool,
     ) -> List[TaskRecord]:
         if account_id is not None:
             self._merge_loaded_tasks(await self._load_all_from_store(account_id, user_id))
         source = self._cache_snapshot()
         tasks = [self._copy(t) for t in source if self._matches_owner(t, account_id, user_id)]
+        if not include_internal:
+            tasks = [t for t in tasks if t.meta.get("internal") is not True]
         if task_type:
             tasks = [t for t in tasks if t.task_type == task_type]
         if status:

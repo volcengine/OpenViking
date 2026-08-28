@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import pytest_asyncio
 
+from openviking.resource.feishu_watch_auth import FeishuAppCredentials
 from openviking.resource.watch_manager import WatchManager
 from openviking.server.identity import RequestContext, Role
 from openviking.service import resource_service as resource_service_module
@@ -171,6 +172,7 @@ class TestWatchTaskCreation:
         task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is not None
         assert task.path == "/test/path"
+        assert task.source_type == "local"
         assert task.to_uri == to_uri
         assert task.reason == "Test monitoring"
         assert task.instruction == "Monitor for changes"
@@ -457,7 +459,12 @@ class TestAddResourceArgs:
         monkeypatch.setattr(
             resource_service_module,
             "load_feishu_app_credentials",
-            lambda: object(),
+            lambda app_id=None, app_secret=None: FeishuAppCredentials(
+                app_id=app_id or "configured-app",
+                app_secret=app_secret or "configured-secret",
+                domain="https://open.feishu.cn",
+                request_timeout=30,
+            ),
         )
         disable_task_tracker(monkeypatch)
         to_uri = "viking://resources/feishu_user_watch"
@@ -480,6 +487,8 @@ class TestAddResourceArgs:
             args={
                 "feishu_access_token": " u-test ",
                 "feishu_refresh_token": " r-test ",
+                "feishu_app_id": " cli-test ",
+                "feishu_app_secret": " secret-test ",
             },
         )
 
@@ -492,7 +501,10 @@ class TestAddResourceArgs:
             "access_token": "u-test",
             "refresh_token": "r-test",
             "expires_at": None,
+            "app_id": "cli-test",
+            "app_secret": "secret-test",
         }
+        assert "secret-test" not in str(message.to_dict())
         await resource_service.execute_add_resource_job(
             message,
             ctx=request_context,
@@ -504,17 +516,40 @@ class TestAddResourceArgs:
         processor = resource_service._resource_processor
         assert processor.calls[-1]["feishu_access_token"] == "u-test"
         assert "feishu_refresh_token" not in processor.calls[-1]
+        assert "feishu_app_id" not in processor.calls[-1]
+        assert "feishu_app_secret" not in processor.calls[-1]
 
         task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is not None
+        assert task.source_type == "feishu"
         assert task.processor_kwargs == {}
         assert task.auth_state == {
             "provider": "feishu",
             "access_token": "u-test",
             "refresh_token": "r-test",
             "expires_at": None,
+            "app_id": "cli-test",
+            "app_secret": "secret-test",
         }
         assert "auth_state" not in task.to_dict()
+
+    @pytest.mark.asyncio
+    async def test_feishu_user_token_watch_rejects_partial_app_credentials(
+        self,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+    ):
+        with pytest.raises(InvalidArgumentError, match="must be non-empty strings"):
+            await resource_service.add_resource(
+                path="https://example.feishu.cn/docx/doc_token",
+                ctx=request_context,
+                watch_interval=30,
+                args={
+                    "feishu_access_token": "u-test",
+                    "feishu_refresh_token": "r-test",
+                    "feishu_app_id": "cli-test",
+                },
+            )
 
     @pytest.mark.asyncio
     async def test_git_token_watch_stores_private_auth_state(
@@ -576,6 +611,7 @@ class TestAddResourceArgs:
 
         task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is not None
+        assert task.source_type == "git"
         assert task.processor_kwargs == {
             "branch": "main",
             "source_name": "private",

@@ -10,6 +10,7 @@ import hashlib
 import math
 import os
 import re
+import signal
 from typing import Any
 
 import yaml
@@ -22,6 +23,7 @@ from openviking.server.local_input_guard import require_remote_resource_source
 from openviking.utils.git_auth import (
     GitHttpAuthConfig,
     build_git_http_auth_env,
+    reject_git_http_userinfo,
 )
 from openviking_cli.exceptions import (
     DeadlineExceededError,
@@ -281,6 +283,7 @@ async def preflight_git_repository(
     """Verify that the server can read a Git source without cloning or creating a task."""
 
     _validate_clone_url(repo_url, asset_name)
+    reject_git_http_userinfo(repo_url)
     repo_url = require_remote_resource_source(repo_url)
     if timeout <= 0 or not math.isfinite(timeout):
         raise InvalidArgumentError("Git preflight timeout must be a positive finite number")
@@ -344,21 +347,23 @@ async def preflight_git_repository(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
+            start_new_session=os.name == "posix",
         )
     except FileNotFoundError as exc:
         raise UnavailableError("git", "executable not found on the OpenViking Server") from exc
 
     try:
         _stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
-    except TimeoutError as exc:
-        process.kill()
-        await process.communicate()
-        raise DeadlineExceededError("Git repository permission preflight", timeout) from exc
-    except BaseException:
+    except BaseException as exc:
         with contextlib.suppress(ProcessLookupError):
-            process.kill()
+            if os.name == "posix":
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.kill()
         with contextlib.suppress(Exception):
-            await asyncio.shield(process.wait())
+            await asyncio.wait_for(asyncio.shield(process.communicate()), timeout=1.0)
+        if isinstance(exc, asyncio.TimeoutError):
+            raise DeadlineExceededError("Git repository permission preflight", timeout) from exc
         raise
 
     locator = normalize_repo_url(repo_url)

@@ -24,6 +24,9 @@ from openviking_cli.exceptions import InvalidArgumentError
 
 router = APIRouter(prefix="/api/v1", tags=["resources"])
 
+_CONNECTOR_TASK_ORIGIN_HEADER = "X-OpenViking-Task-Origin"
+_CONNECTOR_TASK_ORIGIN = "connector_import"
+
 
 class AddResourceRequest(BaseModel):
     """Request model for add_resource.
@@ -63,7 +66,8 @@ class AddResourceRequest(BaseModel):
             watch_interval > 0 the credentials are stored in private watch state.
             For Feishu one-time user-token imports,
             pass {"feishu_access_token": "..."}. For Feishu user-token watches,
-            pass {"feishu_access_token": "...", "feishu_refresh_token": "..."}.
+            also pass "feishu_refresh_token". The optional "feishu_app_id" and
+            "feishu_app_secret" pair overrides the server app for that watch.
         watch_interval: Watch interval in minutes for automatic resource monitoring.
             - watch_interval > 0: Creates or updates a watch task. The resource will be
               automatically re-processed at the specified interval.
@@ -296,6 +300,10 @@ async def add_resource(
                 tag_mode=request.tag_mode,
                 allow_local_path_resolution=allow_local_path_resolution,
                 enforce_public_remote_targets=True,
+                internal_task=(
+                    http_request.headers.get(_CONNECTOR_TASK_ORIGIN_HEADER, "").strip().lower()
+                    == _CONNECTOR_TASK_ORIGIN
+                ),
                 args=request.args,
                 **kwargs,
             )

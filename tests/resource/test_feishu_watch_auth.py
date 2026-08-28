@@ -4,6 +4,7 @@
 
 from datetime import datetime, timedelta, timezone
 
+from openviking.resource import feishu_watch_auth
 from openviking.resource.feishu_watch_auth import (
     FeishuAppCredentials,
     FeishuOAuthClient,
@@ -12,6 +13,26 @@ from openviking.resource.feishu_watch_auth import (
     create_feishu_auth_state,
     feishu_auth_state_needs_refresh,
 )
+
+
+def test_oauth_client_uses_watch_app_credentials(monkeypatch):
+    seen = {}
+
+    def fake_load_credentials(*, app_id=None, app_secret=None):
+        seen.update(app_id=app_id, app_secret=app_secret)
+        return FeishuAppCredentials(
+            app_id=app_id,
+            app_secret=app_secret,
+            domain="https://open.feishu.cn",
+            request_timeout=30,
+        )
+
+    monkeypatch.setattr(feishu_watch_auth, "load_feishu_app_credentials", fake_load_credentials)
+
+    client = FeishuOAuthClient.from_auth_state({"app_id": "cli-test", "app_secret": "secret-test"})
+
+    assert seen == {"app_id": "cli-test", "app_secret": "secret-test"}
+    assert client._credentials.app_id == "cli-test"
 
 
 def test_feishu_auth_state_refresh_window():
