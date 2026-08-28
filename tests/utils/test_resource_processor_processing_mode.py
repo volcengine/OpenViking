@@ -40,6 +40,18 @@ class _RecordingVikingDB:
         return [{"id": "recursive-child-detail"}]
 
 
+@pytest.mark.asyncio
+async def test_resource_processor_upload_understanding_file_delegates():
+    processor = ResourceProcessor(_FakeVikingDB())
+    media_processor = SimpleNamespace(upload_understanding_file=AsyncMock(return_value="file-1"))
+    processor._media_processor = media_processor
+
+    result = await processor.upload_understanding_file("/tmp/upload.pdf")
+
+    assert result == "file-1"
+    media_processor.upload_understanding_file.assert_awaited_once_with("/tmp/upload.pdf")
+
+
 @pytest.fixture
 def ctx() -> RequestContext:
     return RequestContext(

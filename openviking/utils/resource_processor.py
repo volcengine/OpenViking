@@ -138,6 +138,9 @@ class ResourceProcessor:
     async def submit_understanding(self, source: Union[str, "LocalResource"], **kwargs) -> str:
         return await self._get_media_processor().submit_understanding(source, **kwargs)
 
+    async def upload_understanding_file(self, source: Union[str, "LocalResource"]) -> str:
+        return await self._get_media_processor().upload_understanding_file(source)
+
     async def build_index(
         self, resource_uris: List[str], ctx: RequestContext, **kwargs
     ) -> Dict[str, Any]:
