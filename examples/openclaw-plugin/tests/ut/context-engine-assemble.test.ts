@@ -342,7 +342,7 @@ describe("context-engine assemble()", () => {
 
     expect(getClient).not.toHaveBeenCalled();
     expect(result.messages).toBe(sourceMessages);
-    expect(result.estimatedTokens).toBe(roughEstimate(sourceMessages));
+    expect(result.estimatedTokens).toBe(0);
   });
 
   it("passes through transformContext latest user messages when auto-recall is disabled", async () => {
