@@ -30,6 +30,36 @@ export type FindResult = {
   total?: number;
 };
 
+export type SearchContextEntry = {
+  uri: string;
+  category?: string;
+  score?: number;
+  detail?: string;
+  text?: string;
+  origin?: string;
+};
+
+export type SearchContextResult = {
+  entries?: SearchContextEntry[];
+  rendered?: string;
+  digest?: string;
+  stats?: Record<string, unknown>;
+};
+
+export type SearchContextOptions = {
+  sessionId?: string;
+  limit?: number;
+  scoreThreshold?: number;
+  contextType?: string | string[];
+  queryExpansion?: "off" | "auto";
+  maxTokens?: number;
+  detail?: "abstract" | "overview" | "full";
+  dedupTurns?: number;
+  peerScope?: "actor" | "all";
+  actorPeerId?: string;
+  requestTimeoutMs?: number;
+};
+
 export type FsListEntry = string | Record<string, unknown>;
 
 export type FsListResult = FsListEntry[];
@@ -486,6 +516,52 @@ export class OpenVikingClient {
       method: "POST",
       body: JSON.stringify(body),
     }, undefined, actorPeerId);
+  }
+
+  async searchContext(
+    query: string,
+    options: SearchContextOptions = {},
+  ): Promise<SearchContextResult> {
+    const body = {
+      query,
+      mode: "context",
+      session_id: options.sessionId,
+      limit: options.limit,
+      score_threshold: options.scoreThreshold,
+      context_type: options.contextType,
+      query_expansion: options.queryExpansion,
+      max_tokens: options.maxTokens,
+      detail: options.detail,
+      dedup_turns: options.dedupTurns,
+      peer_scope: options.peerScope,
+    };
+    const actorPeerId = this.resolveActorPeerHeader(options.actorPeerId);
+    const tenantHeaders = this.resolveTenantHeaders();
+    this.routingDebugLog?.(
+      `openviking: context search POST ${this.baseUrl}/api/v1/search/search ` +
+        JSON.stringify({
+          X_OpenViking_Account: tenantHeaders.accountId ?? null,
+          X_OpenViking_User: tenantHeaders.userId ?? null,
+          X_OpenViking_Actor_Peer: actorPeerId ?? null,
+          session_id: options.sessionId ?? null,
+          query:
+            query.length > 4000
+              ? `${query.slice(0, 4000)}…(+${query.length - 4000} more chars)`
+              : query,
+          limit: options.limit,
+          score_threshold: options.scoreThreshold ?? null,
+          context_type: options.contextType ?? null,
+          query_expansion: options.queryExpansion ?? null,
+          max_tokens: options.maxTokens,
+          detail: options.detail ?? null,
+          dedup_turns: options.dedupTurns ?? 0,
+          peer_scope: options.peerScope ?? null,
+        }),
+    );
+    return this.request<SearchContextResult>("/api/v1/search/search", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }, options.requestTimeoutMs, actorPeerId);
   }
 
   async read(uri: string, actorPeerId?: string): Promise<string> {

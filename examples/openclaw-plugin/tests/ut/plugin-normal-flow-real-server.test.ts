@@ -60,18 +60,18 @@ describe("plugin normal flow with healthy backend", () => {
         return;
       }
 
-      if (method === "POST" && url.pathname === "/api/v1/search/find") {
+      if (method === "POST" && url.pathname === "/api/v1/search/search") {
         json(res, 200, {
           result: {
-            memories: [
-              {
-                uri: "viking://user/default/memories/rust-pref",
-                level: 2,
-                abstract: "User prefers Rust for backend tasks.",
-                score: 0.91,
-              },
-            ],
-            total: 1,
+            entries: [{
+              uri: "viking://user/default/memories/rust-pref",
+              category: "preferences",
+              detail: "abstract",
+              text: "User prefers Rust for backend tasks.",
+              score: 0.91,
+            }],
+            rendered: '<memory uri="viking://user/default/memories/rust-pref">User prefers Rust for backend tasks.</memory>',
+            stats: { candidates: 1, used_tokens: 18 },
           },
           status: "ok",
         });
@@ -267,8 +267,19 @@ describe("plugin normal flow with healthy backend", () => {
 
     expect(requests.some((entry) => entry.method === "GET" && entry.path === "/health")).toBe(true);
     expect(
-      requests.some((entry) => entry.method === "POST" && entry.path === "/api/v1/search/find"),
+      requests.some((entry) => entry.method === "POST" && entry.path === "/api/v1/search/search"),
     ).toBe(true);
+    const contextSearchRequest = requests.find(
+      (entry) => entry.method === "POST" && entry.path === "/api/v1/search/search",
+    );
+    expect(JSON.parse(contextSearchRequest?.body ?? "{}")).toMatchObject({
+      mode: "context",
+      session_id: "session-normal",
+      context_type: "memory",
+      query_expansion: "auto",
+      dedup_turns: 5,
+      peer_scope: "actor",
+    });
     expect(
       requests.some((entry) => entry.method === "GET" && entry.path.startsWith("/api/v1/sessions/session-normal/context")),
     ).toBe(true);

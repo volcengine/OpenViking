@@ -52,6 +52,7 @@ function makeEngine(
   const client = {
     healthCheck: vi.fn().mockResolvedValue(undefined),
     getSessionContext: vi.fn().mockResolvedValue(contextResult),
+    searchContext: vi.fn().mockResolvedValue({ entries: [], rendered: "", stats: {} }),
     find: vi.fn().mockResolvedValue({ memories: [], resources: [], total: 0 }),
     read: vi.fn().mockResolvedValue(""),
   } as unknown as OpenVikingClient;
@@ -81,6 +82,7 @@ function makeEngine(
     client: client as unknown as {
       getSessionContext: ReturnType<typeof vi.fn>;
       healthCheck: ReturnType<typeof vi.fn>;
+      searchContext: ReturnType<typeof vi.fn>;
       find: ReturnType<typeof vi.fn>;
       read: ReturnType<typeof vi.fn>;
     },
@@ -114,20 +116,16 @@ describe("context-engine assemble()", () => {
           },
         },
       );
-      client.find
-        .mockResolvedValueOnce({
-          memories: [
-            {
-              uri: "viking://user/default/memories/rust-pref",
-              level: 2,
-              category: "preferences",
-              abstract: "User prefers Rust for backend tasks.",
-              score: 0.93,
-            },
-          ],
-          total: 1,
-        })
-        .mockResolvedValueOnce({ memories: [], total: 0 });
+      client.searchContext.mockResolvedValueOnce({
+        entries: [{
+          uri: "viking://user/default/memories/rust-pref",
+          category: "preferences",
+          text: "User prefers Rust for backend tasks.",
+          score: 0.93,
+        }],
+        rendered: '<memory uri="viking://user/default/memories/rust-pref">User prefers Rust for backend tasks.</memory>',
+        stats: { candidates: 1, used_tokens: 18 },
+      });
 
       const sourceMessages = [
         { role: "user", content: "[Session History Summary]\nOlder archive summary." },
@@ -171,17 +169,15 @@ describe("context-engine assemble()", () => {
           },
         },
       );
-      client.find.mockResolvedValueOnce({
-        memories: [
-          {
-            uri: "viking://user/default/memories/typescript-pref",
-            level: 2,
-            category: "preferences",
-            abstract: "Use TypeScript for gateway plugins.",
-            score: 0.9,
-          },
-        ],
-        total: 1,
+      client.searchContext.mockResolvedValueOnce({
+        entries: [{
+          uri: "viking://user/default/memories/typescript-pref",
+          category: "preferences",
+          text: "Use TypeScript for gateway plugins.",
+          score: 0.9,
+        }],
+        rendered: '<memory uri="viking://user/default/memories/typescript-pref">Use TypeScript for gateway plugins.</memory>',
+        stats: { candidates: 1, used_tokens: 16 },
       });
 
       await engine.assemble({
@@ -215,29 +211,28 @@ describe("context-engine assemble()", () => {
           },
         },
       );
-      client.find.mockImplementation(async (_query: string, options: { contextType?: string }) => ({
-        resources: [],
-        memories: options.contextType === "memory"
-          ? [{
-              uri: "viking://user/memories/project-docs",
-              level: 2,
-              category: "memory",
-              abstract: "Memory docs for the gateway plugin.",
-              score: 0.9,
-            }]
-          : [],
-        total: options.contextType === "memory" ? 1 : 0,
-      }));
+      client.searchContext.mockResolvedValue({
+        entries: [{
+          uri: "viking://user/memories/project-docs",
+          category: "memory",
+          text: "Memory docs for the gateway plugin.",
+          score: 0.9,
+        }],
+        rendered: '<memory uri="viking://user/memories/project-docs">Memory docs for the gateway plugin.</memory>',
+        stats: { candidates: 1, used_tokens: 14 },
+      });
 
       await engine.assemble({
         sessionId: "session-transform-resource-default",
         messages: [{ role: "user", content: "where are the gateway plugin docs?" }],
       });
 
-      expect(client.find).toHaveBeenCalledTimes(1);
-      expect(client.find.mock.calls[0]?.[1]).toMatchObject({
+      expect(client.searchContext).toHaveBeenCalledTimes(1);
+      expect(client.searchContext.mock.calls[0]?.[1]).toMatchObject({
+        sessionId: "session-transform-resource-default",
         contextType: "memory",
-        targetUri: undefined,
+        queryExpansion: "auto",
+        dedupTurns: 5,
       });
       const recorded = traces.query({ turn: "latest", sessionId: "session-transform-resource-default", limit: 10 }).entries[0]!;
       expect(recorded.resourceTypes).toEqual(["user", "agent"]);
@@ -277,24 +272,15 @@ describe("context-engine assemble()", () => {
           queryConfigStore,
         },
       );
-      client.find.mockResolvedValueOnce({
-        memories: [
-          {
-            uri: "viking://user/default/memories/high",
-            level: 2,
-            category: "preferences",
-            abstract: "High-confidence dynamic query memory.",
-            score: 0.9,
-          },
-          {
-            uri: "viking://user/default/memories/low",
-            level: 2,
-            category: "facts",
-            abstract: "Low-confidence memory should be filtered.",
-            score: 0.1,
-          },
-        ],
-        total: 2,
+      client.searchContext.mockResolvedValueOnce({
+        entries: [{
+          uri: "viking://user/default/memories/high",
+          category: "preferences",
+          text: "High-confidence dynamic query memory.",
+          score: 0.9,
+        }],
+        rendered: '<memory uri="viking://user/default/memories/high">High-confidence dynamic query memory.</memory>',
+        stats: { candidates: 1, used_tokens: 12 },
       });
 
       const result = await engine.assemble({
@@ -302,11 +288,12 @@ describe("context-engine assemble()", () => {
         messages: [{ role: "user", content: "which dynamic query memory applies?" }],
       });
 
-      expect(client.find).toHaveBeenCalledTimes(1);
-      expect(client.find.mock.calls[0]?.[1]).toMatchObject({
+      expect(client.searchContext).toHaveBeenCalledTimes(1);
+      expect(client.searchContext.mock.calls[0]?.[1]).toMatchObject({
         contextType: "memory",
-        targetUri: undefined,
-        limit: 3,
+        limit: 1,
+        scoreThreshold: 0.5,
+        maxTokens: 250,
       });
       expect(String(result.messages[0]?.content)).toContain("High-confidence dynamic query memory.");
       expect(String(result.messages[0]?.content)).not.toContain("Low-confidence memory should be filtered.");
@@ -407,7 +394,7 @@ describe("context-engine assemble()", () => {
       "session-main-no-prompt",
       4096,
     );
-    expect(client.find).not.toHaveBeenCalled();
+    expect(client.searchContext).not.toHaveBeenCalled();
     expect(result.messages[0]).toEqual({
       role: "user",
       content: "[Session History Summary]\n# Session Summary\nPreviously discussed repository setup.",

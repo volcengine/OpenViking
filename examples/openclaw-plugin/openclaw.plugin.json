@@ -150,9 +150,9 @@
     },
     "autoRecallTimeoutMs": {
       "label": "Auto-Recall Timeout (ms)",
-      "placeholder": "5000",
+      "placeholder": "15000",
       "advanced": true,
-      "help": "Outer time budget for the whole auto-recall flow, including search, ranking, and memory reads."
+      "help": "Outer time budget for the server-assembled context search, including session-aware query expansion."
     },
     "recallResources": {
       "label": "Recall Resources",

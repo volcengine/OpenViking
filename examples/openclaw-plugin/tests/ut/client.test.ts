@@ -553,6 +553,54 @@ describe("OpenVikingClient tenant headers (advanced accountId / userId overrides
 });
 
 describe("OpenVikingClient canonical namespace policy", () => {
+  it("posts server-assembled context search with session and actor routing", async () => {
+    const transport = vi.fn().mockResolvedValue(okResponse({
+      entries: [{ uri: "viking://user/memories/events/a.md" }],
+      rendered: '<memory uri="viking://user/memories/events/a.md">body</memory>',
+      stats: { used_tokens: 12 },
+    }));
+    const routingDebugLog = vi.fn();
+    const client = new OpenVikingClient(
+      "http://127.0.0.1:1933", "", "agent", 5000,
+      "acct-123", "user-456", routingDebugLog, false, true, { transport },
+    );
+
+    const result = await client.searchContext("continue the refactor", {
+      sessionId: "ov-session-1",
+      limit: 6,
+      scoreThreshold: 0.15,
+      contextType: ["memory", "resource"],
+      queryExpansion: "auto",
+      maxTokens: 1000,
+      detail: "abstract",
+      dedupTurns: 5,
+      peerScope: "actor",
+      actorPeerId: "agent-main",
+    });
+
+    expect(result.stats).toEqual({ used_tokens: 12 });
+    expect(transport).toHaveBeenCalledTimes(1);
+    const [url, init] = transport.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:1933/api/v1/search/search");
+    expect(JSON.parse(String(init.body))).toEqual({
+      query: "continue the refactor",
+      mode: "context",
+      session_id: "ov-session-1",
+      limit: 6,
+      score_threshold: 0.15,
+      context_type: ["memory", "resource"],
+      query_expansion: "auto",
+      max_tokens: 1000,
+      detail: "abstract",
+      dedup_turns: 5,
+      peer_scope: "actor",
+    });
+    expect(new Headers(init.headers).get("X-OpenViking-Actor-Peer")).toBe("agent-main");
+    expect(new Headers(init.headers).get("X-OpenViking-Account")).toBe("acct-123");
+    expect(new Headers(init.headers).get("X-OpenViking-User")).toBe("user-456");
+    expect(routingDebugLog).toHaveBeenCalledWith(expect.stringContaining('"query_expansion":"auto"'));
+  });
+
   it("keeps user memory alias unchanged and routes by actor peer by default", async () => {
     const transport = vi.fn(async (url: string) => {
       if (url.endsWith("/api/v1/system/status")) {

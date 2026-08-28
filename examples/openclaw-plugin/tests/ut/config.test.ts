@@ -22,7 +22,7 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.commitTokenThresholdRatio).toBe(0.5);
     expect(cfg.captureMode).toBe("semantic");
     expect(cfg.captureMaxLength).toBe(24000);
-    expect(cfg.autoRecallTimeoutMs).toBe(5000);
+    expect(cfg.autoRecallTimeoutMs).toBe(15000);
     expect(cfg.recallMaxContentChars).toBe(5000);
     expect(cfg.peer_role).toBe("assistant");
     expect(cfg.peer_prefix).toBe("");
