@@ -28,11 +28,14 @@ export function CurrentUserMenu() {
   const { t } = useTranslation('appShell')
   const { connection, serverMode, switchIdentity } = useAppConnection()
   const [open, setOpen] = React.useState(false)
+  const [manualUserId, setManualUserId] = React.useState('')
   const [switchingUserId, setSwitchingUserId] = React.useState('')
   const { accountId, userId } = connection
   const accountLabel = accountId || t('header.currentUser.unset')
   const userLabel = userId || t('header.currentUser.unset')
   const canSwitchUser = serverMode === 'trusted' && Boolean(accountId)
+  const canListUsers = Boolean(connection.adminApiKey)
+  const manualTargetUserId = manualUserId.trim()
   const adminConnection = React.useMemo<AdminConnection>(
     () => ({
       accountId,
@@ -43,7 +46,7 @@ export function CurrentUserMenu() {
     [accountId, connection.adminApiKey, connection.baseUrl, userId],
   )
   const usersQuery = useQuery({
-    enabled: canSwitchUser && open,
+    enabled: canSwitchUser && canListUsers && open,
     queryFn: () => fetchAdminUsers(adminConnection, accountId),
     queryKey: [
       'current-user-menu',
@@ -55,18 +58,20 @@ export function CurrentUserMenu() {
   })
 
   async function selectUser(nextUserId: string): Promise<void> {
-    if (nextUserId === userId) {
+    const normalizedUserId = nextUserId.trim()
+    if (!normalizedUserId || normalizedUserId === userId) {
       return
     }
 
-    setSwitchingUserId(nextUserId)
+    setSwitchingUserId(normalizedUserId)
     try {
       await switchIdentity({
         accountId,
         allowLegacyIdentityFallback: true,
         apiKey: '',
-        userId: nextUserId,
+        userId: normalizedUserId,
       })
+      setManualUserId('')
       setOpen(false)
       toast.success(t('header.currentUser.switchSuccess'))
     } catch (error) {
@@ -143,7 +148,42 @@ export function CurrentUserMenu() {
               {t('header.currentUser.switchUser')}
             </p>
             <div className="max-h-56 overflow-y-auto">
-              {usersQuery.isLoading ? (
+              {!canListUsers ? (
+                <form
+                  className="grid gap-2 p-2"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    void selectUser(manualTargetUserId)
+                  }}
+                >
+                  <label className="sr-only" htmlFor="trusted-user-id">
+                    {t('header.currentUser.userId')}
+                  </label>
+                  <input
+                    id="trusted-user-id"
+                    type="text"
+                    autoComplete="off"
+                    value={manualUserId}
+                    className="h-9 rounded-md border bg-background px-3 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                    placeholder={t('header.currentUser.userIdPlaceholder')}
+                    onChange={(event) => setManualUserId(event.target.value)}
+                  />
+                  <button
+                    type="submit"
+                    disabled={
+                      !manualTargetUserId ||
+                      manualTargetUserId === userId ||
+                      Boolean(switchingUserId)
+                    }
+                    className="flex h-9 items-center justify-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {switchingUserId ? (
+                      <LoaderCircleIcon className="size-3.5 animate-spin" />
+                    ) : null}
+                    {t('header.currentUser.switchAction')}
+                  </button>
+                </form>
+              ) : usersQuery.isLoading ? (
                 <div className="flex items-center justify-center gap-2 px-3 py-5 text-xs text-muted-foreground">
                   <LoaderCircleIcon className="size-3.5 animate-spin" />
                   {t('header.currentUser.loadingUsers')}

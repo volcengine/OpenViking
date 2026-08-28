@@ -77,7 +77,6 @@ import { resolveStudioManagementCapabilities } from '#/lib/studio-permissions'
 import { AddUserDialog } from './-components/add-user-dialog'
 import { DeleteAccountButton } from './-components/delete-account-button'
 import { getErrorMessage } from './-lib/error'
-import { canSwitchToManagedUser } from './-lib/identity-switch'
 
 export const Route = createFileRoute('/users')({
   component: UserManagementRoute,
@@ -435,11 +434,9 @@ function UserManagementRoute() {
                     const isCurrentIdentity =
                       user.accountId === connection.accountId &&
                       user.userId === connection.userId
-                    const canSwitchIdentity = canSwitchToManagedUser({
-                      current: isCurrentIdentity,
-                      hasApiKey: Boolean(user.apiKey),
-                      serverMode,
-                    })
+                    const canSwitchIdentity =
+                      !isCurrentIdentity &&
+                      (serverMode === 'trusted' || Boolean(user.apiKey))
                     const isSwitching = switchingIdentityKey === identityKey
                     const isLastManager =
                       (user.role === 'admin' || user.role === 'root') &&

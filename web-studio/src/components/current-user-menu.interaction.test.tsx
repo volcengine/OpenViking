@@ -63,6 +63,7 @@ function renderMenu() {
 }
 
 beforeEach(() => {
+  connectionMocks.connection.adminApiKey = 'root-key'
   connectionMocks.serverMode = 'trusted'
   connectionMocks.switchIdentity.mockResolvedValue(undefined)
   adminMocks.fetchAdminUsers.mockResolvedValue([
@@ -117,6 +118,32 @@ describe('CurrentUserMenu', () => {
     )
 
     expect(screen.queryByText('header.currentUser.switchUser')).toBeNull()
+    expect(adminMocks.fetchAdminUsers).not.toHaveBeenCalled()
+  })
+
+  it('accepts a user ID when trusted mode has no user directory', async () => {
+    connectionMocks.connection.adminApiKey = ''
+    renderMenu()
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'header.currentUser.openMenu' }),
+    )
+    fireEvent.change(
+      screen.getByPlaceholderText('header.currentUser.userIdPlaceholder'),
+      { target: { value: ' bob ' } },
+    )
+    fireEvent.click(
+      screen.getByRole('button', { name: 'header.currentUser.switchAction' }),
+    )
+
+    await waitFor(() => {
+      expect(connectionMocks.switchIdentity).toHaveBeenCalledWith({
+        accountId: 'account-a',
+        allowLegacyIdentityFallback: true,
+        apiKey: '',
+        userId: 'bob',
+      })
+    })
     expect(adminMocks.fetchAdminUsers).not.toHaveBeenCalled()
   })
 })
