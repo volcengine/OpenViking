@@ -120,17 +120,13 @@ ACL data exists only in the context collection. Each context record stores direc
 
 ```text
 acl_enabled
-acl_direct_read_principal_ids
-acl_direct_write_principal_ids
-acl_direct_manage_principal_ids
-acl_inherited_read_principal_ids
-acl_inherited_write_principal_ids
-acl_inherited_manage_principal_ids
+acl_direct_grants
+acl_inherited_grants
 ```
 
-`acl_direct_*` is the ACL assigned to the current node. `acl_inherited_*` is the union of all ancestor direct ACLs. Effective permission is their union; there is no separate ACL collection.
+`acl_direct_grants` is the ACL assigned to the current node. `acl_inherited_grants` is the union of all ancestor direct ACLs. Each principal stores only its highest level as `{mask}:{principal}`: `1` means `read`, `3` means `write`, and `7` means `manage`. For example, `3:group:dev` gives `group:dev` `write` and therefore also `read`. Effective permission is the union of the two fields; there is no separate ACL collection.
 
-The request principals are `user:{ctx.user_id}`, `user:*`, and one `group:{group_id}` for each ID in `ctx.group_ids`. Within the `viking://resources` scope, `find/search` uses native `list<string>` filters over `acl_direct_read_principal_ids` and `acl_inherited_read_principal_ids`; private resources remain isolated by URI owner. Legacy records without ACL fields are treated as `acl_enabled=false`, so they do not require a full data backfill.
+The request principals are `user:{ctx.user_id}`, `user:*`, and one `group:{group_id}` for each ID in `ctx.group_ids`. For reads, `find/search` matches the `1`, `3`, and `7` tokens for each principal against both native `list<string>` grant fields within the `viking://resources` scope; private resources remain isolated by URI owner. Legacy records without ACL fields are treated as `acl_enabled=false`, so they do not require a full data backfill.
 
 A retrieval target URI is only a search scope; the caller does not need to read the target node itself. A user can discover a deeply shared file even when intermediate directories are not readable.
 

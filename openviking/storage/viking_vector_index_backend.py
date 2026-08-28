@@ -12,7 +12,13 @@ from typing import Any, AsyncIterator, Dict, List, Mapping, Optional
 
 from openviking.core.namespace import canonical_user_root, uri_parts, visible_roots
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.acl import ACL_CONTEXT_FIELDS, AclManager, acl_principals
+from openviking.storage.acl import (
+    ACL_CONTEXT_FIELDS,
+    AclAction,
+    AclManager,
+    acl_grant_tokens,
+    acl_principals,
+)
 from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, RawDSL
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.result import UpdateResult
@@ -1659,14 +1665,14 @@ class VikingVectorIndexBackend:
                 Or([PathScope("uri", root, depth=-1) for root in visible_roots(ctx)]),
             ]
         )
-        principals = sorted(acl_principals(ctx))
+        read_grants = acl_grant_tokens(acl_principals(ctx), AclAction.READ)
         shared_acl_filter = And(
             [
                 PathScope("uri", "viking://resources", depth=-1),
                 Or(
                     [
-                        In("acl_direct_read_principal_ids", principals),
-                        In("acl_inherited_read_principal_ids", principals),
+                        In("acl_direct_grants", read_grants),
+                        In("acl_inherited_grants", read_grants),
                     ]
                 ),
             ]

@@ -149,7 +149,7 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl():
             "account_id": "acct",
             "context_type": "resource",
             "acl_enabled": True,
-            "acl_direct_read_principal_ids": ["user:alice"],
+            "acl_direct_grants": ["1:user:alice"],
         },
         {
             "id": "inherited-shared",
@@ -157,7 +157,7 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl():
             "account_id": "acct",
             "context_type": "resource",
             "acl_enabled": True,
-            "acl_inherited_read_principal_ids": ["user:*"],
+            "acl_inherited_grants": ["3:user:*"],
         },
         {
             "id": "denied-shared",
@@ -165,7 +165,7 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl():
             "account_id": "acct",
             "context_type": "resource",
             "acl_enabled": True,
-            "acl_direct_read_principal_ids": ["user:bob"],
+            "acl_direct_grants": ["7:user:bob"],
         },
         {
             "id": "foreign-account",

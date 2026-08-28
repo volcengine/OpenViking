@@ -25,7 +25,6 @@ from openviking.storage.acl import (
     AclLevel,
     acl_allows,
     acl_ancestors,
-    direct_to_entries,
     has_implicit_manage,
     is_acl_uri,
     normalize_acl_level,
@@ -347,7 +346,7 @@ class _AccessMixin:
             await self._ensure_acl_manage(uri, real_ctx)
             await self._ensure_acl_target_exists(uri, real_ctx)
             direct = await self.acl_manager.get_direct(uri, real_ctx)
-            entries = {entry.principal: entry for entry in direct_to_entries(direct)}
+            entries = {entry.principal: entry for entry in direct.entries}
             if normalized_level is None:
                 entries.pop(principal, None)
             else:

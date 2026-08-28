@@ -33,16 +33,14 @@ class CreatorAclGrant(str, Enum):
     INHERITED = "inherited"
 
 
-_LEVEL_RANK = {
+_LEVEL_MASK = {
     AclLevel.READ: 1,
-    AclLevel.WRITE: 2,
-    AclLevel.MANAGE: 3,
+    AclLevel.WRITE: 3,
+    AclLevel.MANAGE: 7,
 }
-_ACL_PREFIXES = ("acl_direct", "acl_inherited")
-ACL_PRINCIPAL_FIELDS = tuple(
-    f"{prefix}_{action.value}_principal_ids" for prefix in _ACL_PREFIXES for action in AclAction
-)
-ACL_CONTEXT_FIELDS = frozenset(("acl_enabled", *ACL_PRINCIPAL_FIELDS))
+_MASK_LEVEL = {mask: level for level, mask in _LEVEL_MASK.items()}
+ACL_GRANT_FIELDS = ("acl_direct_grants", "acl_inherited_grants")
+ACL_CONTEXT_FIELDS = frozenset(("acl_enabled", *ACL_GRANT_FIELDS))
 ACL_CREATOR_GRANT_FIELD = "_acl_creator_grant"
 _ACL_OUTPUT_FIELDS = ["uri", *sorted(ACL_CONTEXT_FIELDS)]
 
@@ -58,43 +56,38 @@ class AclEntry:
 
 @dataclass(frozen=True)
 class DirectAcl:
-    read: frozenset[str] = frozenset()
-    write: frozenset[str] = frozenset()
-    manage: frozenset[str] = frozenset()
+    entries: tuple[AclEntry, ...] = ()
+
+    @classmethod
+    def from_entries(
+        cls, entries: Iterable[AclEntry | Mapping[str, Any]]
+    ) -> "DirectAcl":
+        return cls(tuple(_normalize_entries(entries)))
 
     @property
     def empty(self) -> bool:
-        return not (self.read or self.write or self.manage)
+        return not self.entries
 
     def union(self, other: "DirectAcl") -> "DirectAcl":
-        return DirectAcl(
-            read=self.read | other.read,
-            write=self.write | other.write,
-            manage=self.manage | other.manage,
-        )
+        return DirectAcl.from_entries((*self.entries, *other.entries))
 
     def principals_for(self, action: AclAction) -> frozenset[str]:
-        if action is AclAction.READ:
-            return self.read
-        if action is AclAction.WRITE:
-            return self.write
-        if action is AclAction.MANAGE:
-            return self.manage
-        raise ValueError(f"Unsupported ACL action: {action!r}")
+        required_mask = _LEVEL_MASK[AclLevel(action.value)]
+        return frozenset(
+            entry.principal
+            for entry in self.entries
+            if _LEVEL_MASK[entry.level] & required_mask == required_mask
+        )
 
     def context_fields(self, prefix: str) -> dict[str, Any]:
-        return {
-            f"{prefix}_read_principal_ids": sorted(self.read),
-            f"{prefix}_write_principal_ids": sorted(self.write),
-            f"{prefix}_manage_principal_ids": sorted(self.manage),
-        }
+        return {f"{prefix}_grants": [_encode_grant(entry) for entry in self.entries]}
 
     @classmethod
     def from_context_fields(cls, record: Mapping[str, Any], prefix: str) -> "DirectAcl":
-        manage = frozenset(record.get(f"{prefix}_manage_principal_ids") or [])
-        write = frozenset(record.get(f"{prefix}_write_principal_ids") or []) | manage
-        read = frozenset(record.get(f"{prefix}_read_principal_ids") or []) | write
-        return cls(read=read, write=write, manage=manage)
+        raw_grants = record.get(f"{prefix}_grants") or []
+        if not isinstance(raw_grants, (list, tuple)):
+            raise RuntimeError(f"Invalid ACL grants for {prefix}: expected a list")
+        return cls.from_entries(_decode_grant(grant) for grant in raw_grants)
 
 
 @dataclass(frozen=True)
@@ -155,6 +148,35 @@ def normalize_acl_level(value: Any) -> AclLevel:
         raise InvalidArgumentError("ACL level must be read, write, or manage") from exc
 
 
+def _encode_grant(entry: AclEntry) -> str:
+    return f"{_LEVEL_MASK[entry.level]}:{entry.principal}"
+
+
+def _decode_grant(raw: Any) -> AclEntry:
+    if not isinstance(raw, str):
+        raise RuntimeError("Invalid ACL grant token: expected a string")
+    raw_mask, separator, raw_principal = raw.partition(":")
+    try:
+        level = _MASK_LEVEL[int(raw_mask)] if separator else None
+        principal = normalize_acl_principal(raw_principal)
+    except (InvalidArgumentError, KeyError, ValueError) as exc:
+        raise RuntimeError(f"Invalid ACL grant token: {raw!r}") from exc
+    if level is None or raw != _encode_grant(AclEntry(principal, level)):
+        raise RuntimeError(f"Invalid ACL grant token: {raw!r}")
+    return AclEntry(principal, level)
+
+
+def acl_grant_tokens(principals: Iterable[str], action: AclAction) -> list[str]:
+    """Return exact scalar-index tokens that satisfy *action* for the principals."""
+    required_mask = _LEVEL_MASK[AclLevel(action.value)]
+    return [
+        _encode_grant(AclEntry(principal, level))
+        for principal in sorted(set(principals))
+        for level, mask in _LEVEL_MASK.items()
+        if mask & required_mask == required_mask
+    ]
+
+
 def _normalize_entries(entries: Iterable[AclEntry | Mapping[str, Any]]) -> list[AclEntry]:
     highest: dict[str, AclLevel] = {}
     for raw in entries:
@@ -166,35 +188,9 @@ def _normalize_entries(entries: Iterable[AclEntry | Mapping[str, Any]]) -> list[
         principal = normalize_acl_principal(principal)
         level = normalize_acl_level(raw_level)
         current = highest.get(principal)
-        if current is None or _LEVEL_RANK[level] > _LEVEL_RANK[current]:
+        if current is None or _LEVEL_MASK[level] > _LEVEL_MASK[current]:
             highest[principal] = level
     return [AclEntry(principal, highest[principal]) for principal in sorted(highest)]
-
-
-def entries_to_direct(entries: Iterable[AclEntry | Mapping[str, Any]]) -> DirectAcl:
-    read: set[str] = set()
-    write: set[str] = set()
-    manage: set[str] = set()
-    for entry in _normalize_entries(entries):
-        read.add(entry.principal)
-        if entry.level in {AclLevel.WRITE, AclLevel.MANAGE}:
-            write.add(entry.principal)
-        if entry.level is AclLevel.MANAGE:
-            manage.add(entry.principal)
-    return DirectAcl(frozenset(read), frozenset(write), frozenset(manage))
-
-
-def direct_to_entries(acl: DirectAcl) -> list[AclEntry]:
-    entries: list[AclEntry] = []
-    for principal in sorted(acl.read | acl.write | acl.manage):
-        if principal in acl.manage:
-            level = AclLevel.MANAGE
-        elif principal in acl.write:
-            level = AclLevel.WRITE
-        else:
-            level = AclLevel.READ
-        entries.append(AclEntry(principal, level))
-    return entries
 
 
 def is_acl_uri(uri: str) -> bool:
@@ -407,7 +403,9 @@ class AclManager:
                         )
                     protect_created = auto_protect_new_content
                 if creator and creator_grant is not None and protect_created:
-                    creator_acl = entries_to_direct([AclEntry(f"user:{creator}", AclLevel.MANAGE)])
+                    creator_acl = DirectAcl.from_entries(
+                        [AclEntry(f"user:{creator}", AclLevel.MANAGE)]
+                    )
                     if creator_grant == CreatorAclGrant.DIRECT:
                         direct = creator_acl
                     else:
@@ -494,7 +492,7 @@ class AclManager:
     ) -> EffectiveAcl:
         if uri_parts(uri) == ["resources"]:
             raise InvalidArgumentError("ACL cannot be set on viking://resources")
-        proposed = entries_to_direct(entries)
+        proposed = DirectAcl.from_entries(entries)
         old_records = await self._subtree_records(uri, ctx)
         try:
             effective = await self._apply_subtree(
@@ -511,11 +509,7 @@ class AclManager:
         return {
             "uri": uri,
             "acl_enabled": effective.enabled,
-            "direct_entries": [entry.to_dict() for entry in direct_to_entries(effective.direct)],
-            "inherited_entries": [
-                entry.to_dict() for entry in direct_to_entries(effective.inherited)
-            ],
-            "effective_entries": [
-                entry.to_dict() for entry in direct_to_entries(effective.permissions)
-            ],
+            "direct_entries": [entry.to_dict() for entry in effective.direct.entries],
+            "inherited_entries": [entry.to_dict() for entry in effective.inherited.entries],
+            "effective_entries": [entry.to_dict() for entry in effective.permissions.entries],
         }

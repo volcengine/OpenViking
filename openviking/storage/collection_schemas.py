@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 from openviking.core.context import ContextType, ResourceContentType
 from openviking.models.embedder.base import embed_compat
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.acl import ACL_CONTEXT_FIELDS, ACL_PRINCIPAL_FIELDS
+from openviking.storage.acl import ACL_CONTEXT_FIELDS, ACL_GRANT_FIELDS
 from openviking.storage.errors import (
     CollectionNotFoundError,
     EmbeddingConfigurationError,
@@ -126,7 +126,7 @@ class CollectionSchemas:
                         "FieldType": "list<string>",
                         "DefaultValue": [],
                     }
-                    for field in ACL_PRINCIPAL_FIELDS
+                    for field in ACL_GRANT_FIELDS
                 ],
             ]
         )
@@ -147,7 +147,7 @@ class CollectionSchemas:
                 "account_id",
                 "owner_user_id",
                 "acl_enabled",
-                *ACL_PRINCIPAL_FIELDS,
+                *ACL_GRANT_FIELDS,
             ]
         )
         return {

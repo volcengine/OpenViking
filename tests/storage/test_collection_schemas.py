@@ -13,7 +13,7 @@ import requests
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
 from openviking.server.identity import RequestContext, Role, UserIdentifier
 from openviking.service.resource_service import ResourceService
-from openviking.storage.acl import ACL_CONTEXT_FIELDS
+from openviking.storage.acl import ACL_CONTEXT_FIELDS, ACL_GRANT_FIELDS
 from openviking.storage.collection_schemas import (
     CollectionSchemas,
     TextEmbeddingHandler,
@@ -198,7 +198,11 @@ async def test_init_context_collection_migrates_local_legacy_schema(monkeypatch)
             schema = CollectionSchemas.context_collection("context", 2)
             return {
                 "Description": "Unified context collection",
-                "Fields": schema["Fields"],
+                "Fields": [
+                    field
+                    for field in schema["Fields"]
+                    if field["FieldName"] not in ACL_CONTEXT_FIELDS
+                ],
                 "ScalarIndex": [
                     field
                     for field in schema["ScalarIndex"]
@@ -228,6 +232,11 @@ async def test_init_context_collection_migrates_local_legacy_schema(monkeypatch)
     assert len(updates) == 1
     assert len(schema_updates) == 1
     assert '"provider": "local"' in updates[0]
+    fields, scalar_index = schema_updates[0]
+    fields_by_name = {field["FieldName"]: field for field in fields}
+    assert fields_by_name["acl_enabled"]["FieldType"] == "bool"
+    assert all(fields_by_name[field]["FieldType"] == "list<string>" for field in ACL_GRANT_FIELDS)
+    assert ACL_CONTEXT_FIELDS <= set(scalar_index)
 
 
 @pytest.mark.asyncio
