@@ -1091,13 +1091,15 @@ export class OpenVikingClient {
       }),
     });
   }
-  /** List tenant accounts. `name` supports wildcard (* and ?) matching. */
+  /** List tenant accounts, ordered by account ID. `name` supports wildcard (* and ?) matching. */
   adminListAccounts(
-    options: { name?: string } = {},
+    options: { name?: string; limit?: number; page?: number } = {},
   ): Promise<unknown[]> {
     return this.request("GET", "/api/v1/admin/accounts", {
       query: {
         name: options.name,
+        limit: options.limit,
+        page: options.limit !== undefined ? (options.page ?? 1) : undefined,
       },
     });
   }
@@ -1128,19 +1130,20 @@ export class OpenVikingClient {
       },
     );
   }
-  /** List users in an account. `name` supports wildcard (* and ?) matching. */
+  /** List users in an account, ordered by user ID. `name` supports wildcard (* and ?) matching. */
   adminListUsers(
     accountId: string,
-    options: { limit?: number; name?: string; role?: string } = {},
+    options: { limit?: number; name?: string; role?: string; page?: number } = {},
   ): Promise<unknown[]> {
     return this.request(
       "GET",
       `/api/v1/admin/accounts/${pathPart(accountId)}/users`,
       {
         query: {
-          limit: options.limit ?? 100,
+          limit: options.limit,
           name: options.name,
           role: options.role,
+          page: options.limit !== undefined ? (options.page ?? 1) : undefined,
         },
       },
     );

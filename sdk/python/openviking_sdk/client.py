@@ -1695,10 +1695,15 @@ class AsyncHTTPClient:
     async def admin_list_accounts(
         self,
         name: Optional[str] = None,
+        limit: Optional[int] = None,
+        page: int = 1,
     ) -> List[Any]:
         params: Dict[str, Any] = {}
         if name is not None:
             params["name"] = name
+        if limit is not None:
+            params["limit"] = limit
+            params["page"] = page
         response = await self._request("GET", "/api/v1/admin/accounts", params=params)
         return self._handle_response(response)
 
@@ -1729,11 +1734,15 @@ class AsyncHTTPClient:
     async def admin_list_users(
         self,
         account_id: str,
-        limit: int = 100,
+        limit: Optional[int] = None,
         name: Optional[str] = None,
         role: Optional[str] = None,
+        page: int = 1,
     ) -> List[Any]:
-        params: Dict[str, Any] = {"limit": limit}
+        params: Dict[str, Any] = {}
+        if limit is not None:
+            params["limit"] = limit
+            params["page"] = page
         if name is not None:
             params["name"] = name
         if role is not None:
@@ -2606,8 +2615,12 @@ class SyncHTTPClient:
     def admin_list_accounts(
         self,
         name: Optional[str] = None,
+        limit: Optional[int] = None,
+        page: int = 1,
     ) -> List[Any]:
-        return run_async(self._async_client.admin_list_accounts(name=name))
+        return run_async(
+            self._async_client.admin_list_accounts(name=name, limit=limit, page=page)
+        )
 
     def admin_delete_account(self, account_id: str) -> Dict[str, Any]:
         return run_async(self._async_client.admin_delete_account(account_id))
@@ -2633,12 +2646,15 @@ class SyncHTTPClient:
     def admin_list_users(
         self,
         account_id: str,
-        limit: int = 100,
+        limit: Optional[int] = None,
         name: Optional[str] = None,
         role: Optional[str] = None,
+        page: int = 1,
     ) -> List[Any]:
         return run_async(
-            self._async_client.admin_list_users(account_id, limit=limit, name=name, role=role)
+            self._async_client.admin_list_users(
+                account_id, limit=limit, name=name, role=role, page=page
+            )
         )
 
     def admin_remove_user(self, account_id: str, user_id: str) -> Dict[str, Any]:

@@ -33,12 +33,20 @@ func (c *Client) AdminListAccounts(ctx context.Context) ([]any, error) {
 	return c.AdminListAccountsWithOptions(ctx, nil)
 }
 
-// AdminListAccountsWithOptions lists accounts, optionally filtering by a
-// wildcard name pattern.
+// AdminListAccountsWithOptions lists accounts (ordered by account ID), optionally
+// filtering by a wildcard name pattern and paging via Limit/Page.
 func (c *Client) AdminListAccountsWithOptions(ctx context.Context, opts *AdminListAccountsOptions) ([]any, error) {
 	query := url.Values{}
 	if opts != nil {
 		setQueryString(query, "name", opts.Name)
+		if opts.Limit != nil {
+			queryInt(query, "limit", *opts.Limit)
+			page := 1
+			if opts.Page != nil {
+				page = *opts.Page
+			}
+			queryInt(query, "page", page)
+		}
 	}
 	var result []any
 	err := c.doJSON(ctx, http.MethodGet, "/api/v1/admin/accounts", query, nil, &result)
@@ -82,13 +90,18 @@ func (c *Client) AdminListUsers(ctx context.Context, accountID string) ([]any, e
 	return c.AdminListUsersWithOptions(ctx, accountID, nil)
 }
 
-// AdminListUsersWithOptions lists users in an account, optionally filtering by a
-// wildcard name pattern, role, and capping the result count.
+// AdminListUsersWithOptions lists users in an account (ordered by user ID),
+// optionally filtering by a wildcard name pattern, role, and paging via Limit/Page.
 func (c *Client) AdminListUsersWithOptions(ctx context.Context, accountID string, opts *AdminListUsersOptions) ([]any, error) {
 	query := url.Values{}
 	if opts != nil {
 		if opts.Limit != nil {
 			queryInt(query, "limit", *opts.Limit)
+			page := 1
+			if opts.Page != nil {
+				page = *opts.Page
+			}
+			queryInt(query, "page", page)
 		}
 		setQueryString(query, "name", opts.Name)
 		setQueryString(query, "role", opts.Role)

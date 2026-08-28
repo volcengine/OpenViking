@@ -59,6 +59,20 @@ def derive_seeded_api_key_secret(user_id: str, seed: str) -> str:
     return hashlib.sha256(f"{user_id}\0{seed}".encode("utf-8")).hexdigest()
 
 
+def _paginate(items: list, limit: int | None, page: int) -> list:
+    """Slice a list by 1-based ``page`` of ``limit`` items.
+
+    ``limit=None`` returns everything (pagination is opt-in), so callers that
+    rely on the full set are unaffected. ``page`` is clamped to a minimum of 1.
+    """
+    if limit is None:
+        return items
+    if page < 1:
+        page = 1
+    start = (page - 1) * limit
+    return items[start : start + limit]
+
+
 class LegacyAPIKeyManager:
     """Manages API keys for multi-tenant authentication (legacy implementation)."""
 
@@ -648,19 +662,27 @@ class LegacyAPIKeyManager:
 
         await self._save_users_json(account_id)
 
-    def get_accounts(self, name_filter: str | None = None) -> list:
-        """List all accounts.
+    def get_accounts(
+        self,
+        name_filter: str | None = None,
+        limit: int | None = None,
+        page: int = 1,
+    ) -> list:
+        """List accounts in lexicographic order of account ID.
 
         ``name_filter`` uses the same wildcard (``*`` and ``?``) matching as
-        ``get_users``. When omitted, all accounts are returned so internal
-        callers that rely on the full account set are unaffected.
+        ``get_users``. Pagination is opt-in: ``limit=None`` returns every
+        matching account so internal callers that rely on the full account set
+        are unaffected; when ``limit`` is set, ``page`` (1-based) selects the
+        slice.
         """
         result = []
-        for account_id, info in self._accounts.items():
+        for account_id in sorted(self._accounts):
             # Apply name filter if provided (fnmatch wildcard matching)
             if name_filter and not fnmatch.fnmatch(account_id, name_filter):
                 continue
 
+            info = self._accounts[account_id]
             result.append(
                 {
                     "account_id": account_id,
@@ -668,24 +690,29 @@ class LegacyAPIKeyManager:
                     "user_count": len(info.users),
                 }
             )
-        return result
+        return _paginate(result, limit, page)
 
     def get_users(
         self,
         account_id: str,
-        limit: int = 100,
+        limit: int | None = 100,
         name_filter: str | None = None,
         role_filter: str | None = None,
         expose_key: bool = True,
+        page: int = 1,
     ) -> list:
-        """List all users in an account."""
+        """List users in an account, ordered lexicographically by user ID.
+
+        Pagination is opt-in via ``limit``/``page`` (1-based); ``limit=None``
+        returns every matching user.
+        """
         account = self._accounts.get(account_id)
         if account is None:
             raise NotFoundError(account_id, "account")
 
         result = []
-        count = 0
-        for user_id, user_info in account.users.items():
+        for user_id in sorted(account.users):
+            user_info = account.users[user_id]
             if user_info.get("deletion"):
                 continue
 
@@ -698,9 +725,6 @@ class LegacyAPIKeyManager:
             # Apply role filter if provided
             if role_filter and user_role != role_filter:
                 continue
-
-            if count >= limit:
-                break
 
             user_data = {
                 "user_id": user_id,
@@ -719,8 +743,7 @@ class LegacyAPIKeyManager:
                         # Plaintext key - show full api_key
                         user_data["api_key"] = key
             result.append(user_data)
-            count += 1
-        return result
+        return _paginate(result, limit, page)
 
     def has_user(self, account_id: str, user_id: str) -> bool:
         """Return True when the account registry contains the given user."""

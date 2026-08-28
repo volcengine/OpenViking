@@ -5,7 +5,7 @@
 import asyncio
 from typing import Optional
 
-from fastapi import APIRouter, Body, Depends, Path, Request
+from fastapi import APIRouter, Body, Depends, Path, Query, Request
 from pydantic import BaseModel
 
 from openviking.server.account_settings import (
@@ -316,11 +316,13 @@ async def create_account(
 async def list_accounts(
     request: Request,
     name: str | None = None,
+    limit: int | None = Query(None, ge=1, description="Page size; omit to return all"),
+    page: int = Query(1, ge=1, description="1-based page number (requires limit)"),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """List all accounts. `name` supports wildcard (* and ?) matching."""
+    """List accounts in lexicographic order. `name` supports wildcard (* and ?) matching."""
     manager = _get_api_key_manager(request)
-    accounts = manager.get_accounts(name_filter=name)
+    accounts = manager.get_accounts(name_filter=name, limit=limit, page=page)
     return Response(status="ok", result=accounts)
 
 
@@ -491,17 +493,23 @@ async def register_user(
 async def list_users(
     request: Request,
     account_id: str = Path(..., description="Account ID"),
-    limit: int = 100,
+    limit: int | None = Query(None, ge=1, description="Page size; omit to return all"),
     name: str | None = None,
     role: str | None = None,
+    page: int = Query(1, ge=1, description="1-based page number (requires limit)"),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """List all users in an account."""
+    """List users in an account, ordered lexicographically by user ID."""
     _check_account_access(ctx, account_id)
     manager = _get_api_key_manager(request)
     expose_key = _should_expose_user_key(request)
     users = manager.get_users(
-        account_id, limit=limit, name_filter=name, role_filter=role, expose_key=expose_key
+        account_id,
+        limit=limit,
+        name_filter=name,
+        role_filter=role,
+        expose_key=expose_key,
+        page=page,
     )
     return Response(status="ok", result=users)
 

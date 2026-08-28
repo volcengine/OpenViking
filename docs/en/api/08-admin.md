@@ -337,9 +337,10 @@ List all workspaces (ROOT only).
 
 **Processing Flow:**
 1. Verify requester has ROOT privileges
-2. Call API Key Manager to get all accounts
+2. Call API Key Manager to get all accounts (ordered lexicographically by account ID)
 3. Apply optional `name` filter
-4. Return list with account ID, creation time, and user count
+4. Apply optional `limit`/`page` pagination
+5. Return list with account ID, creation time, and user count
 
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:list_accounts` - HTTP route
@@ -351,6 +352,10 @@ List all workspaces (ROOT only).
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | name | str | No | null | Filter by account ID (wildcard `*` and `?` matching) |
+| limit | int | No | null | Page size (≥1). Omit to return all matches |
+| page | int | No | 1 | 1-based page number; only applies when `limit` is set |
+
+Results are always returned in lexicographic order of account ID.
 
 #### 3. Usage Examples
 
@@ -368,6 +373,10 @@ curl -X GET http://localhost:1933/api/v1/admin/accounts \
 # With filter (wildcard name matching)
 curl -X GET "http://localhost:1933/api/v1/admin/accounts?name=*acme*" \
   -H "X-API-Key: <root-key>"
+
+# Paginated (second page of 50)
+curl -X GET "http://localhost:1933/api/v1/admin/accounts?limit=50&page=2" \
+  -H "X-API-Key: <root-key>"
 ```
 
 **Python SDK**
@@ -378,7 +387,7 @@ import openviking as ov
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
 
-accounts = client.admin_list_accounts(name="*acme*")
+accounts = client.admin_list_accounts(name="*acme*", limit=50, page=1)
 for account in accounts:
     print(f"Account: {account['account_id']}, created: {account['created_at']}, users: {account['user_count']}")
 ```
@@ -386,7 +395,7 @@ for account in accounts:
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.adminListAccounts({ name: "*acme*" }));
+console.log(await client.adminListAccounts({ name: "*acme*", limit: 50, page: 1 }));
 ```
 
 **Go SDK**
@@ -407,6 +416,9 @@ ov --sudo admin list-accounts
 
 # Filter by wildcard name
 ov --sudo admin list-accounts --name '*acme*'
+
+# Paginated
+ov --sudo admin list-accounts --limit 50 --page 2
 ```
 
 **Response Example**
@@ -660,9 +672,10 @@ List active users in a workspace. Users with deletion in progress are omitted.
 
 **Processing Flow:**
 1. Verify requester has ROOT privileges or is an ADMIN of the account
-2. Call API Key Manager to get active users list
-3. Apply optional filters (name, role) and pagination limit
-4. Return users list (trusted mode omits user_key)
+2. Call API Key Manager to get active users list (ordered lexicographically by user ID)
+3. Apply optional filters (name, role)
+4. Apply optional `limit`/`page` pagination
+5. Return users list (trusted mode omits user_key)
 
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:list_users` - HTTP route
@@ -676,11 +689,13 @@ List active users in a workspace. Users with deletion in progress are omitted.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | account_id | str | Yes | - | Workspace ID |
-| limit | int | No | 100 | Maximum number of users to return |
 | name | str | No | null | Filter by user ID (wildcard `*` and `?` matching) |
 | role | str | No | null | Filter by role |
+| limit | int | No | null | Page size (≥1). Omit to return all matches |
+| page | int | No | 1 | 1-based page number; only applies when `limit` is set |
 
 **Notes:**
+- Results are always returned in lexicographic order of user ID
 - ADMIN can only list users in their own account
 - In `trusted` mode, `user_key` is omitted from the response
 - Users whose deletion has started are no longer returned
@@ -699,7 +714,11 @@ curl -X GET http://localhost:1933/api/v1/admin/accounts/acme/users \
   -H "X-API-Key: <root-or-admin-key>"
 
 # With filters (wildcard name matching)
-curl -X GET "http://localhost:1933/api/v1/admin/accounts/acme/users?name=*ali*&role=admin&limit=50" \
+curl -X GET "http://localhost:1933/api/v1/admin/accounts/acme/users?name=*ali*&role=admin" \
+  -H "X-API-Key: <root-or-admin-key>"
+
+# Paginated (second page of 50)
+curl -X GET "http://localhost:1933/api/v1/admin/accounts/acme/users?limit=50&page=2" \
   -H "X-API-Key: <root-or-admin-key>"
 ```
 
@@ -711,7 +730,7 @@ import openviking as ov
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
 
-users = client.admin_list_users(account_id="acme", name="*ali*")
+users = client.admin_list_users(account_id="acme", name="*ali*", limit=50, page=1)
 for user in users:
     print(f"User: {user['user_id']}, role: {user['role']}")
 ```
@@ -719,7 +738,7 @@ for user in users:
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.adminListUsers("account-id", { name: "*ali*" }));
+console.log(await client.adminListUsers("account-id", { name: "*ali*", limit: 50, page: 1 }));
 ```
 
 **Go SDK**
@@ -742,6 +761,8 @@ ov admin list-users acme
 ov --sudo admin list-users acme
 # Filter by wildcard name
 ov admin list-users acme --name '*ali*'
+# Paginated
+ov admin list-users acme --limit 50 --page 2
 ```
 
 **Response Example**

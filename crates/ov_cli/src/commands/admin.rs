@@ -28,10 +28,12 @@ pub async fn create_account(
 pub async fn list_accounts(
     client: &HttpClient,
     name: Option<String>,
+    limit: Option<u32>,
+    page: u32,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let response = client.admin_list_accounts(name).await?;
+    let response = client.admin_list_accounts(name, limit, page).await?;
     output_success(&response, output_format, compact);
     Ok(())
 }
@@ -98,14 +100,15 @@ fn parse_user_config_json(value: Option<&str>, flag: &str) -> Result<Option<Valu
 pub async fn list_users(
     client: &HttpClient,
     account_id: &str,
-    limit: u32,
+    limit: Option<u32>,
     name: Option<String>,
     role: Option<String>,
+    page: u32,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     let response = client
-        .admin_list_users(account_id, limit, name, role)
+        .admin_list_users(account_id, limit, name, role, page)
         .await?;
     let response = list_users_response_for_output(response, output_format);
     output_success(&response, output_format, compact);
