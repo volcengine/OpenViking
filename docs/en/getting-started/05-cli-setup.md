@@ -502,3 +502,12 @@ ov add-resource --help
 `semantic_and_vectors` processes the full subtree by default. If child summaries already exist and only the target directory's `.abstract.md` / `.overview.md` need regeneration, add `--recursive=false`; this refreshes only the target directory semantics and its L0/L1 vectors.
 
 There is no `semantic` or `full` mode alias.
+
+For a safer targeted repair, audit first and apply the generated plan. Existing
+plan files are not overwritten unless `--force` is supplied.
+
+```bash
+ov system consistency viking://resources/project --repair-plan repair-plan.json
+ov reindex --apply-plan repair-plan.json --dry-run
+ov reindex --apply-plan repair-plan.json --wait true
+```

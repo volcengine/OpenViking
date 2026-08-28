@@ -1127,8 +1127,15 @@ enum Commands {
     /// [Admin] Reindex semantic/vector artifacts for a URI
     Reindex {
         /// Viking URI
-        #[arg(value_name = "uri")]
-        uri: String,
+        #[arg(
+            value_name = "uri",
+            required_unless_present = "apply_plan",
+            conflicts_with = "apply_plan"
+        )]
+        uri: Option<String>,
+        /// Apply a server-generated index repair plan JSON file
+        #[arg(long, value_name = "file", conflicts_with_all = ["mode", "tags", "tag_mode"])]
+        apply_plan: Option<String>,
         /// Reindex mode: vectors_only rebuilds vectors; semantic_and_vectors regenerates semantic artifacts, then vectors; prune_orphans deletes orphan vector records
         #[arg(
             long,
@@ -1142,12 +1149,14 @@ enum Commands {
         #[arg(
             long,
             default_value_t = true,
+            default_missing_value = "true",
+            num_args = 0..=1,
             action = ArgAction::Set,
             value_name = "bool",
             help_heading = "Common options"
         )]
         wait: bool,
-        /// Preview prune_orphans deletions without mutating vectors
+        /// Validate and preview changes without mutating vectors
         #[arg(long, help_heading = "Common options")]
         dry_run: bool,
         /// Explicit k=v retrieval tag for rebuilt vector records. Can be repeated.
@@ -1330,6 +1339,24 @@ enum SystemCommands {
         /// Viking URI to check
         #[arg(value_name = "uri")]
         uri: String,
+        /// Restrict output to an issue type; can be repeated
+        #[arg(long = "issue-type", value_parser = ["missing", "stale", "orphan", "metadata_mismatch", "duplicate_keys", "unverifiable"])]
+        issue_types: Vec<String>,
+        /// Maximum findings returned in this page
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Continue a previous consistency page
+        #[arg(long)]
+        cursor: Option<String>,
+        /// Maximum filesystem and vector records scanned
+        #[arg(long)]
+        max_scan_records: Option<usize>,
+        /// Write a complete executable repair plan to this file
+        #[arg(long, value_name = "file")]
+        repair_plan: Option<String>,
+        /// Overwrite an existing --repair-plan file
+        #[arg(long, requires = "repair_plan")]
+        force: bool,
     },
     /// Cryptographic key management commands
     Crypto {
@@ -3524,14 +3551,15 @@ async fn main() {
         } => handlers::handle_set_tags(uri, tags, mode, recursive, ctx).await,
         Commands::Reindex {
             uri,
+            apply_plan,
             mode,
             wait,
             dry_run,
             tags,
             tag_mode,
-            recursive,
         } => {
-            handlers::handle_reindex(uri, mode, wait, dry_run, tags, tag_mode, recursive, ctx).await
+            handlers::handle_reindex(uri, apply_plan, mode, wait, dry_run, tags, tag_mode, ctx)
+                .await
         }
         Commands::Get { uri, local_path } => handlers::handle_get(uri, local_path, ctx).await,
         Commands::Find {
@@ -5420,6 +5448,58 @@ mod tests {
         ]);
 
         assert!(result.is_err(), "unknown reindex mode should not parse");
+    }
+
+    #[test]
+    fn cli_parses_index_repair_plan_commands() {
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "system",
+                "consistency",
+                "viking://resources/demo",
+                "--issue-type",
+                "stale",
+                "--repair-plan",
+                "repair-plan.json",
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "reindex",
+                "--apply-plan",
+                "repair-plan.json",
+                "--wait",
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn cli_repair_plan_rejects_normal_reindex_arguments() {
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "reindex",
+                "viking://resources/demo",
+                "--apply-plan",
+                "repair-plan.json",
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "reindex",
+                "--apply-plan",
+                "repair-plan.json",
+                "--tag",
+                "team=search",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

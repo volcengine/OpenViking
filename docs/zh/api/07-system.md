@@ -237,6 +237,23 @@ ov system status
 
 ### consistency
 
+> 索引审计扩展：该只读接口审计 active collection 中指定
+> `viking://resources/...` 子树的 L0/L1/L2，分类返回 `missing`、`stale`、
+> `orphan`、`metadata_mismatch`、`duplicate_keys` 和 `unverifiable`。
+> 请求还支持 `issue_types`、`limit`（1～1000）、不透明 `cursor`、
+> `max_scan_records`（最大 100000）和 `generate_repair_plan`。只有完整、无读取
+> 错误且当前页没有后续 cursor 的扫描才返回可执行计划；审计结果不包含正文或向量。
+
+```bash
+ov system consistency viking://resources/my-project \
+  --issue-type stale --repair-plan repair-plan.json
+```
+
+新建 collection 会包含字符串字段 `source_digest`。外部预创建的旧 collection
+缺少该字段时，摘要检查安全降级为 `unverifiable`，服务不会自动删除或重建集合。
+请先通过所用向量后端的常规 schema 迁移流程增加该字段，再执行
+`ov reindex viking://resources --mode vectors_only` 回填；历史空值不能按 stale 处理。
+
 #### 1. API 实现介绍
 
 检查指定 URI 子树的文件系统内容和向量索引是否一致，用于调试索引缺失、向量快照导出失败等问题。该能力是通用数据一致性检查，不属于 OVPack 私有接口；`ov export --include-vectors` 和 `ov backup --include-vectors` 会复用同一检查。

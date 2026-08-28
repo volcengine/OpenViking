@@ -1614,11 +1614,47 @@ class AsyncHTTPClient:
         result = self._handle_response(response)
         return result.get("uri", "")
 
-    async def check_consistency(self, uri: str) -> Dict[str, Any]:
+    async def check_consistency(
+        self,
+        uri: str,
+        *,
+        issue_types: Optional[List[str]] = None,
+        limit: int = 100,
+        cursor: Optional[str] = None,
+        max_scan_records: int = 10000,
+        generate_repair_plan: bool = False,
+    ) -> Dict[str, Any]:
+        # Keep the legacy wire request unchanged when callers use all defaults so
+        # this SDK can still talk to servers that predate the audit extension.
+        payload: Dict[str, Any] = {"uri": VikingURI.normalize(uri)}
+        if issue_types is not None:
+            payload["issue_types"] = issue_types
+        if cursor is not None:
+            payload["cursor"] = cursor
+        if limit != 100:
+            payload["limit"] = limit
+        if max_scan_records != 10000:
+            payload["max_scan_records"] = max_scan_records
+        if generate_repair_plan:
+            payload["generate_repair_plan"] = True
         response = await self._request(
             "POST",
             "/api/v1/system/consistency",
-            json={"uri": VikingURI.normalize(uri)},
+            json=payload,
+        )
+        return self._handle_response(response)
+
+    async def apply_index_repair_plan(
+        self,
+        plan: Dict[str, Any],
+        *,
+        wait: bool = True,
+        dry_run: bool = False,
+    ) -> Dict[str, Any]:
+        response = await self._request(
+            "POST",
+            "/api/v1/content/reindex/repair",
+            json={"plan": plan, "wait": wait, "dry_run": dry_run},
         )
         return self._handle_response(response)
 
@@ -2570,8 +2606,41 @@ class SyncHTTPClient:
             )
         )
 
-    def check_consistency(self, uri: str) -> Dict[str, Any]:
-        return run_async(self._async_client.check_consistency(uri))
+    def check_consistency(
+        self,
+        uri: str,
+        *,
+        issue_types: Optional[List[str]] = None,
+        limit: int = 100,
+        cursor: Optional[str] = None,
+        max_scan_records: int = 10000,
+        generate_repair_plan: bool = False,
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._async_client.check_consistency(
+                uri,
+                issue_types=issue_types,
+                limit=limit,
+                cursor=cursor,
+                max_scan_records=max_scan_records,
+                generate_repair_plan=generate_repair_plan,
+            )
+        )
+
+    def apply_index_repair_plan(
+        self,
+        plan: Dict[str, Any],
+        *,
+        wait: bool = True,
+        dry_run: bool = False,
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._async_client.apply_index_repair_plan(
+                plan,
+                wait=wait,
+                dry_run=dry_run,
+            )
+        )
 
     def health(self) -> bool:
         return run_async(self._async_client.health())

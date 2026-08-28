@@ -502,3 +502,12 @@ ov add-resource --help
 `semantic_and_vectors` 默认递归处理整个子树。对已经具有下级摘要、只需要重新生成目标目录 `.abstract.md` / `.overview.md` 的场景，可添加 `--recursive=false`；此时仅刷新目标目录语义产物和该目录的 L0/L1 向量。
 
 没有 `semantic` 或 `full` 这样的模式别名。
+
+如需更安全的定点修复，可先执行只读审计，再应用服务端生成的计划。计划文件已存在
+时默认拒绝覆盖，只有显式传入 `--force` 才会覆盖。
+
+```bash
+ov system consistency viking://resources/project --repair-plan repair-plan.json
+ov reindex --apply-plan repair-plan.json --dry-run
+ov reindex --apply-plan repair-plan.json --wait true
+```

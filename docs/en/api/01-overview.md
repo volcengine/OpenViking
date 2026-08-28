@@ -380,6 +380,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/api/v1/content/batch-write` | Apply preconditioned multi-file writes |
 | POST | `/api/v1/content/set_tags` | Set retrieval tags |
 | POST | `/api/v1/content/reindex` | Rebuild semantic or vector indexes |
+| POST | `/api/v1/content/reindex/repair` | Validate and apply an index repair plan |
 
 ### [Skills](04-skills.md)
 

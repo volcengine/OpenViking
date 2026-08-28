@@ -822,6 +822,38 @@ Task records are persisted under `/local/{account_id}/_system/tasks/{user_id}/{t
 - Reindex uses the best currently recoverable source inputs. It is not guaranteed to replay the exact historical embedding input byte-for-byte in every case.
 - Memory semantic reindex is based on the currently persisted memory tree. It does not reconstruct the original chronological memory-extraction pipeline.
 
+### apply_index_repair_plan()
+
+Apply a server-generated, preconditioned repair plan. The server validates the
+plan digest, account, resource root, active collection/schema, source topology,
+and every source/index fingerprint before the first write. A stale or modified
+plan is rejected atomically. `dry_run=true` performs all validation without
+deleting or enqueueing records; applying an already converged plan is a no-op.
+
+```python
+result = client.apply_index_repair_plan(plan, wait=True, dry_run=False)
+```
+
+```text
+POST /api/v1/content/reindex/repair
+```
+
+```json
+{
+  "plan": {"plan_version": "index-repair/v1", "...": "..."},
+  "wait": true,
+  "dry_run": false
+}
+```
+
+The endpoint accepts only plans for the current account's active resource
+collection. Async requests use `task_type="index_repair"`. CLI usage:
+
+```bash
+ov reindex --apply-plan repair-plan.json --dry-run
+ov reindex --apply-plan repair-plan.json --wait true
+```
+
 ---
 
 ## Related Documentation
