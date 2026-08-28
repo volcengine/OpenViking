@@ -41,8 +41,22 @@ vi.mock('@streamdown/mermaid', () => ({
   },
 }))
 
+vi.mock('next-themes', () => ({
+  useTheme: () => ({ resolvedTheme: 'light' }),
+}))
+
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    t: (key: string) =>
+      ({
+        'filePreview.mermaid.diagramLabel': 'Mermaid diagram',
+        'filePreview.mermaid.errorDetails': 'Error details',
+        'filePreview.mermaid.loading': 'Rendering Mermaid diagram...',
+        'filePreview.mermaid.renderFailed': 'Unable to render Mermaid diagram.',
+        'filePreview.mermaid.showSource': 'Show Mermaid source',
+        'filePreview.mermaid.unknownError': 'Unknown Mermaid rendering error.',
+      })[key] ?? key,
+  }),
 }))
 
 vi.mock('#/gen/ov-client/client.gen', () => ({
@@ -134,29 +148,6 @@ function renderPreview(
     />,
     { wrapper },
   )
-}
-
-function installImmediateIntersectionObserver() {
-  const originalIntersectionObserver = globalThis.IntersectionObserver
-  class ImmediateIntersectionObserver {
-    disconnect() {}
-    observe(target: Element) {
-      this.callback(
-        [{ isIntersecting: true, target } as IntersectionObserverEntry],
-        this as unknown as IntersectionObserver,
-      )
-    }
-    takeRecords() {
-      return []
-    }
-    unobserve() {}
-
-    constructor(private readonly callback: IntersectionObserverCallback) {}
-  }
-  vi.stubGlobal('IntersectionObserver', ImmediateIntersectionObserver)
-  return () => {
-    vi.stubGlobal('IntersectionObserver', originalIntersectionObserver)
-  }
 }
 
 describe('FilePreview Markdown rendering', () => {
@@ -270,26 +261,21 @@ describe('FilePreview Markdown rendering', () => {
       fileType: 'markdown',
     }
 
-    const restoreIntersectionObserver = installImmediateIntersectionObserver()
+    const { container } = renderPreview(file, vi.fn())
 
-    try {
-      const { container } = renderPreview(file, vi.fn())
-
-      const diagram = await screen.findByRole('img', {
-        name: 'Mermaid chart',
-      })
-      await waitFor(() => {
-        expect(diagram.innerHTML).toContain('<svg')
-        expect(diagram.textContent).toContain('Client to server')
-      })
-      expect(previewMocks.renderMermaid).toHaveBeenCalledWith(
-        expect.stringMatching(/^mermaid-/),
-        expect.stringContaining('graph TD\n    A[Client] --> B[Server]'),
-      )
-      expect(container.querySelector('code.language-mermaid')).toBeNull()
-    } finally {
-      restoreIntersectionObserver()
-    }
+    const diagram = await screen.findByRole('img', {
+      name: 'Mermaid diagram',
+    })
+    await waitFor(() => {
+      expect(diagram.innerHTML).toContain('<svg')
+      expect(diagram.textContent).toContain('Client to server')
+    })
+    expect(previewMocks.renderMermaid).toHaveBeenCalledWith(
+      expect.stringMatching(/^mermaid-/),
+      expect.stringContaining('graph TD\n    A[Client] --> B[Server]'),
+    )
+    expect(diagram.parentElement?.style.width).toBe('120px')
+    expect(container.querySelector('code.language-mermaid')).toBeNull()
   })
 
   it('shows Mermaid errors with the original source', async () => {
@@ -298,17 +284,12 @@ describe('FilePreview Markdown rendering', () => {
       fileType: 'markdown',
     }
     previewMocks.renderMermaid.mockRejectedValueOnce(new Error('parse error'))
-    const restoreIntersectionObserver = installImmediateIntersectionObserver()
+    const { container } = renderPreview(file, vi.fn())
 
-    try {
-      const { container } = renderPreview(file, vi.fn())
-
-      await screen.findByText(/Mermaid Error:/)
-      expect(container.textContent).toContain('parse error')
-      expect(container.textContent).toContain('this is not a diagram')
-    } finally {
-      restoreIntersectionObserver()
-    }
+    await screen.findByText('Unable to render Mermaid diagram.')
+    expect(container.textContent).toContain('parse error')
+    expect(container.textContent).toContain('Show Mermaid source')
+    expect(container.textContent).toContain('this is not a diagram')
   })
 
   it('renders directory L0 and L1 frontmatter as independent metadata panels', () => {
