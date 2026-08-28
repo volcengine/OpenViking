@@ -101,19 +101,38 @@ class MemoryFilePolicyUpdater:
             policy_set=policy_set,
             updated_policy_set=updated_policy_set,
         )
-        updater = MemoryUpdater(
-            registry=create_default_registry(),
-            vikingdb=self.vikingdb,
-            transaction_handle=transaction_handle,
-        )
-        updater._viking_fs = viking_fs
+        trajectory_uris = sorted({link.to_uri for link in operations.resolved_links if link.to_uri})
+        operation_lease = transaction_handle
+        combined_lease = None
+        if trajectory_uris:
+            uri_to_path = getattr(viking_fs, "_uri_to_path", None)
+            if not callable(uri_to_path):
+                raise RuntimeError("VikingFS must provide _uri_to_path for policy link locking")
+            combined_lease = await viking_fs._async_agfs.pathlock_acquire_exact_tree_batch(
+                sorted(uri_to_path(uri, ctx=context) for uri in trajectory_uris),
+                [uri_to_path(policy_set.root_uri, ctx=context)],
+                timeout_secs=300.0,
+                owner_lease_ref=transaction_handle,
+            )
+            operation_lease = combined_lease
 
-        apply_result = await updater.apply_operations(
-            operations,
-            context,
-            extract_context=None,
-            isolation_handler=None,
-        )
+        try:
+            updater = MemoryUpdater(
+                registry=create_default_registry(),
+                vikingdb=self.vikingdb,
+                transaction_handle=operation_lease,
+            )
+            updater._viking_fs = viking_fs
+
+            apply_result = await updater.apply_operations(
+                operations,
+                context,
+                extract_context=None,
+                isolation_handler=None,
+            )
+        finally:
+            if combined_lease is not None:
+                await viking_fs._async_agfs.pathlock_release(combined_lease)
         errors = [*preflight_errors, *[f"{uri}: {exc}" for uri, exc in apply_result.errors]]
 
         return PolicyApplyResult(
