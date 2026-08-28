@@ -1059,6 +1059,7 @@ class ResourceService:
                 defer_target_resolution=defer_target_resolution,
                 understanding_response_id=plan.understanding_response_id,
                 understanding_file_id=plan.understanding_file_id,
+                internal_task=internal_task,
             )
 
             def transfer_staged_source() -> None:

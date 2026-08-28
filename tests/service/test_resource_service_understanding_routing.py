@@ -289,6 +289,7 @@ async def test_temp_uploaded_file_queues_external_parse_with_file_id(
         to="viking://resources/audio",
         wait=False,
         allow_local_path_resolution=True,
+        internal_task=True,
         temp_file_id=temp_file_id,
     )
 
@@ -303,6 +304,7 @@ async def test_temp_uploaded_file_queues_external_parse_with_file_id(
     assert queued.understanding_file_id == "file-1"
     assert queued.understanding_response_id is None
     assert queued.staged_source is None
+    assert queued.internal_task is True
     assert queued.path == "audio.m4a"
     assert queued.source_name == "audio.m4a"
     assert not uploaded.exists()
