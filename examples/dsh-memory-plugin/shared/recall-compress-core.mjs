@@ -86,10 +86,16 @@ export function repairDigestUris(digest, validUris = []) {
       lines.push(line);
       continue;
     }
+    if (valid.some((uri) => line.includes(uri))) {
+      lines.push(line);
+      continue;
+    }
     let dropped = false;
     const repaired = line.replace(/viking:\/\/[^\s<>"')\]]+/g, (uri) => {
-      if (validSet.has(uri)) return uri;
-      const nearest = nearestUri(uri, valid);
+      let decoded = uri;
+      try { decoded = decodeURI(uri); } catch { /* keep the original candidate */ }
+      if (validSet.has(decoded)) return decoded;
+      const nearest = nearestUri(decoded, valid);
       if (nearest) return nearest;
       dropped = true;
       return uri;
@@ -171,7 +177,8 @@ export async function compressRecallContext({
   });
   const cached = await readCache(cachePath);
   if (cached?.key === key && typeof cached.digest === "string") {
-    return { status: COMPRESS_OK, context: cached.digest };
+    const digest = normalizeCompressedContext(cached.digest, 4000, maxBullets);
+    if (digest) return { status: COMPRESS_OK, context: digest };
   }
 
   const prompt = buildRecallCompressionPrompt({
@@ -185,9 +192,10 @@ export async function compressRecallContext({
   if (!normalized) return { status: COMPRESS_EMPTY, context: "" };
 
   const validUris = entries.map((entry) => entry?.uri).filter(Boolean);
-  const digest = repairDigestUris(normalized, validUris.length
+  const repaired = repairDigestUris(normalized, validUris.length
     ? validUris
     : (input.match(/viking:\/\/[^\s<>"']+/g) || []));
+  const digest = normalizeCompressedContext(repaired, 4000, maxBullets);
   if (!digest) return { status: COMPRESS_FAILED, context: "" };
 
   await writeCache(cachePath, { key, digest, updatedAt: now || 0 });

@@ -160,8 +160,9 @@ async function runEndpointCompressionCase({
   compressorOutput,
   exitCode = 0,
   extraEnv = {},
+  stateDir: providedStateDir = "",
 }) {
-  const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-endpoint-compress-"));
+  const stateDir = providedStateDir || await mkdtemp(join(tmpdir(), "ov-auto-recall-endpoint-compress-"));
   let requestBody = null;
   try {
     return await withFakeCodex(compressorOutput, async ({ callLog, argsLog, env }) => {
@@ -210,7 +211,7 @@ async function runEndpointCompressionCase({
       };
     }, { exitCode });
   } finally {
-    await rm(stateDir, { recursive: true, force: true });
+    if (!providedStateDir) await rm(stateDir, { recursive: true, force: true });
   }
 }
 
@@ -381,11 +382,51 @@ test("auto-recall applies the relevance compressor to server recall entries", as
     },
     rendered: "<memory_group>Unrelated remembered detail</memory_group>",
     compressorOutput: "NO_RELEVANT_MEMORY",
+    extraEnv: { OPENVIKING_RECALL_COMPRESS_MIN_INPUT_CHARS: "0" },
   });
 
   assert.deepEqual(result.output, {});
   assert.equal(result.compressorCalls, 1);
   assert.equal(result.requestBody.max_chars, 18000);
+});
+
+test("auto-recall skips the compressor for a bounded short recall", async () => {
+  const result = await runEndpointCompressionCase({
+    prompt: "Which editor do I prefer?",
+    entry: {
+      uri: "viking://user/zeus/memories/preferences/editor.md",
+      score: 0.91,
+      type: "preferences",
+      mode: "summary",
+      summary: "Use Vim",
+    },
+    rendered: '<memory uri="viking://user/zeus/memories/preferences/editor.md">Use Vim</memory>',
+    compressorOutput: "NO_RELEVANT_MEMORY",
+  });
+
+  assert.equal(result.compressorCalls, 0);
+  assert.match(result.output.hookSpecificOutput.additionalContext, /Use Vim/);
+});
+
+test("auto-recall reuses a cached digest for an identical recall", async () => {
+  const uri = "viking://user/zeus/memories/events/retry.md";
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-cache-"));
+  const options = {
+    prompt: "How should retries work?",
+    entry: { uri, score: 0.91, type: "events", mode: "full", summary: "Retry with backoff" },
+    rendered: `<memory uri="${uri}">${"Retry with exponential backoff. ".repeat(80)}</memory>`,
+    compressorOutput: `- Retry with exponential backoff. source: ${uri}`,
+    stateDir,
+  };
+  try {
+    const first = await runEndpointCompressionCase(options);
+    const second = await runEndpointCompressionCase(options);
+    assert.equal(first.compressorCalls, 1);
+    assert.equal(second.compressorCalls, 0);
+    assert.match(second.output.hookSpecificOutput.additionalContext, /exponential backoff/);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
 });
 
 test("auto-recall passes the configured compressor base URL to Codex", async () => {
@@ -400,7 +441,10 @@ test("auto-recall passes the configured compressor base URL to Codex", async () 
     },
     rendered: "<memory_group>Retry with backoff</memory_group>",
     compressorOutput: "NO_RELEVANT_MEMORY",
-    extraEnv: { OPENVIKING_RECALL_COMPRESS_BASE_URL: "https://compressor.example/v1" },
+    extraEnv: {
+      OPENVIKING_RECALL_COMPRESS_BASE_URL: "https://compressor.example/v1",
+      OPENVIKING_RECALL_COMPRESS_MIN_INPUT_CHARS: "0",
+    },
   });
 
   assert.ok(result.compressorArgs.includes('model_provider="openviking_compressor"'));
@@ -421,6 +465,7 @@ test("auto-recall falls back to a bounded deterministic digest when endpoint com
     rendered: "<memory_group>Use Vim</memory_group>",
     compressorOutput: "",
     exitCode: 1,
+    extraEnv: { OPENVIKING_RECALL_COMPRESS_MIN_INPUT_CHARS: "0" },
   });
 
   assert.match(result.output.hookSpecificOutput.additionalContext, /Use Vim/);
@@ -456,7 +501,10 @@ syncBuiltinESMExports();
       },
       rendered: "<memory_group>Use Vim</memory_group>",
       compressorOutput: "unused",
-      extraEnv: { NODE_OPTIONS: `--require=${preloadPath}` },
+      extraEnv: {
+        NODE_OPTIONS: `--require=${preloadPath}`,
+        OPENVIKING_RECALL_COMPRESS_MIN_INPUT_CHARS: "0",
+      },
     });
 
     assert.match(result.output.hookSpecificOutput.additionalContext, /Use Vim/);

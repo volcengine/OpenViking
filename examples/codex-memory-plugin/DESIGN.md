@@ -291,6 +291,7 @@ Env var overrides for tuning without rebuilding:
 | `OPENVIKING_RECALL_COMPRESS_MODEL` | unset | custom first-choice compressor model; `off` disables compression |
 | `OPENVIKING_RECALL_COMPRESS_THINKING` | unset | custom `model_reasoning_effort`; `default` means omit override; alias `OPENVIKING_RECALL_COMPRESS_REASONING_EFFORT` |
 | `OPENVIKING_RECALL_COMPRESS_BASE_URL` | unset | custom API base URL for the nested `codex exec` compressor |
+| `OPENVIKING_RECALL_COMPRESS_MIN_INPUT_CHARS` | `1500` | skip the nested compressor below this recalled-context size; `0` always compresses |
 | `OPENVIKING_RECALL_COMPRESS_DETECT_ON_STARTUP` | `1` | recreate/cache compressor profile during every `SessionStart` |
 | `OPENVIKING_RECALL_COMPRESS_DETECT_TIMEOUT_MS` | `15000` | per-candidate compressor probe timeout |
 | `OPENVIKING_RECALL_COMPRESS_DETECT_TTL_MS` | `604800000` (7 days) | cache TTL used by `UserPromptSubmit` reads |
@@ -344,9 +345,12 @@ Model availability is re-probed at every `SessionStart`, not in every
 `UserPromptSubmit`. Recreating the profile on each session start catches
 cross-session env/config changes. The detector writes
 `recall-compressor-profile.json` under `OPENVIKING_CODEX_STATE_DIR` and
-auto-recall reads that cache. Cache misses in auto-recall use the first
-candidate directly and fall back to deterministic digest if `codex exec`
-fails.
+auto-recall reads that cache. Before resolving a profile, auto-recall passes
+the injection-ready context through the shared recall-compression core. The
+shared core admits only blocks at or above the configured minimum and reuses a
+digest for an identical query/context/URI set; only an eligible cache miss
+launches `codex exec`. Compressor failures fall back to the deterministic
+digest.
 
 Fallback order:
 
