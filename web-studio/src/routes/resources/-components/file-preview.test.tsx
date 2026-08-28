@@ -194,4 +194,36 @@ describe('FilePreview Markdown links', () => {
     expect(screen.queryByRole('link', { name: 'Blob' })).toBeNull()
     expect(onNavigate).not.toHaveBeenCalled()
   })
+
+  it('sanitizes raw HTML and unsafe links in a directory overview', () => {
+    const onNavigate = vi.fn()
+    const { container } = renderPreview(
+      directory,
+      onNavigate,
+      [
+        '<script>window.__pwned = true</script>',
+        '<img src="x" onerror="alert(1)">',
+        '<a href="javascript:alert(1)">Raw unsafe link</a>',
+        '[Markdown unsafe link](javascript:alert(1))',
+      ].join('\n\n'),
+    )
+
+    const directoryArticle = Array.from(
+      container.querySelectorAll('article'),
+    ).find((article) => article.className.includes('rounded-md'))
+    expect(directoryArticle).toBeTruthy()
+    expect(directoryArticle?.textContent).not.toContain('window.__pwned = true')
+    expect(directoryArticle?.querySelector('script')).toBeNull()
+    const image = directoryArticle?.querySelector('img')
+    expect(image).toBeTruthy()
+    expect(image?.getAttribute('onerror')).toBeNull()
+
+    const links = Array.from(directoryArticle?.querySelectorAll('a') ?? [])
+    expect(links).toHaveLength(2)
+    expect(
+      links.every(
+        (link) => !/^javascript:/i.test(link.getAttribute('href') ?? ''),
+      ),
+    ).toBe(true)
+  })
 })
