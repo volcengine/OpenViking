@@ -26,7 +26,7 @@ from openviking.server.config import (
 )
 from openviking.server.dependencies import set_server_config, set_service
 from openviking.server.error_mapping import map_exception
-from openviking.server.identity import RequestContext, Role
+from openviking.server.identity import Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.server.profile_middleware import create_profile_http_middleware
 from openviking.server.request_id import REQUEST_ID_HEADER, RequestIdMiddleware
@@ -58,8 +58,7 @@ from openviking.server.routers import (
 )
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
-from openviking_cli.exceptions import OpenVikingError, PermissionDeniedError
-from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import (
     DEFAULT_OV_CONF,
@@ -139,34 +138,8 @@ async def _initialize_runtime_state(
     config: ServerConfig,
 ) -> None:
     """Initialize service and auth dependencies before traffic is accepted."""
-    auth_ready = asyncio.Event()
-
-    async def resolve_watch_context(
-        account_id: str,
-        user_id: str,
-        original_role: str,
-    ) -> RequestContext:
-        await auth_ready.wait()
-        role = Role(original_role)
-        group_ids: tuple[str, ...] = ()
-        manager = getattr(app.state, "api_key_manager", None)
-        if role != Role.ROOT and manager is not None:
-            if not manager.has_user(account_id, user_id):
-                raise PermissionDeniedError(f"Watch owner no longer exists: {account_id}/{user_id}")
-            role = manager.get_user_role(account_id, user_id)
-            group_ids = tuple(manager.get_user_group_ids(account_id, user_id))
-        return RequestContext(
-            user=UserIdentifier(account_id, user_id),
-            role=role,
-            group_ids=group_ids,
-        )
-
-    set_watch_context_resolver = getattr(service, "set_watch_context_resolver", None)
-    if callable(set_watch_context_resolver):
-        set_watch_context_resolver(resolve_watch_context)
     await service.initialize()
     await _initialize_auth_plugin(app, service, config)
-    auth_ready.set()
     from openviking.service.user_deletion import setup_user_deletion
 
     app.state.user_deletion_service = await setup_user_deletion(

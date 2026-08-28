@@ -30,6 +30,7 @@ class AddResourceMsg:
     job_phase: AddResourcePhase | str | None = None
     lock_handoff: Optional[Dict[str, Any]] = None
     actor_peer_id: Optional[str] = None
+    bypass_acl: bool = False
     reason: str = ""
     instruction: str = ""
     timeout: Optional[float] = None
@@ -135,6 +136,7 @@ class AddResourceMsg:
             ),
             role=str(data.get("role", "root")),
             actor_peer_id=data.get("actor_peer_id"),
+            bypass_acl=bool(data.get("bypass_acl", False)),
             telemetry_id=str(data.get("telemetry_id"))
             if isinstance(data.get("telemetry_id"), str)
             else None,

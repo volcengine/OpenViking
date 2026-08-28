@@ -6,9 +6,8 @@ import pytest
 from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
 from openviking.resource.watch_manager import WatchManager
 from openviking.resource.watch_scheduler import WatchScheduler
-from openviking.server.identity import RequestContext, Role
+from openviking.server.identity import Role
 from openviking.service.resource_service import ResourceService
-from openviking_cli.session.user_id import UserIdentifier
 
 
 class TestWatchSchedulerValidation:
@@ -130,17 +129,10 @@ class TestWatchSchedulerResourceExistence:
         source.write_text("ok")
         coordinator = UriMutationCoordinator()
         resource_service = FakeResourceService()
-        current_ctx = RequestContext(
-            user=UserIdentifier("default", "default"),
-            role=Role.USER,
-            group_ids=("engineering",),
-        )
-        context_resolver = AsyncMock(return_value=current_ctx)
         scheduler = WatchScheduler(
             resource_service=resource_service,
             uri_mutation_coordinator=coordinator,
             check_interval=1,
-            context_resolver=context_resolver,
         )
         manager = WatchManager(uri_mutation_coordinator=coordinator)
         await manager.initialize()
@@ -153,7 +145,6 @@ class TestWatchSchedulerResourceExistence:
             to_uri=old_uri,
             watch_interval=30.0,
             processing_mode="vectors_only",
-            original_role=str(Role.ADMIN),
         )
 
         async with coordinator.mutation(task.account_id, [old_uri, new_uri]):
@@ -172,5 +163,5 @@ class TestWatchSchedulerResourceExistence:
         assert resource_service.calls[0]["to"] == new_uri
         assert resource_service.calls[0]["processing_mode"] == "vectors_only"
         assert resource_service.calls[0]["enforce_public_remote_targets"] is True
-        assert resource_service.calls[0]["ctx"] is current_ctx
-        context_resolver.assert_awaited_once_with("default", "default", str(Role.ADMIN))
+        assert resource_service.calls[0]["ctx"].role == Role.USER
+        assert resource_service.calls[0]["ctx"].bypass_acl is True
