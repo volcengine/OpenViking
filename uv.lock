@@ -3829,7 +3829,7 @@ requires-dist = [
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.14" },
     { name = "opentelemetry-instrumentation-asyncio", specifier = ">=0.61b0" },
     { name = "opentelemetry-sdk", specifier = ">=1.14" },
-    { name = "openviking-sdk", specifier = ">=0.1.1" },
+    { name = "openviking-sdk", specifier = ">=0.1.9" },
     { name = "pandas", marker = "extra == 'benchmark'", specifier = ">=2.0.0" },
     { name = "pandas", marker = "extra == 'eval'", specifier = ">=2.0.0" },
     { name = "pandas", marker = "extra == 'test'", specifier = ">=2.0.0" },
@@ -3906,14 +3906,14 @@ dev = [{ name = "pytest", specifier = ">=9.0.2" }]
 
 [[package]]
 name = "openviking-sdk"
-version = "0.1.4"
+version = "0.1.9"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/11/85/46464494cfa4a84d8355fb43edb455f08c6517629ecf81b50d63ad9ae525/openviking_sdk-0.1.4.tar.gz", hash = "sha256:cac236b8614f3471b294aa71c1e74b297cf72c6a7f286a94c3270e7ccc386de3", size = 33174, upload-time = "2026-07-13T11:38:40.792Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d0/b0/75e49d6da4183165768a40db4876e75c4c9e4ff6ac9356d5bbabdbd51281/openviking_sdk-0.1.9.tar.gz", hash = "sha256:a4e66cd53cd7179d02332ffffb9116fc2feaa431b0bbd1eb93c6906751068e2a", size = 50752, upload-time = "2026-08-24T11:51:34.103Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fe/af/4ca139b05f39c8ed04339d7c8aa56550df80f97d39768d2df9bd72fdbbb9/openviking_sdk-0.1.4-py3-none-any.whl", hash = "sha256:1e9f23332b1b687dd7f272e660953992de60ad3e9d07d62f7460fd4aedb99616", size = 22316, upload-time = "2026-07-13T11:38:39.541Z" },
+    { url = "https://files.pythonhosted.org/packages/47/d6/aa82551f9c5d06ce682b9194c784beeb16478ce103d650ed8e8b487b1aa7/openviking_sdk-0.1.9-py3-none-any.whl", hash = "sha256:6057f3ab921cee4697a7b424948347669cb7b8e04439f305503d8ab7132af3ce", size = 30889, upload-time = "2026-08-24T11:51:33.092Z" },
 ]
 
 [[package]]
