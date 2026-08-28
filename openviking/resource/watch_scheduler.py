@@ -8,7 +8,7 @@ Provides scheduled task execution for watch tasks.
 
 import asyncio
 from datetime import datetime
-from typing import Any, Dict, Optional, Set
+from typing import Any, Awaitable, Callable, Dict, Optional, Set
 
 from openviking.connector.delegate import ConnectorDelegate
 from openviking.resource.feishu_watch_auth import (
@@ -32,6 +32,8 @@ from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
+WatchContextResolver = Callable[[str, str, str], Awaitable[RequestContext]]
+
 
 class WatchScheduler:
     """Scheduled task scheduler for resource watch tasks.
@@ -51,6 +53,7 @@ class WatchScheduler:
         check_interval: float = DEFAULT_CHECK_INTERVAL,
         max_concurrency: int = 4,
         uri_mutation_coordinator: Optional[UriMutationCoordinator] = None,
+        context_resolver: Optional[WatchContextResolver] = None,
     ):
         """Initialize WatchScheduler.
 
@@ -62,6 +65,7 @@ class WatchScheduler:
         self._resource_service = resource_service
         self._viking_fs = viking_fs
         self._uri_mutation_coordinator = uri_mutation_coordinator or UriMutationCoordinator()
+        self._context_resolver = context_resolver
         if check_interval <= 0:
             raise ValueError("check_interval must be > 0")
         if max_concurrency <= 0:
@@ -76,6 +80,10 @@ class WatchScheduler:
         self._executing_tasks: Set[str] = set()
         self._lock = asyncio.Lock()
         self._feishu_oauth_client: Optional[Any] = None
+
+    def set_context_resolver(self, resolver: WatchContextResolver) -> None:
+        """Resolve the watch owner against the current authentication state."""
+        self._context_resolver = resolver
 
     @property
     def watch_manager(self) -> Optional[WatchManager]:
@@ -287,14 +295,17 @@ class WatchScheduler:
                     user_id=task.user_id,
                 )
                 role_value = getattr(task, "original_role", None) or str(Role.USER)
-                try:
-                    role = Role(role_value)
-                except Exception:
-                    role = Role.USER
-                ctx = RequestContext(
-                    user=user,
-                    role=role,
-                )
+                if self._context_resolver is not None:
+                    ctx = await self._context_resolver(
+                        task.account_id,
+                        task.user_id,
+                        role_value,
+                    )
+                else:
+                    ctx = RequestContext(
+                        user=user,
+                        role=Role(role_value),
+                    )
 
                 if task.to_uri:
                     target_exists = await self._check_target_uri_exists(task.to_uri, ctx)

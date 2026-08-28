@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """End-to-end tests for /api/v1/snapshot/*."""
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -191,12 +192,14 @@ async def client_with_resource_and_blob(client_with_resource, service):
     yield client, commit_oid, blob_uri, expected_bytes
 
 
-async def test_restore_dry_run_does_not_mutate(client_with_resource, service):
+async def test_restore_acl_and_reindex_identity(client_with_resource, service, monkeypatch):
     _, _root = client_with_resource
     admin = RequestContext(user=service.user, role=Role.ADMIN)
     writer = RequestContext(
         user=UserIdentifier(admin.account_id, "snapshot_writer"),
         role=Role.USER,
+        group_ids=("engineering",),
+        actor_peer_id="snapshot-peer",
     )
     reader = RequestContext(
         user=UserIdentifier(admin.account_id, "snapshot_reader"),
@@ -263,6 +266,39 @@ async def test_restore_dry_run_does_not_mutate(client_with_resource, service):
     )
     assert delete_plan["diff"]["to_delete"] == ["remove.md"]
     assert await service.fs.read(file_uri, ctx=writer) == "v2"
+
+    reindex_contexts: list[RequestContext] = []
+
+    class _SpyExecutor:
+        async def execute(self, *, uri, mode, wait, ctx):
+            reindex_contexts.append(ctx)
+            return {"ok": True}
+
+        async def reindex_directory_marker(self, *, dir_uri, level, ctx):
+            reindex_contexts.append(ctx)
+
+        async def delete_uri_level(self, *, uri, level, ctx):
+            reindex_contexts.append(ctx)
+            return 0
+
+    monkeypatch.setattr(reindex_mod, "get_reindex_executor", lambda: _SpyExecutor())
+    result = await service.fs.restore(
+        project_dir=root,
+        source_commit=v1["commit_oid"],
+        ctx=writer,
+    )
+    assert result["result"] == "applied"
+
+    for _ in range(100):
+        if reindex_contexts:
+            break
+        await asyncio.sleep(0.02)
+
+    assert reindex_contexts
+    assert all(ctx.role == Role.USER for ctx in reindex_contexts)
+    assert all(ctx.group_ids == ("engineering",) for ctx in reindex_contexts)
+    assert all(ctx.actor_peer_id == "snapshot-peer" for ctx in reindex_contexts)
+    assert all(ctx.bypass_acl for ctx in reindex_contexts)
 
 
 async def test_show_commit_metadata(client_with_resource):

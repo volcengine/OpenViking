@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from openviking.core.directories import DirectoryInitializer
 from openviking.privacy import UserPrivacyConfigService
 from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
-from openviking.resource.watch_scheduler import WatchScheduler
+from openviking.resource.watch_scheduler import WatchContextResolver, WatchScheduler
 from openviking.server.account_settings import (
     effective_auto_protect_new_content,
     read_account_settings,
@@ -98,6 +98,7 @@ class OpenVikingService:
         self._directory_initializer: Optional[DirectoryInitializer] = None
         self._uri_mutation_coordinator = UriMutationCoordinator()
         self._watch_scheduler: Optional[WatchScheduler] = None
+        self._watch_context_resolver: Optional[WatchContextResolver] = None
         self._session_auto_commit_scheduler: Optional[SessionAutoCommitScheduler] = None
         self._encryptor: Optional[Any] = None
         self._privacy_config_service: Optional[UserPrivacyConfigService] = None
@@ -262,6 +263,12 @@ class OpenVikingService:
         """Get WatchScheduler instance."""
         return self._watch_scheduler
 
+    def set_watch_context_resolver(self, resolver: WatchContextResolver) -> None:
+        """Set the server-owned resolver used by recurring watch tasks."""
+        self._watch_context_resolver = resolver
+        if self._watch_scheduler is not None:
+            self._watch_scheduler.set_context_resolver(resolver)
+
     @property
     def fs(self) -> FSService:
         """Get FSService instance."""
@@ -405,6 +412,7 @@ class OpenVikingService:
             resource_service=self._resource_service,
             viking_fs=self._viking_fs,
             uri_mutation_coordinator=self._uri_mutation_coordinator,
+            context_resolver=self._watch_context_resolver,
         )
 
         # Wire up sub-services

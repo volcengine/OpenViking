@@ -11,6 +11,7 @@ import httpx
 
 from openviking.server.app import _initialize_runtime_state, create_app
 from openviking.server.config import ServerConfig
+from openviking.server.identity import Role
 
 
 async def test_health_endpoint(client: httpx.AsyncClient):
@@ -300,6 +301,11 @@ async def test_initialize_runtime_state_loads_api_key_manager(monkeypatch):
         def __init__(self):
             self._initialized = False
             self.viking_fs = object()
+            self._queue_manager = None
+            self.watch_context_resolver = None
+
+        def set_watch_context_resolver(self, resolver):
+            self.watch_context_resolver = resolver
 
         async def initialize(self):
             self._initialized = True
@@ -310,11 +316,24 @@ async def test_initialize_runtime_state_loads_api_key_manager(monkeypatch):
             self.viking_fs = viking_fs
             self.api_key_hashing_enabled = api_key_hashing_enabled
             self.loaded = False
+            self.group_ids = ("engineering",)
 
         async def load(self):
             self.loaded = True
 
-    monkeypatch.setattr("openviking.server.app.APIKeyManager", FakeAPIKeyManager)
+        def has_user(self, account_id, user_id):
+            return account_id == "account" and user_id == "bob"
+
+        def get_user_role(self, account_id, user_id):
+            return Role.USER
+
+        def get_user_group_ids(self, account_id, user_id):
+            return self.group_ids
+
+    monkeypatch.setattr(
+        "openviking.server.auth.plugins.api_key.APIKeyManager",
+        FakeAPIKeyManager,
+    )
 
     app = SimpleNamespace(state=SimpleNamespace(api_key_manager=None))
     service = MockService()
@@ -325,3 +344,9 @@ async def test_initialize_runtime_state_loads_api_key_manager(monkeypatch):
     assert service._initialized is True
     assert app.state.api_key_manager is not None
     assert app.state.api_key_manager.loaded is True
+    watch_ctx = await service.watch_context_resolver("account", "bob", str(Role.ADMIN))
+    assert watch_ctx.role == Role.USER
+    assert watch_ctx.group_ids == ("engineering",)
+    app.state.api_key_manager.group_ids = ()
+    refreshed_ctx = await service.watch_context_resolver("account", "bob", str(Role.ADMIN))
+    assert refreshed_ctx.group_ids == ()

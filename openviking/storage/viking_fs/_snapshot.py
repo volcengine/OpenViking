@@ -4,6 +4,7 @@
 
 import asyncio
 import sys
+from dataclasses import replace
 from typing import Any, Dict, List, Optional, Union
 
 from openviking.pyagfs.exceptions import (
@@ -112,13 +113,7 @@ class _SnapshotMixin:
 
     @staticmethod
     def _restore_reindex_context(ctx: RequestContext) -> RequestContext:
-        if ctx.role == Role.ROOT:
-            return ctx
-        return RequestContext(
-            user=ctx.user,
-            role=Role.ADMIN,
-            group_ids=ctx.group_ids,
-        )
+        return replace(ctx, bypass_acl=True)
 
     async def system_sync_status(
         self, uri: str, ctx: Optional[RequestContext] = None
