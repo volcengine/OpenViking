@@ -26,7 +26,6 @@ from pydantic import BaseModel, Field
 
 from openviking.session.train.context import ExecutionContext
 from openviking.session.train.domain import (
-from openviking.utils.background_tasks import spawn_background_task
     Case,
     CriterionResult,
     Experience,
@@ -36,6 +35,7 @@ from openviking.utils.background_tasks import spawn_background_task
     RubricCriterion,
     RubricEvaluation,
 )
+from openviking.utils.background_tasks import spawn_background_task
 
 CaseLoaderFactory = Callable[[str, str, str, dict[str, Any]], Any]
 RolloutExecutorFactory = Callable[[dict[str, Any]], Any]

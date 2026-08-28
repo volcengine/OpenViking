@@ -59,6 +59,7 @@ from openviking.telemetry.resource_summary import (
     build_queue_status_payload,
 )
 from openviking.utils import is_git_repo_url, parse_code_hosting_url
+from openviking.utils.background_tasks import spawn_background_task
 from openviking.utils.git_auth import (
     GitHttpAuthConfig,
     build_git_http_auth_env,
@@ -78,7 +79,6 @@ from openviking_cli.exceptions import (
     NotInitializedError,
 )
 from openviking_cli.utils import get_logger
-from openviking.utils.background_tasks import spawn_background_task
 
 if TYPE_CHECKING:
     from openviking.connector.delegate import ConnectorDelegate

@@ -37,6 +37,7 @@ from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+from openviking.utils.background_tasks import spawn_background_task
 from openviking.utils.embedding_input import truncate_embedding_input
 from openviking.utils.embedding_utils import (
     _apply_ingest_options,
@@ -50,7 +51,6 @@ from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.config.embedding_config import SUMMARY_TEXT_SOURCES
-from openviking.utils.background_tasks import spawn_background_task
 
 logger = get_logger(__name__)
 

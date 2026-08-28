@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Admin endpoints for OpenViking multi-tenant HTTP Server."""
 
-import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, Path, Request
@@ -44,6 +43,7 @@ from openviking.service.task_tracker import (
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.storage.viking_fs import get_viking_fs
+from openviking.utils.background_tasks import spawn_background_task
 from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
@@ -53,7 +53,6 @@ from openviking_cli.exceptions import (
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
-from openviking.utils.background_tasks import spawn_background_task
 
 logger = get_logger(__name__)
 
