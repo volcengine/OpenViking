@@ -202,10 +202,6 @@ async def test_restore_dry_run_does_not_mutate(client_with_resource, service):
         user=UserIdentifier(admin.account_id, "snapshot_reader"),
         role=Role.USER,
     )
-    managing_user = RequestContext(
-        user=UserIdentifier(admin.account_id, "snapshot_managing_user"),
-        role=Role.USER,
-    )
     root = "viking://resources/snapshot_acl_restore"
     file_uri = f"{root}/document.md"
     extra_uri = f"{root}/remove.md"
@@ -227,7 +223,6 @@ async def test_restore_dry_run_does_not_mutate(client_with_resource, service):
         [
             {"principal": "user:snapshot_writer", "level": "write"},
             {"principal": "user:snapshot_reader", "level": "read"},
-            {"principal": "user:snapshot_managing_user", "level": "manage"},
         ],
         ctx=admin,
     )
@@ -260,19 +255,11 @@ async def test_restore_dry_run_does_not_mutate(client_with_resource, service):
 
     await service.fs.write(extra_uri, content="remove", mode="create", wait=True, ctx=admin)
     await service.fs.commit(message="acl restore delete", paths=[root], ctx=admin)
-    with pytest.raises(PermissionDeniedError):
-        await service.fs.restore(
-            project_dir=root,
-            source_commit=v1["commit_oid"],
-            dry_run=True,
-            ctx=writer,
-        )
-
     delete_plan = await service.fs.restore(
         project_dir=root,
         source_commit=v1["commit_oid"],
         dry_run=True,
-        ctx=managing_user,
+        ctx=writer,
     )
     assert delete_plan["diff"]["to_delete"] == ["remove.md"]
     assert await service.fs.read(file_uri, ctx=writer) == "v2"

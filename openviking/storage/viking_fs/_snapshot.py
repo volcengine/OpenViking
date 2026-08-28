@@ -107,7 +107,7 @@ class _SnapshotMixin:
             await self._ensure_access_many(
                 list(dict.fromkeys(delete_targets)),
                 ctx,
-                action=AclAction.MANAGE,
+                action=AclAction.WRITE,
             )
 
     @staticmethod
