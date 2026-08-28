@@ -114,4 +114,26 @@ describe('createOvClient API key selection', () => {
       'candidate-user-key',
     )
   })
+
+  it('preserves explicit trusted identity headers used to probe a candidate user', async () => {
+    const { client, requests } = createRecordingClient()
+    client.setConnection({
+      accountId: 'account-a',
+      adminApiKey: 'root-key',
+      identityHeaders: true,
+      userId: 'alice',
+    })
+
+    await client.instance.get('/health', {
+      headers: {
+        'X-OpenViking-Account': 'account-a',
+        'X-OpenViking-User': 'bob',
+      },
+    })
+
+    expect(readRequestHeader(requests[0], 'X-OpenViking-Account')).toBe(
+      'account-a',
+    )
+    expect(readRequestHeader(requests[0], 'X-OpenViking-User')).toBe('bob')
+  })
 })
