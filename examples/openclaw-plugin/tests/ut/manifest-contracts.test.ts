@@ -125,6 +125,7 @@ describe("OpenClaw 5.5 package runtime contract", () => {
     expect(packageJson.scripts?.build).toContain("tsc -p tsconfig.build.json");
     expect(packageJson.scripts?.prepack).toBe("npm run build");
     expect(packageJson.files).toContain("dist/");
+    expect(packageJson.files).toContain("shared/");
     expect(packageJson.files).toContain("install-manifest.json");
   });
 
@@ -140,6 +141,7 @@ describe("OpenClaw 5.5 package runtime contract", () => {
       "index.ts",
       "recall-trace.ts",
       "commands/setup.ts",
+      "shared/",
       "tsconfig.json",
       "tsconfig.build.json",
       "package.json",

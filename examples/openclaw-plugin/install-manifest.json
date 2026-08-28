@@ -26,6 +26,7 @@
       "adapters/",
       "registries/",
       "routing/",
+      "shared/",
       "plugin/",
       "services/",
       "commands/setup.ts",

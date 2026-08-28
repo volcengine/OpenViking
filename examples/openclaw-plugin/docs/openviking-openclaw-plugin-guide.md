@@ -770,7 +770,7 @@ openclaw config get plugins.slots.contextEngine
 | `autoRecallTimeoutMs` | 自动召回总超时 | `15000` | 是 | 否 | — | 覆盖单次服务端 context search；默认值为最长 5 秒的 session query expansion 及后续检索保留余量。显式配置的值仍会按 `1000..300000` ms 限制。 |
 | `recallTargetTypes` | 自动召回 + 默认 `memory_recall` 资源类型集合 | `["user","agent"]` | 是 | 安装脚本/setup 参数支持 | `OPENVIKING_RECALL_TARGET_TYPES`（安装脚本写入 setup 参数） | 当前默认只查 `user` + `agent` 记忆。设置为 `["resource"]` 才会切成 resource-only；可组合 `resource,user,agent`：`config.ts:174`、`config.ts:360` |
 | `recallResources` | 自动召回 + 默认 `memory_recall` resources 兼容开关 | `false` | 是 | 是 | `OPENVIKING_RECALL_RESOURCES` | 旧兼容字段；只有未显式配置 `recallTargetTypes` 时才把 `resource` 追加到默认 `user` + `agent`，不会覆盖显式 resource-only：`config.ts:360` |
-| `recallLimit` | 自动召回 / `memory_recall` 返回条数 | `6` | 是 | 否 | — | 自动召回直接作为 context search 的 `limit`；显式 `memory_recall` 仍按该值做最终选择。 |
+| `recallLimit` | 自动召回 / `memory_recall` 返回条数 | `6` | 是 | 否 | — | 自动召回按共享 context-search 契约映射为 coding quotas；显式 `memory_recall` 仍按该值做最终选择。 |
 | `recallScoreThreshold` | 自动召回 / `memory_recall` 过滤阈值 | `0.15` | 是 | 否 | — | 自动召回交给服务端过滤；显式 `memory_recall` 保留本地后处理。 |
 | `recallMaxInjectedChars` | 自动召回 / `memory_recall` 注入预算 | `4000` | 是 | 否 | — | 自动召回按 4 字符/token 换算为服务端 `max_tokens`；显式 `memory_recall` 仍使用字符预算。 |
 | `recallPreferAbstract` | 自动召回读取策略 | `false` | 是 | 否 | — | 为 `true` 时把服务端 detail 固定为 `abstract`；否则由服务端按类别选择默认层级。 |
@@ -1095,7 +1095,7 @@ OPENVIKING_DEBUG=1 openclaw gateway restart
 
 | 日志/字段 | 含义 | 关键路径 |
 | --- | --- | --- |
-| `openviking: context search POST .../api/v1/search/search {...}` | 自动召回向 OpenViking 发起服务端组装检索 | `session_id` / `context_type` / `query_expansion` / `peer_scope` / actor 与租户路由 |
+| `openviking: context search POST .../api/v1/search/search {...}` | 自动召回向 OpenViking 发起服务端组装检索 | `purpose` / `quotas` / `session_id` / `context_type` / `query_expansion` / `max_tokens` / `peer_scope` / actor 与租户路由 |
 | `openviking: find POST .../api/v1/search/find {...}` | 显式 recall/search 工具发起底层语义检索 | `target_uri` / `target_uri_input` / `query` / `X_OpenViking_Agent` |
 | `openviking: injecting N memories ...` | 插件决定向本轮 prompt 注入 N 条召回内容 | `N`、注入字符数、估算 token |
 | `openviking: inject-detail {...}` | 本轮实际注入模型的服务端组装条目摘要 | `entries[].uri`、`category`、`score`、`detail` |

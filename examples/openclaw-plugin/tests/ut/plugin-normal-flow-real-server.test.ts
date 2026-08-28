@@ -272,14 +272,26 @@ describe("plugin normal flow with healthy backend", () => {
     const contextSearchRequest = requests.find(
       (entry) => entry.method === "POST" && entry.path === "/api/v1/search/search",
     );
-    expect(JSON.parse(contextSearchRequest?.body ?? "{}")).toMatchObject({
+    const contextSearchBody = JSON.parse(contextSearchRequest?.body ?? "{}");
+    expect(contextSearchBody).toMatchObject({
       mode: "context",
+      purpose: "coding",
+      quotas: {
+        events: 1,
+        entities: 1,
+        preferences: 1,
+        experiences: 1,
+        resources: 1,
+        skills: 1,
+      },
       session_id: "session-normal",
       context_type: "memory",
       query_expansion: "auto",
+      max_tokens: 1000,
       dedup_turns: 5,
       peer_scope: "actor",
     });
+    expect(contextSearchBody).not.toHaveProperty("limit");
     expect(
       requests.some((entry) => entry.method === "GET" && entry.path.startsWith("/api/v1/sessions/session-normal/context")),
     ).toBe(true);

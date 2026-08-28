@@ -27,6 +27,10 @@ const AGENT_PLUGINS_SHARED_FILES = [
   "mcp-proxy-core.mjs",
   "workspace-peer.mjs",
 ];
+const OPENCLAW_SHARED_FILES = [
+  "recall-compress-core.mjs",
+  "recall-core.mjs",
+];
 const TARGETS = [
   { dir: join(ROOT, "examples", "claude-code-memory-plugin", "scripts", "shared"), files: DOCTOR_SHARED_FILES },
   { dir: join(ROOT, "examples", "codex-memory-plugin", "scripts", "shared"), files: DOCTOR_SHARED_FILES },
@@ -35,6 +39,7 @@ const TARGETS = [
   { dir: join(ROOT, "examples", "pi-coding-agent-extension", "shared"), files: HARNESS_SHARED_FILES },
   { dir: join(ROOT, "examples", "zcode-memory-plugin", "scripts", "shared") , files: ZCODE_SHARED_FILES },
   { dir: join(ROOT, "agent-plugins", "servers", "shared"), files: AGENT_PLUGINS_SHARED_FILES },
+  { dir: join(ROOT, "examples", "openclaw-plugin", "shared"), files: OPENCLAW_SHARED_FILES },
 ];
 const GENERATED_HEADER = "// GENERATED FROM examples/memory-plugin-shared/lib. DO NOT EDIT.\n";
 const SKILLS_DIR = join(ROOT, "examples", "skills");

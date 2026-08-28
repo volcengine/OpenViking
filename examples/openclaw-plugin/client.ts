@@ -12,6 +12,11 @@ import {
   defaultResourcePackager,
   type ResourcePackager,
 } from "./adapters/resource-packager.js";
+import {
+  buildContextSearchBody,
+  contextRequestTimeoutMs,
+  normalizeContextEntry,
+} from "./shared/recall-core.mjs";
 
 export type FindResultItem = {
   uri: string;
@@ -522,19 +527,26 @@ export class OpenVikingClient {
     query: string,
     options: SearchContextOptions = {},
   ): Promise<SearchContextResult> {
-    const body = {
-      query,
-      mode: "context",
-      session_id: options.sessionId,
-      limit: options.limit,
-      score_threshold: options.scoreThreshold,
-      context_type: options.contextType,
-      query_expansion: options.queryExpansion,
-      max_tokens: options.maxTokens,
-      detail: options.detail,
-      dedup_turns: options.dedupTurns,
-      peer_scope: options.peerScope,
+    const contractConfig = {
+      recallLimit: options.limit,
+      recallLimitConfigured: options.limit !== undefined,
+      recallMaxTokens: options.maxTokens,
+      recallMaxTokensConfigured: options.maxTokens !== undefined,
+      scoreThreshold: options.scoreThreshold,
+      recallQueryExpansion: options.queryExpansion,
+      recallQueryExpansionConfigured: options.queryExpansion !== undefined,
+      recallDedupTurns: options.dedupTurns,
+      recallPeerScope: options.peerScope,
+      recallContextTimeoutMs: options.requestTimeoutMs,
+      timeoutMs: this.timeoutMs,
     };
+    const body = {
+      ...buildContextSearchBody(contractConfig, { sessionId: options.sessionId }),
+      query,
+      ...(options.contextType !== undefined ? { context_type: options.contextType } : {}),
+      ...(options.detail !== undefined ? { detail: options.detail } : {}),
+    };
+    const requestTimeoutMs = contextRequestTimeoutMs(contractConfig, body);
     const actorPeerId = this.resolveActorPeerHeader(options.actorPeerId);
     const tenantHeaders = this.resolveTenantHeaders();
     this.routingDebugLog?.(
@@ -543,25 +555,32 @@ export class OpenVikingClient {
           X_OpenViking_Account: tenantHeaders.accountId ?? null,
           X_OpenViking_User: tenantHeaders.userId ?? null,
           X_OpenViking_Actor_Peer: actorPeerId ?? null,
-          session_id: options.sessionId ?? null,
+          session_id: body.session_id ?? null,
           query:
             query.length > 4000
               ? `${query.slice(0, 4000)}…(+${query.length - 4000} more chars)`
               : query,
-          limit: options.limit,
-          score_threshold: options.scoreThreshold ?? null,
-          context_type: options.contextType ?? null,
-          query_expansion: options.queryExpansion ?? null,
-          max_tokens: options.maxTokens,
-          detail: options.detail ?? null,
-          dedup_turns: options.dedupTurns ?? 0,
-          peer_scope: options.peerScope ?? null,
+          purpose: body.purpose,
+          quotas: body.quotas ?? null,
+          score_threshold: body.score_threshold,
+          context_type: body.context_type ?? null,
+          query_expansion: body.query_expansion ?? null,
+          max_tokens: body.max_tokens ?? null,
+          detail: body.detail ?? null,
+          dedup_turns: body.dedup_turns ?? 0,
+          peer_scope: body.peer_scope ?? null,
         }),
     );
-    return this.request<SearchContextResult>("/api/v1/search/search", {
+    const result = await this.request<SearchContextResult>("/api/v1/search/search", {
       method: "POST",
       body: JSON.stringify(body),
-    }, options.requestTimeoutMs, actorPeerId);
+    }, requestTimeoutMs, actorPeerId);
+    return {
+      ...result,
+      entries: Array.isArray(result.entries)
+        ? result.entries.map((entry) => ({ ...entry, ...normalizeContextEntry(entry) }))
+        : result.entries,
+    };
   }
 
   async read(uri: string, actorPeerId?: string): Promise<string> {

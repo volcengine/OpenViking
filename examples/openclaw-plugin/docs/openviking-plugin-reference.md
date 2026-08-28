@@ -98,7 +98,7 @@ $OPENCLAW_STATE_DIR/openclaw.json
 | `targetUri` | string | `viking://user/memories` | — | `memory_recall` / `memory_forget` 默认搜索范围。 |
 | `recallTargetTypes` | string[] | `["user", "agent"]` | — | 自动召回和默认 `memory_recall` 的搜索类型。允许 `resource`、`user`、`agent`。 |
 | `recallResources` | boolean | `false` | `OPENVIKING_RECALL_RESOURCES` | 旧兼容开关；仅在未显式配置 `recallTargetTypes` 时追加 `resource`。 |
-| `recallLimit` | number | `6` | — | 自动召回直接作为服务端 context search 的 `limit`；显式 `memory_recall` 保留本地候选扩展。 |
+| `recallLimit` | number | `6` | — | 自动召回按共享 context-search 契约映射为 coding quotas；显式 `memory_recall` 保留本地候选扩展。 |
 | `recallScoreThreshold` | number | `0.15` | — | 自动召回交给服务端过滤；显式 `memory_recall` 保留本地后处理。范围 `0` 到 `1`。 |
 | `recallMaxInjectedChars` | number | `4000` | — | 自动召回按 4 字符/token 换算为服务端 `max_tokens`；显式召回仍使用字符预算。范围 `100` 到 `50000`。 |
 | `recallPreferAbstract` | boolean | `false` | — | 自动召回为 true 时请求服务端 abstract detail；否则由服务端按类别选择层级。 |
