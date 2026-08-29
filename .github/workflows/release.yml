@@ -155,3 +155,53 @@ jobs:
         VERSION=$(ls dist/*.whl | head -n 1 | xargs basename | cut -d- -f2)
         echo "Published to PyPI (or already existed) with version: $VERSION"
         echo "::notice::Published to PyPI (or already existed) with version: $VERSION"
+
+  verify-docker:
+    name: Verify Docker Image Published
+    needs: [permission-check]
+    if: >-
+      needs.permission-check.outputs.allowed == 'true' &&
+      github.event_name == 'release'
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+    steps:
+      # The tag push and the release event fire at the same instant, so the
+      # image does not exist yet when this job starts. Wait for the tag's
+      # build-docker-image.yml run, then assert the tags really landed.
+      - name: Wait for the tag's docker build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          for _ in $(seq 60); do
+            run=$(gh run list --workflow build-docker-image.yml --branch "$TAG" \
+                    --event push --limit 1 \
+                    --json status,conclusion,url \
+                    --jq '.[0] | "\(.status) \(.conclusion) \(.url)"')
+            if [ -z "$run" ]; then
+              echo "No build-docker-image run for $TAG yet"
+            else
+              set -- $run
+              if [ "$1" = completed ]; then
+                [ "$2" = success ] || { echo "::error::docker build $2: $3"; exit 1; }
+                echo "docker build succeeded: $3"
+                exit 0
+              fi
+              echo "docker build $1 ($3)"
+            fi
+            sleep 30
+          done
+          echo "::error::timed out waiting for the docker build of $TAG"
+          exit 1
+
+      - name: Assert image tags exist
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          image=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          docker buildx imagetools inspect "ghcr.io/${image}:${TAG}" >/dev/null
+          docker buildx imagetools inspect "docker.io/${{ secrets.DOCKERHUB_USERNAME }}/openviking:${TAG}" >/dev/null
