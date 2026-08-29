@@ -10,7 +10,7 @@ description = "Mooncake cache provider adapter for RAGFS"
 async-trait = "0.1"
 bytes = "1.5"
 futures = "0.3"
-mooncake_store = { git = "https://github.com/kvcache-ai/Mooncake.git", rev = "1352bbec43081e461356aaecf6c70cddd826b455", optional = true }
+mooncake_store = { git = "https://github.com/kvcache-ai/Mooncake.git", rev = "8bfa404f9230db7010102e25e63f162fa4da8f12", optional = true }
 ragfs = { path = "../ragfs", features = ["cache"] }
 thiserror = "1.0"
 tokio = { version = "1.38", features = ["rt-multi-thread", "sync", "time", "macros"] }

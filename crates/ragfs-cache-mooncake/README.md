@@ -6,7 +6,7 @@ changing `CachedFileSystem`.
 The optional official binding is pinned to Mooncake commit:
 
 ```text
-1352bbec43081e461356aaecf6c70cddd826b455
+8bfa404f9230db7010102e25e63f162fa4da8f12
 ```
 
 Default tests use the same synchronous object boundary as the native binding,
