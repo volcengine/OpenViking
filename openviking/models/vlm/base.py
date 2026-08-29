@@ -73,6 +73,7 @@ class VLMBase(ABC):
         self.temperature = config.get("temperature", 0.0)
         self.max_retries = config.get("max_retries", 3)
         self.timeout = config.get("timeout", 600.0)
+        self.keepalive_expiry = config.get("keepalive_expiry")
         self.max_tokens = config.get("max_tokens")
         self.extra_headers = config.get("extra_headers")
         self.extra_request_body = dict(config.get("extra_request_body") or {})
