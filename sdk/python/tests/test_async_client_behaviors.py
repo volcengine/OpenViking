@@ -532,6 +532,7 @@ def test_sync_http_client_declares_common_sync_methods_explicitly():
         "get_session",
         "get_session_context",
         "delete_session",
+        "rollback_session",
         "search",
         "find",
         "grep",
@@ -1310,22 +1311,25 @@ async def test_session_exists_returns_false_on_not_found():
 
 
 @pytest.mark.asyncio
-async def test_session_wrapper_forwards_commit_context_and_archive_operations():
+async def test_session_wrapper_forwards_commit_context_archive_and_rollback_operations():
     client = AsyncHTTPClient(url="http://localhost:1933")
     session = Session(client, "thread-1")
     client.commit_session = AsyncMock(return_value={"status": "completed"})
     client.get_session_context = AsyncMock(return_value={"messages": []})
     client.get_session_archive = AsyncMock(return_value={"archive_id": "arc-1"})
+    client.rollback_session = AsyncMock(return_value={"status": "ready"})
     client.delete_session = AsyncMock(return_value=None)
 
     commit_result = await session.commit(keep_recent_count=2)
     context_result = await session.get_session_context(2048)
     archive_result = await session.get_archive("arc-1")
+    rollback_result = await session.rollback(dry_run=True, delete_session=False)
     await session.delete()
 
     assert commit_result == {"status": "completed"}
     assert context_result == {"messages": []}
     assert archive_result == {"archive_id": "arc-1"}
+    assert rollback_result == {"status": "ready"}
     client.commit_session.assert_awaited_once_with(
         "thread-1",
         keep_recent_count=2,
@@ -1333,7 +1337,41 @@ async def test_session_wrapper_forwards_commit_context_and_archive_operations():
     )
     client.get_session_context.assert_awaited_once_with("thread-1", 2048)
     client.get_session_archive.assert_awaited_once_with("thread-1", "arc-1")
+    client.rollback_session.assert_awaited_once_with(
+        "thread-1", dry_run=True, force=False, delete_session=False
+    )
     client.delete_session.assert_awaited_once_with("thread-1")
+
+
+def test_sync_session_wrapper_forwards_rollback_options():
+    client = Mock()
+    client.rollback_session.return_value = {"status": "partial"}
+    session = SyncSession(client, "thread-1")
+
+    result = session.rollback(force=True, delete_session=False)
+
+    assert result == {"status": "partial"}
+    client.rollback_session.assert_called_once_with(
+        "thread-1", dry_run=False, force=True, delete_session=False
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_rollback_session_posts_safety_options():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._request = AsyncMock(return_value=object())
+    client._handle_response = lambda _response: {"status": "ready"}
+
+    result = await client.rollback_session(
+        "thread/1", dry_run=True, force=True, delete_session=False
+    )
+
+    assert result == {"status": "ready"}
+    client._request.assert_awaited_once_with(
+        "POST",
+        "/api/v1/sessions/thread%2F1/rollback",
+        json={"dry_run": True, "force": True, "delete_session": False},
+    )
 
 
 @pytest.mark.asyncio

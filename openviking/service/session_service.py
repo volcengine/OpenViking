@@ -27,6 +27,7 @@ from openviking.service.session_auto_commit import (
     has_uncommitted_content,
     is_next_check_due,
 )
+from openviking.service.session_memory_rollback import SessionMemoryRollback
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
 from openviking.session.auto_commit_policy import AutoCommitPolicy
@@ -38,6 +39,7 @@ from openviking.utils.tags import normalize_search_tags
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import (
     AlreadyExistsError,
+    FailedPreconditionError,
     NotFoundError,
     NotInitializedError,
 )
@@ -361,6 +363,49 @@ class SessionService:
         logger.info(f"Deleted session: {session_id}")
         self._record_lifecycle_metric("delete", "ok")
         return True
+
+    async def rollback_memories(
+        self,
+        session_id: str,
+        ctx: RequestContext,
+        *,
+        dry_run: bool = False,
+        force: bool = False,
+        delete_session: bool = True,
+    ) -> Dict[str, Any]:
+        """Reverse memory changes recorded by a Session's commit archives."""
+        self._ensure_initialized()
+        await self.get(session_id, ctx, auto_create=False)
+        if await get_task_tracker().has_running(
+            "session_commit",
+            session_id,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+        ):
+            raise FailedPreconditionError(
+                f"Session '{session_id}' has a commit in progress",
+                details={"session_id": session_id, "reason": "commit_in_progress"},
+            )
+
+        self._record_lifecycle_metric("rollback", "attempt")
+        try:
+            result = await SessionMemoryRollback(
+                viking_fs=self._viking_fs,
+                vikingdb=self._vikingdb,
+            ).run(
+                session_id,
+                ctx,
+                dry_run=dry_run,
+                force=force,
+                delete_session=delete_session,
+            )
+            self._record_lifecycle_metric("rollback", "ok")
+            if delete_session and not dry_run:
+                self._record_lifecycle_metric("delete", "ok")
+            return result
+        except Exception:
+            self._record_lifecycle_metric("rollback", "error")
+            raise
 
     async def commit(
         self,

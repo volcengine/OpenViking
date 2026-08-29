@@ -1636,6 +1636,47 @@ viking://user/{user_id}/sessions/{session_id}/
 
 如果长记忆抽取已运行但没有产生实际变更或策略性跳过，也会写入空结构的 `memory_diff.json`（所有计数为零）。
 
+从 schema version 2 开始，每条操作还会记录完整原始快照（`after_raw`、
+`before_raw` 或 `deleted_raw`）以及 `operation_order`。这些字段会保留精确回滚所需的
+`MEMORY_FIELDS` 元数据。缺少原始快照的旧审计文件仍可读取，但回滚会将其报告为冲突，
+不会猜测并重建可能不完整的元数据。
+
+## 回滚会话造成的记忆变更
+
+`POST /api/v1/sessions/{session_id}/rollback` 会按“最新归档、最新操作优先”的顺序，
+反向执行该会话所有 commit 审计的记忆变更。默认仅在所有安全反向操作成功后删除会话。
+
+```bash
+# 建议始终先预演
+ov session rollback a1b2c3d4 --dry-run
+
+# 执行回滚并删除会话
+ov session rollback a1b2c3d4
+
+# 执行回滚但保留会话
+ov session rollback a1b2c3d4 --keep-session
+
+# 等价的删除工作流
+ov session delete a1b2c3d4 --rollback-memories --dry-run
+```
+
+```bash
+curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/rollback \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{"dry_run":true,"force":false,"delete_session":true}'
+```
+
+| 请求字段 | 默认值 | 说明 |
+|---|---:|---|
+| `dry_run` | `false` | 只返回反向操作计划，不修改存储，也不删除会话 |
+| `force` | `false` | 跳过冲突 URI 及其依赖的更早操作；不会强制覆盖冲突文件 |
+| `delete_session` | `true` | 非预演回滚成功后删除会话 |
+
+如果当前记忆与审计记录的提交后状态不一致，默认返回 HTTP `409`，且不会应用任何记忆
+修改。使用 `force=true` 时会跳过冲突 URI，响应状态为 `partial`。单个文件系统操作失败
+时会补偿恢复事务前状态；文件系统事务完成后再刷新向量索引与 overview。
+
 <a id="内置记忆类型"></a>
 
 ## 完整示例

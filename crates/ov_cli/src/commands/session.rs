@@ -296,6 +296,30 @@ pub async fn delete_session(
     Ok(())
 }
 
+pub async fn rollback_session(
+    client: &HttpClient,
+    session_id: &str,
+    dry_run: bool,
+    force: bool,
+    delete_session: bool,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let path = format!("/api/v1/sessions/{}/rollback", url_encode(session_id));
+    let body = rollback_session_body(dry_run, force, delete_session);
+    let response: serde_json::Value = client.post(&path, &body).await?;
+    output_success(&response, output_format, compact);
+    Ok(())
+}
+
+fn rollback_session_body(dry_run: bool, force: bool, delete_session: bool) -> serde_json::Value {
+    json!({
+        "dry_run": dry_run,
+        "force": force,
+        "delete_session": delete_session,
+    })
+}
+
 fn parse_messages(input: &str) -> Result<Vec<(String, String)>> {
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(input) {
         if let Some(arr) = value.as_array() {
@@ -541,10 +565,18 @@ fn url_encode(s: &str) -> String {
 mod tests {
     use super::{
         create_session_body, event_tags_body, parse_messages, render_session_get_for_table,
-        session_config_body,
+        rollback_session_body, session_config_body,
     };
     use crate::error::Error;
     use serde_json::json;
+
+    #[test]
+    fn rollback_body_preserves_all_safety_options() {
+        assert_eq!(
+            rollback_session_body(true, true, false),
+            json!({"dry_run": true, "force": true, "delete_session": false})
+        );
+    }
 
     #[test]
     fn parse_messages_reports_invalid_array_item_as_command_error() {

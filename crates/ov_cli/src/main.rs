@@ -1462,6 +1462,30 @@ enum SessionCommands {
         /// Session ID
         #[arg(value_name = "session-id")]
         session_id: String,
+        /// Reverse committed memory changes before deleting the session
+        #[arg(long = "rollback-memories")]
+        rollback_memories: bool,
+        /// Preview the rollback without changing memories or deleting the session
+        #[arg(long, requires = "rollback_memories")]
+        dry_run: bool,
+        /// Skip conflicting URIs instead of aborting the entire rollback
+        #[arg(long, requires = "rollback_memories")]
+        force: bool,
+    },
+    /// Reverse memory changes recorded by a session's commit archives
+    Rollback {
+        /// Session ID
+        #[arg(value_name = "session-id")]
+        session_id: String,
+        /// Preview changes without mutating storage
+        #[arg(long)]
+        dry_run: bool,
+        /// Skip conflicting URIs instead of aborting the entire rollback
+        #[arg(long)]
+        force: bool,
+        /// Keep the session after a successful rollback
+        #[arg(long = "keep-session")]
+        keep_session: bool,
     },
     /// Add one message to a session
     AddMessage {
@@ -2632,6 +2656,7 @@ fn is_session_subcommand(token: &str) -> bool {
             | "get-session-context"
             | "get-session-archive"
             | "delete"
+            | "rollback"
             | "add-message"
             | "add-messages"
             | "commit"
@@ -3737,8 +3762,8 @@ async fn main() {
 mod tests {
     use super::{
         Cli, CliContext, Commands, ConfigAddTarget, ConfigCommands, LanguageGateAction,
-        ObserverCommands, PrivacyCommands, SkillCommands, SnapshotCmd, UploadCliOptions,
-        find_command_index, first_command_token, is_language_command_request,
+        ObserverCommands, PrivacyCommands, SessionCommands, SkillCommands, SnapshotCmd,
+        UploadCliOptions, find_command_index, first_command_token, is_language_command_request,
         language_command_can_run_picker, language_gate_action, language_required_message,
         legacy_upload_option_error, plain_help_misuse, pre_parse_output_options,
         pre_parse_requires_cli_config_file, preprocess_cli_args, preprocess_privacy_args,
@@ -3771,6 +3796,58 @@ mod tests {
         assert_eq!(cli.account.as_deref(), Some("acme"));
         assert_eq!(cli.user.as_deref(), Some("alice"));
         assert_eq!(cli.actor_peer_id.as_deref(), Some("peer-a"));
+    }
+
+    #[test]
+    fn cli_parses_session_rollback_safety_flags() {
+        let cli = Cli::try_parse_from([
+            "ov",
+            "session",
+            "rollback",
+            "session-1",
+            "--dry-run",
+            "--force",
+            "--keep-session",
+        ])
+        .expect("session rollback should parse");
+
+        match cli.command {
+            Commands::Session {
+                action:
+                    SessionCommands::Rollback {
+                        session_id,
+                        dry_run,
+                        force,
+                        keep_session,
+                    },
+            } => {
+                assert_eq!(session_id, "session-1");
+                assert!(dry_run);
+                assert!(force);
+                assert!(keep_session);
+            }
+            _ => panic!("expected session rollback command"),
+        }
+    }
+
+    #[test]
+    fn session_delete_safety_flags_require_rollback_memories() {
+        assert!(
+            Cli::try_parse_from(["ov", "session", "delete", "session-1", "--dry-run"]).is_err()
+        );
+        assert!(Cli::try_parse_from(["ov", "session", "delete", "session-1", "--force"]).is_err());
+        assert!(
+            Cli::try_parse_from([
+                "ov",
+                "session",
+                "delete",
+                "session-1",
+                "--rollback-memories",
+                "--dry-run",
+                "--force",
+            ])
+            .is_ok()
+        );
     }
 
     #[test]
@@ -4260,6 +4337,7 @@ mod tests {
             &["ov", "session", "get-session-context"],
             &["ov", "session", "get-session-archive"],
             &["ov", "session", "delete"],
+            &["ov", "session", "rollback"],
             &["ov", "session", "add-message"],
             &["ov", "session", "add-messages"],
             &["ov", "session", "commit"],

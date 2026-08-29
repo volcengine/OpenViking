@@ -528,9 +528,49 @@ pub async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()>
             )
             .await
         }
-        SessionCommands::Delete { session_id } => {
-            commands::session::delete_session(&client, &session_id, ctx.output_format, ctx.compact)
+        SessionCommands::Delete {
+            session_id,
+            rollback_memories,
+            dry_run,
+            force,
+        } => {
+            if rollback_memories {
+                commands::session::rollback_session(
+                    &client,
+                    &session_id,
+                    dry_run,
+                    force,
+                    true,
+                    ctx.output_format,
+                    ctx.compact,
+                )
                 .await
+            } else {
+                commands::session::delete_session(
+                    &client,
+                    &session_id,
+                    ctx.output_format,
+                    ctx.compact,
+                )
+                .await
+            }
+        }
+        SessionCommands::Rollback {
+            session_id,
+            dry_run,
+            force,
+            keep_session,
+        } => {
+            commands::session::rollback_session(
+                &client,
+                &session_id,
+                dry_run,
+                force,
+                !keep_session,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
         }
         SessionCommands::AddMessage {
             session_id,

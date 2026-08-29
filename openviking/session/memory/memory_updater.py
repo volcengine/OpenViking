@@ -1516,6 +1516,50 @@ class MemoryUpdater:
                 tracer.error(f"Failed to vectorize memory {uri}: {e}")
         return attempted_count
 
+    async def refresh_after_rollback(
+        self,
+        *,
+        restored_uris: List[str],
+        deleted_uris: List[str],
+        uri_memory_type_map: Dict[str, str],
+        ctx: RequestContext,
+    ) -> Dict[str, Any]:
+        """Refresh vector records and directory overviews after raw snapshot restoration."""
+        result = MemoryUpdateResult()
+        for uri in dict.fromkeys(restored_uris):
+            result.add_edited(uri)
+        for uri in dict.fromkeys(deleted_uris):
+            result.add_deleted(uri)
+
+        vectorized = await self._vectorize_memories(
+            result,
+            ctx,
+            uri_memory_type_map=uri_memory_type_map,
+        )
+        overview_directories: Dict[str, str] = {}
+        for uri in dict.fromkeys(restored_uris + deleted_uris):
+            directory = uri.rsplit("/", 1)[0]
+            memory_type = (
+                uri_memory_type_map.get(uri) or self.memory_type_from_uri(uri) or "unknown"
+            )
+            overview_directories[directory] = memory_type
+
+        regenerated = 0
+        errors: List[Dict[str, str]] = []
+        for directory, memory_type in overview_directories.items():
+            try:
+                if await self.generate_overview(memory_type, directory, ctx):
+                    regenerated += 1
+            except Exception as exc:
+                errors.append({"directory": directory, "error": str(exc)})
+                logger.exception("Failed to refresh overview after rollback: %s", directory)
+
+        return {
+            "vectorization_enqueued": vectorized,
+            "overviews_regenerated": regenerated,
+            "errors": errors,
+        }
+
     @staticmethod
     def _truncate_memory_abstract(abstract: str) -> str:
         """Cap memory vector-store abstract fields below backend byte limits."""

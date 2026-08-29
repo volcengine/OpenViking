@@ -18,6 +18,7 @@ from openviking.session.memory.patch_merge_context_provider import (
     PatchMergeContextProvider,
     PatchMergePatch,
 )
+from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.train.domain import (
     Policy,
     PolicyPlanItem,
@@ -415,10 +416,10 @@ def _operations_to_plan_items(
         )
         target_uri = first_uri(getattr(op, "uris", []) or [])
         old_file = getattr(op, "old_memory_file_content", None)
+        existing_policy = _find_policy_by_uri(policy_set, target_uri) if target_uri else None
         before_content = old_file.plain_content() if old_file is not None else None
-        if before_content is None and target_uri:
-            policy = _find_policy_by_uri(policy_set, target_uri)
-            before_content = policy.content if policy is not None else None
+        if before_content is None and existing_policy is not None:
+            before_content = existing_policy.content
         items.append(
             PolicyPlanItem(
                 kind="upsert",
@@ -449,6 +450,10 @@ def _operations_to_plan_items(
                     "rationale": "PatchMergeContextProvider merged semantic gradients via ExtractLoop.",
                     "merge_gradient_count": len(gradients),
                     "merge_memory_fields": fields,
+                    "rollback_before_raw": _rollback_snapshot(
+                        memory_file=old_file,
+                        policy=existing_policy,
+                    ),
                     "superseded_experience_uris": [
                         policy.uri for policy in superseded_policies
                     ],
@@ -487,6 +492,7 @@ def _operations_to_plan_items(
                 metadata={
                     "rationale": "PatchMergeContextProvider merge requested memory deletion.",
                     "merge_gradient_count": len(gradients),
+                    "rollback_before_raw": _rollback_snapshot(memory_file=old_file),
                 },
             )
         )
@@ -509,6 +515,7 @@ def _operations_to_plan_items(
                 metadata={
                     "rationale": "Superseded by broader experience from semantic gradient.",
                     "merge_gradient_count": len(gradients),
+                    "rollback_before_raw": _rollback_snapshot(policy=policy),
                     "superseded_by": [
                         item.target_uri or item.target_name
                         for item in items
@@ -519,6 +526,31 @@ def _operations_to_plan_items(
         )
         delete_uris.add(policy.uri)
     return items
+
+
+def _rollback_snapshot(
+    *,
+    memory_file: MemoryFile | None = None,
+    policy: Policy | None = None,
+) -> str | None:
+    """Serialize the pre-apply policy state for a conflict-safe inverse operation."""
+    if memory_file is not None:
+        return MemoryFileUtils.write(memory_file, render_links=False)
+    if policy is None:
+        return None
+    fields = dict(policy.metadata or {})
+    memory_type = str(fields.get("memory_type") or "experiences")
+    return MemoryFileUtils.write(
+        MemoryFile(
+            uri=policy.uri,
+            content=policy.content,
+            links=list(policy.links or []),
+            backlinks=list(policy.backlinks or []),
+            memory_type=memory_type,
+            extra_fields=fields,
+        ),
+        render_links=False,
+    )
 
 
 def _name_field_for_memory_type(memory_type: str) -> str:

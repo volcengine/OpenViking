@@ -192,6 +192,20 @@ class Session:
     async def delete(self) -> None:
         await self._client.delete_session(self.session_id)
 
+    async def rollback(
+        self,
+        *,
+        dry_run: bool = False,
+        force: bool = False,
+        delete_session: bool = True,
+    ) -> Dict[str, Any]:
+        return await self._client.rollback_session(
+            self.session_id,
+            dry_run=dry_run,
+            force=force,
+            delete_session=delete_session,
+        )
+
     async def load(self) -> Dict[str, Any]:
         return await self._client.get_session(self.session_id)
 
@@ -248,6 +262,20 @@ class SyncSession:
 
     def delete(self) -> None:
         self._client.delete_session(self.session_id)
+
+    def rollback(
+        self,
+        *,
+        dry_run: bool = False,
+        force: bool = False,
+        delete_session: bool = True,
+    ) -> Dict[str, Any]:
+        return self._client.rollback_session(
+            self.session_id,
+            dry_run=dry_run,
+            force=force,
+            delete_session=delete_session,
+        )
 
     def load(self) -> Dict[str, Any]:
         return self._client.get_session(self.session_id)
@@ -1477,6 +1505,27 @@ class AsyncHTTPClient:
         response = await self._request("DELETE", f"/api/v1/sessions/{session_path}")
         self._handle_response(response)
 
+    async def rollback_session(
+        self,
+        session_id: str,
+        *,
+        dry_run: bool = False,
+        force: bool = False,
+        delete_session: bool = True,
+    ) -> Dict[str, Any]:
+        """Reverse a Session's committed memory changes in newest-first order."""
+        session_path = self._path_segment(session_id)
+        response = await self._request(
+            "POST",
+            f"/api/v1/sessions/{session_path}/rollback",
+            json={
+                "dry_run": dry_run,
+                "force": force,
+                "delete_session": delete_session,
+            },
+        )
+        return self._handle_response(response)
+
     async def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         response = await self._request("GET", f"/api/v1/tasks/{task_id}")
         if response.status_code == 404:
@@ -2570,6 +2619,23 @@ class SyncHTTPClient:
 
     def delete_session(self, session_id: str) -> None:
         run_async(self._async_client.delete_session(session_id))
+
+    def rollback_session(
+        self,
+        session_id: str,
+        *,
+        dry_run: bool = False,
+        force: bool = False,
+        delete_session: bool = True,
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._async_client.rollback_session(
+                session_id,
+                dry_run=dry_run,
+                force=force,
+                delete_session=delete_session,
+            )
+        )
 
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         return run_async(self._async_client.get_task(task_id))

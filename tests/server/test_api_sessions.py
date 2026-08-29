@@ -5,7 +5,7 @@
 
 import asyncio
 import json
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -1175,6 +1175,37 @@ async def test_delete_session(client: httpx.AsyncClient):
     resp = await client.delete(f"/api/v1/sessions/{session_id}")
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+
+
+async def test_rollback_session_forwards_safety_options(monkeypatch):
+    rollback = AsyncMock(
+        return_value={
+            "session_id": "session-1",
+            "status": "ready",
+            "dry_run": True,
+            "operations": [],
+            "summary": {"planned": 0, "conflicts": 0, "skipped": 0, "applied": 0},
+        }
+    )
+    service = MagicMock()
+    service.sessions.rollback_memories = rollback
+    monkeypatch.setattr(sessions_router, "get_service", lambda: service)
+    ctx = RequestContext(user=DEFAULT_USER, role=Role.ROOT)
+
+    resp = await sessions_router.rollback_session_memories(
+        session_id="session-1",
+        request=sessions_router.RollbackSessionRequest(
+            dry_run=True, force=True, delete_session=False
+        ),
+        _ctx=ctx,
+    )
+
+    assert resp["status"] == "ok"
+    assert resp["result"]["status"] == "ready"
+    rollback.assert_awaited_once()
+    call = rollback.await_args
+    assert call.args[0] == "session-1"
+    assert call.kwargs == {"dry_run": True, "force": True, "delete_session": False}
 
 
 async def test_compress_session(client: httpx.AsyncClient):
