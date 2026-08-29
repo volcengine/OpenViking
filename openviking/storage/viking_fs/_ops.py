@@ -36,6 +36,18 @@ from openviking_cli.exceptions import (
 from openviking_cli.utils.uri import VikingURI
 
 
+def _glob_match_uri(entry_uri: str, is_dir: Optional[bool]) -> str:
+    """Mark directory matches with a trailing slash.
+
+    `glob` returns a flat list of uri strings, so the trailing slash is the only
+    way a caller can tell a directory match from a file match. Matches the
+    convention `normalize_dir_uri` and the tree renderer already use.
+    """
+    if not is_dir or entry_uri.endswith("/"):
+        return entry_uri
+    return f"{entry_uri}/"
+
+
 class _OpsMixin:
     """Core filesystem operations (read/write/mkdir/rm/mv/stat/glob/tree/ls/temp)."""
 
@@ -675,7 +687,10 @@ class _OpsMixin:
                 continuation_token=continuation_token,
             )
 
-            page_matches: List[str] = []
+            # (acl_uri, match_uri): ACL lookups keep the bare uri, while the uri we
+            # hand back marks directories with a trailing slash so callers can tell
+            # them apart -- the flat `matches` list carries no other type signal.
+            page_matches: List[tuple[str, str]] = []
             for entry in page.get("entries", []):
                 if not self._is_path_entry_visible(
                     entry["path"],
@@ -692,20 +707,23 @@ class _OpsMixin:
                     entry_path=entry["path"],
                     ctx=ctx,
                 )
+                match_uri = _glob_match_uri(entry_uri, entry.get("is_dir"))
                 if self.acl_manager is None:
-                    matches.append(entry_uri)
+                    matches.append(match_uri)
                     if node_limit is not None and node_limit > 0 and len(matches) >= node_limit:
                         return {"matches": matches, "count": len(matches)}
                     continue
 
-                page_matches.append(entry_uri)
+                page_matches.append((entry_uri, match_uri))
 
             if self.acl_manager is not None:
-                access = await self._can_access_many(page_matches, real_ctx)
-                for entry_uri in page_matches:
-                    if not access.get(entry_uri, False):
+                access = await self._can_access_many(
+                    [acl_uri for acl_uri, _ in page_matches], real_ctx
+                )
+                for acl_uri, match_uri in page_matches:
+                    if not access.get(acl_uri, False):
                         continue
-                    matches.append(entry_uri)
+                    matches.append(match_uri)
                     if node_limit is not None and node_limit > 0 and len(matches) >= node_limit:
                         return {"matches": matches, "count": len(matches)}
 
