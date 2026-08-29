@@ -197,11 +197,19 @@ jobs:
           echo "::error::timed out waiting for the docker build of $TAG"
           exit 1
 
-      - name: Assert image tags exist
+      - name: Assert version and latest tags point at this release
         env:
           TAG: ${{ github.event.release.tag_name }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
           set -euo pipefail
           image=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          docker buildx imagetools inspect "ghcr.io/${image}:${TAG}" >/dev/null
-          docker buildx imagetools inspect "docker.io/${{ secrets.DOCKERHUB_USERNAME }}/openviking:${TAG}" >/dev/null
+          for ref in "ghcr.io/${image}" "docker.io/${DOCKERHUB_USERNAME}/openviking"; do
+            tagged=$(docker buildx imagetools inspect "${ref}:${TAG}" --format '{{.Manifest.Digest}}')
+            latest=$(docker buildx imagetools inspect "${ref}:latest" --format '{{.Manifest.Digest}}')
+            if [ "$tagged" != "$latest" ]; then
+              echo "::error::${ref}:latest is ${latest}, expected ${tagged} (${TAG})"
+              exit 1
+            fi
+            echo "${ref}: ${TAG} == latest == ${tagged}"
+          done
