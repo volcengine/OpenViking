@@ -23,6 +23,23 @@ In addition, account-level `.ovgitignore` exclusion rules can be managed (`get`/
 - **Forward-commit restore**: `restore` does **not** rewind or rewrite history. It reads the content at `source_commit`, writes the diff back into the workspace, and creates a **new commit on top of the current HEAD**. The new commit's parent is therefore the HEAD that existed before the restore — **not** `source_commit`. HEAD always advances monotonically and history is never lost.
 - **Scope**: `commit` can be limited to specific URIs via `paths`; `restore` can be limited to a subtree via `project_dir`, leaving files outside it untouched.
 
+## ACL permissions
+
+Snapshots use the current ACL at operation time. ACLs are not stored in snapshots, read from historical versions, or rolled back. Public resources without ACLs keep their legacy visibility; once ACL is enabled, these permissions apply:
+
+| Operation | Required permission |
+|-----------|---------------------|
+| `show(path=...)` / `diff` / `log` | `read` |
+| `commit` | `write`; directories recursively check every current descendant and fail as a whole if any node is denied |
+| `restore` overwriting a file | `write` on the file |
+| `restore` creating a file | `write` on the parent directory |
+| `restore` deleting a file | `write` on the file |
+| Read/write/delete `.ovgitignore` | ADMIN |
+
+USER and ADMIN callers must provide `paths` for `commit` and `log`, `project_dir` for `restore`, and `path` for `show`; account-wide commit metadata lookup without `path` is reserved for local ROOT mode. A user can operate on accessible shared resources and their own `viking://user/{user_id}/...` space, but not another user's space. Directory operations preflight the complete scope instead of silently skipping denied descendants. `restore` authorizes every planned write and deletion before it mutates the workspace.
+
+Existing nodes keep their current ACL after restore. Newly restored nodes inherit the current parent ACL; the user who runs `restore` is not granted `manage`. The background vector rebuild is system work for an already-authorized operation, so parent ACLs do not block it again.
+
 ## Implementation
 
 - HTTP routes: [snapshot.py](https://github.com/volcengine/OpenViking/blob/main/openviking/server/routers/snapshot.py), prefix `/api/v1/snapshot`.
@@ -41,7 +58,7 @@ Save the current workspace state as a new snapshot.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | message | str | Yes | - | Commit message |
-| paths | List[str] | No | null | `viking://` URIs to scope the snapshot to; entries may be files or directories. Directories are expanded recursively with the snapshot pruning rules applied. `null` snapshots the whole account tree. An empty list `[]` is forwarded as an explicit empty path set (no-op). A path that exists in neither the VFS nor the previous snapshot logs a warning and is treated as a no-op deletion |
+| paths | List[str] | No | null | `viking://` URIs to scope the snapshot to; entries may be files or directories. Directories are expanded recursively with the snapshot pruning rules applied. USER/ADMIN callers must provide this field; `null` account-wide snapshots are reserved for local ROOT mode. An empty list `[]` is forwarded as an explicit empty path set (no-op). A path that exists in neither the VFS nor the previous snapshot logs a warning and is treated as a no-op deletion |
 | branch | str | No | `main` | Branch to advance |
 | author_name | str | No | null | Override the default author name (default `viking-bot`) |
 | author_email | str | No | null | Override the default author email |
@@ -125,7 +142,7 @@ Starting from a branch's HEAD, walk history along the first parent (`parents[0]`
 |-----------|------|----------|---------|-------------|
 | branch | str | No | `main` | Branch to walk |
 | limit | int | No | 20 | Max commits to return. The HTTP endpoint accepts values from 1 to 500 |
-| paths | List[str] | No | null | Return only commits that changed any specified `viking://` URI; files and directories are supported. At most 32 paths are accepted, and each account-relative path may contain at most 64 components. Pass multiple URIs to HTTP as repeated `paths` query parameters |
+| paths | List[str] | No | null | Return only commits that changed any specified `viking://` URI; USER/ADMIN callers must provide it, while local ROOT mode may omit it for account-wide history. At most 32 paths are accepted, and each account-relative path may contain at most 64 components. Pass multiple URIs to HTTP as repeated `paths` query parameters |
 
 Filtering happens before the result limit is applied, so `limit=10` with `paths=[X]` returns up to 10 commits related to X rather than filtering only the 10 newest commits.
 
@@ -219,12 +236,12 @@ View a commit's metadata; if `path` is given, return that file's content from th
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | target_ref | str | Yes | - | Commit OID (abbreviated prefix allowed), branch name, or tag |
-| path | str | No | null | `viking://` URI of a single file; omit to return commit metadata |
+| path | str | No | null | `viking://` URI of a single file; omitting it returns commit metadata only in local ROOT mode |
 
 **Python HTTP SDK**
 
 ```python
-# View commit metadata
+# View commit metadata (local ROOT mode only)
 meta = client.snapshot.show("3f2a1b9c")
 print(meta["message"], meta["parents"])
 
@@ -247,7 +264,7 @@ GET /api/v1/snapshot/show?target_ref={ref}[&path={uri}]
 ```
 
 ```bash
-# Commit metadata (returns JSON)
+# Commit metadata (returns JSON; local ROOT mode only)
 curl -X GET "http://localhost:1933/api/v1/snapshot/show?target_ref=3f2a1b9c" \
   -H "X-API-Key: your-key"
 
@@ -264,7 +281,7 @@ Without `path`, the response is commit metadata JSON. With `path`, the response 
 **CLI**
 
 ```bash
-# Commit metadata
+# Commit metadata (local ROOT mode only)
 ov snapshot show 3f2a1b9c -o json
 
 # Read file content (defaults to stdout; use --out-file to write to a local file)
@@ -377,7 +394,7 @@ This is a **forward-commit restore**: it computes the diff between `source_commi
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | source_commit | str | Yes | - | What to restore from: commit OID (abbreviated prefix allowed), branch name, or tag |
-| project_dir | str | No | null | `viking://` URI of the subtree to restore; omit to restore the whole account tree |
+| project_dir | str | No | null | `viking://` URI of the subtree to restore. USER/ADMIN callers must provide it; omitting it for a whole-account restore is reserved for local ROOT mode |
 | branch | str | No | `main` | Branch to advance |
 | dry_run | bool | No | false | Compute and return the diff only; write nothing |
 | message | str | No | null | Message for the new commit; auto-generated when omitted |
@@ -506,7 +523,7 @@ The `.ovgitignore` file at the account root is an account-level exclusion file. 
 
 The syntax is a common glob subset: blank lines are ignored, `#`-prefixed lines are comments, leading/trailing whitespace is trimmed; `!` negation and backslash escaping are **unsupported**; the file is capped at 64 KiB (validated on write). Matching uses account-relative Git tree paths (`/`-separated).
 
-Three methods are provided: `get_gitignore` (read, empty string when absent), `set_gitignore` (write), and `delete_gitignore` (delete, missing is success and idempotent). All three only need the account from the request context and take no path argument.
+Three methods are provided: `get_gitignore` (read, empty string when absent), `set_gitignore` (write), and `delete_gitignore` (delete, missing is success and idempotent). All three require ADMIN permission, use the account from the request context, and take no path argument.
 
 ### get_gitignore()
 
@@ -665,7 +682,7 @@ client.write(
     mode="create",
     wait=True,
 )
-v1 = client.snapshot.commit(message="v1 initial import")
+v1 = client.snapshot.commit(message="v1 initial import", paths=[root])
 
 # 2. Modify and commit v2
 client.write(
@@ -674,10 +691,10 @@ client.write(
     mode="replace",
     wait=True,
 )
-v2 = client.snapshot.commit(message="v2 update")
+v2 = client.snapshot.commit(message="v2 update", paths=[root])
 
 # 3. Walk history
-for c in client.snapshot.log(limit=10):
+for c in client.snapshot.log(limit=10, paths=[root]):
     print(c["oid"][:8], c["message"])
 
 # 4. Restore the workspace to v1 (creates a new commit on top of v2)
@@ -693,6 +710,7 @@ For more end-to-end examples, see the [examples/snapshot/](https://github.com/vo
 | Scenario | HTTP Status | Error Code |
 |----------|-------------|------------|
 | Branch/commit not found, or `show`'s `path` does not exist in that commit | 404 | `NOT_FOUND` |
+| A required operation scope is omitted, or the caller lacks the corresponding ACL permission | 403 | `PERMISSION_DENIED` |
 | Branch concurrently advanced during restore (CAS conflict) | 409 | `CONFLICT` |
 | `.ovgitignore` too large, non-UTF-8, or containing unsupported `!` negation/backslash escaping (validated at `commit` time) | 400 | `INVALID_ARGUMENT` |
 | Request body contains an unknown field (request model is `extra="forbid"`) | 400 | `INVALID_ARGUMENT` |

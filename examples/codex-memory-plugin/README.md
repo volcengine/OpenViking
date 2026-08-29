@@ -115,11 +115,13 @@ Hooks and the MCP proxy call the same resolver directly, so the model tools and 
 
 Auth is sent as `Authorization: Bearer <api_key>` to both the REST API (used by hooks) and the `/mcp` endpoint (used by the model); the hooks also send the same key as `X-API-Key` for compatibility with older servers.
 
-By default the plugin derives a peer from the current workspace path using Claude's project-directory naming rule: every non-letter-or-digit character becomes `-`, with no path normalization. For example, `/Users/x/Dev/OpenViking` becomes `-Users-x-Dev-OpenViking`. Hooks pass the effective peer as `peer_id` for captured session messages and as `X-OpenViking-Actor-Peer` for retrieval/filesystem calls; MCP gets the same header mapping.
+By default the hooks derive a peer from the current workspace path using Claude's project-directory naming rule: every non-letter-or-digit character becomes `-`, with no path normalization. For example, `/Users/x/Dev/OpenViking` becomes `-Users-x-Dev-OpenViking`. Hooks pass the effective peer as `peer_id` for captured session messages and as `X-OpenViking-Actor-Peer` for retrieval and filesystem calls.
 
 Set `actor_peer_id` in `ovcli.conf` (or `OPENVIKING_PEER_ID` with `OPENVIKING_CREDENTIAL_SOURCE=env`) to override the workspace-derived peer. The legacy `codex.peerId` / `codex.peer_id` fields in `ov.conf` still resolve as a fallback. Set `OPENVIKING_WORKSPACE_PEER=0` or `codex.workspacePeer=false` to turn off workspace-derived peers.
 
-Recall defaults to the broad mode: global memory, the current workspace, and other workspace memories can all be recalled, with other workspaces penalized and rendered later. Set `OPENVIKING_RECALL_PEER_SCOPE=actor` or `codex.recallPeerScope="actor"` for the isolation mode, which only sees global memory plus the current workspace. In deployments where one bot serves multiple real people, such as zouk, vikingbot, or AstrBot, use the isolation mode with an explicit actor peer so one person's memories are not recalled into another person's session.
+Recall defaults to broad mode: global memory, the current workspace, and other workspace memories can all be recalled, with other workspaces ranked lower and rendered later. In this mode, the MCP proxy omits `X-OpenViking-Actor-Peer` so it can read any URI returned by broad recall for the authenticated user.
+
+Set `OPENVIKING_RECALL_PEER_SCOPE=actor` or `codex.recallPeerScope="actor"` for isolation mode, which only sees global memory plus the configured peer. The MCP proxy requires `actor_peer_id` or `OPENVIKING_PEER_ID` in this mode and exits with a configuration error if neither is set. In deployments where one bot serves multiple people, such as zouk, vikingbot, or AstrBot, use isolation mode with an explicit actor peer so sessions cannot read another person's memories.
 
 The checked-in `.mcp.json` contains only a stdio command. It never stores server URLs, bearer-token env mappings, or identity headers, so switching `ovcli.conf` changes the MCP target on the next Codex launch without cache rendering.
 
@@ -291,6 +293,16 @@ Codex's hook output schema differs from Claude Code's. Notably:
 
 Unlike Claude Code, **Codex does not support `decision: "approve"`**; only `decision: "block"`. A no-op is `{}` (which is what these scripts emit when there's nothing to add).
 
+## Troubleshooting
+
+Start with the bundled doctor — it checks the install (marketplace, `config.toml` enablement, hook trust records, MCP wiring), the resolved config (which file won, API key shown masked), the connection (reachability, auth, `/mcp`) and the session state left by the hooks, and prints a fix for every finding:
+
+```bash
+node "$(ls -d ~/.codex/plugins/cache/openviking/openviking-memory/*/ | sort -V | tail -1)scripts/ov-memory-doctor.mjs"
+```
+
+Or invoke the `$ov-memory-doctor` skill in Codex, which runs the same script and walks the report. When the server runs on the same machine (loopback url) the report adds a Server health section — whether anything listens on the port, plugin-only keys in ov.conf that stop the server from starting, and `GET /ready`; everything else server-side (config validation, live embedding probe, native engine, disk) stays with `openviking-server doctor`.
+
 ## Plugin Structure
 
 ```
@@ -301,8 +313,13 @@ codex-memory-plugin/
 │   └── hooks.json               # SessionStart + UserPromptSubmit + Stop + PreCompact
 │                                  (uses Codex's native ${PLUGIN_ROOT} token; no
 │                                   rendering needed on modern Codex)
+├── skills/
+│   ├── openviking-memory/       # How to use the memory tools
+│   ├── ov-experience-memory/
+│   └── ov-memory-doctor/        # Install / config / connection / local-server troubleshooting
 ├── scripts/
 │   ├── config.mjs               # Shared config loader (ovcli.conf + env)
+│   ├── ov-memory-doctor.mjs     # Diagnostics script ($ov-memory-doctor skill)
 │   ├── capture-utils.mjs        # Transcript text extraction, filtering, tool compression
 │   ├── debug-log.mjs            # Structured JSONL logger
 │   ├── recall-compressor-profile.mjs # Compressor profile detection/cache

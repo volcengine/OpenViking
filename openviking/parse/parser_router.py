@@ -155,6 +155,11 @@ class ParserRouter:
             raise ValueError("source is not routed to UnderstandingAPI")
         return await self._get_understanding_api().submit_url(str(source_path), **kwargs)
 
+    async def upload_file(self, source: Union[str, Path, LocalResource]) -> str:
+        """Upload a local source file and return only the external Files API file_id."""
+        source_path = self._extract_source_path(source)
+        return await self._get_understanding_api().upload_file(source_path)
+
     def _extract_source_path(self, source: Union[str, Path, LocalResource]) -> Union[str, Path]:
         """Extract a filesystem path from the source."""
         if hasattr(source, "path"):

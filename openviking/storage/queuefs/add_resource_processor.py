@@ -105,7 +105,9 @@ class AddResourceProcessor(DequeueHandlerBase):
         ctx = RequestContext(
             user=UserIdentifier(msg.account_id, msg.user_id),
             role=Role(msg.role),
+            group_ids=tuple(msg.group_ids),
             actor_peer_id=msg.actor_peer_id,
+            bypass_acl=msg.bypass_acl,
         )
         tracker = get_task_tracker()
         task = await tracker.create(
@@ -114,7 +116,10 @@ class AddResourceProcessor(DequeueHandlerBase):
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
             task_id=msg.task_id,
-            meta={"source_path": msg.source_path},
+            meta={
+                "source_path": msg.source_path,
+                **({"internal": True} if msg.internal_task else {}),
+            },
         )
         if task.status in (
             TaskStatus.CANCELLING,
@@ -292,6 +297,7 @@ class AddResourceProcessor(DequeueHandlerBase):
                     user=UserIdentifier(msg.account_id, msg.user_id),
                     role=Role(msg.role),
                     actor_peer_id=msg.actor_peer_id,
+                    bypass_acl=msg.bypass_acl,
                 ),
             ),
             self._service_loop,

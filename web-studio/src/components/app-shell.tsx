@@ -542,10 +542,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
 
             <div className="h-6 w-px bg-border/80" aria-hidden="true" />
 
-            <CurrentUserMenu
-              accountId={connection.accountId}
-              userId={connection.userId}
-            />
+            <CurrentUserMenu />
           </div>
         </header>
 

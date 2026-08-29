@@ -6,6 +6,7 @@ import pytest
 from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
 from openviking.resource.watch_manager import WatchManager
 from openviking.resource.watch_scheduler import WatchScheduler
+from openviking.server.identity import Role
 from openviking.service.resource_service import ResourceService
 
 
@@ -162,3 +163,5 @@ class TestWatchSchedulerResourceExistence:
         assert resource_service.calls[0]["to"] == new_uri
         assert resource_service.calls[0]["processing_mode"] == "vectors_only"
         assert resource_service.calls[0]["enforce_public_remote_targets"] is True
+        assert resource_service.calls[0]["ctx"].role == Role.USER
+        assert resource_service.calls[0]["ctx"].bypass_acl is True

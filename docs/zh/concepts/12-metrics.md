@@ -186,7 +186,7 @@ scrape_configs:
 | `openviking_vector_passed_total` | Counter | `operation` | 向量候选通过数量累计 |
 | `openviking_vector_returned_total` | Counter | `operation` | 向量候选返回数量累计 |
 | `openviking_vector_scanned_total` | Counter | `operation` | 向量候选扫描数量累计 |
-| `openviking_memory_extracted_total` | Counter | `operation` | memory extracted 数量累计 |
+| `openviking_memory_extracted_total` | Counter | `operation`, `memory_type` | memory extracted 数量累计，按记忆 schema 类型拆分 |
 | `openviking_semantic_nodes_total` | Counter | `status` | semantic nodes 数量累计 |
 
 ### 模型调用与 Token

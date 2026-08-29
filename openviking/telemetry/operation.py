@@ -359,6 +359,16 @@ class TelemetrySummaryBuilder:
                 "extracted": memories_extracted,
             }
             if cls._has_metric_prefix("memory.extract", counters, gauges):
+                actions_by_type: Dict[str, Dict[str, int]] = {}
+                type_action_prefix = "memory.extract.by_type."
+                for key, value in gauges.items():
+                    if not key.startswith(type_action_prefix):
+                        continue
+                    suffix = key[len(type_action_prefix) :]
+                    memory_type, separator, action = suffix.rpartition(".")
+                    if not separator or not memory_type or not action:
+                        continue
+                    actions_by_type.setdefault(memory_type, {})[action] = cls._i(value, 0)
                 memory_summary["extract"] = {
                     "duration_ms": cls._f(gauges.get("memory.extract.total.duration_ms"), 0.0),
                     "candidates": {
@@ -373,6 +383,7 @@ class TelemetrySummaryBuilder:
                         "skipped": cls._i(gauges.get("memory.extract.skipped"), 0),
                         "failed": cls._i(gauges.get("memory.extract.failed"), 0),
                     },
+                    "actions_by_type": actions_by_type,
                     "stages": {
                         public_key: cls._f(gauges.get(metric_key), 0.0)
                         for public_key, metric_key in cls._MEMORY_EXTRACT_STAGE_KEYS.items()

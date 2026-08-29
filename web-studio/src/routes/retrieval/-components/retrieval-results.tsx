@@ -391,7 +391,7 @@ function ResultRowContent({
           </span>
         </div>
 
-        <dl className="mt-2.5 grid min-w-0 grid-cols-[3.25rem_minmax(0,1fr)] gap-x-2.5 gap-y-1.5">
+        <dl className="mt-2.5 grid min-w-0 grid-cols-[max-content_minmax(0,1fr)] gap-x-2.5 gap-y-1.5">
           <dt className="pt-px text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground/55">
             {t('results.uri')}
           </dt>

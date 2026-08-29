@@ -13,9 +13,11 @@ import { fileURLToPath } from "node:url";
 import { loadConfig } from "../scripts/config.mjs";
 import { createLogger } from "../scripts/debug-log.mjs";
 import { resolveOpenVikingCredentials } from "../scripts/ov-credentials.mjs";
-import { buildMcpProxyConfig } from "../scripts/shared/mcp-proxy-config.mjs";
+import {
+  buildMcpProxyConfig,
+  resolveMcpActorPeerId,
+} from "../scripts/shared/mcp-proxy-config.mjs";
 import { createOpenVikingMcpProxy } from "../scripts/shared/mcp-proxy-core.mjs";
-import { resolveEffectivePeerId } from "../scripts/shared/workspace-peer.mjs";
 
 export { createOpenVikingMcpProxy } from "../scripts/shared/mcp-proxy-core.mjs";
 
@@ -28,13 +30,13 @@ function readProxyConfig() {
     apiKey: creds.apiKey,
     account: creds.account,
     user: creds.user,
-    peerId: resolveEffectivePeerId({ cfg, cwd: process.cwd() }).peerId,
+    peerId: resolveMcpActorPeerId(cfg),
     userAgent: cfg.userAgent,
     timeoutMs: cfg.timeoutMs,
     debug: cfg.debug,
     debugLogPath: cfg.debugLogPath,
     credentialSource: creds.credentialSource,
-    credentialPath: creds.cliPath || creds.ovPath,
+    credentialPath: creds.credentialPath,
     watchedPaths: [creds.cliPath, creds.ovPath, creds.cliPathCandidate],
   });
 }

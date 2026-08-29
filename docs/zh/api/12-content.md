@@ -452,6 +452,12 @@ curl --get http://localhost:1933/api/v1/content/download \
   --output logo.png
 ```
 
+**CLI**
+
+```bash
+ov get viking://resources/images/logo.png ./logo.png
+```
+
 **响应**
 
 成功时返回 HTTP `200` 和文件原始字节，不使用标准 JSON 响应包：
@@ -464,7 +470,7 @@ Content-Disposition: attachment; filename*=UTF-8''logo.png
 <binary body>
 ```
 
-公共 SDK 和 CLI 当前没有独立的原始字节下载方法，因此本节只展示 HTTP Tab。
+`ov get <uri> <local-path>` 通过上述 HTTP API 下载文件并写入本地路径。Python、TypeScript 和 Go SDK 当前没有独立的原始字节下载方法。
 
 ---
 
@@ -571,7 +577,7 @@ ov set-tags viking://resources/project/ \
 
 **认证**
 
-- HTTP 端点：在开启认证时要求 admin/root 角色。`api_key` 模式下，租户内容重建请使用 admin key；裸 root key 不能访问租户级数据。
+- `api_key` 模式下，共享区 `viking://resources/...` 需要 admin key；普通 user key 只能重建自己的 `viking://user/<user_id>/...`，也可以使用等价的 `viking://~/...` 家目录别名。root key 不能访问租户级数据 API。
 - Python HTTP client / CLI：使用当前认证身份发起请求
 
 **参数**

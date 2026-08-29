@@ -255,7 +255,10 @@ List background tasks visible to the current caller, supporting filtering by typ
 | task_type | str | No | None | Filter by task type, for example `session_commit` |
 | status | str | No | None | Filter by task status: `pending`, `running`, `cancelling`, `completed`, `failed`, `cancelled` |
 | resource_id | str | No | None | Filter by task resource ID, for example a session ID |
+| include_internal | bool | No | false | Include internal child tasks created by Connector imports |
 | limit | int | No | 50 | Maximum number of task records to return |
+
+By default, only user-visible tasks are returned. Pass `include_internal=true` when diagnosing a Connector import to include its internal `add_resource` child tasks.
 
 #### 3. Usage Examples
 

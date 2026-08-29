@@ -13,6 +13,7 @@ import requests
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
 from openviking.server.identity import RequestContext, Role, UserIdentifier
 from openviking.service.resource_service import ResourceService
+from openviking.storage.acl import ACL_CONTEXT_FIELDS, ACL_GRANT_FIELDS
 from openviking.storage.collection_schemas import (
     CollectionSchemas,
     TextEmbeddingHandler,
@@ -184,8 +185,9 @@ async def test_init_context_collection_writes_embedding_metadata(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_init_context_collection_backfills_metadata_for_empty_legacy_collection(monkeypatch):
+async def test_init_context_collection_migrates_local_legacy_schema(monkeypatch):
     updates = []
+    schema_updates = []
 
     class _FakeStorage:
         async def create_collection(self, name, schema):
@@ -193,7 +195,20 @@ async def test_init_context_collection_backfills_metadata_for_empty_legacy_colle
             return False
 
         async def get_collection_meta(self):
-            return {"Description": "Unified context collection"}
+            schema = CollectionSchemas.context_collection("context", 2)
+            return {
+                "Description": "Unified context collection",
+                "Fields": [
+                    field
+                    for field in schema["Fields"]
+                    if field["FieldName"] not in ACL_CONTEXT_FIELDS
+                ],
+                "ScalarIndex": [
+                    field
+                    for field in schema["ScalarIndex"]
+                    if field not in ACL_CONTEXT_FIELDS
+                ],
+            }
 
         async def count(self):
             return 0
@@ -202,7 +217,10 @@ async def test_init_context_collection_backfills_metadata_for_empty_legacy_colle
             updates.append(description)
             return True
 
-    config = _DummyConfig(_DummyEmbedder())
+        async def update_collection_schema(self, fields, scalar_index):
+            schema_updates.append((fields, scalar_index))
+
+    config = _DummyConfig(_DummyEmbedder(), backend="local")
     monkeypatch.setattr(
         "openviking_cli.utils.config.get_openviking_config",
         lambda: config,
@@ -212,23 +230,31 @@ async def test_init_context_collection_backfills_metadata_for_empty_legacy_colle
 
     assert created is False
     assert len(updates) == 1
+    assert len(schema_updates) == 1
     assert '"provider": "local"' in updates[0]
+    fields, scalar_index = schema_updates[0]
+    fields_by_name = {field["FieldName"]: field for field in fields}
+    assert fields_by_name["acl_enabled"]["FieldType"] == "bool"
+    assert all(fields_by_name[field]["FieldType"] == "list<string>" for field in ACL_GRANT_FIELDS)
+    assert ACL_CONTEXT_FIELDS <= set(scalar_index)
 
 
 @pytest.mark.asyncio
 async def test_init_context_collection_appends_missing_schema_fields(monkeypatch):
-    field_updates = []
+    schema_updates = []
     config = _DummyConfig(_DummyEmbedder(), backend="local")
     embedding_meta = _build_embedding_metadata(config)
 
+    current_schema = CollectionSchemas.context_collection("context", 2)
     legacy_fields = [
-        {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
-        {"FieldName": "uri", "FieldType": "path"},
-        {"FieldName": "context_type", "FieldType": "string"},
-        {"FieldName": "vector", "FieldType": "vector", "Dim": 2},
-        {"FieldName": "active_count", "FieldType": "int64"},
-        {"FieldName": "account_id", "FieldType": "string"},
-        {"FieldName": "owner_space", "FieldType": "string"},
+        field
+        for field in current_schema["Fields"]
+        if field["FieldName"] not in {"search_tags", "owner_user_id", *ACL_CONTEXT_FIELDS}
+    ]
+    legacy_scalar_indexes = [
+        field
+        for field in current_schema["ScalarIndex"]
+        if field not in {"search_tags", *ACL_CONTEXT_FIELDS}
     ]
 
     class _FakeStorage:
@@ -243,12 +269,14 @@ async def test_init_context_collection_appends_missing_schema_fields(monkeypatch
                     "Unified context collection\n\n[openviking.embedding]\n"
                     f"{json.dumps(embedding_meta, sort_keys=True, ensure_ascii=False)}"
                 ),
-                "Fields": list(field_updates[-1] if field_updates else legacy_fields),
+                "Fields": list(schema_updates[-1][0] if schema_updates else legacy_fields),
+                "ScalarIndex": list(
+                    schema_updates[-1][1] if schema_updates else legacy_scalar_indexes
+                ),
             }
 
-        async def update_collection_fields(self, fields):
-            field_updates.append(fields)
-            return True
+        async def update_collection_schema(self, fields, scalar_index):
+            schema_updates.append((fields, scalar_index))
 
     monkeypatch.setattr(
         "openviking_cli.utils.config.get_openviking_config",
@@ -258,14 +286,17 @@ async def test_init_context_collection_appends_missing_schema_fields(monkeypatch
     created = await init_context_collection(_FakeStorage())
 
     assert created is False
-    assert len(field_updates) == 1
-    updated_field_names = [field["FieldName"] for field in field_updates[0]]
+    assert len(schema_updates) == 1
+    updated_fields, updated_scalar_indexes = schema_updates[0]
+    updated_field_names = [field["FieldName"] for field in updated_fields]
     assert updated_field_names[: len(legacy_fields)] == [
         field["FieldName"] for field in legacy_fields
     ]
-    assert "owner_space" in updated_field_names
     assert "search_tags" in updated_field_names
     assert "owner_user_id" in updated_field_names
+    assert ACL_CONTEXT_FIELDS <= set(updated_field_names)
+    assert "search_tags" in updated_scalar_indexes
+    assert ACL_CONTEXT_FIELDS <= set(updated_scalar_indexes)
 
 
 @pytest.mark.asyncio

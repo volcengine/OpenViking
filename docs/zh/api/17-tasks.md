@@ -253,7 +253,10 @@ ov task cancel uuid-xxx
 | task_type | str | 否 | None | 按任务类型过滤，例如 `session_commit` |
 | status | str | 否 | None | 按任务状态过滤：`pending`、`running`、`cancelling`、`completed`、`failed`、`cancelled` |
 | resource_id | str | 否 | None | 按资源 ID 过滤，例如会话 ID |
+| include_internal | bool | 否 | false | 是否包含 Connector 导入产生的内部子任务 |
 | limit | int | 否 | 50 | 最多返回的任务条数 |
+
+默认仅返回用户可见任务；排查 Connector 导入时可传 `include_internal=true` 查看其内部 `add_resource` 子任务。
 
 #### 3. 使用示例
 

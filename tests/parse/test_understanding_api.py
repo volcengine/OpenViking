@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from openviking.parse.understanding_api import UnderstandingAPI
+from openviking.parse.understanding_api import PREPARED_FILE_ID_ARG, UnderstandingAPI
 from openviking_cli.exceptions import InvalidArgumentError
 
 
@@ -57,7 +57,7 @@ async def test_parse_uses_downloaded_file_and_resolved_extension(monkeypatch, tm
 
 
 @pytest.mark.asyncio
-async def test_submit_file_validates_input_and_returns_response_id(tmp_path):
+async def test_upload_file_validates_input_and_returns_file_id(tmp_path):
     empty_source = tmp_path / "empty.pdf"
     empty_source.touch()
     api = UnderstandingAPI.__new__(UnderstandingAPI)
@@ -66,20 +66,56 @@ async def test_submit_file_validates_input_and_returns_response_id(tmp_path):
         InvalidArgumentError,
         match="Understanding parser does not support empty files",
     ) as exc_info:
-        await api.submit_file(empty_source)
+        await api.upload_file(empty_source)
 
     assert exc_info.value.code == "INVALID_ARGUMENT"
 
     source = tmp_path / "download.pdf"
     source.write_bytes(b"%PDF-1.7")
     api._create_file = AsyncMock(return_value={"id": "file-1"})
+
+    file_id = await api.upload_file(source)
+
+    assert file_id == "file-1"
+    api._create_file.assert_awaited_once_with(local_path=source)
+
+
+@pytest.mark.asyncio
+async def test_parse_prepared_file_id_creates_response_and_polls(monkeypatch, tmp_path):
+    zip_path = tmp_path / "result.zip"
+    zip_path.write_bytes(b"zip")
+    api = UnderstandingAPI.__new__(UnderstandingAPI)
+    api._video_exts = {"mp4"}
+    api._audio_exts = {"mp3"}
+    api._image_exts = {"png"}
+    api._create_file = AsyncMock(side_effect=AssertionError("prepared file must not reupload"))
     api._create_response_for_file = AsyncMock(return_value={"id": "response-1"})
 
-    response_id = await api.submit_file(source)
+    async def poll_response(*, response_id):
+        assert response_id == "response-1"
+        return {"status": "completed"}
 
-    assert response_id == "response-1"
-    api._create_file.assert_awaited_once_with(local_path=source)
+    monkeypatch.setattr(api, "_poll_response", poll_response)
+    monkeypatch.setattr(api, "_extract_zip_url", lambda _: "https://example.com/result.zip")
+    monkeypatch.setattr(api, "_download_zip", lambda _: _return(zip_path))
+    monkeypatch.setattr(
+        api,
+        "_unpack_zip_to_temp_dir",
+        lambda **_: _return("viking://temp/result"),
+    )
+
+    result = await api.parse(
+        "/tmp/upload_already_cleaned.pdf",
+        source_name="uploaded.pdf",
+        resolved_extension=".pdf",
+        **{PREPARED_FILE_ID_ARG: "file-1"},
+    )
+
     api._create_response_for_file.assert_awaited_once_with(file_id="file-1")
+    assert result.meta["file_id"] == "file-1"
+    assert result.meta["response_id"] == "response-1"
+    assert result.source_format == "pdf"
+    api._create_file.assert_not_awaited()
 
 
 async def _return(value):

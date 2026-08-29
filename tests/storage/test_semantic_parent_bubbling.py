@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from openviking.server.identity import Role
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_ops.freshness_policy import (
     FreshnessAction,
@@ -37,13 +38,20 @@ async def test_unchanged_l0_does_not_mark_or_enqueue_parent(monkeypatch):
         "openviking.storage.queuefs.get_queue_manager", get_queue_manager
     )
 
-    msg = SemanticMsg(uri="viking://resources/root/child", context_type="resource")
+    msg = SemanticMsg(
+        uri="viking://resources/root/child",
+        context_type="resource",
+        role=str(Role.USER),
+        generation_trigger="resource_ingest",
+    )
     await SemanticProcessor()._enqueue_parent_refresh(
         msg, msg.uri, l0_body_changed=False
     )
 
     assert plan.await_args.kwargs["l0_body_changed"] is False
     assert plan.await_args.kwargs["force_refresh"] is False
+    assert plan.await_args.kwargs["ctx"].bypass_acl is True
+    assert plan.await_args.kwargs["ctx"].role == Role.USER
     get_queue_manager.assert_not_called()
 
 

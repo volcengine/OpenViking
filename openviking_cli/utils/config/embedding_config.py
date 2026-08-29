@@ -994,6 +994,10 @@ class EmbeddingConfig(BaseModel):
             )
 
         embedder_class, param_builder = factory_registry[key]
+        if embedder_class is None and key == ("gemini", "dense"):
+            raise ValueError(
+                "google-genai is not installed. Install it with: pip install openviking[gemini]"
+            )
         params = param_builder(config)
         return embedder_class(**params)
 

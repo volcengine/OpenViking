@@ -40,6 +40,26 @@ List directory contents.
 }
 ```
 
+If the caller can read the parent directory but cannot read one of its direct
+children, `ls` still returns a name placeholder without size, modification
+time, abstract, or storage metadata:
+
+```python
+{
+    "name": "restricted",
+    "isDir": True,
+    "uri": "viking://resources/restricted",
+    "access": "denied"
+}
+```
+
+Content operations such as `stat` and `read` return HTTP 403 `PermissionDenied` for
+that URI. Recursive listing retains the inaccessible directory itself but does
+not descend into it, and search results omit unreadable content. This
+discoverable-name behavior applies only to the shared
+`viking://resources` namespace; private user and peer namespaces retain their
+existing hiding rules.
+
 
 **Python HTTP SDK**
 

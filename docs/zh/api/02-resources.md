@@ -42,7 +42,7 @@ OpenViking 支持多种资源类型，按照功能分类如下：
 云文档类
 | 类型 | 说明 |
 |------|------|
-| 飞书/Lark | URL 方式，支持 doc/docx, wiki, sheets, bitable。默认使用 FEISHU_APP_ID 和 FEISHU_APP_SECRET 应用凭证；用户 token 导入可传 `args.feishu_access_token`，用户 token watch 还需传 `args.feishu_refresh_token` |
+| 飞书/Lark | URL 方式，支持 doc/docx, wiki, sheets, bitable。默认使用 FEISHU_APP_ID 和 FEISHU_APP_SECRET 应用凭证；用户 token 导入可传 `args.feishu_access_token`，用户 token watch 还需传 `args.feishu_refresh_token`，并可选传入 `args.feishu_app_id` / `args.feishu_app_secret` |
 
 网页类（递归网页爬虫）
 | 类型 | 资源名 | 说明 |
@@ -179,6 +179,8 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 
 **补充说明**：
 - `to` 和 `parent` 不能同时使用。`to` 是最终保存位置：目标不存在就创建，目标已存在就覆盖该目标；如果目标是目录，目录里本次导入没有生成的旧文件或子目录会被删除。`parent` 是保存目录，适合向已有目录追加新资源；父目录不存在时使用 `create_parent=true` 或 CLI 的 `--parent-auto-create`。当导入后的 `root_uri` 与 `to` 相同时，语义与向量处理会复用未变化内容，只处理变化部分。
+- 创建新资源要求目标父目录可写；显式更新已有 `to` 要求该目标可写。权限校验在任务入队前完成。自动命名按实际 URI 占用判断，即使同名资源不可读也会选择 `_1`、`_2` 等后缀，而不会尝试覆盖。
+- `wait=false` 返回的 `status=accepted` 表示任务已通过预检查并入队，不表示资源处理已经完成；最终状态以对应 `task_id` 为准。
 - 如果同时省略 `to` 和 `parent`，服务端会先尝试使用当前用户的 `add_targets.resource_uri` 覆盖配置，再使用 `server.user_config_defaults.add_targets.resource_uri`。两者都没有配置时，保持旧的目标解析行为。
 - 资源目标可以使用公共 `viking://resources/...`、家目录别名 `viking://~/resources/...`、显式用户 `viking://user/{user_id}/resources/...`，或 peer 级 `viking://user/{user_id}/peers/{peer_id}/resources/...`。家目录别名会按请求身份展开为 canonical 路径；无 uid 的写法 `viking://user/resources/...` 会被拒绝，并提示改用 `viking://~/resources/...`。
 - `user_id` 和 `peer_id` 路径片段必须是安全的单段标识，例如 `alice` 或 `web-visitor-alice`。包含路径分隔符、`.`、`..`、`:` 或 `+` 的值会被拒绝。
@@ -195,9 +197,9 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 - `watch_interval > 0` 时，如果指定了 `to`，监控任务绑定该目标；如果未指定 `to`，监控任务绑定本次导入返回的 `root_uri`。如果无法得到稳定 `root_uri`，请求会报错并要求显式传 `to`。
 - 飞书/Lark 应用 token 导入不传 `args.feishu_access_token`。OpenViking 保持原有应用凭证流程，由 SDK 使用 `app_id` 和 `app_secret` 自动获取 app/tenant token。该模式支持一次性导入和 `watch_interval > 0`。
 - 飞书/Lark 一次性用户 token 导入通过 `args={"feishu_access_token": "u-..."}` 传入，且 `watch_interval <= 0`。OpenViking 只在本次导入使用该用户 token，不保存。
-- 飞书/Lark 用户 token watch 通过 `args={"feishu_access_token": "u-...", "feishu_refresh_token": "r-..."}` 传入，且 `watch_interval > 0`。OpenViking 会把 token 状态保存在 watch task 私有状态里，用配置的飞书应用凭证刷新，并在后续 watch 重跑中使用刷新后的用户 token。
-- 飞书/Lark 用户 token watch 需要 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET`，或 `ov.conf` 中的 `feishu.app_id` 和 `feishu.app_secret`。飞书 refresh token 绑定签发它的应用，因此传入的用户 token 必须来自 OpenViking 当前配置的同一个飞书应用。
-- Watch task 的 token 状态保存在内部控制文件 `viking://resources/.watch_tasks.json` 中，不会出现在 watch API/MCP/CLI 返回里。若启用了 VikingFS 文件加密，该控制文件会静态加密；否则服务端控制文件中会包含明文 token 状态。
+- 飞书/Lark 用户 token watch 通过 `args={"feishu_access_token": "u-...", "feishu_refresh_token": "r-..."}` 传入，且 `watch_interval > 0`。还可同时传入 `feishu_app_id` 和 `feishu_app_secret`；OpenViking 会将其保存在 watch task 私有状态中，并用于刷新该 watch 的用户 token。
+- 请求未传应用凭证时，用户 token watch 回退使用 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET`，或 `ov.conf` 中的 `feishu.app_id` 和 `feishu.app_secret`。飞书 refresh token 绑定签发它的应用，因此实际使用的应用凭证必须与传入的用户 token 匹配。
+- Watch task 的 token 状态和请求传入的应用凭证保存在内部控制文件 `viking://resources/.watch_tasks.json` 中，不会出现在 watch API/MCP/CLI 返回里。若启用了 VikingFS 文件加密，该控制文件会静态加密；否则服务端控制文件中会包含这些明文私有状态。
 - 本地目录输入会遵循 `.gitignore`（根目录和子目录，标准 Git 语义）；`ignore_dirs`、`include`、`exclude` 会在此基础上进一步过滤。
 - `args.parse_mode=no_split` 仍调用正常的格式 Parser。PDF、Word、PowerPoint、HTML 等受支持文档会转换为 Markdown，但跳过按标题、段落和长度拆分。目录导入会对每个受支持文档分别应用该规则，并继续遵循 `.gitignore`、筛选参数和 `preserve_structure`。
 - 对单文件输入使用 `no_split` 时，如果解析结果恰好只有一个可见文件且未指定 `to`，该文件会直接放到解析出的父目录下（例如 `guide.md` 写入 `viking://resources/guide.md`），不会创建同名上层目录，也不会生成目录级 `.abstract.md` / `.overview.md`。如果解析结果还包含图片等其他可见文件，则保留上层目录。显式指定的 `to` 始终作为最终 URI 原样保留。
@@ -323,7 +325,9 @@ curl -X POST http://localhost:1933/api/v1/resources \
     "watch_interval": 1440,
     "args": {
       "feishu_access_token": "u-...",
-      "feishu_refresh_token": "r-..."
+      "feishu_refresh_token": "r-...",
+      "feishu_app_id": "cli_...",
+      "feishu_app_secret": "..."
     }
   }'
 ```
@@ -416,6 +420,8 @@ client.add_resource(
         "args": {
             "feishu_access_token": "u-...",
             "feishu_refresh_token": "r-...",
+            "feishu_app_id": "cli_...",
+            "feishu_app_secret": "...",
         },
     },
 )
@@ -490,7 +496,9 @@ ov add-resource https://example.feishu.cn/docx/doc_token \
   --to viking://resources/feishu/doc \
   --watch-interval 1440 \
   --args feishu_access_token:u-... \
-  --args feishu_refresh_token:r-...
+  --args feishu_refresh_token:r-... \
+  --args feishu_app_id:cli_... \
+  --args feishu_app_secret:...
 
 # 添加到指定父目录（父目录必须存在）
 ov add-resource ./documents/guide.md --parent viking://resources/docs
@@ -543,12 +551,8 @@ ov add-resource ./documents/guide.md -p viking://resources/docs/{calendar:today}
 {
   "status": "ok",
   "result": {
-    "status": "success",
+    "status": "accepted",
     "root_uri": "viking://resources/guide",
-    "temp_uri": "viking://temp/username/04291108_b62dc7/guide",
-    "source_path": "./documents/guide.md",
-    "meta": {},
-    "errors": [],
     "task_id": "uuid-xxx"
   }
 }
@@ -561,7 +565,7 @@ ov add-resource ./documents/guide.md -p viking://resources/docs/{calendar:today}
 ```
 Note: Resource is being processed in the background.
 Use 'ov wait' to wait for completion, or 'ov observer queue' to check status.
-status       success
+status       accepted
 root_uri     viking://resources/01-overview
 task_id      uuid-xxx
 ```
@@ -570,7 +574,7 @@ task_id      uuid-xxx
 
 ```json
 {
-  "status": "success",
+  "status": "accepted",
   "root_uri": "viking://resources/01-overview",
   "task_id": "uuid-xxx"
 }
@@ -580,7 +584,7 @@ task_id      uuid-xxx
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `status` | string | 处理状态："success" 成功，"error" 失败 |
+| `status` | string | 处理状态：`accepted` 表示已入队，`success` 表示成功，`error` 表示失败 |
 | `root_uri` | string | 资源在 OpenViking 中的最终 URI |
 | `task_id` | string | （可选，仅当 `wait=false` 时）可轮询 `/api/v1/tasks/{task_id}` 的任务 ID。非 Git 导入用于队列跟踪；Git 仓库导入用于完整后台导入跟踪。 |
 | `temp_uri` | string | 导入过程中生成的临时 URI |

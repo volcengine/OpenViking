@@ -1,6 +1,6 @@
 # Admin (Multi-tenant)
 
-The Admin API manages accounts and users in a multi-tenant environment. It covers workspace (account) creation/deletion, user registration/removal, role changes, and API key regeneration.
+The Admin API manages accounts, users, and groups in a multi-tenant environment. It covers workspace (account) creation/deletion, user registration/removal, group membership, role changes, and API key regeneration.
 
 This API is available in both `api_key` and `trusted` deployments:
 - In `api_key` mode, the effective role is always derived from the presented API key.
@@ -21,6 +21,7 @@ For `/api/v1/admin/*`, `trusted` mode permits requests with no explicit identity
 | Create/delete workspace | Y | N | N |
 | List workspaces | Y | N | N |
 | Register/remove users | Y | Y (own account) | N |
+| Manage groups and membership | Y | Y (own account) | N |
 | List agents (deprecated, returns empty list) | Y | Y (own account) | N |
 | Regenerate user key | Y | Y (own account) | N |
 | Promote user to ADMIN | Y | Y (own account) | N |
@@ -54,6 +55,32 @@ Configure `root_api_key` in `~/.openviking/ovcli.conf`:
 
 - `--sudo` only works with the commands above - using it with regular data commands will error
 - Must have `root_api_key` configured to use `--sudo`
+
+## Groups
+
+A group belongs to one account and lets one ACL principal grant access to multiple users. Its caller-supplied `group_id` follows the same identifier rules as `user_id` and is the account-unique, stable identifier; there is no separate group name. Only existing users from the same account can be members, and groups cannot be nested.
+
+The server adds memberships to `RequestContext.group_ids` for each request. Adding or removing a member takes effect on the next request without rewriting resource ACL or context records. Removing a user also removes all memberships. A group must be empty before deletion.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/admin/accounts/{account_id}/groups` | Create an empty group with `{"group_id":"engineering"}` |
+| GET | `/api/v1/admin/accounts/{account_id}/groups` | List groups |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | Delete an empty group |
+| GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | List members |
+| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Add a member idempotently; repeated calls return `added=true` |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Remove a member; repeated calls return `removed=false` |
+
+```bash
+ov --sudo admin create-group acme engineering
+ov --sudo admin add-group-member acme engineering alice
+ov acl grant viking://resources/project-a \
+  --principal group:engineering --level read
+ov --sudo admin remove-group-member acme engineering alice
+ov --sudo admin delete-group acme engineering
+```
+
+The Python SDK exposes `admin_create_group`, `admin_list_groups`, `admin_list_group_members`, `admin_add_group_member`, `admin_remove_group_member`, and `admin_delete_group`. The Go SDK uses matching PascalCase method names.
 
 ## API Reference
 
@@ -103,15 +130,28 @@ Content-Type: application/json
 ### account_settings
 
 ROOT can manage any account and ADMIN can manage only its own account. The
-generic settings endpoint accepts only explicitly allowlisted fields; currently
-only `agent_evolution.enabled` is writable.
+generic settings endpoint accepts only explicitly allowlisted fields. It currently
+allows `agent_evolution.enabled` and `resource_acl.auto_protect_new_content`.
 
 ```http
 GET /api/v1/admin/accounts/{account_id}/settings
 PATCH /api/v1/admin/accounts/{account_id}/settings
 Content-Type: application/json
 
-{"agent_evolution": {"enabled": true}}
+{
+  "agent_evolution": {"enabled": true},
+  "resource_acl": {"auto_protect_new_content": true}
+}
+```
+
+`resource_acl.auto_protect_new_content` defaults to `false`. When enabled, newly
+created shared files, directories, and `add-resource` roots grant their creator
+direct `manage` while inheriting the parent ACL. Existing content is not migrated
+or modified. Disabling it again affects only later creations; existing ACLs remain
+effective.
+
+```bash
+ov --sudo admin set-account-settings acme --auto-protect-new-content true
 ```
 
 Before an existing setting is replaced, it is backed up to
@@ -337,8 +377,10 @@ List all workspaces (ROOT only).
 
 **Processing Flow:**
 1. Verify requester has ROOT privileges
-2. Call API Key Manager to get all accounts
-3. Return list with account ID, creation time, and user count
+2. Call API Key Manager to get all accounts (ordered lexicographically by account ID)
+3. Apply optional `name` filter
+4. Apply optional `limit`/`page` pagination
+5. Return list with account ID, creation time, and user count
 
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:list_accounts` - HTTP route
@@ -347,7 +389,13 @@ List all workspaces (ROOT only).
 
 #### 2. Interface and Parameters
 
-No parameters.
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| name | str | No | null | Filter by account ID (wildcard `*` and `?` matching) |
+| limit | int | No | null | Page size (≥1). Omit to return all matches |
+| page | int | No | 1 | 1-based page number; only applies when `limit` is set |
+
+Results are always returned in lexicographic order of account ID.
 
 #### 3. Usage Examples
 
@@ -358,7 +406,16 @@ GET /api/v1/admin/accounts
 ```
 
 ```bash
+# List all accounts
 curl -X GET http://localhost:1933/api/v1/admin/accounts \
+  -H "X-API-Key: <root-key>"
+
+# With filter (wildcard name matching)
+curl -X GET "http://localhost:1933/api/v1/admin/accounts?name=*acme*" \
+  -H "X-API-Key: <root-key>"
+
+# Paginated (second page of 50)
+curl -X GET "http://localhost:1933/api/v1/admin/accounts?limit=50&page=2" \
   -H "X-API-Key: <root-key>"
 ```
 
@@ -370,7 +427,7 @@ import openviking as ov
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
 
-accounts = client.admin_list_accounts()
+accounts = client.admin_list_accounts(name="*acme*", limit=50, page=1)
 for account in accounts:
     print(f"Account: {account['account_id']}, created: {account['created_at']}, users: {account['user_count']}")
 ```
@@ -378,7 +435,7 @@ for account in accounts:
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.adminListAccounts());
+console.log(await client.adminListAccounts({ name: "*acme*", limit: 50, page: 1 }));
 ```
 
 **Go SDK**
@@ -396,6 +453,12 @@ fmt.Println(accounts)
 ```bash
 # Requires ROOT privileges, use --sudo
 ov --sudo admin list-accounts
+
+# Filter by wildcard name
+ov --sudo admin list-accounts --name '*acme*'
+
+# Paginated
+ov --sudo admin list-accounts --limit 50 --page 2
 ```
 
 **Response Example**
@@ -649,9 +712,10 @@ List active users in a workspace. Users with deletion in progress are omitted.
 
 **Processing Flow:**
 1. Verify requester has ROOT privileges or is an ADMIN of the account
-2. Call API Key Manager to get active users list
-3. Apply optional filters (name, role) and pagination limit
-4. Return users list (trusted mode omits user_key)
+2. Call API Key Manager to get active users list (ordered lexicographically by user ID)
+3. Apply optional filters (name, role)
+4. Apply optional `limit`/`page` pagination
+5. Return users list (trusted mode omits user_key)
 
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:list_users` - HTTP route
@@ -665,11 +729,13 @@ List active users in a workspace. Users with deletion in progress are omitted.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | account_id | str | Yes | - | Workspace ID |
-| limit | int | No | 100 | Maximum number of users to return |
-| name | str | No | null | Filter by user ID (prefix match) |
+| name | str | No | null | Filter by user ID (wildcard `*` and `?` matching) |
 | role | str | No | null | Filter by role |
+| limit | int | No | null | Page size (≥1). Omit to return all matches |
+| page | int | No | 1 | 1-based page number; only applies when `limit` is set |
 
 **Notes:**
+- Results are always returned in lexicographic order of user ID
 - ADMIN can only list users in their own account
 - In `trusted` mode, `user_key` is omitted from the response
 - Users whose deletion has started are no longer returned
@@ -687,8 +753,12 @@ GET /api/v1/admin/accounts/{account_id}/users
 curl -X GET http://localhost:1933/api/v1/admin/accounts/acme/users \
   -H "X-API-Key: <root-or-admin-key>"
 
-# With filters
-curl -X GET "http://localhost:1933/api/v1/admin/accounts/acme/users?role=admin&limit=50" \
+# With filters (wildcard name matching)
+curl -X GET "http://localhost:1933/api/v1/admin/accounts/acme/users?name=*ali*&role=admin" \
+  -H "X-API-Key: <root-or-admin-key>"
+
+# Paginated (second page of 50)
+curl -X GET "http://localhost:1933/api/v1/admin/accounts/acme/users?limit=50&page=2" \
   -H "X-API-Key: <root-or-admin-key>"
 ```
 
@@ -700,7 +770,7 @@ import openviking as ov
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
 
-users = client.admin_list_users(account_id="acme")
+users = client.admin_list_users(account_id="acme", name="*ali*", limit=50, page=1)
 for user in users:
     print(f"User: {user['user_id']}, role: {user['role']}")
 ```
@@ -708,7 +778,7 @@ for user in users:
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.adminListUsers("account-id"));
+console.log(await client.adminListUsers("account-id", { name: "*ali*", limit: 50, page: 1 }));
 ```
 
 **Go SDK**
@@ -729,6 +799,10 @@ fmt.Println(users)
 ov admin list-users acme
 # If using root_api_key (--sudo):
 ov --sudo admin list-users acme
+# Filter by wildcard name
+ov admin list-users acme --name '*ali*'
+# Paginated
+ov admin list-users acme --limit 50 --page 2
 ```
 
 **Response Example**

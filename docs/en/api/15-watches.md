@@ -140,6 +140,7 @@ Listing tasks returns:
       {
         "task_id": "7f02e980-8df9-4f27-a570-4d8428cbed8a",
         "path": "https://example.com/guide.md",
+        "source_type": "url",
         "to_uri": "viking://resources/guide.md",
         "parent_uri": "viking://resources",
         "reason": "keep documentation current",
@@ -161,6 +162,10 @@ Listing tasks returns:
   }
 }
 ```
+
+`source_type` is optional provenance metadata. Explicit Connector `add_type` values take
+precedence (for example, `tos` or `feishu_project`); native imports report `feishu`, `git`,
+`url`, or `local`. Legacy or unclassified watches return `null`.
 
 Getting one task and a successful update return the same task object directly in `result`. Delete and trigger return:
 

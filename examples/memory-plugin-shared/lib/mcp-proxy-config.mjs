@@ -40,6 +40,30 @@ export function defaultCredentialPaths(env = process.env) {
   ].filter(Boolean);
 }
 
+/**
+ * Resolve the actor peer header for a long-lived MCP proxy process.
+ *
+ * MCP servers may start in the plugin directory rather than the active
+ * workspace, so their process cwd is not a reliable peer identity. Broad
+ * recall intentionally spans the authenticated user's peer workspaces and
+ * therefore leaves the actor header unset. Actor-scoped recall requires an
+ * explicit peer so isolation never depends on the proxy launch directory.
+ */
+export function resolveMcpActorPeerId({
+  peerId = "",
+  recallPeerScope = "all",
+} = {}) {
+  if (recallPeerScope !== "actor") return "";
+
+  const explicitPeerId = String(peerId || "").trim();
+  if (explicitPeerId) return explicitPeerId;
+
+  throw new Error(
+    "OpenViking MCP actor-scoped recall requires an explicit peer ID. "
+    + "Set actor_peer_id in ovcli.conf or OPENVIKING_PEER_ID in the MCP environment.",
+  );
+}
+
 function uniq(values) {
   return [...new Set(values.filter(Boolean))];
 }

@@ -13,6 +13,7 @@ from openviking.utils.model_retry import (
     ERROR_CLASS_QUOTA_EXCEEDED,
     ERROR_CLASS_TRANSIENT,
     classify_api_error,
+    extract_metric_error_code,
     retry_async,
     retry_sync,
 )
@@ -20,6 +21,31 @@ from openviking.utils.model_retry import (
 
 def test_classify_api_error_recognizes_request_burst_too_fast():
     assert classify_api_error(RuntimeError("RequestBurstTooFast")) == ERROR_CLASS_TRANSIENT
+
+
+class _ProviderError(RuntimeError):
+    def __init__(self, *, status_code=None, error_code=None, code=None, body=None):
+        super().__init__("provider request failed")
+        self.status_code = status_code
+        self.error_code = error_code
+        self.code = code
+        self.body = body
+
+
+def test_extract_metric_error_code_prefers_structured_provider_code():
+    assert extract_metric_error_code(_ProviderError(status_code=429, code="RateLimitExceeded")) == "429"
+    assert extract_metric_error_code(_ProviderError(body={"error": {"code": "InvalidParameter"}})) == (
+        "InvalidParameter"
+    )
+
+
+def test_extract_metric_error_code_uses_safe_fallbacks_only():
+    assert extract_metric_error_code(TimeoutError("request timed out")) == "timeout"
+    assert extract_metric_error_code(ConnectionError("connection reset")) == "connection_error"
+    wrapped_timeout = RuntimeError("request failed")
+    wrapped_timeout.__cause__ = TimeoutError("request timed out")
+    assert extract_metric_error_code(wrapped_timeout) == "timeout"
+    assert extract_metric_error_code(RuntimeError("request_id=not-a-metric-label")) == "unknown"
 
 
 def test_classify_all_credentials_failed_prefers_transient_over_auth():

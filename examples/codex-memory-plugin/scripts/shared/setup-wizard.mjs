@@ -39,14 +39,17 @@ export async function runSetupWizard({
   output = process.stdout,
   env = process.env,
 } = {}) {
-  const { cliPath } = loadCredentialFiles(env);
-  const current = readJsonSafe(cliPath);
+  // cliPath is empty until the file exists; first-run writes go to the candidate
+  // path (OPENVIKING_CLI_CONFIG_FILE, else ~/.openviking/ovcli.conf).
+  const { cliPath, cliPathCandidate } = loadCredentialFiles(env);
+  const targetPath = cliPath || cliPathCandidate;
+  const current = readJsonSafe(targetPath);
   const rl = createInterface({ input, output });
   const say = (line = "") => output.write(`${line}\n`);
 
   try {
     say("OpenViking memory plugin setup");
-    say(`Config file: ${cliPath}`);
+    say(`Config file: ${targetPath}`);
     say("");
     say("Current values:");
     say(`  url:     ${current.url || "(not set)"}`);
@@ -89,22 +92,22 @@ export async function runSetupWizard({
     const confirm = (await rl.question("Write config? [Y/n] ")).trim().toLowerCase();
     if (confirm === "n" || confirm === "no") {
       say("Aborted; nothing written.");
-      return { written: false, path: cliPath };
+      return { written: false, path: targetPath };
     }
 
-    mkdirSync(dirname(cliPath), { recursive: true });
-    if (existsSync(cliPath)) {
-      copyFileSync(cliPath, `${cliPath}.bak.${Date.now()}`);
+    mkdirSync(dirname(targetPath), { recursive: true });
+    if (existsSync(targetPath)) {
+      copyFileSync(targetPath, `${targetPath}.bak.${Date.now()}`);
     }
-    writeFileSync(cliPath, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
+    writeFileSync(targetPath, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
     try {
-      chmodSync(cliPath, 0o600);
+      chmodSync(targetPath, 0o600);
     } catch {
       /* best effort on platforms without chmod semantics */
     }
-    say(`Written: ${cliPath}`);
+    say(`Written: ${targetPath}`);
     say("The stdio MCP proxy and hooks pick this up on the next harness start.");
-    return { written: true, path: cliPath };
+    return { written: true, path: targetPath };
   } finally {
     rl.close();
   }

@@ -444,7 +444,7 @@ async def _skill_snapshot_lock(
 ) -> AsyncIterator[None]:
     """Hold the storage tree lock while one content-addressed Skill view is read."""
     viking_fs = service.fs._ensure_initialized()  # noqa: SLF001
-    viking_fs._ensure_access(root_uri, ctx)  # noqa: SLF001
+    await viking_fs._ensure_access(root_uri, ctx)  # noqa: SLF001
     path = viking_fs._uri_to_path(root_uri, ctx=ctx)  # noqa: SLF001
     fs_ctx = {"account_id": ctx.account_id}
     lease = await viking_fs._async_agfs.pathlock_acquire_tree(  # noqa: SLF001

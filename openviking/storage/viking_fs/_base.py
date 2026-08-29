@@ -12,6 +12,7 @@ from openviking_cli.exceptions import (
 from openviking_cli.utils.logger import get_logger
 
 if TYPE_CHECKING:
+    from openviking.storage.acl import AclManager
     from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
     from openviking_cli.utils.config import GrepConfig, RerankConfig, RetrievalConfig
 
@@ -146,6 +147,7 @@ def init_viking_fs(
     query_embedder: Optional[Any] = None,
     rerank_config: Optional["RerankConfig"] = None,
     vector_store: Optional["VikingVectorIndexBackend"] = None,
+    acl_manager: Optional["AclManager"] = None,
     retrieval_config: Optional["RetrievalConfig"] = None,
     grep_config: Optional["GrepConfig"] = None,
     timeout: int = 10,
@@ -173,6 +175,7 @@ def init_viking_fs(
         query_embedder=query_embedder,
         rerank_config=rerank_config,
         vector_store=vector_store,
+        acl_manager=acl_manager,
         retrieval_config=retrieval_config,
         grep_config=grep_config,
         encryptor=encryptor,

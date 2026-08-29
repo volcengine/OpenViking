@@ -59,6 +59,7 @@ class WatchTask(BaseModel):
         default_factory=lambda: str(uuid.uuid4()), description="Unique task identifier"
     )
     path: str = Field(..., description="Resource path to monitor")
+    source_type: Optional[str] = Field(None, description="Original resource source type")
     to_uri: Optional[str] = Field(None, description="Target URI")
     to_is_directory: Optional[bool] = Field(
         None,
@@ -97,6 +98,7 @@ class WatchTask(BaseModel):
         return {
             "task_id": self.task_id,
             "path": self.path,
+            "source_type": self.source_type,
             "to_uri": self.to_uri,
             "parent_uri": self.parent_uri,
             "reason": self.reason,
@@ -391,6 +393,7 @@ class WatchManager:
         account_id: str = "default",
         user_id: str = "default",
         original_role: str = "user",
+        source_type: Optional[str] = None,
         to_uri: Optional[str] = None,
         to_is_directory: Optional[bool] = None,
         parent_uri: Optional[str] = None,
@@ -419,6 +422,7 @@ class WatchManager:
 
                 task = WatchTask(
                     path=path,
+                    source_type=source_type,
                     to_uri=to_uri,
                     to_is_directory=to_is_directory,
                     parent_uri=parent_uri,
@@ -456,6 +460,7 @@ class WatchManager:
         user_id: str,
         role: str,
         path: Optional[str] = None,
+        source_type: Optional[str] = None,
         to_uri: Optional[str] = None,
         to_is_directory: Optional[bool] = None,
         parent_uri: Optional[str] = None,
@@ -497,6 +502,7 @@ class WatchManager:
                         account_id=account_id,
                         user_id=user_id,
                         path=path,
+                        source_type=source_type,
                         to_uri=to_uri,
                         to_is_directory=to_is_directory,
                         parent_uri=parent_uri,
@@ -518,6 +524,7 @@ class WatchManager:
         account_id: str,
         user_id: str,
         path: Optional[str],
+        source_type: Optional[str],
         to_uri: Optional[str],
         to_is_directory: Optional[bool],
         parent_uri: Optional[str],
@@ -541,6 +548,8 @@ class WatchManager:
         old_to_uri = task.to_uri
         if path is not None:
             task.path = path
+        if source_type is not None:
+            task.source_type = source_type
         if to_uri is not None:
             task.to_uri = to_uri
         if to_is_directory is not None:

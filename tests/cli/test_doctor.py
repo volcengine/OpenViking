@@ -503,6 +503,28 @@ class TestCheckVlm:
             ok, detail, fix = check_vlm()
         assert ok
 
+    def test_pass_with_credentials_config(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {
+                    "vlm": {
+                        "provider": "openai",
+                        "model": "gpt-4o-mini",
+                        "credentials": [
+                            {"api_key": "sk-primary"},
+                            {"api_key": "sk-backup"},
+                        ],
+                    }
+                }
+            )
+        )
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            ok, detail, fix = check_vlm()
+        assert ok
+        assert "openai/gpt-4o-mini" in detail
+        assert fix is None
+
     def test_fail_no_provider(self, tmp_path: Path):
         config = tmp_path / "ov.conf"
         config.write_text(json.dumps({"vlm": {}}))

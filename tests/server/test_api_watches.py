@@ -25,12 +25,14 @@ async def _seed(
     role="user",
     interval=60.0,
     path="https://example.com/foo",
+    source_type=None,
 ):
     return await wm.create_task(
         path=path,
         account_id=account,
         user_id=user,
         original_role=role,
+        source_type=source_type,
         to_uri=to_uri,
         watch_interval=interval,
     )
@@ -45,7 +47,7 @@ async def test_list_empty(client: httpx.AsyncClient):
 
 
 async def test_full_lifecycle(client: httpx.AsyncClient, watch_manager, monkeypatch):
-    task = await _seed(watch_manager)
+    task = await _seed(watch_manager, source_type="url")
 
     # List
     resp = await client.get("/api/v1/watches")
@@ -53,6 +55,7 @@ async def test_full_lifecycle(client: httpx.AsyncClient, watch_manager, monkeypa
     assert body["status"] == "ok"
     assert body["result"]["total"] == 1
     assert body["result"]["tasks"][0]["task_id"] == task.task_id
+    assert body["result"]["tasks"][0]["source_type"] == "url"
     assert body["result"]["tasks"][0]["to_uri"] == task.to_uri
 
     # Get by ID

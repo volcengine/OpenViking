@@ -470,8 +470,20 @@ async def test_tree_original_dfs_order(monkeypatch, fs):
             mode=0o644,
             is_dir=False,
         ),
+        make_entry("/local/test_account/resources/restricted", "restricted", is_dir=True),
+        make_entry(
+            "/local/test_account/resources/restricted/hidden.txt",
+            "hidden.txt",
+            is_dir=False,
+        ),
     ]
     patch_tree_env(monkeypatch, fs, entries)
+    fs.acl_manager = object()
+
+    async def fake_can_access_many(uris, _ctx):
+        return {uri: "/restricted" not in uri for uri in uris}
+
+    monkeypatch.setattr(fs, "_can_access_many", fake_can_access_many)
 
     result = await fs._tree_original("viking://resources", ctx=_default_ctx())
     assert result[0]["name"] == "sub"
@@ -479,6 +491,14 @@ async def test_tree_original_dfs_order(monkeypatch, fs):
     assert result[0]["rel_path"] == "sub"
     assert result[1]["name"] == "file.txt"
     assert result[1]["rel_path"] == "sub/file.txt"
+    assert result[2] == {
+        "name": "restricted",
+        "isDir": True,
+        "rel_path": "restricted",
+        "uri": "viking://resources/restricted",
+        "access": "denied",
+    }
+    assert len(result) == 3
 
 
 # ── _tree_agent tests ──
@@ -569,7 +589,14 @@ async def test_ls_agent_modtime_is_raw_utc_iso(monkeypatch, fs):
                 "mode": 0o644,
                 "modTime": "2026-06-11T00:30:17+08:00",
                 "isDir": False,
-            }
+            },
+            {
+                "name": "restricted",
+                "size": 4096,
+                "mode": 0o755,
+                "modTime": "2026-06-11T00:30:18+08:00",
+                "isDir": True,
+            },
         ]
 
     monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: "/local/test_account/resources")
@@ -578,6 +605,12 @@ async def test_ls_agent_modtime_is_raw_utc_iso(monkeypatch, fs):
     monkeypatch.setattr(fs, "_is_accessible", lambda _uri, _ctx: True)
     monkeypatch.setattr(fs, "_batch_fetch_abstracts", default_batch_fetch)
     monkeypatch.setattr(viking_fs_module, "datetime", _FixedDatetime)
+    fs.acl_manager = object()
+
+    async def fake_can_access_many(uris, _ctx):
+        return {uri: not uri.endswith("/restricted") for uri in uris}
+
+    monkeypatch.setattr(fs, "_can_access_many", fake_can_access_many)
 
     result = await fs._ls_agent(
         "viking://resources",
@@ -588,6 +621,12 @@ async def test_ls_agent_modtime_is_raw_utc_iso(monkeypatch, fs):
 
     assert set(result[0].keys()) == {"uri", "size", "isDir", "modTime", "abstract"}
     assert result[0]["modTime"] == "2026-06-10T16:30:17.000Z"
+    assert result[1] == {
+        "name": "restricted",
+        "uri": "viking://resources/restricted",
+        "isDir": True,
+        "access": "denied",
+    }
 
 
 @pytest.mark.asyncio

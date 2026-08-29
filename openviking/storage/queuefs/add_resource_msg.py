@@ -20,6 +20,7 @@ class AddResourceMsg:
     root_uri: str
     account_id: str
     user_id: str
+    group_ids: list[str] = field(default_factory=list)
     role: str
     path: str = ""
     source_path: str = ""
@@ -29,6 +30,7 @@ class AddResourceMsg:
     job_phase: AddResourcePhase | str | None = None
     lock_handoff: Optional[Dict[str, Any]] = None
     actor_peer_id: Optional[str] = None
+    bypass_acl: bool = False
     reason: str = ""
     instruction: str = ""
     timeout: Optional[float] = None
@@ -51,10 +53,12 @@ class AddResourceMsg:
     skip_watch_management: bool = True
     defer_target_resolution: bool = False
     understanding_response_id: Optional[str] = None
+    understanding_file_id: Optional[str] = None
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
     parse_mode: str = "default"
     tags: Optional[list[str]] = None
     tag_mode: str = "replace"
+    internal_task: bool = False
 
     def __post_init__(self) -> None:
         inferred = (
@@ -69,10 +73,20 @@ class AddResourceMsg:
         if phase is AddResourcePhase.SOURCE and self.prepared is not None:
             raise ValueError("source jobs cannot contain prepared post-process data")
         if self.prepared is not None and (
-            self.staged_source is not None or self.understanding_response_id is not None
+            self.staged_source is not None
+            or self.understanding_response_id is not None
+            or self.understanding_file_id is not None
         ):
             raise ValueError("post_process jobs cannot contain source payloads")
-        if self.staged_source is not None and self.understanding_response_id is not None:
+        source_payload_count = sum(
+            payload is not None
+            for payload in (
+                self.staged_source,
+                self.understanding_response_id,
+                self.understanding_file_id,
+            )
+        )
+        if source_payload_count > 1:
             raise ValueError("source jobs cannot contain multiple source payloads")
         self.job_phase = phase
 
@@ -127,8 +141,14 @@ class AddResourceMsg:
             root_uri=str(root_uri),
             account_id=str(data.get("account_id", "default")),
             user_id=str(data.get("user_id", "default")),
+            group_ids=(
+                [str(group_id) for group_id in data["group_ids"]]
+                if isinstance(data.get("group_ids"), list)
+                else []
+            ),
             role=str(data.get("role", "root")),
             actor_peer_id=data.get("actor_peer_id"),
+            bypass_acl=bool(data.get("bypass_acl", False)),
             telemetry_id=str(data.get("telemetry_id"))
             if isinstance(data.get("telemetry_id"), str)
             else None,
@@ -170,8 +190,14 @@ class AddResourceMsg:
                 if isinstance(data.get("understanding_response_id"), str)
                 else None
             ),
+            understanding_file_id=(
+                data.get("understanding_file_id")
+                if isinstance(data.get("understanding_file_id"), str)
+                else None
+            ),
             processing_mode=data.get("processing_mode", DEFAULT_PROCESSING_MODE),
             parse_mode=str(data.get("parse_mode") or "default"),
             tags=(list(data["tags"]) if isinstance(data.get("tags"), list) else None),
             tag_mode=str(data.get("tag_mode") or "replace"),
+            internal_task=bool(data.get("internal_task", False)),
         )

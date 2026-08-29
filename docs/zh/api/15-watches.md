@@ -140,6 +140,7 @@ ov task watch rm viking://resources/guide.md
       {
         "task_id": "7f02e980-8df9-4f27-a570-4d8428cbed8a",
         "path": "https://example.com/guide.md",
+        "source_type": "url",
         "to_uri": "viking://resources/guide.md",
         "parent_uri": "viking://resources",
         "reason": "keep documentation current",
@@ -161,6 +162,10 @@ ov task watch rm viking://resources/guide.md
   }
 }
 ```
+
+`source_type` 是可选的来源元数据。显式 Connector `add_type` 优先（例如 `tos` 或
+`feishu_project`）；原生导入返回 `feishu`、`git`、`url` 或 `local`。历史任务或
+无法分类的任务返回 `null`。
 
 查看单个任务以及成功更新时，`result` 直接是同一结构的任务对象。删除和触发分别返回：
 

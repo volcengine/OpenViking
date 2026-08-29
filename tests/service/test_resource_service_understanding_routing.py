@@ -210,3 +210,106 @@ async def test_remote_mpeg_ts_url_queues_understanding_after_prepare(
     assert not downloaded.exists()
     agfs.pathlock_to_handoff.assert_awaited_once_with(lock)
     agfs.pathlock_handoff.assert_awaited_once_with(lock)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("temp_file_id", ["upload_audio.m4a", "shared_audio"])
+async def test_temp_uploaded_file_queues_external_parse_with_file_id(
+    monkeypatch,
+    tmp_path,
+    temp_file_id,
+):
+    """Upload snapshots keep only the external file_id before entering ExternalParse."""
+    ctx = RequestContext(
+        user=UserIdentifier("acct", "alice"),
+        role=Role.USER,
+        api_key="secret",
+    )
+    uploaded = tmp_path / "audio.m4a"
+    uploaded.write_bytes(b"audio bytes")
+    prepared = LocalResource(
+        path=uploaded,
+        source_type=SourceType.LOCAL,
+        original_source=str(uploaded),
+        meta={
+            "resolved_extension": ".m4a",
+            "original_filename": "audio.m4a",
+        },
+        is_temporary=True,
+    )
+    lock = {"lease_ref": "lock-1"}
+    agfs = SimpleNamespace(
+        pathlock_to_handoff=AsyncMock(return_value={"handle_id": "lock-1"}),
+        pathlock_handoff=AsyncMock(),
+        pathlock_release=AsyncMock(),
+    )
+    processor = SimpleNamespace(
+        should_use_understanding_directly=lambda _source, **_kwargs: False,
+        prepare_durable_source=AsyncMock(return_value=prepared),
+        should_use_understanding_api=lambda resource: resource is prepared,
+        upload_understanding_file=AsyncMock(return_value="file-1"),
+        submit_understanding=AsyncMock(side_effect=AssertionError("should not create response")),
+        tree_builder=SimpleNamespace(
+            resolve_target_uri=AsyncMock(
+                return_value=(
+                    "viking://resources/audio",
+                    "viking://resources/audio",
+                )
+            )
+        ),
+        reserve_unique_candidate=AsyncMock(return_value=("viking://resources/audio", lock)),
+        process_resource=AsyncMock(),
+    )
+    service = ResourceService(
+        vikingdb=object(),
+        viking_fs=SimpleNamespace(_async_agfs=agfs),
+        resource_processor=processor,
+        skill_processor=object(),
+    )
+    service._connector_delegate = SimpleNamespace(should_delegate=lambda *_args, **_kwargs: False)
+    tracker = SimpleNamespace(
+        create=AsyncMock(return_value=SimpleNamespace(task_id="task-1")),
+        update_stage=AsyncMock(),
+        fail=AsyncMock(),
+    )
+    queue_manager = SimpleNamespace(enqueue=AsyncMock())
+    monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: False)
+    monkeypatch.setattr(
+        "openviking.service.task_tracker.get_task_tracker",
+        lambda: tracker,
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: queue_manager,
+    )
+
+    result = await service.add_resource(
+        path=str(uploaded),
+        ctx=ctx,
+        to="viking://resources/audio",
+        wait=False,
+        allow_local_path_resolution=True,
+        internal_task=True,
+        temp_file_id=temp_file_id,
+    )
+
+    assert result == {
+        "status": "success",
+        "root_uri": "viking://resources/audio",
+        "task_id": "task-1",
+    }
+    _, message = queue_manager.enqueue.await_args.args
+    assert queue_manager.enqueue.await_args.args[0] == QueueManager.EXTERNAL_PARSE
+    queued = AddResourceMsg.from_dict(message)
+    assert queued.understanding_file_id == "file-1"
+    assert queued.understanding_response_id is None
+    assert queued.staged_source is None
+    assert queued.internal_task is True
+    assert queued.path == "audio.m4a"
+    assert queued.source_name == "audio.m4a"
+    assert not uploaded.exists()
+    processor.upload_understanding_file.assert_awaited_once_with(prepared)
+    processor.submit_understanding.assert_not_called()
+    processor.process_resource.assert_not_awaited()
+    agfs.pathlock_to_handoff.assert_awaited_once_with(lock)
+    agfs.pathlock_handoff.assert_awaited_once_with(lock)

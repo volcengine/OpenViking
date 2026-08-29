@@ -299,6 +299,14 @@ OV ✓ │ 🔗 resumed │ +3 today               session 已恢复上下文；
 
 ## 故障排除
 
+先跑内置的体检脚本——它会检查安装（marketplace、启用状态、hooks、MCP 接线）、解析后的配置（哪个文件生效、API key 脱敏展示）、连接（可达性、鉴权、`/mcp`）和最近的 hook 活动，并给每个问题附上修复建议：
+
+```bash
+node "$(jq -r '.plugins["openviking-memory@openviking"][0].installPath' ~/.claude/plugins/installed_plugins.json)/scripts/ov-memory-doctor.mjs"
+```
+
+也可以直接让 Claude 检查插件：`ov-memory-doctor` skill 会运行同一个脚本并解读报告。当 server 与插件在同一台机器上（loopback url）时，报告还会多一节 Server health：端口上是否有 server 在监听、ov.conf 里只有插件会读而 server 会拒绝启动的键、以及 `GET /ready`；其余 server 端检查（配置校验、实际 embedding 探测、native engine、磁盘）仍由 `openviking-server doctor` 负责。
+
 | 症状                                         | 原因                                                  | 解决方案                                                                                       |
 |----------------------------------------------|------------------------------------------------------|-----------------------------------------------------------------------------------------------|
 | 插件没激活                                    | 找不到 `ov.conf` / `ovcli.conf`                       | 创建一个；或设 `OPENVIKING_MEMORY_ENABLED=1` 加上 URL/API_KEY 等环境变量                       |
@@ -391,6 +399,12 @@ claude-code-memory-plugin/
 │   └── plugin.json          # plugin manifest
 ├── hooks/
 │   └── hooks.json           # 9 个 hook 注册
+├── commands/
+│   └── ov.md                # /ov 状态命令
+├── skills/
+│   ├── openviking-memory/   # 记忆工具使用指南
+│   ├── ov-experience-memory/
+│   └── ov-memory-doctor/    # 安装 / 配置 / 连接 / 本机 server 排障
 ├── servers/
 │   └── mcp-proxy.mjs        # stdio -> OpenViking /mcp 桥接
 ├── scripts/
@@ -405,6 +419,8 @@ claude-code-memory-plugin/
 │   ├── subagent-stop.mjs    # SubagentStop
 │   ├── debug-recall.mjs     # 召回独立诊断
 │   ├── debug-capture.mjs    # 捕获独立诊断
+│   ├── ov-status.mjs        # /ov 状态报告
+│   ├── ov-memory-doctor.mjs # 体检脚本（ov-memory-doctor skill）
 │   └── lib/
 │       ├── ov-session.mjs   # OV HTTP 客户端 + session 帮助 + bypass 检查
 │       └── async-writer.mjs # 写路径 detach-worker 帮助

@@ -7,6 +7,7 @@ import {
   DEFAULT_PROXY_TIMEOUT_MS,
   defaultCredentialPaths,
   normalizeConfigPath,
+  resolveMcpActorPeerId,
   trimSlash,
 } from "./lib/mcp-proxy-config.mjs";
 
@@ -64,6 +65,22 @@ test("debug stays strictly boolean-true opt-in", () => {
   assert.equal(buildMcpProxyConfig({ debug: "true" }).debug, false);
   assert.equal(buildMcpProxyConfig({ debug: 1 }).debug, false);
   assert.equal(buildMcpProxyConfig({ debug: true }).debug, true);
+});
+
+test("broad MCP recall does not send an actor peer header", () => {
+  assert.equal(resolveMcpActorPeerId({ peerId: "workspace-a", recallPeerScope: "all" }), "");
+  assert.equal(resolveMcpActorPeerId({ peerId: "workspace-a" }), "");
+});
+
+test("actor-scoped MCP recall requires and trims an explicit peer", () => {
+  assert.equal(
+    resolveMcpActorPeerId({ peerId: " workspace-a ", recallPeerScope: "actor" }),
+    "workspace-a",
+  );
+  assert.throws(
+    () => resolveMcpActorPeerId({ recallPeerScope: "actor" }),
+    /requires an explicit peer ID/,
+  );
 });
 
 test("path and URL helpers stay exported for entrypoints that need them", () => {

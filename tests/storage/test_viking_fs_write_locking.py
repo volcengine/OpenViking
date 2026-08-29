@@ -169,7 +169,7 @@ async def test_append_file_holds_exact_lease_across_read_and_write(monkeypatch):
         fake.events.append(("ensure_parent", path, lease_ref))
 
     monkeypatch.setattr(fs, "_ensure_parent_dirs", ensure_parent_dirs)
-    monkeypatch.setattr(fs, "_ensure_mutable_access", lambda _uri, _ctx=None: None)
+    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
     monkeypatch.setattr(
         fs,
         "_uri_to_path",
@@ -206,8 +206,7 @@ async def test_mv_extends_outer_lease_with_owned_capability(monkeypatch):
     }
     copied_with = []
 
-    monkeypatch.setattr(fs, "_ensure_mutable_access", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(fs, "_ensure_delete_access", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
     monkeypatch.setattr(
         fs,
         "_uri_to_path",
@@ -246,8 +245,7 @@ async def test_directory_mv_uses_source_tree_and_destination_exact(monkeypatch):
     fs = VikingFS(agfs=_FakeAGFS())
     fs._async_agfs = fake  # type: ignore[assignment]
 
-    monkeypatch.setattr(fs, "_ensure_mutable_access", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(fs, "_ensure_delete_access", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
     monkeypatch.setattr(
         fs,
         "_uri_to_path",
@@ -281,8 +279,7 @@ async def test_directory_mv_uses_temporary_tree_only_for_failed_copy_cleanup(mon
     fs = VikingFS(agfs=_FakeAGFS())
     fs._async_agfs = fake  # type: ignore[assignment]
 
-    monkeypatch.setattr(fs, "_ensure_mutable_access", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(fs, "_ensure_delete_access", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
     monkeypatch.setattr(
         fs,
         "_uri_to_path",

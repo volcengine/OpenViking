@@ -40,7 +40,11 @@ for required in \
   cursor-memory-plugin/rules/openviking-memory.mdc \
   cursor-memory-plugin/skills/openviking-memory/SKILL.md \
   claude-code-memory-plugin/skills/openviking-memory/SKILL.md \
+  claude-code-memory-plugin/skills/ov-memory-doctor/SKILL.md \
+  claude-code-memory-plugin/scripts/ov-memory-doctor.mjs \
   codex-memory-plugin/skills/openviking-memory/SKILL.md \
+  codex-memory-plugin/skills/ov-memory-doctor/SKILL.md \
+  codex-memory-plugin/scripts/ov-memory-doctor.mjs \
   trae-memory-hooks/hooks/hooks.json \
   trae-memory-hooks/.mcp.json \
   trae-memory-hooks/openviking.integration.json \

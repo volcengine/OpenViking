@@ -289,6 +289,33 @@ enum AttrsCommands {
     },
 }
 
+#[derive(Subcommand)]
+enum AclCommands {
+    Get {
+        uri: String,
+    },
+    Set {
+        uri: String,
+        #[arg(long = "entry", required = true)]
+        entries: Vec<String>,
+    },
+    Grant {
+        uri: String,
+        #[arg(long)]
+        principal: String,
+        #[arg(long)]
+        level: String,
+    },
+    Revoke {
+        uri: String,
+        #[arg(long)]
+        principal: String,
+    },
+    Rm {
+        uri: String,
+    },
+}
+
 // Commands are organized with category tags in their doc comments.
 //
 // # Command Tagging System
@@ -592,6 +619,11 @@ enum Commands {
     Attrs {
         #[command(subcommand)]
         action: AttrsCommands,
+    },
+    /// [Data] Manage resource ACL
+    Acl {
+        #[command(subcommand)]
+        action: AclCommands,
     },
     /// [Data] Read file content (Level 2)
     Read {
@@ -1832,7 +1864,17 @@ enum AdminCommands {
         user_config_json: Option<String>,
     },
     /// List all accounts (ROOT only)
-    ListAccounts,
+    ListAccounts {
+        /// Filter accounts by ID (supports wildcard * and ?)
+        #[arg(long, value_name = "pattern")]
+        name: Option<String>,
+        /// Page size; omit to list all accounts
+        #[arg(long, value_name = "n")]
+        limit: Option<u32>,
+        /// 1-based page number (requires --limit)
+        #[arg(long, default_value = "1", value_name = "n")]
+        page: u32,
+    },
     /// Delete an account and all associated users (ROOT only)
     DeleteAccount {
         /// Account ID to delete
@@ -1868,15 +1910,62 @@ enum AdminCommands {
         /// Account ID
         #[arg(value_name = "account-id")]
         account_id: String,
-        /// Maximum number of users to list (default: 100)
-        #[arg(long, default_value = "100", value_name = "n")]
-        limit: u32,
+        /// Page size; omit to list all users
+        #[arg(long, value_name = "n")]
+        limit: Option<u32>,
         /// Filter users by name (supports wildcard * and ?)
         #[arg(long, value_name = "pattern")]
         name: Option<String>,
         /// Filter users by role
         #[arg(long, value_name = "role")]
         role: Option<String>,
+        /// 1-based page number (requires --limit)
+        #[arg(long, default_value = "1", value_name = "n")]
+        page: u32,
+    },
+    /// Create an empty account-scoped group
+    CreateGroup {
+        #[arg(value_name = "account-id")]
+        account_id: String,
+        #[arg(value_name = "group-id")]
+        group_id: String,
+    },
+    /// List groups in an account
+    ListGroups {
+        #[arg(value_name = "account-id")]
+        account_id: String,
+    },
+    /// List the users in a group
+    ListGroupMembers {
+        #[arg(value_name = "account-id")]
+        account_id: String,
+        #[arg(value_name = "group-id")]
+        group_id: String,
+    },
+    /// Add an existing account user to a group
+    AddGroupMember {
+        #[arg(value_name = "account-id")]
+        account_id: String,
+        #[arg(value_name = "group-id")]
+        group_id: String,
+        #[arg(value_name = "user-id")]
+        user_id: String,
+    },
+    /// Remove a user from a group
+    RemoveGroupMember {
+        #[arg(value_name = "account-id")]
+        account_id: String,
+        #[arg(value_name = "group-id")]
+        group_id: String,
+        #[arg(value_name = "user-id")]
+        user_id: String,
+    },
+    /// Delete an empty group
+    DeleteGroup {
+        #[arg(value_name = "account-id")]
+        account_id: String,
+        #[arg(value_name = "group-id")]
+        group_id: String,
     },
     /// Remove a user from an account
     RemoveUser {
@@ -1910,6 +1999,20 @@ enum AdminCommands {
         /// Deterministic API key seed
         #[arg(long, value_name = "seed")]
         seed: Option<String>,
+    },
+    /// Update allowlisted settings for an account
+    SetAccountSettings {
+        /// Account ID
+        #[arg(value_name = "account-id")]
+        account_id: String,
+        /// Automatically protect newly created shared content
+        #[arg(
+            long,
+            required = true,
+            action = ArgAction::Set,
+            value_name = "true|false"
+        )]
+        auto_protect_new_content: bool,
     },
 }
 
@@ -2500,9 +2603,16 @@ fn is_admin_subcommand(token: &str) -> bool {
             | "migrate"
             | "register-user"
             | "list-users"
+            | "create-group"
+            | "list-groups"
+            | "list-group-members"
+            | "add-group-member"
+            | "remove-group-member"
+            | "delete-group"
             | "remove-user"
             | "set-role"
             | "regenerate-key"
+            | "set-account-settings"
     )
 }
 
@@ -3386,6 +3496,7 @@ async fn main() {
                 recursive,
             } => handlers::handle_set_tags(uri, tags, mode, recursive, ctx).await,
         },
+        Commands::Acl { action } => handlers::handle_acl(action, ctx).await,
         Commands::AddMemory { content } => handlers::handle_add_memory(content, ctx).await,
         Commands::Tui { uri } => handlers::handle_tui(uri, ctx).await,
         Commands::Chat {
@@ -4124,9 +4235,16 @@ mod tests {
             &["ov", "admin", "migrate"],
             &["ov", "admin", "register-user"],
             &["ov", "admin", "list-users"],
+            &["ov", "admin", "create-group"],
+            &["ov", "admin", "list-groups"],
+            &["ov", "admin", "list-group-members"],
+            &["ov", "admin", "add-group-member"],
+            &["ov", "admin", "remove-group-member"],
+            &["ov", "admin", "delete-group"],
             &["ov", "admin", "remove-user"],
             &["ov", "admin", "set-role"],
             &["ov", "admin", "regenerate-key"],
+            &["ov", "admin", "set-account-settings"],
             &["ov", "system", "wait"],
             &["ov", "system", "status"],
             &["ov", "system", "health"],
