@@ -1,6 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+from types import SimpleNamespace
+
 import pytest
 
 from openviking.server.identity import RequestContext, Role
@@ -28,6 +30,23 @@ class _FakeVikingFS:
 
     def _uri_to_path(self, uri, ctx=None):
         return uri.replace("viking://", "/local/acc1/")
+
+
+class _UnlistableRootVikingFS(_FakeVikingFS):
+    def __init__(self, *, fail_sidecar_write, list_error):
+        super().__init__({})
+        self.fail_sidecar_write = fail_sidecar_write
+        self.list_error = list_error
+        self.materialized_dirs = set()
+
+    async def ls(self, uri, node_limit=None, ctx=None):
+        raise self.list_error(uri)
+
+    async def write_file(self, path, content, ctx=None, lease_ref=None):
+        self.materialized_dirs.add(path.rsplit("/", 1)[0])
+        if self.fail_sidecar_write:
+            raise OSError("sidecar write failed after creating parent")
+        await super().write_file(path, content, ctx=ctx, lease_ref=lease_ref)
 
 
 class _FakeProcessor:
@@ -131,6 +150,69 @@ async def test_messages_jsonl_excluded_in_subdirectory(monkeypatch):
     summarized_names = [p.split("/")[-1] for p in processor.summarized_files]
     assert "messages.jsonl" not in summarized_names
     assert "data.csv" in summarized_names
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_sidecar_write", [False, True])
+@pytest.mark.parametrize("list_error", [FileNotFoundError, NotADirectoryError])
+async def test_unlistable_semantic_root_is_not_materialized_as_directory(
+    monkeypatch, fail_sidecar_write, list_error
+):
+    root_uri = "viking://user/user1/memories/profile.md"
+    fake_fs = _UnlistableRootVikingFS(
+        fail_sidecar_write=fail_sidecar_write,
+        list_error=list_error,
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
+    )
+
+    processor = _FakeProcessor()
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="memory",
+        max_concurrent_llm=2,
+        ctx=ctx,
+        generation_trigger="reindex",
+        skip_vectorization=True,
+    )
+
+    await executor.run(root_uri)
+
+    assert root_uri not in fake_fs.materialized_dirs
+    assert fake_fs.writes == []
+
+
+@pytest.mark.asyncio
+async def test_empty_semantic_directory_still_receives_sidecars(monkeypatch):
+    root_uri = "viking://user/user1/memories/empty"
+    fake_fs = _FakeVikingFS({root_uri: []})
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
+    )
+
+    processor = _FakeProcessor()
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="memory",
+        max_concurrent_llm=2,
+        ctx=ctx,
+        generation_trigger="reindex",
+        skip_vectorization=True,
+    )
+
+    await executor.run(root_uri)
+
+    assert [path for path, _content in fake_fs.writes] == [
+        f"{root_uri}/.overview.md",
+        f"{root_uri}/.abstract.md",
+    ]
 
 
 if __name__ == "__main__":

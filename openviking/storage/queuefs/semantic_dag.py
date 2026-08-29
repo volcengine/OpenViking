@@ -473,7 +473,7 @@ class SemanticDagExecutor:
             logger.warning(
                 f"[SemanticDagExecutor] Failed to list directory {uri}: {e} from {from_hint}"
             )
-            return [], []
+            raise
 
         children_dirs: List[str] = []
         file_paths: List[str] = []
