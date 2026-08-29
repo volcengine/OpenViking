@@ -181,9 +181,10 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             return 1536
 
     def _http_limits(self) -> httpx.Limits:
+        pool_limit = max(1, self.max_concurrent)
         return httpx.Limits(
-            max_connections=self.max_concurrent,
-            max_keepalive_connections=self.max_concurrent,
+            max_connections=pool_limit,
+            max_keepalive_connections=pool_limit,
             keepalive_expiry=5.0,
         )
 

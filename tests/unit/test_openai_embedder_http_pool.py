@@ -13,8 +13,10 @@ from typing import Iterator
 
 import openai
 import pytest
+from pydantic import ValidationError
 
 from openviking.models.embedder import OpenAIDenseEmbedder
+from openviking_cli.utils.config.embedding_config import EmbeddingConfig
 
 
 class _EmbeddingServer(ThreadingHTTPServer):
@@ -140,3 +142,26 @@ async def test_openai_embedder_reuses_and_closes_local_connection() -> None:
                 embedder.client.close()
             if not async_client.is_closed():
                 await async_client.close()
+
+
+@pytest.mark.parametrize("max_concurrent", [0, -1])
+def test_embedding_config_rejects_non_positive_concurrency(max_concurrent: int) -> None:
+    with pytest.raises(ValidationError, match="max_concurrent"):
+        EmbeddingConfig(max_concurrent=max_concurrent)
+
+
+@pytest.mark.parametrize("max_concurrent", [0, -1])
+def test_direct_embedder_normalizes_non_positive_pool_limit(max_concurrent: int) -> None:
+    embedder = OpenAIDenseEmbedder(
+        model_name="test-embedding",
+        api_key="test-key",
+        dimension=3,
+        config={"max_concurrent": max_concurrent},
+    )
+
+    try:
+        pool = _pool(embedder.client)
+        assert pool._max_connections == 1
+        assert pool._max_keepalive_connections == 1
+    finally:
+        embedder.close()

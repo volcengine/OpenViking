@@ -563,6 +563,12 @@ class OpenVikingService:
             self._agfs_client = None
             logger.info("RAGFS binding closed")
 
+        embedder = getattr(self, "_embedder", None)
+        if embedder is not None:
+            embedder.close()
+            self._embedder = None
+            await asyncio.sleep(0)
+
         self._viking_fs = None
         self._resource_processor = None
         self._skill_processor = None
