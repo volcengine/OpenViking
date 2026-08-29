@@ -19,6 +19,7 @@ import pytest
 from pydantic import ValidationError
 
 from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
+from openviking.models.vlm.base import FailoverVLM, MultiCredentialVLM
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
@@ -204,6 +205,30 @@ async def test_openai_vlm_applies_keepalive_to_owned_clients(provider: str) -> N
 
     assert sync_client.is_closed()
     assert async_client.is_closed()
+
+
+def test_vlm_config_close_clears_cached_instance() -> None:
+    config = VLMConfig(model="test-vlm", provider="openai", api_key="test-key")
+    instance = MagicMock()
+    config._vlm_instance = instance
+
+    config.close()
+
+    instance.close.assert_called_once_with()
+    assert config._vlm_instance is None
+
+
+def test_vlm_wrappers_close_all_provider_instances() -> None:
+    primary = MagicMock(model="primary", provider="openai", thinking=False)
+    backup = MagicMock(model="backup", provider="openai", thinking=False)
+    failover = FailoverVLM(primary, backup)
+    multi = MultiCredentialVLM([primary, backup], ["primary", "backup"])
+
+    failover.close()
+    multi.close()
+
+    assert primary.close.call_count == 2
+    assert backup.close.call_count == 2
 
 
 @pytest.mark.asyncio

@@ -549,6 +549,13 @@ class OpenVikingService:
             self._queue_manager = None
             logger.info("Queue manager stopped")
 
+        config = getattr(self, "_config", None)
+        vlm_config = getattr(config, "vlm", None)
+        close_vlm = getattr(vlm_config, "close", None)
+        if close_vlm is not None:
+            close_vlm()
+            await asyncio.sleep(0)
+
         if self._vikingdb_manager:
             self._vikingdb_manager.mark_closing()
 

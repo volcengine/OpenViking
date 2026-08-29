@@ -671,6 +671,13 @@ class VLMConfig(BaseModel):
 
         return self._vlm_instance
 
+    def close(self) -> None:
+        """Close and clear the cached VLM instance."""
+        instance = self._vlm_instance
+        self._vlm_instance = None
+        if instance is not None:
+            instance.close()
+
     def _build_vlm_config_dict_for_credential(self, credential: VLMCredential) -> Dict[str, Any]:
         """Build VLM instance config dict for a specific credential."""
         result = {
