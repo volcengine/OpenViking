@@ -230,3 +230,6 @@ node_modules/
 
 # Local scratch / working notes
 .scratch/
+
+# Repository-local Wiki memory (generated and maintained per checkout)
+/.repo_memory/

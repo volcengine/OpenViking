@@ -20,6 +20,7 @@ const HARNESS_SHARED_FILES = [
 ];
 const OPENCODE_SHARED_FILES = [...HARNESS_SHARED_FILES, "mcp-proxy-core.mjs", "async-writer.mjs", "batch-send.mjs"];
 const DOCTOR_SHARED_FILES = [...OPENCODE_SHARED_FILES, "doctor-core.mjs"];
+const CODEX_SHARED_FILES = [...DOCTOR_SHARED_FILES, "repository-sync.mjs"];
 const ZCODE_SHARED_FILES = [...OPENCODE_SHARED_FILES, "agent-hook-runtime.mjs", "agent-uri-guard.mjs"];
 const AGENT_PLUGINS_SHARED_FILES = [
   "credentials.mjs",
@@ -29,7 +30,7 @@ const AGENT_PLUGINS_SHARED_FILES = [
 ];
 const TARGETS = [
   { dir: join(ROOT, "examples", "claude-code-memory-plugin", "scripts", "shared"), files: DOCTOR_SHARED_FILES },
-  { dir: join(ROOT, "examples", "codex-memory-plugin", "scripts", "shared"), files: DOCTOR_SHARED_FILES },
+  { dir: join(ROOT, "examples", "codex-memory-plugin", "scripts", "shared"), files: CODEX_SHARED_FILES },
   { dir: join(ROOT, "examples", "opencode-plugin", "lib", "shared"), files: OPENCODE_SHARED_FILES },
   { dir: join(ROOT, "examples", "dsh-memory-plugin", "shared"), files: HARNESS_SHARED_FILES },
   { dir: join(ROOT, "examples", "pi-coding-agent-extension", "shared"), files: HARNESS_SHARED_FILES },
@@ -47,7 +48,24 @@ const SKILL_TARGETS = [
       join(ROOT, "examples", "cursor-memory-plugin", "skills"),
     ],
   },
+  {
+    skill: "repo-wiki",
+    dirs: [join(ROOT, "examples", "codex-memory-plugin", "skills")],
+  },
 ];
+
+async function relativeFiles(root, current = "") {
+  const dir = join(root, current);
+  const entries = await readdir(dir, { withFileTypes: true });
+  const out = [];
+  for (const entry of entries) {
+    const relativePath = join(current, entry.name);
+    if (entry.isDirectory()) out.push(...await relativeFiles(root, relativePath));
+    else if (entry.isFile()) out.push(relativePath);
+    else throw new Error(`unsupported skill entry: ${relativePath}`);
+  }
+  return out.sort();
+}
 
 test("vendored shared modules are synchronized", async () => {
   const files = (await readdir(SHARED_DIR)).filter((file) => file.endsWith(".mjs")).sort();
@@ -70,13 +88,13 @@ test("vendored shared modules are synchronized", async () => {
 
 test("vendored skills are byte-identical to examples/skills", async () => {
   for (const { skill, dirs } of SKILL_TARGETS) {
-    const files = (await readdir(join(SKILLS_DIR, skill))).sort();
+    const files = await relativeFiles(join(SKILLS_DIR, skill));
     assert.ok(files.includes("SKILL.md"), `${skill} must ship a SKILL.md`);
 
     for (const dir of dirs) {
       const target = join(dir, skill);
       assert.deepEqual(
-        (await readdir(target)).sort(),
+        await relativeFiles(target),
         files,
         `${relative(ROOT, target)} has a different file set; run node examples/memory-plugin-shared/sync.mjs`,
       );

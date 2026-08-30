@@ -1,0 +1,7 @@
+interface:
+  display_name: "Repository Wiki"
+  short_description: "Build, update, and search repository Wiki memory"
+  default_prompt: "Use $repo-wiki to build, update, validate, or search the current repository Wiki."
+
+policy:
+  allow_implicit_invocation: true

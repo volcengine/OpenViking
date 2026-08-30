@@ -5,6 +5,7 @@
 import asyncio
 import base64
 import os
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
@@ -12,6 +13,8 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from openviking.parse.accessors import GitAccessor
+from openviking.parse.accessors.base import SourceType
+from openviking.utils.media_processor import UnifiedResourceProcessor
 from openviking.parse.parsers.directory import DirectoryParser
 from openviking.utils import code_hosting_utils
 from openviking.utils.git_auth import (
@@ -531,6 +534,146 @@ class TestGitAccessor:
     def test_cannot_handle_local_zip_file(self, accessor: GitAccessor) -> None:
         """GitAccessor should leave local zip files to LocalAccessor/ZipParser."""
         assert accessor.can_handle(Path("/path/to/archive.zip")) is False
+
+    def test_can_handle_local_git_snapshot_zip(self, accessor: GitAccessor, tmp_path: Path) -> None:
+        archive = tmp_path / "repo.zip"
+        archive.write_bytes(b"placeholder")
+
+        assert accessor.can_handle(
+            archive,
+            git_local={
+                "version": 1,
+                "repo_key": "local:test-repo",
+                "repo_name": "test-repo",
+                "branch": "main",
+                "commit": "a" * 40,
+                "archive_format": "zip",
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_access_local_git_snapshot_returns_git_resource(
+        self, accessor: GitAccessor, tmp_path: Path
+    ) -> None:
+        archive = tmp_path / "repo.zip"
+        with zipfile.ZipFile(archive, "w") as zip_file:
+            zip_file.writestr("README.md", "# local repository\n")
+            zip_file.writestr("src/main.py", "print('ok')\n")
+
+        resource = await accessor.access(
+            archive,
+            git_local={
+                "version": 1,
+                "repo_key": "local:test-repo",
+                "repo_name": "test-repo",
+                "branch": "main",
+                "commit": "A" * 40,
+                "archive_format": "zip",
+            },
+        )
+        cleanup_path = Path(resource.meta["_cleanup_path"])
+        try:
+            assert resource.source_type == SourceType.GIT
+            assert resource.original_source == "local:test-repo"
+            assert resource.meta["repo_name"] == "test-repo"
+            assert resource.meta["repo_ref"] == "main"
+            assert resource.meta["repo_commit"] == "a" * 40
+            assert resource.meta["repo_key"] == "local:test-repo"
+            assert (resource.path / "README.md").read_text() == "# local repository\n"
+            assert (resource.path / "src" / "main.py").exists()
+            assert (resource.path / ".git_source_repo").read_text() == "local:test-repo"
+            assert await DirectoryParser._is_git_repository(resource.path)
+        finally:
+            resource.cleanup()
+            assert not cleanup_path.exists()
+
+    @pytest.mark.asyncio
+    async def test_access_local_git_snapshot_cleans_single_root_wrapper(
+        self, accessor: GitAccessor, tmp_path: Path
+    ) -> None:
+        archive = tmp_path / "repo.zip"
+        with zipfile.ZipFile(archive, "w") as zip_file:
+            zip_file.writestr("repo-root/README.md", "# wrapped\n")
+
+        resource = await accessor.access(
+            archive,
+            git_local={
+                "version": 1,
+                "repo_key": "local:wrapped",
+                "repo_name": "wrapped",
+                "branch": "main",
+                "commit": "b" * 40,
+                "archive_format": "zip",
+            },
+        )
+        cleanup_path = Path(resource.meta["_cleanup_path"])
+        assert resource.path.name == "repo-root"
+        resource.cleanup()
+        assert not cleanup_path.exists()
+
+    @pytest.mark.parametrize(
+        "git_local",
+        [
+            True,
+            {},
+            {
+                "version": 1,
+                "repo_key": "local:test-repo",
+                "repo_name": "test-repo",
+                "branch": "main",
+                "commit": "short",
+                "archive_format": "zip",
+            },
+        ],
+    )
+    def test_rejects_invalid_local_git_snapshot_metadata(
+        self, accessor: GitAccessor, tmp_path: Path, git_local
+    ) -> None:
+        archive = tmp_path / "repo.zip"
+        archive.write_bytes(b"placeholder")
+
+        assert accessor.can_handle(archive, git_local=git_local) is False
+
+    @pytest.mark.asyncio
+    async def test_local_git_snapshot_routes_directly_to_code_repository_parser(
+        self, tmp_path: Path
+    ) -> None:
+        repository = tmp_path / "repository"
+        repository.mkdir()
+        resource = SimpleNamespace(
+            path=repository,
+            source_type=SourceType.GIT,
+            original_source="local:test-repository",
+            meta={
+                "repo_name": "test-repository",
+                "repo_ref": "main",
+                "repo_commit": "a" * 40,
+                "resolved_extension": "",
+            },
+            is_temporary=False,
+            cleanup=Mock(),
+        )
+        processor = UnifiedResourceProcessor(vlm_processor=object())
+        processor._accessor_registry = SimpleNamespace(
+            access=AsyncMock(side_effect=AssertionError("prepared Git resource must not be re-routed"))
+        )
+        processor._parser_router = SimpleNamespace()
+
+        parsed = SimpleNamespace(temp_dir_path="viking://temp/repository")
+        with patch(
+            "openviking.parse.parsers.code.code.CodeRepositoryParser.parse",
+            new_callable=AsyncMock,
+            return_value=parsed,
+        ) as parse:
+            result = await processor.process(
+                "/unused",
+                prepared_resource=resource,
+            )
+
+        assert result is parsed
+        assert parse.await_args.args[0] == str(repository)
+        assert parse.await_args.kwargs["_source_meta"]["repo_name"] == "test-repository"
+        assert parse.await_args.kwargs["original_source"] == "local:test-repository"
 
     @pytest.mark.parametrize(
         "source",

@@ -22,6 +22,10 @@ _IDENTITY_META_FIELDS = frozenset(
         "resolved_extension",
         "resolved_name",
         "original_filename",
+        "repo_key",
+        "repo_name",
+        "repo_ref",
+        "repo_commit",
     }
 )
 

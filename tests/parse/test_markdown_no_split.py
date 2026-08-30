@@ -98,6 +98,24 @@ async def test_long_markdown_no_split_plans_one_complete_file(
 
 
 @pytest.mark.asyncio
+async def test_flattened_no_split_root_mkdir_is_idempotent() -> None:
+    parser = MarkdownParser()
+
+    layout = await parser._compute_layout(
+        "# Guide\n\nBody",
+        "viking://temp/test",
+        source_path="/tmp/guide.md",
+        split_content=False,
+        flatten_single_output=True,
+    )
+
+    mkdirs = [op for op in layout.ops if op.kind == "mkdir"]
+    assert [(op.uri, op.exist_ok) for op in mkdirs] == [
+        ("viking://temp/test", True),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_long_markdown_default_mode_still_splits() -> None:
     content = _long_markdown()
     parser = MarkdownParser(config=ParserConfig(max_section_size=32, max_section_chars=128))

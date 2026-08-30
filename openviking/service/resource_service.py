@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from openviking.core.namespace import is_content_root_uri
+from openviking.parse.accessors.git_accessor import GIT_LOCAL_ARG, normalize_git_local_config
 from openviking.parse.backend import ParserBackend, normalize_parser_backend
 from openviking.parse.mode import ParseMode, normalize_parse_mode
 from openviking.parse.parsers.constants import MPEG_TS_EXTENSION_ALIAS
@@ -411,6 +412,11 @@ class ResourceService:
             parse_mode = normalize_parse_mode(raw_parse_mode)
         except InvalidArgumentError as exc:
             raise InvalidArgumentError(str(exc).replace("parse_mode", "args.parse_mode")) from exc
+        if GIT_LOCAL_ARG in normalized:
+            try:
+                normalized[GIT_LOCAL_ARG] = normalize_git_local_config(normalized[GIT_LOCAL_ARG])
+            except ValueError as exc:
+                raise InvalidArgumentError(str(exc)) from exc
         token = normalized.get(FEISHU_ACCESS_TOKEN_ARG)
         refresh_token = normalized.pop(FEISHU_REFRESH_TOKEN_ARG, None)
         app_id = normalized.pop(FEISHU_APP_ID_ARG, None)
@@ -1382,6 +1388,9 @@ class ResourceService:
         self._ensure_initialized()
         processing_mode = normalize_processing_mode(processing_mode)
         self._validate_add_resource_tag_policy(tags=tags, tag_mode=tag_mode)
+        raw_git_local = args.get(GIT_LOCAL_ARG) if isinstance(args, dict) else None
+        if raw_git_local is not None and add_type is not None:
+            raise InvalidArgumentError("args.git_local cannot be combined with add_type.")
         from openviking.connector.delegate import ConnectorDelegate
 
         allowed_reserved_fields = ConnectorDelegate.supported_args(path, add_type).intersection(
@@ -1408,6 +1417,19 @@ class ResourceService:
                 "field and in args."
             )
         kwargs.update(normalized_args.processor_kwargs)
+        if GIT_LOCAL_ARG in normalized_args.processor_kwargs:
+            if add_type is not None:
+                raise InvalidArgumentError("args.git_local cannot be combined with add_type.")
+            if not kwargs.get("temp_file_id"):
+                raise InvalidArgumentError(
+                    "args.git_local requires a repository archive supplied via temp_file_id."
+                )
+            if not to or parent:
+                raise InvalidArgumentError(
+                    "args.git_local requires an exact to target and cannot use parent."
+                )
+            if Path(path).suffix.lower() != ".zip":
+                raise InvalidArgumentError("args.git_local requires a ZIP repository archive.")
         tos_signature = kwargs.get("tos_signature")
         tos_access = kwargs.get("tos_access")
         if tos_signature is not None or tos_access is not None:

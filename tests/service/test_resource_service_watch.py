@@ -432,6 +432,80 @@ class TestAddResourceArgs:
     """Tests for parser-specific add_resource args."""
 
     @pytest.mark.asyncio
+    async def test_forwards_normalized_git_local_to_resource_processor(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+    ):
+        disable_task_tracker(monkeypatch)
+
+        await resource_service.add_resource(
+            path="/tmp/repo.zip",
+            ctx=request_context,
+            to="viking://resources/local-git/test-repo/main",
+            temp_file_id="upload_repo.zip",
+            args={
+                "git_local": {
+                    "version": 1,
+                    "repo_key": " local:test-repo ",
+                    "repo_name": " test-repo ",
+                    "branch": " main ",
+                    "commit": "A" * 40,
+                    "archive_format": "zip",
+                }
+            },
+        )
+
+        processor = resource_service._resource_processor
+        assert processor.calls[-1]["git_local"] == {
+            "version": 1,
+            "repo_key": "local:test-repo",
+            "repo_name": "test-repo",
+            "branch": "main",
+            "commit": "a" * 40,
+            "archive_format": "zip",
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("overrides", "message"),
+        [
+            ({"to": None}, "exact to target"),
+            ({"parent": "viking://resources/imports"}, "cannot use parent"),
+            ({"add_type": "git"}, "cannot be combined with add_type"),
+            ({"path": "/tmp/repo.tar"}, "ZIP repository archive"),
+        ],
+    )
+    async def test_rejects_invalid_git_local_ingestion_combinations(
+        self,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+        overrides: dict,
+        message: str,
+    ):
+        kwargs = {
+            "path": "/tmp/repo.zip",
+            "ctx": request_context,
+            "to": "viking://resources/local-git/test-repo/main",
+            "temp_file_id": "upload_repo.zip",
+            "args": {
+                "git_local": {
+                    "version": 1,
+                    "repo_key": "local:test-repo",
+                    "repo_name": "test-repo",
+                    "branch": "main",
+                    "commit": "a" * 40,
+                    "archive_format": "zip",
+                }
+            },
+        }
+        kwargs.update(overrides)
+
+        with pytest.raises(InvalidArgumentError, match=message):
+            await resource_service.add_resource(**kwargs)
+
+    @pytest.mark.asyncio
     async def test_forwards_args_to_resource_processor(
         self,
         monkeypatch: pytest.MonkeyPatch,

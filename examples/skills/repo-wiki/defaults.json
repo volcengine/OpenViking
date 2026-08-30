@@ -1,0 +1,12 @@
+{
+  "schema": "repo_memory_builder_defaults.v2",
+  "repoHistory": {
+    "mode": "local-only",
+    "limits": {
+      "commits": 30,
+      "prs": 30,
+      "issues": 30
+    }
+  },
+  "summaryChars": 4000
+}

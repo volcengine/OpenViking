@@ -337,8 +337,18 @@ class UnifiedResourceProcessor:
             parse_kwargs["vlm_processor"] = self._get_vlm_processor()
             parse_kwargs["storage"] = self.storage
 
-            # If it's a directory, use DirectoryParser which will delegate to CodeRepositoryParser if it's a git repo
+            # Git sources carry the repository identity in accessor metadata, so
+            # route them directly rather than relying on a marker file surviving
+            # queue staging. Other directories keep the existing marker fallback.
             if local_resource.path.is_dir():
+                if local_resource.source_type == SourceType.GIT:
+                    from openviking.parse.parsers.code.code import CodeRepositoryParser
+
+                    return await CodeRepositoryParser().parse(
+                        str(local_resource.path),
+                        instruction,
+                        **parse_kwargs,
+                    )
                 from openviking.parse.parsers.directory import DirectoryParser
 
                 parser = DirectoryParser()

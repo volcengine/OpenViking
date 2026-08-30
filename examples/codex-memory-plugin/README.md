@@ -12,6 +12,7 @@ This is the Codex counterpart to [`claude-code-memory-plugin`](../claude-code-me
 - **Session-start profile injection** on `startup`, `clear`, and `resume`: load `profile.md` plus abstract-annotated indexes of `preferences/` and `entities/` through the shared CJK-aware profile builder.
 - **Auto-recall** relevant memories on every `UserPromptSubmit` and inject them via `hookSpecificOutput.additionalContext`
 - **Incremental capture on `Stop`** (turn end): append the new user/assistant turns to a deterministic OpenViking session id `cx-<codex_session_id>`. When `pending_tokens` reaches `OPENVIKING_COMMIT_TOKEN_THRESHOLD`, commit while keeping a recent live tail.
+- **Local Git snapshots on `PostToolUse`**: after a successful `git commit`, merge, rebase, reset, revert, checkout, switch, pull, or merge, archive `HEAD` from repositories without an `origin` remote and submit it to OpenViking's normal code-repository ingestion path.
 - **Commit on `PreCompact`**: trigger OpenViking's memory extractor on the full pre-compact transcript before Codex summarizes it.
 - **Commit on `SessionStart` (source=startup|clear)**: active-window heuristic — if exactly one *other* state file was touched within the last 2 min, commit it (the just-ended session). On `≥2`, defer to idle-TTL sweep at the tail. `source=resume` never commits or sweeps; if the live OV session was already committed, it combines the profile block with the latest archive summary for continuity. See `DESIGN.md` for the full decision tree.
 
@@ -156,7 +157,7 @@ Earlier plugin versions configured tuning fields under a `codex` block in `~/.op
    │                            Codex                             │
    └──┬─────────────────┬────────────────┬───────────────────┬────┘
       │                 │                │                   │
- SessionStart      UserPromptSubmit    Stop              PreCompact
+ SessionStart      UserPromptSubmit    PostToolUse       Stop              PreCompact
  (startup|clear|resume) │              (per turn)            │
       │                 │                │                   │
  ┌────▼──────────┐ ┌────▼──────┐ ┌──────▼──────┐ ┌──────────▼──────┐
@@ -265,6 +266,12 @@ defaults.
 
 After a successful append, Stop reads the session meta and commits when `pending_tokens >= OPENVIKING_COMMIT_TOKEN_THRESHOLD` (default `20000`). Threshold commits pass `keep_recent_count=OPENVIKING_COMMIT_KEEP_RECENT_COUNT` (default `10`) so the newest turns remain live for continuity while older context is archived and extracted. `PreCompact` still commits everything before compaction.
 
+### PostToolUse (local-only Git snapshot)
+
+`repository-sync.mjs` handles successful Git mutations only. It ignores reads such as `git status` and `git diff`, failed commands, and repositories that have an `origin` remote because remote-backed repositories already use OpenViking's normal remote-Git ingestion flow. For a local-only repository, the hook creates a stable private Git config identity (`openviking.repositoryKey`), archives committed `HEAD` with `git archive`, uploads the ZIP, and requests the fixed `viking://resources/local-git/<repository>/<branch>` target. The server unwraps the archive as `SourceType.GIT`, so parsing, tree sync, and downstream indexing reuse the normal code-repository path.
+
+The hook's detached worker makes upload failures non-blocking. It records the last successfully submitted commit per repository and branch, so duplicate PostToolUse events do not re-upload the same snapshot. Set `OPENVIKING_GIT_LOCAL_ENABLED=0` to disable this integration.
+
 ### PreCompact (deterministic commit)
 
 `pre-compact-capture.mjs`:
@@ -288,6 +295,7 @@ Codex's hook output schema differs from Claude Code's. Notably:
 |------|------------------------|--------------------------------------|
 | `SessionStart`   | `source` (`startup`/`resume`/`clear`), `session_id`, `cwd` | `hookSpecificOutput.additionalContext`; may also include `systemMessage` when an orphaned session was committed |
 | `UserPromptSubmit` | `prompt`, `session_id`                     | `hookSpecificOutput.additionalContext` |
+| `PostToolUse`    | successful command tool `cwd`, command, exit status | `{}` (async snapshot submission) |
 | `Stop`           | `last_assistant_message`, `transcript_path`, `session_id` | `systemMessage` (only) |
 | `PreCompact`     | `trigger` (`manual`/`auto`), `transcript_path`, `session_id` | `systemMessage` (only) |
 
@@ -310,7 +318,7 @@ codex-memory-plugin/
 ├── .codex-plugin/
 │   └── plugin.json              # Plugin manifest (hooks + mcp wiring)
 ├── hooks/
-│   └── hooks.json               # SessionStart + UserPromptSubmit + Stop + PreCompact
+│   └── hooks.json               # SessionStart + UserPromptSubmit + PostToolUse + Stop + PreCompact
 │                                  (uses Codex's native ${PLUGIN_ROOT} token; no
 │                                   rendering needed on modern Codex)
 ├── skills/
@@ -326,6 +334,7 @@ codex-memory-plugin/
 │   ├── session-state.mjs        # Per-codex-session OV session state
 │   ├── auto-recall.mjs          # UserPromptSubmit hook (REST /search/search)
 │   ├── auto-capture.mjs         # Stop hook (append + threshold commit)
+│   ├── repository-sync.mjs      # PostToolUse local Git snapshot hook
 │   ├── session-start-commit.mjs # SessionStart hook (profile + active-window + idle TTL + resume archive)
 │   └── pre-compact-capture.mjs  # PreCompact hook
 ├── servers/

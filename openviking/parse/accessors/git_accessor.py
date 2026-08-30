@@ -10,13 +10,14 @@ This is the DataAccessor layer extracted from CodeRepositoryParser.
 import asyncio
 import contextlib
 import os
+import re
 import shutil
 import stat
 import tempfile
 import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
-from typing import Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple, Union
 from urllib.parse import quote, urlparse
 
 from openviking.utils import (
@@ -38,6 +39,49 @@ from openviking_cli.utils.logger import get_logger
 from .base import DataAccessor, LocalResource, SourceType
 
 logger = get_logger(__name__)
+
+GIT_LOCAL_ARG = "git_local"
+_FULL_GIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+
+
+def normalize_git_local_config(value: Any) -> Dict[str, Any]:
+    """Validate and normalize an uploaded local Git snapshot descriptor."""
+    if not isinstance(value, dict):
+        raise ValueError("args.git_local must be an object.")
+
+    allowed = {
+        "version",
+        "repo_key",
+        "repo_name",
+        "branch",
+        "commit",
+        "archive_format",
+    }
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        raise ValueError("args.git_local contains unsupported fields: " + ", ".join(unknown))
+    if value.get("version") != 1:
+        raise ValueError("args.git_local.version must be 1.")
+
+    normalized: Dict[str, Any] = {"version": 1}
+    for field, max_length in {"repo_key": 1024, "repo_name": 512, "branch": 512}.items():
+        raw = value.get(field)
+        if not isinstance(raw, str) or not raw.strip():
+            raise ValueError(f"args.git_local.{field} must be a non-empty string.")
+        cleaned = raw.strip()
+        if len(cleaned) > max_length:
+            raise ValueError(f"args.git_local.{field} must not exceed {max_length} characters.")
+        normalized[field] = cleaned
+
+    commit = value.get("commit")
+    if not isinstance(commit, str) or not _FULL_GIT_SHA_RE.fullmatch(commit.strip()):
+        raise ValueError("args.git_local.commit must be a full 40-character Git SHA.")
+    normalized["commit"] = commit.strip().lower()
+
+    if value.get("archive_format") != "zip":
+        raise ValueError("args.git_local.archive_format must be 'zip'.")
+    normalized["archive_format"] = "zip"
+    return normalized
 
 
 class GitAccessor(DataAccessor):
@@ -89,6 +133,12 @@ class GitAccessor(DataAccessor):
             path = Path(source_str)
 
         suffix = path.suffix.lower()
+        if suffix == ".zip" and kwargs.get(GIT_LOCAL_ARG) is not None:
+            try:
+                normalize_git_local_config(kwargs[GIT_LOCAL_ARG])
+            except ValueError:
+                return False
+            return path.is_file()
         return suffix == ".git"
 
     async def access(self, source: Union[str, Path], **kwargs) -> LocalResource:
@@ -104,8 +154,13 @@ class GitAccessor(DataAccessor):
         """
         source_str = str(source)
         temp_local_dir = None
-        branch = kwargs.get("branch") or kwargs.get("ref")
-        commit = kwargs.get("commit")
+        git_local = (
+            normalize_git_local_config(kwargs[GIT_LOCAL_ARG])
+            if kwargs.get(GIT_LOCAL_ARG) is not None
+            else None
+        )
+        branch = git_local["branch"] if git_local else kwargs.get("branch") or kwargs.get("ref")
+        commit = git_local["commit"] if git_local else kwargs.get("commit")
         auth_config = parse_git_http_auth_config(kwargs.get("auth_config"), source_str)
         git_env = None
 
@@ -118,7 +173,19 @@ class GitAccessor(DataAccessor):
             repo_name = "repository"
             local_dir = Path(temp_local_dir)
 
-            if source_str.startswith("git@"):
+            if git_local is not None:
+                await self._extract_zip(source_str, temp_local_dir)
+                entries = [
+                    item
+                    for item in Path(temp_local_dir).iterdir()
+                    if item.name not in {"__MACOSX", ".DS_Store"} and not item.name.startswith("._")
+                ]
+                if len(entries) == 1 and entries[0].is_dir():
+                    local_dir = entries[0]
+                repo_name = git_local["repo_name"]
+                marker_file = local_dir / ".git_source_repo"
+                await asyncio.to_thread(marker_file.write_text, git_local["repo_key"], encoding="utf-8")
+            elif source_str.startswith("git@"):
                 # git@ SSH URL
                 repo_name = await self._git_clone(
                     source_str,
@@ -205,11 +272,14 @@ class GitAccessor(DataAccessor):
                 meta["repo_ref"] = branch
             if commit:
                 meta["repo_commit"] = commit
+            if git_local:
+                meta["repo_key"] = git_local["repo_key"]
+                meta["_cleanup_path"] = temp_local_dir
 
             return LocalResource(
                 path=local_dir,
                 source_type=SourceType.GIT,
-                original_source=source_str,  # Full original URL (critical for TreeBuilder!)
+                original_source=git_local["repo_key"] if git_local else source_str,
                 meta=meta,
                 is_temporary=True,
             )

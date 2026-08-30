@@ -1382,7 +1382,10 @@ class MarkdownParser(BaseParser):
         estimated_tokens = self._estimate_token_count(content)
 
         # Create root directory
-        ops.append(_LayoutOp("mkdir", root_dir))
+        # A flattened document uses temp_uri as root_dir. The outer layout
+        # phase may have already materialized that URI, so the second mkdir
+        # must retain normal directory semantics while accepting that duplicate.
+        ops.append(_LayoutOp("mkdir", root_dir, exist_ok=True))
 
         # Get document name
         doc_name = doc_name or self._sanitize_for_path(

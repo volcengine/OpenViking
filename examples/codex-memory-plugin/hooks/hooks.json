@@ -47,6 +47,18 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|RunCommand|Shell|exec_command|codex_exec",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${PLUGIN_ROOT}/scripts/repository-sync.mjs",
+            "timeout": 5
+          }
+        ]
+      }
     ]
   }
 }

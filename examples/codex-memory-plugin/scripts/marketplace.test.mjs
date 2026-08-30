@@ -125,6 +125,8 @@ test("required plugin files are present", () => {
     "skills/ov-memory-doctor/reference.md",
     "scripts/ov-memory-doctor.mjs",
     "scripts/shared/doctor-core.mjs",
+    "scripts/repository-sync.mjs",
+    "scripts/shared/repository-sync.mjs",
   ]) {
     assert.ok(existsSync(join(pluginDir, rel)), `missing required plugin file: ${rel}`);
   }
@@ -160,6 +162,18 @@ test("hooks.json uses Codex's native ${PLUGIN_ROOT}, not the legacy placeholder"
   for (const cmd of commands) {
     assert.ok(cmd.includes("${PLUGIN_ROOT}/scripts/"), `hook command must be rooted at \${PLUGIN_ROOT}: ${cmd}`);
   }
+});
+
+test("Codex plugin registers local Git sync after successful shell mutations", () => {
+  const hooks = readJson(join(pluginDir, "hooks", "hooks.json"));
+  const postToolUse = hooks.hooks?.PostToolUse;
+  assert.ok(Array.isArray(postToolUse), "hooks.json must define PostToolUse");
+  const repositorySync = postToolUse.find((entry) => entry?.matcher === "Bash|RunCommand|Shell|exec_command|codex_exec");
+  assert.ok(repositorySync, "PostToolUse must match command tools");
+  assert.equal(
+    repositorySync.hooks?.[0]?.command,
+    "node ${PLUGIN_ROOT}/scripts/repository-sync.mjs",
+  );
 });
 
 test(".mcp.json starts the stdio MCP proxy from the plugin root", () => {

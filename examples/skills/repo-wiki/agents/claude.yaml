@@ -1,0 +1,10 @@
+interface:
+  display_name: "Repository Wiki"
+  short_description: "Build, update, and search repository Wiki memory"
+  default_prompt: "Use the repo-wiki skill to build, update, validate, or search the current repository Wiki."
+
+policy:
+  allow_implicit_invocation: true
+  install_targets:
+    - "~/.claude/skills/repo-wiki"
+    - ".claude/skills/repo-wiki"
