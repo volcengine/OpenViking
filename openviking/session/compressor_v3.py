@@ -140,9 +140,7 @@ def _memory_type_by_uri(operations: ResolvedOperations) -> dict[str, str]:
     for file_content in getattr(operations, "delete_file_contents", []) or []:
         uri = str(getattr(file_content, "uri", "") or "")
         if uri:
-            types_by_uri[uri] = str(
-                getattr(file_content, "memory_type", "") or "unknown"
-            )
+            types_by_uri[uri] = str(getattr(file_content, "memory_type", "") or "unknown")
     return types_by_uri
 
 
@@ -166,16 +164,25 @@ def _report_extraction_telemetry(result: Any, operations: ResolvedOperations) ->
         type_actions = actions_by_type.setdefault(normalized_type, {})
         type_actions[action] = type_actions.get(action, 0) + 1
 
+    def type_for(uri: Any) -> str:
+        mapped_type = types_by_uri.get(str(uri))
+        if mapped_type is not None:
+            return mapped_type
+        try:
+            return str(MemoryUpdater.memory_type_from_uri(str(uri)) or "unknown")
+        except ValueError:
+            return "unknown"
+
     for uri in result.written_uris:
-        add(types_by_uri.get(str(uri), MemoryUpdater.memory_type_from_uri(uri)), "created")
+        add(type_for(uri), "created")
     for uri in result.edited_uris:
-        add(types_by_uri.get(str(uri), MemoryUpdater.memory_type_from_uri(uri)), "merged")
+        add(type_for(uri), "merged")
     for uri in result.deleted_uris:
-        add(types_by_uri.get(str(uri), MemoryUpdater.memory_type_from_uri(uri)), "deleted")
+        add(type_for(uri), "deleted")
     for operation in result.skipped_operations:
         add(getattr(operation, "memory_type", None), "skipped")
     for uri, _error in result.errors:
-        add(types_by_uri.get(str(uri), MemoryUpdater.memory_type_from_uri(uri)), "failed")
+        add(type_for(uri), "failed")
 
     for memory_type, actions in actions_by_type.items():
         for action, value in actions.items():

@@ -18,6 +18,7 @@ from openviking.session.compressor_v3 import (
     _experience_root_uri,
     _experience_snapshot_provenance,
     _experience_trajectory_map,
+    _report_extraction_telemetry,
     _visible_experience_snapshot_uris,
 )
 from openviking.session.memory.dataclass import (
@@ -109,6 +110,48 @@ def test_extract_long_term_memories_preserves_legacy_positional_parameter_order(
         "event_search_tags",
         "peer_memory_enabled",
     ]
+
+
+def test_extraction_telemetry_tolerates_placeholder_uris(monkeypatch):
+    telemetry_values = {}
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.get_current_telemetry",
+        lambda: SimpleNamespace(set=telemetry_values.__setitem__),
+    )
+    mapped_placeholders = [
+        "written(page_id=1)",
+        "edited(page_id=2)",
+        "deleted(page_id=3)",
+        "failed(page_id=4)",
+    ]
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                old_memory_file_content=None,
+                memory_type="events",
+                uris=mapped_placeholders,
+                memory_fields={},
+            )
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+    result = MemoryUpdateResult()
+    result.written_uris.extend([mapped_placeholders[0], "unmapped-written"])
+    result.edited_uris.extend([mapped_placeholders[1], "unmapped-edited"])
+    result.deleted_uris.extend([mapped_placeholders[2], "unmapped-deleted"])
+    result.errors.extend(
+        [
+            (mapped_placeholders[3], ValueError("mapped failure")),
+            ("unmapped-failure", ValueError("unmapped failure")),
+        ]
+    )
+
+    _report_extraction_telemetry(result, operations)
+
+    for action in ("created", "merged", "deleted", "failed"):
+        assert telemetry_values[f"memory.extract.by_type.events.{action}"] == 1
+        assert telemetry_values[f"memory.extract.by_type.unknown.{action}"] == 1
 
 
 @pytest.mark.asyncio
