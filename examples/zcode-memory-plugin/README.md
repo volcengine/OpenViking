@@ -15,6 +15,8 @@ This package provides a ZCode lifecycle adapter for OpenViking long-term memory.
 
 ZCode does not support `PreCompact`/`SessionEnd`/`SubagentStart`/`SubagentStop`, so the commit-on-`Stop` strategy compensates for the absence of compact/end-of-session signals. The rollout file is the authoritative incremental transcript: stable host `turnId` values drive deduplication and allow a later Stop to recover missed turns. Hook stdin is only a fallback when the rollout file is unavailable.
 
+> Invariant: hook groups must OMIT the matcher key rather than writing `"matcher": ""`. Strict parsers treat an empty string as invalid and may silently drop the entire configuration source.
+
 ## Install
 
 Use the shared installer:

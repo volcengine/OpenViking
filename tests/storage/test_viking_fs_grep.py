@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import time
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -152,7 +153,8 @@ async def test_grep_vikingdb_pushes_exclude_uri_to_filter(monkeypatch):
     fs = VikingFS(agfs=_DummyAgfs())
     vector_store = _DummyVectorStore()
     monkeypatch.setattr(fs, "_get_vector_store", lambda: vector_store)
-    monkeypatch.setattr(fs, "_ensure_access", lambda uri, ctx=None: None)
+
+    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
 
     result = await fs._grep_vikingdb_then_fs(
         uri="viking://resources",
@@ -187,7 +189,8 @@ async def test_grep_vikingdb_keeps_local_exclude_uri_guard(monkeypatch):
         ]
     )
     monkeypatch.setattr(fs, "_get_vector_store", lambda: vector_store)
-    monkeypatch.setattr(fs, "_ensure_access", lambda uri, ctx=None: None)
+
+    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
 
     grep_in_files_calls = []
 

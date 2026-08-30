@@ -785,7 +785,7 @@ sequenceDiagram
 | `summary.vector.returned` | `openviking_vector_returned_total` |
 | `summary.vector.scanned` | `openviking_vector_scanned_total` |
 | `summary.semantic_nodes.{total|done|pending|running}` | `openviking_semantic_nodes_total{status=...}` |
-| `summary.memory.extracted` | `openviking_memory_extracted_total` |
+| `summary.memory.extracted` | `openviking_memory_extracted_total{memory_type=...}` |
 
 ### 3.8 多租户支持范围
 

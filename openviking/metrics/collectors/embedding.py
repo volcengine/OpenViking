@@ -91,6 +91,7 @@ class EmbeddingCollector(EventMetricCollector):
                 duration_seconds=float(payload["duration_seconds"]),
                 prompt_tokens=int(payload["prompt_tokens"]),
                 completion_tokens=int(payload["completion_tokens"]),
+                error_code=str(payload.get("error_code") or "OK"),
                 account_id=(
                     None if payload.get("account_id") is None else str(payload.get("account_id"))
                 ),
@@ -123,44 +124,50 @@ class EmbeddingCollector(EventMetricCollector):
         duration_seconds: float,
         prompt_tokens: int,
         completion_tokens: int,
+        error_code: str = "OK",
         account_id: str | None = None,
     ) -> None:
         """Record one embedding provider call as calls/tokens counters and a latency sample."""
-        labels = {"provider": str(provider), "model_name": str(model_name)}
+        labels = {
+            "provider": str(provider),
+            "model_name": str(model_name),
+            "error_code": str(error_code or "unknown"),
+        }
         registry.inc_counter(
             self.CALLS_TOTAL,
             labels=labels,
-            label_names=("provider", "model_name"),
+            label_names=("provider", "model_name", "error_code"),
             account_id=account_id,
         )
         registry.observe_histogram(
             self.CALL_DURATION_SECONDS,
             float(duration_seconds),
             labels=labels,
-            label_names=("provider", "model_name"),
+            label_names=("provider", "model_name", "error_code"),
             account_id=account_id,
         )
-        if int(prompt_tokens) > 0:
+        token_labels = {"provider": str(provider), "model_name": str(model_name)}
+        if labels["error_code"] == "OK" and int(prompt_tokens) > 0:
             registry.inc_counter(
                 self.TOKENS_INPUT_TOTAL,
-                labels=labels,
+                labels=token_labels,
                 label_names=("provider", "model_name"),
                 amount=int(prompt_tokens),
                 account_id=account_id,
             )
-        if int(completion_tokens) > 0:
+        if labels["error_code"] == "OK" and int(completion_tokens) > 0:
             registry.inc_counter(
                 self.TOKENS_OUTPUT_TOTAL,
-                labels=labels,
+                labels=token_labels,
                 label_names=("provider", "model_name"),
                 amount=int(completion_tokens),
                 account_id=account_id,
             )
         total_tokens = int(prompt_tokens) + int(completion_tokens)
-        if total_tokens > 0:
+        if labels["error_code"] == "OK" and total_tokens > 0:
             registry.inc_counter(
                 self.TOKENS_TOTAL,
-                labels=labels,
+                labels=token_labels,
                 label_names=("provider", "model_name"),
                 amount=total_tokens,
                 account_id=account_id,

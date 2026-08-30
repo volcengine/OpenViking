@@ -1510,6 +1510,7 @@ async def test_native_git_watch_refresh_queues_with_restored_task_auth(
     service._enqueue_add_resource_job = AsyncMock(
         return_value=SimpleNamespace(task_id="task-refresh")
     )
+    ctx.bypass_acl = True
 
     result = await service.refresh_resource(
         path="https://git.example/org/private.git",
@@ -1522,6 +1523,8 @@ async def test_native_git_watch_refresh_queues_with_restored_task_auth(
     assert result["task_id"] == "task-refresh"
     message = service._enqueue_add_resource_job.await_args.args[0]
     assert message.skip_watch_management is True
+    assert message.bypass_acl is True
+    assert AddResourceMsg.from_dict(message.to_dict()).bypass_acl is True
     assert "secret-token" not in json.dumps(message.to_dict())
     assert service._enqueue_add_resource_job.await_args.kwargs["task_auth"] == {
         "provider": "git_http_basic",

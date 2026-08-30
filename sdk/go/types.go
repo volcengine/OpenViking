@@ -69,6 +69,27 @@ type AdminRegisterUserOptions struct {
 	Seed       *string
 }
 
+// AdminListAccountsOptions controls AdminListAccountsWithOptions.
+// Name uses wildcard (* and ?) matching against account IDs. Pagination is
+// opt-in: set Limit to page the (lexicographically ordered) result; Page is
+// 1-based and only applies when Limit is set.
+type AdminListAccountsOptions struct {
+	Name  string
+	Limit *int
+	Page  *int
+}
+
+// AdminListUsersOptions controls AdminListUsersWithOptions.
+// Name uses wildcard (* and ?) matching against user IDs. Pagination is
+// opt-in: set Limit to page the (lexicographically ordered) result; Page is
+// 1-based and only applies when Limit is set.
+type AdminListUsersOptions struct {
+	Limit *int
+	Name  string
+	Role  string
+	Page  *int
+}
+
 // AdminRegenerateKeyOptions controls AdminRegenerateKeyWithOptions.
 type AdminRegenerateKeyOptions struct {
 	Seed *string

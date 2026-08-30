@@ -1,6 +1,6 @@
 {
   "name": "@openviking/dsh-memory-plugin",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "OpenViking memory and context bundle for DeepSeek Harness",
   "type": "module",
   "main": "index.mjs",

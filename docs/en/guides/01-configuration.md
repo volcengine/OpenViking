@@ -1429,6 +1429,55 @@ Supports cloud-deployed VikingDB on Volcengine
 ```
 </details>
 
+##### ACL schema
+
+ACL data exists only in the context collection. In addition to `acl_enabled: bool`, add these scalar-indexed `list<string>` fields:
+
+```text
+acl_direct_grants
+acl_inherited_grants
+```
+
+Each element uses `{mask}:{principal}`: `1` means `read`, `3` means `write`, and `7` means `manage`.
+
+Local backends add the fields to an existing collection and rebuild the scalar index during startup. Existing records are not rewritten; missing ACL fields read as `acl_enabled=false` and empty lists.
+
+For existing remote collections, including Volcengine VikingDB, provision these fields and scalar indexes before startup; OpenViking validates but does not alter the remote schema. Volcengine API-key data-plane mode also requires the context collection and configured index to exist. See [Resource Access Control (ACL)](../concepts/15-acl.md) for permission semantics.
+
+<details>
+<summary><b>openGauss</b></summary>
+
+Requires an openGauss server with native `vector` support and a remote-capable database user.
+Install the optional driver with `pip install "openviking[opengauss]"`.
+In the official container, the initial `omm` user may be restricted for remote login; create a normal user for OpenViking if needed.
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "name": "context",
+      "backend": "opengauss",
+      "project": "default",
+      "distance_metric": "cosine",
+      "dimension": 1024,
+      "opengauss": {
+        "host": "127.0.0.1",
+        "port": 5432,
+        "user": "openviking",
+        "password": "your-password",
+        "db_name": "postgres",
+        "schema": "public",
+        "mode": "standalone"
+      }
+    }
+  }
+}
+```
+
+Set `mode` to `"distributed"` for openGauss distributed deployments; OpenViking will attempt to mark metadata tables as reference tables and distribute collection tables by `id`.
+</details>
+
+
 ## Config Files
 
 OpenViking uses two config files:

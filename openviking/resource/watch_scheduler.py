@@ -293,6 +293,7 @@ class WatchScheduler:
                 ctx = RequestContext(
                     user=user,
                     role=role,
+                    bypass_acl=True,
                 )
 
                 if task.to_uri:

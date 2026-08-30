@@ -58,6 +58,7 @@ async def ingest_temp_upload(
                 processing_mode=processing_mode,
                 allow_local_path_resolution=True,
                 enforce_public_remote_targets=True,
+                temp_file_id=temp_file_id,
                 args=ingest_args,
                 tags=tags,
                 tag_mode=tag_mode,

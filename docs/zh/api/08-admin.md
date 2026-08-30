@@ -1,6 +1,6 @@
 # 管理员（多租户）
 
-Admin API 用于多租户环境下的账户和用户管理。包括工作区（account）的创建与删除、用户注册与移除、角色变更、API Key 重新生成。
+Admin API 用于多租户环境下的账户、用户和用户组管理。包括工作区（account）的创建与删除、用户注册与移除、用户组成员、角色变更、API Key 重新生成。
 
 该 API 适用于 `api_key` 和 `trusted` 两种模式下的管理链路：
 - 在 `api_key` 模式下，角色始终从 API Key 推导。
@@ -21,6 +21,7 @@ Admin API 用于多租户环境下的账户和用户管理。包括工作区（a
 | 创建/删除工作区 | Y | N | N |
 | 列出工作区 | Y | N | N |
 | 注册/移除用户 | Y | Y（本 account） | N |
+| 管理用户组和成员 | Y | Y（本 account） | N |
 | 列出 agents（已废弃，返回空列表） | Y | Y（本 account） | N |
 | 重新生成 User Key | Y | Y（本 account） | N |
 | 将用户提升为 ADMIN | Y | Y（本 account） | N |
@@ -54,6 +55,32 @@ Admin API 用于多租户环境下的账户和用户管理。包括工作区（a
 
 - `--sudo` 仅适用于上面的命令，用于普通数据命令会报错
 - 必须配置 `root_api_key` 才能使用 `--sudo`
+
+## 用户组
+
+用户组属于单个 account，用于通过一个 ACL principal 授权多个用户。`group_id` 由调用者创建时指定，使用与 `user_id` 相同的标识符规则，是 account 内唯一且稳定的标识；不存在单独的组名。组内只能加入当前 account 已存在的用户，不支持嵌套组。
+
+成员关系由服务端加入每次请求的 `RequestContext.group_ids`。添加或移除成员从下一次请求开始生效，不重写资源 ACL 或 context 记录。用户被删除时会自动退出所有组；用户组必须为空才能删除。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/v1/admin/accounts/{account_id}/groups` | 创建空组，请求体为 `{"group_id":"engineering"}` |
+| GET | `/api/v1/admin/accounts/{account_id}/groups` | 列出组 |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | 删除空组 |
+| GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 列出成员 |
+| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 幂等添加成员；重复调用返回 `added=true` |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 移除成员；重复调用返回 `removed=false` |
+
+```bash
+ov --sudo admin create-group acme engineering
+ov --sudo admin add-group-member acme engineering alice
+ov acl grant viking://resources/project-a \
+  --principal group:engineering --level read
+ov --sudo admin remove-group-member acme engineering alice
+ov --sudo admin delete-group acme engineering
+```
+
+Python SDK 提供对应的 `admin_create_group`、`admin_list_groups`、`admin_list_group_members`、`admin_add_group_member`、`admin_remove_group_member` 和 `admin_delete_group`；Go SDK 使用相同名称的 PascalCase 方法。
 
 ## API 参考
 
@@ -102,14 +129,26 @@ Content-Type: application/json
 ### account_settings
 
 ROOT 可管理任意 account，ADMIN 仅可管理自己所属的 account。通用配置接口仅允许
-显式列入白名单的字段；当前只允许修改 `agent_evolution.enabled`。
+显式列入白名单的字段；当前允许修改 `agent_evolution.enabled` 和
+`resource_acl.auto_protect_new_content`。
 
 ```http
 GET /api/v1/admin/accounts/{account_id}/settings
 PATCH /api/v1/admin/accounts/{account_id}/settings
 Content-Type: application/json
 
-{"agent_evolution": {"enabled": true}}
+{
+  "agent_evolution": {"enabled": true},
+  "resource_acl": {"auto_protect_new_content": true}
+}
+```
+
+`resource_acl.auto_protect_new_content` 默认为 `false`。开启后，账号内新建的共享
+文件、目录和 `add-resource` 根节点会给创建者直接 `manage`，同时继承父目录
+ACL；已有内容不会迁移或改权。重新关闭只影响后续创建，已有 ACL 继续生效。
+
+```bash
+ov --sudo admin set-account-settings acme --auto-protect-new-content true
 ```
 
 覆盖已有配置前，内核会先备份到
@@ -329,8 +368,10 @@ ov --sudo admin create-account acme-private --admin alice \
 
 **处理流程：**
 1. 验证请求者具有 ROOT 权限
-2. 调用 API Key Manager 获取所有账户列表
-3. 返回包含账户 ID、创建时间和用户数量的列表
+2. 调用 API Key Manager 获取所有账户列表（按账户 ID 字典序排列）
+3. 应用可选的 `name` 过滤
+4. 应用可选的 `limit`/`page` 分页
+5. 返回包含账户 ID、创建时间和用户数量的列表
 
 **代码入口：**
 - `openviking/server/routers/admin.py:list_accounts` - HTTP 路由
@@ -339,7 +380,13 @@ ov --sudo admin create-account acme-private --admin alice \
 
 #### 2. 接口和参数说明
 
-无参数。
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| name | str | 否 | null | 按账户 ID 过滤（通配符 `*` 和 `?` 匹配） |
+| limit | int | 否 | null | 每页数量（≥1）。省略则返回所有匹配项 |
+| page | int | 否 | 1 | 从 1 开始的页码；仅在设置了 `limit` 时生效 |
+
+结果始终按账户 ID 字典序返回。
 
 #### 3. 使用示例
 
@@ -350,7 +397,16 @@ GET /api/v1/admin/accounts
 ```
 
 ```bash
+# 列出所有账户
 curl -X GET http://localhost:1933/api/v1/admin/accounts \
+  -H "X-API-Key: <root-key>"
+
+# 带过滤条件（通配符 name 匹配）
+curl -X GET "http://localhost:1933/api/v1/admin/accounts?name=*acme*" \
+  -H "X-API-Key: <root-key>"
+
+# 分页（每页 50，取第 2 页）
+curl -X GET "http://localhost:1933/api/v1/admin/accounts?limit=50&page=2" \
   -H "X-API-Key: <root-key>"
 ```
 
@@ -362,7 +418,7 @@ import openviking as ov
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
 
-accounts = client.admin_list_accounts()
+accounts = client.admin_list_accounts(name="*acme*", limit=50, page=1)
 for account in accounts:
     print(f"Account: {account['account_id']}, created: {account['created_at']}, users: {account['user_count']}")
 ```
@@ -370,7 +426,7 @@ for account in accounts:
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.adminListAccounts());
+console.log(await client.adminListAccounts({ name: "*acme*", limit: 50, page: 1 }));
 ```
 
 **Go SDK**
@@ -388,6 +444,12 @@ fmt.Println(accounts)
 ```bash
 # 需要 ROOT 权限，使用 --sudo
 ov --sudo admin list-accounts
+
+# 按通配符 name 过滤
+ov --sudo admin list-accounts --name '*acme*'
+
+# 分页
+ov --sudo admin list-accounts --limit 50 --page 2
 ```
 
 **响应示例**
@@ -641,9 +703,10 @@ ov admin register-user acme bob-private --role user \
 
 **处理流程：**
 1. 验证请求者具有 ROOT 权限，或为本账户的 ADMIN
-2. 调用 API Key Manager 获取活跃用户列表
-3. 应用可选的过滤条件（name、role）和分页限制
-4. 返回用户列表（trusted 模式下不包含 user_key）
+2. 调用 API Key Manager 获取活跃用户列表（按用户 ID 字典序排列）
+3. 应用可选的过滤条件（name、role）
+4. 应用可选的 `limit`/`page` 分页
+5. 返回用户列表（trusted 模式下不包含 user_key）
 
 **代码入口：**
 - `openviking/server/routers/admin.py:list_users` - HTTP 路由
@@ -657,11 +720,13 @@ ov admin register-user acme bob-private --role user \
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | account_id | str | 是 | - | 工作区 ID |
-| limit | int | 否 | 100 | 返回用户数量上限 |
-| name | str | 否 | null | 按用户 ID 过滤（前缀匹配） |
+| name | str | 否 | null | 按用户 ID 过滤（通配符 `*` 和 `?` 匹配） |
 | role | str | 否 | null | 按角色过滤 |
+| limit | int | 否 | null | 每页数量（≥1）。省略则返回所有匹配项 |
+| page | int | 否 | 1 | 从 1 开始的页码；仅在设置了 `limit` 时生效 |
 
 **说明：**
+- 结果始终按用户 ID 字典序返回
 - ADMIN 只能列出自己所属的 account 中的用户
 - 在 `trusted` 模式下，响应中不会包含 `user_key` 字段
 - 用户删除开始后，不再出现在该列表中
@@ -679,8 +744,12 @@ GET /api/v1/admin/accounts/{account_id}/users
 curl -X GET http://localhost:1933/api/v1/admin/accounts/acme/users \
   -H "X-API-Key: <root-or-admin-key>"
 
-# 带过滤条件
-curl -X GET "http://localhost:1933/api/v1/admin/accounts/acme/users?role=admin&limit=50" \
+# 带过滤条件（通配符 name 匹配）
+curl -X GET "http://localhost:1933/api/v1/admin/accounts/acme/users?name=*ali*&role=admin" \
+  -H "X-API-Key: <root-or-admin-key>"
+
+# 分页（每页 50，取第 2 页）
+curl -X GET "http://localhost:1933/api/v1/admin/accounts/acme/users?limit=50&page=2" \
   -H "X-API-Key: <root-or-admin-key>"
 ```
 
@@ -692,7 +761,7 @@ import openviking as ov
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
 
-users = client.admin_list_users(account_id="acme")
+users = client.admin_list_users(account_id="acme", name="*ali*", limit=50, page=1)
 for user in users:
     print(f"User: {user['user_id']}, role: {user['role']}")
 ```
@@ -700,7 +769,7 @@ for user in users:
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.adminListUsers("account-id"));
+console.log(await client.adminListUsers("account-id", { name: "*ali*", limit: 50, page: 1 }));
 ```
 
 **Go SDK**
@@ -721,6 +790,10 @@ fmt.Println(users)
 ov admin list-users acme
 # 如果使用 root_api_key（--sudo）：
 ov --sudo admin list-users acme
+# 按通配符 name 过滤
+ov admin list-users acme --name '*ali*'
+# 分页
+ov admin list-users acme --limit 50 --page 2
 ```
 
 **响应示例**

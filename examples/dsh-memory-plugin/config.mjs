@@ -1,7 +1,7 @@
 import { buildUserAgent, resolveOpenVikingCredentials } from "./shared/credentials.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
-export const PLUGIN_VERSION = "0.2.1";
+export const PLUGIN_VERSION = "0.3.0";
 
 /**
  * Namespace for the bridged OpenViking MCP tools. DSH publishes every MCP tool
@@ -37,6 +37,7 @@ const DEFAULT_CONFIG = Object.freeze({
   captureMaxLength: 24000,
   captureToolMaxChars: 1000000,
   captureAssistantTurns: true,
+  skipSubagentSessions: false,
   requestTimeoutMs: 10000,
   mcpToolCallTimeoutMs: 60000,
 });
@@ -152,6 +153,7 @@ export function resolveConfig(input = {}, env = process.env, cwd = process.cwd()
   config.syncTurns = config.syncTurns !== false;
   config.captureAssistantTurns = config.captureAssistantTurns !== false;
   config.captureToolResults = config.captureToolResults === true;
+  config.skipSubagentSessions = config.skipSubagentSessions === true;
   return config;
 }
 

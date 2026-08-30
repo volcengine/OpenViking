@@ -104,7 +104,9 @@ class AddResourceProcessor(DequeueHandlerBase):
         ctx = RequestContext(
             user=UserIdentifier(msg.account_id, msg.user_id),
             role=Role(msg.role),
+            group_ids=tuple(msg.group_ids),
             actor_peer_id=msg.actor_peer_id,
+            bypass_acl=msg.bypass_acl,
         )
         tracker = get_task_tracker()
         task = await tracker.create(
@@ -294,6 +296,7 @@ class AddResourceProcessor(DequeueHandlerBase):
                     user=UserIdentifier(msg.account_id, msg.user_id),
                     role=Role(msg.role),
                     actor_peer_id=msg.actor_peer_id,
+                    bypass_acl=msg.bypass_acl,
                 ),
             ),
             self._service_loop,

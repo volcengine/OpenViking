@@ -12,6 +12,7 @@ import pytest_asyncio
 from openviking.pyagfs import AGFSNotFoundError
 from openviking.server.account_settings import (
     AccountAgentEvolutionSettings,
+    AccountResourceAclSettings,
     AccountSettingsPatch,
     account_settings_backup_path,
     account_settings_path,
@@ -209,18 +210,32 @@ async def test_account_settings_admin_api_reads_and_updates_effective_value(
     assert initial.status_code == 200, initial.text
     assert initial.json()["result"] == {
         "account_id": "default",
-        "settings": {"agent_evolution": {"enabled": False}},
+        "settings": {
+            "agent_evolution": {"enabled": False},
+            "resource_acl": {"auto_protect_new_content": False},
+        },
         "overrides": {},
     }
 
     updated = await client.patch(
         "/api/v1/admin/accounts/default/settings",
-        json={"agent_evolution": {"enabled": True}},
+        json={
+            "agent_evolution": {"enabled": True},
+            "resource_acl": {"auto_protect_new_content": True},
+        },
     )
     assert updated.status_code == 200, updated.text
     assert updated.json()["result"]["settings"]["agent_evolution"]["enabled"] is True
-    assert updated.json()["result"]["overrides"] == {"agent_evolution": {"enabled": True}}
-    assert (await read_account_settings(service.viking_fs, "default")).agent_evolution.enabled
+    assert updated.json()["result"]["settings"]["resource_acl"] == {
+        "auto_protect_new_content": True
+    }
+    assert updated.json()["result"]["overrides"] == {
+        "agent_evolution": {"enabled": True},
+        "resource_acl": {"auto_protect_new_content": True},
+    }
+    settings = await read_account_settings(service.viking_fs, "default")
+    assert settings.agent_evolution.enabled
+    assert settings.resource_acl == AccountResourceAclSettings(auto_protect_new_content=True)
 
 
 async def test_account_settings_admin_api_rejects_non_allowlisted_fields(

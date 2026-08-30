@@ -25,6 +25,7 @@ from openviking.storage.abstract_overview import (
     plan_abstract_overview_refresh,
     render_abstract_overview,
 )
+from openviking.storage.acl import CreatorAclGrant
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
@@ -193,9 +194,10 @@ class FSService:
     ) -> None:
         """Create directory."""
         viking_fs = self._ensure_initialized()
+        directory_uri, abstract_uri = self._resolve_directory_uris(uri)
+        directory_preexisting = await viking_fs.exists(directory_uri, ctx=ctx)
         await viking_fs.mkdir(uri, ctx=ctx)
 
-        directory_uri, abstract_uri = self._resolve_directory_uris(uri)
         abstract = self._normalize_directory_description(description)
         if not abstract:
             if await viking_fs.exists(abstract_uri, ctx=ctx):
@@ -229,6 +231,9 @@ class FSService:
             overview="",
             context_type=context_type_for_uri(directory_uri),
             ctx=ctx,
+            creator_acl_grant=(
+                CreatorAclGrant.DIRECT if not directory_preexisting else None
+            ),
             include_overview=False,
         )
 
@@ -417,6 +422,7 @@ class FSService:
             recursive=False,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
+            group_ids=ctx.group_ids,
             peer_id=ctx.user.user_id,
             role=str(ctx.role),
             skip_vectorization=False,
@@ -733,6 +739,27 @@ class FSService:
             recursive=recursive,
             ctx=ctx,
         )
+
+    async def get_acl(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
+        return await self._ensure_initialized().get_acl(uri, ctx=ctx)
+
+    async def set_acl(
+        self, uri: str, entries: List[Dict[str, str]], ctx: RequestContext
+    ) -> Dict[str, Any]:
+        return await self._ensure_initialized().set_acl(uri, entries, ctx=ctx)
+
+    async def grant_acl(
+        self, uri: str, principal: str, level: str, ctx: RequestContext
+    ) -> Dict[str, Any]:
+        return await self._ensure_initialized().grant_acl(uri, principal, level, ctx=ctx)
+
+    async def revoke_acl(
+        self, uri: str, principal: str, ctx: RequestContext
+    ) -> Dict[str, Any]:
+        return await self._ensure_initialized().revoke_acl(uri, principal, ctx=ctx)
+
+    async def delete_acl(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
+        return await self._ensure_initialized().delete_acl(uri, ctx=ctx)
 
     async def commit(
         self,

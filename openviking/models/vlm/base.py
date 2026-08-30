@@ -14,6 +14,7 @@ from openviking.utils.model_retry import (
     OrderedCredentialSwitcher,
     PrimaryBackupSwitcher,
     classify_api_error,
+    extract_metric_error_code,
 )
 from openviking_cli.utils import get_logger
 
@@ -286,6 +287,32 @@ class VLMBase(ABC):
                     model_name,
                     type(e).__name__,
                     e,
+                )
+
+    def record_failed_call(self, *, duration_seconds: float, error: Exception) -> None:
+        """Record one failed provider request attempt without token usage."""
+        try:
+            from openviking.metrics.datasources import VLMEventDataSource
+            from openviking.observability.context import get_root_observability_context
+
+            root_context = get_root_observability_context()
+            VLMEventDataSource.record_call(
+                provider=str(self.provider),
+                model_name=str(self.model or "unknown"),
+                duration_seconds=max(float(duration_seconds), 0.0),
+                prompt_tokens=0,
+                completion_tokens=0,
+                error_code=extract_metric_error_code(error),
+                account_id=root_context.account_id if root_context is not None else None,
+            )
+        except Exception as metrics_error:
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "vlm failed-call metrics emit failed provider=%s model_name=%s err=%s: %s",
+                    self.provider,
+                    self.model,
+                    type(metrics_error).__name__,
+                    metrics_error,
                 )
 
     @property

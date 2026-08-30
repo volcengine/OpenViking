@@ -31,6 +31,30 @@ def _fs_ctx_or_default(path: str, fs_ctx: Dict[str, str] | None) -> Dict[str, st
     return fs_ctx if fs_ctx is not None else fs_ctx_from_agfs_path(path)
 
 
+def _fs_ctx_with_auto_pathlock(
+    path: str,
+    fs_ctx: Dict[str, str] | None,
+    auto_pathlock: bool,
+) -> Dict[str, str]:
+    """Return FsContext with optional auto PathLock bypass for unlocked calls.
+
+    Args:
+        path: AGFS path used to derive a default context when ``fs_ctx`` is absent.
+        fs_ctx: Optional caller-provided context.
+        auto_pathlock: Whether PathLockWrappedFS should acquire locks automatically.
+
+    Returns:
+        A copied FsContext. Existing ``lease_ref`` takes precedence and keeps wrapper
+        lease validation enabled; otherwise ``auto_pathlock=False`` disables auto-locking.
+    """
+    ctx = dict(_fs_ctx_or_default(path, fs_ctx))
+    if ctx.get("lease_ref"):
+        ctx.pop("disable_auto_pathlock", None)
+    elif not auto_pathlock:
+        ctx["disable_auto_pathlock"] = "true"
+    return ctx
+
+
 def local_account_id_from_agfs_path(path: str) -> str | None:
     """Extract the account_id from `/local/{account_id}/...`, or None for non-local paths."""
     parts = path.strip("/").split("/")
@@ -128,12 +152,17 @@ class AsyncAGFSClient:
         max_retries: int = 3,
         *,
         fs_ctx: Dict[str, str] | None = None,
+        auto_pathlock: bool = True,
     ) -> str:
+        """Write file content to AGFS.
+
+        1. Automatic PathLock is enabled by default to prevent data conflicts in concurrent scenarios.
+        2. If automatic PathLock is disabled, the caller must assess the possible data conflict risk.
+        """
+        ctx = _fs_ctx_with_auto_pathlock(path, fs_ctx, auto_pathlock)
         if max_retries == 3:
-            return await self.run("write", path, data, ctx=_fs_ctx_or_default(path, fs_ctx))
-        return await self.run(
-            "write", path, data, max_retries=max_retries, ctx=_fs_ctx_or_default(path, fs_ctx)
-        )
+            return await self.run("write", path, data, ctx=ctx)
+        return await self.run("write", path, data, max_retries=max_retries, ctx=ctx)
 
     async def mkdir(
         self, path: str, mode: str = "755", *, fs_ctx: Dict[str, str] | None = None
@@ -158,13 +187,24 @@ class AsyncAGFSClient:
         force: bool = True,
         *,
         fs_ctx: Dict[str, str] | None = None,
+        auto_pathlock: bool = True,
     ) -> Dict[str, Any]:
+        """Remove a file or directory from AGFS.
+
+        1. Automatic PathLock is enabled by default to prevent data conflicts in concurrent scenarios.
+        2. If automatic PathLock is disabled, the caller must assess the possible data conflict risk.
+        """
         kwargs: Dict[str, Any] = {}
         if recursive:
             kwargs["recursive"] = recursive
         if not force:
             kwargs["force"] = force
-        return await self.run("rm", path, **kwargs, ctx=_fs_ctx_or_default(path, fs_ctx))
+        return await self.run(
+            "rm",
+            path,
+            **kwargs,
+            ctx=_fs_ctx_with_auto_pathlock(path, fs_ctx, auto_pathlock),
+        )
 
     async def stat(
         self, path: str, *, fs_ctx: Dict[str, str] | None = None, bypass_cache: bool = False
@@ -177,10 +217,25 @@ class AsyncAGFSClient:
         return await self.run("stat", path, ctx=ctx)
 
     async def mv(
-        self, old_path: str, new_path: str, *, fs_ctx: Dict[str, str] | None = None
+        self,
+        old_path: str,
+        new_path: str,
+        *,
+        fs_ctx: Dict[str, str] | None = None,
+        auto_pathlock: bool = True,
     ) -> Dict[str, Any]:
+        """Move or rename a path inside AGFS.
+
+        1. Automatic PathLock is enabled by default to prevent data conflicts in concurrent scenarios.
+        2. If automatic PathLock is disabled, the caller must assess the possible data conflict risk.
+        """
         ensure_same_encryption_account(old_path, new_path)
-        return await self.run("mv", old_path, new_path, ctx=_fs_ctx_or_default(old_path, fs_ctx))
+        return await self.run(
+            "mv",
+            old_path,
+            new_path,
+            ctx=_fs_ctx_with_auto_pathlock(old_path, fs_ctx, auto_pathlock),
+        )
 
     async def cp(
         self,
@@ -189,8 +244,13 @@ class AsyncAGFSClient:
         recursive: bool = False,
         *,
         fs_ctx: Dict[str, str] | None = None,
+        auto_pathlock: bool = True,
     ) -> Any:
-        """Copy a path within AGFS while preserving the caller's FsContext."""
+        """Copy a path within AGFS while preserving the caller's FsContext.
+
+        1. Automatic PathLock is enabled by default to prevent data conflicts in concurrent scenarios.
+        2. If automatic PathLock is disabled, the caller must assess the possible data conflict risk.
+        """
         from .helpers import cp
 
         return await asyncio.to_thread(
@@ -199,7 +259,7 @@ class AsyncAGFSClient:
             src_path,
             dst_path,
             recursive=recursive,
-            fs_ctx=_fs_ctx_or_default(src_path, fs_ctx),
+            fs_ctx=_fs_ctx_with_auto_pathlock(src_path, fs_ctx, auto_pathlock),
         )
 
     async def grep(self, **kwargs: Any) -> Dict[str, Any]:

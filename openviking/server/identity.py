@@ -94,6 +94,9 @@ class RequestContext:
 
     user: UserIdentifier
     role: Role
+    # Account-scoped groups resolved by the server for this request. Callers do
+    # not supply these values through headers or ACL payloads.
+    group_ids: tuple[str, ...] = ()
     # Request-level view filter for the current user's peers collection. This does
     # not change tenant/user identity or session ownership.
     actor_peer_id: Optional[str] = None
@@ -105,6 +108,9 @@ class RequestContext:
     # Raw API key from the request — used by Connector to call back into OV
     # on behalf of the original user
     api_key: Optional[str] = field(default=None, repr=False)
+    # Trusted background workers may maintain derived content without replaying
+    # the triggering user's resource ACL. Tenant and namespace checks still apply.
+    bypass_acl: bool = False
 
     @property
     def account_id(self) -> str:

@@ -30,8 +30,26 @@ func (c *Client) AdminCreateAccountWithOptions(ctx context.Context, accountID, a
 
 // AdminListAccounts lists accounts.
 func (c *Client) AdminListAccounts(ctx context.Context) ([]any, error) {
+	return c.AdminListAccountsWithOptions(ctx, nil)
+}
+
+// AdminListAccountsWithOptions lists accounts (ordered by account ID), optionally
+// filtering by a wildcard name pattern and paging via Limit/Page.
+func (c *Client) AdminListAccountsWithOptions(ctx context.Context, opts *AdminListAccountsOptions) ([]any, error) {
+	query := url.Values{}
+	if opts != nil {
+		setQueryString(query, "name", opts.Name)
+		if opts.Limit != nil {
+			queryInt(query, "limit", *opts.Limit)
+			page := 1
+			if opts.Page != nil {
+				page = *opts.Page
+			}
+			queryInt(query, "page", page)
+		}
+	}
 	var result []any
-	err := c.doJSON(ctx, http.MethodGet, "/api/v1/admin/accounts", nil, nil, &result)
+	err := c.doJSON(ctx, http.MethodGet, "/api/v1/admin/accounts", query, nil, &result)
 	return result, err
 }
 
@@ -69,8 +87,27 @@ func (c *Client) AdminRegisterUserWithOptions(ctx context.Context, accountID, us
 
 // AdminListUsers lists users in an account.
 func (c *Client) AdminListUsers(ctx context.Context, accountID string) ([]any, error) {
+	return c.AdminListUsersWithOptions(ctx, accountID, nil)
+}
+
+// AdminListUsersWithOptions lists users in an account (ordered by user ID),
+// optionally filtering by a wildcard name pattern, role, and paging via Limit/Page.
+func (c *Client) AdminListUsersWithOptions(ctx context.Context, accountID string, opts *AdminListUsersOptions) ([]any, error) {
+	query := url.Values{}
+	if opts != nil {
+		if opts.Limit != nil {
+			queryInt(query, "limit", *opts.Limit)
+			page := 1
+			if opts.Page != nil {
+				page = *opts.Page
+			}
+			queryInt(query, "page", page)
+		}
+		setQueryString(query, "name", opts.Name)
+		setQueryString(query, "role", opts.Role)
+	}
 	var result []any
-	err := c.doJSON(ctx, http.MethodGet, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/users", nil, nil, &result)
+	err := c.doJSON(ctx, http.MethodGet, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/users", query, nil, &result)
 	return result, err
 }
 
@@ -103,6 +140,48 @@ func (c *Client) AdminRegenerateKeyWithOptions(ctx context.Context, accountID, u
 	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/users/"+url.PathEscape(userID)+"/key", nil, payload, &result)
+	return result, err
+}
+
+// AdminCreateGroup creates an empty account-scoped group.
+func (c *Client) AdminCreateGroup(ctx context.Context, accountID, groupID string) (map[string]any, error) {
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/groups", nil, map[string]any{"group_id": groupID}, &result)
+	return result, err
+}
+
+// AdminListGroups lists account-scoped groups.
+func (c *Client) AdminListGroups(ctx context.Context, accountID string) ([]any, error) {
+	var result []any
+	err := c.doJSON(ctx, http.MethodGet, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/groups", nil, nil, &result)
+	return result, err
+}
+
+// AdminDeleteGroup deletes an empty group.
+func (c *Client) AdminDeleteGroup(ctx context.Context, accountID, groupID string) (map[string]any, error) {
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodDelete, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/groups/"+url.PathEscape(groupID), nil, nil, &result)
+	return result, err
+}
+
+// AdminListGroupMembers lists a group's user IDs.
+func (c *Client) AdminListGroupMembers(ctx context.Context, accountID, groupID string) (map[string]any, error) {
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodGet, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/groups/"+url.PathEscape(groupID)+"/members", nil, nil, &result)
+	return result, err
+}
+
+// AdminAddGroupMember adds an existing account user to a group.
+func (c *Client) AdminAddGroupMember(ctx context.Context, accountID, groupID, userID string) (map[string]any, error) {
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPut, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/groups/"+url.PathEscape(groupID)+"/members/"+url.PathEscape(userID), nil, nil, &result)
+	return result, err
+}
+
+// AdminRemoveGroupMember removes a user from a group.
+func (c *Client) AdminRemoveGroupMember(ctx context.Context, accountID, groupID, userID string) (map[string]any, error) {
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodDelete, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/groups/"+url.PathEscape(groupID)+"/members/"+url.PathEscape(userID), nil, nil, &result)
 	return result, err
 }
 

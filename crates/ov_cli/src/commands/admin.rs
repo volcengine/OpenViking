@@ -27,10 +27,13 @@ pub async fn create_account(
 
 pub async fn list_accounts(
     client: &HttpClient,
+    name: Option<String>,
+    limit: Option<u32>,
+    page: u32,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let response = client.admin_list_accounts().await?;
+    let response = client.admin_list_accounts(name, limit, page).await?;
     output_success(&response, output_format, compact);
     Ok(())
 }
@@ -97,14 +100,15 @@ fn parse_user_config_json(value: Option<&str>, flag: &str) -> Result<Option<Valu
 pub async fn list_users(
     client: &HttpClient,
     account_id: &str,
-    limit: u32,
+    limit: Option<u32>,
     name: Option<String>,
     role: Option<String>,
+    page: u32,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     let response = client
-        .admin_list_users(account_id, limit, name, role)
+        .admin_list_users(account_id, limit, name, role, page)
         .await?;
     let response = list_users_response_for_output(response, output_format);
     output_success(&response, output_format, compact);
@@ -126,6 +130,102 @@ pub async fn remove_user(
             response
         };
     output_success(&result, output_format, compact);
+    Ok(())
+}
+
+pub async fn create_group(
+    client: &HttpClient,
+    account_id: &str,
+    group_id: &str,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    show_admin(
+        client.admin_create_group(account_id, group_id).await?,
+        output_format,
+        compact,
+    )
+}
+
+pub async fn list_groups(
+    client: &HttpClient,
+    account_id: &str,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    show_admin(
+        client.admin_list_groups(account_id).await?,
+        output_format,
+        compact,
+    )
+}
+
+pub async fn list_group_members(
+    client: &HttpClient,
+    account_id: &str,
+    group_id: &str,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    show_admin(
+        client
+            .admin_list_group_members(account_id, group_id)
+            .await?,
+        output_format,
+        compact,
+    )
+}
+
+pub async fn add_group_member(
+    client: &HttpClient,
+    account_id: &str,
+    group_id: &str,
+    user_id: &str,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    show_admin(
+        client
+            .admin_add_group_member(account_id, group_id, user_id)
+            .await?,
+        output_format,
+        compact,
+    )
+}
+
+pub async fn remove_group_member(
+    client: &HttpClient,
+    account_id: &str,
+    group_id: &str,
+    user_id: &str,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    show_admin(
+        client
+            .admin_remove_group_member(account_id, group_id, user_id)
+            .await?,
+        output_format,
+        compact,
+    )
+}
+
+pub async fn delete_group(
+    client: &HttpClient,
+    account_id: &str,
+    group_id: &str,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    show_admin(
+        client.admin_delete_group(account_id, group_id).await?,
+        output_format,
+        compact,
+    )
+}
+
+fn show_admin(value: Value, output_format: OutputFormat, compact: bool) -> Result<()> {
+    output_success(&value, output_format, compact);
     Ok(())
 }
 
@@ -156,6 +256,22 @@ pub async fn regenerate_key(
     output_success(&response, output_format, compact);
     print_admin_user_key_notice(&response, output_format, true);
     Ok(())
+}
+
+pub async fn set_account_settings(
+    client: &HttpClient,
+    account_id: &str,
+    auto_protect_new_content: bool,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    show_admin(
+        client
+            .admin_set_account_auto_protect_new_content(account_id, auto_protect_new_content)
+            .await?,
+        output_format,
+        compact,
+    )
 }
 
 fn print_admin_user_key_notice(

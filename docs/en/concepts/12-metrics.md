@@ -186,7 +186,7 @@ Typical `stage` values include:
 | `openviking_vector_passed_total` | Counter | `operation` | total passed candidates |
 | `openviking_vector_returned_total` | Counter | `operation` | total returned candidates |
 | `openviking_vector_scanned_total` | Counter | `operation` | total scanned candidates |
-| `openviking_memory_extracted_total` | Counter | `operation` | total extracted memory items |
+| `openviking_memory_extracted_total` | Counter | `operation`, `memory_type` | total extracted memory items, split by memory schema type |
 | `openviking_semantic_nodes_total` | Counter | `status` | total semantic nodes |
 
 ### Model Calls and Tokens

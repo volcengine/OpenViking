@@ -184,6 +184,8 @@ This endpoint is the core entry point for resource management, supporting adding
 
 **Additional Notes**:
 - `to` and `parent` cannot be specified together. `to` is the final save location: a missing target is created, and an existing target is refreshed. If the target is a directory, old files or subdirectories that are not produced by the current import may be removed. `parent` is the destination directory, and is the right option for adding a new resource under an existing directory; use `create_parent=true` or CLI `--parent-auto-create` when that directory should be created automatically. When the imported `root_uri` is the same as `to`, semantic and vector processing reuse unchanged content and process only the changed parts.
+- Creating a resource requires write access to its target parent; updating an existing explicit `to` requires write access to that target. These checks run before the task is queued. Automatic naming uses actual URI occupancy, so an unreadable collision selects `_1`, `_2`, and so on instead of attempting an overwrite.
+- With `wait=false`, `status=accepted` means that preflight passed and the task was queued; it does not mean resource processing has completed. Use the returned `task_id` for the final status.
 - If both `to` and `parent` are omitted, the server may use the current user's `add_targets.resource_uri` override, then `server.user_config_defaults.add_targets.resource_uri`. If neither is set, legacy target resolution is unchanged.
 - Resource targets may use public `viking://resources/...`, the home alias `viking://~/resources/...`, explicit user `viking://user/{user_id}/resources/...`, or peer `viking://user/{user_id}/peers/{peer_id}/resources/...` paths. The home alias is expanded to the canonical path using the authenticated request identity; the uid-less spelling `viking://user/resources/...` is rejected with an error pointing at `viking://~/resources/...`.
 - `user_id` and `peer_id` path segments must be safe single-segment identifiers, for example `alice` or `web-visitor-alice`. Values with path separators, `.`, `..`, `:`, or `+` are rejected.
@@ -543,12 +545,8 @@ ov add-resource ./documents/guide.md -p viking://resources/docs/{calendar:today}
 {
   "status": "ok",
   "result": {
-    "status": "success",
+    "status": "accepted",
     "root_uri": "viking://resources/guide",
-    "temp_uri": "viking://temp/username/04291108_b62dc7/guide",
-    "source_path": "./documents/guide.md",
-    "meta": {},
-    "errors": [],
     "task_id": "uuid-xxx"
   }
 }
@@ -561,7 +559,7 @@ Use the returned `task_id` to poll `/api/v1/tasks/{task_id}` for queue completio
 ```
 Note: Resource is being processed in the background.
 Use 'ov wait' to wait for completion, or 'ov observer queue' to check status.
-status       success
+status       accepted
 root_uri     viking://resources/01-overview
 task_id      uuid-xxx
 ```
@@ -570,7 +568,7 @@ task_id      uuid-xxx
 
 ```json
 {
-  "status": "success",
+  "status": "accepted",
   "root_uri": "viking://resources/01-overview",
   "task_id": "uuid-xxx"
 }
@@ -580,7 +578,7 @@ task_id      uuid-xxx
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `status` | string | Processing status: "success" or "error" |
+| `status` | string | Processing status: `accepted` means queued, `success` means completed successfully, and `error` means failed. |
 | `root_uri` | string | Final URI of the resource in OpenViking |
 | `task_id` | string | (Optional, only when `wait=false`) Task ID for polling `/api/v1/tasks/{task_id}`. Non-Git imports use it for queue tracking; Git repository imports use it for full background import tracking. |
 | `temp_uri` | string | Temporary URI produced during import |

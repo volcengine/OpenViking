@@ -215,6 +215,11 @@ fn entry_metadata(object: Option<&serde_json::Map<String, Value>>) -> Vec<String
             .to_string(),
     ];
 
+    if entry_access_denied(object) {
+        metadata.push(theme::warning("permission denied").bold().to_string());
+        return metadata;
+    }
+
     if !entry_is_dir(object)
         && let Some(size) = object
             .and_then(|object| object.get("size"))
@@ -250,6 +255,11 @@ fn append_entry_abstract(
 
 fn tree_metadata(object: Option<&serde_json::Map<String, Value>>) -> Vec<String> {
     let mut metadata = Vec::new();
+
+    if entry_access_denied(object) {
+        metadata.push("permission denied".to_string());
+        return metadata;
+    }
 
     if !entry_is_dir(object)
         && let Some(size) = object
@@ -304,6 +314,13 @@ fn entry_is_dir(object: Option<&serde_json::Map<String, Value>>) -> bool {
         .and_then(|object| object.get("isDir"))
         .and_then(Value::as_bool)
         .unwrap_or(false)
+}
+
+fn entry_access_denied(object: Option<&serde_json::Map<String, Value>>) -> bool {
+    object
+        .and_then(|object| object.get("access"))
+        .and_then(Value::as_str)
+        == Some("denied")
 }
 
 fn entry_string<'a>(
@@ -527,6 +544,11 @@ mod tests {
                 "isDir": true,
                 "modTime": "2026-05-25",
                 "abstract": "# viking://user/default/memories [Directory abstract is not ready]"
+            },
+            {
+                "uri": "viking://resources/restricted",
+                "isDir": true,
+                "access": "denied"
             }
         ]);
 
@@ -536,6 +558,8 @@ mod tests {
         assert!(rendered.contains("viking://resources"));
         assert!(rendered.contains("The resources directory is a centralized collection"));
         assert!(rendered.contains("2. dir · 2026-05-25"));
+        assert!(rendered.contains("3. dir · permission denied"));
+        assert!(rendered.contains("viking://resources/restricted"));
         assert!(!rendered.contains("Directory abstract is not ready"));
         assert!(!rendered.contains("uri  size  isDir"));
         for line in rendered.lines() {
@@ -610,6 +634,12 @@ mod tests {
                 "modTime": "2026-05-25",
                 "rel_path": "program",
                 "abstract": ""
+            },
+            {
+                "uri": "viking://user/haozhe/memories/entities/restricted",
+                "isDir": true,
+                "rel_path": "restricted",
+                "access": "denied"
             }
         ]);
 
@@ -619,6 +649,8 @@ mod tests {
         assert!(rendered.contains("  2026_fifa_world_cup.md"));
         assert!(rendered.contains("1.3 KB  2026-05-25"));
         assert!(rendered.contains("program/"));
+        assert!(rendered.contains("restricted/"));
+        assert!(rendered.contains("permission denied"));
         assert!(!rendered.contains("1. dir"));
         assert!(!rendered.contains("2. file"));
         assert!(!rendered.contains("Directory abstract is not ready"));

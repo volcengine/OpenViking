@@ -25,6 +25,7 @@ from openviking.resource.processing_mode import (
     normalize_processing_mode,
 )
 from openviking.server.identity import RequestContext
+from openviking.storage.acl import AclAction, CreatorAclGrant
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.expr import And, Eq, PathScope
 from openviking.storage.internal_names import STORAGE_INTERNAL_ENTRY_NAMES
@@ -137,6 +138,9 @@ class ResourceProcessor:
 
     async def submit_understanding(self, source: Union[str, "LocalResource"], **kwargs) -> str:
         return await self._get_media_processor().submit_understanding(source, **kwargs)
+
+    async def upload_understanding_file(self, source: Union[str, "LocalResource"]) -> str:
+        return await self._get_media_processor().upload_understanding_file(source)
 
     async def build_index(
         self, resource_uris: List[str], ctx: RequestContext, **kwargs
@@ -587,11 +591,15 @@ class ResourceProcessor:
                         ctx=ctx,
                         skip_vectorization=not build_index,
                         ingest_options=ingest_options,
+                        created=not target_preexisting,
                     )
                 elif build_index:
                     if root_is_file:
                         await self._vectorize_resource_file(
-                            root_uri, ctx=ctx, ingest_options=ingest_options
+                            root_uri, ctx=ctx, ingest_options=ingest_options,
+                            creator_acl_grant=(
+                                CreatorAclGrant.DIRECT if not target_preexisting else None
+                            ),
                         )
                     elif vectors_only:
                         await self._vectorize_resource_files(
@@ -605,13 +613,17 @@ class ResourceProcessor:
                 ctx=ctx,
                 skip_vectorization=not build_index,
                 ingest_options=ingest_options,
+                created=not target_preexisting,
             )
         elif vectors_only or root_is_file:
             if not build_index:
                 return result
             if root_is_file:
                 await self._vectorize_resource_file(
-                    root_uri, ctx=ctx, ingest_options=ingest_options
+                    root_uri, ctx=ctx, ingest_options=ingest_options,
+                    creator_acl_grant=(
+                        CreatorAclGrant.DIRECT if not target_preexisting else None
+                    ),
                 )
             else:
                 await self._vectorize_resource_files(
@@ -743,6 +755,7 @@ class ResourceProcessor:
         *,
         ctx: RequestContext,
         ingest_options: IngestOptions | None = None,
+        creator_acl_grant: CreatorAclGrant | None = None,
     ) -> None:
         parent = VikingURI(file_uri).parent
         if parent is None:
@@ -755,6 +768,7 @@ class ResourceProcessor:
             context_type=context_type_for_uri(file_uri),
             ctx=ctx,
             ingest_options=IngestOptions.from_value(ingest_options),
+            creator_acl_grant=creator_acl_grant,
         )
 
     async def reserve_unique_candidate(
@@ -770,6 +784,7 @@ class ResourceProcessor:
 
         viking_fs = get_viking_fs()
         last_busy_error: Optional[ResourceBusyError] = None
+        await self.ensure_candidate_parent_write_access(candidate_uri=candidate_uri, ctx=ctx)
 
         for attempt in range(max_attempts + 1):
             root_uri = candidate_uri if attempt == 0 else f"{candidate_uri}_{attempt}"
@@ -800,6 +815,22 @@ class ResourceProcessor:
 
         raise FileExistsError(
             f"Cannot resolve unique name for {candidate_uri} after {max_attempts} attempts"
+        )
+
+    async def ensure_candidate_parent_write_access(
+        self,
+        *,
+        candidate_uri: str,
+        ctx: RequestContext,
+    ) -> None:
+        """Require create permission for an auto-named resource candidate."""
+        parent_uri = VikingURI(candidate_uri).parent
+        if parent_uri is None:
+            raise ValueError(f"Resource candidate must have a parent: {candidate_uri}")
+        await get_viking_fs()._ensure_access(
+            parent_uri.uri,
+            ctx,
+            action=AclAction.WRITE,
         )
 
     @staticmethod

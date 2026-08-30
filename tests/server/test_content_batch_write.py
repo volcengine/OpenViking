@@ -40,8 +40,8 @@ class _VFS:
         self.writes = []
         self._async_agfs = _PathLockClient()
 
-    def _ensure_mutable_access(self, uri, ctx):
-        del uri, ctx
+    async def _ensure_access(self, uri, ctx, *, action):
+        del uri, ctx, action
 
     def _uri_to_path(self, uri, ctx=None):
         del ctx

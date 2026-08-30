@@ -3,6 +3,7 @@
 """Core filesystem operations mixin for VikingFS."""
 
 import asyncio
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
@@ -16,6 +17,7 @@ from openviking.pyagfs.exceptions import (
 )
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext
+from openviking.storage.acl import AclAction, is_acl_uri
 from openviking.storage.expr import PathScope
 from openviking.storage.internal_names import STORAGE_INTERNAL_ENTRY_NAMES
 from openviking.storage.viking_fs._base import (
@@ -34,6 +36,18 @@ from openviking_cli.exceptions import (
 from openviking_cli.utils.uri import VikingURI
 
 
+def _glob_match_uri(entry_uri: str, is_dir: Optional[bool]) -> str:
+    """Mark directory matches with a trailing slash.
+
+    `glob` returns a flat list of uri strings, so the trailing slash is the only
+    way a caller can tell a directory match from a file match. Matches the
+    convention `normalize_dir_uri` and the tree renderer already use.
+    """
+    if not is_dir or entry_uri.endswith("/"):
+        return entry_uri
+    return f"{entry_uri}/"
+
+
 class _OpsMixin:
     """Core filesystem operations (read/write/mkdir/rm/mv/stat/glob/tree/ls/temp)."""
 
@@ -47,7 +61,7 @@ class _OpsMixin:
         ctx: Optional[RequestContext] = None,
     ) -> bytes:
         """Read file"""
-        self._ensure_access(uri, ctx)
+        await self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
         primary_path = self._uri_to_path(uri, ctx=ctx)
 
@@ -84,7 +98,7 @@ class _OpsMixin:
         ctx: Optional[RequestContext] = None,
     ) -> str:
         """Write file"""
-        self._ensure_mutable_access(uri, ctx)
+        await self._ensure_access(uri, ctx, action=AclAction.WRITE)
         path = self._uri_to_path(uri, ctx=ctx)
         if isinstance(data, str):
             data = data.encode("utf-8")
@@ -101,7 +115,7 @@ class _OpsMixin:
         lease_ref: Dict[str, Any] | None = None,
     ) -> None:
         """Create directory."""
-        self._ensure_mutable_access(uri, ctx)
+        await self._ensure_access(uri, ctx, action=AclAction.WRITE)
         path = self._uri_to_path(uri, ctx=ctx)
         # Always ensure parent directories exist before creating this directory
         await self._ensure_parent_dirs(path, ctx=ctx, lease_ref=lease_ref)
@@ -136,7 +150,9 @@ class _OpsMixin:
         """
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 
-        self._ensure_delete_access(uri, ctx)
+        guard_ctx = replace(self._ctx_or_default(ctx), bypass_acl=True)
+        await self._ensure_access(uri, guard_ctx, action=AclAction.MANAGE)
+        await self._ensure_access(uri, ctx, action=AclAction.WRITE)
         path = self._uri_to_path(uri, ctx=ctx)
         target_uri = self._path_to_uri(path, ctx=ctx)
 
@@ -163,6 +179,8 @@ class _OpsMixin:
                 if mapped is not None:
                     raise mapped from exc
                 raise
+            if recursive:
+                await self._ensure_access(target_uri, ctx, action=AclAction.MANAGE)
             # Path does not exist: clean up any orphan index records and return
             uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
             uris_to_delete.append(target_uri)
@@ -173,6 +191,7 @@ class _OpsMixin:
             return {"estimated_deleted_count": estimated_count}
 
         if is_dir:
+            await self._ensure_access(target_uri, ctx, action=AclAction.MANAGE)
             if not recursive:
                 raise FailedPreconditionError(
                     f"Cannot remove directory without --recursive: {uri}",
@@ -191,8 +210,19 @@ class _OpsMixin:
                 raise ResourceBusyError(f"Resource is being processed: {uri}", uri=uri)
 
         try:
-            uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx) if is_dir else []
+            uris_to_delete = (
+                await self._collect_uris(
+                    path,
+                    recursive,
+                    ctx=ctx,
+                    strict=is_dir and self.acl_manager is not None,
+                )
+                if is_dir
+                else []
+            )
             uris_to_delete.append(target_uri)
+            if is_dir:
+                await self._ensure_access_many(uris_to_delete, ctx, action=AclAction.MANAGE)
             real_ctx = self._ctx_or_default(ctx)
             estimated_count = await _estimate_deleted_count(path, real_ctx)
             await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
@@ -236,17 +266,15 @@ class _OpsMixin:
         On VectorDB update failure the copy is cleaned up so the source stays intact.
         """
 
-        self._ensure_mutable_access(old_uri, ctx)
-        # mv is implemented as copy + recursive rm of the source (see the
-        # ``rm(old_path, recursive=is_dir)`` below), so the source must also clear
-        # the delete guard. Without this, a protected account root such as
-        # ``viking://`` — which rm() rejects up front (#2873) — could still be
-        # destroyed via mv, since the write guard alone permits the bare root.
-        self._ensure_delete_access(old_uri, ctx)
-        self._ensure_mutable_access(new_uri, ctx)
+        acl_manager = self.acl_manager
+        guard_ctx = replace(self._ctx_or_default(ctx), bypass_acl=True)
+        await self._ensure_access(old_uri, guard_ctx, action=AclAction.MANAGE)
+        await self._ensure_access(old_uri, ctx, action=AclAction.WRITE)
+        await self._ensure_access(new_uri, ctx, action=AclAction.WRITE)
         old_path = self._uri_to_path(old_uri, ctx=ctx)
         new_path = self._uri_to_path(new_uri, ctx=ctx)
         target_uri = self._path_to_uri(old_path, ctx=ctx)
+        new_acl_scope = acl_manager is not None and is_acl_uri(new_uri)
 
         # Verify source exists and determine type before locking.
         try:
@@ -259,6 +287,9 @@ class _OpsMixin:
                     raise mapped from exc
                 raise
             raise FileNotFoundError(f"mv source not found: {old_uri}") from exc
+
+        if is_dir:
+            await self._ensure_access(old_uri, ctx, action=AclAction.MANAGE)
 
         if not is_dir:
             if new_uri.rstrip("/") != new_uri:
@@ -300,9 +331,18 @@ class _OpsMixin:
 
         try:
             uris_to_move = (
-                await self._collect_uris(old_path, recursive=True, ctx=ctx) if is_dir else []
+                await self._collect_uris(
+                    old_path,
+                    recursive=True,
+                    ctx=ctx,
+                    strict=is_dir and acl_manager is not None,
+                )
+                if is_dir
+                else []
             )
             uris_to_move.append(target_uri)
+            if is_dir:
+                await self._ensure_access_many(uris_to_move, ctx, action=AclAction.MANAGE)
 
             # Check if it's temp directory (files already encrypted)
             is_temp = old_uri.startswith("viking://temp/")
@@ -333,9 +373,19 @@ class _OpsMixin:
                 raise
 
             # Update VectorDB URIs (on failure, clean up the copy)
+            vector_mappings: List[tuple[str, str]] = []
             try:
-                await self._update_vector_store_uris(uris_to_move, old_uri, new_uri, ctx=ctx)
+                vector_mappings = await self._update_vector_store_uris(
+                    uris_to_move, old_uri, new_uri, ctx=ctx
+                )
+                if acl_manager and new_acl_scope:
+                    await acl_manager.refresh_context_subtree(
+                        new_uri,
+                        self._ctx_or_default(ctx),
+                    )
             except Exception:
+                if vector_mappings:
+                    await self._restore_vector_store_uris(vector_mappings, ctx=ctx)
                 try:
                     if is_dir:
                         cleanup_lease = await self._async_agfs.pathlock_acquire_tree(
@@ -533,7 +583,7 @@ class _OpsMixin:
                 Use this when the count field is not needed (e.g. in grep) to avoid
                 an extra VikingDB API call.
         """
-        self._ensure_access(uri, ctx)
+        await self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
         primary_path = self._uri_to_path(uri, ctx=ctx)
         path = primary_path
@@ -580,20 +630,25 @@ class _OpsMixin:
         return result
 
     async def exists(self, uri: str, ctx: Optional[RequestContext] = None) -> bool:
-        """Check if a URI exists.
+        """Check whether a URI is physically present in the caller's namespace.
 
-        Args:
-            uri: Viking URI
-            ctx: Request context
-
-        Returns:
-            bool: True if the URI exists, False otherwise
+        Resource ACLs control access to content, not namespace occupancy.  In
+        particular, auto-naming must not treat an occupied but unreadable URI
+        as available.  Namespace isolation still applies to private user,
+        actor-peer, upload, and internal paths.
         """
-        try:
-            await self.stat(uri, ctx=ctx)
-            return True
-        except Exception:
+        real_ctx = self._ctx_or_default(ctx)
+        self._safe_uri_parts(uri)
+        if not self._is_accessible(uri, real_ctx):
             return False
+
+        primary_path = self._uri_to_path(uri, ctx=ctx)
+        for candidate_path in self._read_paths(uri, ctx=ctx):
+            if not await self._read_path_visible(uri, candidate_path, primary_path, real_ctx):
+                continue
+            if await self._agfs_path_exists(candidate_path):
+                return True
+        return self._is_session_root_uri(uri)
 
     async def glob(
         self,
@@ -604,7 +659,7 @@ class _OpsMixin:
     ) -> Dict:
         """File pattern matching, supports **/*.md recursive."""
         _ensure_non_empty_search_query(pattern)
-        self._ensure_access(uri, ctx)
+        await self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
         primary_path = self._uri_to_path(uri, ctx=ctx)
         path: Optional[str] = None
@@ -632,9 +687,11 @@ class _OpsMixin:
                 continuation_token=continuation_token,
             )
 
+            # (acl_uri, match_uri): ACL lookups keep the bare uri, while the uri we
+            # hand back marks directories with a trailing slash so callers can tell
+            # them apart -- the flat `matches` list carries no other type signal.
+            page_matches: List[tuple[str, str]] = []
             for entry in page.get("entries", []):
-                if node_limit is not None and node_limit > 0 and len(matches) >= node_limit:
-                    return {"matches": matches, "count": len(matches)}
                 if not self._is_path_entry_visible(
                     entry["path"],
                     entry.get("name") or entry["path"].rsplit("/", 1)[-1],
@@ -650,7 +707,25 @@ class _OpsMixin:
                     entry_path=entry["path"],
                     ctx=ctx,
                 )
-                matches.append(entry_uri)
+                match_uri = _glob_match_uri(entry_uri, entry.get("is_dir"))
+                if self.acl_manager is None:
+                    matches.append(match_uri)
+                    if node_limit is not None and node_limit > 0 and len(matches) >= node_limit:
+                        return {"matches": matches, "count": len(matches)}
+                    continue
+
+                page_matches.append((entry_uri, match_uri))
+
+            if self.acl_manager is not None:
+                access = await self._can_access_many(
+                    [acl_uri for acl_uri, _ in page_matches], real_ctx
+                )
+                for acl_uri, match_uri in page_matches:
+                    if not access.get(acl_uri, False):
+                        continue
+                    matches.append(match_uri)
+                    if node_limit is not None and node_limit > 0 and len(matches) >= node_limit:
+                        return {"matches": matches, "count": len(matches)}
 
             if node_limit is not None and node_limit > 0 and len(matches) >= node_limit:
                 return {"matches": matches, "count": len(matches)}
@@ -741,7 +816,7 @@ class _OpsMixin:
         output="agent"
         [{'uri': 'viking://resources...', 'size': 100, 'isDir': False, 'modTime': '2026-02-11T08:52:16.256Z', 'rel_path': '.abstract.md', 'abstract': "..."}]
         """
-        self._ensure_access(uri, ctx)
+        await self._ensure_access(uri, ctx)
         if output == "original":
             return await self._tree_original(uri, show_all_hidden, node_limit, level_limit, ctx=ctx)
         elif output == "agent":
@@ -769,6 +844,17 @@ class _OpsMixin:
             ctx=ctx,
         ):
             info = entry["info"]
+            if entry.get("access") == "denied":
+                result.append(
+                    {
+                        "name": info["name"],
+                        "isDir": info["isDir"],
+                        "rel_path": entry["rel_path"],
+                        "uri": entry_uri,
+                        "access": "denied",
+                    }
+                )
+                continue
             new_entry = dict(entry.get("extra", {}))
             new_entry.update({
                 "name": info["name"],
@@ -803,6 +889,16 @@ class _OpsMixin:
         ):
             info = entry["info"]
             is_dir = info["isDir"]
+            if entry.get("access") == "denied":
+                result.append(
+                    {
+                        "uri": entry_uri,
+                        "isDir": is_dir,
+                        "rel_path": entry["rel_path"],
+                        "access": "denied",
+                    }
+                )
+                continue
             result.append({
                 "uri": entry_uri,
                 "size": 0 if is_dir else info["size"],
@@ -811,14 +907,23 @@ class _OpsMixin:
                 "rel_path": entry["rel_path"],
             })
 
-        await self._batch_fetch_abstracts(result, abs_limit, ctx=ctx)
+        await self._batch_fetch_abstracts(
+            [entry for entry in result if entry.get("access") != "denied"],
+            abs_limit,
+            ctx=ctx,
+        )
 
         return result
 
     # ========== Vector Sync Helper Methods ==========
 
     async def _collect_uris(
-        self, path: str, recursive: bool, ctx: Optional[RequestContext] = None
+        self,
+        path: str,
+        recursive: bool,
+        ctx: Optional[RequestContext] = None,
+        *,
+        strict: bool = False,
     ) -> List[str]:
         """Recursively collect all URIs (for rm/mv), including directories."""
         uris = []
@@ -827,7 +932,7 @@ class _OpsMixin:
             try:
                 entries = await self._ls_entries(p, ctx=ctx)
             except Exception as exc:
-                if is_not_found_error(exc):
+                if is_not_found_error(exc) and not strict:
                     return
                 raise
 
@@ -916,7 +1021,7 @@ class _OpsMixin:
         lease_ref: Dict[str, Any] | None = None,
     ) -> None:
         """Write file directly. Encryption lock handled internally by EncryptionWrappedFS."""
-        self._ensure_mutable_access(uri, ctx)
+        await self._ensure_access(uri, ctx, action=AclAction.WRITE)
         path = self._uri_to_path(uri, ctx=ctx)
         await self._ensure_parent_dirs(path, ctx=ctx, lease_ref=lease_ref)
 
@@ -942,7 +1047,7 @@ class _OpsMixin:
         Raises:
             FileNotFoundError: If the file does not exist.
         """
-        self._ensure_access(uri, ctx)
+        await self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
         primary_path = self._uri_to_path(uri, ctx=ctx)
         # Verify the file exists before reading, because AGFS read returns
@@ -992,7 +1097,7 @@ class _OpsMixin:
         ctx: Optional[RequestContext] = None,
     ) -> bytes:
         """Read single binary file."""
-        self._ensure_access(uri, ctx)
+        await self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
         primary_path = self._uri_to_path(uri, ctx=ctx)
         last_not_found: Optional[Exception] = None
@@ -1028,7 +1133,7 @@ class _OpsMixin:
         lease_ref: Dict[str, Any] | None = None,
     ) -> None:
         """Write single binary file. Encryption lock handled internally by EncryptionWrappedFS."""
-        self._ensure_mutable_access(uri, ctx)
+        await self._ensure_access(uri, ctx, action=AclAction.WRITE)
         path = self._uri_to_path(uri, ctx=ctx)
         await self._ensure_parent_dirs(path, ctx=ctx, lease_ref=lease_ref)
 
@@ -1042,7 +1147,7 @@ class _OpsMixin:
         lease_ref: Dict[str, Any] | None = None,
     ) -> None:
         """Append content to file while holding one exact pathlock lease."""
-        self._ensure_mutable_access(uri, ctx)
+        await self._ensure_access(uri, ctx, action=AclAction.WRITE)
         path = self._uri_to_path(uri, ctx=ctx)
 
         owned_lease = None
@@ -1112,7 +1217,7 @@ class _OpsMixin:
         output="agent"
         [{'name': '.abstract.md', 'size': 100, 'modTime': '2026-02-11T08:52:16.256Z', 'isDir': False, 'uri': 'viking://resources/.abstract.md', 'abstract': "..."}]
         """
-        self._ensure_access(uri, ctx)
+        await self._ensure_access(uri, ctx)
         if sort_by not in {None, "name", "mtime"}:
             raise ValueError("sort_by must be 'name' or 'mtime'")
         if sort_order not in {"asc", "desc"}:
@@ -1209,16 +1314,24 @@ class _OpsMixin:
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """List directory contents (URI version)."""
-        real_ctx = self._ctx_or_default(ctx)
-        entry_items = await self._list_read_path_items(uri, ctx=ctx)
+        entry_items = await self._ls_browsable_items(uri, ctx=ctx)
         entry_items = self._sort_ls_entry_items(entry_items, sort_by, sort_order)
         # basic info
         fallback_time = datetime.now(timezone.utc)
         all_entries = []
         for entry, entry_uri in entry_items:
-            if len(all_entries) >= node_limit:
-                break
             name = entry.get("name", "")
+            if entry.get("access") == "denied":
+                if entry.get("isDir") or not name.startswith(".") or show_all_hidden:
+                    all_entries.append(
+                        {
+                            "name": name,
+                            "uri": entry_uri,
+                            "isDir": bool(entry.get("isDir", False)),
+                            "access": "denied",
+                        }
+                    )
+                continue
             raw_time = entry.get("modTime", "")
             parsed_time = fallback_time
             if isinstance(raw_time, (int, float)):
@@ -1237,15 +1350,18 @@ class _OpsMixin:
                 "isDir": is_dir,
                 "modTime": format_iso8601(parsed_time),
             }
-            if not self._is_accessible(new_entry["uri"], real_ctx):
-                continue
             if is_dir:
                 all_entries.append(new_entry)
             elif not name.startswith("."):
                 all_entries.append(new_entry)
             elif show_all_hidden:
                 all_entries.append(new_entry)
-        await self._batch_fetch_abstracts(all_entries, abs_limit, ctx=ctx)
+        all_entries = all_entries[:node_limit]
+        await self._batch_fetch_abstracts(
+            [entry for entry in all_entries if entry.get("access") != "denied"],
+            abs_limit,
+            ctx=ctx,
+        )
         return all_entries
 
     async def _ls_original(
@@ -1258,29 +1374,58 @@ class _OpsMixin:
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """List directory contents (URI version)."""
-        real_ctx = self._ctx_or_default(ctx)
-        try:
-            entry_items = await self._list_read_path_items(uri, ctx=ctx)
-            entry_items = self._sort_ls_entry_items(entry_items, sort_by, sort_order)
-            # AGFS returns read-only structure, need to create new dict
-            all_entries = []
-            for entry, entry_uri in entry_items:
-                if len(all_entries) >= node_limit:
-                    break
-                name = entry.get("name", "")
-                new_entry = dict(entry)  # Copy original data
+        entry_items = await self._ls_browsable_items(uri, ctx=ctx)
+        entry_items = self._sort_ls_entry_items(entry_items, sort_by, sort_order)
+        # AGFS returns read-only structure, need to create new dict
+        all_entries = []
+        for entry, entry_uri in entry_items:
+            name = entry.get("name", "")
+            if entry.get("access") == "denied":
+                new_entry = {
+                    "name": name,
+                    "isDir": bool(entry.get("isDir", False)),
+                    "uri": entry_uri,
+                    "access": "denied",
+                }
+            else:
+                new_entry = dict(entry)
                 new_entry["uri"] = entry_uri
-                if not self._is_accessible(new_entry["uri"], real_ctx):
-                    continue
-                if entry.get("isDir"):
-                    all_entries.append(new_entry)
-                elif not name.startswith("."):
-                    all_entries.append(new_entry)
-                elif show_all_hidden:
-                    all_entries.append(new_entry)
-            return all_entries
-        except Exception:
-            raise NotFoundError(uri, "directory")
+            if entry.get("isDir"):
+                all_entries.append(new_entry)
+            elif not name.startswith("."):
+                all_entries.append(new_entry)
+            elif show_all_hidden:
+                all_entries.append(new_entry)
+        return all_entries[:node_limit]
+
+    async def _ls_browsable_items(
+        self,
+        uri: str,
+        ctx: Optional[RequestContext] = None,
+    ) -> List[tuple[Dict[str, Any], str]]:
+        """Return list entries according to namespace-enumeration semantics."""
+        entry_items = await self._list_read_path_items(uri, ctx=ctx)
+        access = await self._can_access_many([entry_uri for _, entry_uri in entry_items], ctx)
+        expose_resource_names = bool(
+            self.acl_manager is not None and is_acl_uri(uri)
+        )
+
+        browsable = []
+        for entry, entry_uri in entry_items:
+            if access.get(entry_uri, False):
+                browsable.append((entry, entry_uri))
+            elif expose_resource_names:
+                browsable.append(
+                    (
+                        {
+                            "name": entry.get("name", ""),
+                            "isDir": bool(entry.get("isDir", False)),
+                            "access": "denied",
+                        },
+                        entry_uri,
+                    )
+                )
+        return browsable
 
     async def move_file(
         self,
@@ -1289,8 +1434,8 @@ class _OpsMixin:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Move file."""
-        self._ensure_mutable_access(from_uri, ctx)
-        self._ensure_mutable_access(to_uri, ctx)
+        await self._ensure_access(from_uri, ctx, action=AclAction.WRITE)
+        await self._ensure_access(to_uri, ctx, action=AclAction.WRITE)
         from_path = self._uri_to_path(from_uri, ctx=ctx)
 
         await self._copy_file_through_vikingfs(from_uri, to_uri, ctx=ctx)
@@ -1317,8 +1462,8 @@ class _OpsMixin:
         lease_ref: Dict[str, Any] | None = None,
     ) -> None:
         """Persist an already-encrypted temp tree without rewriting file bytes."""
-        self._ensure_access(temp_uri, ctx)
-        self._ensure_mutable_access(target_uri, ctx)
+        await self._ensure_access(temp_uri, ctx)
+        await self._ensure_access(target_uri, ctx, action=AclAction.WRITE)
         src_path = self._uri_to_path(temp_uri, ctx=ctx)
         dst_path = self._uri_to_path(target_uri, ctx=ctx)
         fs_ctx = self._pathlock_fs_ctx(ctx, lease_ref)
@@ -1337,7 +1482,7 @@ class _OpsMixin:
         lease_ref: Dict[str, Any] | None = None,
     ) -> None:
         """Delete temp directory and its contents."""
-        self._ensure_mutable_access(temp_uri, ctx)
+        await self._ensure_access(temp_uri, ctx, action=AclAction.MANAGE)
         path = self._uri_to_path(temp_uri, ctx=ctx)
         fs_ctx = self._pathlock_fs_ctx(ctx, lease_ref)
         try:

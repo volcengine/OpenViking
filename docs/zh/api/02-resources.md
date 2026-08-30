@@ -179,6 +179,8 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 
 **补充说明**：
 - `to` 和 `parent` 不能同时使用。`to` 是最终保存位置：目标不存在就创建，目标已存在就覆盖该目标；如果目标是目录，目录里本次导入没有生成的旧文件或子目录会被删除。`parent` 是保存目录，适合向已有目录追加新资源；父目录不存在时使用 `create_parent=true` 或 CLI 的 `--parent-auto-create`。当导入后的 `root_uri` 与 `to` 相同时，语义与向量处理会复用未变化内容，只处理变化部分。
+- 创建新资源要求目标父目录可写；显式更新已有 `to` 要求该目标可写。权限校验在任务入队前完成。自动命名按实际 URI 占用判断，即使同名资源不可读也会选择 `_1`、`_2` 等后缀，而不会尝试覆盖。
+- `wait=false` 返回的 `status=accepted` 表示任务已通过预检查并入队，不表示资源处理已经完成；最终状态以对应 `task_id` 为准。
 - 如果同时省略 `to` 和 `parent`，服务端会先尝试使用当前用户的 `add_targets.resource_uri` 覆盖配置，再使用 `server.user_config_defaults.add_targets.resource_uri`。两者都没有配置时，保持旧的目标解析行为。
 - 资源目标可以使用公共 `viking://resources/...`、家目录别名 `viking://~/resources/...`、显式用户 `viking://user/{user_id}/resources/...`，或 peer 级 `viking://user/{user_id}/peers/{peer_id}/resources/...`。家目录别名会按请求身份展开为 canonical 路径；无 uid 的写法 `viking://user/resources/...` 会被拒绝，并提示改用 `viking://~/resources/...`。
 - `user_id` 和 `peer_id` 路径片段必须是安全的单段标识，例如 `alice` 或 `web-visitor-alice`。包含路径分隔符、`.`、`..`、`:` 或 `+` 的值会被拒绝。
@@ -549,12 +551,8 @@ ov add-resource ./documents/guide.md -p viking://resources/docs/{calendar:today}
 {
   "status": "ok",
   "result": {
-    "status": "success",
+    "status": "accepted",
     "root_uri": "viking://resources/guide",
-    "temp_uri": "viking://temp/username/04291108_b62dc7/guide",
-    "source_path": "./documents/guide.md",
-    "meta": {},
-    "errors": [],
     "task_id": "uuid-xxx"
   }
 }
@@ -567,7 +565,7 @@ ov add-resource ./documents/guide.md -p viking://resources/docs/{calendar:today}
 ```
 Note: Resource is being processed in the background.
 Use 'ov wait' to wait for completion, or 'ov observer queue' to check status.
-status       success
+status       accepted
 root_uri     viking://resources/01-overview
 task_id      uuid-xxx
 ```
@@ -576,7 +574,7 @@ task_id      uuid-xxx
 
 ```json
 {
-  "status": "success",
+  "status": "accepted",
   "root_uri": "viking://resources/01-overview",
   "task_id": "uuid-xxx"
 }
@@ -586,7 +584,7 @@ task_id      uuid-xxx
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `status` | string | 处理状态："success" 成功，"error" 失败 |
+| `status` | string | 处理状态：`accepted` 表示已入队，`success` 表示成功，`error` 表示失败 |
 | `root_uri` | string | 资源在 OpenViking 中的最终 URI |
 | `task_id` | string | （可选，仅当 `wait=false` 时）可轮询 `/api/v1/tasks/{task_id}` 的任务 ID。非 Git 导入用于队列跟踪；Git 仓库导入用于完整后台导入跟踪。 |
 | `temp_uri` | string | 导入过程中生成的临时 URI |

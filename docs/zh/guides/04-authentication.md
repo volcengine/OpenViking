@@ -451,6 +451,160 @@ Role.register("operator", rank=1)  # 权限介于 USER (0) 与 ADMIN (1) 之间
 
 ### Trusted 模式
 
+```bash
+# 创建工作区 + 首个 admin
+curl -X POST http://localhost:1933/api/v1/admin/accounts \
+  -H "X-API-Key: your-secret-root-key" \
+  -H "Content-Type: application/json" \
+  -d '{"account_id": "acme", "admin_user_id": "alice"}'
+# 返回: {"result": {"account_id": "acme", "admin_user_id": "alice", "user_key": "..."}}
+
+# 注册普通用户（ROOT 或 ADMIN 均可）
+curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users \
+  -H "X-API-Key: your-secret-root-key" \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": "bob", "role": "user"}'
+# 返回: {"result": {"account_id": "acme", "user_id": "bob", "user_key": "..."}}
+```
+
+ACL 用户组是例外：组和成员通过 [Admin API](../api/08-admin.md#用户组) 维护，成员必须是当前 account 已注册的用户。客户端不能通过 header 或 token claim 声明组；服务端认证用户后查询组注册表，并把结果写入本次请求的 `RequestContext.group_ids`。
+
+受信部署也可以通过受信网关调用 Admin API，目前支持两种方式：
+
+- 携带受信部署自身的 `root_api_key`。对于 `/api/v1/admin/*`，服务端校验该 key 后会将请求视为 ROOT。
+- 如果 Admin 路由指向具体 account/user，也可以同时携带 `X-OpenViking-Account` + `X-OpenViking-User`。这些 header 必须与目标 URL 匹配，并会保留为请求身份；授权仍来自受信 `root_api_key`。
+
+下面是“受信上游身份”这种方式的示例：
+
+```bash
+# 首先，注册网关管理员（在 api_key 模式下执行一次）
+curl -X POST http://localhost:1933/api/v1/admin/accounts \
+  -H "X-API-Key: your-secret-root-key" \
+  -H "Content-Type: application/json" \
+  -d '{"account_id": "platform", "admin_user_id": "gateway-admin"}'
+
+# 如果它需要跨 account 的管理权限，再提升为 root
+curl -X PUT http://localhost:1933/api/v1/admin/accounts/platform/users/gateway-admin/role \
+  -H "X-API-Key: your-secret-root-key" \
+  -H "Content-Type: application/json" \
+  -d '{"role": "root"}'
+
+# 然后，在 trusted 模式下使用该身份调用 Admin API
+curl -X POST http://localhost:1933/api/v1/admin/accounts \
+  -H "X-API-Key: your-secret-root-key" \
+  -H "X-OpenViking-Account: platform" \
+  -H "X-OpenViking-User: gateway-admin" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "account_id": "acme",
+    "admin_user_id": "alice"
+  }'
+```
+
+## 客户端使用
+
+OpenViking 支持两种方式传递 API Key：
+
+**X-API-Key 请求头**
+
+```bash
+curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
+  -H "X-API-Key: <user-key>"
+```
+
+**Authorization: Bearer 请求头**
+
+```bash
+curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
+  -H "Authorization: Bearer <user-key>"
+```
+
+**Python SDK（HTTP）**
+
+```python
+import openviking as ov
+
+client = ov.SyncHTTPClient(
+    url="http://localhost:1933",
+    api_key="<user-key>",
+)
+```
+
+**CLI（通过 ovcli.conf）**
+
+```json
+{
+  "url": "http://localhost:1933",
+  "api_key": "<user-key>"
+}
+```
+
+如果使用普通 `user key` 或 `admin key`，`account` 和 `user` 可以省略，因为服务端可以从 key 反查出来；如果使用 `trusted` 模式，则建议明确配置。
+
+**CLI 覆盖参数**
+
+```bash
+openviking --account acme --user alice ls viking://
+```
+
+### 使用 --sudo 和 Root API Key
+
+CLI 支持在 `ovcli.conf` 中同时配置 `api_key`（用于普通用户操作）和 `root_api_key`（用于管理员操作）：
+
+```json
+{
+  "url": "http://localhost:1933",
+  "api_key": "<user-key>",
+  "root_api_key": "<root-key>"
+}
+```
+
+当需要执行管理员命令（`admin`、`system`、`reindex`）时，使用 `--sudo` 标志提升权限：
+
+```bash
+# 列出所有账户（需要 root 权限）
+ov --sudo admin list-accounts
+
+# 重新索引内容
+ov --sudo reindex viking://
+
+# 系统命令
+ov --sudo system status
+```
+
+`--sudo` 标志：
+- 仅适用于管理员命令：`admin`、`system`、`reindex`
+- 用于非管理员命令时会报错
+- `ovcli.conf` 中未配置 `root_api_key` 时会报错
+- 请求时使用 `root_api_key` 替代 `api_key`
+
+### 租户数据访问
+
+租户级数据 API（如 `ls`、`find`、resources、sessions 等）在 `api_key`
+模式下必须使用绑定了 account/user 的 key。这个 key 可以是 `USER` key，也可以是
+`ADMIN` key；`ADMIN` key 会以它自己的 user 身份访问数据，不能通过
+`X-OpenViking-Account` / `X-OpenViking-User` 切换身份。
+
+ACL 检查还会使用服务端解析的 account 内用户组。成员变更从下一次请求生效，不需要签发新 API Key，也不会修改资源 ACL。
+
+`ROOT` key 没有绑定租户 user，因此在 `api_key` 模式下不能访问租户级数据 API。
+如果部署需要由上游网关断言 `account` / `user`，请使用 `trusted` 模式，而不是在
+root key 请求上携带身份 header。
+
+**ovcli.conf**
+
+```json
+{
+  "url": "http://localhost:1933",
+  "auth_mode": "trusted",
+  "api_key": "your-trusted-server-key",
+  "account": "acme",
+  "user": "alice"
+}
+```
+
+## Trusted 模式
+
 Trusted 模式不会查询 user key，而是直接信任每个请求显式携带的身份请求头：
 
 ```json
@@ -578,6 +732,7 @@ ov doctor
 ## 相关文档
 
 - [多租户](../concepts/11-multi-tenant.md) - 多租户能力、共享边界与接入实践
+- [资源访问控制（ACL）](../concepts/15-acl.md) - account 内资源权限
 - [配置](01-configuration.md) - 配置文件说明
 - [服务部署](03-deployment.md) - 服务部署
 - [API 概览](../api/01-overview.md) - API 参考
