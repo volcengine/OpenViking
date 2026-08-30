@@ -294,7 +294,7 @@ export function loadConfig(pluginRoot, projectDirectory) {
   config.apiKey = creds.apiKey
   config.account = creds.account
   config.user = creds.user
-  config.peerId = creds.peerId
+  config.peerId = creds.peerId || str(fileConfig.peerId)
   config.mcpUrl = creds.mcpUrl
   config.credentialSource = creds.credentialSource
   config.credentialPath = creds.cliPath || creds.ovPath || ""

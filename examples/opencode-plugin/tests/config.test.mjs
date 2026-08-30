@@ -89,6 +89,47 @@ test("loadConfig prefers env credentials over ovcli and legacy config", async ()
   })
 })
 
+test("loadConfig uses project peer when shared credentials omit peer", async () => {
+  const snapshot = { ...process.env }
+  await withTempDir("ov-oc-config-peer-", async (dir) => {
+    try {
+      for (const key of Object.keys(process.env)) {
+        if (key.startsWith("OPENVIKING_")) delete process.env[key]
+      }
+      const ovcli = join(dir, "ovcli.conf")
+      const project = join(dir, "project")
+      await mkdir(join(project, ".opencode"), { recursive: true })
+      await writeFile(ovcli, JSON.stringify({
+        url: "https://cli.example.com",
+        api_key: "cli-key",
+      }))
+      await writeFile(join(project, ".opencode", "openviking-config.json"), JSON.stringify({
+        peerId: "project-peer",
+        workspacePeer: false,
+      }))
+      process.env.OPENVIKING_CLI_CONFIG_FILE = ovcli
+
+      const cfg = loadConfig(dir, project)
+      assert.equal(cfg.credentialSource, "ovcli")
+      assert.equal(cfg.peerId, "project-peer")
+      assert.deepEqual(cfg.effectivePeer, { peerId: "project-peer", source: "explicit" })
+      assert.equal(cfg.legacyCredentialsUsed, false)
+
+      process.env.OPENVIKING_CREDENTIAL_SOURCE = "env"
+      process.env.OPENVIKING_URL = "https://env.example.com"
+      process.env.OPENVIKING_API_KEY = "env-key"
+
+      const envCfg = loadConfig(dir, project)
+      assert.equal(envCfg.credentialSource, "env")
+      assert.equal(envCfg.peerId, "project-peer")
+      assert.deepEqual(envCfg.effectivePeer, { peerId: "project-peer", source: "explicit" })
+      assert.equal(envCfg.legacyCredentialsUsed, false)
+    } finally {
+      restoreOpenVikingEnv(snapshot)
+    }
+  })
+})
+
 test("loadConfig reads legacy credentials as fallback and marks deprecation", async () => {
   const snapshot = { ...process.env }
   await withTempDir("ov-oc-legacy-", async (dir) => {
