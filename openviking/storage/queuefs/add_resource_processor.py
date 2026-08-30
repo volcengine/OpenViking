@@ -97,7 +97,6 @@ class AddResourceProcessor(DequeueHandlerBase):
             exc,
         )
         self.report_requeue()
-        self.report_success()
         return True
 
     async def _process(self, msg: AddResourceMsg, data: Dict[str, Any]) -> None:

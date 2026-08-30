@@ -168,6 +168,7 @@ class NamedQueue:
     def _on_process_requeue(self) -> None:
         """Called when a dequeued message is re-enqueued for later retry."""
         with self._lock:
+            self._in_progress -= 1
             self._requeue_count += 1
 
     def _on_process_error(self, error_msg: str, data: Optional[Dict[str, Any]] = None) -> None:

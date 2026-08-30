@@ -149,8 +149,8 @@ async def test_memory_ls_transient_error_requeues():
 
     A 500-class error wrapped by the processor's `raise RuntimeError(...) from e`
     is classified as `transient`. The outer on_dequeue() path must call
-    _reenqueue_semantic_msg(), bump requeue_count, and fire both report_requeue()
-    and report_success() — not report_error().
+    _reenqueue_semantic_msg(), bump requeue_count, and fire report_requeue()
+    without report_success() or report_error().
     """
     processor = SemanticProcessor()
 
@@ -194,7 +194,7 @@ async def test_memory_ls_transient_error_requeues():
         await processor.on_dequeue(data)
 
     assert requeue_called, "report_requeue() must fire for transient errors"
-    assert success_called, "report_success() must fire after successful re-enqueue"
+    assert not success_called, "report_success() must not fire for requeued work"
     assert not error_called, "report_error() must NOT fire for transient errors"
     reenqueue_mock.assert_awaited_once()
     assert reenqueue_mock.await_args.args[0].retry_count == 1

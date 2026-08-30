@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 
+from openviking.storage.queuefs.named_queue import NamedQueue
 from openviking.storage.queuefs.queue_manager import QueueManager
 
 
@@ -34,3 +35,14 @@ def test_queue_concurrency_uses_separate_configured_values() -> None:
     assert manager._max_concurrent_for_queue(manager.EXTERNAL_PARSE) == 9
     assert manager._max_concurrent_for_queue(manager.ADD_RESOURCE) == 7
     assert manager._max_concurrent_for_queue(manager.SESSION_COMMIT) == 5
+
+
+def test_requeue_finishes_current_in_progress_item() -> None:
+    queue = NamedQueue(agfs=object(), mount_point="/queue", name="test")
+
+    queue._on_dequeue_start()
+    queue._on_process_requeue()
+
+    assert queue._in_progress == 0
+    assert queue._requeue_count == 1
+    assert queue._processed == 0

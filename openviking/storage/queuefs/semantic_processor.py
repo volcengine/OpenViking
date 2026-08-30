@@ -300,7 +300,6 @@ class SemanticProcessor(DequeueHandlerBase):
             get_request_wait_tracker().mark_semantic_failed(msg.telemetry_id, msg.id, str(error))
             self.report_error(str(error), data)
             return
-        self.report_success()
 
     async def _enqueue_parent_refresh(
         self, msg: SemanticMsg, uri: str, *, l0_body_changed: bool
@@ -439,7 +438,6 @@ class SemanticProcessor(DequeueHandlerBase):
                 self._merge_request_stats(msg.telemetry_id, requeue_count=1)
                 get_request_wait_tracker().record_semantic_requeue(msg.telemetry_id)
                 self.report_requeue()
-                self.report_success()
                 return None
             collector = resolve_telemetry(msg.telemetry_id)
             telemetry_ctx = bind_telemetry(collector) if collector is not None else nullcontext()

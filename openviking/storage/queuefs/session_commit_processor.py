@@ -142,8 +142,9 @@ class SessionCommitProcessor(DequeueHandlerBase):
             self._service_loop,
         )
         try:
-            await asyncio.wrap_future(future)
-            self.report_success()
+            processed = await asyncio.wrap_future(future)
+            if processed:
+                self.report_success()
         except asyncio.CancelledError:
             future.cancel()
             raise
