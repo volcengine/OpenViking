@@ -698,6 +698,22 @@ LiteLLM 的 Bedrock bearer-token API-key 鉴权，请设置 `forward_api_key=tru
 }
 ```
 
+对于推理控制格式由 provider 自定义的 LiteLLM 路由，可以分别配置调用级片段：`thinking=true` 选择 `enabled`，`thinking=false` 选择 `disabled`；`thinking=None`
+不应用调用级片段，保留静态请求体或后端默认行为：
+
+```json
+{
+  "vlm": {
+    "provider": "litellm", "model": "LocalModel",
+    "api_base": "http://localhost:4000/v1",
+    "thinking_extra_request_body": {
+      "enabled": {"chat_template_kwargs": {"enable_thinking": true}},
+      "disabled": {"chat_template_kwargs": {"enable_thinking": false}}
+    }
+  }
+}
+```
+
 **流式模式**
 
 对于返回 SSE（Server-Sent Events）格式响应的 OpenAI 兼容 provider，启用 `stream` 模式：

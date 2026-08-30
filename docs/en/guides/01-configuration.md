@@ -730,6 +730,22 @@ For OpenAI-compatible providers that accept provider-specific JSON body fields, 
 }
 ```
 
+For LiteLLM routes with provider-specific reasoning controls, configure per-call fragments: `thinking=true` selects `enabled`, `thinking=false`
+selects `disabled`, and `thinking=None` leaves the static body or backend default unchanged:
+
+```json
+{
+  "vlm": {
+    "provider": "litellm", "model": "LocalModel",
+    "api_base": "http://localhost:4000/v1",
+    "thinking_extra_request_body": {
+      "enabled": {"chat_template_kwargs": {"enable_thinking": true}},
+      "disabled": {"chat_template_kwargs": {"enable_thinking": false}}
+    }
+  }
+}
+```
+
 **Streaming Mode**
 
 For OpenAI-compatible providers that return SSE (Server-Sent Events) format responses, enable `stream` mode:
