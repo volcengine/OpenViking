@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import hljs from 'highlight.js/lib/core'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import rehypeRaw from 'rehype-raw'
-import rehypeSanitize from 'rehype-sanitize'
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import remarkGfm from 'remark-gfm'
 import { X, Pencil, Save, XCircle, Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -137,6 +137,14 @@ const DIRECTORY_LEVEL_META: Array<{
     title: 'Directory overview',
   },
 ]
+
+const directoryMarkdownSanitizeSchema = {
+  ...defaultSchema,
+  protocols: {
+    ...defaultSchema.protocols,
+    href: [...(defaultSchema.protocols?.href ?? []), 'viking'],
+  },
+}
 
 const JSONL_MESSAGE_PREVIEW_LIMIT = 720
 const LARGE_FILE_PREVIEW_BYTES = 2 * 1024 * 1024
@@ -1580,6 +1588,10 @@ export function FilePreview({
                         <article className="prose prose-sm max-w-none break-words rounded-md border bg-muted/20 p-3 dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
                           <ReactMarkdown
                             remarkPlugins={[remarkGfm]}
+                            rehypePlugins={[
+                              rehypeRaw,
+                              [rehypeSanitize, directoryMarkdownSanitizeSchema],
+                            ]}
                             urlTransform={transformDirectoryMarkdownUrl}
                             components={{
                               ...markdownComponents,
