@@ -662,6 +662,10 @@ class AsyncHTTPClient:
             resource = details.get("resource", "") if details else ""
             resource_type = details.get("type", "resource") if details else "resource"
             raise exc_class(resource, resource_type)
+        if exc_class == UnavailableError:
+            service = details.get("service", "service") if details else "service"
+            reason = details.get("reason", "") if details else message
+            raise exc_class(service, reason)
         raise exc_class(message)
 
     def _zip_directory(self, dir_path: str) -> str:
