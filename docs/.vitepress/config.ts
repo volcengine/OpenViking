@@ -231,7 +231,8 @@ const apiReferenceSidebar = {
           ['07-system.md', 'System Status'],
           ['17-tasks.md', 'Background Tasks'],
           ['18-observer.md', 'Runtime Observability'],
-          ['09-metrics.md', 'Metrics']
+          ['09-metrics.md', 'Metrics'],
+          ['21-debug.md', 'Debug']
         ]
       },
       {
