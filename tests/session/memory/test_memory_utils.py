@@ -358,6 +358,29 @@ class TestUriValidation:
             is True
         )
 
+    def test_is_uri_allowed_by_recursive_pattern(self):
+        """Test URI allowed by a pattern matching nested paths."""
+        allowed_dirs = set()
+        allowed_patterns = {"viking://user/**/memories/*.md"}
+
+        assert (
+            is_uri_allowed(
+                "viking://user/alice/memories/a.md",
+                allowed_dirs,
+                allowed_patterns,
+            )
+            is True
+        )
+
+        assert (
+            is_uri_allowed(
+                "viking://user/acme/alice/memories/a.md",
+                allowed_dirs,
+                allowed_patterns,
+            )
+            is True
+        )
+
     def test_is_uri_disallowed(self):
         """Test URI not allowed."""
         allowed_dirs = {
