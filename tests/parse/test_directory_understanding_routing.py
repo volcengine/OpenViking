@@ -1,5 +1,4 @@
 import asyncio
-import io
 import zipfile
 from contextlib import nullcontext
 from pathlib import Path
@@ -791,43 +790,6 @@ async def test_directory_limits_fail_before_understanding_submit(monkeypatch, tm
         with pytest.raises(InvalidArgumentError, match="file count exceeds"):
             await DirectoryParser().parse(str(tmp_path), strict=True)
 
-    parse.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_nested_zip_files_share_one_import_file_limit(monkeypatch, tmp_path: Path):
-    _configure_understanding(monkeypatch, ["pdf"], max_files=4)
-    for archive_index in range(2):
-        with zipfile.ZipFile(tmp_path / f"bundle-{archive_index}.zip", "w") as archive:
-            archive.writestr(f"{archive_index}-a.pdf", b"%PDF-1.7")
-            archive.writestr(f"{archive_index}-b.pdf", b"%PDF-1.7")
-    parse = AsyncMock(side_effect=AssertionError("Understanding must not be submitted"))
-
-    with patch.object(ParserRouter, "parse", new=parse):
-        with pytest.raises(InvalidArgumentError, match="file count exceeds") as exc_info:
-            await DirectoryParser().parse(str(tmp_path), strict=True)
-
-    assert "max_files=4" in str(exc_info.value)
-    assert "bundle-1.zip" in str(exc_info.value)
-    parse.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_nested_zip_depth_is_measured_from_import_root(monkeypatch, tmp_path: Path):
-    _configure_understanding(monkeypatch, ["pdf"], max_depth=1)
-    inner_bytes = io.BytesIO()
-    with zipfile.ZipFile(inner_bytes, "w") as inner:
-        inner.writestr("leaf.pdf", b"%PDF-1.7")
-    with zipfile.ZipFile(tmp_path / "outer.zip", "w") as outer:
-        outer.writestr("inner.zip", inner_bytes.getvalue())
-    parse = AsyncMock(side_effect=AssertionError("Understanding must not be submitted"))
-
-    with patch.object(ParserRouter, "parse", new=parse):
-        with pytest.raises(InvalidArgumentError, match="depth exceeds") as exc_info:
-            await DirectoryParser().parse(str(tmp_path), strict=True)
-
-    assert "max_depth=1" in str(exc_info.value)
-    assert "path=outer.zip/inner.zip" in str(exc_info.value)
     parse.assert_not_awaited()
 
 

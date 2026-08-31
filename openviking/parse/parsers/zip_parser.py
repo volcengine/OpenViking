@@ -28,49 +28,6 @@ def _is_zip_metadata_entry(path: Path) -> bool:
     return name == "__MACOSX" or name == ".DS_Store" or name.startswith("._")
 
 
-async def _extract_zip_to_temp(path: Path) -> Path:
-    """Validate and safely extract one ZIP archive into a temporary directory."""
-    if not path.exists():
-        raise FileNotFoundError(f"ZIP file not found: {path}")
-
-    if not await asyncio.to_thread(zipfile.is_zipfile, path):
-        raise ValueError(f"Not a valid ZIP file: {path}")
-
-    temp_dir = Path(await asyncio.to_thread(tempfile.mkdtemp, prefix="ov_zip_"))
-    try:
-
-        def _extract_zip() -> None:
-            with zipfile.ZipFile(path, "r") as zipf:
-                safe_extract_zip(zipf, temp_dir)
-
-        await asyncio.to_thread(_extract_zip)
-        return temp_dir
-    except Exception:
-        await asyncio.to_thread(shutil.rmtree, temp_dir, True)
-        raise
-
-
-def _select_extracted_directory(
-    temp_dir: Path,
-    archive_path: Path,
-    source_name: Optional[str],
-) -> tuple[Path, Optional[str]]:
-    """Return the DirectoryParser root and effective source name for a ZIP."""
-    extracted_entries = [
-        path
-        for path in temp_dir.iterdir()
-        if path.name not in {".", ".."} and not _is_zip_metadata_entry(path)
-    ]
-    if len(extracted_entries) == 1 and extracted_entries[0].is_dir():
-        source_leaf = Path(source_name).name if source_name else None
-        source_stem = Path(source_leaf).stem if source_leaf else None
-        root_name = extracted_entries[0].name
-        if not source_name or source_leaf == root_name or source_stem == root_name:
-            return extracted_entries[0], None
-
-    return temp_dir, source_name or archive_path.stem
-
-
 class ZipParser(BaseParser):
     """
     ZIP archive parser for OpenViking.
@@ -102,8 +59,36 @@ class ZipParser(BaseParser):
         """
 
         path = Path(source)
-        temp_dir = await _extract_zip_to_temp(path)
+        if not path.exists():
+            raise FileNotFoundError(f"ZIP file not found: {path}")
+
+        # Check if it's a valid ZIP file (non-blocking)
+        def _is_zipfile() -> bool:
+            return zipfile.is_zipfile(path)
+
+        if not await asyncio.to_thread(_is_zipfile):
+            raise ValueError(f"Not a valid ZIP file: {path}")
+
+        # Extract ZIP to temporary directory (non-blocking)
+        temp_dir = Path(await asyncio.to_thread(tempfile.mkdtemp, prefix="ov_zip_"))
         try:
+            # Extract zip (non-blocking)
+            def _extract_zip():
+                with zipfile.ZipFile(path, "r") as zipf:
+                    safe_extract_zip(zipf, temp_dir)
+
+            await asyncio.to_thread(_extract_zip)
+
+            # Check if extracted content has a single root directory (non-blocking)
+            def _list_entries():
+                return [
+                    p
+                    for p in temp_dir.iterdir()
+                    if p.name not in {".", ".."} and not _is_zip_metadata_entry(p)
+                ]
+
+            extracted_entries = await asyncio.to_thread(_list_entries)
+
             # Prepare kwargs for DirectoryParser
             dir_kwargs = dict(kwargs)
             dir_kwargs["instruction"] = instruction
@@ -113,16 +98,22 @@ class ZipParser(BaseParser):
 
             parser = DirectoryParser()
 
-            directory_source, effective_source_name = _select_extracted_directory(
-                temp_dir,
-                path,
-                dir_kwargs.get("source_name"),
-            )
-            if effective_source_name is None:
-                dir_kwargs.pop("source_name", None)
+            if len(extracted_entries) == 1 and extracted_entries[0].is_dir():
+                source_name = dir_kwargs.get("source_name")
+                source_leaf = Path(source_name).name if source_name else None
+                source_stem = Path(source_leaf).stem if source_leaf else None
+                root_name = extracted_entries[0].name
+                if not source_name or source_leaf == root_name or source_stem == root_name:
+                    dir_kwargs.pop("source_name", None)
+                    result = await parser.parse(str(extracted_entries[0]), **dir_kwargs)
+                else:
+                    result = await parser.parse(str(temp_dir), **dir_kwargs)
             else:
-                dir_kwargs["source_name"] = effective_source_name
-            result = await parser.parse(str(directory_source), **dir_kwargs)
+                # Multiple entries at root - parse the temp dir itself
+                # Set source_name from zip filename if not provided
+                if "source_name" not in dir_kwargs or not dir_kwargs["source_name"]:
+                    dir_kwargs["source_name"] = path.stem
+                result = await parser.parse(str(temp_dir), **dir_kwargs)
 
             # Ensure the temporary directory is preserved for TreeBuilder
             if not result.temp_dir_path:

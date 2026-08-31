@@ -375,9 +375,9 @@ Understanding jobs concurrently, while multiple concurrent directories still
 run at most four in total.
 
 `max_files` and `max_depth` apply when Understanding directory routing is enabled.
-Files recursively expanded by the built-in ZIP parser share the same file budget,
-and nested ZIP boundaries count toward depth from the outer import root. The complete
-recursive preflight finishes before any directory Understanding request is submitted.
+Each `DirectoryParser` scan applies these limits independently before submitting its
+own Understanding requests. A nested ZIP starts a new directory scan and does not
+share the outer scan's file-count or depth budget.
 When Understanding is disabled, native OpenViking directory parsing does not apply
 these two limits.
 

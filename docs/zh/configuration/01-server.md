@@ -373,10 +373,10 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
 `4` 时，单个目录可以并发执行 4 个 Understanding 任务；多个目录同时导入时，合计仍最多
 执行 4 个。
 
-启用 Understanding 目录路由时，`max_files` 和 `max_depth` 才约束目录导入。内置 ZIP Parser
-递归展开的文件共享同一个文件数量预算，嵌套 ZIP 边界从最外层导入根开始累计深度。
-完整递归预检结束前，不会提交任何目录 Understanding 请求。关闭 Understanding 时，
-OpenViking 原生目录解析不应用这两个限制。
+启用 Understanding 目录路由时，`max_files` 和 `max_depth` 才约束目录导入。每次
+`DirectoryParser` 扫描会在提交该层 Understanding 请求前独立应用限制；嵌套 ZIP 会启动
+新的目录扫描，不与外层共享文件数量和深度预算。关闭 Understanding 时，OpenViking
+原生目录解析不应用这两个限制。
 
 客户端导入本地目录时，完整目录 ZIP 受 `/resources/temp_upload` 上传大小限制。ZIP
 解压后，`DirectoryParser` 不再设置统一的单文件字节限制；每个入选文件遵循对应内置
