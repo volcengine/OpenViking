@@ -10,6 +10,26 @@ viking://<scope>/<path>
 import re
 from typing import Dict, Optional
 
+# Win32 reserved device names. A URI segment whose stem matches one of these
+# collides with a Windows device name and causes a silent write failure, so
+# sanitize_segment defuses it with a leading underscore. Mirrors the guard PR
+# #4517 added to the memory path (openviking/session/memory/utils/uri.py).
+_WINDOWS_RESERVED_STEMS = frozenset(
+    {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{index}" for index in range(1, 10)),
+        *(f"LPT{index}" for index in range(1, 10)),
+    }
+)
+
+
+def _windows_reserved_stem(segment: str) -> str:
+    """Return the Win32 device-name stem used for portability checks."""
+    return segment.split(".", 1)[0].rstrip(" .").upper()
+
 
 class VikingURI:
     """
@@ -260,6 +280,11 @@ class VikingURI:
         safe = re.sub(r"_+", "_", safe)
         # Strip leading/trailing underscores and dots, limit length
         safe = safe.strip("_.")[:50]
+        # Defuse Win32 reserved device names (CON/PRN/NUL/AUX/COM1../LPT9..)
+        # so the segment is a valid path component on Windows, mirroring PR
+        # #4517's guard on the memory path.
+        if _windows_reserved_stem(safe) in _WINDOWS_RESERVED_STEMS:
+            safe = f"_{safe}"
         return safe or "unnamed"
 
     def __str__(self) -> str:
