@@ -339,7 +339,7 @@ jobs:
       - guard
       - prepare-package-source
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 40
     permissions:
       actions: read
       contents: read
@@ -496,10 +496,10 @@ jobs:
           VERSION: ${{ needs.guard.outputs.version }}
         run: |
           set -euo pipefail
-          # ClawHub version lookup is not read-after-write consistent and the
-          # API rate-limit window can return "Version not found" seconds after
-          # a successful publish. Retry with backoff before failing the job.
-          attempts=6
+          # ClawHub keeps staged releases hidden while pre-publication security
+          # checks run. Allow the 25-minute worker job plus visibility delay
+          # before treating an exact-version 404 as a failed publication.
+          attempts=61
           delay=30
           for i in $(seq 1 "$attempts"); do
             if node "$CLAWHUB_BIN" package inspect "@openviking/openclaw-plugin" \
@@ -508,7 +508,7 @@ jobs:
               break
             fi
             if [ "$i" -eq "$attempts" ]; then
-              echo "::error title=ClawHub verify failed::Version $VERSION still not visible after $attempts attempts."
+              echo "::error title=ClawHub verify failed::Version $VERSION still not visible after 30 minutes ($attempts attempts)."
               exit 1
             fi
             echo "ClawHub version $VERSION not visible yet (attempt $i/$attempts); retrying in ${delay}s..."
