@@ -70,7 +70,7 @@ async def test_resume_queued_commit_continues_phase2(monkeypatch):
     session = Session(viking_fs=viking_fs, session_id="session-1", session_uri=session_uri)
     tracker = TaskTracker(_TaskStore())
     set_task_tracker(tracker)
-    monkeypatch.setattr(session, "_run_memory_extraction", AsyncMock(return_value=False))
+    monkeypatch.setattr(session, "_run_memory_extraction", AsyncMock(return_value=True))
     message = SessionCommitMsg(
         task_id="task-1",
         session_id="session-1",
