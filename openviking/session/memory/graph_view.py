@@ -29,7 +29,7 @@ TYPE_COLORS = {
     "preferences": "#3498db",
     "entities": "#2ecc71",
     "events": "#f39c12",
-    "skills": "#9b59b6",
+    "session_skills": "#9b59b6",
     "identity": "#1abc9c",
     "tools": "#e67e22",
     "experiences": "#fd79a8",

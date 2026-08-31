@@ -30,6 +30,9 @@ from openviking.session.memory.dataclass import (
 )
 from openviking.session.memory.memory_updater import MemoryUpdateResult
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.session.skill.session_skill_context_provider import (
+    SESSION_SKILL_MEMORY_TYPE,
+)
 from openviking.session.train import (
     Case,
     ExperienceSet,
@@ -255,7 +258,7 @@ async def test_v3_skill_only_extraction_submits_gradients_without_agent_memories
         after_file=MemoryFile(
             uri=skill_uri,
             content="## Workflow\n- Read changed files first.",
-            memory_type="skills",
+            memory_type=SESSION_SKILL_MEMORY_TYPE,
             extra_fields={"skill_name": "code-review"},
         ),
         base_version=None,

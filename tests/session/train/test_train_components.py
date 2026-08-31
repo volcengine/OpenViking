@@ -1084,7 +1084,7 @@ async def test_patch_merge_policy_optimizer_runs_llm_for_single_patch(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_patch_merge_policy_optimizer_uses_session_skill_registry(monkeypatch):
+async def test_patch_merge_policy_optimizer_uses_session_skill_schema(monkeypatch):
     from openviking.session.memory.dataclass import (
         ResolvedOperation,
         ResolvedOperations,
@@ -1140,11 +1140,13 @@ async def test_patch_merge_policy_optimizer_uses_session_skill_registry(monkeypa
         FakeExtractLoop,
     )
 
+    skill_schema = load_skill_extract_registry().get(SESSION_SKILL_MEMORY_TYPE)
+    assert skill_schema is not None
     plan = await PatchMergePolicyOptimizer(
         viking_fs=FakeVikingFS({}),
         vlm=object(),
         memory_type=SESSION_SKILL_MEMORY_TYPE,
-        memory_registry=load_skill_extract_registry(),
+        memory_schema=skill_schema,
     ).plan(
         [gradient],
         policy_set,

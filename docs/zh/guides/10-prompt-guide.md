@@ -236,12 +236,6 @@ peer_enabled: true
   - 作用：定义“用户是谁”这一类稳定信息的存储结构
   - 关键字段：`content`
 
-- `skills`
-  - 生效环节：skill 使用记忆落盘与更新阶段
-  - 影响能力：skill 使用统计、经验沉淀与推荐流程
-  - 作用：定义 skill 使用次数、成功率、适用场景等信息
-  - 关键字段：`skill_name`、`total_executions`、`success_count`、`fail_count`、`best_for`、`recommended_flow`
-
 - `soul`
   - 生效环节：agent soul 记忆落盘阶段
   - 影响能力：agent 核心边界、连续性和长期人格稳定性

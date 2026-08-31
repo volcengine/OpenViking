@@ -238,7 +238,7 @@ await session.commit()
 
 ### What memory types does OpenViking support?
 
-OpenViking includes memory types such as `profile`, `preferences`, `entities`, `events`, `identity`, `soul`, `cases`, `trajectories`, `experiences`, `tools`, and `skills`. After a session is committed, the active memory policy determines which useful information to extract. Applications can also extend or adjust the memory types for their own needs.
+OpenViking includes memory types such as `profile`, `preferences`, `entities`, `events`, `identity`, `soul`, `cases`, `trajectories`, `experiences`, and `tools`. After a session is committed, the active memory policy determines which useful information to extract. Applications can also extend or adjust the memory types for their own needs.
 
 Memories are stored in the current User or Peer namespace; there is no current writable `viking://agent/memories` directory. See [Context Types](../concepts/02-context-types.md) for the complete type and path mapping.
 

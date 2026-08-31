@@ -109,7 +109,7 @@ OpenViking includes a memory self-iteration loop. After a session is committed, 
 |---------|----------------|-------------|
 | **User and environment understanding** | `profile`, `preferences`, `entities`, `events` | User profile, preferences, entities, and events |
 | **Assistant identity and continuity** | `identity`, `soul` | Assistant identity, boundaries, style, and continuity |
-| **Task execution and learning** | `cases`, `trajectories`, `experiences`, `tools`, `skills` | Trainable cases, execution traces, reusable experience, and tool/skill usage knowledge |
+| **Task execution and learning** | `cases`, `trajectories`, `experiences`, `tools` | Trainable cases, execution traces, reusable experience, and tool usage knowledge |
 
 OpenViking lets applications extend or adjust memory types for their own needs.
 

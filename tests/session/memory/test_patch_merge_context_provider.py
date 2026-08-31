@@ -14,7 +14,10 @@ from openviking.session.memory.patch_merge_context_provider import (
     PatchMergeContextProvider,
     PatchMergePatch,
 )
-from openviking.session.skill.session_skill_context_provider import load_skill_extract_registry
+from openviking.session.skill.session_skill_context_provider import (
+    SESSION_SKILL_MEMORY_TYPE,
+    load_skill_extract_registry,
+)
 
 
 def _memory_file(
@@ -36,11 +39,20 @@ def _memory_file(
     )
 
 
+def _memory_schema(memory_type: str = "experiences") -> MemoryTypeSchema:
+    return MemoryTypeSchema(
+        memory_type=memory_type,
+        directory=f"viking://user/{{{{ user_space }}}}/memories/{memory_type}",
+        filename_template="{{ name }}.md",
+        fields=[],
+    )
+
+
 @pytest.mark.asyncio
 async def test_patch_merge_context_provider_prefetch_reads_originals_and_renders_patch():
     uri = "viking://user/u/memories/experiences/booking.md"
     provider = PatchMergeContextProvider(
-        memory_type="experiences",
+        memory_schema=_memory_schema(),
         required_file_uris=[uri],
         patches=[
             PatchMergePatch(
@@ -90,7 +102,7 @@ async def test_patch_merge_context_provider_prefetch_searches_and_reads_extra_ca
         fields=[],
     )
     provider = PatchMergeContextProvider(
-        memory_type="experiences",
+        memory_schema=schema,
         required_file_uris=["viking://user/u/memories/experiences/book.md"],
         patches=[
             PatchMergePatch(
@@ -103,7 +115,6 @@ async def test_patch_merge_context_provider_prefetch_searches_and_reads_extra_ca
             )
         ],
     )
-    provider._registry = SimpleNamespace(get=lambda name: schema if name == "experiences" else None)
     provider._ctx = SimpleNamespace(user=SimpleNamespace(user_id="u"))
     provider.search_files = AsyncMock(
         return_value=[
@@ -138,7 +149,7 @@ async def test_patch_merge_context_provider_prefetch_searches_and_reads_extra_ca
 async def test_patch_merge_context_provider_skips_extra_candidates_for_existing_files():
     uri = "viking://user/u/memories/experiences/booking.md"
     provider = PatchMergeContextProvider(
-        memory_type="experiences",
+        memory_schema=_memory_schema(),
         required_file_uris=[uri],
         patches=[
             PatchMergePatch(
@@ -174,7 +185,7 @@ async def test_patch_merge_context_provider_caps_extra_candidate_reads_at_ten():
     )
     required_uris = [f"viking://user/u/memories/experiences/required_{idx}.md" for idx in range(12)]
     provider = PatchMergeContextProvider(
-        memory_type="experiences",
+        memory_schema=schema,
         required_file_uris=required_uris,
         patches=[
             PatchMergePatch(
@@ -187,7 +198,6 @@ async def test_patch_merge_context_provider_caps_extra_candidate_reads_at_ten():
             )
         ],
     )
-    provider._registry = SimpleNamespace(get=lambda name: schema if name == "experiences" else None)
     provider._ctx = SimpleNamespace(user=SimpleNamespace(user_id="u"))
     provider.search_files = AsyncMock(
         return_value=[
@@ -217,7 +227,7 @@ async def test_patch_merge_context_provider_caps_extra_candidate_reads_at_ten():
 @pytest.mark.asyncio
 async def test_patch_merge_context_provider_renders_compact_patch_metadata():
     provider = PatchMergeContextProvider(
-        memory_type="experiences",
+        memory_schema=_memory_schema(),
         required_file_uris=[],
         patches=[
             PatchMergePatch(
@@ -261,7 +271,7 @@ async def test_patch_merge_context_provider_renders_compact_patch_metadata():
 @pytest.mark.asyncio
 async def test_patch_merge_context_provider_hides_last_update_trace_id_from_patch_diff():
     provider = PatchMergeContextProvider(
-        memory_type="experiences",
+        memory_schema=_memory_schema(),
         required_file_uris=[],
         patches=[
             PatchMergePatch(
@@ -301,7 +311,7 @@ async def test_patch_merge_context_provider_hides_last_update_trace_id_from_patc
 @pytest.mark.asyncio
 async def test_patch_merge_context_provider_renders_create_patch_from_dev_null():
     provider = PatchMergeContextProvider(
-        memory_type="experiences",
+        memory_schema=_memory_schema(),
         required_file_uris=[],
         patches=[
             PatchMergePatch(
@@ -334,31 +344,30 @@ def test_patch_merge_context_provider_get_memory_schema_single_type(monkeypatch)
         fields=[],
     )
     provider = PatchMergeContextProvider(
-        memory_type="experiences",
+        memory_schema=schema,
         required_file_uris=[],
         patches=[],
     )
-    provider._registry = SimpleNamespace(get=lambda name: schema if name == "experiences" else None)
 
     assert provider.get_memory_schemas(ctx=None) == [schema]
 
 
-def test_patch_merge_context_provider_get_memory_schema_raises_for_missing_type():
+def test_patch_merge_context_provider_get_memory_schema_raises_for_disabled_type():
     provider = PatchMergeContextProvider(
-        memory_type="missing",
+        memory_schema=_memory_schema("missing").model_copy(update={"enabled": False}),
         required_file_uris=[],
         patches=[],
     )
-    provider._registry = SimpleNamespace(get=lambda name: None)
 
     with pytest.raises(ValueError, match="Memory schema not found or disabled: missing"):
         provider.get_memory_schemas(ctx=None)
 
 
-def test_patch_merge_context_provider_uses_registry_override_for_session_skills():
+def test_patch_merge_context_provider_uses_schema_override_for_session_skills():
+    skill_schema = load_skill_extract_registry().get(SESSION_SKILL_MEMORY_TYPE)
+    assert skill_schema is not None
     provider = PatchMergeContextProvider(
-        memory_type="session_skills",
-        memory_registry=load_skill_extract_registry(),
+        memory_schema=skill_schema,
         required_file_uris=[],
         patches=[],
     )
@@ -366,13 +375,13 @@ def test_patch_merge_context_provider_uses_registry_override_for_session_skills(
     schemas = provider.get_memory_schemas(ctx=None)
 
     assert len(schemas) == 1
-    assert schemas[0].memory_type == "session_skills"
+    assert schemas[0].memory_type == SESSION_SKILL_MEMORY_TYPE
     assert schemas[0].enabled is True
 
 
 def test_patch_merge_context_provider_instruction_mentions_path_field_normalization():
     provider = PatchMergeContextProvider(
-        memory_type="entities",
+        memory_schema=_memory_schema("entities"),
         required_file_uris=[],
         patches=[],
     )
@@ -392,7 +401,7 @@ def test_patch_merge_context_provider_instruction_mentions_path_field_normalizat
 def test_patch_merge_context_provider_detects_language_from_patch_content(monkeypatch):
     monkeypatch.setenv("TZ", "Asia/Shanghai")
     provider = PatchMergeContextProvider(
-        memory_type="preferences",
+        memory_schema=_memory_schema("preferences"),
         required_file_uris=[],
         patches=[
             PatchMergePatch(
@@ -418,7 +427,7 @@ def test_patch_merge_context_provider_detects_language_from_patch_content(monkey
 def test_patch_merge_context_provider_empty_patches_fallback_to_english(monkeypatch):
     monkeypatch.setenv("TZ", "Asia/Shanghai")
     provider = PatchMergeContextProvider(
-        memory_type="preferences",
+        memory_schema=_memory_schema("preferences"),
         required_file_uris=[],
         patches=[],
     )
@@ -429,7 +438,7 @@ def test_patch_merge_context_provider_empty_patches_fallback_to_english(monkeypa
 def test_patch_merge_context_provider_ignores_before_file_language(monkeypatch):
     monkeypatch.setenv("TZ", "Asia/Shanghai")
     provider = PatchMergeContextProvider(
-        memory_type="preferences",
+        memory_schema=_memory_schema("preferences"),
         required_file_uris=[],
         patches=[
             PatchMergePatch(

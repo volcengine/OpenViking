@@ -49,7 +49,6 @@ class SkillPolicyUpdater:
     skill_processor: SkillProcessor | None = None
     viking_fs: Any = None
     vikingdb: Any = None
-    memory_type: str = "skills"
 
     @tracer("train.policy_updater.skill.apply", ignore_result=True, ignore_args=True)
     async def apply(
@@ -79,7 +78,11 @@ class SkillPolicyUpdater:
                 written_uris=[],
                 deleted_uris=[],
                 errors=[],
-                metadata={"dry_run": False, "item_count": 0, "memory_type": self.memory_type},
+                metadata={
+                    "dry_run": False,
+                    "item_count": 0,
+                    "memory_type": SESSION_SKILL_MEMORY_TYPE,
+                },
             )
 
         registry = load_skill_extract_registry()
@@ -115,7 +118,7 @@ class SkillPolicyUpdater:
             metadata={
                 "dry_run": False,
                 "item_count": len(plan.items),
-                "memory_type": self.memory_type,
+                "memory_type": SESSION_SKILL_MEMORY_TYPE,
                 "operation_upsert_count": len(operations.upsert_operations),
                 "operation_delete_count": len(operations.delete_file_contents),
             },
@@ -166,7 +169,7 @@ def _apply_items_to_snapshot(items: list[PolicyPlanItem], policy_set: PolicySet)
         )
         metadata = dict(existing.metadata) if existing is not None else {}
         metadata.update(item.metadata.get("patch_metadata", {}))
-        metadata.setdefault("memory_type", item.memory_type or "skills")
+        metadata["memory_type"] = item.memory_type or SESSION_SKILL_MEMORY_TYPE
         version = (existing.version + 1) if existing is not None else 1
         updated = Policy(
             name=item.target_name,
@@ -288,10 +291,10 @@ def _policy_to_memory_file(policy: Policy | None) -> MemoryFile | None:
         content=serialized,
         links=list(policy.links or []),
         backlinks=list(policy.backlinks or []),
-        memory_type="skills",
+        memory_type=SESSION_SKILL_MEMORY_TYPE,
         extra_fields={
             **dict(policy.metadata),
-            "memory_type": "skills",
+            "memory_type": SESSION_SKILL_MEMORY_TYPE,
             "skill_name": policy.name,
             "version": policy.version,
             "status": policy.status,

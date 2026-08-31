@@ -90,11 +90,6 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
                         overview="Access when deciding how to call tools or diagnosing tool failures.",
                     ),
                     DirectoryDefinition(
-                        path="skills",
-                        abstract="User's skill execution memories. Stores experience about using configured skills.",
-                        overview="Access when choosing or executing skills. This is memory about skill usage, not the skill definition itself.",
-                    ),
-                    DirectoryDefinition(
                         path="trajectories",
                         abstract="User's execution trajectory records. Stores end-to-end task execution traces when trajectory memory is enabled.",
                         overview="Access when reviewing how a previous task was executed.",

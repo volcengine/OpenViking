@@ -10,6 +10,9 @@ from typing import Any
 from openviking.core.skill_loader import SkillLoader
 from openviking.server.identity import RequestContext
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.session.skill.session_skill_context_provider import (
+    SESSION_SKILL_MEMORY_TYPE,
+)
 from openviking.session.train.domain import Policy, PolicySet, PolicyStatus
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
@@ -152,7 +155,7 @@ class SkillSetLoader:
                 version = _safe_int(fields.get("version"), default=1)
                 status = _safe_status(fields.get("status"))
                 metadata = dict(fields)
-                metadata.setdefault("memory_type", "skills")
+                metadata["memory_type"] = SESSION_SKILL_MEMORY_TYPE
                 metadata["description"] = fields.get("description", "")
                 policies.append(
                     Policy(
@@ -171,7 +174,7 @@ class SkillSetLoader:
             version = 1
             status: PolicyStatus = "production"
             metadata: dict[str, Any] = {
-                "memory_type": "skills",
+                "memory_type": SESSION_SKILL_MEMORY_TYPE,
                 "description": skill.get("description", ""),
                 "allowed_tools": list(skill.get("allowed_tools") or []),
                 "tags": list(skill.get("tags") or []),

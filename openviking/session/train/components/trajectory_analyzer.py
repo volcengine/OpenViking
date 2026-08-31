@@ -537,11 +537,11 @@ def _skill_operations_to_gradients(
         after_file = MemoryFile(
             uri=target_uri,
             content=after_content,
-            memory_type="skills",
+            memory_type=SESSION_SKILL_MEMORY_TYPE,
             extra_fields={
                 **dict(getattr(old_file, "extra_fields", {}) or {}),
                 **{k: v for k, v in fields.items() if k != "content"},
-                "memory_type": "skills",
+                "memory_type": SESSION_SKILL_MEMORY_TYPE,
                 "skill_name": skill_name,
             },
         )

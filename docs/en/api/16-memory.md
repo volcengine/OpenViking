@@ -16,9 +16,8 @@ Memory is produced by session commit or explicit extraction, stored in the user 
 | trajectories | `user/memories/trajectories/` | Reusable operation contracts |
 | experiences | `user/memories/experiences/` | Reusable execution insights |
 | tools | `user/memories/tools/` | Tool usage knowledge and best practices |
-| skills | `user/memories/skills/` | Skill execution knowledge and workflow strategies |
 
-These are the enabled built-in types. Deployments can extend or override them with custom memory templates.
+These are the built-in schema types. Deployments can extend or override them with custom memory templates.
 
 ---
 

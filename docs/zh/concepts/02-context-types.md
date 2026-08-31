@@ -68,7 +68,7 @@ results = client.find(
 
 表中的 `~/...` 使用家目录别名 `viking://~`，服务端会按认证身份将其展开为 `viking://user/{user_id}/...`。当记忆策略允许 Peer 记忆时，支持 Peer 的类型会写入 `viking://user/{user_id}/peers/{peer_id}/memories/...`。记忆类型可通过自定义模板扩展或调整。
 
-Schema 定义的 `memories/tools/` 和 `memories/skills/` 类型已禁用。它们与存放在 `viking://user/{user_id}/skills/{skill_name}/SKILL.md` 下的独立 Skill 不同，后者仍然保留并受支持。
+Schema 定义的 `memories/tools/` 类型仍处于禁用状态，旧的 `memories/skills/` 记忆类型已移除。存放在 `viking://user/{user_id}/skills/{skill_name}/SKILL.md` 下的独立 Skill 仍然保留并受支持。
 
 ### 使用
 

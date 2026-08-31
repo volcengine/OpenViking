@@ -68,7 +68,7 @@ Memories are durable knowledge learned from interactions and task execution. The
 
 The `~/...` entries above use the home alias `viking://~`, which the server expands to `viking://user/{user_id}/...` for the authenticated caller. When the memory policy permits Peer memory, supported types may instead be written under `viking://user/{user_id}/peers/{peer_id}/memories/...`. Applications can extend or adjust memory types with custom templates.
 
-The schema-defined `memories/tools/` and `memories/skills/` types are disabled. They are separate from standalone Skills stored under `viking://user/{user_id}/skills/{skill_name}/SKILL.md`, which remain supported.
+The schema-defined `memories/tools/` type is disabled, and the legacy `memories/skills/` memory type has been removed. Standalone Skills stored under `viking://user/{user_id}/skills/{skill_name}/SKILL.md` remain supported.
 
 ### Usage
 

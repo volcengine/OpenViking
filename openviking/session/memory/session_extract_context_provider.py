@@ -232,7 +232,7 @@ When a memory item describes a peer, set peer_id to one of the peer_id values al
 the output schema. Do not invent peer_id values.
 For events with ranges, the system derives self/peer targets from the message range.
 Message role is authoritative: user-role content is the source for profile/preferences/entities/events,
-and assistant-role content is the source for cases/patterns/tools/skills. Do not infer ownership
+and assistant-role content is the source for cases/patterns/tools. Do not infer ownership
 from neighboring messages.
 """
 

@@ -9,8 +9,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from openviking.server.identity import RequestContext
-from openviking.session.memory.dataclass import MemoryFile, MemoryTypeSchema
-from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+from openviking.session.memory.dataclass import (
+    MemoryFile,
+    MemoryTypeSchema,
+    name_field_for_memory_type,
+)
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
@@ -56,12 +59,7 @@ class PatchMergePatch:
     def target_name(self) -> str:
         fields = self.after_file.extra_fields or {}
         memory_type = self.memory_type
-        type_specific_key = f"{str(memory_type).rstrip('s')}_name"
-        name = (
-            fields.get(type_specific_key)
-            or fields.get("experience_name")  # backward compat
-            or fields.get("name")
-        )
+        name = fields.get(name_field_for_memory_type(memory_type)) or fields.get("name")
         if name:
             return str(name)
         uri = self.target_uri
@@ -118,15 +116,14 @@ class PatchMergeContextProvider(SessionExtractContextProvider):
     def __init__(
         self,
         *,
-        memory_type: str,
+        memory_schema: MemoryTypeSchema,
         patches: list[PatchMergePatch],
         required_file_uris: list[str] | None = None,
         output_language: str | None = None,
-        memory_registry: MemoryTypeRegistry | None = None,
     ):
         super().__init__(messages=[])
-        self.memory_type = memory_type
-        self._registry = memory_registry
+        self.memory_type = memory_schema.memory_type
+        self._memory_schema = memory_schema
         self.required_file_uris = list(required_file_uris or [])
         self.patches = list(patches)
         self._output_language = output_language or _resolve_patch_output_language(self.patches)
@@ -156,11 +153,9 @@ is an existing file, put it in delete_ids; if it is only a new proposal, omit it
 
     def get_memory_schemas(self, ctx: RequestContext) -> list[MemoryTypeSchema]:
         del ctx
-        registry = self._get_registry()
-        schema = registry.get(self.memory_type)
-        if schema is None or not schema.enabled:
+        if not self._memory_schema.enabled:
             raise ValueError(f"Memory schema not found or disabled: {self.memory_type}")
-        return [schema]
+        return [self._memory_schema]
 
     async def prefetch(self) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = []
@@ -202,8 +197,8 @@ is an existing file, put it in delete_ids; if it is only a new proposal, omit it
         return [*required_uris, *extra_uris]
 
     async def _search_candidate_file_uris(self, *, limit: int) -> list[str]:
-        schema = self._get_registry().get(self.memory_type)
-        if schema is None or not schema.directory:
+        schema = self._memory_schema
+        if not schema.directory:
             return []
         search_dirs = self._render_search_directories(schema)
         if not search_dirs:

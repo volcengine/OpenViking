@@ -10,10 +10,15 @@ from typing import Any
 
 from openviking.message import Message
 from openviking.server.identity import RequestContext
-from openviking.session.memory.dataclass import MemoryFile, StoredLink
+from openviking.session.memory.dataclass import (
+    MemoryFile,
+    MemoryTypeSchema,
+    StoredLink,
+    name_field_for_memory_type,
+)
 from openviking.session.memory.extract_loop import ExtractLoop
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
-from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+from openviking.session.memory.memory_type_registry import create_default_registry
 from openviking.session.memory.memory_updater import ExtractContext
 from openviking.session.memory.patch_merge_context_provider import (
     PatchMergeContextProvider,
@@ -49,7 +54,7 @@ class PatchMergePolicyOptimizer:
     viking_fs: Any = None
     vlm: Any = None
     memory_type: str = "experiences"
-    memory_registry: MemoryTypeRegistry | None = None
+    memory_schema: MemoryTypeSchema | None = None
 
     @tracer(
         "train.policy_optimizer.patch_merge.plan",
@@ -128,9 +133,9 @@ class PatchMergePolicyOptimizer:
             raise RuntimeError("VikingFS is required for patch-merge policy optimization")
 
         extract_context = ExtractContext(list(context.messages or []))
+        memory_schema = self._resolve_memory_schema()
         provider = PatchMergeContextProvider(
-            memory_type=self.memory_type,
-            memory_registry=self.memory_registry,
+            memory_schema=memory_schema,
             required_file_uris=_required_file_uris(gradients, policy_set),
             patches=[_gradient_to_merge_patch(gradient) for gradient in gradients],
         )
@@ -168,6 +173,17 @@ class PatchMergePolicyOptimizer:
         )
         operations, _ = await orchestrator.run()
         return operations
+
+    def _resolve_memory_schema(self) -> MemoryTypeSchema:
+        schema = self.memory_schema or create_default_registry().get(self.memory_type)
+        if schema is None or not schema.enabled:
+            raise ValueError(f"Memory schema not found or disabled: {self.memory_type}")
+        if schema.memory_type != self.memory_type:
+            raise ValueError(
+                f"Memory schema type mismatch: expected {self.memory_type}, got {schema.memory_type}"
+            )
+        return schema
+
 
 def _constant_prefetch(messages: list[dict[str, Any]]):
     async def prefetch() -> list[dict[str, Any]]:
@@ -372,7 +388,7 @@ def _seed_read_file_contents(
 
 
 def _policy_to_memory_file(policy: Policy, *, memory_type: str = "experiences") -> MemoryFile:
-    name_field = _name_field_for_memory_type(memory_type)
+    name_field = name_field_for_memory_type(memory_type)
     extra_fields = dict(policy.metadata)
     extra_fields["memory_type"] = memory_type
     extra_fields[name_field] = policy.name
@@ -399,7 +415,7 @@ def _operations_to_plan_items(
     superseded_policies = _superseded_policies_for_gradients(gradients, policy_set)
     confidence_values = [float(gradient.confidence) for gradient in gradients]
     confidence = max(confidence_values) if confidence_values else None
-    name_field = _name_field_for_memory_type(memory_type)
+    name_field = name_field_for_memory_type(memory_type)
 
     upsert_output_count = _upsert_output_count(operations, memory_type=memory_type)
     replacement_source_uris_by_target = _replacement_source_uris_by_target(operations)
@@ -524,22 +540,11 @@ def _operations_to_plan_items(
     return items
 
 
-def _name_field_for_memory_type(memory_type: str) -> str:
-    """Return the extra_fields key for the policy name in a given memory type."""
-    if memory_type == "experiences":
-        return "experience_name"
-    if memory_type in {"skills", "session_skills"}:
-        return "skill_name"
-    if memory_type.endswith("s"):
-        return f"{memory_type[:-1]}_name"
-    return f"{memory_type}_name"
-
-
 def _fallback_policy_name(op: Any, *, memory_type: str) -> str:
     uri = first_uri(getattr(op, "uris", []) or [])
     if uri:
         # For skills: path/to/skills/my_skill/SKILL.md → my_skill
-        if memory_type == "skills" and uri.endswith("/SKILL.md"):
+        if memory_type == "session_skills" and uri.endswith("/SKILL.md"):
             parts = uri.rstrip("/").split("/")
             if len(parts) >= 2:
                 return parts[-2]

@@ -375,7 +375,6 @@ ov session get a1b2c3d4
       "trajectories": 1,
       "experiences": 2,
       "tools": 0,
-      "skills": 0,
       "total": 14
     },
     "last_commit_at": "2026-03-23T11:00:00+08:00",

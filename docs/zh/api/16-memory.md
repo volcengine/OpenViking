@@ -16,9 +16,8 @@
 | trajectories | `user/memories/trajectories/` | 可复用的操作契约 |
 | experiences | `user/memories/experiences/` | 可复用的执行经验 |
 | tools | `user/memories/tools/` | 工具使用经验与最佳实践 |
-| skills | `user/memories/skills/` | 技能执行经验与工作流策略 |
 
-以上是当前启用的内置类型；部署可以通过自定义记忆模板扩展或覆盖。
+以上是内置 Schema 类型；部署可以通过自定义记忆模板扩展或覆盖。
 
 ---
 

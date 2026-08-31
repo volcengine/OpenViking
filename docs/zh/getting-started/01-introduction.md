@@ -109,7 +109,7 @@ OpenViking 内置记忆自迭代闭环。提交会话后，系统会异步分析
 |------|----------|------|
 | **用户与环境理解** | `profile`、`preferences`、`entities`、`events` | 记录用户画像、偏好、实体和事件 |
 | **助手身份与连续性** | `identity`、`soul` | 记录助手身份、边界、风格和连续性 |
-| **任务执行与学习** | `cases`、`trajectories`、`experiences`、`tools`、`skills` | 沉淀可训练案例、执行轨迹、经验和工具/技能使用知识 |
+| **任务执行与学习** | `cases`、`trajectories`、`experiences`、`tools` | 沉淀可训练案例、执行轨迹、经验和工具使用知识 |
 
 OpenViking 支持根据业务需要扩展或调整记忆类型。
 

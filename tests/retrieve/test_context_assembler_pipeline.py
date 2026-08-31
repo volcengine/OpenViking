@@ -540,7 +540,7 @@ def test_built_in_memory_types_report_one_declared_category():
         for uri in (
             f"{USER_ROOT}/memories/trajectories/t.md",
             f"{USER_ROOT}/memories/cases/c.md",
-            f"{USER_ROOT}/memories/skills/s.md",
+            f"{USER_ROOT}/memories/patterns/p.md",
             f"{USER_ROOT}/memories/events/e.md",
             f"{USER_ROOT}/skills/real.md",
         )
@@ -548,7 +548,7 @@ def test_built_in_memory_types_report_one_declared_category():
     assert resolved == {
         f"{USER_ROOT}/memories/trajectories/t.md": OTHER_MEMORY_CATEGORY,
         f"{USER_ROOT}/memories/cases/c.md": OTHER_MEMORY_CATEGORY,
-        f"{USER_ROOT}/memories/skills/s.md": OTHER_MEMORY_CATEGORY,
+        f"{USER_ROOT}/memories/patterns/p.md": OTHER_MEMORY_CATEGORY,
         f"{USER_ROOT}/memories/events/e.md": "events",
         f"{USER_ROOT}/skills/real.md": "skills",
     }

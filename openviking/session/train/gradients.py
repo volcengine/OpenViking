@@ -7,7 +7,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from openviking.session.memory.dataclass import MemoryFile, StoredLink
+from openviking.session.memory.dataclass import (
+    MemoryFile,
+    StoredLink,
+    name_field_for_memory_type,
+)
 
 
 @dataclass(slots=True)
@@ -31,11 +35,7 @@ class PatchSemanticGradient:
     def target_name(self) -> str:
         fields = self.after_file.extra_fields or {}
         memory_type = self.after_file.memory_type or fields.get("memory_type") or "experiences"
-        name = (
-            fields.get("experience_name")
-            or fields.get("name")
-            or fields.get(f"{str(memory_type).rstrip('s')}_name")
-        )
+        name = fields.get(name_field_for_memory_type(str(memory_type))) or fields.get("name")
         if name:
             return str(name)
         uri = self.target_uri

@@ -667,7 +667,7 @@ Agent 插件每轮注入上下文时，过去需要按类型逐个检索、再�
   | `events` | 概览档 | 全文档 | 唯一正文足够长、`# Summary` 抽取能真正压缩的类型 |
   | `entities` / `preferences` / `experiences` | 摘要档 | 摘要档 | 正文本身很短，且写入侧把整篇正文存进了摘要标量，摘要档即完整内容 |
   | `resources` / `skills` | 摘要档 | 摘要档 | 语义处理生成的 256 字符摘要；正文可能很大或含凭据，加深需显式指定 |
-  | `memories` | 摘要档 | 摘要档 | 四个具名类型之外的内置记忆类型——`cases`、`patterns`、`tools`、`trajectories`、技能使用记忆。只有 quota-free 检索会命中它们；它们没有自己的检索桶，`quotas` 不能指定，但 `detail` 和 `other_peer_penalty` 可以 |
+  | `memories` | 摘要档 | 摘要档 | 四个具名类型之外的内置记忆类型——`cases`、`patterns`、`tools` 和 `trajectories`。只有 quota-free 检索会命中它们；它们没有自己的检索桶，`quotas` 不能指定，但 `detail` 和 `other_peer_penalty` 可以 |
   | 目录命中 | 概览档 | 概览档 | 目录没有摘要，读 `.overview.md` 侧车；全文档对目录无意义 |
 
 - **保底**：每条结果至少给出 `uri`。记忆类摘要缺失或超出单条上限时回落到概览档：写入侧把整篇正文存进了摘要标量，所以对记忆类别而言概览档在内容阶梯上位于摘要档*之下*，这次替换披露得更少。而 `resources` / `skills` 的摘要是语义处理生成的短摘要，同样的替换会去读调用方没有请求的正文，因此这两类直接退成裸 `uri`，不向上加深

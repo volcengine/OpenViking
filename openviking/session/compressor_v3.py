@@ -817,7 +817,7 @@ class SessionCompressorV3:
             skill_gradients = [
                 gradient
                 for gradient in list((result or {}).get("skill_gradients", []))
-                if _gradient_memory_type(gradient) == "skills"
+                if _gradient_memory_type(gradient) == SESSION_SKILL_MEMORY_TYPE
             ]
             if not skill_gradients:
                 return {
@@ -872,6 +872,9 @@ class SessionCompressorV3:
             include_session_skills=True,
             source_archive_uri=archive_uri,
         )
+        skill_schema = load_skill_extract_registry().get(SESSION_SKILL_MEMORY_TYPE)
+        if skill_schema is None:
+            raise RuntimeError(f"Session skill schema not found: {SESSION_SKILL_MEMORY_TYPE}")
         return await get_streaming_policy_trainer(
             key=_skill_trainer_key(ctx),
             policy_set=skill_policy_set,
@@ -880,13 +883,12 @@ class SessionCompressorV3:
             policy_optimizer=PatchMergePolicyOptimizer(
                 viking_fs=viking_fs,
                 memory_type=SESSION_SKILL_MEMORY_TYPE,
-                memory_registry=load_skill_extract_registry(),
+                memory_schema=skill_schema,
             ),
             policy_updater=SkillPolicyUpdater(
                 skill_processor=self.skill_processor,
                 viking_fs=viking_fs,
                 vikingdb=self.vikingdb,
-                memory_type="skills",
             ),
             context=PipelineContext(
                 analysis_context=analysis_context,
@@ -1073,7 +1075,9 @@ class SessionCompressorV3:
                 # Skill path: co-extracted skill gradients go directly to skill trainer
                 if skill_trainer is not None and analysis.gradients:
                     skill_gradients = [
-                        g for g in analysis.gradients if _gradient_memory_type(g) == "skills"
+                        g
+                        for g in analysis.gradients
+                        if _gradient_memory_type(g) == SESSION_SKILL_MEMORY_TYPE
                     ]
                     if skill_gradients:
                         skill_training_result = await skill_trainer.submit_gradients(

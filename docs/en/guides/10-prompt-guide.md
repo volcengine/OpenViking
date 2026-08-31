@@ -236,12 +236,6 @@ These YAML files define the structure of different memory types. They are not si
   - Purpose: defines the storage structure for "who the user is"
   - Key fields: `content`
 
-- `skills`
-  - Effective stage: skill-usage memory persistence and update stage
-  - Affects: skill usage statistics, experience accumulation, and recommended workflows
-  - Purpose: defines skill usage counts, success rates, best-fit scenarios, and related information
-  - Key fields: `skill_name`, `total_executions`, `success_count`, `fail_count`, `best_for`, `recommended_flow`
-
 - `soul`
   - Effective stage: agent soul memory persistence stage
   - Affects: the agent's core boundaries, continuity, and long-term identity stability

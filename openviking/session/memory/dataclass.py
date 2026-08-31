@@ -250,6 +250,15 @@ class MemoryTypeSchema(BaseModel):
         return "{{" in self.filename_template and "}}" in self.filename_template
 
 
+def name_field_for_memory_type(memory_type: str) -> str:
+    """Return the schema field that identifies one memory item."""
+    if memory_type == "session_skills":
+        return "skill_name"
+    if memory_type.endswith("s"):
+        return f"{memory_type[:-1]}_name"
+    return f"{memory_type}_name"
+
+
 class MemoryData(BaseModel):
     """Dynamic memory data."""
 
@@ -328,7 +337,7 @@ class MemoryFile(BaseModel):
 class ResolvedOperation(BaseModel):
     old_memory_file_content: Optional[MemoryFile] = None
     memory_fields: Dict
-    memory_type: str  # The memory type (e.g., 'tools', 'skills', 'events')
+    memory_type: str  # The memory type (e.g., 'tools', 'session_skills', 'events')
     uris: List[str]
     page_id: Optional[int] = None  # Temporary page_id for link resolution (not persisted)
     source: Optional[MemoryOperationSource] = None

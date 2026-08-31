@@ -454,7 +454,7 @@ async def test_streaming_memory_updater_submit_applies_fast_path(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cached_updater_restores_vectorization_for_tool_and_skill_memories(monkeypatch):
+async def test_cached_updater_restores_vectorization_for_multiple_memory_types(monkeypatch):
     fs = InMemoryVikingFS({})
     fs.search = AsyncMock(return_value=[])
     monkeypatch.setattr(
@@ -467,7 +467,7 @@ async def test_cached_updater_restores_vectorization_for_tool_and_skill_memories
     )
 
     registry = _registry()
-    for memory_type, name_field in (("tools", "tool_name"), ("skills", "skill_name")):
+    for memory_type, name_field in (("tools", "tool_name"), ("patterns", "pattern_name")):
         registry.register(
             MemoryTypeSchema(
                 memory_type=memory_type,
@@ -506,7 +506,7 @@ async def test_cached_updater_restores_vectorization_for_tool_and_skill_memories
     operations = []
     for memory_type, name_field, name in (
         ("tools", "tool_name", "terminal"),
-        ("skills", "skill_name", "analyze_code"),
+        ("patterns", "pattern_name", "analyze_code"),
     ):
         operations.append(
             ResolvedOperation(
@@ -524,7 +524,7 @@ async def test_cached_updater_restores_vectorization_for_tool_and_skill_memories
                 delete_file_contents=[],
                 errors=[],
             ),
-            messages=[Message(id="m1", role="user", parts=[TextPart("use tools and skills")])],
+            messages=[Message(id="m1", role="user", parts=[TextPart("use tools and patterns")])],
             ctx=_ctx(),
         )
     )

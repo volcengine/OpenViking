@@ -431,6 +431,7 @@ class TestSchemaModelGenerator:
         # Check specific types exist
         assert "profile" in models
         assert "preferences" in models
+        assert "skills" not in models
 
         # Check profile model has 'content' field
         profile_model = models["profile"]

@@ -957,7 +957,7 @@ async def merge_one_memory_type_operations(
         for df in delete_files
     )
     provider = PatchMergeContextProvider(
-        memory_type=memory_type,
+        memory_schema=schema,
         required_file_uris=required_file_uris,
         patches=patches,
         output_language=merge_output_language_from_messages(messages),

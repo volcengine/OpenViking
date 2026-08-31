@@ -48,7 +48,8 @@ class TestProviderInstruction:
 
         assert "Peer Memory" in instruction
         assert "profile/preferences/entities/events" in instruction
-        assert "cases/patterns/tools/skills" in instruction
+        assert "cases/patterns/tools" in instruction
+        assert "cases/patterns/tools/skills" not in instruction
 
     def test_instruction_omits_resource_uri_handling_without_resource_uri(self):
         provider = SessionExtractContextProvider(

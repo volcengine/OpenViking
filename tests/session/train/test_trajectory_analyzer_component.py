@@ -9,6 +9,9 @@ import pytest
 
 from openviking.message import Message, TextPart, ToolPart
 from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations
+from openviking.session.skill.session_skill_context_provider import (
+    SESSION_SKILL_MEMORY_TYPE,
+)
 from openviking.session.train import (
     Case,
     CriterionResult,
@@ -236,7 +239,8 @@ async def test_trajectory_rollout_analyzer_extracts_skill_without_persisting_tra
     ] == ["session_skills"]
     assert result["contexts"] == []
     assert len(result["skill_gradients"]) == 1
-    assert result["skill_gradients"][0].after_file.memory_type == "skills"
+    assert result["skill_gradients"][0].after_file.memory_type == SESSION_SKILL_MEMORY_TYPE
+    assert result["skill_gradients"][0].target_name == "code-review"
     assert fs.writes == []
 
 

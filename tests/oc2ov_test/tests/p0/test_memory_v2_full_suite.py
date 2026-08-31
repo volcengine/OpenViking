@@ -5,7 +5,7 @@ Memory V2 全面端到端测试套件
 - entities (实体信息) - User scope
 - events (事件记录) - User scope
 - profile (用户画像) - User scope, 单文件
-- skills (技能) - User scope
+- session_skills (Session Skill) - User scope, stored under user/skills
 
 测试方式：通过 OpenClaw agent 进行对话，然后通过 OV API commit session 触发记忆提取。
 OpenClaw Gateway 会自动分配 OV session ID，需要通过对比 sessions 列表来定位。
@@ -263,7 +263,7 @@ class OpenVikingAPIClient:
 
     def list_memory_files(self, memory_type: str) -> List[str]:
         try:
-            if memory_type == "skills":
+            if memory_type == "session_skills":
                 uri = "viking://user/default/skills"
             else:
                 uri = f"viking://user/default/memories/{memory_type}"
@@ -336,10 +336,10 @@ class MemoryV2TestSuite:
                 "memory_type": "profile",
             },
             {
-                "name": "skills",
-                "description": "测试技能记忆",
+                "name": "session_skills",
+                "description": "测试 Session Skill 提取",
                 "test_message": "我总结了一个代码审查的技能流程：先通读代码理解意图，再检查逻辑错误和边界条件，然后评估代码风格和可维护性，最后给出改进建议。请记住这个技能流程",
-                "memory_type": "skills",
+                "memory_type": "session_skills",
             },
         ]
 
@@ -541,29 +541,6 @@ class MemoryV2TestSuite:
             result["found"] = True
             print(f"  ✓ {memory_type} 类别计数增加 {count_diff} 条")
 
-        if not result["found"] and memory_type == "skills":
-            alt_type = "patterns"
-            alt_before_uris = set(before_files.get("_remote_alt_uris", []))
-            alt_before_count = before_files.get("_remote_alt_category_count", 0)
-            alt_after_files = self.api.list_memory_files(alt_type)
-            alt_after_uris = set(alt_after_files)
-            alt_new_uris = alt_after_uris - alt_before_uris
-            alt_after_count = by_category.get(alt_type, 0)
-            alt_count_diff = alt_after_count - alt_before_count
-            print(
-                f"  [fallback] /api/v1/fs/ls → {alt_type}: 文件 {len(alt_before_uris)} → {len(alt_after_uris)} (新增: {len(alt_new_uris)})"
-            )
-            print(
-                f"  [fallback] /api/v1/stats/memories → {alt_type}: {alt_before_count} → {alt_after_count} (增量: {alt_count_diff})"
-            )
-            if alt_new_uris:
-                result["found"] = True
-                result["new_files"].extend(list(alt_new_uris))
-                print(f"  ✓ {alt_type} 目录新增 {len(alt_new_uris)} 个文件 (skills/patterns 互认)")
-            if alt_count_diff > 0:
-                result["found"] = True
-                print(f"  ✓ {alt_type} 类别计数增加 {alt_count_diff} 条 (skills/patterns 互认)")
-
         if not result["found"]:
             scenario = next(
                 (s for s in self.test_scenarios if s["memory_type"] == memory_type), None
@@ -626,7 +603,7 @@ class MemoryV2TestSuite:
                 print(f"  ✗ profile 文件不存在: {profile_file}")
             return result
 
-        if memory_type == "skills":
+        if memory_type == "session_skills":
             skills_dir = self.viking_data_dir.parent / "skills"
             if not skills_dir.exists():
                 print(f"  ✗ skills 目录不存在: {skills_dir}")
@@ -721,11 +698,6 @@ class MemoryV2TestSuite:
                     before_memory_files["_remote_profile_content"] = (
                         self.api.read_memory_file("viking://user/default/memories/profile.md") or ""
                     )
-                if scenario["memory_type"] == "skills":
-                    before_alt_uris = self.api.list_memory_files("patterns")
-                    before_alt_count = before_stats.get("by_category", {}).get("patterns", 0)
-                    before_memory_files["_remote_alt_uris"] = before_alt_uris
-                    before_memory_files["_remote_alt_category_count"] = before_alt_count
                 print(f"  当前 session 数量: {len(before_session_ids)}")
                 print(f"  [远端模式] 记忆统计: {before_stats.get('by_category', {})}")
                 print(
@@ -1029,11 +1001,11 @@ SCENARIO_MAP = {
         "test_message": "我是一名技术负责人，有10年开发经验，专注于后端架构设计，喜欢用Python和Go语言",
         "memory_type": "profile",
     },
-    "skills": {
-        "name": "skills",
-        "description": "测试技能记忆",
+    "session_skills": {
+        "name": "session_skills",
+        "description": "测试 Session Skill 提取",
         "test_message": "我总结了一个代码审查的技能流程：先通读代码理解意图，再检查逻辑错误和边界条件，然后评估代码风格和可维护性，最后给出改进建议。请记住这个技能流程",
-        "memory_type": "skills",
+        "memory_type": "session_skills",
     },
 }
 
@@ -1057,8 +1029,8 @@ def test_memory_v2_profile():
     _run_single_memory_test("profile")
 
 
-def test_memory_v2_skills():
-    _run_single_memory_test("skills")
+def test_memory_v2_session_skills():
+    _run_single_memory_test("session_skills")
 
 
 if __name__ == "__main__":
