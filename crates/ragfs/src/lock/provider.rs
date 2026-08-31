@@ -267,6 +267,31 @@ mod tests {
         assert_eq!(token.lock_type, crate::lock::PathLockKind::Exact);
     }
 
+    /// Preserve the original create failure when the lock path cannot be written.
+    #[tokio::test]
+    async fn try_create_token_includes_create_error_when_lock_is_absent() {
+        let fs = Arc::new(MemFileSystem::new());
+        let provider = FilesystemPathLockProvider::new(fs);
+        let token = LockToken {
+            owner_id: "owner".to_string(),
+            time_ns: 123,
+            lock_type: crate::lock::PathLockKind::Exact,
+        };
+
+        let err = provider
+            .try_create_token("/missing/.path.ovlock", &token)
+            .await
+            .unwrap_err();
+
+        match err {
+            PathLockError::Io(message) => {
+                assert!(message.starts_with("failed to create lock token at /missing/.path.ovlock:"));
+                assert!(message.contains("not found"), "unexpected error: {message}");
+            }
+            other => panic!("expected I/O error, got {other:?}"),
+        }
+    }
+
     #[test]
     fn compare_and_remove_would_block_maps_to_busy() {
         let err = FilesystemPathLockProvider::map_cas_error(
@@ -324,7 +349,7 @@ impl PathLockProvider for FilesystemPathLockProvider {
             .await
         {
             Ok(_) => Ok(()),
-            Err(_) => {
+            Err(create_error) => {
                 // Already exists — read and check if stale.
                 let existing = self.read_token(lock_path).await?;
                 match existing {
@@ -334,7 +359,7 @@ impl PathLockProvider for FilesystemPathLockProvider {
                         kind: t.lock_type,
                     }),
                     None => Err(PathLockError::Io(format!(
-                        "failed to create lock token at {lock_path}"
+                        "failed to create lock token at {lock_path}: {create_error}"
                     ))),
                 }
             }
