@@ -141,7 +141,7 @@ If another context engine already owns the slot, setup will not replace it by de
 openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --force-slot --json
 ```
 
-If you want assistant messages to carry a prefixed `peer_id` and data-plane recall/search requests to use the matching actor peer view, pass a prefix explicitly:
+Memories are stored once under the OpenViking user by default. To give each assistant its own memory, pass `--peer-role assistant`; add a prefix if you also want the `peer_id` namespaced:
 
 ```bash
 openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --peer-role assistant --peer-prefix <PREFIX> --json
@@ -244,7 +244,7 @@ Core fields:
 | `mode` | `remote` | Legacy compatibility field. Only remote mode is supported. |
 | `baseUrl` | `http://127.0.0.1:1933` | OpenViking HTTP endpoint |
 | `apiKey` | empty | OpenViking API key |
-| `peer_role` | `assistant` | Peer identity mode: `none`, `assistant`, or `person`. Session messages use body `peer_id`; data-plane recall/search uses `X-OpenViking-Actor-Peer`. |
+| `peer_role` | `none` | Memory scope: `none` (one shared memory for the OpenViking user), `assistant` (separate memory per assistant), `person` (separate memory per sender). Session messages use body `peer_id`; data-plane recall/search uses `X-OpenViking-Actor-Peer`. |
 | `peer_prefix` | empty | Optional prefix for assistant `peer_id` / actor peer values when `peer_role=assistant`. |
 | `accountId` | empty | Required when using a root API key |
 | `userId` | empty | Required when using a root API key |
@@ -356,7 +356,7 @@ The plugin connects to an existing remote OpenViking server.
 | --- | --- | --- |
 | `baseUrl` | `http://127.0.0.1:1933` | Remote OpenViking HTTP endpoint |
 | `apiKey` | empty | Optional OpenViking API key |
-| `peer_role` | `assistant` | Peer identity mode: `none`, `assistant`, or `person`; session messages use body `peer_id`, while data-plane recall/search uses `X-OpenViking-Actor-Peer` |
+| `peer_role` | `none` | Memory scope: `none`, `assistant`, or `person`; session messages use body `peer_id`, while data-plane recall/search uses `X-OpenViking-Actor-Peer` |
 | `peer_prefix` | empty | Optional prefix for assistant `peer_id` / actor peer values when `peer_role=assistant` |
 
 Common settings:

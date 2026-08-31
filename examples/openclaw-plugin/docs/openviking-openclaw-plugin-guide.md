@@ -762,7 +762,7 @@ openclaw config get plugins.slots.contextEngine
 | `apiKey` | 所有搜索/召回请求 | 空 | 是 | 是 | `OPENVIKING_API_KEY` | HTTP 认证 key；不配通常只能访问关闭认证的本地服务：`config.ts:202` |
 | `accountId` | 多租户搜索路由 | 空 | 是 | 是 | `OPENVIKING_ACCOUNT_ID` | Root key / trusted 部署下显式指定 account，影响搜索命中空间：`config.ts:212` |
 | `userId` | 多租户搜索路由 | 空 | 是 | 是 | `OPENVIKING_USER_ID` | Root key / trusted 部署下显式指定 user，影响 user memory 检索范围：`config.ts:216` |
-| `peer_role` | session peer 归因和 actor-peer 路由 | `assistant` | 是 | 安装脚本/setup 参数支持 | `OPENVIKING_PEER_ROLE`（安装脚本写入 setup 参数） | `none` 关闭 peer 路由；`assistant` 使用 runtime agent；`person` 使用 sender 身份 |
+| `peer_role` | session peer 归因和 actor-peer 路由 | `none` | 是 | 安装脚本/setup 参数支持 | `OPENVIKING_PEER_ROLE`（安装脚本写入 setup 参数） | `none` 共用一份记忆、关闭 peer 路由（默认）；`assistant` 按助手分开，使用 runtime agent；`person` 按发送者分开，使用 sender 身份 |
 | `peer_prefix` | assistant peer 前缀 | 空 | 是 | 间接支持 | 可通过配置值写 `${ENV}` | 非空时拼成 `<prefix>_<ctx.agentId>`，用于 assistant `peer_id` 与 `X-OpenViking-Actor-Peer` |
 | `targetUri` | `memory_recall` / `memory_forget` 默认搜索范围 | `viking://user/memories` | 是 | 否 | — | 未显式传 `targetUri` 时的默认 memory 搜索位置：`config.ts:275`、`index.ts:1366` |
 | `timeoutMs` | 所有搜索/读取请求超时 | `15000` | 是 | 否 | — | 控制 context search、`find/read/grep/session` 等 HTTP 请求超时：`config.ts:276` |
@@ -794,7 +794,7 @@ openclaw config get plugins.slots.contextEngine
 | `OPENVIKING_API_KEY` | `apiKey` | 指定 OpenViking API key |
 | `OPENVIKING_ACCOUNT_ID` | `accountId` | 指定租户 account |
 | `OPENVIKING_USER_ID` | `userId` | 指定租户 user |
-| `OPENVIKING_PEER_ROLE` | `peer_role` | 安装脚本/setup 写入的 peer 身份模式 |
+| `OPENVIKING_PEER_ROLE` | `peer_role` | 安装脚本/setup 写入的记忆归属（`none` / `assistant` / `person`） |
 | `OPENVIKING_PEER_PREFIX` | `peer_prefix` | 安装脚本/setup 写入的 assistant peer 前缀 |
 | `OPENVIKING_RECALL_RESOURCES` | `recallResources` | 是否把 resources 纳入自动召回和默认 memory_recall |
 | `OPENVIKING_LOG_ROUTING` | `logFindRequests` | 打开检索/路由日志 |

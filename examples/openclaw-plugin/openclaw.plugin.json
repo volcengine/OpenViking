@@ -80,14 +80,14 @@
       "help": "HTTP URL when mode is remote (or ${OPENVIKING_BASE_URL})"
     },
     "peer_role": {
-      "label": "Peer Role",
-      "placeholder": "assistant",
-      "help": "Controls which messages include peer_id: none, assistant, or person. New installs default to assistant."
+      "label": "Memory Scope (peer_role)",
+      "placeholder": "none",
+      "help": "Where memories are stored. none: one shared memory for this OpenViking user (default). assistant: a separate memory per assistant. person: a separate memory per sender."
     },
     "peer_prefix": {
       "label": "Peer Prefix",
       "placeholder": "optional-prefix",
-      "help": "Optional prefix for assistant peer_id values derived from OpenClaw runtime agent IDs."
+      "help": "Only used when Memory Scope is assistant. Prefix added to the peer id derived from the OpenClaw agent id."
     },
     "apiKey": {
       "label": "OpenViking API Key",
@@ -281,8 +281,8 @@
           "assistant",
           "person"
         ],
-        "default": "assistant",
-        "description": "Controls which session messages include peer_id."
+        "default": "none",
+        "description": "Memory scope. none: one shared memory for the OpenViking user. assistant: a separate memory per assistant. person: a separate memory per sender. Also controls which session messages include peer_id."
       },
       "peer_prefix": {
         "type": "string",

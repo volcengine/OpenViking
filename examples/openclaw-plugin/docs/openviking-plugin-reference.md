@@ -75,7 +75,7 @@ $OPENCLAW_STATE_DIR/openclaw.json
 
 | 参数 | 类型 | 默认值 | 环境变量 | 说明 |
 | --- | --- | --- | --- | --- |
-| `peer_role` | `"none"` \| `"assistant"` \| `"person"` | `assistant` | — | Peer 身份模式。Session message 使用 body `peer_id`；数据面 recall/search 使用 `X-OpenViking-Actor-Peer`。 |
+| `peer_role` | `"none"` \| `"assistant"` \| `"person"` | `none` | — | 记忆归属。`none`：共用一份，挂在 OpenViking 用户下（默认）；`assistant`：按助手分开；`person`：按发送者分开。Session message 使用 body `peer_id`；数据面 recall/search 使用 `X-OpenViking-Actor-Peer`。 |
 | `peer_prefix` | string | 空 | — | `peer_role=assistant` 时 assistant `peer_id` / actor peer 值的可选前缀。交互式 setup 仅允许字母、数字、`_`、`-`。 |
 
 ### 3.3 自动捕获与提交

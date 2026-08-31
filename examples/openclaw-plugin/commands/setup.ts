@@ -85,7 +85,7 @@ const CONFIG_KEYS_TO_PRESERVE = [
 ] as const;
 
 type PeerRole = "none" | "assistant" | "person";
-const DEFAULT_SETUP_PEER_ROLE: PeerRole = "assistant";
+const DEFAULT_SETUP_PEER_ROLE: PeerRole = "none";
 type RecallTargetType = "resource" | "user" | "agent";
 const ALLOWED_RECALL_TARGET_TYPES = ["resource", "user", "agent"] as const;
 
@@ -206,9 +206,17 @@ async function askPeerRole(
   q: (prompt: string, def?: string) => Promise<string>,
   defaultValue: PeerRole,
 ): Promise<PeerRole> {
+  console.log(
+    `  ${tr(
+      zh,
+      "Memory scope — none: one shared memory for this OpenViking user; " +
+        "assistant: a separate memory per assistant; person: a separate memory per sender.",
+      "记忆归属 —— none：所有对话共用同一份记忆；assistant：按助手分开存放；person：按发送者分开存放。",
+    )}`,
+  );
   while (true) {
     const value = await q(
-      tr(zh, "Peer Role (none/assistant/person)", "Peer Role（none/assistant/person）"),
+      tr(zh, "Memory scope (none/assistant/person)", "记忆归属（none/assistant/person）"),
       defaultValue,
     );
     const role = normalizePeerRole(value);
@@ -216,8 +224,8 @@ async function askPeerRole(
     console.log(
       `  ✗ ${tr(
         zh,
-        'Peer Role must be "none", "assistant", or "person".',
-        'Peer Role 必须是 "none"、"assistant" 或 "person"。',
+        'Memory scope must be "none", "assistant", or "person".',
+        '记忆归属必须是 "none"、"assistant" 或 "person"。',
       )}`,
     );
   }
@@ -605,7 +613,7 @@ export function registerSetupCli(api: any): void {
         .option("--zh", "Chinese prompts")
         .option("--base-url <url>", "OpenViking server URL (enables non-interactive mode)")
         .option("--api-key <key>", "API key for authentication")
-        .option("--peer-role <role>", "Peer ID role: none, assistant, or person")
+        .option("--peer-role <role>", "Memory scope: none (shared), assistant (per assistant), or person (per sender)")
         .option("--peer-prefix <prefix>", "Prefix for assistant peer_id values")
         .option("--account-id <id>", "Account ID (required for root API keys)")
         .option("--user-id <id>", "User ID (required for root API keys)")

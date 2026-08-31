@@ -152,7 +152,7 @@ const DEFAULT_COMMIT_TOKEN_THRESHOLD_RATIO = 0.5;
 const DEFAULT_COMMIT_KEEP_RECENT_COUNT = 10;
 const DEFAULT_BYPASS_SESSION_PATTERNS: string[] = [];
 const DEFAULT_EMIT_STANDARD_DIAGNOSTICS = false;
-const DEFAULT_PEER_ROLE = "assistant" as const;
+const DEFAULT_PEER_ROLE = "none" as const;
 const DEFAULT_PEER_PREFIX = "";
 const DEFAULT_TRACE_RECALL_DIR = "~/.openclaw/openviking/recall-traces";
 const DEFAULT_TRACE_RECALL_RETENTION_DAYS = 14;
@@ -776,14 +776,16 @@ export const memoryOpenVikingConfigSchema = {
       help: "HTTP URL when mode is remote (or use ${OPENVIKING_BASE_URL})",
     },
     peer_role: {
-      label: "Peer Role",
+      label: "Memory Scope (peer_role)",
       placeholder: DEFAULT_PEER_ROLE,
-      help: 'Controls which session messages get peer_id: "none", "assistant", or "person".',
+      help:
+        'Where memories are stored. "none" (default): one shared memory for this OpenViking user. ' +
+        '"assistant": a separate memory per assistant. "person": a separate memory per sender.',
     },
     peer_prefix: {
       label: "Peer Prefix",
       placeholder: "optional-prefix",
-      help: "Optional prefix applied to assistant peer_id values derived from OpenClaw runtime agent IDs.",
+      help: 'Only used when Memory Scope is "assistant". Prefix added to the peer id derived from the OpenClaw agent id.',
     },
     apiKey: {
       label: "OpenViking API Key",
