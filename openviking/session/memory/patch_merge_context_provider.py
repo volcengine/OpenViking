@@ -10,9 +10,11 @@ from typing import Any
 
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryFile, MemoryTypeSchema
+from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
+from openviking.session.memory.utils import add_line_numbers, line_count
 from openviking.session.memory.utils.language import resolve_output_language_from_text
 
 _SYSTEM_HIDDEN_FIELDS = {
@@ -74,6 +76,14 @@ class PatchMergePatch:
         return "unknown"
 
 
+@dataclass(frozen=True, slots=True)
+class PatchMergeSchemaBinding:
+    """Bind one extraction memory type to the registry that defines it."""
+
+    memory_type: str
+    registry: MemoryTypeRegistry
+
+
 def _resolve_patch_output_language(patches: list[PatchMergePatch]) -> str:
     return resolve_output_language_from_text(_patch_language_text(patches), fallback_language="en")
 
@@ -117,16 +127,22 @@ class PatchMergeContextProvider(SessionExtractContextProvider):
     def __init__(
         self,
         *,
-        memory_type: str,
         patches: list[PatchMergePatch],
+        memory_type: str | None = None,
+        schema_binding: PatchMergeSchemaBinding | None = None,
         required_file_uris: list[str] | None = None,
         output_language: str | None = None,
     ):
+        if (memory_type is None) == (schema_binding is None):
+            raise ValueError("PatchMergeContextProvider requires exactly one schema source")
         super().__init__(messages=[])
-        self.memory_type = memory_type
+        self.memory_type = (
+            schema_binding.memory_type if schema_binding is not None else str(memory_type)
+        )
         self.required_file_uris = list(required_file_uris or [])
         self.patches = list(patches)
         self._output_language = output_language or _resolve_patch_output_language(self.patches)
+        self._registry = schema_binding.registry if schema_binding is not None else None
 
     def instruction(self) -> str:
         output_language = self._output_language
@@ -157,6 +173,31 @@ is an existing file, put it in delete_ids; if it is only a new proposal, omit it
         if schema is None or not schema.enabled:
             raise ValueError(f"Memory schema not found or disabled: {self.memory_type}")
         return [schema]
+
+    async def read_file(self, uri: str) -> dict[str, Any] | None:
+        """Render a seeded policy snapshot without reparsing its storage format."""
+        # Optimizers seed typed snapshots before ExtractLoop starts. Reading the
+        # URI through the generic memory reader would reinterpret specialized
+        # formats such as SKILL.md and break patch materialization.
+        memory_file = self.read_file_contents.get(uri)
+        if memory_file is None:
+            return await super().read_file(uri)
+
+        result = memory_file.to_metadata()
+        result.pop("links", None)
+        result.pop("backlinks", None)
+        for hidden_field in _SYSTEM_HIDDEN_FIELDS:
+            result.pop(hidden_field, None)
+        result["page_id"] = self.get_extract_context().page_id_map.get_page_id(uri)
+        plain_content = memory_file.plain_content() or ""
+        if plain_content:
+            result["content"] = add_line_numbers(plain_content, start_line=1)
+        elif line_count(plain_content) == 0:
+            result["content"] = (
+                "<system-reminder>Warning: the file exists but the contents are empty."
+                "</system-reminder>"
+            )
+        return result
 
     async def prefetch(self) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = []

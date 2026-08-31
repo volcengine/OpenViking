@@ -14,9 +14,11 @@ from openviking.session.memory.dataclass import MemoryFile, StoredLink
 from openviking.session.memory.extract_loop import ExtractLoop
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_updater import ExtractContext
+from openviking.session.memory.merge_op import MergeOpFactory
 from openviking.session.memory.patch_merge_context_provider import (
     PatchMergeContextProvider,
     PatchMergePatch,
+    PatchMergeSchemaBinding,
 )
 from openviking.session.train.domain import (
     Policy,
@@ -47,7 +49,9 @@ class PatchMergePolicyOptimizer:
 
     viking_fs: Any = None
     vlm: Any = None
+    # Policy/updater type can differ from the schema used by ExtractLoop.
     memory_type: str = "experiences"
+    schema_binding: PatchMergeSchemaBinding | None = None
 
     @tracer(
         "train.policy_optimizer.patch_merge.plan",
@@ -80,11 +84,12 @@ class PatchMergePolicyOptimizer:
             policy_set=policy_set,
             context=context,
         )
-        items = _operations_to_plan_items(
+        items = await _operations_to_plan_items(
             operations=operations,
             gradients=patch_gradients,
             policy_set=policy_set,
             memory_type=self.memory_type,
+            schema_binding=self.schema_binding,
         )
         _log_merge_output(
             target="all",
@@ -126,8 +131,12 @@ class PatchMergePolicyOptimizer:
             raise RuntimeError("VikingFS is required for patch-merge policy optimization")
 
         extract_context = ExtractContext(list(context.messages or []))
+        schema_memory_type = (
+            self.schema_binding.memory_type if self.schema_binding is not None else self.memory_type
+        )
         provider = PatchMergeContextProvider(
-            memory_type=self.memory_type,
+            memory_type=self.memory_type if self.schema_binding is None else None,
+            schema_binding=self.schema_binding,
             required_file_uris=_required_file_uris(gradients, policy_set),
             patches=[_gradient_to_merge_patch(gradient) for gradient in gradients],
         )
@@ -138,7 +147,7 @@ class PatchMergePolicyOptimizer:
         isolation_handler = MemoryIsolationHandler(
             context.request_context,
             extract_context,
-            allowed_memory_types={self.memory_type},
+            allowed_memory_types={schema_memory_type},
         )
         isolation_handler.prepare_messages()
         provider._isolation_handler = isolation_handler
@@ -384,34 +393,38 @@ def _policy_to_memory_file(policy: Policy, *, memory_type: str = "experiences") 
         extra_fields=extra_fields,
     )
 
-def _operations_to_plan_items(
+async def _operations_to_plan_items(
     *,
     operations: Any,
     gradients: list[SemanticGradient],
     policy_set: PolicySet,
     memory_type: str,
+    schema_binding: PatchMergeSchemaBinding | None = None,
 ) -> list[PolicyPlanItem]:
+    operation_memory_type = (
+        schema_binding.memory_type if schema_binding is not None else memory_type
+    )
     items: list[PolicyPlanItem] = []
     source_links_by_target = _source_trajectory_links_by_target(gradients, policy_set)
     superseded_policies = _superseded_policies_for_gradients(gradients, policy_set)
     confidence_values = [float(gradient.confidence) for gradient in gradients]
     confidence = max(confidence_values) if confidence_values else None
-    name_field = _name_field_for_memory_type(memory_type)
+    name_field = _name_field_for_memory_type(operation_memory_type)
 
-    upsert_output_count = _upsert_output_count(operations, memory_type=memory_type)
+    upsert_output_count = _upsert_output_count(
+        operations,
+        memory_type=operation_memory_type,
+    )
     replacement_source_uris_by_target = _replacement_source_uris_by_target(operations)
     upsert_target_uris: set[str] = set()
     for op in getattr(operations, "upsert_operations", []) or []:
-        if getattr(op, "memory_type", None) != memory_type:
+        if getattr(op, "memory_type", None) != operation_memory_type:
             continue
         fields = dict(getattr(op, "memory_fields", {}) or {})
-        after_content = str(fields.get("content") or "")
-        if not after_content.strip():
-            continue
         target_name = str(
             fields.get(name_field)
             or fields.get("name")
-            or _fallback_policy_name(op, memory_type=memory_type)
+            or _fallback_policy_name(op, memory_type=operation_memory_type)
         )
         target_uri = first_uri(getattr(op, "uris", []) or [])
         old_file = getattr(op, "old_memory_file_content", None)
@@ -419,6 +432,14 @@ def _operations_to_plan_items(
         if before_content is None and target_uri:
             policy = _find_policy_by_uri(policy_set, target_uri)
             before_content = policy.content if policy is not None else None
+        after_content = await _materialize_content_field(
+            fields.get("content"),
+            before_content=before_content,
+            schema_binding=schema_binding,
+        )
+        if not after_content.strip():
+            continue
+        fields["content"] = after_content
         items.append(
             PolicyPlanItem(
                 kind="upsert",
@@ -521,11 +542,29 @@ def _operations_to_plan_items(
     return items
 
 
+async def _materialize_content_field(
+    value: Any,
+    *,
+    before_content: str | None,
+    schema_binding: PatchMergeSchemaBinding | None,
+) -> str:
+    if schema_binding is None:
+        return str(value or "")
+    schema = schema_binding.registry.get(schema_binding.memory_type)
+    if schema is None:
+        return str(value or "")
+    content_field = next((field for field in schema.fields if field.name == "content"), None)
+    if content_field is None:
+        return str(value or "")
+    merged = await MergeOpFactory.from_field(content_field).apply(before_content, value)
+    return str(merged or "")
+
+
 def _name_field_for_memory_type(memory_type: str) -> str:
     """Return the extra_fields key for the policy name in a given memory type."""
     if memory_type == "experiences":
         return "experience_name"
-    if memory_type == "skills":
+    if memory_type in {"skills", "session_skills"}:
         return "skill_name"
     if memory_type.endswith("s"):
         return f"{memory_type[:-1]}_name"
@@ -536,7 +575,7 @@ def _fallback_policy_name(op: Any, *, memory_type: str) -> str:
     uri = first_uri(getattr(op, "uris", []) or [])
     if uri:
         # For skills: path/to/skills/my_skill/SKILL.md → my_skill
-        if memory_type == "skills" and uri.endswith("/SKILL.md"):
+        if memory_type in {"skills", "session_skills"} and uri.endswith("/SKILL.md"):
             parts = uri.rstrip("/").split("/")
             if len(parts) >= 2:
                 return parts[-2]

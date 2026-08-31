@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Session training framework for trajectory/experience policy optimization."""
 
+from openviking.session.memory.patch_merge_context_provider import PatchMergeSchemaBinding
 from openviking.session.train.batch_runner import (
     BatchTrainEvalConfig,
     BatchTrainEvalReport,
@@ -132,6 +133,7 @@ __all__ = [
     "TrajectoryAnalyzerContext",
     "PatchMergePolicyOptimizer",
     "PatchMergePolicyOptimizerContext",
+    "PatchMergeSchemaBinding",
     "PolicyTrainer",
     "PipelineLifecycleHook",
     "PipelineReportBuilder",

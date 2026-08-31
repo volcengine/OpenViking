@@ -34,6 +34,11 @@ class TestResolveOperations:
                 MemoryField(name="name", field_type=FieldType.STRING, merge_op=MergeOp.IMMUTABLE),
                 MemoryField(name="owner", field_type=FieldType.STRING, merge_op=MergeOp.REPLACE),
                 MemoryField(name="count", field_type=FieldType.INT64, merge_op=MergeOp.SUM),
+                MemoryField(
+                    name="description",
+                    field_type=FieldType.STRING,
+                    merge_op=MergeOp.REPLACE,
+                ),
                 MemoryField(name="content", field_type=FieldType.STRING, merge_op=MergeOp.PATCH),
             ],
         )
@@ -42,7 +47,12 @@ class TestResolveOperations:
             uri=existing_uri,
             content="old content",
             memory_type="entities",
-            extra_fields={"name": "Melanie", "owner": "Alice", "count": 2},
+            extra_fields={
+                "name": "Melanie",
+                "owner": "Alice",
+                "count": 2,
+                "description": "old description",
+            },
         )
 
         context_provider = Mock()
@@ -66,7 +76,13 @@ class TestResolveOperations:
 
         operations, _ = await loop.resolve_operations(
             AttrDict(
-                entities=[{"content": "new content", "page_id": 7}],
+                entities=[
+                    {
+                        "description": "new description",
+                        "content": "new content",
+                        "page_id": 7,
+                    }
+                ],
                 delete_uris=[],
             )
         )
@@ -77,6 +93,7 @@ class TestResolveOperations:
         assert operation.memory_fields["name"] == "Melanie"
         assert "owner" not in operation.memory_fields
         assert "count" not in operation.memory_fields
+        assert operation.memory_fields["description"] == "new description"
         assert operation.memory_fields["content"] == "new content"
         isolation_handler.calculate_memory_uris.assert_not_called()
 

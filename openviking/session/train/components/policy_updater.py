@@ -158,13 +158,7 @@ def _apply_items_to_snapshot(items: list[PolicyPlanItem], policy_set: PolicySet)
 
         if item.kind == "delete":
             existing = policies_by_uri.get(uri) or _find_policy(
-                PolicySet(
-                    policy_set.root_uri,
-                    result,
-                    metadata=dict(policy_set.metadata),
-                    viking_fs=policy_set.viking_fs,
-                    request_context=policy_set.request_context,
-                ),
+                result,
                 uri=None,
                 name=item.target_name,
             )
@@ -181,13 +175,7 @@ def _apply_items_to_snapshot(items: list[PolicyPlanItem], policy_set: PolicySet)
         if item.kind != "upsert" or item.after_content is None:
             continue
         existing = policies_by_uri.get(uri) or _find_policy(
-            PolicySet(
-                policy_set.root_uri,
-                result,
-                metadata=dict(policy_set.metadata),
-                viking_fs=policy_set.viking_fs,
-                request_context=policy_set.request_context,
-            ),
+            result,
             uri=None,
             name=item.target_name,
         )
@@ -213,22 +201,16 @@ def _apply_items_to_snapshot(items: list[PolicyPlanItem], policy_set: PolicySet)
         policies_by_uri[uri] = updated
 
     result.sort(key=lambda policy: policy.uri)
-    return PolicySet(
-        root_uri=policy_set.root_uri,
-        policies=result,
-        metadata=dict(policy_set.metadata),
-        viking_fs=policy_set.viking_fs,
-        request_context=policy_set.request_context,
-    )
+    return policy_set.with_policies(result)
 
 
 def _find_policy(
-    policy_set: PolicySet,
+    policies: list[Policy],
     *,
     uri: str | None,
     name: str,
 ) -> Policy | None:
-    for policy in policy_set.policies:
+    for policy in policies:
         if uri and policy.uri == uri:
             return policy
         if not uri and policy.name == name:
@@ -255,7 +237,7 @@ def _plan_to_resolved_operations(
 
     for item in plan.items:
         uri = _target_uri(item, policy_set.root_uri)
-        current = _find_policy(policy_set, uri=uri, name=item.target_name)
+        current = _find_policy(policy_set.policies, uri=uri, name=item.target_name)
         if (
             current is not None
             and item.before_content is not None
@@ -277,7 +259,7 @@ def _plan_to_resolved_operations(
             errors.append(f"missing after_content for {item.target_name}")
             continue
 
-        updated = _find_policy(updated_policy_set, uri=uri, name=item.target_name)
+        updated = _find_policy(updated_policy_set.policies, uri=uri, name=item.target_name)
         if updated is None:
             errors.append(f"planned policy not found after simulation: {item.target_name}")
             continue

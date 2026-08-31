@@ -14,8 +14,8 @@ from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.merge_op import MergeOpFactory
+from openviking.session.skill.skill_state_adapter import SkillStateAdapter
 from openviking.storage.abstract_overview import body_for_preview
-from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
 from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.exceptions import NotFoundError
@@ -52,10 +52,12 @@ class SkillOperationUpdater:
         registry: MemoryTypeRegistry,
         skill_processor: SkillProcessor,
         viking_fs: Optional[VikingFS] = None,
+        transaction_handle: Any = None,
     ):
         self._registry = registry
         self._skill_processor = skill_processor
         self._viking_fs = viking_fs or get_viking_fs()
+        self._transaction_handle = transaction_handle
 
     async def apply_operations(
         self,
@@ -105,6 +107,7 @@ class SkillOperationUpdater:
                 viking_fs=self._viking_fs,
                 ctx=ctx,
                 allow_local_path_resolution=False,
+                lease_ref=self._transaction_handle,
             )
             created_root_uri = (
                 processor_result.get("root_uri") or processor_result.get("uri") or root_uri
@@ -118,15 +121,17 @@ class SkillOperationUpdater:
                 "name": merged_skill["name"],
             }
 
-        merged_skill = await self._skill_processor.sanitize_skill_privacy(merged_skill, ctx)
-        serialized = SkillLoader.to_skill_md(merged_skill)
-        write_result = await ContentWriteCoordinator(self._viking_fs).write(
-            uri=skill_md_uri,
-            content=serialized,
+        skills_root_uri = root_uri.rsplit("/", 1)[0]
+        processor_result = await self._skill_processor.process_skill(
+            data=merged_skill,
+            viking_fs=self._viking_fs,
             ctx=ctx,
-            mode="replace",
+            allow_local_path_resolution=False,
+            privacy_change_reason="auto-extracted from session skill update",
+            target_uri=skills_root_uri,
+            lease_ref=self._transaction_handle,
         )
-        updated_root_uri = write_result.get("root_uri") or root_uri
+        updated_root_uri = processor_result.get("root_uri") or root_uri
         return {
             "status": "success",
             "action": "update",
@@ -145,17 +150,16 @@ class SkillOperationUpdater:
         if not schema:
             raise ValueError(f"Unknown session skill schema: {operation.memory_type}")
 
-        skill = {
-            "name": (existing_skill or {}).get("name")
-            or operation.memory_fields.get("skill_name", ""),
-            "description": (existing_skill or {}).get("description", ""),
-            "content": (existing_skill or {}).get("content"),
-            "allowed_tools": list((existing_skill or {}).get("allowed_tools") or []),
-            "tags": list(
-                (existing_skill or {}).get("tags")
-                or (["session-derived"] if existing_skill is None else [])
+        source_fields = existing_skill or operation.memory_fields
+        skill = SkillStateAdapter.skill_payload(
+            name=str(
+                (existing_skill or {}).get("name") or operation.memory_fields.get("skill_name", "")
             ),
-        }
+            content=(existing_skill or {}).get("content"),
+            metadata=source_fields,
+        )
+        if existing_skill is None and not skill.get("tags"):
+            skill["tags"] = ["session-derived"]
 
         for schema_field in schema.fields:
             if schema_field.name not in operation.memory_fields:

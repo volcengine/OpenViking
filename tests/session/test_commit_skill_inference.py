@@ -250,7 +250,7 @@ async def test_skill_operation_updater_creates_skill_with_session_defaults():
 
 
 @pytest.mark.asyncio
-async def test_skill_operation_updater_updates_existing_skill(monkeypatch):
+async def test_skill_operation_updater_updates_existing_skill():
     existing_skill_md = """---
 name: code-review
 description: Review code carefully
@@ -258,6 +258,11 @@ allowed-tools:
 - Read
 tags:
 - session-derived
+metadata:
+  vikingbot:
+    requires:
+      bins:
+      - git
 ---
 
 ## 核心规范
@@ -265,26 +270,13 @@ tags:
 """
     viking_fs = MagicMock()
     viking_fs.read_file = AsyncMock(return_value=existing_skill_md)
-    write_calls = {}
-
-    class _FakeContentWriter:
-        def __init__(self, _viking_fs):
-            self._viking_fs = _viking_fs
-
-        async def write(self, **kwargs):
-            write_calls.update(kwargs)
-            return {
-                "uri": kwargs["uri"],
-                "root_uri": kwargs["uri"].rsplit("/SKILL.md", 1)[0],
-            }
-
-    monkeypatch.setattr(
-        "openviking.session.skill.skill_operation_updater.ContentWriteCoordinator",
-        _FakeContentWriter,
-    )
-
     processor = MagicMock()
-    processor.sanitize_skill_privacy = AsyncMock(side_effect=lambda skill_dict, _ctx: skill_dict)
+    processor.process_skill = AsyncMock(
+        return_value={
+            "root_uri": "viking://user/default/skills/code-review",
+            "uri": "viking://user/default/skills/code-review",
+        }
+    )
     updater = SkillOperationUpdater(
         registry=_build_skill_registry(),
         skill_processor=processor,
@@ -323,16 +315,25 @@ tags:
     assert result.written_uris == []
     assert result.edited_uris == [uri]
     assert result.operation_results[0]["action"] == "update"
-    assert write_calls["uri"] == uri
-    assert write_calls["mode"] == "replace"
-    assert "allowed-tools:" in write_calls["content"]
-    assert "tags:" in write_calls["content"]
-    assert "Review code from evidence" in write_calls["content"]
-    assert "- 基于证据总结问题" in write_calls["content"]
+    processor.process_skill.assert_awaited_once()
+    call = processor.process_skill.await_args.kwargs
+    assert call["target_uri"] == "viking://user/default/skills"
+    assert call["allow_local_path_resolution"] is False
+    assert call["data"]["allowed_tools"] == ["Read"]
+    assert call["data"]["tags"] == ["session-derived"]
+    assert call["data"]["metadata"] == {
+        "vikingbot": {"requires": {"bins": ["git"]}},
+    }
+    assert call["data"]["description"] == "Review code from evidence"
+    assert "- 基于证据总结问题" in call["data"]["content"]
 
 
 @pytest.mark.asyncio
 async def test_skill_operation_updater_sanitizes_existing_skill_updates(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.utils.skill_processor.get_openviking_config",
+        lambda: SimpleNamespace(),
+    )
     existing_skill_md = """---
 name: code-review
 description: Review code carefully
@@ -340,6 +341,11 @@ allowed-tools:
 - Read
 tags:
 - session-derived
+metadata:
+  vikingbot:
+    requires:
+      bins:
+      - git
 ---
 
 ## 核心规范
@@ -347,23 +353,7 @@ tags:
 """
     viking_fs = MagicMock()
     viking_fs.read_file = AsyncMock(return_value=existing_skill_md)
-    write_calls = {}
-
-    class _FakeContentWriter:
-        def __init__(self, _viking_fs):
-            self._viking_fs = _viking_fs
-
-        async def write(self, **kwargs):
-            write_calls.update(kwargs)
-            return {
-                "uri": kwargs["uri"],
-                "root_uri": kwargs["uri"].rsplit("/SKILL.md", 1)[0],
-            }
-
-    monkeypatch.setattr(
-        "openviking.session.skill.skill_operation_updater.ContentWriteCoordinator",
-        _FakeContentWriter,
-    )
+    viking_fs.write_context = AsyncMock()
 
     async def _fake_extract_skill_privacy_values(*, skill_name, skill_description, content):
         assert skill_name == "code-review"
@@ -384,14 +374,18 @@ tags:
 
     privacy_config_service = MagicMock()
     privacy_config_service.upsert = AsyncMock()
+    vikingdb = MagicMock()
+    vikingdb.enqueue_embedding_msg = AsyncMock(return_value=True)
     processor = SkillProcessor(
-        vikingdb=MagicMock(),
+        vikingdb=vikingdb,
         privacy_config_service=privacy_config_service,
     )
+    processor._generate_overview = AsyncMock(return_value="Updated skill overview")
     updater = SkillOperationUpdater(
         registry=_build_skill_registry(),
         skill_processor=processor,
         viking_fs=viking_fs,
+        transaction_handle="skill-policy-lease",
     )
     uri = "viking://user/default/skills/code-review/SKILL.md"
     operations = ResolvedOperations(
@@ -424,15 +418,21 @@ tags:
     assert result.written_uris == []
     assert result.edited_uris == [uri]
     assert result.operation_results[0]["action"] == "update"
-    assert "secret-xyz" not in write_calls["content"]
-    assert "{{ov_privacy:skill:code-review:api_key}}" in write_calls["content"]
+    viking_fs.write_context.assert_awaited_once()
+    assert viking_fs.write_context.await_args.kwargs["lease_ref"] == "skill-policy-lease"
+    written_content = viking_fs.write_context.await_args.kwargs["content"]
+    assert "secret-xyz" not in written_content
+    assert "{{ov_privacy:skill:code-review:api_key}}" in written_content
+    assert SkillLoader.parse(written_content)["metadata"] == {
+        "vikingbot": {"requires": {"bins": ["git"]}},
+    }
     privacy_config_service.upsert.assert_awaited_once_with(
         ctx=ctx,
         category="skill",
         target_key="code-review",
         values={"api_key": "secret-xyz"},
         updated_by=ctx.user.user_id,
-        change_reason="auto-extracted from add_skill",
+        change_reason="auto-extracted from session skill update",
     )
 
 

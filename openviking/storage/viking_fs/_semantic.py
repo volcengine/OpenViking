@@ -3,7 +3,7 @@
 """Semantic retrieval mixin for VikingFS."""
 
 import asyncio
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from openviking.core.context import ContextLevel
 from openviking.core.retrieval_targets import resolve_retrieval_targets
@@ -433,23 +433,31 @@ class _SemanticMixin:
         content_filename: str = "content.md",
         is_leaf: bool = False,
         ctx: Optional[RequestContext] = None,
+        lease_ref: Dict[str, Any] | str | None = None,
     ) -> None:
         """Write context to AGFS (L0/L1/L2)."""
 
         await self._ensure_access(uri, ctx, action=AclAction.WRITE)
         path = self._uri_to_path(uri, ctx=ctx)
+        lease_kwargs = {"lease_ref": lease_ref} if lease_ref is not None else {}
 
         try:
-            await self._ensure_parent_dirs(path, ctx=ctx)
+            await self._ensure_parent_dirs(path, ctx=ctx, **lease_kwargs)
             try:
-                await self._async_agfs.mkdir(path)
+                if lease_ref is None:
+                    await self._async_agfs.mkdir(path)
+                else:
+                    await self._async_agfs.mkdir(
+                        path,
+                        fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
+                    )
             except Exception as e:
                 if "exist" not in str(e).lower():
                     raise
 
             if content:
                 content_uri = f"{uri}/{content_filename}"
-                await self.write_file(content_uri, content, ctx=ctx)
+                await self.write_file(content_uri, content, ctx=ctx, **lease_kwargs)
 
             if abstract:
                 abstract_uri = f"{uri}/.abstract.md"
@@ -467,6 +475,7 @@ class _SemanticMixin:
                         },
                     ),
                     ctx=ctx,
+                    **lease_kwargs,
                 )
 
             if overview:
@@ -485,6 +494,7 @@ class _SemanticMixin:
                         },
                     ),
                     ctx=ctx,
+                    **lease_kwargs,
                 )
 
         except Exception as e:
