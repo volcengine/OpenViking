@@ -14,7 +14,6 @@ from openviking.session.memory.dataclass import (
 from openviking.session.memory.merge_op.base import FieldType, MergeOp
 from openviking.session.memory.utils import (
     generate_uri,
-    is_uri_allowed,
     parse_memory_file_with_fields,
     validate_uri_template,
 )
@@ -302,86 +301,6 @@ class TestUriGeneration:
         )
 
         assert validate_uri_template(memory_type) is False
-
-
-class TestUriValidation:
-    """Tests for URI validation."""
-
-    def test_is_uri_allowed_by_directory(self):
-        """Test URI allowed by matching directory prefix."""
-        allowed_dirs = {
-            "viking://user/default/memories/preferences",
-            "viking://user/default/memories/tools",
-        }
-        allowed_patterns = set()
-
-        assert (
-            is_uri_allowed(
-                "viking://user/default/memories/preferences/test.md",
-                allowed_dirs,
-                allowed_patterns,
-            )
-            is True
-        )
-
-        assert (
-            is_uri_allowed(
-                "viking://user/default/memories/preferences",
-                allowed_dirs,
-                allowed_patterns,
-            )
-            is True
-        )
-
-        assert (
-            is_uri_allowed(
-                "viking://user/default/memories/preferences/subdir/test.md",
-                allowed_dirs,
-                allowed_patterns,
-            )
-            is True
-        )
-
-    def test_is_uri_allowed_by_pattern(self):
-        """Test URI allowed by matching pattern."""
-        allowed_dirs = set()
-        allowed_patterns = {
-            "viking://user/default/memories/preferences/{{ topic }}.md",
-        }
-
-        assert (
-            is_uri_allowed(
-                "viking://user/default/memories/preferences/Python code style.md",
-                allowed_dirs,
-                allowed_patterns,
-            )
-            is True
-        )
-
-    def test_is_uri_disallowed(self):
-        """Test URI not allowed."""
-        allowed_dirs = {
-            "viking://user/default/memories/preferences",
-        }
-        allowed_patterns = set()
-
-        assert (
-            is_uri_allowed(
-                "viking://user/default/memories/other/test.md",
-                allowed_dirs,
-                allowed_patterns,
-            )
-            is False
-        )
-
-        assert (
-            is_uri_allowed(
-                "viking://user/other/memories/preferences/test.md",
-                allowed_dirs,
-                allowed_patterns,
-            )
-            is False
-        )
 
 
 class TestParseMemoryFileWithFields:

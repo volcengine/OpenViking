@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from typing import Any, Dict, Set
+from typing import Any, Dict
 
 from openviking.session.memory.dataclass import MemoryTypeSchema
 from openviking.session.memory.utils.model import model_to_dict
@@ -216,69 +216,6 @@ def validate_uri_template(memory_type: MemoryTypeSchema) -> bool:
                 return False
 
     return True
-
-
-def _pattern_matches_uri(pattern: str, uri: str) -> bool:
-    """
-    Check if a URI matches a pattern with variables like {{ topic }}, {{ tool_name }}, etc.
-
-    The pattern matching is flexible:
-    - {{ variable }} matches any sequence of characters except '/'
-    - * matches any sequence of characters except '/' (shell-style)
-    - ** matches any sequence of characters including '/' (shell-style)
-
-    Args:
-        pattern: The pattern to match against (may contain {{ variables }} or * wildcards)
-        uri: The URI to check
-
-    Returns:
-        True if the URI matches the pattern
-    """
-    import re
-
-    # First, convert the pattern to a regex
-    # Escape regex special chars except {, }, *, /
-    pattern = re.escape(pattern)
-    # Unescape {, }, * that we need to handle specially
-    pattern = pattern.replace(r"\{", "{").replace(r"\}", "}").replace(r"\*", "*")
-    # Convert {{ variable }} to [^/]+
-    pattern = re.sub(r"\{\{\s*[^}]+\s*\}\}", r"[^/]+", pattern)
-    # Also support legacy {variable} format
-    pattern = re.sub(r"\{[^}]+\}", r"[^/]+", pattern)
-    # Convert ** to .* and * to [^/]*
-    pattern = pattern.replace("**", ".*")
-    pattern = pattern.replace("*", "[^/]*")
-    # Anchor the pattern
-    pattern = "^" + pattern + "$"
-
-    return bool(re.match(pattern, uri))
-
-
-def is_uri_allowed(
-    uri: str,
-    allowed_directories: Set[str],
-    allowed_patterns: Set[str],
-) -> bool:
-    """
-    Check if a URI is allowed based on allowed directories and patterns.
-
-    Args:
-        uri: The URI to check
-        allowed_directories: Set of allowed directory paths
-        allowed_patterns: Set of allowed path patterns
-
-    Returns:
-        True if the URI is allowed
-    """
-    # Check if URI starts with any allowed directory
-    for dir_path in allowed_directories:
-        if uri == dir_path or uri.startswith(dir_path + "/"):
-            return True
-    # Check if URI matches any allowed pattern
-    for pattern in allowed_patterns:
-        if _pattern_matches_uri(pattern, uri):
-            return True
-    return False
 
 
 def extract_uri_fields_from_flat_model(model: Any, schema: MemoryTypeSchema) -> Dict[str, Any]:
