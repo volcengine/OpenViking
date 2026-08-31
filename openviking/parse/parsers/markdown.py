@@ -949,7 +949,7 @@ class MarkdownParser(BaseParser):
             allowed root, otherwise None
         """
         try:
-            path = Path(path_str)
+            path = Path(self._unwrap_link_destination(path_str))
 
             # Reject absolute paths: they can point anywhere on the host
             if path.is_absolute():
@@ -1024,7 +1024,15 @@ class MarkdownParser(BaseParser):
         return is_valid_image(image_bytes, source_path)
 
     @staticmethod
-    def _is_remote_uri(path: str) -> bool:
+    def _unwrap_link_destination(path: str) -> str:
+        """Return the path represented by a Markdown ``<destination>``."""
+        path = path.strip()
+        if len(path) >= 2 and path.startswith("<") and path.endswith(">"):
+            return path[1:-1]
+        return path
+
+    @classmethod
+    def _is_remote_uri(cls, path: str) -> bool:
         """
         Check if a path is a remote URI.
 
@@ -1035,7 +1043,7 @@ class MarkdownParser(BaseParser):
             True if path starts with http://, https://, viking://, data:, or ftp://
         """
         remote_prefixes = ("http://", "https://", "viking://", "data:", "ftp://")
-        return path.startswith(remote_prefixes)
+        return cls._unwrap_link_destination(path).startswith(remote_prefixes)
 
     @staticmethod
     def _deduplicate_filename(filename: str, used_names: set[str]) -> str:
