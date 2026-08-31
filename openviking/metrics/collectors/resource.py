@@ -20,7 +20,7 @@ from typing import ClassVar
 
 from openviking.metrics.core.base import MetricCollector
 
-from .base import EventMetricCollector
+from .base import CollectorMetricWriter, EventMetricCollector
 
 
 @dataclass
@@ -48,10 +48,21 @@ class ResourceIngestionCollector(EventMetricCollector):
     )
 
     SUPPORTED_EVENTS: ClassVar[frozenset[str]] = frozenset({"resource.stage", "resource.wait"})
+    STAGES: ClassVar[tuple[str, ...]] = ("parse", "finalize", "persist", "summarize")
+    STAGE_STATUSES: ClassVar[tuple[str, ...]] = ("ok", "error")
 
     def collect(self, registry=None) -> None:
-        """Implement the collector interface as a no-op because resource metrics are push-driven."""
-        return None
+        """Initialize bounded stage outcome series before the first resource event."""
+        if registry is None:
+            return
+        writer = CollectorMetricWriter(registry)
+        for stage in self.STAGES:
+            for status in self.STAGE_STATUSES:
+                writer.initialize_counter(
+                    self.STAGE_TOTAL,
+                    labels={"stage": stage, "status": status},
+                    label_names=("stage", "status"),
+                )
 
     def receive_hook(self, event_name: str, payload: dict, registry) -> None:
         """

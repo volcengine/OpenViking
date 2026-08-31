@@ -64,6 +64,22 @@ def test_counter_only_increases():
         c.inc(amount=-1)
 
 
+def test_counter_can_initialize_labeled_series_at_zero(render_prometheus):
+    registry = MetricRegistry()
+    c = registry.counter("openviking_initialized_total", label_names=("status",))
+
+    c.initialize(labels={"status": "error"})
+    assert 'openviking_initialized_total{status="error"} 0' in render_prometheus(registry)
+
+    c.inc(amount=2, labels={"status": "error"})
+    c.initialize(labels={"status": "error"})
+
+    text = render_prometheus(registry)
+    assert 'openviking_initialized_total{status="error"} 2' in text
+    with pytest.raises(ValueError):
+        c.inc(amount=0, labels={"status": "error"})
+
+
 def test_histogram_boundary_bucket(registry, render_prometheus):
     h = registry.histogram("openviking_latency_seconds", buckets=(0.05, 0.1))
     h.observe(0.05)

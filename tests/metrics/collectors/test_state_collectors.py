@@ -45,6 +45,7 @@ def test_queue_collector_maps_status(monkeypatch):
     assert 'openviking_queue_in_progress{queue="semantic"} 1.0' in text
     assert 'openviking_queue_processed_total{queue="semantic"} 10' in text
     assert 'openviking_queue_errors_total{queue="semantic"} 2' in text
+    assert 'openviking_queue_errors_total{queue="embedding"} 0' in text
 
 
 def test_task_tracker_collector_maps_counts(monkeypatch):
