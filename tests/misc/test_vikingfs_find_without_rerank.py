@@ -51,6 +51,7 @@ async def test_find_works_without_rerank_config(monkeypatch) -> None:
             typed_query,
             ctx,
             limit,
+            mode,
             score_threshold,
             scope_dsl,
             level,
@@ -58,6 +59,7 @@ async def test_find_works_without_rerank_config(monkeypatch) -> None:
             captured["typed_query"] = typed_query
             captured["ctx"] = ctx
             captured["limit"] = limit
+            captured["mode"] = mode
             captured["score_threshold"] = score_threshold
             captured["scope_dsl"] = scope_dsl
             captured["level"] = level
@@ -98,6 +100,7 @@ async def test_find_works_without_rerank_config(monkeypatch) -> None:
     assert captured["typed_query"].target_directories == ["viking://resources/docs"]
     assert captured["ctx"] == fs._ctx_or_default.return_value
     assert captured["limit"] == 3
+    assert captured["mode"].value == "quick"
     assert captured["score_threshold"] == 0.2
     assert captured["scope_dsl"] == {"category": "doc"}
     assert captured["level"] is None
@@ -118,6 +121,7 @@ async def test_find_accepts_image_url_without_text_query(monkeypatch) -> None:
             typed_query,
             ctx,
             limit,
+            mode,
             score_threshold,
             scope_dsl,
             level,
