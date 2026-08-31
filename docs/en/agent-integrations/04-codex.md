@@ -57,9 +57,9 @@ For TraeCode CLI 2.0, launch `trae-cli` and use `trae-cli plugin list` to confir
 
 ## How it works
 
-The plugin integrates with Codex's lifecycle by hooking into key events. On `SessionStart` (`startup`, `clear`, or `resume`), it injects `profile.md` plus URI and abstract indexes for `preferences/` and `entities/` through the same shared, CJK-aware profile builder used by the other coding-agent integrations. It then searches OpenViking and injects relevant memories before every prompt (`UserPromptSubmit`), appends new turns to the session after each response (`Stop`), and commits the full transcript before compaction (`PreCompact`) to ensure memory extraction processes the entire conversation. Upon starting a fresh session, it also cleans up any orphaned sessions from previous runs. A resumed session may combine the fixed profile block with its latest archive digest.
+The plugin integrates with Codex's lifecycle by hooking into key events. On `SessionStart` (`startup`, `clear`, or `resume`), it injects `profile.md` plus URI and abstract indexes for `preferences/` and `entities/` through the same shared, CJK-aware profile builder used by the other coding-agent integrations. It then searches OpenViking and injects relevant memories before every prompt (`UserPromptSubmit`), appends new turns to the session after each response (`Stop`), commits the full transcript before compaction (`PreCompact`), and commits the session when the thread shuts down (`SessionEnd`) so memory extraction processes the entire conversation. Upon starting a fresh session, it also sweeps any orphaned sessions left by previous runs. A resumed session may combine the fixed profile block with its latest archive digest.
 
-> **Known limitation**: Codex does not fire a hook upon `SIGTERM`, `Ctrl+C`, or `/exit`. Orphaned sessions are recovered during the next `SessionStart` via the idle-TTL sweep (30 minutes) or the active-window heuristic.
+> **Known limitation**: `SessionEnd` requires Codex 0.145 or newer, and it only fires on a graceful exit (`/quit`, `/exit`, double `Ctrl-C`, EOF, end of a `codex exec` run). It does not fire on `SIGTERM`, a closed terminal, `kill -9`, or a crash, and it is deferred when the TUI runs against a `codex app-server` daemon. Those sessions — and every session on Codex older than 0.145, and any TraeCode CLI build without it — are recovered by the idle-TTL sweep (30 minutes) at the next `SessionStart`.
 
 Tool calls and results are captured as dedicated `tool` parts, and `tool_output` is reported verbatim. Truncation is the server's job: output larger than `tool_output_externalization.threshold_chars` (default `20000`) is written to the session's tool-result store, and the part keeps a synopsis stub plus `tool_output_ref`, so the original stays readable through [`/api/v1/sessions/{id}/tool-results`](../api/05-sessions.md#read_tool_result).
 
@@ -76,8 +76,8 @@ Credential source: env vars win by default — when any `OPENVIKING_*` credentia
 | `OPENVIKING_CREDENTIAL_SOURCE` | `auto` | `auto` prefers env-var credentials when any are set; `cli` forces the active ovcli config, `env` forces env vars |
 | `OPENVIKING_NO_AUTO_INJECT` | `false` | Disable fixed session-start profile/background injection without disabling per-prompt recall |
 | `OPENVIKING_PROFILE_TOKEN_BUDGET` | `10000` | CJK-aware token budget for `profile.md` plus `preferences/` and `entities/` indexes |
-| `OPENVIKING_CODEX_ACTIVE_WINDOW_MS` | `120000` | SessionStart active-window threshold |
 | `OPENVIKING_CODEX_IDLE_TTL_MS` | `1800000` | SessionStart idle-TTL sweep threshold |
+| `OPENVIKING_CODEX_LOCK_WAIT_MS` | `120000` (SessionEnd), `40000` (PreCompact) | How long a capture hook waits for the per-session state lock |
 | `OPENVIKING_CODEX_COMMITTED_TTL_MS` | `2592000000` | How long a committed session's transcript cursor is kept before its state file is retired |
 | `OPENVIKING_DEBUG` | `false` | Write logs to `~/.openviking/logs/codex-hooks.log` |
 

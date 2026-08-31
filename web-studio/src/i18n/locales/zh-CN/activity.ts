@@ -139,6 +139,10 @@ const activity = {
       terminal: '终端',
       agent: 'Agent',
     },
+    actionPanel: {
+      collapse: '收起面板',
+      expand: '展开面板',
+    },
     addResource: {
       title: '添加资源',
       description: '添加完成后左侧上下文树会刷新，右侧终端可继续定位新资源。',

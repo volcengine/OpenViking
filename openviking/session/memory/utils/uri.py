@@ -6,12 +6,117 @@ URI generation and validation utilities.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Any, Dict, Set
 
 from openviking.session.memory.dataclass import MemoryTypeSchema
 from openviking.session.memory.utils.model import model_to_dict
 from openviking.session.memory.utils.template_utils import TemplateUtils
+
+_PORTABLE_SEGMENT_MARKER = "~ov~"
+_PORTABLE_SEGMENT_HASH_LENGTH = 16
+_WINDOWS_INVALID_CHARS = frozenset('<>:"\\|?*')
+_WINDOWS_RESERVED_STEMS = frozenset(
+    {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{index}" for index in range(1, 10)),
+        *(f"LPT{index}" for index in range(1, 10)),
+    }
+)
+
+
+def _windows_reserved_stem(segment: str) -> str:
+    """Return the Win32 device-name stem used for portability checks."""
+    return segment.split(".", 1)[0].rstrip(" .").upper()
+
+
+def _is_portable_uri_segment(segment: str) -> bool:
+    """Return whether a rendered URI segment is safe as a Windows path component."""
+    if not segment or segment in {".", ".."}:
+        return False
+    if segment.endswith((" ", ".")):
+        return False
+    if _PORTABLE_SEGMENT_MARKER in segment:
+        # Reserve the generated marker so a literal segment cannot alias one.
+        return False
+    for character in segment:
+        codepoint = ord(character)
+        if (
+            character in _WINDOWS_INVALID_CHARS
+            or codepoint < 32
+            or codepoint == 127
+            or 0xD800 <= codepoint <= 0xDFFF
+        ):
+            return False
+    return _windows_reserved_stem(segment) not in _WINDOWS_RESERVED_STEMS
+
+
+def _split_safe_extension(segment: str) -> tuple[str, str]:
+    """Split a conventional final extension so rewritten memory files keep it."""
+    stem, separator, extension = segment.rpartition(".")
+    if not separator or not stem or not extension:
+        return segment, ""
+    if any(
+        character in _WINDOWS_INVALID_CHARS
+        or ord(character) < 32
+        or ord(character) == 127
+        or 0xD800 <= ord(character) <= 0xDFFF
+        for character in extension
+    ):
+        return segment, ""
+    return stem, f".{extension}"
+
+
+def _portable_uri_segment(segment: str) -> str:
+    """Rewrite one non-portable segment without collapsing distinct logical names."""
+    if _is_portable_uri_segment(segment):
+        return segment
+
+    digest = hashlib.sha256(segment.encode("utf-8", errors="surrogatepass")).hexdigest()
+    suffix = f"{_PORTABLE_SEGMENT_MARKER}{digest[:_PORTABLE_SEGMENT_HASH_LENGTH]}"
+
+    cleaned = "".join(
+        character
+        if (
+            character not in _WINDOWS_INVALID_CHARS
+            and ord(character) >= 32
+            and ord(character) != 127
+            and not 0xD800 <= ord(character) <= 0xDFFF
+        )
+        else "_"
+        for character in segment
+    ).rstrip(" .")
+    if not cleaned or cleaned in {".", ".."}:
+        cleaned = "_"
+    if _windows_reserved_stem(cleaned) in _WINDOWS_RESERVED_STEMS:
+        cleaned = f"_{cleaned}"
+
+    stem, extension = _split_safe_extension(cleaned)
+    stem = stem.rstrip(" .") or "_"
+    return f"{stem}{suffix}{extension}"
+
+
+def _make_uri_path_segments_portable(uri: str) -> str:
+    """Make every rendered memory URI segment portable on supported filesystems.
+
+    Clean segments remain byte-identical. A non-portable segment keeps a readable
+    safe prefix and receives a deterministic digest of its original value, so
+    values such as ``Desktop``, ``Desktop ``, and ``Desktop.`` stay distinct.
+    """
+    scheme_separator = "://"
+    if scheme_separator in uri:
+        scheme, _, path = uri.partition(scheme_separator)
+        prefix = f"{scheme}{scheme_separator}"
+    else:
+        prefix, path = "", uri
+
+    if not path:
+        return uri
+    return prefix + "/".join(_portable_uri_segment(segment) for segment in path.split("/"))
 
 
 def render_template(
@@ -46,7 +151,7 @@ def generate_uri(
     fields: Dict[str, Any],
     user_space: str = "default",
     extract_context: Any = None,
-) -> tuple[str, str]:
+) -> str:
     """
     Generate a full URI from memory type schema and field values.
 
@@ -81,7 +186,7 @@ def generate_uri(
             raise ValueError(f"Template variable '{var}' has None value")
     # Render using unified render_template method (same as content_template)
     uri = render_template(uri_template, context, extract_context)
-    return uri
+    return _make_uri_path_segments_portable(uri)
 
 
 def validate_uri_template(memory_type: MemoryTypeSchema) -> bool:

@@ -143,7 +143,7 @@ openviking overview viking://resources/docs/
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| uri | str | 是 | - | Viking URI |
+| uri | str | 是 | - | Viking URI（如 `viking://resources/docs/api.md`）或 32 字符十六进制向量记录 `id`（由 `stat()` 返回） |
 | offset | int | 否 | 0 | 起始行号（0 开始） |
 | limit | int | 否 | -1 | 读取的行数，`-1` 表示读到结尾 |
 | raw | bool | 否 | false | 返回未过滤 MEMORY_FIELDS 的原始存储内容（仅 HTTP API，Python SDK 暂未暴露）。 |
@@ -151,6 +151,7 @@ openviking overview viking://resources/docs/
 **说明**
 
 - `read()` 只接受文件 URI。传入已存在的目录 URI 时返回 `INVALID_ARGUMENT`（`400`），而不是 `NOT_FOUND`。该错误会携带结构化的 `details` 字段——`details.expected` 为 `"file"`，`details.actual` 为 `"directory"`，`details.resource` 为出错的 URI（HTTP 路径上会带上）——客户端据此即可以编程方式判断"文件 vs 目录"不匹配（例如回退到 `list`），而无需对错误消息做字符串匹配。
+- 除 Viking URI 外，还可以传入 `stat()` 返回的 32 字符十六进制文件 `id`。服务端通过向量索引查找对应 URI 并执行相同的权限校验。由于索引是异步生成的，新返回的 ID 可能暂时无法解析；对应向量记录被删除后，按 ID 查询也会失败。这两种情况下，服务端都会返回 `NOT_FOUND`，并提示数据可能尚未索引或已经删除。
 - 公开 URI 参数接受 `resources` 和 `user` 作用域。访问 session 文件时，使用 `viking://user/{user_id}/sessions/{session_id}`，也可以使用向后兼容的 `viking://session/{session_id}` 别名。`temp`、`queue` 等内部作用域会返回 `INVALID_URI`。
 
 

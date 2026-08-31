@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import httpx
 
 from openviking.pyagfs.exceptions import AGFSHTTPError
+from openviking_cli.exceptions import NotFoundError
 
 
 def _assert_error(
@@ -107,6 +108,32 @@ async def test_stat_backend_unavailable_returns_structured_error(app, service, m
         params={"uri": "viking://resources/unavailable"},
     )
     _assert_error(response, status_code=503, error_code="UNAVAILABLE")
+
+
+async def test_record_id_miss_hint_reaches_stat_and_read_responses(app, service, monkeypatch):
+    record_id = "0123456789abcdef0123456789abcdef"
+    reason = "The data may not have been indexed yet or may have been deleted"
+
+    async def fake_not_found(*args, **kwargs):
+        raise NotFoundError(record_id, "file", reason=reason)
+
+    monkeypatch.setattr(service.fs, "stat", fake_not_found)
+    monkeypatch.setattr(service.fs, "read_visible", fake_not_found)
+
+    for endpoint in ("/api/v1/fs/stat", "/api/v1/content/read"):
+        response = await _request_with_handler(
+            app,
+            "GET",
+            endpoint,
+            params={"uri": record_id},
+        )
+        _assert_error(
+            response,
+            status_code=404,
+            error_code="NOT_FOUND",
+            message_fragment=reason,
+        )
+        assert response.json()["error"]["details"]["reason"] == reason
 
 
 async def test_mkdir_permission_denied_returns_structured_error(app, service, monkeypatch):

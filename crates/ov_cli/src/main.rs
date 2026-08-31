@@ -530,6 +530,9 @@ enum Commands {
             help_heading = "Common options"
         )]
         node_limit: i32,
+        /// Comma-separated fields to display (name,uri,path,type,size,mode,mtime,locked,id,count,abstract)
+        #[arg(short = 'f', long = "fields", value_delimiter = ',', value_name = "FIELDS", help_heading = "Output options")]
+        fields: Option<Vec<String>>,
     },
     /// [Data] Get directory tree
     Tree {
@@ -568,6 +571,12 @@ enum Commands {
             help_heading = "Common options"
         )]
         level_limit: i32,
+        /// Simple path output (just paths, no tree formatting)
+        #[arg(short, long, help_heading = "Common options")]
+        simple: bool,
+        /// Comma-separated fields to display (name,uri,path,type,size,mode,mtime,locked,id,count)
+        #[arg(short = 'f', long = "fields", value_delimiter = ',', value_name = "FIELDS", help_heading = "Output options")]
+        fields: Option<Vec<String>>,
     },
     /// [Data] Create directory
     Mkdir {
@@ -931,6 +940,12 @@ enum Commands {
             help_heading = "Common options"
         )]
         node_limit: i32,
+        /// Simple output (one entry per line)
+        #[arg(short, long, help_heading = "Common options")]
+        simple: bool,
+        /// Comma-separated fields to display (name,uri,path,type,size,mode,mtime,locked,id)
+        #[arg(short = 'f', long = "fields", value_delimiter = ',', value_name = "FIELDS", help_heading = "Output options")]
+        fields: Option<Vec<String>>,
     },
     /// [Data] Session management commands
     Session {
@@ -3470,14 +3485,17 @@ async fn main() {
             abs_limit,
             all,
             node_limit,
-        } => handlers::handle_ls(uri, simple, recursive, abs_limit, all, node_limit, ctx).await,
+            fields,
+        } => handlers::handle_ls(uri, simple, recursive, abs_limit, all, node_limit, fields, ctx).await,
         Commands::Tree {
             uri,
             abs_limit,
             all,
             node_limit,
             level_limit,
-        } => handlers::handle_tree(uri, abs_limit, all, node_limit, level_limit, ctx).await,
+            simple,
+            fields,
+        } => handlers::handle_tree(uri, abs_limit, all, node_limit, level_limit, simple, fields, ctx).await,
         Commands::Mkdir { uri, description } => handlers::handle_mkdir(uri, description, ctx).await,
         Commands::Rm {
             uri,
@@ -3716,7 +3734,9 @@ async fn main() {
             pattern,
             uri,
             node_limit,
-        } => handlers::handle_glob(pattern, uri, node_limit, ctx).await,
+            simple,
+            fields,
+        } => handlers::handle_glob(pattern, uri, node_limit, simple, fields, ctx).await,
     };
 
     if let Err(e) = result {

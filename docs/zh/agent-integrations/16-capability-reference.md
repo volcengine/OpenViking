@@ -299,7 +299,7 @@ JS 系 harness 的召回逻辑均由 `recall-core.mjs` 中的三级降级链处�
 | harness | 轮内阈值触发 | 显式/边界触发 | 压缩触发 |
 |---|---|---|---|
 | claude-code | Stop：`pending_tokens ≥ 20000`（读服务端值），keep 10 | SessionEnd：无条件触发；SubagentStop：无条件触发（无阈值）；SessionStart：重放 pending | PreCompact：无条件触发（同步执行，不 detach） |
-| codex / trae-cli | Stop：同上，20000 / keep 10 | SessionStart(startup\|clear)：基于 active-window 的启发式（2min 内恰好 1 个 state → commit；≥2 个则跳过） + idle-TTL 扫描（>30min 一律 commit 并清理） | PreCompact：全量 commit（发空 body `{}`），随后置 `ovSessionId=null` |
+| codex / trae-cli | Stop：同上，20000 / keep 10 | SessionEnd（Codex ≥ 0.145）：无条件触发，先补齐 Stop 漏掉的轮次再 commit——父 hook 只写 `.ended` 标记并 detach worker（Codex 默认给 1s，`timeout` 上限 3s）；SessionStart(startup\|clear)：兜底扫描，提交带 `.ended` 标记或闲置超过 30min 的 state。trae-cli 若无 `SessionEnd` 则只走扫描 | PreCompact：全量 commit（发空 body `{}`），随后置 `ovSessionId=null` |
 | cursor | stop：`capturedSinceCommit ≥ 8`（按消息条数计算，≈4 轮问答；纯客户端计数），keep 0 | sessionEnd：已注册该事件（但实践中不触达，见 [§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)） | preCompact：无条件触发 |
 | trae / trae-cn | 每个有内容的 Stop 都 commit（无阈值），keep 0 | — | 无（上游无 PreCompact 事件） |
 | zcode | 同 trae（每 Stop 都 commit，keep 0；rollout 增量游标保守推进，若有漏掉的轮次，将在同会话的下个 Stop 补齐） | — | 无（上游无 PreCompact 事件） |
@@ -320,7 +320,8 @@ JS 系 harness 的召回逻辑均由 `recall-core.mjs` 中的三级降级链处�
 | harness | 正常退出 | Ctrl+C | SIGTERM | SIGHUP/关终端/关窗口·tab | kill -9/崩溃 | 补救路径 |
 |---|---|---|---|---|---|---|
 | claude-code | **C**（SessionEnd → detach 子进程 commit，用户不等待） | **C** | **C** | **C**（detached worker 自成进程组，不受 SIGHUP 波及） | **—** | 下次 Stop 越阈值 / `/compact` / 下次 SessionEnd |
-| codex / trae-cli | **—**（上游不提供 SessionEnd 类事件） | **—** | **—** | **—** | **—** | 下次 `SessionStart(startup\|clear)` 的启发式（2min 内恰好 1 个活跃 → commit）或 30min idle-TTL 扫描；≥2 并发会话时启发式让位于 TTL 扫描 |
+| codex | **C**（SessionEnd → detach worker commit，用户不等待；需 Codex ≥ 0.145） | **C\*** | **—** | **—** | **—** | C\* 前提：连按两次 `Ctrl-C` 属于正常退出、会触发 SessionEnd，单次不会。未 commit 的一律由下次 `SessionStart(startup\|clear)` 回收：标记仍在则 `ended_retry`，否则等 30min idle-TTL 扫描 |
+| trae-cli | **—**（除非 TraeCode CLI 版本已带 `SessionEnd`） | **—** | **—** | **—** | **—** | 下次 `SessionStart(startup\|clear)` 的 30min idle-TTL 扫描 |
 | cursor | **—**（chat 关闭 / new-chat 无事件） | **—** | **—** | **—**（`sessionEnd` 已注册且仅 window_close 触发，但此时宿主已销毁 shell-exec host，hook 在 spawn 前中止） | **—** | 结束在 <8 条消息水位的会话，尾部依赖同一会话的后续消息触发 commit |
 | trae / trae-cn | **—**（无 session-end 类事件） | **—** | **—** | **—** | **—** | 每 Stop 已 commit，最大待归档量 = 最后一轮 in-flight |
 | zcode | **—**（无 session-end 类事件） | **C\*** | **—** | **—** | **—** | C\* 前提：Ctrl+C 时该轮 Stop 已触发（detached worker 照常写完）；每 Stop 已 commit，漏掉的轮次靠 rollout 游标在同一会话的下个 Stop 补回 |
@@ -479,9 +480,9 @@ MCP `write` / REST `content/write` 的三道 guard（`content_write.py`）：可
 ## codex
 
 - **集成文档**：[Codex 记忆插件](./04-codex.md)
-- **形态**：Codex 插件（marketplace），4 hook（SessionStart 70s / UserPromptSubmit 130s / Stop 30s / PreCompact 60s）+ MCP 代理 + 1 experience skill。版本 0.7.5。
-- **能力亮点**：本地召回压缩管线（`codex exec`，[§3.2.5](#_3-2-5-召回再摘要)）；SessionStart 的 active-window 启发式 + idle-TTL 扫描，可自动回收历史会话中未归档的消息（[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)）。
-- **行为要点**：session id 为 `cx-<safeId>`（确定性推导，不读 state）；关闭时无 hook（上游不提供 SessionEnd），commit 依赖下次启动的回收路径；不使用磁盘 pending queue（离线靠游标不推进、下一轮重发补偿，[§3.3.4](#_3-3-4-pending-queue-离线补偿对照)）；active-window 120000ms / idle-TTL 1800000ms（env 配置）；Stop 默认 detach（`appended N turn(s)` 提示默认不展示）。
+- **形态**：Codex 插件（marketplace），5 hook（SessionStart 70s / UserPromptSubmit 130s / Stop 30s / SessionEnd 3s / PreCompact 60s）+ MCP 代理 + 1 experience skill。版本 0.8.0。
+- **能力亮点**：本地召回压缩管线（`codex exec`，[§3.2.5](#_3-2-5-召回再摘要)）；SessionEnd（Codex ≥ 0.145）在正常退出时补齐 Stop 漏掉的轮次并 commit，SessionStart 的兜底扫描回收那些没触发 SessionEnd 的退出所遗留的未归档消息（[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)）。
+- **行为要点**：session id 为 `cx-<safeId>`（确定性推导，不读 state）；SessionEnd 只在正常退出、且 Codex 0.145+ 时触发，信号、崩溃、旧版本以及 `codex app-server` 延后的场景都落到扫描路径；不使用磁盘 pending queue（离线靠游标不推进、下一轮重发补偿，[§3.3.4](#_3-3-4-pending-queue-离线补偿对照)）；idle-TTL 1800000ms、锁等待 120000ms（env 配置）；Stop 与 SessionEnd 默认 detach（`appended N turn(s)` 提示默认不展示）；单会话 mkdir 锁串行化 Stop worker、PreCompact、SessionEnd worker 与扫描。新增的 hook 事件在 Codex 侧没有信任记录，升级后需在 `/hooks` 中批准 SessionEnd。
 - **配置**：env + ovcli.conf `plugin.codex` + ov.conf `codex`；hooks 同时发送 Bearer 与 `X-API-Key` 兼容头（[§3.1.3](#_3-1-3-凭据体系)）。
 - **维度索引**：工具面 [§2.1](#_2-1-服务端-mcp-工具面) ｜召回 [§3.2](#_3-2-自动召回与注入) ｜commit [§3.3.2](#_3-3-2-常规-commit-触发条件)/[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵) ｜降级 [§3.6](#_3-6-降级与容错)。
 
@@ -489,7 +490,7 @@ MCP `write` / REST `content/write` 的三道 guard（`content_write.py`）：可
 
 - **集成文档**：[TRAE 记忆集成](./13-trae.md)
 - **形态**：TraeCode CLI 2.0 是 Codex 系 CLI（binary `traecli`，用户配置 `~/.trae/traecli.toml`，TUI 支持 `/plugins` `/skills` `/mcp`）。OpenViking 经 **codex 插件别名安装**接入：`--harness trae-cli` 复用 codex 安装流程，仅安装参数（binary / home / 配置路径）指向 TraeCode CLI。
-- **能力面**：与 codex 完全一致——4 hook + MCP 代理 + experience skill、本地召回压缩、active-window/idle-TTL commit 回收、resume archive 注入等，详见 codex 档案卡。
+- **能力面**：与 codex 同一套插件——5 个已注册 hook + MCP 代理 + experience skill、本地召回压缩、idle-TTL commit 回收、resume archive 注入等，详见 codex 档案卡。若 TraeCode CLI 所基于的 Codex 版本没有 `SessionEnd`，该 hook 会被忽略，关闭时的 commit 全部依赖 idle-TTL 扫描。
 - **版本支持**：仅支持 TraeCode CLI 2.0。1.0 与 2.0 不是同一套 CLI，2.0 才是 Codex 系、才能走 codex 插件别名安装；早期面向 1.0 的独立插件 `examples/trae-cli-memory-hooks`（`~/.trae/cli/hooks.json` + `[mcp_servers."openviking-memory"]` 方案）已废弃。
 - **维度索引**：同 codex 卡。
 

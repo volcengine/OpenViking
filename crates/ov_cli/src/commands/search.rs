@@ -756,9 +756,32 @@ pub async fn glob(
     node_limit: i32,
     output_format: OutputFormat,
     compact: bool,
+    simple: bool,
+    fields: Option<Vec<String>>,
 ) -> Result<()> {
-    let result = client.glob(pattern, uri, node_limit).await?;
-    output_success(&result, output_format, compact);
+    let has_fields = fields.is_some();
+    let extra: Option<&[String]> = if has_fields {
+        fields.as_deref()
+    } else {
+        None
+    };
+    let result = client.glob(pattern, uri, node_limit, extra).await?;
+    if simple && !has_fields {
+        super::filesystem::print_uri_blob_per_line(&result);
+        return Ok(());
+    }
+    if has_fields || simple {
+        let effective_fields = fields.or_else(|| Some(vec!["uri".to_string()]));
+        super::filesystem::output_entry_list(
+            &result,
+            output_format,
+            compact,
+            simple,
+            effective_fields.as_deref(),
+        );
+    } else {
+        output_success(&result, output_format, compact);
+    }
     Ok(())
 }
 

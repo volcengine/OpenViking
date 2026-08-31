@@ -26,13 +26,21 @@ class InvalidURIError(InvalidArgumentError):
 
 
 class NotFoundError(OpenVikingError):
-    def __init__(self, resource: str, resource_type: str = "resource"):
+    def __init__(
+        self,
+        resource: str,
+        resource_type: str = "resource",
+        reason: Optional[str] = None,
+    ):
         details = {"type": resource_type}
         if resource:
             details["resource"] = resource
             message = f"{resource_type.capitalize()} not found: {resource}"
         else:
             message = f"{resource_type.capitalize()} not found"
+        if reason:
+            details["reason"] = reason
+            message = f"{message}. {reason}"
         super().__init__(message, code="NOT_FOUND", details=details)
 
 

@@ -4,13 +4,13 @@
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass, field
 from typing import Any
 
 from openviking.core.namespace import context_type_for_uri, owner_fields_for_uri
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.expr import And, Contains, Eq, Or, PathScope
+from openviking.storage.vector_ids import vector_record_id
 from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.uri import VikingURI
@@ -58,22 +58,8 @@ def _root_ctx(account_id: str) -> RequestContext:
     return RequestContext(user=UserIdentifier(account_id, "default"), role=Role.ROOT)
 
 
-def _seed_uri_for_id(uri: str, level: Any) -> str:
-    try:
-        level_int = int(level)
-    except (TypeError, ValueError):
-        level_int = 2
-
-    if level_int == 0:
-        return uri if uri.endswith("/.abstract.md") else f"{uri}/.abstract.md"
-    if level_int == 1:
-        return uri if uri.endswith("/.overview.md") else f"{uri}/.overview.md"
-    return uri
-
-
 def _vector_record_id(account_id: str, uri: str, level: Any) -> str:
-    seed_uri = _seed_uri_for_id(uri, level)
-    return hashlib.md5(f"{account_id}:{seed_uri}".encode("utf-8")).hexdigest()
+    return vector_record_id(account_id, uri, level)
 
 
 def _has_vector_payload(record: dict[str, Any]) -> bool:

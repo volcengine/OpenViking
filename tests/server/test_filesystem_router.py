@@ -187,6 +187,47 @@ async def test_http_stat_returns_canonical_request_uri(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_http_stat_by_record_id_returns_resolved_uri(monkeypatch):
+    record_id = "0123456789abcdef0123456789abcdef"
+    resolved_uri = "viking://user/alice/resources/notes.md"
+    seen = {}
+
+    async def fake_stat(uri, ctx=None):
+        seen.update(uri=uri, ctx=ctx)
+        return {
+            "uri": resolved_uri,
+            "name": "notes.md",
+            "size": 12,
+            "mode": 0o644,
+            "modTime": "2026-08-28T00:00:00Z",
+            "isDir": False,
+            "isLocked": False,
+            "id": record_id,
+        }
+
+    monkeypatch.setattr(
+        filesystem,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(stat=fake_stat)),
+    )
+
+    app = FastAPI()
+    app.include_router(filesystem.router)
+    app.dependency_overrides[get_request_context] = lambda: RequestContext(
+        user=UserIdentifier("acct", "alice"), role=Role.USER
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        response = await client.get("/api/v1/fs/stat", params={"uri": record_id})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["uri"] == resolved_uri
+    assert seen["uri"] == record_id
+
+
+@pytest.mark.asyncio
 async def test_ls_user_container_lists_only_caller_space(app, client, service):
     """`viking://user` is the container of user spaces, not a current-user shorthand."""
     from openviking.server.auth import get_request_context

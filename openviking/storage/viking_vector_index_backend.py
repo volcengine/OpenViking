@@ -20,6 +20,7 @@ from openviking.storage.acl import (
     acl_principals,
 )
 from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, RawDSL
+from openviking.storage.vector_ids import vector_record_id
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.result import UpdateResult
 from openviking.storage.vectordb.utils.logging_init import init_cpp_logging
@@ -127,23 +128,6 @@ class _AsyncVectorAdapter:
         await asyncio.to_thread(
             lambda: self._adapter.get_collection().update(description=description)
         )
-
-    async def update_collection_schema(
-        self, fields: List[Dict[str, Any]], scalar_index: List[str], index_name: str
-    ) -> None:
-        def _update() -> None:
-            collection = self._adapter.get_collection()
-            collection.update(fields=fields)
-            if self._adapter.mode in {"local", "cuvs"}:
-                index_meta = collection.get_index_meta_data(index_name)
-                index_meta["ScalarIndex"] = scalar_index
-                collection.drop_index(index_name)
-                collection.create_index(index_name, index_meta)
-            else:
-                collection.update_index(index_name, scalar_index=scalar_index)
-
-        await asyncio.to_thread(_update)
-
 
 class _SingleAccountBackend:
     """绑定单个 account 的后端实现（内部类）"""
@@ -337,12 +321,6 @@ class _SingleAccountBackend:
         await self._async_adapter.update_collection_description(description)
         await self._refresh_meta_data_async()
         return True
-
-    async def update_collection_schema(
-        self, fields: List[Dict[str, Any]], scalar_index: List[str]
-    ) -> None:
-        await self._async_adapter.update_collection_schema(fields, scalar_index, self._index_name)
-        await self._refresh_meta_data_async()
 
     # =========================================================================
     # Data Operations (with tenant enforcement)
@@ -900,15 +878,6 @@ class VikingVectorIndexBackend:
 
     async def update_collection_description(self, description: str) -> bool:
         return await self._get_default_backend().update_collection_description(description)
-
-    async def update_collection_schema(
-        self, fields: List[Dict[str, Any]], scalar_index: List[str]
-    ) -> None:
-        default_backend = self._get_default_backend()
-        await default_backend.update_collection_schema(fields, scalar_index)
-        for backend in [*self._account_backends.values(), self._root_backend]:
-            if backend is not None and backend is not default_backend:
-                await backend._refresh_meta_data_async()
 
     # =========================================================================
     # 公开数据操作 API（强制要求 ctx）
@@ -1473,8 +1442,6 @@ class VikingVectorIndexBackend:
         new_uri: str,
         levels: Optional[List[int]] = None,
     ) -> bool:
-        import hashlib
-
         conds: List[FilterExpr] = [Eq("uri", uri), Eq("account_id", ctx.account_id)]
         if levels:
             conds.append(In("level", levels))
@@ -1507,13 +1474,6 @@ class VikingVectorIndexBackend:
             )
             return False
 
-        def _seed_uri_for_id(uri: str, level: int) -> str:
-            if level == 0:
-                return uri if uri.endswith("/.abstract.md") else f"{uri}/.abstract.md"
-            if level == 1:
-                return uri if uri.endswith("/.overview.md") else f"{uri}/.overview.md"
-            return uri
-
         updated_records: List[Dict[str, Any]] = []
         ids_to_delete: List[str] = []
         for record in full_records:
@@ -1525,9 +1485,7 @@ class VikingVectorIndexBackend:
             except (TypeError, ValueError):
                 level = 2
 
-            seed_uri = _seed_uri_for_id(new_uri, level)
-            id_seed = f"{ctx.account_id}:{seed_uri}"
-            new_id = hashlib.md5(id_seed.encode("utf-8")).hexdigest()
+            new_id = vector_record_id(ctx.account_id, new_uri, level)
 
             updated = {
                 **record,

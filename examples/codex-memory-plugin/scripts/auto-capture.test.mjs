@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -8,6 +8,24 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+
+async function endedMarkerStamps(dir, id) {
+  const prefix = `${id}.ended.`;
+  const files = await readdir(dir).catch(() => []);
+  return files
+    .filter((name) => name.startsWith(prefix))
+    .map((name) => Number(name.slice(prefix.length)))
+    .filter((ts) => Number.isFinite(ts));
+}
+
+async function endedMarkerExists(dir, id) {
+  return (await endedMarkerStamps(dir, id)).length > 0;
+}
+
+function writeEndedMarker(dir, id, ts) {
+  return writeFile(join(dir, `${id}.ended.${ts}`), String(ts));
+}
+
 
 function readRequestBody(req) {
   return new Promise((resolve, reject) => {
@@ -459,6 +477,149 @@ test("auto-capture skips compacted history after transcript shrink", async () =>
       ),
       false,
     );
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("auto-capture clears a stale session-end marker and never resets the cursor", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-capture-ended-"));
+  const transcriptPath = join(stateDir, "transcript.jsonl");
+  const batches = [];
+  const now = Date.now();
+
+  try {
+    await writeFile(join(stateDir, "resumed.json"), JSON.stringify({
+      codexSessionId: "resumed",
+      ovSessionId: "cx-resumed",
+      capturedTurnCount: 1,
+      createdAt: now - 1000,
+      lastUpdatedAt: now,
+    }));
+    await writeEndedMarker(stateDir, "resumed", now);
+    await writeFile(
+      transcriptPath,
+      [
+        { payload: { message: { role: "user", content: "first request" } } },
+        { payload: { message: { role: "user", content: "second request" } } },
+      ].map((entry) => JSON.stringify(entry)).join("\n"),
+    );
+
+    const env = (baseUrl) => ({
+      OPENVIKING_AUTO_CAPTURE: "1",
+      OPENVIKING_CODEX_STATE_DIR: stateDir,
+      OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
+      OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
+      OPENVIKING_CREDENTIAL_SOURCE: "env",
+      OPENVIKING_MIN_QUERY_LENGTH: "1",
+      OPENVIKING_WRITE_PATH_ASYNC: "0",
+      OPENVIKING_TIMEOUT_MS: "5000",
+      OPENVIKING_URL: baseUrl,
+    });
+
+    await withMockOpenViking(async (req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      if (req.method === "GET" && url.pathname === "/health") {
+        writeJson(res, { status: "ok", result: { ok: true } });
+        return;
+      }
+      if (req.method === "POST" && url.pathname.endsWith("/messages/batch")) {
+        batches.push(await readRequestBody(req));
+        writeJson(res, { status: "ok", result: { ok: true } });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/v1/sessions/cx-resumed") {
+        writeJson(res, { status: "ok", result: { pending_tokens: 0, commit_count: 0, total_message_count: 2 } });
+        return;
+      }
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "error", error: "not found" }));
+    }, async (baseUrl) => {
+      await runAutoCapture({ session_id: "resumed", transcript_path: transcriptPath }, env(baseUrl));
+
+      const marker = await endedMarkerExists(stateDir, "resumed");
+      assert.equal(marker, false, "a Stop proves the thread is alive again");
+      assert.equal(
+        JSON.parse(await readFile(join(stateDir, "resumed.json"), "utf-8")).capturedTurnCount,
+        2,
+      );
+
+      // An unreadable transcript must not look like a shrink.
+      await runAutoCapture(
+        { session_id: "resumed", transcript_path: join(stateDir, "gone.jsonl") },
+        env(baseUrl),
+      );
+      assert.equal(
+        JSON.parse(await readFile(join(stateDir, "resumed.json"), "utf-8")).capturedTurnCount,
+        2,
+      );
+    });
+
+    assert.equal(batches.flatMap((batch) => batch.messages || []).length, 1);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("a Stop clears only end markers older than the hook run", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-capture-marker-"));
+  const transcriptPath = join(stateDir, "transcript.jsonl");
+  const startedAt = Date.now();
+
+  try {
+    await writeFile(transcriptPath, JSON.stringify({
+      payload: { message: { role: "user", content: "hello" } },
+    }));
+
+    const env = (baseUrl, extra) => ({
+      OPENVIKING_AUTO_CAPTURE: "1",
+      OPENVIKING_CODEX_STATE_DIR: stateDir,
+      OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
+      OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
+      OPENVIKING_CREDENTIAL_SOURCE: "env",
+      OPENVIKING_MIN_QUERY_LENGTH: "1",
+      OPENVIKING_WRITE_PATH_ASYNC: "0",
+      OPENVIKING_TIMEOUT_MS: "5000",
+      OPENVIKING_URL: baseUrl,
+      OPENVIKING_HOOK_STARTED_AT: String(startedAt),
+      ...extra,
+    });
+
+    await withMockOpenViking(async (req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      if (req.method === "GET" && url.pathname === "/health") {
+        writeJson(res, { status: "ok", result: { ok: true } });
+        return;
+      }
+      if (req.method === "POST" && url.pathname.endsWith("/messages/batch")) {
+        await readRequestBody(req);
+        writeJson(res, { status: "ok", result: { ok: true } });
+        return;
+      }
+      if (req.method === "GET" && url.pathname.startsWith("/api/v1/sessions/")) {
+        writeJson(res, { status: "ok", result: { pending_tokens: 0 } });
+        return;
+      }
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "error", error: "not found" }));
+    }, async (baseUrl) => {
+      // A marker written after this hook started belongs to a later exit.
+      await writeEndedMarker(stateDir, "newer", startedAt + 10_000);
+      await runAutoCapture({ session_id: "newer", transcript_path: transcriptPath }, env(baseUrl));
+      assert.deepEqual(
+        await endedMarkerStamps(stateDir, "newer"),
+        [startedAt + 10_000],
+        "a fresher marker survives a late Stop worker",
+      );
+
+      await writeEndedMarker(stateDir, "older", startedAt - 10_000);
+      await runAutoCapture({ session_id: "older", transcript_path: transcriptPath }, env(baseUrl));
+      assert.equal(
+        await endedMarkerExists(stateDir, "older"),
+        false,
+        "an older marker is cleared: the thread is alive again",
+      );
+    });
   } finally {
     await rm(stateDir, { recursive: true, force: true });
   }

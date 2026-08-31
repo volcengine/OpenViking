@@ -146,6 +146,10 @@ const activity = {
       terminal: 'Terminal',
       agent: 'Agent',
     },
+    actionPanel: {
+      collapse: 'Collapse panel',
+      expand: 'Open panel',
+    },
     addResource: {
       title: 'Add resource',
       description:

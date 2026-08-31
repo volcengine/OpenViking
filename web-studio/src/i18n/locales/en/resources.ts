@@ -349,6 +349,10 @@ const resources = {
       },
     },
     searchPalette: {
+      modes: {
+        name: 'files',
+        switchHint: 'switch mode',
+      },
       ariaLabel: 'Search',
       openContainingDirectory: 'Open containing directory',
       placeholder: 'Search',
@@ -431,12 +435,11 @@ const resources = {
       unsupportedBinary: 'Binary files do not support text preview.',
       jsonl: {
         collapse: 'Collapse',
-        dialogMode: 'Dialog',
+        dialogMode: 'Dialog mode',
         emptyJsonl: 'Empty JSONL.',
         emptyMessage: 'Empty message',
         expand: 'Expand',
         noArguments: 'No arguments',
-        rawMode: 'JSONL',
         recordCount: '{{count}} record',
         recordCount_other: '{{count}} records',
         toolcall: 'toolcall',

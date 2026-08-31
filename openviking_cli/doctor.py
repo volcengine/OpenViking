@@ -351,7 +351,15 @@ def check_vlm() -> tuple[bool, str, Optional[str]]:
 
     raw_vlm = data.get("vlm", {})
     normalized_vlm = VLMConfig.sync_provider_backend(dict(raw_vlm))
-    vlm = VLMConfig.model_validate(normalized_vlm)
+    try:
+        # Doctor owns the runtime credential probe below. Skip only the model's
+        # Codex availability check while retaining all structural validation.
+        vlm = VLMConfig.model_validate(
+            normalized_vlm,
+            context={"skip_codex_auth_availability": True},
+        )
+    except Exception as exc:
+        return False, f"Invalid VLM config: {exc}", "Fix vlm section in ov.conf"
     _, provider = vlm.get_provider_config()
     model = vlm.model or ""
 

@@ -27,6 +27,7 @@ from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
+from openviking.storage.vector_ids import is_vector_record_id
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, PermissionDeniedError
 from openviking_cli.utils import get_logger
@@ -129,12 +130,17 @@ async def read(
 ):
     """Read file content (L2)."""
     service = get_service()
-    uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
+    # If the argument is a raw 32-hex vector record id, skip URI validation
+    # (id lookup + access check happens inside VikingFS.read_file).
+    if is_vector_record_id(uri):
+        resolved = uri
+    else:
+        resolved = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
         if raw:
-            result = await service.fs.read(uri, ctx=_ctx, offset=offset, limit=limit)
+            result = await service.fs.read(resolved, ctx=_ctx, offset=offset, limit=limit)
         else:
-            result = await service.fs.read_visible(uri, ctx=_ctx, offset=offset, limit=limit)
+            result = await service.fs.read_visible(resolved, ctx=_ctx, offset=offset, limit=limit)
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:

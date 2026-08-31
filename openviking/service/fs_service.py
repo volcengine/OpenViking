@@ -30,6 +30,7 @@ from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
+from openviking.storage.vector_ids import is_vector_record_id
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -106,6 +107,17 @@ class FSService:
             raise NotInitializedError("VikingFS")
         return self._viking_fs
 
+    async def _resolve_uri(self, uri_or_id: str, ctx: RequestContext) -> str:
+        """If ``uri_or_id`` is a 32-char hex vector record id, resolve it to the
+        corresponding Viking URI via the vector store. Otherwise return as-is.
+        Used so that service-layer helpers (classify_uri, get_skill_name_from_uri,
+        visible_content) always see a real URI, even when callers pass an id.
+        """
+        if not is_vector_record_id(uri_or_id):
+            return uri_or_id
+        viking_fs = self._ensure_initialized()
+        return await viking_fs.resolve_uri(uri_or_id, ctx=ctx)
+
     def _get_watch_manager(self) -> Optional["WatchManager"]:
         if not self._watch_scheduler:
             return None
@@ -124,6 +136,7 @@ class FSService:
         level_limit: int = 3,
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
+        extra_fields: Optional[List[str]] = None,
     ) -> List[Any]:
         """List directory contents.
 
@@ -137,10 +150,14 @@ class FSService:
             node_limit: int = 1000 (maximum number of nodes to list)
             sort_by: Optional sort field for non-recursive listings
             sort_order: Sort direction, "asc" or "desc"
+            extra_fields: Optional extra fields to include (locked, id, count)
         """
         viking_fs = self._ensure_initialized()
+        extra_fields = extra_fields or []
 
-        if simple:
+        use_simple_paths = simple and not extra_fields
+
+        if use_simple_paths:
             # Only return URIs — skip expensive abstract fetching to save tokens
             if recursive:
                 entries = await viking_fs.tree(
@@ -172,6 +189,7 @@ class FSService:
                 show_all_hidden=show_all_hidden,
                 node_limit=node_limit,
                 level_limit=level_limit,
+                extra_fields=extra_fields,
             )
         else:
             entries = await viking_fs.ls(
@@ -183,6 +201,7 @@ class FSService:
                 node_limit=node_limit,
                 sort_by=sort_by,
                 sort_order=sort_order,
+                extra_fields=extra_fields,
             )
         return entries
 
@@ -568,6 +587,7 @@ class FSService:
         show_all_hidden: bool = False,
         node_limit: int = 1000,
         level_limit: int = 3,
+        extra_fields: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Get directory tree."""
         viking_fs = self._ensure_initialized()
@@ -579,6 +599,7 @@ class FSService:
             show_all_hidden=show_all_hidden,
             node_limit=node_limit,
             level_limit=level_limit,
+            extra_fields=extra_fields,
         )
 
     async def stat(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
@@ -597,10 +618,14 @@ class FSService:
         return await viking_fs.system_sync_retry(uri, ctx=ctx)
 
     async def read(self, uri: str, ctx: RequestContext, offset: int = 0, limit: int = -1) -> str:
-        """Read file content."""
+        """Read file content. Accepts a Viking URI or a 32-char hex vector record id."""
         viking_fs = self._ensure_initialized()
-        content = await viking_fs.read_file(uri, ctx=ctx)
-        skill_name = get_skill_name_from_uri(uri)
+        # Resolve ids to URIs so that downstream helpers (get_skill_name_from_uri)
+        # always see a real viking:// URI. VikingFS.read_file also resolves, which
+        # is harmless defense-in-depth when the input was already a URI.
+        resolved_uri = await self._resolve_uri(uri, ctx)
+        content = await viking_fs.read_file(resolved_uri, ctx=ctx)
+        skill_name = get_skill_name_from_uri(resolved_uri)
         if skill_name and self._privacy_config_service:
             current = await self._privacy_config_service.get_current(
                 ctx=ctx,
@@ -623,11 +648,16 @@ class FSService:
         offset: int = 0,
         limit: int = -1,
     ) -> str:
-        """Read public content, hiding reserved metadata from memory files."""
-        if not classify_uri(uri).is_memory:
-            return await self.read(uri, ctx=ctx, offset=offset, limit=limit)
-        content = await self.read(uri, ctx=ctx)
-        return visible_content(content, uri=uri, offset=offset, limit=limit)
+        """Read public content, hiding reserved metadata from memory files.
+        Accepts a Viking URI or a 32-char hex vector record id.
+        """
+        # Resolve id to URI before classify_uri / visible_content which expect
+        # a real viking:// URI.
+        resolved_uri = await self._resolve_uri(uri, ctx)
+        if not classify_uri(resolved_uri).is_memory:
+            return await self.read(resolved_uri, ctx=ctx, offset=offset, limit=limit)
+        content = await self.read(resolved_uri, ctx=ctx)
+        return visible_content(content, uri=resolved_uri, offset=offset, limit=limit)
 
     async def abstract(self, uri: str, ctx: RequestContext) -> str:
         """Read L0 abstract (.abstract.md)."""
@@ -668,10 +698,13 @@ class FSService:
         ctx: RequestContext,
         uri: str = "viking://",
         node_limit: Optional[int] = None,
+        extra_fields: Optional[List[str]] = None,
     ) -> Dict:
         """File pattern matching."""
         viking_fs = self._ensure_initialized()
-        return await viking_fs.glob(pattern, uri=uri, node_limit=node_limit, ctx=ctx)
+        return await viking_fs.glob(
+            pattern, uri=uri, node_limit=node_limit, ctx=ctx, extra_fields=extra_fields
+        )
 
     async def read_file_bytes(self, uri: str, ctx: RequestContext) -> bytes:
         """Read file as raw bytes."""

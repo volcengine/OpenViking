@@ -41,6 +41,9 @@ jobs:
             examples/codex-memory-plugin/scripts/recall-compressor-profile.test.mjs \
             examples/codex-memory-plugin/scripts/auto-recall.test.mjs \
             examples/codex-memory-plugin/scripts/session-start-commit.test.mjs \
+            examples/codex-memory-plugin/scripts/session-end.test.mjs \
+            examples/codex-memory-plugin/scripts/pre-compact-capture.test.mjs \
+            examples/codex-memory-plugin/scripts/session-state.test.mjs \
             examples/claude-code-memory-plugin/scripts/auto-capture.test.mjs \
             examples/claude-code-memory-plugin/scripts/config.test.mjs \
             examples/claude-code-memory-plugin/scripts/marketplace.test.mjs \

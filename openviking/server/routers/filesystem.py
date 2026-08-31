@@ -19,6 +19,7 @@ from openviking.server.models import Response
 from openviking.server.routers.content import SetTagsRequest
 from openviking.server.routers.content import set_tags as content_set_tags
 from openviking.storage.expr import And, Eq, In
+from openviking.storage.vector_ids import is_vector_record_id
 from openviking.storage.vikingdb_manager import VikingDBManagerProxy
 from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import NotFoundError
@@ -81,6 +82,9 @@ async def ls(
         description="Sort directory and file groups before applying node_limit",
     ),
     sort_order: Literal["asc", "desc"] = Query("asc", description="Sort direction"),
+    extra_fields: Optional[list[str]] = Query(
+        None, description="Extra fields to include: locked, id, count"
+    ),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """List directory contents."""
@@ -100,6 +104,7 @@ async def ls(
             node_limit=actual_node_limit,
             sort_by=sort_by,
             sort_order=sort_order,
+            extra_fields=extra_fields,
         )
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
@@ -120,6 +125,9 @@ async def tree(
     node_limit: int = Query(1000, description="Maximum number of nodes to list"),
     limit: Optional[int] = Query(None, description="Alias for node_limit"),
     level_limit: int = Query(3, description="Maximum depth level to traverse"),
+    extra_fields: Optional[list[str]] = Query(
+        None, description="Extra fields to include: locked, id, count"
+    ),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get directory tree."""
@@ -136,6 +144,7 @@ async def tree(
             show_all_hidden=show_all_hidden,
             node_limit=actual_node_limit,
             level_limit=level_limit,
+            extra_fields=extra_fields,
         )
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
@@ -149,16 +158,23 @@ async def tree(
 
 @router.get("/stat")
 async def stat(
-    uri: str = Query(..., description="Viking URI"),
+    uri: str = Query(..., description="Viking URI or vector record id (32-char hex)"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get resource status."""
     service = get_service()
-    # Resolve path variables
-    uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
+    # If the argument is a raw 32-hex vector record id, skip URI validation
+    # (id lookup + access check happens inside VikingFS.stat).
+    if is_vector_record_id(uri):
+        resolved = uri
+    else:
+        resolved = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
-        result = await service.fs.stat(uri, ctx=_ctx)
-        return Response(status="ok", result={**result, "uri": uri})
+        result = await service.fs.stat(resolved, ctx=_ctx)
+        # URI requests use the canonical validated URI. ID requests are resolved
+        # inside VikingFS, which returns the corresponding canonical URI.
+        response_uri = result.get("uri", resolved)
+        return Response(status="ok", result={**result, "uri": response_uri})
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:

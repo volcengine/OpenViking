@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import struct
 import zipfile
 from typing import Any
@@ -23,6 +22,7 @@ from openviking.storage.ovpack.format import (
     sha256_hex,
 )
 from openviking.storage.ovpack.manifest import manifest_dense_info, manifest_entry_target_uri
+from openviking.storage.vector_ids import vector_record_id
 from openviking.storage.ovpack.validation import dense_record_count, record_dense_ref
 from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.exceptions import InvalidArgumentError
@@ -256,17 +256,7 @@ def choose_vector_restore_action(
 
 
 def _vector_record_id(target_uri: str, level: int, ctx: RequestContext) -> str:
-    if level == 0:
-        seed_uri = (
-            target_uri if target_uri.endswith("/.abstract.md") else f"{target_uri}/.abstract.md"
-        )
-    elif level == 1:
-        seed_uri = (
-            target_uri if target_uri.endswith("/.overview.md") else f"{target_uri}/.overview.md"
-        )
-    else:
-        seed_uri = target_uri
-    return hashlib.md5(f"{ctx.account_id}:{seed_uri}".encode("utf-8")).hexdigest()
+    return vector_record_id(ctx.account_id, target_uri, level)
 
 
 async def _upsert_vector_snapshot_record(

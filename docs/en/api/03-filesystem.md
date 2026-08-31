@@ -25,6 +25,7 @@ List directory contents.
 | node_limit | int | No | 1000 | Maximum number of results |
 | sort_by | str | No | None | Sort directories and files within their groups by `name` or `mtime` before applying `node_limit`; directories remain first |
 | sort_order | str | No | `asc` | Sort direction: `asc` or `desc` |
+| extra_fields | list[str] | No | None | Extra fields to include: `locked`, `id`, `count` |
 
 **Entry Structure**
 
@@ -117,8 +118,12 @@ curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&recursiv
 **CLI**
 
 ```bash
-openviking ls viking://resources/ [--simple] [--recursive]
+openviking ls viking://resources/ [--simple] [--recursive] [-f FIELDS]
+openviking tree viking://resources/my-project/ [--simple] [-f FIELDS]
+openviking glob "**/*.md" [--uri viking://resources/] [--simple] [-f FIELDS]
 ```
+
+`-f`/`--fields` accepts a comma-separated list of columns to display (ps `-o` style), producing a column-aligned table with a header row. Available fields: `name`, `uri`, `path`, `type`, `size`, `mode`, `mtime`, `locked`, `id`, `count`, `abstract`. Combining `--simple` with `-f` outputs comma-separated values (no header, no tree indentation), one entry per line — suitable for scripting pipelines. When `--simple` is used without `-f`, the previous behavior (bare URI per line) is preserved.
 
 
 **Response**
@@ -156,6 +161,7 @@ Get directory tree structure.
 | show_all_hidden | bool | No | False | Include hidden files like `-a` |
 | node_limit | int | No | 1000 | Maximum number of results |
 | level_limit | int | No | 3 | Maximum directory depth to traverse |
+| extra_fields | list[str] | No | None | Extra fields to include: `locked`, `id`, `count` |
 
 
 **Python HTTP SDK**
@@ -239,7 +245,7 @@ Get file or directory status information. For directories, returns the count of 
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| uri | str | Yes | - | Viking URI |
+| uri | str | Yes | - | Viking URI (e.g. `viking://resources/docs/api.md`) or a 32-character hex vector record `id` |
 
 
 **Python HTTP SDK**
@@ -303,6 +309,7 @@ openviking stat viking://resources/my-project/docs
     "modTime": "2024-01-01T00:00:00Z",
     "isDir": false,
     "isLocked": false,
+    "id": "a1b2c3d4e5f678901234567890abcdef",
     "uri": "viking://resources/docs/api.md"
   },
   "time": 0.1
@@ -329,6 +336,8 @@ openviking stat viking://resources/my-project/docs
 ```
 
 The `isLocked` field reports whether the path is currently held by a path lock: the path itself has a valid lock (including an exact-path lock for the target), or any ancestor directory holds a TreeLock. Returns `false` when the LockManager is unavailable or the lookup fails, so callers can avoid attempting a write only to observe `ResourceBusyError`.
+
+The `id` field (files only) is the deterministic vector record primary key in VikingDB, computed as `md5(f"{account_id}:{uri}")` for level 2 (regular file) records. This value matches the `id` field in the vector collection schema and can be used to cross-reference vector records without an additional lookup. The field is omitted for directories because a directory may have multiple vector records across semantic levels (L0 abstract, L1 overview). Because indexing is asynchronous, a newly returned ID might not be resolvable immediately; lookup by ID can also fail after its vector record is deleted. In either case, `stat(id)` returns `NOT_FOUND` with a reason indicating that the data may not have been indexed yet or may have been deleted.
 
 The `count` field (directories only) contains the estimated number of items (files and subdirectories) under this directory (from vector index).
 

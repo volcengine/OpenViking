@@ -55,9 +55,9 @@ const LEGACY_MARKETPLACE = "openviking-plugins-local";
 const CODEX_DIR = join(homedir(), ".codex");
 const CODEX_CONFIG = process.env.CODEX_CONFIG_FILE || join(CODEX_DIR, "config.toml");
 const CACHE_DIR = join(CODEX_DIR, "plugins", "cache", MARKETPLACE, PLUGIN_NAME);
-const HOOK_EVENTS = ["session_start", "user_prompt_submit", "stop", "pre_compact"];
+const HOOK_EVENTS = ["session_start", "user_prompt_submit", "stop", "session_end", "pre_compact"];
 const RC_MARKERS = ["# >>> openviking-codex-plugin >>>", "codex-plugin.rc.sh"];
-const REQUIRED_PLUGIN_FILES = [".codex-plugin/plugin.json", "hooks/hooks.json", ".mcp.json", "servers/mcp-proxy.mjs", "scripts/config.mjs", "scripts/auto-recall.mjs", "scripts/auto-capture.mjs"];
+const REQUIRED_PLUGIN_FILES = [".codex-plugin/plugin.json", "hooks/hooks.json", ".mcp.json", "servers/mcp-proxy.mjs", "scripts/config.mjs", "scripts/auto-recall.mjs", "scripts/auto-capture.mjs", "scripts/session-end.mjs", "scripts/ov-session.mjs"];
 
 function parseArgs(argv) {
   const opts = { json: false, offline: false, timeoutMs: 5000, color: process.stdout.isTTY && !process.env.NO_COLOR };
@@ -226,8 +226,8 @@ function checkInstall(report, { codexOnPath }) {
       else trusted.push(event);
     }
     if (disabled.length) report.fail(`hooks disabled in [hooks.state]: ${disabled.join(", ")}`, "", `remove enabled = false from those [hooks.state] sections in ${homeShort(CODEX_CONFIG)}`);
-    if (untrusted.length) report.info(`hooks without a trust record yet: ${untrusted.join(", ")} (Codex records trusted_hash the first time a hook is approved; a changed hooks.json needs re-approval)`);
-    if (trusted.length === HOOK_EVENTS.length) report.ok("all four hooks have trust records in config.toml");
+    if (untrusted.length) report.info(`hooks without a trust record yet: ${untrusted.join(", ")} (Codex records trusted_hash the first time a hook is approved; a changed hooks.json — including a newly added event such as session_end — needs re-approval)`);
+    if (trusted.length === HOOK_EVENTS.length) report.ok(`all ${HOOK_EVENTS.length} hooks have trust records in config.toml`);
     const legacyKeys = Object.keys(toml).filter((k) => k.includes(LEGACY_MARKETPLACE));
     if (legacyKeys.length) report.info(`config.toml still has ${legacyKeys.length} section(s) for the legacy id ${LEGACY_MARKETPLACE} (harmless)`);
   }
@@ -382,9 +382,16 @@ function checkActivity(report, cfg, connection) {
     report.info(`${states.length} session state file(s) in ${homeShort(stateDir)}; newest ${fmtAge(newest.mtimeMs)}: ${d.ovSessionId || "(committed)"} captured ${d.capturedTurnCount ?? "?"} turns`);
     if (states.length > 3 && states.every((s) => (s.data?.capturedTurnCount ?? 0) === 0)) report.warn("no session has ever captured a turn", "the Stop hook runs but never appends messages", "check the Connection section; enable OPENVIKING_DEBUG=1 and read the hook log");
     const idleTtl = Number(process.env.OPENVIKING_CODEX_IDLE_TTL_MS) || 30 * 60 * 1000;
-    const orphans = states.filter((s) => s.data?.ovSessionId && Date.now() - (s.data.lastUpdatedAt || s.mtimeMs) > idleTtl);
-    if (orphans.length > 10) report.warn(`${orphans.length} idle sessions still uncommitted`, "the idle sweep at SessionStart commits them; a growing pile usually means commits are failing", "check the Connection section, then start a new Codex session to trigger the sweep");
-    else if (orphans.length) report.info(`${orphans.length} idle session(s) waiting for the SessionStart sweep`);
+    // Markers are `<id>.ended.<ts>`; the bare `<id>.ended` is a pre-0.8.1 leftover.
+    const ended = new Set(
+      readdirSync(stateDir)
+        .map((n) => /^(.*)\.ended(?:\.\d+)?$/.exec(n)?.[1])
+        .filter(Boolean),
+    );
+    const orphans = states.filter((s) => s.data?.ovSessionId
+      && (ended.has(s.name.slice(0, -5)) || Date.now() - (s.data.lastUpdatedAt || s.mtimeMs) > idleTtl));
+    if (orphans.length > 10) report.warn(`${orphans.length} sessions still uncommitted`, "SessionEnd commits a thread when it exits; the SessionStart sweep retries ended and idle ones, so a growing pile usually means commits are failing", "check the Connection section, then start a new Codex session to trigger the sweep");
+    else if (orphans.length) report.info(`${orphans.length} session(s) waiting for the SessionStart sweep`);
   }
   const profile = tryJson(join(stateDir, "recall-compressor-profile.json"));
   if (profile?.profile) {

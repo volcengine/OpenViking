@@ -58,6 +58,10 @@ each caller.
 
 Moving away from traditional flat database thinking, all context is organized as a filesystem. Agents no longer just find data through vector search, but can locate and browse data through deterministic paths and standard filesystem commands. Each context or directory is assigned a unique URI identifier string in the format viking://{scope}/{path}, allowing the system to precisely locate and access resources stored in different locations.
 
+## File IDs
+
+In addition to its URI, every file is automatically assigned a stable `id` that serves as the primary key of its vector record in VikingDB. The id is deterministically computed as `md5(f"{account_id}:{uri}")` for level 2 (regular file) records, and is returned by `stat()` and other metadata APIs. This allows callers to cross-reference vector index entries without a separate lookup. The id is scoped to the account and changes if the file is moved to a different URI (vector records are re-keyed during URI migration). Directories do not expose a single `id` because a directory may span multiple semantic levels (L0 abstract, L1 overview, L2), each with its own record.
+
 ```
 viking://
 ├── user/

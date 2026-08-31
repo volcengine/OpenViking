@@ -1164,6 +1164,63 @@ async def test_glob_normalizes_scope_uri():
 
 
 @pytest.mark.asyncio
+async def test_glob_preserves_explicit_empty_extra_fields():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response = lambda _response: {"count": 0, "matches": []}
+
+    await client.glob("**/*.md", extra_fields=[])
+
+    fake_http.post.assert_awaited_once_with(
+        "/api/v1/search/glob",
+        json={
+            "pattern": "**/*.md",
+            "uri": "viking://",
+            "node_limit": 256,
+            "extra_fields": [],
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_record_id_passthrough_is_limited_to_stat_and_read():
+    record_id = "0123456789abcdef0123456789abcdef"
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._request = AsyncMock(return_value=object())
+    client._handle_response = lambda _response: {}
+
+    await client.stat(record_id)
+    await client.read(record_id)
+    await client.rm(record_id)
+
+    calls = client._request.await_args_list
+    assert calls[0].kwargs["params"]["uri"] == record_id
+    assert calls[1].kwargs["params"]["uri"] == record_id
+    assert calls[2].kwargs["params"]["uri"] == f"viking://{record_id}"
+
+
+def test_not_found_reason_is_preserved_by_sdk_error_mapping():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    reason = "The data may not have been indexed yet or may have been deleted"
+
+    with pytest.raises(NotFoundError, match="not have been indexed yet") as exc_info:
+        client._raise_exception(
+            {
+                "code": "NOT_FOUND",
+                "message": "server message",
+                "details": {
+                    "resource": "0123456789abcdef0123456789abcdef",
+                    "type": "file",
+                    "reason": reason,
+                },
+            }
+        )
+
+    assert exc_info.value.details["reason"] == reason
+
+
+@pytest.mark.asyncio
 async def test_ls_and_tree_pass_query_params():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(get=AsyncMock(return_value=object()))

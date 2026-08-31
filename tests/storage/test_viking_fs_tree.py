@@ -459,6 +459,35 @@ async def test_tree_original_extra_fields_preserved(monkeypatch, fs):
 
 
 @pytest.mark.asyncio
+async def test_extra_fields_do_not_enrich_acl_denied_entries(monkeypatch, fs):
+    denied = {
+        "name": "restricted",
+        "isDir": True,
+        "uri": "viking://resources/restricted",
+        "access": "denied",
+    }
+
+    async def fail_locked(_path):
+        raise AssertionError("denied entry must not query lock metadata")
+
+    monkeypatch.setattr(fs, "_is_path_locked_async", fail_locked)
+    monkeypatch.setattr(fs, "_get_vector_store", lambda: None)
+
+    await fs._augment_entries_extra_fields(
+        [denied],
+        ["locked", "id", "count"],
+        ctx=_default_ctx(),
+    )
+
+    assert denied == {
+        "name": "restricted",
+        "isDir": True,
+        "uri": "viking://resources/restricted",
+        "access": "denied",
+    }
+
+
+@pytest.mark.asyncio
 async def test_tree_original_dfs_order(monkeypatch, fs):
     """PY-ORIG-006: DFS order preserved — directories before their children."""
     entries = [

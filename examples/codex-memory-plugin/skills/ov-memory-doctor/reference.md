@@ -12,10 +12,11 @@ and `CODEX_CONFIG_FILE` relocate individual pieces.
 | `~/.openviking/ovcli.conf` | Client connection: `url`, `api_key`, `account`, `user`, optional `plugin.codex.*` tuning. Mode 0600. |
 | `~/.openviking/ov.conf` | Server config. The plugin reads only `server.url/host/port`, `server.root_api_key` (last-resort key) and the legacy `codex` block. |
 | `~/.openviking/ovcli.conf.<name>` | Saved CLI profiles (`ov config switch` copies one over `ovcli.conf`). `ovcli.conf.bak.<epoch>` are installer backups. |
-| `~/.codex/config.toml` | `[features] plugin_hooks`, `[plugins."openviking-memory@openviking"] enabled`, `[marketplaces.openviking]` (source, ref), `[hooks.state."openviking-memory@openviking:hooks/hooks.json:<event>:0:0"] trusted_hash` for `session_start`, `user_prompt_submit`, `stop`, `pre_compact`. |
+| `~/.codex/config.toml` | `[features] plugin_hooks`, `[plugins."openviking-memory@openviking"] enabled`, `[marketplaces.openviking]` (source, ref), `[hooks.state."openviking-memory@openviking:hooks/hooks.json:<event>:0:0"] trusted_hash` for `session_start`, `user_prompt_submit`, `stop`, `session_end`, `pre_compact`. |
 | `~/.codex/plugins/cache/openviking/openviking-memory/<version>/` | The copy Codex runs hooks from. Keyed by `plugin.json` version. |
 | `~/.codex/.tmp/marketplaces/openviking/` | Git clone of the marketplace (GitHub/TOS dist); `examples/codex-memory-plugin` inside it is what `codex plugin list` reports as the source path. |
-| `~/.openviking/codex-plugin-state/<session_id>.json` | Per-session state: `ovSessionId` (`cx-<session_id>`, null once committed), `capturedTurnCount`, `lastUpdatedAt`. |
+| `~/.openviking/codex-plugin-state/<session_id>.json` | Per-session state: `ovSessionId` (`cx-<session_id>`, null once committed), `transcriptPath` (last rollout seen, used by the SessionStart sweep to catch up unsent turns), `capturedTurnCount`, `lastUpdatedAt`. |
+| `~/.openviking/codex-plugin-state/<session_id>.ended.<timestamp>` / `.lock` | Sidecars: `.ended.<timestamp>` marks a thread whose SessionEnd fired but whose commit has not succeeded yet (the timestamp is in the filename so a conditional removal cannot delete a newer exit's marker; a bare `.ended` is a pre-0.8.1 leftover); `.lock` is the directory lock serializing the capture hooks. |
 | `~/.openviking/codex-plugin-state/recall-compressor-profile.json` | Cached local-compressor detection (`profile.enabled`, `model`, `source`). |
 | `~/.openviking/logs/codex-hooks.log` | JSONL hook + proxy log; written only when `OPENVIKING_DEBUG=1` or `codex.debug: true`. |
 | `~/.openviking/codex-plugin.rc.sh`, `~/.openviking/codex-memory-plugin/runtime/` | Residue of the pre-marketplace installer. The rc script, if still sourced, exports `OPENVIKING_*` and pins credentials to env mode. |
@@ -42,7 +43,8 @@ Codex plugin. Disable features with `OPENVIKING_AUTO_RECALL=0`,
 `codex plugin remove openviking-memory@openviking` / `enabled = false`.
 
 Hook budgets in `hooks/hooks.json`: SessionStart 70s, UserPromptSubmit 130s,
-Stop 30s, PreCompact 60s. `recallTimeoutMs` (default 120000) must stay below
+Stop 30s, SessionEnd 3s (Codex clamps it there; the hook detaches a worker),
+PreCompact 60s. `recallTimeoutMs` (default 120000) must stay below
 130s and `captureTimeoutMs` (default 30000) at or below 30s.
 
 Sent headers: `Authorization: Bearer <key>`, `X-OpenViking-Account/User` (trusted
@@ -94,7 +96,7 @@ Plugin MCP proxy (what Codex shows for a failing tool call):
 | `-32003` | `OpenViking MCP upstream returned an empty response` | 2xx with blank/non-JSON body — captive portal or proxy interstitial |
 
 Hook log (`codex-hooks.log`) hooks: `session-start`, `auto-recall`,
-`auto-capture`, `pre-compact`, `mcp-proxy`. Stages worth grepping:
+`auto-capture`, `session-end`, `pre-compact`, `mcp-proxy`. Stages worth grepping:
 `health_check`, `appended`, `pending_tokens`, `commit`, `recall_context_assembled`,
 `mcp-proxy` `start` (resolved `mcpUrl`, `hasApiKey` = present, not valid),
 `uncaught`. Ordinary failed proxy requests are not logged — the JSON-RPC error

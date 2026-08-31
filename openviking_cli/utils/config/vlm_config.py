@@ -7,7 +7,7 @@ import weakref
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field, PrivateAttr, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, ValidationInfo, model_validator
 
 
 def _load_codex_auth_module():
@@ -224,13 +224,17 @@ class VLMConfig(BaseModel):
         return data
 
     @model_validator(mode="after")
-    def validate_config(self):
+    def validate_config(self, info: ValidationInfo):
         """Validate configuration completeness and consistency"""
         # Validate recursive backup BEFORE normalizing credentials (which clears backup)
         self._validate_no_recursive_backup()
 
         self._migrate_legacy_config()
         self._normalize_credentials()
+
+        skip_codex_auth_availability = bool(
+            info.context and info.context.get("skip_codex_auth_availability")
+        )
 
         if self._has_any_config():
             if not self.model:
@@ -243,7 +247,11 @@ class VLMConfig(BaseModel):
                         has_codex_auth_available = (
                             _load_codex_auth_module().has_codex_auth_available
                         )
-                        if not cred.api_key and not has_codex_auth_available():
+                        if (
+                            not cred.api_key
+                            and not skip_codex_auth_availability
+                            and not has_codex_auth_available()
+                        ):
                             raise ValueError(
                                 f"Credential {i} ({cred.id or 'unnamed'}): requires Codex OAuth credentials in ~/.openviking/codex_auth.json"
                             )
@@ -258,7 +266,11 @@ class VLMConfig(BaseModel):
                 provider_name = self._resolve_provider_name()
                 if provider_name == "openai-codex":
                     has_codex_auth_available = _load_codex_auth_module().has_codex_auth_available
-                    if not self._get_effective_api_key() and not has_codex_auth_available():
+                    if (
+                        not self._get_effective_api_key()
+                        and not skip_codex_auth_availability
+                        and not has_codex_auth_available()
+                    ):
                         raise ValueError(
                             "VLM configuration requires Codex OAuth credentials in ~/.openviking/codex_auth.json or an importable Codex CLI auth file"
                         )

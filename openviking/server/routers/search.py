@@ -318,6 +318,7 @@ class GlobRequest(BaseModel):
     pattern: str
     uri: str = "viking://"
     node_limit: Optional[int] = 256
+    extra_fields: Optional[list[str]] = None
 
 
 @router.post("/find")
@@ -559,7 +560,11 @@ async def glob(
     resolved_uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
     try:
         result = await service.fs.glob(
-            request.pattern, ctx=_ctx, uri=resolved_uri, node_limit=request.node_limit
+            request.pattern,
+            ctx=_ctx,
+            uri=resolved_uri,
+            node_limit=request.node_limit,
+            extra_fields=request.extra_fields,
         )
     except AGFSNotFoundError:
         raise NotFoundError(resolved_uri or request.pattern, "file")

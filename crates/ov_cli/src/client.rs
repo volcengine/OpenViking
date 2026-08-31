@@ -584,8 +584,9 @@ impl HttpClient {
         abs_limit: i32,
         show_all_hidden: bool,
         node_limit: i32,
+        extra_fields: &[String],
     ) -> Result<serde_json::Value> {
-        let params = vec![
+        let mut params = vec![
             ("uri".to_string(), uri.to_string()),
             ("simple".to_string(), simple.to_string()),
             ("recursive".to_string(), recursive.to_string()),
@@ -594,6 +595,9 @@ impl HttpClient {
             ("show_all_hidden".to_string(), show_all_hidden.to_string()),
             ("node_limit".to_string(), node_limit.to_string()),
         ];
+        for field in extra_fields {
+            params.push(("extra_fields".to_string(), field.clone()));
+        }
         self.get("/api/v1/fs/ls", &params).await
     }
 
@@ -605,8 +609,9 @@ impl HttpClient {
         show_all_hidden: bool,
         node_limit: i32,
         level_limit: i32,
+        extra_fields: &[String],
     ) -> Result<serde_json::Value> {
-        let params = vec![
+        let mut params = vec![
             ("uri".to_string(), uri.to_string()),
             ("output".to_string(), output.to_string()),
             ("abs_limit".to_string(), abs_limit.to_string()),
@@ -614,6 +619,9 @@ impl HttpClient {
             ("node_limit".to_string(), node_limit.to_string()),
             ("level_limit".to_string(), level_limit.to_string()),
         ];
+        for field in extra_fields {
+            params.push(("extra_fields".to_string(), field.clone()));
+        }
         self.get("/api/v1/fs/tree", &params).await
     }
 
@@ -758,12 +766,16 @@ impl HttpClient {
         pattern: &str,
         uri: &str,
         node_limit: i32,
+        extra_fields: Option<&[String]>,
     ) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "pattern": pattern,
             "uri": uri,
             "node_limit": node_limit,
         });
+        if let Some(fields) = extra_fields {
+            body["extra_fields"] = serde_json::json!(fields);
+        }
         self.post("/api/v1/search/glob", &body).await
     }
 
@@ -2246,7 +2258,7 @@ mod tests {
         let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
 
         client
-            .ls("viking://resources", false, false, "agent", 256, false, 1)
+            .ls("viking://resources", false, false, "agent", 256, false, 1, &[])
             .await
             .expect("ls request should succeed");
 
@@ -2372,7 +2384,7 @@ mod tests {
         let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
 
         client
-            .tree("viking://resources", "agent", 256, false, 1, 3)
+            .tree("viking://resources", "agent", 256, false, 1, 3, &[])
             .await
             .expect("tree request should succeed");
 

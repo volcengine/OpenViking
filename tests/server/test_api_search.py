@@ -1160,3 +1160,18 @@ async def test_glob(client_with_resource):
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+    assert all(isinstance(match, str) for match in resp.json()["result"]["matches"])
+
+
+async def test_glob_explicit_empty_extra_fields_returns_entry_objects(client_with_resource):
+    client, _ = client_with_resource
+    resp = await client.post(
+        "/api/v1/search/glob",
+        json={"pattern": "**/*.md", "extra_fields": []},
+    )
+
+    assert resp.status_code == 200
+    matches = resp.json()["result"]["matches"]
+    assert matches
+    assert all(isinstance(match, dict) for match in matches)
+    assert all("uri" in match and "isDir" in match for match in matches)

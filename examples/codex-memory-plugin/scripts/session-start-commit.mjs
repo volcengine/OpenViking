@@ -14,20 +14,20 @@
  * abstract-annotated indexes of preferences/ and entities/, capped by
  * OPENVIKING_PROFILE_TOKEN_BUDGET with the shared CJK-aware estimator.
  *
- * Behavior (see DESIGN.md §3 — "SessionStart source=startup, heuristic"):
- *   On `startup` or `clear`, run the active-window heuristic over state files
- *   excluding the new session_id:
- *     - 0 recently-active     → no-op
- *     - 1 recently-active     → commit it (the just-ended session)
- *     - ≥2 recently-active    → skip; rely on idle TTL
- *   "Recently-active" means lastUpdatedAt within ACTIVE_WINDOW_MS (default 2 min).
- *   Concurrency is judged on activity alone; only a state that still has a live
- *   ovSessionId is actually committed.
+ * Behavior (see DESIGN.md — "Fallback sweep"):
+ *   Committing a finished thread is SessionEnd's job. On `startup` or `clear`
+ *   this hook only sweeps what SessionEnd could not reach: a state file with a
+ *   live OV session is committed when it carries an `.ended` marker (the
+ *   SessionEnd worker was killed or the server was down) or when it has been
+ *   idle for more than IDLE_TTL_MS (default 30 min) — signals, crashes, Codex
+ *   older than 0.145, and app-server threads whose SessionEnd is deferred.
  *
- *   At the tail (regardless of which branch above ran), run an idle-TTL sweep:
- *   any live OV session state older than IDLE_TTL_MS (default 30 min) gets
- *   committed while retaining its transcript cursor. This catches
- *   SIGTERM/Ctrl+C/`/exit` exits and crashes that left sessions orphaned.
+ *   Each candidate is committed under its session lock with no waiting: a lock
+ *   we cannot take means a SessionEnd or Stop worker already owns the session.
+ *   Under the lock the sweep first appends whatever the state's recorded
+ *   transcript still holds past the cursor, so a session whose workers never
+ *   ran is not archived without its tail turns; an incomplete append keeps the
+ *   session live for the next sweep instead of committing.
  *
  *   The same pass retires cursor-only states (no live OV session): a cursor
  *   that was never used is dropped after IDLE_TTL_MS, and a real cursor is
@@ -46,8 +46,18 @@
 
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
+import { catchUpTurns, makeFetchJSON } from "./ov-session.mjs";
 import { detectRecallCompressorProfile } from "./recall-compressor-profile.mjs";
-import { clearState, deriveOvSessionId, listStates, loadState, saveState } from "./session-state.mjs";
+import {
+  clearEnded,
+  clearState,
+  deriveOvSessionId,
+  listStates,
+  loadState,
+  readEndedAt,
+  saveState,
+  withSessionLock,
+} from "./session-state.mjs";
 import { buildProfileBlock } from "./shared/profile-inject.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
@@ -55,15 +65,16 @@ const cfg = loadConfig();
 const { log, logError } = createLogger("session-start");
 let activePeerId = cfg.peerId || "";
 
-const ACTIVE_WINDOW_MS = (() => {
-  const v = Number(process.env.OPENVIKING_CODEX_ACTIVE_WINDOW_MS);
-  return Number.isFinite(v) && v > 0 ? Math.floor(v) : 120_000;
-})();
-
 const IDLE_TTL_MS = (() => {
   const v = Number(process.env.OPENVIKING_CODEX_IDLE_TTL_MS);
   return Number.isFinite(v) && v > 0 ? Math.floor(v) : 1_800_000;
 })();
+
+const HOOK_STARTED_AT = Date.now();
+
+// The sweep catches up unsent turns before committing, so it needs the same
+// HTTP helper the capture hooks use.
+const { fetchJSONRes } = makeFetchJSON(cfg, { getActorPeerId: () => activePeerId });
 
 const COMMITTED_TTL_MS = (() => {
   const v = Number(process.env.OPENVIKING_CODEX_COMMITTED_TTL_MS);
@@ -250,7 +261,7 @@ async function buildResumeArchiveContext(newSessionId) {
  *
  * Returns { committed: bool, ovSessionId: string|null, traceId: string }.
  */
-async function commitAndRelease(state, reason) {
+async function commitAndRelease(state, reason, endToken) {
   const ovSessionId = state.ovSessionId;
   const commit = await commitOvSession(ovSessionId);
   if (!commit?.ok) {
@@ -277,6 +288,12 @@ async function commitAndRelease(state, reason) {
   });
   state.ovSessionId = null;
   await saveState(state, { touch: false });
+  // Only retire the marker this pass verified; a newer one belongs to an exit
+  // that happened while we were committing.
+  await clearEnded(
+    state.codexSessionId,
+    typeof endToken === "number" ? { before: endToken + 1 } : {},
+  );
   return { committed: true, ovSessionId, traceId };
 }
 
@@ -336,7 +353,6 @@ async function main() {
   log("start", {
     source,
     newSessionId,
-    activeWindowMs: ACTIVE_WINDOW_MS,
     idleTtlMs: IDLE_TTL_MS,
     peerSource: effectivePeer.source,
   });
@@ -348,6 +364,9 @@ async function main() {
   }
 
   if (source === "resume") {
+    // Earliest liveness signal after `codex resume`: the thread is running
+    // again, so a marker left by its previous exit must not trigger the sweep.
+    await clearEnded(newSessionId, { before: HOOK_STARTED_AT });
     const health = await fetchJSON("/health");
     if (!health) {
       logError("health_check", "server unreachable; skipping profile + archive injection");
@@ -380,96 +399,120 @@ async function main() {
 
   const profileContext = await buildSessionProfileContext();
   const now = Date.now();
-  const states = await listStates();
-
-  // -------------------------------------------------------------------------
-  // Active-window heuristic (DESIGN.md §3)
-  // -------------------------------------------------------------------------
-  const otherStates = states.filter(
-    (s) => s?.codexSessionId && s.codexSessionId !== newSessionId,
-  );
-
-  // Concurrency is judged on activity, not on whether an OV session is live:
-  // a session that PreCompact just committed is cursor-only yet may still be
-  // running, and counting it keeps the ≥2 branch from committing a sibling
-  // session mid-flight.
-  const recentlyActive = otherStates.filter(
-    (s) => typeof s.lastUpdatedAt === "number"
-      && (now - s.lastUpdatedAt) <= ACTIVE_WINDOW_MS,
-  );
-
-  const heuristicCommits = [];
-  const skippedSessionIds = new Set();
-
-  if (recentlyActive.length === 0) {
-    log("heuristic", { branch: "0_active", action: "noop", otherStates: otherStates.length });
-  } else if (recentlyActive.length === 1) {
-    const target = recentlyActive[0];
-    if (!target.ovSessionId) {
-      log("heuristic", {
-        branch: "1_active",
-        action: "skip",
-        reason: "no live OV session",
-        codexSessionId: target.codexSessionId,
-      });
-    } else {
-      log("heuristic", {
-        branch: "1_active",
-        action: "commit",
-        codexSessionId: target.codexSessionId,
-        ovSessionId: target.ovSessionId,
-      });
-      const r = await commitAndRelease(target, "heuristic_1_active");
-      if (r.committed) heuristicCommits.push(r);
-    }
-  } else {
-    log("heuristic", {
-      branch: ">=2_active",
-      action: "skip; rely on idle TTL",
-      activeCount: recentlyActive.length,
-      activeIds: recentlyActive.map((s) => s.codexSessionId),
-    });
-    for (const s of recentlyActive) skippedSessionIds.add(s.codexSessionId);
-  }
-
-  // -------------------------------------------------------------------------
-  // Idle TTL sweep + cursor retention (tail) — applies to ALL state files
-  // including ones we just skipped above (≥2 active path). We re-list because
-  // the heuristic branch may have changed entries.
-  // -------------------------------------------------------------------------
-  const postHeuristic = await listStates();
-  const idleCommits = [];
+  const commits = [];
   let retired = 0;
+  let lockSkipped = 0;
 
-  for (const s of postHeuristic) {
+  for (const s of await listStates()) {
     if (!s?.codexSessionId) continue;
+    if (s.codexSessionId === newSessionId) continue;
     if (typeof s.lastUpdatedAt !== "number") continue;
     const ageMs = now - s.lastUpdatedAt;
-    if (!s.ovSessionId) {
+
+    // A marker must always enter the lock, even with no live id: PreCompact
+    // releases the id while leaving a cursor behind, so the tail turns of a
+    // session whose SessionEnd worker died are only reachable through a
+    // catch-up under the lock.
+    if (!s.ovSessionId && !s.endedAt) {
       if (await maybeRetireCursorState(s, ageMs)) retired += 1;
       continue;
     }
-    if (ageMs <= IDLE_TTL_MS) continue;
-    log("idle_sweep", {
-      codexSessionId: s.codexSessionId,
-      ovSessionId: s.ovSessionId,
-      ageMs,
-    });
-    const r = await commitAndRelease(s, "idle_ttl");
-    if (r.committed) idleCommits.push(r);
+    if (!s.endedAt && ageMs <= IDLE_TTL_MS) continue;
+
+    const reason = s.endedAt ? "ended_retry" : "idle_ttl";
+    log("sweep", { codexSessionId: s.codexSessionId, ovSessionId: s.ovSessionId, ageMs, reason });
+    // Try-lock only: a held lock means a SessionEnd or Stop worker is already
+    // committing this session (user quit and relaunched within seconds).
+    const outcome = await withSessionLock(s.codexSessionId, async ({ heartbeat }) => {
+      const fresh = await loadState(s.codexSessionId);
+
+      // Re-read the marker under the lock: it may have been cleared by a
+      // resume or replaced by a newer exit since listStates() sampled it.
+      const endToken = await readEndedAt(s.codexSessionId);
+      if (reason === "ended_retry" && (endToken === undefined || endToken > s.endedAt)) {
+        if (ageMs <= IDLE_TTL_MS) {
+          log("sweep_skip", {
+            codexSessionId: s.codexSessionId,
+            reason: endToken === undefined ? "marker cleared under the lock" : "newer end marker",
+          });
+          return null;
+        }
+      }
+
+      // Turns the session's own workers never sent would be lost by an
+      // archive-now commit, so catch them up first and keep the session live
+      // for the next sweep if any of them failed to land.
+      const { newTurns, added, skipped, unreadable } = await catchUpTurns({
+        state: fresh,
+        transcriptPath: fresh.transcriptPath,
+        fetchJSONRes,
+        activePeerId: fresh.workspacePeerId || activePeerId,
+        cfg,
+        log,
+        logError,
+        heartbeat,
+      });
+      if (added > 0) log("appended_catchup", { ovSessionId: fresh.ovSessionId, added });
+
+      // An unreadable transcript is not an empty one: the tail turns may still
+      // be there. Keep the live id and the marker for the next sweep.
+      if (unreadable) {
+        logError("transcript_unreadable", {
+          codexSessionId: s.codexSessionId,
+          ovSessionId: fresh.ovSessionId,
+          transcriptPath: fresh.transcriptPath,
+        });
+        await saveState(fresh, { touch: false });
+        return null;
+      }
+
+      if (newTurns.length > 0 && !skipped && added < newTurns.length) {
+        logError("append_incomplete", {
+          codexSessionId: s.codexSessionId,
+          ovSessionId: fresh.ovSessionId,
+          attempted: newTurns.length,
+          added,
+        });
+        await saveState(fresh, { touch: false });
+        return null;
+      }
+
+      // The catch-up derives a live id whenever it sends something; still
+      // having none means there is genuinely nothing to commit, so the marker
+      // can go.
+      if (!fresh.ovSessionId) {
+        if (added > 0) await saveState(fresh, { touch: false });
+        await clearEnded(
+          s.codexSessionId,
+          typeof endToken === "number" ? { before: endToken + 1 } : {},
+        );
+        log("skip", {
+          stage: "commit",
+          codexSessionId: s.codexSessionId,
+          reason: "no live OV session for this codex session",
+        });
+        return null;
+      }
+
+      return commitAndRelease(fresh, reason, endToken);
+    }, { waitMs: 0 });
+
+    if (outcome.skipped) {
+      lockSkipped += 1;
+      log("sweep_skip", { codexSessionId: s.codexSessionId, reason: "locked by another writer" });
+      continue;
+    }
+    if (outcome.value?.committed) commits.push(outcome.value);
   }
 
-  const commits = [...heuristicCommits, ...idleCommits];
   const ovSessionIds = commits.map((item) => item.ovSessionId);
 
   log("done", {
     source,
-    heuristicCommitted: heuristicCommits.length,
-    idleCommitted: idleCommits.length,
-    totalCommitted: commits.length,
+    committed: commits.length,
     retired,
+    lockSkipped,
     ovSessionIds,
-    skipped: [...skippedSessionIds],
   });
 
   if (commits.length > 0) {

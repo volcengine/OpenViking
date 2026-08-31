@@ -1,5 +1,12 @@
+import type { GroupedFindResult } from '#/lib/retrieval'
+
 import type { VikingFsEntry } from '../-types/viking-fm'
-import { normalizeDirUri, normalizeFileUri, parentUri } from './normalize'
+import {
+  fileNameFromUri,
+  normalizeDirUri,
+  normalizeFileUri,
+  parentUri,
+} from './normalize'
 
 const VIKING_URI_PREFIX = 'viking://'
 
@@ -100,4 +107,35 @@ export function filterResourceSearchEntries(
   }
 
   return entries.filter((entry) => matchesResourceSearch(entry, spec))
+}
+
+// A pattern without `/` matches at any depth (implicit `**/` prefix); one that
+// contains `/` is treated as already anchored — matches gitignore / VS Code
+// files-to-include / fd conventions.
+export function normalizeGlobPattern(pattern: string): string {
+  const trimmed = pattern.trim()
+  return trimmed.includes('/') ? trimmed : `**/${trimmed}`
+}
+
+export function retrievalItemsToEntries(
+  result: GroupedFindResult | undefined,
+): Array<VikingFsEntry> {
+  if (!result) return []
+  const items = [...result.resources, ...result.memories, ...result.skills]
+  return items.map((item) => ({
+    uri: item.uri,
+    name:
+      fileNameFromUri(item.uri) +
+      (item.line === undefined ? '' : `:${item.line}`),
+    isDir: item.uri.endsWith('/'),
+    abstract: item.abstract,
+    // ponytail: reuse the `size` slot to surface the semantic score.
+    size:
+      item.result_kind === 'grep' || item.result_kind === 'glob'
+        ? ''
+        : item.score.toFixed(2),
+    sizeBytes: null,
+    modTime: '',
+    modTimestamp: null,
+  }))
 }

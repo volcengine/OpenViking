@@ -156,10 +156,19 @@ test("hooks.json uses Codex's native ${PLUGIN_ROOT}, not the legacy placeholder"
     .flat()
     .flatMap((group) => group.hooks || [])
     .map((h) => h.command || "");
-  assert.ok(commands.length >= 4, "expected at least 4 hook commands (SessionStart/UserPromptSubmit/Stop/PreCompact)");
+  assert.ok(commands.length >= 5, "expected at least 5 hook commands (SessionStart/UserPromptSubmit/Stop/SessionEnd/PreCompact)");
   for (const cmd of commands) {
     assert.ok(cmd.includes("${PLUGIN_ROOT}/scripts/"), `hook command must be rooted at \${PLUGIN_ROOT}: ${cmd}`);
   }
+});
+
+test("hooks.json registers SessionEnd within Codex's clamped budget", () => {
+  const parsed = JSON.parse(readFileSync(join(pluginDir, "hooks", "hooks.json"), "utf-8"));
+  const entries = (parsed.hooks?.SessionEnd || []).flatMap((group) => group.hooks || []);
+  assert.equal(entries.length, 1, "expected exactly one SessionEnd hook");
+  assert.match(entries[0].command, /scripts\/session-end\.mjs/);
+  // Codex clamps SessionEnd to 3s; anything larger is silently ignored.
+  assert.ok(entries[0].timeout <= 3, `SessionEnd timeout must be <= 3, got ${entries[0].timeout}`);
 });
 
 test(".mcp.json starts the stdio MCP proxy from the plugin root", () => {

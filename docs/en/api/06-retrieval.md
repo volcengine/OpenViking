@@ -931,6 +931,7 @@ The `glob()` method uses file wildcard pattern matching URIs, similar to Unix sh
 | pattern | str | Yes | - | Glob pattern (e.g., `**/*.md`) |
 | uri | str | No | "viking://" | Starting URI |
 | node_limit | int | No | 256 | Maximum number of matches to return. Omitted requests default to 256; pass a larger integer when you need more results |
+| extra_fields | list[str] | No | None | Extra fields to include per match. Recognized names: `name`, `uri`, `path`, `type`, `size`, `mode`, `mtime`, `locked`, `id`. When omitted, the response contains URI strings only; when provided, `result.matches` becomes a list of entry objects |
 
 #### 3. Usage Examples
 
@@ -946,7 +947,8 @@ curl -X POST http://localhost:1933/api/v1/search/glob \
     -H "X-API-Key: your-key" \
     -d '{
         "pattern": "**/*.md",
-        "uri": "viking://resources"
+        "uri": "viking://resources",
+        "extra_fields": ["name", "size", "mtime"]
     }'
 ```
 
@@ -964,13 +966,16 @@ print(f"Found {results['count']} markdown files:")
 for uri in results['matches']:
     print(f"  {uri}")
 
-# Find all Python files with a higher explicit cap
+# Find all Python files with extra stat fields
 results = client.glob(
     pattern="**/*.py",
     uri="viking://resources",
     node_limit=1024,
+    extra_fields=["name", "size", "mtime", "mode"],
 )
 print(f"Found {results['count']} Python files")
+for entry in results['matches']:
+    print(f"  {entry['name']}  {entry['size']}  {entry['mtime']}")
 ```
 
 **TypeScript SDK**
@@ -999,9 +1004,17 @@ openviking glob "**/*.md" --uri viking://resources
 
 # Find all Python files
 openviking glob "**/*.py"
+
+# Table output with extra fields (ps -o style -f)
+openviking glob "**/*.py" -f name,size,mtime,mode
+
+# Script-friendly simple output with selected fields (comma-separated, no header)
+openviking glob "**/*.py" --simple -f name,size
 ```
 
 **Response Example**
+
+Default (URI strings):
 
 ```json
 {
@@ -1014,6 +1027,22 @@ openviking glob "**/*.py"
         "count": 2
     },
     "time": 0.1
+}
+```
+
+With `extra_fields=["name","size","mtime"]`:
+
+```json
+{
+    "status": "ok",
+    "result": {
+        "matches": [
+            {"name": "api.md", "uri": "viking://resources/docs/api.md", "size": 12345, "mtime": 1720000000},
+            {"name": "guide.md", "uri": "viking://resources/docs/guide.md", "size": 8234, "mtime": 1720000001}
+        ],
+        "count": 2
+    },
+    "time": 0.2
 }
 ```
 

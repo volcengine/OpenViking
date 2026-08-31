@@ -330,6 +330,10 @@ const resources = {
       },
     },
     searchPalette: {
+      modes: {
+        name: '文件名',
+        switchHint: '切换模式',
+      },
       ariaLabel: '搜索',
       openContainingDirectory: '打开所在目录',
       placeholder: '搜索',
@@ -411,12 +415,11 @@ const resources = {
       unsupportedBinary: '二进制文件不支持文本预览。',
       jsonl: {
         collapse: '收起',
-        dialogMode: '对话',
+        dialogMode: '对话模式',
         emptyJsonl: '空 JSONL。',
         emptyMessage: '空消息',
         expand: '展开',
         noArguments: '无参数',
-        rawMode: 'JSONL',
         recordCount: '{{count}} 条记录',
         recordCount_other: '{{count}} 条记录',
         toolcall: '工具调用',
