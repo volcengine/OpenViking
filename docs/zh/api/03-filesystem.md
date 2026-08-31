@@ -41,6 +41,23 @@ OpenViking 提供类 Unix 的文件系统操作来管理上下文。
 }
 ```
 
+如果调用方可以读取父目录，但没有某个直接子项的读取权限，`ls` 仍会返回该
+子项的名称占位，但不会返回大小、修改时间、摘要或存储元数据：
+
+```python
+{
+    "name": "restricted",
+    "isDir": True,
+    "uri": "viking://resources/restricted",
+    "access": "denied"
+}
+```
+
+对这个 URI 调用 `stat`、`read` 等内容接口会返回 HTTP 403 `PermissionDenied`。递归
+列举会保留无权限目录本身，但不会继续展开其内容，搜索结果也不会包含无权读取的
+内容。该行为只适用于共享的
+`viking://resources` 命名空间；个人和 peer 私有命名空间仍按原有规则隐藏。
+
 
 **Python HTTP SDK**
 

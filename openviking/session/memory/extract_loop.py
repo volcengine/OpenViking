@@ -9,6 +9,7 @@ Reference: bot/vikingbot/agent/loop.py AgentLoop structure
 import asyncio
 import json
 import re
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.models.vlm.base import ToolCall, VLMBase
@@ -17,12 +18,15 @@ from openviking.session.memory.dataclass import (
     DeleteId,
     MemoryFile,
     MemoryOperationSkip,
+    MemoryOperationSkipCode,
     ResolvedOperation,
     ResolvedOperations,
     StoredLink,
+    WikiLink,
 )
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.merge_op import FieldType, MergeOp, PatchOp
+from openviking.session.memory.page_id_map import ResponsePageIdAllocator
 from openviking.session.memory.schema_model_generator import SchemaModelGenerator
 from openviking.session.memory.tools import (
     MEMORY_TOOLS_REGISTRY,
@@ -39,6 +43,23 @@ from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
+
+
+@dataclass
+class _EventRepairOperations:
+    """Server-filtered operation set accepted from one Event repair response."""
+
+    events: List[Dict[str, Any]]
+    delete_ids: List[Any] = field(default_factory=list)
+    links: List[WikiLink] = field(default_factory=list)
+
+
+_EVENT_RETRYABLE_RESOLUTION_SKIP_CODES = {
+    MemoryOperationSkipCode.INVALID_PEER_ID,
+    MemoryOperationSkipCode.INVALID_RANGES,
+    MemoryOperationSkipCode.AMBIGUOUS_TARGET,
+    MemoryOperationSkipCode.NO_WRITABLE_TARGET,
+}
 
 
 _CANNED_REFUSAL_RE = re.compile(
@@ -158,6 +179,8 @@ class ExtractLoop:
         # Reset format retry counter for each run
         self._format_retry_count = 0
         patch_repair_count = 0
+        resolution_repair_count = 0
+        pending_resolution_repair: Optional[Tuple[ResolvedOperations, List]] = None
 
         # 从 provider 获取 schemas（内部自动加载 registry）
         schemas = self.context_provider.get_memory_schemas(self.ctx)
@@ -285,7 +308,41 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
             # If model returned final operations, check if refetch is needed
             if operations is not None:
-                final_operations, raw_links = await self.resolve_operations(operations)
+                if pending_resolution_repair is not None:
+                    operations = self._event_resolution_repair_subset(
+                        operations,
+                        pending_resolution_repair[0],
+                    )
+                candidate_operations, candidate_links = await self.resolve_operations(operations)
+                if pending_resolution_repair is not None:
+                    base_operations, base_links = pending_resolution_repair
+                    final_operations = self._merge_event_resolution_repair(
+                        base_operations,
+                        candidate_operations,
+                    )
+                    raw_links = base_links
+                    pending_resolution_repair = None
+                else:
+                    final_operations = candidate_operations
+                    raw_links = candidate_links
+                resolution_issues = self._retryable_resolution_issues(final_operations)
+                if resolution_issues and resolution_repair_count == 0:
+                    resolution_repair_count += 1
+                    pending_resolution_repair = (final_operations, raw_links)
+                    max_iterations += 1
+                    self._disable_tools_for_iteration = True
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": self._build_resolution_repair_instruction(resolution_issues),
+                        }
+                    )
+                    tracer.info(
+                        "Extended max_iterations to "
+                        f"{max_iterations} for retry memory target resolution",
+                        console=True,
+                    )
+                    continue
                 # Check if any write_uris target existing files that weren't read
                 refetch_uris = await self._check_unread_existing_files(final_operations)
                 if refetch_uris:
@@ -336,6 +393,15 @@ The final output of the model must strictly follow the JSON Schema format shown 
             # If it's the last iteration, treat unparseable response as
             # "no memory operations" rather than failing hard.
             if iteration >= max_iterations:
+                if pending_resolution_repair is not None:
+                    final_operations, raw_links = pending_resolution_repair
+                    pending_resolution_repair = None
+                    tracer.info(
+                        "Event resolution repair response could not be parsed; "
+                        "keeping the first-pass operations",
+                        console=True,
+                    )
+                    break
                 tracer.info(
                     "Memory extraction final response could not be parsed as JSON operations "
                     f"after {max_iterations} iterations — treating as no operations "
@@ -368,16 +434,319 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
         return final_operations, tools_used
 
+    def _retryable_resolution_issues(self, operations: ResolvedOperations) -> List[Dict[str, Any]]:
+        issues: List[Dict[str, Any]] = []
+        for operation in operations.upsert_operations:
+            resolution_skip = operation.resolution_skip
+            if (
+                operation.uris
+                or operation.memory_type != "events"
+                or resolution_skip is None
+                or resolution_skip.reason_code not in _EVENT_RETRYABLE_RESOLUTION_SKIP_CODES
+            ):
+                continue
+            if resolution_skip.reason_code == MemoryOperationSkipCode.NO_WRITABLE_TARGET and (
+                not self.ctx or not self.ctx.user
+            ):
+                continue
+            issue = {
+                "memory_type": operation.memory_type,
+                "page_id": operation.page_id,
+                "reason_code": resolution_skip.reason_code.value,
+                "reason": resolution_skip.reason,
+                "operation": operation.memory_fields,
+            }
+            issues.append(issue)
+        return issues
+
+    @staticmethod
+    def _build_resolution_repair_instruction(issues: List[Dict[str, Any]]) -> str:
+        details = json.dumps(issues, ensure_ascii=False, indent=2)
+        return (
+            "Some event operations could not resolve a safe write target. "
+            "Return only corrected event operations for the failed items below; leave every "
+            "other memory-type field, delete_ids, and links empty. The server has preserved "
+            "all successful operations from the previous response. "
+            "Reuse exactly the page_id shown for each failed event. "
+            "For event ranges, use valid in-bounds message indexes and include the user-role "
+            "message that establishes the event so its owner can be resolved. "
+            "Do not target a disallowed or ambiguous peer. Output ONLY one JSON object matching "
+            "the required schema.\n\n"
+            f"Resolution issues:\n{details}"
+        )
+
+    @staticmethod
+    def _is_event_schema(schema: Any) -> bool:
+        return (
+            getattr(schema, "memory_type", None) == "events"
+            and getattr(schema, "operation_mode", None) == "add_only"
+        )
+
+    def _uri_belongs_to_schema(self, uri: str, schema: Any) -> Optional[bool]:
+        """Return a path-based ownership result without trusting file metadata."""
+        render_directories = getattr(self._isolation_handler, "render_schema_directories", None)
+        if not callable(render_directories):
+            return None
+        try:
+            directories = render_directories(schema)
+        except Exception:
+            return None
+        if not isinstance(directories, (list, tuple, set)):
+            return None
+        directories = [
+            directory.rstrip("/") for directory in directories if isinstance(directory, str)
+        ]
+        if not directories:
+            return None
+        filename_template = str(getattr(schema, "filename_template", "") or "").lstrip("/")
+        if not filename_template:
+            return None
+        if schema.filename_has_variables():
+            return any(uri.startswith(f"{directory}/") for directory in directories)
+        return any(uri == f"{directory}/{filename_template}" for directory in directories)
+
+    def _memory_type_for_uri(self, uri: str) -> Optional[str]:
+        matches = [
+            schema.memory_type
+            for schema in self.context_provider.get_memory_schemas(self.ctx)
+            if self._uri_belongs_to_schema(uri, schema) is True
+        ]
+        unique_matches = list(dict.fromkeys(matches))
+        return unique_matches[0] if len(unique_matches) == 1 else None
+
+    @staticmethod
+    def _is_retryable_event_operation(operation: ResolvedOperation) -> bool:
+        return bool(
+            operation.memory_type == "events"
+            and not operation.uris
+            and operation.resolution_skip is not None
+            and operation.resolution_skip.reason_code in _EVENT_RETRYABLE_RESOLUTION_SKIP_CODES
+        )
+
+    @classmethod
+    def _event_resolution_repair_subset(
+        cls,
+        operations: Any,
+        original: ResolvedOperations,
+    ) -> _EventRepairOperations:
+        """Keep only one range repair for each failed Event and preserve its original fields."""
+        failed_events = {
+            operation.page_id: operation
+            for operation in original.upsert_operations
+            if cls._is_retryable_event_operation(operation) and operation.page_id is not None
+        }
+        candidates: Dict[int, List[Dict[str, Any]]] = {}
+        for item in getattr(operations, "events", None) or []:
+            item_dict = dict(item)
+            page_id = item_dict.get("page_id")
+            if page_id in failed_events:
+                candidates.setdefault(page_id, []).append(item_dict)
+
+        repaired_items: List[Dict[str, Any]] = []
+        for page_id, failed_operation in failed_events.items():
+            page_candidates = candidates.get(page_id, [])
+            if len(page_candidates) != 1:
+                if page_candidates:
+                    logger.warning(
+                        "Ignoring ambiguous Event repair response for page_id=%s: count=%s",
+                        page_id,
+                        len(page_candidates),
+                    )
+                continue
+
+            candidate = page_candidates[0]
+            expected_name = failed_operation.memory_fields.get("event_name")
+            if candidate.get("event_name") != expected_name or candidate.get("ranges") is None:
+                logger.warning(
+                    "Ignoring mismatched Event repair response for page_id=%s",
+                    page_id,
+                )
+                continue
+
+            repaired_item = {
+                key: value
+                for key, value in failed_operation.memory_fields.items()
+                if key not in {"memory_type", "user_id"}
+            }
+            repaired_item["ranges"] = candidate["ranges"]
+            repaired_item["page_id"] = page_id
+            repaired_items.append(repaired_item)
+
+        return _EventRepairOperations(events=repaired_items)
+
+    @classmethod
+    def _merge_event_resolution_repair(
+        cls,
+        original: ResolvedOperations,
+        repair: ResolvedOperations,
+    ) -> ResolvedOperations:
+        """Replace only failed Events; preserve every other first-pass operation."""
+        failed_page_ids = {
+            operation.page_id
+            for operation in original.upsert_operations
+            if cls._is_retryable_event_operation(operation)
+        }
+        failed_event_names = {
+            operation.page_id: operation.memory_fields.get("event_name")
+            for operation in original.upsert_operations
+            if cls._is_retryable_event_operation(operation)
+        }
+        repaired_events: Dict[int, ResolvedOperation] = {}
+        duplicate_page_ids = set()
+        for operation in repair.upsert_operations:
+            if (
+                operation.memory_type != "events"
+                or operation.page_id not in failed_page_ids
+                or operation.memory_fields.get("event_name")
+                != failed_event_names.get(operation.page_id)
+            ):
+                continue
+            if operation.page_id in repaired_events:
+                duplicate_page_ids.add(operation.page_id)
+                continue
+            repaired_events[operation.page_id] = operation
+        for page_id in duplicate_page_ids:
+            repaired_events.pop(page_id, None)
+
+        merged_operations: List[ResolvedOperation] = []
+        for operation in original.upsert_operations:
+            if cls._is_retryable_event_operation(operation):
+                repaired_operation = repaired_events.get(operation.page_id)
+                merged_operations.append(repaired_operation or operation)
+                continue
+            merged_operations.append(operation)
+
+        return original.model_copy(
+            update={
+                "upsert_operations": merged_operations,
+            }
+        )
+
+    @staticmethod
+    def _normalize_page_id_reference(
+        raw_page_id: Optional[int],
+        page_id_assignments: Dict[int, List[int]],
+        page_id_map: Any,
+    ) -> Tuple[Optional[int], bool]:
+        """Return the normalized response ID and whether the reference is ambiguous."""
+        if raw_page_id is None:
+            return None, False
+        assigned_ids = page_id_assignments.get(raw_page_id, [])
+        if not assigned_ids:
+            return raw_page_id, False
+
+        unique_ids = list(dict.fromkeys(assigned_ids))
+        existing_uri = page_id_map.resolve(raw_page_id) if page_id_map else None
+        if len(unique_ids) != 1 or (existing_uri is not None and unique_ids[0] != raw_page_id):
+            return None, True
+        return unique_ids[0], False
+
+    @classmethod
+    def _normalize_operation_links(
+        cls,
+        raw_links: List[WikiLink],
+        page_id_assignments: Dict[int, List[int]],
+        page_id_map: Any,
+    ) -> List[WikiLink]:
+        if not raw_links or not page_id_assignments:
+            return raw_links
+
+        normalized_links: List[WikiLink] = []
+        for link in raw_links:
+            updates: Dict[str, int] = {}
+            ambiguous = False
+            for field_name in ("f", "t"):
+                raw_page_id = getattr(link, field_name, None)
+                normalized_page_id, is_ambiguous = cls._normalize_page_id_reference(
+                    raw_page_id,
+                    page_id_assignments,
+                    page_id_map,
+                )
+                if is_ambiguous:
+                    ambiguous = True
+                    break
+                if normalized_page_id != raw_page_id:
+                    updates[field_name] = normalized_page_id
+            if ambiguous:
+                logger.warning(
+                    "Skipping ambiguous memory link after page_id normalization: f=%s, t=%s",
+                    link.f,
+                    link.t,
+                )
+                continue
+            normalized_links.append(link.model_copy(update=updates) if updates else link)
+        return normalized_links
+
+    def _assign_response_page_ids(
+        self,
+        operations: Any,
+        schemas: List[Any],
+        page_id_map: Any,
+    ) -> Tuple[Dict[Tuple[int, int], int], Dict[int, List[int]]]:
+        """Assign unique IDs to new logical operations within one candidate response."""
+        entries: List[Tuple[int, int, Optional[int], bool]] = []
+        for schema_index, schema in enumerate(schemas):
+            value = getattr(operations, schema.memory_type, None)
+            if value is None:
+                continue
+            items = value if isinstance(value, list) else [value]
+            is_event = self._is_event_schema(schema)
+            for item_index, item in enumerate(items):
+                requested_page_id = dict(item).get("page_id")
+                entries.append((schema_index, item_index, requested_page_id, is_event))
+
+        assigned_page_ids: Dict[Tuple[int, int], int] = {}
+        page_id_assignments: Dict[int, List[int]] = {}
+        page_id_allocator = None
+
+        # Preserve non-Event behavior where possible. Events are always new and therefore
+        # allocate after every other memory type has claimed its response-local ID.
+        for event_phase in (False, True):
+            for schema_index, item_index, requested_page_id, is_event in entries:
+                if is_event != event_phase:
+                    continue
+                existing_uri = None
+                if requested_page_id is not None and page_id_map is not None:
+                    existing_uri = page_id_map.resolve(requested_page_id)
+                if not is_event and existing_uri is not None:
+                    page_id = requested_page_id
+                else:
+                    if page_id_allocator is None:
+                        allocator_factory = getattr(
+                            page_id_map,
+                            "new_page_id_allocator",
+                            None,
+                        )
+                        page_id_allocator = (
+                            allocator_factory()
+                            if callable(allocator_factory)
+                            else ResponsePageIdAllocator()
+                        )
+                    page_id = page_id_allocator.allocate(requested_page_id)
+
+                assigned_page_ids[(schema_index, item_index)] = page_id
+                if requested_page_id is not None:
+                    page_id_assignments.setdefault(requested_page_id, []).append(page_id)
+
+        return assigned_page_ids, page_id_assignments
+
     async def resolve_operations(self, operations) -> tuple[ResolvedOperations, List]:
         tracer.info(f"operations={JsonUtils.dumps(operations)}")
         upsert_operations: List[ResolvedOperation] = []
         delete_file_contents: List[MemoryFile] = []
         errors: List[str] = []
+        invalid_reference_page_ids: set[int] = set()
 
         role_scope = self._isolation_handler.get_read_scope()
         page_id_map = getattr(self._extract_context, "page_id_map", None)
+        schemas = list(self.context_provider.get_memory_schemas(self.ctx))
+        assigned_page_ids, page_id_assignments = self._assign_response_page_ids(
+            operations,
+            schemas,
+            page_id_map,
+        )
 
-        for schema in self.context_provider.get_memory_schemas(self.ctx):
+        for schema_index, schema in enumerate(schemas):
             memory_type = schema.memory_type
             value = getattr(operations, memory_type, None)
             if value is None:
@@ -385,7 +754,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
             items = value if isinstance(value, list) else [value]
 
-            for item in items:
+            for item_index, item in enumerate(items):
                 item_dict = dict(item)
                 item_dict["memory_type"] = memory_type
                 identity_resolution_skip = None
@@ -419,7 +788,9 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 if not isinstance(identity_resolution_skip, MemoryOperationSkip):
                     identity_resolution_skip = None
 
-                page_id = item_dict.pop("page_id", None)
+                requested_page_id = item_dict.pop("page_id", None)
+                page_id = assigned_page_ids[(schema_index, item_index)]
+                is_event = self._is_event_schema(schema)
                 resolved_op = ResolvedOperation(
                     old_memory_file_content=None,
                     memory_fields=item_dict,
@@ -429,16 +800,36 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     resolution_skip=identity_resolution_skip,
                 )
 
-                if page_id is not None and page_id_map is not None:
-                    resolved_uri = page_id_map.resolve(page_id)
+                if is_event:
+                    # Event page_ids are temporary link anchors. They must never select an
+                    # existing memory file; URI collision handling remains unchanged downstream.
+                    resolved_op.uris = self._isolation_handler.calculate_memory_uris(
+                        memory_type_schema=schema,
+                        operation=resolved_op,
+                        extract_context=self._extract_context,
+                    )
+                elif requested_page_id is not None and page_id_map is not None:
+                    resolved_uri = page_id_map.resolve(requested_page_id)
                     if resolved_uri:
-                        resolved_op.uris = [resolved_uri]
-                        # Existing page IDs retain their historical precedence over
-                        # an invalid peer hint. Keep the hint runtime-only and do
-                        # not persist it into memory metadata.
-                        resolved_op.resolution_skip = None
                         old_content = self.context_provider.read_file_contents.get(resolved_uri)
-                        if old_content is not None:
+                        belongs_to_schema = self._uri_belongs_to_schema(resolved_uri, schema)
+                        if belongs_to_schema is False:
+                            invalid_reference_page_ids.add(requested_page_id)
+                            existing_memory_type = self._memory_type_for_uri(resolved_uri)
+                            resolved_op.resolution_skip = MemoryOperationSkip(
+                                reason_code=MemoryOperationSkipCode.PAGE_ID_TYPE_MISMATCH,
+                                reason=(
+                                    f"page_id {page_id} belongs to memory type "
+                                    f"{existing_memory_type or 'another schema'}, not {memory_type}"
+                                ),
+                            )
+                        else:
+                            resolved_op.uris = [resolved_uri]
+                            # Existing page IDs retain their historical precedence over
+                            # an invalid peer hint. Keep the hint runtime-only and do
+                            # not persist it into memory metadata.
+                            resolved_op.resolution_skip = None
+                        if old_content is not None and resolved_op.uris:
                             resolved_op.old_memory_file_content = old_content
                             immutable_fields = {
                                 field.name
@@ -476,21 +867,54 @@ The final output of the model must strictly follow the JSON Schema format shown 
             old_content = self.context_provider.read_file_contents.get(delete_uri)
             if not old_content:
                 continue
-            delete_file_contents.append(old_content)
-
             replacement_page_id = delete_id.replacement_page_id
-            if replacement_page_id is None:
-                continue
-            replacement_uri = page_id_map.resolve(replacement_page_id)
-            if not replacement_uri:
-                for op in upsert_operations:
-                    if op.page_id == replacement_page_id and op.uris:
-                        replacement_uri = op.uris[0]
-                        break
+            replacement_uri = None
+            if replacement_page_id is not None:
+                if replacement_page_id in invalid_reference_page_ids:
+                    logger.warning(
+                        "Skipping delete with type-mismatched replacement page_id: "
+                        "delete_page_id=%s, replacement_page_id=%s",
+                        delete_id.delete_page_id,
+                        delete_id.replacement_page_id,
+                    )
+                    continue
+                replacement_page_id, ambiguous = self._normalize_page_id_reference(
+                    replacement_page_id,
+                    page_id_assignments,
+                    page_id_map,
+                )
+                if ambiguous:
+                    logger.warning(
+                        "Skipping delete with ambiguous replacement page_id: "
+                        "delete_page_id=%s, replacement_page_id=%s",
+                        delete_id.delete_page_id,
+                        delete_id.replacement_page_id,
+                    )
+                    continue
+                replacement_uri = page_id_map.resolve(replacement_page_id)
+                if not replacement_uri:
+                    for op in upsert_operations:
+                        if op.page_id == replacement_page_id and op.uris:
+                            replacement_uri = op.uris[0]
+                            break
+
+            delete_file_contents.append(old_content)
             if replacement_uri and replacement_uri != delete_uri:
                 delete_replacements[delete_uri] = replacement_uri
 
         raw_links = getattr(operations, "links", None) or []
+        if invalid_reference_page_ids:
+            raw_links = [
+                link
+                for link in raw_links
+                if link.f not in invalid_reference_page_ids
+                and link.t not in invalid_reference_page_ids
+            ]
+        raw_links = self._normalize_operation_links(
+            raw_links,
+            page_id_assignments,
+            page_id_map,
+        )
         resolved = ResolvedOperations(
             upsert_operations=upsert_operations,
             delete_file_contents=delete_file_contents,
@@ -506,7 +930,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     break
 
         return resolved, raw_links
-
 
     def _normalize_delete_ids(self, raw_delete_ids: List[Any]) -> List[DeleteId]:
         delete_ids: List[DeleteId] = []

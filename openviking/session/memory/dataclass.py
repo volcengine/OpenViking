@@ -180,6 +180,7 @@ class MemoryOperationSkipCode(str, Enum):
     INVALID_RANGES = "invalid_ranges"
     AMBIGUOUS_TARGET = "ambiguous_target"
     NO_WRITABLE_TARGET = "no_writable_target"
+    PAGE_ID_TYPE_MISMATCH = "page_id_type_mismatch"
 
 
 class MemoryOperationSkip(BaseModel):

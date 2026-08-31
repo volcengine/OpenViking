@@ -14,11 +14,41 @@ page_id information is injected into LLM context by annotating read results
 with [page_id: N], not by generating a separate mapping table.
 """
 
-from typing import Dict, Optional
+from typing import Dict, Iterable, Optional
 
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+
+class ResponsePageIdAllocator:
+    """Allocate unique new-page IDs for one candidate LLM response."""
+
+    def __init__(self, registered_page_ids: Iterable[int] = ()):
+        self._registered_page_ids = set(registered_page_ids)
+        self._allocated_page_ids: set[int] = set()
+        self._next_page_id = 100
+
+    def allocate(self, requested_page_id: Optional[int]) -> int:
+        if (
+            requested_page_id is not None
+            and requested_page_id >= 100
+            and requested_page_id not in self._registered_page_ids
+            and requested_page_id not in self._allocated_page_ids
+        ):
+            page_id = requested_page_id
+        else:
+            page_id = self._next_page_id
+            while page_id in self._registered_page_ids or page_id in self._allocated_page_ids:
+                page_id += 1
+
+        self._allocated_page_ids.add(page_id)
+        while (
+            self._next_page_id in self._registered_page_ids
+            or self._next_page_id in self._allocated_page_ids
+        ):
+            self._next_page_id += 1
+        return page_id
 
 
 class PageIdMap:
@@ -43,6 +73,9 @@ class PageIdMap:
         self._id_to_uri[page_id] = uri
         if uri not in self._uri_to_id:
             self._uri_to_id[uri] = page_id
+
+    def new_page_id_allocator(self) -> ResponsePageIdAllocator:
+        return ResponsePageIdAllocator(self._id_to_uri)
 
     def resolve(self, page_id: int) -> Optional[str]:
         """Resolve page_id to URI."""

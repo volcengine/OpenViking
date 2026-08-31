@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """End-to-end tests for /api/v1/snapshot/*."""
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -9,11 +10,16 @@ import httpx
 import pytest
 import pytest_asyncio
 
-from openviking.server.auth import get_request_context
+import openviking.service.reindex_executor as reindex_mod
 from openviking.server.app import create_app
+from openviking.server.auth import get_request_context
 from openviking.server.config import ServerConfig
 from openviking.server.identity import RequestContext, Role
-from openviking_cli.exceptions import InvalidArgumentError, InvalidURIError
+from openviking_cli.exceptions import (
+    InvalidArgumentError,
+    InvalidURIError,
+    PermissionDeniedError,
+)
 from openviking_cli.session.user_id import UserIdentifier
 
 pytestmark = pytest.mark.asyncio
@@ -186,24 +192,113 @@ async def client_with_resource_and_blob(client_with_resource, service):
     yield client, commit_oid, blob_uri, expected_bytes
 
 
-async def test_restore_dry_run_does_not_mutate(client_with_resource):
-    client, _root = client_with_resource
-    v1 = (await client.post("/api/v1/snapshot/commit", json={"message": "v1"})).json()["result"]
-
-    resp = await client.post(
-        "/api/v1/snapshot/restore",
-        json={
-            "project_dir": "viking://resources",
-            "source_commit": v1["commit_oid"],
-            "dry_run": True,
-        },
+async def test_restore_acl_and_reindex_identity(client_with_resource, service, monkeypatch):
+    _, _root = client_with_resource
+    admin = RequestContext(user=service.user, role=Role.ADMIN)
+    writer = RequestContext(
+        user=UserIdentifier(admin.account_id, "snapshot_writer"),
+        role=Role.USER,
+        group_ids=("engineering",),
+        actor_peer_id="snapshot-peer",
     )
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["status"] == "ok"
-    result = body["result"]
-    # Per VikingFS.restore contract, dry_run responses carry 'diff'.
-    assert "diff" in result or result.get("result") == "noop"
+    reader = RequestContext(
+        user=UserIdentifier(admin.account_id, "snapshot_reader"),
+        role=Role.USER,
+    )
+    root = "viking://resources/snapshot_acl_restore"
+    file_uri = f"{root}/document.md"
+    extra_uri = f"{root}/remove.md"
+
+    await service.fs.mkdir(root, ctx=admin)
+    assert await service.vikingdb_manager.upsert(
+        {
+            "id": "snapshot-acl-restore-root",
+            "uri": root,
+            "account_id": admin.account_id,
+            "context_type": "resource",
+            "level": 0,
+            "vector": [0.1] * service.vikingdb_manager.vector_dim,
+        },
+        ctx=admin,
+    )
+    await service.fs.set_acl(
+        root,
+        [
+            {"principal": "user:snapshot_writer", "level": "write"},
+            {"principal": "user:snapshot_reader", "level": "read"},
+        ],
+        ctx=admin,
+    )
+    await service.fs.write(file_uri, content="v1", mode="create", wait=True, ctx=admin)
+    v1 = await service.fs.commit(message="acl restore v1", paths=[root], ctx=writer)
+
+    assert await service.fs.show(v1["commit_oid"], path=file_uri, ctx=reader)
+    assert await service.fs.log(paths=[root], ctx=reader)
+    with pytest.raises(PermissionDeniedError):
+        await service.fs.commit(message="reader cannot commit", paths=[root], ctx=reader)
+
+    await service.fs.write(file_uri, content="v2", mode="replace", wait=True, ctx=writer)
+    await service.fs.commit(message="acl restore v2", paths=[root], ctx=writer)
+
+    with pytest.raises(PermissionDeniedError):
+        await service.fs.restore(
+            project_dir=root,
+            source_commit=v1["commit_oid"],
+            dry_run=True,
+            ctx=reader,
+        )
+
+    write_plan = await service.fs.restore(
+        project_dir=root,
+        source_commit=v1["commit_oid"],
+        dry_run=True,
+        ctx=writer,
+    )
+    assert [item["path"] for item in write_plan["diff"]["to_write"]] == ["document.md"]
+
+    await service.fs.write(extra_uri, content="remove", mode="create", wait=True, ctx=admin)
+    await service.fs.commit(message="acl restore delete", paths=[root], ctx=admin)
+    delete_plan = await service.fs.restore(
+        project_dir=root,
+        source_commit=v1["commit_oid"],
+        dry_run=True,
+        ctx=writer,
+    )
+    assert delete_plan["diff"]["to_delete"] == ["remove.md"]
+    assert await service.fs.read(file_uri, ctx=writer) == "v2"
+
+    reindex_contexts: list[RequestContext] = []
+
+    class _SpyExecutor:
+        async def execute(self, *, uri, mode, wait, ctx):
+            reindex_contexts.append(ctx)
+            return {"ok": True}
+
+        async def reindex_directory_marker(self, *, dir_uri, level, ctx):
+            reindex_contexts.append(ctx)
+
+        async def delete_uri_level(self, *, uri, level, ctx):
+            reindex_contexts.append(ctx)
+            return 0
+
+    monkeypatch.setattr(reindex_mod, "get_reindex_executor", lambda: _SpyExecutor())
+    result = await service.fs.restore(
+        project_dir=root,
+        source_commit=v1["commit_oid"],
+        ctx=writer,
+    )
+    assert result["result"] == "applied"
+
+    for _ in range(100):
+        if reindex_contexts:
+            break
+        await asyncio.sleep(0.02)
+
+    assert reindex_contexts
+    assert all(ctx.role == Role.USER for ctx in reindex_contexts)
+    assert all(ctx.group_ids == ("engineering",) for ctx in reindex_contexts)
+    assert all(ctx.actor_peer_id == "snapshot-peer" for ctx in reindex_contexts)
+    assert all(ctx.bypass_acl for ctx in reindex_contexts)
 
 
 async def test_show_commit_metadata(client_with_resource):
@@ -536,10 +631,6 @@ async def test_restore_apply_triggers_reindex_hook(client_with_resource_and_blob
     """Verify the HTTP restore path actually invokes the vector-reindex
     scheduler — protects the chain router -> viking_fs.restore -> _schedule_vector_rebuild.
     """
-    from openviking.server.identity import RequestContext, Role
-    from openviking_cli.session.user_id import UserIdentifier
-    import openviking.service.reindex_executor as reindex_mod
-
     client, c1_oid, blob_uri, _v1 = client_with_resource_and_blob
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
 
@@ -583,10 +674,6 @@ async def test_restore_delete_removes_orphaned_vectors(client_with_resource_and_
     viking_fs.restore must route deleted source paths to the executor's
     level-precise delete (DETAIL).
     """
-    from openviking.server.identity import RequestContext, Role
-    from openviking_cli.session.user_id import UserIdentifier
-    import openviking.service.reindex_executor as reindex_mod
-
     client, c1_oid, _blob_uri, _v1 = client_with_resource_and_blob
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
 

@@ -39,6 +39,7 @@ class Summarizer:
         ctx: "RequestContext",
         skip_vectorization: bool = False,
         ingest_options: IngestOptions | None = None,
+        created: bool = False,
     ) -> Dict[str, Any]:
         """Summarize one flat file and refresh its parent directory semantics."""
         parent = VikingURI(file_uri).parent
@@ -59,7 +60,7 @@ class Summarizer:
             role=str(ctx.role),
             skip_vectorization=skip_vectorization,
             telemetry_id=telemetry_id,
-            changes={"modified": [file_uri]},
+            changes={"added" if created else "modified": [file_uri]},
             coalesce_key=build_semantic_coalesce_key(
                 context_type=context_type_for_uri(file_uri),
                 uri=parent_uri,
@@ -182,6 +183,7 @@ class Summarizer:
                     context_type=context_type,
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
+                    group_ids=ctx.group_ids,
                     peer_id=ctx.user.user_id,
                     role=str(ctx.role),
                     skip_vectorization=skip_vectorization,

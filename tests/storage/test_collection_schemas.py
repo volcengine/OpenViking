@@ -13,6 +13,7 @@ import requests
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
 from openviking.server.identity import RequestContext, Role, UserIdentifier
 from openviking.service.resource_service import ResourceService
+from openviking.storage.acl import ACL_CONTEXT_FIELDS, ACL_GRANT_FIELDS
 from openviking.storage.collection_schemas import (
     CollectionSchemas,
     TextEmbeddingHandler,
@@ -184,8 +185,9 @@ async def test_init_context_collection_writes_embedding_metadata(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_init_context_collection_backfills_metadata_for_empty_legacy_collection(monkeypatch):
+async def test_init_context_collection_migrates_local_legacy_schema(monkeypatch):
     updates = []
+    schema_updates = []
 
     class _FakeStorage:
         async def create_collection(self, name, schema):
@@ -193,7 +195,20 @@ async def test_init_context_collection_backfills_metadata_for_empty_legacy_colle
             return False
 
         async def get_collection_meta(self):
-            return {"Description": "Unified context collection"}
+            schema = CollectionSchemas.context_collection("context", 2)
+            return {
+                "Description": "Unified context collection",
+                "Fields": [
+                    field
+                    for field in schema["Fields"]
+                    if field["FieldName"] not in ACL_CONTEXT_FIELDS
+                ],
+                "ScalarIndex": [
+                    field
+                    for field in schema["ScalarIndex"]
+                    if field not in ACL_CONTEXT_FIELDS
+                ],
+            }
 
         async def count(self):
             return 0
@@ -202,7 +217,10 @@ async def test_init_context_collection_backfills_metadata_for_empty_legacy_colle
             updates.append(description)
             return True
 
-    config = _DummyConfig(_DummyEmbedder())
+        async def update_collection_schema(self, fields, scalar_index):
+            schema_updates.append((fields, scalar_index))
+
+    config = _DummyConfig(_DummyEmbedder(), backend="local")
     monkeypatch.setattr(
         "openviking_cli.utils.config.get_openviking_config",
         lambda: config,
@@ -212,7 +230,13 @@ async def test_init_context_collection_backfills_metadata_for_empty_legacy_colle
 
     assert created is False
     assert len(updates) == 1
+    assert len(schema_updates) == 1
     assert '"provider": "local"' in updates[0]
+    fields, scalar_index = schema_updates[0]
+    fields_by_name = {field["FieldName"]: field for field in fields}
+    assert fields_by_name["acl_enabled"]["FieldType"] == "bool"
+    assert all(fields_by_name[field]["FieldType"] == "list<string>" for field in ACL_GRANT_FIELDS)
+    assert ACL_CONTEXT_FIELDS <= set(scalar_index)
 
 
 @pytest.mark.asyncio

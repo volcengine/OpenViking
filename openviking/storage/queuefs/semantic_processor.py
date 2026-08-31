@@ -43,6 +43,7 @@ from openviking.storage.abstract_overview import (
     plan_abstract_overview_refresh,
     write_abstract_overview,
 )
+from openviking.storage.acl import CreatorAclGrant
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
@@ -164,10 +165,11 @@ class SemanticProcessor(DequeueHandlerBase):
 
     @staticmethod
     def _ctx_from_semantic_msg(msg: SemanticMsg) -> RequestContext:
-        role = Role(msg.role or Role.ROOT)
         return RequestContext(
             user=UserIdentifier(msg.account_id, msg.user_id),
-            role=role,
+            role=Role(msg.role),
+            group_ids=tuple(msg.group_ids),
+            bypass_acl=True,
         )
 
     def _detect_file_type(self, file_name: str) -> str:
@@ -260,12 +262,13 @@ class SemanticProcessor(DequeueHandlerBase):
             or parent_uri == uri.rstrip("/")
         ):
             return
+        parent_ctx = self._ctx_from_semantic_msg(msg)
         semantic_config = get_openviking_config().semantic
         decision = await plan_abstract_overview_refresh(
             viking_fs=get_viking_fs(),
             dir_uri=parent_uri,
             changed_entries=1,
-            ctx=self._ctx_from_semantic_msg(msg),
+            ctx=parent_ctx,
             l0_body_changed=l0_body_changed,
             # This helper handles automatic upward propagation only. Manual
             # refresh/ingest bypasses the threshold for its requested root,
@@ -296,6 +299,7 @@ class SemanticProcessor(DequeueHandlerBase):
             recursive=False,
             account_id=msg.account_id,
             user_id=msg.user_id,
+            group_ids=msg.group_ids,
             peer_id=msg.peer_id,
             role=msg.role,
             skip_vectorization=msg.skip_vectorization,
@@ -470,6 +474,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                 ctx=current_ctx,
                                 incremental_update=is_incremental,
                                 target_uri=target_uri,
+                                target_preexisting=msg.target_preexisting,
                                 recursive=msg.recursive,
                                 lock=semantic_lock.lock,
                                 is_code_repo=msg.is_code_repo,
@@ -1544,6 +1549,7 @@ class SemanticProcessor(DequeueHandlerBase):
         overview: str,
         ctx: Optional[RequestContext] = None,
         ingest_options: IngestOptions | None = None,
+        creator_acl_grant: CreatorAclGrant | None = None,
     ) -> None:
         """Create directory Context and enqueue to EmbeddingQueue."""
 
@@ -1557,6 +1563,7 @@ class SemanticProcessor(DequeueHandlerBase):
             context_type=context_type,
             ctx=active_ctx,
             ingest_options=ingest_options,
+            creator_acl_grant=creator_acl_grant,
         )
 
     async def _vectorize_single_file(
@@ -1569,6 +1576,7 @@ class SemanticProcessor(DequeueHandlerBase):
         use_summary: bool = False,
         preserve_existing_created_at: bool = False,
         ingest_options: IngestOptions | None = None,
+        creator_acl_grant: CreatorAclGrant | None = None,
     ) -> None:
         """Vectorize a single file using its content or summary."""
         from openviking.utils.embedding_utils import vectorize_file
@@ -1583,4 +1591,5 @@ class SemanticProcessor(DequeueHandlerBase):
             use_summary=use_summary,
             preserve_existing_created_at=preserve_existing_created_at,
             ingest_options=ingest_options,
+            creator_acl_grant=creator_acl_grant,
         )

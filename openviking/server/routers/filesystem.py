@@ -158,7 +158,7 @@ async def stat(
     uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
         result = await service.fs.stat(uri, ctx=_ctx)
-        return Response(status="ok", result=result)
+        return Response(status="ok", result={**result, "uri": uri})
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:

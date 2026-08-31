@@ -106,6 +106,8 @@ viking://~/resources/docs/                    # 自己的私有资源目录
 viking://user/{user_id}/memories/             # 显式用户路径（可写自己的 id；访问他人需 admin/root）
 ```
 
+`viking://resources/...` 是当前 account 的共享区，可通过 [资源访问控制（ACL）](./15-acl.md) 细化目录或文件权限。`viking://user/{user}/resources/...` 是个人私有区；分享资源需要将其移动到共享区。
+
 ### 用户技能和 peer 内容
 
 ```

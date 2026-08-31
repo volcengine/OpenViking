@@ -24,6 +24,7 @@ class RagfsBindingConfig:
     """Single binding config object for both stack construction and backend mount setup."""
 
     agfs: Any
+    cache: Any | None = None
     root_key: bytes | None = None
     provider_type: int | None = None
     log: Dict[str, Any] | None = None
@@ -34,8 +35,28 @@ class RagfsBindingConfig:
 
     def to_binding_dict(self) -> Dict[str, Any]:
         """Convert the runtime config into the sectioned dict consumed by `RAGFSBindingClient`."""
+        queuefs = getattr(self.agfs, "queuefs", None)
+        queue_backend = getattr(queuefs, "backend", None)
+        cachefs = getattr(self.agfs, "cachefs", None)
+        cachefs_backend = getattr(cachefs, "backend", "local")
+        uses_runtime = cachefs_backend == "cache" or queue_backend == "cache"
+        if self.cache is not None and uses_runtime:
+            cache_config = _build_provider_cache_config(
+                self.cache,
+                cachefs,
+                cachefs_backend == "cache",
+                uses_runtime,
+            )
+        elif self.cache is not None:
+            cache_config = _disabled_cache_config(cachefs)
+        else:
+            if uses_runtime:
+                raise ValueError(
+                    "top-level cache config is required when CacheFS or QueueFS uses backend=cache"
+                )
+            cache_config = _disabled_cache_config(cachefs)
         binding_config: Dict[str, Any] = {
-            "cache": self.agfs.cache.model_dump(mode="json"),
+            "cache": cache_config,
             "pathlock": self.agfs.pathlock.model_dump(mode="json"),
         }
 
@@ -53,6 +74,46 @@ class RagfsBindingConfig:
             }
 
         return binding_config
+
+
+def _disabled_cache_config(cachefs_model: Any) -> Dict[str, Any]:
+    traversal_mode = getattr(cachefs_model, "traversal_mode", "backend")
+    return {
+        "enabled": False,
+        "runtime_enabled": False,
+        "provider": "redis",
+        "namespace": getattr(cachefs_model, "namespace", "openviking"),
+        "max_file_size_bytes": getattr(cachefs_model, "max_file_size_bytes", 1024 * 1024),
+        "traversal_mode": getattr(traversal_mode, "value", traversal_mode),
+        "bypass_prefixes": list(getattr(cachefs_model, "bypass_prefixes", [])),
+    }
+
+
+def _build_provider_cache_config(
+    provider_config: Any,
+    cachefs_model: Any,
+    cachefs_enabled: bool,
+    runtime_enabled: bool,
+) -> Dict[str, Any]:
+    provider = provider_config.provider.strip()
+    params = dict(provider_config.params)
+    cache_config = _disabled_cache_config(cachefs_model)
+    cache_config.update(
+        {
+            "enabled": cachefs_enabled,
+            "runtime_enabled": runtime_enabled,
+            "provider": provider,
+        }
+    )
+    if provider == "redis":
+        from openviking_cli.utils.config.agfs_config import RedisCacheConfig
+
+        redis = RedisCacheConfig.model_validate(params)
+        cache_config["redis"] = redis.model_dump(mode="json")
+        return cache_config
+    if provider == "dynamic":
+        cache_config["dynamic"] = params
+    return cache_config
 
 
 def _run_coro_blocking(coro: Any) -> Any:
@@ -102,6 +163,7 @@ def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig,
     agfs_config = _get_config_value(storage, "agfs") if storage is not None else None
     if agfs_config is None:
         raise ValueError("OpenViking config storage.agfs is required")
+    cache_config = _get_config_value(config, "cache")
 
     log_config = _get_config_value(config, "log")
     log_level = _get_config_value(log_config, "level", "INFO")
@@ -119,7 +181,11 @@ def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig,
 
     encryptor = _run_coro_blocking(bootstrap_encryption(_dump_openviking_config(config)))
     if encryptor is None:
-        return RagfsBindingConfig(agfs=agfs_config, log=binding_log), None
+        return RagfsBindingConfig(
+            agfs=agfs_config,
+            cache=cache_config,
+            log=binding_log,
+        ), None
 
     root_key = _run_coro_blocking(encryptor.provider.get_root_key())
     if not isinstance(root_key, (bytes, bytearray)) or len(root_key) != 32:
@@ -128,6 +194,7 @@ def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig,
     return (
         RagfsBindingConfig(
             agfs=agfs_config,
+            cache=cache_config,
             root_key=bytes(root_key),
             provider_type=encryptor.provider_type,
             log=binding_log,
@@ -170,7 +237,7 @@ def resolve_queuefs_mount_point(config: Any = None) -> str:
 
 
 def _build_queuefs_plugin_config(agfs_config: Any, data_path: Path) -> Dict[str, Any]:
-    """Build QueueFS plugin configuration from AGFS config with legacy compatibility."""
+    """Build QueueFS plugin configuration from AGFS config."""
     default_queue_db_path = data_path / "_system" / "queue" / "queue.db"
     queuefs_config = getattr(agfs_config, "queuefs", None)
 
@@ -193,8 +260,8 @@ def _build_queuefs_plugin_config(agfs_config: Any, data_path: Path) -> Dict[str,
 
         plugin_config["db_path"] = queue_db_path
 
-    if backend == "redis":
-        plugin_config["redis"] = queuefs_config.redis.model_dump()
+    if backend == "cache":
+        plugin_config["cache_key_prefix"] = queuefs_config.cache_key_prefix
 
     return plugin_config
 

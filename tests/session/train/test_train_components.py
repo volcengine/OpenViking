@@ -22,13 +22,54 @@ from openviking.session.train import (
     PatchSemanticGradient,
     PolicyUpdatePlan,
 )
+from openviking.storage.errors import LockAcquisitionError
+
+
+class FakePathlockClient:
+    def __init__(self, acquire_error: Exception | None = None):
+        self.acquire_error = acquire_error
+        self.acquire_calls = []
+        self.release_calls = []
+
+    async def pathlock_acquire_exact_tree_batch(
+        self,
+        exact_paths,
+        tree_paths,
+        timeout_secs=0.0,
+        owner_lease_ref=None,
+    ):
+        call = {
+            "exact_paths": list(exact_paths),
+            "tree_paths": list(tree_paths),
+            "timeout_secs": timeout_secs,
+            "owner_lease_ref": owner_lease_ref,
+        }
+        self.acquire_calls.append(call)
+        if self.acquire_error is not None:
+            raise self.acquire_error
+        lease = {"lease_ref": f"combined-lease-{len(self.acquire_calls)}"}
+        call["lease"] = lease
+        return lease
+
+    async def pathlock_release(self, lease):
+        self.release_calls.append(lease)
 
 
 class FakeVikingFS:
-    def __init__(self, files: dict[str, str]):
+    def __init__(
+        self,
+        files: dict[str, str],
+        *,
+        lock_acquire_error: Exception | None = None,
+    ):
         self.files = files
         self.rm_lock_handles = []
         self.write_lock_handles = []
+        self._async_agfs = FakePathlockClient(lock_acquire_error)
+
+    def _uri_to_path(self, uri: str, ctx=None) -> str:
+        account_id = getattr(getattr(ctx, "user", None), "account_id", None) or "default"
+        return f"/local/{account_id}/{uri.removeprefix('viking://')}"
 
     async def ls(self, uri: str, output: str = "original", ctx=None, **kwargs):
         del kwargs
@@ -47,13 +88,13 @@ class FakeVikingFS:
     async def read_file(self, uri: str, ctx=None):
         return self.files[uri]
 
-    async def write_file(self, uri: str, content: str, ctx=None, lock_handle=None):
-        self.write_lock_handles.append((uri, lock_handle))
+    async def write_file(self, uri: str, content: str, ctx=None, lease_ref=None):
+        self.write_lock_handles.append((uri, lease_ref))
         self.files[uri] = content
 
-    async def rm(self, uri: str, recursive: bool = False, ctx=None, lock_handle=None):
+    async def rm(self, uri: str, recursive: bool = False, ctx=None, lease_ref=None):
         del recursive, ctx
-        self.rm_lock_handles.append(lock_handle)
+        self.rm_lock_handles.append(lease_ref)
         self.files.pop(uri, None)
         return {"estimated_deleted_count": 1}
 
@@ -126,14 +167,18 @@ def _patch_gradient(
         after_file=_memory_file(name=name, uri=uri, content=after, version=base_version),
         base_version=base_version,
         rationale=rationale,
-        links=links or [
-            StoredLink(
-                from_uri=uri or "",
-                to_uri="viking://user/u/memories/trajectories/traj1.md",
-                link_type="derived_from",
-                weight=1.0,
-            )
-        ],
+        links=(
+            links
+            if links is not None
+            else [
+                StoredLink(
+                    from_uri=uri or "",
+                    to_uri="viking://user/u/memories/trajectories/traj1.md",
+                    link_type="derived_from",
+                    weight=1.0,
+                )
+            ]
+        ),
         confidence=confidence,
         metadata=metadata or {},
     )
@@ -290,7 +335,12 @@ async def test_dry_run_policy_updater_simulates_delete_plan_items():
 async def test_memory_file_policy_updater_writes_experience_files():
     policy_set = _experience_set()
     fs = FakeVikingFS({})
-    gradient = _patch_gradient(uri=policy_set.policies[0].uri, before="content", after="new content")
+    gradient = _patch_gradient(
+        uri=policy_set.policies[0].uri,
+        before="content",
+        after="new content",
+        links=[],
+    )
     plan = _plan_from_gradient(gradient)
 
     result = await MemoryFilePolicyUpdater(viking_fs=fs).apply(
@@ -309,7 +359,7 @@ async def test_memory_file_policy_updater_writes_experience_files():
 
 
 @pytest.mark.asyncio
-async def test_memory_file_policy_updater_reuses_transaction_lock_for_experience_writes():
+async def test_memory_file_policy_updater_does_not_expand_lock_without_trajectory_links():
     policy_set = _experience_set()
     fs = FakeVikingFS({})
     lock_handle = object()
@@ -317,6 +367,7 @@ async def test_memory_file_policy_updater_reuses_transaction_lock_for_experience
         uri=policy_set.policies[0].uri,
         before="content",
         after="new content",
+        links=[],
     )
     plan = _plan_from_gradient(gradient)
 
@@ -330,6 +381,8 @@ async def test_memory_file_policy_updater_reuses_transaction_lock_for_experience
     assert result.errors == []
     assert result.written_uris == [policy_set.policies[0].uri]
     assert (policy_set.policies[0].uri, lock_handle) in fs.write_lock_handles
+    assert fs._async_agfs.acquire_calls == []
+    assert fs._async_agfs.release_calls == []
 
 
 @pytest.mark.asyncio
@@ -337,7 +390,12 @@ async def test_memory_file_policy_updater_vectorizes_written_experience_files():
     policy_set = _experience_set()
     fs = FakeVikingFS({})
     vikingdb = FakeVikingDB()
-    gradient = _patch_gradient(uri=policy_set.policies[0].uri, before="content", after="new content")
+    gradient = _patch_gradient(
+        uri=policy_set.policies[0].uri,
+        before="content",
+        after="new content",
+        links=[],
+    )
     plan = _plan_from_gradient(gradient)
 
     from openviking.server.identity import RequestContext, Role
@@ -363,6 +421,8 @@ async def test_memory_file_policy_updater_writes_v2_compatible_source_trajectory
     policy_set = _experience_set()
     exp_uri = policy_set.policies[0].uri
     traj_uri = "viking://user/u/memories/trajectories/booking_duplicate.md"
+    ctx = fake_request_context()
+    transaction_lease = {"lease_ref": "experience-tree-lease"}
     fs = FakeVikingFS(
         {
             traj_uri: MemoryFileUtils.write(
@@ -393,9 +453,28 @@ async def test_memory_file_policy_updater_writes_v2_compatible_source_trajectory
     )
     plan = _plan_from_gradient(gradient)
 
-    result = await MemoryFilePolicyUpdater(viking_fs=fs).apply(plan, policy_set)
+    result = await MemoryFilePolicyUpdater(viking_fs=fs).apply(
+        plan,
+        policy_set,
+        ctx,
+        transaction_handle=transaction_lease,
+    )
 
     assert result.errors == []
+    assert len(fs._async_agfs.acquire_calls) == 1
+    acquire_call = fs._async_agfs.acquire_calls[0]
+    assert acquire_call["exact_paths"] == [fs._uri_to_path(traj_uri, ctx=ctx)]
+    assert acquire_call["tree_paths"] == [fs._uri_to_path(policy_set.root_uri, ctx=ctx)]
+    assert acquire_call["timeout_secs"] == 300.0
+    assert acquire_call["owner_lease_ref"] is transaction_lease
+    combined_lease = acquire_call["lease"]
+    assert fs._async_agfs.release_calls == [combined_lease]
+    relevant_write_leases = [
+        lease for uri, lease in fs.write_lock_handles if uri in {exp_uri, traj_uri}
+    ]
+    assert relevant_write_leases
+    assert all(lease is combined_lease for lease in relevant_write_leases)
+
     exp_mf = MemoryFileUtils.read(fs.files[exp_uri], uri=exp_uri)
     assert any(
         link.get("from_uri") == exp_uri
@@ -415,6 +494,136 @@ async def test_memory_file_policy_updater_writes_v2_compatible_source_trajectory
         and link.get("description") == ""
         for link in traj_mf.backlinks
     )
+
+
+@pytest.mark.asyncio
+async def test_memory_file_policy_updater_locks_and_writes_multiple_trajectory_backlinks():
+    policy_set = _experience_set()
+    exp_uri = policy_set.policies[0].uri
+    trajectory_uris = [
+        "viking://user/u/memories/trajectories/traj1.md",
+        "viking://user/u/memories/trajectories/traj2.md",
+    ]
+    ctx = fake_request_context()
+    transaction_lease = {"lease_ref": "experience-tree-lease"}
+    fs = FakeVikingFS(
+        {
+            uri: MemoryFileUtils.write(
+                MemoryFile(
+                    uri=uri,
+                    content=f"trajectory content {index}",
+                    memory_type="trajectories",
+                    extra_fields={
+                        "memory_type": "trajectories",
+                        "trajectory_name": f"traj{index}",
+                    },
+                )
+            )
+            for index, uri in enumerate(trajectory_uris, start=1)
+        }
+    )
+    gradient = _patch_gradient(
+        uri=exp_uri,
+        before="content",
+        after="new content",
+        links=[
+            StoredLink(
+                from_uri=exp_uri,
+                to_uri=uri,
+                link_type="derived_from",
+                weight=1.0,
+            )
+            for uri in trajectory_uris
+        ],
+    )
+
+    result = await MemoryFilePolicyUpdater(viking_fs=fs).apply(
+        _plan_from_gradient(gradient),
+        policy_set,
+        ctx,
+        transaction_handle=transaction_lease,
+    )
+
+    assert result.errors == []
+    assert len(fs._async_agfs.acquire_calls) == 1
+    acquire_call = fs._async_agfs.acquire_calls[0]
+    assert acquire_call["exact_paths"] == sorted(
+        fs._uri_to_path(uri, ctx=ctx) for uri in trajectory_uris
+    )
+    assert acquire_call["tree_paths"] == [fs._uri_to_path(policy_set.root_uri, ctx=ctx)]
+    assert acquire_call["owner_lease_ref"] is transaction_lease
+    combined_lease = acquire_call["lease"]
+    assert fs._async_agfs.release_calls == [combined_lease]
+
+    exp_mf = MemoryFileUtils.read(fs.files[exp_uri], uri=exp_uri)
+    assert {link["to_uri"] for link in exp_mf.links} == set(trajectory_uris)
+    for trajectory_uri in trajectory_uris:
+        trajectory_mf = MemoryFileUtils.read(
+            fs.files[trajectory_uri],
+            uri=trajectory_uri,
+        )
+        assert any(
+            link.get("from_uri") == exp_uri and link.get("to_uri") == trajectory_uri
+            for link in trajectory_mf.backlinks
+        )
+
+
+@pytest.mark.asyncio
+async def test_memory_file_policy_updater_propagates_combined_lock_failure_before_writes():
+    policy_set = _experience_set()
+    exp_uri = policy_set.policies[0].uri
+    traj_uri = "viking://user/u/memories/trajectories/traj1.md"
+    initial_files = {
+        exp_uri: MemoryFileUtils.write(
+            _memory_file(
+                name="booking_duplicate_handling",
+                uri=exp_uri,
+                content="content",
+                version=1,
+            )
+        ),
+        traj_uri: MemoryFileUtils.write(
+            MemoryFile(
+                uri=traj_uri,
+                content="trajectory content",
+                memory_type="trajectories",
+                extra_fields={"memory_type": "trajectories", "trajectory_name": "traj1"},
+            )
+        ),
+    }
+    fs = FakeVikingFS(
+        dict(initial_files),
+        lock_acquire_error=LockAcquisitionError("combined lock timed out"),
+    )
+    gradient = _patch_gradient(
+        uri=exp_uri,
+        before="content",
+        after="new content",
+        links=[
+            StoredLink(
+                from_uri=exp_uri,
+                to_uri=traj_uri,
+                link_type="derived_from",
+                weight=1.0,
+            )
+        ],
+    )
+
+    with pytest.raises(LockAcquisitionError, match="combined lock timed out"):
+        await MemoryFilePolicyUpdater(viking_fs=fs).apply(
+            _plan_from_gradient(gradient),
+            policy_set,
+            fake_request_context(),
+            transaction_handle={"lease_ref": "experience-tree-lease"},
+        )
+
+    assert len(fs._async_agfs.acquire_calls) == 1
+    assert fs._async_agfs.release_calls == []
+    assert fs.write_lock_handles == []
+    assert fs.files == initial_files
+    persisted_exp = MemoryFileUtils.read(fs.files[exp_uri], uri=exp_uri)
+    assert persisted_exp.content == "content"
+    assert persisted_exp.extra_fields["version"] == 1
 
 
 @pytest.mark.asyncio

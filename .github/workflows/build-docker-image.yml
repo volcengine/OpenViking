@@ -95,38 +95,7 @@ jobs:
             type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
 
       - name: Set up Docker Buildx
-        id: buildx
         uses: docker/setup-buildx-action@v4
-
-      # Persist the Dockerfile's cargo/ccache RUN --mount=type=cache dirs across
-      # runs. On ephemeral runners they start empty, so the Rust CLI and C++
-      # extension recompile from scratch every build (~13 min of a ~16 min job).
-      # Key on the native-build inputs, not the commit sha: commits that do not
-      # touch Rust/C++ hit the exact key, which also skips the cache upload, so
-      # this stays quiet inside the repo's shared 10 GB Actions cache budget.
-      # npm/uv mounts are deliberately not persisted: they only save ~1 min and
-      # would churn the cache on every dependency change.
-      - name: Restore BuildKit mount caches
-        id: mount-cache
-        uses: actions/cache@v4
-        with:
-          path: buildkit-mount-cache
-          key: buildkit-mount-${{ matrix.arch }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'crates/**', 'src/**', 'third_party/**', 'setup.py') }}
-          restore-keys: |
-            buildkit-mount-${{ matrix.arch }}-
-
-      - name: Inject mount caches into BuildKit
-        uses: reproducible-containers/buildkit-cache-dance@v3.4.0
-        with:
-          builder: ${{ steps.buildx.outputs.name }}
-          cache-map: |
-            {
-              "buildkit-mount-cache/cargo-target": {"target": "/cargo-target", "id": "cargo-target-${{ matrix.platform }}"},
-              "buildkit-mount-cache/cargo-registry": {"target": "/usr/local/cargo/registry", "id": "cargo-registry-${{ matrix.platform }}"},
-              "buildkit-mount-cache/cargo-git": {"target": "/usr/local/cargo/git", "id": "cargo-git-${{ matrix.platform }}"},
-              "buildkit-mount-cache/ccache": {"target": "/root/.ccache", "id": "ccache-${{ matrix.platform }}"}
-            }
-          skip-extraction: ${{ steps.mount-cache.outputs.cache-hit }}
 
       - name: Build and push Docker image to GHCR
         id: push-ghcr

@@ -31,6 +31,14 @@ class AccountAgentEvolutionSettings(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class AccountResourceAclSettings(BaseModel):
+    """Account-scoped defaults for newly created shared content."""
+
+    auto_protect_new_content: bool = False
+
+    model_config = {"extra": "forbid"}
+
+
 class AccountSettings(BaseModel):
     """Persisted account overrides.
 
@@ -38,6 +46,7 @@ class AccountSettings(BaseModel):
     """
 
     agent_evolution: Optional[AccountAgentEvolutionSettings] = None
+    resource_acl: Optional[AccountResourceAclSettings] = None
 
     model_config = {"extra": "forbid"}
 
@@ -46,6 +55,7 @@ class AccountSettingsPatch(BaseModel):
     """Allowlisted account settings accepted by the update API."""
 
     agent_evolution: Optional[AccountAgentEvolutionSettings] = None
+    resource_acl: Optional[AccountResourceAclSettings] = None
 
     model_config = {"extra": "forbid"}
 
@@ -116,6 +126,12 @@ def effective_agent_evolution_enabled(
     return settings.agent_evolution.enabled
 
 
+def effective_auto_protect_new_content(settings: AccountSettings) -> bool:
+    if settings.resource_acl is None:
+        return False
+    return settings.resource_acl.auto_protect_new_content
+
+
 async def update_account_settings(
     viking_fs: VikingFS,
     account_id: str,
@@ -147,6 +163,8 @@ async def update_account_settings(
         updated = current.model_copy(deep=True)
         if patch.agent_evolution is not None:
             updated.agent_evolution = patch.agent_evolution.model_copy(deep=True)
+        if patch.resource_acl is not None:
+            updated.resource_acl = patch.resource_acl.model_copy(deep=True)
         if updated == current:
             return current
 

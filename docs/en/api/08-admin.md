@@ -1,6 +1,6 @@
 # Admin (Multi-tenant)
 
-The Admin API manages accounts and users in a multi-tenant environment. It covers workspace (account) creation/deletion, user registration/removal, role changes, and API key regeneration.
+The Admin API manages accounts, users, and groups in a multi-tenant environment. It covers workspace (account) creation/deletion, user registration/removal, group membership, role changes, and API key regeneration.
 
 This API is available in both `api_key` and `trusted` deployments:
 - In `api_key` mode, the effective role is always derived from the presented API key.
@@ -21,6 +21,7 @@ For `/api/v1/admin/*`, `trusted` mode permits requests with no explicit identity
 | Create/delete workspace | Y | N | N |
 | List workspaces | Y | N | N |
 | Register/remove users | Y | Y (own account) | N |
+| Manage groups and membership | Y | Y (own account) | N |
 | List agents (deprecated, returns empty list) | Y | Y (own account) | N |
 | Regenerate user key | Y | Y (own account) | N |
 | Promote user to ADMIN | Y | Y (own account) | N |
@@ -54,6 +55,32 @@ Configure `root_api_key` in `~/.openviking/ovcli.conf`:
 
 - `--sudo` only works with the commands above - using it with regular data commands will error
 - Must have `root_api_key` configured to use `--sudo`
+
+## Groups
+
+A group belongs to one account and lets one ACL principal grant access to multiple users. Its caller-supplied `group_id` follows the same identifier rules as `user_id` and is the account-unique, stable identifier; there is no separate group name. Only existing users from the same account can be members, and groups cannot be nested.
+
+The server adds memberships to `RequestContext.group_ids` for each request. Adding or removing a member takes effect on the next request without rewriting resource ACL or context records. Removing a user also removes all memberships. A group must be empty before deletion.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/admin/accounts/{account_id}/groups` | Create an empty group with `{"group_id":"engineering"}` |
+| GET | `/api/v1/admin/accounts/{account_id}/groups` | List groups |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | Delete an empty group |
+| GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | List members |
+| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Add a member idempotently; repeated calls return `added=true` |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Remove a member; repeated calls return `removed=false` |
+
+```bash
+ov --sudo admin create-group acme engineering
+ov --sudo admin add-group-member acme engineering alice
+ov acl grant viking://resources/project-a \
+  --principal group:engineering --level read
+ov --sudo admin remove-group-member acme engineering alice
+ov --sudo admin delete-group acme engineering
+```
+
+The Python SDK exposes `admin_create_group`, `admin_list_groups`, `admin_list_group_members`, `admin_add_group_member`, `admin_remove_group_member`, and `admin_delete_group`. The Go SDK uses matching PascalCase method names.
 
 ## API Reference
 
@@ -103,15 +130,28 @@ Content-Type: application/json
 ### account_settings
 
 ROOT can manage any account and ADMIN can manage only its own account. The
-generic settings endpoint accepts only explicitly allowlisted fields; currently
-only `agent_evolution.enabled` is writable.
+generic settings endpoint accepts only explicitly allowlisted fields. It currently
+allows `agent_evolution.enabled` and `resource_acl.auto_protect_new_content`.
 
 ```http
 GET /api/v1/admin/accounts/{account_id}/settings
 PATCH /api/v1/admin/accounts/{account_id}/settings
 Content-Type: application/json
 
-{"agent_evolution": {"enabled": true}}
+{
+  "agent_evolution": {"enabled": true},
+  "resource_acl": {"auto_protect_new_content": true}
+}
+```
+
+`resource_acl.auto_protect_new_content` defaults to `false`. When enabled, newly
+created shared files, directories, and `add-resource` roots grant their creator
+direct `manage` while inheriting the parent ACL. Existing content is not migrated
+or modified. Disabling it again affects only later creations; existing ACLs remain
+effective.
+
+```bash
+ov --sudo admin set-account-settings acme --auto-protect-new-content true
 ```
 
 Before an existing setting is replaced, it is backed up to

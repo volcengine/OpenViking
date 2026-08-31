@@ -1,6 +1,6 @@
 # 管理员（多租户）
 
-Admin API 用于多租户环境下的账户和用户管理。包括工作区（account）的创建与删除、用户注册与移除、角色变更、API Key 重新生成。
+Admin API 用于多租户环境下的账户、用户和用户组管理。包括工作区（account）的创建与删除、用户注册与移除、用户组成员、角色变更、API Key 重新生成。
 
 该 API 适用于 `api_key` 和 `trusted` 两种模式下的管理链路：
 - 在 `api_key` 模式下，角色始终从 API Key 推导。
@@ -21,6 +21,7 @@ Admin API 用于多租户环境下的账户和用户管理。包括工作区（a
 | 创建/删除工作区 | Y | N | N |
 | 列出工作区 | Y | N | N |
 | 注册/移除用户 | Y | Y（本 account） | N |
+| 管理用户组和成员 | Y | Y（本 account） | N |
 | 列出 agents（已废弃，返回空列表） | Y | Y（本 account） | N |
 | 重新生成 User Key | Y | Y（本 account） | N |
 | 将用户提升为 ADMIN | Y | Y（本 account） | N |
@@ -54,6 +55,32 @@ Admin API 用于多租户环境下的账户和用户管理。包括工作区（a
 
 - `--sudo` 仅适用于上面的命令，用于普通数据命令会报错
 - 必须配置 `root_api_key` 才能使用 `--sudo`
+
+## 用户组
+
+用户组属于单个 account，用于通过一个 ACL principal 授权多个用户。`group_id` 由调用者创建时指定，使用与 `user_id` 相同的标识符规则，是 account 内唯一且稳定的标识；不存在单独的组名。组内只能加入当前 account 已存在的用户，不支持嵌套组。
+
+成员关系由服务端加入每次请求的 `RequestContext.group_ids`。添加或移除成员从下一次请求开始生效，不重写资源 ACL 或 context 记录。用户被删除时会自动退出所有组；用户组必须为空才能删除。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/v1/admin/accounts/{account_id}/groups` | 创建空组，请求体为 `{"group_id":"engineering"}` |
+| GET | `/api/v1/admin/accounts/{account_id}/groups` | 列出组 |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | 删除空组 |
+| GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 列出成员 |
+| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 幂等添加成员；重复调用返回 `added=true` |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 移除成员；重复调用返回 `removed=false` |
+
+```bash
+ov --sudo admin create-group acme engineering
+ov --sudo admin add-group-member acme engineering alice
+ov acl grant viking://resources/project-a \
+  --principal group:engineering --level read
+ov --sudo admin remove-group-member acme engineering alice
+ov --sudo admin delete-group acme engineering
+```
+
+Python SDK 提供对应的 `admin_create_group`、`admin_list_groups`、`admin_list_group_members`、`admin_add_group_member`、`admin_remove_group_member` 和 `admin_delete_group`；Go SDK 使用相同名称的 PascalCase 方法。
 
 ## API 参考
 
@@ -102,14 +129,26 @@ Content-Type: application/json
 ### account_settings
 
 ROOT 可管理任意 account，ADMIN 仅可管理自己所属的 account。通用配置接口仅允许
-显式列入白名单的字段；当前只允许修改 `agent_evolution.enabled`。
+显式列入白名单的字段；当前允许修改 `agent_evolution.enabled` 和
+`resource_acl.auto_protect_new_content`。
 
 ```http
 GET /api/v1/admin/accounts/{account_id}/settings
 PATCH /api/v1/admin/accounts/{account_id}/settings
 Content-Type: application/json
 
-{"agent_evolution": {"enabled": true}}
+{
+  "agent_evolution": {"enabled": true},
+  "resource_acl": {"auto_protect_new_content": true}
+}
+```
+
+`resource_acl.auto_protect_new_content` 默认为 `false`。开启后，账号内新建的共享
+文件、目录和 `add-resource` 根节点会给创建者直接 `manage`，同时继承父目录
+ACL；已有内容不会迁移或改权。重新关闭只影响后续创建，已有 ACL 继续生效。
+
+```bash
+ov --sudo admin set-account-settings acme --auto-protect-new-content true
 ```
 
 覆盖已有配置前，内核会先备份到

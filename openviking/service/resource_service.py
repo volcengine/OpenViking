@@ -54,6 +54,7 @@ from openviking.server.user_config import (
     effective_resource_add_target,
     effective_skill_add_target,
 )
+from openviking.storage.acl import AclAction
 from openviking.storage.queuefs import QueueManager, get_queue_manager
 from openviking.storage.queuefs.add_resource_msg import AddResourcePhase
 from openviking.storage.viking_fs import LS_ALL_NODES, VikingFS
@@ -1083,8 +1084,10 @@ class ResourceService:
                 telemetry_id=get_current_telemetry().telemetry_id or None,
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
+                group_ids=list(ctx.group_ids),
                 role=str(ctx.role),
                 actor_peer_id=ctx.actor_peer_id,
+                bypass_acl=ctx.bypass_acl,
                 lock_handoff=lock_handoff,
                 reason=reason,
                 instruction=instruction,
@@ -1189,6 +1192,10 @@ class ResourceService:
             create_parent=create_parent,
         )
         if candidate_uri and defer_candidate_resolution:
+            await self._resource_processor.ensure_candidate_parent_write_access(
+                candidate_uri=candidate_uri,
+                ctx=ctx,
+            )
             return root_uri, None, True, False
         if candidate_uri:
             root_uri, resource_lock = await self._resource_processor.reserve_unique_candidate(
@@ -1202,11 +1209,17 @@ class ResourceService:
         # rejects compliant concurrent writers, and cleanup rechecks that the
         # target is empty before deleting it.
         target_preexisting = await self._viking_fs.exists(root_uri, ctx=ctx)
+        await self._viking_fs._ensure_access(root_uri, ctx, action=AclAction.WRITE)
         dst_path = self._viking_fs._uri_to_path(root_uri, ctx=ctx)
         resource_lock = await self._viking_fs._async_agfs.pathlock_acquire_tree(
             dst_path,
             timeout_secs=0.0,
         )
+        try:
+            await self._viking_fs._ensure_access(root_uri, ctx, action=AclAction.WRITE)
+        except BaseException:
+            await self._release_lock_ref(resource_lock)
+            raise
         return root_uri, resource_lock, False, not target_preexisting
 
     @staticmethod
@@ -1845,8 +1858,10 @@ class ResourceService:
                     telemetry_id=telemetry_id or None,
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
+                    group_ids=list(ctx.group_ids),
                     role=str(ctx.role),
                     actor_peer_id=ctx.actor_peer_id,
+                    bypass_acl=ctx.bypass_acl,
                     lock_handoff=lock_handoff,
                     reason=reason,
                     instruction=instruction,

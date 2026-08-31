@@ -300,6 +300,11 @@ class TempUploadConfig(BaseModel):
     default_mode: Literal["local", "shared"] = "local"
     shared_max_size_bytes: int = 512 * 1024 * 1024
     ttl_seconds: int = Field(12 * 60 * 60, ge=0)
+    # When True, shared-upload cleanup also removes directories whose names are
+    # not valid upload ids (missing/garbled `<ms-ts>-<uuid>` format). Off by
+    # default so a malformed entry never triggers an unexpected delete; enable
+    # to reclaim junk directories that would otherwise be skipped forever.
+    cleanup_invalid_dirs: bool = False
 
     model_config = {"extra": "forbid"}
 

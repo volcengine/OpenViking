@@ -20,6 +20,7 @@ class AddResourceMsg:
     root_uri: str
     account_id: str
     user_id: str
+    group_ids: list[str] = field(default_factory=list)
     role: str
     path: str = ""
     source_path: str = ""
@@ -29,6 +30,7 @@ class AddResourceMsg:
     job_phase: AddResourcePhase | str | None = None
     lock_handoff: Optional[Dict[str, Any]] = None
     actor_peer_id: Optional[str] = None
+    bypass_acl: bool = False
     reason: str = ""
     instruction: str = ""
     timeout: Optional[float] = None
@@ -140,8 +142,14 @@ class AddResourceMsg:
             root_uri=str(root_uri),
             account_id=str(data.get("account_id", "default")),
             user_id=str(data.get("user_id", "default")),
+            group_ids=(
+                [str(group_id) for group_id in data["group_ids"]]
+                if isinstance(data.get("group_ids"), list)
+                else []
+            ),
             role=str(data.get("role", "root")),
             actor_peer_id=data.get("actor_peer_id"),
+            bypass_acl=bool(data.get("bypass_acl", False)),
             telemetry_id=str(data.get("telemetry_id"))
             if isinstance(data.get("telemetry_id"), str)
             else None,

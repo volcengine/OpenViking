@@ -99,6 +99,7 @@ async def test_flat_file_refreshes_parent_semantics_and_vectorizes_via_summary(
         ctx=ctx,
         skip_vectorization=False,
         ingest_options=IngestOptions(),
+        created=True,
     )
 
 

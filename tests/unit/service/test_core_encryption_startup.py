@@ -16,7 +16,7 @@ from openviking.utils.agfs_utils import RagfsBindingConfig
 class _FakeCacheConfig:
     def model_dump(self, mode: str) -> dict:
         assert mode == "json"
-        return {"enabled": False, "provider": "memory"}
+        return {"provider": "redis", "params": {}}
 
 
 class _FakeConfig:
@@ -26,10 +26,18 @@ class _FakeConfig:
         agfs=SimpleNamespace(
             path="/tmp/ov-test",
             backend="local",
-            cache=_FakeCacheConfig(),
+            cachefs=SimpleNamespace(backend="local"),
+            pathlock=SimpleNamespace(
+                model_dump=lambda mode: {
+                    "provider": "filesystem",
+                    "lock_timeout_secs": 0.0,
+                    "lock_expire_secs": 30.0,
+                }
+            ),
         ),
         skip_process_lock=False,
     )
+    cache = _FakeCacheConfig()
 
     def to_dict(self) -> dict:
         return {"encryption": {"enabled": True, "provider": "local"}}
@@ -71,8 +79,19 @@ async def test_build_ragfs_binding_config_works_inside_running_event_loop(monkey
     assert ragfs_config.to_binding_dict() == {
         "cache": {
             "enabled": False,
-            "provider": "memory",
+            "runtime_enabled": False,
+            "provider": "redis",
+            "namespace": "openviking",
+            "max_file_size_bytes": 1024 * 1024,
+            "traversal_mode": "backend",
+            "bypass_prefixes": [],
         },
+        "pathlock": {
+            "provider": "filesystem",
+            "lock_timeout_secs": 0.0,
+            "lock_expire_secs": 30.0,
+        },
+        "log": {"level": "INFO", "output": "stdout"},
         "encryption": {
             "root_key": b"k" * 32,
             "provider_type": 1,
@@ -192,6 +211,7 @@ async def test_close_releases_data_dir_lock_after_successful_cleanup(monkeypatch
     service._queue_manager = None
     service._lock_manager = None
     service._vikingdb_manager = None
+    service._agfs_client = None
     service._initialized = True
     monkeypatch.setattr(service, "_release_data_dir_lock", lambda: released.append(True))
 

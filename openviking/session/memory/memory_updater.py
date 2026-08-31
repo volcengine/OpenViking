@@ -906,6 +906,7 @@ class MemoryUpdater:
                 if resolution_skip.reason_code in {
                     MemoryOperationSkipCode.INVALID_PEER_ID,
                     MemoryOperationSkipCode.INVALID_RANGES,
+                    MemoryOperationSkipCode.PAGE_ID_TYPE_MISMATCH,
                 }:
                     logger.warning(message)
                 else:

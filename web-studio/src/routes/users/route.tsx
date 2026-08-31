@@ -247,7 +247,7 @@ function UserManagementRoute() {
   }
 
   async function useUserIdentity(user: AdminUser | KeyResult): Promise<void> {
-    if (!user.apiKey) {
+    if (serverMode !== 'trusted' && !user.apiKey) {
       toast.error(t('management.noUsableKey'))
       return
     }
@@ -259,7 +259,7 @@ function UserManagementRoute() {
       await switchIdentity({
         accountId,
         allowLegacyIdentityFallback: true,
-        apiKey: user.apiKey,
+        apiKey: user.apiKey || '',
         userId,
       })
       toast.success(t('toast.dataKeySelected'))
@@ -434,6 +434,9 @@ function UserManagementRoute() {
                     const isCurrentIdentity =
                       user.accountId === connection.accountId &&
                       user.userId === connection.userId
+                    const canSwitchIdentity =
+                      !isCurrentIdentity &&
+                      (serverMode === 'trusted' || Boolean(user.apiKey))
                     const isSwitching = switchingIdentityKey === identityKey
                     const isLastManager =
                       (user.role === 'admin' || user.role === 'root') &&
@@ -571,7 +574,7 @@ function UserManagementRoute() {
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center justify-end gap-1">
-                            {user.apiKey && !isCurrentIdentity ? (
+                            {canSwitchIdentity ? (
                               <Button
                                 type="button"
                                 variant="secondary"

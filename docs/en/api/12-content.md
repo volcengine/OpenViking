@@ -577,7 +577,7 @@ This API operates on existing `viking://...` content. It does not import new fil
 
 **Authentication**
 
-- HTTP endpoint: requires admin/root role when authentication is enabled. In `api_key` mode, use an admin key for tenant content; a raw root key cannot access tenant-scoped data.
+- In `api_key` mode, shared `viking://resources/...` targets require an admin key. A regular user key may reindex only its own `viking://user/<user_id>/...` namespace, including the equivalent `viking://~/...` home alias. A root key cannot access tenant-scoped data APIs.
 - Python HTTP client / CLI: sends the current authenticated identity
 
 **Parameters**

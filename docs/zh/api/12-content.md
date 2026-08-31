@@ -577,7 +577,7 @@ ov set-tags viking://resources/project/ \
 
 **认证**
 
-- HTTP 端点：在开启认证时要求 admin/root 角色。`api_key` 模式下，租户内容重建请使用 admin key；裸 root key 不能访问租户级数据。
+- `api_key` 模式下，共享区 `viking://resources/...` 需要 admin key；普通 user key 只能重建自己的 `viking://user/<user_id>/...`，也可以使用等价的 `viking://~/...` 家目录别名。root key 不能访问租户级数据 API。
 - Python HTTP client / CLI：使用当前认证身份发起请求
 
 **参数**

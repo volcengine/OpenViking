@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 from . import embedding_config
 from .agfs_config import AGFSConfig
+from .cache_config import CacheConfig
 from .config_loader import (
     load_json_config,
     require_config,
@@ -88,6 +89,7 @@ from .vlm_config import VLMConfig
 
 __all__ = [
     "AGFSConfig",
+    "CacheConfig",
     "SYSTEM_CONFIG_DIR",
     "DEFAULT_OV_CONF",
     "DEFAULT_OVCLI_CONF",
