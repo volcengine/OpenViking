@@ -185,6 +185,47 @@ class TestLanguageFlow:
 class TestOverviewGenerationFlow:
     """目录概述生成流程测试。"""
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "description,override,expected_language",
+        [
+            ("", "", "en"),
+            ("这是用于查询任务状态和统计运行时间的客户端代码。", "", "zh-CN"),
+            (
+                "Este documento descreve as preferências do usuário e o projeto para completar.",
+                "",
+                "pt",
+            ),
+            ("", "zh-CN", "zh-CN"),
+        ],
+    )
+    async def test_import_paths_do_not_set_overview_language(
+        self, description, override, expected_language
+    ):
+        from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+
+        imports = [f'"github.com/example/module{index}"' for index in range(6)]
+        skeleton = "package client\nimport (\n" + "\n".join(imports) + "\n)\nfunc NewClient()"
+        config = MagicMock()
+        config.output_language_override = override
+        config.semantic.max_overview_prompt_chars = 60_000
+        config.semantic.overview_batch_size = 50
+        config.vlm.get_completion_async = AsyncMock(return_value="# client\nClient overview.")
+
+        with patch(
+            "openviking.storage.queuefs.semantic_processor.get_openviking_config",
+            return_value=config,
+        ):
+            await SemanticProcessor()._generate_overview(
+                "viking://resources/example/client",
+                [{"name": "client.go", "summary": description + "\n" + skeleton}],
+                [],
+            )
+
+        prompt = config.vlm.get_completion_async.call_args.args[0]
+        assert f"Output Language: {expected_language}" in prompt
+        assert all(path in prompt for path in imports)
+
     @pytest.mark.parametrize(
         "lang,file_summaries",
         [
@@ -264,6 +305,7 @@ class TestOverviewGenerationFlow:
         assert "**Directory Coverage** (H2)" not in prompt
         assert "**Quick Navigation** (H2)" not in prompt
         assert "**Detailed Description** (H2)" not in prompt
+
 
 class LanguageAwareMockVLM:
     """语言感知的 MockVLM，根据 prompt 中的 Output Language 返回对应语言的响应。"""
