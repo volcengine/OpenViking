@@ -138,6 +138,9 @@ class _AnyDocMarkdownRenderer:
             return f"{fence}{block.lang or ''}\n{body}\n{fence}"
         if kind == "rule":
             return "---"
+        if kind == "math":
+            source = self._escape_math_source(block.text or "", context=None)
+            return f"$$\n{source}\n$$" if source else ""
         raise RuntimeError(f"Unsupported AnyDoc block kind: {kind}")
 
     def _render_inlines(
@@ -165,7 +168,16 @@ class _AnyDocMarkdownRenderer:
                     )
                 )
                 continue
-            parts.append(self._render_inline(inline, context=context, in_label=in_label))
+            rendered = self._render_inline(inline, context=context, in_label=in_label)
+            if _kind(inline) == "checkbox" and index + 1 < len(normalized):
+                next_inline = normalized[index + 1]
+                starts_with_space = (
+                    isinstance(next_inline, _TextRun)
+                    and next_inline.text[0].isspace()
+                ) or _kind(next_inline) == "line_break"
+                if not starts_with_space:
+                    rendered += " "
+            parts.append(rendered)
         return "".join(parts)
 
     def _render_inline(self, inline: Any, *, context: str, in_label: bool) -> str:
@@ -182,6 +194,11 @@ class _AnyDocMarkdownRenderer:
             return f"[^{number}]" if number is not None else ""
         if kind == "line_break":
             return "\\\n" if context == "block" else "\n" if context == "table_cell" else " "
+        if kind == "math":
+            source = self._escape_math_source(inline.text or "", context=context)
+            return f"${source}$" if source else ""
+        if kind == "checkbox":
+            return "[x]" if inline.checked is True else "[ ]"
         raise RuntimeError(f"Unsupported AnyDoc inline kind: {kind}")
 
     def _normalize_inlines(self, inlines: Iterable[Any]) -> list[Any]:
@@ -369,13 +386,12 @@ class _AnyDocMarkdownRenderer:
         for index, item in enumerate(list_model.items):
             ordinal = int(list_model.start) + index
             marker = self._list_marker(list_model, item, ordinal)
-            checkbox = "[x] " if item.checked is True else "[ ] " if item.checked is False else ""
             body = self._render_blocks(item.blocks)
             if len(item.blocks) > 1:
                 loose = True
             lines = body.splitlines() or [""]
             indent = " " * len(marker)
-            rendered = f"{marker}{checkbox}{lines[0]}"
+            rendered = f"{marker}{lines[0]}"
             for line in lines[1:]:
                 if not line:
                     loose = True
@@ -720,6 +736,23 @@ class _AnyDocMarkdownRenderer:
     def _backtick_fence(text: str, minimum: int) -> str:
         longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
         return "`" * max(longest + 1, minimum)
+
+    @staticmethod
+    def _escape_math_source(text: str, *, context: str | None) -> str:
+        source = text.strip()
+        if context is not None:
+            source = source.replace("\n", " ")
+
+        escaped: list[str] = []
+        backslashes = 0
+        for char in source:
+            if char == "$" and backslashes % 2 == 0:
+                escaped.append("\\")
+            if char == "|" and context == "table_cell" and backslashes % 2 == 0:
+                escaped.append("\\")
+            escaped.append(char)
+            backslashes = backslashes + 1 if char == "\\" else 0
+        return "".join(escaped)
 
     @staticmethod
     def _escape_text(
