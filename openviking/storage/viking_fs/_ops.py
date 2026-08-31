@@ -228,7 +228,7 @@ class _OpsMixin:
                     path,
                     recursive,
                     ctx=ctx,
-                    strict=is_dir and self.acl_manager is not None,
+                    strict=is_dir and self._acl_enabled(ctx),
                 )
                 if is_dir
                 else []
@@ -312,6 +312,7 @@ class _OpsMixin:
         """
 
         acl_manager = self.acl_manager
+        acl_enabled = self._acl_enabled(ctx)
         guard_ctx = replace(self._ctx_or_default(ctx), bypass_acl=True)
         await self._ensure_access(old_uri, guard_ctx, action=AclAction.MANAGE)
         await self._ensure_access(old_uri, ctx, action=AclAction.WRITE)
@@ -319,7 +320,7 @@ class _OpsMixin:
         old_path = self._uri_to_path(old_uri, ctx=ctx)
         new_path = self._uri_to_path(new_uri, ctx=ctx)
         target_uri = self._path_to_uri(old_path, ctx=ctx)
-        new_acl_scope = acl_manager is not None and is_acl_uri(new_uri)
+        new_acl_scope = acl_enabled and is_acl_uri(new_uri)
 
         # Verify source exists and determine type before locking.
         try:
@@ -380,7 +381,7 @@ class _OpsMixin:
                     old_path,
                     recursive=True,
                     ctx=ctx,
-                    strict=is_dir and acl_manager is not None,
+                    strict=is_dir and acl_enabled,
                 )
                 if is_dir
                 else []
@@ -423,7 +424,7 @@ class _OpsMixin:
                 vector_mappings = await self._update_vector_store_uris(
                     uris_to_move, old_uri, new_uri, ctx=ctx
                 )
-                if acl_manager and new_acl_scope:
+                if acl_manager is not None and new_acl_scope:
                     await acl_manager.refresh_context_subtree(
                         new_uri,
                         self._ctx_or_default(ctx),
@@ -1539,9 +1540,7 @@ class _OpsMixin:
         """Return list entries according to namespace-enumeration semantics."""
         entry_items = await self._list_read_path_items(uri, ctx=ctx)
         access = await self._can_access_many([entry_uri for _, entry_uri in entry_items], ctx)
-        expose_resource_names = bool(
-            self.acl_manager is not None and is_acl_uri(uri)
-        )
+        expose_resource_names = self._acl_enabled(ctx) and is_acl_uri(uri)
 
         browsable = []
         for entry, entry_uri in entry_items:

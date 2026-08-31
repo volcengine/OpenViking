@@ -5,6 +5,7 @@ import pytest
 
 from openviking.core.namespace import uri_parts
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.acl import AclManager
 from openviking.storage.expr import And, Eq, In, Or, PathScope, RawDSL
 from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
 from openviking_cli.session.user_id import UserIdentifier
@@ -199,7 +200,8 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl():
         return [record for record in records if matches(filter, record)]
 
     backend = object.__new__(VikingVectorIndexBackend)
-    backend.acl_manager = object()
+    backend.acl_manager = AclManager(backend)
+    backend.acl_manager.set_enabled(ctx.account_id, True)
     backend.search = fake_search
 
     visible = await backend.search_in_tenant(
@@ -233,6 +235,20 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl():
     assert [record["id"] for record in internal] == [
         "own",
         "cross-user",
+        "legacy-shared",
+        "direct-shared",
+        "inherited-shared",
+        "denied-shared",
+    ]
+
+    backend.acl_manager.set_enabled(ctx.account_id, False)
+    shared = await backend.search_in_tenant(
+        ctx=ctx,
+        query_vector=[1.0],
+        context_type="resource",
+    )
+    assert [record["id"] for record in shared] == [
+        "own",
         "legacy-shared",
         "direct-shared",
         "inherited-shared",

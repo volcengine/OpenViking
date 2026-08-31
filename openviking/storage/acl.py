@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Iterable, Mapping, Sequence
 
 from openviking.core.identifiers import validate_identifier_part, validate_user_id
 from openviking.core.namespace import uri_parts
@@ -220,10 +220,18 @@ class AclManager:
     def __init__(
         self,
         context_store: "VikingVectorIndexBackend",
-        auto_protect_new_content: Callable[[str], Awaitable[bool]] | None = None,
     ) -> None:
         self._context_store = context_store
-        self._auto_protect_new_content = auto_protect_new_content
+        self._enabled_accounts: set[str] = set()
+
+    def set_enabled(self, account_id: str, enabled: bool) -> None:
+        if enabled:
+            self._enabled_accounts.add(account_id)
+        else:
+            self._enabled_accounts.discard(account_id)
+
+    def is_enabled(self, account_id: str) -> bool:
+        return account_id in self._enabled_accounts
 
     @staticmethod
     def _effective_from_record(record: Mapping[str, Any]) -> EffectiveAcl:
@@ -346,6 +354,12 @@ class AclManager:
     async def materialize_context_records(
         self, records: Sequence[dict[str, Any]], ctx: RequestContext
     ) -> list[dict[str, Any]]:
+        if not self.is_enabled(ctx.account_id):
+            return [
+                {key: value for key, value in record.items() if key != ACL_CREATOR_GRANT_FIELD}
+                for record in records
+            ]
+
         resource_uris: set[str] = set()
         for record in records:
             uri = record.get("uri")
@@ -370,8 +384,6 @@ class AclManager:
             parents[uri] = ancestors[-2] if len(ancestors) > 1 else None
 
         parent_acl = await self.resolve_many([parent for parent in parents.values() if parent], ctx)
-        auto_protect_new_content: bool | None = None
-
         materialized: list[dict[str, Any]] = []
         for record in records:
             record = dict(record)
@@ -389,20 +401,7 @@ class AclManager:
                 inherited = parent_acl[parent].permissions if parent else DirectAcl()
                 direct = DirectAcl()
                 creator = (record.get("user") or {}).get("user_id")
-                protect_created = bool(parent and parent_acl[parent].enabled)
-                if (
-                    creator
-                    and creator_grant is not None
-                    and parent
-                    and not protect_created
-                    and self._auto_protect_new_content is not None
-                ):
-                    if auto_protect_new_content is None:
-                        auto_protect_new_content = await self._auto_protect_new_content(
-                            ctx.account_id
-                        )
-                    protect_created = auto_protect_new_content
-                if creator and creator_grant is not None and protect_created:
+                if creator and creator_grant is not None:
                     creator_acl = DirectAcl.from_entries(
                         [AclEntry(f"user:{creator}", AclLevel.MANAGE)]
                     )

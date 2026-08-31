@@ -4,6 +4,7 @@
 """Regression tests for watch-task control file access boundaries."""
 
 import contextvars
+from types import SimpleNamespace
 
 import pytest
 
@@ -52,7 +53,7 @@ class _NoWriteVikingFS:
 )
 @pytest.mark.asyncio
 async def test_watch_task_control_files_are_root_only(bare_viking_fs, root_ctx, user_ctx, uri):
-    bare_viking_fs.acl_manager = object()
+    bare_viking_fs.acl_manager = SimpleNamespace(is_enabled=lambda _account_id: True)
     await bare_viking_fs._ensure_access(uri, root_ctx)
     with pytest.raises(PermissionDeniedError):
         await bare_viking_fs._ensure_access(uri, user_ctx)

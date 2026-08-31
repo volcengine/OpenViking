@@ -2020,14 +2020,14 @@ enum AdminCommands {
         /// Account ID
         #[arg(value_name = "account-id")]
         account_id: String,
-        /// Automatically protect newly created shared content
+        /// Enable ACL authorization for shared resources
         #[arg(
             long,
             required = true,
             action = ArgAction::Set,
             value_name = "true|false"
         )]
-        auto_protect_new_content: bool,
+        acl_enabled: bool,
     },
 }
 

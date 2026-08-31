@@ -140,6 +140,15 @@ async def _initialize_runtime_state(
     """Initialize service and auth dependencies before traffic is accepted."""
     await service.initialize()
     await _initialize_auth_plugin(app, service, config)
+    manager = app.state.api_key_manager
+    if manager is not None:
+        await service.load_acl_settings(
+            [
+                item["account_id"]
+                for item in manager.get_accounts()
+                if item["account_id"] != service.user.account_id
+            ]
+        )
     from openviking.service.user_deletion import setup_user_deletion
 
     app.state.user_deletion_service = await setup_user_deletion(

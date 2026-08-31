@@ -130,7 +130,7 @@ Content-Type: application/json
 
 ROOT 可管理任意 account，ADMIN 仅可管理自己所属的 account。通用配置接口仅允许
 显式列入白名单的字段；当前允许修改 `agent_evolution.enabled` 和
-`resource_acl.auto_protect_new_content`。
+`acl.enabled`。
 
 ```http
 GET /api/v1/admin/accounts/{account_id}/settings
@@ -139,16 +139,16 @@ Content-Type: application/json
 
 {
   "agent_evolution": {"enabled": true},
-  "resource_acl": {"auto_protect_new_content": true}
+  "acl": {"enabled": true}
 }
 ```
 
-`resource_acl.auto_protect_new_content` 默认为 `false`。开启后，账号内新建的共享
-文件、目录和 `add-resource` 根节点会给创建者直接 `manage`，同时继承父目录
-ACL；已有内容不会迁移或改权。重新关闭只影响后续创建，已有 ACL 继续生效。
+`acl.enabled` 默认为 `false`。关闭时，共享资源按原有规则完全共享，不执行 ACL
+鉴权。开启后，账号内新增共享资源会写入 ACL，并对带 ACL 的共享资源执行鉴权；
+已有且未设置 ACL 的内容不会迁移或改权。重新关闭后，已有 ACL 也不再参与访问判断。
 
 ```bash
-ov --sudo admin set-account-settings acme --auto-protect-new-content true
+ov --sudo admin set-account-settings acme --acl-enabled true
 ```
 
 覆盖已有配置前，内核会先备份到

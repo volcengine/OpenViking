@@ -6,6 +6,7 @@
 import asyncio
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -54,6 +55,9 @@ class DummyStorage:
         self.acl_manager = None
         self.search_calls = []
         self.child_search_calls = []
+
+    def _acl_enabled(self, ctx: RequestContext) -> bool:
+        return self.acl_manager is not None and self.acl_manager.is_enabled(ctx.account_id)
 
     async def collection_exists_bound(self) -> bool:
         return True
@@ -370,7 +374,7 @@ async def test_retrieve_falls_back_to_vector_scores_when_rerank_returns_none(mon
         _result("viking://resources/a/deep-a.md", 0.2, abstract="deep A"),
         _result("viking://resources/b/deep-b.md", 0.8, abstract="deep B"),
     ])
-    storage.acl_manager = object()
+    storage.acl_manager = SimpleNamespace(is_enabled=lambda _account_id: True)
 
     async def no_hierarchical_children(*_args, **_kwargs):
         return []

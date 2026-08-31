@@ -12,7 +12,7 @@ from openviking.server.account_settings import (
     AccountAgentEvolutionSettings,
     AccountSettings,
     AccountSettingsPatch,
-    effective_auto_protect_new_content,
+    effective_acl_enabled,
     read_account_settings,
     update_account_settings,
 )
@@ -187,8 +187,8 @@ async def _account_settings_result(
             "agent_evolution": {
                 "enabled": enabled,
             },
-            "resource_acl": {
-                "auto_protect_new_content": effective_auto_protect_new_content(settings),
+            "acl": {
+                "enabled": effective_acl_enabled(settings),
             },
         },
         "overrides": settings.model_dump(exclude_none=True),

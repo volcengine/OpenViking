@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -507,7 +508,7 @@ async def test_tree_original_dfs_order(monkeypatch, fs):
         ),
     ]
     patch_tree_env(monkeypatch, fs, entries)
-    fs.acl_manager = object()
+    fs.acl_manager = SimpleNamespace(is_enabled=lambda _account_id: True)
 
     async def fake_can_access_many(uris, _ctx):
         return {uri: "/restricted" not in uri for uri in uris}
@@ -634,7 +635,7 @@ async def test_ls_agent_modtime_is_raw_utc_iso(monkeypatch, fs):
     monkeypatch.setattr(fs, "_is_accessible", lambda _uri, _ctx: True)
     monkeypatch.setattr(fs, "_batch_fetch_abstracts", default_batch_fetch)
     monkeypatch.setattr(viking_fs_module, "datetime", _FixedDatetime)
-    fs.acl_manager = object()
+    fs.acl_manager = SimpleNamespace(is_enabled=lambda _account_id: True)
 
     async def fake_can_access_many(uris, _ctx):
         return {uri: not uri.endswith("/restricted") for uri in uris}

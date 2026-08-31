@@ -1492,7 +1492,7 @@ class VikingVectorIndexBackend:
                 "id": new_id,
                 "uri": new_uri,
             }
-            if self.acl_manager:
+            if self._acl_enabled(ctx):
                 updated.update(
                     await self.acl_manager.materialize_moved_record(record, new_uri, ctx)
                 )
@@ -1562,7 +1562,7 @@ class VikingVectorIndexBackend:
         tenant_filter = self._tenant_filter(ctx)
         if (
             tenant_filter
-            and not self.acl_manager
+            and not self._acl_enabled(ctx)
             and self._targets_within_visible_roots(ctx, targets)
         ):
             # The target scopes are already narrower than the tenant-visible
@@ -1609,7 +1609,7 @@ class VikingVectorIndexBackend:
             return None
 
         account_filter = Eq("account_id", ctx.account_id)
-        if not self.acl_manager:
+        if not self._acl_enabled(ctx):
             return And(
                 [
                     account_filter,
@@ -1643,6 +1643,9 @@ class VikingVectorIndexBackend:
         if ctx.role == Role.ADMIN:
             access_filters.append(PathScope("uri", "viking://resources", depth=-1))
         return And([account_filter, Or(access_filters)])
+
+    def _acl_enabled(self, ctx: RequestContext) -> bool:
+        return self.acl_manager is not None and self.acl_manager.is_enabled(ctx.account_id)
 
     @staticmethod
     def _merge_filters(*filters: Optional[FilterExpr]) -> Optional[FilterExpr]:

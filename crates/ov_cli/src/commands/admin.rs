@@ -261,13 +261,13 @@ pub async fn regenerate_key(
 pub async fn set_account_settings(
     client: &HttpClient,
     account_id: &str,
-    auto_protect_new_content: bool,
+    acl_enabled: bool,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     show_admin(
         client
-            .admin_set_account_auto_protect_new_content(account_id, auto_protect_new_content)
+            .admin_set_account_acl_enabled(account_id, acl_enabled)
             .await?,
         output_format,
         compact,

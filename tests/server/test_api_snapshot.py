@@ -11,6 +11,11 @@ import pytest
 import pytest_asyncio
 
 import openviking.service.reindex_executor as reindex_mod
+from openviking.server.account_settings import (
+    AccountAclSettings,
+    AccountSettingsPatch,
+    update_account_settings,
+)
 from openviking.server.app import create_app
 from openviking.server.auth import get_request_context
 from openviking.server.config import ServerConfig
@@ -195,6 +200,11 @@ async def client_with_resource_and_blob(client_with_resource, service):
 async def test_restore_acl_and_reindex_identity(client_with_resource, service, monkeypatch):
     _, _root = client_with_resource
     admin = RequestContext(user=service.user, role=Role.ADMIN)
+    await update_account_settings(
+        service.viking_fs,
+        admin.account_id,
+        AccountSettingsPatch(acl=AccountAclSettings(enabled=True)),
+    )
     writer = RequestContext(
         user=UserIdentifier(admin.account_id, "snapshot_writer"),
         role=Role.USER,

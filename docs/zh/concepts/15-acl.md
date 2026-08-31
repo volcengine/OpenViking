@@ -63,15 +63,14 @@ read user:carol on viking://resources/A/B/C/report.md
 
 ## 默认行为与 `acl_enabled`
 
-账号级 `resource_acl.auto_protect_new_content` 默认关闭。关闭时，如果父目录没有
-ACL，新建文件或目录不会自动开启 ACL，继续使用原有 URI namespace 可见性和写入
-规则；父目录已有 ACL 时，创建者获得直接 `manage`，并继承父目录权限。
+账号级 `acl.enabled` 默认关闭。关闭时，共享资源继续使用原有 URI namespace
+可见性和写入规则，不解析或校验 ACL，也不为新建内容写入 ACL。
 
-开启后，新建共享文件或目录即使位于无 ACL 的父目录下，创建者也会在首条 context
-记录上获得直接 `manage`；父目录权限仍作为继承 ACL 合并。已有内容不会迁移或
-改权，重新关闭也只影响后续创建。`add-resource` 只把本次生成的根目录（`no_split`
-时为根文件）作为创建节点：根节点获得创建者直接 `manage`，内部节点只继承，
-不重复写直接授权。重新向量化或覆盖已有 context 不会改变直接 ACL。
+开启后，新建共享文件或目录的创建者会在首条 context 记录上获得直接 `manage`；
+父目录权限作为继承 ACL 合并。已有且未设置 ACL 的内容不会迁移或改权，仍按公开
+规则访问；重新关闭后，已有 ACL 也不再参与访问判断。`add-resource` 只把本次生成
+的根目录（`no_split` 时为根文件）作为创建节点：根节点获得创建者直接 `manage`，
+内部节点只继承，不重复写直接授权。重新向量化或覆盖已有 context 不会改变直接 ACL。
 
 只要节点或任一祖先存在直接 ACL，该节点就进入 ACL 控制域：
 
@@ -96,9 +95,8 @@ acl_enabled = true
 
 服务端会先 canonicalize URI，再在同一个鉴权入口中依次执行 account/owner/actor peer 等硬边界、有效 ACL 或 legacy fallback，以及写入和删除的 namespace 防护。
 
-父目录已有 ACL，或账号开启 `auto_protect_new_content` 时，新建共享节点由创建者的
-直接 `manage` 完成权限 bootstrap。其他情况下，首次设置 ACL 只能由共享区隐式
-管理者完成；启用后，后续 ACL 修改要求有效 `manage` 能力。
+账号开启 `acl.enabled` 时，新建共享节点由创建者的直接 `manage` 完成权限
+bootstrap，后续 ACL 修改要求有效 `manage` 能力。
 
 目录上的 ACL 授权会被所有后代继承。`list`、`tree` 和批量结果仍逐个检查有效 ACL，因为未设置 ACL 的目录可能按原有 URI 规则可见，而某个后代已经通过自己的 ACL 进入控制域。
 
@@ -124,11 +122,11 @@ acl_inherited_grants
 
 检索 target URI 只是搜索范围，不要求调用者能够读取 target 节点本身。用户即使不能读取中间目录，也可以检索到深层单独授权给自己的文件。
 
-共享区 context 写入会保留同 URI 已有 direct ACL。父目录已开启 ACL，或账号开启
-`auto_protect_new_content` 时，新创建节点为创建者生成直接 `manage`，并从父节点
-生成 inherited ACL；否则保持 `acl_enabled=false`。`add-resource` 的内部节点只继承
-导入根节点。重新向量化和普通覆盖写不会把受控记录恢复为默认可见，也不能通过
-普通 context 字段直接改 ACL。
+账号开启 `acl.enabled` 时，共享区 context 写入会保留同 URI 已有 direct ACL；
+新创建节点为创建者生成直接 `manage`，并从父节点生成 inherited ACL。
+`add-resource` 的内部节点只继承导入根节点。重新向量化和普通覆盖写不会把受控记录
+恢复为默认可见，也不能通过普通 context 字段直接改 ACL。账号关闭该开关时，检索
+只使用原有 account 和 URI scope 过滤，不使用这些 ACL 字段。
 
 ## 示例
 

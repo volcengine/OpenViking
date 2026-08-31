@@ -789,12 +789,12 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
         }
         AdminCommands::SetAccountSettings {
             account_id,
-            auto_protect_new_content,
+            acl_enabled,
         } => {
             commands::admin::set_account_settings(
                 &client,
                 &account_id,
-                auto_protect_new_content,
+                acl_enabled,
                 ctx.output_format,
                 ctx.compact,
             )

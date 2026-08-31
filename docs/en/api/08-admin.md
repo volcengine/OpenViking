@@ -131,7 +131,7 @@ Content-Type: application/json
 
 ROOT can manage any account and ADMIN can manage only its own account. The
 generic settings endpoint accepts only explicitly allowlisted fields. It currently
-allows `agent_evolution.enabled` and `resource_acl.auto_protect_new_content`.
+allows `agent_evolution.enabled` and `acl.enabled`.
 
 ```http
 GET /api/v1/admin/accounts/{account_id}/settings
@@ -140,18 +140,18 @@ Content-Type: application/json
 
 {
   "agent_evolution": {"enabled": true},
-  "resource_acl": {"auto_protect_new_content": true}
+  "acl": {"enabled": true}
 }
 ```
 
-`resource_acl.auto_protect_new_content` defaults to `false`. When enabled, newly
-created shared files, directories, and `add-resource` roots grant their creator
-direct `manage` while inheriting the parent ACL. Existing content is not migrated
-or modified. Disabling it again affects only later creations; existing ACLs remain
-effective.
+`acl.enabled` defaults to `false`. While disabled, shared resources use the
+original public behavior and ACL authorization is skipped. When enabled, newly
+created shared resources receive ACL fields and ACL-protected shared resources
+are authorized against them. Existing content without an ACL is not migrated or
+modified. Disabling the setting also stops enforcing existing ACLs.
 
 ```bash
-ov --sudo admin set-account-settings acme --auto-protect-new-content true
+ov --sudo admin set-account-settings acme --acl-enabled true
 ```
 
 Before an existing setting is replaced, it is backed up to

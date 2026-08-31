@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openviking.server.account_settings import (
-    AccountResourceAclSettings,
+    AccountAclSettings,
     AccountSettingsPatch,
     update_account_settings,
 )
@@ -135,9 +135,7 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
     await update_account_settings(
         service.viking_fs,
         creator.account_id,
-        AccountSettingsPatch(
-            resource_acl=AccountResourceAclSettings(auto_protect_new_content=True)
-        ),
+        AccountSettingsPatch(acl=AccountAclSettings(enabled=True)),
     )
     await service.fs.mkdir(auto_protected_dir, ctx=creator)
     await service.resources.wait_processed()
@@ -202,6 +200,13 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
         await service.fs.write(uri, content="denied", ctx=reader)
     with pytest.raises(PermissionDeniedError):
         await service.viking_fs.read_file(uri, ctx=outsider)
+
+    await update_account_settings(
+        service.viking_fs,
+        creator.account_id,
+        AccountSettingsPatch(acl=AccountAclSettings(enabled=False)),
+    )
+    assert await service.viking_fs.read_file(uri, ctx=outsider) == stored
 
     internal_ctx = RequestContext(
         user=outsider.user,

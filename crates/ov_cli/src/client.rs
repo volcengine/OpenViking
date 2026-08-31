@@ -1488,7 +1488,7 @@ impl HttpClient {
         self.delete(&path, &[]).await
     }
 
-    pub async fn admin_set_account_auto_protect_new_content(
+    pub async fn admin_set_account_acl_enabled(
         &self,
         account_id: &str,
         enabled: bool,
@@ -1497,8 +1497,8 @@ impl HttpClient {
         self.patch(
             &path,
             &serde_json::json!({
-                "resource_acl": {
-                    "auto_protect_new_content": enabled,
+                "acl": {
+                    "enabled": enabled,
                 }
             }),
             &[],
@@ -2500,12 +2500,12 @@ mod tests {
         let (base_url, request_rx) = spawn_request_capture_server().await;
         let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
         client
-            .admin_set_account_auto_protect_new_content("acct", true)
+            .admin_set_account_acl_enabled("acct", true)
             .await
             .expect("set account settings should succeed");
         let request = request_rx.await.expect("request should be captured");
         assert!(request.starts_with("PATCH /api/v1/admin/accounts/acct/settings "));
-        assert!(request.contains(r#""resource_acl":{"auto_protect_new_content":true}"#));
+        assert!(request.contains(r#""acl":{"enabled":true}"#));
     }
 
     #[test]

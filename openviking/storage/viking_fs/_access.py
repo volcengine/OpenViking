@@ -177,7 +177,7 @@ class _AccessMixin:
                 valid.append(uri)
 
         acl_manager = self.acl_manager
-        if acl_manager is None:
+        if acl_manager is None or not acl_manager.is_enabled(real_ctx.account_id):
             result.update({uri: self._is_accessible(uri, real_ctx) for uri in valid})
             return result
 
@@ -263,9 +263,15 @@ class _AccessMixin:
         self, uri: str, ctx: Optional[RequestContext]
     ) -> None:
         self._safe_uri_parts(uri)
-        if self.acl_manager is not None and is_acl_uri(uri):
+        if self._acl_enabled(ctx) and is_acl_uri(uri):
             return
         await self._ensure_access(uri, ctx)
+
+    def _acl_enabled(self, ctx: Optional[RequestContext]) -> bool:
+        real_ctx = self._ctx_or_default(ctx)
+        return self.acl_manager is not None and self.acl_manager.is_enabled(
+            real_ctx.account_id
+        )
 
     async def _ensure_acl_manage(
         self, uri: str, ctx: Optional[RequestContext]
@@ -479,7 +485,7 @@ class _AccessMixin:
             if not self._is_name_visible_at_path(name, parent_path):
                 return False
 
-        if self.acl_manager is None:
+        if not self._acl_enabled(ctx):
             uri = self._path_to_uri(entry_path, ctx=ctx)
             if not self._is_accessible(uri, ctx):
                 return False
@@ -544,6 +550,7 @@ class _AccessMixin:
             raw_limit: Optional[int] = None
         else:
             raw_limit = max(node_limit * self._TREE_OVERFETCH_FACTOR, node_limit)
+        acl_enabled = self._acl_enabled(real_ctx)
 
         while True:
             raw_entries = await self._async_agfs.tree_directory(
@@ -567,16 +574,14 @@ class _AccessMixin:
                 )
                 candidates.append((entry, entry_uri))
                 if (
-                    self.acl_manager is None
+                    not acl_enabled
                     and node_limit is not None
                     and len(candidates) >= node_limit
                 ):
                     break
 
-            expose_resource_names = bool(
-                self.acl_manager is not None and is_acl_uri(uri)
-            )
-            if self.acl_manager is None:
+            expose_resource_names = acl_enabled and is_acl_uri(uri)
+            if not acl_enabled:
                 visible = candidates
             else:
                 access = await self._can_access_many(

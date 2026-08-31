@@ -15,7 +15,7 @@ from openviking.privacy import UserPrivacyConfigService
 from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
 from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.server.account_settings import (
-    effective_auto_protect_new_content,
+    effective_acl_enabled,
     read_account_settings,
 )
 from openviking.server.identity import RequestContext, Role
@@ -185,10 +185,7 @@ class OpenVikingService:
         self._vikingdb_manager = VikingDBManager(
             vectordb_config=config.vectordb, queue_manager=self._queue_manager
         )
-        self._vikingdb_manager.acl_manager = AclManager(
-            self._vikingdb_manager,
-            auto_protect_new_content=self._auto_protect_new_content,
-        )
+        self._vikingdb_manager.acl_manager = AclManager(self._vikingdb_manager)
 
         # Configure queues if QueueManager is available.
         # Workers are NOT started here — start() is called after VikingFS is initialized
@@ -204,11 +201,17 @@ class OpenVikingService:
         binding_config, self._encryptor = build_runtime_ragfs_binding_config(self._config)
         return binding_config
 
-    async def _auto_protect_new_content(self, account_id: str) -> bool:
+    async def load_acl_settings(self, account_ids: list[str]) -> None:
         if self._viking_fs is None:
             raise NotInitializedError("VikingFS")
-        settings = await read_account_settings(self._viking_fs, account_id)
-        return effective_auto_protect_new_content(settings)
+        if self._vikingdb_manager is None or self._vikingdb_manager.acl_manager is None:
+            raise NotInitializedError("ACL")
+        for account_id in dict.fromkeys(account_ids):
+            settings = await read_account_settings(self._viking_fs, account_id)
+            self._vikingdb_manager.acl_manager.set_enabled(
+                account_id,
+                effective_acl_enabled(settings),
+            )
 
     def _ensure_data_dir_lock_acquired(self) -> None:
         """Acquire the process-level data directory lock once for this service instance."""
@@ -369,6 +372,7 @@ class OpenVikingService:
         )
         if enable_recorder:
             logger.info("VikingFS IO Recorder enabled")
+        await self.load_acl_settings([self._user.account_id])
 
         self._resource_processor = ResourceProcessor(
             vikingdb=self._vikingdb_manager,
@@ -388,7 +392,6 @@ class OpenVikingService:
             account_count,
             user_count,
         )
-
         self._privacy_config_service = UserPrivacyConfigService(self._viking_fs)
 
         # Initialize processors

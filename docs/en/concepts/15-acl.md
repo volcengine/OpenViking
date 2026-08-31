@@ -63,16 +63,15 @@ Removing the group's direct ACL from `A/B` does not remove entries from `A` or `
 
 ## Default Behavior and `acl_enabled`
 
-The account-level `resource_acl.auto_protect_new_content` setting is disabled by
-default. While disabled, creating a file or directory under an ACL-free parent
-keeps the existing URI namespace visibility and write rules. Under an
-ACL-controlled parent, the creator receives direct `manage` and inherits the
-parent permissions.
+The account-level `acl.enabled` setting is disabled by default. While disabled,
+shared resources keep the existing URI namespace visibility and write rules.
+ACLs are neither resolved nor enforced, and new content does not receive ACL
+fields.
 
 When enabled, a newly created shared file or directory grants its creator direct
-`manage` on its first context record even under an ACL-free parent; parent
-permissions are still merged as inherited ACL. Existing content is not migrated
-or modified, and disabling the setting again affects only later creations.
+`manage` on its first context record, and parent permissions are merged as
+inherited ACL. Existing content without an ACL is not migrated or modified and
+remains public. Disabling the setting also stops enforcing existing ACLs.
 `add-resource` treats only the generated import root (or the root file with
 `no_split`) as the created node: the root gets the direct creator grant and
 descendants only inherit it. Re-embedding or replacing an existing context record
@@ -101,10 +100,9 @@ All filesystem APIs use the same permission mapping:
 
 The server canonicalizes the URI, then uses one authorization entry point for account/owner/actor-peer boundaries, the effective ACL or legacy fallback, and write/delete namespace guards.
 
-Under an ACL-controlled parent, or when the account enables
-`auto_protect_new_content`, a new shared node is bootstrapped by its creator's
-direct `manage` grant. Otherwise only the shared scope's implicit `manage` identity can
-establish the first ACL. Later ACL changes require effective `manage` capability.
+When the account enables `acl.enabled`, a new shared node is bootstrapped by its
+creator's direct `manage` grant. Later ACL changes require effective `manage`
+capability.
 
 An ACL grant on a directory is inherited by every descendant. `list`, `tree`, and other batch results still check every returned node because an ACL-free directory may be visible under legacy URI rules while one of its descendants has entered the ACL-controlled domain through its own ACL.
 
@@ -130,13 +128,14 @@ The request principals are `user:{ctx.user_id}`, `user:*`, and one `group:{group
 
 A retrieval target URI is only a search scope; the caller does not need to read the target node itself. A user can discover a deeply shared file even when intermediate directories are not readable.
 
-Shared-scope context writes preserve an existing direct ACL for the same URI.
-Under an ACL-controlled parent, or when the account enables
-`auto_protect_new_content`, a newly created node receives direct `manage` for its
-creator and derives inherited ACL fields from its parent; otherwise it remains
-`acl_enabled=false`. Descendants created by `add-resource` only inherit from the
-import root. Re-embedding and ordinary replacement writes cannot reset controlled
-records to default visibility or modify ACLs through regular context fields.
+When the account enables `acl.enabled`, shared-scope context writes preserve an
+existing direct ACL for the same URI. A newly created node receives direct
+`manage` for its creator and derives inherited ACL fields from its parent.
+Descendants created by `add-resource` only inherit from the import root.
+Re-embedding and ordinary replacement writes cannot reset controlled records to
+default visibility or modify ACLs through regular context fields. When the
+account disables the switch, retrieval uses only the original account and URI
+scope filters and ignores these ACL fields.
 
 ## Example
 
