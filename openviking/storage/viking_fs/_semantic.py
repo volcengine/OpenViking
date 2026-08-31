@@ -206,7 +206,7 @@ class _SemanticMixin:
         """
         _ensure_non_empty_search_query(query, image_url)
         telemetry = get_current_telemetry()
-        from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
+        from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever, RetrieverMode
         from openviking_cli.retrieve import (
             ContextType,
             FindResult,
@@ -254,6 +254,9 @@ class _SemanticMixin:
             typed_query,
             ctx=real_ctx,
             limit=limit,
+            # ``find`` is the lightweight lookup API.  Do not let the
+            # presence of a reranker implicitly switch it to deep retrieval.
+            mode=RetrieverMode.QUICK,
             score_threshold=score_threshold,
             scope_dsl=filter,
             level=level,
