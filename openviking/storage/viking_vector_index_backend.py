@@ -128,23 +128,6 @@ class _AsyncVectorAdapter:
             lambda: self._adapter.get_collection().update(description=description)
         )
 
-    async def update_collection_schema(
-        self, fields: List[Dict[str, Any]], scalar_index: List[str], index_name: str
-    ) -> None:
-        def _update() -> None:
-            collection = self._adapter.get_collection()
-            collection.update(fields=fields)
-            if self._adapter.mode in {"local", "cuvs"}:
-                index_meta = collection.get_index_meta_data(index_name)
-                index_meta["ScalarIndex"] = scalar_index
-                collection.drop_index(index_name)
-                collection.create_index(index_name, index_meta)
-            else:
-                collection.update_index(index_name, scalar_index=scalar_index)
-
-        await asyncio.to_thread(_update)
-
-
 class _SingleAccountBackend:
     """绑定单个 account 的后端实现（内部类）"""
 
@@ -337,12 +320,6 @@ class _SingleAccountBackend:
         await self._async_adapter.update_collection_description(description)
         await self._refresh_meta_data_async()
         return True
-
-    async def update_collection_schema(
-        self, fields: List[Dict[str, Any]], scalar_index: List[str]
-    ) -> None:
-        await self._async_adapter.update_collection_schema(fields, scalar_index, self._index_name)
-        await self._refresh_meta_data_async()
 
     # =========================================================================
     # Data Operations (with tenant enforcement)
@@ -900,15 +877,6 @@ class VikingVectorIndexBackend:
 
     async def update_collection_description(self, description: str) -> bool:
         return await self._get_default_backend().update_collection_description(description)
-
-    async def update_collection_schema(
-        self, fields: List[Dict[str, Any]], scalar_index: List[str]
-    ) -> None:
-        default_backend = self._get_default_backend()
-        await default_backend.update_collection_schema(fields, scalar_index)
-        for backend in [*self._account_backends.values(), self._root_backend]:
-            if backend is not None and backend is not default_backend:
-                await backend._refresh_meta_data_async()
 
     # =========================================================================
     # 公开数据操作 API（强制要求 ctx）
