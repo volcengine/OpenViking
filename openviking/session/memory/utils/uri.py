@@ -245,9 +245,12 @@ def _pattern_matches_uri(pattern: str, uri: str) -> bool:
     pattern = re.sub(r"\{\{\s*[^}]+\s*\}\}", r"[^/]+", pattern)
     # Also support legacy {variable} format
     pattern = re.sub(r"\{[^}]+\}", r"[^/]+", pattern)
-    # Convert ** to .* and * to [^/]*
-    pattern = pattern.replace("**", ".*")
+    # Convert ** to .* and * to [^/]*. Keep the recursive wildcard separate
+    # so its * is not converted as a single-segment wildcard.
+    recursive_wildcard = "\0"
+    pattern = pattern.replace("**", recursive_wildcard)
     pattern = pattern.replace("*", "[^/]*")
+    pattern = pattern.replace(recursive_wildcard, ".*")
     # Anchor the pattern
     pattern = "^" + pattern + "$"
 
