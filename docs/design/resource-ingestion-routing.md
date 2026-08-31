@@ -215,14 +215,18 @@ Parser 的内部实现，不回到顶层 `ResourceService`。`DirectoryParser` �
 文件本身是否直接进入 Understanding，仍由其冻结扩展名和
 `parser_api.extensions` 决定。
 
-目录在发起任何 Understanding 请求前执行完整预检，默认限制为 1000 个入选文件和
-10 层目录深度。客户端导入本地目录时，会先将整个目录压缩为 ZIP，再由
+启用 Understanding 目录路由后，目录在发起任何远程请求前执行完整预检，默认限制为 1000 个
+入选文件和 10 层目录深度；关闭 Understanding 时，OpenViking 原生目录解析不应用
+这两个限制。内置 `ZipParser` 递归展开的文件共享同一次导入的数量预算，ZIP 嵌套
+层级也计入从最外层导入根开始累计的深度；超限时不会先提交部分 Understanding 任务。
+客户端导入本地目录时，会先将整个目录压缩为 ZIP，再由
 `/resources/temp_upload` 对整个 ZIP 执行上传大小限制。ZIP 解压后的叶子文件不再由
 `DirectoryParser` 设置统一大小限制，而是交给对应内置 Parser 或 Understanding，遵循
 各自的格式和上传限制。这些文件使用固定 worker 池，默认并发为 4；远程解析可以并发，
 但向目录临时树的合并始终按扫描顺序串行执行。目录限制可通过
 `parsers.directory` 配置调整。目录内部分文件失败时仍提交成功文件并通过
-`meta.failed_files` 返回失败详情；如果没有任何文件成功，则在 TreeBuilder 持久化前
+`meta.failed_files` 返回失败详情；嵌套 ZIP 的叶子失败使用 `bundle.zip/path/to/file`
+形式的路径并保留远端任务 ID。如果没有任何文件成功，则在 TreeBuilder 持久化前
 终止任务，并清理本次请求新预占的空目标目录。
 
 ## Understanding 链路

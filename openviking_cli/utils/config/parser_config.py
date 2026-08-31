@@ -601,8 +601,10 @@ class DirectoryConfig(ParserConfig):
             adding directory resources. When True (default), files maintain their
             relative path hierarchy. When False, all files are flattened to a
             single level under the resource root.
-        max_files: Maximum number of selected files admitted by one directory import.
-        max_depth: Maximum nested directory depth below the import root.
+        max_files: Maximum number of selected files admitted by one Understanding
+            directory import.
+        max_depth: Maximum nested directory depth below an Understanding directory
+            import root.
         max_concurrent: Maximum concurrent Understanding jobs shared by all
             directory imports in one service event loop.
     """

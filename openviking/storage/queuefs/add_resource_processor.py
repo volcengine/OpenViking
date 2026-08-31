@@ -302,6 +302,7 @@ class AddResourceProcessor(DequeueHandlerBase):
                 RequestContext(
                     user=UserIdentifier(msg.account_id, msg.user_id),
                     role=Role(msg.role),
+                    group_ids=tuple(msg.group_ids),
                     actor_peer_id=msg.actor_peer_id,
                     bypass_acl=msg.bypass_acl,
                 ),

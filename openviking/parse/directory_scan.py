@@ -27,9 +27,6 @@ logger = get_logger(__name__)
 CLASS_PROCESSABLE = "processable"
 CLASS_UNSUPPORTED = "unsupported"
 
-DEFAULT_MAX_FILES = 1000
-DEFAULT_MAX_DEPTH = 10
-
 
 @dataclass
 class ClassifiedFile:
@@ -53,6 +50,15 @@ class DirectoryScanResult:
     def all_processable_files(self) -> List[ClassifiedFile]:
         """Return processable files in order (for phase-two routing)."""
         return self.processable
+
+
+@dataclass
+class DirectoryScanBudget:
+    """Safety limits shared by every directory scan in one logical import."""
+
+    max_files: int
+    max_depth: int
+    selected_file_count: int = 0
 
 
 def _should_skip_file(file_path: Path) -> tuple[bool, str]:
@@ -188,8 +194,11 @@ def scan_directory(
     include: Optional[str] = None,
     exclude: Optional[str] = None,
     additional_can_process: Optional[Callable[[Path], bool]] = None,
-    max_files: int = DEFAULT_MAX_FILES,
-    max_depth: int = DEFAULT_MAX_DEPTH,
+    max_files: Optional[int] = None,
+    max_depth: Optional[int] = None,
+    _budget: Optional[DirectoryScanBudget] = None,
+    _depth_offset: int = 0,
+    _path_prefix: str = "",
 ) -> DirectoryScanResult:
     """
     Traverse directory tree and classify every file (phase-one validation).
@@ -216,8 +225,8 @@ def scan_directory(
                  else glob on file name (e.g. "*.tmp").
         additional_can_process: Optional capability check for parser backends
             outside ParserRegistry.
-        max_files: Maximum number of selected files admitted by the scan.
-        max_depth: Maximum nested directory depth below the root.
+        max_files: Optional maximum number of selected files admitted by the scan.
+        max_depth: Optional maximum nested directory depth below the root.
 
     Returns:
         DirectoryScanResult with processable, unsupported, warnings.
@@ -234,11 +243,15 @@ def scan_directory(
     if not root.is_dir():
         raise NotADirectoryError(f"Not a directory: {root}")
 
+    effective_max_files = _budget.max_files if _budget is not None else max_files
+    effective_max_depth = _budget.max_depth if _budget is not None else max_depth
     limits = {
-        "max_files": max_files,
-        "max_depth": max_depth,
+        "max_files": effective_max_files,
+        "max_depth": effective_max_depth,
     }
     for name, value in limits.items():
+        if value is None:
+            continue
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
             raise InvalidArgumentError(f"directory.{name} must be a positive integer")
     effective_registry = registry if registry is not None else get_registry()
@@ -257,21 +270,33 @@ def scan_directory(
     else:
         ignore_dirs_set = ignore_dirs
 
+    if isinstance(_depth_offset, bool) or not isinstance(_depth_offset, int) or _depth_offset < 0:
+        raise InvalidArgumentError("directory scan depth offset must be a non-negative integer")
+
+    def _display_path(relative_path: str) -> str:
+        relative_path = _normalize_rel_path(relative_path)
+        prefix = _normalize_rel_path(_path_prefix).strip("/")
+        if relative_path in {"", "."}:
+            return prefix or "."
+        return f"{prefix}/{relative_path}" if prefix else relative_path
+
     result = DirectoryScanResult(root=root)
     selected_file_count = 0
     for dir_path_str, dir_names, file_names in os.walk(root, topdown=True):
         dir_path = Path(dir_path_str)
         try:
             relative_dir_path = dir_path.relative_to(root)
-            directory_depth = len(relative_dir_path.parts)
+            directory_depth = _depth_offset + len(relative_dir_path.parts)
         except ValueError:
             relative_dir_path = Path("<outside-root>")
-            directory_depth = max_depth + 1
-        if directory_depth > max_depth:
-            display_path = _normalize_rel_path(str(relative_dir_path))
+            directory_depth = (
+                effective_max_depth + 1 if effective_max_depth is not None else _depth_offset
+            )
+        if effective_max_depth is not None and directory_depth > effective_max_depth:
+            display_path = _display_path(str(relative_dir_path))
             raise InvalidArgumentError(
                 f"Directory depth exceeds limit: depth={directory_depth}, "
-                f"max_depth={max_depth}, path={display_path}"
+                f"max_depth={effective_max_depth}, path={display_path}"
             )
         dir_spec = gitignore_matcher.spec_for_dir(dir_path)
 
@@ -322,11 +347,22 @@ def scan_directory(
             accepted_by_additional_parser = bool(
                 additional_can_process and additional_can_process(file_path)
             )
-            selected_file_count += 1
-            if selected_file_count > max_files:
+            if _budget is not None:
+                _budget.selected_file_count += 1
+                current_file_count = _budget.selected_file_count
+            elif effective_max_files is not None:
+                selected_file_count += 1
+                current_file_count = selected_file_count
+            else:
+                current_file_count = None
+            if (
+                effective_max_files is not None
+                and current_file_count is not None
+                and current_file_count > effective_max_files
+            ):
                 raise InvalidArgumentError(
-                    f"Directory file count exceeds limit: count={selected_file_count}, "
-                    f"max_files={max_files}, path={rel_path_norm}"
+                    f"Directory file count exceeds limit: count={current_file_count}, "
+                    f"max_files={effective_max_files}, path={_display_path(rel_path_norm)}"
                 )
             classification = (
                 CLASS_PROCESSABLE

@@ -374,6 +374,13 @@ server event loop. With the default value `4`, one directory can run four
 Understanding jobs concurrently, while multiple concurrent directories still
 run at most four in total.
 
+`max_files` and `max_depth` apply when Understanding directory routing is enabled.
+Files recursively expanded by the built-in ZIP parser share the same file budget,
+and nested ZIP boundaries count toward depth from the outer import root. The complete
+recursive preflight finishes before any directory Understanding request is submitted.
+When Understanding is disabled, native OpenViking directory parsing does not apply
+these two limits.
+
 When a local directory is added through the client, the complete directory ZIP is
 subject to the `/resources/temp_upload` size limit. After extraction,
 `DirectoryParser` does not impose a common per-file byte limit. Each selected file

@@ -1,4 +1,5 @@
 import asyncio
+import concurrent.futures
 import json
 import zipfile
 from pathlib import Path
@@ -25,6 +26,66 @@ from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.media_processor import UnifiedResourceProcessor
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
+
+
+@pytest.mark.asyncio
+async def test_add_resource_processor_cancelled_context_preserves_group_ids(monkeypatch):
+    lock = {"lease_ref": "lock-1"}
+    cleanup = AsyncMock(return_value=True)
+    service = SimpleNamespace(_cleanup_reserved_target_if_empty=cleanup)
+    viking_fs = SimpleNamespace(
+        _async_agfs=SimpleNamespace(
+            pathlock_adopt=AsyncMock(return_value=lock),
+            pathlock_release=AsyncMock(),
+        ),
+        delete_temp=AsyncMock(),
+    )
+    processor = AddResourceProcessor(
+        service,
+        asyncio.get_running_loop(),
+        QueueManager.ADD_RESOURCE,
+        viking_fs,
+    )
+    msg = AddResourceMsg(
+        task_id="task-cancelled",
+        path="report.zip",
+        root_uri="viking://resources/report",
+        account_id="account-1",
+        user_id="user-1",
+        group_ids=["writers", "reviewers"],
+        role="user",
+        lock_handoff={"handle_id": "lock-1"},
+        cleanup_empty_target_on_failure=True,
+    )
+
+    def run_on_current_loop(coro, _loop):
+        task = asyncio.create_task(coro)
+        future: concurrent.futures.Future[None] = concurrent.futures.Future()
+
+        def complete(completed: asyncio.Task) -> None:
+            if completed.cancelled():
+                future.cancel()
+                return
+            error = completed.exception()
+            if error is not None:
+                future.set_exception(error)
+            else:
+                future.set_result(completed.result())
+
+        task.add_done_callback(complete)
+        return future
+
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.add_resource_processor.asyncio.run_coroutine_threadsafe",
+        run_on_current_loop,
+    )
+
+    await processor.on_cancelled({"data": json.dumps(msg.to_dict())})
+
+    cleanup.assert_awaited_once()
+    cleanup_ctx = cleanup.await_args.kwargs["ctx"]
+    assert cleanup_ctx.group_ids == ("writers", "reviewers")
+    viking_fs._async_agfs.pathlock_release.assert_awaited_once_with(lock)
 
 
 @pytest.mark.asyncio
@@ -696,7 +757,6 @@ async def test_uat_producer_cancellation_respects_queue_ownership(
             rm=AsyncMock(),
             _uri_to_path=lambda _uri, ctx: "/resources/fixed",
             _async_agfs=agfs,
-            exists=AsyncMock(return_value=False),
             _ensure_access=AsyncMock(),
         ),
         resource_processor=resource_processor,

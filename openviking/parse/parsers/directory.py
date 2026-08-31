@@ -18,6 +18,7 @@ CodeRepositoryParser:
 """
 
 import asyncio
+import shutil
 import time
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
@@ -32,12 +33,17 @@ from openviking.parse.base import (
 from openviking.parse.image_rewrite import IMAGE_MAPPINGS_FILENAME
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.media.constants import MEDIA_EXTENSIONS
+from openviking.parse.parsers.upload_utils import is_text_file
 from openviking.storage.viking_fs import LS_ALL_NODES
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from openviking.parse.directory_scan import ClassifiedFile
+    from openviking.parse.directory_scan import (
+        ClassifiedFile,
+        DirectoryScanBudget,
+        DirectoryScanResult,
+    )
     from openviking.parse.parser_router import ParserRouter
     from openviking.parse.registry import ParserRegistry
 
@@ -144,7 +150,7 @@ class DirectoryParser(BaseParser):
 
         try:
             # ── Phase 1: scan directory ───────────────────────────────
-            from openviking.parse.directory_scan import scan_directory
+            from openviking.parse.directory_scan import DirectoryScanBudget, scan_directory
             from openviking.parse.parser_router import ParserRouter
             from openviking.parse.registry import get_registry
             from openviking_cli.utils.config.open_viking_config import get_openviking_config
@@ -156,6 +162,21 @@ class DirectoryParser(BaseParser):
             directory_config = getattr(ov_config, "directory", None) or DirectoryConfig()
 
             split_content = kwargs.get("split_content", True)
+            preflight_done = bool(kwargs.get("_directory_preflight_done", False))
+            parser_api_config = getattr(ov_config, "parser_api", None)
+            understanding_limits_enabled = bool(
+                split_content
+                and parser_router.understanding_api_enabled()
+                and getattr(parser_api_config, "extensions", None)
+            )
+            scan_budget = (
+                None
+                if preflight_done or not understanding_limits_enabled
+                else DirectoryScanBudget(
+                    max_files=directory_config.max_files,
+                    max_depth=directory_config.max_depth,
+                )
+            )
 
             scan_result = scan_directory(
                 root=str(source_path),
@@ -165,9 +186,21 @@ class DirectoryParser(BaseParser):
                 include=kwargs.get("include"),
                 exclude=kwargs.get("exclude"),
                 additional_can_process=parser_router.should_use_understanding_api,
-                max_files=directory_config.max_files,
-                max_depth=directory_config.max_depth,
+                max_files=directory_config.max_files if understanding_limits_enabled else None,
+                max_depth=directory_config.max_depth if understanding_limits_enabled else None,
+                _budget=scan_budget,
             )
+            if scan_budget is not None:
+                await self._preflight_nested_archives(
+                    scan_result,
+                    registry=registry,
+                    parser_router=parser_router,
+                    budget=scan_budget,
+                    depth_offset=0,
+                    path_prefix="",
+                    split_content=split_content,
+                )
+                preflight_done = True
             directly_upload_media = kwargs.get("directly_upload_media", True)
             preserve_structure = kwargs.get("preserve_structure")
             if preserve_structure is None:
@@ -186,13 +219,21 @@ class DirectoryParser(BaseParser):
             file_jobs: List[Dict[str, Any]] = []
             understanding_jobs: List[Dict[str, Any]] = []
             for index, cf in enumerate(processable_files):
-                use_understanding = parser_router.should_use_understanding_api(cf.path)
-                file_parser = (
-                    parser_router if use_understanding else self._assign_parser(cf, registry)
+                configured_for_understanding = parser_router.should_use_understanding_api(cf.path)
+                use_understanding = bool(split_content and configured_for_understanding)
+                native_parser = None if use_understanding else self._assign_parser(cf, registry)
+                file_parser = parser_router if use_understanding else native_parser
+                native_parser_unavailable = bool(
+                    not split_content
+                    and configured_for_understanding
+                    and native_parser is None
+                    and not is_text_file(cf.path)
                 )
                 parser_name = (
                     "UnderstandingAPI"
                     if use_understanding
+                    else "native"
+                    if native_parser_unavailable
                     else type(file_parser).__name__
                     if file_parser
                     else "direct"
@@ -210,6 +251,7 @@ class DirectoryParser(BaseParser):
                     "file_parser": file_parser,
                     "parser_name": parser_name,
                     "use_understanding": use_understanding,
+                    "native_parser_unavailable": native_parser_unavailable,
                     "direct_upload": bool(
                         directly_upload_media
                         and not use_understanding
@@ -220,14 +262,6 @@ class DirectoryParser(BaseParser):
                 file_jobs.append(job)
                 if use_understanding:
                     understanding_jobs.append(job)
-
-            if not split_content and understanding_jobs:
-                paths = [job["classified_file"].rel_path for job in understanding_jobs[:5]]
-                suffix = "..." if len(understanding_jobs) > len(paths) else ""
-                raise InvalidArgumentError(
-                    "parse_mode='no_split' is not supported for directory files routed to "
-                    f"Understanding: {paths}{suffix}"
-                )
 
             viking_fs = self._get_viking_fs()
             temp_uri = self._create_temp_uri()
@@ -324,6 +358,13 @@ class DirectoryParser(BaseParser):
                                 "meta": getattr(sub_result, "meta", {}) or {},
                                 "error": str(exc),
                             }
+                elif job["native_parser_unavailable"]:
+                    error = (
+                        "parse_mode='no_split' requires a native parser, but none is "
+                        "available for this file type"
+                    )
+                    warnings.append(f"Failed to parse {cf.rel_path}: {error}")
+                    detail = {"ok": False, "meta": {}, "error": error}
                 elif job["direct_upload"]:
                     detail = await self._upload_file_directly(
                         cf,
@@ -343,6 +384,7 @@ class DirectoryParser(BaseParser):
                         preserve_structure=preserve_structure,
                         import_root=str(source_path),
                         split_content=split_content,
+                        directory_preflight_done=preflight_done,
                     )
 
                 file_entry = self._file_status_entry(cf, parser_name, detail)
@@ -351,6 +393,7 @@ class DirectoryParser(BaseParser):
                     processed_files.append(file_entry)
                 else:
                     failed_files.append(file_entry)
+                failed_files.extend(self._nested_failed_files(cf, parser_name, detail))
 
             # Collect unsupported files from scan result
             unsupported_files = [
@@ -496,6 +539,30 @@ class DirectoryParser(BaseParser):
         return normalized
 
     @staticmethod
+    def _nested_failed_files(
+        classified_file: "ClassifiedFile",
+        parser_name: str,
+        detail: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """Promote leaf failures from a parsed ZIP into the outer directory result."""
+        if parser_name != "ZipParser":
+            return []
+        meta = detail.get("meta")
+        if not isinstance(meta, dict) or not isinstance(meta.get("failed_files"), list):
+            return []
+
+        prefix = classified_file.rel_path.replace("\\", "/").rstrip("/")
+        promoted: List[Dict[str, Any]] = []
+        for item in meta["failed_files"]:
+            if not isinstance(item, dict):
+                continue
+            child = dict(item)
+            child_path = str(child.get("path") or "<unknown>").replace("\\", "/").lstrip("/")
+            child["path"] = f"{prefix}/{child_path}"
+            promoted.append(child)
+        return promoted
+
+    @staticmethod
     def _file_status_entry(
         classified_file: "ClassifiedFile",
         parser_name: str,
@@ -552,6 +619,81 @@ class DirectoryParser(BaseParser):
             ``None`` for text-fallback files with no dedicated parser.
         """
         return registry.get_parser_for_file(classified_file.path)
+
+    async def _preflight_nested_archives(
+        self,
+        scan_result: "DirectoryScanResult",
+        *,
+        registry: "ParserRegistry",
+        parser_router: "ParserRouter",
+        budget: "DirectoryScanBudget",
+        depth_offset: int,
+        path_prefix: str,
+        split_content: bool,
+    ) -> None:
+        """Validate nested ZIP contents against one import-scoped scan budget."""
+        from openviking.parse.directory_scan import scan_directory
+        from openviking.parse.parsers.zip_parser import (
+            ZipParser,
+            _extract_zip_to_temp,
+            _select_extracted_directory,
+        )
+
+        for classified_file in scan_result.all_processable_files():
+            if split_content and parser_router.should_use_understanding_api(classified_file.path):
+                continue
+            parser = self._assign_parser(classified_file, registry)
+            if not isinstance(parser, ZipParser):
+                continue
+
+            relative_path = classified_file.rel_path.replace("\\", "/").lstrip("/")
+            archive_path = (
+                f"{path_prefix.rstrip('/')}/{relative_path}" if path_prefix else relative_path
+            )
+            parent = PurePosixPath(relative_path).parent
+            archive_depth = depth_offset + len(parent.parts) + 1
+
+            try:
+                temp_dir = await _extract_zip_to_temp(classified_file.path)
+            except Exception:
+                # Invalid archives remain ordinary per-file parser failures.
+                continue
+
+            try:
+                try:
+                    directory_source, _ = _select_extracted_directory(
+                        temp_dir,
+                        classified_file.path,
+                        None,
+                    )
+                except Exception:
+                    continue
+
+                if await self._is_git_repository(directory_source):
+                    continue
+
+                nested_scan = scan_directory(
+                    root=directory_source,
+                    registry=registry,
+                    strict=False,
+                    additional_can_process=parser_router.should_use_understanding_api,
+                    max_files=budget.max_files,
+                    max_depth=budget.max_depth,
+                    _budget=budget,
+                    _depth_offset=archive_depth,
+                    _path_prefix=archive_path,
+                )
+                await self._preflight_nested_archives(
+                    nested_scan,
+                    registry=registry,
+                    parser_router=parser_router,
+                    budget=budget,
+                    depth_offset=archive_depth,
+                    path_prefix=archive_path,
+                    split_content=split_content,
+                )
+            finally:
+                await asyncio.to_thread(shutil.rmtree, temp_dir, True)
 
     # ------------------------------------------------------------------
     # Per-file processing
@@ -625,16 +767,22 @@ class DirectoryParser(BaseParser):
         preserve_structure: bool,
         import_root: Optional[str],
         split_content: bool,
+        directory_preflight_done: bool = False,
     ) -> ParseResult:
         """Run one parser without mutating the directory destination tree."""
-        return await parser.parse(
-            str(classified_file.path),
-            enable_link_rewrite=preserve_structure,
-            link_rewrite_root=import_root,
-            allowed_media_dirs=[Path(import_root)] if import_root else None,
-            split_content=split_content,
-            flatten_single_output=bool(not split_content and preserve_structure),
-        )
+        parser_kwargs = {
+            "enable_link_rewrite": preserve_structure,
+            "link_rewrite_root": import_root,
+            "allowed_media_dirs": [Path(import_root)] if import_root else None,
+            "split_content": split_content,
+            "flatten_single_output": bool(not split_content and preserve_structure),
+        }
+        if directory_preflight_done:
+            from openviking.parse.parsers.zip_parser import ZipParser
+
+            if isinstance(parser, ZipParser):
+                parser_kwargs["_directory_preflight_done"] = True
+        return await parser.parse(str(classified_file.path), **parser_kwargs)
 
     @staticmethod
     async def _merge_parser_result(
@@ -677,6 +825,7 @@ class DirectoryParser(BaseParser):
         preserve_structure: bool = True,
         import_root: Optional[str] = None,
         split_content: bool = True,
+        directory_preflight_done: bool = False,
     ) -> Dict[str, Any]:
         """Process one file into the VikingFS directory temp.
 
@@ -696,6 +845,7 @@ class DirectoryParser(BaseParser):
         src_file = classified_file.path
 
         if parser:
+            sub_result: Optional[ParseResult] = None
             try:
                 sub_result = await DirectoryParser._parse_file_with_parser(
                     classified_file,
@@ -703,6 +853,7 @@ class DirectoryParser(BaseParser):
                     preserve_structure=preserve_structure,
                     import_root=import_root,
                     split_content=split_content,
+                    directory_preflight_done=directory_preflight_done,
                 )
                 await DirectoryParser._merge_parser_result(
                     classified_file,
@@ -719,7 +870,12 @@ class DirectoryParser(BaseParser):
                 }
             except Exception as exc:
                 warnings.append(f"Failed to parse {rel_path}: {exc}")
-                return {"ok": False, "meta": {}, "error": str(exc)}
+                meta = getattr(sub_result, "meta", {}) if sub_result is not None else {}
+                return {
+                    "ok": False,
+                    "meta": meta if isinstance(meta, dict) else {},
+                    "error": str(exc),
+                }
         else:
             try:
                 content = src_file.read_bytes()

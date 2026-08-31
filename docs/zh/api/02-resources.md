@@ -201,10 +201,10 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 - 请求未传应用凭证时，用户 token watch 回退使用 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET`，或 `ov.conf` 中的 `feishu.app_id` 和 `feishu.app_secret`。飞书 refresh token 绑定签发它的应用，因此实际使用的应用凭证必须与传入的用户 token 匹配。
 - Watch task 的 token 状态和请求传入的应用凭证保存在内部控制文件 `viking://resources/.watch_tasks.json` 中，不会出现在 watch API/MCP/CLI 返回里。若启用了 VikingFS 文件加密，该控制文件会静态加密；否则服务端控制文件中会包含这些明文私有状态。
 - 本地目录输入会遵循 `.gitignore`（根目录和子目录，标准 Git 语义）；`ignore_dirs`、`include`、`exclude` 会在此基础上进一步过滤。
-- 目录导入仅在至少一个入选文件成功时采用 best-effort：失败文件写入 `meta.failed_files`，成功文件正常提交。如果没有任何文件成功，或筛选后没有可处理文件，任务会失败且不会保留空资源目录。
-- `args.parse_mode=no_split` 仍调用正常的格式 Parser。PDF、Word、PowerPoint、HTML 等受支持文档会转换为 Markdown，但跳过按标题、段落和长度拆分。目录导入会对每个受支持文档分别应用该规则，并继续遵循 `.gitignore`、筛选参数和 `preserve_structure`。如果任一入选目录文件配置为走 Understanding，目录解析会在调用 Understanding API 前整体报错，因为 Understanding 不支持 `no_split`。
+- 目录导入仅在至少一个入选文件成功时采用 best-effort：失败文件写入 `meta.failed_files`，成功文件正常提交。嵌套 ZIP 的叶子失败使用 `bundle.zip/path/to/file` 形式的归档限定路径，并保留远端任务 ID。如果没有任何文件成功，或筛选后没有可处理文件，任务会失败且不会保留空资源目录。
+- `args.parse_mode=no_split` 仍调用正常的格式 Parser。PDF、Word、PowerPoint、HTML 等受支持文档会转换为 Markdown，但跳过按标题、段落和长度拆分。目录导入会对每个受支持文档分别应用该规则，并继续遵循 `.gitignore`、筛选参数和 `preserve_structure`。该模式下，配置为走 Understanding 的目录文件会回退到对应的原生 Parser；没有原生解析能力的文件会写入 `meta.failed_files`，但不会阻止其他入选文件成功导入。
 - 对单文件输入使用 `no_split` 时，如果解析结果恰好只有一个可见文件且未指定 `to`，该文件会直接放到解析出的父目录下（例如 `guide.md` 写入 `viking://resources/guide.md`），不会创建同名上层目录，也不会生成目录级 `.abstract.md` / `.overview.md`。如果解析结果还包含图片等其他可见文件，则保留上层目录。显式指定的 `to` 始终作为最终 URI 原样保留。
-- `no_split` 只改变 Markdown 正文的存储布局，不改变语义处理、文件向量化和内部 embedding 分块。Markdown 相对链接会按同一个 no-split 输出布局解析，不会再指向仅拆分模式存在的路径。如果配置的 Understanding 解析器无法保证单一 Markdown 正文，接口会明确返回不支持该模式的错误。
+- `no_split` 只改变 Markdown 正文的存储布局，不改变语义处理、文件向量化和内部 embedding 分块。Markdown 相对链接会按同一个 no-split 输出布局解析，不会再指向仅拆分模式存在的路径。该模式下不会为目录文件调用 Understanding。
 - 如果要直接创建或更新纯文本内容，请使用 [content/write](03-filesystem.md#write)，不要使用 `add_resource`。资源导入和内容写入后都会自动刷新语义与 embedding。
 
 #### 3. 使用示例

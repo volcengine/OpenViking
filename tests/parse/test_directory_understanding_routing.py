@@ -1,4 +1,6 @@
 import asyncio
+import io
+import zipfile
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -51,6 +53,7 @@ def _configure_understanding(
     enabled: bool = True,
     max_concurrent: int = 4,
     max_files: int = 1000,
+    max_depth: int = 10,
     upload_simple_max_bytes: int = 512 * 1024 * 1024,
     enable_resumable_upload: bool = False,
 ) -> None:
@@ -70,7 +73,7 @@ def _configure_understanding(
         directory=SimpleNamespace(
             preserve_structure=True,
             max_files=max_files,
-            max_depth=10,
+            max_depth=max_depth,
             max_concurrent=max_concurrent,
         ),
     )
@@ -253,6 +256,41 @@ async def test_disabled_understanding_uses_native_directory_parser(monkeypatch, 
     native_parse.assert_awaited_once()
     assert type(native_parse.await_args.args[1]).__name__ == "PDFParser"
     assert result.meta["processed_files"][0]["parser"] == "PDFParser"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("enabled", "extensions"),
+    [(False, ["pdf"]), (True, [])],
+)
+async def test_directory_limits_require_understanding_routing(
+    monkeypatch,
+    tmp_path: Path,
+    enabled: bool,
+    extensions: list[str],
+):
+    _configure_understanding(
+        monkeypatch,
+        extensions,
+        enabled=enabled,
+        max_files=1,
+        max_depth=1,
+    )
+    nested = tmp_path / "level-1" / "level-2"
+    nested.mkdir(parents=True)
+    (tmp_path / "first.pdf").write_bytes(b"%PDF-1.7")
+    (nested / "second.pdf").write_bytes(b"%PDF-1.7")
+    native_parse = AsyncMock(return_value={"ok": True, "meta": {}, "error": None})
+
+    with (
+        patch.object(BaseParser, "_get_viking_fs", return_value=_FakeVikingFS()),
+        patch.object(DirectoryParser, "_process_single_file", new=native_parse),
+    ):
+        result = await DirectoryParser().parse(str(tmp_path), strict=True)
+
+    assert native_parse.await_count == 2
+    assert result.meta["file_count"] == 2
+    assert result.meta["failed_files"] == []
 
 
 @pytest.mark.asyncio
@@ -658,22 +696,88 @@ async def test_understanding_results_merge_in_source_order(monkeypatch, tmp_path
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("extension,content", [("pdf", b"%PDF-1.7"), ("html", b"<h1>Page</h1>")])
-async def test_no_split_directory_rejects_understanding_before_submit(
+@pytest.mark.parametrize(
+    ("parser_type", "extension", "content"),
+    [
+        (PDFParser, "pdf", b"%PDF-1.7"),
+        (HTMLParser, "html", b"<h1>Page</h1>"),
+    ],
+)
+async def test_no_split_directory_falls_back_to_native_parser(
     monkeypatch,
     tmp_path: Path,
+    parser_type,
     extension,
     content,
 ):
     _configure_understanding(monkeypatch, [extension])
-    (tmp_path / f"paper.{extension}").write_bytes(content)
-    parse = AsyncMock(side_effect=AssertionError("Understanding must not be submitted"))
+    source_path = tmp_path / f"paper.{extension}"
+    source_path.write_bytes(content)
+    understanding_parse = AsyncMock(
+        side_effect=AssertionError("Understanding must not be submitted")
+    )
+    native_calls = []
 
-    with patch.object(ParserRouter, "parse", new=parse):
-        with pytest.raises(InvalidArgumentError, match="no_split"):
-            await DirectoryParser().parse(str(tmp_path), split_content=False, strict=True)
+    async def native_parse(_self, source, **kwargs):
+        native_calls.append((Path(source), kwargs))
+        result = create_parse_result(
+            root=ResourceNode(type=NodeType.ROOT, title="paper"),
+            source_path=str(source),
+            source_format=extension,
+            parser_name=parser_type.__name__,
+        )
+        result.temp_dir_path = f"viking://temp/native_{extension}"
+        return result
 
-    parse.assert_not_awaited()
+    with (
+        patch.object(BaseParser, "_get_viking_fs", return_value=_FakeVikingFS()),
+        patch.object(ParserRouter, "parse", new=understanding_parse),
+        patch.object(parser_type, "parse", new=native_parse),
+        patch.object(DirectoryParser, "_merge_parser_result", new=AsyncMock()),
+    ):
+        result = await DirectoryParser().parse(str(tmp_path), split_content=False, strict=True)
+
+    understanding_parse.assert_not_awaited()
+    assert len(native_calls) == 1
+    assert native_calls[0][0] == source_path
+    assert native_calls[0][1]["split_content"] is False
+    assert result.meta["processed_files"] == [
+        {"path": source_path.name, "parser": parser_type.__name__}
+    ]
+    assert result.meta["failed_files"] == []
+
+
+@pytest.mark.asyncio
+async def test_no_split_directory_records_missing_native_parser_per_file(
+    monkeypatch,
+    tmp_path: Path,
+):
+    _configure_understanding(monkeypatch, ["bin"])
+    (tmp_path / "README").write_text("plain text", encoding="utf-8")
+    (tmp_path / "payload.bin").write_bytes(b"\x00\x01")
+    understanding_parse = AsyncMock(
+        side_effect=AssertionError("Understanding must not be submitted")
+    )
+
+    with (
+        patch.object(BaseParser, "_get_viking_fs", return_value=_FakeVikingFS()),
+        patch.object(ParserRouter, "parse", new=understanding_parse),
+    ):
+        result = await DirectoryParser().parse(str(tmp_path), split_content=False, strict=True)
+
+    understanding_parse.assert_not_awaited()
+    assert result.meta["file_count"] == 1
+    assert result.meta["processed_files"] == [{"path": "README", "parser": "direct"}]
+    assert result.meta["failed_files"] == [
+        {
+            "path": "payload.bin",
+            "parser": "native",
+            "error": (
+                "parse_mode='no_split' requires a native parser, but none is "
+                "available for this file type"
+            ),
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -688,6 +792,80 @@ async def test_directory_limits_fail_before_understanding_submit(monkeypatch, tm
             await DirectoryParser().parse(str(tmp_path), strict=True)
 
     parse.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_nested_zip_files_share_one_import_file_limit(monkeypatch, tmp_path: Path):
+    _configure_understanding(monkeypatch, ["pdf"], max_files=4)
+    for archive_index in range(2):
+        with zipfile.ZipFile(tmp_path / f"bundle-{archive_index}.zip", "w") as archive:
+            archive.writestr(f"{archive_index}-a.pdf", b"%PDF-1.7")
+            archive.writestr(f"{archive_index}-b.pdf", b"%PDF-1.7")
+    parse = AsyncMock(side_effect=AssertionError("Understanding must not be submitted"))
+
+    with patch.object(ParserRouter, "parse", new=parse):
+        with pytest.raises(InvalidArgumentError, match="file count exceeds") as exc_info:
+            await DirectoryParser().parse(str(tmp_path), strict=True)
+
+    assert "max_files=4" in str(exc_info.value)
+    assert "bundle-1.zip" in str(exc_info.value)
+    parse.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_nested_zip_depth_is_measured_from_import_root(monkeypatch, tmp_path: Path):
+    _configure_understanding(monkeypatch, ["pdf"], max_depth=1)
+    inner_bytes = io.BytesIO()
+    with zipfile.ZipFile(inner_bytes, "w") as inner:
+        inner.writestr("leaf.pdf", b"%PDF-1.7")
+    with zipfile.ZipFile(tmp_path / "outer.zip", "w") as outer:
+        outer.writestr("inner.zip", inner_bytes.getvalue())
+    parse = AsyncMock(side_effect=AssertionError("Understanding must not be submitted"))
+
+    with patch.object(ParserRouter, "parse", new=parse):
+        with pytest.raises(InvalidArgumentError, match="depth exceeds") as exc_info:
+            await DirectoryParser().parse(str(tmp_path), strict=True)
+
+    assert "max_depth=1" in str(exc_info.value)
+    assert "path=outer.zip/inner.zip" in str(exc_info.value)
+    parse.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_nested_zip_leaf_failures_are_promoted_with_remote_ids(
+    monkeypatch,
+    tmp_path: Path,
+):
+    _configure_understanding(monkeypatch, ["pdf"])
+    archive_path = tmp_path / "bundle.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("good.md", "# good\n")
+        archive.writestr("bad.pdf", b"%PDF-1.7")
+
+    async def parse(_self, source, **_kwargs):
+        assert Path(source).name == "bad.pdf"
+        raise UnderstandingAPIError(
+            "remote parse failed",
+            {"file_id": "file-bad", "response_id": "response-bad"},
+        )
+
+    with (
+        patch.object(BaseParser, "_get_viking_fs", return_value=_FakeVikingFS()),
+        patch.object(ParserRouter, "parse", new=parse),
+        patch.object(DirectoryParser, "_merge_parser_result", new=AsyncMock()),
+    ):
+        result = await DirectoryParser().parse(str(tmp_path), strict=True)
+
+    assert result.meta["processed_files"] == [{"path": "bundle.zip", "parser": "ZipParser"}]
+    assert result.meta["failed_files"] == [
+        {
+            "path": "bundle.zip/bad.pdf",
+            "parser": "UnderstandingAPI",
+            "file_id": "file-bad",
+            "response_id": "response-bad",
+            "error": "remote parse failed",
+        }
+    ]
 
 
 @pytest.mark.asyncio

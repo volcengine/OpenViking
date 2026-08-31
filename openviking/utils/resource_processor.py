@@ -659,7 +659,9 @@ class ResourceProcessor:
                 elif build_index:
                     if root_is_file:
                         await self._vectorize_resource_file(
-                            root_uri, ctx=ctx, ingest_options=ingest_options,
+                            root_uri,
+                            ctx=ctx,
+                            ingest_options=ingest_options,
                             creator_acl_grant=(
                                 CreatorAclGrant.DIRECT if not target_preexisting else None
                             ),
@@ -683,10 +685,10 @@ class ResourceProcessor:
                 return result
             if root_is_file:
                 await self._vectorize_resource_file(
-                    root_uri, ctx=ctx, ingest_options=ingest_options,
-                    creator_acl_grant=(
-                        CreatorAclGrant.DIRECT if not target_preexisting else None
-                    ),
+                    root_uri,
+                    ctx=ctx,
+                    ingest_options=ingest_options,
+                    creator_acl_grant=(CreatorAclGrant.DIRECT if not target_preexisting else None),
                 )
             else:
                 await self._vectorize_resource_files(

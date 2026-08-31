@@ -1204,12 +1204,12 @@ class ResourceService:
             )
             return root_uri, resource_lock, False, True
 
-        # A tree lock may materialize an empty directory marker, so ownership
-        # must be recorded before acquiring it. The zero-timeout lock still
-        # rejects compliant concurrent writers, and cleanup rechecks that the
-        # target is empty before deleting it.
-        target_preexisting = await self._viking_fs.exists(root_uri, ctx=ctx)
         await self._viking_fs._ensure_access(root_uri, ctx, action=AclAction.WRITE)
+        # A tree lock may materialize an empty directory marker, so ownership
+        # must be recorded immediately before acquiring it. The zero-timeout
+        # lock still rejects compliant concurrent writers, and cleanup rechecks
+        # that the target is empty before deleting it.
+        target_preexisting = await self._viking_fs.exists(root_uri, ctx=ctx)
         dst_path = self._viking_fs._uri_to_path(root_uri, ctx=ctx)
         resource_lock = await self._viking_fs._async_agfs.pathlock_acquire_tree(
             dst_path,

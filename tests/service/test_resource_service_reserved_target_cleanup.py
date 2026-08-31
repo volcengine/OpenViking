@@ -92,8 +92,12 @@ async def test_explicit_target_plan_tracks_reservation_ownership(
         calls.append("exists")
         return target_preexisting
 
+    async def ensure_access(*args, **kwargs):
+        calls.append("acl")
+
     viking_fs = SimpleNamespace(
         exists=AsyncMock(side_effect=target_exists),
+        _ensure_access=AsyncMock(side_effect=ensure_access),
         _uri_to_path=lambda uri, ctx: f"/agfs/{uri}",
         _async_agfs=SimpleNamespace(pathlock_acquire_tree=AsyncMock(side_effect=acquire_lock)),
     )
@@ -124,7 +128,7 @@ async def test_explicit_target_plan_tracks_reservation_ownership(
         False,
         cleanup_empty_target_on_failure,
     )
-    assert calls == ["exists", "lock"]
+    assert calls == ["acl", "exists", "lock", "acl"]
 
 
 @pytest.mark.asyncio
