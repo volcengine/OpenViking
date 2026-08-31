@@ -25,6 +25,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.session.auto_commit_policy import AutoCommitPolicy
 from openviking.session.memory.constants import AGENT_EVOLUTION_MEMORY_TYPES
 from openviking.session.memory_policy import MemoryPolicy
+from openviking.session.memory.utils.language import resolve_output_language_from_conversation
 from openviking.session.retention import (
     RETENTION_MODE_TURN_BUDGET,
     RetentionPlan,
@@ -4198,6 +4199,9 @@ class Session:
             return ""
 
         formatted = self._format_messages_for_wm(messages, checkpoint_requests)
+        output_language = resolve_output_language_from_conversation(
+            formatted, config=get_openviking_config()
+        )
         checkpoint_instructions = self._checkpoint_prompt_instructions(len(checkpoint_requests))
 
         vlm = get_openviking_config().vlm
@@ -4238,6 +4242,7 @@ class Session:
                         "messages": formatted,
                         "latest_archive_overview": latest_archive_overview or "",
                         "checkpoint_instructions": checkpoint_instructions,
+                        "output_language": output_language,
                     },
                 )
                 if checkpoint_requests:
@@ -4296,6 +4301,7 @@ class Session:
                     "latest_archive_overview": latest_archive_overview,
                     "wm_section_reminders": reminders,
                     "checkpoint_instructions": checkpoint_instructions,
+                    "output_language": output_language,
                 },
             )
             resp = await vlm.get_completion_async(
@@ -4314,7 +4320,7 @@ class Session:
                 raise
             logger.warning("WM update tool_call failed (%s); falling back to creation prompt", e)
             return await self._fallback_generate_wm_creation(
-                formatted, messages, latest_archive_overview
+                formatted, messages, latest_archive_overview, output_language
             )
 
         has_tc = bool(getattr(resp, "has_tool_calls", False) and getattr(resp, "tool_calls", None))
@@ -4331,7 +4337,7 @@ class Session:
                 raise ValueError("Working Memory update returned no tool call for checkpoints")
             logger.warning("WM update: LLM returned no tool_call; falling back to creation prompt")
             return await self._fallback_generate_wm_creation(
-                formatted, messages, latest_archive_overview
+                formatted, messages, latest_archive_overview, output_language
             )
 
         checkpoint_summaries: tuple[str, ...] = ()
@@ -4432,7 +4438,7 @@ class Session:
                 e,
             )
             return await self._fallback_generate_wm_creation(
-                formatted, messages, latest_archive_overview
+                formatted, messages, latest_archive_overview, output_language
             )
 
         _wm_debug(
@@ -4452,6 +4458,7 @@ class Session:
         formatted_messages: str,
         messages: List[Message],
         prior_overview: str = "",
+        output_language: str = "en",
     ) -> str:
         """Re-run WM creation prompt when the update tool_call path fails.
 
@@ -4471,6 +4478,7 @@ class Session:
                     "messages": formatted_messages,
                     "latest_archive_overview": prior_overview,
                     "checkpoint_instructions": "",
+                    "output_language": output_language,
                 },
             )
             return await get_openviking_config().vlm.get_completion_async(prompt)
