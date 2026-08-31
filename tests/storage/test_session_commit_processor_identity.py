@@ -123,11 +123,15 @@ async def test_process_requeues_deferred_commit_and_resets_root_context(monkeypa
 async def test_process_retries_phase2_then_completes_without_restart(monkeypatch):
     queued = []
     outcomes = iter([False, True])
+    files: dict[str, str] = {}
 
     class _RetrySession(_FakeSession):
         async def resume_queued_commit(self, msg):
             self._processed = next(outcomes)
-            return await super().resume_queued_commit(msg)
+            processed = await super().resume_queued_commit(msg)
+            if processed:
+                files[f"{msg.archive_uri}/.done"] = "completed"
+            return processed
 
     class _RetryService(_FakeSessionService):
         def session(self, ctx, session_id, session_uri=None):
@@ -156,6 +160,7 @@ async def test_process_retries_phase2_then_completes_without_restart(monkeypatch
     second = await processor._process(retry_msg, ctx)
     assert second is True
     assert len(queued) == 1
+    assert files[f"{retry_msg.archive_uri}/.done"] == "completed"
 
 
 async def test_cancelled_queued_commit_writes_terminal_marker_before_success(monkeypatch):
