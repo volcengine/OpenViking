@@ -39,9 +39,7 @@ def _clean_memory_attrs(raw: str) -> dict[str, Any]:
     return attrs
 
 
-async def _tags_attr(
-    service: Any, uri: str, ctx: RequestContext, *, is_dir: bool
-) -> list[str]:
+async def _tags_attr(service: Any, uri: str, ctx: RequestContext, *, is_dir: bool) -> list[str]:
     vikingdb_manager = getattr(service, "vikingdb_manager", None)
     if not vikingdb_manager:
         return []
@@ -331,8 +329,12 @@ async def cp(
 ):
     """Copy a file or directory together with its vector records."""
     service = get_service()
-    from_uri = resolve_path_variables(request.from_uri)
-    to_uri = resolve_path_variables(request.to_uri)
+    from_uri = validate_request_viking_uri(
+        resolve_path_variables(request.from_uri), _ctx, field_name="from_uri"
+    )
+    to_uri = validate_request_viking_uri(
+        resolve_path_variables(request.to_uri), _ctx, field_name="to_uri"
+    )
     try:
         result = await service.fs.cp(
             from_uri,

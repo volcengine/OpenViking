@@ -532,17 +532,8 @@ class SemanticDagExecutor:
         primary = deterministic_sample(candidates, sample_limit)
         loaded = await self._load_transfer_candidates(primary)
         selected = [candidate for candidate in primary if candidate in loaded]
-        missing_primary = len(primary) - len(selected)
 
         inspected = set(primary)
-        if missing_primary:
-            remaining = [candidate for candidate in candidates if candidate not in inspected]
-            fallback_loaded = await self._load_transfer_candidates(remaining)
-            loaded.update(fallback_loaded)
-            ready_remaining = [candidate for candidate in remaining if candidate in fallback_loaded]
-            selected.extend(deterministic_sample(ready_remaining, missing_primary))
-            inspected.update(remaining)
-
         selected.sort(key=lambda item: (item[1].rsplit("/", 1)[-1], item[0], item[1]))
         selected_files = [uri for kind, uri in selected if kind == "file"]
         selected_dirs = [uri for kind, uri in selected if kind == "directory"]

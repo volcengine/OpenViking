@@ -7,6 +7,7 @@ Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, 
 """
 
 import asyncio
+from collections.abc import Coroutine
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 from openviking.core.context import ContextLevel
@@ -314,9 +315,7 @@ class FSService:
             overview="",
             context_type=context_type_for_uri(directory_uri),
             ctx=ctx,
-            creator_acl_grant=(
-                CreatorAclGrant.DIRECT if not directory_preexisting else None
-            ),
+            creator_acl_grant=(CreatorAclGrant.DIRECT if not directory_preexisting else None),
             include_overview=False,
         )
 
@@ -608,7 +607,21 @@ class FSService:
         recursive: bool,
         ctx: RequestContext,
     ) -> Dict[str, Any]:
-        """Copy a resource and queue derived parent semantics after commit."""
+        """Copy a resource without exposing a cancellable partial transaction."""
+        return await self._finish_transfer_after_caller_cancel(
+            self._cp_and_refresh(from_uri, to_uri, recursive=recursive, ctx=ctx),
+            operation="copy",
+        )
+
+    async def _cp_and_refresh(
+        self,
+        from_uri: str,
+        to_uri: str,
+        *,
+        recursive: bool,
+        ctx: RequestContext,
+    ) -> Dict[str, Any]:
+        """Commit copy and enqueue its parent refresh as one cancellation-safe unit."""
         viking_fs = self._ensure_initialized()
         async with self._uri_mutation_coordinator.mutation(
             ctx.account_id,
@@ -650,33 +663,52 @@ class FSService:
         return result
 
     async def mv(self, from_uri: str, to_uri: str, ctx: RequestContext) -> None:
-        """Move resource."""
+        """Move a resource without exposing a cancellable partial transaction."""
+        await self._finish_transfer_after_caller_cancel(
+            self._mv_and_refresh(from_uri, to_uri, ctx=ctx),
+            operation="move",
+        )
+
+    async def _mv_and_refresh(
+        self,
+        from_uri: str,
+        to_uri: str,
+        *,
+        ctx: RequestContext,
+    ) -> None:
+        """Commit move/watch state and enqueue all affected parent refreshes."""
         viking_fs = self._ensure_initialized()
         watch_manager = self._get_watch_manager()
-        if not watch_manager or context_type_for_uri(from_uri) != "resource":
+        use_watch_transaction = (
+            watch_manager is not None
+            and context_type_for_uri(from_uri) == "resource"
+            and context_type_for_uri(to_uri) == "resource"
+            and not is_watch_task_control_uri(from_uri)
+            and not is_watch_task_control_uri(to_uri)
+        )
+        if not use_watch_transaction:
             await viking_fs.mv(from_uri, to_uri, ctx=ctx)
-            await self._refresh_move_parents(from_uri=from_uri, to_uri=to_uri, ctx=ctx)
-            return
-        if context_type_for_uri(to_uri) != "resource":
-            await viking_fs.mv(from_uri, to_uri, ctx=ctx)
-            await self._refresh_move_parents(from_uri=from_uri, to_uri=to_uri, ctx=ctx)
-            return
-        if is_watch_task_control_uri(from_uri) or is_watch_task_control_uri(to_uri):
-            await viking_fs.mv(from_uri, to_uri, ctx=ctx)
-            await self._refresh_move_parents(from_uri=from_uri, to_uri=to_uri, ctx=ctx)
-            return
-
-        transaction_task = asyncio.create_task(
-            self._move_resource_with_watch_transaction(
+        else:
+            assert watch_manager is not None
+            await self._move_resource_with_watch_transaction(
                 viking_fs,
                 watch_manager,
                 from_uri,
                 to_uri,
                 ctx,
             )
-        )
+        await self._refresh_move_parents(from_uri=from_uri, to_uri=to_uri, ctx=ctx)
+
+    async def _finish_transfer_after_caller_cancel(
+        self,
+        transaction: Coroutine[Any, Any, Any],
+        *,
+        operation: str,
+    ) -> Any:
+        """Finish an already-started transfer before propagating caller cancellation."""
+        transaction_task = asyncio.create_task(transaction)
         try:
-            await asyncio.shield(transaction_task)
+            return await asyncio.shield(transaction_task)
         except asyncio.CancelledError:
             while not transaction_task.done():
                 try:
@@ -691,11 +723,11 @@ class FSService:
                 pass
             except Exception:
                 logger.error(
-                    "Resource move transaction failed while caller was cancelled",
+                    "Filesystem %s transaction failed while caller was cancelled",
+                    operation,
                     exc_info=True,
                 )
             raise
-        await self._refresh_move_parents(from_uri=from_uri, to_uri=to_uri, ctx=ctx)
 
     async def _refresh_move_parents(
         self,
@@ -1047,9 +1079,7 @@ class FSService:
     ) -> Dict[str, Any]:
         return await self._ensure_initialized().grant_acl(uri, principal, level, ctx=ctx)
 
-    async def revoke_acl(
-        self, uri: str, principal: str, ctx: RequestContext
-    ) -> Dict[str, Any]:
+    async def revoke_acl(self, uri: str, principal: str, ctx: RequestContext) -> Dict[str, Any]:
         return await self._ensure_initialized().revoke_acl(uri, principal, ctx=ctx)
 
     async def delete_acl(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:

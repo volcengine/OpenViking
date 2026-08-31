@@ -245,6 +245,7 @@ class AsyncAGFSClient:
         *,
         fs_ctx: Dict[str, str] | None = None,
         auto_pathlock: bool = True,
+        allow_same_mount_fast_path: bool = False,
     ) -> Any:
         """Copy a path within AGFS while preserving the caller's FsContext.
 
@@ -261,6 +262,7 @@ class AsyncAGFSClient:
             recursive=recursive,
             stream=True,
             fs_ctx=_fs_ctx_with_auto_pathlock(src_path, fs_ctx, auto_pathlock),
+            allow_same_mount_fast_path=allow_same_mount_fast_path,
         )
 
     async def grep(self, **kwargs: Any) -> Dict[str, Any]:

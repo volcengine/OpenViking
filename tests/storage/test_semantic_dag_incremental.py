@@ -472,7 +472,7 @@ async def test_content_copy_samples_before_loading_summaries(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_content_copy_backfills_missing_sample_summary(monkeypatch):
+async def test_content_copy_does_not_backfill_missing_sample_summary(monkeypatch):
     root_uri = "viking://resources/archive"
     file_paths = [f"{root_uri}/{name}.txt" for name in "abcde"]
     fake_fs = _FakeVikingFS(
@@ -502,13 +502,12 @@ async def test_content_copy_backfills_missing_sample_summary(monkeypatch):
 
     await executor.run(root_uri)
 
-    assert processor.transfer_summary_calls[0] == [file_paths[0], file_paths[-1]]
-    assert processor.transfer_summary_calls[1] == file_paths[1:-1]
+    assert processor.transfer_summary_calls == [[file_paths[0], file_paths[-1]]]
     overview_doc = parse_abstract_overview(fake_fs._file_contents[f"{root_uri}/.overview.md"])
     assert "a.txt" not in overview_doc.body
-    assert "b.txt" in overview_doc.body
+    assert "b.txt" not in overview_doc.body
     assert "e.txt" in overview_doc.body
-    assert overview_doc.metadata["freshness"]["missing_summary_entries"] == 1
+    assert overview_doc.metadata["freshness"].get("missing_summary_entries") is None
 
 
 @pytest.mark.asyncio

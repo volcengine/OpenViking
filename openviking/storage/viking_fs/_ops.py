@@ -355,12 +355,16 @@ class _OpsMixin:
 
         await self._ensure_transfer_parent_directory(new_path, new_uri, operation="cp")
         await self._ensure_transfer_target_missing(new_path, new_uri)
-        lock_kind = "tree" if is_dir else "exact"
-        lease = await self._async_agfs.pathlock_acquire_batch(
-            [
-                {"path": old_path, "kind": lock_kind},
+        lock_requests = (
+            self._directory_transfer_lock_requests(old_path, new_path)
+            if is_dir
+            else [
+                {"path": old_path, "kind": "exact"},
                 {"path": new_path, "kind": "exact"},
-            ],
+            ]
+        )
+        lease = await self._async_agfs.pathlock_acquire_batch(
+            lock_requests,
             owner_lease_ref=lease_ref,
         )
         operation_id = uuid.uuid4().hex
@@ -476,7 +480,7 @@ class _OpsMixin:
     async def _ensure_transfer_parent_directory(
         self, path: str, uri: str, *, operation: str
     ) -> None:
-        parent_path = path.rstrip("/").rsplit("/", 1)[0] or "/"
+        parent_path = self._transfer_parent_path(path)
         try:
             parent_stat = await self._async_agfs.stat(parent_path)
         except Exception as exc:
@@ -493,6 +497,39 @@ class _OpsMixin:
         if not isinstance(parent_stat, dict) or not parent_stat.get("isDir", False):
             raise InvalidArgumentError(f"{operation} target parent is not a directory: {uri}")
 
+    @staticmethod
+    def _transfer_parent_path(path: str) -> str:
+        return path.rstrip("/").rsplit("/", 1)[0] or "/"
+
+    @classmethod
+    def _directory_transfer_lock_requests(
+        cls, old_path: str, new_path: str
+    ) -> List[Dict[str, str]]:
+        """Lock stable parents so directory deletion and recreation stay covered."""
+
+        parents: List[str] = []
+        for parent in (
+            cls._transfer_parent_path(old_path),
+            cls._transfer_parent_path(new_path),
+        ):
+            if any(cls._tree_lock_covers(existing, parent) for existing in parents):
+                continue
+            parents = [
+                existing for existing in parents if not cls._tree_lock_covers(parent, existing)
+            ]
+            parents.append(parent)
+        return [{"path": parent, "kind": "tree"} for parent in parents]
+
+    @staticmethod
+    def _tree_lock_covers(ancestor: str, path: str) -> bool:
+        normalized_ancestor = ancestor.rstrip("/") or "/"
+        normalized_path = path.rstrip("/") or "/"
+        if normalized_ancestor == "/":
+            return True
+        return normalized_path == normalized_ancestor or normalized_path.startswith(
+            f"{normalized_ancestor}/"
+        )
+
     async def _copy_agfs_entry(
         self,
         old_path: str,
@@ -505,7 +542,7 @@ class _OpsMixin:
         lease_ref: Dict[str, Any],
     ) -> int:
         if is_dir:
-            return await self._copy_directory_with_exact_locks(
+            return await self._copy_directory_under_parent_locks(
                 old_path,
                 new_path,
                 old_uri=old_uri,
@@ -530,21 +567,11 @@ class _OpsMixin:
         ctx: Optional[RequestContext],
         lease_ref: Dict[str, Any],
     ) -> None:
-        cleanup_lease = lease_ref
-        if is_dir:
-            cleanup_lease = await self._async_agfs.pathlock_acquire_tree(
-                path,
-                owner_lease_ref=lease_ref,
-            )
-        try:
-            await self._async_agfs.rm(
-                path,
-                recursive=is_dir,
-                fs_ctx=self._pathlock_fs_ctx(ctx, cleanup_lease),
-            )
-        finally:
-            if cleanup_lease is not lease_ref:
-                await self._async_agfs.pathlock_release(cleanup_lease)
+        await self._async_agfs.rm(
+            path,
+            recursive=is_dir,
+            fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
+        )
 
     async def mv(
         self,
@@ -617,10 +644,7 @@ class _OpsMixin:
 
         if is_dir:
             lease = await self._async_agfs.pathlock_acquire_batch(
-                [
-                    {"path": old_path, "kind": "tree"},
-                    {"path": new_path, "kind": "exact"},
-                ],
+                self._directory_transfer_lock_requests(old_path, new_path),
                 owner_lease_ref=lease_ref,
             )
         else:
@@ -827,7 +851,7 @@ class _OpsMixin:
             lease_ref=lease_ref,
         )
 
-    async def _copy_directory_with_exact_locks(
+    async def _copy_directory_under_parent_locks(
         self,
         old_path: str,
         new_path: str,
@@ -836,13 +860,13 @@ class _OpsMixin:
         ctx: Optional[RequestContext],
         lease_ref: Dict[str, Any] | None,
     ) -> int:
-        """Copy a directory through AGFS while locking every destination entry.
+        """Copy a directory under the operation's stable parent Tree leases.
 
         Args:
             old_path: Source backend directory path.
             new_path: Destination backend directory path.
             ctx: Request context used for filesystem operations.
-            lease_ref: Exact lease covering the current destination directory.
+            lease_ref: Batch lease covering the source and destination parents.
 
         Returns:
             Number of created directories and files.
@@ -866,30 +890,23 @@ class _OpsMixin:
                 recursive=bool(entry.get("isDir", False)),
                 ctx=ctx,
             )
-            child_lease = await self._async_agfs.pathlock_acquire_exact(
-                new_child,
-                owner_lease_ref=lease_ref,
-            )
-            try:
-                if entry.get("isDir", False):
-                    copied += await self._copy_directory_with_exact_locks(
-                        old_child,
-                        new_child,
-                        old_uri=old_child_uri,
-                        new_uri=new_child_uri,
-                        ctx=ctx,
-                        lease_ref=child_lease,
-                    )
-                else:
-                    await self._async_agfs.cp(
-                        old_child,
-                        new_child,
-                        recursive=False,
-                        fs_ctx=self._pathlock_fs_ctx(ctx, child_lease),
-                    )
-                    copied += 1
-            finally:
-                await self._async_agfs.pathlock_release(child_lease)
+            if entry.get("isDir", False):
+                copied += await self._copy_directory_under_parent_locks(
+                    old_child,
+                    new_child,
+                    old_uri=old_child_uri,
+                    new_uri=new_child_uri,
+                    ctx=ctx,
+                    lease_ref=lease_ref,
+                )
+            else:
+                await self._async_agfs.cp(
+                    old_child,
+                    new_child,
+                    recursive=False,
+                    fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
+                )
+                copied += 1
         return copied
 
     async def _copy_dir_through_vikingfs(
@@ -1261,7 +1278,9 @@ class _OpsMixin:
         await self._ensure_access(uri, ctx)
         extra_fields = extra_fields or []
         if output == "original":
-            entries = await self._tree_original(uri, show_all_hidden, node_limit, level_limit, ctx=ctx)
+            entries = await self._tree_original(
+                uri, show_all_hidden, node_limit, level_limit, ctx=ctx
+            )
         elif output == "agent":
             entries = await self._tree_agent(
                 uri, abs_limit, show_all_hidden, node_limit, level_limit, ctx=ctx
@@ -1937,12 +1956,11 @@ class _OpsMixin:
                     if not may_include_hidden_actor_peers(entry_uri, real_ctx):
                         filter_expr = PathScope("uri", entry_uri, depth=-1)
                         entry["count"] = await vector_store.count(
-                            filter=filter_expr, ctx=real_ctx,
+                            filter=filter_expr,
+                            ctx=real_ctx,
                         )
                 except Exception as e:
-                    logger.warning(
-                        f"[VikingFS] Failed to count nodes for {entry_uri}: {e}"
-                    )
+                    logger.warning(f"[VikingFS] Failed to count nodes for {entry_uri}: {e}")
 
         if need_locked and lock_paths:
             for i, path in lock_paths:
@@ -1951,9 +1969,7 @@ class _OpsMixin:
                 except Exception:
                     entries[i]["isLocked"] = False
 
-    def _try_uri_to_path(
-        self, uri: str, ctx: Optional[RequestContext] = None
-    ) -> Optional[str]:
+    def _try_uri_to_path(self, uri: str, ctx: Optional[RequestContext] = None) -> Optional[str]:
         """Best-effort URI to path conversion; returns None on failure."""
         try:
             return self._uri_to_path(uri, ctx=ctx)
@@ -2006,6 +2022,7 @@ class _OpsMixin:
             dst_path,
             recursive=True,
             fs_ctx=fs_ctx or {"account_id": self._ctx_or_default(ctx).account_id},
+            allow_same_mount_fast_path=True,
         )
 
     async def delete_temp(

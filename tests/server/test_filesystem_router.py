@@ -3,6 +3,7 @@
 """Filesystem router tests."""
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -11,6 +12,7 @@ from fastapi import FastAPI
 from openviking.server.auth import get_request_context
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import filesystem
+from openviking_cli.exceptions import InvalidURIError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -102,6 +104,62 @@ def test_cp_request_defaults_to_non_recursive():
 
 
 @pytest.mark.asyncio
+async def test_cp_canonicalizes_home_aliases(monkeypatch):
+    calls = []
+
+    async def fake_cp(from_uri, to_uri, recursive=False, ctx=None):
+        calls.append((from_uri, to_uri, recursive, ctx))
+        return {}
+
+    monkeypatch.setattr(
+        filesystem,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(cp=fake_cp)),
+    )
+    ctx = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
+
+    response = await filesystem.cp(
+        filesystem.CpRequest(
+            from_uri="viking://~/resources/a.md",
+            to_uri="viking://~/resources/b.md",
+        ),
+        _ctx=ctx,
+    )
+
+    assert calls == [
+        (
+            "viking://user/alice/resources/a.md",
+            "viking://user/alice/resources/b.md",
+            False,
+            ctx,
+        )
+    ]
+    assert response.result["from"] == "viking://user/alice/resources/a.md"
+    assert response.result["to"] == "viking://user/alice/resources/b.md"
+
+
+@pytest.mark.asyncio
+async def test_cp_rejects_invalid_uri_before_calling_service(monkeypatch):
+    cp_mock = AsyncMock()
+    monkeypatch.setattr(
+        filesystem,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(cp=cp_mock)),
+    )
+
+    with pytest.raises(InvalidURIError, match="Invalid URI"):
+        await filesystem.cp(
+            filesystem.CpRequest(
+                from_uri="/local/acct/resources/a.md",
+                to_uri="viking://resources/b.md",
+            ),
+            _ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER),
+        )
+
+    cp_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_attrs_returns_memory_fields_and_tags(monkeypatch):
     raw_memory = (
         "Original preference\n\n"
@@ -121,7 +179,7 @@ async def test_attrs_returns_memory_fields_and_tags(monkeypatch):
         async def filter(self, **kwargs):
             return [
                 {
-                    "uri": kwargs["filter"]["conds"][0],
+                    "uri": "viking://user/alice/memories/preferences/theme.md",
                     "level": 2,
                     "search_tags": ["team=search"],
                 }
@@ -143,6 +201,7 @@ async def test_attrs_returns_memory_fields_and_tags(monkeypatch):
 
     attrs = response.result["attrs"]
     assert attrs["memory"] == {
+        "version": 1,
         "tags": ["ui"],
         "fields": {"topic": "theme"},
         "resource_refs": ["viking://resources/docs/api.md"],
@@ -210,9 +269,7 @@ async def test_dev_root_http_mkdir_expands_home_alias_from_request_identity(
 @pytest.mark.asyncio
 async def test_http_stat_returns_canonical_request_uri(monkeypatch):
     seen = {}
-    request_context = RequestContext(
-        user=UserIdentifier("acct", "alice"), role=Role.USER
-    )
+    request_context = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
 
     async def fake_stat(uri, ctx=None):
         seen.update(uri=uri, ctx=ctx)
@@ -235,9 +292,7 @@ async def test_http_stat_returns_canonical_request_uri(monkeypatch):
     app.include_router(filesystem.router)
     app.dependency_overrides[get_request_context] = lambda: request_context
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(
-        transport=transport, base_url="http://testserver"
-    ) as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         response = await client.get(
             "/api/v1/fs/stat",
             params={"uri": "viking://~/resources/notes.md"},
@@ -280,9 +335,7 @@ async def test_http_stat_by_record_id_returns_resolved_uri(monkeypatch):
         user=UserIdentifier("acct", "alice"), role=Role.USER
     )
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(
-        transport=transport, base_url="http://testserver"
-    ) as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         response = await client.get("/api/v1/fs/stat", params={"uri": record_id})
 
     assert response.status_code == 200, response.text

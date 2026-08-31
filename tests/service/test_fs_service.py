@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for file-system service coordination behavior."""
 
+import asyncio
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -970,6 +971,100 @@ async def test_resource_cp_refresh_failure_does_not_roll_back_copy(request_conte
     assert viking_fs.mv_calls == []
     assert result["semantic_status"] == "failed"
     assert result["semantic_error"] == "queue unavailable"
+
+
+@pytest.mark.asyncio
+async def test_resource_cp_finishes_transfer_and_refresh_after_caller_cancel(request_context):
+    source = "viking://resources/source.md"
+    target = "viking://resources/archive/copied.md"
+    started = asyncio.Event()
+    release = asyncio.Event()
+    completed = asyncio.Event()
+    viking_fs = _FakeVikingFS()
+
+    async def blocked_cp(from_uri, to_uri, recursive=False, ctx=None):
+        del from_uri, to_uri, recursive, ctx
+        started.set()
+        await release.wait()
+        completed.set()
+        return {"operation_id": "copy-cancel"}
+
+    viking_fs.cp = blocked_cp
+    service = FSService(viking_fs=viking_fs)
+    service._enqueue_copy_refresh = AsyncMock(return_value="queued")
+
+    task = asyncio.create_task(service.cp(source, target, recursive=False, ctx=request_context))
+    await started.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert completed.is_set()
+    service._enqueue_copy_refresh.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_resource_cp_finishes_inflight_refresh_after_caller_cancel(request_context):
+    source = "viking://resources/source.md"
+    target = "viking://resources/archive/copied.md"
+    refresh_started = asyncio.Event()
+    release_refresh = asyncio.Event()
+    refresh_completed = asyncio.Event()
+    service = FSService(viking_fs=_FakeVikingFS())
+
+    async def blocked_refresh(**kwargs):
+        del kwargs
+        refresh_started.set()
+        await release_refresh.wait()
+        refresh_completed.set()
+        return "queued"
+
+    service._enqueue_copy_refresh = blocked_refresh
+    task = asyncio.create_task(service.cp(source, target, recursive=False, ctx=request_context))
+    await refresh_started.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    release_refresh.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert refresh_completed.is_set()
+
+
+@pytest.mark.asyncio
+async def test_resource_mv_finishes_transfer_and_refresh_after_caller_cancel(request_context):
+    source = "viking://resources/source.md"
+    target = "viking://resources/archive/moved.md"
+    started = asyncio.Event()
+    release = asyncio.Event()
+    completed = asyncio.Event()
+    viking_fs = _FakeVikingFS()
+
+    async def blocked_mv(from_uri, to_uri, ctx=None):
+        del from_uri, to_uri, ctx
+        started.set()
+        await release.wait()
+        completed.set()
+
+    viking_fs.mv = blocked_mv
+    service = FSService(viking_fs=viking_fs)
+    service._enqueue_copy_refresh = AsyncMock(return_value="queued")
+
+    task = asyncio.create_task(service.mv(source, target, ctx=request_context))
+    await started.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert completed.is_set()
+    assert service._enqueue_copy_refresh.await_count == 2
 
 
 @pytest.mark.asyncio
