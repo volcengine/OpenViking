@@ -190,6 +190,7 @@ async def temp_upload(
             temp_file_id,
             _ctx,
             to=signed.to,
+            parent=signed.parent,
             reason=signed.reason,
             processing_mode=signed.processing_mode,
             tags=signed.tags,

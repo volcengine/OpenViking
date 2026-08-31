@@ -972,8 +972,8 @@ async def add_resource(
         to: Target URI under viking://resources/ (e.g. "viking://resources/volcengine/OpenViking").
             Required when ``add_type`` is set; otherwise leave empty to derive a URI
             from the source.
-        parent: Parent URI under viking://resources/ for remote imports. Mutually exclusive
-            with ``to`` and not supported when ``add_type`` is set.
+        parent: Parent URI under viking://resources/ for remote or local-file imports.
+            Mutually exclusive with ``to`` and not supported when ``add_type`` is set.
         tags: Optional explicit k=v retrieval tags to apply after ingestion.
         tag_mode: Tag update mode, "replace" or "append". Defaults to "replace".
         args: Parser-specific options, e.g. {"auth_config": {"token": "..."}}
@@ -1021,6 +1021,8 @@ async def add_resource(
         return "Error: add_type cannot be combined with parent."
     if add_type and not to:
         return "Error: add_type requires an exact 'to' target."
+    if to and parent:
+        return "Error: Cannot specify both 'to' and 'parent' at the same time."
 
     # Branch 1: ingest by temp_file_id. Kept for backward compat / REST-style use — the
     # signed upload now auto-ingests server-side, so agents no longer need this second leg.
@@ -1035,6 +1037,7 @@ async def add_resource(
                 temp_file_id,
                 ctx,
                 to=to,
+                parent=parent,
                 reason=description,
                 args=args,
                 processing_mode=processing_mode,
@@ -1133,6 +1136,7 @@ async def add_resource(
         ctx.user.user_id,
         ttl_seconds=ttl_seconds,
         to=to,
+        parent=parent,
         reason=description,
         actor_peer_id=ctx.actor_peer_id or "",
         processing_mode=processing_mode,
