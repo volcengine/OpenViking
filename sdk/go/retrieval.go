@@ -166,6 +166,12 @@ func (c *Client) Grep(ctx context.Context, uri, pattern string, opts *GrepOption
 	if opts.ExcludeURI != "" {
 		payload["exclude_uri"] = NormalizeURI(opts.ExcludeURI)
 	}
+	if opts.Tags != nil {
+		payload["tags"] = opts.Tags
+	}
+	if opts.IncludeTags {
+		payload["include_tags"] = true
+	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/search/grep", nil, payload, &result)
 	return result, err
@@ -185,6 +191,12 @@ func (c *Client) Glob(ctx context.Context, pattern string, uri string, opts *Glo
 	}
 	if opts.NodeLimit != nil {
 		payload["node_limit"] = *opts.NodeLimit
+	}
+	if opts.Tags != nil {
+		payload["tags"] = opts.Tags
+	}
+	if opts.IncludeTags {
+		payload["include_tags"] = true
 	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/search/glob", nil, payload, &result)

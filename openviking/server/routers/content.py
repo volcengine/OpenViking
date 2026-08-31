@@ -47,6 +47,8 @@ class WriteContentRequest(BaseModel):
     timeout: float | None = None
     telemetry: TelemetryRequest = False
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
+    tags: list[str] | None = None
+    tag_mode: Literal["replace", "append"] = "replace"
 
 
 class BatchWriteOperation(BaseModel):
@@ -245,6 +247,8 @@ async def write(
             wait=request.wait,
             timeout=request.timeout,
             processing_mode=request.processing_mode,
+            tags=request.tags,
+            tag_mode=request.tag_mode,
         ),
     )
     return Response(

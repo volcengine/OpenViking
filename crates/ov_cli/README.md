@@ -266,6 +266,13 @@ ov find "authentication" --uri viking://resources/project --level 0,1
 # Recursive list
 ov ls viking://resources --recursive
 
+# Write caller-provided tags, then filter or project them
+ov write viking://resources/docs/api.md --content "# API" \
+  --tags team=search,env=prod
+ov ls viking://resources/docs --tags team=search,env=prod --fields tags
+ov grep "TODO" --uri viking://resources/docs --tags team=search,env=prod
+ov glob "**/*.md" --uri viking://resources/docs --tags team=search,env=prod
+
 # Temporarily override identity from CLI flags
 ov --account acme --user alice ls viking://
 
@@ -276,6 +283,7 @@ ov admin regenerate-key acme bob --seed bob-new-seed
 
 # Glob search
 ov glob "**/*.md" --uri viking://resources
+ov glob "**/*.md" --uri viking://resources -f tags
 
 # Session workflow
 SESSION=$(ov -o json session new | jq -r '.result.session_id')

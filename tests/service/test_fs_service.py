@@ -31,6 +31,33 @@ class _FakeVikingFS:
             self.events.append(("mv", from_uri, to_uri))
 
 
+@pytest.mark.asyncio
+async def test_write_forwards_tags_and_tag_mode_to_content_coordinator(monkeypatch, request_context):
+    seen = {}
+
+    class FakeCoordinator:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def write(self, **kwargs):
+            seen.update(kwargs)
+            return {"uri": kwargs["uri"]}
+
+    monkeypatch.setattr("openviking.service.fs_service.ContentWriteCoordinator", FakeCoordinator)
+    service = FSService(viking_fs=object())
+
+    await service.write(
+        "viking://resources/demo.md",
+        "updated",
+        request_context,
+        tags=["env=prod"],
+        tag_mode="append",
+    )
+
+    assert seen["tags"] == ["env=prod"]
+    assert seen["tag_mode"] == "append"
+
+
 class _FakeWatchManager:
     def __init__(self, *, events=None):
         self.validate_calls = []
@@ -206,6 +233,380 @@ async def test_grep_projects_memory_content_but_keeps_resource_fast_path(request
     viking_fs.grep.reset_mock()
     await service.grep("viking://resources", "secret", ctx=request_context)
     assert "content_transform" not in viking_fs.grep.await_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_grep_projects_tags_for_each_match(request_context):
+    matches = [
+        {"uri": "viking://resources/a.md", "line": 1, "content": "needle"},
+        {"uri": "viking://resources/b.md", "line": 2, "content": "needle"},
+    ]
+    viking_fs = SimpleNamespace(grep=AsyncMock(return_value={"matches": matches, "count": 2}))
+
+    class FakeVikingDB:
+        async def filter(self, **_kwargs):
+            return [
+                {
+                    "uri": "viking://resources/a.md",
+                    "level": 2,
+                    "search_tags": ["team=search", "env=prod"],
+                },
+                {
+                    "uri": "viking://resources/b.md",
+                    "level": 2,
+                    "search_tags": [],
+                },
+            ]
+
+    service = FSService(viking_fs=viking_fs, vikingdb=FakeVikingDB())
+    result = await service.grep(
+        "viking://resources", "needle", ctx=request_context, include_tags=True
+    )
+
+    assert result["matches"] == [
+        {
+            "uri": "viking://resources/a.md",
+            "line": 1,
+            "content": "needle",
+            "tags": ["team=search", "env=prod"],
+        },
+        {
+            "uri": "viking://resources/b.md",
+            "line": 2,
+            "content": "needle",
+            "tags": [],
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_grep_skips_tag_projection_without_tags_or_include_tags(request_context):
+    matches = [{"uri": "viking://resources/a.md", "line": 1, "content": "needle"}]
+    viking_fs = SimpleNamespace(grep=AsyncMock(return_value={"matches": matches, "count": 1}))
+
+    class FakeVikingDB:
+        async def filter(self, **_kwargs):
+            raise AssertionError("plain grep should not load tags")
+
+    service = FSService(viking_fs=viking_fs, vikingdb=FakeVikingDB())
+
+    result = await service.grep("viking://resources", "needle", ctx=request_context)
+
+    assert result["matches"] == matches
+
+
+@pytest.mark.asyncio
+async def test_grep_projects_tags_when_include_tags_is_requested(request_context):
+    matches = [{"uri": "viking://resources/a.md", "line": 1, "content": "needle"}]
+    viking_fs = SimpleNamespace(grep=AsyncMock(return_value={"matches": matches, "count": 1}))
+
+    class FakeVikingDB:
+        async def filter(self, **_kwargs):
+            return [{"uri": "viking://resources/a.md", "level": 2, "search_tags": ["env=prod"]}]
+
+    service = FSService(viking_fs=viking_fs, vikingdb=FakeVikingDB())
+
+    result = await service.grep(
+        "viking://resources", "needle", ctx=request_context, include_tags=True
+    )
+
+    assert result["matches"] == [{**matches[0], "tags": ["env=prod"]}]
+
+
+@pytest.mark.asyncio
+async def test_ls_and_tree_skip_tag_projection_without_tags_or_include_tags(request_context):
+    entries = [{"uri": "viking://resources/a.md", "isDir": False}]
+    viking_fs = SimpleNamespace(
+        ls=AsyncMock(return_value=entries),
+        tree=AsyncMock(return_value=entries),
+    )
+
+    class FakeVikingDB:
+        async def filter(self, **_kwargs):
+            raise AssertionError("plain filesystem reads should not load tags")
+
+    service = FSService(viking_fs=viking_fs, vikingdb=FakeVikingDB())
+
+    assert await service.ls("viking://resources", ctx=request_context) == entries
+    assert await service.tree("viking://resources", ctx=request_context) == entries
+
+
+@pytest.mark.asyncio
+async def test_glob_skips_tag_projection_without_tags_or_include_tags(request_context):
+    expected = {"matches": ["viking://resources/a.md"], "count": 1}
+    viking_fs = SimpleNamespace(glob=AsyncMock(return_value=expected))
+
+    class FakeVikingDB:
+        async def filter(self, **_kwargs):
+            raise AssertionError("plain glob should not load tags")
+
+    service = FSService(viking_fs=viking_fs, vikingdb=FakeVikingDB())
+
+    assert await service.glob("**/*.md", ctx=request_context) == expected
+    assert viking_fs.glob.await_args.kwargs["extra_fields"] is None
+
+
+@pytest.mark.asyncio
+async def test_glob_filters_and_projects_tags_before_applying_node_limit(request_context):
+    entries = [
+        {"uri": "viking://resources/a.md", "isDir": False},
+        {"uri": "viking://resources/b.md", "isDir": False},
+        {"uri": "viking://resources/c.md", "isDir": False},
+    ]
+    viking_fs = SimpleNamespace(glob=AsyncMock(return_value={"matches": entries, "count": 3}))
+
+    class FakeVikingDB:
+        async def filter(self, **_kwargs):
+            return [
+                {"uri": "viking://resources/a.md", "level": 2, "search_tags": ["team=search"]},
+                {
+                    "uri": "viking://resources/b.md",
+                    "level": 2,
+                    "search_tags": ["team=search", "env=prod"],
+                },
+                {
+                    "uri": "viking://resources/c.md",
+                    "level": 2,
+                    "search_tags": ["team=search", "env=prod"],
+                },
+            ]
+
+    service = FSService(viking_fs=viking_fs, vikingdb=FakeVikingDB())
+    result = await service.glob(
+        "**/*.md",
+        ctx=request_context,
+        tags=["team=search", "env=prod"],
+        node_limit=1,
+    )
+
+    assert result == {
+        "matches": [
+            {
+                "uri": "viking://resources/b.md",
+                "isDir": False,
+                "tags": ["team=search", "env=prod"],
+            }
+        ],
+        "count": 1,
+    }
+    assert viking_fs.glob.await_args.kwargs["extra_fields"] == []
+    assert viking_fs.glob.await_args.kwargs["node_limit"] is None
+
+
+@pytest.mark.asyncio
+async def test_glob_tag_filter_keeps_zero_node_limit_unbounded(request_context):
+    entries = [
+        {"uri": "viking://resources/a.md", "isDir": False},
+        {"uri": "viking://resources/b.md", "isDir": False},
+    ]
+    viking_fs = SimpleNamespace(glob=AsyncMock(return_value={"matches": entries, "count": 2}))
+
+    class FakeVikingDB:
+        async def filter(self, **_kwargs):
+            return [
+                {"uri": "viking://resources/a.md", "level": 2, "search_tags": ["env=prod"]},
+                {"uri": "viking://resources/b.md", "level": 2, "search_tags": ["env=prod"]},
+            ]
+
+    service = FSService(viking_fs=viking_fs, vikingdb=FakeVikingDB())
+    result = await service.glob(
+        "**/*.md", ctx=request_context, tags=["env=prod"], node_limit=0
+    )
+
+    assert result["count"] == 2
+    assert [entry["uri"] for entry in result["matches"]] == [
+        "viking://resources/a.md",
+        "viking://resources/b.md",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_grep_passes_tags_to_vikingfs_without_prequerying_vikingdb(request_context):
+    viking_fs = SimpleNamespace(grep=AsyncMock(return_value={"matches": [], "count": 0}))
+
+    class FakeVikingDB:
+        async def filter(self, **_kwargs):
+            raise AssertionError("tagged grep should not pre-query VikingDB")
+
+    service = FSService(viking_fs=viking_fs, vikingdb=FakeVikingDB())
+    await service.grep(
+        "viking://resources",
+        "needle",
+        ctx=request_context,
+        tags=["team=search", "env=prod"],
+    )
+
+    assert viking_fs.grep.await_args.kwargs["tag_filter"] == {
+        "op": "and",
+        "conds": [
+            {"op": "must", "field": "search_tags", "conds": ["team=search"]},
+            {"op": "must", "field": "search_tags", "conds": ["env=prod"]},
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_tagged_grep_reuses_tags_returned_by_viking_fs(request_context):
+    matches = [
+        {
+            "uri": "viking://resources/a.md",
+            "line": 1,
+            "content": "needle",
+            "tags": ["team=search", "env=prod"],
+        }
+    ]
+    viking_fs = SimpleNamespace(grep=AsyncMock(return_value={"matches": matches, "count": 1}))
+
+    class FakeVikingDB:
+        async def filter(self, **_kwargs):
+            raise AssertionError("tagged grep should reuse VikingFS tag projection")
+
+    service = FSService(viking_fs=viking_fs, vikingdb=FakeVikingDB())
+    result = await service.grep(
+        "viking://resources",
+        "needle",
+        ctx=request_context,
+        tags=["team=search", "env=prod"],
+    )
+
+    assert result["matches"] == matches
+
+
+@pytest.mark.asyncio
+async def test_ls_projects_tags_filters_with_and_before_applying_node_limit(request_context):
+    entries = [
+        {"uri": "viking://resources/a.md", "isDir": False},
+        {"uri": "viking://resources/b.md", "isDir": False},
+        {"uri": "viking://resources/c.md", "isDir": False},
+    ]
+    viking_fs = SimpleNamespace(ls=AsyncMock(return_value=entries))
+
+    class FakeVikingDB:
+        async def filter(self, **_kwargs):
+            return [
+                {"uri": "viking://resources/a.md", "level": 2, "search_tags": ["team=search"]},
+                {
+                    "uri": "viking://resources/b.md",
+                    "level": 2,
+                    "search_tags": ["team=search", "env=prod"],
+                },
+                {
+                    "uri": "viking://resources/c.md",
+                    "level": 2,
+                    "search_tags": ["team=search", "env=prod"],
+                },
+            ]
+
+    service = FSService(viking_fs=viking_fs, vikingdb=FakeVikingDB())
+    result = await service.ls(
+        "viking://resources",
+        ctx=request_context,
+        tags=["team=search", "env=prod"],
+        node_limit=1,
+    )
+
+    assert result == [
+        {"uri": "viking://resources/b.md", "isDir": False, "tags": ["team=search", "env=prod"]}
+    ]
+    assert viking_fs.ls.await_args.kwargs["node_limit"] is None
+
+
+@pytest.mark.asyncio
+async def test_ls_tag_filter_keeps_zero_node_limit_unbounded_for_entry_and_simple_output(
+    request_context,
+):
+    entries = [
+        {"uri": "viking://resources/a.md", "isDir": False},
+        {"uri": "viking://resources/b.md", "isDir": False},
+    ]
+
+    class FakeVikingDB:
+        async def filter(self, **_kwargs):
+            return [
+                {"uri": entry["uri"], "level": 2, "search_tags": ["env=prod"]}
+                for entry in entries
+            ]
+
+    entry_service = FSService(
+        viking_fs=SimpleNamespace(ls=AsyncMock(return_value=entries)), vikingdb=FakeVikingDB()
+    )
+    entry_result = await entry_service.ls(
+        "viking://resources", ctx=request_context, tags=["env=prod"], node_limit=0
+    )
+
+    simple_service = FSService(
+        viking_fs=SimpleNamespace(ls=AsyncMock(return_value=entries)), vikingdb=FakeVikingDB()
+    )
+    simple_result = await simple_service.ls(
+        "viking://resources",
+        ctx=request_context,
+        simple=True,
+        tags=["env=prod"],
+        node_limit=0,
+    )
+
+    assert [entry["uri"] for entry in entry_result] == [
+        "viking://resources/a.md",
+        "viking://resources/b.md",
+    ]
+    assert simple_result == ["viking://resources/a.md", "viking://resources/b.md"]
+
+
+@pytest.mark.asyncio
+async def test_tree_projects_directory_tags_from_abstract_and_overview_records(request_context):
+    directory = {"uri": "viking://resources/docs", "isDir": True}
+    viking_fs = SimpleNamespace(tree=AsyncMock(return_value=[directory]))
+
+    class FakeVikingDB:
+        async def filter(self, **_kwargs):
+            return [
+                {"uri": "viking://resources/docs", "level": 0, "search_tags": ["team=search"]},
+                {
+                    "uri": "viking://resources/docs",
+                    "level": 1,
+                    "search_tags": ["env=prod", "team=search"],
+                },
+                {"uri": "viking://resources/docs", "level": 2, "search_tags": ["ignored=true"]},
+            ]
+
+    service = FSService(viking_fs=viking_fs, vikingdb=FakeVikingDB())
+    result = await service.tree(
+        "viking://resources",
+        ctx=request_context,
+        tags=["team=search", "env=prod"],
+    )
+
+    assert result == [
+        {"uri": "viking://resources/docs", "isDir": True, "tags": ["team=search", "env=prod"]}
+    ]
+    assert viking_fs.tree.await_args.kwargs["node_limit"] is None
+
+
+@pytest.mark.asyncio
+async def test_tree_tag_filter_keeps_zero_node_limit_unbounded(request_context):
+    entries = [
+        {"uri": "viking://resources/a.md", "isDir": False},
+        {"uri": "viking://resources/b.md", "isDir": False},
+    ]
+    viking_fs = SimpleNamespace(tree=AsyncMock(return_value=entries))
+
+    class FakeVikingDB:
+        async def filter(self, **_kwargs):
+            return [
+                {"uri": entry["uri"], "level": 2, "search_tags": ["env=prod"]}
+                for entry in entries
+            ]
+
+    service = FSService(viking_fs=viking_fs, vikingdb=FakeVikingDB())
+    result = await service.tree(
+        "viking://resources", ctx=request_context, tags=["env=prod"], node_limit=0
+    )
+
+    assert [entry["uri"] for entry in result] == [
+        "viking://resources/a.md",
+        "viking://resources/b.md",
+    ]
+    assert viking_fs.tree.await_args.kwargs["node_limit"] is None
 
 
 @pytest.mark.asyncio

@@ -412,8 +412,11 @@ impl HttpClient {
         wait: bool,
         timeout: Option<f64>,
         processing_mode: &str,
+        tags: Vec<String>,
+        tag_mode: &str,
     ) -> Result<serde_json::Value> {
-        let body = Self::build_write_body(uri, content, mode, wait, timeout, processing_mode);
+        let mut body = Self::build_write_body(uri, content, mode, wait, timeout, processing_mode);
+        add_resource_tag_fields(&mut body, &tags, tag_mode);
         self.post("/api/v1/content/write", &body).await
     }
 
@@ -585,6 +588,8 @@ impl HttpClient {
         show_all_hidden: bool,
         node_limit: i32,
         extra_fields: &[String],
+        tags: &[String],
+        include_tags: bool,
     ) -> Result<serde_json::Value> {
         let mut params = vec![
             ("uri".to_string(), uri.to_string()),
@@ -598,6 +603,12 @@ impl HttpClient {
         for field in extra_fields {
             params.push(("extra_fields".to_string(), field.clone()));
         }
+        for tag in tags {
+            params.push(("tags".to_string(), tag.clone()));
+        }
+        if include_tags {
+            params.push(("include_tags".to_string(), "true".to_string()));
+        }
         self.get("/api/v1/fs/ls", &params).await
     }
 
@@ -610,6 +621,8 @@ impl HttpClient {
         node_limit: i32,
         level_limit: i32,
         extra_fields: &[String],
+        tags: &[String],
+        include_tags: bool,
     ) -> Result<serde_json::Value> {
         let mut params = vec![
             ("uri".to_string(), uri.to_string()),
@@ -621,6 +634,12 @@ impl HttpClient {
         ];
         for field in extra_fields {
             params.push(("extra_fields".to_string(), field.clone()));
+        }
+        for tag in tags {
+            params.push(("tags".to_string(), tag.clone()));
+        }
+        if include_tags {
+            params.push(("include_tags".to_string(), "true".to_string()));
         }
         self.get("/api/v1/fs/tree", &params).await
     }
@@ -749,15 +768,20 @@ impl HttpClient {
         ignore_case: bool,
         node_limit: i32,
         level_limit: i32,
+        tags: &[String],
+        include_tags: bool,
     ) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "uri": uri,
             "exclude_uri": exclude_uri,
             "pattern": pattern,
             "case_insensitive": ignore_case,
             "node_limit": node_limit,
             "level_limit": level_limit,
+            "tags": (!tags.is_empty()).then(|| tags),
+            "include_tags": include_tags.then_some(true),
         });
+        compact_request_body(&mut body);
         self.post("/api/v1/search/grep", &body).await
     }
 
@@ -767,15 +791,20 @@ impl HttpClient {
         uri: &str,
         node_limit: i32,
         extra_fields: Option<&[String]>,
+        tags: &[String],
+        include_tags: bool,
     ) -> Result<serde_json::Value> {
         let mut body = serde_json::json!({
             "pattern": pattern,
             "uri": uri,
             "node_limit": node_limit,
+            "tags": (!tags.is_empty()).then(|| tags),
+            "include_tags": include_tags.then_some(true),
         });
         if let Some(fields) = extra_fields {
             body["extra_fields"] = serde_json::json!(fields);
         }
+        compact_request_body(&mut body);
         self.post("/api/v1/search/glob", &body).await
     }
 
@@ -2258,7 +2287,7 @@ mod tests {
         let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
 
         client
-            .ls("viking://resources", false, false, "agent", 256, false, 1, &[])
+            .ls("viking://resources", false, false, "agent", 256, false, 1, &[], &[], false)
             .await
             .expect("ls request should succeed");
 
@@ -2384,7 +2413,7 @@ mod tests {
         let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
 
         client
-            .tree("viking://resources", "agent", 256, false, 1, 3, &[])
+            .tree("viking://resources", "agent", 256, false, 1, 3, &[], &[], false)
             .await
             .expect("tree request should succeed");
 
@@ -2392,6 +2421,92 @@ mod tests {
         assert!(request.starts_with("GET /api/v1/fs/tree?"));
         assert!(!request.contains("tz="));
         assert!(!request.contains("include_mod_time_iso="));
+    }
+
+    #[tokio::test]
+    async fn grep_omits_optional_tags_fields_when_not_requested() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+
+        client
+            .grep(
+                "viking://resources",
+                None,
+                "needle",
+                false,
+                10,
+                3,
+                &[],
+                false,
+            )
+            .await
+            .expect("plain grep request should succeed");
+
+        let request = request_rx.await.expect("request should be captured");
+        assert!(request.starts_with("POST /api/v1/search/grep "));
+        assert!(!request.contains(r#""tags""#));
+        assert!(!request.contains(r#""include_tags""#));
+    }
+
+    #[tokio::test]
+    async fn grep_sends_include_tags_only_when_requested() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+
+        client
+            .grep(
+                "viking://resources",
+                None,
+                "needle",
+                false,
+                10,
+                3,
+                &[],
+                true,
+            )
+            .await
+            .expect("grep tags projection request should succeed");
+
+        let request = request_rx.await.expect("request should be captured");
+        assert!(request.contains(r#""include_tags":true"#));
+    }
+
+    #[tokio::test]
+    async fn glob_omits_tags_when_not_requested() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+
+        client
+            .glob("**/*.md", "viking://resources", 10, None, &[], false)
+            .await
+            .expect("plain glob request should succeed");
+
+        let request = request_rx.await.expect("request should be captured");
+        assert!(request.starts_with("POST /api/v1/search/glob "));
+        assert!(!request.contains(r#""tags"#));
+        assert!(!request.contains(r#""include_tags"#));
+    }
+
+    #[tokio::test]
+    async fn glob_sends_tags_and_projection_when_requested() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+
+        client
+            .glob(
+                "**/*.md",
+                "viking://resources",
+                10,
+                Some(&["tags".to_string()]),
+                &["team=search".to_string(), "env=prod".to_string()],
+                true,
+            )
+            .await
+            .expect("tagged glob request should succeed");
+
+        let request = request_rx.await.expect("request should be captured");
+        assert!(request.contains(r#""tags":["team=search","env=prod"]"#));
+        assert!(request.contains(r#""include_tags":true"#));
     }
 
     #[tokio::test]

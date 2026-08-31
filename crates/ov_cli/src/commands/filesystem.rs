@@ -43,6 +43,7 @@ static ALL_FIELDS: &[FieldDef] = &[
     FieldDef { name: "locked", header: "LOCKED", alignment: FieldAlignment::Left },
     FieldDef { name: "id", header: "ID", alignment: FieldAlignment::Left },
     FieldDef { name: "count", header: "COUNT", alignment: FieldAlignment::Right },
+    FieldDef { name: "tags", header: "TAGS", alignment: FieldAlignment::Left },
     FieldDef { name: "abstract", header: "ABSTRACT", alignment: FieldAlignment::Left },
 ];
 
@@ -133,6 +134,12 @@ fn field_value(entry: &Value, field: &FieldDef) -> String {
             .and_then(Value::as_u64)
             .map(|c| c.to_string())
             .unwrap_or_else(|| "-".to_string()),
+        "tags" => obj
+            .and_then(|o| o.get("tags"))
+            .and_then(Value::as_array)
+            .map(|tags| tags.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(","))
+            .filter(|tags| !tags.is_empty())
+            .unwrap_or_else(|| "-".to_string()),
         "abstract" => entry_string(obj, "abstract")
             .map(|s| {
                 if is_directory_abstract_placeholder(s) {
@@ -167,6 +174,7 @@ pub async fn ls(
     output_format: OutputFormat,
     compact: bool,
     fields: Option<Vec<String>>,
+    tags: &[String],
 ) -> Result<()> {
     let extra = extra_fields_from(&fields);
     // When fields are requested we need entry objects (not URI strings) regardless of --simple.
@@ -181,6 +189,8 @@ pub async fn ls(
             show_all_hidden,
             node_limit,
             &extra,
+            tags,
+            fields.as_ref().is_some_and(|items| items.iter().any(|item| item == "tags")) || !tags.is_empty(),
         )
         .await?;
     output_filesystem_entries(&result, output_format, compact, false, simple, fields.as_deref());
@@ -199,6 +209,7 @@ pub async fn tree(
     compact: bool,
     simple: bool,
     fields: Option<Vec<String>>,
+    tags: &[String],
 ) -> Result<()> {
     let extra = extra_fields_from(&fields);
     let result = client
@@ -210,6 +221,8 @@ pub async fn tree(
             node_limit,
             level_limit,
             &extra,
+            tags,
+            fields.as_ref().is_some_and(|items| items.iter().any(|item| item == "tags")) || !tags.is_empty(),
         )
         .await?;
     output_filesystem_entries(&result, output_format, compact, true, simple, fields.as_deref());

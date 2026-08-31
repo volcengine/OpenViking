@@ -16,6 +16,7 @@ from openviking.storage.abstract_overview import (
     render_abstract_overview,
 )
 from openviking.storage.queuefs.semantic_dag import SemanticDagExecutor
+from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -64,6 +65,8 @@ class _FakeProcessor:
         self.summarized_files = []
         self.sync_calls = []
         self.vectorized_files = []
+        self.file_ingest_options = {}
+        self.directory_ingest_options = {}
 
     def _parse_overview_md(self, overview_content):
         results = {}
@@ -98,8 +101,11 @@ class _FakeProcessor:
         ctx=None,
         use_summary=False,
         ingest_options=None,
+        creator_acl_grant=None,
     ):
+        del creator_acl_grant
         self.vectorized_files.append(file_path)
+        self.file_ingest_options[file_path] = ingest_options
 
     async def _vectorize_directory(
         self,
@@ -109,7 +115,10 @@ class _FakeProcessor:
         overview,
         ctx=None,
         ingest_options=None,
+        creator_acl_grant=None,
     ):
+        del creator_acl_grant
+        self.directory_ingest_options[uri] = ingest_options
         return None
 
     async def _sync_topdown_recursive(
@@ -133,7 +142,6 @@ class _FakeProcessor:
 
 @pytest.mark.asyncio
 async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypatch):
-
     root_uri = "viking://resources/root"
     tree = {
         root_uri: [
@@ -187,6 +195,56 @@ async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypa
     overview = parse_abstract_overview(fake_fs._file_contents[f"{root_uri}/.overview.md"]).body
     assert "- a.txt: summary" in overview
     assert "- b.txt: old-b" in overview
+
+
+@pytest.mark.asyncio
+async def test_content_write_tags_apply_only_to_changed_file(monkeypatch):
+    root_uri = "viking://resources/root"
+    changed_uri = f"{root_uri}/a.txt"
+    fake_fs = _FakeVikingFS(
+        tree={
+            root_uri: [
+                {"name": "a.txt", "isDir": False},
+                {"name": "b.txt", "isDir": False},
+            ],
+        },
+        file_contents={
+            changed_uri: "new content",
+            f"{root_uri}/b.txt": "unchanged",
+            f"{root_uri}/.overview.md": render_abstract_overview(
+                ContextLevel.OVERVIEW,
+                root_uri,
+                "FILES:\n- a.txt: old-a\n- b.txt: old-b",
+                {},
+            ),
+            f"{root_uri}/.abstract.md": "old-abstract",
+        },
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
+    )
+
+    processor = _FakeProcessor(fake_fs)
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
+    tag_options = IngestOptions(search_tags=["team=search"])
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=ctx,
+        incremental_update=True,
+        target_uri=root_uri,
+        changes={"modified": [changed_uri]},
+        ingest_options=tag_options,
+        generation_trigger="content_write",
+    )
+
+    await executor.run(root_uri)
+
+    assert processor.file_ingest_options == {changed_uri: tag_options}
+    assert processor.directory_ingest_options[root_uri] == IngestOptions()
 
 
 @pytest.mark.asyncio

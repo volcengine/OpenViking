@@ -39,9 +39,7 @@ def _clean_memory_attrs(raw: str) -> dict[str, Any]:
     return attrs
 
 
-async def _tags_attr(
-    service: Any, uri: str, ctx: RequestContext, *, is_dir: bool
-) -> list[str]:
+async def _tags_attr(service: Any, uri: str, ctx: RequestContext, *, is_dir: bool) -> list[str]:
     vikingdb_manager = getattr(service, "vikingdb_manager", None)
     if not vikingdb_manager:
         return []
@@ -85,6 +83,8 @@ async def ls(
     extra_fields: Optional[list[str]] = Query(
         None, description="Extra fields to include: locked, id, count"
     ),
+    tags: list[str] | None = Query(None, description="Only include entries matching all k=v tags"),
+    include_tags: bool = Query(False, description="Include tags in each entry"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """List directory contents."""
@@ -105,6 +105,8 @@ async def ls(
             sort_by=sort_by,
             sort_order=sort_order,
             extra_fields=extra_fields,
+            tags=tags,
+            include_tags=include_tags,
         )
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
@@ -128,6 +130,8 @@ async def tree(
     extra_fields: Optional[list[str]] = Query(
         None, description="Extra fields to include: locked, id, count"
     ),
+    tags: list[str] | None = Query(None, description="Only include entries matching all k=v tags"),
+    include_tags: bool = Query(False, description="Include tags in each entry"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get directory tree."""
@@ -145,6 +149,8 @@ async def tree(
             node_limit=actual_node_limit,
             level_limit=level_limit,
             extra_fields=extra_fields,
+            tags=tags,
+            include_tags=include_tags,
         )
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
@@ -209,9 +215,7 @@ async def attrs(
             },
         }
         if result["context_type"] == "memory" and not stat_result.get("isDir", False):
-            result["attrs"]["memory"] = _clean_memory_attrs(
-                await service.fs.read(uri, ctx=_ctx)
-            )
+            result["attrs"]["memory"] = _clean_memory_attrs(await service.fs.read(uri, ctx=_ctx))
         return Response(status="ok", result=result)
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")

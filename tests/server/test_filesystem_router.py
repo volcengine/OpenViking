@@ -250,3 +250,26 @@ async def test_ls_user_container_lists_only_caller_space(app, client, service):
     assert response.status_code == 200, response.text
     names = {entry["name"] for entry in response.json()["result"]}
     assert names == {"alice"}
+
+
+@pytest.mark.asyncio
+async def test_ls_forwards_tags_to_filesystem_service(monkeypatch):
+    seen = {}
+
+    async def fake_ls(uri, **kwargs):
+        seen.update(uri=uri, **kwargs)
+        return []
+
+    monkeypatch.setattr(
+        filesystem,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(ls=fake_ls)),
+    )
+
+    await filesystem.ls(
+        uri="viking://resources",
+        tags=["team=search", "env=prod"],
+        _ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER),
+    )
+
+    assert seen["tags"] == ["team=search", "env=prod"]

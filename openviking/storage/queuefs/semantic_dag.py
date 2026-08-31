@@ -519,6 +519,19 @@ class SemanticDagExecutor:
         prefix = uri.rstrip("/") + "/"
         return any(path.startswith(prefix) for path in self._changed_paths)
 
+    def _ingest_options_for_file(self, file_path: str) -> IngestOptions:
+        if (
+            self._generation_trigger == "content_write"
+            and file_path not in self._changed_paths
+        ):
+            return IngestOptions()
+        return self._ingest_options
+
+    def _ingest_options_for_directory(self) -> IngestOptions:
+        if self._generation_trigger == "content_write":
+            return IngestOptions()
+        return self._ingest_options
+
     async def _check_file_content_changed(self, file_path: str) -> bool:
         if self._is_direct_incremental_update():
             return file_path in self._changed_paths
@@ -712,7 +725,7 @@ class SemanticDagExecutor:
                     summary_dict=summary_dict,
                     ctx=self._ctx,
                     use_summary=use_summary,
-                    ingest_options=self._ingest_options,
+                    ingest_options=self._ingest_options_for_file(file_path),
                     creator_acl_grant=self._creator_acl_grant(file_path),
                 )
             except Exception as e:
@@ -968,7 +981,7 @@ class SemanticDagExecutor:
                         abstract=abstract,
                         overview=overview,
                         ctx=self._ctx,
-                        ingest_options=self._ingest_options,
+                        ingest_options=self._ingest_options_for_directory(),
                         creator_acl_grant=self._creator_acl_grant(dir_uri),
                     )
                 except Exception as e:

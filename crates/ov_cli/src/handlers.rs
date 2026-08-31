@@ -1392,6 +1392,8 @@ pub async fn handle_write(
     wait: bool,
     timeout: Option<f64>,
     processing_mode: String,
+    tags: Vec<String>,
+    tag_mode: String,
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
@@ -1413,6 +1415,8 @@ pub async fn handle_write(
         wait,
         timeout,
         &processing_mode,
+        tags,
+        &tag_mode,
         ctx.output_format,
         ctx.compact,
     )
@@ -1641,6 +1645,7 @@ pub async fn handle_ls(
     show_all_hidden: bool,
     node_limit: i32,
     fields: Option<Vec<String>>,
+    tags: Vec<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![
@@ -1656,6 +1661,9 @@ pub async fn handle_ls(
     }
     if show_all_hidden {
         params.push("-a".to_string());
+    }
+    if !tags.is_empty() {
+        params.push(format!("--tags {}", tags.join(",")));
     }
     if let Some(fields) = &fields {
         params.push(format!("-f {}", fields.join(",")));
@@ -1680,6 +1688,7 @@ pub async fn handle_ls(
         ctx.output_format,
         ctx.compact,
         fields,
+        &tags,
     )
     .await
 }
@@ -1692,6 +1701,7 @@ pub async fn handle_tree(
     level_limit: i32,
     simple: bool,
     fields: Option<Vec<String>>,
+    tags: Vec<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![
@@ -1705,6 +1715,9 @@ pub async fn handle_tree(
     }
     if simple {
         params.push("-s".to_string());
+    }
+    if !tags.is_empty() {
+        params.push(format!("--tags {}", tags.join(",")));
     }
     if let Some(fields) = &fields {
         params.push(format!("-f {}", fields.join(",")));
@@ -1729,6 +1742,7 @@ pub async fn handle_tree(
         ctx.compact,
         simple,
         fields,
+        &tags,
     )
     .await
 }
@@ -1827,6 +1841,8 @@ pub async fn handle_grep(
     ignore_case: bool,
     node_limit: i32,
     level_limit: i32,
+    tags: Vec<String>,
+    fields: Option<Vec<String>>,
     ctx: CliContext,
 ) -> Result<()> {
     // Prevent grep from root directory to avoid excessive server load and timeouts
@@ -1847,6 +1863,12 @@ pub async fn handle_grep(
     if ignore_case {
         params.push("-i".to_string());
     }
+    if !tags.is_empty() {
+        params.push(format!("--tags {}", tags.join(",")));
+    }
+    if let Some(fields) = &fields {
+        params.push(format!("-f {}", fields.join(",")));
+    }
     params.push(format!("\"{}\"", pattern));
     print_command_echo("ov grep", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
@@ -1858,6 +1880,8 @@ pub async fn handle_grep(
         ignore_case,
         node_limit,
         level_limit,
+        &tags,
+        fields.as_ref().is_some_and(|items| items.iter().any(|item| item == "tags")),
         ctx.output_format,
         ctx.compact,
     )
@@ -1870,6 +1894,7 @@ pub async fn handle_glob(
     node_limit: i32,
     simple: bool,
     fields: Option<Vec<String>>,
+    tags: Vec<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![
@@ -1879,6 +1904,9 @@ pub async fn handle_glob(
     ];
     if simple {
         params.push("-s".to_string());
+    }
+    if !tags.is_empty() {
+        params.push(format!("--tags {}", tags.join(",")));
     }
     if let Some(fields) = &fields {
         params.push(format!("-f {}", fields.join(",")));
@@ -1894,6 +1922,7 @@ pub async fn handle_glob(
         ctx.compact,
         simple,
         fields,
+        &tags,
     )
     .await
 }
