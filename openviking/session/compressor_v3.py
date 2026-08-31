@@ -53,10 +53,6 @@ from openviking.session.memory.streaming_memory_updater import (
 from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.uri import generate_uri
-from openviking.session.skill.session_skill_context_provider import (
-    SESSION_SKILL_MEMORY_TYPE,
-    load_skill_extract_registry,
-)
 from openviking.session.train import (
     Case,
     ExperienceGradientContext,
@@ -879,8 +875,7 @@ class SessionCompressorV3:
             gradient_estimator=_NoopGradientEstimator(),
             policy_optimizer=PatchMergePolicyOptimizer(
                 viking_fs=viking_fs,
-                memory_type=SESSION_SKILL_MEMORY_TYPE,
-                memory_registry=load_skill_extract_registry(),
+                memory_type="skills",
             ),
             policy_updater=SkillPolicyUpdater(
                 skill_processor=self.skill_processor,
