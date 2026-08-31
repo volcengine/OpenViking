@@ -12,6 +12,7 @@ const manifest = JSON.parse(
   icon?: string;
   activation?: { onStartup?: boolean; onCapabilities?: string[] };
   contracts?: { tools?: string[] };
+  setup?: { providers?: Array<{ id?: string; envVars?: string[] }> };
   configSchema?: { properties?: Record<string, unknown> };
 };
 const packageJson = JSON.parse(
@@ -98,6 +99,14 @@ describe("OpenClaw 5.2 manifest contracts", () => {
   it("opts into startup and capability-triggered hook/tool activation", () => {
     expect(manifest.activation?.onStartup).toBe(true);
     expect(manifest.activation?.onCapabilities?.toSorted()).toEqual(["hook", "tool"]);
+  });
+
+  it("declares provider auth environment variables only in current setup metadata", () => {
+    expect(manifest).not.toHaveProperty("providerAuthEnvVars");
+    expect(manifest.setup?.providers).toContainEqual(expect.objectContaining({
+      id: "openviking",
+      envVars: ["OPENVIKING_API_KEY", "OPENVIKING_BASE_URL"],
+    }));
   });
 
   it("declares recall trace configuration schema keys", () => {

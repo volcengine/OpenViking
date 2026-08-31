@@ -42,12 +42,6 @@
       "cliCommand": "openviking"
     }
   ],
-  "providerAuthEnvVars": {
-    "openviking": [
-      "OPENVIKING_API_KEY",
-      "OPENVIKING_BASE_URL"
-    ]
-  },
   "skills": [
     "./skills/install-openviking-memory",
     "./skills/openviking-context-database",
