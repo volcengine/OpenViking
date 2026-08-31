@@ -6,6 +6,7 @@ import base64
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse
 
@@ -73,6 +74,44 @@ def _build_openai_client_kwargs(
     if extra_headers:
         kwargs["default_headers"] = extra_headers
     return kwargs
+
+
+class _StreamingResponse:
+    """Aggregate the first completion choice into the existing response shape."""
+
+    def __init__(self):
+        self.usage: Any = None
+        self.message = SimpleNamespace(content=None, reasoning_content=None, tool_calls=[])
+        self.choices = [SimpleNamespace(message=self.message, finish_reason=None)]
+        self._tool_calls: Dict[int, Any] = {}
+
+    def add_chunk(self, chunk) -> None:
+        # The final usage chunk has no choices; some providers omit usage entirely.
+        if getattr(chunk, "usage", None) is not None:
+            self.usage = chunk.usage
+        for choice in chunk.choices:
+            if choice.index != 0:
+                continue
+            if choice.finish_reason is not None:
+                self.choices[0].finish_reason = choice.finish_reason
+            delta = choice.delta
+            if delta is None:
+                continue
+            for field in ("content", "reasoning_content"):
+                value = getattr(delta, field, None)
+                if value is not None:
+                    setattr(self.message, field, (getattr(self.message, field) or "") + value)
+            for tool in delta.tool_calls or []:
+                if tool.index not in self._tool_calls:
+                    self._tool_calls[tool.index] = SimpleNamespace(
+                        id="", function=SimpleNamespace(name="", arguments="")
+                    )
+                target = self._tool_calls[tool.index]
+                target.id += tool.id or ""
+                if tool.function is not None:
+                    target.function.name += tool.function.name or ""
+                    target.function.arguments += tool.function.arguments or ""
+        self.message.tool_calls = [self._tool_calls[i] for i in sorted(self._tool_calls)]
 
 
 class OpenAIVLM(VLMBase):
@@ -210,11 +249,33 @@ class OpenAIVLM(VLMBase):
 
             return VLMResponse(
                 content=message.content,
+                reasoning_content=getattr(message, "reasoning_content", None),
                 tool_calls=self._parse_tool_calls(message),
                 finish_reason=choice.finish_reason or "stop",
                 usage=usage,
             )
         return message.content or ""
+
+    def _apply_stream_options(self, kwargs: Dict[str, Any]) -> None:
+        # Raw-body overrides must also reach the SDK, which chooses its response
+        # parser from this keyword rather than from the serialized HTTP body.
+        kwargs["stream"] = kwargs.get("extra_body", {}).pop("stream", self.stream)
+        if kwargs["stream"]:
+            kwargs["stream_options"] = {"include_usage": True}
+
+    def _collect_streaming_response(self, stream):
+        response = _StreamingResponse()
+        with stream:
+            for chunk in stream:
+                response.add_chunk(chunk)
+        return response
+
+    async def _collect_streaming_response_async(self, stream):
+        response = _StreamingResponse()
+        async with stream:
+            async for chunk in stream:
+                response.add_chunk(chunk)
+        return response
 
     def _build_text_kwargs(
         self,
@@ -242,6 +303,7 @@ class OpenAIVLM(VLMBase):
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
+        self._apply_stream_options(kwargs)
         return kwargs
 
     def _build_vision_kwargs(
@@ -280,6 +342,7 @@ class OpenAIVLM(VLMBase):
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
+        self._apply_stream_options(kwargs)
         return kwargs
 
     def _extract_completion_content(self, response, elapsed: float) -> str:
@@ -308,6 +371,8 @@ class OpenAIVLM(VLMBase):
         def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
             response = client.chat.completions.create(**kwargs)
+            if kwargs.get("stream"):
+                response = self._collect_streaming_response(response)
             elapsed = time.perf_counter() - t0
             if tools is not None:
                 self._update_token_usage_from_response(response, duration_seconds=elapsed)
@@ -338,6 +403,8 @@ class OpenAIVLM(VLMBase):
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
             response = await client.chat.completions.create(**kwargs)
+            if kwargs.get("stream"):
+                response = await self._collect_streaming_response_async(response)
             elapsed = time.perf_counter() - t0
             if tools is not None:
                 self._update_token_usage_from_response(response, duration_seconds=elapsed)
@@ -426,6 +493,8 @@ class OpenAIVLM(VLMBase):
         def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
             response = client.chat.completions.create(**kwargs)
+            if kwargs.get("stream"):
+                response = self._collect_streaming_response(response)
             elapsed = time.perf_counter() - t0
             if tools is not None:
                 self._update_token_usage_from_response(response, duration_seconds=elapsed)
@@ -458,6 +527,8 @@ class OpenAIVLM(VLMBase):
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
             response = await client.chat.completions.create(**kwargs)
+            if kwargs.get("stream"):
+                response = await self._collect_streaming_response_async(response)
             elapsed = time.perf_counter() - t0
             if tools is not None:
                 self._update_token_usage_from_response(response, duration_seconds=elapsed)

@@ -716,6 +716,12 @@ LiteLLM 的 Bedrock bearer-token API-key 鉴权，请设置 `forward_api_key=tru
 
 > **注意**: OpenAI SDK 需要 `stream=true` 才能正确解析 SSE 响应。使用强制返回 SSE 格式的 provider 时，必须将此选项设置为 `true`。
 
+对于使用 `OpenAIVLM` 的后端（`openai`、`azure`、`kimi`、`glm`），此设置作用于
+文本和图片补全，也包括工具调用。OpenViking 在内部合并流式分片后返回完整结果，
+调用方仍需等待整次补全结束。流式请求附带 `stream_options: {"include_usage": true}`
+以获取 token 用量；provider 不返回 usage 时，仍返回结果，但不记录该次用量。
+独立的 Codex Responses、VolcEngine 和 LiteLLM 实现不受此后端流式支持的控制。
+
 **音视频理解**
 
 音频和视频理解是当前 VLM 的可选能力，复用相同的 provider、模型、凭据、client、请求超时、重试、请求头、最大输出 token、故障切换链路和 token 统计。通过嵌套的 `vlm.media` 参数启用，不再单独配置媒体模型。

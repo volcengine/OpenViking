@@ -748,6 +748,14 @@ For OpenAI-compatible providers that return SSE (Server-Sent Events) format resp
 
 > **Note**: The OpenAI SDK requires `stream=true` to properly parse SSE responses. When using providers that force SSE format, you must set this option to `true`.
 
+For backends using `OpenAIVLM` (`openai`, `azure`, `kimi`, and `glm`), this applies to
+text and vision completions, including tool calls. OpenViking consumes the stream
+internally and returns a complete result; callers still await the full completion.
+Streaming requests include `stream_options: {"include_usage": true}` for token
+accounting. If the provider omits usage, the result is still returned without usage
+counts. The separate Codex Responses and VolcEngine/LiteLLM implementations are not
+controlled by this backend's streaming support.
+
 **Audio/video understanding**
 
 Audio and video understanding is an optional capability of the configured VLM. It uses the same provider, model, credentials, client, request timeout, retries, headers, maximum output tokens, failover chain, and token accounting as other VLM calls. Enable it with the nested `vlm.media` controls; there is no separate media model configuration.
