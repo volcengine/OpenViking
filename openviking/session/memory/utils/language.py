@@ -21,7 +21,12 @@ _JAPANESE_KANA_MIN_CHARS = 3
 _STRONG_DOMINANT_MIN_CHARS = 10
 _STRONG_DOMINANT_RATIO = 0.95
 _PRIMARY_LANGUAGES = {"zh-CN", "en"}
-_URI_LANGUAGE_NOISE_RE = re.compile(r"\b(?:viking|https?)://[^\s<>\]\)\"']+")
+# Bare import paths are machine tokens too: repeated .com domains otherwise
+# count as the Portuguese stopword "com" in code skeletons.
+_URI_LANGUAGE_NOISE_RE = re.compile(
+    r"\b(?:(?:viking|https?)://|(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}/)"
+    r"[^\s<>\]\)\"'`]+"
+)
 
 _LATIN_STOPWORDS = {
     "en": set(
@@ -373,7 +378,7 @@ def resolve_output_language_from_text(
 
 
 def strip_language_detection_noise(text: str) -> str:
-    """Remove URI-like machine tokens that should not affect output language."""
+    """Remove URIs and bare domain paths that should not affect output language."""
     return _URI_LANGUAGE_NOISE_RE.sub(" ", text or "")
 
 
