@@ -970,6 +970,28 @@ def test_enforce_merge_group_peer_id_rewrites_merged_output_scope():
     assert op.uris == ["viking://user/u/peers/conv-42/memories/notes/peer_note.md"]
 
 
+def test_enforce_merge_group_reapplies_portable_uri_without_changing_memory_name():
+    op = ResolvedOperation(
+        old_memory_file_content=None,
+        memory_fields={"note_name": "Desktop /new", "content": "peer content"},
+        memory_type="notes",
+        uris=["viking://user/u/memories/notes/temporary.md"],
+    )
+
+    enforce_merge_group_peer_id(
+        [op],
+        peer_id="conv-42",
+        memory_type="notes",
+        registry=_registry(),
+        ctx=_ctx(),
+    )
+
+    assert op.memory_fields["note_name"] == "Desktop /new"
+    assert op.uris == [
+        "viking://user/u/peers/conv-42/memories/notes/Desktop~ov~02970756851a43cf/new.md"
+    ]
+
+
 def test_enforce_merge_group_self_scope_removes_peer_id():
     op = ResolvedOperation(
         old_memory_file_content=None,
