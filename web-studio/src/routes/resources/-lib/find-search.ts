@@ -1,12 +1,9 @@
 import type { GroupedFindResult } from '#/lib/retrieval'
+import { parseOkfSidecarMarkdown } from '#/lib/okf-markdown'
+import { retrievalResultNameFromUri } from '#/lib/viking-uri'
 
 import type { VikingFsEntry } from '../-types/viking-fm'
-import {
-  fileNameFromUri,
-  normalizeDirUri,
-  normalizeFileUri,
-  parentUri,
-} from './normalize'
+import { normalizeDirUri, normalizeFileUri, parentUri } from './normalize'
 
 const VIKING_URI_PREFIX = 'viking://'
 
@@ -125,7 +122,7 @@ export function retrievalItemsToEntries(
   return items.map((item) => ({
     uri: item.uri,
     name:
-      fileNameFromUri(item.uri) +
+      retrievalResultNameFromUri(item.uri) +
       (item.line === undefined ? '' : `:${item.line}`),
     isDir: item.uri.endsWith('/'),
     abstract: item.abstract,
@@ -138,4 +135,26 @@ export function retrievalItemsToEntries(
     modTime: '',
     modTimestamp: null,
   }))
+}
+
+export function resourceEntryAbstractForDisplay(
+  entry: Pick<VikingFsEntry, 'abstract' | 'isDir' | 'uri'>,
+): string {
+  const content = entry.abstract.trim()
+  if (!content || !entry.isDir) return content
+
+  const looksLikeGeneratedSidecar =
+    /^---\r?\ndirectory:\s*viking:\/\//.test(content) &&
+    /\r?\ngenerated_by:/.test(content)
+  if (!looksLikeGeneratedSidecar) return content
+
+  const document = parseOkfSidecarMarkdown(
+    `${normalizeDirUri(entry.uri)}.abstract.md`,
+    content,
+  )
+  if (document) return document.body.trim()
+
+  // Directory abstracts returned in list/search payloads may be clipped before
+  // the closing `---`. Do not surface that partial YAML as a human summary.
+  return ''
 }

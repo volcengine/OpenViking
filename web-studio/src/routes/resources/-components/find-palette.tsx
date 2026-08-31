@@ -10,19 +10,17 @@ import {
 import { useTranslation } from 'react-i18next'
 
 import { cn } from '#/lib/utils'
+import { retrievalResultNameFromUri } from '#/lib/viking-uri'
 import { useTransientScrollbar } from '#/hooks/use-transient-scrollbar'
 import { useRetrievalQuery } from '#/routes/retrieval/-hooks/use-retrieval-query'
 import type { RetrievalMode } from '#/routes/retrieval/-types/retrieval'
 
-import {
-  fileNameFromUri,
-  normalizeDirUri,
-  parentUri as getParentUri,
-} from '../-lib/normalize'
+import { normalizeDirUri, parentUri as getParentUri } from '../-lib/normalize'
 import {
   filterResourceSearchEntries,
   getResourceSearchSpec,
   normalizeGlobPattern,
+  resourceEntryAbstractForDisplay,
   retrievalItemsToEntries,
 } from '../-lib/find-search'
 import {
@@ -56,7 +54,7 @@ const KEY_ESCAPE_LABEL = 'esc'
 const KEY_TAB_LABEL = 'Tab'
 
 function displayName(uri: string): { name: string; parent: string } {
-  const name = fileNameFromUri(uri)
+  const name = retrievalResultNameFromUri(uri)
   const dir = getParentUri(uri)
   const segments = dir.replace(/\/$/, '').split('/').filter(Boolean)
   const parent = segments.length > 1 ? segments.slice(-1)[0] : dir
@@ -735,6 +733,7 @@ function DirResultList({
     >
       {items.map((entry, i) => {
         const { name, parent } = displayName(entry.uri)
+        const abstract = resourceEntryAbstractForDisplay(entry)
         const isActive = i === activeIndex
         const EntryIcon = entry.isDir ? FolderIcon : FileIcon
 
@@ -769,7 +768,7 @@ function DirResultList({
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-medium">{name}</div>
                 <div className="mt-0.5 truncate text-xs text-muted-foreground/80">
-                  {entry.abstract.trim() ? entry.abstract : parent}
+                  {abstract || parent}
                 </div>
               </div>
             </button>
