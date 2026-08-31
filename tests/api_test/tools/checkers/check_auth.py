@@ -1,6 +1,3 @@
-auth_path = "/usr/local/lib/python3.11/site-packages/openviking/server/auth.py"
-print(f"Reading {auth_path}...")
-print("=" * 80)
+from source_reader import read_source
 
-with open(auth_path, "r") as f:
-    print(f.read())
+print(read_source("openviking/server/auth.py", "openviking.server.auth"))
