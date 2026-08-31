@@ -217,9 +217,15 @@ def _build_final_response_from_stream_events(
 
 
 class CodexCompletionsAdapter:
-    def __init__(self, client_factory: Callable[[], Any], model: str):
+    def __init__(
+        self,
+        client_factory: Callable[[], Any],
+        model: str,
+        auth_retry_client_factory: Optional[Callable[[], Any]] = None,
+    ):
         self._client_factory = client_factory
         self._model = model
+        self._auth_retry_client_factory = auth_retry_client_factory
 
     def _create_response(self, **kwargs) -> Any:
         client = self._client_factory()
@@ -253,7 +259,16 @@ class CodexCompletionsAdapter:
         collected_text_deltas: List[str] = []
         has_function_calls = False
         completed_response = None
-        stream = client.responses.create(**response_kwargs, stream=True)
+        try:
+            stream = client.responses.create(**response_kwargs, stream=True)
+        except Exception as exc:
+            status_code = getattr(exc, "status_code", None)
+            if status_code is None:
+                status_code = getattr(getattr(exc, "response", None), "status_code", None)
+            if status_code != 401 or self._auth_retry_client_factory is None:
+                raise
+            client = self._auth_retry_client_factory()
+            stream = client.responses.create(**response_kwargs, stream=True)
         try:
             for event in stream:
                 event_type = getattr(event, "type", "")
