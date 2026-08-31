@@ -14,7 +14,7 @@ from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever, Re
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.abstract_overview import render_abstract_overview
 from openviking.utils.token_estimation import estimate_text_tokens
-from openviking_cli.retrieve.types import ContextType, TypedQuery
+from openviking_cli.retrieve.types import ContextType, TraceEventType, TypedQuery
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import RerankConfig, RetrievalConfig
 
@@ -274,6 +274,87 @@ async def test_retrieve_uses_rerank_scores_in_thinking_mode(monkeypatch):
     assert storage.search_calls[0]["level"] == [0, 1]
 
 
+@pytest.mark.parametrize(("score_gte", "expected_count"), [(False, 1), (True, 2)])
+def test_score_distribution_matches_threshold_mode(score_gte, expected_count):
+    distribution = HierarchicalRetriever._score_distribution(
+        [("equal", 0.5), ("above", 0.6)],
+        threshold=0.5,
+        score_gte=score_gte,
+    )
+
+    assert distribution["above_threshold"] == expected_count
+    assert distribution["threshold_operator"] == (">=" if score_gte else ">")
+
+
+@pytest.mark.asyncio
+async def test_thinking_mode_returns_actual_directories_and_deterministic_trace(monkeypatch):
+    fake_client = FakeRerankClient([0.95, 0.05, 0.11, 0.95])
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
+        lambda config: fake_client,
+    )
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=DummyEmbedder(),
+        rerank_config=_config(),
+    )
+    query = _query()
+    query.target_directories = ["viking://resources"]
+
+    result = await retriever.retrieve(query, ctx=_ctx(), limit=2, mode=RetrieverMode.THINKING)
+
+    assert result.searched_directories == [
+        "viking://resources/root-a",
+        "viking://resources/root-b",
+        "viking://resources",
+    ]
+
+    events = result.thinking_trace.events
+    directory_results = [
+        event.data["uri"]
+        for event in events
+        if event.event_type == TraceEventType.SEARCH_DIRECTORY_RESULT
+    ]
+    assert directory_results == result.searched_directories
+
+    selected = next(
+        event for event in events if event.event_type == TraceEventType.CANDIDATE_SELECTED
+    )
+    assert selected.data == {
+        "directory": "viking://resources",
+        "count": 2,
+        "candidates": [
+            {"uri": "viking://resources/file-a", "score": pytest.approx(0.11)},
+            {"uri": "viking://resources/file-b", "score": pytest.approx(0.95)},
+        ],
+    }
+
+    convergence = next(
+        event for event in events if event.event_type == TraceEventType.CONVERGENCE_CHECK
+    )
+    assert convergence.data == {
+        "round": 1,
+        "candidate_pool_size": 2,
+        "topk_count": 2,
+        "stable_topk_rounds": 0,
+        "stagnant_rounds": 0,
+        "queued_directories": 0,
+    }
+    assert result.thinking_trace.get_statistics() == {
+        "total_events": len(events),
+        "duration_seconds": pytest.approx(events[-1].timestamp, abs=0.0001),
+        "directories_searched": 3,
+        "candidates_collected": 2,
+        "candidates_excluded": 0,
+        "convergence_rounds": 1,
+    }
+    assert all(
+        event.data["fallback_to_vector_scores"] is False
+        for event in events
+        if event.event_type == TraceEventType.RERANK_SCORES
+    )
+
+
 @pytest.mark.asyncio
 async def test_rerank_scores_preserves_fallbacks_for_empty_documents(monkeypatch):
     fake_client = FakeRerankClient([0.95, 0.05])
@@ -366,10 +447,12 @@ async def test_retrieve_falls_back_to_vector_scores_when_rerank_returns_none(mon
         lambda config: fake_client,
     )
 
-    storage = QuickSearchStorage([
-        _result("viking://resources/a/deep-a.md", 0.2, abstract="deep A"),
-        _result("viking://resources/b/deep-b.md", 0.8, abstract="deep B"),
-    ])
+    storage = QuickSearchStorage(
+        [
+            _result("viking://resources/a/deep-a.md", 0.2, abstract="deep A"),
+            _result("viking://resources/b/deep-b.md", 0.8, abstract="deep B"),
+        ]
+    )
     storage.acl_manager = object()
 
     async def no_hierarchical_children(*_args, **_kwargs):
@@ -390,6 +473,11 @@ async def test_retrieve_falls_back_to_vector_scores_when_rerank_returns_none(mon
     ]
     assert [call["level"] for call in storage.search_calls] == [[0, 1], [2]]
     assert fake_client.calls
+    assert all(
+        event.data["fallback_to_vector_scores"] is True
+        for event in result.thinking_trace.events
+        if event.event_type == TraceEventType.RERANK_SCORES
+    )
 
 
 @pytest.mark.asyncio
