@@ -32,8 +32,6 @@ async function withConfigFile(body, fn, env = {}, cliConfig = null) {
   delete process.env.OPENVIKING_WORKSPACE_PEER;
   delete process.env.OPENVIKING_RECALL_PEER_SCOPE;
   delete process.env.OPENVIKING_SCORE_THRESHOLD;
-  delete process.env.OPENVIKING_CLI_CONFIG_FILE;
-  delete process.env.OPENVIKING_CONFIG_FILE;
   for (const [key, value] of Object.entries(env)) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
