@@ -16,6 +16,8 @@ def test_message_estimated_tokens_is_cjk_aware():
     msg = Message(id="msg-cjk", role="user", parts=[TextPart("\u4f60\u597d\u4e16\u754c")])
 
     assert msg.estimated_tokens == 6
+    assert estimate_text_tokens("abcd") == 1
+    assert estimate_text_tokens("\U0001f600") == 2
 
 
 def test_truncate_text_to_token_budget_preserves_head_and_tail():

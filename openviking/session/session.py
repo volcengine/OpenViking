@@ -761,7 +761,7 @@ class Session:
         # counter stays consistent across restarts and is also backfilled for
         # legacy sessions whose .meta.json predates these fields. O(n) once,
         # subsequent add_message() maintains it in O(1).
-        self._rebuild_pending_tokens()
+        await asyncio.to_thread(self._rebuild_pending_tokens)
 
         self._loaded = True
 
