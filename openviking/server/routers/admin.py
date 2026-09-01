@@ -330,7 +330,7 @@ async def list_accounts(
     page: int = Query(1, ge=1, description="1-based page number (requires limit)"),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """List accounts in lexicographic order. `name` supports wildcard (* and ?) matching."""
+    """List accounts in creation order. `name` supports wildcard (* and ?) matching."""
     manager = _get_api_key_manager(request)
     accounts = manager.get_accounts(name_filter=name, limit=limit, page=page)
     return Response(status="ok", result=accounts)
@@ -509,7 +509,7 @@ async def list_users(
     page: int = Query(1, ge=1, description="1-based page number (requires limit)"),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """List users in an account, ordered lexicographically by user ID."""
+    """List users in an account, in creation order. `name` supports wildcard (* and ?) matching."""
     _check_account_access(ctx, account_id)
     manager = _get_api_key_manager(request)
     expose_key = _should_expose_user_key(request)

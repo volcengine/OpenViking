@@ -712,21 +712,19 @@ class LegacyAPIKeyManager:
         limit: int | None = None,
         page: int = 1,
     ) -> list:
-        """List accounts in lexicographic order of account ID.
+        """List accounts in creation (insertion) order.
 
-        ``name_filter`` uses the same wildcard (``*`` and ``?``) matching as
-        ``get_users``. Pagination is opt-in: ``limit=None`` returns every
-        matching account so internal callers that rely on the full account set
-        are unaffected; when ``limit`` is set, ``page`` (1-based) selects the
-        slice.
+        ``name_filter`` uses wildcard (``*`` and ``?``) matching. Pagination is
+        opt-in: ``limit=None`` returns every matching account so internal
+        callers that rely on the full account set are unaffected; when ``limit``
+        is set, ``page`` (1-based) selects the slice.
         """
         result = []
-        for account_id in sorted(self._accounts):
+        for account_id, info in self._accounts.items():
             # Apply name filter if provided (fnmatch wildcard matching)
             if name_filter and not fnmatch.fnmatch(account_id, name_filter):
                 continue
 
-            info = self._accounts[account_id]
             result.append(
                 {
                     "account_id": account_id,
@@ -745,7 +743,7 @@ class LegacyAPIKeyManager:
         expose_key: bool = True,
         page: int = 1,
     ) -> list:
-        """List users in an account, ordered lexicographically by user ID.
+        """List users in an account in creation (insertion) order.
 
         Pagination is opt-in via ``limit``/``page`` (1-based); ``limit=None``
         returns every matching user.
@@ -755,8 +753,7 @@ class LegacyAPIKeyManager:
             raise NotFoundError(account_id, "account")
 
         result = []
-        for user_id in sorted(account.users):
-            user_info = account.users[user_id]
+        for user_id, user_info in account.users.items():
             if user_info.get("deletion"):
                 continue
 

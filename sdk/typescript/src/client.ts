@@ -1091,7 +1091,7 @@ export class OpenVikingClient {
       }),
     });
   }
-  /** List tenant accounts, ordered by account ID. `name` supports wildcard (* and ?) matching. */
+  /** List tenant accounts, in creation order. `name` supports wildcard (* and ?) matching. */
   adminListAccounts(
     options: { name?: string; limit?: number; page?: number } = {},
   ): Promise<unknown[]> {
@@ -1130,7 +1130,7 @@ export class OpenVikingClient {
       },
     );
   }
-  /** List users in an account, ordered by user ID. `name` supports wildcard (* and ?) matching. */
+  /** List users in an account, in creation order. `name` supports wildcard (* and ?) matching. */
   adminListUsers(
     accountId: string,
     options: { limit?: number; name?: string; role?: string; page?: number } = {},

@@ -368,7 +368,7 @@ ov --sudo admin create-account acme-private --admin alice \
 
 **处理流程：**
 1. 验证请求者具有 ROOT 权限
-2. 调用 API Key Manager 获取所有账户列表（按账户 ID 字典序排列）
+2. 调用 API Key Manager 获取所有账户列表（按创建顺序排列）
 3. 应用可选的 `name` 过滤
 4. 应用可选的 `limit`/`page` 分页
 5. 返回包含账户 ID、创建时间和用户数量的列表
@@ -386,7 +386,7 @@ ov --sudo admin create-account acme-private --admin alice \
 | limit | int | 否 | null | 每页数量（≥1）。省略则返回所有匹配项 |
 | page | int | 否 | 1 | 从 1 开始的页码；仅在设置了 `limit` 时生效 |
 
-结果始终按账户 ID 字典序返回。
+结果按创建顺序返回。
 
 #### 3. 使用示例
 
@@ -703,7 +703,7 @@ ov admin register-user acme bob-private --role user \
 
 **处理流程：**
 1. 验证请求者具有 ROOT 权限，或为本账户的 ADMIN
-2. 调用 API Key Manager 获取活跃用户列表（按用户 ID 字典序排列）
+2. 调用 API Key Manager 获取活跃用户列表（按创建顺序排列）
 3. 应用可选的过滤条件（name、role）
 4. 应用可选的 `limit`/`page` 分页
 5. 返回用户列表（trusted 模式下不包含 user_key）
@@ -726,7 +726,7 @@ ov admin register-user acme bob-private --role user \
 | page | int | 否 | 1 | 从 1 开始的页码；仅在设置了 `limit` 时生效 |
 
 **说明：**
-- 结果始终按用户 ID 字典序返回
+- 结果按创建顺序返回
 - ADMIN 只能列出自己所属的 account 中的用户
 - 在 `trusted` 模式下，响应中不会包含 `user_key` 字段
 - 用户删除开始后，不再出现在该列表中

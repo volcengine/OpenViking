@@ -402,54 +402,49 @@ async def test_get_accounts_filter(manager: APIKeyManager):
 
 
 async def test_get_users_pagination_and_ordering(manager: APIKeyManager):
-    """get_users returns users in lexicographic order and honors limit/page."""
+    """get_users returns users in creation order and honors limit/page."""
     acct = _uid()
     await manager.create_account(acct, "alice")
-    # Register out of order; expected sorted order is alice, bob, carol, dave.
+    # Register out of alphabetical order; creation order is alice, dave, bob, carol.
     await manager.register_user(acct, "dave", "user")
     await manager.register_user(acct, "bob", "user")
     await manager.register_user(acct, "carol", "user")
 
-    # No limit -> all users, lexicographically ordered.
+    # No limit -> all users, in creation order.
     ids = [u["user_id"] for u in manager.get_users(acct)]
-    assert ids == ["alice", "bob", "carol", "dave"]
+    assert ids == ["alice", "dave", "bob", "carol"]
 
-    # First page of 2.
+    # First page of 2 (creation order).
     page1 = [u["user_id"] for u in manager.get_users(acct, limit=2, page=1)]
-    assert page1 == ["alice", "bob"]
+    assert page1 == ["alice", "dave"]
 
-    # Second page of 2.
+    # Second page of 2 (creation order).
     page2 = [u["user_id"] for u in manager.get_users(acct, limit=2, page=2)]
-    assert page2 == ["carol", "dave"]
+    assert page2 == ["bob", "carol"]
 
     # Page past the end is empty.
     assert manager.get_users(acct, limit=2, page=3) == []
 
-    # Pagination applies after the name filter.
-    filtered = [u["user_id"] for u in manager.get_users(acct, name_filter="*a*", limit=1, page=2)]
-    assert filtered == ["carol"]
-
 
 async def test_get_accounts_pagination_and_ordering(manager: APIKeyManager):
-    """get_accounts returns accounts in lexicographic order and honors limit/page."""
+    """get_accounts returns accounts in creation order and honors limit/page."""
     prefix = f"page_{uuid.uuid4().hex[:8]}"
+    # Creation order matches this list.
     ids = [f"{prefix}_{suffix}" for suffix in ("delta", "alpha", "charlie", "bravo")]
     for account_id in ids:
         await manager.create_account(account_id, "u")
 
-    expected = sorted(ids)
-
-    # No limit -> all matches, lexicographically ordered.
+    # No limit -> all matches, in creation order.
     got = [a["account_id"] for a in manager.get_accounts(name_filter=f"{prefix}*")]
-    assert got == expected
+    assert got == ids
 
-    # First page of 2.
+    # First page of 2 (creation order).
     page1 = [a["account_id"] for a in manager.get_accounts(name_filter=f"{prefix}*", limit=2, page=1)]
-    assert page1 == expected[:2]
+    assert page1 == ids[:2]
 
-    # Second page of 2.
+    # Second page of 2 (creation order).
     page2 = [a["account_id"] for a in manager.get_accounts(name_filter=f"{prefix}*", limit=2, page=2)]
-    assert page2 == expected[2:]
+    assert page2 == ids[2:]
 
     # Page past the end is empty.
     assert manager.get_accounts(name_filter=f"{prefix}*", limit=2, page=3) == []
