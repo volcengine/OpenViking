@@ -21,6 +21,7 @@ class _FakeFS:
         self.files = dict(files)
         self._async_agfs = self
         self._lock = asyncio.Lock()
+        self.lock_timeouts = []
 
     async def read_file(self, uri, ctx=None):
         if uri not in self.files:
@@ -33,7 +34,8 @@ class _FakeFS:
     def _uri_to_path(self, uri, ctx=None):
         return uri
 
-    async def pathlock_acquire_exact_batch(self, paths):
+    async def pathlock_acquire_exact_batch(self, paths, timeout_secs=0.0):
+        self.lock_timeouts.append(timeout_secs)
         await self._lock.acquire()
         return {"paths": paths}
 
@@ -66,6 +68,7 @@ async def test_pending_increment_and_threshold_decision_share_one_snapshot():
         ctx=None,
         overview_sample_limit=32,
         refresh_ratio=0.10,
+        lock_timeout_secs=1.0,
     )
     second = await plan_abstract_overview_refresh(
         viking_fs=fs,
@@ -78,6 +81,7 @@ async def test_pending_increment_and_threshold_decision_share_one_snapshot():
 
     assert first.action is FreshnessAction.MARK_PENDING
     assert second.action is FreshnessAction.REFRESH_NOW
+    assert fs.lock_timeouts == [1.0, 0.0]
     for raw in fs.files.values():
         assert parse_abstract_overview(raw).metadata["freshness"][
             "pending_child_changes"

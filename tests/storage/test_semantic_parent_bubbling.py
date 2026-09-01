@@ -164,4 +164,5 @@ async def test_parent_refresh_preserves_semantic_roots(
 
     plan.assert_awaited_once()
     assert plan.await_args.kwargs["dir_uri"] == expected_parent
+    assert plan.await_args.kwargs["lock_timeout_secs"] == 1.0
     get_queue_manager.assert_not_called()

@@ -277,6 +277,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 force_refresh=False,
                 overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
                 refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
+                lock_timeout_secs=1.0,
             )
         except LockAcquisitionError:
             logger.info(

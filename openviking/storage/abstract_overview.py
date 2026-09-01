@@ -488,6 +488,7 @@ async def plan_abstract_overview_refresh(
     force_refresh: bool = False,
     overview_sample_limit: int = 32,
     refresh_ratio: float = 0.10,
+    lock_timeout_secs: float = 0.0,
 ) -> FreshnessDecision:
     """Atomically record direct-child changes and choose refresh scheduling.
 
@@ -530,7 +531,9 @@ async def plan_abstract_overview_refresh(
             force_refresh=force_refresh,
         )
     lock_paths = [viking_fs._uri_to_path(uri, ctx=ctx) for uri in uris]
-    lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(lock_paths)
+    lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(
+        lock_paths, timeout_secs=lock_timeout_secs
+    )
     try:
         documents = [await _read_existing_document(viking_fs, uri, ctx) for uri in uris]
         baselines = [
