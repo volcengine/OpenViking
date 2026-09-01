@@ -253,6 +253,7 @@ async def find(
     level: Optional[List[int]] = None,
     context_type: Optional[Union[str, List[str]]] = None,
     read_content: bool = False,
+    exclude_generated_summaries: bool = True,
 ) -> str:
     """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, and score."""
     service = get_service()
@@ -268,6 +269,8 @@ async def find(
         filter=_resolve_context_type_filter(context_type),
         level=level,
     )
+    if exclude_generated_summaries:
+        result = _exclude_generated_summaries(result)
     return await _format_search_result(result, service=service, ctx=ctx, read_content=read_content)
 
 
@@ -371,6 +374,23 @@ async def search(
         level=level,
     )
     return await _format_search_result(result, service=service, ctx=ctx, read_content=read_content)
+
+
+_GENERATED_SUMMARY_SUFFIXES = ("/.overview.md", "/.abstract.md")
+
+
+def _exclude_generated_summaries(result):
+    """Drop generated directory summaries (.overview.md/.abstract.md) from find results.
+
+    Aligns with upstream issue #4518: these files are directory link lists, not
+    knowledge, and since v0.4.17 they outrank the real cards they point to.
+    find() excludes them by default; callers that want them can pass
+    exclude_generated_summaries=False.
+    """
+    for attr in ("memories", "resources", "skills"):
+        bucket = getattr(result, attr)
+        setattr(result, attr, [m for m in bucket if not m.uri.endswith(_GENERATED_SUMMARY_SUFFIXES)])
+    return result
 
 
 async def _format_search_result(result, *, service, ctx, read_content: bool = False) -> str:
