@@ -411,7 +411,6 @@ class SemanticProcessor(DequeueHandlerBase):
 
                     logger.info(f"Processing semantic generation for: {msg})")
 
-                    parent_refresh: Optional[Tuple[str, bool]] = None
                     semantic_lock = await SemanticLockScope.resolve(
                         msg.lock_handoff,
                         caller_lock=lock,
@@ -508,18 +507,13 @@ class SemanticProcessor(DequeueHandlerBase):
                                         wrote=True, abstract_body_changed=True
                                     ),
                                 )
-                                parent_refresh = (
+                                await self._enqueue_parent_refresh(
+                                    msg,
                                     target_uri or msg.uri,
-                                    write_result.abstract_body_changed,
+                                    l0_body_changed=write_result.abstract_body_changed,
                                 )
                     finally:
                         await semantic_lock.close()
-                    if parent_refresh is not None:
-                        await self._enqueue_parent_refresh(
-                            msg,
-                            parent_refresh[0],
-                            l0_body_changed=parent_refresh[1],
-                        )
                     get_request_wait_tracker().mark_semantic_done(msg.telemetry_id, msg.id)
                     self._merge_request_stats(msg.telemetry_id, processed=1)
                     logger.info(f"Completed semantic generation for: {msg.uri}")
