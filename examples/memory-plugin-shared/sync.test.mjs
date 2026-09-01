@@ -45,6 +45,14 @@ const SKILL_TARGETS = [
       join(ROOT, "examples", "codex-memory-plugin", "skills"),
       join(ROOT, "examples", "claude-code-memory-plugin", "skills"),
       join(ROOT, "examples", "cursor-memory-plugin", "skills"),
+      join(ROOT, "examples", "dsh-memory-plugin", "skills"),
+    ],
+  },
+  {
+    skill: "ov-experience-memory",
+    dirs: [
+      join(ROOT, "examples", "codex-memory-plugin", "skills"),
+      join(ROOT, "examples", "claude-code-memory-plugin", "skills"),
     ],
   },
 ];
@@ -88,5 +96,52 @@ test("vendored skills are byte-identical to examples/skills", async () => {
         );
       }
     }
+  }
+});
+
+// Skill loaders reject a description longer than this, and the skill then
+// silently fails to load. Guard every SKILL.md we ship, synced or not.
+const MAX_DESCRIPTION_LENGTH = 1024;
+
+function readDescription(source) {
+  const frontmatter = /^---\n([\s\S]*?)\n---\n/.exec(source);
+  if (!frontmatter) return null;
+  const lines = frontmatter[1].split("\n");
+  const start = lines.findIndex((line) => /^description:/.test(line));
+  if (start === -1) return null;
+  const head = lines[start].slice("description:".length).trim();
+  if (head && head !== ">" && head !== "|" && head !== ">-" && head !== "|-") {
+    return head.replace(/^["']|["']$/g, "");
+  }
+  const body = [];
+  for (const line of lines.slice(start + 1)) {
+    if (/^\S/.test(line)) break;
+    body.push(line.trim());
+  }
+  return body.join(" ").trim();
+}
+
+async function findSkillFiles(dir) {
+  const found = [];
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) found.push(...(await findSkillFiles(full)));
+    else if (entry.name === "SKILL.md") found.push(full);
+  }
+  return found;
+}
+
+test("shipped skill descriptions stay within the loader limit", async () => {
+  const files = await findSkillFiles(join(ROOT, "examples"));
+  assert.ok(files.length > 0, "expected at least one SKILL.md");
+
+  for (const file of files) {
+    const description = readDescription(await readFile(file, "utf-8"));
+    assert.ok(description, `${relative(ROOT, file)} has no frontmatter description`);
+    assert.ok(
+      description.length <= MAX_DESCRIPTION_LENGTH,
+      `${relative(ROOT, file)} description is ${description.length} chars, over the ${MAX_DESCRIPTION_LENGTH} limit`,
+    );
   }
 });

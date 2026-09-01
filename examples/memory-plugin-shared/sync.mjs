@@ -59,6 +59,14 @@ const SKILL_TARGETS = [
       join(ROOT, "examples", "dsh-memory-plugin", "skills"),
     ],
   },
+  {
+    // Only the two harnesses that ship the experience workflow today.
+    skill: "ov-experience-memory",
+    dirs: [
+      join(ROOT, "examples", "codex-memory-plugin", "skills"),
+      join(ROOT, "examples", "claude-code-memory-plugin", "skills"),
+    ],
+  },
 ];
 
 async function listSharedFiles() {
