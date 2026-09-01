@@ -309,8 +309,7 @@ async def create_account(
         body.admin_user_id,
         seed=body.seed,
     )
-    await service.initialize_account_directories(account_ctx)
-    await service.initialize_user_directories(account_ctx)
+    await service.initialize_account_workspace(account_ctx)
     await _write_initial_user_config(service, account_ctx, body.user_config)
     result = {
         "account_id": body.account_id,

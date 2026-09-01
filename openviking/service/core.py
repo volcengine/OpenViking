@@ -385,8 +385,9 @@ class OpenVikingService:
         )
         self._directory_initializer = directory_initializer
         default_ctx = RequestContext(user=self._user, role=Role.ROOT)
-        account_count = await directory_initializer.initialize_account_directories(default_ctx)
-        user_count = await directory_initializer.initialize_user_directories(default_ctx)
+        account_count, user_count = await directory_initializer.initialize_account_workspace(
+            default_ctx
+        )
         logger.info(
             "Initialized preset directories account=%d user=%d",
             account_count,
@@ -661,6 +662,13 @@ class OpenVikingService:
         if not self._directory_initializer:
             return 0
         return await self._directory_initializer.initialize_account_directories(ctx)
+
+    async def initialize_account_workspace(self, ctx: RequestContext) -> tuple[int, int]:
+        """Initialize account and first-user preset directories in one batch."""
+        self._ensure_initialized()
+        if not self._directory_initializer:
+            return 0, 0
+        return await self._directory_initializer.initialize_account_workspace(ctx)
 
     async def initialize_user_directories(self, ctx: RequestContext) -> int:
         """Initialize current user's directory tree."""
