@@ -761,16 +761,21 @@ class Session:
         # counter stays consistent across restarts and is also backfilled for
         # legacy sessions whose .meta.json predates these fields. O(n) once,
         # subsequent add_message() maintains it in O(1).
-        await asyncio.to_thread(self._rebuild_pending_tokens)
+        await self._rebuild_pending_tokens()
 
         self._loaded = True
 
-    def _rebuild_pending_tokens(self) -> None:
+    async def _rebuild_pending_tokens(self) -> None:
         """Recompute ``pending_tokens`` from the current message list.
 
-        Used on load and as a safety net after rollbacks. Respects the
-        currently remembered ``keep_recent_count`` from meta.
+        Used on load, turn-budget appends, and recovery. Respects the current
+        retention settings from meta.
         """
+        pending_tokens = await asyncio.to_thread(self._calculate_pending_tokens)
+        self._meta.pending_tokens = max(0, pending_tokens)
+
+    def _calculate_pending_tokens(self) -> int:
+        """Calculate pending tokens without mutating session state."""
         if (
             self._meta.retention_mode == RETENTION_MODE_TURN_BUDGET
             and self._meta.keep_recent_turn_count > 0
@@ -783,25 +788,19 @@ class Session:
                 min_raw_tail_steps=self._meta.min_raw_tail_steps,
             )
             retained_ids = {message.id for message in plan.retained_messages}
-            self._meta.pending_tokens = sum(
+            return sum(
                 int(message.estimated_tokens or 0)
                 for message in plan.archive_messages
                 if message.id not in retained_ids
             )
-            self._meta.pending_tokens = max(0, self._meta.pending_tokens)
-            return
 
         keep = max(0, int(self._meta.keep_recent_count or 0))
         total = len(self._messages)
         if keep <= 0:
-            self._meta.pending_tokens = sum(int(m.estimated_tokens or 0) for m in self._messages)
-        elif total > keep:
-            self._meta.pending_tokens = sum(
-                int(m.estimated_tokens or 0) for m in self._messages[: total - keep]
-            )
-        else:
-            self._meta.pending_tokens = 0
-        self._meta.pending_tokens = max(0, self._meta.pending_tokens)
+            return sum(int(m.estimated_tokens or 0) for m in self._messages)
+        if total > keep:
+            return sum(int(m.estimated_tokens or 0) for m in self._messages[: total - keep])
+        return 0
 
     async def exists(self) -> bool:
         """Check whether this session already exists in storage."""
@@ -1295,7 +1294,7 @@ class Session:
         if not messages:
             return
         if not self._viking_fs:
-            self._apply_appended_messages_to_state(messages)
+            await self._apply_appended_messages_to_state(messages)
             return
 
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
@@ -1323,7 +1322,7 @@ class Session:
                 # append. Message correctness remains rooted in messages.jsonl.
                 self._meta = in_memory_meta
 
-            self._apply_appended_messages_to_state(messages)
+            await self._apply_appended_messages_to_state(messages)
             batch_content = "".join(message.to_jsonl() + "\n" for message in messages)
             if live_messages_missing:
                 await self._viking_fs.write_file(
@@ -1341,7 +1340,7 @@ class Session:
         finally:
             await self._viking_fs._async_agfs.pathlock_release(lease)
 
-    def _apply_appended_messages_to_state(self, messages: List[Message]) -> None:
+    async def _apply_appended_messages_to_state(self, messages: List[Message]) -> None:
         """Update in-memory counters after an authoritative root reload."""
         for msg in messages:
             self._messages.append(msg)
@@ -1360,7 +1359,7 @@ class Session:
                     self._meta.pending_tokens += int(pushed_out.estimated_tokens or 0)
 
         if self._meta.retention_mode == RETENTION_MODE_TURN_BUDGET:
-            self._rebuild_pending_tokens()
+            await self._rebuild_pending_tokens()
 
         self._meta.message_count = len(self._messages)
         if self._meta.total_message_count is not None:
@@ -1804,7 +1803,7 @@ class Session:
                 self._archive_index_from_uri(archive_uri),
             )
             self._meta.last_commit_at = get_current_timestamp()
-            self._rebuild_pending_tokens()
+            await self._rebuild_pending_tokens()
             await self._save_meta()
             await self._write_phase1_ready_marker(archive_uri)
             logger.warning("Recovered interrupted Session Phase 1: %s", archive_uri)
