@@ -48,7 +48,11 @@ from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
 from openviking.storage.queuefs.semantic_lock import SemanticLockScope
-from openviking.storage.queuefs.semantic_msg import SemanticMsg, build_semantic_coalesce_key
+from openviking.storage.queuefs.semantic_msg import (
+    SEMANTIC_WORK_PARENT_REFRESH,
+    SemanticMsg,
+    build_semantic_coalesce_key,
+)
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
 from openviking.storage.queuefs.semantic_queue import is_semantic_msg_stale
 from openviking.storage.viking_fs import LS_ALL_NODES, SyncDiff, get_viking_fs
@@ -250,7 +254,7 @@ class SemanticProcessor(DequeueHandlerBase):
     ) -> None:
         if msg.context_type not in {"resource", "skill"}:
             return
-        if not msg.propagate_to_parent:
+        if not msg.propagate_to_parent or not l0_body_changed:
             return
         parent = VikingURI(uri).parent
         if parent is None:
@@ -262,26 +266,66 @@ class SemanticProcessor(DequeueHandlerBase):
             or parent_uri == uri.rstrip("/")
         ):
             return
-        parent_ctx = self._ctx_from_semantic_msg(msg)
-        semantic_config = get_openviking_config().semantic
-        decision = await plan_abstract_overview_refresh(
-            viking_fs=get_viking_fs(),
-            dir_uri=parent_uri,
-            changed_entries=1,
-            ctx=parent_ctx,
-            l0_body_changed=l0_body_changed,
-            # This helper handles automatic upward propagation only. Manual
-            # refresh/ingest bypasses the threshold for its requested root,
-            # not for every ancestor reached afterwards.
-            force_refresh=False,
-            overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
-            refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
+        from openviking.storage.queuefs import get_queue_manager
+
+        queue_manager = get_queue_manager()
+        if queue_manager is None:
+            return
+        semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
+        parent_msg = SemanticMsg(
+            uri=parent_uri,
+            context_type=msg.context_type,
+            work_kind=SEMANTIC_WORK_PARENT_REFRESH,
+            recursive=False,
+            account_id=msg.account_id,
+            user_id=msg.user_id,
+            group_ids=msg.group_ids,
+            peer_id=msg.peer_id,
+            role=msg.role,
+            skip_vectorization=msg.skip_vectorization,
+            changes={"modified": [uri]},
+            generation_trigger="parent_refresh",
+            aggregate_directory=False,
         )
-        if decision.action is not FreshnessAction.REFRESH_NOW:
+        with detach_task_context():
+            await semantic_queue.enqueue(parent_msg)
+        logger.info("Enqueued parent freshness update: %s", parent_uri)
+
+    async def _process_parent_refresh(self, msg: SemanticMsg, ctx: RequestContext) -> None:
+        changed_entries = len({uri for values in (msg.changes or {}).values() for uri in values})
+        if changed_entries <= 0:
+            return
+
+        semantic_config = get_openviking_config().semantic
+        try:
+            decision = await plan_abstract_overview_refresh(
+                viking_fs=get_viking_fs(),
+                dir_uri=msg.uri,
+                changed_entries=changed_entries,
+                ctx=ctx,
+                # This worker handles automatic upward propagation only. Manual
+                # refresh/ingest bypasses the threshold for its requested root,
+                # not for every ancestor reached afterwards.
+                force_refresh=False,
+                overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
+                refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
+            )
+        except LockAcquisitionError:
+            # The child semantic work is already complete. If the short
+            # freshness update contends with another sidecar writer, recompute
+            # the parent from its current snapshot instead of replaying the
+            # child DAG and duplicating its embedding work.
+            logger.info(
+                "Parent freshness lock busy for %s; forcing directory refresh",
+                msg.uri,
+            )
+            decision = None
+
+        if decision is not None and decision.action is not FreshnessAction.REFRESH_NOW:
             logger.debug(
                 "Parent semantic refresh %s for %s (pending=%d, total=%d)",
                 decision.action.value,
-                parent_uri,
+                msg.uri,
                 decision.pending_after,
                 decision.total_entries,
             )
@@ -293,8 +337,8 @@ class SemanticProcessor(DequeueHandlerBase):
         if queue_manager is None:
             return
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
-        parent_msg = SemanticMsg(
-            uri=parent_uri,
+        aggregate_msg = SemanticMsg(
+            uri=msg.uri,
             context_type=msg.context_type,
             recursive=False,
             account_id=msg.account_id,
@@ -303,19 +347,19 @@ class SemanticProcessor(DequeueHandlerBase):
             peer_id=msg.peer_id,
             role=msg.role,
             skip_vectorization=msg.skip_vectorization,
-            changes={"modified": [uri]},
+            changes=msg.changes,
             generation_trigger="parent_refresh",
             coalesce_key=build_semantic_coalesce_key(
                 context_type=msg.context_type,
-                uri=parent_uri,
+                uri=msg.uri,
                 account_id=msg.account_id,
                 user_id=msg.user_id,
                 peer_id=msg.peer_id,
             ),
         )
         with detach_task_context():
-            await semantic_queue.enqueue(parent_msg)
-        logger.info("Enqueued parent semantic refresh: %s", parent_uri)
+            await semantic_queue.enqueue(aggregate_msg)
+        logger.info("Enqueued parent semantic refresh: %s", msg.uri)
 
     async def on_dequeue(
         self,
@@ -342,6 +386,14 @@ class SemanticProcessor(DequeueHandlerBase):
                     get_request_wait_tracker().mark_semantic_done(msg.telemetry_id, msg.id)
                 self.report_success()
                 return None
+            if msg.work_kind == SEMANTIC_WORK_PARENT_REFRESH:
+                logger.info("Processing parent freshness update for: %s", msg.uri)
+                await self._process_parent_refresh(msg, self._ctx_from_semantic_msg(msg))
+                if msg.telemetry_id and msg.id:
+                    get_request_wait_tracker().mark_semantic_done(msg.telemetry_id, msg.id)
+                self._merge_request_stats(msg.telemetry_id, processed=1)
+                self.report_success()
+                return None
             if is_semantic_msg_stale(msg):
                 live_file_changes = {
                     kind: list(msg.changes.get(kind, []))
@@ -353,8 +405,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     # maintenance. Let the newest message aggregate while this
                     # one still summarizes/vectorizes its changed files.
                     logger.info(
-                        "Downgrading stale semantic message to file-only work: "
-                        "uri=%s version=%s",
+                        "Downgrading stale semantic message to file-only work: uri=%s version=%s",
                         msg.uri,
                         msg.coalesce_version,
                     )
@@ -405,6 +456,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
                     logger.info(f"Processing semantic generation for: {msg})")
 
+                    parent_refresh: Optional[Tuple[str, bool]] = None
                     semantic_lock = await SemanticLockScope.resolve(
                         msg.lock_handoff,
                         caller_lock=lock,
@@ -501,13 +553,18 @@ class SemanticProcessor(DequeueHandlerBase):
                                         wrote=True, abstract_body_changed=True
                                     ),
                                 )
-                                await self._enqueue_parent_refresh(
-                                    msg,
+                                parent_refresh = (
                                     target_uri or msg.uri,
-                                    l0_body_changed=write_result.abstract_body_changed,
+                                    write_result.abstract_body_changed,
                                 )
                     finally:
                         await semantic_lock.close()
+                    if parent_refresh is not None:
+                        await self._enqueue_parent_refresh(
+                            msg,
+                            parent_refresh[0],
+                            l0_body_changed=parent_refresh[1],
+                        )
                     get_request_wait_tracker().mark_semantic_done(msg.telemetry_id, msg.id)
                     self._merge_request_stats(msg.telemetry_id, processed=1)
                     logger.info(f"Completed semantic generation for: {msg.uri}")
@@ -772,10 +829,7 @@ class SemanticProcessor(DequeueHandlerBase):
         if msg.skip_vectorization:
             logger.info(f"Skipping vectorization for {dir_uri} (requested via SemanticMsg)")
             return
-        if not (
-            wrote_semantics.overview_body_changed
-            or wrote_semantics.abstract_body_changed
-        ):
+        if not (wrote_semantics.overview_body_changed or wrote_semantics.abstract_body_changed):
             logger.info(
                 "Skipping directory vectorization for %s (visible semantics unchanged)",
                 dir_uri,

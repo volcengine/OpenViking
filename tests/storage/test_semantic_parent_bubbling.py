@@ -2,41 +2,24 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from openviking.server.identity import Role
-from openviking.storage.queuefs.semantic_msg import SemanticMsg
-from openviking.storage.queuefs.semantic_ops.freshness_policy import (
-    FreshnessAction,
-    FreshnessDecision,
+from openviking.storage.errors import LockAcquisitionError
+from openviking.storage.queuefs.semantic_msg import (
+    SEMANTIC_WORK_GENERATE,
+    SEMANTIC_WORK_PARENT_REFRESH,
+    SemanticMsg,
 )
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 
 
 @pytest.mark.asyncio
 async def test_unchanged_l0_does_not_mark_or_enqueue_parent(monkeypatch):
-    plan = AsyncMock(
-        return_value=FreshnessDecision(FreshnessAction.NOOP, pending_after=3, total_entries=161)
-    )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.plan_abstract_overview_refresh", plan
-    )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.get_openviking_config",
-        lambda: SimpleNamespace(
-            semantic=SimpleNamespace(overview_sample_limit=32, freshness_refresh_ratio=0.10)
-        ),
-    )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
-        lambda: SimpleNamespace(),
-    )
-    get_queue_manager = AsyncMock(side_effect=AssertionError("parent must not be enqueued"))
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.get_queue_manager", get_queue_manager
-    )
+    get_queue_manager = MagicMock(side_effect=AssertionError("parent must not be enqueued"))
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", get_queue_manager)
 
     msg = SemanticMsg(
         uri="viking://resources/root/child",
@@ -44,23 +27,17 @@ async def test_unchanged_l0_does_not_mark_or_enqueue_parent(monkeypatch):
         role=str(Role.USER),
         generation_trigger="resource_ingest",
     )
-    await SemanticProcessor()._enqueue_parent_refresh(
-        msg, msg.uri, l0_body_changed=False
-    )
+    await SemanticProcessor()._enqueue_parent_refresh(msg, msg.uri, l0_body_changed=False)
 
-    assert plan.await_args.kwargs["l0_body_changed"] is False
-    assert plan.await_args.kwargs["force_refresh"] is False
-    assert plan.await_args.kwargs["ctx"].bypass_acl is True
-    assert plan.await_args.kwargs["ctx"].role == Role.USER
     get_queue_manager.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_non_recursive_reindex_does_not_bubble_to_parent(monkeypatch):
-    plan = AsyncMock(side_effect=AssertionError("non-recursive reindex must stop at target"))
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.plan_abstract_overview_refresh", plan
+    get_queue_manager = MagicMock(
+        side_effect=AssertionError("non-recursive reindex must stop at target")
     )
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", get_queue_manager)
 
     msg = SemanticMsg(
         uri="viking://resources/root/child",
@@ -69,11 +46,10 @@ async def test_non_recursive_reindex_does_not_bubble_to_parent(monkeypatch):
         generation_trigger="reindex",
         propagate_to_parent=False,
     )
-    await SemanticProcessor()._enqueue_parent_refresh(
-        msg, msg.uri, l0_body_changed=True
-    )
+    await SemanticProcessor()._enqueue_parent_refresh(msg, msg.uri, l0_body_changed=True)
 
-    plan.assert_not_awaited()
+    get_queue_manager.assert_not_called()
+
 
 @pytest.mark.parametrize(
     ("uri", "context_type"),
@@ -83,29 +59,11 @@ async def test_non_recursive_reindex_does_not_bubble_to_parent(monkeypatch):
     ],
 )
 @pytest.mark.asyncio
-async def test_parent_refresh_stops_at_nonsemantic_namespace_root(
-    monkeypatch, uri, context_type
-):
-    plan = AsyncMock(
+async def test_parent_refresh_stops_at_nonsemantic_namespace_root(monkeypatch, uri, context_type):
+    get_queue_manager = MagicMock(
         side_effect=AssertionError("non-semantic namespace root must not be refreshed")
     )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.plan_abstract_overview_refresh",
-        plan,
-    )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.get_openviking_config",
-        lambda: SimpleNamespace(
-            semantic=SimpleNamespace(
-                overview_sample_limit=32,
-                freshness_refresh_ratio=0.10,
-            )
-        ),
-    )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
-        lambda: SimpleNamespace(),
-    )
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", get_queue_manager)
 
     msg = SemanticMsg(uri=uri, context_type=context_type)
     await SemanticProcessor()._enqueue_parent_refresh(
@@ -114,7 +72,7 @@ async def test_parent_refresh_stops_at_nonsemantic_namespace_root(
         l0_body_changed=True,
     )
 
-    plan.assert_not_awaited()
+    get_queue_manager.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -129,13 +87,7 @@ async def test_parent_refresh_stops_at_nonsemantic_namespace_root(
 async def test_parent_refresh_preserves_semantic_roots(
     monkeypatch, uri, context_type, expected_parent
 ):
-    plan = AsyncMock(
-        return_value=FreshnessDecision(
-            FreshnessAction.NOOP,
-            pending_after=0,
-            total_entries=1,
-        )
-    )
+    plan = AsyncMock(side_effect=LockAcquisitionError("parent sidecars are busy"))
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_processor.plan_abstract_overview_refresh",
         plan,
@@ -153,13 +105,39 @@ async def test_parent_refresh_preserves_semantic_roots(
         "openviking.storage.queuefs.semantic_processor.get_viking_fs",
         lambda: SimpleNamespace(),
     )
+    semantic_queue = SimpleNamespace(enqueue=AsyncMock())
+    queue_manager = SimpleNamespace(
+        SEMANTIC="Semantic",
+        get_queue=MagicMock(return_value=semantic_queue),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: queue_manager,
+    )
 
     msg = SemanticMsg(uri=uri, context_type=context_type)
-    await SemanticProcessor()._enqueue_parent_refresh(
+    processor = SemanticProcessor()
+    processor.set_callbacks(lambda: None, lambda: None, lambda *_: None)
+    processor._reenqueue_semantic_msg = AsyncMock()
+    await processor._enqueue_parent_refresh(
         msg,
         msg.uri,
         l0_body_changed=True,
     )
 
+    intent = semantic_queue.enqueue.await_args_list[0].args[0]
+    assert intent.uri == expected_parent
+    assert intent.work_kind == SEMANTIC_WORK_PARENT_REFRESH
+    assert intent.aggregate_directory is False
+    assert not intent.coalesce_key
+
+    await processor.on_dequeue(intent.to_dict())
+
     plan.assert_awaited_once()
     assert plan.await_args.kwargs["dir_uri"] == expected_parent
+    aggregate = semantic_queue.enqueue.await_args_list[1].args[0]
+    assert aggregate.uri == expected_parent
+    assert aggregate.work_kind == SEMANTIC_WORK_GENERATE
+    assert aggregate.aggregate_directory is True
+    assert aggregate.coalesce_key
+    processor._reenqueue_semantic_msg.assert_not_awaited()
