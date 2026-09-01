@@ -827,6 +827,39 @@ class VLMConfig(BaseModel):
             messages=messages,
         )
 
+    def is_image_mime_blacklisted(self, mime: Optional[str]) -> bool:
+        """Return True when a configured VLM endpoint rejected this image MIME type.
+
+        The blacklist is learned at runtime from provider "invalid image"
+        errors and lives for the process lifetime, so subsequent files of a
+        rejected format skip the VLM instead of re-probing the endpoint.
+        """
+        if not mime:
+            return False
+        from openviking.models.vlm.backends.openai_vlm import (
+            is_image_mime_blacklisted as _mime_blacklisted,
+        )
+
+        def _backends(instance):
+            primary = getattr(instance, "primary", None)
+            backup = getattr(instance, "backup", None)
+            if primary is not None or backup is not None:
+                return [v for v in (primary, backup) if v is not None]
+            inner = getattr(instance, "_vlm_instances", None)
+            if inner:
+                return list(inner)
+            return [instance]
+
+        for backend in _backends(self.get_vlm_instance()):
+            if _mime_blacklisted(
+                getattr(backend, "provider", None),
+                getattr(backend, "api_base", None),
+                getattr(backend, "model", None),
+                mime,
+            ):
+                return True
+        return False
+
 
 # Resolve forward reference for backup field
 VLMConfig.model_rebuild()

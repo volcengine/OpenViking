@@ -112,6 +112,9 @@ class _ImageVLM:
     def __init__(self):
         self.images = []
 
+    def is_image_mime_blacklisted(self, mime):
+        return False
+
     async def get_vision_completion_async(self, *, prompt, images):
         self.images = images
         return "image summary"
@@ -226,6 +229,40 @@ async def test_image_summary_downsamples_large_model_input(monkeypatch):
     assert len(vlm.images) == 1
     assert max(_image_size(vlm.images[0])) <= 64
     assert fs.content == original
+
+
+async def test_image_summary_svg_with_short_prologue_skips_vlm(monkeypatch):
+    fs = _FS(b'<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg"></svg>')
+    vlm = _ImageVLM()
+    config = SimpleNamespace(vlm=vlm)
+    monkeypatch.setattr(media_utils, "get_viking_fs", lambda: fs)
+    monkeypatch.setattr(media_utils, "get_openviking_config", lambda: config)
+
+    result = await media_utils.generate_image_summary(
+        "viking://resources/images/logo.svg",
+        "logo.svg",
+    )
+
+    assert result == {"name": "logo.svg", "summary": "SVG image (format not supported by VLM)"}
+    assert vlm.images == []
+
+
+async def test_image_summary_svg_with_long_prologue_skips_vlm(monkeypatch):
+    prologue = b'<?xml version="1.0" encoding="UTF-8"?>\n' + b"<!-- license comment -->\n" * 6
+    assert prologue.find(b"<svg") == -1 and len(prologue) > 100
+    fs = _FS(prologue + b'<svg xmlns="http://www.w3.org/2000/svg"></svg>')
+    vlm = _ImageVLM()
+    config = SimpleNamespace(vlm=vlm)
+    monkeypatch.setattr(media_utils, "get_viking_fs", lambda: fs)
+    monkeypatch.setattr(media_utils, "get_openviking_config", lambda: config)
+
+    result = await media_utils.generate_image_summary(
+        "viking://resources/images/flexbox-wrap.svg",
+        "flexbox-wrap.svg",
+    )
+
+    assert result == {"name": "flexbox-wrap.svg", "summary": "SVG image (format not supported by VLM)"}
+    assert vlm.images == []
 
 
 async def test_unknown_size_media_stops_at_hard_staging_limit(

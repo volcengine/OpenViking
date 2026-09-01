@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import magic
 from PIL import Image, UnidentifiedImageError
 
 from openviking.utils.media_limits import is_large_image_by_size
@@ -25,26 +26,65 @@ def image_mime_type(file_name: str = "") -> str:
 
 
 def image_bytes_to_data_uri(data: bytes | bytearray | memoryview, file_name: str = "") -> str:
+    """Build a data URI, labeling the MIME from content when detectable."""
     encoded = base64.b64encode(bytes(data)).decode("ascii")
-    return f"data:{image_mime_type(file_name)};base64,{encoded}"
+    mime = detect_image_mime(data) or image_mime_type(file_name)
+    return f"data:{mime};base64,{encoded}"
+
+
+#: Image MIME types every OpenAI-compatible vision endpoint decodes natively;
+#: everything else is converted to JPEG before being sent to the model.
+NATIVE_IMAGE_MIME_TYPES = frozenset(
+    {
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+    }
+)
+
+_IMAGE_MIME_PROBE_BYTES = 16384
+
+
+def detect_image_mime(data: bytes | bytearray | memoryview) -> Optional[str]:
+    """Detect the image MIME type from content via libmagic.
+
+    Returns an ``image/*`` MIME type, or ``None`` when the content is not a
+    recognized image.
+    """
+    prefix = bytes(data)[:_IMAGE_MIME_PROBE_BYTES]
+    if not prefix:
+        return None
+    mime = magic.from_buffer(prefix, mime=True)
+    if mime and mime.startswith("image/"):
+        return mime
+    return None
 
 
 def _prepare_image_bytes_for_model(
     data: bytes | bytearray | memoryview,
     config: ImageConfig | None = None,
 ) -> tuple[bytes, bool]:
-    """Return model-ready image bytes and whether they differ from the input."""
+    """Return model-ready image bytes and whether they differ from the input.
+
+    Images in a format the vision endpoint may not decode natively (TIFF,
+    BMP, AVIF, ICO, ...) are converted to JPEG before being sent, so the
+    model always receives a universally-decodable payload. Content PIL
+    cannot decode is passed through unchanged and reported as ``changed``.
+    """
     content = bytes(data)
     try:
         with Image.open(io.BytesIO(content)) as img:
             width, height = img.size
             image_config = config or ImageConfig()
-            if not is_large_image_by_size(
+            native = detect_image_mime(content) in NATIVE_IMAGE_MIME_TYPES
+            large = is_large_image_by_size(
                 file_size_bytes=len(content),
                 width=width,
                 height=height,
                 config=image_config,
-            ):
+            )
+            if native and not large:
                 return content, False
 
             preview = img.convert("RGB")
@@ -59,7 +99,10 @@ def _prepare_image_bytes_for_model(
             preview.save(buf, format="JPEG", quality=85, optimize=True)
             return buf.getvalue(), True
     except (UnidentifiedImageError, OSError, ValueError):
-        return content, False
+        # PIL cannot decode this content (exotic or corrupted image). Pass it
+        # through as-is — the VLM backend detects the real format from the
+        # bytes and blacklists it at runtime if the endpoint rejects it.
+        return content, True
 
 
 def prepare_image_bytes_for_model(

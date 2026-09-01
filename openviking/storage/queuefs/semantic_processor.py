@@ -44,7 +44,7 @@ from openviking.storage.abstract_overview import (
     write_abstract_overview,
 )
 from openviking.storage.acl import CreatorAclGrant
-from openviking.storage.errors import LockAcquisitionError
+from openviking.storage.errors import LockAcquisitionError, SemanticSourceMissingError
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
 from openviking.storage.queuefs.semantic_lock import SemanticLockScope
@@ -531,6 +531,21 @@ class SemanticProcessor(DequeueHandlerBase):
                     self.report_error(str(e), data)
                 return None
 
+            if isinstance(e, SemanticSourceMissingError):
+                logger.warning(
+                    "Dropping semantic message with missing source without "
+                    "tripping API circuit breaker: %s",
+                    e,
+                    exc_info=True,
+                )
+                if msg is not None:
+                    self._merge_request_stats(msg.telemetry_id, error_count=1)
+                    get_request_wait_tracker().mark_semantic_failed(
+                        msg.telemetry_id, msg.id, str(e)
+                    )
+                self.report_error(str(e), data)
+                return None
+
             error_class = classify_api_error(e)
             if error_class == ERROR_CLASS_INPUT_TOO_LARGE:
                 logger.error(
@@ -841,19 +856,22 @@ class SemanticProcessor(DequeueHandlerBase):
         """
         viking_fs = get_viking_fs()
         if not await viking_fs.exists(root_uri, ctx=ctx):
-            raise FileNotFoundError(
+            raise SemanticSourceMissingError(
                 f"Semantic source no longer exists; refusing to sync into {target_uri}: {root_uri}"
             )
 
         target_exists = await viking_fs.exists(target_uri, ctx=ctx)
-        diff = await viking_fs.sync_tree(
-            root_uri,
-            target_uri,
-            ctx=ctx,
-            file_change_status=file_change_status,
-            lease_ref=lock,
-            delete_temp_after=False,
-        )
+        try:
+            diff = await viking_fs.sync_tree(
+                root_uri,
+                target_uri,
+                ctx=ctx,
+                file_change_status=file_change_status,
+                lease_ref=lock,
+                delete_temp_after=False,
+            )
+        except FileNotFoundError as exc:
+            raise SemanticSourceMissingError(str(exc)) from exc
 
         if not target_exists:
             # The whole temp tree (including the hidden .image_mappings.json

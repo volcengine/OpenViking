@@ -11,7 +11,7 @@ from openviking.core.context import ResourceContentType
 from openviking.core.namespace import is_session_uri
 from openviking.server.identity import RequestContext
 from openviking.storage.expr import Eq
-from openviking.utils.embedding_utils import get_resource_content_type
+from openviking.utils.embedding_utils import _resolve_resource_content_type
 from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
 
@@ -167,7 +167,8 @@ async def build_index_expectations(
             expectations.append(IndexExpectation(uri=uri, rel_path=rel_path, level=1))
 
     for uri, rel_path, name in _file_candidates(root_uri, entries):
-        if get_resource_content_type(name) == ResourceContentType.TEXT:
+        content_type = await _resolve_resource_content_type(uri, name, viking_fs, ctx)
+        if content_type == ResourceContentType.TEXT:
             expectations.append(IndexExpectation(uri=uri, rel_path=rel_path, level=2))
 
     return tuple(sorted(expectations, key=lambda item: (item.rel_path, item.level)))

@@ -5,7 +5,6 @@ import types
 import pytest
 from PIL import Image
 
-from openviking.core.context import ResourceContentType
 from openviking.parse.parsers.media.utils import (
     MPEG_TS_PACKET_SIZE,
     MPEG_TS_PROBE_BYTES,
@@ -102,19 +101,6 @@ def _data_uri_image_size(data_uri: str) -> tuple[int, int]:
     _, encoded = data_uri.split(";base64,", 1)
     with Image.open(io.BytesIO(base64.b64decode(encoded))) as img:
         return img.size
-
-
-def test_get_resource_content_type_recognizes_media_extensions():
-    expected = {
-        "recording.ogg": ResourceContentType.AUDIO,
-        "RECORDING.OPUS": ResourceContentType.AUDIO,
-        "recording.mkv": ResourceContentType.VIDEO,
-        "RECORDING.WEBM": ResourceContentType.VIDEO,
-        "source.ts": ResourceContentType.TEXT,
-    }
-
-    for filename, content_type in expected.items():
-        assert embedding_utils.get_resource_content_type(filename) == content_type
 
 
 def _mpeg_ts_bytes() -> bytes:
@@ -688,7 +674,7 @@ async def test_vectorize_unknown_file_ignores_summary_content_without_reread(mon
 async def test_vectorize_unknown_binary_file_falls_back_to_summary(monkeypatch):
     queue = DummyQueue()
     summary = "VLM generated binary file summary"
-    binary_content = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+    binary_content = b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 1024
     fs = DummyFS(binary_content)
     monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
     monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: fs)
@@ -747,7 +733,7 @@ async def test_vectorize_text_summary_first_defers_full_content_read(monkeypatch
 @pytest.mark.asyncio
 async def test_vectorize_image_file_enqueues_summary_and_image(monkeypatch):
     queue = DummyQueue()
-    fs = DummyFS(b"\x89PNG\r\n\x1a\nimage")
+    fs = DummyFS(_jpeg_bytes(32, 32))
     monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
     monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: fs)
     monkeypatch.setattr(
@@ -769,7 +755,8 @@ async def test_vectorize_image_file_enqueues_summary_and_image(monkeypatch):
     msg = queue.items[0]
     assert msg.message[0] == {"type": "text", "text": "a cat on a sofa"}
     assert msg.message[1]["type"] == "image_url"
-    assert msg.message[1]["image_url"]["url"].startswith("data:image/png;base64,")
+    # MIME is labeled from content, not the (mislabeled) .png extension
+    assert msg.message[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
     assert "content" not in msg.context_data
     assert fs.read_file_bytes_calls == 1
 
@@ -812,7 +799,7 @@ async def test_vectorize_image_file_falls_back_to_summary_when_image_unreadable(
             raise OSError("cannot read")
 
     queue = DummyQueue()
-    fs = UnreadableImageFS("")
+    fs = UnreadableImageFS(_jpeg_bytes(32, 32))
     monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
     monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: fs)
     monkeypatch.setattr(
@@ -899,6 +886,67 @@ async def test_vectorize_content_only_reads_embedding_input(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_vectorize_extensionless_text_content_only_uses_raw_text(monkeypatch):
+    """LICENSE-style extensionless text must embed raw content under the default
+    content_only source, like .md/.txt files, instead of falling back to the
+    LLM summary with an 'Unsupported file type' warning."""
+    queue = DummyQueue()
+    fs = DummyFS("MIT License\nPermission is hereby granted...")
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: fs)
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
+        ),
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/demo/LICENSE",
+        summary_dict={"name": "LICENSE", "summary": "VLM generated license summary"},
+        parent_uri="viking://user/default/resources/demo",
+        ctx=DummyReq(),
+    )
+
+    assert len(queue.items) == 1
+    assert queue.items[0].message == "MIT License\nPermission is hereby granted..."
+    assert "content" not in queue.items[0].context_data
+    assert fs.read_file_calls == 1
+    assert fs.read_file_bytes_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_vectorize_extensionless_text_summary_first_uses_summary(monkeypatch):
+    """summary_first must keep using the summary for extensionless text files,
+    deferring the content read like it does for .md files."""
+    queue = DummyQueue()
+    fs = DummyFS("MIT License\nPermission is hereby granted...")
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: fs)
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="summary_first", max_input_tokens=1000)
+        ),
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/demo/LICENSE",
+        summary_dict={"name": "LICENSE", "summary": "VLM generated license summary"},
+        parent_uri="viking://user/default/resources/demo",
+        ctx=DummyReq(),
+    )
+
+    assert len(queue.items) == 1
+    assert queue.items[0].message == "VLM generated license summary"
+    assert "content" not in queue.items[0].context_data
+    assert fs.read_file_calls == 0
+    assert fs.read_file_bytes_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_vectorize_file_bounds_content_before_enqueue(monkeypatch):
     queue = DummyQueue()
     content = " ".join(f"token-{i}" for i in range(200))
@@ -942,6 +990,49 @@ async def test_index_resource_skips_session_namespace(monkeypatch):
         ctx=DummyReq(),
     )
 
+    assert queue.items == []
+
+
+def test_decode_text_bytes_rejects_valid_utf8_binary_with_nul_bytes():
+    # NUL bytes are valid UTF-8, so a real binary (ELF/PE/class/zip) must be
+    # rejected before the UTF-8 fast path, not only when UTF-8 decoding fails.
+    elf_like = b"\x7fELF\x00\x01\x01\x00" + b"\x00" * 64 + b"printable tail"
+    assert embedding_utils._decode_text_bytes(elf_like) == ""
+
+
+def test_decode_text_bytes_rejects_invalid_utf8_binary():
+    # Fails UTF-8 AND trips the control-byte ratio check (>30%).
+    assert embedding_utils._decode_text_bytes(b"\x00\x01\x02\xff" * 8) == ""
+
+
+def test_decode_text_bytes_decodes_plain_utf8():
+    assert embedding_utils._decode_text_bytes("MIT License\n".encode("utf-8")) == "MIT License\n"
+
+
+@pytest.mark.asyncio
+async def test_vectorize_binary_named_like_text_is_not_enqueued(monkeypatch):
+    """A real binary with a text name (e.g. a binary called LICENSE) must not
+    produce a garbage content vector."""
+    queue = DummyQueue()
+    fs = DummyFS(b"\x7fELF\x00\x01\x01\x00" + b"\x00" * 64)
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: fs)
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
+        ),
+    )
+
+    enqueued = await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/demo/LICENSE",
+        summary_dict={"name": "LICENSE", "summary": ""},
+        parent_uri="viking://user/default/resources/demo",
+        ctx=DummyReq(),
+    )
+
+    assert enqueued is False
     assert queue.items == []
 
 
@@ -1008,7 +1099,7 @@ async def test_empty_media_uses_filename_but_unknown_binary_skips(monkeypatch):
     monkeypatch.setattr(
         embedding_utils,
         "get_viking_fs",
-        lambda: DummyFS(b"media"),
+        lambda: DummyFS((b"\xff\xfb\x90\x00" + b"\x00" * 150) * 8),
     )
     await embedding_utils.vectorize_file(
         file_path="viking://resources/media/meeting.mp3",
@@ -1029,7 +1120,7 @@ async def test_empty_media_uses_filename_but_unknown_binary_skips(monkeypatch):
     monkeypatch.setattr(
         embedding_utils,
         "get_viking_fs",
-        lambda: DummyFS(b"binary"),
+        lambda: DummyFS(b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 1024),
     )
     await embedding_utils.vectorize_file(
         file_path="viking://resources/media/archive.bin",

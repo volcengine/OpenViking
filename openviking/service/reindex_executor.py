@@ -40,8 +40,8 @@ from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.embedding_input import truncate_embedding_input
 from openviking.utils.embedding_utils import (
     _apply_ingest_options,
+    _resolve_resource_content_type,
     _truncate_abstract_bytes,
-    get_resource_content_type,
 )
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.skill_processor import SkillProcessor
@@ -1822,7 +1822,9 @@ class ReindexExecutor:
             ctx=self._content_owner_ctx(uri, ctx),
         )
         fallback = self._record_abstract(existing)
-        content_type = get_resource_content_type(uri.rsplit("/", 1)[-1])
+        content_type = await _resolve_resource_content_type(
+            uri, uri.rsplit("/", 1)[-1], get_viking_fs(), ctx
+        )
 
         if content_type == ResourceContentType.TEXT:
             embedding_config = get_openviking_config().embedding

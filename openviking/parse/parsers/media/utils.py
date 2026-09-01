@@ -12,7 +12,7 @@ from openviking.core.path_variables import CalendarVariableProvider
 from openviking.parse.parsers.constants import TYPESCRIPT_MPEG_TS_EXTENSION
 from openviking.prompts import render_prompt
 from openviking.storage.viking_fs import get_viking_fs
-from openviking.utils.image_search import prepare_image_bytes_for_model
+from openviking.utils.image_search import detect_image_mime, prepare_image_bytes_for_model
 from openviking.utils.media_limits import MAX_MEDIA_FILE_BYTES
 from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
@@ -140,6 +140,20 @@ _CHINESE_MEDIA_NOT_UNDERSTOOD_RE = re.compile(
 def _is_svg(data: bytes) -> bool:
     """Check if the data is an SVG file."""
     return data[:4] == b"<svg" or (data[:5] == b"<?xml" and b"<svg" in data[:100])
+
+
+def _is_text_data(data: bytes) -> bool:
+    """Check if the data is plain text (SVG/XML markup) rather than a raster image.
+
+    Raster formats are binary with control bytes; SVG/XML is UTF-8 text and
+    cannot be decoded by VLM image pipelines.
+    """
+    head = data[:4096]
+    if not head:
+        return False
+    if any(byte < 9 or (13 < byte < 32) or byte == 127 for byte in head):
+        return False
+    return head.lstrip().lstrip(b"\xef\xbb\xbf").startswith(b"<")
 
 
 def _convert_svg_to_png(svg_data: bytes) -> Optional[bytes]:
@@ -275,13 +289,22 @@ async def generate_image_summary(
         if not isinstance(image_bytes, bytes):
             raise ValueError(f"Expected bytes for image file, got {type(image_bytes)}")
 
-        # Check for unsupported formats (SVG, etc.) by detecting magic bytes
-        # SVG format is not supported by VolcEngine VLM API, skip VLM analysis
-        if _is_svg(image_bytes):
+        # Text markup (SVG/XML) cannot be decoded by VLM image pipelines
+        if _is_svg(image_bytes) or _is_text_data(image_bytes):
             logger.info(
                 f"[MediaUtils.generate_image_summary] SVG format detected, skipping VLM analysis: {image_uri}"
             )
             return {"name": file_name, "summary": "SVG image (format not supported by VLM)"}
+
+        # Formats the endpoint already rejected at runtime are skipped
+        # without another VLM round-trip.
+        image_mime = detect_image_mime(image_bytes)
+        if image_mime and vlm.is_image_mime_blacklisted(image_mime):
+            logger.info(
+                f"[MediaUtils.generate_image_summary] {image_mime} rejected by VLM endpoint, "
+                f"skipping: {image_uri}"
+            )
+            return {"name": file_name, "summary": f"Image format {image_mime} not supported by VLM"}
 
         logger.info(
             f"[MediaUtils.generate_image_summary] Generating summary for image: {image_uri}"

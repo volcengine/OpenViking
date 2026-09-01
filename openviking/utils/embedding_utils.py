@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import magic
 from charset_normalizer import from_bytes
 
 from openviking.core.context import Context, ContextLevel, ResourceContentType, Vectorize
@@ -19,11 +20,7 @@ from openviking.core.namespace import (
     is_session_uri,
     owner_space_for_uri,
 )
-from openviking.parse.parsers.media.utils import (
-    MPEG_TS_PROBE_BYTES,
-    is_mpeg_ts,
-)
-from openviking.parse.parsers.upload_utils import is_text_file
+from openviking.parse.parsers.media.utils import is_mpeg_ts
 from openviking.server.identity import RequestContext
 from openviking.service.task_work_index import TaskWorkRejected
 from openviking.storage.abstract_overview import body_for_preview, embedding_text_for_body
@@ -181,89 +178,97 @@ async def _resolve_context_timestamps(
     return created_at, updated_at
 
 
-def get_resource_content_type(file_name: str) -> Optional[ResourceContentType]:
-    """Determine resource content type based on file extension.
+#: Number of leading bytes read to classify a file's content.
+FILE_PROBE_BYTES = 65536
 
-    Returns None if the file type is not recognized.
+#: Media MIME types, matched exactly against libmagic output. Anything
+#: libmagic reports but does not whitelist (e.g. image/svg+xml) falls
+#: through to the text probe.
+IMAGE_MIME_WHITELIST = {
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "image/bmp",
+}
+VIDEO_MIME_WHITELIST = {
+    "video/mp4",
+    "video/x-msvideo",
+    "video/quicktime",
+    "video/x-ms-asf",
+    "video/x-flv",
+    "video/x-matroska",
+    "video/webm",
+}
+#: Ogg containers (Vorbis, Opus, Speex) share the audio/ogg MIME; audio in
+#: an MP4 container ( .m4a / .aac ) reports video/mp4 and classifies as VIDEO
+#: — the vectorizer handles AUDIO and VIDEO identically (summary or file
+#: name), so the container-level MIME is fine.
+AUDIO_MIME_WHITELIST = {
+    "audio/mpeg",
+    "audio/x-wav",
+    "audio/x-hx-aac-adts",
+    "audio/flac",
+    "audio/ogg",
+}
+
+#: libmagic MIME types indicating decodable text content. image/svg+xml is
+#: reported by libmagic for SVG, which is XML markup and must be parsed as
+#: text, not routed to the image pipeline.
+TEXT_MIME_PREFIXES = ("text/",)
+TEXT_MIME_EXACT = {
+    "image/svg+xml",
+    "application/json",
+    "application/javascript",
+    "application/xml",
+    "application/x-xml",
+    "application/yaml",
+    "application/x-yaml",
+}
+
+
+def classify_file_content(prefix: bytes) -> Optional[ResourceContentType]:
+    """Classify file content from its leading bytes.
+
+    1. libmagic MIME in the media whitelists      -> IMAGE / VIDEO / AUDIO
+    2. libmagic MIME is a text type and the bytes
+       decode as text                             -> TEXT
+    3. anything else (binary/unknown)             -> None
     """
-    file_name = file_name.lower()
-
-    text_extensions = {
-        ".txt",
-        ".md",
-        ".csv",
-        ".json",
-        ".jsonl",
-        ".xml",
-        ".svg",
-        ".py",
-        ".js",
-        ".ts",
-        ".java",
-        ".cpp",
-        ".c",
-        ".cu",
-        ".cuh",
-        ".h",
-        ".go",
-        ".rs",
-        ".lua",
-        ".rb",
-        ".php",
-        ".sh",
-        ".bash",
-        ".zsh",
-        ".fish",
-        ".sql",
-        ".kt",
-        ".swift",
-        ".scala",
-        ".r",
-        ".m",
-        ".pl",
-        ".toml",
-        ".yaml",
-        ".yml",
-        ".ini",
-        ".cfg",
-        ".conf",
-        ".tsx",
-        ".jsx",
-        ".cs",
-        ".env",
-        ".properties",
-        ".rst",
-        ".tf",
-        ".proto",
-        ".gradle",
-        ".cc",
-        ".cxx",
-        ".hpp",
-        ".hh",
-        ".dart",
-        ".vue",
-        ".groovy",
-        ".ps1",
-        ".ex",
-        ".exs",
-        ".erl",
-        ".jl",
-        ".mm",
-    }
-    image_extensions = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
-    video_extensions = {".mp4", ".avi", ".mov", ".wmv", ".flv", ".mkv", ".webm"}
-    audio_extensions = {".mp3", ".wav", ".aac", ".flac", ".ogg", ".m4a", ".opus", ".ac3"}
-
-    if any(file_name.endswith(ext) for ext in text_extensions):
-        return ResourceContentType.TEXT
-    elif any(file_name.endswith(ext) for ext in image_extensions):
+    if not prefix:
+        return None
+    mime = magic.from_buffer(prefix, mime=True)
+    if mime in IMAGE_MIME_WHITELIST:
         return ResourceContentType.IMAGE
-    elif any(file_name.endswith(ext) for ext in video_extensions):
+    if mime in VIDEO_MIME_WHITELIST:
         return ResourceContentType.VIDEO
-    elif any(file_name.endswith(ext) for ext in audio_extensions):
+    if mime in AUDIO_MIME_WHITELIST:
         return ResourceContentType.AUDIO
-
+    if mime.startswith(TEXT_MIME_PREFIXES) or mime in TEXT_MIME_EXACT:
+        if is_text_bytes(prefix):
+            return ResourceContentType.TEXT
     return None
+
+
+def is_text_bytes(raw: bytes) -> bool:
+    """Return True when file bytes should be treated as text.
+
+    Binary payloads (NUL bytes or high control-byte density) are rejected
+    up front — those bytes are valid UTF-8, so the check must run before
+    decoding. Valid UTF-8 and any charset recognized by charset-normalizer
+    count as text.
+    """
+    if not raw:
+        return True
+    if _looks_like_binary_bytes(raw):
+        return False
+    try:
+        raw.decode("utf-8")
+        return True
+    except UnicodeDecodeError:
+        pass
+    best = from_bytes(raw).best()
+    return best is not None
 
 
 async def _build_image_data_uri(
@@ -293,21 +298,24 @@ async def _resolve_resource_content_type(
     viking_fs: Any,
     ctx: Optional[RequestContext],
 ) -> Optional[ResourceContentType]:
-    content_type = get_resource_content_type(file_name)
-    if Path(file_name).suffix.lower() != ".ts":
-        return content_type
     try:
         prefix = await viking_fs.read(
             file_path,
             offset=0,
-            size=MPEG_TS_PROBE_BYTES,
+            size=FILE_PROBE_BYTES,
             ctx=ctx,
         )
     except Exception:
-        return content_type
-    if is_mpeg_ts(prefix):
+        return None
+    if prefix is None:
+        return None
+    if isinstance(prefix, str):
+        prefix = prefix.encode("utf-8")
+    # .ts is ambiguous (TypeScript vs MPEG-TS stream); the sync-byte probe
+    # takes precedence over content classification.
+    if Path(file_name).suffix.lower() == ".ts" and is_mpeg_ts(prefix):
         return ResourceContentType.VIDEO
-    return content_type
+    return classify_file_content(prefix)
 
 
 def _coerce_text_file_content(raw: Any) -> str:
@@ -333,19 +341,21 @@ def _looks_like_binary_bytes(raw: bytes) -> bool:
 def _decode_text_bytes(raw: bytes) -> str:
     """Decode file bytes for BM25 content.
 
-    Prefer UTF-8. If UTF-8 fails, reject binary-looking bytes, then try charset
-    sniffing. Return an empty string when no text encoding can be recognized.
+    Reject binary-looking bytes up front (NUL/control bytes are valid UTF-8,
+    so the check must run before the UTF-8 fast path). Then prefer UTF-8, and
+    fall back to charset sniffing. Return an empty string when no text
+    encoding can be recognized.
     """
     if not raw:
+        return ""
+
+    if _looks_like_binary_bytes(raw):
         return ""
 
     try:
         return raw.decode("utf-8")
     except UnicodeDecodeError:
         pass
-
-    if _looks_like_binary_bytes(raw):
-        return ""
 
     best = from_bytes(raw).best()
     if best is None:
@@ -560,22 +570,16 @@ async def vectorize_file(
             context.abstract = effective_text
             context.set_vectorize(Vectorize(text=effective_text))
         elif content_type is None:
+            # Content probe found no decodable text: binary (or unreadable)
+            # payload. Raw bytes must never enter the text pipeline.
             if summary:
                 logger.warning(
-                    f"Unsupported file type for {file_path}, falling back to summary for vectorization"
+                    f"Binary or undecodable content for {file_path}, using summary for vectorization"
                 )
                 context.set_vectorize(Vectorize(text=summary))
-            elif is_text_file(file_name):
-                content = _coerce_text_file_content(await viking_fs.read_file(file_path, ctx=ctx))
-                embedding_text = truncate_embedding_input(
-                    content,
-                    embedding_cfg.max_input_tokens,
-                )
-                del content
-                context.set_vectorize(Vectorize(text=embedding_text))
             else:
                 logger.warning(
-                    f"Unsupported file type for {file_path} and no summary available, skipping vectorization"
+                    f"Binary or undecodable content for {file_path} and no summary available, skipping vectorization"
                 )
                 return False
         elif content_type == ResourceContentType.TEXT:

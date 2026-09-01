@@ -82,6 +82,7 @@ dependencies = [
     "lark-oapi>=1.5.3",
     "mcp>=1.27,<2",
     "pathspec>=1.1.1",
+    "python-magic>=0.4.27",
     "grep-ast>=0.9.0",
     "tree-sitter-language-pack>=1.12,<2.0",
 ]
@@ -255,6 +256,10 @@ markers = [
     "cli_remote: tests that require a remote OpenViking CLI binary and server connection",
 ]
 addopts = "-v --cov=openviking --cov-report=term-missing"
+filterwarnings = [
+    "ignore:Support for class-based `config` is deprecated:DeprecationWarning",
+    "ignore:`json_encoders` is deprecated:DeprecationWarning",
+]
 
 [tool.ruff]
 line-length = 100

@@ -2,16 +2,24 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import base64
+import io
 import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from PIL import Image
 
 from openviking.models.vlm.backends import codex_auth
 from openviking.models.vlm.backends.codex_auth import resolve_codex_runtime_credentials
 from openviking.models.vlm.backends.codex_vlm import CodexVLM
 from openviking_cli.utils.config.vlm_config import VLMConfig
+
+
+def _png_bytes() -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (16, 16), "red").save(buf, format="PNG")
+    return buf.getvalue()
 
 
 class _MockResponsesStream:
@@ -138,7 +146,7 @@ def test_codex_vision_completion_converts_images(mock_resolve, mock_openai_class
     mock_openai_class.return_value = mock_real_client
 
     vlm = CodexVLM({"provider": "openai-codex", "model": "gpt-5.3-codex"})
-    result = vlm.get_vision_completion("describe", [b"\x89PNG\r\n\x1a\n0000"])
+    result = vlm.get_vision_completion("describe", [_png_bytes()])
 
     assert result == "image result"
     call_kwargs = mock_real_client.responses.create.call_args.kwargs

@@ -267,6 +267,32 @@ mod tests {
         assert_eq!(token.lock_type, crate::lock::PathLockKind::Exact);
     }
 
+    /// Verify an orphaned empty lock file is removed and token creation retried.
+    #[tokio::test]
+    async fn try_create_token_recovers_from_orphaned_empty_lock_file() {
+        let fs = Arc::new(MemFileSystem::new());
+        fs.mkdir("/data", 0o755).await.unwrap();
+        fs.write("/data/.path.ovlock", b"", 0, WriteFlag::Create)
+            .await
+            .unwrap();
+        let provider = FilesystemPathLockProvider::new(fs.clone());
+
+        let token = LockToken {
+            owner_id: "owner".to_string(),
+            time_ns: 123,
+            lock_type: crate::lock::PathLockKind::Tree,
+        };
+        provider
+            .try_create_token("/data/.path.ovlock", &token)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            fs.read("/data/.path.ovlock", 0, 0).await.unwrap(),
+            LockTokenCodec::encode(&token).as_bytes()
+        );
+    }
+
     #[test]
     fn compare_and_remove_would_block_maps_to_busy() {
         let err = FilesystemPathLockProvider::map_cas_error(
@@ -333,9 +359,33 @@ impl PathLockProvider for FilesystemPathLockProvider {
                         owner: t.owner_id,
                         kind: t.lock_type,
                     }),
-                    None => Err(PathLockError::Io(format!(
-                        "failed to create lock token at {lock_path}"
-                    ))),
+                    None => {
+                        // File exists without a decodable token (e.g. a crash
+                        // between create and write). Remove the orphaned file
+                        // and retry so a leftover cannot wedge the lock forever.
+                        if self.fs.remove(lock_path).await.is_err() {
+                            return Err(PathLockError::Io(format!(
+                                "failed to create lock token at {lock_path}"
+                            )));
+                        }
+                        match self
+                            .fs
+                            .write(lock_path, encoded.as_bytes(), 0, WriteFlag::CreateNew)
+                            .await
+                        {
+                            Ok(_) => Ok(()),
+                            Err(_) => match self.read_token(lock_path).await? {
+                                Some(t) => Err(PathLockError::Conflict {
+                                    lock_path: lock_path.to_string(),
+                                    owner: t.owner_id,
+                                    kind: t.lock_type,
+                                }),
+                                None => Err(PathLockError::Io(format!(
+                                    "failed to create lock token at {lock_path}"
+                                ))),
+                            },
+                        }
+                    }
                 }
             }
         }

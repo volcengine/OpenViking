@@ -1,0 +1,5 @@
+{
+    "name": "sample-config",
+    "version": 1,
+    "features": ["alpha", "beta"]
+}

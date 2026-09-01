@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+import io
 from unittest.mock import MagicMock, patch
+
+from PIL import Image
 
 from openviking.models.vlm import VLMFactory
 from openviking.models.vlm.backends.glm_vlm import DEFAULT_GLM_API_BASE, GLMVLM
@@ -21,6 +24,12 @@ def _build_openai_response(text: str = "ok", finish_reason: str = "stop") -> Mag
     return response
 
 
+def _png_bytes() -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (16, 16), "red").save(buf, format="PNG")
+    return buf.getvalue()
+
+
 @patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI")
 def test_kimi_vision_completion_uses_openai_messages_and_headers(mock_openai_class):
     mock_client = MagicMock()
@@ -35,7 +44,7 @@ def test_kimi_vision_completion_uses_openai_messages_and_headers(mock_openai_cla
         }
     )
 
-    result = vlm.get_vision_completion(prompt="describe", images=[b"\x89PNG\r\n\x1a\n0000"])
+    result = vlm.get_vision_completion(prompt="describe", images=[_png_bytes()])
 
     assert result == "vision ok"
     client_kwargs = mock_openai_class.call_args.kwargs

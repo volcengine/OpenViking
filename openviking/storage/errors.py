@@ -65,6 +65,21 @@ class LockAcquisitionError(LockError):
     """Raised when lock acquisition fails."""
 
 
+class SemanticSourceMissingError(FileNotFoundError, VikingDBException):
+    """Raised when the semantic source tree is removed before it can be synced.
+
+    A per-message data condition (e.g. a temp staging tree cleaned up after a
+    crash), not a model API failure; the message is dropped without tripping
+    the API circuit breaker. Subclasses ``FileNotFoundError`` so existing
+    callers that treat a vanished source as a missing-file error keep working.
+    """
+
+    def __init__(self, message: str) -> None:
+        # OSError.__init__ would shadow VikingDBException.__init__ in the MRO;
+        # call it explicitly so structured retry-boundary attributes are set.
+        VikingDBException.__init__(self, message)
+
+
 class ResourceBusyError(LockError):
     """Raised when a resource is locked by an ongoing operation."""
 

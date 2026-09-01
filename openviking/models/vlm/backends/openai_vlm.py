@@ -6,7 +6,7 @@ import base64
 import json
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 from openviking.telemetry import tracer
@@ -19,12 +19,68 @@ try:
 except ImportError:
     openai = None
 
+from openviking.utils.image_search import detect_image_mime
 from openviking.utils.model_retry import retry_async, retry_sync
 
 from ..base import ToolCall, VLMBase, VLMResponse
 from ..registry import DEFAULT_AZURE_API_VERSION
 
 logger = get_logger(__name__)
+
+#: Image MIME types every OpenAI-compatible vision endpoint decodes natively.
+SUPPORTED_IMAGE_MIME_TYPES = frozenset(
+    {
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+    }
+)
+
+#: Substrings in a provider error indicating the image payload itself was
+#: rejected (undecodable or unsupported), as opposed to a transient failure.
+_IMAGE_REJECTION_MARKERS = (
+    "invalid image",
+    "failed to load image",
+    "image input",
+    "unable to process image",
+)
+
+#: Runtime blacklist of image MIME types the endpoint rejected with an
+#: "invalid image" error. Keyed by (provider, api_base, model) so distinct
+#: endpoints keep independent capability views. Lives for the process
+#: lifetime: once a format is rejected, stop resending it.
+_blacklisted_image_mimes: Dict[Tuple[str, str, str], set] = {}
+
+
+def _endpoint_key(
+    provider: Optional[str], api_base: Optional[str], model: Optional[str]
+) -> Tuple[str, str, str]:
+    return (provider or "", (api_base or "").rstrip("/"), model or "")
+
+
+def is_image_mime_blacklisted(
+    provider: Optional[str], api_base: Optional[str], model: Optional[str], mime: Optional[str]
+) -> bool:
+    """Return True when the endpoint rejected this image MIME type at runtime."""
+    if not mime:
+        return False
+    return mime in _blacklisted_image_mimes.get(_endpoint_key(provider, api_base, model), set())
+
+
+def blacklist_image_mime(
+    provider: Optional[str], api_base: Optional[str], model: Optional[str], mime: str
+) -> None:
+    """Record that the endpoint rejected an image of this MIME type."""
+    if not mime:
+        return
+    _blacklisted_image_mimes.setdefault(_endpoint_key(provider, api_base, model), set()).add(mime)
+
+
+def is_image_error(e: BaseException) -> bool:
+    """Return True when a provider error rejects the image payload itself."""
+    text = str(e).lower()
+    return any(marker in text for marker in _IMAGE_REJECTION_MARKERS)
 
 
 _DASHSCOPE_HOSTS = {
@@ -259,7 +315,17 @@ class OpenAIVLM(VLMBase):
         else:
             content = []
             if images:
-                content.extend(self._prepare_image(img) for img in images)
+                prepared = [
+                    part
+                    for part in (self._prepare_image(img) for img in images)
+                    if part is not None
+                ]
+                if not prepared and not prompt:
+                    raise ValueError(
+                        "All images were skipped (unrecognized or endpoint-rejected format) "
+                        "and no prompt was provided"
+                    )
+                content.extend(prepared)
             if prompt:
                 content.append({"type": "text", "text": prompt})
             kwargs_messages = [{"role": "user", "content": content}]
@@ -356,32 +422,36 @@ class OpenAIVLM(VLMBase):
             operation_name="OpenAI VLM async completion",
         )
 
-    def _detect_image_format(self, data: bytes) -> str:
-        """Detect image format from magic bytes.
+    def _detect_image_format(self, data: bytes) -> Optional[str]:
+        """Detect the image MIME type from content via libmagic.
 
-        Supported formats: PNG, JPEG, GIF, WebP
+        Returns the ``image/*`` MIME type, or ``None`` when the bytes are not
+        a recognized image. Previously unknown bytes were mislabeled
+        ``image/png`` and sent to the endpoint, which rejected them.
         """
-        if len(data) < 8:
-            logger.warning(f"[OpenAIVLM] Image data too small: {len(data)} bytes")
-            return "image/png"
+        if not data:
+            return None
+        mime = detect_image_mime(data)
+        if mime is None:
+            logger.warning(
+                f"[OpenAIVLM] Non-image data sent as image, magic bytes: {data[:8].hex()}"
+            )
+        return mime
 
-        if data[:8] == b"\x89PNG\r\n\x1a\n":
-            return "image/png"
-        if data[:2] == b"\xff\xd8":
-            return "image/jpeg"
-        if data[:6] in (b"GIF87a", b"GIF89a"):
-            return "image/gif"
-        if data[:4] == b"RIFF" and len(data) >= 12 and data[8:12] == b"WEBP":
-            return "image/webp"
+    def _prepare_image(self, image: Union[str, Path, bytes]) -> Optional[Dict[str, Any]]:
+        """Prepare image data for vision completion.
 
-        logger.warning(f"[OpenAIVLM] Unknown image format, magic bytes: {data[:8].hex()}")
-        return "image/png"
-
-    def _prepare_image(self, image: Union[str, Path, bytes]) -> Dict[str, Any]:
-        """Prepare image data for vision completion."""
+        Returns ``None`` when the image must be skipped: unrecognized
+        content, or a MIME type the endpoint already rejected at runtime.
+        """
         if isinstance(image, bytes):
-            b64 = base64.b64encode(image).decode("utf-8")
             mime_type = self._detect_image_format(image)
+            if mime_type is None:
+                return None
+            if self._is_mime_blacklisted(mime_type):
+                logger.info(f"[OpenAIVLM] Skipping {mime_type} image: format rejected by endpoint")
+                return None
+            b64 = base64.b64encode(image).decode("utf-8")
             return {
                 "type": "image_url",
                 "image_url": {"url": f"data:{mime_type};base64,{b64}"},
@@ -390,22 +460,31 @@ class OpenAIVLM(VLMBase):
             isinstance(image, str) and not image.startswith(("http://", "https://"))
         ):
             path = Path(image)
-            suffix = path.suffix.lower()
-            mime_type = {
-                ".png": "image/png",
-                ".jpg": "image/jpeg",
-                ".jpeg": "image/jpeg",
-                ".gif": "image/gif",
-                ".webp": "image/webp",
-            }.get(suffix, "image/png")
             with open(path, "rb") as f:
                 data = f.read()
+            mime_type = self._detect_image_format(data)
+            if mime_type is None:
+                logger.warning(f"[OpenAIVLM] Skipping non-image file: {path}")
+                return None
+            if self._is_mime_blacklisted(mime_type):
+                logger.info(f"[OpenAIVLM] Skipping {mime_type} image: format rejected by endpoint")
+                return None
             b64 = base64.b64encode(data).decode("utf-8")
             return {
                 "type": "image_url",
                 "image_url": {"url": f"data:{mime_type};base64,{b64}"},
             }
         return {"type": "image_url", "image_url": {"url": image}}
+
+    def _is_mime_blacklisted(self, mime: str) -> bool:
+        return is_image_mime_blacklisted(self.provider, self.api_base, self.model, mime)
+
+    def _blacklist_mime(self, mime: str) -> None:
+        blacklist_image_mime(self.provider, self.api_base, self.model, mime)
+        logger.warning(
+            f"[OpenAIVLM] Endpoint rejected {mime} images; blacklisting format "
+            f"for model {self.model} until process restart"
+        )
 
     def get_vision_completion(
         self,
@@ -432,12 +511,42 @@ class OpenAIVLM(VLMBase):
                 return self._build_vlm_response(response, has_tools=True)
             return self._extract_completion_content(response, elapsed)
 
-        return retry_sync(
-            _call,
-            max_retries=self.max_retries,
-            logger=logger,
-            operation_name="OpenAI VLM vision completion",
-        )
+        try:
+            return retry_sync(
+                _call,
+                max_retries=self.max_retries,
+                logger=logger,
+                operation_name="OpenAI VLM vision completion",
+            )
+        except Exception as e:
+            if is_image_error(e):
+                self._blacklist_rejected_image_mimes(images)
+            raise
+
+    def _blacklist_rejected_image_mimes(
+        self, images: Optional[List[Union[str, Path, bytes]]]
+    ) -> None:
+        """Learn from an endpoint 'invalid image' rejection.
+
+        Only MIME types outside the universally-decodable set are
+        blacklisted: a rejected PNG/JPEG/GIF/WebP is far more likely a
+        transient or payload problem than a format problem.
+        """
+        for image in images or []:
+            if isinstance(image, (bytes, bytearray, memoryview)):
+                mime = self._detect_image_format(bytes(image))
+            elif isinstance(image, Path) or (
+                isinstance(image, str) and not image.startswith(("http://", "https://"))
+            ):
+                try:
+                    with open(image, "rb") as f:
+                        mime = self._detect_image_format(f.read())
+                except OSError:
+                    mime = None
+            else:
+                mime = None
+            if mime is not None and mime not in SUPPORTED_IMAGE_MIME_TYPES:
+                self._blacklist_mime(mime)
 
     async def get_vision_completion_async(
         self,
@@ -464,9 +573,14 @@ class OpenAIVLM(VLMBase):
                 return self._build_vlm_response(response, has_tools=True)
             return await self._extract_completion_content_async(response, elapsed)
 
-        return await retry_async(
-            _call,
-            max_retries=self.max_retries,
-            logger=logger,
-            operation_name="OpenAI VLM async vision completion",
-        )
+        try:
+            return await retry_async(
+                _call,
+                max_retries=self.max_retries,
+                logger=logger,
+                operation_name="OpenAI VLM async vision completion",
+            )
+        except Exception as e:
+            if is_image_error(e):
+                self._blacklist_rejected_image_mimes(images)
+            raise
