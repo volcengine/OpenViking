@@ -269,8 +269,6 @@ class SemanticProcessor(DequeueHandlerBase):
         from openviking.storage.queuefs import get_queue_manager
 
         queue_manager = get_queue_manager()
-        if queue_manager is None:
-            return
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
         parent_msg = SemanticMsg(
             uri=parent_uri,
@@ -334,8 +332,6 @@ class SemanticProcessor(DequeueHandlerBase):
         from openviking.storage.queuefs import get_queue_manager
 
         queue_manager = get_queue_manager()
-        if queue_manager is None:
-            return
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
         aggregate_msg = SemanticMsg(
             uri=msg.uri,
