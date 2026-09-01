@@ -969,11 +969,16 @@ async def add_resource(
             Only applies to remote-URL invocations.
         processing_mode: "semantic_and_vectors" for normal semantic processing, or
             "vectors_only" to skip semantic understanding and only build vector indexes.
-        to: Target URI under viking://resources/ (e.g. "viking://resources/volcengine/OpenViking").
-            Required when ``add_type`` is set; otherwise leave empty to derive a URI
-            from the source.
-        parent: Parent URI under viking://resources/ for remote or local-file imports.
-            Mutually exclusive with ``to`` and not supported when ``add_type`` is set.
+        to: Exact final URI including the leaf name (e.g.
+            "viking://resources/volcengine/OpenViking"). Written verbatim; an existing
+            target is synced to match the new source, so visible entries it does not
+            contain are deleted. Required when ``add_type`` is set.
+        parent: Existing directory to store the resource under, for remote or
+            local-file imports; the leaf name comes from the source. Never overwrites
+            — a collision reserves the next free name ("name_1", "name_2", ...) and
+            returns a warning. Mutually exclusive with ``to``; not supported when
+            ``add_type`` is set. Leaving both empty derives the directory and the name
+            from the source and handles collisions like ``parent``.
         tags: Optional explicit k=v retrieval tags to apply after ingestion.
         tag_mode: Tag update mode, "replace" or "append". Defaults to "replace".
         args: Parser-specific options, e.g. {"auth_config": {"token": "..."}}

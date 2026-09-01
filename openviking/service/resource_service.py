@@ -1417,10 +1417,16 @@ class ResourceService:
                 the type must be enabled in connector.allowed_add_types. A
                 declared request never degrades to the standard pipeline and
                 requires an exact ``to`` target.
-            to: Target URI (e.g., "viking://resources/my_resource"). Required
-                when ``add_type`` is set.
-            parent: Parent URI under which the resource will be stored. Not
-                supported when ``add_type`` is set.
+            to: Exact final URI including the leaf name (e.g.,
+                "viking://resources/my_resource"). Written verbatim; an existing
+                target is synced to match the new source, so visible entries it does
+                not contain are deleted. Required when ``add_type`` is set.
+            parent: Existing directory to store the resource under; the leaf name
+                comes from the source. Never overwrites — a collision reserves the
+                next free name ("name_1", "name_2", ...) and returns a warning.
+                Mutually exclusive with ``to`` and not supported when ``add_type``
+                is set. Leaving both empty derives the directory and the name from
+                the source and handles collisions like ``parent``.
             reason: Reason for adding the resource
             instruction: Processing instruction for semantic extraction
             wait: Whether to wait for semantic extraction and vectorization to complete
