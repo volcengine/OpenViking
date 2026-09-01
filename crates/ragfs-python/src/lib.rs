@@ -164,7 +164,8 @@ fn pathlock_err_to_py(err: PathLockError) -> PyErr {
         PathLockError::Conflict { .. }
         | PathLockError::Timeout { .. }
         | PathLockError::HandoffFailed(_)
-        | PathLockError::Busy { .. } => {
+        | PathLockError::Busy { .. }
+        | PathLockError::EmptyToken { .. } => {
             #[allow(deprecated)]
             Python::with_gil(|py| {
                 let ty = LOCK_ACQUISITION_ERROR_TYPE

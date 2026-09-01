@@ -681,7 +681,9 @@ impl PathLockManager {
     fn is_retryable_error(error: &PathLockError) -> bool {
         matches!(
             error,
-            PathLockError::Conflict { .. } | PathLockError::Busy { .. }
+            PathLockError::Conflict { .. }
+                | PathLockError::Busy { .. }
+                | PathLockError::EmptyToken { .. }
         )
     }
 
@@ -2402,6 +2404,7 @@ mod tests {
         fs.mkdir("/data/delete-me", 0o755).await.unwrap();
         let provider = Arc::new(crate::lock::provider::FilesystemPathLockProvider::new(
             fs.clone(),
+            PathLockConfig::default().lock_expire_secs,
         ));
         let mgr = PathLockManager::new(fs.clone(), provider, PathLockConfig::default());
         let lease = mgr
