@@ -392,6 +392,16 @@ def _serialize_s3_plugin_params(s3_config: Any) -> Dict[str, Any]:
             s3_config, "normalize_encoding_chars", "?#%+@"
         ),
         "auto_detect_content_type": _get_config_value(s3_config, "auto_detect_content_type", False),
+        "cache_enabled": _get_config_value(s3_config, "cache_enabled", True),
+        "cache_max_size": _get_config_value(s3_config, "cache_max_size", 10_000),
+        "cache_ttl": _get_config_value(s3_config, "cache_ttl", 600),
+        "stat_cache_ttl": _get_config_value(s3_config, "stat_cache_ttl", 600),
+        "object_cache_max_file_size_bytes": _get_config_value(
+            s3_config, "object_cache_max_file_size_bytes", 8 * 1024 * 1024
+        ),
+        "object_cache_max_size_bytes": _get_config_value(
+            s3_config, "object_cache_max_size_bytes", 512 * 1024 * 1024
+        ),
     }
 
 
