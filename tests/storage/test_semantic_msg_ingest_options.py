@@ -1,10 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-from openviking.storage.queuefs.semantic_msg import (
-    SEMANTIC_WORK_PARENT_REFRESH,
-    SemanticMsg,
-)
+from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.utils.ingest_options import IngestOptions
 
 
@@ -59,14 +56,10 @@ def test_semantic_msg_round_trips_deferred_aggregation_flag():
     msg = SemanticMsg(
         uri="viking://resources/wide",
         context_type="resource",
-        work_kind=SEMANTIC_WORK_PARENT_REFRESH,
         aggregate_directory=False,
     )
 
-    restored = SemanticMsg.from_json(msg.to_json())
-
-    assert restored.work_kind == SEMANTIC_WORK_PARENT_REFRESH
-    assert restored.aggregate_directory is False
+    assert SemanticMsg.from_json(msg.to_json()).aggregate_directory is False
 
 
 def test_semantic_msg_round_trips_hierarchical_aggregation_policy():

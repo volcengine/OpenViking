@@ -10,9 +10,6 @@ from uuid import uuid4
 
 from openviking.utils.ingest_options import IngestOptions
 
-SEMANTIC_WORK_GENERATE = "generate"
-SEMANTIC_WORK_PARENT_REFRESH = "parent_refresh"
-
 
 def build_semantic_coalesce_key(
     *,
@@ -33,8 +30,6 @@ class SemanticMsg:
         id: Unique identifier (UUID)
         uri: Directory URI to process
         context_type: Type of context (resource, memory, skill, session)
-        work_kind: Whether this message generates semantics or records a
-                   completed child change for its parent directory.
         status: Processing status (pending/processing/completed)
         timestamp: Creation timestamp
         recursive: Whether to recursively process subdirectories.
@@ -51,7 +46,6 @@ class SemanticMsg:
     id: str  # UUID
     uri: str  # Directory URI
     context_type: str  # resource, memory, skill, session
-    work_kind: str = SEMANTIC_WORK_GENERATE
     status: str = "pending"  # pending/processing/completed
     timestamp: int = int(datetime.now().timestamp())
     recursive: bool = True  # Whether to recursively process subdirectories
@@ -104,12 +98,10 @@ class SemanticMsg:
         aggregate_directory: bool = True,
         use_hierarchical_aggregation: bool = False,
         propagate_to_parent: bool = True,
-        work_kind: str = SEMANTIC_WORK_GENERATE,
     ):
         self.id = str(uuid4())
         self.uri = uri
         self.context_type = context_type
-        self.work_kind = work_kind
         self.recursive = recursive
         self.account_id = account_id
         self.user_id = user_id
@@ -162,7 +154,6 @@ class SemanticMsg:
         obj = cls(
             uri=uri,
             context_type=context_type,
-            work_kind=data.get("work_kind", SEMANTIC_WORK_GENERATE),
             recursive=data.get("recursive", True),
             account_id=data.get("account_id", "default"),
             user_id=data.get("user_id", "default"),
