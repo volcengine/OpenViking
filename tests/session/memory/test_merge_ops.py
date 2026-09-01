@@ -19,12 +19,14 @@ from openviking.session.memory.merge_op import (
     MergeOpFactory,
     PatchOp,
     PatchParseError,
+    ReplaceOp,
     SearchReplaceBlock,
     StrPatch,
     SumOp,
     apply_str_patch,
 )
 from openviking.session.memory.merge_op.base import FieldType
+from openviking.session.memory.utils.line_numbers import add_line_numbers, strip_line_numbers
 
 # ============================================================================
 # Test MergeOp Base Classes
@@ -139,6 +141,33 @@ class TestPatchOp:
 
         assert await op.apply("line 1\nline 2\nline 3\nline 4", patch) == "line 1\nline 4"
 
+    @pytest.mark.asyncio
+    async def test_apply_new_file_strips_numbered_replace_content(self):
+        op = PatchOp(FieldType.STRING)
+        patch = StrPatch(
+            blocks=[
+                SearchReplaceBlock(
+                    search="",
+                    replace="1\t## Title\n2\t- fact one",
+                )
+            ]
+        )
+
+        assert await op.apply(None, patch) == "## Title\n- fact one"
+
+    @pytest.mark.asyncio
+    async def test_apply_plain_string_replacement_strips_numbered_content(self):
+        op = PatchOp(FieldType.STRING)
+
+        assert await op.apply("old", "1\t## Title\n2\t- fact one") == "## Title\n- fact one"
+
+    @pytest.mark.asyncio
+    async def test_apply_plain_string_replacement_keeps_non_sequential_tabular_content(self):
+        op = PatchOp(FieldType.STRING)
+        content = "42\tAlice\n99\tBob"
+
+        assert await op.apply("old", content) == content
+
 
 class TestSumOp:
     """Tests for SumOp."""
@@ -184,6 +213,29 @@ class TestSumOp:
         """Invalid values should keep current."""
         op = SumOp()
         assert await op.apply("not a number", 10) == "not a number"
+
+
+class TestReplaceOp:
+    """Tests for ReplaceOp."""
+
+    @pytest.mark.asyncio
+    async def test_string_replace_strips_numbered_content(self):
+        op = ReplaceOp(FieldType.STRING)
+
+        assert await op.apply("old", "1\t## Title\n2\t- fact one") == "## Title\n- fact one"
+
+    @pytest.mark.asyncio
+    async def test_string_replace_keeps_non_sequential_tabular_content(self):
+        op = ReplaceOp(FieldType.STRING)
+        content = "42\tAlice\n99\tBob"
+
+        assert await op.apply("old", content) == content
+
+    @pytest.mark.asyncio
+    async def test_non_string_replace_keeps_value(self):
+        op = ReplaceOp(FieldType.INT64)
+
+        assert await op.apply(1, 2) == 2
 
 
 class TestImmutableOp:
@@ -454,6 +506,35 @@ class TestApplyStrPatch:
         result = apply_str_patch(original, patch)
 
         assert result == "keep\nsame\nKEEP\nSAME"
+
+    def test_numbered_replace_is_stripped_when_search_is_clean(self):
+        original = "## Title\n- old fact"
+        patch = StrPatch(
+            blocks=[
+                SearchReplaceBlock(
+                    search="- old fact",
+                    replace="1\t- old fact\n2\t- new fact",
+                )
+            ]
+        )
+
+        assert apply_str_patch(original, patch) == "## Title\n- old fact\n- new fact"
+
+    def test_strip_line_numbers_removes_repeated_prefixes(self):
+        content = "## Title\n- fact one"
+        numbered_twice = add_line_numbers(add_line_numbers(content))
+
+        stripped = strip_line_numbers(numbered_twice)
+
+        assert stripped == content
+        assert strip_line_numbers(stripped) == content
+
+    def test_strip_line_numbers_if_present_keeps_non_sequential_tabular_content(self):
+        from openviking.session.memory.utils.line_numbers import strip_line_numbers_if_present
+
+        content = "42\tAlice\n99\tBob"
+
+        assert strip_line_numbers_if_present(content) == content
 
     def test_numbered_patch_uses_aggressive_strip_with_leading_spaces(self):
         """Aggressive stripping should still handle tab-prefixed line numbers."""
