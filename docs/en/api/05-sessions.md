@@ -1666,6 +1666,51 @@ When long-term memory extraction runs successfully, the commit writes a `memory_
 
 An empty `memory_diff.json` (all counts zero) is written when long-term memory extraction runs but produces no applied or intentionally skipped operations.
 
+Starting with schema version 2, each operation also records a complete raw snapshot
+(`after_raw`, `before_raw`, or `deleted_raw`) and `operation_order`. These fields retain
+the `MEMORY_FIELDS` metadata needed for an exact, conflict-safe rollback. Older audit
+files without raw snapshots remain readable, but rollback reports them as conflicts
+instead of guessing how to reconstruct metadata.
+
+## Roll Back Session Memory Changes
+
+`POST /api/v1/sessions/{session_id}/rollback` reverses all memory changes recorded by
+the Session's commit archives, newest archive and newest operation first. By default,
+the Session is deleted only after every safe inverse operation succeeds.
+
+```bash
+# Always preview first
+ov session rollback a1b2c3d4 --dry-run
+
+# Apply the rollback and delete the Session
+ov session rollback a1b2c3d4
+
+# Keep the Session after applying the rollback
+ov session rollback a1b2c3d4 --keep-session
+
+# Equivalent delete workflow
+ov session delete a1b2c3d4 --rollback-memories --dry-run
+```
+
+```bash
+curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/rollback \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{"dry_run":true,"force":false,"delete_session":true}'
+```
+
+| Request field | Default | Description |
+|---|---:|---|
+| `dry_run` | `false` | Return the inverse plan without changing storage or deleting the Session |
+| `force` | `false` | Skip conflicting URIs and their older dependent operations; never overwrite them |
+| `delete_session` | `true` | Delete the Session after a successful non-dry-run rollback |
+
+A conflict is returned as HTTP `409` when current memory no longer matches the audited
+post-commit state. No memory changes are applied in that case. With `force=true`, the
+conflicting URI is skipped and the response status is `partial`. Filesystem writes are
+compensated if an operation fails; vector-index and overview refresh runs after the
+filesystem transaction.
+
 <a id="built-in-memory-types"></a>
 
 ## Full Example

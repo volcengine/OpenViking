@@ -738,6 +738,8 @@ async def test_patch_merge_policy_optimizer_runs_patch_merge_extract_loop(monkey
     assert plan.items[0].target_uri == policy_set.policies[0].uri
     assert plan.items[0].before_content == "content"
     assert plan.items[0].after_content == "merged content"
+    assert "content" in plan.items[0].metadata["rollback_before_raw"]
+    assert "<!-- MEMORY_FIELDS" in plan.items[0].metadata["rollback_before_raw"]
     assert [link.to_uri for link in plan.items[0].links] == [
         "viking://user/u/memories/trajectories/traj1.md"
     ]

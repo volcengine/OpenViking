@@ -548,6 +548,39 @@ async def get_session_archive(
     return Response(status="ok", result=_to_jsonable(result))
 
 
+class RollbackSessionRequest(BaseModel):
+    """Options for reversing memory changes recorded by a Session."""
+
+    dry_run: bool = False
+    force: bool = False
+    delete_session: bool = True
+    telemetry: Optional[TelemetryRequest] = None
+
+
+@router.post("/{session_id}/rollback")
+async def rollback_session_memories(
+    session_id: str = Path(..., description="Session ID"),
+    request: RollbackSessionRequest = Body(default_factory=RollbackSessionRequest),
+    _ctx: RequestContext = Depends(get_session_request_context),
+):
+    """Reverse committed memory changes, optionally deleting the Session afterward."""
+    service = get_service()
+    execution = await run_operation(
+        operation="session.rollback",
+        telemetry=request.telemetry,
+        fn=lambda: service.sessions.rollback_memories(
+            session_id,
+            _ctx,
+            dry_run=request.dry_run,
+            force=request.force,
+            delete_session=request.delete_session,
+        ),
+    )
+    return Response(status="ok", result=execution.result, telemetry=execution.telemetry).model_dump(
+        exclude_none=True
+    )
+
+
 @router.delete("/{session_id}")
 async def delete_session(
     session_id: str = Path(..., description="Session ID"),

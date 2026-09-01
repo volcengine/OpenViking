@@ -7,6 +7,7 @@ Verifies that memory_diff.json is correctly written to the archive directory
 containing adds, updates, and deletes.
 """
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -79,6 +80,9 @@ class TestMemoryDiffArchive:
         assert diff["summary"]["total_adds"] == 1
         assert diff["summary"]["total_updates"] == 0
         assert diff["summary"]["total_deletes"] == 0
+        assert diff["schema_version"] == 2
+        assert diff["operations"]["adds"][0]["after_raw"] == ("# Identity\n\nTest identity content")
+        assert diff["operation_order"][0]["kind"] == "add"
 
     @pytest.mark.asyncio
     async def test_build_memory_diff_update(self, compressor, mock_viking_fs, mock_ctx):
@@ -116,6 +120,9 @@ class TestMemoryDiffArchive:
 
         assert diff["summary"]["total_adds"] == 0
         assert diff["summary"]["total_updates"] == 1
+        update = diff["operations"]["updates"][0]
+        assert "Old identity content" in update["before_raw"]
+        assert update["after_raw"] == "# Identity\n\nNew identity content"
 
     @pytest.mark.asyncio
     async def test_build_memory_diff_delete(self, compressor, mock_viking_fs, mock_ctx):
@@ -147,6 +154,76 @@ class TestMemoryDiffArchive:
         assert len(diff["operations"]["deletes"]) == 1
         assert diff["operations"]["deletes"][0]["uri"] == "memory/user/test/context/old_project.md"
         assert "This project was deleted" in diff["operations"]["deletes"][0]["deleted_content"]
+        assert "<!-- MEMORY_FIELDS" in diff["operations"]["deletes"][0]["deleted_raw"]
+        assert '"project": "test"' in diff["operations"]["deletes"][0]["deleted_raw"]
+
+    @pytest.mark.asyncio
+    async def test_training_diff_preserves_raw_update_snapshots(
+        self, compressor, mock_viking_fs, mock_ctx
+    ):
+        uri = "viking://user/test/memories/experiences/retry.md"
+        item = SimpleNamespace(
+            memory_type="experiences",
+            links=[],
+            target_uri=uri,
+            target_name="retry",
+            kind="upsert",
+            before_content="old body",
+            after_content="new body",
+            metadata={"rollback_before_raw": "old raw snapshot"},
+        )
+        training_result = SimpleNamespace(
+            analyses=[],
+            plan=SimpleNamespace(items=[item]),
+            apply_result=SimpleNamespace(
+                written_uris=[uri],
+                deleted_uris=[],
+                updated_policy_set=SimpleNamespace(
+                    root_uri="viking://user/test/memories/experiences"
+                ),
+            ),
+        )
+        mock_viking_fs.read_file = AsyncMock(return_value="new raw snapshot")
+
+        diff = await compressor._build_training_memory_diff(
+            training_result=training_result,
+            viking_fs=mock_viking_fs,
+            ctx=mock_ctx,
+            archive_uri="viking://user/test/sessions/s/history/archive_001",
+        )
+
+        update = diff["operations"]["updates"][0]
+        assert update["before_raw"] == "old raw snapshot"
+        assert update["after_raw"] == "new raw snapshot"
+
+    @pytest.mark.asyncio
+    async def test_training_diff_preserves_raw_trajectory_snapshot(
+        self, compressor, mock_viking_fs, mock_ctx
+    ):
+        uri = "viking://user/test/memories/trajectories/run.md"
+        training_result = SimpleNamespace(
+            analyses=[
+                SimpleNamespace(trajectories=[SimpleNamespace(uri=uri, content="trajectory")])
+            ],
+            plan=SimpleNamespace(items=[]),
+            apply_result=SimpleNamespace(
+                written_uris=[],
+                deleted_uris=[],
+                updated_policy_set=SimpleNamespace(
+                    root_uri="viking://user/test/memories/experiences"
+                ),
+            ),
+        )
+        mock_viking_fs.read_file = AsyncMock(return_value="trajectory raw snapshot")
+
+        diff = await compressor._build_training_memory_diff(
+            training_result=training_result,
+            viking_fs=mock_viking_fs,
+            ctx=mock_ctx,
+            archive_uri="viking://user/test/sessions/s/history/archive_001",
+        )
+
+        assert diff["operations"]["adds"][0]["after_raw"] == "trajectory raw snapshot"
 
     @pytest.mark.asyncio
     async def test_build_memory_diff_edited(self, compressor, mock_viking_fs, mock_ctx):
@@ -478,11 +555,13 @@ class TestMemoryDiffStructure:
         """Verify memory_diff.json structure."""
         # This test validates the expected structure
         expected_keys = [
+            "schema_version",
             "archive_uri",
             "trace_id",
             "extracted_at",
             "operations",
             "skipped_operations",
+            "operation_order",
             "summary",
         ]
 
@@ -491,10 +570,12 @@ class TestMemoryDiffStructure:
         assert set(expected_keys).issubset(
             {
                 "archive_uri",
+                "schema_version",
                 "trace_id",
                 "extracted_at",
                 "operations",
                 "skipped_operations",
+                "operation_order",
                 "summary",
             }
         )

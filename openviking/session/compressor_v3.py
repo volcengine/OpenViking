@@ -322,11 +322,20 @@ class SessionCompressorV3:
                         "uri": uri,
                         "memory_type": memory_type,
                         "before": old_file.content,
+                        "before_raw": MemoryFileUtils.write(old_file, render_links=False),
                         "after": "",
+                        "after_raw": None,
                     }
                 )
             else:
-                adds.append({"uri": uri, "memory_type": memory_type, "after": ""})
+                adds.append(
+                    {
+                        "uri": uri,
+                        "memory_type": memory_type,
+                        "after": "",
+                        "after_raw": None,
+                    }
+                )
 
         for uri in result.edited_uris:
             op = upsert_by_uri.get(uri)
@@ -339,7 +348,11 @@ class SessionCompressorV3:
                     "uri": uri,
                     "memory_type": memory_type,
                     "before": old_file.content if old_file else "",
+                    "before_raw": (
+                        MemoryFileUtils.write(old_file, render_links=False) if old_file else None
+                    ),
                     "after": "",
+                    "after_raw": None,
                 }
             )
 
@@ -350,6 +363,9 @@ class SessionCompressorV3:
                     "uri": uri,
                     "memory_type": (deleted.memory_type if deleted else None) or "unknown",
                     "deleted_content": deleted.content if deleted else "",
+                    "deleted_raw": (
+                        MemoryFileUtils.write(deleted, render_links=False) if deleted else None
+                    ),
                 }
             )
 
@@ -363,6 +379,7 @@ class SessionCompressorV3:
             try:
                 content = await viking_fs.read_file(uri=item["uri"], ctx=ctx)
                 item["after"] = MemoryFileUtils.read(content).content
+                item["after_raw"] = content
             except Exception:
                 pass
 
@@ -375,6 +392,7 @@ class SessionCompressorV3:
                 content = await viking_fs.read_file(uri=item["uri"], ctx=ctx)
                 new_file = MemoryFileUtils.read(content, uri=item["uri"])
                 item["after"] = new_file.content
+                item["after_raw"] = content
             except Exception:
                 pass
             if old_file is not None and _same_memory_file(old_file, new_file):
@@ -1148,11 +1166,18 @@ class SessionCompressorV3:
                 if not uri or uri in seen_trajectory_uris:
                     continue
                 seen_trajectory_uris.add(uri)
+                after, after_raw = await _read_memory_content_snapshot(
+                    viking_fs,
+                    uri=uri,
+                    ctx=ctx,
+                    fallback=trajectory.content,
+                )
                 adds.append(
                     {
                         "uri": uri,
                         "memory_type": "trajectories",
-                        "after": trajectory.content,
+                        "after": after,
+                        "after_raw": after_raw,
                     }
                 )
 
@@ -1183,20 +1208,29 @@ class SessionCompressorV3:
                             "uri": uri,
                             "memory_type": "experiences",
                             "deleted_content": item.before_content or "",
+                            "deleted_raw": item.metadata.get("rollback_before_raw"),
                         }
                     )
                 continue
             if item.kind != "upsert" or uri not in applied_uris:
                 continue
-            after = await _read_plain_memory_content(
+            after, after_raw = await _read_memory_content_snapshot(
                 viking_fs,
                 uri=uri,
                 ctx=ctx,
                 fallback=item.after_content or "",
             )
             before = item.before_content
+            before_raw = item.metadata.get("rollback_before_raw")
             if before is None:
-                adds.append({"uri": uri, "memory_type": "experiences", "after": after})
+                adds.append(
+                    {
+                        "uri": uri,
+                        "memory_type": "experiences",
+                        "after": after,
+                        "after_raw": after_raw,
+                    }
+                )
             else:
                 # Filter no-op experience updates the same way as user-memory
                 # updates: a patch that re-serializes to identical content should
@@ -1214,7 +1248,9 @@ class SessionCompressorV3:
                         "uri": uri,
                         "memory_type": "experiences",
                         "before": before,
+                        "before_raw": before_raw,
                         "after": after,
+                        "after_raw": after_raw,
                     }
                 )
 
@@ -2151,7 +2187,13 @@ def _make_memory_diff(
     skipped_operations: Optional[list[dict[str, Any]]] = None,
 ) -> dict[str, Any]:
     skipped = list(skipped_operations or [])
+    operation_order = [
+        *[{"kind": "add", **item} for item in adds],
+        *[{"kind": "update", **item} for item in updates],
+        *[{"kind": "delete", **item} for item in deletes],
+    ]
     return {
+        "schema_version": 2,
         "archive_uri": archive_uri,
         "trace_id": tracer.get_trace_id() or None,
         "extracted_at": datetime.utcnow().isoformat() + "Z",
@@ -2161,6 +2203,10 @@ def _make_memory_diff(
             "deletes": list(deletes),
         },
         "skipped_operations": skipped,
+        # Preserve execution order so consumers can invert multiple changes to
+        # the same URI deterministically. The grouped operations above remain
+        # for backward compatibility with existing audit readers.
+        "operation_order": operation_order,
         "summary": {
             "total_adds": len(adds),
             "total_updates": len(updates),
@@ -2179,6 +2225,7 @@ def _merge_memory_diffs(
     updates: list[dict[str, Any]] = []
     deletes: list[dict[str, Any]] = []
     skipped_operations: list[dict[str, Any]] = []
+    operation_order: list[dict[str, Any]] = []
     trace_id = tracer.get_trace_id() or None
     for diff in diffs:
         if not isinstance(diff, dict):
@@ -2194,6 +2241,29 @@ def _merge_memory_diffs(
         adds.extend([item for item in operations.get("adds", []) if isinstance(item, dict)])
         updates.extend([item for item in operations.get("updates", []) if isinstance(item, dict)])
         deletes.extend([item for item in operations.get("deletes", []) if isinstance(item, dict)])
+        ordered = diff.get("operation_order")
+        if isinstance(ordered, list):
+            operation_order.extend(item for item in ordered if isinstance(item, dict))
+        else:
+            operation_order.extend(
+                [
+                    *[
+                        {"kind": "add", **item}
+                        for item in operations.get("adds", [])
+                        if isinstance(item, dict)
+                    ],
+                    *[
+                        {"kind": "update", **item}
+                        for item in operations.get("updates", [])
+                        if isinstance(item, dict)
+                    ],
+                    *[
+                        {"kind": "delete", **item}
+                        for item in operations.get("deletes", [])
+                        if isinstance(item, dict)
+                    ],
+                ]
+            )
     merged = _make_memory_diff(
         archive_uri=archive_uri,
         adds=adds,
@@ -2202,6 +2272,7 @@ def _merge_memory_diffs(
         skipped_operations=skipped_operations,
     )
     merged["trace_id"] = trace_id
+    merged["operation_order"] = operation_order
     return merged
 
 
@@ -2217,18 +2288,18 @@ def _memory_diff_has_changes(diff: Any) -> bool:
     )
 
 
-async def _read_plain_memory_content(
+async def _read_memory_content_snapshot(
     viking_fs: Any,
     *,
     uri: str,
     ctx: RequestContext,
     fallback: str,
-) -> str:
+) -> tuple[str, str | None]:
     try:
         raw = await viking_fs.read_file(uri, ctx=ctx)
-        return MemoryFileUtils.read(raw, uri=uri).content
+        return MemoryFileUtils.read(raw, uri=uri).content, raw
     except Exception:
-        return fallback
+        return fallback, None
 
 
 def _experience_plan_item_uri(item: PolicyPlanItem, root_uri: str) -> str:
