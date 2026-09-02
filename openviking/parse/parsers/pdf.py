@@ -17,6 +17,7 @@ import base64
 import hashlib
 import io
 import re
+import threading
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -35,6 +36,12 @@ from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.parser_config import PDFConfig
 
 logger = get_logger(__name__)
+
+
+# PDFium is process-global and not thread-safe, even for different documents.
+# pdfplumber enters PDFium from Page.to_image(), while PDF parsing itself runs
+# in asyncio's shared thread pool, so every such call must be serialized.
+_PDFIUM_RENDER_LOCK = threading.Lock()
 
 
 class PDFParser(BaseParser):
@@ -670,7 +677,8 @@ class PDFParser(BaseParser):
                 return None
 
             cropped = page.crop(bbox)
-            page_image = cropped.to_image(resolution=self.config.image_resolution)
+            with _PDFIUM_RENDER_LOCK:
+                page_image = cropped.to_image(resolution=self.config.image_resolution)
 
             buffer = io.BytesIO()
             page_image.save(buffer, format="PNG")

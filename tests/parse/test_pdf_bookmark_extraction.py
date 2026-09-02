@@ -7,6 +7,8 @@ Verifies that _extract_bookmarks correctly extracts bookmark entries
 and that _convert_local injects them as markdown headings.
 """
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -533,3 +535,60 @@ class TestExtractImages:
             )
             is None
         )
+
+    def test_extract_image_serializes_pdfium_rendering_across_threads(self):
+        """Concurrent PDF parses must never overlap inside PDFium rendering."""
+        parser = PDFParser()
+        first_entered = threading.Event()
+        release_first = threading.Event()
+        second_started = threading.Event()
+        second_entered = threading.Event()
+        state_lock = threading.Lock()
+        state = {"calls": 0, "active": 0, "max_active": 0}
+
+        class BlockingCroppedPage:
+            def to_image(self, resolution: int):
+                assert resolution == parser.config.image_resolution
+                with state_lock:
+                    state["calls"] += 1
+                    call_number = state["calls"]
+                    state["active"] += 1
+                    state["max_active"] = max(state["max_active"], state["active"])
+
+                try:
+                    if call_number == 1:
+                        first_entered.set()
+                        assert release_first.wait(timeout=2)
+                    else:
+                        second_entered.set()
+                    return _FakeRenderedImage(b"rendered-png")
+                finally:
+                    with state_lock:
+                        state["active"] -= 1
+
+        page = MagicMock(width=100, height=200)
+        page.crop.return_value = BlockingCroppedPage()
+        image = {"x0": 10, "top": 20, "x1": 40, "bottom": 60}
+
+        def render_second():
+            second_started.set()
+            return parser._extract_image_from_page(page, image)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first = executor.submit(parser._extract_image_from_page, page, image)
+            assert first_entered.wait(timeout=2)
+            second = executor.submit(render_second)
+            assert second_started.wait(timeout=2)
+
+            try:
+                # The second worker is running, but must remain outside PDFium
+                # until the first worker leaves the process-wide critical section.
+                assert not second_entered.wait(timeout=0.2)
+            finally:
+                release_first.set()
+
+            assert first.result(timeout=2) == b"rendered-png"
+            assert second.result(timeout=2) == b"rendered-png"
+
+        assert second_entered.is_set()
+        assert state["max_active"] == 1
