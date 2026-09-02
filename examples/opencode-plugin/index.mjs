@@ -66,7 +66,14 @@ export async function OpenVikingPlugin({ client, directory }) {
 
     "experimental.chat.system.transform": (_input, output) => {
       const prompt = repoContext.getRepoSystemPrompt()
-      if (prompt) output.system.push(prompt)
+      if (!prompt) return
+      if (output.system.length > 0) {
+        // Templates accept exactly one system prompt; append to the existing
+        // entry instead of pushing a second one.
+        output.system[0] = `${output.system[0]}\n\n${prompt}`
+        return
+      }
+      output.system.push(prompt)
     },
 
     "chat.message": async (input, output) => {
