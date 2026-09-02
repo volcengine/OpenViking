@@ -229,14 +229,20 @@ def test_context_builder_keeps_trusted_local_file_support(tmp_path):
 
 def test_redact_image_data_urls_does_not_mutate_request_messages():
     inline_url = _data_url("image/png", PNG_SIGNATURE)
+    uppercase_inline_url = inline_url.replace(";base64,", ";BASE64,")
     messages = [
         {
             "role": "user",
-            "content": [{"type": "image_url", "image_url": {"url": inline_url}}],
+            "content": [
+                {"type": "image_url", "image_url": {"url": inline_url}},
+                {"type": "image_url", "image_url": {"url": uppercase_inline_url}},
+            ],
         }
     ]
 
     redacted = redact_image_data_urls(messages)
 
     assert "redacted" in redacted[0]["content"][0]["image_url"]["url"]
+    assert "redacted" in redacted[0]["content"][1]["image_url"]["url"]
     assert messages[0]["content"][0]["image_url"]["url"] == inline_url
+    assert messages[0]["content"][1]["image_url"]["url"] == uppercase_inline_url

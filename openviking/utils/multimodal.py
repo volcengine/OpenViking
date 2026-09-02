@@ -11,8 +11,7 @@ def redact_image_data_urls(value: Any) -> Any:
     """Return a copy with inline image payloads replaced by compact placeholders."""
     if isinstance(value, str):
         if value.lower().startswith("data:image/") and ";base64," in value.lower():
-            header, payload = value.split(",", 1)
-            return f"{header},[redacted {len(payload)} base64 chars]"
+            return "[redacted image data]"
         return value
     if isinstance(value, list):
         return [redact_image_data_urls(item) for item in value]

@@ -191,7 +191,7 @@ class OpenVikingService:
         # Workers are NOT started here — start() is called after VikingFS is initialized
         # in initialize(), so that recovered tasks don't race against VikingFS init.
         if self._queue_manager:
-            self._queue_manager.setup_standard_queues(self._vikingdb_manager, start=False)
+            self._queue_manager.setup_standard_queues(self._vikingdb_manager)
 
         # PathLock has been moved to Rust ragfs; Python-layer LockManager is no longer needed.
         set_task_tracker(config.build_task_tracker(self._agfs_client))
@@ -476,7 +476,6 @@ class OpenVikingService:
                     queue_name,
                     dequeue_handler=AddResourceProcessor(
                         self._resource_service,
-                        asyncio.get_running_loop(),
                         queue_name,
                         self._viking_fs,
                     ),
@@ -486,7 +485,6 @@ class OpenVikingService:
                 self._queue_manager.SESSION_COMMIT,
                 dequeue_handler=SessionCommitProcessor(
                     self._session_service,
-                    asyncio.get_running_loop(),
                 ),
                 allow_create=True,
             )
@@ -506,7 +504,7 @@ class OpenVikingService:
             logger.info("WatchScheduler disabled by config (enable_watch_scheduler=false)")
 
         if self._queue_manager:
-            self._queue_manager.start()
+            await self._queue_manager.start()
             logger.info("QueueManager workers started")
 
         # Preflight the MinerU endpoint when it will be used, so endpoint
@@ -546,7 +544,7 @@ class OpenVikingService:
             logger.info("SessionAutoCommitScheduler stopped")
 
         if self._queue_manager:
-            await asyncio.to_thread(self._queue_manager.stop)
+            await self._queue_manager.stop()
             self._queue_manager = None
             logger.info("Queue manager stopped")
 

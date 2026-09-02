@@ -449,7 +449,6 @@ class LiteLLMVLMProvider(VLMBase):
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously."""
         kwargs = self._build_text_kwargs(prompt, thinking, tools, tool_choice, messages)
-        # 用 tracer.info 打印请求
         tracer.info(
             f"request: {json.dumps(redact_image_data_urls(kwargs), ensure_ascii=False, indent=2)}"
         )

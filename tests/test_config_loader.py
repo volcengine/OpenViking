@@ -583,7 +583,6 @@ def test_early_logger_initialization_is_reconfigured_to_file_output(tmp_path, mo
         logger.propagate = True
     logger_module._shared_log_handler = None
     logger_module._shared_log_handler_key = None
-    logger_module._stop_std_stream_listeners()
 
     OpenVikingConfigSingleton.reset_instance()
     monkeypatch.setenv("OPENVIKING_CONFIG_FILE", "/tmp/codex-no-config.json")
@@ -616,8 +615,7 @@ def test_early_logger_initialization_is_reconfigured_to_file_output(tmp_path, mo
         uvicorn_access = logging.getLogger("uvicorn.access")
         assert refreshed_logger.handlers == []
         assert uvicorn_access.handlers == []
-        assert any(isinstance(h, logging.FileHandler) for h in openviking_root.handlers)
-        assert not any(type(h) is logging.StreamHandler for h in openviking_root.handlers)
+        assert any(isinstance(h, QueueHandler) for h in openviking_root.handlers)
         assert openviking_root.handlers == uvicorn_root.handlers
 
         refreshed_logger.info("child-line")
@@ -637,5 +635,4 @@ def test_early_logger_initialization_is_reconfigured_to_file_output(tmp_path, mo
             logger.propagate = True
         logger_module._shared_log_handler = None
         logger_module._shared_log_handler_key = None
-        logger_module._stop_std_stream_listeners()
         OpenVikingConfigSingleton.reset_instance()

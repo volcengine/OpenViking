@@ -1,5 +1,4 @@
 import asyncio
-import concurrent.futures
 import json
 import zipfile
 from pathlib import Path
@@ -42,7 +41,6 @@ async def test_add_resource_processor_cancelled_context_preserves_group_ids(monk
     )
     processor = AddResourceProcessor(
         service,
-        asyncio.get_running_loop(),
         QueueManager.ADD_RESOURCE,
         viking_fs,
     )
@@ -56,28 +54,6 @@ async def test_add_resource_processor_cancelled_context_preserves_group_ids(monk
         role="user",
         lock_handoff={"handle_id": "lock-1"},
         cleanup_empty_target_on_failure=True,
-    )
-
-    def run_on_current_loop(coro, _loop):
-        task = asyncio.create_task(coro)
-        future: concurrent.futures.Future[None] = concurrent.futures.Future()
-
-        def complete(completed: asyncio.Task) -> None:
-            if completed.cancelled():
-                future.cancel()
-                return
-            error = completed.exception()
-            if error is not None:
-                future.set_exception(error)
-            else:
-                future.set_result(completed.result())
-
-        task.add_done_callback(complete)
-        return future
-
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.add_resource_processor.asyncio.run_coroutine_threadsafe",
-        run_on_current_loop,
     )
 
     await processor.on_cancelled({"data": json.dumps(msg.to_dict())})
@@ -1014,7 +990,6 @@ async def test_add_resource_processor_persists_final_uri_and_cleans_staged_sourc
     )
     processor = AddResourceProcessor(
         service,
-        asyncio.get_running_loop(),
         QueueManager.ADD_RESOURCE,
         viking_fs,
     )
@@ -1152,7 +1127,6 @@ async def test_add_resource_processor_collects_stats_without_registered_telemetr
             execute_add_resource_job=AsyncMock(side_effect=execute_add_resource_job),
             _link_resource_reason_memory=AsyncMock(),
         ),
-        asyncio.get_running_loop(),
         QueueManager.ADD_RESOURCE,
         SimpleNamespace(_async_agfs=SimpleNamespace(pathlock_release=AsyncMock())),
     )
@@ -1216,7 +1190,6 @@ async def test_add_resource_processor_replay_skips_lock_adopt_when_result_exists
     )
     processor = AddResourceProcessor(
         service,
-        asyncio.get_running_loop(),
         QueueManager.ADD_RESOURCE,
         SimpleNamespace(_async_agfs=async_agfs),
     )
@@ -1269,7 +1242,6 @@ async def test_add_resource_processor_reports_zero_vectors(monkeypatch):
     )
     processor = AddResourceProcessor(
         service,
-        asyncio.get_running_loop(),
         QueueManager.ADD_RESOURCE,
         SimpleNamespace(_async_agfs=SimpleNamespace(pathlock_release=AsyncMock())),
     )

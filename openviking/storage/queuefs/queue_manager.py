@@ -6,10 +6,7 @@ All queues are managed through NamedQueue.
 """
 
 import asyncio
-import atexit
-import threading
 import time
-import traceback
 from typing import Any, Dict, Optional, Set, Union
 
 from openviking.service.task_work_index import TaskWorkIndex
@@ -108,25 +105,21 @@ class QueueManager:
         self._max_concurrent_add_resource = max_concurrent_add_resource
         self._max_concurrent_session_commit = max_concurrent_session_commit
         self._queues: Dict[str, NamedQueue] = {}
-        self._started = False
-        self._queue_threads: Dict[str, threading.Thread] = {}
-        self._queue_stop_events: Dict[str, threading.Event] = {}
+        self._workers: Dict[str, asyncio.Task[None]] = {}
+        self._stop_event: Optional[asyncio.Event] = None
         self._poll_interval = 0.2
         self._task_work_index = TaskWorkIndex()
 
-        atexit.register(self.stop)
         logger.info(
             f"[QueueManager] Initialized with agfs={type(agfs).__name__}, mount_point={mount_point}"
         )
 
-    def start(self) -> None:
+    async def start(self) -> None:
         """Start QueueManager workers."""
-        if self._started:
+        if self._stop_event is not None:
             return
 
-        self._started = True
-
-        # Start queue workers for existing queues
+        self._stop_event = asyncio.Event()
         for queue in list(self._queues.values()):
             self._start_queue_worker(queue)
 
@@ -139,17 +132,8 @@ class QueueManager:
         tracker.attach_work_index(self._task_work_index)
         await tracker.restore_work_tasks(owners)
 
-    def setup_standard_queues(self, vector_store: Any, start: bool = True) -> None:
-        """
-        Setup standard queues (Embedding and Semantic) with their handlers.
-
-        Args:
-            vector_store: Vector store instance for handlers to write results.
-            start: Whether to start worker threads immediately (default True).
-                   Pass False when the consumer depends on resources that are
-                   not yet initialized (e.g. VikingFS); call start() manually
-                   after those resources are ready.
-        """
+    def setup_standard_queues(self, vector_store: Any) -> None:
+        """Set up standard queues without starting their consumers."""
         # Import handlers here to avoid circular dependencies
         from openviking.storage.collection_schemas import TextEmbeddingHandler
         from openviking.storage.queuefs import SemanticProcessor
@@ -172,26 +156,18 @@ class QueueManager:
         )
         logger.info("Semantic queue initialized with SemanticProcessor")
 
-        if start:
-            self.start()
-
     def _start_queue_worker(self, queue: NamedQueue) -> None:
-        """Start a dedicated worker thread for a queue if not already running."""
-        if queue.name in self._queue_threads:
-            thread = self._queue_threads[queue.name]
-            if thread.is_alive():
-                return
-
-        max_concurrent = self._max_concurrent_for_queue(queue.name)
-        stop_event = threading.Event()
-        self._queue_stop_events[queue.name] = stop_event
-        thread = threading.Thread(
-            target=self._queue_worker_loop,
-            args=(queue, stop_event, max_concurrent),
-            daemon=True,
+        """Start one consumer task on the service event loop."""
+        if self._stop_event is None or queue.name in self._workers:
+            return
+        self._workers[queue.name] = asyncio.create_task(
+            self._queue_worker_loop(
+                queue,
+                self._max_concurrent_for_queue(queue.name),
+                self._stop_event,
+            ),
+            name=f"queuefs:{queue.name}",
         )
-        self._queue_threads[queue.name] = thread
-        thread.start()
 
     def _max_concurrent_for_queue(self, queue_name: str) -> int:
         """Return the worker concurrency limit for a named queue."""
@@ -207,101 +183,57 @@ class QueueManager:
             return self._max_concurrent_session_commit
         return self._max_concurrent_semantic
 
-    def _queue_worker_loop(
-        self, queue: NamedQueue, stop_event: threading.Event, max_concurrent: int = 1
+    async def _queue_worker_loop(
+        self,
+        queue: NamedQueue,
+        max_concurrent: int,
+        stop_event: asyncio.Event,
     ) -> None:
-        """Worker loop for a single queue.
-
-        When max_concurrent > 1, items are fetched and processed in parallel
-        (up to max_concurrent at a time). Otherwise items are processed one by one.
-        """
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        """Consume one durable queue with bounded in-flight work."""
         poll_interval = (
             self._SESSION_COMMIT_POLL_INTERVAL
             if queue.name == self.SESSION_COMMIT
             else self._poll_interval
         )
-        try:
-            if max_concurrent > 1:
-                loop.run_until_complete(
-                    self._worker_async_concurrent(queue, stop_event, max_concurrent)
-                )
-            else:
-                while not stop_event.is_set():
-                    try:
-                        queue_size = loop.run_until_complete(queue.size())
-                        if queue.has_dequeue_handler() and queue_size > 0:
-                            data = loop.run_until_complete(queue.dequeue())
-                            if data is not None:
-                                logger.debug("[QueueManager] Dequeued message from %s", queue.name)
-                            if queue.name == self.SESSION_COMMIT:
-                                stop_event.wait(poll_interval)
-                        else:
-                            stop_event.wait(poll_interval)
-                    except Exception as e:
-                        logger.error(f"[QueueManager] Worker error for {queue.name}: {e}")
-                        traceback.print_exc()
-                        stop_event.wait(poll_interval)
-        finally:
-            loop.close()
-
-    async def _worker_async_concurrent(
-        self, queue: NamedQueue, stop_event: threading.Event, max_concurrent: int
-    ) -> None:
-        """Concurrent worker: drains the queue and processes items in parallel.
-
-        A Semaphore caps inflight tasks at max_concurrent.
-        """
-        poll_interval = (
-            self._SESSION_COMMIT_POLL_INTERVAL
-            if queue.name == self.SESSION_COMMIT
-            else self._poll_interval
-        )
-        sem = asyncio.Semaphore(max_concurrent)
         active_tasks: Set[asyncio.Task] = set()
 
         async def process_one(data: Dict[str, Any]) -> None:
-            async with sem:
-                msg_id = data.get("id", "") if isinstance(data, dict) else ""
-                try:
-                    await queue.process_dequeued(data)
-                    # Ack after successful processing (delete from persistent storage).
-                    await queue.ack(msg_id, data)
-                except Exception as e:
-                    # Handler did not call report_error; decrement in_progress manually.
-                    # Do NOT ack — let RecoverStale re-queue on next startup.
-                    queue._on_process_error(str(e), data)
-                    logger.error(f"[QueueManager] Concurrent worker error for {queue.name}: {e}")
-
-        while not stop_event.is_set():
-            # Prune completed tasks
-            active_tasks = {t for t in active_tasks if not t.done()}
-
-            # While capacity remains, keep draining the queue
-            while len(active_tasks) < max_concurrent:
-                try:
-                    queue_size = await queue.size()
-                except Exception:
-                    break
-                if not queue.has_dequeue_handler() or queue_size == 0:
-                    break
-                data = await queue.dequeue_raw()
-                if data is None:
-                    break
-                # Increment before task creation to close the race window where
-                # size=0 and in_progress=0 between dequeue_raw() and task execution.
-                queue._on_dequeue_start()
-                task = asyncio.create_task(process_one(data))
-                active_tasks.add(task)
-                logger.debug(
-                    f"[QueueManager] Dispatched concurrent task for {queue.name} "
-                    f"(active={len(active_tasks)})"
+            msg_id = data.get("id", "")
+            try:
+                await queue.process_dequeued(data)
+                await queue.ack(msg_id, data)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                queue._on_process_error(str(exc), data)
+                logger.error(
+                    "[QueueManager] Worker error for %s: %s",
+                    queue.name,
+                    exc,
                 )
 
-            await asyncio.sleep(poll_interval)
+        while not stop_event.is_set():
+            active_tasks = {task for task in active_tasks if not task.done()}
+            while queue.has_dequeue_handler() and len(active_tasks) < max_concurrent:
+                try:
+                    data = await queue.dequeue_raw()
+                except Exception as exc:
+                    logger.error("[QueueManager] Dequeue failed for %s: %s", queue.name, exc)
+                    break
+                if data is None:
+                    break
+                queue._on_dequeue_start()
+                task = asyncio.create_task(
+                    process_one(data),
+                    name=f"queuefs:{queue.name}:{data.get('id', '')}",
+                )
+                active_tasks.add(task)
 
-        # Drain remaining in-flight tasks on shutdown (with timeout)
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=poll_interval)
+            except asyncio.TimeoutError:
+                pass
+
         if active_tasks:
             try:
                 await asyncio.wait_for(
@@ -313,29 +245,23 @@ class QueueManager:
                     f"[QueueManager] Drain timeout for {queue.name}, "
                     f"cancelling {len(active_tasks)} in-flight task(s)"
                 )
-                for t in active_tasks:
-                    t.cancel()
+                for task in active_tasks:
+                    task.cancel()
                 await asyncio.gather(*active_tasks, return_exceptions=True)
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
         """Stop QueueManager and release resources."""
         global _instance
-        if not self._started:
+        if self._stop_event is None:
             return
 
-        # Stop queue workers
-        for stop_event in self._queue_stop_events.values():
-            stop_event.set()
-        for name, thread in self._queue_threads.items():
-            thread.join(timeout=10.0)
-            if thread.is_alive():
-                logger.warning(f"[QueueManager] Worker thread {name} did not exit in time")
-        self._queue_threads.clear()
-        self._queue_stop_events.clear()
+        self._stop_event.set()
+        await asyncio.gather(*self._workers.values())
+        self._workers.clear()
 
         self._agfs = None
         self._queues.clear()
-        self._started = False
+        self._stop_event = None
 
         if _instance is self:
             _instance = None
@@ -344,7 +270,7 @@ class QueueManager:
 
     def is_running(self) -> bool:
         """Check if QueueManager is running."""
-        return self._started
+        return self._stop_event is not None
 
     def get_queue(
         self,
@@ -384,13 +310,12 @@ class QueueManager:
                     dequeue_handler=dequeue_handler,
                     task_work_index=self._task_work_index,
                 )
-            if self._started:
+            if self._stop_event is not None:
                 self._start_queue_worker(self._queues[name])
         else:
             if dequeue_handler is not None:
                 self._queues[name].set_dequeue_handler(dequeue_handler)
-            if self._started:
-                # Ensure existing queue has a worker running
+            if self._stop_event is not None:
                 self._start_queue_worker(self._queues[name])
         return self._queues[name]
 
@@ -431,8 +356,8 @@ class QueueManager:
         if queue_name:
             if queue_name not in self._queues:
                 return False
-            return self._queues[queue_name]._error_count > 0
-        return any(q._error_count > 0 for q in self._queues.values())
+            return self._queues[queue_name].has_errors()
+        return any(queue.has_errors() for queue in self._queues.values())
 
     async def is_all_complete(self, queue_name: Optional[str] = None) -> bool:
         """Check if all processing is complete."""

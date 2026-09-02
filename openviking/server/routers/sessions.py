@@ -748,11 +748,7 @@ async def add_message(
                 "source_message_ids": request.source_message_ids,
             }
         ]
-        add_many_async = getattr(session, "add_messages_async", None)
-        if callable(add_many_async):
-            await add_many_async(specs)
-        else:
-            session.add_messages(specs)
+        await session.add_messages_async(specs)
         await service.sessions.maybe_schedule_auto_commit(
             session_id,
             _ctx,
@@ -804,11 +800,7 @@ async def batch_add_messages(
                     "source_message_ids": msg_request.source_message_ids,
                 }
             )
-        add_many_async = getattr(session, "add_messages_async", None)
-        if callable(add_many_async):
-            msgs = await add_many_async(specs)
-        else:
-            msgs = session.add_messages(specs)
+        msgs = await session.add_messages_async(specs)
         await service.sessions.maybe_schedule_auto_commit(
             session_id,
             _ctx,

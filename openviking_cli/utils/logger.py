@@ -4,16 +4,15 @@
 Logging utilities for OpenViking.
 """
 
-import atexit
 import contextvars
+import copy
 import logging
 import queue
 import sys
-import threading
 from contextlib import contextmanager
 from logging.handlers import QueueHandler, QueueListener, TimedRotatingFileHandler
 from pathlib import Path
-from typing import Any, Iterator, Optional, Tuple
+from typing import Any, Iterator, Optional
 from uuid import uuid4
 
 from openviking.observability.context import (
@@ -67,12 +66,6 @@ _otel_log_handler: Any = None
 _MANAGED_LOGGER_ROOTS = ("openviking", "openviking_cli", "uvicorn")
 _shared_log_handler: Optional[logging.Handler] = None
 _shared_log_handler_key: Optional[tuple[Any, ...]] = None
-
-# QueueListeners for thread-safe stdout/stderr logging (avoids StreamHandler stalls
-# on application threads when process managers redirect streams).
-_std_stream_handlers: dict[str, Tuple[QueueListener, logging.Handler]] = {}
-_std_stream_handlers_lock = threading.RLock()
-_std_stream_atexit_registered = False
 
 _request_id_context: contextvars.ContextVar[str] = contextvars.ContextVar(
     "openviking_log_request_id", default=""
@@ -664,7 +657,7 @@ class LogToSpanEventFilter(logging.Filter):
         return True
 
 
-def _load_log_config() -> Tuple[str, str, str, Optional[Any]]:
+def _load_log_config() -> tuple[str, str, str, Optional[Any]]:
     config = None
     try:
         from openviking_cli.utils.config import get_openviking_config
@@ -695,48 +688,44 @@ def _managed_root_name(name: str) -> Optional[str]:
     return None
 
 
-def _stop_std_stream_listeners() -> None:
-    """Stop queue listeners created for stdout/stderr logging."""
-    with _std_stream_handlers_lock:
-        listeners = list(_std_stream_handlers.values())
-        _std_stream_handlers.clear()
+class _QueuedLogHandler(QueueHandler):
+    """Own a background sink while callers only enqueue raw records."""
 
-    for listener, real_handler in listeners:
-        try:
-            listener.stop()
-        except Exception:
-            pass
-        try:
-            real_handler.close()
-        except Exception:
-            pass
+    def __init__(self, sink: logging.Handler) -> None:
+        self._sink = sink
+        log_queue: queue.Queue = queue.Queue(-1)
+        super().__init__(log_queue)
+        self._listener = QueueListener(log_queue, sink, respect_handler_level=True)
+        self._listener.start()
+
+    def prepare(self, record: logging.LogRecord) -> logging.LogRecord:
+        return copy.copy(record)
+
+    def flush(self) -> None:
+        self.queue.join()
+        self._sink.flush()
+
+    def close(self) -> None:
+        if not self._closed:
+            self._listener.stop()
+            self._sink.close()
+        super().close()
 
 
-def _create_queued_stream_handler(log_output: str) -> QueueHandler:
-    """Create a QueueHandler backed by a per-stream QueueListener."""
-    global _std_stream_atexit_registered
+def _create_log_sink(log_output: str, config: Optional[Any]) -> logging.Handler:
+    if log_output in ("stdout", "stderr"):
+        stream = sys.stdout if log_output == "stdout" else sys.stderr
+        return logging.StreamHandler(stream)
 
-    if log_output not in ("stdout", "stderr"):
-        raise ValueError(f"unsupported stream log output: {log_output}")
-
-    with _std_stream_handlers_lock:
-        entry = _std_stream_handlers.get(log_output)
-        if entry is None:
-            stream = sys.stdout if log_output == "stdout" else sys.stderr
-            real_handler = logging.StreamHandler(stream)
-            log_queue: queue.Queue = queue.Queue(-1)
-            listener = QueueListener(log_queue, real_handler, respect_handler_level=True)
-            listener.start()
-            _std_stream_handlers[log_output] = (listener, real_handler)
-            entry = (listener, real_handler)
-            if not _std_stream_atexit_registered:
-                atexit.register(_stop_std_stream_listeners)
-                _std_stream_atexit_registered = True
-
-        listener, real_handler = entry
-        handler = QueueHandler(listener.queue)
-        handler._ov_real_handler = real_handler  # type: ignore[attr-defined]
-        return handler
+    if config is not None and config.log.rotation:
+        return _RustAwareTimedRotatingFileHandler(
+            log_output,
+            when=config.log.rotation_interval,
+            interval=1,
+            backupCount=config.log.rotation_days,
+            encoding="utf-8",
+        )
+    return logging.FileHandler(log_output, encoding="utf-8")
 
 
 def _add_trace_id_filter(handler: logging.Handler) -> None:
@@ -746,41 +735,18 @@ def _add_trace_id_filter(handler: logging.Handler) -> None:
         handler.addFilter(TraceIdLoggingFilter())
 
 
-def _create_log_handler(log_output: str, config: Optional[Any]) -> logging.Handler:
+def _create_log_handler(
+    log_output: str,
+    config: Optional[Any],
+    format_string: str,
+) -> logging.Handler:
     # Prevent creating a file literally named "file"
     if log_output == "file":
         log_output = "stdout"
 
-    if log_output in ("stdout", "stderr"):
-        return _create_queued_stream_handler(log_output)
-    else:
-        if config is not None:
-            try:
-                log_rotation = config.log.rotation
-                if log_rotation:
-                    log_rotation_days = config.log.rotation_days
-                    log_rotation_interval = config.log.rotation_interval
-
-                    if log_rotation_interval == "midnight":
-                        when = "midnight"
-                        interval = 1
-                    else:
-                        when = log_rotation_interval
-                        interval = 1
-
-                    return _RustAwareTimedRotatingFileHandler(
-                        log_output,
-                        when=when,
-                        interval=interval,
-                        backupCount=log_rotation_days,
-                        encoding="utf-8",
-                    )
-                else:
-                    return logging.FileHandler(log_output, encoding="utf-8")
-            except Exception:
-                return logging.FileHandler(log_output, encoding="utf-8")
-        else:
-            return logging.FileHandler(log_output, encoding="utf-8")
+    sink = _create_log_sink(log_output, config)
+    sink.setFormatter(logging.Formatter(format_string))
+    return _QueuedLogHandler(sink)
 
 
 def _build_standard_handler(
@@ -788,17 +754,7 @@ def _build_standard_handler(
     config: Optional[Any],
     format_string: str,
 ) -> logging.Handler:
-    handler = _create_log_handler(log_output, config)
-
-    # QueueHandler must enrich and format records on the caller thread so
-    # context-local trace data and per-logger format strings are captured before
-    # the shared listener-side stream handler writes the prepared message.
-    if isinstance(handler, QueueHandler):
-        real = getattr(handler, "_ov_real_handler", None)
-        if real is not None:
-            real.setFormatter(logging.Formatter("%(message)s"))
-
-    handler.setFormatter(logging.Formatter(format_string))
+    handler = _create_log_handler(log_output, config, format_string)
     _add_trace_id_filter(handler)
     handler.addFilter(_RequestIdLoggingFilter())
     return handler
@@ -808,8 +764,6 @@ def _get_shared_handler(
     log_output: str,
     config: Optional[Any],
     format_string: str,
-    *,
-    force: bool = False,
 ) -> logging.Handler:
     global _shared_log_handler, _shared_log_handler_key
 
@@ -823,7 +777,7 @@ def _get_shared_handler(
             config.log.rotation_interval,
             config.log.rotation_days,
         )
-    if not force and _shared_log_handler is not None and _shared_log_handler_key == handler_key:
+    if _shared_log_handler is not None and _shared_log_handler_key == handler_key:
         return _shared_log_handler
 
     _shared_log_handler = _build_standard_handler(log_output, config, format_string)
@@ -923,7 +877,7 @@ def reconfigure_logging() -> None:
     """Re-apply logging configuration to already-created OpenViking loggers."""
     log_level_str, log_format, log_output, config = _load_log_config()
     level = getattr(logging, log_level_str, logging.INFO)
-    handler = _get_shared_handler(log_output, config, log_format, force=True)
+    handler = _get_shared_handler(log_output, config, log_format)
 
     logger_dict = logging.Logger.manager.loggerDict
     target_names = [

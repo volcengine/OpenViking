@@ -118,7 +118,7 @@ async def test_close_stops_queue_manager_before_ragfs_binding(monkeypatch) -> No
             events.append("resource_tasks")
 
     class QueueManager:
-        def stop(self) -> None:
+        async def stop(self) -> None:
             events.append("queue_manager")
 
     class RagfsClient:

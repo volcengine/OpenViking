@@ -8,8 +8,6 @@ worker binds the committing account/user (so tokens are not attributed to
 "__unknown__") and resets the context afterwards.
 """
 
-import asyncio
-import concurrent.futures
 import json
 from unittest.mock import Mock
 
@@ -81,7 +79,6 @@ async def test_process_binds_committing_identity_to_root_context():
     captured: dict = {}
     processor = SessionCommitProcessor(
         _FakeSessionService(captured),
-        asyncio.get_running_loop(),
     )
     ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
@@ -100,7 +97,6 @@ async def test_process_requeues_deferred_commit_and_resets_root_context(monkeypa
 
     processor = SessionCommitProcessor(
         _FakeSessionService({}, processed=False),
-        asyncio.get_running_loop(),
     )
     monkeypatch.setattr(
         "openviking.storage.queuefs.get_queue_manager",
@@ -124,33 +120,10 @@ async def test_cancelled_queued_commit_writes_terminal_marker_before_success(mon
     )
     processor = SessionCommitProcessor(
         _SingleSessionService(session),
-        asyncio.get_running_loop(),
     )
     marker_uri = f"{msg.archive_uri}/.failed.json"
     on_success = Mock(side_effect=lambda: viking_fs.files[marker_uri])
     processor.set_callbacks(on_success, Mock(), Mock())
-
-    def run_on_current_loop(coro, _loop):
-        task = asyncio.create_task(coro)
-        future: concurrent.futures.Future[None] = concurrent.futures.Future()
-
-        def complete(completed: asyncio.Task) -> None:
-            if completed.cancelled():
-                future.cancel()
-                return
-            error = completed.exception()
-            if error is not None:
-                future.set_exception(error)
-            else:
-                future.set_result(completed.result())
-
-        task.add_done_callback(complete)
-        return future
-
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.session_commit_processor.asyncio.run_coroutine_threadsafe",
-        run_on_current_loop,
-    )
 
     await processor.on_cancelled({"data": json.dumps(msg.to_dict())})
 

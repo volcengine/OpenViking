@@ -97,6 +97,42 @@ class StoredToolResult:
     synopsis: ToolResultSynopsis
 
 
+@dataclass(frozen=True)
+class PreparedToolResult:
+    """CPU-prepared content-addressed tool result."""
+
+    content: str
+    sha256: str
+    tool_result_id: str
+    preview_chars: int
+    mime_type: str
+    synopsis: ToolResultSynopsis
+
+
+def prepare_tool_result(
+    content: str,
+    *,
+    tool_id: str,
+    tool_name: str,
+    preview_chars: int,
+    mime_type: str,
+) -> PreparedToolResult:
+    digest = sha256_text(content)
+    return PreparedToolResult(
+        content=content,
+        sha256=digest,
+        tool_result_id=build_tool_result_id(tool_id, digest),
+        preview_chars=preview_chars,
+        mime_type=mime_type,
+        synopsis=generate_tool_result_synopsis(
+            content,
+            preview_chars=preview_chars,
+            tool_name=tool_name,
+            mime_type=mime_type,
+        ),
+    )
+
+
 class ToolResultStore:
     """Persist raw tool outputs outside session messages."""
 
@@ -124,19 +160,19 @@ class ToolResultStore:
     async def write(
         self,
         *,
-        content: str,
+        prepared: PreparedToolResult,
         tool_id: str,
         tool_name: str,
         message_id: str,
         user_id: Optional[str],
         peer_id: Optional[str],
         created_at: Optional[str],
-        preview_chars: int,
-        mime_type: str = "text/plain",
-        synopsis: Optional[ToolResultSynopsis] = None,
     ) -> StoredToolResult:
-        digest = sha256_text(content)
-        tool_result_id = build_tool_result_id(tool_id, digest)
+        content = prepared.content
+        digest = prepared.sha256
+        tool_result_id = prepared.tool_result_id
+        preview_chars = prepared.preview_chars
+        mime_type = prepared.mime_type
         storage_uri = self._result_uri(tool_result_id)
         output_uri = f"{storage_uri}/output.txt"
         metadata_uri = f"{storage_uri}/metadata.json"
@@ -148,12 +184,7 @@ class ToolResultStore:
                 synopsis = (
                     ToolResultSynopsis.from_dict(synopsis_data)
                     if isinstance(synopsis_data, dict)
-                    else generate_tool_result_synopsis(
-                        content,
-                        preview_chars=preview_chars,
-                        tool_name=tool_name,
-                        mime_type=mime_type,
-                    )
+                    else prepared.synopsis
                 )
                 return StoredToolResult(
                     tool_result_id=tool_result_id,
@@ -166,12 +197,7 @@ class ToolResultStore:
         except NotFoundError:
             pass
 
-        synopsis = synopsis or generate_tool_result_synopsis(
-            content,
-            preview_chars=preview_chars,
-            tool_name=tool_name,
-            mime_type=mime_type,
-        )
+        synopsis = prepared.synopsis
         metadata = {
             "tool_result_id": tool_result_id,
             "session_id": self._session_id,

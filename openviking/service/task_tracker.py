@@ -8,7 +8,7 @@ Provides a lightweight registry for tracking background operations
 polled via the /tasks API to check completion status, results, or errors.
 
 Design decisions:
-  - Thread-safe (QueueManager workers run in separate threads).
+  - Sync and async entrypoints may reach the tracker from different loops.
   - TTL-based cleanup applies to the process-local cache.
   - Error messages are sanitized to avoid leaking sensitive data.
 """
@@ -222,7 +222,7 @@ class TaskTracker:
         )
 
     def is_cancellation_requested(self, task_id: str) -> bool:
-        """Fast thread-safe status check used by queue workers."""
+        """Fast thread-safe status check used by queue consumers."""
         with self._lock:
             task = self._tasks.get(task_id)
             return task is not None and task.status in (

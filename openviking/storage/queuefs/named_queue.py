@@ -133,8 +133,9 @@ class NamedQueue:
         self._task_work_index = task_work_index
         self._initialized = False
 
-        # Status tracking
-        self._lock = threading.Lock()
+        # Consumers mutate status on the service loop; synchronous metrics may
+        # read the snapshot from their collector thread.
+        self._status_lock = threading.Lock()
         self._in_progress = 0
         self._processed = 0
         self._requeue_count = 0
@@ -156,18 +157,18 @@ class NamedQueue:
 
     def _on_dequeue_start(self) -> None:
         """Called on dequeue."""
-        with self._lock:
+        with self._status_lock:
             self._in_progress += 1
 
     def _on_process_success(self) -> None:
         """Called on processing success."""
-        with self._lock:
+        with self._status_lock:
             self._in_progress -= 1
             self._processed += 1
 
     def _on_process_requeue(self) -> None:
         """Called when a dequeued message is re-enqueued for later retry."""
-        with self._lock:
+        with self._status_lock:
             self._requeue_count += 1
 
     def _on_process_error(self, error_msg: str, data: Optional[Dict[str, Any]] = None) -> None:
@@ -176,7 +177,7 @@ class NamedQueue:
             metadata = extract_task_metadata(data)
             if metadata is not None:
                 self._task_work_index.record_failure(metadata.task_id, error_msg)
-        with self._lock:
+        with self._status_lock:
             self._in_progress -= 1
             self._error_count += 1
             self._errors.append(
@@ -192,7 +193,7 @@ class NamedQueue:
     async def get_status(self) -> QueueStatus:
         """Get queue status."""
         pending = await self.size()
-        with self._lock:
+        with self._status_lock:
             return QueueStatus(
                 pending=pending,
                 in_progress=self._in_progress,
@@ -204,12 +205,16 @@ class NamedQueue:
 
     def reset_status(self) -> None:
         """Reset status counters."""
-        with self._lock:
+        with self._status_lock:
             self._in_progress = 0
             self._processed = 0
             self._requeue_count = 0
             self._error_count = 0
             self._errors = []
+
+    def has_errors(self) -> bool:
+        with self._status_lock:
+            return self._error_count > 0
 
     def has_dequeue_handler(self) -> bool:
         """Check if dequeue handler exists."""

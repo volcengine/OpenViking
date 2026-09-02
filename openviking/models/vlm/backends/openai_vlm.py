@@ -344,7 +344,6 @@ class OpenAIVLM(VLMBase):
                 return self._build_vlm_response(response, has_tools=True)
             return await self._extract_completion_content_async(response, elapsed)
 
-        # 用 tracer.info 打印请求
         tracer.info(
             f"messages={json.dumps(redact_image_data_urls(kwargs), ensure_ascii=False, indent=2)}"
         )

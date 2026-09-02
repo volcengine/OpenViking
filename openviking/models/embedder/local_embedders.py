@@ -4,9 +4,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import os
+from contextvars import copy_context
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -89,6 +92,7 @@ class LocalDenseEmbedder(DenseEmbedderBase):
         runtime_config.setdefault("provider", "local")
         super().__init__(model_name, runtime_config)
 
+        self._inference_lock = asyncio.Lock()
         self.model_spec = get_local_model_spec(model_name)
         self.model_path = model_path
         self.cache_dir = cache_dir or DEFAULT_LOCAL_MODEL_CACHE_DIR
@@ -214,6 +218,16 @@ class LocalDenseEmbedder(DenseEmbedderBase):
             completion_tokens=0,
         )
         return result
+
+    async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+        await self._inference_lock.acquire()
+        inference = asyncio.get_running_loop().run_in_executor(
+            None,
+            copy_context().run,
+            partial(self.embed, text, is_query=is_query),
+        )
+        inference.add_done_callback(lambda _: self._inference_lock.release())
+        return await asyncio.shield(inference)
 
     def get_dimension(self) -> int:
         return self._dimension

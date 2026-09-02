@@ -65,13 +65,11 @@ class UserDeletionService:
         *,
         service: Any,
         manager: Any,
-        service_loop: asyncio.AbstractEventLoop,
         oauth_store: Any = None,
         usage_audit_runtime: Any = None,
     ) -> None:
         self._service = service
         self._manager = manager
-        self._service_loop = service_loop
         self._oauth_store = oauth_store
         self._usage_audit_runtime = usage_audit_runtime
         self._request_lock = asyncio.Lock()
@@ -88,7 +86,7 @@ class UserDeletionService:
         }
         queue_manager.get_queue(
             queue_manager.USER_DELETION,
-            dequeue_handler=_UserDeletionProcessor(self, self._service_loop),
+            dequeue_handler=_UserDeletionProcessor(self),
         )
 
         tracker = get_task_tracker()
@@ -465,13 +463,8 @@ class UserDeletionService:
 
 
 class _UserDeletionProcessor(DequeueHandlerBase):
-    def __init__(
-        self,
-        deletion_service: UserDeletionService,
-        service_loop: asyncio.AbstractEventLoop,
-    ) -> None:
+    def __init__(self, deletion_service: UserDeletionService) -> None:
         self._deletion_service = deletion_service
-        self._service_loop = service_loop
 
     @staticmethod
     def _parse_message(data: dict[str, Any]) -> dict[str, Any]:
@@ -507,15 +500,7 @@ class _UserDeletionProcessor(DequeueHandlerBase):
             self.report_error(str(exc), data)
             return None
 
-        future = asyncio.run_coroutine_threadsafe(
-            self._deletion_service._process(message),
-            self._service_loop,
-        )
-        try:
-            error = await asyncio.wrap_future(future)
-        except asyncio.CancelledError:
-            future.cancel()
-            raise
+        error = await self._deletion_service._process(message)
         if error is None:
             self.report_success()
         else:
@@ -536,7 +521,6 @@ async def setup_user_deletion(
     deletion_service = UserDeletionService(
         service=service,
         manager=manager,
-        service_loop=asyncio.get_running_loop(),
         oauth_store=oauth_store,
         usage_audit_runtime=usage_audit_runtime,
     )

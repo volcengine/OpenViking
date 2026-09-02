@@ -193,11 +193,7 @@ class ResourceMemoryLinkService:
             }
             if target_peer_id:
                 message_spec["peer_id"] = target_peer_id
-            add_many_async = getattr(session, "add_messages_async", None)
-            if callable(add_many_async):
-                await add_many_async([message_spec])
-            else:
-                session.add_messages([message_spec])
+            await session.add_messages_async([message_spec])
             commit_result = await self._session_service.commit_async(
                 session_id,
                 ctx,
@@ -263,11 +259,7 @@ class ResourceMemoryLinkService:
             }
             if target_peer_id:
                 message_spec["peer_id"] = target_peer_id
-            add_many_async = getattr(session, "add_messages_async", None)
-            if callable(add_many_async):
-                await add_many_async([message_spec])
-            else:
-                session.add_messages([message_spec])
+            await session.add_messages_async([message_spec])
             commit_result = await self._session_service.commit_async(
                 session_id,
                 ctx,

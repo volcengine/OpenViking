@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Queue consumer for restart-safe Session Phase 2 work."""
 
-import asyncio
-import concurrent.futures
 import json
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
@@ -27,10 +25,8 @@ class SessionCommitProcessor(DequeueHandlerBase):
     def __init__(
         self,
         session_service: "SessionService",
-        service_loop: asyncio.AbstractEventLoop,
     ) -> None:
         self._session_service = session_service
-        self._service_loop = service_loop
 
     @staticmethod
     def _parse_message(data: Dict[str, Any]) -> tuple[SessionCommitMsg, RequestContext]:
@@ -45,11 +41,8 @@ class SessionCommitProcessor(DequeueHandlerBase):
         return msg, ctx
 
     async def _process(self, msg: SessionCommitMsg, ctx: RequestContext) -> bool:
-        # Bind a root observability context so Phase-2 extraction VLM/embedding
-        # token events are attributed to the committing account/user rather than
-        # "__unknown__" (mirrors SemanticProcessor.on_dequeue). Must bind inside
-        # this coroutine: on_dequeue hops loops via run_coroutine_threadsafe, so
-        # a context bound there would not propagate here.
+        # Bind queue work to the committing identity before Phase 2 emits model
+        # usage and trace events.
         root_attrs = create_root_span_attributes(
             http_method="QUEUE",
             http_route="/queuefs/session_commit",
@@ -116,16 +109,8 @@ class SessionCommitProcessor(DequeueHandlerBase):
             self.report_error(str(exc), data)
             return None
 
-        future = asyncio.run_coroutine_threadsafe(
-            self._finalize_cancelled(msg, ctx),
-            self._service_loop,
-        )
-        try:
-            await asyncio.wrap_future(future)
-            self.report_success()
-        except asyncio.CancelledError:
-            future.cancel()
-            raise
+        await self._finalize_cancelled(msg, ctx)
+        self.report_success()
         return None
 
     async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -137,14 +122,6 @@ class SessionCommitProcessor(DequeueHandlerBase):
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             self.report_error(str(exc), data)
             return None
-        future: concurrent.futures.Future[bool] = asyncio.run_coroutine_threadsafe(
-            self._process(msg, ctx),
-            self._service_loop,
-        )
-        try:
-            await asyncio.wrap_future(future)
-            self.report_success()
-        except asyncio.CancelledError:
-            future.cancel()
-            raise
+        await self._process(msg, ctx)
+        self.report_success()
         return None

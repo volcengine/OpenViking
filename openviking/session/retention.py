@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional
 
 from openviking.message import Message
+from openviking.message.message import estimate_message_tokens
 from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.utils.token_estimation import truncate_text_to_token_budget
 
@@ -51,7 +52,7 @@ class AssistantStep:
 
     @property
     def estimated_tokens(self) -> int:
-        return sum(int(message.estimated_tokens or 0) for message in self.messages)
+        return sum(message.estimated_tokens for message in self.messages)
 
 
 @dataclass
@@ -72,7 +73,7 @@ class UserTurn:
 
     @property
     def estimated_tokens(self) -> int:
-        return sum(int(message.estimated_tokens or 0) for message in self.messages)
+        return sum(message.estimated_tokens for message in self.messages)
 
 
 @dataclass
@@ -143,7 +144,12 @@ def _flatten_turns(turns: Iterable[UserTurn]) -> List[Message]:
 
 
 def _message_tokens(messages: Iterable[Message]) -> int:
-    return sum(int(message.estimated_tokens or 0) for message in messages)
+    return sum(message.estimated_tokens for message in messages)
+
+
+def _current_message_tokens(messages: Iterable[Message]) -> int:
+    """Estimate mutable virtual messages while fitting a truncated view."""
+    return sum(estimate_message_tokens(message.parts) for message in messages)
 
 
 def _truncate_message_group(
@@ -181,25 +187,25 @@ def _truncate_message_group(
 
     # Tool inputs are structured and cannot be text-truncated safely. Preserve
     # them whenever possible, then remove oldest inputs until fixed metadata fits.
-    if _message_tokens(cloned) > token_budget:
+    if _current_message_tokens(cloned) > token_budget:
         for message in cloned:
             for part in message.parts:
                 if not isinstance(part, ToolPart) or not part.tool_input:
                     continue
                 part.tool_input = {}
                 truncated_ids.add(message.id)
-                if _message_tokens(cloned) <= token_budget:
+                if _current_message_tokens(cloned) <= token_budget:
                     break
-            if _message_tokens(cloned) <= token_budget:
+            if _current_message_tokens(cloned) <= token_budget:
                 break
 
-    if _message_tokens(cloned) > token_budget:
+    if _current_message_tokens(cloned) > token_budget:
         return [], []
 
     for _message, part, attribute, original in slots:
         if not original:
             continue
-        used = _message_tokens(cloned)
+        used = _current_message_tokens(cloned)
         remaining = max(0, token_budget - used)
         if remaining <= 0:
             break
@@ -220,10 +226,8 @@ def _truncate_message_group(
                 part.tool_output_original_chars = len(original)
             part.tool_output_preview_chars = len(fitted)
 
-    # The estimator and truncation helper share the same accounting, but keep a
-    # defensive final guard so this function is a strict budget boundary.
-    if _message_tokens(cloned) > token_budget:
-        return [], []
+    for message in cloned:
+        message.recalculate_tokens()
     return cloned, sorted(truncated_ids)
 
 
@@ -382,7 +386,7 @@ def _partial_latest_turn_plan(
     min_tail = max(1, int(min_raw_tail_steps or 0)) if steps else 0
 
     retained_steps: List[AssistantStep] = list(steps[-min_tail:]) if min_tail else []
-    retained_tokens = int(anchor.estimated_tokens or 0) if anchor is not None else 0
+    retained_tokens = anchor.estimated_tokens if anchor is not None else 0
     retained_tokens += sum(step.estimated_tokens for step in retained_steps)
 
     # Leave room for the dedicated checkpoint summary generated alongside the

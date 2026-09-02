@@ -6,13 +6,30 @@ Message = role + parts, supports serialization to JSONL.
 """
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import List, Literal, Optional
 
 from openviking.core.peer_id import normalize_peer_id
 from openviking.message.part import ContextPart, ImagePart, Part, TextPart, ToolPart, part_from_dict
 from openviking.utils.token_estimation import estimate_text_tokens
+
+
+def estimate_message_tokens(parts: List[Part]) -> int:
+    """Estimate the prompt tokens represented by message parts."""
+    token_text = []
+    for part in parts:
+        if isinstance(part, TextPart):
+            token_text.append(part.text)
+        elif isinstance(part, ContextPart):
+            token_text.append(part.abstract)
+        elif isinstance(part, ToolPart):
+            token_text.extend([part.tool_id, part.tool_name])
+            if part.tool_input:
+                token_text.append(json.dumps(part.tool_input, ensure_ascii=False))
+            if part.tool_output:
+                token_text.append(part.tool_output)
+    return estimate_text_tokens("".join(token_text))
 
 
 @dataclass
@@ -29,6 +46,7 @@ class Message:
         Literal["user_query", "assistant_step", "tool_transport", "checkpoint"]
     ] = None
     source_message_ids: Optional[List[str]] = None
+    _estimated_tokens: Optional[int] = field(default=None, init=False, repr=False, compare=False)
 
     @property
     def content(self) -> str:
@@ -40,36 +58,14 @@ class Message:
 
     @property
     def estimated_tokens(self) -> int:
-        """Estimate token count from all parts using a CJK-aware fallback.
+        if self._estimated_tokens is None:
+            self._estimated_tokens = estimate_message_tokens(self.parts)
+        return self._estimated_tokens
 
-        Counts fields that actually appear in the assembled prompt:
-        - TextPart.text: always emitted
-        - ContextPart.abstract: injected as text (uri is not sent to the model)
-        - ImagePart: not counted here; image captioning/model usage is tracked
-          by the VLM call that converts images into text for extraction
-        - ToolPart: tool_id (appears in toolUse.id / toolResult.toolCallId),
-          tool_name, tool_input (JSON), tool_output
-
-        Known limitation: ToolPart estimation undercounts by ~10-20 tokens per
-        tool call because tool_id/toolName appear twice in the assembled transcript
-        (toolUse + toolResult), and small literals like "(no output)" / "{}" are
-        not counted. Under 128k budgets this is negligible; for smaller budgets
-        (8k/16k) or tool-dense sessions, consider adding a conservative per-tool
-        buffer instead of mirroring the full convertToAgentMessages logic.
-        """
-        token_text = []
-        for p in self.parts:
-            if isinstance(p, TextPart):
-                token_text.append(p.text)
-            elif isinstance(p, ContextPart):
-                token_text.append(p.abstract)
-            elif isinstance(p, ToolPart):
-                token_text.extend([p.tool_id, p.tool_name])
-                if p.tool_input:
-                    token_text.append(json.dumps(p.tool_input, ensure_ascii=False))
-                if p.tool_output:
-                    token_text.append(p.tool_output)
-        return estimate_text_tokens("".join(token_text))
+    def recalculate_tokens(self) -> int:
+        """Refresh the cached count after changing message parts."""
+        self._estimated_tokens = estimate_message_tokens(self.parts)
+        return self._estimated_tokens
 
     def to_dict(self) -> dict:
         """Serialize to JSONL."""
@@ -203,3 +199,21 @@ class Message:
     def to_jsonl(self) -> str:
         """Serialize to JSONL string."""
         return json.dumps(self.to_dict(), ensure_ascii=False)
+
+
+def messages_from_jsonl(content: str) -> List[Message]:
+    """Deserialize authoritative message JSONL with stable line boundaries."""
+    messages = []
+    for line_number, line in enumerate(content.replace("\r\n", "\n").split("\n"), start=1):
+        if not line.strip():
+            continue
+        try:
+            messages.append(Message.from_dict(json.loads(line)))
+        except Exception as exc:
+            raise ValueError(f"Invalid message JSONL at line {line_number}: {exc}") from exc
+    return messages
+
+
+def messages_to_jsonl(messages: List[Message]) -> str:
+    """Serialize messages with one trailing newline per record."""
+    return "".join(f"{message.to_jsonl()}\n" for message in messages)

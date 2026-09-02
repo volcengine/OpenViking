@@ -143,7 +143,7 @@ class _FakeSession:
         self.messages = []
         self.meta = SimpleNamespace(memory_policy=None)
 
-    def add_messages(self, specs):
+    async def add_messages_async(self, specs):
         self.messages.extend(specs)
 
 

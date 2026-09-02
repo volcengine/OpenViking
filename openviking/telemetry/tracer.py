@@ -12,8 +12,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from loguru import logger
-
 # Try to import opentelemetry - will be None if not installed
 try:
     from opentelemetry import trace as otel_trace
@@ -66,7 +64,7 @@ except ImportError:
 # Global tracer instance
 _otel_tracer: Any = None
 _propagator: Any = None
-_trace_id_filter_added: bool = False
+logger = logging.getLogger(__name__)
 
 
 def _log_trace_internal_failure(message: str) -> None:
@@ -186,36 +184,6 @@ class TraceIdLoggingFilter(logging.Filter):
         if trace_id:
             record.msg = f"[{trace_id}] {record.msg}"
         return True
-
-
-def _setup_logging():
-    """Setup logging with trace_id injection."""
-    global _trace_id_filter_added
-
-    if _trace_id_filter_added:
-        return
-
-    try:
-        # Configure logger to patch records with trace_id
-        def _patch_trace_id(record):
-            trace_id = get_trace_id()
-            record["extra"]["trace_id"] = trace_id
-            if trace_id:
-                record["message"] = f"[{trace_id}] {record['message']}"
-
-        logger.configure(patcher=_patch_trace_id)
-        _trace_id_filter_added = True
-    except Exception:
-        _log_trace_internal_failure("[TRACER] failed to configure loguru trace_id patcher")
-
-    # Also setup standard logging filter
-    try:
-        standard_logger = logging.getLogger()
-        for handler in standard_logger.handlers:
-            if not any(isinstance(f, TraceIdLoggingFilter) for f in handler.filters):
-                handler.addFilter(TraceIdLoggingFilter())
-    except Exception:
-        _log_trace_internal_failure("[TRACER] failed to attach standard logging trace_id filter")
 
 
 def init_tracer_from_server_config(server_config: Any) -> Any:
@@ -361,9 +329,6 @@ def init_tracer(
 
         _otel_tracer = otel_trace.get_tracer(service_name)
         _propagator = TraceContextTextMapPropagator()
-
-        # Setup logging with trace_id
-        _setup_logging()
 
         # Initialize asyncio instrumentation to create child spans for create_task
         _init_asyncio_instrumentation()
@@ -646,7 +611,7 @@ class tracer:
     def info(line: str, console: bool = False) -> None:
         """Add an event to the current span."""
         if console:
-            logger.opt(depth=1).info(line)
+            logger.info(line, stacklevel=2)
         if _otel_tracer is None:
             return
 
@@ -666,7 +631,7 @@ class tracer:
     def info_span(line: str, console: bool = False) -> None:
         """Create a new span with the given name."""
         if console:
-            logger.opt(depth=1).info(line)
+            logger.info(line, stacklevel=2)
         if _otel_tracer is None:
             return
         with tracer.start_as_current_span(name=line):
@@ -677,9 +642,13 @@ class tracer:
         """Record an error on the current span."""
         if console:
             if e is not None:
-                logger.opt(depth=1).exception(f"{line}", exc_info=e)
+                logger.error(
+                    line,
+                    exc_info=(type(e), e, e.__traceback__),
+                    stacklevel=2,
+                )
             else:
-                logger.opt(depth=1).error(line)
+                logger.error(line, stacklevel=2)
         if _otel_tracer is None:
             return
 

@@ -6,6 +6,7 @@ Session as Context: Sessions integrated into L0/L1/L2 system.
 """
 
 import asyncio
+import copy
 import inspect
 import json
 import re
@@ -16,8 +17,9 @@ from uuid import uuid4
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import canonical_session_uri
-from openviking.core.peer_id import normalize_peer_id, safe_peer_id
+from openviking.core.peer_id import safe_peer_id
 from openviking.message import Message, Part
+from openviking.message.message import messages_from_jsonl, messages_to_jsonl
 from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSHTTPError, AGFSNotFoundError
 from openviking.server.config import ToolOutputExternalizationConfig
@@ -25,6 +27,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.session.auto_commit_policy import AutoCommitPolicy
 from openviking.session.memory.constants import AGENT_EVOLUTION_MEMORY_TYPES
 from openviking.session.memory_policy import MemoryPolicy
+from openviking.session.message_preparer import MessagePreparer, PreparedMessageBatch
 from openviking.session.retention import (
     RETENTION_MODE_TURN_BUDGET,
     RetentionPlan,
@@ -33,27 +36,14 @@ from openviking.session.retention import (
     is_user_query,
     plan_retention,
 )
-from openviking.session.tool_result_store import (
-    ToolResultStore,
-    build_tool_result_id,
-    make_preview,
-    render_preview_from_synopsis,
-    sha256_text,
-)
-from openviking.session.tool_result_synopsis import (
-    ToolResultSynopsis,
-    generate_tool_result_synopsis,
-)
+from openviking.session.tool_result_store import ToolResultStore
 from openviking.storage.abstract_overview import body_for_preview, render_abstract_overview
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.model_retry import is_retryable_api_error, retry_async
 from openviking.utils.time_utils import get_current_timestamp
 from openviking.utils.token_estimation import estimate_text_tokens, truncate_text_to_token_budget
-from openviking_cli.exceptions import (
-    FailedPreconditionError,
-    NotFoundError,
-)
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger, run_async
 from openviking_cli.utils.config import get_openviking_config
@@ -110,6 +100,7 @@ def _redact_inline_images_from_tool_outputs(messages: List[Message]) -> List[Mes
         for part in message.parts:
             if isinstance(part, ToolPart):
                 part.tool_output = _redact_inline_images(part.tool_output or "")
+        message.recalculate_tokens()
     return messages
 
 
@@ -700,11 +691,7 @@ class Session:
             content = await self._viking_fs.read_file(
                 f"{self._session_uri}/messages.jsonl", ctx=self.ctx
             )
-            self._messages = [
-                Message.from_dict(json.loads(line))
-                for line in content.strip().split("\n")
-                if line.strip()
-            ]
+            self._messages = await asyncio.to_thread(messages_from_jsonl, content)
         except Exception as exc:
             if not _is_storage_not_found(exc):
                 raise
@@ -789,7 +776,7 @@ class Session:
             )
             retained_ids = {message.id for message in plan.retained_messages}
             return sum(
-                int(message.estimated_tokens or 0)
+                message.estimated_tokens
                 for message in plan.archive_messages
                 if message.id not in retained_ids
             )
@@ -797,9 +784,9 @@ class Session:
         keep = max(0, int(self._meta.keep_recent_count or 0))
         total = len(self._messages)
         if keep <= 0:
-            return sum(int(m.estimated_tokens or 0) for m in self._messages)
+            return sum(message.estimated_tokens for message in self._messages)
         if total > keep:
-            return sum(int(m.estimated_tokens or 0) for m in self._messages[: total - keep])
+            return sum(message.estimated_tokens for message in self._messages[: total - keep])
         return 0
 
     async def exists(self) -> bool:
@@ -955,10 +942,10 @@ class Session:
         messages: List[Message],
     ) -> List[Message]:
         """Return a sanitized memory-only copy with externalized tool outputs restored."""
-        hydrated = [Message.from_dict(m.to_dict()) for m in messages]
+        hydrated = await asyncio.to_thread(copy.deepcopy, messages)
         store = self._tool_result_store()
         if not store:
-            return _redact_inline_images_from_tool_outputs(hydrated)
+            return await asyncio.to_thread(_redact_inline_images_from_tool_outputs, hydrated)
 
         for msg in hydrated:
             for part in msg.parts:
@@ -999,290 +986,7 @@ class Session:
                     continue
                 part.tool_output = result.get("content", "")
 
-        return _redact_inline_images_from_tool_outputs(hydrated)
-
-    def _effective_tool_preview_chars(
-        self,
-        cfg: ToolOutputExternalizationConfig,
-        externalized_count: int,
-    ) -> int:
-        if externalized_count <= 0:
-            return cfg.preview_chars
-        group_share = cfg.assistant_turn_preview_budget_chars // externalized_count
-        return max(0, min(cfg.preview_chars, max(cfg.min_preview_chars, group_share)))
-
-    def _rewrite_source_read_tool_output(
-        self,
-        part: ToolPart,
-        cfg: ToolOutputExternalizationConfig,
-        *,
-        group_id: str,
-        group_original_chars: int,
-    ) -> bool:
-        """Rewrite read-back tool output as a source reference, not a new result."""
-        if part.tool_name != "openviking_tool_result_read":
-            return False
-        tool_input = part.tool_input if isinstance(part.tool_input, dict) else {}
-        source_ref = str(
-            tool_input.get("tool_output_ref")
-            or tool_input.get("ref")
-            or tool_input.get("uri")
-            or ""
-        )
-        if not source_ref.startswith(f"{self._session_uri}/tool-results/"):
-            return False
-
-        output = part.tool_output or ""
-        preview_chars = max(cfg.min_preview_chars, cfg.preview_chars)
-        preview = make_preview(
-            output,
-            preview_chars=preview_chars,
-            ref=source_ref,
-            tool_name=part.tool_name,
-            sha256=sha256_text(output) if output else "",
-            reason="source_read",
-            original_chars=len(output),
-            mime_type=part.tool_output_mime_type or "text/plain",
-        )
-        part.tool_output = preview
-        part.tool_output_ref = source_ref
-        part.tool_output_truncated = len(output) > len(preview)
-        part.tool_output_original_chars = len(output)
-        part.tool_output_preview_chars = len(preview)
-        part.tool_output_sha256 = sha256_text(output) if output else ""
-        part.tool_output_storage_uri = source_ref
-        part.tool_output_source_ref = source_ref
-        part.tool_output_source_offset = tool_input.get("offset")
-        part.tool_output_source_limit = tool_input.get("limit")
-        part.tool_output_group_id = group_id
-        part.tool_output_externalized_reason = "source_read"
-        part.tool_output_group_original_chars = group_original_chars
-        part.tool_output_group_budget_chars = cfg.assistant_turn_inline_budget_chars
-        return True
-
-    def _externalize_tool_part(
-        self,
-        msg: Message,
-        part: ToolPart,
-        cfg: ToolOutputExternalizationConfig,
-        *,
-        preview_chars: int,
-        reason: str,
-        group_id: str,
-        group_original_chars: int,
-        synopsis: Optional[ToolResultSynopsis] = None,
-    ) -> None:
-        store = self._tool_result_store()
-        original_output = part.tool_output or ""
-        if not store or not original_output:
-            return
-
-        digest = sha256_text(original_output)
-        try:
-            stored = run_async(
-                store.write(
-                    content=original_output,
-                    tool_id=part.tool_id,
-                    tool_name=part.tool_name,
-                    message_id=msg.id,
-                    user_id=self.ctx.user.user_id if self.ctx and self.ctx.user else None,
-                    peer_id=msg.peer_id,
-                    created_at=msg.created_at,
-                    preview_chars=preview_chars,
-                    mime_type=part.tool_output_mime_type or "text/plain",
-                    synopsis=synopsis,
-                )
-            )
-        except Exception as exc:
-            error = f"{type(exc).__name__}: {exc}"
-            part.tool_output_externalization_error = error
-            if cfg.failure_mode == "reject":
-                raise FailedPreconditionError(
-                    "Failed to externalize tool output",
-                    details={"tool_id": part.tool_id, "error": error},
-                ) from exc
-            if cfg.failure_mode == "preview_only":
-                part.tool_output = make_preview(
-                    original_output,
-                    preview_chars=preview_chars,
-                    tool_name=part.tool_name,
-                    sha256=digest,
-                    reason=f"{reason}:externalization_failed",
-                    original_chars=len(original_output),
-                    mime_type=part.tool_output_mime_type or "text/plain",
-                )
-                part.tool_output_ref = ""
-                part.tool_output_truncated = True
-                part.tool_output_original_chars = len(original_output)
-                part.tool_output_preview_chars = len(part.tool_output)
-                part.tool_output_sha256 = digest
-                part.tool_output_externalized_reason = reason
-            return
-
-        ref = stored.storage_uri
-        part.tool_output = render_preview_from_synopsis(
-            stored.synopsis,
-            ref=ref,
-            tool_name=part.tool_name,
-            sha256=digest,
-            reason=reason,
-            original_chars=len(original_output),
-            preview_chars=min(len(original_output), max(preview_chars, 0)),
-        )
-        part.tool_output_ref = ref
-        part.tool_output_truncated = True
-        part.tool_output_original_chars = len(original_output)
-        part.tool_output_preview_chars = len(part.tool_output)
-        part.tool_output_sha256 = digest
-        part.tool_output_storage_uri = ref
-        part.tool_output_mime_type = stored.metadata.get("mime_type", "text/plain")
-        part.tool_output_group_id = group_id
-        part.tool_output_externalized_reason = reason
-        part.tool_output_group_original_chars = group_original_chars
-        part.tool_output_group_budget_chars = cfg.assistant_turn_inline_budget_chars
-
-    def _externalize_large_tool_output_group(self, messages: List[Message]) -> None:
-        cfg = self._tool_output_externalization_config
-        if not cfg.enabled:
-            return
-
-        tool_parts = [
-            (msg, p)
-            for msg in messages
-            for p in msg.parts
-            if isinstance(p, ToolPart) and (p.tool_output or "")
-        ]
-        if not tool_parts:
-            return
-
-        group_id = messages[0].id
-        group_original_chars = sum(
-            (
-                int(p.tool_output_original_chars)
-                if p.tool_output_ref
-                and p.tool_output_truncated
-                and p.tool_output_original_chars is not None
-                else len(p.tool_output or "")
-            )
-            for _, p in tool_parts
-        )
-        normal_indices: List[int] = []
-        selected: set[int] = set()
-        externalized_preview_cache: Dict[tuple[int, int, str], tuple[ToolResultSynopsis, int]] = {}
-
-        for idx, (_msg, part) in enumerate(tool_parts):
-            part.tool_output_group_id = group_id
-            part.tool_output_group_original_chars = group_original_chars
-            part.tool_output_group_budget_chars = cfg.assistant_turn_inline_budget_chars
-            if self._rewrite_source_read_tool_output(
-                part,
-                cfg,
-                group_id=group_id,
-                group_original_chars=group_original_chars,
-            ):
-                continue
-            if part.tool_output_ref and part.tool_output_truncated:
-                continue
-            normal_indices.append(idx)
-            if len(part.tool_output or "") > cfg.threshold_chars:
-                selected.add(idx)
-
-        def prepared_externalized_preview(
-            idx: int, part: ToolPart, preview_chars: int
-        ) -> tuple[ToolResultSynopsis, int]:
-            content = part.tool_output or ""
-            reason = "single_threshold" if len(content) > cfg.threshold_chars else "turn_budget"
-            cache_key = (idx, preview_chars, reason)
-            cached = externalized_preview_cache.get(cache_key)
-            if cached is not None:
-                return cached
-
-            synopsis = generate_tool_result_synopsis(
-                content,
-                preview_chars=preview_chars,
-                tool_name=part.tool_name,
-                mime_type=part.tool_output_mime_type or "text/plain",
-            )
-            digest = sha256_text(content)
-            ref = f"{self._session_uri}/tool-results/{build_tool_result_id(part.tool_id, digest)}"
-            rendered = render_preview_from_synopsis(
-                synopsis,
-                ref=ref,
-                tool_name=part.tool_name,
-                sha256=digest,
-                reason=reason,
-                original_chars=len(content),
-                preview_chars=min(len(content), max(preview_chars, 0)),
-            )
-            prepared = (synopsis, len(rendered))
-            externalized_preview_cache[cache_key] = prepared
-            return prepared
-
-        def projected_inline_chars(selected_indices: set[int]) -> int:
-            preview_chars = self._effective_tool_preview_chars(cfg, len(selected_indices))
-            total = 0
-            for idx, (_, part) in enumerate(tool_parts):
-                output_len = len(part.tool_output or "")
-                if idx in selected_indices:
-                    _synopsis, rendered_len = prepared_externalized_preview(
-                        idx, part, preview_chars
-                    )
-                    total += rendered_len
-                else:
-                    total += output_len
-            return total
-
-        remaining = sorted(
-            [idx for idx in normal_indices if idx not in selected],
-            key=lambda idx: len(tool_parts[idx][1].tool_output or ""),
-            reverse=True,
-        )
-        while (
-            projected_inline_chars(selected) >= cfg.assistant_turn_inline_budget_chars and remaining
-        ):
-            baseline = projected_inline_chars(selected)
-            chosen_pos = None
-            for pos, idx in enumerate(remaining):
-                candidate = set(selected)
-                candidate.add(idx)
-                if projected_inline_chars(candidate) < baseline:
-                    chosen_pos = pos
-                    break
-            if chosen_pos is None:
-                break
-            selected.add(remaining.pop(chosen_pos))
-
-        preview_chars = self._effective_tool_preview_chars(cfg, len(selected))
-        for idx in sorted(selected):
-            msg, part = tool_parts[idx]
-            reason = (
-                "single_threshold"
-                if len(part.tool_output or "") > cfg.threshold_chars
-                else "turn_budget"
-            )
-            synopsis, _rendered_len = prepared_externalized_preview(idx, part, preview_chars)
-            self._externalize_tool_part(
-                msg,
-                part,
-                cfg,
-                preview_chars=preview_chars,
-                reason=reason,
-                group_id=group_id,
-                group_original_chars=group_original_chars,
-                synopsis=synopsis,
-            )
-
-    def _externalize_large_tool_outputs(self, msg: Message) -> None:
-        self._externalize_large_tool_output_group([msg])
-
-    def _is_tool_result_aggregate(self, role: str, parts: List[Part]) -> bool:
-        return (
-            role == "user" and len(parts) > 1 and all(isinstance(part, ToolPart) for part in parts)
-        )
-
-    def _append_messages(self, messages: List[Message]) -> None:
-        """Append messages through the same authoritative lock as commit Phase 1."""
-        run_async(self._append_messages_authoritatively(messages))
+        return await asyncio.to_thread(_redact_inline_images_from_tool_outputs, hydrated)
 
     async def _append_messages_authoritatively(self, messages: List[Message]) -> None:
         """Reload and append under the session path lock.
@@ -1323,7 +1027,7 @@ class Session:
                 self._meta = in_memory_meta
 
             await self._apply_appended_messages_to_state(messages)
-            batch_content = "".join(message.to_jsonl() + "\n" for message in messages)
+            batch_content = await asyncio.to_thread(messages_to_jsonl, messages)
             if live_messages_missing:
                 await self._viking_fs.write_file(
                     f"{self._session_uri}/messages.jsonl",
@@ -1347,7 +1051,7 @@ class Session:
 
             if is_user_query(msg):
                 self._stats.total_turns += 1
-            msg_tokens = int(msg.estimated_tokens or 0)
+            msg_tokens = msg.estimated_tokens
             self._stats.total_tokens += msg_tokens
 
             if self._meta.retention_mode != RETENTION_MODE_TURN_BUDGET:
@@ -1356,7 +1060,7 @@ class Session:
                     self._meta.pending_tokens += msg_tokens
                 elif len(self._messages) > keep:
                     pushed_out = self._messages[-(keep + 1)]
-                    self._meta.pending_tokens += int(pushed_out.estimated_tokens or 0)
+                    self._meta.pending_tokens += pushed_out.estimated_tokens
 
         if self._meta.retention_mode == RETENTION_MODE_TURN_BUDGET:
             await self._rebuild_pending_tokens()
@@ -1370,89 +1074,46 @@ class Session:
             # path lock as the counters above.
             self._meta.last_message_at = get_current_timestamp()
 
-    def _build_messages(
-        self,
-        messages_spec: List[dict],
-    ) -> List[Message]:
-        """Validate message specs and build their durable Message objects.
-
-        Args:
-            messages_spec: List of dicts, each with keys:
-                role, parts, peer_id/created_at and optional semantic fields.
-        """
-        all_messages = []
-        for i, spec in enumerate(messages_spec):
-            if "role" not in spec:
-                raise ValueError(f"messages_spec[{i}]: missing required key 'role'")
-            if "parts" not in spec:
-                raise ValueError(f"messages_spec[{i}]: missing required key 'parts'")
-            role = spec["role"]
-            parts = spec["parts"]
-            created_at = spec.get("created_at") or datetime.now(timezone.utc).isoformat()
-            turn_id = spec.get("turn_id")
-            message_kind = spec.get("message_kind")
-            source_message_ids = spec.get("source_message_ids")
-
-            try:
-                peer_id = normalize_peer_id(spec.get("peer_id"))
-            except ValueError as exc:
-                from openviking_cli.exceptions import InvalidArgumentError
-
-                raise InvalidArgumentError(str(exc)) from exc
-
-            if self._is_tool_result_aggregate(role, parts):
-                msgs = [
-                    Message(
-                        id=f"msg_{uuid4().hex}",
-                        role=role,
-                        parts=[part],
-                        peer_id=peer_id,
-                        created_at=created_at,
-                        turn_id=turn_id,
-                        message_kind=message_kind or "tool_transport",
-                        source_message_ids=(
-                            list(source_message_ids) if source_message_ids is not None else None
-                        ),
+    async def _persist_prepared_messages(self, batch: PreparedMessageBatch) -> None:
+        store = self._tool_result_store()
+        if store is not None:
+            for output in batch.tool_outputs:
+                try:
+                    stored = await store.write(
+                        prepared=output.prepared,
+                        tool_id=output.part.tool_id,
+                        tool_name=output.part.tool_name,
+                        message_id=output.message.id,
+                        user_id=self.ctx.user.user_id if self.ctx and self.ctx.user else None,
+                        peer_id=output.message.peer_id,
+                        created_at=output.message.created_at,
                     )
-                    for part in parts
-                ]
-                self._externalize_large_tool_output_group(msgs)
-                all_messages.extend(msgs)
-            else:
-                msg = Message(
-                    id=f"msg_{uuid4().hex}",
-                    role=role,
-                    parts=parts,
-                    peer_id=peer_id,
-                    created_at=created_at,
-                    turn_id=turn_id,
-                    message_kind=message_kind,
-                    source_message_ids=(
-                        list(source_message_ids) if source_message_ids is not None else None
-                    ),
-                )
-                self._externalize_large_tool_outputs(msg)
-                all_messages.append(msg)
-
-        return all_messages
+                except Exception as exc:
+                    output.apply_failure(self._tool_output_externalization_config, exc)
+                else:
+                    output.apply_success(stored)
+        await asyncio.to_thread(batch.finalize_tokens)
 
     def add_messages(
         self,
         messages_spec: List[dict],
     ) -> List[Message]:
         """Synchronously add multiple messages in one authoritative batch."""
-        messages = self._build_messages(messages_spec)
-        self._append_messages(messages)
-        return messages
+        return run_async(self.add_messages_async(messages_spec))
 
     async def add_messages_async(
         self,
         messages_spec: List[dict],
     ) -> List[Message]:
         """Asynchronously add multiple messages without blocking the caller loop."""
-        messages = self._build_messages(messages_spec)
-        await self._append_messages_authoritatively(messages)
-        return messages
+        preparer = MessagePreparer(
+            self._session_uri,
+            self._tool_output_externalization_config,
+        )
+        batch = await asyncio.to_thread(preparer.prepare_new, messages_spec)
+        await self._persist_prepared_messages(batch)
+        await self._append_messages_authoritatively(batch.messages)
+        return batch.messages
 
     def add_message(
         self,
@@ -2038,9 +1699,14 @@ class Session:
                 # The externalization budget belongs to a logical Turn, not one
                 # physical assistant message. This catches N small tool outputs
                 # whose aggregate exceeds the configured inline budget.
-                for turn in build_turns(self._messages):
-                    self._externalize_large_tool_output_group(turn.messages)
-                retention_plan = plan_retention(
+                preparer = MessagePreparer(
+                    self._session_uri,
+                    self._tool_output_externalization_config,
+                )
+                prepared = await asyncio.to_thread(preparer.prepare_turns, self._messages)
+                await self._persist_prepared_messages(prepared)
+                retention_plan = await asyncio.to_thread(
+                    plan_retention,
                     self._messages,
                     keep_recent_turn_count=effective_keep_turns,
                     token_budget=effective_token_budget,
@@ -2124,10 +1790,10 @@ class Session:
                 # Archive raw remains durable and recoverable before any live
                 # conversation history is removed from the root JSONL.
                 if self._viking_fs:
-                    lines = [m.to_jsonl() for m in messages_to_archive]
+                    content = await asyncio.to_thread(messages_to_jsonl, messages_to_archive)
                     await self._viking_fs.write_file(
                         uri=f"{archive_uri}/messages.jsonl",
-                        content="\n".join(lines) + "\n",
+                        content=content,
                         ctx=self.ctx,
                     )
                     if retention_plan is not None:
@@ -2497,7 +2163,8 @@ class Session:
                             if isinstance(generated, _ArchiveSummaryResult)
                             else _ArchiveSummaryResult(overview=str(generated or ""))
                         )
-                        checkpoint_records = self._build_checkpoint_records(
+                        checkpoint_records = await asyncio.to_thread(
+                            self._build_checkpoint_records,
                             checkpoint_requests,
                             summary_result.checkpoint_summaries,
                         )
@@ -2961,7 +2628,8 @@ class Session:
 
         context = await self._collect_session_context_components()
         merged_messages = context["messages"]
-        budgeted = fit_active_messages_to_budget(
+        budgeted = await asyncio.to_thread(
+            fit_active_messages_to_budget,
             merged_messages,
             token_budget=token_budget,
         )
@@ -3413,7 +3081,7 @@ class Session:
 
     async def _read_archive_overview_tokens(self, archive_uri: str, overview: str) -> int:
         """Read overview token estimate from archive metadata."""
-        overview_tokens = estimate_text_tokens(overview)
+        overview_tokens = await asyncio.to_thread(estimate_text_tokens, overview)
         try:
             meta_content = await self._viking_fs.read_file(
                 f"{archive_uri}/.meta.json", ctx=self.ctx
@@ -3427,17 +3095,10 @@ class Session:
     async def _read_archive_messages(self, archive_uri: str) -> List[Message]:
         """Read archived messages from one archive."""
         content = await self._viking_fs.read_file(f"{archive_uri}/messages.jsonl", ctx=self.ctx)
-
-        messages: List[Message] = []
-        for line in content.strip().split("\n"):
-            if not line.strip():
-                continue
-            try:
-                messages.append(Message.from_dict(json.loads(line)))
-            except (json.JSONDecodeError, AttributeError, KeyError, TypeError, ValueError) as exc:
-                raise _ArchiveMessagesCorruptError("invalid message record") from exc
-
-        return messages
+        try:
+            return await asyncio.to_thread(messages_from_jsonl, content)
+        except ValueError as exc:
+            raise _ArchiveMessagesCorruptError("invalid message record") from exc
 
     async def _get_latest_completed_archive_summary(
         self,
@@ -4077,23 +3738,7 @@ class Session:
             f"{self._session_uri}/messages.jsonl",
             ctx=self.ctx,
         )
-        messages: List[Message] = []
-        # Split on "\n" only, not str.splitlines(): the latter also treats
-        # U+2028 / U+2029 / NEL (\x85) / \r / \v / \f as line boundaries, which
-        # would cut a JSONL record in half when those characters appear inside a
-        # JSON string value (e.g. assistant tool_output) and break json.loads()
-        # with "Unterminated string". Normalize CRLF first so a trailing "\r"
-        # does not leak into the record. See issue #3984.
-        for line_number, line in enumerate(content.replace("\r\n", "\n").split("\n"), start=1):
-            if not line.strip():
-                continue
-            try:
-                messages.append(Message.from_dict(json.loads(line)))
-            except Exception as exc:
-                raise ValueError(
-                    f"Invalid live message JSONL at line {line_number}: {exc}"
-                ) from exc
-        return messages
+        return await asyncio.to_thread(messages_from_jsonl, content)
 
     def _extract_abstract_from_summary(self, summary: str) -> str:
         """Extract one-sentence overview from structured summary."""
@@ -4229,7 +3874,11 @@ class Session:
                 raise ValueError("Cannot generate checkpoints without archive messages")
             return ""
 
-        formatted = self._format_messages_for_wm(messages, checkpoint_requests)
+        formatted = await asyncio.to_thread(
+            self._format_messages_for_wm,
+            messages,
+            checkpoint_requests,
+        )
         checkpoint_instructions = self._checkpoint_prompt_instructions(len(checkpoint_requests))
 
         vlm = get_openviking_config().vlm
@@ -5276,8 +4925,7 @@ class Session:
         abstract = self._generate_abstract()
         overview = self._generate_overview(turn_count)
 
-        lines = [m.to_jsonl() for m in messages]
-        content = "\n".join(lines) + "\n" if lines else ""
+        content = await asyncio.to_thread(messages_to_jsonl, messages)
 
         await viking_fs.write_file(
             uri=f"{self._session_uri}/messages.jsonl",

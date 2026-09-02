@@ -5,7 +5,6 @@ import json
 
 import pytest
 
-import openviking.session.session as session_module
 import openviking.session.tool_result_store as tool_result_store
 from openviking.message import ToolPart
 from openviking.server.config import ToolOutputExternalizationConfig
@@ -17,6 +16,16 @@ from openviking_cli.exceptions import NotFoundError
 class MemoryVikingFS:
     def __init__(self):
         self.files = {}
+        self._async_agfs = self
+
+    def _uri_to_path(self, uri, *, ctx=None):  # noqa: ANN001
+        return uri
+
+    async def pathlock_acquire_exact(self, path, timeout_secs):  # noqa: ANN001
+        return path
+
+    async def pathlock_release(self, lease):  # noqa: ANN001
+        return None
 
     async def write_file(self, uri, content, *, ctx=None, lease_ref=None):  # noqa: ANN001
         self.files[uri] = content
@@ -98,9 +107,7 @@ async def test_externalized_tool_output_generates_synopsis_once(session: Session
         return original(*args, **kwargs)
 
     monkeypatch.setattr(tool_result_store, "generate_tool_result_synopsis", wrapped)
-    monkeypatch.setattr(session_module, "generate_tool_result_synopsis", wrapped)
-
-    session.add_message(
+    await session.add_message_async(
         "user",
         [
             ToolPart(
