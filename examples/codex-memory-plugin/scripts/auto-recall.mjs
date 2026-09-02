@@ -386,6 +386,21 @@ function fallbackDigest(items) {
   return lines.length > 0 ? appendMcpRetrievalHint(`OpenViking memory digest:\n${lines.join("\n")}`) : "";
 }
 
+function fallbackCompressionInput(items) {
+  const perItemChars = Math.max(
+    500,
+    Math.floor(cfg.recallCompressMaxInputChars / Math.max(1, items.length)),
+  );
+  return JSON.stringify({
+    memories: items.map((item) => ({
+      uri: item.uri,
+      category: item.category || "memory",
+      score: item.score,
+      text: truncateText(item.text, perItemChars),
+    })),
+  }, null, 2);
+}
+
 async function getRecallCompressorProfile() {
   const cached = await loadCachedRecallCompressorProfile(cfg);
   if (cached) return cached;
@@ -481,7 +496,7 @@ async function runCodexCompressor(prompt, profile) {
   }
 }
 
-async function compressMemoryContext(userPrompt, rendered, items) {
+async function compressMemoryContext(userPrompt, rendered, items, shortContext = rendered) {
   if (!cfg.recallCompress) return null;
   const input = String(rendered || "").trim() || fallbackDigest(items);
   if (!input) return "";
@@ -491,6 +506,7 @@ async function compressMemoryContext(userPrompt, rendered, items) {
     const compression = await compressRecallContext({
       query: userPrompt,
       rendered: input,
+      shortContext,
       entries: items,
       cfg,
       cachePath: RECALL_DIGEST_CACHE_PATH,
@@ -649,7 +665,12 @@ async function main() {
   );
 
   const fallbackContext = fallbackDigest(memoryItems);
-  const compressedContext = await compressMemoryContext(userPrompt, fallbackContext, memoryItems);
+  const compressedContext = await compressMemoryContext(
+    userPrompt,
+    fallbackCompressionInput(memoryItems),
+    memoryItems,
+    fallbackContext,
+  );
   const memoryContext = compressedContext === null ? fallbackContext : compressedContext;
 
   emit(memoryContext);

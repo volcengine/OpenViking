@@ -28,13 +28,34 @@ test("compressed context keeps only citations to served URIs", () => {
   );
 });
 
-test("URI repair preserves served paths with spaces and decodes escaped citations", () => {
+test("URI repair validates every citation while preserving served paths with spaces", () => {
+  const plain = "viking://user/u/a.md";
   const served = "viking://user/u/memories/preferences/cross runtime.md";
   assert.equal(repairDigestUris(`- raw source: ${served}`, [served]), `- raw source: ${served}`);
   assert.equal(
     repairDigestUris("- escaped source: viking://user/u/memories/preferences/cross%20runtime.md", [served]),
     `- escaped source: ${served}`,
   );
+  assert.equal(repairDigestUris(`- near miss source: ${plain}.evil`, [plain]), `- near miss source: ${plain}`);
+  assert.equal(repairDigestUris(`- mixed source: ${plain} and viking://evil/x.md`, [plain]), "");
+  assert.equal(repairDigestUris(`- mixed source: ${served} and viking://evil/x.md`, [served]), "");
+});
+
+test("short compression input returns the caller's bounded context", async () => {
+  let called = false;
+  const result = await compressRecallContext({
+    query: "q",
+    rendered: "full compressor input",
+    shortContext: "bounded display context",
+    cfg: { recallCompressMinInputChars: 100 },
+    runCompressor: async () => {
+      called = true;
+      return "NO_RELEVANT_MEMORY";
+    },
+  });
+
+  assert.deepEqual(result, { status: "ok", context: "bounded display context" });
+  assert.equal(called, false);
 });
 
 test("compression cache is reused only for the same request", async () => {

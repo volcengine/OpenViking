@@ -118,12 +118,14 @@ async function withFakeCodex(output, fn, { exitCode = 0 } = {}) {
   );
   const callLog = join(binDir, "calls.log");
   const argsLog = join(binDir, "args.log");
+  const promptLog = join(binDir, "prompt.log");
   const fakeCodex = `#!/usr/bin/env node
 const fs = require("node:fs");
 
 const outputFlagIndex = process.argv.indexOf("--output-last-message");
 const outputPath = outputFlagIndex >= 0 ? process.argv[outputFlagIndex + 1] : "";
-fs.readFileSync(0);
+const prompt = fs.readFileSync(0, "utf8");
+fs.writeFileSync(process.env.FAKE_CODEX_PROMPT_LOG, prompt);
 fs.appendFileSync(process.env.FAKE_CODEX_CALL_LOG, "called\\n");
 fs.appendFileSync(process.env.FAKE_CODEX_ARGS_LOG, process.argv.slice(2).join("\\n") + "\\n");
 
@@ -140,10 +142,12 @@ fs.writeFileSync(outputPath, process.env.FAKE_CODEX_OUTPUT || "");
     return await fn({
       callLog,
       argsLog,
+      promptLog,
       env: {
         PATH: `${binDir}${delimiter}${process.env.PATH}`,
         FAKE_CODEX_CALL_LOG: callLog,
         FAKE_CODEX_ARGS_LOG: argsLog,
+        FAKE_CODEX_PROMPT_LOG: promptLog,
         FAKE_CODEX_EXIT_CODE: String(exitCode),
         FAKE_CODEX_OUTPUT: output,
       },
@@ -165,7 +169,7 @@ async function runEndpointCompressionCase({
   const stateDir = providedStateDir || await mkdtemp(join(tmpdir(), "ov-auto-recall-endpoint-compress-"));
   let requestBody = null;
   try {
-    return await withFakeCodex(compressorOutput, async ({ callLog, argsLog, env }) => {
+    return await withFakeCodex(compressorOutput, async ({ callLog, argsLog, promptLog, env }) => {
       const result = await withMockOpenViking(async (req, res) => {
         const url = new URL(req.url, "http://127.0.0.1");
         if (req.method === "GET" && url.pathname === "/health") {
@@ -203,10 +207,12 @@ async function runEndpointCompressionCase({
       ));
       const compressorCallLog = await readFile(callLog, "utf-8").catch(() => "");
       const compressorArgs = await readFile(argsLog, "utf-8").catch(() => "");
+      const compressorPrompt = await readFile(promptLog, "utf-8").catch(() => "");
       return {
         output: JSON.parse(result.stdout.trim()),
         compressorCalls: compressorCallLog.trim().split("\n").filter(Boolean).length,
         compressorArgs: compressorArgs.trim().split("\n").filter(Boolean),
+        compressorPrompt,
         requestBody,
       };
     }, { exitCode });
@@ -424,6 +430,87 @@ test("auto-recall reuses a cached digest for an identical recall", async () => {
     assert.equal(first.compressorCalls, 1);
     assert.equal(second.compressorCalls, 0);
     assert.match(second.output.hookSpecificOutput.additionalContext, /exponential backoff/);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("auto-recall gives the compressor full content from the raw-search fallback", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-raw-compress-"));
+  const memories = Array.from({ length: 6 }, (_, index) => ({
+    uri: `viking://user/zeus/memories/events/raw-${index}.md`,
+    level: 2,
+    score: 0.9 - (index * 0.01),
+    category: "events",
+    abstract: `raw fallback memory ${index}`,
+  }));
+  const sentinels = memories.map((_, index) => `DETAIL_AFTER_320_${index}`);
+
+  try {
+    await withFakeCodex(
+      `- kept raw detail source: ${memories[0].uri}`,
+      async ({ promptLog, env }) => {
+        const result = await withMockOpenViking(async (req, res) => {
+          const url = new URL(req.url, "http://127.0.0.1");
+          if (req.method === "GET" && url.pathname === "/health") {
+            writeJson(res, { status: "ok", result: { ok: true } });
+            return;
+          }
+          if (req.method === "POST" && url.pathname === "/api/v1/search/recall") {
+            writeStatusJson(res, 404, { status: "error", error: "not found" });
+            return;
+          }
+          if (req.method === "POST" && url.pathname === "/api/v1/search/search") {
+            const body = await readRequestBody(req);
+            if (body.mode === "context") {
+              writeStatusJson(res, 400, {
+                status: "error",
+                error: "Extra inputs are not permitted: mode",
+              });
+              return;
+            }
+            const isMemoryScope = body.target_uri === "viking://user/zeus/memories";
+            writeJson(res, {
+              status: "ok",
+              result: { memories: isMemoryScope ? memories : [], skills: [] },
+            });
+            return;
+          }
+          if (req.method === "GET" && url.pathname === "/api/v1/content/read") {
+            const index = memories.findIndex((item) => item.uri === url.searchParams.get("uri"));
+            writeJson(res, {
+              status: "ok",
+              result: `${"x".repeat(320)}${sentinels[index]}${"y".repeat(80)}`,
+            });
+            return;
+          }
+          writeStatusJson(res, 404, { status: "error", error: "not found" });
+        }, async (baseUrl) => runAutoRecall(
+          { prompt: "use the raw fallback details", session_id: "codex:raw-compress" },
+          {
+            ...env,
+            OPENVIKING_AUTO_RECALL: "1",
+            OPENVIKING_CODEX_STATE_DIR: stateDir,
+            OPENVIKING_STATE_DIR: stateDir,
+            OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
+            OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
+            OPENVIKING_CREDENTIAL_SOURCE: "env",
+            OPENVIKING_RECALL_COMPRESS: "1",
+            OPENVIKING_RECALL_LIMIT: "6",
+            OPENVIKING_RECALL_TIMEOUT_MS: "10000",
+            OPENVIKING_MIN_QUERY_LENGTH: "1",
+            OPENVIKING_SCORE_THRESHOLD: "0",
+            OPENVIKING_TIMEOUT_MS: "5000",
+            OPENVIKING_URL: baseUrl,
+            OPENVIKING_USER: "zeus",
+          },
+        ));
+
+        const compressorPrompt = await readFile(promptLog, "utf8");
+        for (const sentinel of sentinels) assert.match(compressorPrompt, new RegExp(sentinel));
+        assert.match(JSON.parse(result.stdout).hookSpecificOutput.additionalContext, /kept raw detail/);
+      },
+    );
   } finally {
     await rm(stateDir, { recursive: true, force: true });
   }

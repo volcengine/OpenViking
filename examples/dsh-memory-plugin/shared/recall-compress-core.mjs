@@ -86,12 +86,12 @@ export function repairDigestUris(digest, validUris = []) {
       lines.push(line);
       continue;
     }
-    if (valid.some((uri) => line.includes(uri))) {
-      lines.push(line);
-      continue;
+    let tokenized = line;
+    for (const uri of [...valid].sort((a, b) => b.length - a.length)) {
+      if (/\s/.test(uri)) tokenized = tokenized.split(uri).join(encodeURI(uri));
     }
     let dropped = false;
-    const repaired = line.replace(/viking:\/\/[^\s<>"')\]]+/g, (uri) => {
+    const repaired = tokenized.replace(/viking:\/\/[^\s<>"')\]]+/g, (uri) => {
       let decoded = uri;
       try { decoded = decodeURI(uri); } catch { /* keep the original candidate */ }
       if (validSet.has(decoded)) return decoded;
@@ -155,6 +155,7 @@ async function writeCache(path, value) {
 export async function compressRecallContext({
   query,
   rendered,
+  shortContext = rendered,
   entries = [],
   cfg = {},
   runCompressor,
@@ -164,7 +165,9 @@ export async function compressRecallContext({
   const input = String(rendered || "").trim();
   if (!input) return { status: COMPRESS_EMPTY, context: "" };
   const minChars = Math.max(0, Number(cfg.recallCompressMinInputChars ?? 1500));
-  if (input.length < minChars) return { status: COMPRESS_OK, context: input };
+  if (input.length < minChars) {
+    return { status: COMPRESS_OK, context: String(shortContext ?? input).trim() };
+  }
 
   const maxInputChars = Math.max(1000, Number(cfg.recallCompressMaxInputChars || 18000));
   const maxBullets = Math.max(1, Number(cfg.recallCompressMaxBullets || 6));
