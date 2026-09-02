@@ -140,30 +140,22 @@ class TestUriGeneration:
         with pytest.raises(ValueError, match="has None value"):
             generate_uri(memory_type, {"topic": None})
 
-    def test_generate_uri_makes_windows_unsafe_directory_segment_collision_resistant(self):
-        """The exact #4308 shape is portable without changing the LLM field."""
+    def test_generate_uri_normalizes_dynamic_slash_without_new_hierarchy(self):
         memory_type = MemoryTypeSchema(
             memory_type="events",
-            description="Event memory",
             directory="viking://user/{{ user_space }}/memories/events",
             filename_template="2026/07/30/{{ event_name }}.md",
-            fields=[
-                MemoryField(
-                    name="event_name",
-                    field_type=FieldType.STRING,
-                    merge_op=MergeOp.IMMUTABLE,
-                )
-            ],
         )
-        fields = {"event_name": "Desktop /new report"}
+        fields = {"event_name": "alpha/beta"}
 
         uri = generate_uri(memory_type, fields, user_space="default")
 
-        assert uri == (
-            "viking://user/default/memories/events/2026/07/30/"
-            "Desktop~ov~02970756851a43cf/new report.md"
+        assert (
+            uri
+            == generate_uri(memory_type, {"event_name": "alpha_beta"}, user_space="default")
+            == "viking://user/default/memories/events/2026/07/30/alpha_beta.md"
         )
-        assert fields == {"event_name": "Desktop /new report"}
+        assert fields == {"event_name": "alpha/beta"}
 
     def test_generate_uri_keeps_colliding_windows_names_distinct(self):
         memory_type = MemoryTypeSchema(

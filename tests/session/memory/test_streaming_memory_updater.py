@@ -987,9 +987,7 @@ def test_enforce_merge_group_reapplies_portable_uri_without_changing_memory_name
     )
 
     assert op.memory_fields["note_name"] == "Desktop /new"
-    assert op.uris == [
-        "viking://user/u/peers/conv-42/memories/notes/Desktop~ov~02970756851a43cf/new.md"
-    ]
+    assert op.uris == ["viking://user/u/peers/conv-42/memories/notes/Desktop _new.md"]
 
 
 def test_enforce_merge_group_self_scope_removes_peer_id():
