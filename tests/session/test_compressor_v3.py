@@ -18,6 +18,7 @@ from openviking.session.compressor_v3 import (
     _experience_root_uri,
     _experience_snapshot_provenance,
     _experience_trajectory_map,
+    _report_extraction_telemetry,
     _visible_experience_snapshot_uris,
 )
 from openviking.session.memory.dataclass import (
@@ -46,6 +47,7 @@ from openviking.session.train import (
     Trajectory,
 )
 from openviking.session.train.components.session_commit import _case_spec_message_to_request
+from openviking.telemetry import OperationTelemetry, bind_telemetry
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -109,6 +111,44 @@ def test_extract_long_term_memories_preserves_legacy_positional_parameter_order(
         "event_search_tags",
         "peer_memory_enabled",
     ]
+
+
+def test_report_extraction_telemetry_handles_placeholder_error_targets():
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                old_memory_file_content=None,
+                memory_fields={},
+                memory_type="events",
+                uris=["unknown"],
+            )
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+    result = MemoryUpdateResult()
+    result.add_written("unknown")
+    result.add_edited("viking://user/u/memories/preferences/pref.md")
+    result.add_deleted("viking://user/u/memories/events/old.md")
+    result.add_error("events(page_id=xyz)", ValueError("Missing resolved URI"))
+
+    telemetry = OperationTelemetry(operation="session.commit", enabled=True)
+    with bind_telemetry(telemetry):
+        _report_extraction_telemetry(result, operations)
+
+    summary = telemetry.finish().summary
+    extract = summary["memory"]["extract"]
+    assert extract["actions"] == {
+        "created": 1,
+        "merged": 1,
+        "deleted": 1,
+        "failed": 1,
+    }
+    assert extract["actions_by_type"] == {
+        "events": {"created": 1, "deleted": 1},
+        "preferences": {"merged": 1},
+        "unknown": {"failed": 1},
+    }
 
 
 @pytest.mark.asyncio
