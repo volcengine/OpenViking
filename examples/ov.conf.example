@@ -3,6 +3,9 @@
         "host": "0.0.0.0",
         "port": 1933,
         "timeout_keep_alive": 5,
+        "bind_retry_max_attempts": 5,
+        "bind_retry_initial_delay_seconds": 1.0,
+        "bind_retry_backoff_factor": 2.0,
         "root_api_key": null,
         "cors_origins": ["*"],
         "agent_evolution": {

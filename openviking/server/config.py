@@ -337,6 +337,14 @@ class ServerConfig(BaseModel):
     # connections the client still believes are reusable, causing sporadic
     # connection-reset / EOF errors.
     timeout_keep_alive: int = 5
+    # Port-binding recovery. When the listen port is still occupied at startup
+    # (stale process from a previous run, watchdog restart race, duplicate
+    # launch), retry the bind with exponential backoff instead of exiting on
+    # the first EADDRINUSE. 0 preserves the old fail-fast behavior; the delay
+    # grows as initial * backoff_factor ** attempt.
+    bind_retry_max_attempts: int = Field(default=5, ge=0)
+    bind_retry_initial_delay_seconds: float = Field(default=1.0, gt=0)
+    bind_retry_backoff_factor: float = Field(default=2.0, ge=1.0)
     auth_mode: Optional[str] = None  # If None, auto-detect based on root_api_key
     root_api_key: Optional[str] = None
     # OIDC/LDAP authentication configuration
