@@ -21,7 +21,7 @@
  * State directory: $OPENVIKING_CODEX_STATE_DIR or ~/.openviking/codex-plugin-state
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rename, rm, rmdir, stat, utimes, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -229,33 +229,39 @@ export async function readEndedAt(codexSessionId) {
 const LOCK_POLL_MS = 100;
 
 /**
- * Take a stale lock over by claiming its `owner` file.
+ * Take a stale lock over, atomically, against every other taker that saw the
+ * same dead lock.
  *
- * Both steps are atomic and exactly one racer can complete them: the rename
- * removes the dead holder's stamp, and the exclusive create installs ours.
- * A racer that loses either step leaves the winner's lock intact.
+ * The takers cannot race for the `owner` file itself: displacing it would
+ * happily unseat a taker that won a moment earlier and is already running, and
+ * any scheme that moves it aside leaves the stamp momentarily absent for a
+ * third taker to claim. Instead each taker derives a claim directory from the
+ * exact state it read (`seen`, or its absence) and races to `mkdir` it, which
+ * is atomic: everyone who observed the same dead lock contends for one name,
+ * exactly one wins, and the losers re-read a lock that now carries the
+ * winner's fresh stamp. The winner drops the claim as soon as it is stamped,
+ * so later generations can take over in turn; a claim left behind by a taker
+ * that died mid-takeover ages out like the lock itself.
  */
-async function claimStaleLock(ownerFile, token) {
-  const aside = `${ownerFile}.taken-${randomUUID()}`;
+async function claimStaleLock(dir, ownerFile, token, seen, staleMs) {
+  const key = createHash("sha256").update(seen ?? "\u0000unstamped").digest("hex").slice(0, 32);
+  const claimDir = join(dir, `claim-${key}`);
   try {
-    await rename(ownerFile, aside);
-  } catch {
-    // No stamp to displace: the holder died before writing one, or a racer
-    // already displaced it. The exclusive create alone decides the winner.
-    try {
-      await writeFile(ownerFile, token, { flag: "wx" });
-      return true;
-    } catch {
-      return false;
+    await mkdir(claimDir);
+  } catch (err) {
+    if (err?.code === "EEXIST") {
+      try {
+        if (Date.now() - (await stat(claimDir)).mtimeMs > staleMs) {
+          await rmdir(claimDir).catch(() => {});
+        }
+      } catch {}
     }
-  }
-  try {
-    await writeFile(ownerFile, token, { flag: "wx" });
-  } catch {
-    await rm(aside, { force: true }).catch(() => {});
     return false;
   }
-  await rm(aside, { force: true }).catch(() => {});
+  await writeFile(ownerFile, token);
+  const now = new Date();
+  await utimes(dir, now, now).catch(() => {});
+  await rmdir(claimDir).catch(() => {});
   return true;
 }
 
@@ -263,17 +269,18 @@ async function claimStaleLock(ownerFile, token) {
  * Run `fn` while holding an exclusive per-session lock.
  *
  * The lock is a directory (mkdir is atomic everywhere we run). A lock whose
- * mtime is older than `staleMs` is abandoned, so a killed holder cannot wedge
- * a session forever; a live holder keeps it fresh through `heartbeat()`.
+ * `owner` stamp — or, before one is written, whose directory — is older than
+ * `staleMs` is abandoned, so a killed holder cannot wedge a session forever; a
+ * live holder keeps both fresh through `heartbeat()`.
  * `waitMs: 0` makes this a try-lock that returns `{ skipped: true }` instead
  * of waiting. Callers must always load state *inside* `fn`.
  *
  * The holder stamps an `owner` file inside the directory and only ever
  * releases (or refreshes) a lock whose owner is still its own, so a stale
  * takeover cannot make one taker drop the lock another taker now holds.
- * Takeover never removes or moves the directory — the lock path must never be
- * momentarily absent, or a racer's `mkdir` would succeed alongside the taker.
- * Instead the takers race for the `owner` file itself; see `claimStaleLock`.
+ * Takeover never removes or moves the directory or the stamp — neither path
+ * may be momentarily absent, or a racer would claim the lock alongside the
+ * taker. Instead the takers race for a claim directory; see `claimStaleLock`.
  */
 export async function withSessionLock(codexSessionId, fn, { waitMs = 0, staleMs = 300_000 } = {}) {
   const dir = lockPath(codexSessionId);
@@ -290,21 +297,30 @@ export async function withSessionLock(codexSessionId, fn, { waitMs = 0, staleMs 
       break;
     } catch (err) {
       if (err?.code !== "EEXIST") throw err;
-      let ageMs = 0;
+      // Age the lock by its own stamp when it has one: a taker that just won
+      // the stamp is live even before it refreshes the directory, and reading
+      // the directory here would let the losers of that race take the lock
+      // straight back off the winner.
+      let seen = null;
       try {
-        ageMs = Date.now() - (await stat(dir)).mtimeMs;
+        seen = await readFile(ownerFile, "utf-8");
+      } catch {}
+      let ageMs;
+      try {
+        ageMs = Date.now() - (await stat(seen === null ? dir : ownerFile)).mtimeMs;
       } catch {
         continue; // holder released between mkdir and stat; retry immediately
       }
       if (ageMs > staleMs) {
-        if (await claimStaleLock(ownerFile, token)) {
-          // Stop the other waiters from reading this lock as stale too.
-          const now = new Date();
-          await utimes(dir, now, now).catch(() => {});
+        if (await claimStaleLock(dir, ownerFile, token, seen, staleMs)) {
           held = true;
           break;
         }
-        continue; // another taker claimed it; re-read the lock from the top
+        // Another taker claimed this generation; give it a moment to stamp the
+        // lock before re-reading, or we would spin on the state it replaces.
+        if (Date.now() >= deadline) break;
+        await new Promise((resolve) => setTimeout(resolve, LOCK_POLL_MS));
+        continue;
       }
       if (Date.now() >= deadline) break;
       await new Promise((resolve) => setTimeout(resolve, LOCK_POLL_MS));
@@ -321,6 +337,7 @@ export async function withSessionLock(codexSessionId, fn, { waitMs = 0, staleMs 
   const heartbeat = async () => {
     if (!(await owned())) return;
     const now = new Date();
+    await utimes(ownerFile, now, now).catch(() => {});
     await utimes(dir, now, now).catch(() => {});
   };
   try {
@@ -328,7 +345,10 @@ export async function withSessionLock(codexSessionId, fn, { waitMs = 0, staleMs 
   } finally {
     if (await owned()) {
       await rm(ownerFile, { force: true }).catch(() => {});
-      await rmdir(dir).catch(() => {});
+      // Recursive: a taker that died mid-takeover can leave its claim
+      // directory behind, and a plain rmdir would then leave the whole lock
+      // standing with a fresh mtime for a full `staleMs`.
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
     }
   }
 }
