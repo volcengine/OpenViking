@@ -8,8 +8,6 @@ use aws_sdk_s3::config::http::HttpResponse;
 use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
 use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::error::SdkError;
-use aws_sdk_s3::operation::put_object::builders::PutObjectFluentBuilder;
-use aws_sdk_s3::operation::put_object::{PutObjectError, PutObjectOutput};
 use aws_sdk_s3::operation::{RequestId, RequestIdExt};
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client;
@@ -19,34 +17,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const ENCODED_SEGMENT_PREFIX: char = '!';
 const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
-
-/// S3-compatible vendor behavior selected by configuration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum S3Vendor {
-    /// Standard S3-compatible behavior.
-    Standard,
-    /// Alibaba Cloud OSS S3-compatible behavior.
-    AliyunOss,
-}
-
-impl S3Vendor {
-    /// Parse the S3 vendor option from plugin configuration.
-    ///
-    /// # Arguments
-    /// * `config` - S3FS plugin configuration.
-    ///
-    /// # Returns
-    /// The configured S3 vendor, or `Standard` when omitted.
-    pub(super) fn from_config(config: &HashMap<String, ConfigValue>) -> Result<Self> {
-        match config.get("s3_vendor").and_then(|v| v.as_string()) {
-            None | Some("") | Some("standard") => Ok(Self::Standard),
-            Some("aliyun_oss") => Ok(Self::AliyunOss),
-            Some(v) => Err(Error::config(format!(
-                "invalid s3_vendor: {v}; expected one of: standard, aliyun_oss"
-            ))),
-        }
-    }
-}
 
 fn partial_delete_error(bucket: &str, errors: &[aws_sdk_s3::types::Error]) -> Option<Error> {
     if errors.is_empty() {
@@ -399,7 +369,6 @@ pub struct S3Client {
     marker_mode: DirectoryMarkerMode,
     disable_batch_delete: bool,
     auto_detect_content_type: bool,
-    s3_vendor: S3Vendor,
 }
 
 impl S3Client {
@@ -427,8 +396,6 @@ impl S3Client {
             .and_then(|v| v.as_string())
             .unwrap_or("us-east-1")
             .to_string();
-
-        let s3_vendor = S3Vendor::from_config(config)?;
 
         let raw_endpoint = config.get("endpoint").and_then(|v| v.as_string());
         let use_ssl = if let Some(v) = config.get("use_ssl").and_then(|v| v.as_bool()) {
@@ -519,7 +486,6 @@ impl S3Client {
             marker_mode,
             disable_batch_delete,
             auto_detect_content_type,
-            s3_vendor,
         })
     }
 
@@ -689,6 +655,7 @@ impl S3Client {
             .put_object()
             .bucket(&self.bucket)
             .key(key)
+            .if_none_match("*")
             .body(ByteStream::from(data));
 
         if self.auto_detect_content_type {
@@ -697,19 +664,17 @@ impl S3Client {
             }
         }
 
-        self.if_none_match_adapter(request, "*")
-            .await
-            .map_err(|e| {
-                if is_s3_conditional_failure(&e) {
-                    Error::already_exists(key)
-                } else {
-                    format_sdk_s3_error(
-                        "PutObjectCreateNew",
-                        &format!("bucket={} key={key}", self.bucket),
-                        &e,
-                    )
-                }
-            })?;
+        request.send().await.map_err(|e| {
+            if is_s3_conditional_failure(&e) {
+                Error::already_exists(key)
+            } else {
+                format_sdk_s3_error(
+                    "PutObjectCreateNew",
+                    &format!("bucket={} key={key}", self.bucket),
+                    &e,
+                )
+            }
+        })?;
 
         Ok(())
     }
@@ -721,6 +686,7 @@ impl S3Client {
             .put_object()
             .bucket(&self.bucket)
             .key(key)
+            .if_match(etag)
             .body(ByteStream::from(data));
 
         if self.auto_detect_content_type {
@@ -729,7 +695,7 @@ impl S3Client {
             }
         }
 
-        self.if_match_adapter(request, etag, key).await.map_err(|e| {
+        request.send().await.map_err(|e| {
             if is_s3_conditional_failure(&e) {
                 Error::AlreadyExists(key.to_string())
             } else {
@@ -746,46 +712,6 @@ impl S3Client {
                 Err(e)
             }
         })
-    }
-
-    /// Apply create-if-absent behavior to a PutObject request.
-    async fn if_none_match_adapter(
-        &self,
-        request: PutObjectFluentBuilder,
-        value: &str,
-    ) -> std::result::Result<PutObjectOutput, SdkError<PutObjectError, HttpResponse>> {
-        match self.s3_vendor {
-            S3Vendor::Standard => request.if_none_match(value).send().await,
-            S3Vendor::AliyunOss => {
-                request
-                    .customize()
-                    .mutate_request(|req| {
-                        req.headers_mut().insert("x-oss-forbid-overwrite", "true");
-                    })
-                    .send()
-                    .await
-            }
-        }
-    }
-
-    /// Apply match-current-ETag behavior to a PutObject request when supported.
-    async fn if_match_adapter(
-        &self,
-        request: PutObjectFluentBuilder,
-        etag: &str,
-        key: &str,
-    ) -> std::result::Result<PutObjectOutput, SdkError<PutObjectError, HttpResponse>> {
-        match self.s3_vendor {
-            S3Vendor::Standard => request.if_match(etag).send().await,
-            S3Vendor::AliyunOss => {
-                tracing::info!(
-                    bucket = %self.bucket,
-                    key = %key,
-                    "aliyun_oss does not support PutObject If-Match; proceeding without CAS guarantee"
-                );
-                request.send().await
-            }
-        }
     }
 
     /// Delete a single object
@@ -1301,7 +1227,6 @@ mod tests {
         }
     }
 
-    /// Build a test S3 client without performing network setup.
     fn test_client(prefix: &str, normalize_encoding_chars: &str) -> S3Client {
         S3Client {
             client: Client::from_conf(
@@ -1316,7 +1241,6 @@ mod tests {
             marker_mode: DirectoryMarkerMode::Empty,
             disable_batch_delete: false,
             auto_detect_content_type: false,
-            s3_vendor: S3Vendor::Standard,
         }
     }
 

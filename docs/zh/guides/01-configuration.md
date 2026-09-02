@@ -1295,7 +1295,6 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 | `prefix` | str | 用于命名空间隔离的可选键前缀 | "" |
 | `use_ssl` | bool | 为 S3 连接启用/禁用 SSL（HTTPS）。也用于决定 `endpoint` 仅填主机名时自动补的协议前缀 | true |
 | `use_path_style` | bool | true 表示对 MinIO 和某些 S3 兼容服务使用 PathStyle；false 表示对 TOS 和某些 S3 兼容服务使用 VirtualHostStyle | true |
-| `s3_vendor` | str | S3 厂商行为，可选 `standard`、`aliyun_oss` | `"standard"` |
 | `auto_detect_content_type` | bool | 上传时根据 object key / 文件名后缀自动推断 MIME 类型，并写入 S3 对象的 `Content-Type` | false |
 | `directory_marker_mode` | str | 目录 marker 的持久化方式，可选 `none`、`empty`、`nonempty` | `"empty"` |
 | `normalize_encoding_chars` | str | 需要在 S3 object key 中转义为 `!HH` 十六进制字节的字符集合；空字符串表示关闭编码 | `"?#%+@"` |
@@ -1311,18 +1310,6 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 - 对 MinIO、SeaweedFS 以及大多数 PathStyle 后端，保持默认 `empty` 即可。
 - 对 TOS 或其他拒绝 0 字节目录 marker 的 VirtualHostStyle 后端，使用 `nonempty`。
 - 如果你想完全使用 prefix 风格行为，并且不需要持久化空目录，可以使用 `none`。
-
-`s3_vendor` 控制厂商请求差异：
-
-- `standard` 是默认值。使用标准 S3 条件头。
-- `aliyun_oss` 用于 Alibaba Cloud OSS。
-- OSS 创建对象时，使用 `x-oss-forbid-overwrite: true`。
-- OSS 覆盖写时，不发送 `If-Match`。
-- 覆盖写会继续执行，并打印 `INFO` 日志。
-- 此时无法保证 CAS。CAS 指按旧值匹配后再写。
-- `s3_vendor` 不会修改其他配置。
-- `use_path_style` 仍需显式设置。
-- `disable_batch_delete` 仍需显式设置。
 
 `normalize_encoding_chars` 用来控制 RAGFS 在发起 S3 请求前需要重写哪些字符：
 

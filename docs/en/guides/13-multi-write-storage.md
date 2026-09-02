@@ -99,7 +99,6 @@ When using S3-compatible services (MinIO, RustFS, Ceph, etc.), the `s3` section 
 | Field | Required? | Description |
 | --- | --- | --- |
 | `use_path_style` | Yes for most S3-compatible | Set to `true` for path-style URLs (`http://host/bucket/key`). Most S3-compatible services require this. |
-| `s3_vendor` | Required for Alibaba Cloud OSS | Set to `aliyun_oss`. Create-if-absent writes use `x-oss-forbid-overwrite: true`. |
 | `directory_marker_mode` | Yes for S3-compatible | **Must be explicitly set to `"none"`**. Without this, the RAGFS Rust binding panics with `AGFSConfigError: invalid directory_marker_mode: null` during startup, causing a silent crash loop. |
 | `use_ssl` | Optional | Set to `false` for HTTP endpoints (e.g. `http://localhost:9000`). |
 
@@ -121,32 +120,6 @@ When using S3-compatible services (MinIO, RustFS, Ceph, etc.), the `s3` section 
   }
 }
 ```
-
-**Alibaba Cloud OSS example:**
-
-```json
-{
-  "name": "oss-backup",
-  "backend": "s3",
-  "s3": {
-    "bucket": "my-oss-bucket",
-    "endpoint": "https://s3.oss-cn-beijing.aliyuncs.com",
-    "region": "cn-beijing",
-    "access_key": "your-access-key",
-    "secret_key": "your-secret-key",
-    "prefix": "openviking",
-    "use_path_style": false,
-    "s3_vendor": "aliyun_oss",
-    "disable_batch_delete": true
-  }
-}
-```
-
-> `aliyun_oss` does not change other options.
-> Set `use_path_style` and `disable_batch_delete` explicitly.
-> OSS does not support `PutObject If-Match`.
-> OpenViking continues the write and emits an `INFO` log.
-> CAS is not guaranteed on that path.
 
 > **Why is `directory_marker_mode` required?**
 >

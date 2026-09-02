@@ -383,7 +383,6 @@ def _serialize_s3_plugin_params(s3_config: Any) -> Dict[str, Any]:
         "prefix": _get_config_value(s3_config, "prefix", ""),
         "disable_ssl": not _get_config_value(s3_config, "use_ssl", True),
         "use_path_style": _get_config_value(s3_config, "use_path_style", True),
-        "s3_vendor": _get_config_value(s3_config, "s3_vendor", "standard"),
         "directory_marker_mode": directory_marker_mode.value
         if hasattr(directory_marker_mode, "value")
         else directory_marker_mode,

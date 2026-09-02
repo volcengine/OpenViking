@@ -1320,7 +1320,6 @@ Code entry: `openviking/session/auto_commit_policy.py:AutoCommitPolicy`.
 | `prefix` | str | Optional key prefix for namespace isolation | "" |
 | `use_ssl` | bool | Enable/disable SSL (HTTPS) for S3 connections. Also controls the scheme auto-prefixed onto bare-hostname `endpoint` values | true |
 | `use_path_style` | bool | true for PathStyle used by MinIO and some S3-compatible services; false for VirtualHostStyle used by TOS and some S3-compatible services | true |
-| `s3_vendor` | str | S3 vendor behavior: `standard` or `aliyun_oss` | `"standard"` |
 | `auto_detect_content_type` | bool | Automatically infer MIME type from the object key / filename extension and set the S3 object `Content-Type` header during upload | false |
 | `directory_marker_mode` | str | How to persist directory markers: `none`, `empty`, or `nonempty` | `"empty"` |
 | `normalize_encoding_chars` | str | Characters to escape in S3 object keys as `!HH` hexadecimal bytes; empty string disables normalization | `"?#%+@"` |
@@ -1336,18 +1335,6 @@ Typical choices:
 - For MinIO, SeaweedFS, and most PathStyle backends, keep the default `empty`.
 - For TOS or other VirtualHostStyle backends that reject zero-byte directory markers, use `nonempty`.
 - If you want pure prefix-style behavior and do not need persisted empty directories, use `none`.
-
-`s3_vendor` controls vendor-specific request behavior:
-
-- `standard` is the default. It uses standard S3 conditional headers.
-- `aliyun_oss` is for Alibaba Cloud OSS.
-- For create-if-absent writes, OSS uses `x-oss-forbid-overwrite: true`.
-- For overwrite writes, OSS does not send `If-Match`.
-- The write still proceeds and emits an `INFO` log.
-- CAS is not guaranteed in this case. CAS means write-after-match.
-- `s3_vendor` does not change other options.
-- Set `use_path_style` explicitly.
-- Set `disable_batch_delete` explicitly.
 
 `normalize_encoding_chars` controls which characters RAGFS rewrites before issuing S3 requests:
 

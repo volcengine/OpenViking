@@ -390,7 +390,9 @@ def test_rediss_scheme_enables_tls_without_boolean_flag():
 
     binding = RagfsBindingConfig(config.storage.agfs, cache=config.cache).to_binding_dict()
 
-    assert binding["cache"]["redis"]["endpoints"] == ["rediss://redis.example.com:6380"]
+    assert binding["cache"]["redis"]["endpoints"] == [
+        "rediss://redis.example.com:6380"
+    ]
     assert "tls_enabled" not in binding["cache"]["redis"]
 
 
@@ -601,7 +603,6 @@ def test_generate_plugin_config_materializes_multiwrite_backups(tmp_path):
         "prefix": "backup-prefix",
         "disable_ssl": True,
         "use_path_style": False,
-        "s3_vendor": "standard",
         "directory_marker_mode": None,
         "disable_batch_delete": False,
         "normalize_encoding_chars": "#?",

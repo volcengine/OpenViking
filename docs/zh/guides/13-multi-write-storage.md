@@ -99,7 +99,6 @@
 | 字段 | 是否必填 | 说明 |
 | --- | --- | --- |
 | `use_path_style` | 大多数 S3 兼容服务必填 | 设置为 `true` 使用路径风格 URL（`http://host/bucket/key`）。大多数 S3 兼容服务需要此配置。 |
-| `s3_vendor` | Alibaba Cloud OSS 必填 | 设置为 `aliyun_oss`。创建对象会使用 `x-oss-forbid-overwrite: true`。 |
 | `directory_marker_mode` | S3 兼容服务必填 | **必须显式设置为 `"none"`**。如果不配置，RAGFS Rust binding 启动时会报 `AGFSConfigError: invalid directory_marker_mode: null` 并静默崩溃。 |
 | `use_ssl` | 可选 | HTTP 端点（如 `http://localhost:9000`）需要设置为 `false`。 |
 
@@ -121,32 +120,6 @@
   }
 }
 ```
-
-**Alibaba Cloud OSS 示例：**
-
-```json
-{
-  "name": "oss-backup",
-  "backend": "s3",
-  "s3": {
-    "bucket": "my-oss-bucket",
-    "endpoint": "https://s3.oss-cn-beijing.aliyuncs.com",
-    "region": "cn-beijing",
-    "access_key": "your-access-key",
-    "secret_key": "your-secret-key",
-    "prefix": "openviking",
-    "use_path_style": false,
-    "s3_vendor": "aliyun_oss",
-    "disable_batch_delete": true
-  }
-}
-```
-
-> `aliyun_oss` 不会联动其他配置。
-> `use_path_style` 和 `disable_batch_delete` 仍需显式设置。
-> OSS 不支持 `PutObject If-Match`。
-> OpenViking 会继续写入，并打印 `INFO` 日志。
-> 该路径无法保证 CAS。
 
 > **为什么需要 `directory_marker_mode`？**
 >
