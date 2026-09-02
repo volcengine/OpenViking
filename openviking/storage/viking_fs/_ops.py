@@ -729,6 +729,7 @@ class _OpsMixin:
                 raise
 
             # Update VectorDB URIs (on failure, clean up the copy)
+            vector_transfer_completed = False
             try:
                 vector_result = await self._update_vector_store_uris(
                     old_uri,
@@ -736,12 +737,28 @@ class _OpsMixin:
                     recursive=is_dir,
                     ctx=ctx,
                 )
+                vector_transfer_completed = True
                 if acl_manager is not None and new_acl_scope:
                     await acl_manager.refresh_context_subtree(
                         new_uri,
                         self._ctx_or_default(ctx),
                     )
             except Exception as transfer_error:
+                if vector_transfer_completed:
+                    try:
+                        await self._update_vector_store_uris(
+                            new_uri,
+                            old_uri,
+                            recursive=is_dir,
+                            ctx=ctx,
+                        )
+                    except Exception as rollback_error:
+                        raise TransferRollbackError(
+                            f"mv post-vector step failed and vector restore was incomplete for "
+                            f"{old_uri} -> {new_uri}: {rollback_error}",
+                            phase="vector_restore",
+                            residual_uri=new_uri,
+                        ) from transfer_error
                 try:
                     await self._cleanup_transfer_target(
                         new_path,
