@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Regression tests for subagent prompt skill loading."""
 
+import asyncio
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -122,3 +123,37 @@ Session-loaded instruction.
     assert "### Skill: session-skill" in prompt
     assert "Session-loaded instruction." in prompt
     assert "Global-loaded instruction." not in prompt
+
+
+@pytest.mark.asyncio
+async def test_subagent_spawn_rejects_tasks_above_concurrency_limit(tmp_path, monkeypatch):
+    blocker = asyncio.Event()
+    manager = SubagentManager(
+        provider=SimpleNamespace(get_default_model=lambda: "fake-model"),
+        workspace=tmp_path,
+        bus=MessageBus(),
+        config=SimpleNamespace(agents=SimpleNamespace(subagent_max_concurrency=1)),
+    )
+
+    async def blocked(*args, **kwargs):
+        await blocker.wait()
+
+    monkeypatch.setattr(manager, "_run_subagent", blocked)
+    session_key = SimpleNamespace()
+
+    first = await manager.spawn("first", session_key)
+    second = await manager.spawn("second", session_key)
+
+    assert "started" in first
+    assert second == "Error: Subagent concurrency limit reached (1)"
+    assert manager.get_running_count() == 1
+
+    tasks = list(manager._running_tasks.values())
+    blocker.set()
+    await asyncio.gather(*tasks, return_exceptions=True)
+    await asyncio.sleep(0)
+
+    third = await manager.spawn("third", session_key)
+
+    assert "started" in third
+    await asyncio.gather(*manager._running_tasks.values(), return_exceptions=True)

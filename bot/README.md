@@ -315,6 +315,7 @@ Restart `vikingbot gateway` after changing the configuration.
 | `bot.agents.max_tool_iterations` | `50` | Maximum tool iterations in one turn |
 | `bot.agents.memory_window` | `50` | Local history window and session commit message threshold |
 | `bot.agents.subagent_enabled` | `true` | Whether to expose the `spawn` tool |
+| `bot.agents.subagent_max_concurrency` | `4` | Maximum number of background subagents running at once |
 | `bot.gateway.host` | `127.0.0.1` | Gateway listen address |
 | `bot.gateway.port` | `18790` | Gateway listen port |
 | `bot.sandbox.backend` | `direct` | Execution backend |
