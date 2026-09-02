@@ -57,8 +57,10 @@ export function extractCurrentUserText(parts) {
 
 function prependSyntheticRecallPart(input, output, injection) {
   const sessionID = input.sessionID ?? output.message?.sessionID
-  const messageID = input.messageID ?? output.message?.id
-  if (!sessionID || !messageID) return false
+  // messageID is optional in opencode's chat.message API (messageID?: string).
+  // When absent, generate a fallback so recall context is always injected.
+  const messageID = input.messageID ?? output.message?.id ?? `ov-recall-${Date.now()}`
+  if (!sessionID) return false
 
   output.parts.unshift({
     id: `prt-ov-recall-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
