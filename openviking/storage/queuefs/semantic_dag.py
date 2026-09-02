@@ -619,10 +619,7 @@ class SemanticDagExecutor:
         return any(path.startswith(prefix) for path in self._changed_paths)
 
     def _ingest_options_for_file(self, file_path: str) -> IngestOptions:
-        if (
-            self._generation_trigger == "content_write"
-            and file_path not in self._changed_paths
-        ):
+        if self._generation_trigger == "content_write" and file_path not in self._changed_paths:
             return IngestOptions()
         return self._ingest_options
 

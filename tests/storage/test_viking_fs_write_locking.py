@@ -241,8 +241,8 @@ async def test_mv_extends_outer_lease_with_owned_capability(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_directory_mv_uses_source_tree_and_destination_exact(monkeypatch):
-    """Directory move must not hold a destination Tree lock for the whole copy."""
+async def test_directory_mv_locks_stable_source_and_destination_parents(monkeypatch):
+    """Directory move keeps both stable parents locked through copy and cleanup."""
     fake = _AsyncMoveAGFS(source_is_dir=True)
     fs = VikingFS(agfs=_FakeAGFS())
     fs._async_agfs = fake  # type: ignore[assignment]
@@ -269,14 +269,14 @@ async def test_directory_mv_uses_source_tree_and_destination_exact(monkeypatch):
     )
 
     assert fake.acquire_calls[0][0] == [
-        {"path": "/local/default/temp/source", "kind": "tree"},
-        {"path": "/local/default/resources/target", "kind": "exact"},
+        {"path": "/local/default/temp", "kind": "tree"},
+        {"path": "/local/default/resources", "kind": "tree"},
     ]
 
 
 @pytest.mark.asyncio
-async def test_directory_mv_uses_temporary_tree_only_for_failed_copy_cleanup(monkeypatch):
-    """Failed directory move must acquire and release a cleanup-only target Tree."""
+async def test_directory_mv_reuses_parent_tree_for_failed_copy_cleanup(monkeypatch):
+    """Failed directory move cleans the target under the existing parent Tree lease."""
     fake = _AsyncMoveAGFS(source_is_dir=True)
     fs = VikingFS(agfs=_FakeAGFS())
     fs._async_agfs = fake  # type: ignore[assignment]
@@ -307,25 +307,9 @@ async def test_directory_mv_uses_temporary_tree_only_for_failed_copy_cleanup(mon
             ctx=_default_ctx(),
         )
 
-    assert fake.tree_calls == [
-        (
-            "/local/default/resources/target",
-            {
-                "lease_ref": "operation-ref",
-                "owner_id": "operation-owner",
-                "ownership_ref": "operation-ownership",
-                "owned": True,
-            },
-        )
-    ]
-    assert fake.rm_calls[0][2]["lease_ref"] == "cleanup-ref"
+    assert fake.tree_calls == []
+    assert fake.rm_calls[0][2]["lease_ref"] == "operation-ref"
     assert fake.release_calls == [
-        {
-            "lease_ref": "cleanup-ref",
-            "owner_id": "operation-owner",
-            "ownership_ref": "cleanup-ownership",
-            "owned": True,
-        },
         {
             "lease_ref": "operation-ref",
             "owner_id": "operation-owner",

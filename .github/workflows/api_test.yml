@@ -495,7 +495,7 @@ jobs:
           }
         continue-on-error: true
 
-      - name: Install OpenViking CLI (Unix)
+      - name: Install released OpenViking CLI for compatibility tests (Unix)
         if: runner.os != 'Windows'
         run: |
           echo "Installing OpenViking CLI..."
@@ -504,11 +504,11 @@ jobs:
           echo "Verifying CLI installation..."
           if command -v openviking &> /dev/null; then
             openviking version
-            echo "OPENVIKING_CLI_BIN=$(which openviking)" >> $GITHUB_ENV
+            echo "OPENVIKING_COMPAT_CLI_BIN=$(which openviking)" >> $GITHUB_ENV
           elif command -v ov &> /dev/null; then
             ov language en
             ov version
-            echo "OPENVIKING_CLI_BIN=$(which ov)" >> $GITHUB_ENV
+            echo "OPENVIKING_COMPAT_CLI_BIN=$(which ov)" >> $GITHUB_ENV
           else
             echo "WARNING: CLI binary not found after installation, CLI tests will be skipped"
           fi
@@ -517,13 +517,13 @@ jobs:
         if: runner.os != 'Windows'
         id: run-cli-compat-tests
         run: |
-          if [ -z "$OPENVIKING_CLI_BIN" ]; then
+          if [ -z "$OPENVIKING_COMPAT_CLI_BIN" ]; then
             echo "CLI binary not available, skipping CLI compatibility tests"
             echo "cli_compat_outcome=skipped" >> $GITHUB_OUTPUT
             exit 0
           fi
           cd tests/cli
-          export OPENVIKING_CLI_BIN="${OPENVIKING_CLI_BIN}"
+          export OPENVIKING_CLI_BIN="${OPENVIKING_COMPAT_CLI_BIN}"
           export OPENVIKING_URL="http://127.0.0.1:${{ env.SERVER_PORT }}"
           export OPENVIKING_API_KEY="test-root-api-key"
           export OPENVIKING_ROOT_API_KEY="test-root-api-key"
@@ -531,6 +531,16 @@ jobs:
           echo "Running CLI compatibility tests (serial)..."
           uv run python -m pytest test_cli_compatibility.py -v --tb=short -m cli_remote || true
         continue-on-error: true
+
+      - name: Build OpenViking CLI from current source (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cargo build --locked --package ov_cli --bin ov
+          CURRENT_CLI_BIN="$GITHUB_WORKSPACE/target/debug/ov"
+          "$CURRENT_CLI_BIN" language en
+          "$CURRENT_CLI_BIN" version
+          echo "OPENVIKING_CLI_BIN=$CURRENT_CLI_BIN" >> $GITHUB_ENV
 
       - name: Run CLI Integration Tests (Unix)
         if: runner.os != 'Windows'

@@ -1,3 +1,4 @@
+import os
 import uuid
 
 
@@ -25,10 +26,11 @@ class TestFsCp:
                 assert read.status_code == 200
                 assert content in read.json().get("result", "")
 
-            found = api_client.find(query=suffix, target_uri=target, limit=5)
-            assert found.status_code == 200
-            resources = found.json().get("result", {}).get("resources", [])
-            assert any(item.get("uri") == target for item in resources)
+            if os.getenv("HAS_SECRETS", "true").lower() == "true":
+                found = api_client.find(query=suffix, target_uri=target, limit=5)
+                assert found.status_code == 200
+                resources = found.json().get("result", {}).get("resources", [])
+                assert any(item.get("uri") == target for item in resources)
 
             assert api_client.fs_rm(source).status_code == 200
             assert api_client.fs_read(target).status_code == 200

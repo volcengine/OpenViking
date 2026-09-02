@@ -171,6 +171,7 @@ class _AclMemoryTransferBackend(_MemoryTransferBackend):
     ) -> list[str]:
         return await VikingVectorIndexBackend.upsert_many(self, data_list, ctx=ctx)
 
+
 def _records_under(
     backend: _MemoryTransferBackend, uri: str, *, recursive: bool = True
 ) -> list[dict[str, Any]]:

@@ -362,8 +362,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     # maintenance. Let the newest message aggregate while this
                     # one still summarizes/vectorizes its changed files.
                     logger.info(
-                        "Downgrading stale semantic message to file-only work: "
-                        "uri=%s version=%s",
+                        "Downgrading stale semantic message to file-only work: uri=%s version=%s",
                         msg.uri,
                         msg.coalesce_version,
                     )
@@ -782,10 +781,7 @@ class SemanticProcessor(DequeueHandlerBase):
         if msg.skip_vectorization:
             logger.info(f"Skipping vectorization for {dir_uri} (requested via SemanticMsg)")
             return
-        if not (
-            wrote_semantics.overview_body_changed
-            or wrote_semantics.abstract_body_changed
-        ):
+        if not (wrote_semantics.overview_body_changed or wrote_semantics.abstract_body_changed):
             logger.info(
                 "Skipping directory vectorization for %s (visible semantics unchanged)",
                 dir_uri,

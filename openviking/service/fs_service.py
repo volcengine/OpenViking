@@ -980,7 +980,9 @@ class FSService:
                 uri=uri,
                 node_limit=None if normalized_tags else node_limit,
                 ctx=ctx,
-                extra_fields=extra_fields if extra_fields is not None else ([] if project_tags else None),
+                extra_fields=extra_fields
+                if extra_fields is not None
+                else ([] if project_tags else None),
             )
         )
         if not project_tags:

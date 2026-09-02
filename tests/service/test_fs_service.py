@@ -71,7 +71,9 @@ class _FakeMutationCoordinator:
 
 
 @pytest.mark.asyncio
-async def test_write_forwards_tags_and_tag_mode_to_content_coordinator(monkeypatch, request_context):
+async def test_write_forwards_tags_and_tag_mode_to_content_coordinator(
+    monkeypatch, request_context
+):
     seen = {}
 
     class FakeCoordinator:
@@ -448,9 +450,7 @@ async def test_glob_tag_filter_keeps_zero_node_limit_unbounded(request_context):
             ]
 
     service = FSService(viking_fs=viking_fs, vikingdb=FakeVikingDB())
-    result = await service.glob(
-        "**/*.md", ctx=request_context, tags=["env=prod"], node_limit=0
-    )
+    result = await service.glob("**/*.md", ctx=request_context, tags=["env=prod"], node_limit=0)
 
     assert result["count"] == 2
     assert [entry["uri"] for entry in result["matches"]] == [
@@ -562,8 +562,7 @@ async def test_ls_tag_filter_keeps_zero_node_limit_unbounded_for_entry_and_simpl
     class FakeVikingDB:
         async def filter(self, **_kwargs):
             return [
-                {"uri": entry["uri"], "level": 2, "search_tags": ["env=prod"]}
-                for entry in entries
+                {"uri": entry["uri"], "level": 2, "search_tags": ["env=prod"]} for entry in entries
             ]
 
     entry_service = FSService(
@@ -632,8 +631,7 @@ async def test_tree_tag_filter_keeps_zero_node_limit_unbounded(request_context):
     class FakeVikingDB:
         async def filter(self, **_kwargs):
             return [
-                {"uri": entry["uri"], "level": 2, "search_tags": ["env=prod"]}
-                for entry in entries
+                {"uri": entry["uri"], "level": 2, "search_tags": ["env=prod"]} for entry in entries
             ]
 
     service = FSService(viking_fs=viking_fs, vikingdb=FakeVikingDB())
