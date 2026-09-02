@@ -960,6 +960,9 @@ class ResourceService:
                             prepared,
                             viking_fs=self._viking_fs,
                             ctx=ctx,
+                            ignore_dirs=processor_kwargs.get("ignore_dirs"),
+                            include=processor_kwargs.get("include"),
+                            exclude=processor_kwargs.get("exclude"),
                         )
                 finally:
                     prepared.cleanup()
