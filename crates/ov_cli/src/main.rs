@@ -449,10 +449,10 @@ enum Commands {
         /// locally, e.g. --args dry_run:true (supported keys: catalog, dry_run, skip_failed)
         #[arg(long = "args")]
         resource_args: Option<String>,
-        /// Explicit k=v retrieval tag to apply after import. Can be repeated.
-        #[arg(long = "tag", value_name = "k=v", help_heading = "Common options")]
+        /// Comma-separated k=v retrieval tags to apply after import
+        #[arg(long = "tags", value_delimiter = ',', value_name = "k=v", help_heading = "Common options")]
         tags: Vec<String>,
-        /// Tag update mode when --tag is provided
+        /// Tag update mode when --tags is provided
         #[arg(
             long = "tag-mode",
             default_value = "replace",
@@ -1218,10 +1218,10 @@ enum Commands {
         /// Preview prune_orphans deletions without mutating vectors
         #[arg(long, help_heading = "Common options")]
         dry_run: bool,
-        /// Explicit k=v retrieval tag for rebuilt vector records. Can be repeated.
-        #[arg(long = "tag", value_name = "k=v", help_heading = "Common options")]
+        /// Comma-separated k=v retrieval tags for rebuilt vector records
+        #[arg(long = "tags", value_delimiter = ',', value_name = "k=v", help_heading = "Common options")]
         tags: Vec<String>,
-        /// Tag update mode when --tag is provided
+        /// Tag update mode when --tags is provided
         #[arg(
             long = "tag-mode",
             default_value = "replace",
@@ -4568,10 +4568,8 @@ mod tests {
             "ov",
             "add-resource",
             "./README.md",
-            "--tag",
-            "team=search",
-            "--tag",
-            "env=test",
+            "--tags",
+            "team=search,env=test",
             "--tag-mode",
             "append",
         ])
@@ -5543,7 +5541,7 @@ mod tests {
             "prune_orphans",
             "--wait=false",
             "--dry-run",
-            "--tag",
+            "--tags",
             "team=search",
             "--tag-mode",
             "append",
