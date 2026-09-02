@@ -1121,6 +1121,45 @@ fn owned_lease_to_py_dict(py: Python<'_>, lease: &OwnedPathLockLease) -> PyResul
     Ok(dict.into())
 }
 
+/// Releases the lease unless ownership is explicitly transferred to Python.
+struct PendingPathLockLease {
+    lease: Option<OwnedPathLockLease>,
+    manager: Arc<PathLockManager>,
+    runtime: tokio::runtime::Handle,
+    fs_ctx: FsContext,
+}
+
+impl PendingPathLockLease {
+    fn into_py(mut self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let value = owned_lease_to_py_dict(
+            py,
+            self.lease
+                .as_ref()
+                .expect("pending pathlock lease already consumed"),
+        )?;
+        self.lease.take();
+        Ok(value)
+    }
+}
+
+impl Drop for PendingPathLockLease {
+    fn drop(&mut self) {
+        if let Some(lease) = self.lease.take() {
+            let manager = self.manager.clone();
+            self.runtime
+                .spawn(FS_CTX.scope(self.fs_ctx.clone(), async move {
+                    if let Err(error) = manager.release(&lease).await {
+                        tracing::error!(
+                            error = %error,
+                            lease_ref = %lease.lease.lease_ref,
+                            "failed to release pathlock acquired for a cancelled Python waiter"
+                        );
+                    }
+                }));
+        }
+    }
+}
+
 /// Convert a BorrowedPathLockLease to a Python dict.
 fn borrowed_lease_to_py_dict(py: Python<'_>, lease: &BorrowedPathLockLease) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new(py);
@@ -2426,6 +2465,56 @@ impl RAGFSBindingClient {
             })
             .map_err(pathlock_err_to_py)?;
         Python::attach(|py| owned_lease_to_py_dict(py, &lease))
+    }
+
+    /// Acquire a batch without occupying Python's shared blocking executor.
+    ///
+    /// Cancellation does not abort the Rust acquisition mid-flight. If the
+    /// Python Future is cancelled, a lease acquired afterwards is released
+    /// before the native task finishes.
+    #[pyo3(signature = (ctx, requests, timeout_secs=0.0, owner_lease_ref=None))]
+    fn pathlock_acquire_batch_async<'py>(
+        &self,
+        py: Python<'py>,
+        ctx: Option<HashMap<String, String>>,
+        requests: Vec<HashMap<String, String>>,
+        timeout_secs: f64,
+        owner_lease_ref: Option<Py<PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let fs_ctx = build_fs_context(ctx);
+        let timeout = validate_timeout_secs(timeout_secs)?;
+        let owner_capability = extract_optional_owned_lease_ref(py, owner_lease_ref.as_ref())?;
+        let lock_requests = parse_pathlock_request_batch(&requests)?;
+
+        let runtime = self.rt.handle().clone();
+        let task_manager = self.clone_pathlock_manager();
+        let task_runtime = runtime.clone();
+        let task_fs_ctx = fs_ctx.clone();
+
+        let task = runtime.spawn(FS_CTX.scope(fs_ctx, async move {
+            let capability = owner_capability
+                .as_ref()
+                .map(|(lease_ref, ownership_ref)| (lease_ref.as_str(), ownership_ref.as_str()));
+            task_manager
+                .acquire_batch(&lock_requests, timeout, capability)
+                .await
+                .map(|lease| PendingPathLockLease {
+                    lease: Some(lease),
+                    manager: task_manager,
+                    runtime: task_runtime,
+                    fs_ctx: task_fs_ctx,
+                })
+        }));
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            match task.await {
+                Ok(Ok(pending)) => Python::attach(|py| pending.into_py(py)),
+                Ok(Err(error)) => Err(pathlock_err_to_py(error)),
+                Err(error) => Err(PyRuntimeError::new_err(format!(
+                    "pathlock async task stopped before returning a result: {error}"
+                ))),
+            }
+        })
     }
 
     /// Create a borrowed view of an owned lease.

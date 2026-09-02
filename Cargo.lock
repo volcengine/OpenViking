@@ -3902,6 +3902,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "pyo3-async-runtimes"
+version = "0.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57ddb5b570751e93cc6777e81fee8087e59cd53b5043292f2a6d59d5bd80fdfd"
+dependencies = [
+ "futures",
+ "once_cell",
+ "pin-project-lite",
+ "pyo3",
+ "tokio",
+]
+
+[[package]]
 name = "pyo3-build-config"
 version = "0.27.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4107,6 +4120,7 @@ dependencies = [
  "bytes",
  "gix-hash",
  "pyo3",
+ "pyo3-async-runtimes",
  "ragfs",
  "serde",
  "serde_json",

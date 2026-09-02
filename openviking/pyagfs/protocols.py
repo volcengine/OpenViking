@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Any, BinaryIO, Dict, Literal, Protocol, overload, runtime_checkable
+from typing import Any, Awaitable, BinaryIO, Dict, Literal, Protocol, overload, runtime_checkable
 
 AGFSByteStream = Iterator[bytes]
 
 
 @runtime_checkable
 class AGFSSyncClientProtocol(Protocol):
-    """Minimal synchronous AGFS client contract used by OpenViking."""
+    """AGFS binding contract used by OpenViking."""
 
     def ls(self, path: str = "/") -> list[Dict[str, Any]]:
         """List directory entries under the given AGFS path."""
@@ -109,3 +109,12 @@ class AGFSSyncClientProtocol(Protocol):
 
     def system_sync_retry(self, path: str) -> Dict[str, Any]:
         """Retry pending multi-write sync work for a file or directory path."""
+
+    def pathlock_acquire_batch_async(
+        self,
+        ctx: Dict[str, str],
+        requests: list[Dict[str, str]],
+        timeout_secs: float = 0.0,
+        owner_lease_ref: Dict[str, Any] | None = None,
+    ) -> Awaitable[Dict[str, Any]]:
+        """Acquire a PathLock batch without blocking a Python worker thread."""

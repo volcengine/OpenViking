@@ -7,12 +7,14 @@ Tests the python binding mode of VikingFS which directly uses AGFS implementatio
 without HTTP server.
 """
 
+import asyncio
 import os
 import shutil
 import uuid
 
 import pytest
 
+from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.viking_fs import init_viking_fs
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking_cli.utils.config.agfs_config import AGFSConfig
@@ -128,20 +130,52 @@ class TestVikingFSBindingLocal:
                     stat_info = await vfs.stat(uri)
                     await vfs.rm(uri, recursive=bool(stat_info.get("isDir")))
 
-    async def test_borrowed_pathlock_cannot_release_via_raw_ref(self, viking_fs_binding_instance):
-        """Reject borrowed lifecycle control through typed and raw lease refs."""
+    async def test_pathlock_ownership_and_cancelled_waiter_cleanup(
+        self, viking_fs_binding_instance
+    ):
+        """Reject borrowed release and clean up a cancelled native waiter."""
         vfs = viking_fs_binding_instance
         path = f"/local/default/temp/borrowed_release_{uuid.uuid4().hex}.txt"
         owned = await vfs._async_agfs.pathlock_acquire_exact(path)
         borrowed = await vfs._async_agfs.pathlock_as_borrowed(owned)
+        waiter = None
 
         try:
             with pytest.raises(ValueError):
                 await vfs._async_agfs.pathlock_release(borrowed)
             with pytest.raises((TypeError, ValueError)):
                 await vfs._async_agfs.pathlock_release(borrowed["lease_ref"])
-        finally:
+            with pytest.raises(LockAcquisitionError):
+                await vfs._async_agfs.pathlock_acquire_exact(path)
+
+            waiter = asyncio.create_task(
+                vfs._async_agfs.pathlock_acquire_exact(path, timeout_secs=1.0)
+            )
+            for _ in range(100):
+                snapshot = await vfs._async_agfs.pathlock_observe()
+                if snapshot["waiting_locks"] == 1:
+                    break
+                await asyncio.sleep(0.01)
+            assert snapshot["waiting_locks"] == 1
+
+            waiter.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await waiter
+
             await vfs._async_agfs.pathlock_release(owned)
+            owned = None
+            for _ in range(100):
+                snapshot = await vfs._async_agfs.pathlock_observe()
+                if snapshot["waiting_locks"] == 0 and snapshot["active_locks"] == 0:
+                    break
+                await asyncio.sleep(0.01)
+            assert snapshot["waiting_locks"] == 0
+            assert snapshot["active_locks"] == 0
+        finally:
+            if waiter is not None and not waiter.done():
+                waiter.cancel()
+            if owned is not None:
+                await vfs._async_agfs.pathlock_release(owned)
 
     async def test_pathlock_adopt_rejects_forged_tree_coverage(self, viking_fs_binding_instance):
         """Reject handoff coverage that is stronger than the live token."""
