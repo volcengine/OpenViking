@@ -582,6 +582,7 @@ async def search_by_random(request: SearchByRandomRequest, req: Request):
 
         filters = data_utils.convert_dict(request.filter)
         output_fields = data_utils.convert_dict(request.output_fields)
+        advance = data_utils.convert_dict(request.advance) if request.advance else None
         limit = request.limit or 10
         if limit <= 0:
             return error_response(
@@ -601,6 +602,7 @@ async def search_by_random(request: SearchByRandomRequest, req: Request):
             offset=offset,
             filters=filters,
             output_fields=output_fields,
+            advance=advance,
         )
         return success_response("search success", asdict(result), request=req)
     except VikingDBException as e:

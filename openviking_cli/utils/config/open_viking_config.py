@@ -23,6 +23,7 @@ from .consts import (
 from .embedding_config import EmbeddingConfig
 from .encryption_config import EncryptionConfig
 from .git_config import GitConfig
+from .glob_config import GlobConfig
 from .grep_config import GrepConfig
 from .ingest_config import IngestConfig
 from .log_config import LogConfig
@@ -181,6 +182,11 @@ class OpenVikingConfig(BaseModel):
     grep: GrepConfig = Field(
         default_factory=GrepConfig,
         description="Grep engine configuration",
+    )
+
+    glob: GlobConfig = Field(
+        default_factory=GlobConfig,
+        description="Glob engine configuration",
     )
 
     # Encryption configuration

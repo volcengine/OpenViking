@@ -53,6 +53,7 @@ from .consts import (
 )
 from .embedding_config import EmbeddingConfig
 from .git_config import GitConfig, GitLocalConfig, GitS3Config
+from .glob_config import GlobConfig, GlobEngine
 from .grep_config import GrepConfig, GrepEngine
 from .log_config import LogConfig
 from .open_viking_config import (
@@ -135,6 +136,8 @@ __all__ = [
     "OpenVikingConfig",
     "OpenVikingConfigSingleton",
     "OVCLIConfig",
+    "GlobConfig",
+    "GlobEngine",
     "GrepConfig",
     "GrepEngine",
     "RerankConfig",

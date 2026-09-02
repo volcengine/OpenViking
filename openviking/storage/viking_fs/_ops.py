@@ -3,6 +3,7 @@
 """Core filesystem operations mixin for VikingFS."""
 
 import asyncio
+import math
 from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
@@ -47,6 +48,158 @@ def _glob_match_uri(entry_uri: str, is_dir: Optional[bool]) -> str:
     if not is_dir or entry_uri.endswith("/"):
         return entry_uri
     return f"{entry_uri}/"
+
+
+_REMOTE_GLOB_OUTPUT_FIELDS = ["uri", "level", "name"]
+_REMOTE_GLOB_ENTRY_FIELDS = ["size", "mode", "modTime"]
+_REMOTE_GLOB_DEFAULT_LIMIT = 1000
+_REMOTE_GLOB_MAX_LIMIT = 100000
+_REMOTE_GLOB_POST_PROCESS_INPUT_LIMIT = 1000000
+_REMOTE_GLOB_LOCAL_STAT_FIELDS = {
+    "size",
+    "mode",
+    "modTime",
+    "mtime",
+    "is_dir",
+}
+_REMOTE_GLOB_LOCAL_COMPUTED_FIELDS = {
+    "id",
+    "count",
+    "isLocked",
+    "locked",
+}
+_GLOB_SPECIAL_CHARS = set("*?[{")
+
+
+def _normalize_glob_pattern_for_validation(pattern: str) -> str:
+    return "/".join(
+        segment for segment in pattern.split("/") if segment and segment != "."
+    )
+
+
+def _find_unescaped(value: str, target: str, start: int) -> int:
+    escaped = False
+    for index in range(start, len(value)):
+        char = value[index]
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == target:
+            return index
+    return -1
+
+
+def _validate_glob_pattern(pattern: str) -> None:
+    """Reject invalid glob patterns before the remote VikingDB path_glob call.
+
+    Rust/AGFS remains the source of truth for full glob matching. This guard
+    mirrors the public validation cases so clearly invalid patterns do not
+    reach VikingDB before the local backend has a chance to reject them.
+    """
+    if pattern == "":
+        raise InvalidArgumentError("empty glob pattern")
+
+    saw_segment = False
+    for segment in pattern.split("/"):
+        if not segment:
+            continue
+        saw_segment = True
+        if segment != ".":
+            break
+    else:
+        if saw_segment:
+            raise InvalidArgumentError("empty glob pattern")
+        return
+
+    normalized = _normalize_glob_pattern_for_validation(pattern)
+    if not normalized:
+        return
+
+    index = 0
+    while index < len(normalized):
+        char = normalized[index]
+        if char == "\\":
+            if index == len(normalized) - 1:
+                raise InvalidArgumentError("invalid glob pattern: dangling escape")
+            index += 2
+            continue
+        if char == "[":
+            end = _find_unescaped(normalized, "]", index + 1)
+            content_start = index + 1
+            if content_start < len(normalized) and normalized[content_start] in {"!", "^"}:
+                content_start += 1
+            if end < 0 or end <= content_start:
+                raise InvalidArgumentError("invalid glob pattern: empty or unclosed class")
+            index = end + 1
+            continue
+        if char == "]":
+            raise InvalidArgumentError("invalid glob pattern: unopened class")
+        if char == "{":
+            end = _find_unescaped(normalized, "}", index + 1)
+            if end < 0 or end == index + 1:
+                raise InvalidArgumentError("invalid glob pattern: empty or unclosed alternate")
+            index = end + 1
+            continue
+        if char == "}":
+            raise InvalidArgumentError("invalid glob pattern: unopened alternate")
+        index += 1
+
+
+def _normalize_uri_for_glob(uri: str) -> str:
+    return "viking://" if uri == "viking://" else uri.rstrip("/")
+
+
+def _uri_to_remote_path_pattern(uri: str, pattern: str) -> str:
+    if pattern.startswith("/"):
+        return pattern
+    base_path = "/" + _normalize_uri_for_glob(uri)[len("viking://") :].strip("/")
+    if base_path == "/":
+        base_path = ""
+    normalized_pattern = pattern.lstrip("/")
+    if not normalized_pattern:
+        return base_path or "/"
+    return f"{base_path}/{normalized_pattern}" if base_path else f"/{normalized_pattern}"
+
+
+def _literal_glob_prefix(pattern: str) -> str:
+    parts = []
+    for segment in pattern.lstrip("/").split("/"):
+        if not segment or any(ch in segment for ch in _GLOB_SPECIAL_CHARS):
+            break
+        parts.append(segment)
+    return "/".join(parts)
+
+
+def _join_uri_path(uri: str, suffix: str) -> str:
+    normalized_uri = _normalize_uri_for_glob(uri)
+    suffix = suffix.strip("/")
+    if not suffix:
+        return normalized_uri
+    if normalized_uri == "viking://":
+        return f"viking://{suffix}"
+    return f"{normalized_uri}/{suffix}"
+
+
+def _remote_path_to_uri(path: str) -> str:
+    suffix = path.strip("/")
+    return f"viking://{suffix}" if suffix else "viking://"
+
+
+def _rel_path_sort_key(uri: str, root_uri: str) -> List[str]:
+    normalized_root = _normalize_uri_for_glob(root_uri)
+    normalized_uri = uri.rstrip("/")
+    if normalized_uri == normalized_root:
+        rel_path = ""
+    elif normalized_root == "viking://":
+        rel_path = normalized_uri[len("viking://") :]
+    elif normalized_uri.startswith(normalized_root + "/"):
+        rel_path = normalized_uri[len(normalized_root) + 1 :]
+    else:
+        rel_path = normalized_uri
+    return [part for part in rel_path.split("/") if part and part != "."]
 
 
 class _OpsMixin:
@@ -761,6 +914,18 @@ class _OpsMixin:
                 return {"matches": [], "count": 0}
             raise NotFoundError(uri, "directory")
 
+        _validate_glob_pattern(pattern)
+        remote_result = await self._try_glob_vikingdb(
+            pattern=pattern,
+            uri=uri,
+            node_limit=node_limit,
+            return_entries=return_entries,
+            extra_fields=aug_fields,
+            ctx=real_ctx,
+        )
+        if remote_result is not None:
+            return remote_result
+
         page_size = self._glob_page_size(node_limit)
         continuation_token: Optional[str] = None
         matches = []
@@ -831,6 +996,281 @@ class _OpsMixin:
         if return_entries:
             await self._augment_entries_extra_fields(matches, aug_fields, ctx=ctx)
         return {"matches": matches, "count": len(matches)}
+
+    async def _try_glob_vikingdb(
+        self,
+        *,
+        pattern: str,
+        uri: str,
+        node_limit: Optional[int],
+        return_entries: bool,
+        extra_fields: List[str],
+        ctx: RequestContext,
+    ) -> Optional[Dict[str, Any]]:
+        if not await self._should_use_vikingdb_glob(
+            pattern=pattern,
+            uri=uri,
+            node_limit=node_limit,
+            ctx=ctx,
+        ):
+            return None
+
+        vector_store = self._get_vector_store()
+        if vector_store is None or not hasattr(vector_store, "search_by_random"):
+            return None
+
+        remote_limit = self._remote_glob_limit(node_limit)
+        filter_expr = self._remote_glob_filter(uri, pattern)
+        full_pattern = _uri_to_remote_path_pattern(uri, pattern)
+        advance = {
+            "post_process_input_limit": _REMOTE_GLOB_POST_PROCESS_INPUT_LIMIT,
+            "post_process_ops": [
+                {
+                    "op": "path_glob",
+                    "field": "uri",
+                    "pattern": full_pattern,
+                    "stop_after_matches": remote_limit,
+                }
+            ],
+        }
+
+        try:
+            records = await vector_store.search_by_random(
+                filter=filter_expr,
+                limit=remote_limit,
+                offset=0,
+                output_fields=self._remote_glob_output_fields(
+                    extra_fields,
+                    return_entries=return_entries,
+                ),
+                advance=advance,
+                ctx=ctx,
+            )
+        except Exception as exc:
+            logger.warning("glob vikingdb step failed, falling back to fs: %s", exc)
+            return None
+
+        entries = self._remote_glob_records_to_entries(
+            records,
+            root_uri=uri,
+            ctx=ctx,
+        )
+        entries.sort(key=lambda entry: _rel_path_sort_key(str(entry.get("uri", "")), uri))
+        access = await self._can_access_many(
+            [entry["uri"] for entry in entries],
+            ctx,
+        )
+        entries = [entry for entry in entries if access.get(entry["uri"], False)]
+        if node_limit is not None and node_limit > 0:
+            entries = entries[:node_limit]
+
+        if return_entries:
+            await self._fill_remote_glob_entry_fields(entries, extra_fields, ctx=ctx)
+            return {"matches": entries, "count": len(entries)}
+
+        return {
+            "matches": [_glob_match_uri(entry["uri"], entry.get("isDir")) for entry in entries],
+            "count": len(entries),
+        }
+
+    async def _should_use_vikingdb_glob(
+        self,
+        *,
+        pattern: str,
+        uri: str,
+        node_limit: Optional[int],
+        ctx: RequestContext,
+    ) -> bool:
+        if node_limit is not None and node_limit <= 0:
+            return False
+
+        glob_config = getattr(self, "glob_config", None)
+        engine = getattr(glob_config, "engine", "auto")
+        if engine == "fs":
+            return False
+
+        vector_store = self._get_vector_store()
+        if vector_store is None:
+            return False
+
+        backend_type = getattr(vector_store, "_backend_type", "unknown")
+        if backend_type not in ("volcengine", "vikingdb"):
+            return False
+
+        if not await self._collection_has_glob_uri_field(vector_store, ctx):
+            return False
+
+        threshold = getattr(glob_config, "switch_to_remote_threshold", 1000)
+        if threshold == 0:
+            return True
+
+        try:
+            scoped_uri = self._remote_glob_scoped_uri(uri, pattern)
+            count = await self._get_cached_count(scoped_uri, ctx)
+        except Exception:
+            logger.debug(
+                "glob engine=auto: count() check failed, falling back to fs", exc_info=True
+            )
+            return False
+        return count >= threshold
+
+    async def _collection_has_glob_uri_field(self, vector_store: Any, ctx: RequestContext) -> bool:
+        try:
+            if not hasattr(vector_store, "get_collection_meta"):
+                return False
+            meta = await vector_store.get_collection_meta(ctx=ctx)
+            fields = meta.get("Fields", []) if isinstance(meta, dict) else []
+            return any(
+                field.get("FieldName") == "uri" for field in fields if isinstance(field, dict)
+            )
+        except Exception:
+            logger.debug(
+                "Failed to check collection uri field, assuming no path_glob support", exc_info=True
+            )
+            return False
+
+    @staticmethod
+    def _remote_glob_limit(node_limit: Optional[int]) -> int:
+        if node_limit is None:
+            return _REMOTE_GLOB_DEFAULT_LIMIT
+        return min(max(math.ceil(node_limit * 1.2), 1), _REMOTE_GLOB_MAX_LIMIT)
+
+    @staticmethod
+    def _remote_glob_output_fields(
+        extra_fields: List[str],
+        *,
+        return_entries: bool,
+    ) -> List[str]:
+        fields = list(_REMOTE_GLOB_OUTPUT_FIELDS)
+        if return_entries:
+            for field in _REMOTE_GLOB_ENTRY_FIELDS:
+                if field not in fields:
+                    fields.append(field)
+        local_only = _REMOTE_GLOB_LOCAL_STAT_FIELDS | _REMOTE_GLOB_LOCAL_COMPUTED_FIELDS
+        for field in extra_fields:
+            if field in local_only or field in fields:
+                continue
+            fields.append(field)
+        return fields
+
+    @staticmethod
+    def _remote_glob_scoped_uri(uri: str, pattern: str) -> str:
+        prefix = _literal_glob_prefix(pattern)
+        if pattern.startswith("/") and prefix:
+            scoped_uri = _remote_path_to_uri(prefix)
+        else:
+            scoped_uri = _join_uri_path(uri, prefix) if prefix else _normalize_uri_for_glob(uri)
+        return scoped_uri
+
+    def _remote_glob_filter(self, uri: str, pattern: str) -> Dict[str, Any]:
+        scoped_uri = self._remote_glob_scoped_uri(uri, pattern)
+        return {
+            "op": "must",
+            "field": "uri",
+            "conds": [scoped_uri],
+            "para": "-d=-1",
+        }
+
+    def _remote_glob_records_to_entries(
+        self,
+        records: List[Dict[str, Any]],
+        *,
+        root_uri: str,
+        ctx: RequestContext,
+    ) -> List[Dict[str, Any]]:
+        seen: set[str] = set()
+        entries: List[Dict[str, Any]] = []
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            entry_uri = record.get("uri")
+            if not isinstance(entry_uri, str) or not entry_uri:
+                continue
+            entry_uri = _normalize_uri_for_glob(entry_uri)
+            if entry_uri in seen:
+                continue
+            seen.add(entry_uri)
+
+            level = record.get("level")
+            is_dir = level != 2 if level is not None else bool(record.get("isDir", False))
+            name = record.get("name") or entry_uri.rstrip("/").rsplit("/", 1)[-1]
+            if not self._is_remote_glob_uri_visible(
+                entry_uri,
+                str(name),
+                bool(is_dir),
+                root_uri,
+                ctx,
+            ):
+                continue
+            if not self._is_accessible(entry_uri, ctx):
+                continue
+
+            entry = dict(record)
+            entry["uri"] = entry_uri
+            entry["name"] = entry.get("name") or name
+            entry["isDir"] = bool(is_dir)
+            entries.append(entry)
+        return entries
+
+    def _is_remote_glob_uri_visible(
+        self,
+        entry_uri: str,
+        name: str,
+        is_dir: bool,
+        root_uri: str,
+        ctx: RequestContext,
+    ) -> bool:
+        try:
+            entry_parts = self._safe_uri_parts(entry_uri)
+            root_parts = self._safe_uri_parts(root_uri)
+        except ValueError:
+            return False
+
+        if root_parts and entry_parts[: len(root_parts)] != root_parts:
+            return False
+        if not root_parts and entry_parts:
+            if entry_parts[0] not in VikingURI.LISTABLE_SCOPES:
+                return False
+
+        relative_parts = entry_parts[len(root_parts) :]
+        if not is_dir and name.startswith("."):
+            return False
+        if name in STORAGE_INTERNAL_ENTRY_NAMES:
+            return False
+        return all(part not in STORAGE_INTERNAL_ENTRY_NAMES for part in relative_parts)
+
+    async def _fill_remote_glob_entry_fields(
+        self,
+        entries: List[Dict[str, Any]],
+        extra_fields: List[str],
+        ctx: Optional[RequestContext] = None,
+    ) -> None:
+        requested_stat_fields = {
+            field for field in extra_fields if field in _REMOTE_GLOB_LOCAL_STAT_FIELDS
+        }
+        required_fields = set(_REMOTE_GLOB_ENTRY_FIELDS) | requested_stat_fields
+        for entry in entries:
+            entry.pop("level", None)
+            entry.pop("_score", None)
+        for entry in entries:
+            if all(field in entry for field in required_fields):
+                if entry.get("isDir"):
+                    entry.pop("id", None)
+                continue
+            entry_uri = entry.get("uri")
+            if not entry_uri:
+                continue
+            try:
+                stat = await self.stat(entry_uri, ctx=ctx, skip_count=True)
+            except Exception:
+                continue
+            stat.update({k: v for k, v in entry.items() if v is not None})
+            entry.clear()
+            entry.update(stat)
+            if entry.get("isDir"):
+                entry.pop("id", None)
+        if extra_fields:
+            await self._augment_entries_extra_fields(entries, extra_fields, ctx=ctx)
 
     async def _batch_fetch_abstracts(
         self,

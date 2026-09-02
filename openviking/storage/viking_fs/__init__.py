@@ -101,7 +101,7 @@ from openviking_cli.utils.uri import VikingURI
 if TYPE_CHECKING:
     from openviking.storage.acl import AclManager
     from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
-    from openviking_cli.utils.config import GrepConfig, RerankConfig, RetrievalConfig
+    from openviking_cli.utils.config import GlobConfig, GrepConfig, RerankConfig, RetrievalConfig
 
 
 # ========== VikingFS Main Class ==========
@@ -134,6 +134,7 @@ class VikingFS(
         acl_manager: Optional["AclManager"] = None,
         retrieval_config: Optional["RetrievalConfig"] = None,
         grep_config: Optional["GrepConfig"] = None,
+        glob_config: Optional["GlobConfig"] = None,
         timeout: int = 10,
         encryptor: Optional[Any] = None,
     ):
@@ -145,6 +146,7 @@ class VikingFS(
         self.acl_manager = acl_manager
         self.retrieval_config = retrieval_config
         self.grep_config = grep_config
+        self.glob_config = glob_config
         self._encryptor = encryptor
         self._count_cache: Dict[str, tuple] = {}  # cache_key → (count, timestamp)
         self._count_cache_max_size = 1024

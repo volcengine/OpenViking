@@ -691,6 +691,7 @@ class LocalCollection(ICollection):
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> SearchResult:
         dense_vector = [random.uniform(-1, 1) for _ in range(self.meta.vector_dim)]
         return self.search_by_vector(

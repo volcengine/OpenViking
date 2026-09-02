@@ -50,6 +50,7 @@ openviking-server --config /path/to/ov.conf
 | `rerank` | object | disabled | 检索结果重排模型 |
 | `retrieval` | object | 见下表 | 检索排序和意图分析策略 |
 | `grep` | object | 内置默认值 | 文本搜索引擎配置 |
+| `glob` | object | 内置默认值 | 路径模式匹配引擎配置 |
 | `storage` | object | 本地存储 | 工作目录、文件系统和向量数据库 |
 | `queue_workers` | object | 见下表 | QueueFS 消费 worker 的运行时并发配置 |
 | `server` | object | 本地开发模式 | HTTP 服务、鉴权、上传和可观测性 |
