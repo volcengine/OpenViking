@@ -8,6 +8,7 @@ and that _convert_local injects them as markdown headings.
 """
 
 import threading
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from pathlib import Path
@@ -16,7 +17,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from openviking.parse.parsers.pdf import PDFParser
+from openviking.parse.parsers.pdf import _PDFIUM_RENDER_LOCK, PDFParser
 
 
 def _make_page(*, pageid=None, objid=None):
@@ -592,3 +593,47 @@ class TestExtractImages:
 
         assert second_entered.is_set()
         assert state["max_active"] == 1
+
+    def test_extract_image_finalizes_failed_pdfium_handles_while_locked(self):
+        """Render failures must release traceback-owned PDFium handles under the lock."""
+        parser = PDFParser()
+        cleanup_lock_states = {}
+
+        def record_cleanup(handle_name: str):
+            cleanup_lock_states[handle_name] = _PDFIUM_RENDER_LOCK.locked()
+
+        class FakePdfPage:
+            def __init__(self, pdf):
+                self.pdf = pdf
+                weakref.finalize(self, record_cleanup, "page")
+
+            def render(self, **_kwargs):
+                raise RuntimeError("PDFium render failed")
+
+        class FakePdfDocument:
+            def __init__(self, *_args, **_kwargs):
+                weakref.finalize(self, record_cleanup, "document")
+
+            def get_page(self, _page_ix):
+                return FakePdfPage(self)
+
+        class PdfiumBackedCroppedPage:
+            def to_image(self, resolution: int):
+                from pdfplumber.display import get_page_image
+
+                return get_page_image(
+                    stream=MagicMock(),
+                    path=Path("dummy.pdf"),
+                    page_ix=0,
+                    resolution=resolution,
+                    password=None,
+                )
+
+        page = MagicMock(width=100, height=200)
+        page.crop.return_value = PdfiumBackedCroppedPage()
+        image = {"x0": 10, "top": 20, "x1": 40, "bottom": 60}
+
+        with patch("pdfplumber.display.pypdfium2.PdfDocument", FakePdfDocument):
+            assert parser._extract_image_from_page(page, image) is None
+
+        assert cleanup_lock_states == {"page": True, "document": True}

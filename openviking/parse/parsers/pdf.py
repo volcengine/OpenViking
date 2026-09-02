@@ -678,7 +678,13 @@ class PDFParser(BaseParser):
 
             cropped = page.crop(bbox)
             with _PDFIUM_RENDER_LOCK:
-                page_image = cropped.to_image(resolution=self.config.image_resolution)
+                try:
+                    page_image = cropped.to_image(resolution=self.config.image_resolution)
+                except Exception as e:
+                    # Keep the traceback-owned pypdfium2 page/document handles
+                    # inside the critical section until their finalizers run.
+                    logger.debug(f"Image extraction error: {e}")
+                    return None
 
             buffer = io.BytesIO()
             page_image.save(buffer, format="PNG")
