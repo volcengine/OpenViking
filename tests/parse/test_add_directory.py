@@ -303,6 +303,58 @@ class TestEmptyDirectory:
         ]
         assert any("Skipped Feishu Drive item blocked.pdf: HTTP 403" in w for w in result.warnings)
 
+    @pytest.mark.asyncio
+    async def test_wiki_skipped_node_is_reported(self, tmp_empty: Path, parser, fake_fs) -> None:
+        blocked_dir = tmp_empty / "Blocked"
+        blocked_dir.mkdir()
+        blocked_path = blocked_dir / "Blocked.md"
+
+        result = await parser.parse(
+            str(tmp_empty),
+            _source_meta={
+                "feishu_wiki_scope": "subtree",
+                "feishu_wiki_space_id": "space-id",
+                "feishu_wiki_root_node_token": "parent-token",
+                "feishu_wiki_node_count": 2,
+                "feishu_wiki_skipped_items": [
+                    {
+                        "path": str(blocked_path),
+                        "name": "Blocked",
+                        "type": "docx",
+                        "token": "doc-token",
+                        "space_id": "space-id",
+                        "node_token": "node-token",
+                        "parent_node_token": "parent-token",
+                        "url": "https://example.feishu.cn/wiki/node-token",
+                        "reason": "HTTP 403",
+                    }
+                ]
+            },
+        )
+
+        assert result.meta["failed_files"] == [
+            {
+                "path": "Blocked/Blocked.md",
+                "parser": "feishu",
+                "status": "failed",
+                "type": "docx",
+                "token": "doc-token",
+                "space_id": "space-id",
+                "node_token": "node-token",
+                "parent_node_token": "parent-token",
+                "url": "https://example.feishu.cn/wiki/node-token",
+                "reason": "HTTP 403",
+            }
+        ]
+        assert any(
+            "Skipped Feishu Wiki node Blocked/Blocked.md: HTTP 403" in warning
+            for warning in result.warnings
+        )
+        assert result.meta["feishu_wiki_scope"] == "subtree"
+        assert result.meta["feishu_wiki_space_id"] == "space-id"
+        assert result.meta["feishu_wiki_root_node_token"] == "parent-token"
+        assert result.meta["feishu_wiki_node_count"] == 2
+
 
 # ---------------------------------------------------------------------------
 # Tests: files without a parser (direct write)

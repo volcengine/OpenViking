@@ -47,6 +47,14 @@ logger = get_logger(__name__)
 # Hidden files a parser's temp tree is allowed to carry through the merge.
 # Everything else hidden stays filtered, like a default ls.
 _MERGE_SIDECAR_ALLOWLIST = frozenset({IMAGE_MAPPINGS_FILENAME})
+_SOURCE_REPORT_META_FIELDS = frozenset(
+    {
+        "feishu_wiki_scope",
+        "feishu_wiki_space_id",
+        "feishu_wiki_root_node_token",
+        "feishu_wiki_node_count",
+    }
+)
 
 # DirectoryParser instances share one limiter in the server event loop so
 # concurrent directory imports cannot multiply UnderstandingAPI concurrency.
@@ -181,14 +189,26 @@ class DirectoryParser(BaseParser):
                 preserve_structure = directory_config.preserve_structure
             processable_files = scan_result.all_processable_files()
             warnings.extend(scan_result.warnings)
-            source_skipped_items = self._source_skipped_items(
+            drive_skipped_items = self._source_skipped_items(
                 kwargs.get("_source_meta"),
                 source_path,
+                "feishu_folder_skipped_items",
             )
             warnings.extend(
                 f"Skipped Feishu Drive item {item['path']}: {item.get('reason', 'unknown error')}"
-                for item in source_skipped_items
+                for item in drive_skipped_items
             )
+            wiki_skipped_items = self._source_skipped_items(
+                kwargs.get("_source_meta"),
+                source_path,
+                "feishu_wiki_skipped_items",
+            )
+            warnings.extend(
+                f"Skipped Feishu Wiki node {item['path']}: {item.get('reason', 'unknown error')}"
+                for item in wiki_skipped_items
+            )
+            source_skipped_items = drive_skipped_items + wiki_skipped_items
+            source_report_meta = self._source_report_meta(kwargs.get("_source_meta"))
 
             file_jobs: List[Dict[str, Any]] = []
             understanding_jobs: List[Dict[str, Any]] = []
@@ -265,6 +285,7 @@ class DirectoryParser(BaseParser):
                 result.meta["failed_files"] = source_skipped_items
                 result.meta["unsupported_files"] = []
                 result.meta["skipped_files"] = self._parse_skipped(scan_result.skipped)
+                result.meta.update(source_report_meta)
                 return result
 
             # ── Phase 2: process each file ────────────────────────────
@@ -407,6 +428,7 @@ class DirectoryParser(BaseParser):
             result.meta["failed_files"] = failed_files + source_skipped_items
             result.meta["unsupported_files"] = unsupported_files
             result.meta["skipped_files"] = skipped_files
+            result.meta.update(source_report_meta)
 
             return result
 
@@ -477,11 +499,15 @@ class DirectoryParser(BaseParser):
         return result
 
     @staticmethod
-    def _source_skipped_items(source_meta: Any, source_path: Path) -> List[Dict[str, str]]:
+    def _source_skipped_items(
+        source_meta: Any,
+        source_path: Path,
+        field_name: str = "feishu_folder_skipped_items",
+    ) -> List[Dict[str, str]]:
         """Normalize skipped items reported by a remote source accessor."""
         if not isinstance(source_meta, dict):
             return []
-        items = source_meta.get("feishu_folder_skipped_items") or []
+        items = source_meta.get(field_name) or []
         if not isinstance(items, list):
             return []
 
@@ -499,17 +525,30 @@ class DirectoryParser(BaseParser):
                 pass
             display_path = display_path.replace("\\", "/")
 
-            normalized.append(
-                {
-                    "path": display_path,
-                    "parser": "feishu",
-                    "status": "failed",
-                    "type": str(item.get("type") or ""),
-                    "token": str(item.get("token") or ""),
-                    "reason": str(item.get("reason") or "unknown error"),
-                }
-            )
+            entry = {
+                "path": display_path,
+                "parser": "feishu",
+                "status": "failed",
+                "type": str(item.get("type") or ""),
+                "token": str(item.get("token") or ""),
+                "reason": str(item.get("reason") or "unknown error"),
+            }
+            for key in ("space_id", "node_token", "parent_node_token", "url"):
+                if item.get(key) is not None:
+                    entry[key] = str(item[key])
+            normalized.append(entry)
         return normalized
+
+    @staticmethod
+    def _source_report_meta(source_meta: Any) -> Dict[str, Any]:
+        """Expose non-secret source summary fields in directory parse results."""
+        if not isinstance(source_meta, dict):
+            return {}
+        return {
+            key: source_meta[key]
+            for key in _SOURCE_REPORT_META_FIELDS
+            if key in source_meta
+        }
 
     @staticmethod
     def _nested_failed_files(

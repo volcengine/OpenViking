@@ -450,6 +450,64 @@ class TestAddResourceArgs:
         assert processor.calls[-1]["feishu_access_token"] == "u-test"
 
     @pytest.mark.asyncio
+    async def test_rejects_invalid_feishu_wiki_scope(
+        self,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+    ):
+        with pytest.raises(InvalidArgumentError, match="feishu_wiki_scope"):
+            await resource_service.add_resource(
+                path="/test/path",
+                ctx=request_context,
+                args={"feishu_wiki_scope": "recursive"},
+            )
+
+    @pytest.mark.asyncio
+    async def test_feishu_wiki_subtree_queues_directory_source(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+    ):
+        to_uri = "viking://resources/wiki_root"
+        resource_service._plan_source_job_target = AsyncMock(
+            return_value=(to_uri, None, False, False)
+        )
+
+        async def preflight(
+            _self,
+            _source,
+            *,
+            feishu_access_token=None,
+            feishu_wiki_scope=None,
+        ):
+            assert feishu_access_token is None
+            assert feishu_wiki_scope == "subtree"
+            return SimpleNamespace(source_name="Wiki Root", source_format="directory")
+
+        monkeypatch.setattr(
+            "openviking.parse.accessors.feishu_accessor.FeishuAccessor.preflight_source",
+            preflight,
+        )
+        resource_service._resource_processor.should_use_understanding_directly = MagicMock(
+            return_value=True
+        )
+
+        await resource_service.add_resource(
+            path="https://example.feishu.cn/wiki/root",
+            ctx=request_context,
+            to=to_uri,
+            wait=False,
+            args={"feishu_wiki_scope": " SUBTREE "},
+        )
+
+        message = resource_service._enqueue_add_resource_job.await_args.args[0]
+        assert message.args["feishu_wiki_scope"] == "subtree"
+        assert message.source_name == "Wiki Root"
+        assert message.understanding_response_id is None
+        resource_service._resource_processor.should_use_understanding_directly.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_feishu_user_token_watch_stores_private_auth_state(
         self,
         monkeypatch: pytest.MonkeyPatch,

@@ -140,6 +140,8 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
 )
 _ADD_RESOURCE_TRANSIENT_ARGS = frozenset({"tos_signature", "tos_access"})
 _ADD_RESOURCE_TAG_MODES = frozenset({"replace", "append"})
+_FEISHU_WIKI_SCOPE_ARG = "feishu_wiki_scope"
+_FEISHU_WIKI_SCOPES = frozenset({"node", "subtree"})
 
 _INTERNAL_INGESTION_FIELDS = frozenset(
     {
@@ -407,6 +409,14 @@ class ResourceService:
             parse_mode = normalize_parse_mode(raw_parse_mode)
         except InvalidArgumentError as exc:
             raise InvalidArgumentError(str(exc).replace("parse_mode", "args.parse_mode")) from exc
+        wiki_scope = normalized.get(_FEISHU_WIKI_SCOPE_ARG)
+        if wiki_scope is not None:
+            if (
+                not isinstance(wiki_scope, str)
+                or wiki_scope.strip().lower() not in _FEISHU_WIKI_SCOPES
+            ):
+                raise InvalidArgumentError("args.feishu_wiki_scope must be one of: node, subtree.")
+            normalized[_FEISHU_WIKI_SCOPE_ARG] = wiki_scope.strip().lower()
         token = normalized.get(FEISHU_ACCESS_TOKEN_ARG)
         refresh_token = normalized.pop(FEISHU_REFRESH_TOKEN_ARG, None)
         app_id = normalized.pop(FEISHU_APP_ID_ARG, None)
@@ -885,10 +895,13 @@ class ResourceService:
                         "access_token": token.strip(),
                     }
                 )
-            preflight = await FeishuAccessor().preflight_source(
-                path,
-                feishu_access_token=token.strip() if isinstance(token, str) else None,
-            )
+            preflight_kwargs: Dict[str, Any] = {
+                "feishu_access_token": token.strip() if isinstance(token, str) else None,
+            }
+            wiki_scope = processor_kwargs.get(_FEISHU_WIKI_SCOPE_ARG)
+            if wiki_scope is not None:
+                preflight_kwargs[_FEISHU_WIKI_SCOPE_ARG] = wiki_scope
+            preflight = await FeishuAccessor().preflight_source(path, **preflight_kwargs)
             source_name = source_name or preflight.source_name
             source_info = _ResourceSourceInfo(
                 source_name=source_name,
@@ -898,6 +911,7 @@ class ResourceService:
             defer_unnamed_target = True
             direct_understanding = bool(
                 mode is ParseMode.DEFAULT
+                and preflight.source_format != "directory"
                 and self._resource_processor.should_use_understanding_directly(
                     path,
                     **processor_kwargs,
