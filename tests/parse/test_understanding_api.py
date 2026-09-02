@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
@@ -28,15 +29,16 @@ async def test_parse_uses_downloaded_file_and_resolved_extension(
     downloaded.write_bytes(content)
     zip_path = tmp_path / "result.zip"
     zip_path.write_bytes(b"zip")
-    uploaded: list[Path] = []
+    source_name = f"original.{source_format}"
+    uploaded: list[tuple[Path, str]] = []
 
     api = UnderstandingAPI.__new__(UnderstandingAPI)
     api._video_exts = {"mp4"}
     api._audio_exts = {"mp3"}
     api._image_exts = {"png"}
 
-    async def create_file(*, local_path):
-        uploaded.append(local_path)
+    async def create_file(*, local_path, file_name):
+        uploaded.append((local_path, file_name))
         return {"id": "file-1"}
 
     async def create_response_for_file(*, file_id):
@@ -62,10 +64,11 @@ async def test_parse_uses_downloaded_file_and_resolved_extension(
         downloaded,
         original_source=original_source,
         resource_name="report",
+        source_name=source_name,
         resolved_extension=resolved_extension,
     )
 
-    assert uploaded == [downloaded]
+    assert uploaded == [(downloaded, source_name)]
     assert result.source_path == original_source
     assert result.source_format == source_format
     assert result.root.title == "report"
@@ -89,10 +92,10 @@ async def test_upload_file_validates_input_and_returns_file_id(tmp_path):
     source.write_bytes(b"%PDF-1.7")
     api._create_file = AsyncMock(return_value={"id": "file-1"})
 
-    file_id = await api.upload_file(source)
+    file_id = await api.upload_file(source, file_name="report.pdf")
 
     assert file_id == "file-1"
-    api._create_file.assert_awaited_once_with(local_path=source)
+    api._create_file.assert_awaited_once_with(local_path=source, file_name="report.pdf")
 
 
 @pytest.mark.asyncio
@@ -154,10 +157,53 @@ async def test_file_above_simple_limit_uses_multipart_when_enabled(tmp_path):
     api._enable_resumable_upload = True
     api._multipart_create_file = AsyncMock(return_value={"id": "file-1"})
 
-    result = await api._create_file(local_path=source)
+    result = await api._create_file(local_path=source, file_name="report.pdf")
 
     assert result == {"id": "file-1"}
-    api._multipart_create_file.assert_awaited_once_with(source)
+    api._multipart_create_file.assert_awaited_once_with(source, file_name="report.pdf")
+
+
+@pytest.mark.asyncio
+async def test_simple_upload_uses_original_filename(monkeypatch, tmp_path):
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, json={"id": "file-1"})
+
+    api = _api_with_transport(monkeypatch, handler)
+    source = tmp_path / "upload_0123456789abcdef.txt"
+    source.write_text("content")
+
+    result = await api._create_file(local_path=source, file_name="note.txt")
+
+    assert result == {"id": "file-1"}
+    assert len(requests) == 1
+    assert b'filename="note.txt"' in requests[0].content
+    assert source.name.encode() not in requests[0].content
+
+
+@pytest.mark.asyncio
+async def test_resumable_upload_uses_original_filename(monkeypatch, tmp_path):
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, json={"upload_id": "upload-1"})
+
+    api = _api_with_transport(monkeypatch, handler)
+    source = tmp_path / "tmp8unv3f.txt"
+    source.write_text("content")
+
+    await api._uploads_init(file_path=source, file_name="note.txt")
+
+    assert len(requests) == 1
+    assert json.loads(requests[0].content) == {
+        "file_name": "note.txt",
+        "file_size": 7,
+        "content_type": "text/plain",
+        "part_size": 512,
+    }
 
 
 @pytest.mark.asyncio
@@ -190,7 +236,7 @@ async def test_parse_failure_preserves_observed_remote_ids(monkeypatch, tmp_path
         "doc_name": "original",
         "doc_type": "pdf",
         "source_name": "original.pdf",
-        "file_name": "report.pdf",
+        "file_name": "original.pdf",
         "file_id": "file-1",
         "response_id": "response-1",
     }

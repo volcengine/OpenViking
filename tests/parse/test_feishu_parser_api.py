@@ -358,7 +358,10 @@ async def test_legacy_accessor_output_does_not_enable_lark_protocol(tmp_path: Pa
         feishu_access_token="u-test",
     )
 
-    api._create_file.assert_awaited_once_with(local_path=markdown_path)
+    api._create_file.assert_awaited_once_with(
+        local_path=markdown_path,
+        file_name="document.md",
+    )
     api._create_response_for_file.assert_awaited_once_with(file_id="file-1")
     api._create_response_for_url.assert_not_awaited()
 
