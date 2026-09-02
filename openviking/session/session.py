@@ -4199,8 +4199,16 @@ class Session:
             return ""
 
         formatted = self._format_messages_for_wm(messages, checkpoint_requests)
+        language_conversation = "\n".join(
+            f"[{message.role}]: {line}"
+            for message in messages
+            for part in message.parts
+            if isinstance(part, TextPart)
+            for line in part.text.splitlines()
+            if line.strip()
+        )
         output_language = resolve_output_language_from_conversation(
-            formatted, config=get_openviking_config()
+            language_conversation, config=get_openviking_config()
         )
         checkpoint_instructions = self._checkpoint_prompt_instructions(len(checkpoint_requests))
 
