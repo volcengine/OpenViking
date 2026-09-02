@@ -705,6 +705,14 @@ async def tree(
 
 # -- remember --------------------------------------------------------------
 
+# One resident session per user instead of one per call. A session directory
+# survives its commit -- the live messages.jsonl is rewritten empty and the
+# content moves to history/archive_NNN -- so a fresh session id per call left a
+# permanently near-empty directory behind for every remembered fact. Sessions
+# are already scoped to viking://user/<user_id>/sessions/, so a fixed id is
+# per-user without any additional keying.
+MEMORY_STORE_SESSION_ID = "mcp-store"
+
 
 class StoreMessage(BaseModel):
     role: Literal["user", "assistant"] = Field(description="Message role")
@@ -714,13 +722,11 @@ class StoreMessage(BaseModel):
 @mcp.tool()
 async def remember(messages: list[StoreMessage]) -> str:
     """Store information into OpenViking long-term memory. Use when the user says 'remember this', shares preferences, important facts, or decisions worth persisting."""
-    import uuid
-
     from openviking.message.part import TextPart
 
     service = get_service()
     ctx = _get_ctx()
-    session_id = f"mcp-store-{uuid.uuid4().hex[:12]}"
+    session_id = MEMORY_STORE_SESSION_ID
     session = await service.sessions.get(session_id, ctx, auto_create=True)
     for msg in messages:
         if msg.content:
