@@ -1,0 +1,20 @@
+openviking/session/memory/utils/uri.py
+  h_b34c679d17e2ac 20,104-109,111-114,117-118,121-139,198-199,206
+tests/session/memory/test_memory_utils.py
+  h_b34c679d17e2ac 143,149,153-156,158
+tests/session/memory/test_streaming_memory_updater.py
+  h_b34c679d17e2ac 990
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "10abbd8cb49a0ee5758d9cace3ac5144375ff1dc",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
