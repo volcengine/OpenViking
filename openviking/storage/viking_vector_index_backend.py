@@ -155,6 +155,7 @@ class _AsyncVectorAdapter:
             lambda: self._adapter.get_collection().update(description=description)
         )
 
+
 class _SingleAccountBackend:
     """绑定单个 account 的后端实现（内部类）"""
 
@@ -1842,8 +1843,11 @@ class VikingVectorIndexBackend:
             return result
 
         timestamp = get_current_timestamp()
-        target_payloads = [
-            rewrite_vector_record(
+        acl_enabled = self._acl_enabled(ctx)
+        moved_acl_by_uri: Dict[str, Dict[str, Any]] = {}
+        target_payloads: List[Dict[str, Any]] = []
+        for record in source_records:
+            payload = rewrite_vector_record(
                 record,
                 source_uri=source_uri,
                 target_uri=target_uri,
@@ -1851,15 +1855,30 @@ class VikingVectorIndexBackend:
                 mode="move",
                 timestamp=timestamp,
             )
-            for record in source_records
-        ]
+            if acl_enabled:
+                assert self.acl_manager is not None
+                rewritten_uri = str(payload["uri"])
+                acl_fields = moved_acl_by_uri.get(rewritten_uri)
+                if acl_fields is None:
+                    acl_fields = await self.acl_manager.materialize_moved_record(
+                        record,
+                        rewritten_uri,
+                        ctx,
+                    )
+                    moved_acl_by_uri[rewritten_uri] = acl_fields
+                payload.update(acl_fields)
+            target_payloads.append(payload)
         target_ids = [str(payload["id"]) for payload in target_payloads]
         attempted_target_ids: List[str] = []
         try:
             for offset in range(0, len(target_payloads), 100):
                 payload_batch = target_payloads[offset : offset + 100]
                 attempted_target_ids.extend(str(payload["id"]) for payload in payload_batch)
-                written_ids = await self.upsert_many(payload_batch, ctx=ctx)
+                written_ids = (
+                    await self._upsert_many_raw(payload_batch, ctx=ctx)
+                    if acl_enabled
+                    else await self.upsert_many(payload_batch, ctx=ctx)
+                )
                 if len(written_ids) != len(payload_batch):
                     raise RuntimeError(
                         f"Vector move wrote {len(written_ids)} of {len(payload_batch)} records"
@@ -1889,7 +1908,7 @@ class VikingVectorIndexBackend:
         except Exception as transfer_error:
             rollback_errors: List[Exception] = []
             try:
-                restored_ids = await self.upsert_many(source_records, ctx=ctx)
+                restored_ids = await self._upsert_many_raw(source_records, ctx=ctx)
                 result.restored = len(restored_ids)
                 if result.restored != len(source_records):
                     raise RuntimeError(

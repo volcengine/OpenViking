@@ -13,6 +13,10 @@ from openviking.core.namespace import (
     owner_space_for_uri,
 )
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.abstract_overview import (
+    rewrite_abstract_overview_for_transfer,
+    rewrite_viking_uri_references,
+)
 from openviking.storage.expr import And, Contains, Eq, Or, PathScope
 from openviking.storage.vector_ids import vector_record_id
 from openviking.utils.time_utils import get_current_timestamp
@@ -136,6 +140,28 @@ def rewrite_vector_record(
                 "active_count": 0,
             }
         )
+    try:
+        level = int(record.get("level", 2))
+    except (TypeError, ValueError):
+        level = 2
+    if level in {0, 1}:
+        abstract = payload.get("abstract")
+        if isinstance(abstract, str):
+            payload["abstract"] = rewrite_viking_uri_references(
+                abstract,
+                source_uri,
+                target_uri,
+            )
+        content = payload.get("content")
+        if isinstance(content, (str, bytes)):
+            payload["content"] = rewrite_abstract_overview_for_transfer(
+                content,
+                level=level,
+                source_dir_uri=record_uri,
+                target_dir_uri=rewritten_uri,
+                source_scope_uri=source_uri,
+                target_scope_uri=target_uri,
+            )
     return payload
 
 

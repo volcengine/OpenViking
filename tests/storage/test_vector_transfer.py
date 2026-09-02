@@ -56,6 +56,7 @@ class _MemoryTransferBackend(VikingVectorIndexBackend):
         self.drop_delete_requests = False
         self.backend_mode = "local"
         self.scroll_filters = []
+        self.acl_manager = None
 
     @property
     def mode(self) -> str:
@@ -96,6 +97,11 @@ class _MemoryTransferBackend(VikingVectorIndexBackend):
     ) -> list[str]:
         return [await self.upsert(data, ctx=ctx) for data in data_list]
 
+    async def _upsert_many_raw(
+        self, data_list: list[dict[str, Any]], *, ctx: RequestContext
+    ) -> list[str]:
+        return [await self.upsert(data, ctx=ctx) for data in data_list]
+
     async def delete(self, ids: list[str], *, ctx: RequestContext) -> int:
         del ctx
         self.delete_calls += 1
@@ -129,6 +135,41 @@ class _MemoryTransferBackend(VikingVectorIndexBackend):
     async def _strict_transfer_delete(self, ctx, ids):
         return await self.delete(ids, ctx=ctx)
 
+
+class _TransferAclManager:
+    def is_enabled(self, account_id: str) -> bool:
+        return account_id == "acct"
+
+    async def materialize_context_records(self, records, ctx):
+        del ctx
+        return [
+            {
+                **record,
+                "acl_enabled": True,
+                "acl_direct_grants": [],
+                "acl_inherited_grants": ["1:group:target-readers"],
+            }
+            for record in records
+        ]
+
+    async def materialize_moved_record(self, record, new_uri, ctx):
+        del new_uri, ctx
+        return {
+            "acl_enabled": True,
+            "acl_direct_grants": list(record.get("acl_direct_grants") or []),
+            "acl_inherited_grants": ["1:group:target-readers"],
+        }
+
+
+class _AclMemoryTransferBackend(_MemoryTransferBackend):
+    def __init__(self, records: list[dict[str, Any]]) -> None:
+        super().__init__(records)
+        self.acl_manager = _TransferAclManager()
+
+    async def upsert_many(
+        self, data_list: list[dict[str, Any]], *, ctx: RequestContext
+    ) -> list[str]:
+        return await VikingVectorIndexBackend.upsert_many(self, data_list, ctx=ctx)
 
 def _records_under(
     backend: _MemoryTransferBackend, uri: str, *, recursive: bool = True
@@ -448,6 +489,30 @@ async def test_update_uri_mapping_deletes_source_only_after_targets_exist():
 
 
 @pytest.mark.asyncio
+async def test_update_uri_mapping_preserves_source_direct_acl_on_target():
+    source = "viking://resources/src.md"
+    target = "viking://resources/dst.md"
+    backend = _AclMemoryTransferBackend(
+        [
+            _record(
+                "source",
+                source,
+                acl_enabled=True,
+                acl_direct_grants=["7:user:alice"],
+                acl_inherited_grants=["1:group:source-readers"],
+            )
+        ]
+    )
+
+    await backend.update_uri_mapping(_ctx(), source, target, recursive=False)
+
+    moved = _records_under(backend, target, recursive=False)
+    assert len(moved) == 1
+    assert moved[0]["acl_direct_grants"] == ["7:user:alice"]
+    assert moved[0]["acl_inherited_grants"] == ["1:group:target-readers"]
+
+
+@pytest.mark.asyncio
 async def test_update_uri_mapping_restores_source_and_removes_target_after_partial_delete():
     source = "viking://resources/src"
     backend = _MemoryTransferBackend(
@@ -465,6 +530,42 @@ async def test_update_uri_mapping_restores_source_and_removes_target_after_parti
 
     assert len(_records_under(backend, source)) == 3
     assert _records_under(backend, "viking://resources/dst") == []
+
+
+@pytest.mark.asyncio
+async def test_update_uri_mapping_rollback_restores_source_direct_acl():
+    source = "viking://resources/src"
+    target = "viking://resources/dst"
+    backend = _AclMemoryTransferBackend(
+        [
+            _record(
+                "source-root",
+                source,
+                acl_enabled=True,
+                acl_direct_grants=["7:user:alice"],
+                acl_inherited_grants=["1:group:source-readers"],
+            ),
+            _record(
+                "source-child",
+                f"{source}/child.md",
+                acl_enabled=True,
+                acl_direct_grants=["3:user:bob"],
+                acl_inherited_grants=["7:user:alice"],
+            ),
+        ]
+    )
+    backend.fail_delete_at = 1
+    backend.partial_delete_count = 1
+
+    with pytest.raises(RuntimeError, match="injected vector delete failure"):
+        await backend.update_uri_mapping(_ctx(), source, target, recursive=True)
+
+    restored = sorted(_records_under(backend, source), key=lambda item: item["uri"])
+    assert [record["acl_direct_grants"] for record in restored] == [
+        ["7:user:alice"],
+        ["3:user:bob"],
+    ]
+    assert _records_under(backend, target) == []
 
 
 @pytest.mark.asyncio

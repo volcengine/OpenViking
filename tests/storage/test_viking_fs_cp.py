@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.abstract_overview import parse_abstract_overview
 from openviking.storage.viking_fs import VikingFS
 from openviking.storage.viking_fs._ops import TransferRollbackError
 from openviking_cli.exceptions import (
@@ -145,6 +146,16 @@ class _DirectoryCopyAGFS(_CopyAGFS):
     async def cp(self, source, target, recursive=False, fs_ctx=None):
         self.events.append(("cp", source, target, recursive, fs_ctx))
         self.files[target] = self.files[source]
+
+    async def cat(self, path, offset=0, size=-1, stream=False, fs_ctx=None):
+        del stream, fs_ctx
+        content = self.files[path]
+        return content[offset:] if size < 0 else content[offset : offset + size]
+
+    async def write(self, path, data, max_retries=3, fs_ctx=None, auto_pathlock=True):
+        del max_retries, fs_ctx, auto_pathlock
+        self.files[path] = data if isinstance(data, bytes) else bytes(data)
+        return path
 
     async def rm(self, path, recursive=False, fs_ctx=None):
         self.events.append(("rm", path, recursive, fs_ctx))
@@ -367,6 +378,77 @@ async def test_cp_directory_preserves_empty_hidden_and_binary_entries(monkeypatc
         recursive=True,
         ctx=_ctx(),
     )
+
+
+@pytest.mark.asyncio
+async def test_cp_directory_rewrites_generated_sidecar_frontmatter_and_links(monkeypatch):
+    agfs = _DirectoryCopyAGFS()
+    source_overview = b"""---
+directory: viking://resources/source/
+source:
+  kind: url
+  uri: https://example.com/original
+generated_by:
+  component: SemanticProcessor
+  trigger: semantic_refresh
+freshness:
+  total_entries: 1
+  sampled_entries: 1
+  unsampled_entries: 0
+  pending_child_changes: 0
+---
+
+# Source
+
+[chapter](viking://resources/source/%E7%AB%A0%E8%8A%82.md)
+"""
+    source_abstract = b"""---
+directory: viking://resources/source/
+---
+
+See viking://resources/source/data.bin.
+"""
+    nested_abstract = b"""---
+directory: viking://resources/source/nested/
+---
+
+Back to viking://resources/source/data.bin.
+"""
+    agfs.directories.add("/local/acct/resources/source/nested")
+    agfs.files["/local/acct/resources/source/.overview.md"] = source_overview
+    agfs.files["/local/acct/resources/source/.abstract.md"] = source_abstract
+    agfs.files["/local/acct/resources/source/nested/.abstract.md"] = nested_abstract
+    fs = _viking_fs(monkeypatch, agfs)
+    monkeypatch.setattr(fs, "_copy_vector_store_uris", AsyncMock(), raising=False)
+
+    await fs.cp(
+        "viking://resources/source",
+        "viking://resources/target",
+        recursive=True,
+        ctx=_ctx(),
+    )
+
+    target_overview = agfs.files["/local/acct/resources/target/.overview.md"]
+    overview_doc = parse_abstract_overview(target_overview)
+    assert overview_doc.metadata["directory"] == "viking://resources/target/"
+    assert overview_doc.metadata["source"] == {
+        "kind": "url",
+        "uri": "https://example.com/original",
+    }
+    assert "[chapter](viking://resources/target/%E7%AB%A0%E8%8A%82.md)" in overview_doc.body
+    assert "viking://resources/source" not in target_overview.decode()
+
+    target_abstract = agfs.files["/local/acct/resources/target/.abstract.md"]
+    abstract_doc = parse_abstract_overview(target_abstract)
+    assert abstract_doc.metadata["directory"] == "viking://resources/target/"
+    assert "viking://resources/target/data.bin" in abstract_doc.body
+    assert "viking://resources/source" not in target_abstract.decode()
+
+    target_nested = agfs.files["/local/acct/resources/target/nested/.abstract.md"]
+    nested_doc = parse_abstract_overview(target_nested)
+    assert nested_doc.metadata["directory"] == "viking://resources/target/nested/"
+    assert "viking://resources/target/data.bin" in nested_doc.body
+    assert "viking://resources/source" not in target_nested.decode()
 
 
 @pytest.mark.asyncio

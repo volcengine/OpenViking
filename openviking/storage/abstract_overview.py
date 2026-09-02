@@ -9,8 +9,10 @@ its frontmatter as user content and is never parsed implicitly.
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Dict, Mapping, Optional, Sequence, TypeVar
+from urllib.parse import quote
 
 import yaml
 
@@ -246,6 +248,59 @@ def render_abstract_overview(
         sort_keys=False,
     ).rstrip()
     return f"---\n{frontmatter}\n---\n\n{body.strip()}\n"
+
+
+def rewrite_viking_uri_references(text: str, source_uri: str, target_uri: str) -> str:
+    """Rewrite generated raw or URL-encoded URI references within one transfer scope."""
+
+    if not isinstance(text, str):
+        raise TypeError("abstract overview body must be a string")
+    source = source_uri.rstrip("/")
+    target = target_uri.rstrip("/")
+    if not source or source == target:
+        return text
+
+    variants = (
+        (quote(source, safe=":/"), quote(target, safe=":/")),
+        (source, target),
+    )
+    rewritten = text
+    seen: set[str] = set()
+    # Generated summaries contain Markdown links and occasional URI prose.  A
+    # boundary is required so moving ``.../foo`` never rewrites ``.../foobar``.
+    suffix_boundary = r"(?=$|[/#\s)\]}>,'\"`.,;:!?])"
+    for old, new in variants:
+        if old in seen:
+            continue
+        seen.add(old)
+        rewritten = re.sub(
+            re.escape(old) + suffix_boundary,
+            lambda _match, replacement=new: replacement,
+            rewritten,
+        )
+    return rewritten
+
+
+def rewrite_abstract_overview_for_transfer(
+    raw: str | bytes,
+    *,
+    level: int | ContextLevel,
+    source_dir_uri: str,
+    target_dir_uri: str,
+    source_scope_uri: Optional[str] = None,
+    target_scope_uri: Optional[str] = None,
+) -> str:
+    """Retarget generated sidecar metadata and body links without regeneration."""
+
+    document = parse_abstract_overview(raw)
+    body = rewrite_viking_uri_references(
+        document.body,
+        source_scope_uri or source_dir_uri,
+        target_scope_uri or target_dir_uri,
+    )
+    if document.legacy:
+        return body
+    return render_abstract_overview(level, target_dir_uri, body, document.metadata)
 
 
 def prepare_abstract_overview_write(

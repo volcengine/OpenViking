@@ -8,6 +8,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
+from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
     is_hidden_by_actor_peer_view,
     may_include_hidden_actor_peers,
@@ -21,6 +22,10 @@ from openviking.pyagfs.exceptions import (
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.abstract_overview import (
+    ABSTRACT_OVERVIEW_FILENAMES,
+    rewrite_abstract_overview_for_transfer,
+)
 from openviking.storage.acl import AclAction, is_acl_uri
 from openviking.storage.expr import PathScope
 from openviking.storage.internal_names import STORAGE_INTERNAL_ENTRY_NAMES
@@ -859,6 +864,8 @@ class _OpsMixin:
         new_uri: str,
         ctx: Optional[RequestContext],
         lease_ref: Dict[str, Any] | None,
+        transfer_source_uri: str | None = None,
+        transfer_target_uri: str | None = None,
     ) -> int:
         """Copy a directory under the operation's stable parent Tree leases.
 
@@ -873,6 +880,8 @@ class _OpsMixin:
         """
         if lease_ref is None:
             raise ValueError("directory copy requires a pathlock lease")
+        transfer_source_uri = transfer_source_uri or old_uri
+        transfer_target_uri = transfer_target_uri or new_uri
         fs_ctx = self._pathlock_fs_ctx(ctx, lease_ref)
         await self._async_agfs.mkdir(new_path, fs_ctx=fs_ctx)
         copied = 1
@@ -898,14 +907,35 @@ class _OpsMixin:
                     new_uri=new_child_uri,
                     ctx=ctx,
                     lease_ref=lease_ref,
+                    transfer_source_uri=transfer_source_uri,
+                    transfer_target_uri=transfer_target_uri,
                 )
             else:
-                await self._async_agfs.cp(
-                    old_child,
-                    new_child,
-                    recursive=False,
-                    fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
-                )
+                if name in ABSTRACT_OVERVIEW_FILENAMES:
+                    raw = await self._async_agfs.cat(old_child, fs_ctx=fs_ctx)
+                    level = (
+                        ContextLevel.ABSTRACT if name == ".abstract.md" else ContextLevel.OVERVIEW
+                    )
+                    rewritten = rewrite_abstract_overview_for_transfer(
+                        raw,
+                        level=level,
+                        source_dir_uri=old_uri,
+                        target_dir_uri=new_uri,
+                        source_scope_uri=transfer_source_uri,
+                        target_scope_uri=transfer_target_uri,
+                    )
+                    await self._async_agfs.write(
+                        new_child,
+                        rewritten.encode("utf-8"),
+                        fs_ctx=fs_ctx,
+                    )
+                else:
+                    await self._async_agfs.cp(
+                        old_child,
+                        new_child,
+                        recursive=False,
+                        fs_ctx=fs_ctx,
+                    )
                 copied += 1
         return copied
 

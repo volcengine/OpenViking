@@ -5,6 +5,7 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.storage import vector_migration
+from openviking.storage.abstract_overview import parse_abstract_overview
 from openviking.storage.vector_migration import copy_vector_records, delete_vector_records
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -92,6 +93,40 @@ def test_rewrite_vector_record_for_move_preserves_metadata(level):
     assert result["created_at"] == 10
     assert result["updated_at"] == 11
     assert result["active_count"] == 9
+
+
+@pytest.mark.parametrize("mode", ["copy", "move"])
+def test_rewrite_vector_record_updates_generated_l1_uri_references(mode):
+    record = {
+        "id": "old-id",
+        "uri": "viking://resources/source",
+        "level": 1,
+        "vector": [0.1],
+        "abstract": "[chapter](viking://resources/source/chapter.md)",
+        "content": """---
+directory: viking://resources/source/
+---
+
+[chapter](viking://resources/source/chapter.md)
+""",
+        "created_at": 10,
+        "updated_at": 11,
+        "active_count": 9,
+    }
+
+    result = vector_migration.rewrite_vector_record(
+        record,
+        source_uri="viking://resources/source",
+        target_uri="viking://resources/target",
+        ctx=_ctx(),
+        mode=mode,
+        timestamp=123,
+    )
+
+    assert result["abstract"] == "[chapter](viking://resources/target/chapter.md)"
+    content_doc = parse_abstract_overview(result["content"])
+    assert content_doc.metadata["directory"] == "viking://resources/target/"
+    assert content_doc.body.strip() == "[chapter](viking://resources/target/chapter.md)"
 
 
 class FakeVectorStore:
