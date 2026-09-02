@@ -520,6 +520,34 @@ class CollectionAdapter(ABC):
             records.append(record)
         return records
 
+    def search_by_random(
+        self,
+        *,
+        filter: Optional[Dict[str, Any] | FilterExpr] = None,
+        limit: int = 10,
+        offset: int = 0,
+        output_fields: Optional[list[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
+    ) -> list[Dict[str, Any]]:
+        coll = self.get_collection()
+        result = coll.search_by_random(
+            index_name=self._index_name,
+            limit=limit,
+            offset=offset,
+            filters=self._compile_filter(filter),
+            output_fields=output_fields,
+            advance=advance,
+        )
+
+        records: list[Dict[str, Any]] = []
+        for item in result.data:
+            record = dict(item.fields) if item.fields else {}
+            record["id"] = item.id
+            record["_score"] = _normalize_result_score(item.score)
+            record = self._normalize_record_for_read(record)
+            records.append(record)
+        return records
+
     def delete(
         self,
         *,
