@@ -58,7 +58,7 @@ The `find()` method performs pure vector similarity search for simple query scen
 | image_url | str | No | None | Image query as a `data:image/...;base64,...`, `http(s)://`, or `viking://` URI. Requires a multimodal embedding model |
 | target_uri | str \| List[str] | No | "" | Limit search to specific URI prefix |
 | context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
-| tags | List[str] | No | None | Explicit retrieval tags in strict `k=v` form. Multiple tags are combined with AND; a result must contain every requested tag |
+| tags | List[str] | No | None | Explicit retrieval tags in strict `k=v` form (lowercase letters/digits/`_`/`-`/`.`, starting with a letter or digit, key<=64, value<=128). Multiple tags are combined with AND; a result must contain every requested tag |
 | node_limit | int | No | None | Maximum number of results |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filter |
@@ -176,7 +176,7 @@ curl -X POST http://localhost:1933/api/v1/search/find \
     }'
 ```
 
-Tags must use strict `k=v` strings. When multiple tags are provided, `find()` requires all of them; the example above only returns contexts whose explicit retrieval tags contain both `env=prod` and `team=search`.
+Tags must use strict `k=v` strings: both key and value are non-empty, contain exactly one `=`, are made only of lowercase letters, digits, `_`, `-`, `.` and start with a letter or digit (the server trims whitespace and lowercases). The key is capped at 64 and the value at 128 characters. When multiple tags are provided, `find()` requires all of them; the example above only returns contexts whose explicit retrieval tags contain both `env=prod` and `team=search`.
 
 **Python SDK**
 
@@ -396,7 +396,7 @@ The `search()` method adds session context understanding and intent analysis cap
 | session | Session | No | None | Session for context-aware search (SDK) |
 | session_id | str | No | None | Session ID for context-aware search (HTTP) |
 | context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
-| tags | List[str] | No | None | Explicit retrieval tags in strict `k=v` form. Multiple tags are combined with AND; a result must contain every requested tag |
+| tags | List[str] | No | None | Explicit retrieval tags in strict `k=v` form (lowercase letters/digits/`_`/`-`/`.`, starting with a letter or digit, key<=64, value<=128). Multiple tags are combined with AND; a result must contain every requested tag |
 | node_limit | int | No | None | Maximum number of results |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filter |

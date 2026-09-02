@@ -58,7 +58,7 @@ OpenViking 提供多种检索方法，包括简单的向量相似度搜索、带
 | image_url | str | 否 | None | 图片查询，支持 `data:image/...;base64,...`、`http(s)://` 或 `viking://` URI；需要 multimodal embedding 模型 |
 | target_uri | str \| List[str] | 否 | "" | 限制搜索范围到指定的 URI 前缀 |
 | context_type | str \| List[str] | 否 | None | 限定一个或多个 `ContextType` 取值：`memory`、`resource` 或 `skill` |
-| tags | List[str] | 否 | None | 显式检索标签，必须是严格的 `k=v` 格式。多个 tags 之间是 AND 关系，结果必须同时包含所有请求的标签 |
+| tags | List[str] | 否 | None | 显式检索标签，必须是严格的 `k=v` 格式（小写字母/数字/`_`/`-`/`.`，以字母或数字开头，key≤64、value≤128）。多个 tags 之间是 AND 关系，结果必须同时包含所有请求的标签 |
 | limit | int | 否 | 10 | 最大返回结果数 |
 | node_limit | int | 否 | None | 可选 HTTP 别名；如果提供，会覆盖 limit |
 | score_threshold | float | 否 | None | 最低相关性分数阈值 |
@@ -177,7 +177,7 @@ curl -X POST http://localhost:1933/api/v1/search/find \
     }'
 ```
 
-Tags 必须使用严格的 `k=v` 字符串。传入多个 tags 时，`find()` 会要求全部命中；上面的例子只返回显式检索标签同时包含 `env=prod` 和 `team=search` 的上下文。
+Tags 必须使用严格的 `k=v` 字符串：key 和 value 都非空，只能有一个 `=`，仅由小写字母、数字、`_`、`-`、`.` 组成且以字母或数字开头（服务端会去空白并转小写），key 最长 64、value 最长 128 字符。传入多个 tags 时，`find()` 会要求全部命中；上面的例子只返回显式检索标签同时包含 `env=prod` 和 `team=search` 的上下文。
 
 **Python SDK**
 
@@ -397,7 +397,7 @@ openviking find "红色海报风格" --image ./poster.png --uri "viking://resour
 | session | Session | 否 | None | 用于上下文感知搜索的会话（SDK）|
 | session_id | str | 否 | None | 用于上下文感知搜索的会话 ID（HTTP）|
 | context_type | str \| List[str] | 否 | None | 限定一个或多个 `ContextType` 取值：`memory`、`resource` 或 `skill` |
-| tags | List[str] | 否 | None | 显式检索标签，必须是严格的 `k=v` 格式。多个 tags 之间是 AND 关系，结果必须同时包含所有请求的标签 |
+| tags | List[str] | 否 | None | 显式检索标签，必须是严格的 `k=v` 格式（小写字母/数字/`_`/`-`/`.`，以字母或数字开头，key≤64、value≤128）。多个 tags 之间是 AND 关系，结果必须同时包含所有请求的标签 |
 | limit | int | 否 | 10 | 最大返回结果数 |
 | node_limit | int | 否 | None | 可选 HTTP 别名；如果提供，会覆盖 limit |
 | score_threshold | float | 否 | None | 最低相关性分数阈值 |

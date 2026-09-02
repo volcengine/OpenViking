@@ -491,7 +491,7 @@ Content-Disposition: attachment; filename*=UTF-8''logo.png
 
 ### set_tags()
 
-设置用于检索过滤的显式 `k=v` 标签。`replace` 替换已有标签，`append` 追加标签；对目录设置 `recursive=true` 时会更新目录下的文件。
+设置用于检索过滤的显式 `k=v` 标签。key 和 value 都非空、只能有一个 `=`，仅由小写字母、数字、`_`、`-`、`.` 组成且以字母或数字开头（服务端会去空白并转小写），key 最长 64、value 最长 128 字符；不合规的标签会被拒绝。`replace` 替换已有标签，`append` 追加标签；对目录设置 `recursive=true` 时会更新目录下的文件。
 
 **Python SDK**
 
