@@ -26,6 +26,55 @@ def _service(viking_fs, resource_processor=None) -> ResourceService:
 
 
 @pytest.mark.asyncio
+async def test_cleanup_reserved_target_removes_internal_only_directory():
+    lock = {"lease_ref": "lock-1"}
+    ctx = _ctx()
+    viking_fs = SimpleNamespace(
+        exists=AsyncMock(return_value=True),
+        stat=AsyncMock(return_value={"isDir": True}),
+        ls=AsyncMock(return_value=[{"name": ".path.ovlock", "isDir": False}]),
+        rm=AsyncMock(),
+    )
+    service = _service(viking_fs)
+
+    removed = await service._cleanup_reserved_target_if_empty(
+        root_uri="viking://resources/reserved",
+        ctx=ctx,
+        resource_lock=lock,
+    )
+
+    assert removed is True
+    viking_fs.rm.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_reserved_target_removes_stub_overview_directory():
+    lock = {"lease_ref": "lock-1"}
+    ctx = _ctx()
+    viking_fs = SimpleNamespace(
+        exists=AsyncMock(return_value=True),
+        stat=AsyncMock(return_value={"isDir": True}),
+        ls=AsyncMock(
+            return_value=[
+                {"name": ".abstract.md", "isDir": False},
+                {"name": ".overview.md", "isDir": False},
+            ]
+        ),
+        rm=AsyncMock(),
+    )
+    service = _service(viking_fs)
+
+    removed = await service._cleanup_reserved_target_if_empty(
+        root_uri="viking://resources/f5-repro/broken-pdf",
+        ctx=ctx,
+        resource_lock=lock,
+    )
+
+    assert removed is True
+    viking_fs.rm.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_cleanup_reserved_target_removes_only_empty_directory():
     lock = {"lease_ref": "lock-1"}
     ctx = _ctx()

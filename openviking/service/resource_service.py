@@ -55,6 +55,10 @@ from openviking.server.user_config import (
     effective_skill_add_target,
 )
 from openviking.storage.acl import AclAction
+from openviking.storage.internal_names import (
+    STORAGE_INTERNAL_ENTRY_NAMES,
+    WEBDAV_RESERVED_FILENAMES,
+)
 from openviking.storage.queuefs import QueueManager, get_queue_manager
 from openviking.storage.queuefs.add_resource_msg import AddResourcePhase
 from openviking.storage.viking_fs import LS_ALL_NODES, VikingFS
@@ -538,6 +542,7 @@ class ResourceService:
         resource_lock: Dict[str, Any],
     ) -> bool:
         """Remove a newly reserved target only while it is still empty."""
+        rollback_safe_names = STORAGE_INTERNAL_ENTRY_NAMES | WEBDAV_RESERVED_FILENAMES
         try:
             if not await self._viking_fs.exists(root_uri, ctx=ctx):
                 return True
@@ -550,7 +555,13 @@ class ResourceService:
                 node_limit=LS_ALL_NODES,
                 ctx=ctx,
             )
-            if any(entry.get("name") not in {None, "", ".", ".."} for entry in entries):
+            visible_names: list[str] = []
+            for entry in entries:
+                name = entry.get("name")
+                if not name or name in {".", ".."}:
+                    continue
+                visible_names.append(str(name))
+            if visible_names and not all(name in rollback_safe_names for name in visible_names):
                 return False
             await self._viking_fs.rm(
                 root_uri,
@@ -764,18 +775,38 @@ class ResourceService:
         stage_result = stage_callback("processing_queue")
         if inspect.isawaitable(stage_result):
             await stage_result
-        return await self._resource_processor.finish_prepared_resource(
-            msg.prepared,
-            ctx=ctx,
-            resource_lock=resource_lock,
-            summarize=msg.summarize,
-            build_index=msg.build_index,
-            processing_mode=msg.processing_mode,
-            **self._add_resource_ingest_tag_kwargs(
-                tags=msg.tags,
-                tag_mode=msg.tag_mode,
-            ),
-        )
+        try:
+            result = await self._resource_processor.finish_prepared_resource(
+                msg.prepared,
+                ctx=ctx,
+                resource_lock=resource_lock,
+                summarize=msg.summarize,
+                build_index=msg.build_index,
+                processing_mode=msg.processing_mode,
+                **self._add_resource_ingest_tag_kwargs(
+                    tags=msg.tags,
+                    tag_mode=msg.tag_mode,
+                ),
+            )
+        except BaseException:
+            if msg.cleanup_empty_target_on_failure and resource_lock is not None:
+                await self._cleanup_reserved_target_if_empty(
+                    root_uri=msg.root_uri,
+                    ctx=ctx,
+                    resource_lock=resource_lock,
+                )
+            raise
+        if (
+            result.get("status") == "error"
+            and msg.cleanup_empty_target_on_failure
+            and resource_lock is not None
+        ):
+            await self._cleanup_reserved_target_if_empty(
+                root_uri=msg.root_uri,
+                ctx=ctx,
+                resource_lock=resource_lock,
+            )
+        return result
 
     def _restore_source_task_auth(
         self,
