@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Admin endpoints for OpenViking multi-tenant HTTP Server."""
 
-import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, Path, Query, Request
@@ -45,6 +44,7 @@ from openviking.service.task_tracker import (
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.storage.viking_fs import get_viking_fs
+from openviking.utils.background_tasks import spawn_background_task
 from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
@@ -373,7 +373,7 @@ async def migrate_legacy_data(
         account_id=SYSTEM_TASK_ACCOUNT_ID,
         user_id=SYSTEM_TASK_USER_ID,
     )
-    asyncio.create_task(
+    spawn_background_task(
         _run_legacy_migration_task(
             task.task_id,
             migration,
