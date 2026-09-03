@@ -276,6 +276,25 @@ class TaskWorkIndex:
                 )
             return bool(self._work.get(task_id) or self._active.get(task_id))
 
+    def work_ids(
+        self,
+        task_id: str,
+        exclude_work_id: Optional[str] = None,
+    ) -> tuple[tuple[str, str], ...]:
+        """Snapshot the queued work entries owned by a task.
+
+        Used for diagnostics when descendant work never reaches a terminal ACK.
+        """
+        with self._lock:
+            entries = self._work.get(task_id)
+            if not entries:
+                return ()
+            return tuple(
+                (queue_name, work_id)
+                for queue_name, work_id in sorted(entries)
+                if work_id != exclude_work_id
+            )
+
     def cancellation_requested(self, task_id: str) -> bool:
         callback = self._is_cancellation_requested
         return bool(callback is not None and callback(task_id))

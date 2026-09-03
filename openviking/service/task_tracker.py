@@ -173,7 +173,13 @@ class TaskTracker:
     TTL_FAILED = 604_800  # 7 days
     CLEANUP_INTERVAL = 300  # 5 minutes
 
-    def __init__(self, store: TaskStore, *, max_concurrent_store_io: int = 8) -> None:
+    def __init__(
+        self,
+        store: TaskStore,
+        *,
+        max_concurrent_store_io: int = 8,
+        descendant_wait_timeout_s: Optional[float] = 600.0,
+    ) -> None:
         self._store = store
         self._tasks: Dict[str, TaskRecord] = {}
         self._lock = threading.Lock()
@@ -184,6 +190,9 @@ class TaskTracker:
         self._business_locks = KeyedAsyncLockPool[tuple[str, str, str, str]]()
         self._store_io = StoreIOLimiter(max_concurrent_store_io)
         self._cleanup_task: Optional[asyncio.Task] = None
+        # Upper bound for wait_for_descendants. ``None`` or ``<= 0`` restores the
+        # legacy unbounded wait.
+        self._descendant_wait_timeout_s = descendant_wait_timeout_s
         self._work_index = TaskWorkIndex()
         self._install_work_index_callbacks()
         logger.info(
@@ -816,8 +825,35 @@ class TaskTracker:
         return deleted
 
     async def wait_for_descendants(self, task_id: str, current_work_id: str) -> None:
-        """Wait on the same durable work index used by completion and cancellation."""
+        """Wait on the same durable work index used by completion and cancellation.
+
+        Bounded by ``descendant_wait_timeout_s`` (default 600s): when descendant
+        work never reaches a terminal ACK — orphaned in-memory entry, rollback
+        without retry, worker crash window — the parent proceeds instead of
+        spinning forever and leaving the task stuck in ``processing``. QueueFS
+        remains the source of truth; late descendant ACKs still run their own
+        finalization path.
+        """
+        timeout_s = self._descendant_wait_timeout_s
+        if timeout_s is None or timeout_s <= 0:
+            while self._work_index.has_work(task_id, exclude_work_id=current_work_id):
+                await asyncio.sleep(0.05)
+            return
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_s
         while self._work_index.has_work(task_id, exclude_work_id=current_work_id):
+            if loop.time() >= deadline:
+                orphaned = self._work_index.work_ids(task_id, exclude_work_id=current_work_id)
+                logger.warning(
+                    "[TaskTracker] wait_for_descendants timed out after %.0fs for task %s: "
+                    "%d descendant work item(s) never reached a terminal ACK %s; "
+                    "proceeding so the parent task can complete",
+                    timeout_s,
+                    task_id,
+                    len(orphaned),
+                    [f"{queue}:{work}" for queue, work in orphaned[:5]],
+                )
+                return
             await asyncio.sleep(0.05)
 
     def has_work(self, task_id: str) -> bool:
