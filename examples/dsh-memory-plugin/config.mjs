@@ -21,6 +21,7 @@ const DEFAULT_CONFIG = Object.freeze({
   recallPeerScope: "all",
   recallQueryExpansion: "auto",
   recallQueryExpansionConfigured: false,
+  recallContextType: "",
   syncTurns: true,
   recallTokenBudget: 2000,
   recallMaxContentChars: 500,
@@ -76,12 +77,18 @@ export function resolveConfig(input = {}, env = process.env, cwd = process.cwd()
     config.recallLimit = env.OPENVIKING_RECALL_LIMIT;
     config.recallLimitConfigured = true;
   }
+  if (env.OPENVIKING_RECALL_CONTEXT_TYPE) {
+    config.recallContextType = env.OPENVIKING_RECALL_CONTEXT_TYPE;
+  }
 
   config.endpoint = String(config.endpoint || DEFAULT_CONFIG.endpoint).replace(/\/+$/, "");
   config.workspacePeer = config.workspacePeer !== false;
   config.peerId = resolveEffectivePeerId({ cfg: config, cwd }).peerId;
   config.recallPeerScope = config.recallPeerScope === "actor" ? "actor" : "all";
   config.recallQueryExpansion = config.recallQueryExpansion === "off" ? "off" : "auto";
+  config.recallContextType = ["memory", "resource", "skill"].includes(config.recallContextType)
+    ? config.recallContextType
+    : "";
   config.recallLimit = clampInteger(config.recallLimit, 1, 50, DEFAULT_CONFIG.recallLimit);
   config.recallMaxContentChars = clampInteger(
     config.recallMaxContentChars,

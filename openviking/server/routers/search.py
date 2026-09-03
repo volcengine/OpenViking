@@ -117,6 +117,31 @@ def _resolve_image_url(image_url: Optional[str], ctx: RequestContext) -> Optiona
     return resolved
 
 
+def _typed_context_type(value: Any) -> Optional["ContextType"]:
+    """Map an API context_type (str | list) onto a single retriever type.
+
+    The API accepts one or more types; TypedQuery carries a single type, so
+    a multi-type request keeps its filter-based scoping and is left
+    unclassified (the filter still narrows results correctly). Values are
+    normalized (strip + lower) the same way as resolve_context_types.
+    """
+    from openviking_cli.retrieve import ContextType
+
+    def _coerce(value: Any) -> Optional["ContextType"]:
+        if not isinstance(value, str):
+            return None
+        try:
+            return ContextType(value.strip().lower())
+        except ValueError:
+            return None
+
+    if isinstance(value, str):
+        return _coerce(value)
+    if isinstance(value, list) and len(value) == 1:
+        return _coerce(value[0])
+    return None
+
+
 class FindRequest(BaseModel):
     """Request model for find."""
 
@@ -353,6 +378,7 @@ async def find(
             filter=effective_filter,
             level=_resolve_levels(request.level) or None,
             image_url=resolved_image_url,
+            context_type=_typed_context_type(request.context_type),
         ),
     )
     result = execution.result
@@ -467,6 +493,7 @@ async def search(
             filter=effective_filter,
             level=_resolve_levels(request.level) or None,
             image_url=resolved_image_url,
+            context_type=_typed_context_type(request.context_type),
         )
 
     execution = await run_operation(
