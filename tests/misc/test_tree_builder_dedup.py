@@ -112,6 +112,42 @@ class TestFinalizeFromTemp:
         assert tree._root_is_file is True
 
     @pytest.mark.asyncio
+    async def test_no_split_flatten_preserves_extension_on_long_name(self):
+        """A 53-char no-split temp file keeps its ``.md`` suffix after the cap.
+
+        Mirrors the real no-split PDF shape: ``MarkdownParser._sanitize_for_path``
+        emits a 50-char stem (41 chars + ``_`` + 8-char hash) and ``.md`` is
+        appended afterwards, so the temp file name is 53 chars. The segment cap
+        must budget for the extension instead of amputating it, otherwise the
+        stored URI loses its ``.md`` suffix.
+        """
+        from openviking.parse.tree_builder import TreeBuilder
+        from openviking.server.identity import RequestContext, Role
+        from openviking_cli.session.user_id import UserIdentifier
+
+        stem = "a" * 41 + "_d1e2f3a4"  # 50 chars, _sanitize_for_path output shape
+        entries = {
+            "viking://temp/import": [{"name": stem, "isDir": True}],
+            f"viking://temp/import/{stem}": [{"name": f"{stem}.md", "isDir": False}],
+        }
+        fs = self._make_fs(entries, {"viking://resources"})
+        ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+        with patch("openviking.parse.tree_builder.get_viking_fs", return_value=fs):
+            tree = await TreeBuilder().finalize_from_temp(
+                temp_dir_path="viking://temp/import",
+                ctx=ctx,
+                scope="resources",
+                to_uri="viking://resources",
+                flatten_single_file=True,
+            )
+
+        assert tree.root.uri == f"viking://resources/{stem[:47]}.md"
+        assert tree.root.temp_uri == f"viking://temp/import/{stem}/{stem}.md"
+        assert tree._candidate_uri == tree.root.uri
+        assert tree._root_is_file is True
+
+    @pytest.mark.asyncio
     async def test_explicit_to_is_preserved_for_single_no_split_file(self):
         from openviking.parse.tree_builder import TreeBuilder
         from openviking.server.identity import RequestContext, Role
