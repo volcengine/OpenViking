@@ -110,7 +110,9 @@ async def test_process_requeues_deferred_commit_and_resets_root_context(monkeypa
 
     await processor._process(_make_msg(), ctx)
 
-    assert queued == [("SessionCommit", _make_msg().to_dict())]
+    expected = _make_msg().to_dict()
+    expected["dependency_wait_count"] = 1
+    assert queued == [("SessionCommit", expected)]
     assert get_root_observability_context() is None
 
 
@@ -158,3 +160,67 @@ async def test_cancelled_queued_commit_writes_terminal_marker_before_success(mon
     assert marker["stage"] == "cancelled"
     assert marker["error"] == "session commit cancelled"
     on_success.assert_called_once_with()
+
+
+async def test_dependency_blocked_commit_is_paced_and_counts_its_waits(monkeypatch):
+    """A commit blocked behind its predecessor must not spin.
+
+    Without a delay the consumer dequeues the blocked message, finds it still
+    blocked and re-enqueues it as fast as it can turn, which is how a queue of
+    33 waiters reached a requeue count in the hundreds of thousands while its
+    depth never dropped. Assert both halves of the pacing: the worker actually
+    waits, and the wait it already served rides along on the message so the
+    next attempt waits longer instead of restarting from zero.
+    """
+    queued: list = []
+    slept: list = []
+
+    class _QueueManager:
+        async def enqueue(self, queue_name, data):
+            queued.append(data)
+
+    async def _record_sleep(delay):
+        slept.append(delay)
+
+    processor = SessionCommitProcessor(
+        _FakeSessionService({}, processed=False),
+        asyncio.get_running_loop(),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: _QueueManager(),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.session_commit_processor.asyncio.sleep",
+        _record_sleep,
+    )
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+
+    msg = _make_msg()
+    for _ in range(3):
+        await processor._process(msg, ctx)
+        msg = SessionCommitMsg.from_dict(queued[-1])
+
+    assert [item["dependency_wait_count"] for item in queued] == [1, 2, 3]
+    assert all(delay > 0 for delay in slept)
+    assert slept == sorted(slept)
+    assert slept[0] < slept[-1]
+
+
+def test_dependency_wait_delay_grows_then_holds_at_the_cap():
+    """The wait doubles, then stops growing.
+
+    A predecessor that runs for an hour must not push the commits behind it into
+    an hour-long poll interval, so the delay is capped rather than unbounded.
+    """
+    delays = [SessionCommitProcessor._dependency_wait_delay(n) for n in range(0, 14)]
+
+    assert delays[0] == SessionCommitProcessor._DEPENDENCY_WAIT_BASE_DELAY
+    assert delays == sorted(delays)
+    assert max(delays) == SessionCommitProcessor._DEPENDENCY_WAIT_MAX_DELAY
+    assert delays[-1] == delays[-2] == SessionCommitProcessor._DEPENDENCY_WAIT_MAX_DELAY
+    # A negative or absent counter from an older producer must not underflow.
+    assert (
+        SessionCommitProcessor._dependency_wait_delay(-5)
+        == SessionCommitProcessor._DEPENDENCY_WAIT_BASE_DELAY
+    )
