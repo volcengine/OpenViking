@@ -69,6 +69,21 @@ def test_openai_rerank_from_config_default_timeout():
     assert client.timeout == 30.0
 
 
+def test_openai_rerank_from_config_can_disable_environment_proxy_lookup():
+    """from_config passes trust_env through to the client."""
+    config = RerankConfig(
+        model="qwen3-rerank",
+        api_key="test-key",
+        api_base="http://rerank.internal:8081/v1/rerank",
+        trust_env=False,
+    )
+
+    client = OpenAIRerankClient.from_config(config)
+
+    assert client is not None
+    assert client.trust_env is False
+
+
 @patch("openviking.models.rerank.openai_rerank.requests.post")
 def test_rerank_batch_uses_configured_timeout(mock_post):
     """rerank_batch passes the configured timeout to requests.post."""
@@ -108,3 +123,24 @@ def test_rerank_batch_uses_default_timeout(mock_post):
 
     assert mock_post.called
     assert mock_post.call_args.kwargs["timeout"] == 30.0
+
+
+@patch("openviking.models.rerank.openai_rerank.requests.Session")
+def test_rerank_batch_can_disable_environment_proxy_lookup(mock_session):
+    """A LAN endpoint can opt out of proxy environment discovery."""
+    response = Mock()
+    response.json.return_value = {"results": [{"index": 0, "relevance_score": 0.9}]}
+    session = mock_session.return_value
+    session.post.return_value = response
+
+    client = OpenAIRerankClient(
+        api_key="test-key",
+        api_base="http://rerank.internal:8081/v1/rerank",
+        model_name="qwen3-rerank",
+        trust_env=False,
+    )
+
+    assert client.rerank_batch(query="test query", documents=["doc1"]) == [0.9]
+    assert session.trust_env is False
+    session.post.assert_called_once()
+    session.close.assert_called_once()

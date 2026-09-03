@@ -43,6 +43,15 @@ class RerankConfig(BaseModel):
         ),
     )
 
+    trust_env: bool = Field(
+        default=True,
+        description=(
+            "Whether OpenAI-compatible rerank calls use proxy and authentication settings "
+            "from the process environment. Set false for trusted LAN endpoints that must "
+            "bypass ambient proxy discovery."
+        ),
+    )
+
     threshold: float = Field(
         default=0.1, description="Relevance threshold (score > threshold is relevant)"
     )

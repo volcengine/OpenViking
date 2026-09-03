@@ -944,6 +944,7 @@ Reranking model for search result refinement. Supports VikingDB (Volcengine), Co
 | `api_base` | str | Endpoint URL (for `openai` provider) |
 | `model` | str | Model name (for `openai` providers) |
 | `timeout` | float | HTTP request timeout in seconds for OpenAI-compatible providers. Increase for slow or cold-starting local rerank servers. Default: `30.0` |
+| `trust_env` | bool | Whether to use proxy and authentication settings from the process environment. Set `false` for trusted LAN endpoints that must bypass ambient proxy discovery. Default: `true` |
 | `max_input_tokens` | int | Maximum estimated raw-text tokens in each query-document pair sent to the reranker. Oversized inputs retain their beginning and end. `0` disables truncation. Default: `0` |
 | `threshold` | float | Score threshold between `0.0` and `1.0`; results below this are filtered out. Default: `0.1` |
 | `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
