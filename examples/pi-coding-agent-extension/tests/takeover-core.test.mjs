@@ -249,11 +249,20 @@ test("commitAndAdvance advances boundary and persists after overview is ready", 
   assert.equal(calls.persisted[0].type, TAKEOVER_ENTRY_TYPE);
 });
 
-test("commitAndAdvance keeps pending tokens when flush fails", async () => {
+test("flush failure delays takeover retry until new token pressure crosses the threshold (#4504)", async () => {
   const { core, calls } = makeCore({ flushResult: false });
   core.transformContext([user("one"), user("two")]);
-  assert.equal(await core.onTurnSynced(120), false);
-  assert.equal(core.state.pendingTokens, 120);
+
+  const firstAttempt = await core.onTurnSynced(120);
+  const smallTurn = await core.onTurnSynced(10);
+  const flushesBeforeNewThreshold = calls.flushed;
+  const nextThreshold = await core.onTurnSynced(100);
+
+  assert.equal(firstAttempt, false);
+  assert.equal(smallTurn, false);
+  assert.equal(flushesBeforeNewThreshold, 1);
+  assert.equal(nextThreshold, false);
+  assert.equal(calls.flushed, 2);
   assert.equal(calls.committed, 0);
   assert.equal(calls.persisted.length, 0);
 });
