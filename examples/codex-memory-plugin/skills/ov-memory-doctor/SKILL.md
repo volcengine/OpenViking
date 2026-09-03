@@ -19,7 +19,7 @@ Troubleshooting for the OpenViking memory plugin. Three things go
 wrong on a user's machine, each silently:
 
 - **Install** — marketplace registration, `[plugins."openviking-memory@openviking"]`
-  and `[features] plugin_hooks` in `~/.codex/config.toml`, per-hook trust
+  and `[features] hooks` (or legacy `plugin_hooks`) in `~/.codex/config.toml`, per-hook trust
   records, the stdio MCP proxy. When these are wrong, hooks never run and
   nothing is logged anywhere.
 - **Configuration** — `~/.openviking/ovcli.conf`, `~/.openviking/ov.conf` and
@@ -75,7 +75,7 @@ Work top-down; fix the first ✗ and rerun before chasing the next.
 |---|---|---|
 | `ovcli.conf cannot be parsed` / `no usable config` | Trailing comma/comment; the plugin treats the file as absent and uses the localhost default | Fix the JSON. Fresh machine: create `~/.openviking/ovcli.conf` with `url` + `api_key`, `chmod 600`. |
 | `codex plugin list does not show …` | Plugin never installed, or installed under an old id | Re-run the one-line installer (`bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) --harness codex`; add `--dist tos` where GitHub is blocked). |
-| `[features] plugin_hooks is not set/false` | Codex never runs plugin hooks | Add `plugin_hooks = true` under `[features]` in `~/.codex/config.toml`, restart Codex. |
+| `[features] hooks / plugin_hooks is not set/false` | Codex never runs plugin hooks | Add `hooks = true` under `[features]` in `~/.codex/config.toml` (or `plugin_hooks = true` for older Codex), restart Codex. |
 | `[plugins."…"] enabled = false` / `installed but disabled` | Plugin switched off in config.toml | Set `enabled = true`, restart Codex. |
 | `hooks disabled in [hooks.state]` | A hook was declined at the trust prompt | Remove `enabled = false` from that `[hooks.state."openviking-memory@openviking:hooks/hooks.json:<event>:0:0"]` section; approve the hook again. |
 | `hooks without a trust record yet` | Codex has not yet approved those hooks (fresh install or `hooks.json` changed on update) | Start a Codex session and accept the hook prompt; nothing is wrong. |
@@ -110,7 +110,7 @@ More symptoms, exact error strings and log stage names: [reference.md](reference
 Prove hooks run at all: put `OPENVIKING_DEBUG=1` in the environment that
 launches Codex, run one turn, then read `~/.openviking/logs/codex-hooks.log`
 (JSONL; grep `"error"`). An absent or unchanged log after a full turn means the
-hooks were not spawned — a `plugin_hooks` / trust / node problem, not a server
+hooks were not spawned — a hooks / trust / node problem, not a server
 problem. `~/.openviking/logs/cc-hooks.log` belongs to the Claude Code plugin.
 
 Prove the key and identity by hand (`Bearer` is case-sensitive with exactly one

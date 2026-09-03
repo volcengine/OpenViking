@@ -12,7 +12,7 @@ and `CODEX_CONFIG_FILE` relocate individual pieces.
 | `~/.openviking/ovcli.conf` | Client connection: `url`, `api_key`, `account`, `user`, optional `plugin.codex.*` tuning. Mode 0600. |
 | `~/.openviking/ov.conf` | Server config. The plugin reads only `server.url/host/port`, `server.root_api_key` (last-resort key) and the legacy `codex` block. |
 | `~/.openviking/ovcli.conf.<name>` | Saved CLI profiles (`ov config switch` copies one over `ovcli.conf`). `ovcli.conf.bak.<epoch>` are installer backups. |
-| `~/.codex/config.toml` | `[features] plugin_hooks`, `[plugins."openviking-memory@openviking"] enabled`, `[marketplaces.openviking]` (source, ref), `[hooks.state."openviking-memory@openviking:hooks/hooks.json:<event>:0:0"] trusted_hash` for `session_start`, `user_prompt_submit`, `stop`, `session_end`, `pre_compact`. |
+| `~/.codex/config.toml` | `[features] hooks` (or legacy `plugin_hooks`), `[plugins."openviking-memory@openviking"] enabled`, `[marketplaces.openviking]` (source, ref), `[hooks.state."openviking-memory@openviking:hooks/hooks.json:<event>:0:0"] trusted_hash` for `session_start`, `user_prompt_submit`, `stop`, `session_end`, `pre_compact`. |
 | `~/.codex/plugins/cache/openviking/openviking-memory/<version>/` | The copy Codex runs hooks from. Keyed by `plugin.json` version. |
 | `~/.codex/.tmp/marketplaces/openviking/` | Git clone of the marketplace (GitHub/TOS dist); `examples/codex-memory-plugin` inside it is what `codex plugin list` reports as the source path. |
 | `~/.openviking/codex-plugin-state/<session_id>.json` | Per-session state: `ovSessionId` (`cx-<session_id>`, null once committed), `transcriptPath` (last rollout seen, used by the SessionStart sweep to catch up unsent turns), `capturedTurnCount`, `lastUpdatedAt`. |
@@ -153,7 +153,7 @@ reports `unknown command`.
 
 | Symptom | Likely cause | Detect | Fix |
 |---|---|---|---|
-| Plugin listed and enabled, but no `<openviking-context>` ever, no log | `plugin_hooks` off, hooks never trusted, or no parseable config | doctor Plugin install + Configuration sections | Enable hooks / approve the prompt / fix config |
+| Plugin listed and enabled, but no `<openviking-context>` ever, no log | `hooks` / `plugin_hooks` off, hooks never trusted, or no parseable config | doctor Plugin install + Configuration sections | Enable hooks / approve the prompt / fix config |
 | Worked until an edit to `ovcli.conf` | JSON broken by the edit | doctor "cannot be parsed" | Fix JSON |
 | Edits to `ovcli.conf` or `ov config switch` have no effect | Env var or rc-file export wins (`credential source: env`) | doctor "← env"; `env \| grep OPENVIKING_` | Remove the export |
 | Recall empty on a healthy server | Wrong key (401 reads as no results), wrong user space, peer scope, threshold | `/health` with key; `/api/v1/system/status` → `result.user` | Fix key; `OPENVIKING_PEER_ID`; lower `OPENVIKING_SCORE_THRESHOLD` |
