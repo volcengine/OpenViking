@@ -4105,6 +4105,30 @@ class Session:
         if match:
             return match.group(1).strip()
 
+        # mengxy-patch: OKF Working Memory documents always open with the
+        # "# Working Memory" heading, so first-line fallback returns a heading,
+        # not an abstract (upstream issue #3136). Prefer the "## Session Title"
+        # section value, then the first real paragraph line. Skip template
+        # prompt echoes (wholly italic lines) some VLMs re-emit verbatim.
+        def _is_heading_or_noise(line: str) -> bool:
+            s = line.strip()
+            if not s or len(s) <= 3 or s.startswith("#") or s.startswith("---"):
+                return True
+            return bool(re.fullmatch(r"_.*_", s, re.DOTALL))
+
+        title_section = re.search(
+            r"^##[ \t]*Session Title[ \t]*\n(.*?)(?=^##[ \t]|\Z)",
+            summary,
+            re.MULTILINE | re.DOTALL,
+        )
+        if title_section:
+            for line in title_section.group(1).split("\n"):
+                if not _is_heading_or_noise(line):
+                    return line.strip()
+
+        for line in summary.split("\n"):
+            if not _is_heading_or_noise(line):
+                return line.strip()
         first_line = summary.split("\n")[0].strip()
         return first_line if first_line else ""
 
