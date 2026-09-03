@@ -737,6 +737,7 @@ class EmbeddingConfig(BaseModel):
             VolcengineSparseEmbedder,
             VoyageDenseEmbedder,
         )
+        from openviking_cli.utils.ollama import normalize_ollama_openai_base
 
         if provider == "litellm" and LiteLLMDenseEmbedder is None:
             raise ValueError("LiteLLM is not installed. Install it with: pip install litellm")
@@ -895,14 +896,16 @@ class EmbeddingConfig(BaseModel):
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                 },
             ),
-            # Ollama: local OpenAI-compatible embedding server, no real API key needed
+            # Ollama: local OpenAI-compatible embedding server, no real API key needed.
+            # normalize_ollama_openai_base() adds the /v1 prefix Ollama needs when
+            # api_base is a bare host, which is how the configuration guide shows it.
             ("ollama", "dense"): (
                 OpenAIDenseEmbedder,
                 lambda cfg: {
                     "model_name": cfg.model,
                     "api_key": cfg.api_key
                     or "no-key",  # Ollama ignores the key, but client requires non-empty
-                    "api_base": cfg.api_base or "http://localhost:11434/v1",
+                    "api_base": normalize_ollama_openai_base(cfg.api_base),
                     "dimension": cfg.dimension,
                     "configured_provider": "ollama",
                     "config": dict(runtime_config),
