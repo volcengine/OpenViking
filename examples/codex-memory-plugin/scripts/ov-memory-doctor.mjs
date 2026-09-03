@@ -17,7 +17,7 @@
  * Exit code 1 when any check fails, 0 otherwise. Never prints a full api key.
  */
 
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -138,28 +138,68 @@ function checkEnvironment(report) {
   return { codexOnPath: codex.ok };
 }
 
-export function assessHooksFeature(features) {
+export function parseFeaturesList(stdout) {
+  const map = new Map();
+  if (typeof stdout !== "string") return map;
+  for (const line of stdout.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const parts = trimmed.split(/\s+/);
+    if (parts.length >= 3) {
+      const key = parts[0];
+      const stateStr = parts[parts.length - 1].toLowerCase();
+      const stage = parts.slice(1, -1).join(" ");
+      map.set(key, {
+        stage,
+        enabled: stateStr === "true",
+      });
+    }
+  }
+  return map;
+}
+
+export function assessHooksFeature(features, cliFeatures = null) {
   const hooks = features?.hooks;
   const pluginHooks = features?.plugin_hooks;
+
   if (hooks === true) {
-    return { ok: true, message: "[features] hooks = true" };
+    return { status: "ok", message: "[features] hooks = true" };
   }
   if (pluginHooks === true) {
-    return { ok: true, message: "[features] plugin_hooks = true (legacy; modern Codex uses hooks = true)" };
+    return { status: "ok", message: "[features] plugin_hooks = true (legacy; modern Codex uses hooks = true)" };
   }
   if (hooks === false || pluginHooks === false) {
     return {
-      ok: false,
+      status: "fail",
       message: `hooks disabled in [features] (hooks=${hooks ?? "unset"}, plugin_hooks=${pluginHooks ?? "unset"})`,
       detail: "no plugin hook fires when hooks feature is disabled",
-      fix: `set hooks = true under [features] in ~/.codex/config.toml`,
+      fix: "set hooks = true under [features] in ~/.codex/config.toml",
     };
   }
+
+  if (cliFeatures instanceof Map) {
+    const liveHooks = cliFeatures.get("hooks");
+    if (liveHooks?.enabled === true) {
+      return {
+        status: "ok",
+        message: `[features] hooks enabled by default (Codex stage: ${liveHooks.stage || "stable"})`,
+      };
+    }
+    if (liveHooks?.enabled === false) {
+      return {
+        status: "fail",
+        message: "hooks feature is disabled in Codex",
+        detail: "Codex reports hooks feature effective state is false",
+        fix: "set hooks = true under [features] in ~/.codex/config.toml",
+      };
+    }
+  }
+
   return {
-    ok: false,
-    message: "[features] hooks is not set",
-    detail: "no plugin hook fires at all unless hooks feature is enabled",
-    fix: `add hooks = true under [features] in ~/.codex/config.toml (or plugin_hooks = true for older Codex)`,
+    status: "info",
+    message: "[features] hooks is not set (modern Codex enables hooks by default; older Codex needs plugin_hooks = true)",
+    detail: "if hooks do not fire, verify with `codex features list` or add hooks = true",
+    fix: "add hooks = true under [features] in ~/.codex/config.toml (or plugin_hooks = true for older Codex)",
   };
 }
 
@@ -231,14 +271,24 @@ function checkInstall(report, { codexOnPath }) {
   if (!toml) {
     report.warn(`${homeShort(CODEX_CONFIG)} not found`, "Codex has never been configured on this machine");
   } else {
-    const hooksAssessment = assessHooksFeature(toml.features);
-    if (hooksAssessment.ok) {
+    let cliFeatures = null;
+    if (codexOnPath) {
+      const featRes = runCommand("codex", ["features", "list"], { timeoutMs: 5000 });
+      if (featRes.ok) cliFeatures = parseFeaturesList(featRes.stdout);
+    }
+
+    const hooksAssessment = assessHooksFeature(toml.features, cliFeatures);
+    if (hooksAssessment.status === "ok") {
       report.ok(hooksAssessment.message);
+    } else if (hooksAssessment.status === "warn") {
+      report.warn(hooksAssessment.message, hooksAssessment.detail, hooksAssessment.fix?.replace("~/.codex/config.toml", homeShort(CODEX_CONFIG)));
+    } else if (hooksAssessment.status === "info") {
+      report.info(hooksAssessment.message);
     } else {
       report.fail(
         hooksAssessment.message,
         hooksAssessment.detail,
-        hooksAssessment.fix.replace("~/.codex/config.toml", homeShort(CODEX_CONFIG)),
+        hooksAssessment.fix?.replace("~/.codex/config.toml", homeShort(CODEX_CONFIG)),
       );
     }
     const pluginSection = toml[`plugins."${PLUGIN_ID}"`];
@@ -487,7 +537,16 @@ async function main() {
   process.exitCode = report.exitCode();
 }
 
-if (process.argv[1] && resolvePath(process.argv[1]) === fileURLToPath(import.meta.url)) {
+function isDirectRun() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return resolvePath(process.argv[1]) === fileURLToPath(import.meta.url);
+  }
+}
+
+if (isDirectRun()) {
   main().catch((err) => {
     console.error("ov-memory-doctor failed:", err?.stack || err?.message || err);
     process.exit(2);
