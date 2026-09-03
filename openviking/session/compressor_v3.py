@@ -499,12 +499,14 @@ class SessionCompressorV3:
                         else "memory_types_filtered"
                     ),
                 }
-            # Evolution training only reaches skill extraction when cases exist.
-            # `skill_uris` missing means that path never ran; an empty list means it ran.
+            # Empty-cases training returns before skill extraction. Compensate
+            # only then; a swallowed training error keeps case_count > 0 and
+            # must not re-submit skills that may already be on disk.
             if (
                 agent_evolution_enabled
                 and session_skills_enabled
                 and allow_self_memory
+                and train_result.get("case_count") == 0
                 and "skill_uris" not in train_result
             ):
                 skill_result = await self.extract_session_skills(

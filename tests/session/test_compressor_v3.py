@@ -396,6 +396,56 @@ async def test_v3_does_not_reextract_session_skills_when_training_already_did(
 
 
 @pytest.mark.asyncio
+async def test_v3_does_not_reextract_session_skills_when_training_swallowed_an_error(
+    monkeypatch,
+):
+    # train_from_extracted_cases swallows mid-loop failures and returns
+    # case_count > 0 without skill_uris. Skills may already be on disk.
+    config = SimpleNamespace(
+        memory=SimpleNamespace(session_skill_extraction_enabled=True),
+    )
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.get_openviking_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.get_viking_fs",
+        lambda: SimpleNamespace(),
+    )
+    compressor = SessionCompressorV3(
+        vikingdb=None,
+        skill_processor=SimpleNamespace(),
+    )
+    compressor._extract_user_memories = AsyncMock(
+        return_value=SimpleNamespace(
+            contexts=[],
+            cases=[_training_case()],
+            memory_diff={"operations": {}},
+            case_uri_by_name={},
+        )
+    )
+    compressor.train_from_extracted_cases = AsyncMock(
+        return_value={
+            "case_count": 1,
+            "submitted": 0,
+            "error": "Commit streaming train failed",
+        }
+    )
+    compressor.extract_session_skills = AsyncMock()
+    compressor._write_final_memory_diff = AsyncMock()
+
+    result = await compressor.extract_long_term_memories(
+        messages=_messages(),
+        ctx=_ctx(),
+        agent_evolution_enabled=True,
+    )
+
+    compressor.train_from_extracted_cases.assert_awaited_once()
+    compressor.extract_session_skills.assert_not_awaited()
+    assert result == []
+
+
+@pytest.mark.asyncio
 async def test_v3_skill_only_extraction_submits_gradients_without_agent_memories(monkeypatch):
     from openviking.session.train import PatchSemanticGradient
 
