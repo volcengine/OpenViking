@@ -2271,13 +2271,26 @@ class Session:
             if not _is_storage_not_found(exc):
                 raise
         else:
-            await tracker.fail(
-                msg.task_id,
-                str(failed.get("error") or "session commit failed"),
-                account_id=self.ctx.account_id,
-                user_id=self.ctx.user.user_id,
+            failed_stage = str(failed.get("stage") or "")
+            if failed_stage != "memory_extraction":
+                await tracker.fail(
+                    msg.task_id,
+                    str(failed.get("error") or "session commit failed"),
+                    account_id=self.ctx.account_id,
+                    user_id=self.ctx.user.user_id,
+                )
+                return True
+
+            # Phase 1 and messages.jsonl are still durable when only the
+            # model-backed Phase 2 failed. Keep the failure marker for
+            # observability, but remove it before phase-1 reconciliation so a
+            # later queue replay can retry the recoverable extraction.
+            logger.info(
+                "Retrying recoverable Phase 2 failure for session %s: %s",
+                self.session_id,
+                failed.get("error") or "unknown error",
             )
-            return True
+            await self._viking_fs.rm(f"{msg.archive_uri}/.failed.json", ctx=self.ctx)
 
         if not await self._ensure_phase1_ready(msg.archive_uri):
             try:
@@ -2354,7 +2367,7 @@ class Session:
         if user_config_error is not None:
             user_config_error = str(user_config_error)
 
-        await self._run_memory_extraction(
+        return await self._run_memory_extraction(
             task_id=msg.task_id,
             archive_uri=msg.archive_uri,
             messages=archive_messages,
@@ -2407,7 +2420,7 @@ class Session:
         user_config_error: Optional[str] = None,
         record_auto_commit_success: bool = False,
         event_search_tags: Optional[List[str]] = None,
-    ) -> None:
+    ) -> bool:
         """Phase 2: Extract memories and enqueue semantic work in the background."""
         from openviking.service.task_tracker import get_task_tracker
         from openviking.telemetry import OperationTelemetry, bind_telemetry
@@ -2865,6 +2878,7 @@ class Session:
                 user_id=self.ctx.user.user_id,
             )
             logger.info(f"Session {self.session_id} memory extraction completed")
+            return True
         except asyncio.CancelledError:
             telemetry.set_error("session.commit.phase2", "CANCELLED", "session commit cancelled")
             snapshot = telemetry.finish("cancelled")
@@ -2891,6 +2905,15 @@ class Session:
                 task_id, str(e), account_id=self.ctx.account_id, user_id=self.ctx.user.user_id
             )
             logger.exception(f"Memory extraction failed for session {self.session_id}")
+            return False
+
+    async def finalize_failed_commit(self, archive_uri: str, *, error: str) -> None:
+        """Make an exhausted queued commit terminal after bounded retries."""
+        await self._write_failed_marker(
+            archive_uri,
+            stage="memory_extraction",
+            error=error,
+        )
 
     async def _write_done_file(
         self,
