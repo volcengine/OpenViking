@@ -540,17 +540,27 @@ class TestAddResourceArgs:
         assert "auth_state" not in task.to_dict()
 
     @pytest.mark.asyncio
-    async def test_paused_native_feishu_watch_is_created_before_queue_processing(
+    @pytest.mark.parametrize(
+        ("target", "is_active"),
+        [
+            ({"to": "viking://resources/feishu"}, False),
+            ({"parent": "viking://resources"}, False),
+            ({"to": "viking://resources/feishu"}, True),
+        ],
+    )
+    async def test_native_feishu_watch_is_created_during_queue_processing(
         self,
         monkeypatch: pytest.MonkeyPatch,
         resource_service: ResourceService,
         request_context: RequestContext,
+        target,
+        is_active,
     ):
-        to_uri = "viking://resources/paused_feishu"
+        to_uri = "viking://resources/feishu"
         resource_service._plan_source_job_target = AsyncMock(return_value=(to_uri, None, False))
 
         async def preflight(_self, _source, *, feishu_access_token=None):
-            return SimpleNamespace(source_name="Paused Feishu", source_format="file")
+            return SimpleNamespace(source_name="Feishu", source_format="file")
 
         monkeypatch.setattr(
             "openviking.parse.accessors.feishu_accessor.FeishuAccessor.preflight_source",
@@ -560,22 +570,19 @@ class TestAddResourceArgs:
         result = await resource_service.add_resource(
             path="https://example.feishu.cn/docx/doc_token",
             ctx=request_context,
-            to=to_uri,
             watch_interval=30,
-            is_active=False,
+            is_active=is_active,
+            **target,
         )
 
-        task = await get_task_by_uri(resource_service, to_uri, request_context)
-        assert task is not None
-        assert task.is_active is False
-        assert task.next_execution_time is None
-        assert task.last_status is None
+        assert await get_task_by_uri(resource_service, to_uri, request_context) is None
         assert result["task_id"] == "test-task"
 
         message = resource_service._enqueue_add_resource_job.await_args.args[0]
-        assert message.watch_task_id == task.task_id
-        assert message.skip_watch_management is True
-        assert AddResourceMsg.from_dict(message.to_dict()).watch_task_id == task.task_id
+        assert message.is_active is is_active
+        assert message.watch_task_id is None
+        assert message.skip_watch_management is False
+        assert AddResourceMsg.from_dict(message.to_dict()).is_active is is_active
 
         await resource_service.execute_add_resource_job(
             message,
@@ -584,63 +591,14 @@ class TestAddResourceArgs:
             stage_callback=AsyncMock(),
         )
 
-        updated = await get_task_by_uri(resource_service, to_uri, request_context)
-        assert updated is not None
-        assert updated.task_id == task.task_id
-        assert updated.is_active is False
-        assert len(resource_service._resource_processor.calls) == 1
-
-    @pytest.mark.asyncio
-    async def test_active_native_feishu_watch_is_created_before_queue_processing(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        resource_service: ResourceService,
-        request_context: RequestContext,
-    ):
-        to_uri = "viking://resources/active_feishu"
-        resource_service._plan_source_job_target = AsyncMock(return_value=(to_uri, None, False))
-
-        async def preflight(_self, _source, *, feishu_access_token=None):
-            return SimpleNamespace(source_name="Active Feishu", source_format="file")
-
-        monkeypatch.setattr(
-            "openviking.parse.accessors.feishu_accessor.FeishuAccessor.preflight_source",
-            preflight,
-        )
-
-        result = await resource_service.add_resource(
-            path="https://example.feishu.cn/docx/doc_token",
-            ctx=request_context,
-            to=to_uri,
-            watch_interval=30,
-        )
-
         task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is not None
-        assert task.is_active is True
-        assert task.next_execution_time is not None
-        assert task.last_status is None
-        assert result["task_id"] == "test-task"
-
-        message = resource_service._enqueue_add_resource_job.await_args.args[0]
-        assert message.watch_task_id == task.task_id
-        assert message.skip_watch_management is True
-
-        await resource_service.execute_add_resource_job(
-            message,
-            ctx=request_context,
-            resource_lock=None,
-            stage_callback=AsyncMock(),
-        )
-
-        updated = await get_task_by_uri(resource_service, to_uri, request_context)
-        assert updated is not None
-        assert updated.task_id == task.task_id
-        assert updated.is_active is True
+        assert task.is_active is (is_active is not False)
+        assert (task.next_execution_time is not None) is (is_active is not False)
         assert len(resource_service._resource_processor.calls) == 1
 
     @pytest.mark.asyncio
-    async def test_paused_native_feishu_watch_keeps_preflight_failure(
+    async def test_native_feishu_preflight_failure_does_not_create_watch(
         self,
         monkeypatch: pytest.MonkeyPatch,
         resource_service: ResourceService,
@@ -665,11 +623,22 @@ class TestAddResourceArgs:
                 is_active=False,
             )
 
-        task = await get_task_by_uri(resource_service, to_uri, request_context)
-        assert task is not None
-        assert task.is_active is False
-        assert task.last_status == "failed"
-        assert task.last_error == "preflight unavailable"
+        assert await get_task_by_uri(resource_service, to_uri, request_context) is None
+
+    @pytest.mark.asyncio
+    async def test_paused_watch_with_parent_rejects_non_feishu_source(
+        self,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+    ):
+        with pytest.raises(InvalidArgumentError, match="only supported"):
+            await resource_service.add_resource(
+                path="/test/path",
+                ctx=request_context,
+                parent="viking://resources",
+                watch_interval=30,
+                is_active=False,
+            )
 
     @pytest.mark.asyncio
     async def test_feishu_user_token_watch_rejects_partial_app_credentials(

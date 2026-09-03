@@ -364,6 +364,7 @@ class ResourceService:
         ctx: RequestContext,
         source_type: Optional[str] = None,
         connector_states: Optional[Dict[str, Any]] = None,
+        is_active: Optional[bool] = None,
     ) -> None:
         if not watch_manager or not manage_watch:
             return
@@ -408,6 +409,7 @@ class ResourceService:
                         connector_states=connector_states,
                         source_type=source_type or self._infer_watch_source_type(path),
                         ctx=ctx,
+                        is_active=is_active is not False,
                     )
                 except ConflictError:
                     raise
@@ -722,6 +724,7 @@ class ResourceService:
                 processing_mode=msg.processing_mode,
                 parse_mode=msg.parse_mode,
                 watch_interval=msg.watch_interval,
+                is_active=msg.is_active,
                 manage_watch=not msg.skip_watch_management,
                 tags=msg.tags,
                 tag_mode=msg.tag_mode,
@@ -1005,7 +1008,7 @@ class ResourceService:
         enforce_public_remote_targets: bool,
         processor_kwargs: Dict[str, Any],
         internal_task: bool,
-        watch_task_id: Optional[str] = None,
+        is_active: Optional[bool] = None,
     ) -> Dict[str, Any]:
         from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 
@@ -1061,7 +1064,7 @@ class ResourceService:
                 processing_mode=processing_mode,
                 parse_mode=mode.value,
                 watch_interval=watch_interval,
-                watch_task_id=watch_task_id,
+                is_active=is_active,
                 skip_watch_management=not manage_watch,
                 tags=tags,
                 tag_mode=tag_mode,
@@ -1381,11 +1384,11 @@ class ResourceService:
                 Note: Re-adding the same source to the same target updates its active watch
                 task in place. A different source targeting an active watch raises
                 ConflictError; cancel that watch first with watch_interval <= 0. Connector
-                and native Feishu imports create the Watch before the import runs, so the
-                conflict is reported at submission and the Watch is visible at once; the
-                scheduler holds it until the first round records its result.
+                imports create the Watch before the import runs, so the conflict is reported
+                at submission and the Watch is visible at once; the scheduler holds it until
+                the first round records its result.
             is_active: When false, the Connector or native Feishu Watch is created paused.
-                Requires watch_interval > 0 and an explicit to target.
+                Requires watch_interval > 0 and an explicit to or parent target.
             enforce_public_remote_targets: When True, reject non-public remote hosts and
                 validate each outbound HTTP request URL during fetch.
             args: Parser/accessor-specific options forwarded to the processing chain.
@@ -1399,9 +1402,10 @@ class ResourceService:
             InvalidArgumentError: If the URI scope is not 'resources'
         """
         self._ensure_initialized()
-        if is_active is False and (watch_interval <= 0 or not (to or "").strip()):
+        has_target = bool((to or "").strip() or (parent or "").strip())
+        if is_active is False and (watch_interval <= 0 or not has_target):
             raise InvalidArgumentError(
-                "is_active=false requires watch_interval > 0 and an explicit 'to'."
+                "is_active=false requires watch_interval > 0 and either 'to' or 'parent'."
             )
         processing_mode = normalize_processing_mode(processing_mode)
         self._validate_add_resource_tag_policy(tags=tags, tag_mode=tag_mode)
@@ -1627,131 +1631,73 @@ class ResourceService:
 
         from openviking.parse.accessors.feishu_accessor import FeishuAccessor
 
-        feishu_watch = None
-        watch_manager = self._get_watch_manager()
         if is_active is False and not FeishuAccessor._is_feishu_url(path):
             raise InvalidArgumentError(
                 "is_active=false is only supported for Connector or native Feishu imports."
             )
-        if (
-            watch_manager is not None
-            and manage_watch
-            and watch_interval > 0
-            and target_to
-            and FeishuAccessor._is_feishu_url(path)
-        ):
-            # Native Feishu Watches are created before the source job runs so they
-            # are visible at once; the queue processor records the first round and
-            # releases the scheduler hold through record_watch_execution.
-            feishu_watch = await self._handle_watch_task_creation(
-                path=path,
-                to_uri=target_to,
-                to_is_directory=to_is_directory,
-                parent_uri=target_parent,
+        if enforce_public_remote_targets and is_remote_resource_source(path):
+            path = require_remote_resource_source(path)
+            kwargs.setdefault("request_validator", ensure_public_remote_target)
+
+        source_plan = await self._prepare_standard_source_plan(
+            path=path,
+            ctx=ctx,
+            mode=mode,
+            allow_local_path_resolution=allow_local_path_resolution,
+            processor_kwargs=kwargs,
+            watch_auth_state=normalized_args.watch_auth_state,
+        )
+        if source_plan is not None:
+            result = await self._enqueue_source_plan(
+                source_plan,
+                ctx=ctx,
+                to=target_to,
+                parent=target_parent,
+                create_parent=target_create_parent,
                 reason=reason,
                 instruction=instruction,
-                watch_interval=watch_interval,
+                timeout=timeout,
                 build_index=build_index,
                 summarize=summarize,
                 processing_mode=processing_mode,
-                processor_kwargs=self._sanitize_watch_processor_kwargs(
-                    self._watch_processor_kwargs(kwargs, tags, tag_mode)
-                ),
-                auth_state=normalized_args.watch_auth_state,
-                connector_states=None,
-                source_type="feishu",
-                ctx=ctx,
-                is_active=is_active is not False,
+                mode=mode,
+                watch_interval=watch_interval,
+                manage_watch=manage_watch,
+                tags=tags,
+                tag_mode=tag_mode,
+                to_is_directory=to_is_directory,
+                allow_local_path_resolution=allow_local_path_resolution,
+                enforce_public_remote_targets=enforce_public_remote_targets,
+                processor_kwargs=kwargs,
+                internal_task=internal_task,
+                is_active=is_active,
             )
-            if feishu_watch is None:
-                raise InternalError("Failed to create native Feishu watch task.")
-            await self._hold_watch_execution(feishu_watch.task_id)
-            logger.info(
-                "[ResourceService] Native Feishu watch ready before import: watch_task_id=%s "
-                "to=%s is_active=%s",
-                feishu_watch.task_id,
-                target_to,
-                feishu_watch.is_active,
-            )
-
-        try:
-            if enforce_public_remote_targets and is_remote_resource_source(path):
-                path = require_remote_resource_source(path)
-                kwargs.setdefault("request_validator", ensure_public_remote_target)
-
-            source_plan = await self._prepare_standard_source_plan(
+        else:
+            result = await self._execute_resource_ingestion(
                 path=path,
                 ctx=ctx,
-                mode=mode,
+                to=target_to,
+                to_is_directory=to_is_directory,
+                parent=target_parent,
+                reason=reason,
+                instruction=instruction,
+                defer_post_processing=True,
+                timeout=timeout,
+                build_index=build_index,
+                summarize=summarize,
+                processing_mode=processing_mode,
+                parse_mode=mode,
+                watch_interval=watch_interval,
+                is_active=is_active,
+                manage_watch=manage_watch,
+                tags=tags,
+                tag_mode=tag_mode,
                 allow_local_path_resolution=allow_local_path_resolution,
-                processor_kwargs=kwargs,
+                enforce_public_remote_targets=enforce_public_remote_targets,
                 watch_auth_state=normalized_args.watch_auth_state,
+                internal_task=internal_task,
+                **kwargs,
             )
-            if source_plan is not None:
-                result = await self._enqueue_source_plan(
-                    source_plan,
-                    ctx=ctx,
-                    to=target_to,
-                    parent=target_parent,
-                    create_parent=target_create_parent,
-                    reason=reason,
-                    instruction=instruction,
-                    timeout=timeout,
-                    build_index=build_index,
-                    summarize=summarize,
-                    processing_mode=processing_mode,
-                    mode=mode,
-                    watch_interval=watch_interval,
-                    manage_watch=manage_watch and feishu_watch is None,
-                    tags=tags,
-                    tag_mode=tag_mode,
-                    to_is_directory=to_is_directory,
-                    allow_local_path_resolution=allow_local_path_resolution,
-                    enforce_public_remote_targets=enforce_public_remote_targets,
-                    processor_kwargs=kwargs,
-                    internal_task=internal_task,
-                    watch_task_id=feishu_watch.task_id if feishu_watch is not None else None,
-                )
-            else:
-                if feishu_watch is not None:
-                    raise InternalError("Native Feishu import did not produce a durable source job.")
-                result = await self._execute_resource_ingestion(
-                    path=path,
-                    ctx=ctx,
-                    to=target_to,
-                    to_is_directory=to_is_directory,
-                    parent=target_parent,
-                    reason=reason,
-                    instruction=instruction,
-                    defer_post_processing=True,
-                    timeout=timeout,
-                    build_index=build_index,
-                    summarize=summarize,
-                    processing_mode=processing_mode,
-                    parse_mode=mode,
-                    watch_interval=watch_interval,
-                    manage_watch=manage_watch,
-                    tags=tags,
-                    tag_mode=tag_mode,
-                    allow_local_path_resolution=allow_local_path_resolution,
-                    enforce_public_remote_targets=enforce_public_remote_targets,
-                    watch_auth_state=normalized_args.watch_auth_state,
-                    internal_task=internal_task,
-                    **kwargs,
-                )
-        except Exception as exc:
-            if feishu_watch is not None:
-                try:
-                    await self.record_watch_execution(
-                        feishu_watch.task_id,
-                        status="failed",
-                        error=str(exc) or type(exc).__name__,
-                    )
-                except Exception:
-                    logger.exception(
-                        "[ResourceService] Failed to record native Feishu Watch result"
-                    )
-            raise
         get_current_telemetry().set("resource.flags.wait", wait)
         if not wait:
             return result
@@ -1797,6 +1743,7 @@ class ResourceService:
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
         parse_mode: ParseMode | str = ParseMode.DEFAULT,
         watch_interval: float = 0,
+        is_active: Optional[bool] = None,
         manage_watch: bool = True,
         tags: Optional[List[str]] = None,
         tag_mode: str = "replace",
@@ -1881,6 +1828,7 @@ class ResourceService:
                 watch_manager=watch_manager,
                 manage_watch=manage_watch,
                 watch_interval=watch_interval,
+                is_active=is_active,
                 to=target_to,
                 parent=target_parent,
                 to_is_directory=watch_to_is_directory,

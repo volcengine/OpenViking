@@ -44,12 +44,19 @@ def test_add_resource_request_accepts_declared_add_type():
     assert request.to == "viking://resources/feishu"
 
 
-def test_add_resource_request_accepts_paused_connector_watch():
+@pytest.mark.parametrize(
+    "target",
+    [
+        {"to": "viking://resources/docs"},
+        {"parent": "viking://resources"},
+    ],
+)
+def test_add_resource_request_accepts_paused_watch_with_target(target):
     request = AddResourceRequest(
-        path="tos://bucket/docs/",
-        to="viking://resources/docs",
+        path="https://example.feishu.cn/docx/doc_token",
         watch_interval=30,
         is_active=False,
+        **target,
     )
 
     assert request.is_active is False

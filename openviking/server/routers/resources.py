@@ -76,12 +76,12 @@ class AddResourceRequest(BaseModel):
 
             Note: Re-adding the same source to the same target updates its active watch task.
             A different source targeting an active watch raises ConflictError; cancel that
-            watch first with watch_interval <= 0. Connector and native Feishu imports create
-            the Watch before the import runs, so it is visible immediately and the conflict
-            is reported at submission; the scheduler does not run it until the first round
-            has recorded its result.
+            watch first with watch_interval <= 0. Connector imports create the Watch before
+            the import runs, so it is visible immediately and the conflict is reported at
+            submission; the scheduler does not run it until the first round has recorded
+            its result.
         is_active: Initial Watch state for Connector and native Feishu imports. When false,
-            requires watch_interval > 0 and an explicit to target and creates the Watch
+            requires watch_interval > 0 and an explicit to or parent target and creates the Watch
             paused; it stays paused until updated, regardless of the import result.
     """
 
@@ -135,8 +135,11 @@ class AddResourceRequest(BaseModel):
 
     @model_validator(mode="after")
     def check_paused_watch(self):
-        if self.is_active is False and (self.watch_interval <= 0 or not self.to):
-            raise ValueError("is_active=false requires watch_interval > 0 and an explicit 'to'")
+        has_target = bool((self.to or "").strip() or (self.parent or "").strip())
+        if self.is_active is False and (self.watch_interval <= 0 or not has_target):
+            raise ValueError(
+                "is_active=false requires watch_interval > 0 and either 'to' or 'parent'"
+            )
         return self
 
 
