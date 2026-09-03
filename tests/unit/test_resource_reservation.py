@@ -93,3 +93,57 @@ async def test_reservation_returns_first_available_lock(monkeypatch):
 
     assert uri == "viking://resources/report_1"
     assert acquired is lease
+
+
+@pytest.mark.asyncio
+async def test_acquire_lock_forwards_wait_timeout_to_backend(monkeypatch):
+    """Ingest into a busy directory must wait for the tree lock (#4337)."""
+    from types import SimpleNamespace
+
+    viking_fs = _FakeVikingFS()
+    viking_fs._async_agfs = SimpleNamespace(
+        pathlock_acquire_tree=AsyncMock(return_value={"lease_ref": "tree"}),
+        pathlock_acquire_exact=AsyncMock(return_value={"lease_ref": "exact"}),
+    )
+    monkeypatch.setattr(resource_processor_module, "get_viking_fs", lambda: viking_fs)
+
+    await ResourceProcessor.acquire_resource_lock(
+        "/agfs/resources/docs", uri="viking://resources/docs", timeout=60.0
+    )
+    viking_fs._async_agfs.pathlock_acquire_tree.assert_awaited_once_with(
+        "/agfs/resources/docs", timeout_secs=60.0
+    )
+    viking_fs._async_agfs.pathlock_acquire_exact.assert_not_awaited()
+
+    await ResourceProcessor.acquire_resource_lock(
+        "/agfs/resources/docs/file.md",
+        uri="viking://resources/docs/file.md",
+        timeout=60.0,
+        root_is_file=True,
+    )
+    viking_fs._async_agfs.pathlock_acquire_exact.assert_awaited_once_with(
+        "/agfs/resources/docs/file.md", timeout_secs=60.0
+    )
+
+
+@pytest.mark.asyncio
+async def test_acquire_lock_still_maps_busy_after_wait(monkeypatch):
+    """A lock that stays busy past the wait maps to a retryable busy error."""
+    from types import SimpleNamespace
+
+    from openviking.storage.errors import LockAcquisitionError
+
+    viking_fs = _FakeVikingFS()
+    viking_fs._async_agfs = SimpleNamespace(
+        pathlock_acquire_tree=AsyncMock(
+            side_effect=LockAcquisitionError("lock acquire timed out after 60000ms")
+        ),
+    )
+    monkeypatch.setattr(resource_processor_module, "get_viking_fs", lambda: viking_fs)
+
+    with pytest.raises(ResourceBusyError) as exc_info:
+        await ResourceProcessor.acquire_resource_lock(
+            "/agfs/resources/docs", uri="viking://resources/docs", timeout=60.0
+        )
+    assert exc_info.value.retryable is True
+    assert exc_info.value.conflict_type == "path_busy"

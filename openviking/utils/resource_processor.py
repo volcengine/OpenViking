@@ -48,6 +48,10 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 _MAX_FILE_VECTORIZATION_CONCURRENCY = 64
 VECTORDB_MAX_QUERY_LIMIT = 100_000
+# Ingesting into a busy directory (e.g. a sibling upload still holding the
+# tree lock through its extraction) waits for the lock instead of failing
+# with CONFLICT immediately (#4337). 0 restores the old zero-wait behavior.
+RESOURCE_LOCK_ACQUIRE_WAIT_SECS = 60.0
 
 
 class ResourceProcessor:
@@ -463,6 +467,7 @@ class ResourceProcessor:
                                 dst_path,
                                 uri=root_uri,
                                 root_is_file=root_is_file,
+                                timeout=RESOURCE_LOCK_ACQUIRE_WAIT_SECS,
                             )
                     if not target_preexisting:
                         await viking_fs.persist_temp_tree(
