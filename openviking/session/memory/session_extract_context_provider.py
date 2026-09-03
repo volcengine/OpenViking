@@ -122,9 +122,52 @@ class SessionExtractContextProvider(ExtractContextProvider):
                 get_vlm=self._get_vision_vlm,
                 logger=logger,
             )
+            self.messages = self._apply_session_extract_budget(self.messages)
             self._extract_context = None
             self._output_language = self._detect_language()
         self._vision_messages_prepared = True
+
+    def _apply_session_extract_budget(self, messages: Any) -> Any:
+        """Clamp the trajectory to ``semantic.max_session_extract_prompt_chars``.
+
+        The session compression / memory-extraction path historically sent the
+        accumulated trajectory however large it was; a single oversized request
+        could saturate the serving backend and, on single-step-prefill engines,
+        OOM it (#3226). Oldest messages are dropped first — the memory-relevant
+        tail is kept — and a lone over-budget message is preserved so extraction
+        never runs on an empty trajectory.
+        """
+        if not isinstance(messages, list) or len(messages) <= 1:
+            return messages
+        budget = get_openviking_config().semantic.max_session_extract_prompt_chars
+        if budget <= 0:
+            return messages
+
+        def _size(message: Any) -> int:
+            total = 0
+            for part in getattr(message, "parts", []) or []:
+                text = getattr(part, "text", None)
+                if isinstance(text, str):
+                    total += len(text)
+            return total
+
+        sizes = [_size(m) for m in messages]
+        total = sum(sizes)
+        drop = 0
+        while total > budget and len(messages) - drop > 1:
+            total -= sizes[drop]
+            drop += 1
+        if drop:
+            logger.warning(
+                "session extraction trajectory %d chars exceeds budget %d; "
+                "dropping %d oldest of %d messages",
+                sum(sizes),
+                budget,
+                drop,
+                len(messages),
+            )
+            return messages[drop:]
+        return messages
 
     def _get_vision_vlm(self):
         if self._vision_vlm is not None:
