@@ -343,7 +343,8 @@ async function buildFallbackInjectionBlock(fetchJSON, items, cfg, actorPeerId = 
   let budgetRemaining = Math.max(200, Number(cfg.recallTokenBudget || 2000));
   const lines = [
     "<openviking-context>",
-    "Relevant context from OpenViking. Use the read MCP tool to expand URIs.",
+    `✧ OV · recall ×${items.length}`,
+    "Match the glyph to HOW you got it: remembered without tools → ✧; used viking search → ⌕; used the read tool → ▤. Format: <glyph> <fact> — viking://uri. Cite only items you actually used; omit glyphs otherwise.",
   ];
   let contentCount = 0;
   let hintCount = 0;
@@ -423,9 +424,12 @@ function looksLikeUnknownField(res) {
 }
 
 function wrapContext(body) {
+  const n = (body.match(/<memory\b/g) || []).length
+    || (body.match(/\[[^\]]*%\]/g) || []).length;
   return [
     "<openviking-context>",
-    "Relevant memory from OpenViking. Use the search/read MCP tools to expand URIs.",
+    "✧ OV · recall ×" + n,
+    "When a recalled item is used in your reply, cite it inline with glyphs: ✧ recall · ⌕ search · ▤ read, e.g. ✧ name — viking://...(omit if none used).",
     body,
     "</openviking-context>",
   ].join("\n");
