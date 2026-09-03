@@ -258,6 +258,37 @@ export async function listPending() {
   return entries;
 }
 
+async function countPendingMessagesForSession(sessionId) {
+  const dir = getPendingDir();
+  let unresolved = 0;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let files;
+    try {
+      files = await readdir(dir);
+    } catch {
+      return unresolved;
+    }
+
+    let count = 0;
+    unresolved = 0;
+    for (const filename of files) {
+      if (!filename.endsWith(".json") && !filename.endsWith(".processing")) continue;
+      try {
+        const entry = await readEntry(dir, filename);
+        if (entry?.type === "addMessage" && entry.sessionId === sessionId) count++;
+      } catch (err) {
+        // Queue claims and retry writes rename files atomically. Re-scan after
+        // ENOENT so the inventory observes the new name. If names keep moving,
+        // conservatively keep the takeover barrier closed for this pass.
+        if (err?.code === "ENOENT") unresolved++;
+      }
+    }
+    if (unresolved === 0) return count;
+    if (attempt === 1) return count + unresolved;
+  }
+  return unresolved;
+}
+
 /**
  * Atomically claim a pending file for replay. Only the process that successfully
  * renames the file may send the HTTP replay.
@@ -341,6 +372,109 @@ export async function cleanStale() {
     }
   }
   return cleaned;
+}
+
+/**
+ * Replay queued addMessage entries for one session within a bounded pass.
+ * Each entry from the initial snapshot is considered at most once, so a
+ * retryable failure cannot consume multiple retries during one call.
+ *
+ * @param {Function} fetchJSON - the configured fetchJSON from makeFetchJSON
+ * @param {Function} log - logger function
+ * @param {string} sessionId - session whose addMessage entries should drain
+ * @param {object} options
+ * @param {number} options.maxItems - maximum snapshot entries examined
+ * @param {number} options.timeBudgetMs - maximum elapsed time before starting more work
+ * @returns {{ replayed: number, failed: number, skipped: number, deferred: number, remaining: number }}
+ */
+export async function drainPendingForSession(fetchJSON, log, sessionId, options = {}) {
+  if (typeof sessionId !== "string" || !sessionId) {
+    throw new TypeError("sessionId is required");
+  }
+
+  const pending = (await listPending()).filter(
+    ({ entry }) => entry?.type === "addMessage" && entry.sessionId === sessionId,
+  );
+  const configuredMaxItems = Number(options.maxItems);
+  const maxItems = options.maxItems === undefined
+    ? getReplayLimit()
+    : Math.max(0, Number.isFinite(configuredMaxItems) ? Math.floor(configuredMaxItems) : 0);
+  const configuredTimeBudget = Number(options.timeBudgetMs);
+  const timeBudgetMs = options.timeBudgetMs === undefined
+    ? Infinity
+    : Math.max(0, Number.isFinite(configuredTimeBudget) ? configuredTimeBudget : 0);
+  const startedAt = Date.now();
+
+  let replayed = 0;
+  let failed = 0;
+  let skipped = 0;
+  let deferred = 0;
+
+  log("pending-queue", {
+    action: "session-drain-start",
+    sessionId,
+    count: pending.length,
+    maxItems,
+    timeBudgetMs: Number.isFinite(timeBudgetMs) ? timeBudgetMs : undefined,
+  });
+
+  for (let index = 0; index < pending.length; index++) {
+    if (index >= maxItems || Date.now() - startedAt >= timeBudgetMs) {
+      deferred += pending.length - index;
+      break;
+    }
+
+    const { filename, entry } = pending[index];
+
+    if ((entry.retries || 0) >= getMaxRetries()) {
+      await dequeue(filename);
+      skipped++;
+      continue;
+    }
+
+    const claimedFilename = await claimForReplay(filename);
+    if (!claimedFilename) {
+      skipped++;
+      continue;
+    }
+
+    let res;
+    try {
+      const encodedSid = encodeURIComponent(entry.sessionId);
+      res = await fetchJSON(`/api/v1/sessions/${encodedSid}/messages`, {
+        method: "POST",
+        body: JSON.stringify(entry.payload),
+      });
+    } catch {
+      res = { ok: false };
+    }
+
+    if (res?.ok) {
+      await dequeue(claimedFilename);
+      replayed++;
+    } else if (!isRetryableReplayFailure(res)) {
+      await dequeue(claimedFilename);
+      skipped++;
+    } else {
+      await incrementRetry(claimedFilename, entry);
+      failed++;
+      deferred += pending.length - index - 1;
+      break;
+    }
+  }
+
+  const remaining = await countPendingMessagesForSession(sessionId);
+  log("pending-queue", {
+    action: "session-drain-done",
+    sessionId,
+    replayed,
+    failed,
+    skipped,
+    deferred,
+    remaining,
+  });
+
+  return { replayed, failed, skipped, deferred, remaining };
 }
 
 /**
