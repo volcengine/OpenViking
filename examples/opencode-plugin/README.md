@@ -164,7 +164,11 @@ with an explicit actor peer so one person's memories are not recalled into
 another person's session.
 
 `OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`,
-and `OPENVIKING_PEER_ID` take precedence over values in this file.
+and `OPENVIKING_PEER_ID` take precedence over values in this file. The config
+file's `peerId` still applies whenever shared credentials (ovcli.conf or
+environment variables) do not carry a peer of their own, so an authenticated
+setup keeps writing peer-scoped data instead of dropping into the shared user
+tree.
 
 For advanced setups, `OPENVIKING_PLUGIN_CONFIG` can point to another config file path.
 

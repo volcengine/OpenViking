@@ -267,3 +267,95 @@ test("loadConfig defaults an invalid commit keep recent count", async () => {
     }
   })
 })
+
+test("loadConfig falls back to config peerId when shared credentials define none (#4487)", async () => {
+  const snapshot = { ...process.env }
+  await withTempDir("ov-oc-peer-fallback-", async (dir) => {
+    try {
+      for (const key of Object.keys(process.env)) {
+        if (key.startsWith("OPENVIKING_")) delete process.env[key]
+      }
+      const ovcli = join(dir, "ovcli.conf")
+      const project = join(dir, "project")
+      await mkdir(join(project, ".opencode"), { recursive: true })
+      await writeFile(ovcli, JSON.stringify({
+        url: "https://cli.example.com",
+        api_key: "cli-key",
+        account: "cli-account",
+        user: "cli-user",
+      }))
+      await writeFile(join(project, ".opencode", "openviking-config.json"), JSON.stringify({
+        enabled: true,
+        peerId: "atomic-city",
+        workspacePeer: false,
+        recallPeerScope: "actor",
+      }))
+      process.env.OPENVIKING_CLI_CONFIG_FILE = ovcli
+
+      const cfg = loadConfig(dir, project)
+      assert.equal(cfg.peerId, "atomic-city")
+      assert.deepEqual(cfg.effectivePeer, { peerId: "atomic-city", source: "explicit" })
+      assert.equal(cfg.legacyCredentialsUsed, false)
+    } finally {
+      restoreOpenVikingEnv(snapshot)
+    }
+  })
+})
+
+test("loadConfig keeps ovcli actor_peer_id over config peerId", async () => {
+  const snapshot = { ...process.env }
+  await withTempDir("ov-oc-peer-cli-wins-", async (dir) => {
+    try {
+      for (const key of Object.keys(process.env)) {
+        if (key.startsWith("OPENVIKING_")) delete process.env[key]
+      }
+      const ovcli = join(dir, "ovcli.conf")
+      const project = join(dir, "project")
+      await mkdir(join(project, ".opencode"), { recursive: true })
+      await writeFile(ovcli, JSON.stringify({
+        url: "https://cli.example.com",
+        api_key: "cli-key",
+        actor_peer_id: "cli-peer",
+      }))
+      await writeFile(join(project, ".opencode", "openviking-config.json"), JSON.stringify({
+        peerId: "config-peer",
+      }))
+      process.env.OPENVIKING_CLI_CONFIG_FILE = ovcli
+
+      const cfg = loadConfig(dir, project)
+      assert.equal(cfg.peerId, "cli-peer")
+      assert.deepEqual(cfg.effectivePeer, { peerId: "cli-peer", source: "explicit" })
+    } finally {
+      restoreOpenVikingEnv(snapshot)
+    }
+  })
+})
+
+test("loadConfig keeps env peer over config peerId when ovcli has none", async () => {
+  const snapshot = { ...process.env }
+  await withTempDir("ov-oc-peer-env-wins-", async (dir) => {
+    try {
+      for (const key of Object.keys(process.env)) {
+        if (key.startsWith("OPENVIKING_")) delete process.env[key]
+      }
+      const ovcli = join(dir, "ovcli.conf")
+      const project = join(dir, "project")
+      await mkdir(join(project, ".opencode"), { recursive: true })
+      await writeFile(ovcli, JSON.stringify({
+        url: "https://cli.example.com",
+        api_key: "cli-key",
+      }))
+      await writeFile(join(project, ".opencode", "openviking-config.json"), JSON.stringify({
+        peerId: "config-peer",
+      }))
+      process.env.OPENVIKING_CLI_CONFIG_FILE = ovcli
+      process.env.OPENVIKING_PEER_ID = "env-peer"
+
+      const cfg = loadConfig(dir, project)
+      assert.equal(cfg.peerId, "env-peer")
+      assert.deepEqual(cfg.effectivePeer, { peerId: "env-peer", source: "explicit" })
+    } finally {
+      restoreOpenVikingEnv(snapshot)
+    }
+  })
+})
