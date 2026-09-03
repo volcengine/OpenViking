@@ -7,11 +7,11 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
 import pytest
-from openviking_cli.utils.config.vlm_config import VLMConfig
 
 from openviking.models.vlm.backends import codex_auth
 from openviking.models.vlm.backends.codex_auth import resolve_codex_runtime_credentials
 from openviking.models.vlm.backends.codex_vlm import CodexVLM
+from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
 class _MockResponsesStream:
@@ -337,24 +337,86 @@ def test_codex_auth_resyncs_external_tokens_before_cached_token_expires(tmp_path
     assert persisted["tokens"]["refresh_token"] == "new-refresh"
 
 
-def test_codex_auth_force_refresh_returns_external_credentials(tmp_path, monkeypatch):
+def test_codex_auth_force_refresh_resyncs_external_credentials_once(tmp_path, monkeypatch):
     ov_auth_path = tmp_path / "codex_auth.json"
     bootstrap_path = tmp_path / "codex_cli_auth.json"
-    access_token = _make_jwt_token({"exp": 9999999999})
-    payload = {"tokens": {"access_token": access_token, "refresh_token": "refresh-token"}}
+    old_access_token = _make_jwt_token({"exp": 9999999999, "version": "old"})
+    new_access_token = _make_jwt_token({"exp": 9999999999, "version": "new"})
+    payload = {"tokens": {"access_token": new_access_token, "refresh_token": "new-refresh"}}
     bootstrap_path.write_text(json.dumps(payload), encoding="utf-8")
+    ov_auth_path.write_text(
+        json.dumps(
+            {
+                "tokens": {
+                    "access_token": old_access_token,
+                    "refresh_token": "old-refresh",
+                },
+                "auth_owner": "external",
+                "imported_from": str(bootstrap_path),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENVIKING_CODEX_AUTH_PATH", str(ov_auth_path))
+
+    with patch.object(
+        codex_auth,
+        "_write_tokens_to_ov_store",
+        wraps=codex_auth._write_tokens_to_ov_store,
+    ) as mock_write:
+        creds = resolve_codex_runtime_credentials(force_refresh=True)
+
+    assert creds["api_key"] == new_access_token
+    assert creds["auth_owner"] == "external"
+    assert mock_write.call_count == 1
+
+
+def test_codex_auth_parse_failure_preserves_external_owner(tmp_path, monkeypatch):
+    ov_auth_path = tmp_path / "codex_auth.json"
+    bootstrap_path = tmp_path / "codex_cli_auth.json"
+    old_access_token = _make_jwt_token({"exp": 9999999999, "version": "old"})
+    new_access_token = _make_jwt_token({"exp": 9999999999, "version": "new"})
     ov_payload = {
-        **payload,
+        "tokens": {
+            "access_token": old_access_token,
+            "refresh_token": "old-refresh",
+        },
         "auth_owner": "external",
         "imported_from": str(bootstrap_path),
     }
     ov_auth_path.write_text(json.dumps(ov_payload), encoding="utf-8")
+    bootstrap_path.write_text("{invalid", encoding="utf-8")
     monkeypatch.setenv("OPENVIKING_CODEX_AUTH_PATH", str(ov_auth_path))
 
-    creds = resolve_codex_runtime_credentials(force_refresh=True)
+    with patch.object(codex_auth, "refresh_codex_oauth") as mock_refresh:
+        with pytest.raises(codex_auth.CodexAuthError, match="exists but could not be read"):
+            resolve_codex_runtime_credentials(force_refresh=True)
 
-    assert creds["api_key"] == access_token
-    assert creds["auth_owner"] == "external"
+    persisted = json.loads(ov_auth_path.read_text(encoding="utf-8"))
+    assert persisted["auth_owner"] == "external"
+    assert persisted["imported_from"] == str(bootstrap_path)
+    assert persisted["tokens"]["refresh_token"] == "old-refresh"
+    mock_refresh.assert_not_called()
+
+    bootstrap_path.write_text(
+        json.dumps(
+            {
+                "tokens": {
+                    "access_token": new_access_token,
+                    "refresh_token": "new-refresh",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    recovered = resolve_codex_runtime_credentials()
+
+    assert recovered["api_key"] == new_access_token
+    assert recovered["auth_owner"] == "external"
+    recovered_persisted = json.loads(ov_auth_path.read_text(encoding="utf-8"))
+    assert recovered_persisted["auth_owner"] == "external"
+    assert recovered_persisted["imported_from"] == str(bootstrap_path)
 
 
 def test_codex_auth_native_login_defaults_to_openviking_owner(tmp_path, monkeypatch):
