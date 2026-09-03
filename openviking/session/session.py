@@ -814,17 +814,37 @@ class Session:
             return False
 
     async def is_materialized(self) -> bool:
-        """Check whether the session's authoritative live-message file exists."""
-        try:
-            await self._viking_fs.stat(
-                f"{self._session_uri}/messages.jsonl",
-                ctx=self.ctx,
-            )
-            return True
-        except Exception as exc:
-            if not _is_storage_not_found(exc):
-                raise
-            return False
+        """Check whether this session has ever held real content.
+
+        #3820 made messages.jsonl the materialization boundary so that a
+        half-created session root is not used for session-aware recall. A
+        committed session no longer keeps that file -- everything moved into
+        history/ -- so the archive directory is the second half of the same
+        boundary. A root with neither has never held a message.
+        """
+        for leaf in ("messages.jsonl", "history"):
+            try:
+                await self._viking_fs.stat(
+                    f"{self._session_uri}/{leaf}",
+                    ctx=self.ctx,
+                )
+                return True
+            except Exception as exc:
+                if not _is_storage_not_found(exc):
+                    raise
+        return False
+
+    async def _remove_live_messages(self, lease_ref: Optional[Any] = None) -> None:
+        """Drop the live message file; absence and emptiness mean the same thing.
+
+        VikingFS.rm is documented idempotent, so a session that never wrote a
+        live file needs no separate guard here.
+        """
+        await self._viking_fs.rm(
+            f"{self._session_uri}/messages.jsonl",
+            ctx=self.ctx,
+            lease_ref=lease_ref,
+        )
 
     async def ensure_exists(self) -> None:
         """Materialize session root and messages file if missing."""
@@ -1946,7 +1966,15 @@ class Session:
             session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
         )
         try:
-            self._messages = await self._read_live_messages_strict()
+            try:
+                self._messages = await self._read_live_messages_strict()
+            except Exception as exc:
+                # A previous commit that archived everything removes the live
+                # file, so a second commit with nothing new must read as empty
+                # rather than as a storage failure.
+                if not _is_storage_not_found(exc):
+                    raise
+                self._messages = []
             try:
                 meta_content = await self._viking_fs.read_file(
                     f"{self._session_uri}/.meta.json",
@@ -5293,14 +5321,23 @@ class Session:
         overview = self._generate_overview(turn_count)
 
         lines = [m.to_jsonl() for m in messages]
-        content = "\n".join(lines) + "\n" if lines else ""
 
-        await viking_fs.write_file(
-            uri=f"{self._session_uri}/messages.jsonl",
-            content=content,
-            ctx=self.ctx,
-            lease_ref=lease_ref,
-        )
+        if lines:
+            await viking_fs.write_file(
+                uri=f"{self._session_uri}/messages.jsonl",
+                content="\n".join(lines) + "\n",
+                ctx=self.ctx,
+                lease_ref=lease_ref,
+            )
+        else:
+            # A commit that archives everything used to leave a 0-byte
+            # messages.jsonl in every session directory. Remove the file
+            # instead: "no live messages" and "an empty list of live messages"
+            # are the same state, and the empty file is the single most
+            # complained-about piece of session-directory clutter.
+            # is_materialized() still separates a committed session from a
+            # half-created root by falling back to the archive directory.
+            await self._remove_live_messages(lease_ref=lease_ref)
         await viking_fs.write_file(
             uri=f"{self._session_uri}/.abstract.md",
             content=render_abstract_overview(
