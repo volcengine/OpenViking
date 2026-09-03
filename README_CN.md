@@ -8,7 +8,7 @@
 
 ### OpenViking：AI 智能体的上下文数据库
 
-[English](README.md) / 中文 / [日本語](README_JA.md)
+[English](README.md) / 中文 / [日本語](README_JA.md) / [Русский](README_RU.md)
 
 <a href="https://www.openviking.ai">官网</a> · <a href="https://openviking.ai/studio">在线体验</a> · <a href="https://github.com/volcengine/OpenViking">GitHub</a> · <a href="https://github.com/volcengine/OpenViking/issues">问题反馈</a> · <a href="https://docs.openviking.ai/">文档</a>
 
