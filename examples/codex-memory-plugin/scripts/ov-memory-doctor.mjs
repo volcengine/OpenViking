@@ -138,6 +138,31 @@ function checkEnvironment(report) {
   return { codexOnPath: codex.ok };
 }
 
+export function assessHooksFeature(features) {
+  const hooks = features?.hooks;
+  const pluginHooks = features?.plugin_hooks;
+  if (hooks === true) {
+    return { ok: true, message: "[features] hooks = true" };
+  }
+  if (pluginHooks === true) {
+    return { ok: true, message: "[features] plugin_hooks = true (legacy; modern Codex uses hooks = true)" };
+  }
+  if (hooks === false || pluginHooks === false) {
+    return {
+      ok: false,
+      message: `hooks disabled in [features] (hooks=${hooks ?? "unset"}, plugin_hooks=${pluginHooks ?? "unset"})`,
+      detail: "no plugin hook fires when hooks feature is disabled",
+      fix: `set hooks = true under [features] in ~/.codex/config.toml`,
+    };
+  }
+  return {
+    ok: false,
+    message: "[features] hooks is not set",
+    detail: "no plugin hook fires at all unless hooks feature is enabled",
+    fix: `add hooks = true under [features] in ~/.codex/config.toml (or plugin_hooks = true for older Codex)`,
+  };
+}
+
 function checkInstall(report, { codexOnPath }) {
   report.section("Plugin install");
   const manifest = tryJson(join(PLUGIN_ROOT, ".codex-plugin", "plugin.json"));
@@ -206,9 +231,16 @@ function checkInstall(report, { codexOnPath }) {
   if (!toml) {
     report.warn(`${homeShort(CODEX_CONFIG)} not found`, "Codex has never been configured on this machine");
   } else {
-    const hooksOn = toml.features?.plugin_hooks;
-    if (hooksOn === true) report.ok("[features] plugin_hooks = true");
-    else report.fail(`[features] plugin_hooks is ${hooksOn === undefined ? "not set" : hooksOn}`, "no plugin hook fires at all", `add plugin_hooks = true under [features] in ${homeShort(CODEX_CONFIG)}`);
+    const hooksAssessment = assessHooksFeature(toml.features);
+    if (hooksAssessment.ok) {
+      report.ok(hooksAssessment.message);
+    } else {
+      report.fail(
+        hooksAssessment.message,
+        hooksAssessment.detail,
+        hooksAssessment.fix.replace("~/.codex/config.toml", homeShort(CODEX_CONFIG)),
+      );
+    }
     const pluginSection = toml[`plugins."${PLUGIN_ID}"`];
     if (!pluginSection) report.warn(`no [plugins."${PLUGIN_ID}"] section`, "the installer normally writes enabled = true here");
     else if (pluginSection.enabled === false) report.fail(`[plugins."${PLUGIN_ID}"] enabled = false`, "", "set enabled = true");
@@ -402,7 +434,7 @@ function checkActivity(report, cfg, connection) {
 
   const log = scanDebugLog(cfg.debugLogPath);
   if (!log.exists) {
-    report.info(`no hook log at ${homeShort(cfg.debugLogPath)}${cfg.debug ? " — debug is on but no hook has run since; if a Codex turn ran, hooks are not being spawned (plugin_hooks, trust, node)" : ""}`);
+    report.info(`no hook log at ${homeShort(cfg.debugLogPath)}${cfg.debug ? " — debug is on but no hook has run since; if a Codex turn ran, hooks are not being spawned (hooks, trust, node)" : ""}`);
   } else {
     report.info(`hook log ${homeShort(log.path)} — ${fmtBytes(log.size)}, last write ${fmtAge(log.mtimeMs)}, hooks seen: ${log.hooks.join(", ") || "(none)"}`);
     if (log.proxyStart?.data?.mcpUrl) {
@@ -455,7 +487,9 @@ async function main() {
   process.exitCode = report.exitCode();
 }
 
-main().catch((err) => {
-  console.error("ov-memory-doctor failed:", err?.stack || err?.message || err);
-  process.exit(2);
-});
+if (process.argv[1] && resolvePath(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((err) => {
+    console.error("ov-memory-doctor failed:", err?.stack || err?.message || err);
+    process.exit(2);
+  });
+}
