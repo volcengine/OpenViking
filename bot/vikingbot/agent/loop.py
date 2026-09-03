@@ -1965,7 +1965,7 @@ class AgentLoop:
                 await self.sessions.save(session)
                 return OutboundMessage(
                     session_key=msg.session_key,
-                    content="🐈 New session started. Session history droped.",
+                    content="🐈 New session started. Session history dropped.",
                     metadata=msg.metadata,
                 )
             elif cmd == "/compact":
