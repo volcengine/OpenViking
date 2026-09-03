@@ -267,6 +267,11 @@ def _project_http_request(
         context_key = (audit_account, row_user, event_date, hour, context_operation)
         context_rows[context_key] += 1
 
+    # #4061: the emitter already carries the raw request path
+    # (`HttpRequestLifecycleDataSource.record_request(url_path=...)`), but it
+    # stopped here, so a 404 on a parameterized route was only ever recorded as
+    # its template and the failing id could not be recovered afterwards.
+    raw_url_path = payload.get("url_path")
     audit_rows.append(
         (
             payload.get("request_id") or event.request_id,
@@ -274,6 +279,7 @@ def _project_http_request(
             audit_user,
             str(payload.get("method") or ""),
             route,
+            None if raw_url_path is None else str(raw_url_path),
             str(payload.get("api_type") or derive_api_type(route)),
             status_code,
             duration_ms,
