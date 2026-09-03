@@ -1158,6 +1158,24 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     )
                     return (None, None)
 
+                # #3508: a non-conforming response (root JSON list or a legacy
+                # envelope like {"memories": [...]} / {"current_status": ...,
+                # "memories": [...]}) parses "successfully" but to an *empty*
+                # operation set, because the generic parser drops every key not
+                # in the dynamic top-level schema fields. Recover the memory
+                # items by routing them into the matching memory_type field so
+                # they are no longer silently lost. Conforming responses are
+                # unaffected: this only fires when the normal parse came back
+                # empty despite non-empty content.
+                if (
+                    operations is not None
+                    and callable(getattr(operations, "is_empty", None))
+                    and operations.is_empty()
+                ):
+                    recovered = self._recover_legacy_operations(content)
+                    if recovered is not None and not recovered.is_empty():
+                        operations = recovered
+
                 return (None, operations)
             except Exception as e:
                 logger.exception(f"Error parsing operations: {e}")
@@ -1171,6 +1189,190 @@ The final output of the model must strictly follow the JSON Schema format shown 
             f"response_preview={_preview_text(self._last_llm_failure_content)!r}"
         )
         return (None, None)
+
+    def _recover_legacy_operations(self, content: str) -> Optional[Any]:
+        """
+        Best-effort recovery for non-conforming LLM responses (#3508).
+
+        Local models (e.g. llama.cpp) sometimes return memory items as a root
+        JSON list ``[{...}, {...}]`` or wrapped in a legacy envelope
+        (``{"memories": [...]}`` / ``{"current_status": ..., "memories": [...]}``)
+        instead of the expected per-type operations object
+        (``{"entities": [...], "preferences": [...]}``).
+
+        The generic ``parse_json_with_stability`` reduces a root list to its
+        first item and filters out every non-top-level key, silently yielding
+        empty operations. This method re-routes such items into the matching
+        ``memory_type`` field: by item discriminator when several schemas are
+        active, or into the single active schema otherwise. It only runs after
+        a successful parse produced an empty operation set, so conforming
+        responses are unaffected.
+
+        Returns a validated ``StructuredMemoryOperations`` instance, or ``None``
+        if the response could not be coerced.
+        """
+        try:
+            import json_repair
+
+            from openviking.session.memory.utils.json_parser import extract_json_content
+
+            raw = json_repair.loads(extract_json_content(content) or content)
+        except Exception as exc:
+            tracer.info(f"legacy recovery: raw parse failed: {exc}")
+            return None
+
+        # Gather a flat list of item dicts.
+        if isinstance(raw, dict):
+            # If it already carries an expected top-level field *as a list* (the
+            # conforming per-type operations shape), the normal path handled it.
+            # Only a list value counts — a stray {"entities": "some string"} must
+            # NOT short-circuit recovery of a sibling envelope (e.g. "memories").
+            if any(isinstance(raw.get(k), list) for k in (self._expected_fields or [])):
+                return None
+            # Otherwise look for the single list-of-dicts field (e.g. "memories").
+            item_lists = [
+                v
+                for v in raw.values()
+                if isinstance(v, list) and v and all(isinstance(x, dict) for x in v)
+            ]
+            if len(item_lists) != 1:
+                return None
+            items = item_lists[0]
+        elif isinstance(raw, list):
+            items = [x for x in raw if isinstance(x, dict)]
+        else:
+            return None
+
+        if not items:
+            return None
+
+        schemas = self.context_provider.get_memory_schemas(self.ctx)
+        active_types = [s.memory_type for s in schemas]
+        if not active_types or self._operations_model is None:
+            return None
+
+        single_type = active_types[0] if len(active_types) == 1 else None
+        # Drop keys the target schema does not know (the model uses extra="ignore",
+        # but cleaning keeps tracer output readable and avoids surprising merges).
+        allowed_fields = {s.memory_type: {f.name for f in s.fields} for s in schemas}
+
+        bucketed: Dict[str, List[Dict[str, Any]]] = {mt: [] for mt in active_types}
+        next_page_id = 100
+        dropped = 0
+        for item in items:
+            mt = single_type or self._match_memory_type(item, active_types)
+            if mt is None:
+                dropped += 1
+                continue
+            allowed = allowed_fields.get(mt, set())
+            clean = {k: v for k, v in item.items() if k in allowed}
+            # page_id is required by every item model; legacy items lack it.
+            clean.setdefault("page_id", next_page_id)
+            next_page_id += 1
+            bucketed[mt].append(clean)
+
+        if all(len(v) == 0 for v in bucketed.values()):
+            tracer.info(
+                f"legacy recovery: no items matched active types {active_types} "
+                f"(dropped {dropped})"
+            )
+            return None
+
+        # Per-item tolerance: validate each item against its target type BEFORE the
+        # whole-batch validate. Without this, a single malformed item (e.g. a
+        # legacy item missing a required immutable field after key-cleaning) makes
+        # model_validate fail the ENTIRE memory_type bucket, losing every valid item
+        # alongside it — reproducing the very silent-drop this recovery exists to
+        # prevent. Drop only the bad items, keep the good ones.
+        for mt in list(bucketed.keys()):
+            items = bucketed[mt]
+            if not items:
+                continue
+            item_type = self._get_item_model_type(mt)
+            if item_type is None:
+                continue
+            kept: List[Dict[str, Any]] = []
+            for item in items:
+                try:
+                    item_type.model_validate(item, strict=False)
+                    kept.append(item)
+                except Exception:
+                    dropped += 1
+                    tracer.info(
+                        f"legacy recovery: dropped malformed {mt} item: {item!r}"
+                    )
+            bucketed[mt] = kept
+
+        if all(len(v) == 0 for v in bucketed.values()):
+            tracer.info(f"legacy recovery: every item failed per-item validation (dropped {dropped})")
+            return None
+
+        try:
+            recovered = self._operations_model.model_validate(bucketed, strict=False)
+        except Exception as exc:
+            tracer.info(
+                f"legacy recovery: validation failed for { {mt: len(v) for mt, v in bucketed.items() if v} }: {exc}"
+            )
+            return None
+
+        tracer.info(
+            "legacy recovery: routed items into "
+            f"{ {mt: len(v) for mt, v in bucketed.items() if v} } (dropped {dropped})"
+        )
+        return recovered
+
+    def _get_item_model_type(self, memory_type: str) -> Optional[Any]:
+        """Return the per-item Pydantic model for a memory_type field, or None.
+
+        The structured operations model stores each memory_type as ``List[FlatModel]``;
+        this pulls out ``FlatModel`` so callers can validate items individually
+        (used by legacy recovery to tolerate one bad item without losing the batch).
+        """
+        model = self._operations_model
+        if model is None:
+            return None
+        field = model.model_fields.get(memory_type)
+        if field is None:
+            return None
+        args = getattr(field.annotation, "__args__", ())
+        return args[0] if args else None
+
+    @staticmethod
+    def _singularize_type(name: str) -> str:
+        """Canonicalize a memory_type or discriminator to a singular lowercased form."""
+        n = name.strip().lower()
+        if n.endswith("ies"):
+            return n[:-3] + "y"  # entities -> entity
+        if n.endswith("s") and not n.endswith("ss"):
+            return n[:-1]  # preferences -> preference, cases -> case
+        return n
+
+    def _match_memory_type(
+        self, item: Dict[str, Any], active_types: List[str]
+    ) -> Optional[str]:
+        """
+        Map a legacy item's type discriminator to an active ``memory_type``.
+
+        Recognizes the keys ``memory_type`` / ``type`` / ``kind`` and matches
+        case-insensitively, tolerating singular vs plural differences
+        (``entity`` -> ``entities``, ``preference`` -> ``preferences``).
+        Returns ``None`` when no active type matches.
+        """
+        disc: Optional[str] = None
+        for key in ("memory_type", "type", "kind"):
+            val = item.get(key)
+            if isinstance(val, str) and val.strip():
+                disc = val.strip()
+                break
+        if not disc:
+            return None
+        disc_norm = self._singularize_type(disc)
+        for t in active_types:
+            if t.strip().lower() == disc.strip().lower():
+                return t
+            if self._singularize_type(t) == disc_norm:
+                return t
+        return None
 
     async def _check_unread_existing_files(self, operations: ResolvedOperations) -> Dict:
         refetch_uris = {}
