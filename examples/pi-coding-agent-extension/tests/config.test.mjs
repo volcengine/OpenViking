@@ -16,6 +16,7 @@ async function withConfigFile(body, fn, env = {}, cliConfig = null) {
     OPENVIKING_PEER_ID: process.env.OPENVIKING_PEER_ID,
     OPENVIKING_WORKSPACE_PEER: process.env.OPENVIKING_WORKSPACE_PEER,
     OPENVIKING_RECALL_PEER_SCOPE: process.env.OPENVIKING_RECALL_PEER_SCOPE,
+    OPENVIKING_SCORE_THRESHOLD: process.env.OPENVIKING_SCORE_THRESHOLD,
     OPENVIKING_CREDENTIAL_SOURCE: process.env.OPENVIKING_CREDENTIAL_SOURCE,
     OPENVIKING_CLI_CONFIG_FILE: process.env.OPENVIKING_CLI_CONFIG_FILE,
     OPENVIKING_CONFIG_FILE: process.env.OPENVIKING_CONFIG_FILE,
@@ -30,6 +31,7 @@ async function withConfigFile(body, fn, env = {}, cliConfig = null) {
   delete process.env.OPENVIKING_PEER_ID;
   delete process.env.OPENVIKING_WORKSPACE_PEER;
   delete process.env.OPENVIKING_RECALL_PEER_SCOPE;
+  delete process.env.OPENVIKING_SCORE_THRESHOLD;
   for (const [key, value] of Object.entries(env)) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
@@ -79,6 +81,18 @@ test("loadConfig maps nested takeover block", async () => {
     assert.equal(cfg.takeoverOverviewPollMs, 10);
     assert.equal(cfg.takeoverOverviewPollMax, 2);
   });
+});
+
+test("loadConfig preserves logit-scale score thresholds", async () => {
+  await withConfigFile({ scoreThreshold: -8 }, (cfg) => {
+    assert.equal(cfg.scoreThreshold, -8);
+  });
+});
+
+test("loadConfig reads logit-scale score thresholds from the environment", async () => {
+  await withConfigFile({}, (cfg) => {
+    assert.equal(cfg.scoreThreshold, -8);
+  }, { OPENVIKING_SCORE_THRESHOLD: "-8" });
 });
 
 test("loadConfigFromModuleUrl decodes Unicode paths", async () => {

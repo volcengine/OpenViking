@@ -126,9 +126,9 @@ async function fetchJSON(path, init = {}, options = {}) {
 // Ranking
 // ---------------------------------------------------------------------------
 
-function clampScore(v) {
+function numericScore(v) {
   if (typeof v !== "number" || Number.isNaN(v)) return 0;
-  return Math.max(0, Math.min(1, v));
+  return v;
 }
 
 const PREFERENCE_QUERY_RE = /prefer|preference|favorite|favourite|like|偏好|喜欢|爱好|更倾向/i;
@@ -161,7 +161,7 @@ function lexicalOverlapBoost(tokens, text) {
 }
 
 function getRankingBreakdown(item, profile) {
-  const base = clampScore(item.score);
+  const base = numericScore(item.score);
   const abstract = (item.abstract || item.overview || "").trim();
   const cat = (item.category || "").toLowerCase();
   const uri = item.uri.toLowerCase();
@@ -212,11 +212,11 @@ function pickMemories(items, limit, queryText) {
 
 function postProcess(items, limit, threshold) {
   const seen = new Set();
-  const sorted = [...items].sort((a, b) => clampScore(b.score) - clampScore(a.score));
+  const sorted = [...items].sort((a, b) => numericScore(b.score) - numericScore(a.score));
   const result = [];
   for (const item of sorted) {
     if (item.level !== 2) continue;
-    if (clampScore(item.score) < threshold) continue;
+    if (numericScore(item.score) < threshold) continue;
     const cat = (item.category || "").toLowerCase() || "unknown";
     const abs = (item.abstract || item.overview || "").trim().toLowerCase();
     const key = abs ? `${cat}:${abs}` : `uri:${item.uri}`;
@@ -310,7 +310,7 @@ async function readMemoryContent(uri) {
 function assembledToRecallResult(rendered, entries) {
   const items = entries
     .map(normalizeContextEntry)
-    .map((entry) => ({ ...entry, score: clampScore(entry.score) }))
+    .map((entry) => ({ ...entry, score: numericScore(entry.score) }))
     .filter((entry) => entry.uri && entry.text);
   const context = rendered
     ? [
@@ -670,7 +670,7 @@ async function main() {
       return {
         uri: item.uri,
         category: item.category || "memory",
-        score: clampScore(item.score),
+        score: numericScore(item.score),
         text,
       };
     }),

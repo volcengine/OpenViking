@@ -45,9 +45,15 @@ function approve(msg) {
 // Ranking (ported from openclaw-plugin/memory-ranking.ts)
 // ---------------------------------------------------------------------------
 
-function clampScore(v) {
+function numericScore(v) {
   if (typeof v !== "number" || Number.isNaN(v)) return 0;
-  return Math.max(0, Math.min(1, v));
+  return v;
+}
+
+function formatScore(score) {
+  const value = numericScore(score);
+  if (value >= 0 && value <= 1) return `${(value * 100).toFixed(0)}%`;
+  return value.toFixed(2);
 }
 
 const PREFERENCE_QUERY_RE = /prefer|preference|favorite|favourite|like|偏好|喜欢|爱好|更倾向/i;
@@ -80,7 +86,7 @@ function lexicalOverlapBoost(tokens, text) {
 }
 
 function rankItem(item, profile) {
-  const base = clampScore(item.score);
+  const base = numericScore(item.score);
   const abstract = (item.abstract || item.overview || "").trim();
   const cat = (item.category || "").toLowerCase();
   const uri = (item.uri || "").toLowerCase();
@@ -263,12 +269,12 @@ async function buildInjectionBlock(items, actorPeerId = "") {
   let hintCount = 0;
 
   for (const item of items) {
-    const score = (clampScore(item.score) * 100).toFixed(0);
-    const uriLine = `- [${item._sourceType} ${score}%] ${item.uri}`;
+    const score = formatScore(item.score);
+    const uriLine = `- [${item._sourceType} ${score}] ${item.uri}`;
 
     if (budgetRemaining > 0) {
       const content = await resolveItemContent(item, actorPeerId);
-      const contentLine = `- [${item._sourceType} ${score}%] ${content}`;
+      const contentLine = `- [${item._sourceType} ${score}] ${content}`;
       const lineTokens = estimateTokens(contentLine);
 
       // First item always included even if over budget (openclaw spec §6.2)
@@ -421,7 +427,7 @@ async function main() {
   }
 
   const profile = buildQueryProfile(userPrompt);
-  const filtered = raw.filter(it => clampScore(it.score) >= cfg.scoreThreshold);
+  const filtered = raw.filter(it => numericScore(it.score) >= cfg.scoreThreshold);
   filtered.sort((a, b) => rankItem(b, profile) - rankItem(a, profile));
   const deduped = dedupeItems(filtered);
   const picked = deduped.slice(0, cfg.recallLimit);
@@ -430,7 +436,7 @@ async function main() {
     filteredCount: filtered.length,
     dedupedCount: deduped.length,
     pickedCount: picked.length,
-    items: picked.map(it => ({ type: it._sourceType, uri: it.uri, score: clampScore(it.score) })),
+    items: picked.map(it => ({ type: it._sourceType, uri: it.uri, score: numericScore(it.score) })),
   });
 
   if (picked.length === 0) {

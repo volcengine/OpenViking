@@ -120,6 +120,8 @@ node examples/opencode-plugin/scripts/setup.mjs
 }
 ```
 
+`autoRecall.scoreThreshold` 按 reranker 原始分数尺度解释；余弦类 reranker 通常是 `0.0` 到 `1.0`，logit-scale reranker 可能需要负值。
+
 环境变量优先级高于 `ovcli.conf`：
 
 ```bash

@@ -144,6 +144,9 @@ export function loadConfig(extensionDir: string): OVConfig {
     config.recallLimit = Number(process.env.OPENVIKING_RECALL_LIMIT);
     config.recallLimitConfigured = true;
   }
+  if (process.env.OPENVIKING_SCORE_THRESHOLD) {
+    config.scoreThreshold = Number(process.env.OPENVIKING_SCORE_THRESHOLD);
+  }
   if (process.env.OPENVIKING_RECALL_QUERY_EXPANSION) {
     config.recallQueryExpansion = process.env.OPENVIKING_RECALL_QUERY_EXPANSION === "off" ? "off" : "auto";
     config.recallQueryExpansionConfigured = true;
@@ -155,7 +158,9 @@ export function loadConfig(extensionDir: string): OVConfig {
   config.recallLimit = clampInt(config.recallLimit, 1, 50, DEFAULT_CONFIG.recallLimit);
   config.recallMaxContentChars = clampInt(config.recallMaxContentChars, 100, 5000, DEFAULT_CONFIG.recallMaxContentChars);
   config.recallTokenBudget = clampInt(config.recallTokenBudget, 200, 50000, DEFAULT_CONFIG.recallTokenBudget);
-  config.scoreThreshold = clampNumber(config.scoreThreshold, 0, 1, DEFAULT_CONFIG.scoreThreshold);
+  config.scoreThreshold = Number.isFinite(Number(config.scoreThreshold))
+    ? Number(config.scoreThreshold)
+    : DEFAULT_CONFIG.scoreThreshold;
   config.minQueryLength = clampInt(config.minQueryLength, 1, 64, DEFAULT_CONFIG.minQueryLength);
   config.profileTokenBudget = clampInt(config.profileTokenBudget, 500, 50000, DEFAULT_CONFIG.profileTokenBudget);
   config.resumeContextBudget = clampInt(config.resumeContextBudget, 1024, 128000, DEFAULT_CONFIG.resumeContextBudget);

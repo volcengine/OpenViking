@@ -98,9 +98,15 @@ async function fetchJSON(path, init = {}, options = {}) {
 // Pure functions — copied from auto-recall.mjs
 // ---------------------------------------------------------------------------
 
-function clampScore(v) {
+function numericScore(v) {
   if (typeof v !== "number" || Number.isNaN(v)) return 0;
-  return Math.max(0, Math.min(1, v));
+  return v;
+}
+
+function formatScore(score) {
+  const value = numericScore(score);
+  if (value >= 0 && value <= 1) return value.toFixed(4);
+  return value.toFixed(2);
 }
 
 const PREFERENCE_QUERY_RE = /prefer|preference|favorite|favourite|like|偏好|喜欢|爱好|更倾向/i;
@@ -133,7 +139,7 @@ function lexicalOverlapBoost(tokens, text) {
 }
 
 function rankForInjection(item, profile) {
-  const base = clampScore(item.score);
+  const base = numericScore(item.score);
   const abstract = (item.abstract || item.overview || "").trim();
   const cat = (item.category || "").toLowerCase();
   const uri = item.uri.toLowerCase();
@@ -173,11 +179,11 @@ function pickMemories(items, limit, queryText) {
 
 function postProcess(items, limit, threshold) {
   const seen = new Set();
-  const sorted = [...items].sort((a, b) => clampScore(b.score) - clampScore(a.score));
+  const sorted = [...items].sort((a, b) => numericScore(b.score) - numericScore(a.score));
   const result = [];
   for (const item of sorted) {
     if (item.level !== 2) continue;
-    if (clampScore(item.score) < threshold) continue;
+    if (numericScore(item.score) < threshold) continue;
     const cat = (item.category || "").toLowerCase() || "unknown";
     const abs = (item.abstract || item.overview || "").trim().toLowerCase();
     const key = abs ? `${cat}:${abs}` : `uri:${item.uri}`;
@@ -302,7 +308,7 @@ function printSearchResults(label, items) {
     return;
   }
   for (const item of items) {
-    const score = clampScore(item.score).toFixed(4);
+    const score = formatScore(item.score);
     console.log(`  ${C.bold}${item.uri}${C.reset}`);
     dim(`    score=${score}  level=${item.level}  category=${item.category || "(none)"}`);
     dim(`    abstract: ${(item.abstract || item.overview || "(none)").trim().slice(0, 120)}`);
@@ -378,7 +384,7 @@ async function main() {
   const rankedItems = [...processed].sort((a, b) => rankForInjection(b, profile) - rankForInjection(a, profile));
 
   for (const item of rankedItems) {
-    const base = clampScore(item.score);
+    const base = numericScore(item.score);
     const abstract = (item.abstract || item.overview || "").trim();
     const cat = (item.category || "").toLowerCase();
     const uri = item.uri.toLowerCase();
@@ -412,7 +418,7 @@ async function main() {
   const lines = [];
   for (const item of memories) {
     console.log(`  ${C.green}*${C.reset} ${C.bold}${item.uri}${C.reset}`);
-    dim(`    score=${clampScore(item.score).toFixed(4)}  level=${item.level}  category=${item.category || "(none)"}`);
+    dim(`    score=${formatScore(item.score)}  level=${item.level}  category=${item.category || "(none)"}`);
 
     let lineText;
     if (item.level === 2) {

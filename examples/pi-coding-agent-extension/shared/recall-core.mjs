@@ -183,9 +183,15 @@ export function downgradeToRecallBody(contextBody = {}, cfg = {}) {
   return body;
 }
 
-function clampScore(v) {
+function numericScore(v) {
   if (typeof v !== "number" || Number.isNaN(v)) return 0;
-  return Math.max(0, Math.min(1, v));
+  return v;
+}
+
+function formatScore(score) {
+  const value = numericScore(score);
+  if (value >= 0 && value <= 1) return `${(value * 100).toFixed(0)}%`;
+  return value.toFixed(2);
 }
 
 function buildQueryProfile(query) {
@@ -209,7 +215,7 @@ function lexicalOverlapBoost(tokens, text) {
 }
 
 function rankItem(item, profile) {
-  const base = clampScore(item.score);
+  const base = numericScore(item.score);
   const abstract = (item.abstract || item.overview || "").trim();
   const cat = (item.category || "").toLowerCase();
   const uri = (item.uri || "").toLowerCase();
@@ -349,12 +355,12 @@ async function buildFallbackInjectionBlock(fetchJSON, items, cfg, actorPeerId = 
   let hintCount = 0;
 
   for (const item of items) {
-    const score = (clampScore(item.score) * 100).toFixed(0);
-    const uriLine = `- [${item._sourceType} ${score}%] ${item.uri}`;
+    const score = formatScore(item.score);
+    const uriLine = `- [${item._sourceType} ${score}] ${item.uri}`;
 
     if (budgetRemaining > 0) {
       const content = await resolveItemContent(fetchJSON, item, cfg, actorPeerId);
-      const contentLine = `- [${item._sourceType} ${score}%] ${content}`;
+      const contentLine = `- [${item._sourceType} ${score}] ${content}`;
       const lineTokens = estimateTokens(contentLine);
 
       if (lineTokens > budgetRemaining && contentCount > 0) {
@@ -598,14 +604,14 @@ export async function buildRecallBlock(fetchJSON, cfg, query, options = {}) {
 
   const profile = buildQueryProfile(trimmed);
   const scoreThreshold = Number.isFinite(Number(cfg.scoreThreshold)) ? Number(cfg.scoreThreshold) : 0.35;
-  const filtered = raw.filter((it) => clampScore(it.score) >= scoreThreshold);
+  const filtered = raw.filter((it) => numericScore(it.score) >= scoreThreshold);
   filtered.sort((a, b) => rankItem(b, profile) - rankItem(a, profile));
   const picked = dedupeItems(filtered).slice(0, recallLimit);
   log("recall_picked", {
     rawCount: raw.length,
     filteredCount: filtered.length,
     pickedCount: picked.length,
-    items: picked.map((it) => ({ type: it._sourceType, uri: it.uri, score: clampScore(it.score) })),
+    items: picked.map((it) => ({ type: it._sourceType, uri: it.uri, score: numericScore(it.score) })),
   });
 
   if (picked.length === 0) return null;

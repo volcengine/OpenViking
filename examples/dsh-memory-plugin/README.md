@@ -146,6 +146,8 @@ The patch can also carry plugin config:
             mcpToolCallTimeoutMs: 60000
 ```
 
+`scoreThreshold` follows the reranker's native score scale. Cosine-like rerankers commonly use `0.0` to `1.0`; logit-scale rerankers may require negative values.
+
 ## Behavior
 
 - `agent/session-start` injects the OpenViking profile and available-memory index through `agent.inject()`.

@@ -76,6 +76,9 @@ export function resolveConfig(input = {}, env = process.env, cwd = process.cwd()
     config.recallLimit = env.OPENVIKING_RECALL_LIMIT;
     config.recallLimitConfigured = true;
   }
+  if (env.OPENVIKING_SCORE_THRESHOLD) {
+    config.scoreThreshold = env.OPENVIKING_SCORE_THRESHOLD;
+  }
 
   config.endpoint = String(config.endpoint || DEFAULT_CONFIG.endpoint).replace(/\/+$/, "");
   config.workspacePeer = config.workspacePeer !== false;
@@ -95,12 +98,9 @@ export function resolveConfig(input = {}, env = process.env, cwd = process.cwd()
     50000,
     DEFAULT_CONFIG.recallTokenBudget,
   );
-  config.scoreThreshold = clampNumber(
-    config.scoreThreshold,
-    0,
-    1,
-    DEFAULT_CONFIG.scoreThreshold,
-  );
+  config.scoreThreshold = Number.isFinite(Number(config.scoreThreshold))
+    ? Number(config.scoreThreshold)
+    : DEFAULT_CONFIG.scoreThreshold;
   config.minQueryLength = clampInteger(
     config.minQueryLength,
     1,

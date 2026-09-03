@@ -179,10 +179,10 @@ export function loadConfig() {
     ))),
     recallLimitConfigured: Boolean(process.env.OPENVIKING_RECALL_LIMIT) ||
       hasOwn(cx, "recallLimit"),
-    scoreThreshold: Math.min(1, Math.max(0, num(
+    scoreThreshold: num(
       process.env.OPENVIKING_SCORE_THRESHOLD,
       num(cx.scoreThreshold, 0.35),
-    ))),
+    ),
     minQueryLength: Math.max(1, Math.floor(num(
       process.env.OPENVIKING_MIN_QUERY_LENGTH,
       num(cx.minQueryLength, 3),
