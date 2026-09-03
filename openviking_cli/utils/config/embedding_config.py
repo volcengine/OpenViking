@@ -738,8 +738,21 @@ class EmbeddingConfig(BaseModel):
             VoyageDenseEmbedder,
         )
 
-        if provider == "litellm" and LiteLLMDenseEmbedder is None:
-            raise ValueError("LiteLLM is not installed. Install it with: pip install litellm")
+        # Providers whose dependency is optional export None from
+        # `openviking.models.embedder` when the package is missing. Calling that
+        # None is where doctor's "invalid embedding config: 'NoneType' object is
+        # not callable" came from — an error that named neither the provider nor
+        # the missing package (#4200). Answer with the install command instead.
+        optional_providers = {
+            "litellm": (LiteLLMDenseEmbedder, "LiteLLM", "litellm"),
+            "gemini": (GeminiDenseEmbedder, "google-genai", "openviking[gemini]"),
+        }
+        optional = optional_providers.get(provider)
+        if optional is not None and optional[0] is None:
+            _embedder_class, dependency, install_target = optional
+            raise ValueError(
+                f"{dependency} is not installed. Install it with: pip install {install_target}"
+            )
 
         # Factory registry: (provider, type) -> (embedder_class, param_builder)
         runtime_config = {
