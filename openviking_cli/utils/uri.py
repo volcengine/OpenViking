@@ -278,11 +278,26 @@ class VikingURI:
         )
         # Merge consecutive underscores
         safe = re.sub(r"_+", "_", safe)
-        # Strip leading/trailing underscores and dots, limit length
-        safe = safe.strip("_.")[:50]
+        # Strip leading/trailing underscores and dots
+        safe = safe.strip("_.")
+        # Split a trailing extension off before applying the cap. After the
+        # strip a dot can only sit mid-string, so the last dot-run is the
+        # extension candidate; require an ASCII-alphanumeric tail of <=5 chars
+        # (covers .md/.pdf/.docx/.html/.ipynb; longer runs like .markdown and
+        # tails containing non-alphanumerics keep the old plain-truncation
+        # behavior) so version dots followed by long stems ("v1.2<long stem>")
+        # are not misread as extensions.
+        suffix = ""
+        if len(safe) > 50 and "." in safe:
+            tail = safe.rsplit(".", 1)[1]
+            if tail.isascii() and tail.isalnum() and len(tail) <= 5:
+                suffix = f".{tail}"
+        if len(safe) > 50:
+            safe = safe[: 50 - len(suffix)].rstrip("_.") + suffix
         # Defuse Win32 reserved device names (CON/PRN/NUL/AUX/COM1../LPT9..)
         # so the segment is a valid path component on Windows, mirroring PR
-        # #4517's guard on the memory path.
+        # #4517's guard on the memory path. Checked on the rejoined name so
+        # the stem alone (``CON`` in ``CON.txt``) is what gets defused.
         if _windows_reserved_stem(safe) in _WINDOWS_RESERVED_STEMS:
             safe = f"_{safe}"
         return safe or "unnamed"
