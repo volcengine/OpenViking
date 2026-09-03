@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from openviking_cli.utils.config.consts import DEFAULT_CONFIG_DIR, OPENVIKING_CONFIG_ENV
+from openviking_cli.utils.environment import get_system_ram_gb as _get_system_ram_gb
 from openviking_cli.utils.ollama import (
     check_ollama_running,
     get_ollama_models,
@@ -444,41 +445,6 @@ def _print_banner() -> None:
 # ---------------------------------------------------------------------------
 # System info
 # ---------------------------------------------------------------------------
-
-
-def _get_system_ram_gb() -> int:
-    """Get total system RAM in GB."""
-    try:
-        pages = os.sysconf("SC_PHYS_PAGES")
-        page_size = os.sysconf("SC_PAGE_SIZE")
-        return (pages * page_size) // (1024**3)
-    except (ValueError, OSError, AttributeError):
-        pass
-    # Windows fallback
-    try:
-        import ctypes
-
-        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
-
-        class MEMORYSTATUSEX(ctypes.Structure):
-            _fields_ = [
-                ("dwLength", ctypes.c_ulong),
-                ("dwMemoryLoad", ctypes.c_ulong),
-                ("ullTotalPhys", ctypes.c_ulonglong),
-                ("ullAvailPhys", ctypes.c_ulonglong),
-                ("ullTotalPageFile", ctypes.c_ulonglong),
-                ("ullAvailPageFile", ctypes.c_ulonglong),
-                ("ullTotalVirtual", ctypes.c_ulonglong),
-                ("ullAvailVirtual", ctypes.c_ulonglong),
-                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
-            ]
-
-        stat = MEMORYSTATUSEX()
-        stat.dwLength = ctypes.sizeof(stat)
-        kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))
-        return stat.ullTotalPhys // (1024**3)
-    except Exception:
-        return 0
 
 
 def _parse_size_gb(size_hint: str) -> float:
