@@ -21,6 +21,27 @@ class SessionAutoCommitConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class SessionDiskGcConfig(BaseModel):
+    """Opt-in disk retention (GC) for session directories and commit archives.
+
+    Disabled by default: when ``enabled`` is False (the default), no GC
+    scheduler is registered and no retention action ever runs.
+    """
+
+    enabled: bool = False
+    # Delete whole idle sessions after this many days of inactivity; 0 disables.
+    max_idle_days: float = Field(default=0.0, ge=0)
+    # Delete session history/archive_NNN directories older than this many days;
+    # 0 disables. The newest archive of each session is always kept.
+    archive_max_age_days: float = Field(default=0.0, ge=0)
+    # Log planned deletions without executing them.
+    dry_run: bool = False
+    # Interval between GC scans when enabled.
+    interval_secs: float = Field(default=3600.0, gt=0)
+
+    model_config = {"extra": "forbid"}
+
+
 class MemoryConfig(BaseModel):
     """Memory configuration for OpenViking."""
 
@@ -84,6 +105,10 @@ class MemoryConfig(BaseModel):
     session_auto_commit: SessionAutoCommitConfig = Field(
         default_factory=SessionAutoCommitConfig,
         description="Server-wide controls for automatic session commits.",
+    )
+    session_gc: SessionDiskGcConfig = Field(
+        default_factory=SessionDiskGcConfig,
+        description="Opt-in disk retention (GC) for session directories and commit archives.",
     )
 
     model_config = {"extra": "forbid"}
