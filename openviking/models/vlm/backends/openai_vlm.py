@@ -9,6 +9,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse
 
+from openviking.models.network import (
+    create_optional_async_httpx_client,
+    create_optional_sync_httpx_client,
+)
 from openviking.telemetry import tracer
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking.utils.multimodal import redact_image_data_urls
@@ -98,6 +102,13 @@ class OpenAIVLM(VLMBase):
                 self.extra_headers,
                 self.timeout,
             )
+            http_client = create_optional_sync_httpx_client(
+                self.api_base,
+                client_cls=openai.DefaultHttpxClient,
+                timeout=self.timeout,
+            )
+            if http_client is not None:
+                kwargs["http_client"] = http_client
             if self.provider == "azure":
                 self._sync_client = openai.AzureOpenAI(**kwargs)
             else:
@@ -116,6 +127,13 @@ class OpenAIVLM(VLMBase):
             self.extra_headers,
             self.timeout,
         )
+        http_client = create_optional_async_httpx_client(
+            self.api_base,
+            client_cls=openai.DefaultAsyncHttpxClient,
+            timeout=self.timeout,
+        )
+        if http_client is not None:
+            kwargs["http_client"] = http_client
         if self.provider == "azure":
             return openai.AsyncAzureOpenAI(**kwargs)
         return openai.AsyncOpenAI(**kwargs)

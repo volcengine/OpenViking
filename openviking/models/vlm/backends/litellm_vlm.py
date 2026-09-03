@@ -13,9 +13,15 @@ from urllib.parse import urlparse
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
 import litellm
+import openai
 from litellm import acompletion, completion
 
+from openviking.models.network import (
+    create_optional_async_httpx_client,
+    create_optional_sync_httpx_client,
+)
 from openviking.telemetry import tracer
+from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking.utils.model_retry import retry_async, retry_sync
 from openviking.utils.multimodal import redact_image_data_urls
 from openviking_cli.utils import get_logger
@@ -166,12 +172,52 @@ class LiteLLMVLMProvider(VLMBase):
         self._thinking = config.get("thinking", False)
         self._forward_api_key = config.get("forward_api_key")
         self._detected_provider: str | None = None
+        self._sync_sd_client = None
+        self._async_sd_client_cache = LoopScopedAsyncClientCache()
 
         if self.api_key:
             self._setup_env(self.api_key, self.model)
 
         litellm.suppress_debug_info = True
         litellm.drop_params = True
+
+    def _get_sync_sd_client(self):
+        if self._sync_sd_client is not None:
+            return self._sync_sd_client
+        http_client = create_optional_sync_httpx_client(
+            self.api_base,
+            client_cls=openai.DefaultHttpxClient,
+            timeout=self.timeout,
+        )
+        if http_client is None:
+            return None
+        self._sync_sd_client = openai.OpenAI(
+            api_key=self.api_key or "no-key",
+            base_url=self.api_base,
+            http_client=http_client,
+            timeout=self.timeout,
+            max_retries=0,
+        )
+        return self._sync_sd_client
+
+    def _get_async_sd_client(self):
+        def _build():
+            http_client = create_optional_async_httpx_client(
+                self.api_base,
+                client_cls=openai.DefaultAsyncHttpxClient,
+                timeout=self.timeout,
+            )
+            if http_client is None:
+                return None
+            return openai.AsyncOpenAI(
+                api_key=self.api_key or "no-key",
+                base_url=self.api_base,
+                http_client=http_client,
+                timeout=self.timeout,
+                max_retries=0,
+            )
+
+        return self._async_sd_client_cache.get(_build)
 
     def _setup_env(self, api_key: str, model: str | None) -> None:
         """Set environment variables based on detected provider."""
@@ -420,6 +466,9 @@ class LiteLLMVLMProvider(VLMBase):
     ) -> Union[str, VLMResponse]:
         """Get text completion synchronously."""
         kwargs = self._build_text_kwargs(prompt, thinking, tools, tool_choice, messages)
+        sd_client = self._get_sync_sd_client()
+        if sd_client is not None:
+            kwargs["client"] = sd_client
 
         def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
@@ -449,9 +498,12 @@ class LiteLLMVLMProvider(VLMBase):
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously."""
         kwargs = self._build_text_kwargs(prompt, thinking, tools, tool_choice, messages)
-        # 用 tracer.info 打印请求
+        sd_client = self._get_async_sd_client()
+        if sd_client is not None:
+            kwargs["client"] = sd_client
+        log_kwargs = {key: value for key, value in kwargs.items() if key != "client"}
         tracer.info(
-            f"request: {json.dumps(redact_image_data_urls(kwargs), ensure_ascii=False, indent=2)}"
+            f"request: {json.dumps(redact_image_data_urls(log_kwargs), ensure_ascii=False, indent=2)}"
         )
 
         async def _call() -> Union[str, VLMResponse]:
@@ -482,6 +534,9 @@ class LiteLLMVLMProvider(VLMBase):
     ) -> Union[str, VLMResponse]:
         """Get vision completion synchronously."""
         kwargs = self._build_vision_kwargs(prompt, images, thinking, tools, tool_choice, messages)
+        sd_client = self._get_sync_sd_client()
+        if sd_client is not None:
+            kwargs["client"] = sd_client
 
         def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
@@ -510,6 +565,9 @@ class LiteLLMVLMProvider(VLMBase):
     ) -> Union[str, VLMResponse]:
         """Get vision completion asynchronously."""
         kwargs = self._build_vision_kwargs(prompt, images, thinking, tools, tool_choice, messages)
+        sd_client = self._get_async_sd_client()
+        if sd_client is not None:
+            kwargs["client"] = sd_client
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()

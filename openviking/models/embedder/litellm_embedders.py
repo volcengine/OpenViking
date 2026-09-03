@@ -10,10 +10,16 @@ import os
 from typing import Any, Dict, List, Optional
 
 import litellm
+import openai
+from openviking_cli.utils import get_logger
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
+from openviking.models.network import (
+    create_optional_async_httpx_client,
+    create_optional_sync_httpx_client,
+)
 from openviking.telemetry import get_current_telemetry
-from openviking_cli.utils import get_logger
+from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 
 logger = get_logger(__name__)
 
@@ -78,6 +84,8 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
         self.query_param = query_param
         self.document_param = document_param
         self.extra_headers = extra_headers
+        self._sync_sd_client = None
+        self._async_sd_client_cache = LoopScopedAsyncClientCache()
 
         if dimension is None:
             raise ValueError(
@@ -85,6 +93,40 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
                 "Check your embedding model's documentation for the correct dimension."
             )
         self._dimension = dimension
+
+    def _get_sync_sd_client(self):
+        if self._sync_sd_client is not None:
+            return self._sync_sd_client
+        http_client = create_optional_sync_httpx_client(
+            self.api_base,
+            client_cls=openai.DefaultHttpxClient,
+        )
+        if http_client is None:
+            return None
+        self._sync_sd_client = openai.OpenAI(
+            api_key=self.api_key or "no-key",
+            base_url=self.api_base,
+            http_client=http_client,
+            max_retries=0,
+        )
+        return self._sync_sd_client
+
+    def _get_async_sd_client(self):
+        def _build():
+            http_client = create_optional_async_httpx_client(
+                self.api_base,
+                client_cls=openai.DefaultAsyncHttpxClient,
+            )
+            if http_client is None:
+                return None
+            return openai.AsyncOpenAI(
+                api_key=self.api_key or "no-key",
+                base_url=self.api_base,
+                http_client=http_client,
+                max_retries=0,
+            )
+
+        return self._async_sd_client_cache.get(_build)
 
     def _truncate_vector(self, vector: List[float]) -> List[float]:
         """Truncate vector to target dimension if needed.
@@ -183,6 +225,9 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
         def _call() -> EmbedResult:
             kwargs = self._build_kwargs(is_query=is_query)
             kwargs["input"] = [text]
+            sd_client = self._get_sync_sd_client()
+            if sd_client is not None:
+                kwargs["client"] = sd_client
             response = litellm.embedding(**kwargs)
             self._update_telemetry_token_usage(response)
             vector = response.data[0]["embedding"]
@@ -203,6 +248,9 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
         async def _call() -> EmbedResult:
             kwargs = self._build_kwargs(is_query=is_query)
             kwargs["input"] = [text]
+            sd_client = self._get_async_sd_client()
+            if sd_client is not None:
+                kwargs["client"] = sd_client
             response = await litellm.aembedding(**kwargs)
             self._update_telemetry_token_usage(response)
             vector = response.data[0]["embedding"]
