@@ -542,6 +542,14 @@ impl HttpClient {
 
     /// Download file as raw bytes
     pub async fn get_bytes(&self, uri: &str) -> Result<Vec<u8>> {
+        let mut bytes = Vec::new();
+        self.get_stream(uri, &mut bytes).await?;
+        Ok(bytes)
+    }
+
+    /// Stream a download body into `sink` chunk by chunk and return the number
+    /// of bytes written, so caller memory stays bounded regardless of size.
+    pub async fn get_stream<W: std::io::Write>(&self, uri: &str, sink: &mut W) -> Result<u64> {
         let url = format!("{}/api/v1/content/download", self.base.base_url);
         let params = vec![
             ("uri".to_string(), uri.to_string()),
@@ -554,7 +562,7 @@ impl HttpClient {
             .get(&url)
             .headers(self.base.build_headers())
             .query(&params);
-        let response = self
+        let mut response = self
             .base
             .send_request(request, "HTTP request failed")
             .await?;
@@ -569,11 +577,16 @@ impl HttpClient {
             return Err(crate::base_client::api_error_from_body(&bytes, status));
         }
 
-        response
-            .bytes()
+        let mut written = 0u64;
+        while let Some(chunk) = response
+            .chunk()
             .await
-            .map(|b| b.to_vec())
-            .map_err(|e| Error::from_reqwest("Failed to read response bytes", e))
+            .map_err(|e| Error::from_reqwest("Failed to read download chunk", e))?
+        {
+            sink.write_all(&chunk)?;
+            written += chunk.len() as u64;
+        }
+        Ok(written)
     }
 
     // ============ Filesystem Methods ============

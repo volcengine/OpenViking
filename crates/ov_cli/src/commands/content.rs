@@ -111,33 +111,36 @@ pub async fn get(client: &HttpClient, uri: &str, local_path: &str) -> Result<()>
 
     // Ensure parent directory exists
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
     }
 
-    // Download file
-    let bytes = client.get_bytes(uri).await?;
+    // Stream into a sibling temp file so memory stays bounded and a partial
+    // download never occupies the requested target; publish via hard link so
+    // the target appears atomically and an existing target is never replaced.
+    // The temp file must live in the target's own directory: link(2) does not
+    // cross filesystems.
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut file = tempfile::NamedTempFile::new_in(parent)?;
 
-    // Write to local file
-    let mut file = create_download_target(path, local_path)?;
-    file.write_all(&bytes)?;
+    let written = client.get_stream(uri, &mut file).await?;
     file.flush()?;
 
-    println!("Downloaded {} bytes to {}", bytes.len(), local_path);
-    Ok(())
-}
+    let display = path.display().to_string();
+    file.persist_noclobber(path).map_err(|error| {
+        if error.error.kind() == std::io::ErrorKind::AlreadyExists {
+            crate::error::Error::Client(format!("File already exists: {display}"))
+        } else {
+            crate::error::Error::Io(error.error)
+        }
+    })?;
 
-fn create_download_target(path: &Path, local_path: &str) -> Result<std::fs::File> {
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::AlreadyExists {
-                crate::error::Error::Client(format!("File already exists: {local_path}"))
-            } else {
-                crate::error::Error::Io(error)
-            }
-        })
+    println!("Downloaded {written} bytes to {display}");
+    Ok(())
 }
 
 fn output_content_result(result: Value, output_format: OutputFormat, compact: bool) -> Result<()> {
@@ -306,18 +309,142 @@ mod tests {
         );
     }
 
-    #[test]
-    fn download_target_creation_does_not_truncate_an_existing_file() {
-        let dir = tempfile::tempdir().expect("tempdir should be created");
-        let path = dir.path().join("result.bin");
-        std::fs::write(&path, b"existing").expect("fixture should be written");
+    enum DownloadBody {
+        Complete(Vec<u8>),
+        /// Advertise `declared` bytes but send only `sent`, then close: the
+        /// client must treat the transfer as failed mid-body.
+        Truncated { declared: usize, sent: Vec<u8> },
+    }
 
-        let error = super::create_download_target(&path, &path.to_string_lossy())
-            .expect_err("existing targets must be rejected atomically");
+    async fn spawn_download_server(body: DownloadBody) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test server should bind");
+        let address = listener
+            .local_addr()
+            .expect("listener should have an address");
+        tokio::spawn(async move {
+            let (mut socket, _) = listener
+                .accept()
+                .await
+                .expect("download request should arrive");
+            // Drain the request head; a GET with no body arrives in one read.
+            let mut buffer = vec![0u8; 8192];
+            let _ = socket.read(&mut buffer).await;
+
+            let (declared, sent, truncate) = match body {
+                DownloadBody::Complete(bytes) => (bytes.len(), bytes, false),
+                DownloadBody::Truncated { declared, sent } => (declared, sent, true),
+            };
+            let head = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/octet-stream\r\ncontent-length: {declared}\r\nconnection: close\r\n\r\n"
+            );
+            socket
+                .write_all(head.as_bytes())
+                .await
+                .expect("response head should write");
+            socket.write_all(&sent).await.expect("body should write");
+            if truncate {
+                socket.shutdown().await.expect("socket should shut down");
+            }
+        });
+        format!("http://{address}")
+    }
+
+    fn download_client(base_url: String) -> crate::client::HttpClient {
+        crate::client::HttpClient::new(base_url, None, None, None, None, 5.0, false, None)
+    }
+
+    #[tokio::test]
+    async fn get_streams_body_and_publishes_target_atomically() {
+        let body: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+        let base_url = spawn_download_server(DownloadBody::Complete(body.clone())).await;
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let target = dir.path().join("download.bin");
+
+        super::get(
+            &download_client(base_url),
+            "viking://resources/file.bin",
+            &target.to_string_lossy(),
+        )
+        .await
+        .expect("download should succeed");
+
+        assert_eq!(
+            std::fs::read(&target).expect("published file should be readable"),
+            body
+        );
+        let entries: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("target directory should be listable")
+            .map(|entry| entry.expect("entry should be readable"))
+            .collect();
+        assert_eq!(
+            entries.len(),
+            1,
+            "no temp file should remain after success: {entries:?}"
+        );
+        assert!(entries[0].path().ends_with("download.bin"));
+    }
+
+    #[tokio::test]
+    async fn get_interrupted_transfer_leaves_no_target_and_no_partial_files() {
+        let base_url = spawn_download_server(DownloadBody::Truncated {
+            declared: 4096,
+            sent: vec![7u8; 512],
+        })
+        .await;
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let target = dir.path().join("download.bin");
+
+        let error = super::get(
+            &download_client(base_url),
+            "viking://resources/file.bin",
+            &target.to_string_lossy(),
+        )
+        .await
+        .expect_err("a truncated body must fail the download");
+
+        assert!(
+            matches!(
+                error,
+                Error::Network(_) | Error::Timeout(_) | Error::Parse(_) | Error::Io(_)
+            ),
+            "unexpected error variant: {error:?}"
+        );
+        assert!(
+            !target.exists(),
+            "the requested target must never appear from a failed transfer"
+        );
+        let residue: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("target directory should be listable")
+            .collect();
+        assert!(
+            residue.is_empty(),
+            "the partial temp file must be removed on error: {residue:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_refuses_to_overwrite_existing_target() {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let target = dir.path().join("download.bin");
+        std::fs::write(&target, b"existing").expect("fixture should be written");
+
+        // No server needed: the preflight check rejects before any request.
+        let client = download_client("http://127.0.0.1:1".into());
+        let error = super::get(
+            &client,
+            "viking://resources/file.bin",
+            &target.to_string_lossy(),
+        )
+        .await
+        .expect_err("existing targets must be rejected");
 
         assert!(matches!(error, Error::Client(_)));
         assert_eq!(
-            std::fs::read(&path).expect("existing file should remain readable"),
+            std::fs::read(&target).expect("existing file should remain readable"),
             b"existing"
         );
     }
