@@ -80,7 +80,17 @@ class TaskRecord:
     stage: Optional[str] = None
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
+    # These fields connect retry attempts that belong to the same task.
+    operation_id: Optional[str] = None
+    parent_task_id: Optional[str] = None
+    attempt_number: int = 1
+    error_info: Dict[str, Any] = field(default_factory=dict)
     auth: Dict[str, Any] = field(default_factory=dict, repr=False)
+
+    def __post_init__(self) -> None:
+        if not self.operation_id:
+            self.operation_id = self.task_id
+        self.attempt_number = max(1, int(self.attempt_number or 1))
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize for JSON response."""
@@ -90,10 +100,65 @@ class TaskRecord:
         d["updated_at_iso"] = datetime.fromtimestamp(self.updated_at, tz=timezone.utc).isoformat()
         d["result"] = _sanitize_task_result(d.get("result"))
         d["meta"] = _sanitize_task_result(d.get("meta"))
+        # Legacy failed tasks have only the raw error. Expose the same safe
+        # classification at read time without rewriting their historical record.
+        error_info = self.error_info or (classify_task_error(self.error) if self.error else {})
+        d["error_info"] = _sanitize_task_result(error_info)
         d.pop("auth", None)
         d.pop("account_id", None)
         d.pop("user_id", None)
         return d
+
+
+def classify_task_error(error: str) -> Dict[str, str]:
+    """Classify terminal errors for safe retry decisions and UI guidance.
+
+    This deliberately uses a small conservative set. Unknown failures remain
+    manually retryable, but permanent provider and input failures are blocked
+    so a retry button cannot create an unbounded stream of equivalent tasks.
+    """
+    lowered = (error or "").lower()
+    if "sparse embedding only supports text input" in lowered:
+        return {
+            "code": "MEDIA_SPARSE_INPUT_UNSUPPORTED",
+            "retryability": "requires_change",
+            "action": "Configure media text extraction or remove media from sparse embedding input.",
+        }
+    if "token_expired" in lowered or "credential" in lowered or "authentication token" in lowered:
+        return {
+            "code": "AUTH_EXPIRED",
+            "retryability": "requires_change",
+            "action": "Refresh the affected provider credential before retrying.",
+        }
+    if "accountoverdue" in lowered or "overdue balance" in lowered:
+        return {
+            "code": "ACCOUNT_OVERDUE",
+            "retryability": "requires_change",
+            "action": "Resolve the provider account balance before retrying.",
+        }
+    if "has no attribute 'strip'" in lowered or 'has no attribute "strip"' in lowered:
+        return {
+            "code": "INPUT_SHAPE_INVALID",
+            "retryability": "requires_change",
+            "action": "Correct the message input shape before retrying.",
+        }
+    if "source no longer exists" in lowered or "not found" in lowered:
+        return {
+            "code": "SOURCE_MISSING",
+            "retryability": "requires_change",
+            "action": "Restore or replace the source before retrying.",
+        }
+    if any(marker in lowered for marker in ("overloaded", "timeout", "timed out", "lock acquire")):
+        return {
+            "code": "TRANSIENT_UPSTREAM",
+            "retryability": "retryable",
+            "action": "Retry with backoff; the service may be temporarily busy.",
+        }
+    return {
+        "code": "UNKNOWN",
+        "retryability": "manual",
+        "action": "Review the error details before retrying.",
+    }
 
 
 # ── Singleton ──
@@ -544,6 +609,216 @@ class TaskTracker:
         """Record failure and finalize after owned work settles."""
         await self._record_outcome(task_id, account_id, user_id, error=error)
 
+    async def link_retry(
+        self,
+        task_id: str,
+        *,
+        parent_task_id: str,
+        account_id: str,
+        user_id: str,
+    ) -> Optional[TaskRecord]:
+        """Attach a newly accepted task to its failed predecessor."""
+        self._validate_owner(account_id, user_id)
+        return await self._dispatcher.run(
+            lambda: self._link_retry_on_owner(task_id, parent_task_id, account_id, user_id)
+        )
+
+    async def _link_retry_on_owner(
+        self,
+        task_id: str,
+        parent_task_id: str,
+        account_id: str,
+        user_id: str,
+    ) -> Optional[TaskRecord]:
+        parent = await self._load_for_update(parent_task_id, account_id, user_id)
+        if parent is None:
+            return None
+        linked: Optional[TaskRecord] = None
+        async with self._task_locks.acquire(task_id):
+            task = await self._load_for_update(task_id, account_id, user_id)
+            if task is None:
+                return None
+            updated = deepcopy(task)
+            updated.operation_id = parent.operation_id or parent.task_id
+            updated.parent_task_id = parent.task_id
+            updated.attempt_number = parent.attempt_number + 1
+            updated.updated_at = self._next_updated_at(task)
+            await self._persist_and_publish("update", updated)
+            linked = self._copy(updated)
+        if linked.status == TaskStatus.COMPLETED:
+            await self._complete_failed_operation_tasks_on_owner(linked)
+        return linked
+
+    async def resolve_failed(
+        self,
+        task_id: str,
+        result: Dict[str, Any],
+        *,
+        account_id: str,
+        user_id: str,
+    ) -> Optional[TaskRecord]:
+        """Change a failed task to completed after its retry or archive succeeds."""
+        self._validate_owner(account_id, user_id)
+        return await self._dispatcher.run(
+            lambda: self._resolve_failed_on_owner(task_id, result, account_id, user_id)
+        )
+
+    async def _resolve_failed_on_owner(
+        self,
+        task_id: str,
+        result: Dict[str, Any],
+        account_id: str,
+        user_id: str,
+    ) -> Optional[TaskRecord]:
+        async with self._task_locks.acquire(task_id):
+            task = await self._load_for_update(task_id, account_id, user_id)
+            if task is None:
+                return None
+            if task.status == TaskStatus.COMPLETED:
+                return self._copy(task)
+            if task.status != TaskStatus.FAILED:
+                return self._copy(task)
+            updated = deepcopy(task)
+            updated.status = TaskStatus.COMPLETED
+            updated.stage = TaskStatus.COMPLETED.value
+            updated.result = deepcopy(result)
+            updated.error = None
+            updated.error_info = {}
+            updated.updated_at = self._next_updated_at(task)
+            updated.auth = {}
+            await self._persist_and_publish("update", updated)
+            logger.info("[TaskTracker] Task %s completed after retry", task_id)
+            return self._copy(updated)
+
+    async def _complete_failed_operation_tasks_on_owner(
+        self,
+        completed: TaskRecord,
+        *,
+        refresh_from_store: bool = True,
+    ) -> None:
+        if (
+            completed.status != TaskStatus.COMPLETED
+            or completed.attempt_number <= 1
+            or not completed.account_id
+            or not completed.user_id
+        ):
+            return
+        if refresh_from_store:
+            self._merge_loaded_tasks(
+                await self._load_all_from_store(completed.account_id, completed.user_id)
+            )
+        failed_task_ids = [
+            task.task_id
+            for task in self._cache_snapshot()
+            if task.task_type == completed.task_type
+            and task.resource_id == completed.resource_id
+            and task.operation_id == completed.operation_id
+            and self._matches_owner(task, completed.account_id, completed.user_id)
+            and task.status == TaskStatus.FAILED
+        ]
+        for failed_task_id in failed_task_ids:
+            await self._resolve_failed_on_owner(
+                failed_task_id,
+                completed.result or {},
+                completed.account_id,
+                completed.user_id,
+            )
+
+    async def _reconcile_completed_operations_on_owner(
+        self,
+        account_id: str,
+        user_id: str,
+    ) -> None:
+        completed_retries = [
+            task
+            for task in self._cache_snapshot()
+            if self._matches_owner(task, account_id, user_id)
+            and task.status == TaskStatus.COMPLETED
+            and task.attempt_number > 1
+        ]
+        for completed in completed_retries:
+            await self._complete_failed_operation_tasks_on_owner(
+                completed,
+                refresh_from_store=False,
+            )
+
+    async def find_active(
+        self,
+        task_type: str,
+        resource_id: str,
+        *,
+        account_id: str,
+        user_id: str,
+    ) -> Optional[TaskRecord]:
+        """Return the newest active task for an owner and business key."""
+        self._validate_owner(account_id, user_id)
+        return await self._dispatcher.run(
+            lambda: self._find_active_on_owner(task_type, resource_id, account_id, user_id)
+        )
+
+    async def _find_active_on_owner(
+        self,
+        task_type: str,
+        resource_id: str,
+        account_id: str,
+        user_id: str,
+    ) -> Optional[TaskRecord]:
+        self._merge_loaded_tasks(await self._load_all_from_store(account_id, user_id))
+        candidates = [
+            task
+            for task in self._cache_snapshot()
+            if task.task_type == task_type
+            and task.resource_id == resource_id
+            and self._matches_owner(task, account_id, user_id)
+            and task.status in _ACTIVE_STATUSES
+        ]
+        if not candidates:
+            return None
+        return self._copy(max(candidates, key=lambda task: task.created_at))
+
+    async def find_completed_operation(
+        self,
+        task_type: str,
+        resource_id: str,
+        operation_id: str,
+        *,
+        account_id: str,
+        user_id: str,
+    ) -> Optional[TaskRecord]:
+        """Return the successful attempt that completed one retry operation."""
+        self._validate_owner(account_id, user_id)
+        return await self._dispatcher.run(
+            lambda: self._find_completed_operation_on_owner(
+                task_type,
+                resource_id,
+                operation_id,
+                account_id,
+                user_id,
+            )
+        )
+
+    async def _find_completed_operation_on_owner(
+        self,
+        task_type: str,
+        resource_id: str,
+        operation_id: str,
+        account_id: str,
+        user_id: str,
+    ) -> Optional[TaskRecord]:
+        self._merge_loaded_tasks(await self._load_all_from_store(account_id, user_id))
+        candidates = [
+            task
+            for task in self._cache_snapshot()
+            if task.task_type == task_type
+            and task.resource_id == resource_id
+            and task.operation_id == operation_id
+            and self._matches_owner(task, account_id, user_id)
+            and task.status == TaskStatus.COMPLETED
+        ]
+        if not candidates:
+            return None
+        return self._copy(max(candidates, key=lambda task: (task.attempt_number, task.updated_at)))
+
     async def _record_outcome(
         self,
         task_id: str,
@@ -587,9 +862,11 @@ class TaskTracker:
                         updated.resource_id = resource_id
                 if error is not None and updated.error is None:
                     updated.error = _sanitize_error(error)
+                    updated.error_info = classify_task_error(updated.error)
                 work_error = self._work_index.failure(task_id)
                 if work_error and updated.error is None:
                     updated.error = _sanitize_error(work_error)
+                    updated.error_info = classify_task_error(updated.error)
                 updated.updated_at = self._next_updated_at(task)
                 updated.auth = {}
                 try:
@@ -698,6 +975,7 @@ class TaskTracker:
     ) -> None:
         if self._work_index.has_work(task_id):
             return
+        completed: Optional[TaskRecord] = None
         async with self._task_locks.acquire(task_id):
             task = await self._load_for_update(task_id, account_id, user_id)
             if task and task.status in _ACTIVE_STATUSES:
@@ -722,6 +1000,10 @@ class TaskTracker:
                 await self._persist_and_publish("update", updated)
                 self._work_index.clear_failure(task_id)
                 logger.info("[TaskTracker] Task %s %s", task_id, updated.status.value)
+                if updated.status == TaskStatus.COMPLETED:
+                    completed = self._copy(updated)
+        if completed is not None:
+            await self._complete_failed_operation_tasks_on_owner(completed)
 
     async def wait(
         self,
@@ -848,7 +1130,8 @@ class TaskTracker:
         if task is not None:
             if not self._matches_owner(task, account_id, user_id):
                 return None
-            return self._copy(task)
+            if task.status != TaskStatus.FAILED or account_id is None or user_id is None:
+                return self._copy(task)
         if account_id is None:
             return None
         return await self._dispatcher.run(lambda: self._get_on_owner(task_id, account_id, user_id))
@@ -865,6 +1148,17 @@ class TaskTracker:
             if task is not None:
                 self._merge_loaded_tasks([task])
                 task = self._cached_task(task_id)
+        if task is not None and task.status == TaskStatus.FAILED and user_id:
+            try:
+                self._merge_loaded_tasks(await self._load_all_from_store(account_id, user_id))
+                await self._reconcile_completed_operations_on_owner(account_id, user_id)
+                task = self._cached_task(task_id)
+            except Exception:
+                logger.warning(
+                    "[TaskTracker] Failed to reconcile cached failed task %s",
+                    task_id,
+                    exc_info=True,
+                )
         if task is None or not self._matches_owner(task, account_id, user_id):
             return None
         return self._copy(task)
@@ -904,6 +1198,8 @@ class TaskTracker:
     ) -> List[TaskRecord]:
         if account_id is not None:
             self._merge_loaded_tasks(await self._load_all_from_store(account_id, user_id))
+            if user_id is not None:
+                await self._reconcile_completed_operations_on_owner(account_id, user_id)
         source = self._cache_snapshot()
         tasks = [self._copy(t) for t in source if self._matches_owner(t, account_id, user_id)]
         if not include_internal:

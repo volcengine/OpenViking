@@ -49,7 +49,7 @@ from openviking.storage.abstract_overview import body_for_preview, render_abstra
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.model_retry import is_retryable_api_error, retry_async
-from openviking.utils.time_utils import get_current_timestamp
+from openviking.utils.time_utils import get_current_timestamp, parse_iso_datetime
 from openviking.utils.token_estimation import estimate_text_tokens, truncate_text_to_token_budget
 from openviking_cli.exceptions import (
     FailedPreconditionError,
@@ -2157,6 +2157,7 @@ class Session:
                     account_id=self.ctx.account_id,
                     user_id=self.ctx.user.user_id,
                     task_id=task_id,
+                    meta={"archive_uri": archive_uri},
                 )
 
                 phase1_stage = "phase1_persist"
@@ -2224,6 +2225,240 @@ class Session:
                 retention_plan.estimated_active_tokens if retention_plan else 0
             ),
             "budget_exceeded": retention_plan.budget_exceeded if retention_plan else False,
+        }
+
+    async def inspect_failed_commit(
+        self,
+        failed_task_id: str,
+        *,
+        archive_uri: Optional[str] = None,
+        failed_task_created_at: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Inspect whether a failed Phase 2 archive still needs work."""
+        if not self._viking_fs:
+            raise FailedPreconditionError("Session storage is not initialized")
+
+        selected_uri, _ = await self._find_failed_commit_archive(
+            failed_task_id,
+            archive_uri=archive_uri,
+            failed_task_created_at=failed_task_created_at,
+        )
+        if not selected_uri:
+            return {"state": "unavailable", "archive_uri": None}
+        if await self._archive_file_exists(selected_uri, ".done"):
+            return {"state": "completed", "archive_uri": selected_uri}
+        if await self._archive_file_exists(selected_uri, ".failed.json"):
+            return {"state": "failed_ready", "archive_uri": selected_uri}
+        return {"state": "not_ready", "archive_uri": selected_uri}
+
+    async def _find_failed_commit_archive(
+        self,
+        failed_task_id: str,
+        *,
+        archive_uri: Optional[str] = None,
+        failed_task_created_at: Optional[float] = None,
+    ) -> tuple[str, Dict[str, Any]]:
+        """Find current and legacy archives without changing their state."""
+        candidate_uris = [archive_uri] if archive_uri else []
+        if not candidate_uris:
+            history_uri = f"{self._session_uri}/history"
+            matches = await self._viking_fs.glob(
+                "archive_*/messages.jsonl", uri=history_uri, ctx=self.ctx
+            )
+            candidate_uris = [
+                uri.rsplit("/messages.jsonl", 1)[0]
+                for uri in matches.get("matches", [])
+                if isinstance(uri, str) and uri.endswith("/messages.jsonl")
+            ]
+
+        legacy_matches: List[tuple[float, str, Dict[str, Any]]] = []
+        for candidate_uri in candidate_uris:
+            if not isinstance(candidate_uri, str) or not candidate_uri.startswith(
+                f"{self._session_uri}/history/"
+            ):
+                continue
+            phase1 = (await self._read_archive_meta(candidate_uri)).get("phase1")
+            if not isinstance(phase1, dict):
+                continue
+            payload = phase1.get("queue_message")
+            if not isinstance(payload, dict):
+                continue
+            retry_history = phase1.get("retry_history") or []
+            known_task_ids = {
+                str(item.get("task_id"))
+                for item in retry_history
+                if isinstance(item, dict) and item.get("task_id")
+            }
+            if payload.get("task_id") == failed_task_id or failed_task_id in known_task_ids:
+                return candidate_uri, payload
+            if archive_uri and candidate_uri == archive_uri:
+                return candidate_uri, payload
+
+            # Recovery tooling used by older installations replaced the queue
+            # task ID without retaining retry_history. Phase 1 and task records
+            # were created together, so their sub-second timestamps provide a
+            # narrow, deterministic compatibility match.
+            if failed_task_created_at is None:
+                continue
+            created_at = phase1.get("created_at")
+            if not isinstance(created_at, str):
+                continue
+            try:
+                created_epoch = parse_iso_datetime(created_at).timestamp()
+            except ValueError:
+                continue
+            delta = abs(created_epoch - float(failed_task_created_at))
+            if delta <= 1.0:
+                legacy_matches.append((delta, candidate_uri, payload))
+
+        if legacy_matches:
+            _, selected_uri, queue_payload = min(legacy_matches, key=lambda item: item[0])
+            return selected_uri, queue_payload
+        return "", {}
+
+    async def retry_failed_commit(
+        self,
+        failed_task_id: str,
+        *,
+        archive_uri: Optional[str] = None,
+        failed_task_created_at: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Create a new Phase 2 task from a failed commit's durable archive.
+
+        Phase 1 has already removed the archived messages from the live session,
+        so retrying ``commit_async`` would incorrectly report ``no_messages``.
+        This method restores the stored QueueFS payload instead, while keeping
+        each failed attempt as an immutable task record.
+        """
+        from openviking.service.task_tracker import get_task_tracker
+        from openviking.storage.queuefs import QueueManager, get_queue_manager
+        from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
+
+        if not self._viking_fs:
+            raise FailedPreconditionError("Session storage is not initialized")
+
+        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
+        lease = await self._viking_fs._async_agfs.pathlock_acquire_tree(
+            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
+        )
+        try:
+            selected_uri, queue_payload = await self._find_failed_commit_archive(
+                failed_task_id,
+                archive_uri=archive_uri,
+                failed_task_created_at=failed_task_created_at,
+            )
+
+            if not selected_uri:
+                raise FailedPreconditionError("The failed commit archive is unavailable for retry")
+            if await self._archive_file_exists(selected_uri, ".done"):
+                return {
+                    "session_id": self.session_id,
+                    "status": "completed",
+                    "task_id": None,
+                    "archive_uri": selected_uri,
+                    "reason": "archive_complete",
+                }
+            if not await self._archive_file_exists(selected_uri, ".failed.json"):
+                raise FailedPreconditionError("The failed commit is not ready for retry")
+
+            queued = SessionCommitMsg.from_dict(queue_payload)
+            retry_task_id = str(uuid4())
+            retry_message = SessionCommitMsg(**{**queued.to_dict(), "task_id": retry_task_id})
+            failed_uri = f"{selected_uri}/.failed.json"
+            failure_history_id = sha256_text(failed_task_id)
+            failure_history_uri = f"{selected_uri}/.failed.{failure_history_id}.json"
+            failure_content = await self._viking_fs.read_file(failed_uri, ctx=self.ctx)
+            phase1 = (await self._read_archive_meta(selected_uri)).get("phase1")
+            if not isinstance(phase1, dict):
+                raise FailedPreconditionError("The failed commit archive has no Phase 1 record")
+            original_phase1 = dict(phase1)
+            retry_history = list(phase1.get("retry_history") or [])
+            retry_history.append({"task_id": failed_task_id, "failed_file": failure_history_uri})
+            phase1["queue_message"] = retry_message.to_dict()
+            phase1["retry_history"] = retry_history
+
+            tracker = get_task_tracker()
+            retry_task_created = False
+            failure_history_written = False
+            try:
+                await self._viking_fs.write_file(
+                    failure_history_uri,
+                    failure_content,
+                    ctx=self.ctx,
+                    lease_ref=lease,
+                )
+                failure_history_written = True
+                await self._merge_archive_meta(selected_uri, {"phase1": phase1}, lease_ref=lease)
+                await tracker.create(
+                    "session_commit",
+                    resource_id=self.session_id,
+                    account_id=self.ctx.account_id,
+                    user_id=self.ctx.user.user_id,
+                    task_id=retry_task_id,
+                    meta={"archive_uri": selected_uri, "retry_of": failed_task_id},
+                )
+                retry_task_created = True
+                await self._viking_fs._async_agfs.rm(
+                    self._viking_fs._uri_to_path(failed_uri, ctx=self.ctx),
+                    fs_ctx=self._viking_fs._pathlock_fs_ctx(self.ctx, lease),
+                )
+                await get_queue_manager().enqueue(
+                    QueueManager.SESSION_COMMIT,
+                    retry_message.to_dict(),
+                )
+            except Exception:
+                if retry_task_created:
+                    try:
+                        await tracker.fail(
+                            retry_task_id,
+                            "Failed to enqueue session commit retry",
+                            account_id=self.ctx.account_id,
+                            user_id=self.ctx.user.user_id,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Failed to mark retry task %s after queue enqueue failure",
+                            retry_task_id,
+                        )
+                phase1_rolled_back = False
+                try:
+                    await self._merge_archive_meta(
+                        selected_uri, {"phase1": original_phase1}, lease_ref=lease
+                    )
+                    phase1_rolled_back = True
+                except Exception:
+                    logger.exception("Failed to roll back retry metadata for %s", selected_uri)
+                try:
+                    if not await self._archive_file_exists(selected_uri, ".failed.json"):
+                        await self._viking_fs.write_file(
+                            failed_uri,
+                            failure_content,
+                            ctx=self.ctx,
+                            lease_ref=lease,
+                        )
+                except Exception:
+                    logger.exception("Failed to restore retry marker for %s", selected_uri)
+                if failure_history_written and phase1_rolled_back:
+                    try:
+                        await self._viking_fs._async_agfs.rm(
+                            self._viking_fs._uri_to_path(failure_history_uri, ctx=self.ctx),
+                            fs_ctx=self._viking_fs._pathlock_fs_ctx(self.ctx, lease),
+                        )
+                    except Exception as cleanup_exc:
+                        if not _is_storage_not_found(cleanup_exc):
+                            logger.exception(
+                                "Failed to remove rolled-back retry history %s",
+                                failure_history_uri,
+                            )
+                raise
+        finally:
+            await self._viking_fs._async_agfs.pathlock_release(lease)
+
+        return {
+            "session_id": self.session_id,
+            "status": "accepted",
+            "task_id": retry_task_id,
+            "archive_uri": selected_uri,
         }
 
     async def finalize_cancelled_commit(self, archive_uri: str) -> None:

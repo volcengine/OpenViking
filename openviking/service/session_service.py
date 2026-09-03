@@ -450,6 +450,42 @@ class SessionService:
         )
         return task.to_dict() if task else None
 
+    async def retry_failed_commit(
+        self,
+        session_id: str,
+        failed_task_id: str,
+        ctx: RequestContext,
+        *,
+        archive_uri: Optional[str] = None,
+        failed_task_created_at: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Requeue Phase 2 for a failed commit without re-archiving the session."""
+        self._ensure_initialized()
+        session = await self.get(session_id, ctx)
+        return await session.retry_failed_commit(
+            failed_task_id,
+            archive_uri=archive_uri,
+            failed_task_created_at=failed_task_created_at,
+        )
+
+    async def inspect_failed_commit(
+        self,
+        session_id: str,
+        failed_task_id: str,
+        ctx: RequestContext,
+        *,
+        archive_uri: Optional[str] = None,
+        failed_task_created_at: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Return the durable retry state without creating work."""
+        self._ensure_initialized()
+        session = await self.get(session_id, ctx)
+        return await session.inspect_failed_commit(
+            failed_task_id,
+            archive_uri=archive_uri,
+            failed_task_created_at=failed_task_created_at,
+        )
+
     async def extract(self, session_id: str, ctx: RequestContext) -> List[Any]:
         """Extract memories from a session.
 
@@ -557,9 +593,7 @@ class SessionService:
                     return False
                 self._auto_commit_inflight.add(claim)
         except Exception:
-            logger.debug(
-                "Skipped auto-commit scheduling for %s", session_id, exc_info=True
-            )
+            logger.debug("Skipped auto-commit scheduling for %s", session_id, exc_info=True)
             return False
 
         task = asyncio.create_task(self.run_auto_commit(session_id, ctx, reason=reason_hint))
