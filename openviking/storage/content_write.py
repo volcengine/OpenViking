@@ -1463,6 +1463,9 @@ class ContentWriteCoordinator:
                 parent = VikingURI(normalized_uri).parent
                 if parent is not None:
                     directory_levels.setdefault(parent.uri.rstrip("/"), set()).add(1)
+            elif normalized_uri.endswith("/.search_tags.json"):
+                # Internal control metadata — never index as user content.
+                pass
             else:
                 deduped.append({"uri": normalized_uri})
         for directory_uri, levels in directory_levels.items():
