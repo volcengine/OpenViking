@@ -748,6 +748,43 @@ async def test_reindex_upsert_uses_uri_owner_for_user_scoped_records(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_reindex_upsert_caps_oversized_abstract_by_utf8_bytes(monkeypatch):
+    from openviking.service.reindex_executor import ReindexExecutor
+
+    captured = {}
+
+    class FakeVikingDB:
+        async def enqueue_embedding_msg(self, msg):
+            captured["msg"] = msg
+            return True
+
+    fake_service = type("Svc", (), {"vikingdb_manager": FakeVikingDB()})()
+    monkeypatch.setattr("openviking.service.reindex_executor.get_service", lambda: fake_service)
+
+    service = ReindexExecutor()
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="acct", user_id="admin"),
+        role=Role.ROOT,
+    )
+    oversized_abstract = "א" * 60_000
+
+    await service._upsert_context(
+        uri="viking://user/bob/memories/events/large.md",
+        parent_uri="viking://user/bob/memories/events",
+        abstract=oversized_abstract,
+        vector_text="large memory",
+        is_leaf=True,
+        context_type="memory",
+        level=ContextLevel.DETAIL,
+        ctx=ctx,
+    )
+
+    abstract = captured["msg"].context_data["abstract"]
+    assert len(abstract.encode("utf-8")) == 50_000
+    assert abstract == oversized_abstract[:25_000]
+
+
+@pytest.mark.asyncio
 async def test_reindex_semantic_processor_uses_uri_owner_for_user_scoped_records(monkeypatch):
     from openviking.service.reindex_executor import ReindexExecutor
 
@@ -1618,6 +1655,56 @@ async def test_reindex_executor_infers_user_namespace_root():
 
 
 @pytest.mark.asyncio
+async def test_reindex_user_container_reindexes_its_root_markers_after_children(monkeypatch):
+    from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
+
+    class FakeVikingFS:
+        async def tree(
+            self,
+            uri,
+            output="original",
+            show_all_hidden=True,
+            node_limit=1000,
+            level_limit=None,
+            ctx=None,
+        ):
+            return [{"uri": "viking://user/default", "isDir": True}]
+
+    seen = {"users": [], "namespace": []}
+    reindex_user_container = ReindexExecutor._reindex_user_namespace
+
+    async def fake_reindex_user_namespace(self, *, uri, mode, run):
+        seen["users"].append((uri, mode))
+
+    async def fake_reindex_resource_vectors_from_entries(
+        self, *, root_uri, directories, files, counters, ctx
+    ):
+        seen["namespace"].append((root_uri, list(directories), list(files)))
+
+    monkeypatch.setattr("openviking.service.reindex_executor.get_viking_fs", lambda: FakeVikingFS())
+    monkeypatch.setattr(ReindexExecutor, "_reindex_user_namespace", fake_reindex_user_namespace)
+    monkeypatch.setattr(
+        ReindexExecutor,
+        "_reindex_resource_vectors_from_entries",
+        fake_reindex_resource_vectors_from_entries,
+    )
+
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="alice"),
+        role=Role.ROOT,
+    )
+    await reindex_user_container(
+        ReindexExecutor(),
+        uri="viking://user",
+        mode="vectors_only",
+        run=_make_reindex_run(ctx, _ReindexCounters()),
+    )
+
+    assert seen["users"] == [("viking://user/default", "vectors_only")]
+    assert seen["namespace"] == [("viking://user", ["viking://user"], [])]
+
+
+@pytest.mark.asyncio
 async def test_reindex_executor_rejects_deprecated_agent_namespace_root():
     from openviking.service.reindex_executor import ReindexExecutor
 
@@ -1840,8 +1927,9 @@ async def test_reindex_user_namespace_semantic_and_vectors_skips_uncovered_root_
 
 
 @pytest.mark.asyncio
-async def test_reindex_skill_namespace_reindexes_only_skill_roots(monkeypatch):
+async def test_reindex_skill_namespace_reindexes_root_markers_and_only_skill_roots(monkeypatch):
     from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
+    from openviking.utils.ingest_options import IngestOptions
 
     class FakeVikingFS:
         async def tree(
@@ -1861,13 +1949,23 @@ async def test_reindex_skill_namespace_reindexes_only_skill_roots(monkeypatch):
                 {"uri": "viking://user/default/skills/my_skill/SKILL.md", "isDir": False},
             ]
 
-    seen = []
+    seen = {"namespace": [], "skills": []}
 
     async def fake_reindex_skill(self, *, uri, mode, run):
-        seen.append((uri, mode))
+        seen["skills"].append((uri, mode))
+
+    async def fake_reindex_resource_vectors_from_entries(
+        self, *, root_uri, directories, files, counters, ctx, ingest_options=None
+    ):
+        seen["namespace"].append((root_uri, list(directories), list(files), ingest_options))
 
     monkeypatch.setattr("openviking.service.reindex_executor.get_viking_fs", lambda: FakeVikingFS())
     monkeypatch.setattr(ReindexExecutor, "_reindex_skill", fake_reindex_skill)
+    monkeypatch.setattr(
+        ReindexExecutor,
+        "_reindex_resource_vectors_from_entries",
+        fake_reindex_resource_vectors_from_entries,
+    )
 
     service = ReindexExecutor()
     counters = _ReindexCounters()
@@ -1875,14 +1973,25 @@ async def test_reindex_skill_namespace_reindexes_only_skill_roots(monkeypatch):
         user=UserIdentifier(account_id="test", user_id="alice"),
         role=Role.ROOT,
     )
+    ingest_options = IngestOptions.from_search_tags(["team=search"], mode="replace")
+    run = _make_reindex_run(ctx, counters)
+    run.ingest_options = ingest_options
 
     await service._reindex_skill_namespace(
         uri="viking://user/default/skills",
         mode="semantic_and_vectors",
-        run=_make_reindex_run(ctx, counters),
+        run=run,
     )
 
-    assert seen == [("viking://user/default/skills/my_skill", "semantic_and_vectors")]
+    assert seen["namespace"] == [
+        (
+            "viking://user/default/skills",
+            ["viking://user/default/skills"],
+            [],
+            ingest_options,
+        )
+    ]
+    assert seen["skills"] == [("viking://user/default/skills/my_skill", "semantic_and_vectors")]
 
 
 @pytest.mark.asyncio
@@ -2964,13 +3073,14 @@ async def test_reindex_user_namespace_partitions_memory_skill_and_resource(monke
     )
 
     await service._reindex_user_namespace(
-        uri="viking://user/",
+        uri="viking://user/default",
         mode="vectors_only",
         run=_make_reindex_run(ctx, counters),
     )
 
     assert seen["memory"] == [("viking://user/default/memories", "vectors_only")]
     assert seen["skill"] == [("viking://user/default/skills/my_skill", "vectors_only")]
+    assert "viking://user/default" in seen["resource_dirs"]
     assert "viking://user/default/resources" in seen["resource_dirs"]
     assert "viking://user/default/memories" not in seen["resource_dirs"]
     assert "viking://user/default/skills" not in seen["resource_dirs"]
