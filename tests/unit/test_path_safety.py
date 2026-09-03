@@ -3,7 +3,11 @@
 
 import pytest
 
-from openviking.utils.path_safety import safe_join_viking_uri, sanitize_relative_viking_path
+from openviking.utils.path_safety import (
+    safe_join_viking_uri,
+    sanitize_relative_viking_path,
+    validate_safe_viking_uri_path,
+)
 
 
 def test_sanitize_relative_viking_path_normalizes_windows_separators():
@@ -73,3 +77,28 @@ def test_safe_join_viking_uri_preserves_posix_relative_path():
         )
         == "viking://user/default/skills/pdf/scripts/check_bounding_boxes.py"
     )
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "viking://resources/proj/notes#1.md",
+        "viking://user/u/memories/notes/meeting.md#chunk_0000",
+        "viking://resources/proj/dir#1/b.md",
+    ],
+)
+def test_validate_safe_viking_uri_path_allows_hash(uri):
+    assert validate_safe_viking_uri_path(uri) == uri
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "viking://resources/proj/notes?draft=1",
+        "viking://resources/proj/../secret.md",
+        "viking://resources/proj/%2e%2e/secret.md",
+    ],
+)
+def test_validate_safe_viking_uri_path_rejects_unsafe_uri(uri):
+    with pytest.raises(ValueError):
+        validate_safe_viking_uri_path(uri)

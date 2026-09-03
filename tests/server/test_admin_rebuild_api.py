@@ -1107,6 +1107,114 @@ async def test_prune_orphans_skips_memory_chunks_when_base_read_fails(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_prune_orphans_keeps_real_file_whose_name_looks_like_a_chunk(monkeypatch):
+    """A memory file literally named `x#chunk_0000.md` is a file, not a chunk
+    of `x` — write URIs accept '#', so the prune check must match the exact
+    chunk suffix instead of any '#chunk_' substring."""
+    from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
+
+    base_uri = "viking://user/bob/memories/notes/meeting.md"
+    hash_named_file = "viking://user/bob/memories/notes/meeting#chunk_0000.md"
+
+    class FakeVikingFS:
+        async def exists(self, uri, ctx=None):
+            return uri in {base_uri, hash_named_file}
+
+        async def read_file(self, uri, ctx=None):
+            assert uri == base_uri
+            return "memory body"
+
+    class FakeVikingDB:
+        async def filter(self, *, filter, limit, output_fields, ctx):
+            return [
+                {
+                    "id": "keep_hash_named_file",
+                    "uri": hash_named_file,
+                    "level": 2,
+                    "context_type": "memory",
+                    "account_id": "acct",
+                    "owner_user_id": "bob",
+                }
+            ]
+
+        async def delete(self, ids, *, ctx):
+            raise AssertionError("existing files must not be pruned as orphan chunks")
+
+    fake_service = type("Svc", (), {"vikingdb_manager": FakeVikingDB()})()
+    monkeypatch.setattr("openviking.service.reindex_executor.get_service", lambda: fake_service)
+    monkeypatch.setattr("openviking.service.reindex_executor.get_viking_fs", lambda: FakeVikingFS())
+
+    counters = _ReindexCounters()
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="acct", user_id="admin"),
+        role=Role.ROOT,
+    )
+
+    await ReindexExecutor()._prune_orphan_vectors(
+        uri="viking://user/bob/memories",
+        object_type="memory",
+        dry_run=False,
+        counters=counters,
+        ctx=ctx,
+    )
+
+    assert counters.deleted_records == 0
+    assert counters.failed_records == 0
+
+
+@pytest.mark.asyncio
+async def test_prune_orphans_prunes_resource_record_named_like_a_chunk(monkeypatch):
+    """A resource/skill record whose literal name ends in '#chunk_0000' is a
+    real file: the chunk-prune shortcut must not shield it from the ordinary
+    exists-based prune when the file is gone."""
+    from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
+
+    hash_named_file = "viking://resources/demo/notes#chunk_0000"
+    deleted = {}
+
+    class FakeVikingFS:
+        async def exists(self, uri, ctx=None):
+            return False
+
+    class FakeVikingDB:
+        async def filter(self, *, filter, limit, output_fields, ctx):
+            return [
+                {
+                    "id": "delete_hash_named_resource",
+                    "uri": hash_named_file,
+                    "level": 2,
+                    "context_type": "resource",
+                    "account_id": "test",
+                }
+            ]
+
+        async def delete(self, ids, *, ctx):
+            deleted["ids"] = ids
+            return len(ids)
+
+    fake_service = type("Svc", (), {"vikingdb_manager": FakeVikingDB()})()
+    monkeypatch.setattr("openviking.service.reindex_executor.get_service", lambda: fake_service)
+    monkeypatch.setattr("openviking.service.reindex_executor.get_viking_fs", lambda: FakeVikingFS())
+
+    counters = _ReindexCounters()
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="admin"),
+        role=Role.ROOT,
+    )
+
+    await ReindexExecutor()._prune_orphan_vectors(
+        uri="viking://resources/demo",
+        object_type="resource",
+        dry_run=False,
+        counters=counters,
+        ctx=ctx,
+    )
+
+    assert deleted["ids"] == ["delete_hash_named_resource"]
+    assert counters.deleted_records == 1
+
+
+@pytest.mark.asyncio
 async def test_prune_orphans_deletes_missing_file_with_string_level(monkeypatch):
     from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
 

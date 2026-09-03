@@ -37,6 +37,7 @@ from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+from openviking.utils.chunk_uri import chunk_base_uri, make_chunk_uri
 from openviking.utils.embedding_input import truncate_embedding_input
 from openviking.utils.embedding_utils import (
     _apply_ingest_options,
@@ -680,11 +681,14 @@ class ReindexExecutor:
                 if not records:
                     break
 
+                chunk_cache: dict[str, tuple[_PruneSourceRead, Optional[set[str]]]] = {}
                 for record in records:
                     counters.scanned_records += 1
                     if not self._is_supported_prune_record(record, counters):
                         continue
-                    if not await self._is_orphan_vector_record(record, counters=counters, ctx=ctx):
+                    if not await self._is_orphan_vector_record(
+                        record, counters=counters, ctx=ctx, chunk_cache=chunk_cache
+                    ):
                         continue
 
                     if dry_run:
@@ -782,6 +786,7 @@ class ReindexExecutor:
         *,
         counters: _ReindexCounters,
         ctx: RequestContext,
+        chunk_cache: Optional[dict[str, tuple[_PruneSourceRead, Optional[set[str]]]]] = None,
     ) -> bool:
         uri = str(record["uri"])
         level = int(record.get("_prune_level", record["level"]))
@@ -846,25 +851,40 @@ class ReindexExecutor:
                 )
             return True
 
-        if "#" in uri:
-            if context_type == ContextType.MEMORY.value and "#chunk_" in uri:
-                base_uri = uri.split("#chunk_", 1)[0]
+        # Chunk suffixes only exist in the memory namespace; a resource/skill
+        # record whose literal name happens to end in '#chunk_NNNN' is a real
+        # file and must fall through to the exists-based prune below.
+        base_uri = (
+            chunk_base_uri(uri) if context_type == ContextType.MEMORY.value else None
+        )
+        if base_uri is not None:
+            # All chunks of one base share the same source read and expected
+            # set; memoize so a heavily-chunked base costs one read, not N.
+            if chunk_cache is not None and base_uri in chunk_cache:
+                base, expected = chunk_cache[base_uri]
+            else:
                 base = await self._read_prune_source(base_uri, ctx=owner_ctx)
-                if base.error:
-                    self._record_prune_source_error(
-                        counters=counters,
-                        uri=uri,
-                        source_uri=base_uri,
-                        error=base.error,
-                    )
-                    return False
-                if not base.exists:
-                    return True
-                expected = {
-                    chunk_uri for chunk_uri, _chunk in self._chunk_memory_body(base_uri, base.text)
-                }
-                return uri not in expected
-            return False
+                expected = (
+                    {
+                        chunk_uri
+                        for chunk_uri, _chunk in self._chunk_memory_body(base_uri, base.text)
+                    }
+                    if base.exists and not base.error
+                    else None
+                )
+                if chunk_cache is not None:
+                    chunk_cache[base_uri] = (base, expected)
+            if base.error:
+                self._record_prune_source_error(
+                    counters=counters,
+                    uri=uri,
+                    source_uri=base_uri,
+                    error=base.error,
+                )
+                return False
+            if not base.exists:
+                return True
+            return uri not in expected
 
         if self._is_hidden_meta_file(uri):
             return False
@@ -1635,7 +1655,11 @@ class ReindexExecutor:
                 file_counters.warnings.append(f"No memory source found for {file_uri}")
                 return file_counters
 
-            parent_uri = VikingURI(file_uri.split("#", 1)[0]).parent.uri
+            # No '#' split here: '#' has no fragment semantics in Viking URIs, and
+            # stripping at the first '#' would misparent names/directories that
+            # legitimately contain it (real chunk URIs keep the '#' inside the
+            # final path segment, so parent is unaffected either way).
+            parent_uri = VikingURI(file_uri).parent.uri
             if body:
                 detail_abstract = self._prefer_non_empty(abstract, memory_content, body)
                 try:
@@ -1966,7 +1990,9 @@ class ReindexExecutor:
             if start >= len(body):
                 break
 
-        return [(f"{uri}#chunk_{idx:04d}", chunk) for idx, chunk in enumerate(chunks) if chunk]
+        return [
+            (make_chunk_uri(uri, idx), chunk) for idx, chunk in enumerate(chunks) if chunk
+        ]
 
     def _best_non_empty(self, *values: str) -> str:
         for value in values:
