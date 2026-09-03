@@ -29,6 +29,11 @@ variables:
     description: "Optional instructions for checkpoint summaries produced by the same call."
     required: false
     default: ""
+  - name: "output_language"
+    type: "string"
+    description: "Language for all section content, resolved from the conversation or config override."
+    required: false
+    default: "en"
 
 template: |
   You are the Working Memory maintainer for a long-running session. Produce a
@@ -81,6 +86,12 @@ template: |
   Exception: raw exhaustive URL/image/search result dumps are NOT durable facts
   unless the user explicitly asked to preserve them or a specific URL was used
   as evidence. Summarize or prune bulk URL lists instead of copying them forward.
+
+  # Output language
+
+  Write all section CONTENT you produce or rewrite (including the Session
+  Title) in {{ output_language }}. The English section names in the "sections"
+  JSON keys stay in English — the server matches them when parsing and merging.
 
   # RULE 1 — Op semantics (re-read carefully).
 

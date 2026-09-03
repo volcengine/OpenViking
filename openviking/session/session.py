@@ -24,6 +24,7 @@ from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext, Role
 from openviking.session.auto_commit_policy import AutoCommitPolicy
 from openviking.session.memory.constants import AGENT_EVOLUTION_MEMORY_TYPES
+from openviking.session.memory.utils import resolve_output_language_from_conversation
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.session.memory.utils.language import resolve_output_language_from_conversation
 from openviking.session.retention import (
@@ -4244,7 +4245,8 @@ class Session:
         )
         checkpoint_instructions = self._checkpoint_prompt_instructions(len(checkpoint_requests))
 
-        vlm = get_openviking_config().vlm
+        config = get_openviking_config()
+        vlm = config.vlm
         if not (vlm and vlm.is_available()):
             if checkpoint_requests:
                 raise ValueError("A configured VLM is required to generate checkpoint summaries")
@@ -4263,6 +4265,10 @@ class Session:
             return (
                 f"# Session Summary\n\n**Overview**: {turn_count} turns, {len(messages)} messages"
             )
+
+        # Resolve once, before the CREATE/UPDATE split, so every render path
+        # (create, update, update-failure fallback) shares the same language.
+        output_language = resolve_output_language_from_conversation(formatted, config)
 
         # -------- Detect WM v2 format --------
         _is_wm_v2 = latest_archive_overview and any(

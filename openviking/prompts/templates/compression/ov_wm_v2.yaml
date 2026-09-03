@@ -25,6 +25,11 @@ variables:
     description: "Optional instructions for checkpoint summaries produced by the same call."
     required: false
     default: ""
+  - name: "output_language"
+    type: "string"
+    description: "Language for all section content, resolved from the conversation or config override."
+    required: false
+    default: "en"
 
 template: |
   You are a session note-taker. Produce a structured Working Memory document
@@ -53,6 +58,9 @@ template: |
   RULES:
   - Write all section content in {{ output_language }}. Keep the 7 canonical English section headers and italic descriptions unchanged so existing Working Memory archives remain machine-detectable.
   - All 7 section headers and italic descriptions must appear unchanged.
+  - Write all section CONTENT (including the Session Title) in {{ output_language }}.
+    The English headers and italic descriptions stay in English because the
+    server matches them to detect and merge the WM v2 format.
   - Write INFO-DENSE content: names, numbers, dates, locations, exact values.
   - For temporal facts, record the EVENT date, not the conversation date.
     Example: conversation on May 8 mentions "I went yesterday" -> record "7 May".
