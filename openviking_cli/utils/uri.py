@@ -285,13 +285,20 @@ class VikingURI:
         # extension candidate; require an ASCII-alphanumeric tail of <=5 chars
         # (covers .md/.pdf/.docx/.html/.ipynb; longer runs like .markdown and
         # tails containing non-alphanumerics keep the old plain-truncation
-        # behavior) so version dots followed by long stems ("v1.2<long stem>")
-        # are not misread as extensions.
+        # behavior — purely numeric tails such as .12345 do count, which is
+        # harmless since the tail is kept verbatim either way) so version dots
+        # followed by long stems ("v1.2<long stem>") are not misread as
+        # extensions.
         suffix = ""
         if len(safe) > 50 and "." in safe:
             tail = safe.rsplit(".", 1)[1]
             if tail.isascii() and tail.isalnum() and len(tail) <= 5:
                 suffix = f".{tail}"
+        # The cap counts code points (a 50-char segment is <=200 UTF-8 bytes,
+        # within common 255-byte filename limits). The stem budget can eat
+        # into the hash tail of a no-split temp name (`<41 chars>_<hash8>.md`
+        # keeps 5 of 8 hash chars); avoiding that needs the parser to budget
+        # the extension in _sanitize_for_path upstream.
         if len(safe) > 50:
             safe = safe[: 50 - len(suffix)].rstrip("_.") + suffix
         # Defuse Win32 reserved device names (CON/PRN/NUL/AUX/COM1../LPT9..)

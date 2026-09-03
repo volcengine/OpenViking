@@ -73,9 +73,14 @@ def test_sanitize_segment_no_split_md_hash_shape():
     assert result.startswith("x" * 41)
 
 
-def test_sanitize_segment_multiple_dots():
-    """Only the last dot-run is treated as the extension candidate."""
-    assert VikingURI.sanitize_segment("a.b.c") == "a.b.c"
+def test_sanitize_segment_multiple_dots_last_run_is_candidate():
+    """Only the last dot-run is treated as the extension candidate.
+
+    ``"x" * 45 + ".md.pdf"`` (53 chars) keeps only ``.pdf``: the cut lands
+    exactly on the ``.md`` dot, and the stem rstrip must eat it or the
+    result would read ``x*45..pdf``.
+    """
+    assert VikingURI.sanitize_segment("x" * 45 + ".md.pdf") == "x" * 45 + ".pdf"
 
 
 def test_sanitize_segment_trailing_dot_stripped():
