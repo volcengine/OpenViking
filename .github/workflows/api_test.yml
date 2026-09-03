@@ -337,6 +337,12 @@ jobs:
           $config | Out-File -FilePath "$configDir\ov.conf" -Encoding utf8
           Write-Host "Config file created at $configDir\ov.conf"
 
+      - name: Run queued resource error regression
+        if: github.event_name == 'pull_request' && runner.os == 'Linux'
+        run: |
+          uv run python -m pytest -q -o addopts='' \
+            tests/server/test_api_resources.py::test_add_resource_remote_empty_with_wait_returns_invalid_argument
+
       - name: Find available port and start OpenViking Server (Unix)
         if: runner.os != 'Windows'
         id: start-server-unix

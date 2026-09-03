@@ -1292,55 +1292,6 @@ async def test_add_resource_processor_reports_zero_vectors(monkeypatch):
     assert final_result["context_count"] == 0
 
 
-@pytest.mark.asyncio
-async def test_add_resource_processor_preserves_public_error_code(monkeypatch):
-    service = SimpleNamespace(
-        execute_add_resource_job=AsyncMock(
-            side_effect=InvalidArgumentError("'remote-empty.txt' is empty (0 bytes)")
-        ),
-    )
-    task_tracker = SimpleNamespace(
-        create=AsyncMock(return_value=SimpleNamespace(status=TaskStatus.PENDING)),
-        start=AsyncMock(),
-        update_stage=AsyncMock(),
-        complete=AsyncMock(),
-        fail=AsyncMock(),
-        get_task_auth=AsyncMock(return_value={}),
-        wait_for_descendants=AsyncMock(),
-    )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.add_resource_processor.get_task_tracker",
-        Mock(return_value=task_tracker),
-    )
-    processor = AddResourceProcessor(
-        service,
-        asyncio.get_running_loop(),
-        QueueManager.ADD_RESOURCE,
-        SimpleNamespace(_async_agfs=SimpleNamespace(pathlock_release=AsyncMock())),
-    )
-    msg = AddResourceMsg(
-        task_id="task-invalid",
-        path="https://example.com/remote-empty.txt",
-        root_uri="viking://resources/remote-empty.txt",
-        account_id="account-1",
-        user_id="user-1",
-        role="user",
-    )
-    data = msg.to_dict()
-    data[TASK_WORK_ID_FIELD] = "work-invalid"
-
-    await processor._process(msg, data)
-
-    task_tracker.fail.assert_awaited_once_with(
-        "task-invalid",
-        "'remote-empty.txt' is empty (0 bytes)",
-        account_id="account-1",
-        user_id="user-1",
-        result={"code": "INVALID_ARGUMENT"},
-    )
-    task_tracker.complete.assert_not_awaited()
-
-
 def test_feishu_direct_submission_requires_configured_auth(monkeypatch):
     api = _understanding_api_for_parse()
     source = "https://example.larkoffice.com/docx/doxcnToken"

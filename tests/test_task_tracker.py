@@ -204,23 +204,6 @@ async def test_fail_task(tracker: TaskTracker):
     assert "LLM timeout" in retrieved.error
 
 
-async def test_fail_task_preserves_structured_failure_result(tracker: TaskTracker):
-    task = await tracker.create("add_resource", **_owner_kwargs())
-    await tracker.start(task.task_id)
-
-    await tracker.fail(
-        task.task_id,
-        "source is empty",
-        result={"code": "INVALID_ARGUMENT"},
-    )
-
-    retrieved = await tracker.get(task.task_id)
-    assert retrieved is not None
-    assert retrieved.status == TaskStatus.FAILED
-    assert retrieved.error == "source is empty"
-    assert retrieved.result == {"code": "INVALID_ARGUMENT"}
-
-
 async def test_get_nonexistent_returns_none(tracker: TaskTracker):
     assert await tracker.get("does-not-exist") is None
 
