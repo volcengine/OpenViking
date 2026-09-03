@@ -347,6 +347,26 @@ def main():
             _stop_vikingbot_gateway(bot_process)
 
 
+def _read_bot_log(log_file_path: str) -> str:
+    """Read the gateway log for a failure report.
+
+    The child writes to this file through the descriptor, so the bytes in it are
+    whatever the child emitted rather than anything this process encoded. Reading
+    it back with the locale codec made the report depend on where it ran: on a
+    Windows console codepage a traceback carrying one non-ASCII byte — a path, a
+    provider name, a translated message — raised UnicodeDecodeError here, and the
+    decode error replaced the failure it was called to explain.
+
+    Undecodable bytes are replaced rather than raised. A diagnostic that refuses
+    to print is worse than one with a few question marks in it.
+    """
+    try:
+        with open(log_file_path, "r", encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError as exc:
+        return f"(could not read {log_file_path}: {exc})"
+
+
 def _handle_vikingbot_failure(output: str, returncode: int) -> None:
     """Handle vikingbot startup failure and provide helpful error messages."""
     print(f"\nError: vikingbot gateway exited early (code {returncode})", file=sys.stderr)
@@ -410,7 +430,7 @@ def _start_vikingbot_gateway(
             os.makedirs(log_dir, exist_ok=True)
             log_filename = "vikingbot.log"
             log_file_path = os.path.join(log_dir, log_filename)
-            log_file = open(log_file_path, "a")
+            log_file = open(log_file_path, "a", encoding="utf-8")
             stdout_handler = log_file
             stderr_handler = log_file
             print(f"Vikingbot logs will be written to: {log_file_path}")
@@ -448,8 +468,7 @@ def _start_vikingbot_gateway(
             if log_file:
                 log_file.close()
                 if log_file_path:
-                    with open(log_file_path, "r") as f:
-                        output = f.read()
+                    output = _read_bot_log(log_file_path)
                     _handle_vikingbot_failure(output, process.returncode)
             else:
                 stdout, stderr = process.communicate(timeout=1)
