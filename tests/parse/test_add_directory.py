@@ -316,6 +316,8 @@ class TestEmptyDirectory:
                 "feishu_wiki_space_id": "space-id",
                 "feishu_wiki_root_node_token": "parent-token",
                 "feishu_wiki_node_count": 2,
+                "feishu_wiki_materialized_count": 1,
+                "feishu_wiki_skipped_count": 1,
                 "feishu_wiki_skipped_items": [
                     {
                         "path": str(blocked_path),
@@ -328,7 +330,7 @@ class TestEmptyDirectory:
                         "url": "https://example.feishu.cn/wiki/node-token",
                         "reason": "HTTP 403",
                     }
-                ]
+                ],
             },
         )
 
@@ -354,6 +356,8 @@ class TestEmptyDirectory:
         assert result.meta["feishu_wiki_space_id"] == "space-id"
         assert result.meta["feishu_wiki_root_node_token"] == "parent-token"
         assert result.meta["feishu_wiki_node_count"] == 2
+        assert result.meta["feishu_wiki_materialized_count"] == 1
+        assert result.meta["feishu_wiki_skipped_count"] == 1
 
 
 # ---------------------------------------------------------------------------

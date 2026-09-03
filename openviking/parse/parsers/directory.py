@@ -53,6 +53,8 @@ _SOURCE_REPORT_META_FIELDS = frozenset(
         "feishu_wiki_space_id",
         "feishu_wiki_root_node_token",
         "feishu_wiki_node_count",
+        "feishu_wiki_materialized_count",
+        "feishu_wiki_skipped_count",
     }
 )
 

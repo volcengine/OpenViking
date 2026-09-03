@@ -462,6 +462,23 @@ class ResourceService:
 
         return _NormalizedAddResourceArgs(normalized, watch_auth_state, parse_mode)
 
+    @staticmethod
+    def _validate_feishu_wiki_scope_source(path: str, wiki_scope: Optional[str]) -> None:
+        if wiki_scope is None:
+            return
+        from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+
+        accessor = FeishuAccessor()
+        if not accessor.can_handle(path):
+            raise InvalidArgumentError(
+                "args.feishu_wiki_scope is only supported for Feishu Wiki URLs."
+            )
+        try:
+            doc_type, _ = accessor._parse_feishu_url(path)
+            accessor._normalize_wiki_scope(doc_type, wiki_scope)
+        except ValueError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
+
     def _load_feishu_credentials_for_watch(
         self,
         app_id: Any,
@@ -901,7 +918,10 @@ class ResourceService:
             wiki_scope = processor_kwargs.get(_FEISHU_WIKI_SCOPE_ARG)
             if wiki_scope is not None:
                 preflight_kwargs[_FEISHU_WIKI_SCOPE_ARG] = wiki_scope
-            preflight = await FeishuAccessor().preflight_source(path, **preflight_kwargs)
+            try:
+                preflight = await FeishuAccessor().preflight_source(path, **preflight_kwargs)
+            except ValueError as exc:
+                raise InvalidArgumentError(str(exc)) from exc
             source_name = source_name or preflight.source_name
             source_info = _ResourceSourceInfo(
                 source_name=source_name,
@@ -1485,6 +1505,10 @@ class ResourceService:
             args,
             watch_interval=watch_interval,
             allowed_reserved_fields=allowed_reserved_fields,
+        )
+        self._validate_feishu_wiki_scope_source(
+            path,
+            normalized_args.processor_kwargs.get(_FEISHU_WIKI_SCOPE_ARG),
         )
         mode = (
             normalize_parse_mode(parse_mode)

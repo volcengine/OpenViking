@@ -463,6 +463,51 @@ class TestAddResourceArgs:
             )
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("path", "scope", "message"),
+        [
+            ("/test/path", "subtree", "only supported for Feishu Wiki URLs"),
+            (
+                "https://example.feishu.cn/docx/document-token",
+                "subtree",
+                "only supported for Feishu Wiki URLs",
+            ),
+            (
+                "https://example.feishu.cn/wiki/settings/space-1",
+                "node",
+                "can only be imported with subtree scope",
+            ),
+        ],
+    )
+    async def test_rejects_feishu_wiki_scope_for_incompatible_source(
+        self,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+        path: str,
+        scope: str,
+        message: str,
+    ):
+        with pytest.raises(InvalidArgumentError, match=message):
+            await resource_service.add_resource(
+                path=path,
+                ctx=request_context,
+                args={"feishu_wiki_scope": scope},
+            )
+
+    @pytest.mark.asyncio
+    async def test_rejects_bare_feishu_wiki_settings_url(
+        self,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+    ):
+        with pytest.raises(InvalidArgumentError, match="must include a space ID"):
+            await resource_service.add_resource(
+                path="https://example.feishu.cn/wiki/settings",
+                ctx=request_context,
+                to="viking://resources/wiki-space",
+            )
+
+    @pytest.mark.asyncio
     async def test_feishu_wiki_subtree_queues_directory_source(
         self,
         monkeypatch: pytest.MonkeyPatch,

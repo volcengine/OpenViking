@@ -198,9 +198,11 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 - 飞书/Lark 应用 token 导入不传 `args.feishu_access_token`。OpenViking 保持原有应用凭证流程，由 SDK 使用 `app_id` 和 `app_secret` 自动获取 app/tenant token。该模式支持一次性导入和 `watch_interval > 0`。
 - 飞书/Lark 一次性用户 token 导入通过 `args={"feishu_access_token": "u-..."}` 传入，且 `watch_interval <= 0`。OpenViking 只在本次导入使用该用户 token，不保存。
 - 飞书/Lark 用户 token watch 通过 `args={"feishu_access_token": "u-...", "feishu_refresh_token": "r-..."}` 传入，且 `watch_interval > 0`。还可同时传入 `feishu_app_id` 和 `feishu_app_secret`；OpenViking 会将其保存在 watch task 私有状态中，并用于刷新该 watch 的用户 token。
-- `/wiki/{node_token}` URL 默认保持现有的单文档导入行为。设置 `args.feishu_wiki_scope="subtree"` 后，该节点及全部后代会作为一个目录资源导入；`/wiki/settings/{space_id}` URL 始终按整空间子树导入。
+- `/wiki/{node_token}` URL 默认保持现有的单文档导入行为。设置 `args.feishu_wiki_scope="subtree"` 后，该节点及全部后代会作为一个目录资源导入；即使所选节点当前没有子节点，显式请求的 subtree 也仍保持目录资源语义。`/wiki/settings/{space_id}` URL 始终按整空间子树导入，缺少 space ID 的 `/wiki/settings` 非法。非 Wiki 来源传入 `feishu_wiki_scope`，或空间 URL 使用 `node` scope，都会在导入开始前被拒绝。
 - Wiki 子树中的每个节点都会保留为一个目录：节点正文保存为该目录中的 `{title}.md`，子节点嵌套在其下。挂载身份按 `node_token` 区分，因此指向同一 `obj_token` 的两个 Wiki 节点不会被合并；同级重名节点会追加稳定的 node token 后缀。
-- 子节点列表读取失败、`node_token` 重复、深度超过 20 或节点超过 500 时，子树发现会直接失败，不会静默生成残缺结构。单个节点正文无权限或类型不支持时，默认写入 `meta.failed_files` 并继续导入可访问节点；`strict=true` 会将这类正文失败升级为整体失败。
+- 子节点列表读取失败、分页重复或缺少必要的 page token、`node_token` 重复、父子边深度超过 20 或节点超过 500 时，子树发现会直接失败，不会静默生成残缺结构。这两个固定上限采用 fail-closed 语义；超限时需要选择更小的子树。
+- 飞书 API 调用会对瞬时传输错误、HTTP 408/429/5xx 和已知限流响应进行重试，总尝试次数最多 3 次。数值型 `Retry-After` 会在上限内优先采用，其他重试使用带抖动的有界指数退避；权限、鉴权、参数和不存在错误不会重试。
+- 单个节点正文无权限或类型不支持时，默认写入 `meta.failed_files` 并继续导入可访问节点；`strict=true` 会将这类正文失败升级为整体失败。如果所有已发现节点的正文都失败，整体导入失败，不会返回空的成功资源。子树元数据包含 `feishu_wiki_node_count`、`feishu_wiki_materialized_count` 和 `feishu_wiki_skipped_count`。
 - 请求未传应用凭证时，用户 token watch 回退使用 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET`，或 `ov.conf` 中的 `feishu.app_id` 和 `feishu.app_secret`。飞书 refresh token 绑定签发它的应用，因此实际使用的应用凭证必须与传入的用户 token 匹配。
 - Watch task 的 token 状态和请求传入的应用凭证保存在内部控制文件 `viking://resources/.watch_tasks.json` 中，不会出现在 watch API/MCP/CLI 返回里。若启用了 VikingFS 文件加密，该控制文件会静态加密；否则服务端控制文件中会包含这些明文私有状态。
 - 本地目录输入会遵循 `.gitignore`（根目录和子目录，标准 Git 语义）；`ignore_dirs`、`include`、`exclude` 会在此基础上进一步过滤。

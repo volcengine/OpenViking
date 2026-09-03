@@ -10,12 +10,15 @@ Included by default in `openviking[bot]` installation.
 """
 
 import asyncio
+import hashlib
 import json
 import mimetypes
 import os
+import random
 import re
 import shutil
 import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, NoReturn, Optional, Tuple, Union
@@ -52,6 +55,11 @@ _FEISHU_WIKI_SCOPES = frozenset({FEISHU_WIKI_SCOPE_NODE, FEISHU_WIKI_SCOPE_SUBTR
 _MAX_WIKI_SUBTREE_DEPTH = 20
 _MAX_WIKI_SUBTREE_NODES = 500
 _MAX_WIKI_DOCUMENT_CONCURRENCY = 8
+_FEISHU_API_MAX_ATTEMPTS = 3
+_FEISHU_API_RETRY_BASE_SECONDS = 0.5
+_FEISHU_API_RETRY_MAX_SECONDS = 8.0
+_FEISHU_API_RETRY_AFTER_MAX_SECONDS = 60.0
+_FEISHU_RATE_LIMIT_CODES = frozenset({11020, 11021, 99991402})
 _FEISHU_DOC_PATH_TYPES = {"doc", "docs", "docx", "wiki", "sheets", "base"}
 _FEISHU_DRIVE_DOC_TYPES = {
     "doc": "docs",
@@ -64,6 +72,16 @@ _FEISHU_DRIVE_DOC_TYPES = {
 }
 _MAX_PATH_SEGMENT_CHARS = 120
 _MAX_PATH_SEGMENT_BYTES = 240
+_WINDOWS_RESERVED_PATH_STEMS = frozenset(
+    {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{index}" for index in range(1, 10)),
+        *(f"LPT{index}" for index in range(1, 10)),
+    }
+)
 
 _MediaDownloadExtras = Dict[str, List[Optional[str]]]
 
@@ -104,6 +122,33 @@ def _fit_path_segment(text: str, *, max_chars: int, max_bytes: int) -> str:
     ).rstrip(" ._")
 
 
+def _windows_reserved_path_stem(segment: str) -> str:
+    """Return the Win32 device-name stem used for portability checks."""
+    return segment.split(".", 1)[0].rstrip(" .").upper()
+
+
+def _guard_windows_reserved_path_segment(
+    segment: str,
+    *,
+    max_chars: int,
+    max_bytes: int,
+) -> str:
+    """Prefix Win32 device names while preserving a normal file extension."""
+    if _windows_reserved_path_stem(segment) not in _WINDOWS_RESERVED_PATH_STEMS:
+        return segment
+
+    path = Path(segment)
+    suffix = path.suffix
+    stem = path.stem
+    suffix_bytes = len(suffix.encode("utf-8"))
+    safe_stem = _truncate_text_for_path_segment(
+        stem,
+        max_chars=max_chars - len(suffix) - 1,
+        max_bytes=max_bytes - suffix_bytes - 1,
+    ).rstrip(" ._")
+    return f"_{safe_stem or 'untitled'}{suffix}"
+
+
 def _safe_path_segment(
     name: str,
     *,
@@ -117,31 +162,40 @@ def _safe_path_segment(
     if not safe_name:
         safe_name = fallback
     if len(safe_name) <= max_len and len(safe_name.encode("utf-8")) <= max_bytes:
-        return safe_name
+        candidate = safe_name
+    else:
+        stem = Path(safe_name).stem
+        suffix = Path(safe_name).suffix
+        suffix_bytes = len(suffix.encode("utf-8"))
+        if suffix_bytes >= max_bytes:
+            suffix = ""
+            suffix_bytes = 0
 
-    stem = Path(safe_name).stem
-    suffix = Path(safe_name).suffix
-    suffix_bytes = len(suffix.encode("utf-8"))
-    if suffix_bytes >= max_bytes:
-        suffix = ""
-        suffix_bytes = 0
-
-    stem = _truncate_text_for_path_segment(
-        stem,
-        max_chars=max_len - len(suffix),
-        max_bytes=max_bytes - suffix_bytes,
-    ).rstrip(" ._")
-    if not stem:
         stem = _truncate_text_for_path_segment(
-            fallback,
+            stem,
             max_chars=max_len - len(suffix),
             max_bytes=max_bytes - suffix_bytes,
         ).rstrip(" ._")
-    return _fit_path_segment(
-        f"{stem or 'untitled'}{suffix}",
+        if not stem:
+            stem = _truncate_text_for_path_segment(
+                fallback,
+                max_chars=max_len - len(suffix),
+                max_bytes=max_bytes - suffix_bytes,
+            ).rstrip(" ._")
+        candidate = (
+            _fit_path_segment(
+                f"{stem or 'untitled'}{suffix}",
+                max_chars=max_len,
+                max_bytes=max_bytes,
+            )
+            or "untitled"
+        )
+
+    return _guard_windows_reserved_path_segment(
+        candidate,
         max_chars=max_len,
         max_bytes=max_bytes,
-    ) or "untitled"
+    )
 
 
 def _numbered_path_segment(stem: str, suffix: str, index: int) -> str:
@@ -164,7 +218,13 @@ def _numbered_path_segment(stem: str, suffix: str, index: int) -> str:
 
 def _identified_path_segment(name: str, identity: str) -> str:
     """Append an identity marker without letting path truncation discard it."""
-    marker = f" [{identity or 'node'}]"
+    raw_identity = str(identity or "node")
+    safe_identity = re.sub(r"[^A-Za-z0-9_-]+", "_", raw_identity).strip("_") or "node"
+    if len(safe_identity) > 32 or len(safe_identity.encode("utf-8")) > 32:
+        prefix = safe_identity[:8].rstrip("_-") or "node"
+        digest = hashlib.sha256(raw_identity.encode("utf-8")).hexdigest()[:12]
+        safe_identity = f"{prefix}-{digest}"
+    marker = f" [{safe_identity}]"
     marker_bytes = len(marker.encode("utf-8"))
     stem = _truncate_text_for_path_segment(
         name,
@@ -510,6 +570,8 @@ class FeishuAccessor(DataAccessor):
                         "feishu_wiki_space_id": snapshot["space_id"],
                         "feishu_wiki_root_node_token": snapshot["root_node_token"],
                         "feishu_wiki_node_count": snapshot["node_count"],
+                        "feishu_wiki_materialized_count": snapshot["materialized_count"],
+                        "feishu_wiki_skipped_count": snapshot["skipped_count"],
                         "feishu_wiki_skipped_items": wiki_skipped_items,
                         "original_filename": snapshot["source_name"],
                     },
@@ -862,6 +924,8 @@ class FeishuAccessor(DataAccessor):
         """
         parsed = urlparse(url)
         path_parts = [p for p in parsed.path.split("/") if p]
+        if path_parts[:2] == ["wiki", "settings"] and len(path_parts) < 3:
+            raise ValueError("Feishu Wiki space URL must include a space ID after /wiki/settings/")
         if len(path_parts) < 2:
             raise ValueError(f"Cannot parse Feishu URL: {url}")
         if len(path_parts) >= 3 and path_parts[:2] == ["drive", "folder"]:
@@ -980,21 +1044,24 @@ class FeishuAccessor(DataAccessor):
             ):
                 pending.append((child, node_dir / directory_name, depth + 1))
 
+        materialized_count = 0
         if strict:
             for node, node_dir in placements:
-                await self._materialize_wiki_document(
-                    node,
-                    node_dir,
-                    feishu_access_token=feishu_access_token,
-                    skipped_items=skipped_items,
-                    strict=True,
+                materialized_count += int(
+                    await self._materialize_wiki_document(
+                        node,
+                        node_dir,
+                        feishu_access_token=feishu_access_token,
+                        skipped_items=skipped_items,
+                        strict=True,
+                    )
                 )
         else:
             semaphore = asyncio.Semaphore(_MAX_WIKI_DOCUMENT_CONCURRENCY)
 
-            async def materialize(node: FeishuWikiNode, node_dir: Path) -> None:
+            async def materialize(node: FeishuWikiNode, node_dir: Path) -> bool:
                 async with semaphore:
-                    await self._materialize_wiki_document(
+                    return await self._materialize_wiki_document(
                         node,
                         node_dir,
                         feishu_access_token=feishu_access_token,
@@ -1002,12 +1069,30 @@ class FeishuAccessor(DataAccessor):
                         strict=False,
                     )
 
-            await asyncio.gather(*(materialize(node, node_dir) for node, node_dir in placements))
+            results = await asyncio.gather(
+                *(materialize(node, node_dir) for node, node_dir in placements)
+            )
+            materialized_count = sum(results)
+
+        if placements and materialized_count == 0:
+            raise OpenVikingError(
+                "Feishu Wiki subtree discovery succeeded, but no document body "
+                "could be materialized.",
+                code="FAILED_PRECONDITION",
+                details={
+                    "operation": "materialize Wiki subtree",
+                    "node_count": len(placements),
+                    "materialized_count": 0,
+                    "skipped_count": len(placements),
+                },
+            )
 
         return {
             "space_id": space_id,
             "root_node_token": root_node_token,
             "node_count": len(placements),
+            "materialized_count": materialized_count,
+            "skipped_count": len(placements) - materialized_count,
             "source_name": source_name,
         }
 
@@ -1019,7 +1104,7 @@ class FeishuAccessor(DataAccessor):
         feishu_access_token: Optional[str],
         skipped_items: Optional[list[dict[str, Any]]],
         strict: bool,
-    ) -> None:
+    ) -> bool:
         doc_type = self._WIKI_TYPE_MAP.get(node.obj_type, node.obj_type)
         try:
             if doc_type not in self._DOC_TYPE_HANDLERS or not node.obj_token:
@@ -1042,6 +1127,7 @@ class FeishuAccessor(DataAccessor):
                 image_path = target_dir / rel_path
                 image_path.parent.mkdir(parents=True, exist_ok=True)
                 image_path.write_bytes(image_bytes)
+            return True
         except Exception as exc:
             self._record_skipped_wiki_item(
                 skipped_items,
@@ -1051,6 +1137,7 @@ class FeishuAccessor(DataAccessor):
             )
             if strict:
                 raise
+            return False
 
     @classmethod
     def _wiki_child_directory_names(
@@ -1078,8 +1165,11 @@ class FeishuAccessor(DataAccessor):
                 candidate = _identified_path_segment(base, suffix)
             if candidate.casefold() in used:
                 candidate = _identified_path_segment(base, node.node_token or str(len(names) + 1))
-            if candidate.casefold() in used:
-                candidate = _numbered_path_segment(Path(candidate).stem, Path(candidate).suffix, 2)
+            numbered_stem = candidate
+            index = 2
+            while candidate.casefold() in used:
+                candidate = _numbered_path_segment(numbered_stem, "", index)
+                index += 1
             used.add(candidate.casefold())
             names.append(candidate)
         return names
@@ -1647,9 +1737,86 @@ class FeishuAccessor(DataAccessor):
 
         return RequestOption.builder().user_access_token(feishu_access_token).build()
 
+    @staticmethod
+    def _is_retryable_feishu_exception(exc: Exception) -> bool:
+        if isinstance(exc, (TimeoutError, ConnectionError)):
+            return True
+        try:
+            import requests
+        except ImportError:  # pragma: no cover - lark-oapi already depends on requests
+            return False
+        return isinstance(
+            exc,
+            (requests.exceptions.Timeout, requests.exceptions.ConnectionError),
+        )
+
+    @staticmethod
+    def _is_retryable_feishu_response(response: Any) -> bool:
+        status = _response_http_status(response)
+        if status == 408 or status == 429 or (status is not None and 500 <= status < 600):
+            return True
+        try:
+            code = int(getattr(response, "code", 0) or 0)
+        except (TypeError, ValueError):
+            return False
+        return code in _FEISHU_RATE_LIMIT_CODES
+
+    @classmethod
+    def _feishu_retry_delay(cls, response: Any, retry_index: int) -> float:
+        retry_after = cls._response_header(getattr(response, "raw", None), "retry-after")
+        if retry_after:
+            try:
+                delay = float(retry_after)
+            except (TypeError, ValueError):
+                delay = 0.0
+            if delay > 0:
+                return min(delay, _FEISHU_API_RETRY_AFTER_MAX_SECONDS)
+        delay = min(
+            _FEISHU_API_RETRY_BASE_SECONDS * (2**retry_index),
+            _FEISHU_API_RETRY_MAX_SECONDS,
+        )
+        return delay * random.uniform(0.8, 1.2)
+
     def _call_api(self, method, request, feishu_access_token: Optional[str] = None):
         option = self._user_request_option(feishu_access_token)
-        return method(request) if option is None else method(request, option)
+        for attempt in range(_FEISHU_API_MAX_ATTEMPTS):
+            try:
+                response = method(request) if option is None else method(request, option)
+            except Exception as exc:
+                if (
+                    attempt >= _FEISHU_API_MAX_ATTEMPTS - 1
+                    or not self._is_retryable_feishu_exception(exc)
+                ):
+                    raise
+                delay = self._feishu_retry_delay(None, attempt)
+                logger.warning(
+                    "[FeishuAPI] Transient transport failure; retry %d/%d in %.2fs",
+                    attempt + 1,
+                    _FEISHU_API_MAX_ATTEMPTS - 1,
+                    delay,
+                )
+                time.sleep(delay)
+                continue
+
+            success = getattr(response, "success", None)
+            if callable(success) and success():
+                return response
+            if attempt >= _FEISHU_API_MAX_ATTEMPTS - 1 or not self._is_retryable_feishu_response(
+                response
+            ):
+                return response
+            delay = self._feishu_retry_delay(response, attempt)
+            logger.warning(
+                "[FeishuAPI] Transient API failure: code=%s http=%s; retry %d/%d in %.2fs",
+                getattr(response, "code", None),
+                _response_http_status(response),
+                attempt + 1,
+                _FEISHU_API_MAX_ATTEMPTS - 1,
+                delay,
+            )
+            time.sleep(delay)
+
+        raise AssertionError("unreachable Feishu API retry loop")
 
     # ========== Wiki Resolution ==========
 
@@ -1767,9 +1934,10 @@ class FeishuAccessor(DataAccessor):
     ) -> List[FeishuWikiNode]:
         """List all direct child placements, retaining node rather than object identity."""
         children: list[FeishuWikiNode] = []
-        page_token = None
+        page_token: Optional[str] = None
+        seen_page_tokens: set[str] = set()
         while True:
-            page, has_more, page_token = self._fetch_wiki_children_page(
+            page, has_more, next_page_token = self._fetch_wiki_children_page(
                 space_id,
                 parent_node_token=parent_node_token,
                 feishu_access_token=feishu_access_token,
@@ -1779,11 +1947,17 @@ class FeishuAccessor(DataAccessor):
             children.extend(page)
             if not has_more:
                 return children
-            if not page_token:
-                resource = parent_node_token or space_id
+            resource = parent_node_token or space_id
+            if not next_page_token:
                 raise RuntimeError(
                     f"Feishu returned more Wiki children for {resource} without a page token"
                 )
+            if next_page_token == page_token or next_page_token in seen_page_tokens:
+                raise RuntimeError(
+                    f"Feishu repeated a Wiki children page token while listing {resource}"
+                )
+            seen_page_tokens.add(next_page_token)
+            page_token = next_page_token
 
     def _resolve_wiki_node(
         self,
