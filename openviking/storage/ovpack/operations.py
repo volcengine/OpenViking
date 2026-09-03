@@ -657,7 +657,9 @@ async def restore_ovpack(
 
         manifest_entries = manifest_entries_by_path(manifest)
         backup_scopes = backup_scopes_from_manifest(manifest, manifest_entries)
-        members = validated_import_members(infolist, base_name, root_uri)
+        members = validated_import_members(
+            infolist, base_name, root_uri, skip_watch_control_files=True
+        )
 
         index_records = validate_manifest_content(zf, manifest, infolist, base_name)
         dense_vectors = read_dense_vectors(zf, manifest, base_name, index_records)
