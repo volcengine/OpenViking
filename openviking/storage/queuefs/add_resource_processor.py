@@ -68,21 +68,6 @@ class AddResourceProcessor(DequeueHandlerBase):
         staged = StagedSource.from_dict(msg.staged_source)
         await self._viking_fs.delete_temp(staged.temp_uri, ctx=ctx)
 
-    async def _cleanup_failed_target(
-        self,
-        msg: AddResourceMsg,
-        ctx: RequestContext,
-        resource_lock: Optional[Dict[str, Any]],
-    ) -> None:
-        if not msg.cleanup_empty_target_on_failure or resource_lock is None:
-            return
-        with suppress(Exception):
-            await self._resource_service._cleanup_reserved_target_if_empty(
-                root_uri=msg.root_uri,
-                ctx=ctx,
-                resource_lock=resource_lock,
-            )
-
     async def _release_cancelled_resources(
         self,
         msg: AddResourceMsg,
@@ -203,6 +188,7 @@ class AddResourceProcessor(DequeueHandlerBase):
             bind_task_context(msg.task_id, ctx.account_id, ctx.user.user_id),
         ):
             terminal = False
+            task_failed = False
             try:
                 if replay_result is None:
                     await tracker.start(
@@ -224,7 +210,6 @@ class AddResourceProcessor(DequeueHandlerBase):
                     )
                     if result.get("status") == "error":
                         errors = result.get("errors") or ["resource processing failed"]
-                        await self._cleanup_failed_target(msg, ctx, resource_lock)
                         await tracker.fail(
                             msg.task_id,
                             "; ".join(str(error) for error in errors),
@@ -232,6 +217,7 @@ class AddResourceProcessor(DequeueHandlerBase):
                             user_id=ctx.user.user_id,
                         )
                         terminal = True
+                        task_failed = True
                         self.report_error("resource processing failed", data)
                         return None
                     await tracker.complete(
@@ -283,7 +269,6 @@ class AddResourceProcessor(DequeueHandlerBase):
                 self.report_success()
                 return None
             except Exception as exc:
-                await self._cleanup_failed_target(msg, ctx, resource_lock)
                 await tracker.fail(
                     msg.task_id,
                     str(exc),
@@ -291,11 +276,26 @@ class AddResourceProcessor(DequeueHandlerBase):
                     user_id=ctx.user.user_id,
                 )
                 terminal = True
+                task_failed = True
                 self.report_error(str(exc), data)
                 return None
             finally:
                 request_wait_tracker.cleanup(telemetry_id)
                 unregister_telemetry(telemetry_id)
+                if (
+                    task_failed
+                    and msg.cleanup_empty_target_on_failure
+                    and resource_lock is not None
+                ):
+                    # Roll back a target this import reserved before it was
+                    # published; _cleanup_reserved_target_if_empty rechecks
+                    # that the directory still holds no real content (#4501).
+                    with suppress(Exception):
+                        await self._resource_service._cleanup_reserved_target_if_empty(
+                            root_uri=msg.root_uri,
+                            ctx=ctx,
+                            resource_lock=resource_lock,
+                        )
                 with suppress(Exception):
                     if resource_lock is not None:
                         await self._viking_fs._async_agfs.pathlock_release(resource_lock)

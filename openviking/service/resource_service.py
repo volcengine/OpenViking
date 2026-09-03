@@ -55,10 +55,7 @@ from openviking.server.user_config import (
     effective_skill_add_target,
 )
 from openviking.storage.acl import AclAction
-from openviking.storage.internal_names import (
-    STORAGE_INTERNAL_ENTRY_NAMES,
-    WEBDAV_RESERVED_FILENAMES,
-)
+from openviking.storage.internal_names import is_rollback_safe_entry_name
 from openviking.storage.queuefs import QueueManager, get_queue_manager
 from openviking.storage.queuefs.add_resource_msg import AddResourcePhase
 from openviking.storage.viking_fs import LS_ALL_NODES, VikingFS
@@ -541,27 +538,35 @@ class ResourceService:
         ctx: RequestContext,
         resource_lock: Dict[str, Any],
     ) -> bool:
-        """Remove a newly reserved target only while it is still empty."""
-        rollback_safe_names = STORAGE_INTERNAL_ENTRY_NAMES | WEBDAV_RESERVED_FILENAMES
+        """Remove a newly reserved target while it holds no real content.
+
+        Storage-internal markers (pathlock files, redirect/sync bookkeeping)
+        and ingest stub sidecars (``.abstract.md`` / ``.overview.md``) are
+        materialized while reserving a target, so they do not block rollback;
+        any other entry means real content (possibly from a concurrent writer)
+        and must preserve the directory (#4501).
+        """
         try:
             if not await self._viking_fs.exists(root_uri, ctx=ctx):
                 return True
             stat = await self._viking_fs.stat(root_uri, ctx=ctx)
             if not isinstance(stat, dict) or not stat.get("isDir"):
                 return False
-            entries = await self._viking_fs.ls(
-                root_uri,
-                show_all_hidden=True,
-                node_limit=LS_ALL_NODES,
-                ctx=ctx,
-            )
-            visible_names: list[str] = []
-            for entry in entries:
-                name = entry.get("name")
-                if not name or name in {".", ".."}:
-                    continue
-                visible_names.append(str(name))
-            if visible_names and not all(name in rollback_safe_names for name in visible_names):
+            async def _has_real_content() -> bool:
+                entries = await self._viking_fs.ls(
+                    root_uri,
+                    show_all_hidden=True,
+                    node_limit=LS_ALL_NODES,
+                    ctx=ctx,
+                )
+                return any(
+                    not is_rollback_safe_entry_name(str(entry.get("name") or ""))
+                    for entry in entries
+                )
+
+            # List twice so a concurrent writer between the emptiness check and
+            # rm preserves the target; rm(lease_ref=...) still guards the final race.
+            if await _has_real_content() or await _has_real_content():
                 return False
             await self._viking_fs.rm(
                 root_uri,
@@ -1887,6 +1892,9 @@ class ResourceService:
                     job_phase=AddResourcePhase.POST_PROCESS,
                     root_uri=root_uri,
                     prepared=prepared,
+                    cleanup_empty_target_on_failure=not bool(
+                        prepared.get("target_preexisting")
+                    ),
                     source_path=str(
                         (kwargs.get("source_name") or "")
                         if kwargs.get("temp_file_id")

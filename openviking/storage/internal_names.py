@@ -31,3 +31,26 @@ WEBDAV_RESERVED_FILENAMES = frozenset(
         *MULTIWRITE_INTERNAL_FILE_NAMES,
     }
 )
+
+
+ROLLBACK_SAFE_ENTRY_NAMES = frozenset(
+    {
+        *STORAGE_INTERNAL_ENTRY_NAMES,
+        *WEBDAV_RESERVED_FILENAMES,
+    }
+)
+
+
+def is_rollback_safe_entry_name(name: str) -> bool:
+    """Whether a directory entry is an internal marker rather than real content.
+
+    Reserved targets materialize pathlock internals (``.path.ovlock``,
+    ``.exact.ovlock.*``) and ingest stub sidecars (``.abstract.md`` /
+    ``.overview.md``) before an import finishes, so a failed import can only
+    roll back a directory whose entries are all internal markers.
+    """
+    if not name or name in {".", ".."}:
+        return True
+    return name in ROLLBACK_SAFE_ENTRY_NAMES or name.startswith(
+        MULTIWRITE_EXACT_LOCK_FILE_PREFIX
+    )

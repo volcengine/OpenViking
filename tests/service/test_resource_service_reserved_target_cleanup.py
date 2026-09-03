@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 
 import pytest
 
@@ -23,55 +23,6 @@ def _service(viking_fs, resource_processor=None) -> ResourceService:
         resource_processor=resource_processor or SimpleNamespace(),
         skill_processor=object(),
     )
-
-
-@pytest.mark.asyncio
-async def test_cleanup_reserved_target_removes_internal_only_directory():
-    lock = {"lease_ref": "lock-1"}
-    ctx = _ctx()
-    viking_fs = SimpleNamespace(
-        exists=AsyncMock(return_value=True),
-        stat=AsyncMock(return_value={"isDir": True}),
-        ls=AsyncMock(return_value=[{"name": ".path.ovlock", "isDir": False}]),
-        rm=AsyncMock(),
-    )
-    service = _service(viking_fs)
-
-    removed = await service._cleanup_reserved_target_if_empty(
-        root_uri="viking://resources/reserved",
-        ctx=ctx,
-        resource_lock=lock,
-    )
-
-    assert removed is True
-    viking_fs.rm.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_cleanup_reserved_target_removes_stub_overview_directory():
-    lock = {"lease_ref": "lock-1"}
-    ctx = _ctx()
-    viking_fs = SimpleNamespace(
-        exists=AsyncMock(return_value=True),
-        stat=AsyncMock(return_value={"isDir": True}),
-        ls=AsyncMock(
-            return_value=[
-                {"name": ".abstract.md", "isDir": False},
-                {"name": ".overview.md", "isDir": False},
-            ]
-        ),
-        rm=AsyncMock(),
-    )
-    service = _service(viking_fs)
-
-    removed = await service._cleanup_reserved_target_if_empty(
-        root_uri="viking://resources/f5-repro/broken-pdf",
-        ctx=ctx,
-        resource_lock=lock,
-    )
-
-    assert removed is True
-    viking_fs.rm.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -118,6 +69,36 @@ async def test_cleanup_reserved_target_preserves_nonempty_directory():
     )
 
     assert removed is False
+    viking_fs.rm.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_reserved_target_preserves_content_appearing_mid_rollback():
+    """A concurrent writer between emptiness listings must preserve the target."""
+    viking_fs = SimpleNamespace(
+        exists=AsyncMock(return_value=True),
+        stat=AsyncMock(return_value={"isDir": True}),
+        ls=AsyncMock(
+            side_effect=[
+                [{"name": ".path.ovlock", "isDir": False}],
+                [
+                    {"name": ".path.ovlock", "isDir": False},
+                    {"name": "document.md", "isDir": False},
+                ],
+            ]
+        ),
+        rm=AsyncMock(),
+    )
+    service = _service(viking_fs)
+
+    removed = await service._cleanup_reserved_target_if_empty(
+        root_uri="viking://resources/racy",
+        ctx=_ctx(),
+        resource_lock={"lease_ref": "lock-1"},
+    )
+
+    assert removed is False
+    assert viking_fs.ls.await_count == 2
     viking_fs.rm.assert_not_awaited()
 
 
@@ -268,3 +249,164 @@ async def test_prepared_file_failure_preserves_cleanup_policy(cleanup_on_failure
         )
     else:
         service._cleanup_reserved_target_if_empty.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "names",
+    [
+        [".path.ovlock"],
+        [".exact.ovlock.7f3a1c"],
+        [".path.ovlock", ".exact.ovlock.7f3a1c", ".redirect.json", ".sync_log.json"],
+        ["_system", "tasks"],
+        [".abstract.md", ".overview.md"],
+        [".path.ovlock", ".abstract.md", ".overview.md", ".relations.json"],
+    ],
+)
+async def test_cleanup_reserved_target_removes_directory_with_internal_markers_only(names):
+    viking_fs = SimpleNamespace(
+        exists=AsyncMock(return_value=True),
+        stat=AsyncMock(return_value={"isDir": True}),
+        ls=AsyncMock(return_value=[{"name": name, "isDir": False} for name in names]),
+        rm=AsyncMock(),
+    )
+    service = _service(viking_fs)
+
+    removed = await service._cleanup_reserved_target_if_empty(
+        root_uri="viking://resources/repro/broken-pdf",
+        ctx=_ctx(),
+        resource_lock={"lease_ref": "lock-1"},
+    )
+
+    assert removed is True
+    viking_fs.rm.assert_awaited_once_with(
+        "viking://resources/repro/broken-pdf",
+        recursive=True,
+        ctx=ANY,
+        lease_ref={"lease_ref": "lock-1"},
+    )
+
+
+def _post_process_msg(cleanup_on_failure: bool) -> AddResourceMsg:
+    return AddResourceMsg(
+        task_id="task-2",
+        path="report.pdf",
+        root_uri="viking://resources/report",
+        account_id="account-1",
+        user_id="user-1",
+        role="user",
+        prepared={
+            "root_uri": "viking://resources/report",
+            "temp_uri": "viking://temp/account-1/task-2",
+            "temp_dir_path": "viking://temp/account-1/task-2",
+            "source_committed": False,
+            "target_preexisting": not cleanup_on_failure,
+            "root_is_file": False,
+        },
+        cleanup_empty_target_on_failure=cleanup_on_failure,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cleanup_on_failure", [False, True])
+async def test_post_process_job_error_rolls_back_owned_reservation(cleanup_on_failure):
+    service = _service(SimpleNamespace())
+    service._resource_processor = SimpleNamespace(
+        finish_prepared_resource=AsyncMock(
+            return_value={"status": "error", "errors": ["post-processing failed"]}
+        )
+    )
+    service._cleanup_reserved_target_if_empty = AsyncMock(return_value=True)
+    lock = {"lease_ref": "lock-1"}
+    ctx = _ctx()
+    msg = _post_process_msg(cleanup_on_failure)
+
+    result = await service.execute_add_resource_job(
+        msg,
+        ctx=ctx,
+        resource_lock=lock,
+        stage_callback=AsyncMock(),
+    )
+
+    assert result["status"] == "error"
+    if cleanup_on_failure:
+        service._cleanup_reserved_target_if_empty.assert_awaited_once_with(
+            root_uri="viking://resources/report",
+            ctx=ctx,
+            resource_lock=lock,
+        )
+    else:
+        service._cleanup_reserved_target_if_empty.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_post_process_job_exception_rolls_back_owned_reservation():
+    service = _service(SimpleNamespace())
+    service._resource_processor = SimpleNamespace(
+        finish_prepared_resource=AsyncMock(side_effect=RuntimeError("summarize crashed"))
+    )
+    service._cleanup_reserved_target_if_empty = AsyncMock(return_value=True)
+    lock = {"lease_ref": "lock-1"}
+    ctx = _ctx()
+    msg = _post_process_msg(True)
+
+    with pytest.raises(RuntimeError, match="summarize crashed"):
+        await service.execute_add_resource_job(
+            msg,
+            ctx=ctx,
+            resource_lock=lock,
+            stage_callback=AsyncMock(),
+        )
+
+    service._cleanup_reserved_target_if_empty.assert_awaited_once_with(
+        root_uri="viking://resources/report",
+        ctx=ctx,
+        resource_lock=lock,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("target_preexisting", "expected_flag"),
+    [(False, True), (True, False)],
+)
+async def test_deferred_post_process_message_carries_target_ownership(
+    target_preexisting,
+    expected_flag,
+):
+    service = _service(SimpleNamespace())
+    prepared = {
+        "root_uri": "viking://resources/report",
+        "temp_uri": "viking://temp/account-1/task-3",
+        "temp_dir_path": "viking://temp/account-1/task-3",
+        "source_committed": True,
+        "target_preexisting": target_preexisting,
+        "root_is_file": False,
+    }
+    service._resource_processor = SimpleNamespace(
+        process_resource=AsyncMock(
+            return_value={
+                "status": "success",
+                "root_uri": "viking://resources/report",
+                "source_path": "report.pdf",
+                "_post_process": prepared,
+                "_resource_lock": None,
+            }
+        )
+    )
+    service._manage_watch_if_needed = AsyncMock()
+    service._enqueue_add_resource_job = AsyncMock(
+        return_value=SimpleNamespace(task_id="task-3")
+    )
+
+    result = await service._execute_resource_ingestion(
+        "report.pdf",
+        ctx=_ctx(),
+        defer_post_processing=True,
+        to="viking://resources/report",
+    )
+
+    assert result["task_id"] == "task-3"
+    enqueued_msg = service._enqueue_add_resource_job.await_args.args[0]
+    assert enqueued_msg.job_phase.value == "post_process"
+    assert enqueued_msg.cleanup_empty_target_on_failure is expected_flag
