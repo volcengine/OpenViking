@@ -181,13 +181,28 @@ export default async function (pi: ExtensionAPI) {
     // still receives current-query memory, without blocking user-message UI.
     await recall.searchPending();
 
-    // The context hook omits persisted entry ids, but its user messages are a
-    // deep copy of the active SessionManager context. Associate those objects
-    // with stable ids before takeover may filter the array; retained messages
-    // keep object identity through that transform.
-    const userEntryIds = ctx.sessionManager.buildContextEntries()
-      .filter((entry: any) => entry?.type === "message" && entry.message?.role === "user")
-      .map((entry: any) => entry.id as string);
+    // The entry IDs are an optional optimization for replaying the recall
+    // ledger. Compatible hosts may omit buildContextEntries(), so fail closed
+    // to nullable IDs rather than guessing from another SessionManager API.
+    const sessionManager = ctx.sessionManager;
+    const entries = typeof sessionManager?.buildContextEntries === "function"
+      ? sessionManager.buildContextEntries()
+      : [];
+    const userEntryIds = entries
+      .filter((entry: unknown): entry is { id?: unknown; type: "message"; message: { role: "user" } } => {
+        if (!entry || typeof entry !== "object") return false;
+        if (!("type" in entry) || !("message" in entry)) return false;
+        const type = entry.type;
+        const message = entry.message;
+        return type === "message" &&
+          !!message &&
+          typeof message === "object" &&
+          "role" in message &&
+          message.role === "user";
+      })
+      .map((entry): string | undefined =>
+        typeof entry.id === "string" ? entry.id : undefined
+      );
     const messageIds = new WeakMap<object, string>();
     let userIndex = 0;
     for (const message of event.messages as any[]) {
