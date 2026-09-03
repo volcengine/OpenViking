@@ -264,6 +264,7 @@ const workspace = {
       title: 'Task details',
       loading: 'Loading task details...',
       loadFailed: 'Could not load task details',
+      notFoundOrExpired: 'Task not found or no longer available',
       retry: 'Retry',
       openLabel: 'View details for task {{taskId}}',
       fields: {
@@ -273,6 +274,27 @@ const workspace = {
         resource: 'Resource',
         createdAt: 'Created',
         updatedAt: 'Updated',
+        duration: 'Duration',
+        retryLineage: 'Retry lineage',
+      },
+      lineageAttempt: 'Attempt {{attempt}}; previous: {{parentTaskId}}',
+      lineageInitial: 'Initial attempt',
+      failureGuidance: 'Failure guidance',
+      pipeline: {
+        title: 'Pipeline steps',
+        itemCount: '{{count}} items',
+        status: {
+          completed: 'Completed',
+          running: 'Running',
+          failed: 'Failed',
+          pending: 'Pending',
+        },
+      },
+      trace: {
+        title: 'Task execution log',
+        stream: 'LOG TRACE STREAM (ID: {{taskId}})',
+        copy: 'Copy logs',
+        copied: 'Logs copied to clipboard',
       },
       error: 'Failure reason',
       result: 'Result',
@@ -283,6 +305,15 @@ const workspace = {
         'This task did not return a result. See the failure reason above.',
       noResultCancelledDescription:
         'This task was cancelled before it returned a result.',
+      noResultCompleted: 'Task completed without a result payload',
+      noResultCompletedDescription:
+        'The task finished successfully, but the API did not return additional result data.',
+      noResultRunning: 'Task is still running',
+      noResultRunningDescription:
+        'Result data will appear here after the task completes.',
+      noResultPending: 'Task is waiting to run',
+      noResultPendingDescription:
+        'The task will begin when a worker becomes available.',
     },
     filters: {
       label: 'Filter',
@@ -307,6 +338,8 @@ const workspace = {
       resource: 'Resource',
       createdAt: 'Created',
       status: 'Status',
+      pipeline: 'Queue pipeline',
+      duration: 'Duration',
     },
     status: {
       cancelled: 'Cancelled',
@@ -314,6 +347,7 @@ const workspace = {
       completed: 'Completed',
       failed: 'Failed',
       pending: 'Pending',
+      queued: 'Queued',
       running: 'Running',
       unknown: 'Unknown',
     },
@@ -326,6 +360,33 @@ const workspace = {
       snapshot_restore_reindex: 'Snapshot reindex',
       legacy_migration: 'Legacy migration',
       legacy_cleanup: 'Legacy cleanup',
+    },
+    actions: {
+      retry: 'Retry task',
+    },
+    pipeline: {
+      serialTransition: 'Serial process transition',
+      parallelBatch: 'Parallel process batch',
+      serialBatch: 'Serial process batch',
+    },
+    historyMode: {
+      latestPerResource: 'Latest per resource',
+      all: 'All history',
+    },
+    attemptLabel: 'Attempt {{attempt}}',
+    retryFlow: {
+      taskIdRequired: 'Task ID is required',
+      requeueFailed: 'Retry request failed',
+      archiveComplete:
+        'The archive for this failed attempt is already complete. No retry is needed.',
+      resolvedByTask:
+        'Successful task {{taskId}} already resolved this failed attempt, so it cannot be retried again.',
+      blocked: 'Address this issue before retrying: {{guidance}}',
+      retryLimit:
+        'This operation has reached the {{maxAttempts}}-attempt limit. Fix the issue, then click retry again to start a new operation.',
+      noAction: 'There is no work to retry.',
+      alreadyRunning: 'An equivalent task is already running.',
+      accepted: 'A linked retry task was created and is now being tracked.',
     },
   },
   watchesPage: {

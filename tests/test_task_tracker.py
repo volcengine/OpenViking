@@ -13,9 +13,11 @@ from openviking.server.identity import RequestContext, Role
 from openviking.service.session_service import SessionService
 from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import (
+    TaskRecord,
     TaskStatus,
     TaskTracker,
     _sanitize_error,
+    classify_task_error,
     get_task_tracker,
     set_task_tracker,
 )
@@ -202,6 +204,139 @@ async def test_fail_task(tracker: TaskTracker):
     assert retrieved.status == TaskStatus.FAILED
     assert retrieved.stage == "failed"
     assert "LLM timeout" in retrieved.error
+    assert retrieved.error_info["retryability"] == "retryable"
+
+
+async def test_get_cached_failed_task_survives_reconciliation_store_failure(
+    tracker: TaskTracker, monkeypatch
+):
+    task = await tracker.create("session_commit", **_owner_kwargs())
+    await tracker.fail(task.task_id, "LLM timeout", **_owner_kwargs())
+
+    async def fail_owner_load(account_id, user_id):
+        raise OSError("store unavailable")
+
+    monkeypatch.setattr(tracker, "_load_all_from_store", fail_owner_load)
+
+    retrieved = await tracker.get(task.task_id, **_owner_kwargs())
+
+    assert retrieved is not None
+    assert retrieved.task_id == task.task_id
+    assert retrieved.status == TaskStatus.FAILED
+    assert retrieved.error == "LLM timeout"
+
+
+async def test_legacy_failure_is_classified_when_serialized(tracker: TaskTracker):
+    task = await tracker.create("session_commit", **_owner_kwargs())
+    await tracker.fail(task.task_id, "token_expired")
+    retrieved = await tracker.get(task.task_id)
+
+    assert retrieved is not None
+    retrieved.error_info = {}
+    assert retrieved.to_dict()["error_info"]["code"] == "AUTH_EXPIRED"
+
+
+@pytest.mark.parametrize(
+    ("error", "code", "retryability"),
+    [
+        ("token_expired", "AUTH_EXPIRED", "requires_change"),
+        (
+            "Sparse embedding only supports text input",
+            "MEDIA_SPARSE_INPUT_UNSUPPORTED",
+            "requires_change",
+        ),
+        ("provider overloaded", "TRANSIENT_UPSTREAM", "retryable"),
+    ],
+)
+async def test_classify_task_error(error: str, code: str, retryability: str):
+    info = classify_task_error(error)
+    assert info["code"] == code
+    assert info["retryability"] == retryability
+
+
+async def test_linked_retry_keeps_predecessor_failed_while_retry_is_active(
+    tracker: TaskTracker,
+):
+    first = await tracker.create("session_commit", resource_id="session-1", **_owner_kwargs())
+    await tracker.fail(first.task_id, "provider overloaded")
+    second = await tracker.create("session_commit", resource_id="session-1", **_owner_kwargs())
+
+    linked = await tracker.link_retry(
+        second.task_id,
+        parent_task_id=first.task_id,
+        **_owner_kwargs(),
+    )
+
+    assert linked is not None
+    assert linked.operation_id == first.task_id
+    assert linked.parent_task_id == first.task_id
+    assert linked.attempt_number == 2
+    predecessor = await tracker.get(first.task_id, **_owner_kwargs())
+    assert predecessor is not None
+    assert predecessor.status == TaskStatus.FAILED
+    active = await tracker.find_active("session_commit", "session-1", **_owner_kwargs())
+    assert active is not None
+    assert active.task_id == second.task_id
+
+
+async def test_completed_retry_changes_failed_predecessor_to_completed(
+    tracker: TaskTracker,
+):
+    first = await tracker.create("session_commit", resource_id="session-1", **_owner_kwargs())
+    await tracker.fail(first.task_id, "provider overloaded")
+    second = await tracker.create("session_commit", resource_id="session-1", **_owner_kwargs())
+    linked = await tracker.link_retry(
+        second.task_id,
+        parent_task_id=first.task_id,
+        **_owner_kwargs(),
+    )
+    assert linked is not None
+    await tracker.complete(second.task_id, {"memories_extracted": 1}, **_owner_kwargs())
+
+    resolved = await tracker.find_completed_operation(
+        "session_commit",
+        "session-1",
+        first.task_id,
+        **_owner_kwargs(),
+    )
+
+    assert resolved is not None
+    assert resolved.task_id == second.task_id
+    predecessor = await tracker.get(first.task_id, **_owner_kwargs())
+    assert predecessor is not None
+    assert predecessor.status == TaskStatus.COMPLETED
+    assert predecessor.error is None
+    assert predecessor.error_info == {}
+    assert predecessor.result == {"memories_extracted": 1}
+
+
+async def test_listing_tasks_reconciles_a_completed_retry_from_persistent_storage():
+    store = PersistentTaskStore(_FakeAgfs())
+    tracker1 = TaskTracker(store=store)
+    first = await tracker1.create("session_commit", resource_id="session-1", **_owner_kwargs())
+    await tracker1.fail(first.task_id, "provider overloaded")
+    second = await tracker1.create("session_commit", resource_id="session-1", **_owner_kwargs())
+    linked = await tracker1.link_retry(
+        second.task_id,
+        parent_task_id=first.task_id,
+        **_owner_kwargs(),
+    )
+    assert linked is not None
+    await tracker1.start(second.task_id, **_owner_kwargs())
+    await tracker1.complete(second.task_id, {"ok": True}, **_owner_kwargs())
+
+    failed_payload = await store.get(first.task_id, **_owner_kwargs())
+    assert failed_payload is not None
+    failed_payload["stage"] = "failed"
+    failed_payload["error"] = "provider overloaded"
+    failed_payload["error_info"] = classify_task_error("provider overloaded")
+    failed_payload["status"] = TaskStatus.FAILED
+    await store.update(TaskRecord(**failed_payload))
+
+    tracker2 = TaskTracker(store=store)
+    tasks = await tracker2.list_tasks(**_owner_kwargs())
+    predecessor = next(task for task in tasks if task.task_id == first.task_id)
+    assert predecessor.status == TaskStatus.COMPLETED
 
 
 async def test_get_nonexistent_returns_none(tracker: TaskTracker):

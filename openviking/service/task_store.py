@@ -154,6 +154,10 @@ def _task_to_payload(task: Any) -> Dict[str, Any]:
         "stage": task.stage,
         "result": deepcopy(task.result),
         "error": task.error,
+        "operation_id": task.operation_id,
+        "parent_task_id": task.parent_task_id,
+        "attempt_number": task.attempt_number,
+        "error_info": deepcopy(task.error_info),
         "auth": deepcopy(task.auth),
     }
 

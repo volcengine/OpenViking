@@ -257,6 +257,7 @@ const workspace = {
       title: '任务详情',
       loading: '正在加载任务详情...',
       loadFailed: '任务详情加载失败',
+      notFoundOrExpired: '未找到该任务，或任务已不可用',
       retry: '重试',
       openLabel: '查看任务 {{taskId}} 的详情',
       fields: {
@@ -266,6 +267,27 @@ const workspace = {
         resource: '关联资源',
         createdAt: '创建时间',
         updatedAt: '更新时间',
+        duration: '执行耗时',
+        retryLineage: '重试链路',
+      },
+      lineageAttempt: '第 {{attempt}} 次；上一次：{{parentTaskId}}',
+      lineageInitial: '首次执行',
+      failureGuidance: '失败处理建议',
+      pipeline: {
+        title: '工序进度',
+        itemCount: '{{count}} 项',
+        status: {
+          completed: '已完成',
+          running: '进行中',
+          failed: '失败',
+          pending: '等待中',
+        },
+      },
+      trace: {
+        title: '任务执行日志',
+        stream: '日志跟踪流（ID：{{taskId}}）',
+        copy: '复制日志',
+        copied: '日志已复制到剪贴板',
       },
       error: '失败原因',
       result: '执行结果',
@@ -273,6 +295,13 @@ const workspace = {
       noResultDescription: '任务完成后，接口返回的结果会显示在这里。',
       noResultFailedDescription: '该任务未返回结果，请查看上方失败原因。',
       noResultCancelledDescription: '该任务已取消，未返回执行结果。',
+      noResultCompleted: '任务已完成，但没有返回结果数据',
+      noResultCompletedDescription:
+        '任务已成功完成，但接口没有返回额外的结果数据。',
+      noResultRunning: '任务正在执行',
+      noResultRunningDescription: '任务完成后，结果数据会显示在这里。',
+      noResultPending: '任务正在等待执行',
+      noResultPendingDescription: '有可用工作进程后，任务会自动开始。',
     },
     filters: {
       label: '筛选',
@@ -296,6 +325,8 @@ const workspace = {
       resource: '关联资源',
       createdAt: '创建时间',
       status: '状态',
+      pipeline: '工序队列流转',
+      duration: '耗时',
     },
     status: {
       cancelled: '已取消',
@@ -303,6 +334,7 @@ const workspace = {
       completed: '已完成',
       failed: '失败',
       pending: '等待中',
+      queued: '排队中',
       running: '进行中',
       unknown: '未知',
     },
@@ -315,6 +347,32 @@ const workspace = {
       snapshot_restore_reindex: '快照恢复索引',
       legacy_migration: '旧数据迁移',
       legacy_cleanup: '旧数据清理',
+    },
+    actions: {
+      retry: '重新提交',
+    },
+    pipeline: {
+      serialTransition: '串行工序流转',
+      parallelBatch: '并发工序批次',
+      serialBatch: '串行工序批次',
+    },
+    historyMode: {
+      latestPerResource: '每个资源仅显示最新任务',
+      all: '显示全部任务',
+    },
+    attemptLabel: '第 {{attempt}} 次',
+    retryFlow: {
+      taskIdRequired: '缺少任务 ID',
+      requeueFailed: '重新提交失败',
+      archiveComplete: '该失败记录对应的归档已经处理完成，无需再次重试。',
+      resolvedByTask:
+        '该失败记录已由任务 {{taskId}} 成功恢复，不能再次重新提交。',
+      blocked: '请先处理以下问题：{{guidance}}。处理完成后再重试。',
+      retryLimit:
+        '该操作已达到 {{maxAttempts}} 次尝试上限。请先修复问题，再次点击可发起一项新操作。',
+      noAction: '当前没有可重新提交的工作。',
+      alreadyRunning: '同一操作已有任务正在执行。',
+      accepted: '已创建新的重试任务，正在跟踪执行状态。',
     },
   },
   watchesPage: {
