@@ -6,6 +6,7 @@ Session Extract Context Provider - 会话提取 Provider 实现
 从会话消息中提取记忆的实现。
 """
 
+import json
 import re
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -21,10 +22,7 @@ from openviking.session.memory.memory_isolation_handler import (
 from openviking.session.memory.memory_type_registry import (
     MemoryTypeRegistry,
 )
-from openviking.session.memory.tools import (
-    add_tool_call_pair_to_messages,
-    get_tool,
-)
+from openviking.session.memory.tools import get_tool
 from openviking.session.memory.utils.resource_refs import contains_resource_uri
 from openviking.session.memory.utils.uri import render_template
 from openviking.session.memory.vision_message_normalizer import (
@@ -207,17 +205,45 @@ class SessionExtractContextProvider(ExtractContextProvider):
             if contains_resource_uri
             else ""
         )
+        if self._eager_prefetch:
+            resource_deletion_context_rule = (
+                "\n- For URIs listed under the system-generated `## Resource Deletion` block's "
+                "`Affected memory URIs`, only edit files whose complete content is already included "
+                "in the provided memory context"
+                if contains_resource_uri
+                else ""
+            )
+            context_workflow = (
+                "2. Use only the memory context already included in the messages; "
+                "no tools are available\n"
+                "3. Output ONLY a JSON object (no extra text before or after)"
+            )
+            tool_rules = (
+                "- No tools are available. Do not output read, search, write, or other tool requests\n"
+                "- Only edit an existing memory file when its complete content is already included "
+                f"in the provided memory context{resource_deletion_context_rule}"
+            )
+        else:
+            context_workflow = (
+                "2. Search results are already included in the messages. If you need the complete "
+                "content of a listed memory URI, use the read tool\n"
+                "3. When you have enough information, output ONLY a JSON object "
+                "(no extra text before or after)"
+            )
+            tool_rules = (
+                "- ONLY the read tool is available - search and write are not available\n"
+                "- Before editing ANY existing memory file, you MUST first read its complete content\n"
+                "- ONLY read URIs that are explicitly listed in pre-fetched search results, "
+                f"returned by previous tool calls{resource_deletion_read_source}"
+            )
         goal = f"""You are a memory extraction agent. Your task is to analyze conversations and update memories.
 
 ## Workflow
 1. Analyze the conversation and pre-fetched context
-2. If you need more information, use the available tools (read/search)
-3. When you have enough information, output ONLY a JSON object (no extra text before or after)
+{context_workflow}
 
 ## Critical
-- ONLY read and search tools are available - DO NOT use write tool
-- Before editing ANY existing memory file, you MUST first read its complete content
-- ONLY read URIs that are explicitly listed in ls/search tool results, returned by previous tool calls{resource_deletion_read_source}
+{tool_rules}
 
 ## Target Output Language
 All memory content MUST be written in {output_language}.
@@ -452,22 +478,34 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
     ) -> int:
         result = await self.read_file(file_uri)
         if result is not None:
-            add_tool_call_pair_to_messages(
+            self._append_prefetched_context(
                 messages=messages,
-                call_id=call_id,
-                tool_name="read",
-                params={"uri": file_uri},
-                result=result,
+                context_type="memory_file",
+                context={"uri": file_uri, "data": result},
             )
             return call_id + 1
         return call_id
+
+    @staticmethod
+    def _append_prefetched_context(
+        messages: List[Dict[str, Any]],
+        context_type: str,
+        context: Dict[str, Any],
+    ) -> None:
+        """Add server-fetched data without fabricating a model tool exchange."""
+        payload = {
+            "message_type": "prefetched_context",
+            "context_type": context_type,
+            **context,
+        }
+        messages.append({"role": "user", "content": json.dumps(payload, ensure_ascii=False)})
 
     async def prefetch(self) -> List[Dict]:
         """
         执行 prefetch - 从会话消息中提取相关记忆上下文
 
         Returns:
-            预取的消息列表，第一个元素是 Conversation History user message，后续是 tool call messages
+            预取的消息列表，第一个元素是 Conversation History user message，后续是预取上下文消息
         """
         messages = self.messages
 
@@ -545,16 +583,13 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                 query=search_query,
                 search_uris=dir_list,
             )
-            result_value = search_uris
             if self._eager_prefetch:
                 files_to_read_from_search.extend(search_uris)
 
-            add_tool_call_pair_to_messages(
+            self._append_prefetched_context(
                 messages=pre_fetch_messages,
-                call_id=call_id_seq,
-                tool_name="search",
-                params={"query": "[Keywords]", "search_uri": dir_list},
-                result=result_value,
+                context_type="memory_search_results",
+                context={"search_scope": dir_list, "matched_uris": search_uris},
             )
             call_id_seq += 1
 
