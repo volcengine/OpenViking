@@ -3,9 +3,11 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { OVConfig } from "./config.js";
 import { deriveHarnessSessionId } from "./shared/session-model.mjs";
-import { enqueue, listPending, replayPending } from "./shared/pending-queue.mjs";
+import { drainPendingForSession, enqueue, replayPending } from "./shared/pending-queue.mjs";
 import { extractBranchCapturePayloads } from "./lib/capture-adapter.mjs";
-import { countUndeliveredForSession, estimatePayloadTokens } from "./lib/takeover-core.mjs";
+import { estimatePayloadTokens } from "./lib/takeover-core.mjs";
+
+const TAKEOVER_DRAIN_TIME_BUDGET_MS = 1000;
 
 // --- SyncManager ---
 
@@ -69,9 +71,15 @@ export class SyncManager {
 
   async flushForTakeover(): Promise<boolean> {
     if (!this.ovSessionId) return false;
-    await this.replayPending();
-    const pending = await listPending();
-    return countUndeliveredForSession(pending, this.ovSessionId) === 0;
+    if (!this.client.connected) return false;
+    const result = await drainPendingForSession(
+      (path: string, init?: any) => this.client.fetchJSON(path, init, 10000),
+      (stage: string, data: unknown) =>
+        debugLog(`${stage}: ${JSON.stringify(data)}`),
+      this.ovSessionId,
+      { timeBudgetMs: TAKEOVER_DRAIN_TIME_BUDGET_MS },
+    );
+    return result.remaining === 0;
   }
 
   async syncBranch(branch: any[]): Promise<SyncBranchResult> {

@@ -266,6 +266,7 @@ export class TakeoverCore {
       const flushed = await this.io.flush();
       if (!flushed) {
         this.log("takeover: flush failed; commit postponed");
+        this.pendingTokens = 0;
         return false;
       }
 
