@@ -120,6 +120,7 @@ Create `~/.config/opencode/openviking-config.json`:
   "enabled": true,
   "mcp": { "enabled": true },
   "timeoutMs": 30000,
+  "recallPurpose": "coding",
   "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
   "autoRecall": {
     "enabled": true,
@@ -137,10 +138,15 @@ Create `~/.config/opencode/openviking-config.json`:
 }
 ```
 
-`autoRecall.limit` is a legacy quota-scaling input, not a final result cap.
-Explicit values from 1 through 5 produce an effective total quota of 6 because
-each coding category keeps one retrieval slot. Use Context `quotas` directly
-when exact category ceilings are required.
+`autoRecall.limit` scales the category quotas used by the `coding` recall
+purpose. When the limit is smaller than the number of categories, only the
+highest-weighted categories receive a slot, so the total quota still equals the
+configured limit.
+
+The default `recallPurpose` is `"coding"`. Set it to `"chat"` to use the
+server's chat preset, or set it explicitly to `null` to omit both `purpose` and
+preset quotas. The latter lets server relevance and `autoRecall.tokenBudget`
+select context without forcing one result from every coding category.
 
 API keys are resolved from environment variables or `~/.openviking/ovcli.conf` and sent as `Authorization: Bearer ...` by both hooks and the MCP proxy. Recall goes through the server-side context face (`POST /api/v1/search/search` with `mode="context"`), falling back to the deprecated `/api/v1/search/recall` on older deployments. `account` and `user` are trusted-mode identity
 headers sent as `X-OpenViking-Account` and `X-OpenViking-User`; leave them empty
