@@ -7,6 +7,9 @@ Verifies that _extract_bookmarks correctly extracts bookmark entries
 and that _convert_local injects them as markdown headings.
 """
 
+import threading
+import weakref
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,7 +17,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from openviking.parse.parsers.pdf import PDFParser
+from openviking.parse.parsers.pdf import _PDFIUM_RENDER_LOCK, PDFParser
 
 
 def _make_page(*, pageid=None, objid=None):
@@ -533,3 +536,104 @@ class TestExtractImages:
             )
             is None
         )
+
+    def test_extract_image_serializes_pdfium_rendering_across_threads(self):
+        """Concurrent PDF parses must never overlap inside PDFium rendering."""
+        parser = PDFParser()
+        first_entered = threading.Event()
+        release_first = threading.Event()
+        second_started = threading.Event()
+        second_entered = threading.Event()
+        state_lock = threading.Lock()
+        state = {"calls": 0, "active": 0, "max_active": 0}
+
+        class BlockingCroppedPage:
+            def to_image(self, resolution: int):
+                assert resolution == parser.config.image_resolution
+                with state_lock:
+                    state["calls"] += 1
+                    call_number = state["calls"]
+                    state["active"] += 1
+                    state["max_active"] = max(state["max_active"], state["active"])
+
+                try:
+                    if call_number == 1:
+                        first_entered.set()
+                        assert release_first.wait(timeout=2)
+                    else:
+                        second_entered.set()
+                    return _FakeRenderedImage(b"rendered-png")
+                finally:
+                    with state_lock:
+                        state["active"] -= 1
+
+        page = MagicMock(width=100, height=200)
+        page.crop.return_value = BlockingCroppedPage()
+        image = {"x0": 10, "top": 20, "x1": 40, "bottom": 60}
+
+        def render_second():
+            second_started.set()
+            return parser._extract_image_from_page(page, image)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first = executor.submit(parser._extract_image_from_page, page, image)
+            assert first_entered.wait(timeout=2)
+            second = executor.submit(render_second)
+            assert second_started.wait(timeout=2)
+
+            try:
+                # The second worker is running, but must remain outside PDFium
+                # until the first worker leaves the process-wide critical section.
+                assert not second_entered.wait(timeout=0.2)
+            finally:
+                release_first.set()
+
+            assert first.result(timeout=2) == b"rendered-png"
+            assert second.result(timeout=2) == b"rendered-png"
+
+        assert second_entered.is_set()
+        assert state["max_active"] == 1
+
+    def test_extract_image_finalizes_failed_pdfium_handles_while_locked(self):
+        """Render failures must release traceback-owned PDFium handles under the lock."""
+        parser = PDFParser()
+        cleanup_lock_states = {}
+
+        def record_cleanup(handle_name: str):
+            cleanup_lock_states[handle_name] = _PDFIUM_RENDER_LOCK.locked()
+
+        class FakePdfPage:
+            def __init__(self, pdf):
+                self.pdf = pdf
+                weakref.finalize(self, record_cleanup, "page")
+
+            def render(self, **_kwargs):
+                raise RuntimeError("PDFium render failed")
+
+        class FakePdfDocument:
+            def __init__(self, *_args, **_kwargs):
+                weakref.finalize(self, record_cleanup, "document")
+
+            def get_page(self, _page_ix):
+                return FakePdfPage(self)
+
+        class PdfiumBackedCroppedPage:
+            def to_image(self, resolution: int):
+                from pdfplumber.display import get_page_image
+
+                return get_page_image(
+                    stream=MagicMock(),
+                    path=Path("dummy.pdf"),
+                    page_ix=0,
+                    resolution=resolution,
+                    password=None,
+                )
+
+        page = MagicMock(width=100, height=200)
+        page.crop.return_value = PdfiumBackedCroppedPage()
+        image = {"x0": 10, "top": 20, "x1": 40, "bottom": 60}
+
+        with patch("pdfplumber.display.pypdfium2.PdfDocument", FakePdfDocument):
+            assert parser._extract_image_from_page(page, image) is None
+
+        assert cleanup_lock_states == {"page": True, "document": True}
