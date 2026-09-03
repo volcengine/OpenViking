@@ -65,6 +65,7 @@ from openviking.server.local_input_guard import (
 from openviking.server.resource_ingest import ingest_temp_upload
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.server.upload_token_store import upload_token_store
+from openviking.utils.chunk_uri import strip_chunk_suffix
 from openviking.utils.search_filters import SearchContextTypeInput, merge_search_filter
 from openviking_cli.exceptions import (
     InvalidArgumentError,
@@ -430,10 +431,14 @@ _MCP_VIDEO_EXTENSIONS = {".avi", ".m4v", ".mkv", ".mov", ".mp4", ".webm"}
 _MCP_MEDIA_MAX_BYTES = 3_932_160
 
 
+def _mcp_uri_path(uri: str) -> str:
+    """Path portion of a URI, ignoring any query and a trailing chunk suffix."""
+    return strip_chunk_suffix(uri.split("?", 1)[0])
+
+
 def _mcp_uri_suffix(uri: str) -> str:
-    """Lowercased file extension of a URI, ignoring any query or fragment."""
-    path = uri.split("#", 1)[0].split("?", 1)[0]
-    return PurePosixPath(path).suffix.lower()
+    """Lowercased file extension of a URI, ignoring any query and a trailing chunk suffix."""
+    return PurePosixPath(_mcp_uri_path(uri)).suffix.lower()
 
 
 def _is_mcp_image_uri(uri: str) -> bool:
@@ -489,8 +494,7 @@ def _mcp_audio_content(data: bytes, mime_type: str) -> AudioContent:
 
 def _mcp_media_download_hint(uri: str) -> str:
     """Return actionable fallbacks when media cannot be inlined."""
-    path = uri.split("#", 1)[0].split("?", 1)[0]
-    filename = PurePosixPath(path).name or "download"
+    filename = PurePosixPath(_mcp_uri_path(uri)).name or "download"
     encoded_uri = quote(uri, safe="")
     return (
         f'Use `ov get "{uri}" "./{filename}"` or GET '

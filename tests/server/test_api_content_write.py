@@ -370,3 +370,45 @@ async def test_set_tags_discards_invalid_kv_tag(client_with_resource):
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["tags"] == ["team=search"]
+
+
+async def test_write_accepts_hash_in_uri(client):
+    """'#' is a literal path character: add-resource already accepts it, so
+    write must too (regression for resources that could not be updated)."""
+    uri = "viking://user/default/memories/notes#1.md"
+
+    write_resp = await client.post(
+        "/api/v1/content/write",
+        json={
+            "uri": uri,
+            "content": "# Notes\n\nHash in the file name.",
+            "mode": "create",
+            "wait": True,
+        },
+    )
+    assert write_resp.status_code == 200
+    body = write_resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["uri"] == uri
+
+    read_resp = await client.get("/api/v1/content/read", params={"uri": uri})
+    assert read_resp.status_code == 200
+    assert read_resp.json()["result"] == "# Notes\n\nHash in the file name."
+
+
+async def test_write_rejects_query_separator_in_uri(client):
+    """'?' is still rejected: uri_parts strips it as a query separator, so the
+    path would not read back."""
+    resp = await client.post(
+        "/api/v1/content/write",
+        json={
+            "uri": "viking://user/default/memories/notes?draft=1.md",
+            "content": "content",
+            "mode": "create",
+            "wait": True,
+        },
+    )
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "INVALID_ARGUMENT"

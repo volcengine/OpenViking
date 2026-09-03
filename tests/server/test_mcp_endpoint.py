@@ -700,6 +700,10 @@ async def test_read_mixed_batch_preserves_source_order(monkeypatch):
         ("viking://resources/clip.m4a", b"\x00\x00\x00\x18ftypM4A audio", "audio/mp4"),
         # suffix sniffing must ignore a query string, like the extension gate does
         ("viking://resources/clip.ogg?v=2", b"OggSaudio", "audio/ogg"),
+        # '#' is a literal path character; only a trailing chunk suffix is stripped
+        ("viking://resources/song#1.mp3", b"ID3audio", "audio/mpeg"),
+        ("viking://resources/clip.mp3#chunk_0000", b"ID3audio", "audio/mpeg"),
+        ("viking://resources/clip.mp3#chunk_0000?v=2", b"ID3audio", "audio/mpeg"),
     ],
 )
 async def test_read_audio_returns_native_mcp_content(monkeypatch, uri, audio_bytes, mime_type):
@@ -748,6 +752,26 @@ async def test_read_video_returns_unsupported_hint(monkeypatch):
     assert 'ov get "viking://resources/demo.mp4" "./demo.mp4"' in result
     stat.assert_awaited_once_with("viking://resources/demo.mp4", ctx=DEFAULT_CTX)
     read_visible.assert_not_awaited()
+
+
+async def test_read_video_hash_named_file_keeps_full_download_filename(monkeypatch):
+    stat = AsyncMock(return_value={"size": 1024, "isDir": False})
+    read_visible = AsyncMock()
+    monkeypatch.setattr(
+        mcp_endpoint,
+        "get_service",
+        lambda: SimpleNamespace(
+            fs=SimpleNamespace(
+                read_file_bytes=AsyncMock(),
+                read_visible=read_visible,
+                stat=stat,
+            )
+        ),
+    )
+
+    result = await read("viking://resources/demo#1.mp4")
+
+    assert 'ov get "viking://resources/demo#1.mp4" "./demo#1.mp4"' in result
 
 
 async def test_read_video_nonexistent_uri_preserves_not_found(monkeypatch):

@@ -45,7 +45,11 @@ def sanitize_relative_viking_path(rel_path: str) -> str:
 def validate_safe_viking_uri_path(uri: str) -> str:
     """Reject ambiguous or traversal-bearing path syntax in a Viking URI."""
     normalized = VikingURI(uri.strip()).uri.rstrip("/")
-    if "?" in normalized or "#" in normalized:
+    # '?' is stripped as a query separator by core.namespace.uri_parts, so a
+    # '?' in the path would not read back. '#' has no fragment semantics in
+    # Viking URIs (add-resource targets and the read paths already accept it),
+    # so it is allowed as a literal path character.
+    if "?" in normalized:
         raise ValueError(f"Unsafe Viking URI path rejected: {uri}")
     path = normalized[len(f"{VikingURI.SCHEME}://") :]
     if not path:
