@@ -17,6 +17,15 @@ import {
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '#/components/ui/alert-dialog'
 import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
 import { Card } from '#/components/ui/card'
@@ -52,7 +61,14 @@ import { TaskDetailSheet } from '#/routes/tasks/-components/task-detail-sheet'
 import { normalizeTaskStatus } from '#/routes/tasks/-lib/task-record'
 import type { TaskRecord } from '#/routes/tasks/-lib/task-record'
 import { formatTaskDuration, getTaskDate } from '#/routes/tasks/-lib/task-time'
-import { fetchTasks, getEffectiveTaskStatus, MAX_TASKS } from './-lib/task-list'
+import {
+  canCancelTask,
+  cancelTask,
+  fetchTasks,
+  getEffectiveTaskStatus,
+  isTaskCancelling,
+  MAX_TASKS,
+} from './-lib/task-list'
 import type { TaskStatusFilter, TaskTypeFilter } from './-lib/task-list'
 import { getTaskPipelineGroups } from './-lib/task-pipeline'
 
@@ -81,7 +97,7 @@ const TASK_STATUS_OPTIONS: Exclude<TaskStatusFilter, 'all'>[] = [
   'cancelled',
 ]
 
-function TasksRoute() {
+export function TasksRoute() {
   const { i18n, t } = useTranslation('tasksPage')
   const { identityScopeKey } = useAppConnection()
   const queryClient = useQueryClient()
@@ -94,6 +110,8 @@ function TasksRoute() {
   const [selectedTaskId, setSelectedTaskId] = React.useState<string | null>(
     null,
   )
+  const [cancelTargetTask, setCancelTargetTask] =
+    React.useState<TaskRecord | null>(null)
   const tasksQuery = useQuery({
     queryFn: () => fetchTasks(taskType, statusFilter),
     queryKey: ['tasks', identityScopeKey, taskType, statusFilter],
@@ -205,6 +223,31 @@ function TasksRoute() {
     },
   })
 
+  const cancelMutation = useMutation({
+    mutationFn: (task: TaskRecord) => {
+      if (!task.task_id) {
+        throw new Error(
+          i18n.language.startsWith('zh')
+            ? '任务缺少任务 ID，无法取消'
+            : 'Missing task ID, unable to cancel',
+        )
+      }
+      return cancelTask(task.task_id)
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : String(error))
+    },
+    onSuccess: async () => {
+      toast.success(
+        i18n.language.startsWith('zh')
+          ? '已请求取消该任务，取消完成后状态将自动更新'
+          : 'Cancellation requested, the status will update shortly',
+      )
+      setCancelTargetTask(null)
+      await queryClient.invalidateQueries({ queryKey: ['tasks'] })
+    },
+  })
+
   React.useEffect(() => {
     if (page > totalPages) {
       setPage(totalPages)
@@ -270,6 +313,8 @@ function TasksRoute() {
     const status = normalizeTaskStatus(effStatus)
     const pct = getTaskProgressPct(task)
     const isRetrying = retryMutation.isPending && retryMutation.variables.task_id === taskId
+    const isRequestingCancel =
+      cancelMutation.isPending && cancelMutation.variables.task_id === taskId
     const Icon =
       status === 'completed'
         ? CheckCircle2Icon
@@ -324,6 +369,33 @@ function TasksRoute() {
               <RotateCcwIcon className="size-3 shrink-0" />
             )}
           </button>
+        )}
+        {canCancelTask(task) && (
+          <button
+            type="button"
+            disabled={isRequestingCancel}
+            className="ml-1 inline-flex items-center justify-center rounded p-0.5 text-destructive hover:bg-destructive/15 active:scale-95 transition-all cursor-pointer disabled:opacity-50"
+            title={t('actions.cancelTask')}
+            aria-label={t('actions.cancelTask')}
+            onClick={(e) => {
+              e.stopPropagation()
+              setCancelTargetTask(task)
+            }}
+          >
+            {isRequestingCancel ? (
+              <LoaderCircleIcon className="size-3 shrink-0 animate-spin" />
+            ) : (
+              <XIcon className="size-3 shrink-0" />
+            )}
+          </button>
+        )}
+        {isTaskCancelling(task) && (
+          <span
+            className="ml-1 inline-flex items-center justify-center rounded p-0.5 text-destructive/70"
+            title={t('status.cancelling')}
+          >
+            <LoaderCircleIcon className="size-3 shrink-0 animate-spin" />
+          </span>
         )}
       </Badge>
     )
@@ -989,6 +1061,46 @@ function TasksRoute() {
           </div>
         </Card>
       )}
+
+      <AlertDialog
+        open={Boolean(cancelTargetTask)}
+        onOpenChange={(open) => {
+          if (!open && !cancelMutation.isPending) {
+            setCancelTargetTask(null)
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('cancelDialog.title')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('cancelDialog.description', {
+                taskId: cancelTargetTask?.task_id ?? '',
+              })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('cancelDialog.dismiss')}</AlertDialogCancel>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={cancelMutation.isPending}
+              onClick={() => {
+                if (cancelTargetTask) {
+                  cancelMutation.mutate(cancelTargetTask)
+                }
+              }}
+            >
+              {cancelMutation.isPending ? (
+                <LoaderCircleIcon className="animate-spin" />
+              ) : (
+                <XIcon />
+              )}
+              {t('cancelDialog.confirm')}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <TaskDetailSheet
         identityScopeKey={identityScopeKey}

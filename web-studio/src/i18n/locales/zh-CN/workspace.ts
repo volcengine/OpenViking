@@ -274,6 +274,16 @@ const workspace = {
       noResultFailedDescription: '该任务未返回结果，请查看上方失败原因。',
       noResultCancelledDescription: '该任务已取消，未返回执行结果。',
     },
+    actions: {
+      cancelTask: '取消任务',
+    },
+    cancelDialog: {
+      title: '确认取消该任务？',
+      description:
+        '将请求取消任务 {{taskId}}。任务会在下一个安全检查点协作式停止，队列槽位随即释放，状态将更新为“已取消”。',
+      confirm: '取消任务',
+      dismiss: '继续运行',
+    },
     filters: {
       label: '筛选',
       type: '任务类型',
