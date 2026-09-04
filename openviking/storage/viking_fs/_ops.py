@@ -47,6 +47,13 @@ from openviking_cli.exceptions import (
 )
 from openviking_cli.utils.uri import VikingURI
 
+# Mutating filesystem operations (rm/mv) used to acquire path locks with a
+# zero-second wait, so an rm issued right after mkdir/upload failed instantly
+# with CONFLICT "path_busy" while a background semantic refresh still held the
+# tree lock. Waiting here mirrors the ingest-side fix in the resource
+# processor (#4337); set back to 0 to restore the old fail-fast behavior.
+FS_OP_LOCK_ACQUIRE_WAIT_SECS = 60.0
+
 
 def _glob_match_uri(entry_uri: str, is_dir: Optional[bool]) -> str:
     """Mark directory matches with a trailing slash.
@@ -238,7 +245,9 @@ class _OpsMixin:
         lease = lease_ref
         if lease is None and not skip_lock:
             try:
-                lease = await lock_method(path)
+                lease = await lock_method(
+                    path, timeout_secs=FS_OP_LOCK_ACQUIRE_WAIT_SECS
+                )
             except LockAcquisitionError:
                 raise ResourceBusyError(f"Resource is being processed: {uri}", uri=uri)
 
@@ -370,6 +379,7 @@ class _OpsMixin:
         )
         lease = await self._async_agfs.pathlock_acquire_batch(
             lock_requests,
+            timeout_secs=FS_OP_LOCK_ACQUIRE_WAIT_SECS,
             owner_lease_ref=lease_ref,
         )
         operation_id = uuid.uuid4().hex
@@ -650,6 +660,7 @@ class _OpsMixin:
         if is_dir:
             lease = await self._async_agfs.pathlock_acquire_batch(
                 self._directory_transfer_lock_requests(old_path, new_path),
+                timeout_secs=FS_OP_LOCK_ACQUIRE_WAIT_SECS,
                 owner_lease_ref=lease_ref,
             )
         else:
@@ -658,6 +669,7 @@ class _OpsMixin:
                     {"path": old_path, "kind": "exact"},
                     {"path": new_path, "kind": "exact"},
                 ],
+                timeout_secs=FS_OP_LOCK_ACQUIRE_WAIT_SECS,
                 owner_lease_ref=lease_ref,
             )
 
@@ -1004,6 +1016,7 @@ class _OpsMixin:
         child_path = self._uri_to_path(to_uri, ctx=ctx)
         child_lease = await self._async_agfs.pathlock_acquire_exact(
             child_path,
+            timeout_secs=FS_OP_LOCK_ACQUIRE_WAIT_SECS,
             owner_lease_ref=lease_ref,
         )
         try:
@@ -1699,7 +1712,9 @@ class _OpsMixin:
             await self._ensure_parent_dirs(path, ctx=ctx, lease_ref=lease_ref)
             lease = lease_ref
             if lease is None:
-                lease = await self._async_agfs.pathlock_acquire_exact(path)
+                lease = await self._async_agfs.pathlock_acquire_exact(
+                    path, timeout_secs=FS_OP_LOCK_ACQUIRE_WAIT_SECS
+                )
                 owned_lease = lease
             fs_ctx = self._pathlock_fs_ctx(ctx, lease)
 
