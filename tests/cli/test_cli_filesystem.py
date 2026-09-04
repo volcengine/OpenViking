@@ -7,7 +7,7 @@ import tempfile
 import uuid
 
 import pytest
-from conftest import ov, ov_add_resource, ov_cp, ov_mkdir, ov_mv, ov_rm
+from conftest import ov, ov_add_resource, ov_cp, ov_mkdir, ov_mv, ov_rm, ov_write
 
 pytestmark = pytest.mark.cli_remote
 
@@ -143,11 +143,12 @@ class TestFsCp:
         source = f"{test_dir_uri}/cp_source_{suffix}.txt"
         json_target = f"{test_dir_uri}/cp_json_{suffix}.txt"
         human_target = f"{test_dir_uri}/cp_human_{suffix}.txt"
-        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False, mode="w") as f:
-            f.write("copy me")
-            temp_path = f.name
         try:
-            assert ov_add_resource(temp_path, source)["exit_code"] == 0
+            # `add-resource --to` creates a resource root directory even when
+            # the target URI ends in ".txt", so a non-recursive `ov cp` on it
+            # correctly fails with FAILED_PRECONDITION (#4662). Create a true
+            # file instead so this test keeps covering the file-copy path.
+            assert ov_write(source, "copy me", "--mode", "create")["exit_code"] == 0
             json_result = ov_cp(source, json_target)
             assert json_result["exit_code"] == 0, json_result["stderr"]
             assert json_result["json"] and json_result["json"].get("ok") is True
@@ -156,7 +157,6 @@ class TestFsCp:
             assert human_result["exit_code"] == 0, human_result["stderr"]
             assert "Copied:" in human_result["stdout"]
         finally:
-            os.unlink(temp_path)
             ov_rm(source)
             ov_rm(json_target)
             ov_rm(human_target)
