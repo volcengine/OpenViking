@@ -30,7 +30,7 @@ from openviking.storage.vectordb.utils.logging_init import init_cpp_logging
 from openviking.storage.vectordb_adapters import create_collection_adapter
 from openviking.utils.tags import merge_search_tags
 from openviking.utils.time_utils import get_current_timestamp
-from openviking_cli.exceptions import ConflictError
+from openviking_cli.exceptions import ConflictError, InvalidArgumentError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.vectordb_config import DEFAULT_INDEX_NAME, VectorDBBackendConfig
 from openviking_cli.utils.uri import VikingURI
@@ -1469,6 +1469,43 @@ class VikingVectorIndexBackend:
         return await self.search(
             query_vector=query_vector,
             sparse_query_vector=sparse_query_vector,
+            filter=scope_filter,
+            limit=limit,
+            offset=offset,
+            output_fields=RETRIEVAL_OUTPUT_FIELDS,
+            ctx=ctx,
+        )
+
+    async def filter_in_tenant(
+        self,
+        ctx: RequestContext,
+        context_type: Optional[str] = None,
+        target_directories: Optional[List[str]] = None,
+        extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
+        level: Optional[List[int]] = None,
+        limit: int = 10,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """Metadata-only lookup scoped exactly like search_in_tenant.
+
+        Used when a caller supplies a filter but no query, so there is no vector
+        to search by. Scoping goes through the same _build_scope_filter as the
+        vector path, which keeps tenant isolation and target-directory limits
+        identical between the two — a separately hand-built filter would be one
+        refactor away from silently losing them.
+        """
+        scope_filter = self._build_scope_filter(
+            ctx=ctx,
+            context_type=context_type,
+            target_directories=target_directories,
+            extra_filter=extra_filter,
+            level=level,
+        )
+        if scope_filter is None:
+            raise InvalidArgumentError(
+                "A query-less lookup needs a filter or a target directory to scope by."
+            )
+        return await self.filter(
             filter=scope_filter,
             limit=limit,
             offset=offset,

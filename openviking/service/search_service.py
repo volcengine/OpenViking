@@ -25,9 +25,23 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-def _ensure_non_empty_query(query: str, image_url: Optional[str] = None) -> None:
-    if not query.strip() and not image_url:
-        raise InvalidArgumentError("Search query or image_url must not be empty.")
+def _ensure_non_empty_query(
+    query: str,
+    image_url: Optional[str] = None,
+    filter: Optional[Dict] = None,
+) -> None:
+    """Reject a request that gives the search nothing to work with.
+
+    A filter is an acceptable substitute for a query: the result set is then
+    fully determined by the filter, which is exactly what an exact-match lookup
+    (e.g. by a tag carrying an external id) needs. Without either one the call
+    would return an arbitrary slice of the whole store.
+    """
+    if query.strip() or image_url or filter:
+        return
+    raise InvalidArgumentError(
+        "Search query or image_url must not be empty unless a filter is provided."
+    )
 
 
 class SearchService:
@@ -147,7 +161,7 @@ class SearchService:
             FindResult
         """
         resolved_image_url = await self._resolve_image_url(image_url, ctx)
-        _ensure_non_empty_query(query, resolved_image_url)
+        _ensure_non_empty_query(query, resolved_image_url, filter)
         viking_fs = self._ensure_initialized()
         result = await viking_fs.find(
             query=query,

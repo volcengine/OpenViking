@@ -458,6 +458,25 @@ class VikingDBManagerProxy:
             offset=offset,
         )
 
+    async def filter_in_tenant(
+        self,
+        context_type: Optional[str] = None,
+        target_directories: Optional[List[str]] = None,
+        extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
+        level: Optional[List[int]] = None,
+        limit: int = 10,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        return await self._manager.filter_in_tenant(
+            self._ctx,
+            context_type=context_type,
+            target_directories=target_directories,
+            extra_filter=extra_filter,
+            level=level,
+            limit=limit,
+            offset=offset,
+        )
+
     async def search_children_in_tenant(
         self,
         parent_uri: str,
