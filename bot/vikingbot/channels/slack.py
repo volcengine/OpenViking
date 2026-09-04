@@ -89,11 +89,21 @@ class SlackChannel(BaseChannel):
             use_thread = thread_ts and channel_type != "im"
             thread_kw = {"thread_ts": thread_ts} if use_thread else {}
             cleaned, send_images = await self._extract_send_images(msg.content)
-            for filename, image_bytes in send_images:
+            if len(send_images) == 1:
+                filename, image_bytes = send_images[0]
                 await self._web_client.files_upload_v2(
                     channel=msg.session_key.chat_id,
                     filename=filename,
                     file=BytesIO(image_bytes),
+                    **thread_kw,
+                )
+            elif send_images:
+                await self._web_client.files_upload_v2(
+                    channel=msg.session_key.chat_id,
+                    file_uploads=[
+                        {"filename": filename, "file": BytesIO(image_bytes)}
+                        for filename, image_bytes in send_images
+                    ],
                     **thread_kw,
                 )
             if cleaned:

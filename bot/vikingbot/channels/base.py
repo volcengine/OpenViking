@@ -255,7 +255,9 @@ class BaseChannel(ABC):
         if not content:
             return "", []
 
-        markdown_pattern = r"!\[([^\]]*)\]\((send://[^)\s]+\.(?:png|jpeg|jpg|gif|bmp|webp))\)"
+        # Optional ! so both ![alt](send://x.png) and [alt](send://x.png) are
+        # removed whole; otherwise the bare-URI pass leaves "[alt](".
+        markdown_pattern = r"!?\[([^\]]*)\]\((send://[^)\s]+\.(?:png|jpeg|jpg|gif|bmp|webp))\)"
         send_pattern = r"(send://[^)\s]+\.(?:png|jpeg|jpg|gif|bmp|webp))\)?"
         uris: list[str] = []
         for match in re.finditer(markdown_pattern, content, flags=re.IGNORECASE):
