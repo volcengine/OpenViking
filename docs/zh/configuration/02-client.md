@@ -227,6 +227,7 @@ peer 是用户空间下的一段路径前缀——`viking://user/<you>/peers/<pe
 | 变量 | 取值 | 何时为空 |
 |---|---|---|
 | `{git_remote}` | 归一化后的 `origin`，形如 `github.com-org-repo` | 不在 git 仓库中，或仓库没有 `origin` |
+| `{git_port}` | remote 的端口，仅当它不是协议默认端口时才有值（如 `https://forge.corp:8443/group/repo` 的 `8443`） | remote 不带端口——scp 写法永远不带——或只是协议默认端口 |
 | `{git_root}` | 仓库根路径，所有非字母数字字符替换成 `-` | 不在 git 仓库中。仓库内某个子目录放了 `.openviking/config.json` 时，它仍然是仓库自己的根，因此标记子目录不会拆散默认 peer |
 | `{cwd}` | 工作目录，所有非字母数字字符替换成 `-` | 从不为空——它也不在任何默认链里，裸路径只有在你明确要求时才会成为 peer |
 | `{dir}` | 工作区根目录的目录名：仓库根，或放着 `.openviking/config.json` 的那个目录 | 该目录不是工作区 |
@@ -245,6 +246,7 @@ peer 是用户空间下的一段路径前缀——`viking://user/<you>/peers/<pe
 | monorepo 里某个子项目要单独记忆 | 在子目录放 `config.json`，写 `peer.source: "{git_remote}-{dir}"`。只放标记文件仍会沿用仓库 peer，因为 `{git_remote}` 先解析成功 |
 | 一次性任务目录（应用按日期新建的目录、临时解包目录） | 什么都不用做，记忆进入用户级空间 |
 | 同一仓库下各个 agent 想各存各的 | `peer.source: "{git_remote}-{harness}"`。默认不这么分——跨 agent 共享一份项目记忆通常才是想要的，所以这一档得自己写 |
+| 同一台主机、同一路径跑着两个 forge（`:8443` 与 `:9443`） | `peer.source: ["{git_remote}-{git_port}", "{git_remote}"]`。默认不这么分——端口会被折叠，好让同一仓库的 ssh 与 https 写法归为同一个 peer（自建 forge 常是这种形态）；这条链留给一台主机上确实跑着两个 forge 的场景 |
 | 几个目录共享一份记忆 | 各处写同一个 `peer.id` |
 | 不想按项目区分 | `peer.source: "none"`（等同于 `OPENVIKING_WORKSPACE_PEER=0`） |
 

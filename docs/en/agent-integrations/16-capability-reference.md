@@ -218,6 +218,7 @@ Family A resolves credentials in the following order (refer to individual profil
 | Variable | Value | Empty when |
 |---|---|---|
 | `{git_remote}` | The normalized `origin` URL as `github.com-org-repo`. Host and path are lowercased and `.git` plus any userinfo is dropped, so the ssh and https spellings of one repo agree and an embedded token can never reach the peer id. | Not a git repository, or `origin` is unset |
+| `{git_port}` | The remote's non-default port (`8443` in `https://forge.corp:8443/group/repo`), for an opt-in chain such as `["{git_remote}-{git_port}", "{git_remote}"]` | The remote carries no port or only its scheme's default |
 | `{git_root}` | The repository root path, under the legacy sanitation above | Outside a git repository. A marker file inside a repository still leaves this the repository's own root, so marking a subdirectory does not split the default peer |
 | `{cwd}` | The working directory, under the legacy sanitation above | Never — and it is in no default chain, so a bare path becomes a peer only when you ask for one |
 | `{dir}` | The workspace root's directory name: the repository root, or the directory holding `.openviking/config.json` | The directory is not a workspace |

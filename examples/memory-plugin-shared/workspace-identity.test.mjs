@@ -61,6 +61,24 @@ test("normalizeGitRemote refuses identities that are only local", () => {
   }
 });
 
+test("normalizeGitRemote keeps folding ports away, default or not", () => {
+  // Deliberate, and the RFC's own worked example: a self-hosted forge serves
+  // ssh and https on different ports (GitLab alt-ssh 2222, https 443), and
+  // those are two spellings of one repository — folding the port is what keeps
+  // them one peer. The opt-in `{git_port}` template variable is where a port
+  // shows up, so no default chain changes here.
+  const expected = "gitlab.corp/group/repo";
+  for (const url of [
+    "https://gitlab.corp/group/repo.git",
+    "https://gitlab.corp:443/group/repo.git",
+    "ssh://git@gitlab.corp:2222/group/repo.git",
+    "http://gitlab.corp:80/group/repo.git",
+    "git://gitlab.corp:9418/group/repo.git",
+  ]) {
+    assert.equal(normalizeGitRemote(url), expected, `failed on ${url}`);
+  }
+});
+
 test("sanitizePeerId produces a server-valid id and dodges the reserved names", () => {
   assert.equal(sanitizePeerId("github.com/volcengine/openviking"), "github.com-volcengine-openviking");
   assert.match(sanitizePeerId("github.com/volcengine/openviking"), /^[a-zA-Z0-9_.@-]+$/);
@@ -245,7 +263,7 @@ test("identity exposes every template variable, git and non-git alike", async ()
   assert.equal(identity.vars.dir, sanitizePeerId(root.split("/").pop()));
   // `harness` belongs to the caller, not here: this result is cached on disk
   // under a cwd-only key, which two harnesses in one directory would share.
-  assert.deepEqual(Object.keys(identity.vars).sort(), ["cwd", "dir", "git_remote", "git_root"]);
+  assert.deepEqual(Object.keys(identity.vars).sort(), ["cwd", "dir", "git_port", "git_remote", "git_root"]);
 
   const plain = await tempRoot("plain");
   const outside = resolveWorkspaceIdentity({ cwd: plain, env, cache: false });
@@ -254,6 +272,30 @@ test("identity exposes every template variable, git and non-git alike", async ()
   assert.equal(outside.vars.git_root, "");
   assert.equal(outside.vars.dir, "", "a directory that is no workspace names nothing");
   assert.equal(outside.vars.cwd, legacySanitize(plain));
+  assert.equal(outside.vars.git_port, "");
+});
+
+test("git_port surfaces only a port that is not the scheme's default", async () => {
+  const root = await tempRoot("port");
+  await makeRepo(root, { remote: "https://forge.corp:8443/group/repo.git" });
+  const env = { HOME: "/nonexistent-home", OPENVIKING_STATE_DIR: join(root, ".state") };
+  assert.equal(resolveWorkspaceIdentity({ cwd: root, env, cache: false }).vars.git_port, "8443");
+
+  for (const [remote, note] of [
+    ["https://forge.corp/group/repo.git", "no port at all"],
+    ["https://forge.corp:443/group/repo.git", "the special scheme's own default"],
+    ["ssh://git@forge.corp:22/group/repo.git", "a non-special scheme's default"],
+    ["git://forge.corp:9418/group/repo.git", "the git scheme's default"],
+    ["rsync://forge.corp:873/group/repo.git", "the rsync scheme's default"],
+    ["git@forge.corp:group/repo.git", "the scp spelling has no port syntax"],
+  ]) {
+    await writeFile(join(root, ".git", "config"), `[remote "origin"]\n\turl = ${remote}\n`);
+    assert.equal(
+      resolveWorkspaceIdentity({ cwd: root, env, cache: false }).vars.git_port,
+      "",
+      `${remote}: ${note}`,
+    );
+  }
 });
 
 test("a repo with no origin leaves git_remote empty but still names the root", async () => {
@@ -362,6 +404,29 @@ test("a cache holding the wrong shape is re-derived instead of returned", async 
 
   const identity = resolveWorkspaceIdentity({ cwd: root, env, now: 1000 });
   assert.equal(identity.vars.git_remote, "github.com-o-r");
+});
+
+test("a cache entry from before git_port existed is re-derived, not served", async () => {
+  const root = await tempRoot("oldcache");
+  await makeRepo(root, { remote: "https://forge.corp:8443/group/repo.git" });
+  const state = join(root, ".state");
+  const env = { HOME: "/nonexistent-home", OPENVIKING_STATE_DIR: state };
+
+  const identity = resolveWorkspaceIdentity({ cwd: root, env, now: 1000 });
+  assert.equal(identity.vars.git_port, "8443");
+  // Rewrite the entry the way a pre-git_port build wrote it: a valid identity
+  // whose vars key set simply predates the variable. Serving it would render
+  // `{git_port}` as empty — and to `renderPeerTemplate` an empty variable
+  // falls through exactly like an absent one, so the port-less template would
+  // win for the rest of the TTL without anyone seeing why.
+  for (const name of await readdir(state)) {
+    const cached = JSON.parse(await readFile(join(state, name), "utf-8"));
+    delete cached.identity.vars.git_port;
+    await writeFile(join(state, name), JSON.stringify(cached));
+  }
+
+  const rederived = resolveWorkspaceIdentity({ cwd: root, env, now: 1000 });
+  assert.equal(rederived.vars.git_port, "8443", "a stale key set is a miss, not a value");
 });
 
 test("findWorkspaceRoot returns nothing rather than throwing on a dead cwd", () => {

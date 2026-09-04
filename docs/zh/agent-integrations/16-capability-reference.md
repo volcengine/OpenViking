@@ -220,6 +220,7 @@ per-harness 章节（档案卡）只写差异；所有共享事实均在本章�
 | 变量 | 取值 | 何时为空 |
 |---|---|---|
 | `{git_remote}` | 归一化后的 `origin`，形如 `github.com-org-repo`；host 与 path 转小写，`.git` 后缀与 userinfo 一并丢弃，因此同一仓库的 ssh / https 两种写法结果一致，且 URL 里内嵌的 token 不可能进入 peer id | 非 git 仓库，或未配 `origin` |
+| `{git_port}` | remote 的非默认端口（`https://forge.corp:8443/group/repo` 中的 `8443`），供自选链如 `["{git_remote}-{git_port}", "{git_remote}"]` 使用 | remote 不带端口，或只是协议默认端口 |
 | `{git_root}` | 仓库根路径，按上述旧 sanitation 处理 | 不在 git 仓库中。仓库内某个子目录放了标记文件时，它仍然是仓库自己的根，因此标记子目录不会拆散默认 peer |
 | `{cwd}` | 当前工作目录，按上述旧 sanitation 处理 | 从不为空——它也不在任何默认链里，裸路径只有在你明确要求时才会成为 peer |
 | `{dir}` | 工作区根目录的目录名：仓库根，或放着 `.openviking/config.json` 的那个目录 | 该目录不是工作区 |

@@ -227,6 +227,7 @@ The other ways to set it, highest precedence first:
 | Variable | Value | Empty when |
 |---|---|---|
 | `{git_remote}` | Normalized `origin`, as `github.com-org-repo` | Outside a git repository, or the repository has no `origin` |
+| `{git_port}` | The remote's port when it is not the scheme's default (`8443` in `https://forge.corp:8443/group/repo`) | The remote carries no port — the scp spelling never does — or only its scheme's default |
 | `{git_root}` | Repository root path, with every non-alphanumeric character replaced by `-` | Outside a git repository. A `.openviking/config.json` inside a repository still leaves this the repository's own root, so marking a subdirectory does not split the default peer |
 | `{cwd}` | Working directory, with every non-alphanumeric character replaced by `-` | Never — and it is in no default chain, so a bare path becomes a peer only when you ask for one |
 | `{dir}` | The workspace root's directory name: the repository root, or the directory holding `.openviking/config.json` | The directory is not a workspace |
@@ -245,6 +246,7 @@ In `/Users/x/Dev/OpenViking/examples/codex-memory-plugin` with `origin` `git@git
 | One subproject of a monorepo needing its own memory | Put a `config.json` in the subdirectory with `peer.source: "{git_remote}-{dir}"`. A marker file alone keeps the repository's peer, because `{git_remote}` resolves first |
 | A throwaway task directory (a dated folder an app creates, an unpacked archive) | Nothing. Its memories go to your user-level space |
 | Each agent keeping its own memory of one repository | `peer.source: "{git_remote}-{harness}"`. Not the default — one shared project memory across agents is usually what you want, so this one is opt-in |
+| Two forges on one host and path (`:8443` vs `:9443`) | `peer.source: ["{git_remote}-{git_port}", "{git_remote}"]`. Not the default — ports are folded away so the ssh and https spellings of one repository agree, which self-hosted forges make common; this chain is for when one host really does serve two forges |
 | Several directories sharing one memory | Write the same `peer.id` in each |
 | Not wanting per-project separation at all | `peer.source: "none"` (the same as `OPENVIKING_WORKSPACE_PEER=0`) |
 
