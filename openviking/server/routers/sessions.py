@@ -858,7 +858,7 @@ async def record_used(
             resolve_path_variables(resolved_skill["uri"]), _ctx
         )
 
-    session.used(contexts=resolved_contexts, skill=resolved_skill)
+    await session.used_async(contexts=resolved_contexts, skill=resolved_skill)
     return Response(
         status="ok",
         result={

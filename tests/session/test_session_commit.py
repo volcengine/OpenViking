@@ -705,11 +705,11 @@ class TestCommit:
             session_id="active_count_regression_test",
         )
         await session.ensure_exists()
-        session._session_compressor.extract_long_term_memories = AsyncMock(return_value=[])
+        service.sessions._session_compressor.extract_long_term_memories = AsyncMock(return_value=[])
         session.add_message("user", [TextPart("Query")])
-        session.used(contexts=[uri])
+        await session.used_async(contexts=[uri])
         session.add_message("assistant", [TextPart("Answer")])
-        result = await session.commit_async()
+        result = await service.sessions.commit_async(session.session_id, client_ctx)
 
         # Wait for background task to complete (active_count is updated there)
         task_result = await _wait_for_task(result["task_id"])

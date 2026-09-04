@@ -534,8 +534,10 @@ class SessionMeta:
     # session. Maps to config.memory_extraction_config.events.tags in the API.
     # None means no session default; a commit may still override per-call.
     event_search_tags: Optional[List[str]] = None
+    # Usage waiting to be consumed by the next successful commit.
+    pending_usage_records: List[Dict[str, Any]] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self, *, include_internal: bool = False) -> Dict[str, Any]:
         data = {
             "session_id": self.session_id,
             "created_at": self.created_at,
@@ -565,6 +567,8 @@ class SessionMeta:
             data["total_message_count"] = self.total_message_count
         if self.event_search_tags is not None:
             data["event_search_tags"] = list(self.event_search_tags)
+        if include_internal and self.pending_usage_records:
+            data["pending_usage_records"] = [dict(item) for item in self.pending_usage_records]
         return data
 
     @classmethod
@@ -615,6 +619,11 @@ class SessionMeta:
             last_message_at=data.get("last_message_at", ""),
             last_auto_commit_at=data.get("last_auto_commit_at", ""),
             event_search_tags=data.get("event_search_tags"),
+            pending_usage_records=[
+                dict(item)
+                for item in (data.get("pending_usage_records") or [])
+                if isinstance(item, dict)
+            ],
         )
 
 
@@ -625,10 +634,56 @@ class Usage:
     uri: str
     type: str  # "context" | "skill"
     contribution: float = 0.0
-    input: str = ""
-    output: str = ""
+    input: Any = ""
+    output: Any = ""
     success: bool = True
     timestamp: str = field(default_factory=get_current_timestamp)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "uri": self.uri,
+            "type": self.type,
+            "contribution": self.contribution,
+            "input": self.input,
+            "output": self.output,
+            "success": self.success,
+            "timestamp": self.timestamp,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Usage":
+        return cls(
+            uri=str(data.get("uri", "")),
+            type=str(data.get("type", "")),
+            contribution=float(data.get("contribution", 0.0) or 0.0),
+            input=data.get("input", ""),
+            output=data.get("output", ""),
+            success=bool(data.get("success", True)),
+            timestamp=str(data.get("timestamp", "")) or get_current_timestamp(),
+        )
+
+
+@dataclass(frozen=True)
+class _UsageEvent:
+    """One durable usage event waiting for a Session commit to own it."""
+
+    event_id: str
+    usage: Usage
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "event_id": self.event_id,
+            "uri": self.usage.uri,
+            "type": self.usage.type,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "_UsageEvent":
+        event_id = data.get("event_id")
+        return cls(
+            event_id=event_id if isinstance(event_id, str) and event_id else str(uuid4()),
+            usage=Usage.from_dict(data),
+        )
 
 
 class Session:
@@ -663,6 +718,8 @@ class Session:
         self._session_uri = session_uri or canonical_session_uri(self.ctx, self.session_id)
 
         self._messages: List[Message] = []
+        self._pending_usage_events: List[_UsageEvent] = []
+        self._pending_usage_ids_need_persist = False
         self._usage_records: List[Usage] = []
         self._archive_meta_merge_lock = asyncio.Lock()
         self._compression: SessionCompression = SessionCompression()
@@ -744,6 +801,7 @@ class Session:
         # message_count mirrors the live message list, maintained by every write
         # path. Recompute on load so a stale persisted value can't drift.
         self._meta.message_count = len(self._messages)
+        self._restore_pending_usage()
 
         if not self._meta.created_by_account_id:
             self._meta.created_by_account_id = self.ctx.account_id
@@ -845,10 +903,11 @@ class Session:
         self._meta.updated_at = get_current_timestamp()
         await self._viking_fs.write_file(
             uri=f"{self._session_uri}/.meta.json",
-            content=json.dumps(self._meta.to_dict(), ensure_ascii=False),
+            content=json.dumps(self._meta.to_dict(include_internal=True), ensure_ascii=False),
             ctx=self.ctx,
             lease_ref=lease_ref,
         )
+        self._pending_usage_ids_need_persist = False
 
     async def update_config(
         self,
@@ -908,11 +967,53 @@ class Session:
         skill: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Record actually used contexts and skills."""
+        run_async(self.used_async(contexts=contexts, skill=skill))
+
+    async def used_async(
+        self,
+        contexts: Optional[List[str]] = None,
+        skill: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Persist actually used contexts and skills for the next commit."""
+        records = [Usage(uri=uri, type="context") for uri in contexts or []]
+        if skill:
+            records.append(
+                Usage(
+                    uri=skill.get("uri", ""),
+                    type="skill",
+                    input=skill.get("input", ""),
+                    output=skill.get("output", ""),
+                    success=skill.get("success", True),
+                )
+            )
+        if not records:
+            return
+        new_events = [_UsageEvent(event_id=str(uuid4()), usage=record) for record in records]
+
+        if self._viking_fs:
+            session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
+            lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
+                session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
+            )
+            try:
+                try:
+                    meta_content = await self._viking_fs.read_file(
+                        f"{self._session_uri}/.meta.json", ctx=self.ctx
+                    )
+                    self._meta = SessionMeta.from_dict(json.loads(meta_content))
+                except Exception as exc:
+                    if not _is_storage_not_found(exc):
+                        raise
+                self._restore_pending_usage()
+                self._set_pending_usage_events(self._pending_usage_events + new_events)
+                await self._save_meta()
+            finally:
+                await self._viking_fs._async_agfs.pathlock_release(lease)
+        else:
+            self._set_pending_usage_events(self._pending_usage_events + new_events)
+
         if contexts:
             for uri in contexts:
-                usage = Usage(uri=uri, type="context")
-                self._usage_records.append(usage)
-                self._stats.contexts_used += 1
                 logger.debug(f"Tracked context usage: {uri}")
             try:
                 from openviking.metrics.datasources.session import SessionLifecycleDataSource
@@ -924,15 +1025,6 @@ class Session:
                 pass
 
         if skill:
-            usage = Usage(
-                uri=skill.get("uri", ""),
-                type="skill",
-                input=skill.get("input", ""),
-                output=skill.get("output", ""),
-                success=skill.get("success", True),
-            )
-            self._usage_records.append(usage)
-            self._stats.skills_used += 1
             logger.debug(f"Tracked skill usage: {skill.get('uri')}")
             try:
                 from openviking.metrics.datasources.session import SessionLifecycleDataSource
@@ -940,6 +1032,38 @@ class Session:
                 SessionLifecycleDataSource.record_contexts_used(action="skill", delta=1)
             except Exception:
                 pass
+
+    def _restore_pending_usage(self) -> None:
+        self._pending_usage_ids_need_persist = any(
+            not isinstance(item.get("event_id"), str) or not item.get("event_id")
+            for item in self._meta.pending_usage_records
+        )
+        self._set_pending_usage_events(
+            [_UsageEvent.from_dict(item) for item in self._meta.pending_usage_records]
+        )
+
+    def _set_pending_usage_events(self, events: List[_UsageEvent]) -> None:
+        self._pending_usage_events = list(events)
+        self._usage_records = [event.usage for event in events]
+        self._meta.pending_usage_records = [event.to_dict() for event in events]
+        self._restore_usage_stats()
+
+    def _restore_usage_events(self, events: List[_UsageEvent]) -> None:
+        """Restore events idempotently without overwriting newer pending usage."""
+        current_ids = {event.event_id for event in self._pending_usage_events}
+        restored = [event for event in events if event.event_id not in current_ids]
+        self._set_pending_usage_events(restored + self._pending_usage_events)
+
+    def _consume_usage_events(self, event_ids: List[str]) -> None:
+        """Remove only events durably owned by one Phase 1 intent."""
+        consumed_ids = set(event_ids)
+        self._set_pending_usage_events(
+            [event for event in self._pending_usage_events if event.event_id not in consumed_ids]
+        )
+
+    def _restore_usage_stats(self) -> None:
+        self._stats.contexts_used = sum(item.type == "context" for item in self._usage_records)
+        self._stats.skills_used = sum(item.type == "skill" for item in self._usage_records)
 
     def _tool_result_store(self) -> Optional[ToolResultStore]:
         if not self._viking_fs:
@@ -1643,6 +1767,7 @@ class Session:
         min_raw_tail_steps: int,
         agent_evolution_enabled: bool = True,
         agent_memory_skip_reason: Optional[str] = None,
+        usage_events: Optional[List[Dict[str, Any]]] = None,
         lease_ref: Optional[Any] = None,
     ) -> None:
         """Persist the Phase 1 intent before any destructive root rewrite."""
@@ -1659,6 +1784,10 @@ class Session:
             "keep_recent_turn_count": keep_recent_turn_count,
             "retained_message_token_budget": retained_message_token_budget,
             "min_raw_tail_steps": min_raw_tail_steps,
+            # This is the durable ownership record for usage removed from the
+            # Session root. Recovery either finishes this transfer or restores
+            # these exact events to pending state by stable event ID.
+            "usage_events": list(usage_events or []),
         }
         await self._merge_archive_meta(
             archive_uri,
@@ -1694,10 +1823,51 @@ class Session:
             return False
 
     async def _read_phase1_meta(self, archive_uri: str) -> Dict[str, Any]:
-        phase1 = (await self._read_archive_meta(archive_uri)).get("phase1")
+        try:
+            content = await self._viking_fs.read_file(f"{archive_uri}/.meta.json", ctx=self.ctx)
+        except Exception as exc:
+            if _is_storage_not_found(exc):
+                return {}
+            raise
+        parsed = json.loads(content)
+        if not isinstance(parsed, dict):
+            raise ValueError("session commit archive metadata must be an object")
+        phase1 = parsed.get("phase1")
         return dict(phase1) if isinstance(phase1, dict) else {}
 
-    async def _ensure_phase1_ready(self, archive_uri: str) -> bool:
+    @staticmethod
+    def _phase1_usage_events(marker: Dict[str, Any]) -> List[_UsageEvent]:
+        raw_events = marker.get("usage_events")
+        if not isinstance(raw_events, list):
+            return []
+        return [_UsageEvent.from_dict(item) for item in raw_events if isinstance(item, dict)]
+
+    async def _reload_pending_usage_meta(self) -> None:
+        try:
+            meta_content = await self._viking_fs.read_file(
+                f"{self._session_uri}/.meta.json",
+                ctx=self.ctx,
+            )
+            self._meta = SessionMeta.from_dict(json.loads(meta_content))
+        except Exception as exc:
+            if not _is_storage_not_found(exc):
+                raise
+        self._restore_pending_usage()
+
+    async def _restore_phase1_usage(self, marker: Dict[str, Any]) -> None:
+        events = self._phase1_usage_events(marker)
+        if not events:
+            return
+        await self._reload_pending_usage_meta()
+        self._restore_usage_events(events)
+        await self._save_meta()
+
+    async def _ensure_phase1_ready(
+        self,
+        archive_uri: str,
+        *,
+        held_lease: Optional[Any] = None,
+    ) -> bool:
         """Verify or recover a queued Phase 1 before Phase 2 consumes it.
 
         New commits enqueue while holding the session lock and before rewriting
@@ -1715,10 +1885,13 @@ class Session:
         if await self._archive_file_exists(archive_uri, ".failed.json"):
             return False
 
-        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
-        lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
-            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
-        )
+        acquired_here = held_lease is None
+        lease = held_lease
+        if acquired_here:
+            session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
+            lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
+                session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
+            )
         try:
             marker = await self._read_phase1_meta(archive_uri)
             if marker.get("status") == "ready":
@@ -1733,6 +1906,7 @@ class Session:
             tracker = get_task_tracker()
             if not task_id or not tracker.has_work(str(task_id)):
                 error = "Phase 1 has no QueueFS work to resume"
+                await self._restore_phase1_usage(marker)
                 await self._write_failed_marker(
                     archive_uri,
                     stage="phase1_recovery",
@@ -1758,6 +1932,7 @@ class Session:
                 archived_ids = [item for item in archived_ids if isinstance(item, str)]
                 live_messages = await self._read_live_messages_strict()
             except Exception as exc:
+                await self._restore_phase1_usage(marker)
                 await self._write_failed_marker(
                     archive_uri,
                     stage="phase1_recovery",
@@ -1771,6 +1946,7 @@ class Session:
                 : len(retained_ids)
             ] == retained_ids and not archived_only_ids.intersection(live_ids)
             if not phase1_applied:
+                await self._restore_phase1_usage(marker)
                 await self._write_failed_marker(
                     archive_uri,
                     stage="phase1_recovery",
@@ -1780,14 +1956,7 @@ class Session:
 
             # Root is authoritative and proves the rewrite completed. Reconcile
             # metadata that may have been interrupted immediately afterwards.
-            try:
-                meta_content = await self._viking_fs.read_file(
-                    f"{self._session_uri}/.meta.json",
-                    ctx=self.ctx,
-                )
-                self._meta = SessionMeta.from_dict(json.loads(meta_content))
-            except Exception:
-                pass
+            await self._reload_pending_usage_meta()
             self._messages = live_messages
             self._remember_retention_policy(
                 keep_recent_count=max(0, int(marker.get("keep_recent_count", 0) or 0)),
@@ -1805,12 +1974,16 @@ class Session:
             )
             self._meta.last_commit_at = get_current_timestamp()
             await self._rebuild_pending_tokens()
+            self._consume_usage_events(
+                [event.event_id for event in self._phase1_usage_events(marker)]
+            )
             await self._save_meta()
             await self._write_phase1_ready_marker(archive_uri)
             logger.warning("Recovered interrupted Session Phase 1: %s", archive_uri)
             return True
         finally:
-            await self._viking_fs._async_agfs.pathlock_release(lease)
+            if acquired_here:
+                await self._viking_fs._async_agfs.pathlock_release(lease)
 
     def commit(
         self,
@@ -1953,6 +2126,7 @@ class Session:
                     ctx=self.ctx,
                 )
                 self._meta = SessionMeta.from_dict(json.loads(meta_content))
+                self._restore_pending_usage()
                 if (
                     memory_policy is None
                     and self._meta.memory_policy is None
@@ -2011,6 +2185,27 @@ class Session:
                 ctx=self.ctx,
             ):
                 self._compression.compression_index += 1
+
+            # A process may have died after publishing a preparing intent but
+            # before publishing ready. Resolve that ownership boundary before
+            # a later commit can snapshot the same pending usage again.
+            if self._compression.compression_index > 0:
+                predecessor_uri = (
+                    f"{self._session_uri}/history/archive_{self._compression.compression_index:03d}"
+                )
+                try:
+                    predecessor_phase1 = await self._read_phase1_meta(predecessor_uri)
+                except Exception as exc:
+                    if not _is_storage_not_found(exc):
+                        raise
+                    predecessor_phase1 = {}
+                if predecessor_phase1 and predecessor_phase1.get("status") != "ready":
+                    await self._ensure_phase1_ready(
+                        predecessor_uri,
+                        held_lease=lease,
+                    )
+                    self._messages = await self._read_live_messages_strict()
+                    await self._reload_pending_usage_meta()
 
             if not self._messages:
                 self._meta.pending_tokens = 0
@@ -2087,12 +2282,20 @@ class Session:
                     "budget_exceeded": retention_plan.budget_exceeded if retention_plan else False,
                 }
 
+            # Legacy pending records from the first #4485 revision had no
+            # stable IDs. Persist their assigned IDs before a Phase 1 marker
+            # can claim them, otherwise a crash could regenerate new IDs and
+            # make recovery restore duplicates.
+            if self._pending_usage_ids_need_persist:
+                await self._save_meta()
+
             self._compression.compression_index += 1
             archive_uri = (
                 f"{self._session_uri}/history/archive_{self._compression.compression_index:03d}"
             )
             original_messages = list(self._messages)
-            usage_snapshot = self._usage_records.copy()
+            usage_event_snapshot = list(self._pending_usage_events)
+            usage_snapshot = [event.usage for event in usage_event_snapshot]
             task_id = str(uuid4())
             queue_msg = SessionCommitMsg(
                 task_id=task_id,
@@ -2120,6 +2323,7 @@ class Session:
                     min_raw_tail_steps=effective_min_tail,
                     agent_evolution_enabled=agent_evolution_enabled,
                     agent_memory_skip_reason=agent_memory_skip_reason,
+                    usage_events=[event.to_dict() for event in usage_event_snapshot],
                 )
 
                 # Archive raw remains durable and recoverable before any live
@@ -2181,6 +2385,7 @@ class Session:
                     # commit boundary, so an idle scan and a concurrent worker
                     # never see a stale state.
                     self._meta.last_auto_commit_at = get_current_timestamp()
+                self._consume_usage_events([event.event_id for event in usage_event_snapshot])
                 await self._save_meta()
                 await self._write_phase1_ready_marker(archive_uri)
             except Exception as e:
@@ -2188,15 +2393,37 @@ class Session:
                 # Whether the queue write failed or a queued Phase 1 stopped
                 # before publication, a terminal marker makes archive raw
                 # logically live and prevents a permanent pending directory.
-                try:
-                    await self._write_failed_marker(
-                        archive_uri,
-                        stage=phase1_stage,
-                        error=str(e),
-                    )
-                except Exception:
-                    logger.exception(
-                        "Failed to mark archive after Phase 1 persistence failure: %s",
+                usage_restored = not usage_event_snapshot
+                if usage_event_snapshot:
+                    try:
+                        await self._reload_pending_usage_meta()
+                        self._restore_usage_events(usage_event_snapshot)
+                        await self._save_meta()
+                        usage_restored = True
+                    except Exception:
+                        # Do not publish a terminal failure if compensation was
+                        # not durable. A preparing marker can still recover the
+                        # ownership transfer after a process restart.
+                        logger.exception(
+                            "Failed to restore usage after Phase 1 failure: %s",
+                            archive_uri,
+                        )
+                if usage_restored:
+                    try:
+                        await self._write_failed_marker(
+                            archive_uri,
+                            stage=phase1_stage,
+                            error=str(e),
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Failed to mark archive after Phase 1 persistence failure: %s",
+                            archive_uri,
+                        )
+                else:
+                    logger.error(
+                        "Skipped terminal Phase 1 marker because usage restoration "
+                        "was not durable: %s",
                         archive_uri,
                     )
                 self._messages = original_messages

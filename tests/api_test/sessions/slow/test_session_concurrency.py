@@ -144,17 +144,22 @@ class TestSessionConcurrency:
 
             api_client.add_message(session_id, "user", "Used accumulation test")
 
-            api_client.session_used(
+            used1 = api_client.session_used(
                 session_id,
                 contexts=["viking://resources/ctx1"],
                 skill={"name": "skill-a"},
             )
 
-            api_client.session_used(
+            used2 = api_client.session_used(
                 session_id,
                 contexts=["viking://resources/ctx2", "viking://resources/ctx3"],
                 skill={"name": "skill-b"},
             )
+
+            assert used1.json()["result"]["contexts_used"] == 1
+            assert used1.json()["result"]["skills_used"] == 1
+            assert used2.json()["result"]["contexts_used"] == 3
+            assert used2.json()["result"]["skills_used"] == 2
 
             get_resp = api_client.get_session(session_id)
             assert get_resp.status_code == 200
