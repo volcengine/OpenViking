@@ -24,11 +24,12 @@ async function enqueueRemainder(sessionId, payloads, startIndex, result, retryab
   result.retryable = retryable;
   result.lastError = lastError ?? null;
 
-  if (!retryable) {
-    result.failed += Math.max(0, payloads.length - startIndex);
-    return result;
-  }
-
+  // Always enqueue the unsent suffix when the caller requested enqueue-on-failure
+  // semantics — including non-retryable statuses (400/403/…). Counting them as
+  // accepted-after-enqueue keeps the sync watermark moving; poison payloads are
+  // still dropped later by maxRetries/TTL. Skipping the enqueue here left
+  // accepted < payloads.length, so the next turn re-extracted already-sent
+  // messages and duplicated them on the server (#4692 review).
   const baseCreatedAt = Date.now();
   for (let i = startIndex; i < payloads.length; i++) {
     const queued = await enqueue("addMessage", sessionId, payloads[i], {
@@ -79,7 +80,8 @@ async function sendSerial(fetchJSON, sessionId, payloads, startIndex, opts, resu
  * @param {string} sessionId - OpenViking session id
  * @param {Array<object>} payloads - sanitized add-message request bodies
  * @param {object} opts
- * @param {boolean} opts.enqueueOnRetryable - enqueue unsent payloads after a retryable failure
+ * @param {boolean} opts.enqueueOnRetryable - enqueue unsent payloads after any send failure
+ *   (retryable or not); name kept for callers, semantics are enqueue-on-failure
  * @param {Function} opts.onSent - called with the number of messages durably sent after each success
  * @returns {Promise<{sent:number,queued:number,enqueueFailed:number,failed:number,retryable:boolean,usedBatch:boolean,lastError:any}>}
  */

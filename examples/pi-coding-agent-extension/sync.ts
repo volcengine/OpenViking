@@ -62,6 +62,9 @@ export class SyncManager {
 
   async flushForTakeover(): Promise<boolean> {
     if (!this.ovSessionId) return false;
+    // Drain is bounded (time / max batches). Remaining undelivered entries —
+    // including any still claimed as `.processing` — keep the barrier closed
+    // until a later turn finishes draining them.
     if (this.client.connected) await this.drainSessionBacklog();
     const pending = await listPending();
     return countUndeliveredForSession(pending, this.ovSessionId) === 0;
@@ -74,20 +77,44 @@ export class SyncManager {
    * large offline backlog block the takeover barrier for many turns (#4504).
    * Entries are claimed one batch at a time so a failed batch only costs a
    * retry for the entries it contained.
+   *
+   * Bounded per call via OPENVIKING_PENDING_DRAIN_BUDGET_MS (default 60s) and
+   * optional OPENVIKING_PENDING_DRAIN_MAX_BATCHES so a huge backlog cannot
+   * block turn_end for an unbounded wall time; remainder drains on later turns.
    */
   private async drainSessionBacklog(): Promise<void> {
     const sid = this.ovSessionId;
     if (!sid) return;
+    const budgetRaw = Number(process.env.OPENVIKING_PENDING_DRAIN_BUDGET_MS);
+    const timeBudgetMs = Number.isFinite(budgetRaw) && budgetRaw >= 0 ? budgetRaw : 60_000;
+    const maxRaw = Number(process.env.OPENVIKING_PENDING_DRAIN_MAX_BATCHES);
+    const maxBatches =
+      Number.isFinite(maxRaw) && maxRaw > 0 ? Math.floor(maxRaw) : Number.POSITIVE_INFINITY;
+    const started = Date.now();
+    let batches = 0;
+
     const backlog = (await listPending()).filter(
       ({ entry }) => entry?.type === "addMessage" && entry.sessionId === sid,
     );
     for (let start = 0; start < backlog.length; start += BATCH_LIMIT) {
+      if (batches >= maxBatches || Date.now() - started >= timeBudgetMs) {
+        this.logger.log("drain", {
+          session: sid,
+          stopped: batches >= maxBatches ? "max-batches" : "time-budget",
+          batches,
+          remaining: backlog.length - start,
+          elapsedMs: Date.now() - started,
+        });
+        return;
+      }
+
       const claimed: Array<{ filename: string; entry: any }> = [];
       for (const { filename, entry } of backlog.slice(start, start + BATCH_LIMIT)) {
         const name = await claimForReplay(filename);
         if (name) claimed.push({ filename: name, entry });
       }
       if (claimed.length === 0) continue;
+      batches += 1;
 
       let delivered = 0;
       await sendSessionMessages(

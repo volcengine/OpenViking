@@ -270,3 +270,46 @@ test("failed batch keeps its entries queued with one retry and leaves the rest u
     assert.equal(retries.filter((r) => r === 0).length, 20);
   });
 });
+
+test("non-retryable batch failure still enqueues and advances the sync watermark", async () => {
+  await withPendingDir(async () => {
+    const { c, calls } = batchClient({ respond: () => ({ ok: false, status: 400, error: { message: "bad" } }) });
+    const sync = new SyncManager(c, config());
+    await sync.ensureSession("pi-session");
+
+    const result = await sync.syncBranch([
+      { type: "message", message: { role: "user", content: "Poison payload one for watermark enqueue test." } },
+      { type: "message", message: { role: "user", content: "Poison payload two for watermark enqueue test." } },
+    ]);
+
+    assert.equal(result.added, 2);
+    assert.equal(result.allDelivered, false);
+    assert.equal(sync.syncedCount, 2);
+    assert.equal(calls.length, 1);
+    assert.equal((await listPending()).length, 2);
+  });
+});
+
+test("drainSessionBacklog stops after maxBatches and leaves remainder for later turns", async () => {
+  await withPendingDir(async () => {
+    const previous = process.env.OPENVIKING_PENDING_DRAIN_MAX_BATCHES;
+    process.env.OPENVIKING_PENDING_DRAIN_MAX_BATCHES = "1";
+    try {
+      const { c, calls } = batchClient();
+      const sync = new SyncManager(c, config());
+      await sync.ensureSession("pi-session");
+      const t0 = Date.now();
+      for (let i = 0; i < 250; i++) {
+        await enqueue("addMessage", sync.sessionId, { role: "user", content: `m${i}` }, { createdAt: t0 + i });
+      }
+
+      assert.equal(await sync.flushForTakeover(), false);
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].body.messages.length, 100);
+      assert.equal((await listPending()).length, 150);
+    } finally {
+      if (previous === undefined) delete process.env.OPENVIKING_PENDING_DRAIN_MAX_BATCHES;
+      else process.env.OPENVIKING_PENDING_DRAIN_MAX_BATCHES = previous;
+    }
+  });
+});
