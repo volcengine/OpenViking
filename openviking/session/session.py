@@ -850,29 +850,6 @@ class Session:
             lease_ref=lease_ref,
         )
 
-    async def _acquire_session_write_lease_for_uris(
-        self,
-        uris: List[str],
-        owner_lease_ref: Any,
-    ) -> Optional[Any]:
-        """Acquire exact write locks for Session child files under the Session owner lease."""
-        if not self._viking_fs:
-            return None
-        paths: List[str] = []
-        seen: set[str] = set()
-        for uri in uris:
-            path = self._viking_fs._uri_to_path(uri, ctx=self.ctx)
-            if path not in seen:
-                paths.append(path)
-                seen.add(path)
-        if not paths:
-            return None
-        return await self._viking_fs._async_agfs.pathlock_acquire_exact_batch(
-            paths,
-            timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS,
-            owner_lease_ref=owner_lease_ref,
-        )
-
     async def update_config(
         self,
         *,
@@ -886,7 +863,6 @@ class Session:
         lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
             session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
         )
-        write_lease = None
         try:
             try:
                 meta_content = await self._viking_fs.read_file(
@@ -906,14 +882,8 @@ class Session:
                     existing = dict(self._meta.auto_commit_policy or {})
                     existing.update(auto_commit_policy)
                     self._meta.auto_commit_policy = AutoCommitPolicy.from_dict(existing).to_dict()
-            write_lease = await self._acquire_session_write_lease_for_uris(
-                [f"{self._session_uri}/.meta.json"],
-                lease,
-            )
-            await self._save_meta(lease_ref=write_lease)
+            await self._save_meta()
         finally:
-            if write_lease is not None:
-                await self._viking_fs._async_agfs.pathlock_release(write_lease)
             await self._viking_fs._async_agfs.pathlock_release(lease)
 
     async def update_event_search_tags(self, event_search_tags: List[str]) -> None:
@@ -1332,7 +1302,6 @@ class Session:
         lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
             session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
         )
-        write_lease = None
         try:
             live_messages_missing = False
             try:
@@ -1356,31 +1325,20 @@ class Session:
 
             await self._apply_appended_messages_to_state(messages)
             batch_content = "".join(message.to_jsonl() + "\n" for message in messages)
-            write_lease = await self._acquire_session_write_lease_for_uris(
-                [
-                    f"{self._session_uri}/messages.jsonl",
-                    f"{self._session_uri}/.meta.json",
-                ],
-                lease,
-            )
             if live_messages_missing:
                 await self._viking_fs.write_file(
                     f"{self._session_uri}/messages.jsonl",
                     batch_content,
                     ctx=self.ctx,
-                    lease_ref=write_lease,
                 )
             else:
                 await self._viking_fs.append_file(
                     f"{self._session_uri}/messages.jsonl",
                     batch_content,
                     ctx=self.ctx,
-                    lease_ref=write_lease,
                 )
-            await self._save_meta(lease_ref=write_lease)
+            await self._save_meta()
         finally:
-            if write_lease is not None:
-                await self._viking_fs._async_agfs.pathlock_release(write_lease)
             await self._viking_fs._async_agfs.pathlock_release(lease)
 
     async def _apply_appended_messages_to_state(self, messages: List[Message]) -> None:
@@ -1761,22 +1719,12 @@ class Session:
         lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
             session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
         )
-        write_lease = None
         try:
             marker = await self._read_phase1_meta(archive_uri)
             if marker.get("status") == "ready":
                 return True
             if await self._archive_file_exists(archive_uri, ".failed.json"):
                 return False
-
-            write_lease = await self._acquire_session_write_lease_for_uris(
-                [
-                    f"{archive_uri}/.meta.json",
-                    f"{archive_uri}/.failed.json",
-                    f"{self._session_uri}/.meta.json",
-                ],
-                lease,
-            )
 
             queue_message = marker.get("queue_message")
             task_id = queue_message.get("task_id") if isinstance(queue_message, dict) else None
@@ -1789,7 +1737,6 @@ class Session:
                     archive_uri,
                     stage="phase1_recovery",
                     error=error,
-                    lease_ref=write_lease,
                 )
                 if task_id:
                     await tracker.fail(
@@ -1815,7 +1762,6 @@ class Session:
                     archive_uri,
                     stage="phase1_recovery",
                     error=f"Cannot verify Phase 1 state: {exc}",
-                    lease_ref=write_lease,
                 )
                 return False
 
@@ -1829,7 +1775,6 @@ class Session:
                     archive_uri,
                     stage="phase1_recovery",
                     error="Root rewrite was not durably completed before process interruption",
-                    lease_ref=write_lease,
                 )
                 return False
 
@@ -1860,13 +1805,11 @@ class Session:
             )
             self._meta.last_commit_at = get_current_timestamp()
             await self._rebuild_pending_tokens()
-            await self._save_meta(lease_ref=write_lease)
-            await self._write_phase1_ready_marker(archive_uri, lease_ref=write_lease)
+            await self._save_meta()
+            await self._write_phase1_ready_marker(archive_uri)
             logger.warning("Recovered interrupted Session Phase 1: %s", archive_uri)
             return True
         finally:
-            if write_lease is not None:
-                await self._viking_fs._async_agfs.pathlock_release(write_lease)
             await self._viking_fs._async_agfs.pathlock_release(lease)
 
     def commit(
@@ -1998,15 +1941,10 @@ class Session:
         # The exact lock on the Session directory is the mutex for root Session
         # state and archive-number allocation. Child files use their own exact
         # locks, so Phase 2 can keep writing an earlier archive concurrently.
-        task_id = ""
-        archive_uri = ""
-        phase1_stage = "pathlock_acquire"
-
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
         lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
             session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
         )
-        write_lease = None
         try:
             self._messages = await self._read_live_messages_strict()
             try:
@@ -2083,11 +2021,7 @@ class Session:
                     retained_message_token_budget=effective_token_budget if turn_mode else 0,
                     min_raw_tail_steps=effective_min_tail,
                 )
-                write_lease = await self._acquire_session_write_lease_for_uris(
-                    [f"{self._session_uri}/.meta.json"],
-                    lease,
-                )
-                await self._save_meta(lease_ref=write_lease)
+                await self._save_meta()
                 get_current_telemetry().set("memory.extracted", 0)
                 return {
                     "session_id": self.session_id,
@@ -2127,16 +2061,7 @@ class Session:
             # remember the policy for subsequent add_message accounting.
             if not messages_to_archive:
                 self._messages = retained_messages
-                write_lease = await self._acquire_session_write_lease_for_uris(
-                    [
-                        f"{self._session_uri}/messages.jsonl",
-                        f"{self._session_uri}/.abstract.md",
-                        f"{self._session_uri}/.overview.md",
-                        f"{self._session_uri}/.meta.json",
-                    ],
-                    lease,
-                )
-                await self._write_to_agfs_async(messages=self._messages, lease_ref=write_lease)
+                await self._write_to_agfs_async(messages=self._messages)
                 self._meta.pending_tokens = 0
                 self._meta.message_count = total
                 self._remember_retention_policy(
@@ -2146,7 +2071,7 @@ class Session:
                     retained_message_token_budget=effective_token_budget if turn_mode else 0,
                     min_raw_tail_steps=effective_min_tail,
                 )
-                await self._save_meta(lease_ref=write_lease)
+                await self._save_meta()
                 get_current_telemetry().set("memory.extracted", 0)
                 return {
                     "session_id": self.session_id,
@@ -2180,21 +2105,8 @@ class Session:
                 record_auto_commit_success=record_auto_commit_success,
                 event_search_tags=list(effective_event_tags),
             )
-            phase1_stage = "acquire_write_lease"
+            phase1_stage = "phase1_persist"
             try:
-                write_lease = await self._acquire_session_write_lease_for_uris(
-                    [
-                        f"{archive_uri}/.meta.json",
-                        f"{archive_uri}/messages.jsonl",
-                        f"{archive_uri}/.failed.json",
-                        f"{self._session_uri}/messages.jsonl",
-                        f"{self._session_uri}/.abstract.md",
-                        f"{self._session_uri}/.overview.md",
-                        f"{self._session_uri}/.meta.json",
-                    ],
-                    lease,
-                )
-                phase1_stage = "phase1_persist"
                 archive_persist_tasks = [
                     self._write_phase1_marker(
                         archive_uri,
@@ -2209,7 +2121,6 @@ class Session:
                         min_raw_tail_steps=effective_min_tail,
                         agent_evolution_enabled=agent_evolution_enabled,
                         agent_memory_skip_reason=agent_memory_skip_reason,
-                        lease_ref=write_lease,
                     )
                 ]
                 if self._viking_fs:
@@ -2219,7 +2130,6 @@ class Session:
                             uri=f"{archive_uri}/messages.jsonl",
                             content="\n".join(lines) + "\n",
                             ctx=self.ctx,
-                            lease_ref=write_lease,
                         )
                     )
                 archive_persist_results = await asyncio.gather(
@@ -2240,7 +2150,6 @@ class Session:
                                 min_raw_tail_steps=effective_min_tail,
                             )
                         },
-                        lease_ref=write_lease,
                     )
 
                 phase1_stage = "queue_enqueue"
@@ -2260,7 +2169,7 @@ class Session:
 
                 phase1_stage = "phase1_persist"
                 self._messages = retained_messages
-                await self._write_to_agfs_async(messages=self._messages, lease_ref=write_lease)
+                await self._write_to_agfs_async(messages=self._messages)
                 self._meta.message_count = len(self._messages)
                 self._meta.pending_tokens = 0
                 self._remember_retention_policy(
@@ -2280,8 +2189,8 @@ class Session:
                     # commit boundary, so an idle scan and a concurrent worker
                     # never see a stale state.
                     self._meta.last_auto_commit_at = get_current_timestamp()
-                await self._save_meta(lease_ref=write_lease)
-                await self._write_phase1_ready_marker(archive_uri, lease_ref=write_lease)
+                await self._save_meta()
+                await self._write_phase1_ready_marker(archive_uri)
             except Exception as e:
                 logger.error(f"[commit] Failed during {phase1_stage}: {e}")
                 # Whether the queue write failed or a queued Phase 1 stopped
@@ -2292,7 +2201,6 @@ class Session:
                         archive_uri,
                         stage=phase1_stage,
                         error=str(e),
-                        lease_ref=write_lease,
                     )
                 except Exception:
                     logger.exception(
@@ -2303,8 +2211,6 @@ class Session:
                 self._compression.compression_index -= 1
                 raise
         finally:
-            if write_lease is not None:
-                await self._viking_fs._async_agfs.pathlock_release(write_lease)
             await self._viking_fs._async_agfs.pathlock_release(lease)
         # Lock released; Phase 1 intent, queue item, retained root, metadata and
         # ready metadata are all durable.
@@ -4117,7 +4023,6 @@ class Session:
         lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
             session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
         )
-        write_lease = None
         try:
             latest_meta = self._meta
             try:
@@ -4156,14 +4061,8 @@ class Session:
                 # a clean auto-commit even after Phase 2 reloads the latest meta.
                 latest_meta.last_auto_commit_at = get_current_timestamp()
             self._meta = latest_meta
-            write_lease = await self._acquire_session_write_lease_for_uris(
-                [f"{self._session_uri}/.meta.json"],
-                lease,
-            )
-            await self._save_meta(lease_ref=write_lease)
+            await self._save_meta()
         finally:
-            if write_lease is not None:
-                await self._viking_fs._async_agfs.pathlock_release(write_lease)
             await self._viking_fs._async_agfs.pathlock_release(lease)
 
     async def _read_live_message_count(self) -> int:
