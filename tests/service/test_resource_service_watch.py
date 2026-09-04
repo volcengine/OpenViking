@@ -781,6 +781,7 @@ async def test_add_resource_processor_records_paused_watch_result(
         "openviking.storage.queuefs.add_resource_processor.get_task_tracker",
         Mock(return_value=task_tracker),
     )
+
     async def execute_add_resource_job(message, **_kwargs):
         message.watch_task_id = "watch-1"
         if error:
@@ -822,6 +823,8 @@ async def test_add_resource_processor_records_paused_watch_result(
         execution_task_id="add-resource-1",
         error=expected_error,
     )
+    if expected_status == "completed":
+        assert task_tracker.complete.await_count == 1
 
 
 @pytest.mark.asyncio

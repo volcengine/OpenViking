@@ -254,13 +254,14 @@ class AddResourceProcessor(DequeueHandlerBase):
                         terminal = True
                         self.report_error("resource processing failed", data)
                         return None
-                    await tracker.complete(
-                        msg.task_id,
-                        deepcopy(result),
-                        account_id=ctx.account_id,
-                        user_id=ctx.user.user_id,
-                        resource_id=result.get("root_uri"),
-                    )
+                    if not msg.watch_task_id:
+                        await tracker.complete(
+                            msg.task_id,
+                            deepcopy(result),
+                            account_id=ctx.account_id,
+                            user_id=ctx.user.user_id,
+                            resource_id=result.get("root_uri"),
+                        )
                 else:
                     result = deepcopy(replay_result)
                 await tracker.wait_for_descendants(msg.task_id, metadata.work_id)

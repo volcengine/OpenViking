@@ -38,7 +38,10 @@ from openviking.connector.routing import (
 from openviking.core.namespace import NamespaceShapeError
 from openviking.core.uri_validation import matches_content_kind
 from openviking.crypto.encryptor import MAGIC as ENCRYPTED_ENVELOPE_MAGIC
-from openviking.observability.http_error_context import sanitize_public_http_error
+from openviking.observability.http_error_context import (
+    sanitize_public_error_details,
+    sanitize_public_http_error,
+)
 from openviking.parse.mode import ParseMode
 from openviking.resource.processing_mode import (
     DEFAULT_PROCESSING_MODE,
@@ -53,6 +56,17 @@ from openviking_cli.utils import get_logger
 logger = get_logger(__name__)
 
 _TOS_BUCKET_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])$")
+
+
+def _safe_http_response(response: httpx.Response) -> Any:
+    """Return a bounded, credential-redacted response body for logs."""
+    try:
+        payload = response.json()
+    except (TypeError, ValueError):
+        payload = response.text
+    if isinstance(payload, dict):
+        return sanitize_public_error_details(payload)
+    return sanitize_public_http_error(code="CONNECTOR_HTTP_ERROR", message=payload).message
 
 
 def _validate_tos_uri(
@@ -640,7 +654,20 @@ class ConnectorDelegate:
             }
             if connector_states is not None:
                 submit_kwargs["stream_states"] = connector_states
+            safe_submit_request = dict(submit_kwargs)
+            if safe_submit_request.get("auth_config") is not None:
+                safe_submit_request["auth_config"] = "[REDACTED]"
+            logger.info(
+                "[ConnectorDelegate] Connector task add request: ov_task_id=%s request=%s",
+                task.task_id,
+                sanitize_public_error_details(safe_submit_request),
+            )
             result = await client.submit_doc_add(**submit_kwargs)
+            logger.info(
+                "[ConnectorDelegate] Connector task add response: ov_task_id=%s response=%s",
+                task.task_id,
+                sanitize_public_error_details(result),
+            )
 
             connector_task_key = result.get("task_key") or result.get("TaskKey") or ""
             if not connector_task_key:
@@ -669,6 +696,14 @@ class ConnectorDelegate:
             )
             raise
         except Exception as exc:
+            if isinstance(exc, httpx.HTTPStatusError):
+                logger.error(
+                    "[ConnectorDelegate] Connector task add response: ov_task_id=%s status=%s "
+                    "response=%s",
+                    task.task_id,
+                    exc.response.status_code,
+                    _safe_http_response(exc.response),
+                )
             safe_error = sanitize_public_http_error(
                 code="CONNECTOR_SUBMISSION_FAILED",
                 message=exc,
@@ -779,12 +814,18 @@ class ConnectorDelegate:
                     info = await client.get_task_info(connector_task_key, ctx.api_key)
                 except httpx.HTTPStatusError as exc:
                     status_code = exc.response.status_code
-                    if status_code not in {408, 429} and status_code < 500:
-                        raise
+                    retrying = status_code in {408, 429} or status_code >= 500
                     logger.warning(
-                        "[ConnectorDelegate] Transient Connector task polling HTTP error "
-                        f"for {connector_task_key}: {status_code}; retrying"
+                        "[ConnectorDelegate] Connector task info error response: "
+                        "connector_task_key=%s ov_task_id=%s status=%s response=%s retrying=%s",
+                        connector_task_key,
+                        ov_task_id,
+                        status_code,
+                        _safe_http_response(exc.response),
+                        retrying,
                     )
+                    if not retrying:
+                        raise
                     continue
                 except httpx.RequestError:
                     logger.warning(
@@ -862,12 +903,13 @@ class ConnectorDelegate:
                     failure = f"connector task {status}: {safe_error}"
                     logger.warning(
                         "[ConnectorDelegate] Connector task %s ended %s after %.0fs "
-                        "(ov_task_id=%s): %s",
+                        "(ov_task_id=%s): %s response=%s",
                         connector_task_key,
                         status,
                         time.perf_counter() - started,
                         ov_task_id,
                         safe_error,
+                        sanitize_public_error_details(info),
                     )
                     if status == "cancelled":
                         await task_tracker.mark_cancelled(

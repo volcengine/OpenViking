@@ -154,6 +154,8 @@ async def test_add_resource_routes_tos_to_connector(
         submit_doc_add=AsyncMock(return_value={"task_key": "connector-1"})
     )
     _install_connector_dependencies(monkeypatch, tracker, connector_client)
+    info_log = Mock()
+    monkeypatch.setattr(connector_delegate_module.logger, "info", info_log)
 
     result = await service.add_resource(
         path=path,
@@ -183,6 +185,15 @@ async def test_add_resource_routes_tos_to_connector(
         account_id="acct",
         user_id="alice",
     )
+    request_log = next(
+        call for call in info_log.call_args_list if "task add request" in call.args[0]
+    )
+    response_log = next(
+        call for call in info_log.call_args_list if "task add response" in call.args[0]
+    )
+    assert request_log.args[2]["api_key"] == "[REDACTED]"
+    assert response_log.args[2] == {"task_key": "connector-1"}
+    assert "secret" not in str(info_log.call_args_list)
 
 
 @pytest.mark.asyncio
@@ -1372,6 +1383,51 @@ async def test_connector_import_persists_task_before_remote_submission(
 
 
 @pytest.mark.asyncio
+async def test_connector_import_logs_http_error_response(
+    monkeypatch,
+    connector_config,
+    ctx,
+    service,
+):
+    tracker = _task_tracker()
+    request = httpx.Request("POST", connector_config.connector)
+    response = httpx.Response(
+        400,
+        request=request,
+        json={"message": "invalid path_prefix", "token": "secret-value"},
+    )
+    connector_client = SimpleNamespace(
+        submit_doc_add=AsyncMock(
+            side_effect=httpx.HTTPStatusError(
+                "bad request",
+                request=request,
+                response=response,
+            )
+        )
+    )
+    _install_connector_dependencies(monkeypatch, tracker, connector_client)
+    error_log = Mock()
+    monkeypatch.setattr(connector_delegate_module.logger, "error", error_log)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await service.add_resource(
+            path="tos://bucket/prefix",
+            ctx=ctx,
+            to="viking://resources/imports",
+        )
+
+    response_log = next(
+        call for call in error_log.call_args_list if "task add response" in call.args[0]
+    )
+    assert response_log.args[2] == 400
+    assert response_log.args[3] == {
+        "message": "invalid path_prefix",
+        "token": "[REDACTED]",
+    }
+    assert "secret-value" not in str(error_log.call_args_list)
+
+
+@pytest.mark.asyncio
 async def test_connector_import_rejects_parent_target(
     connector_config,
     ctx,
@@ -2423,6 +2479,61 @@ async def test_monitor_connector_task_retries_transient_polling_error(
 
 
 @pytest.mark.asyncio
+async def test_monitor_connector_task_logs_http_error_response(
+    monkeypatch,
+    connector_config,
+    ctx,
+):
+    tracker = _task_tracker()
+    monkeypatch.setattr(
+        "openviking.service.task_tracker.get_task_tracker",
+        lambda: tracker,
+    )
+
+    async def no_sleep(_seconds):
+        pass
+
+    monkeypatch.setattr(connector_delegate_module.asyncio, "sleep", no_sleep)
+    request = httpx.Request("POST", "https://connector.example/task/info")
+    response = httpx.Response(
+        503,
+        request=request,
+        text='{"message":"token=secret-value unavailable"}',
+    )
+    client = SimpleNamespace(
+        get_task_info=AsyncMock(
+            side_effect=[
+                httpx.HTTPStatusError(
+                    "service unavailable",
+                    request=request,
+                    response=response,
+                ),
+                {"Status": "succeeded"},
+            ]
+        )
+    )
+    warning_log = Mock()
+    monkeypatch.setattr(connector_delegate_module.logger, "warning", warning_log)
+
+    await ResourceService()._connector._monitor(
+        client=client,
+        connector_task_key="connector-1",
+        ov_task_id="task-1",
+        poll_interval_ms=1,
+        timeout_seconds=1,
+        ctx=ctx,
+    )
+
+    error_log = next(
+        call for call in warning_log.call_args_list if "task info error response" in call.args[0]
+    )
+    assert error_log.args[3] == 503
+    assert error_log.args[4] == {"message": "token=[REDACTED]"}
+    assert "secret-value" not in str(warning_log.call_args_list)
+    tracker.complete.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_monitor_connector_task_marks_cancelled_monitor_as_failed(
     monkeypatch,
     connector_config,
@@ -2475,6 +2586,8 @@ async def test_declared_add_type_routes_generic_type_to_connector(
         submit_doc_add=AsyncMock(return_value={"task_key": "connector-1"})
     )
     _install_connector_dependencies(monkeypatch, tracker, connector_client)
+    info_log = Mock()
+    monkeypatch.setattr(connector_delegate_module.logger, "info", info_log)
 
     result = await service.add_resource(
         path="https://example.feishu.cn/wiki/space-home",
@@ -2498,6 +2611,11 @@ async def test_declared_add_type_routes_generic_type_to_connector(
         auth_config={"app_secret": "s3cret"},
         extra_params=None,
     )
+    request_log = next(
+        call for call in info_log.call_args_list if "task add request" in call.args[0]
+    )
+    assert request_log.args[2]["auth_config"] == "[REDACTED]"
+    assert "s3cret" not in str(info_log.call_args_list)
 
 
 @pytest.mark.asyncio
