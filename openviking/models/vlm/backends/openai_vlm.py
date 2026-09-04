@@ -84,6 +84,7 @@ class OpenAIVLM(VLMBase):
         self._async_client_cache = LoopScopedAsyncClientCache()
         self.api_version = config.get("api_version")
         self.reasoning_effort = config.get("reasoning_effort", "low")
+        self._reasoning_effort_configured = "reasoning_effort" in config
 
     def get_client(self):
         """Get sync client"""
@@ -145,8 +146,18 @@ class OpenAIVLM(VLMBase):
     def _apply_provider_specific_extra_body(self, kwargs: Dict[str, Any], thinking: bool) -> None:
         """Attach provider-specific raw body parameters understood by compatible APIs."""
         extra_body = dict(self.extra_request_body)
-        if self._supports_enable_thinking():
+        supports_thinking_flag = self._supports_enable_thinking()
+        if supports_thinking_flag:
             extra_body["enable_thinking"] = bool(thinking)
+        if (
+            self._reasoning_effort_configured
+            and not supports_thinking_flag
+            and not _is_reasoning_model(self.model)
+            and "reasoning_effort" not in extra_body
+        ):
+            # The native kwarg is OpenAI reasoning-family only; other endpoints
+            # (e.g. GLM-5.3, server default `max`) must receive it via extra_body (#4686).
+            extra_body["reasoning_effort"] = self.reasoning_effort
         if extra_body:
             kwargs["extra_body"] = extra_body
 
