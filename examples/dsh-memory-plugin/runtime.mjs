@@ -196,11 +196,17 @@ export class OpenVikingRuntime {
         error: response.ok ? undefined : response.error?.message || response.error?.code,
       });
       if (isRetryableFailure(response)) {
-        await this.enqueueFinalCommit(state, {
+        await this.enqueueFinalCommit(state, this.commitExtras(state, {
           keep_recent_count: state.config.commitKeepRecentCount,
-        });
+        }));
       }
     });
+  }
+
+  commitExtras(state, base) {
+    const tags = state.config?.attributionTags;
+    if (!tags) return base;
+    return { ...base, extraction_metadata: { event: { tags: String(tags).split(",").map((t) => t.trim()).filter(Boolean) } } };
   }
 
   dispose(session) {
@@ -210,9 +216,9 @@ export class OpenVikingRuntime {
     state.disposing = (async () => {
       this.enqueueWrite(state, async () => {
         if (!state.config.syncTurns) return;
-        const commitPayload = {
+        const commitPayload = this.commitExtras(state, {
           keep_recent_count: state.config.commitKeepRecentCount,
-        };
+        });
         if (state.hasPendingWrites) {
           await this.enqueueFinalCommit(state, commitPayload);
           return;
