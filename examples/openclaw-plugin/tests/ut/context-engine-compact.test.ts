@@ -1,9 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { OpenVikingClient } from "../../client.js";
 import { memoryOpenVikingConfigSchema } from "../../config.js";
 import { createMemoryOpenVikingContextEngine } from "../../context-engine.js";
+import { loadRuntimeCompactionDelegate } from "../../plugin/openclaw-runtime-compaction.js";
 import { openClawSessionToOvStorageId } from "../../routing/identity-routing.js";
+
+vi.mock("../../plugin/openclaw-runtime-compaction.js", () => ({
+  loadRuntimeCompactionDelegate: vi.fn().mockResolvedValue(undefined),
+}));
+
+beforeEach(() => {
+  vi.mocked(loadRuntimeCompactionDelegate).mockResolvedValue(undefined);
+});
 
 function makeLogger() {
   return {
@@ -177,7 +186,7 @@ describe("context-engine commitOVSession()", () => {
 });
 
 describe("context-engine compact()", () => {
-  it("returns compacted=false when the session matches bypassSessionPatterns", async () => {
+  function makeBypassEngine() {
     const cfg = memoryOpenVikingConfigSchema.parse({
       mode: "remote",
       baseUrl: "http://127.0.0.1:1933",
@@ -185,19 +194,43 @@ describe("context-engine compact()", () => {
       autoRecall: false,
       bypassSessionPatterns: ["agent:*:cron:**"],
     });
-    const logger = makeLogger();
     const getClient = vi.fn();
-    const resolveAgentId = vi.fn((_sid: string) => "test-agent");
-
     const engine = createMemoryOpenVikingContextEngine({
       id: "openviking",
       name: "Test Engine",
       version: "test",
       cfg,
-      logger,
+      logger: makeLogger(),
       getClient: getClient as any,
-      resolveAgentId,
+      resolveAgentId: vi.fn((_sid: string) => "test-agent"),
     });
+    return { engine, getClient };
+  }
+
+  it("delegates bypassed sessions to the OpenClaw native compactor without touching OV", async () => {
+    const delegated = { ok: true, compacted: true, result: { summary: "s", firstKeptEntryId: "e1", tokensBefore: 90_000, tokensAfter: 10_000 } };
+    const delegate = vi.fn().mockResolvedValue(delegated);
+    vi.mocked(loadRuntimeCompactionDelegate).mockResolvedValue(delegate);
+    const { engine, getClient } = makeBypassEngine();
+
+    const compactParams = {
+      sessionId: "agent:main:cron:nightly:run:1",
+      sessionKey: "agent:main:cron:nightly",
+      sessionFile: "",
+      tokenBudget: 100_000,
+      currentTokenCount: 90_000,
+      force: true,
+      runtimeContext: { workspaceDir: "/tmp/ws" },
+    };
+    const result = await engine.compact(compactParams);
+
+    expect(result).toBe(delegated);
+    expect(delegate).toHaveBeenCalledWith(compactParams);
+    expect(getClient).not.toHaveBeenCalled();
+  });
+
+  it("returns session_bypassed when the host exposes no native compactor", async () => {
+    const { engine, getClient } = makeBypassEngine();
 
     const result = await engine.compact({
       sessionId: "agent:main:cron:nightly:run:1",

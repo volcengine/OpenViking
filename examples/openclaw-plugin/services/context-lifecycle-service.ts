@@ -117,6 +117,8 @@ export type CompactOpenVikingSessionParams = {
   logger: ContextEngineLifecycleLogger;
   resolveAgentId: (sessionId: string, sessionKey?: string, ovSessionId?: string) => string;
   isBypassedSession: (params: { sessionId?: string; sessionKey?: string }) => boolean;
+  /** Host-native compaction for bypassed sessions; resolves undefined when unavailable. */
+  runtimeCompact?: () => Promise<CompactOpenVikingSessionResult | undefined>;
   diag: (stage: string, sessionId: string, data: Record<string, unknown>) => void;
 };
 
@@ -1014,6 +1016,7 @@ export async function compactOpenVikingSession({
   logger,
   resolveAgentId,
   isBypassedSession,
+  runtimeCompact,
   diag,
 }: CompactOpenVikingSessionParams): Promise<CompactOpenVikingSessionResult> {
   const ovSessionId = openClawSessionToOvStorageId(sessionId, sessionKey);
@@ -1027,6 +1030,18 @@ export async function compactOpenVikingSession({
   });
 
   if (isBypassedSession({ sessionId, sessionKey })) {
+    // Bypassed sessions store nothing in OV, but the host still needs a real
+    // compaction (preflight hard-fails on an unknown skip reason), so hand the
+    // request to OpenClaw's native compactor.
+    const delegated = await runtimeCompact?.();
+    if (delegated) {
+      diag("compact_result", ovSessionId, {
+        ok: delegated.ok,
+        compacted: delegated.compacted,
+        reason: delegated.reason ?? "session_bypassed_runtime_compaction",
+      });
+      return delegated;
+    }
     diag("compact_result", ovSessionId, {
       ok: true,
       compacted: false,

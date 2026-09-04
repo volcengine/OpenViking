@@ -907,7 +907,7 @@ export const memoryOpenVikingConfigSchema = {
     bypassSessionPatterns: {
       label: "Bypass Session Patterns",
       placeholder: "agent:*:cron:**",
-      help: "Completely bypass OpenViking for matching session keys. Use * within one segment and ** across segments.",
+      help: "Completely bypass OpenViking for matching session keys (no capture, recall, or commit; compaction falls back to OpenClaw's native compactor). Use * within one segment and ** across segments.",
       advanced: true,
     },
     commitTokenThresholdRatio: {
