@@ -9,7 +9,6 @@ import asyncio
 import inspect
 import json
 import re
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Literal, Optional
@@ -1330,31 +1329,9 @@ class Session:
             return
 
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
-        started_at = time.perf_counter()
-        last_at = started_at
-        timings: List[tuple[str, float]] = []
-
-        def mark(step: str) -> None:
-            nonlocal last_at
-            now = time.perf_counter()
-            timings.append((step, (now - last_at) * 1000))
-            last_at = now
-
-        try:
-            lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
-                session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
-            )
-        except Exception:
-            logger.warning(
-                "[session.add_message.slow] session_id=%s failed_stage=pathlock_acquire "
-                "elapsed_ms=%.1f message_count=%d",
-                self.session_id,
-                (time.perf_counter() - started_at) * 1000,
-                len(messages),
-                exc_info=True,
-            )
-            raise
-        mark("pathlock_acquire")
+        lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
+            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
+        )
         write_lease = None
         try:
             live_messages_missing = False
@@ -1365,7 +1342,6 @@ class Session:
                     raise
                 self._messages = []
                 live_messages_missing = True
-            mark("read_live_messages")
             in_memory_meta = self._meta
             try:
                 meta_content = await self._viking_fs.read_file(
@@ -1377,10 +1353,8 @@ class Session:
                 # Legacy/malformed metadata must not prevent an otherwise safe
                 # append. Message correctness remains rooted in messages.jsonl.
                 self._meta = in_memory_meta
-            mark("read_meta")
 
             await self._apply_appended_messages_to_state(messages)
-            mark("apply_state")
             batch_content = "".join(message.to_jsonl() + "\n" for message in messages)
             write_lease = await self._acquire_session_write_lease_for_uris(
                 [
@@ -1389,7 +1363,6 @@ class Session:
                 ],
                 lease,
             )
-            mark("acquire_write_lease")
             if live_messages_missing:
                 await self._viking_fs.write_file(
                     f"{self._session_uri}/messages.jsonl",
@@ -1404,33 +1377,11 @@ class Session:
                     ctx=self.ctx,
                     lease_ref=write_lease,
                 )
-            mark("write_messages")
             await self._save_meta(lease_ref=write_lease)
-            mark("save_meta")
         finally:
             if write_lease is not None:
-                release_write_started_at = time.perf_counter()
                 await self._viking_fs._async_agfs.pathlock_release(write_lease)
-                timings.append(
-                    (
-                        "write_lease_release",
-                        (time.perf_counter() - release_write_started_at) * 1000,
-                    )
-                )
-            release_started_at = time.perf_counter()
             await self._viking_fs._async_agfs.pathlock_release(lease)
-            timings.append(("pathlock_release", (time.perf_counter() - release_started_at) * 1000))
-            total_ms = (time.perf_counter() - started_at) * 1000
-            if total_ms >= 1000:
-                logger.warning(
-                    "[session.add_message.slow] session_id=%s total_ms=%.1f "
-                    "message_count=%d live_messages=%d timings=%s",
-                    self.session_id,
-                    total_ms,
-                    len(messages),
-                    len(self._messages),
-                    ",".join(f"{name}:{duration_ms:.1f}" for name, duration_ms in timings),
-                )
 
     async def _apply_appended_messages_to_state(self, messages: List[Message]) -> None:
         """Update in-memory counters after an authoritative root reload."""
@@ -1734,7 +1685,6 @@ class Session:
         min_raw_tail_steps: int,
         agent_evolution_enabled: bool = True,
         agent_memory_skip_reason: Optional[str] = None,
-        archive_meta_updates: Optional[Dict[str, Any]] = None,
         lease_ref: Optional[Any] = None,
     ) -> None:
         """Persist the Phase 1 intent before any destructive root rewrite."""
@@ -1752,16 +1702,17 @@ class Session:
             "retained_message_token_budget": retained_message_token_budget,
             "min_raw_tail_steps": min_raw_tail_steps,
         }
-        updates = {
-            "phase1": payload,
-            "agent_evolution": {
-                "enabled": agent_evolution_enabled,
-                "skip_reason": agent_memory_skip_reason,
+        await self._merge_archive_meta(
+            archive_uri,
+            {
+                "phase1": payload,
+                "agent_evolution": {
+                    "enabled": agent_evolution_enabled,
+                    "skip_reason": agent_memory_skip_reason,
+                },
             },
-        }
-        if archive_meta_updates:
-            updates.update(archive_meta_updates)
-        await self._merge_archive_meta(archive_uri, updates, lease_ref=lease_ref)
+            lease_ref=lease_ref,
+        )
 
     async def _write_phase1_ready_marker(
         self,
@@ -2047,40 +1998,17 @@ class Session:
         # The exact lock on the Session directory is the mutex for root Session
         # state and archive-number allocation. Child files use their own exact
         # locks, so Phase 2 can keep writing an earlier archive concurrently.
-        phase1_started_at = time.perf_counter()
-        phase1_last_at = phase1_started_at
-        phase1_timings: List[tuple[str, float]] = []
         task_id = ""
         archive_uri = ""
-        archived_count = 0
-        retained_count = 0
         phase1_stage = "pathlock_acquire"
 
-        def mark_phase1(step: str) -> None:
-            nonlocal phase1_last_at
-            now = time.perf_counter()
-            phase1_timings.append((step, (now - phase1_last_at) * 1000))
-            phase1_last_at = now
-
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
-        try:
-            lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
-                session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
-            )
-        except Exception:
-            logger.warning(
-                "[session.commit.phase1.slow] session_id=%s failed_stage=pathlock_acquire "
-                "elapsed_ms=%.1f",
-                self.session_id,
-                (time.perf_counter() - phase1_started_at) * 1000,
-                exc_info=True,
-            )
-            raise
-        mark_phase1("pathlock_acquire")
+        lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
+            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
+        )
         write_lease = None
         try:
             self._messages = await self._read_live_messages_strict()
-            mark_phase1("read_live_messages")
             try:
                 meta_content = await self._viking_fs.read_file(
                     f"{self._session_uri}/.meta.json",
@@ -2097,12 +2025,10 @@ class Session:
                 # The root JSONL remains authoritative for message correctness;
                 # legacy sessions may not have metadata yet.
                 pass
-            mark_phase1("read_meta")
 
             effective_event_tags = _resolve_event_search_tags(
                 event_tags, self._meta.event_search_tags
             )
-            mark_phase1("resolve_event_tags")
 
             # keep_recent_count controls how many live messages survive this
             # commit. stored_keep_recent_count is what we persist for future
@@ -2134,7 +2060,6 @@ class Session:
                     agent_evolution_enabled=agent_evolution_enabled,
                     effective_memory_types=set(effective_memory_types),
                 )
-            mark_phase1("resolve_memory_policy")
 
             self._compression.compression_index = max(
                 self._compression.compression_index,
@@ -2148,7 +2073,6 @@ class Session:
                 ctx=self.ctx,
             ):
                 self._compression.compression_index += 1
-            mark_phase1("archive_index_scan")
 
             if not self._messages:
                 self._meta.pending_tokens = 0
@@ -2163,9 +2087,7 @@ class Session:
                     [f"{self._session_uri}/.meta.json"],
                     lease,
                 )
-                mark_phase1("acquire_write_lease")
                 await self._save_meta(lease_ref=write_lease)
-                mark_phase1("save_meta")
                 get_current_telemetry().set("memory.extracted", 0)
                 return {
                     "session_id": self.session_id,
@@ -2200,9 +2122,6 @@ class Session:
             else:
                 messages_to_archive = self._messages.copy()
                 retained_messages = []
-            archived_count = len(messages_to_archive)
-            retained_count = len(retained_messages)
-            mark_phase1("split_retention")
 
             # No archive work: persist possible Turn-wide externalization and
             # remember the policy for subsequent add_message accounting.
@@ -2217,9 +2136,7 @@ class Session:
                     ],
                     lease,
                 )
-                mark_phase1("acquire_write_lease")
                 await self._write_to_agfs_async(messages=self._messages, lease_ref=write_lease)
-                mark_phase1("write_live_messages")
                 self._meta.pending_tokens = 0
                 self._meta.message_count = total
                 self._remember_retention_policy(
@@ -2230,7 +2147,6 @@ class Session:
                     min_raw_tail_steps=effective_min_tail,
                 )
                 await self._save_meta(lease_ref=write_lease)
-                mark_phase1("save_meta")
                 get_current_telemetry().set("memory.extracted", 0)
                 return {
                     "session_id": self.session_id,
@@ -2278,16 +2194,7 @@ class Session:
                     ],
                     lease,
                 )
-                mark_phase1("acquire_write_lease")
                 phase1_stage = "phase1_persist"
-                archive_meta_updates: Dict[str, Any] = {}
-                if retention_plan is not None:
-                    archive_meta_updates["retention_plan"] = self._retention_plan_meta(
-                        retention_plan,
-                        keep_recent_turn_count=effective_keep_turns,
-                        retained_message_token_budget=effective_token_budget,
-                        min_raw_tail_steps=effective_min_tail,
-                    )
                 archive_persist_tasks = [
                     self._write_phase1_marker(
                         archive_uri,
@@ -2302,7 +2209,6 @@ class Session:
                         min_raw_tail_steps=effective_min_tail,
                         agent_evolution_enabled=agent_evolution_enabled,
                         agent_memory_skip_reason=agent_memory_skip_reason,
-                        archive_meta_updates=archive_meta_updates,
                         lease_ref=write_lease,
                     )
                 ]
@@ -2323,14 +2229,25 @@ class Session:
                 for result in archive_persist_results:
                     if isinstance(result, BaseException):
                         raise result
-                mark_phase1("write_archive_phase1")
+                if retention_plan is not None:
+                    await self._merge_archive_meta(
+                        archive_uri,
+                        {
+                            "retention_plan": self._retention_plan_meta(
+                                retention_plan,
+                                keep_recent_turn_count=effective_keep_turns,
+                                retained_message_token_budget=effective_token_budget,
+                                min_raw_tail_steps=effective_min_tail,
+                            )
+                        },
+                        lease_ref=write_lease,
+                    )
 
                 phase1_stage = "queue_enqueue"
                 await get_queue_manager().enqueue(
                     QueueManager.SESSION_COMMIT,
                     queue_msg.to_dict(),
                 )
-                mark_phase1("queue_enqueue")
 
                 phase1_stage = "task_tracker_create"
                 await get_task_tracker().create(
@@ -2340,12 +2257,10 @@ class Session:
                     user_id=self.ctx.user.user_id,
                     task_id=task_id,
                 )
-                mark_phase1("task_tracker_create")
 
                 phase1_stage = "phase1_persist"
                 self._messages = retained_messages
                 await self._write_to_agfs_async(messages=self._messages, lease_ref=write_lease)
-                mark_phase1("write_live_messages")
                 self._meta.message_count = len(self._messages)
                 self._meta.pending_tokens = 0
                 self._remember_retention_policy(
@@ -2366,9 +2281,7 @@ class Session:
                     # never see a stale state.
                     self._meta.last_auto_commit_at = get_current_timestamp()
                 await self._save_meta(lease_ref=write_lease)
-                mark_phase1("save_meta")
                 await self._write_phase1_ready_marker(archive_uri, lease_ref=write_lease)
-                mark_phase1("write_phase1_ready_marker")
             except Exception as e:
                 logger.error(f"[commit] Failed during {phase1_stage}: {e}")
                 # Whether the queue write failed or a queued Phase 1 stopped
@@ -2391,36 +2304,8 @@ class Session:
                 raise
         finally:
             if write_lease is not None:
-                release_write_started_at = time.perf_counter()
                 await self._viking_fs._async_agfs.pathlock_release(write_lease)
-                phase1_timings.append(
-                    (
-                        "write_lease_release",
-                        (time.perf_counter() - release_write_started_at) * 1000,
-                    )
-                )
-            release_started_at = time.perf_counter()
             await self._viking_fs._async_agfs.pathlock_release(lease)
-            phase1_timings.append(
-                ("pathlock_release", (time.perf_counter() - release_started_at) * 1000)
-            )
-            phase1_total_ms = (time.perf_counter() - phase1_started_at) * 1000
-            if phase1_total_ms >= 1000:
-                logger.warning(
-                    "[session.commit.phase1.slow] session_id=%s task_id=%s "
-                    "archive_uri=%s total_ms=%.1f stage=%s archived=%d retained=%d "
-                    "timings=%s",
-                    self.session_id,
-                    task_id,
-                    archive_uri,
-                    phase1_total_ms,
-                    phase1_stage,
-                    archived_count,
-                    retained_count,
-                    ",".join(
-                        f"{name}:{duration_ms:.1f}" for name, duration_ms in phase1_timings
-                    ),
-                )
         # Lock released; Phase 1 intent, queue item, retained root, metadata and
         # ready metadata are all durable.
 

@@ -5,18 +5,14 @@
 from __future__ import annotations
 
 import json
-import time
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Protocol
 
 from openviking.pyagfs import AsyncAGFSClient
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
-from openviking_cli.utils.logger import get_logger
 
 SYSTEM_TASK_ACCOUNT_ID = "_system"
 SYSTEM_TASK_USER_ID = "root"
-
-logger = get_logger(__name__)
 
 
 class TaskStore(Protocol):
@@ -108,66 +104,35 @@ class PersistentTaskStore:
         user_id = getattr(task, "user_id", None)
         if not account_id or not user_id:
             raise ValueError("PersistentTaskStore requires account_id and user_id")
-        started_at = time.perf_counter()
-        ensure_timings = await self._ensure_task_dir(account_id, user_id)
-        after_ensure = time.perf_counter()
+        await self._ensure_task_dir(account_id, user_id)
         path = self._task_path(account_id, user_id, task.task_id)
         payload = json.dumps(_task_to_payload(task), ensure_ascii=False).encode("utf-8")
         try:
             await self._write_task_payload(path, payload)
         except (AGFSNotFoundError, FileNotFoundError):
             self._ensured_task_dirs.discard((account_id, user_id))
-            retry_started_at = time.perf_counter()
-            retry_timings = await self._ensure_task_dir(account_id, user_id)
-            ensure_timings.extend(
-                (f"retry_{name}", duration_ms) for name, duration_ms in retry_timings
-            )
-            after_ensure = time.perf_counter()
-            logger.warning(
-                "[PersistentTaskStore] task dir cache refreshed after missing parent "
-                "task_type=%s task_id=%s retry_ensure_ms=%.1f",
-                getattr(task, "task_type", ""),
-                getattr(task, "task_id", ""),
-                (after_ensure - retry_started_at) * 1000,
-            )
+            await self._ensure_task_dir(account_id, user_id)
             await self._write_task_payload(path, payload)
-        finished_at = time.perf_counter()
-        total_ms = (finished_at - started_at) * 1000
-        if total_ms >= 1000:
-            logger.warning(
-                "[PersistentTaskStore] slow write_task task_type=%s task_id=%s "
-                "total_ms=%.1f ensure_dir_ms=%.1f write_ms=%.1f mkdir_steps=%s",
-                getattr(task, "task_type", ""),
-                getattr(task, "task_id", ""),
-                total_ms,
-                (after_ensure - started_at) * 1000,
-                (finished_at - after_ensure) * 1000,
-                ",".join(f"{name}:{duration_ms:.1f}" for name, duration_ms in ensure_timings),
-            )
 
-    async def _ensure_task_dir(self, account_id: str, user_id: str) -> List[tuple[str, float]]:
+    async def _ensure_task_dir(self, account_id: str, user_id: str) -> None:
         cache_key = (account_id, user_id)
         if cache_key in self._ensured_task_dirs:
-            return [("cache_hit", 0.0)]
+            return
 
-        timings: List[tuple[str, float]] = []
         seen_paths: set[str] = set()
-        for name, path in self._task_dir_chain(account_id, user_id):
+        for path in self._task_dir_chain(account_id, user_id):
             if path in seen_paths:
                 continue
             seen_paths.add(path)
-            started_at = time.perf_counter()
             await self._mkdir_if_missing(path)
-            timings.append((name, (time.perf_counter() - started_at) * 1000))
         self._ensured_task_dirs.add(cache_key)
-        return timings
 
-    def _task_dir_chain(self, account_id: str, user_id: str) -> tuple[tuple[str, str], ...]:
+    def _task_dir_chain(self, account_id: str, user_id: str) -> tuple[str, ...]:
         return (
-            ("account", self._account_dir(account_id)),
-            ("system", self._system_dir(account_id)),
-            ("task_root", self._task_root_dir(account_id)),
-            ("user", self._task_dir(account_id, user_id)),
+            self._account_dir(account_id),
+            self._system_dir(account_id),
+            self._task_root_dir(account_id),
+            self._task_dir(account_id, user_id),
         )
 
     async def _write_task_payload(self, path: str, payload: bytes) -> None:
