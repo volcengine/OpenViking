@@ -11,6 +11,7 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.service.fs_service import FSService
+from openviking.storage.acl import AclAction
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -205,12 +206,26 @@ def request_context():
 @pytest.mark.asyncio
 async def test_read_visible_strips_memory_metadata_before_slicing(request_context):
     raw = 'line one\nline two\n\n<!-- MEMORY_FIELDS\n{"secret":"hidden"}\n-->'
-    viking_fs = SimpleNamespace(read_file=AsyncMock(return_value=raw))
-    service = FSService(viking_fs=viking_fs)
     uri = "viking://user/ryoma/memories/notes/private.md"
+    second_uri = "viking://user/ryoma/memories/notes/second.md"
+    viking_fs = SimpleNamespace(
+        read_file=AsyncMock(return_value=raw),
+        _can_access_many=AsyncMock(return_value={uri: True, second_uri: True}),
+        _read_file_authorized=AsyncMock(return_value=raw),
+    )
+    service = FSService(viking_fs=viking_fs)
 
     assert await service.read_visible(uri, ctx=request_context, offset=3, limit=1) == ""
     viking_fs.read_file.assert_awaited_once_with(uri, ctx=request_context)
+
+    assert await service.read_visible_many([uri, second_uri], ctx=request_context) == [
+        "line one\nline two",
+        "line one\nline two",
+    ]
+    viking_fs._can_access_many.assert_awaited_once_with(
+        [uri, second_uri], request_context, action=AclAction.READ
+    )
+    assert viking_fs._read_file_authorized.await_count == 2
 
 
 @pytest.mark.parametrize(

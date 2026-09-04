@@ -8,7 +8,7 @@ Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, 
 
 import asyncio
 from collections.abc import Coroutine
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import classify_uri, context_type_for_uri, uri_leaf_name
@@ -27,7 +27,7 @@ from openviking.storage.abstract_overview import (
     plan_abstract_overview_refresh,
     render_abstract_overview,
 )
-from openviking.storage.acl import CreatorAclGrant
+from openviking.storage.acl import AclAction, CreatorAclGrant
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.expr import And, Eq, In, Or
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
@@ -41,7 +41,11 @@ from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import build_queue_status_payload
 from openviking.utils.embedding_utils import vectorize_directory_meta
 from openviking.utils.tags import normalize_search_tags
-from openviking_cli.exceptions import DeadlineExceededError, NotInitializedError
+from openviking_cli.exceptions import (
+    DeadlineExceededError,
+    NotInitializedError,
+    PermissionDeniedError,
+)
 from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.config import get_openviking_config
 
@@ -872,12 +876,24 @@ class FSService:
     async def read(self, uri: str, ctx: RequestContext, offset: int = 0, limit: int = -1) -> str:
         """Read file content. Accepts a Viking URI or a 32-char hex vector record id."""
         viking_fs = self._ensure_initialized()
-        # Resolve ids to URIs so that downstream helpers (get_skill_name_from_uri)
-        # always see a real viking:// URI. VikingFS.read_file also resolves, which
-        # is harmless defense-in-depth when the input was already a URI.
         resolved_uri = await self._resolve_uri(uri, ctx)
         content = await viking_fs.read_file(resolved_uri, ctx=ctx)
-        skill_name = get_skill_name_from_uri(resolved_uri)
+        content = await self._apply_read_privacy(resolved_uri, content, ctx)
+
+        if offset == 0 and limit == -1:
+            return content
+        lines = content.splitlines(keepends=True)
+        sliced = lines[offset:] if limit == -1 else lines[offset : offset + limit]
+        return "".join(sliced)
+
+    async def _apply_read_privacy(
+        self,
+        uri: str,
+        content: str,
+        ctx: RequestContext,
+    ) -> str:
+        """Restore configured private skill values before public visibility filtering."""
+        skill_name = get_skill_name_from_uri(uri)
         if skill_name and self._privacy_config_service:
             current = await self._privacy_config_service.get_current(
                 ctx=ctx,
@@ -886,12 +902,46 @@ class FSService:
             )
             if current:
                 content = restore_skill_content(content, skill_name, current.values)
+        return content
 
-        if offset == 0 and limit == -1:
-            return content
-        lines = content.splitlines(keepends=True)
-        sliced = lines[offset:] if limit == -1 else lines[offset : offset + limit]
-        return "".join(sliced)
+    async def read_visible_many(
+        self,
+        uris: List[str],
+        ctx: RequestContext,
+    ) -> List[Union[str, Exception]]:
+        """Read visible content with one batched READ authorization.
+
+        Results preserve input order. Per-item failures are returned as exception
+        objects so callers can preserve partial-success behavior.
+        """
+        if not uris:
+            return []
+
+        viking_fs = self._ensure_initialized()
+        unique_uris = list(dict.fromkeys(uris))
+        try:
+            access = await viking_fs._can_access_many(unique_uris, ctx, action=AclAction.READ)
+        except Exception as exc:
+            return [exc for _ in uris]
+
+        semaphore = asyncio.Semaphore(10)
+
+        async def _read_one(uri: str) -> Union[str, Exception]:
+            if not access.get(uri, False):
+                return PermissionDeniedError(f"Access denied for {uri}", resource=uri)
+            try:
+                async with semaphore:
+                    content = await viking_fs._read_file_authorized(uri, ctx=ctx)
+                    content = await self._apply_read_privacy(uri, content, ctx)
+                    if classify_uri(uri).is_memory:
+                        content = visible_content(content, uri=uri)
+                    return content
+            except Exception as exc:
+                return exc
+
+        unique_results = await asyncio.gather(*(_read_one(uri) for uri in unique_uris))
+        result_by_uri = dict(zip(unique_uris, unique_results, strict=True))
+        return [result_by_uri[uri] for uri in uris]
 
     async def read_visible(
         self,

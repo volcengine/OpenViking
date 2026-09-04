@@ -552,6 +552,7 @@ class _AccessMixin:
             raw_limit = max(node_limit * self._TREE_OVERFETCH_FACTOR, node_limit)
         acl_enabled = self._acl_enabled(real_ctx)
 
+        access_by_uri: Dict[str, bool] = {}
         while True:
             raw_entries = await self._async_agfs.tree_directory(
                 path,
@@ -584,9 +585,12 @@ class _AccessMixin:
             if not acl_enabled:
                 visible = candidates
             else:
-                access = await self._can_access_many(
-                    [entry_uri for _, entry_uri in candidates], real_ctx
-                )
+                pending_uris = [
+                    entry_uri for _, entry_uri in candidates if entry_uri not in access_by_uri
+                ]
+                if pending_uris:
+                    access_by_uri.update(await self._can_access_many(pending_uris, real_ctx))
+                access = access_by_uri
                 if expose_resource_names:
                     denied_directories = {
                         entry["path"].rstrip("/")

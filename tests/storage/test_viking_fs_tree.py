@@ -347,21 +347,22 @@ async def test_iter_visible_tree_entries_node_limit_after_acl(monkeypatch, fs):
 @pytest.mark.asyncio
 async def test_iter_visible_tree_entries_refetch_when_under_limit(monkeypatch, fs):
     """PY-ITER-004: when ACL filtering leaves too few visible entries and Rust
-    returned a full page, the raw limit is doubled and re-fetched (zero-regression
-    bounded over-fetch)."""
+    returned a full page, the raw limit is doubled without rechecking entries
+    already authorized in the first page."""
     factor = fs._TREE_OVERFETCH_FACTOR
     node_limit = 2
     # First page (size == raw_limit) is entirely invisible; second page after
     # doubling contains the visible entries.
     invisible = [
-        make_entry(f"/local/test_account/resources/h{i}/x", "x", is_dir=False)
+        make_entry(f"/local/test_account/user/default/h{i}/x", "x", is_dir=False)
         for i in range(node_limit * factor)
     ]
     visible = [
-        make_entry(f"/local/test_account/resources/v{i}", f"v{i}", is_dir=False)
+        make_entry(f"/local/test_account/user/default/v{i}", f"v{i}", is_dir=False)
         for i in range(node_limit)
     ]
     captured_limits = []
+    access_batches = []
 
     async def fake_tree_directory(_path, **kwargs):
         raw_limit = kwargs.get("node_limit")
@@ -372,15 +373,22 @@ async def test_iter_visible_tree_entries_refetch_when_under_limit(monkeypatch, f
             return invisible[:raw_limit]
         return invisible + visible
 
-    def fake_is_accessible(uri, _ctx):
-        # Entries under an "hN" directory are invisible (ACL denied).
-        return "/h" not in uri
+    async def fake_can_access_many(uris, _ctx):
+        access_batches.append(list(uris))
+        return {uri: "/h" not in uri for uri in uris}
 
-    patch_tree_env(monkeypatch, fs, fake_tree_directory, is_accessible=fake_is_accessible)
+    patch_tree_env(
+        monkeypatch,
+        fs,
+        fake_tree_directory,
+        uri_to_path="/local/test_account/user/default",
+    )
+    fs.acl_manager = SimpleNamespace(is_enabled=lambda _account_id: True)
+    monkeypatch.setattr(fs, "_can_access_many", fake_can_access_many)
 
     results = []
     async for entry, _uri in fs._iter_visible_tree_entries(
-        "viking://resources", node_limit=node_limit, ctx=_default_ctx()
+        "viking://user/default", node_limit=node_limit, ctx=_default_ctx()
     ):
         results.append(entry)
 
@@ -388,6 +396,10 @@ async def test_iter_visible_tree_entries_refetch_when_under_limit(monkeypatch, f
     # Re-fetch happened: first raw_limit = node_limit*factor, then doubled.
     assert captured_limits[0] == node_limit * factor
     assert captured_limits[1] == node_limit * factor * 2
+    assert access_batches == [
+        [f"viking://user/default/h{i}/x" for i in range(node_limit * factor)],
+        [f"viking://user/default/v{i}" for i in range(node_limit)],
+    ]
 
 
 @pytest.mark.asyncio
@@ -661,19 +673,34 @@ async def test_ls_agent_modtime_is_raw_utc_iso(monkeypatch, fs):
 
 @pytest.mark.asyncio
 async def test_tree_agent_abs_limit_truncation(monkeypatch, fs):
-    """PY-AGENT-005: abstract is truncated when exceeding abs_limit."""
+    """PY-AGENT-005: reuse batched access and truncate long abstracts."""
     entries = [make_entry("/local/test_account/resources/sub", "sub", is_dir=True)]
+    access_batches = []
 
-    async def fake_batch_fetch(entries_arg, abs_limit, **_kwargs):
-        for entry in entries_arg:
-            abstract = "x" * (abs_limit + 10) if entry.get("isDir") else ""
-            if len(abstract) > abs_limit:
-                abstract = abstract[: abs_limit - 3] + "..."
-            entry["abstract"] = abstract
+    async def fake_can_access_many(uris, _ctx):
+        access_batches.append(list(uris))
+        return dict.fromkeys(uris, True)
 
-    patch_tree_env(monkeypatch, fs, entries, batch_fetch=fake_batch_fetch)
+    async def always_visible(*_args, **_kwargs):
+        return True
+
+    async def fake_read_abstract_file(*_args, **_kwargs):
+        return "x" * 20
+
+    patch_tree_env(monkeypatch, fs, entries)
+    fs.acl_manager = SimpleNamespace(is_enabled=lambda _account_id: True)
+    monkeypatch.setattr(fs, "_can_access_many", fake_can_access_many)
+    monkeypatch.setattr(
+        fs,
+        "_read_paths",
+        lambda _uri, **_kwargs: ["/local/test_account/resources/sub"],
+    )
+    monkeypatch.setattr(fs, "_read_path_visible", always_visible)
+    monkeypatch.setattr(fs, "_agfs_path_exists", always_visible)
+    monkeypatch.setattr(fs, "_read_abstract_file", fake_read_abstract_file)
 
     result = await fs._tree_agent("viking://resources", abs_limit=10, ctx=_default_ctx())
+    assert access_batches == [["viking://resources/sub"]]
     assert len(result[0]["abstract"]) <= 10
     assert result[0]["abstract"].endswith("...")
 

@@ -323,13 +323,13 @@ async def test_find_tool_inlines_visible_content_when_requested(service, monkeyp
             skills=[],
         )
 
-    async def fake_read_visible(uri, *, ctx):
-        assert uri == "viking://resources/visible.md"
+    async def fake_read_visible_many(uris, *, ctx):
+        assert uris == ["viking://resources/visible.md"]
         assert ctx == DEFAULT_CTX
-        return "full visible content"
+        return ["full visible content"]
 
     monkeypatch.setattr(service.search, "find", fake_find)
-    monkeypatch.setattr(service.fs, "read_visible", fake_read_visible)
+    monkeypatch.setattr(service.fs, "read_visible_many", fake_read_visible_many)
 
     result = await mcp_endpoint.find(query="visible", read_content=True)
 

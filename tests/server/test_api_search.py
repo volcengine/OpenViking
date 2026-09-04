@@ -62,9 +62,9 @@ async def test_find_basic(client_with_resource):
 async def test_search_endpoints_inline_visible_content_when_requested(
     client: httpx.AsyncClient, service, monkeypatch, endpoint: str
 ):
-    async def fake_read_visible(uri, *, ctx):
+    async def fake_read_visible_many(uris, *, ctx):
         assert ctx is not None
-        return f"visible content for {uri}"
+        return [f"visible content for {uri}" for uri in uris]
 
     async def fake_search(**kwargs):
         del kwargs
@@ -79,7 +79,7 @@ async def test_search_endpoints_inline_visible_content_when_requested(
             skills=[],
         )
 
-    monkeypatch.setattr(service.fs, "read_visible", fake_read_visible)
+    monkeypatch.setattr(service.fs, "read_visible_many", fake_read_visible_many)
     monkeypatch.setattr(
         service.search, "find" if endpoint.endswith("/find") else "search", fake_search
     )
@@ -111,8 +111,8 @@ async def test_find_omits_content_when_read_is_not_requested(
     monkeypatch.setattr(service.search, "find", fake_search)
     monkeypatch.setattr(
         service.fs,
-        "read_visible",
-        lambda *args, **kwargs: pytest.fail("read_visible must not be called"),
+        "read_visible_many",
+        lambda *args, **kwargs: pytest.fail("read_visible_many must not be called"),
     )
 
     response = await client.post("/api/v1/search/find", json={"query": "visible"})
@@ -124,9 +124,9 @@ async def test_find_omits_content_when_read_is_not_requested(
 async def test_find_keeps_hit_without_content_when_read_fails(
     client: httpx.AsyncClient, service, monkeypatch
 ):
-    async def fake_read_visible(uri, *, ctx):
-        del uri, ctx
-        raise RuntimeError("unavailable")
+    async def fake_read_visible_many(uris, *, ctx):
+        del ctx
+        return [RuntimeError("unavailable") for _ in uris]
 
     async def fake_find(**kwargs):
         del kwargs
@@ -141,7 +141,7 @@ async def test_find_keeps_hit_without_content_when_read_fails(
             skills=[],
         )
 
-    monkeypatch.setattr(service.fs, "read_visible", fake_read_visible)
+    monkeypatch.setattr(service.fs, "read_visible_many", fake_read_visible_many)
     monkeypatch.setattr(service.search, "find", fake_find)
 
     response = await client.post(

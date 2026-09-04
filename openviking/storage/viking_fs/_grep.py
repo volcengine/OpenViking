@@ -60,10 +60,10 @@ class _GrepMixin:
         Returns:
             Dict with matches, count, match_count, files_scanned
         """
-        await self._ensure_access(uri, ctx)
         # Skip vector_store.count() — the count field is not needed for grep,
-        # and avoiding it saves one VikingDB API call.
-        await self.stat(uri, ctx=ctx, skip_count=True)
+        # and avoiding it saves one VikingDB API call. stat() also owns the
+        # root READ check, so grep must not check the same URI first.
+        root_stat = await self.stat(uri, ctx=ctx, skip_count=True)
 
         # Read engine and threshold from grep_config (ov.conf)
         engine = self.grep_config.engine if self.grep_config else "auto"
@@ -114,6 +114,7 @@ class _GrepMixin:
                 ctx=ctx,
                 content_transform=content_transform,
                 allowed_uris=allowed_uris,
+                root_is_dir=bool(root_stat.get("isDir", False)),
             )
         else:  # "vikingdb_then_fs"
             result = await self._grep_vikingdb_then_fs(
@@ -233,6 +234,7 @@ class _GrepMixin:
         ctx,
         content_transform=None,
         allowed_uris=None,
+        root_is_dir: Optional[bool] = None,
     ):
         """Filesystem grep path: prefer native agfs grep and fall back if unavailable."""
         if content_transform is None and allowed_uris is None:
@@ -259,6 +261,7 @@ class _GrepMixin:
             ctx=ctx,
             content_transform=content_transform,
             allowed_uris=allowed_uris,
+            root_is_dir=root_is_dir,
         )
 
     async def _grep_vikingdb_then_fs(
@@ -424,14 +427,17 @@ class _GrepMixin:
         """Execute regex matching in specified file list (vikingdb_then_fs Step 2)."""
         flags = re.IGNORECASE if case_insensitive else 0
         compiled = re.compile(pattern, flags)
+        access = await self._can_access_many(file_uris, ctx)
 
         results = []
         files_scanned = 0
 
         for file_uri in file_uris:
+            if not access.get(file_uri, False):
+                continue
             files_scanned += 1
             try:
-                content_bytes = await self.read(file_uri, ctx=ctx)
+                content_bytes = await self._read_authorized(file_uri, ctx=ctx)
                 content = content_bytes.decode("utf-8", errors="replace")
             except Exception:
                 continue
@@ -510,6 +516,14 @@ class _GrepMixin:
             raise
 
         matches = result.get("matches", [])
+        match_uris = []
+        for match in matches:
+            match_file = match.get("file", "")
+            if not match_file:
+                continue
+            match_path = self._resolve_grep_match_agfs_path(path, match_file)
+            match_uris.append(self._path_to_uri(match_path, ctx=ctx))
+        access = await self._can_access_many(match_uris, ctx)
         results = []
         files_scanned_set = set()
         real_ctx = self._ctx_or_default(ctx)
@@ -522,7 +536,7 @@ class _GrepMixin:
             agfs_file_path = self._resolve_grep_match_agfs_path(path, match_file)
 
             file_uri = self._path_to_uri(agfs_file_path, ctx=ctx)
-            if not self._is_accessible(file_uri, real_ctx):
+            if not access.get(file_uri, False):
                 continue
 
             files_scanned_set.add(file_uri)
@@ -566,6 +580,7 @@ class _GrepMixin:
         ctx: Optional[RequestContext] = None,
         content_transform: Optional[Callable[[str, str], str]] = None,
         allowed_uris: Optional[Set[str]] = None,
+        root_is_dir: Optional[bool] = None,
     ) -> Dict:
         """Grep implementation for encrypted files.
 
@@ -596,6 +611,7 @@ class _GrepMixin:
             level_limit=level_limit,
             ctx=ctx,
             allowed_uris=allowed_uris,
+            root_is_dir=root_is_dir,
         )
         results, files_scanned = await self._grep_files_parallel(
             file_uris,
@@ -619,6 +635,7 @@ class _GrepMixin:
         level_limit: int,
         ctx: Optional[RequestContext] = None,
         allowed_uris: Optional[Set[str]] = None,
+        root_is_dir: Optional[bool] = None,
     ) -> List[str]:
         file_uris: List[str] = []
 
@@ -640,6 +657,8 @@ class _GrepMixin:
                 return
 
             for entry in entries:
+                if entry.get("access") == "denied":
+                    continue
                 entry_uri = f"{normalized_current_uri.rstrip('/')}/{entry['name']}"
                 if excluded_prefix and (
                     entry_uri == excluded_prefix or entry_uri.startswith(excluded_prefix + "/")
@@ -658,11 +677,13 @@ class _GrepMixin:
         ):
             logger.debug(f"Skipping excluded uri during grep: {normalized_uri}")
             return file_uris
-        try:
-            root_stat = await self.stat(normalized_uri, ctx=ctx)
-        except Exception:
-            return file_uris
-        if not root_stat.get("isDir", False):
+        if root_is_dir is None:
+            try:
+                root_stat = await self.stat(normalized_uri, ctx=ctx, skip_count=True)
+            except Exception:
+                return file_uris
+            root_is_dir = bool(root_stat.get("isDir", False))
+        if not root_is_dir:
             if allowed_uris is None or normalized_uri in allowed_uris:
                 file_uris.append(normalized_uri)
             return file_uris
@@ -710,7 +731,7 @@ class _GrepMixin:
         content_transform: Optional[Callable[[str, str], str]] = None,
     ) -> tuple[List[Dict[str, Any]], int]:
         try:
-            content = await self.read(entry_uri, ctx=ctx)
+            content = await self._read_authorized(entry_uri, ctx=ctx)
             if isinstance(content, bytes):
                 content = content.decode("utf-8", errors="replace")
             if content_transform is not None:

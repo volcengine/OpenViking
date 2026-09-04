@@ -388,18 +388,13 @@ async def _format_search_result(result, *, service, ctx, read_content: bool = Fa
 
     contents: dict[str, str] = {}
     if read_content:
-        import asyncio
-
-        semaphore = asyncio.Semaphore(10)
-
-        async def _read(uri: str) -> None:
-            async with semaphore:
-                try:
-                    contents[uri] = await service.fs.read_visible(uri, ctx=ctx)
-                except Exception:
-                    pass
-
-        await asyncio.gather(*(_read(m.uri) for _, m in items))
+        uris = [m.uri for _, m in items]
+        read_results = await service.fs.read_visible_many(uris, ctx=ctx)
+        contents = {
+            uri: content
+            for uri, content in zip(uris, read_results, strict=True)
+            if isinstance(content, str)
+        }
 
     lines = []
     for ctx_type, m in items:
@@ -567,6 +562,16 @@ async def read(uris: str | list[str]) -> str | list[ContentBlock]:
                 media_total += size
         checked.append((resolved_uri, size, error))
 
+    preloaded_text: dict[str, str | Exception] = {}
+    text_uris = [
+        resolved_uri
+        for resolved_uri, size, error in checked
+        if error is None and size is None
+    ]
+    if len(text_uris) > 1:
+        text_results = await service.fs.read_visible_many(text_uris, ctx=ctx)
+        preloaded_text = dict(zip(text_uris, text_results, strict=True))
+
     async def _read_one(
         uri: str, prepared: tuple[str, Optional[int], Optional[str]]
     ) -> str | ContentBlock:
@@ -597,6 +602,13 @@ async def read(uris: str | list[str]) -> str | list[ContentBlock]:
                     if is_image:
                         return _mcp_image_content(data, mime_type)
                     return _mcp_audio_content(data, mime_type)
+                if resolved_uri in preloaded_text:
+                    preloaded = preloaded_text[resolved_uri]
+                    if isinstance(preloaded, OpenVikingError):
+                        return str(preloaded)
+                    if isinstance(preloaded, Exception):
+                        raise preloaded
+                    return preloaded
                 content = await service.fs.read_visible(resolved_uri, ctx=ctx)
                 return content
             except OpenVikingError as exc:

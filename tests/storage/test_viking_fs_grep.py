@@ -361,6 +361,7 @@ async def test_grep_preserves_dfs_order_and_node_limit(monkeypatch):
                 {"name": "dir_b", "isDir": True},
             ],
             "viking://resources/dir_a": [
+                {"name": "denied.md", "isDir": False, "access": "denied"},
                 {"name": "a1.md", "isDir": False},
                 {"name": "a2.md", "isDir": False},
             ],
@@ -602,7 +603,7 @@ async def test_grep_stops_scheduling_later_batches_after_node_limit(monkeypatch)
 
     assert result["count"] == 2
     assert result["files_scanned"] == 1
-    assert read_paths == ["/resources/file0.md", "/resources/file1.md"]
+    assert set(read_paths) == {"/resources/file0.md", "/resources/file1.md"}
 
 
 @pytest.mark.asyncio

@@ -56,10 +56,10 @@ class _SemanticMixin:
     ) -> str:
         """Read .abstract.md for a directory that is already known to be a directory.
 
-        Bypasses stat() and isDir check. Caller (i.e. _batch_fetch_abstracts)
-        must guarantee that the URI points to a directory.
+        Bypasses access, stat(), and isDir checks. Caller (i.e.
+        _batch_fetch_abstracts) must guarantee that the URI is accessible and
+        points to a directory.
         """
-        await self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
         primary_path = self._uri_to_path(uri, ctx=ctx)
         for path in self._read_paths(uri, ctx=ctx):
@@ -440,25 +440,13 @@ class _SemanticMixin:
     ) -> None:
         """Write context to AGFS (L0/L1/L2)."""
 
-        await self._ensure_access(uri, ctx, action=AclAction.WRITE)
-        path = self._uri_to_path(uri, ctx=ctx)
-
-        try:
-            await self._ensure_parent_dirs(path, ctx=ctx)
-            try:
-                await self._async_agfs.mkdir(path)
-            except Exception as e:
-                if "exist" not in str(e).lower():
-                    raise
-
-            if content:
-                content_uri = f"{uri}/{content_filename}"
-                await self.write_file(content_uri, content, ctx=ctx)
-
-            if abstract:
-                abstract_uri = f"{uri}/.abstract.md"
-                await self.write_file(
-                    abstract_uri,
+        writes: List[tuple[str, Union[str, bytes]]] = []
+        if content:
+            writes.append((f"{uri}/{content_filename}", content))
+        if abstract:
+            writes.append(
+                (
+                    f"{uri}/.abstract.md",
                     render_abstract_overview(
                         ContextLevel.ABSTRACT,
                         uri,
@@ -470,13 +458,12 @@ class _SemanticMixin:
                             }
                         },
                     ),
-                    ctx=ctx,
                 )
-
-            if overview:
-                overview_uri = f"{uri}/.overview.md"
-                await self.write_file(
-                    overview_uri,
+            )
+        if overview:
+            writes.append(
+                (
+                    f"{uri}/.overview.md",
                     render_abstract_overview(
                         ContextLevel.OVERVIEW,
                         uri,
@@ -488,8 +475,26 @@ class _SemanticMixin:
                             }
                         },
                     ),
-                    ctx=ctx,
                 )
+            )
+
+        await self._ensure_access_many(
+            [uri, *(target_uri for target_uri, _ in writes)],
+            ctx,
+            action=AclAction.WRITE,
+        )
+        path = self._uri_to_path(uri, ctx=ctx)
+
+        try:
+            await self._ensure_parent_dirs(path, ctx=ctx)
+            try:
+                await self._async_agfs.mkdir(path)
+            except Exception as e:
+                if "exist" not in str(e).lower():
+                    raise
+
+            for target_uri, value in writes:
+                await self._write_file_authorized(target_uri, value, ctx=ctx)
 
         except Exception as e:
             logger.error(f"[VikingFS] Failed to write {uri}: {e}")

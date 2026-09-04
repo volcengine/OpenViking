@@ -85,6 +85,17 @@ class _OpsMixin:
         real_ctx = self._ctx_or_default(ctx)
         uri = await self.resolve_uri(uri, real_ctx)
         await self._ensure_access(uri, ctx)
+        return await self._read_authorized(uri, offset=offset, size=size, ctx=ctx)
+
+    async def _read_authorized(
+        self,
+        uri: str,
+        offset: int = 0,
+        size: int = -1,
+        ctx: Optional[RequestContext] = None,
+    ) -> bytes:
+        """Read a file URI whose READ access was already established by the caller."""
+        real_ctx = self._ctx_or_default(ctx)
         primary_path = self._uri_to_path(uri, ctx=ctx)
 
         # Decryption + offset/size slicing now happen inside the ragfs encryption layer
@@ -595,8 +606,7 @@ class _OpsMixin:
         acl_enabled = self._acl_enabled(ctx)
         guard_ctx = replace(self._ctx_or_default(ctx), bypass_acl=True)
         await self._ensure_access(old_uri, guard_ctx, action=AclAction.MANAGE)
-        await self._ensure_access(old_uri, ctx, action=AclAction.WRITE)
-        await self._ensure_access(new_uri, ctx, action=AclAction.WRITE)
+        await self._ensure_access_many([old_uri, new_uri], ctx, action=AclAction.WRITE)
         old_scope = old_uri.rstrip("/")
         new_scope = new_uri.rstrip("/")
         if old_scope == new_scope:
@@ -995,10 +1005,10 @@ class _OpsMixin:
         ctx: Optional[RequestContext] = None,
         lease_ref: Dict[str, Any] | None = None,
     ) -> None:
-        """Copy one file through VikingFS read/write hooks without deleting source."""
-        content_bytes = await self.read_file_bytes(from_uri, ctx=ctx)
+        """Copy one file after the caller authorized source and destination."""
+        content_bytes = await self._read_file_bytes_authorized(from_uri, ctx=ctx)
         if lease_ref is None:
-            await self.write_file_bytes(to_uri, content_bytes, ctx=ctx)
+            await self._write_file_bytes_authorized(to_uri, content_bytes, ctx=ctx)
             return
 
         child_path = self._uri_to_path(to_uri, ctx=ctx)
@@ -1007,7 +1017,9 @@ class _OpsMixin:
             owner_lease_ref=lease_ref,
         )
         try:
-            await self.write_file_bytes(to_uri, content_bytes, ctx=ctx, lease_ref=child_lease)
+            await self._write_file_bytes_authorized(
+                to_uri, content_bytes, ctx=ctx, lease_ref=child_lease
+            )
         finally:
             await self._async_agfs.pathlock_release(child_lease)
 
@@ -1244,11 +1256,11 @@ class _OpsMixin:
         abs_limit: int,
         ctx: Optional[RequestContext] = None,
     ) -> None:
-        """Batch fetch abstracts for entries using a fixed-size worker pool.
+        """Fetch abstracts for already-authorized entries with a worker pool.
 
         Non-directory entries receive an empty abstract immediately.
-        Directory entries are processed concurrently via a worker pool,
-        using _read_abstract_for_known_dir to skip redundant stat() calls.
+        Directory entries are processed concurrently without repeating the
+        access and stat checks already completed while listing the entries.
 
         Args:
             entries: List of entries to fetch abstracts for
@@ -1544,6 +1556,23 @@ class _OpsMixin:
         concurrently (e.g. unique-per-request shared upload directories).
         """
         await self._ensure_access(uri, ctx, action=AclAction.WRITE)
+        await self._write_file_authorized(
+            uri,
+            content,
+            ctx=ctx,
+            lease_ref=lease_ref,
+            auto_pathlock=auto_pathlock,
+        )
+
+    async def _write_file_authorized(
+        self,
+        uri: str,
+        content: Union[str, bytes],
+        ctx: Optional[RequestContext] = None,
+        lease_ref: Dict[str, Any] | None = None,
+        auto_pathlock: bool = True,
+    ) -> None:
+        """Write a file URI whose WRITE access was already established by the caller."""
         path = self._uri_to_path(uri, ctx=ctx)
         await self._ensure_parent_dirs(path, ctx=ctx, lease_ref=lease_ref)
 
@@ -1577,6 +1606,17 @@ class _OpsMixin:
         real_ctx = self._ctx_or_default(ctx)
         uri = await self.resolve_uri(uri, real_ctx)
         await self._ensure_access(uri, ctx)
+        return await self._read_file_authorized(uri, offset=offset, limit=limit, ctx=ctx)
+
+    async def _read_file_authorized(
+        self,
+        uri: str,
+        offset: int = 0,
+        limit: int = -1,
+        ctx: Optional[RequestContext] = None,
+    ) -> str:
+        """Read a text file URI whose READ access was already established by the caller."""
+        real_ctx = self._ctx_or_default(ctx)
         primary_path = self._uri_to_path(uri, ctx=ctx)
         # Verify the file exists before reading, because AGFS read returns
         # empty bytes for non-existent files instead of raising an error.
@@ -1630,6 +1670,15 @@ class _OpsMixin:
         real_ctx = self._ctx_or_default(ctx)
         uri = await self.resolve_uri(uri, real_ctx)
         await self._ensure_access(uri, ctx)
+        return await self._read_file_bytes_authorized(uri, ctx=ctx)
+
+    async def _read_file_bytes_authorized(
+        self,
+        uri: str,
+        ctx: Optional[RequestContext] = None,
+    ) -> bytes:
+        """Read a binary file whose READ access was established by the caller."""
+        real_ctx = self._ctx_or_default(ctx)
         primary_path = self._uri_to_path(uri, ctx=ctx)
         last_not_found: Optional[Exception] = None
         for path in self._read_paths(uri, ctx=ctx):
@@ -1673,6 +1722,23 @@ class _OpsMixin:
         concurrently (e.g. unique-per-request shared upload directories).
         """
         await self._ensure_access(uri, ctx, action=AclAction.WRITE)
+        await self._write_file_bytes_authorized(
+            uri,
+            content,
+            ctx=ctx,
+            lease_ref=lease_ref,
+            auto_pathlock=auto_pathlock,
+        )
+
+    async def _write_file_bytes_authorized(
+        self,
+        uri: str,
+        content: bytes,
+        ctx: Optional[RequestContext] = None,
+        lease_ref: Dict[str, Any] | None = None,
+        auto_pathlock: bool = True,
+    ) -> None:
+        """Write bytes to a URI whose WRITE access was established by the caller."""
         path = self._uri_to_path(uri, ctx=ctx)
         await self._ensure_parent_dirs(path, ctx=ctx, lease_ref=lease_ref)
 
@@ -2034,8 +2100,7 @@ class _OpsMixin:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Move file."""
-        await self._ensure_access(from_uri, ctx, action=AclAction.WRITE)
-        await self._ensure_access(to_uri, ctx, action=AclAction.WRITE)
+        await self._ensure_access_many([from_uri, to_uri], ctx, action=AclAction.WRITE)
         from_path = self._uri_to_path(from_uri, ctx=ctx)
 
         await self._copy_file_through_vikingfs(from_uri, to_uri, ctx=ctx)

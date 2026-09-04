@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Search endpoints for OpenViking HTTP Server."""
 
-import asyncio
 import math
 from typing import Any, Dict, List, Literal, Optional, Sequence, Union
 
@@ -250,16 +249,11 @@ async def _inline_read_content(
         for hit in result.get(category, [])
         if isinstance(hit, dict) and isinstance(hit.get("uri"), str)
     ]
-    semaphore = asyncio.Semaphore(10)
-
-    async def _read(hit: Dict[str, Any]) -> None:
-        async with semaphore:
-            try:
-                hit["content"] = await service.fs.read_visible(hit["uri"], ctx=ctx)
-            except Exception:
-                pass
-
-    await asyncio.gather(*(_read(hit) for hit in hits))
+    uris = [hit["uri"] for hit in hits]
+    contents = await service.fs.read_visible_many(uris, ctx=ctx)
+    for hit, content in zip(hits, contents, strict=True):
+        if isinstance(content, str):
+            hit["content"] = content
     return result
 
 

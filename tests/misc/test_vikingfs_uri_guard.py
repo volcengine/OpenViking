@@ -313,6 +313,7 @@ class TestVikingFSURITraversalGuard:
         fs = _make_viking_fs()
         fs._encryptor = None
         fs._ensure_access = AsyncMock()
+        fs.stat = AsyncMock(return_value={"isDir": True})
         fs._grep_with_agfs = AsyncMock(side_effect=AGFSInvalidOperationError("invalid regex"))
         fs._grep_encrypted = AsyncMock(
             return_value={"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
