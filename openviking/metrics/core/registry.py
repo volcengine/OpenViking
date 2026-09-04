@@ -106,6 +106,30 @@ class MetricRegistry:
         """
         self.counter(name, label_names=label_names).inc(labels=labels, amount=float(amount))
 
+    def init_counter_series(
+        self,
+        name: str,
+        *,
+        labels: Mapping[str, str] | None = None,
+        label_names: Sequence[str] = (),
+    ) -> None:
+        """
+        Pre-initialize one Counter series to zero without incrementing it.
+
+        Args:
+            name: Prometheus metric name.
+            labels: Optional label dict. Keys must exactly match `label_names`.
+            label_names: Ordered label key tuple for this metric name.
+
+        Notes:
+            This is the in-process equivalent of the Prometheus client library's
+            "initialize label values" guidance: creating a zero-valued series up front
+            lets Prometheus scrape the pre-increment sample, so `increase()`/`rate()`
+            can account for the first real increment of that label set. Existing series
+            are left untouched, making repeated calls idempotent.
+        """
+        self.counter(name, label_names=label_names).init(labels=labels)
+
     def set_gauge(
         self,
         name: str,
@@ -376,6 +400,22 @@ class _CounterFamily:
                 return
             self._values[key] = self._values.get(key, 0.0) + float(amount)
 
+    def init(self, *, labels: Mapping[str, str] | None) -> None:
+        """
+        Ensure one counter series exists with value zero, without incrementing it.
+
+        New series creation is subject to the same family-level cardinality cap as
+        regular increments. If the series already exists, its current value is
+        preserved, so this operation is idempotent.
+        """
+        key = self._normalize_and_validate(labels)
+        with self._lock:
+            if key not in self._values:
+                if len(self._values) >= self._max_series:
+                    self._on_drop(self.name)
+                    return
+                self._values[key] = 0.0
+
     def copy_values(self) -> dict[tuple[tuple[str, str], ...], float]:
         """Return a detached copy of all series values in this family."""
         with self._lock:
@@ -619,6 +659,10 @@ class _Counter:
     def inc(self, amount: float = 1.0, *, labels: Mapping[str, str] | None = None) -> None:
         """Increment one series in the bound counter family using the public wrapper API."""
         self._family.inc(labels=labels, amount=amount)
+
+    def init(self, *, labels: Mapping[str, str] | None = None) -> None:
+        """Pre-initialize one series in the bound counter family to zero, idempotently."""
+        self._family.init(labels=labels)
 
 
 class _Gauge:

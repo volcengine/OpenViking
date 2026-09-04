@@ -7,6 +7,7 @@ import pytest
 
 from openviking.metrics.core.base import MetricCollector
 from openviking.metrics.core.registry import MetricRegistry
+from openviking.metrics.exporters.prometheus import PrometheusExporter
 
 
 def test_metric_collector_metric_name_includes_namespace_and_optional_unit():
@@ -52,6 +53,39 @@ def test_registry_canonicalizes_label_name_order_for_same_family(render_promethe
 
     text = render_prometheus(registry)
     assert 'openviking_ordered_total{provider="local",status="ok"} 2' in text
+
+
+def test_init_counter_series_preinitializes_zero_and_is_idempotent():
+    registry = MetricRegistry()
+    registry.init_counter_series(
+        "openviking_preinit_total", labels={"queue": "q"}, label_names=("queue",)
+    )
+    assert (
+        'openviking_preinit_total{queue="q"} 0' in PrometheusExporter(registry=registry).render()
+    )
+
+    registry.inc_counter(
+        "openviking_preinit_total", labels={"queue": "q"}, label_names=("queue",)
+    )
+    registry.init_counter_series(
+        "openviking_preinit_total", labels={"queue": "q"}, label_names=("queue",)
+    )
+    assert (
+        'openviking_preinit_total{queue="q"} 1' in PrometheusExporter(registry=registry).render()
+    )
+
+
+def test_init_counter_series_enforces_label_contract():
+    registry = MetricRegistry()
+    registry.init_counter_series(
+        "openviking_preinit_contract_total", labels={"a": "1"}, label_names=("a",)
+    )
+    with pytest.raises(ValueError):
+        registry.init_counter_series(
+            "openviking_preinit_contract_total",
+            labels={"a": "1", "b": "2"},
+            label_names=("a", "b"),
+        )
 
 
 def test_counter_only_increases():
