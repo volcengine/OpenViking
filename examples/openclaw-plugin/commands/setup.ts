@@ -84,7 +84,7 @@ const CONFIG_KEYS_TO_PRESERVE = [
   "logFindRequests",
 ] as const;
 
-type PeerRole = "none" | "assistant" | "person";
+type PeerRole = "none" | "assistant" | "sender";
 const DEFAULT_SETUP_PEER_ROLE: PeerRole = "none";
 type RecallTargetType = "resource" | "user" | "agent";
 const ALLOWED_RECALL_TARGET_TYPES = ["resource", "user", "agent"] as const;
@@ -126,7 +126,8 @@ function isValidPeerPrefixInput(value: string): boolean {
 function normalizePeerRole(value: unknown): PeerRole | undefined {
   if (typeof value !== "string") return undefined;
   const role = value.trim().toLowerCase();
-  if (role === "none" || role === "assistant" || role === "person") return role;
+  if (role === "person") return "sender";
+  if (role === "none" || role === "assistant" || role === "sender") return role;
   return undefined;
 }
 
@@ -147,7 +148,7 @@ function resolveSetupPeerRole(value: unknown): PeerRole {
   if (value === undefined) return DEFAULT_SETUP_PEER_ROLE;
   const role = normalizePeerRole(value);
   if (role) return role;
-  throw new Error('peer_role must be "none", "assistant", or "person"');
+  throw new Error('peer_role must be "none", "assistant", or "sender" (legacy alias: "person")');
 }
 
 function normalizeSetupRecallTargetTypes(value: unknown): RecallTargetType[] | undefined {
@@ -209,14 +210,17 @@ async function askPeerRole(
   console.log(
     `  ${tr(
       zh,
-      "Memory scope — none: one shared memory for this OpenViking user; " +
-        "assistant: a separate memory per assistant; person: a separate memory per sender.",
-      "记忆归属 —— none：所有对话共用同一份记忆；assistant：按助手分开存放；person：按发送者分开存放。",
+      "Memory scope — none (default): viking://user/<user_id>/memories, shared across all conversations; " +
+        "assistant: viking://user/<user_id>/peers/<assistant_id>/memories; " +
+        "sender: viking://user/<user_id>/peers/<sender_id>/memories (legacy alias: person).",
+      "记忆归属 —— none（默认）：viking://user/<user_id>/memories，所有对话共享；" +
+        "assistant：viking://user/<user_id>/peers/<assistant_id>/memories；" +
+        "sender：viking://user/<user_id>/peers/<sender_id>/memories（兼容旧值 person）。",
     )}`,
   );
   while (true) {
     const value = await q(
-      tr(zh, "Memory scope (none/assistant/person)", "记忆归属（none/assistant/person）"),
+      tr(zh, "Memory scope (none/assistant/sender)", "记忆归属（none/assistant/sender）"),
       defaultValue,
     );
     const role = normalizePeerRole(value);
@@ -224,8 +228,8 @@ async function askPeerRole(
     console.log(
       `  ✗ ${tr(
         zh,
-        'Memory scope must be "none", "assistant", or "person".',
-        '记忆归属必须是 "none"、"assistant" 或 "person"。',
+        'Memory scope must be "none", "assistant", or "sender" (legacy "person" is also accepted).',
+        '记忆归属必须是 "none"、"assistant" 或 "sender"（也兼容旧值 "person"）。',
       )}`,
     );
   }
@@ -613,7 +617,7 @@ export function registerSetupCli(api: any): void {
         .option("--zh", "Chinese prompts")
         .option("--base-url <url>", "OpenViking server URL (enables non-interactive mode)")
         .option("--api-key <key>", "API key for authentication")
-        .option("--peer-role <role>", "Memory scope: none (shared), assistant (per assistant), or person (per sender)")
+        .option("--peer-role <role>", "Memory scope: none (shared), assistant (per assistant), or sender (per sender); person is a legacy alias")
         .option("--peer-prefix <prefix>", "Prefix for assistant peer_id values")
         .option("--account-id <id>", "Account ID (required for root API keys)")
         .option("--user-id <id>", "User ID (required for root API keys)")
@@ -1190,6 +1194,8 @@ async function setupRemote(
 export const __test__ = {
   isLegacyLocalMode,
   isValidPeerPrefixInput,
+  normalizePeerRole,
+  resolveSetupPeerRole,
   normalizeSetupRecallTargetTypes,
   activateContextEngineSlot,
   isContextEngineSlotActive,

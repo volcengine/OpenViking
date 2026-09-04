@@ -97,7 +97,7 @@ export function createOpenVikingSessionRoutingRuntime(options: {
       agentId,
       actorPeerId: resolveOpenVikingActorPeerId({
         peerRole,
-        personPeerId: sanitizeOpenVikingPeerId(ctx?.requesterSenderId ?? ctx?.senderId),
+        senderPeerId: sanitizeOpenVikingPeerId(ctx?.requesterSenderId ?? ctx?.senderId),
         assistantPeerId: agentId,
       }),
     };

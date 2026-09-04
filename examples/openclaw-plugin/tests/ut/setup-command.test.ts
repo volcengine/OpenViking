@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { __test__ as setupCommandTest } from "../../commands/setup.js";
 import { defaultSetupIO } from "../../services/setup/config-writer.js";
 import { createOpenVikingSetupService } from "../../services/setup/setup-flow.js";
 
@@ -29,6 +30,12 @@ describe("openviking setup agent prefix validation", () => {
       expect(/^[a-zA-Z0-9_-]*$/.test(value.trim())).toBe(false);
     },
   );
+
+  it("uses sender as the canonical setup value and accepts legacy person input", () => {
+    expect(setupCommandTest.normalizePeerRole("sender")).toBe("sender");
+    expect(setupCommandTest.normalizePeerRole("person")).toBe("sender");
+    expect(setupCommandTest.resolveSetupPeerRole("person")).toBe("sender");
+  });
 
   it("non-interactive setup can persist resource-only recallTargetTypes for post-install opt-in", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openviking-setup-"));

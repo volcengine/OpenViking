@@ -15,7 +15,7 @@ export type SessionAgentLookup = {
   ovSessionId?: string;
 };
 
-export type OpenVikingPeerRole = "none" | "assistant" | "person";
+export type OpenVikingPeerRole = "none" | "assistant" | "sender";
 
 export function sanitizeOpenVikingPeerId(raw?: string): string | undefined {
   const normalized = raw
@@ -29,11 +29,11 @@ export function sanitizeOpenVikingPeerId(raw?: string): string | undefined {
 export function resolveOpenVikingMessagePeerId(params: {
   peerRole: OpenVikingPeerRole;
   role?: string;
-  personPeerId?: string;
+  senderPeerId?: string;
   assistantPeerId?: string;
 }): string | undefined {
-  if (params.peerRole === "person" && params.role === "user") {
-    return params.personPeerId;
+  if (params.peerRole === "sender" && params.role === "user") {
+    return params.senderPeerId;
   }
   if (params.peerRole === "assistant" && params.role === "assistant") {
     return params.assistantPeerId;
@@ -43,15 +43,15 @@ export function resolveOpenVikingMessagePeerId(params: {
 
 export function resolveOpenVikingActorPeerId(params: {
   peerRole: OpenVikingPeerRole;
-  personPeerId?: string;
+  senderPeerId?: string;
   assistantPeerId?: string;
 }): string | undefined {
   const actorPeerId = resolveOpenVikingMessagePeerId({
     ...params,
-    role: params.peerRole === "person" ? "user" : "assistant",
+    role: params.peerRole === "sender" ? "user" : "assistant",
   });
-  if (params.peerRole === "person" && !actorPeerId) {
-    throw new Error("openviking: peer_role=person requires a sender identity");
+  if (params.peerRole === "sender" && !actorPeerId) {
+    throw new Error("openviking: peer_role=sender requires a sender identity");
   }
   return actorPeerId;
 }

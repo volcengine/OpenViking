@@ -82,7 +82,7 @@
     "peer_role": {
       "label": "Memory Scope (peer_role)",
       "placeholder": "none",
-      "help": "Where memories are stored. none: one shared memory for this OpenViking user (default). assistant: a separate memory per assistant. person: a separate memory per sender."
+      "help": "Where peer-scoped memories are stored. none (default): viking://user/<user_id>/memories. assistant: viking://user/<user_id>/peers/<assistant_id>/memories. sender: viking://user/<user_id>/peers/<sender_id>/memories. Legacy person is accepted as sender."
     },
     "peer_prefix": {
       "label": "Peer Prefix",
@@ -279,10 +279,11 @@
         "enum": [
           "none",
           "assistant",
+          "sender",
           "person"
         ],
         "default": "none",
-        "description": "Memory scope. none: one shared memory for the OpenViking user. assistant: a separate memory per assistant. person: a separate memory per sender. Also controls which session messages include peer_id."
+        "description": "Memory scope. none: shared user memory. assistant: peer memory keyed by OpenClaw assistant id. sender: peer memory keyed by sender id. person is a legacy alias for sender. Also controls which session messages include peer_id."
       },
       "peer_prefix": {
         "type": "string",

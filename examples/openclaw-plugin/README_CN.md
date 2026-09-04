@@ -152,14 +152,25 @@ openclaw config get plugins.slots.contextEngine  # 应输出：openviking
 - `sessionId` 是 UUID 时直接复用。
 - `sessionKey` 存在时优先用它生成稳定的 `ovSessionId`。
 - 非安全路径字符会被规整或退化成稳定的 SHA-256。
-- `peer_role=none` 是默认值：记忆只存一份，挂在 OpenViking 用户下，不做 peer 归因，也不做 actor-peer 路由。
-- `peer_role=assistant` 会让 assistant message 写入 `peer_id=<sessionAgent>`，每个助手一份独立记忆；如果配置了 `peer_prefix`，则写入 `<peer_prefix>_<sessionAgent>`。
-- `peer_role=person` 按发送者隔离记忆：user message 使用 OpenClaw sender 身份派生 `peer_id`；assistant message 不写 `peer_id`。
-- 数据面的 recall/search/read/import/delete 会在 `peer_role=assistant` 或 `peer_role=person` 时把同一个解析后的 peer 身份作为 `X-OpenViking-Actor-Peer` 发送。
+- `peer_role=none` 是默认值：消息不写 peer 归因，记忆留在用户共享空间，例如 `viking://user/alice/memories/...`；不使用具体 peer 的记忆子树。
+- `peer_role=assistant` 会让 assistant message 写入 `peer_id=<sessionAgent>`，并使用例如 `viking://user/alice/peers/main/memories/...` 的 peer 记忆；如果配置了 `peer_prefix`，peer id 为 `<peer_prefix>_<sessionAgent>`。
+- `peer_role=sender` 会让 user message 用 OpenClaw sender 身份派生 `peer_id`，并使用例如 `viking://user/support-agent/peers/customer-42/memories/...` 的 peer 记忆；assistant message 不写 `peer_id`。
+- `person` 仍作为 `sender` 的旧配置别名被兼容；新配置和文档统一使用 `sender`。
+- 数据面的 recall/search/read/import/delete 会在 `peer_role=assistant` 或 `peer_role=sender` 时把同一个解析后的 peer 身份作为 `X-OpenViking-Actor-Peer` 发送。
 - OpenClaw 没有提供 session agent 时，使用其默认 agent `main` 作为本地 session 和 assistant peer metadata。
 - 只有显式配置了 `accountId` / `userId` 时才发送 `X-OpenViking-Account` / `X-OpenViking-User`。
 
 这样做是因为 OpenViking 的租户身份是 account/user 级，OpenClaw agent 身份只作为运行时 metadata 使用。
+
+选择 scope 时，先看 `viking://user/<user_id>` 代表谁：
+
+| 模型 | 案例 | 结果 |
+| --- | --- | --- |
+| 通用／共享（`none`） | `user_id=alice` 使用任意 OpenClaw 助手 | 共享用户记忆位于 `viking://user/alice/memories/...` |
+| 人是 OpenViking user（`assistant`） | Alice 同时使用 `main` 和 `research` 两个 OpenClaw 助手 | 助手 peer 记忆分别位于 `.../peers/main/memories/...` 和 `.../peers/research/memories/...` |
+| Agent 是 OpenViking user（`sender`） | `user_id=support-agent` 接收 `customer-42` 和 `customer-99` 的消息 | 发送者 peer 记忆分别位于 `.../peers/customer-42/memories/...` 和 `.../peers/customer-99/memories/...` |
+
+OpenViking 会把受管的 `peers/` 容器作为用户 namespace 的一部分初始化。`none` 表示插件不创建、也不路由到具体的 `peers/<peer_id>/memories` 子树。使用 `assistant` 或 `sender` 时，actor-peer 召回同时包含用户共享记忆和当前 peer 记忆；切换配置不会搬迁已有记忆。
 
 默认推荐的远程模式配置只有：
 

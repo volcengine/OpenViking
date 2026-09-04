@@ -320,13 +320,17 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
   it("accepts explicit peer_role values", () => {
     expect(memoryOpenVikingConfigSchema.parse({ peer_role: "none" }).peer_role).toBe("none");
     expect(memoryOpenVikingConfigSchema.parse({ peer_role: "assistant" }).peer_role).toBe("assistant");
-    expect(memoryOpenVikingConfigSchema.parse({ peer_role: "person" }).peer_role).toBe("person");
+    expect(memoryOpenVikingConfigSchema.parse({ peer_role: "sender" }).peer_role).toBe("sender");
+  });
+
+  it("normalizes the legacy person peer_role alias to sender", () => {
+    expect(memoryOpenVikingConfigSchema.parse({ peer_role: "person" }).peer_role).toBe("sender");
   });
 
   it("throws on invalid peer_role", () => {
     expect(() =>
       memoryOpenVikingConfigSchema.parse({ peer_role: "agent" }),
-    ).toThrow('peer_role must be "none", "assistant", or "person"');
+    ).toThrow('peer_role must be "none", "assistant", or "sender"');
   });
 
   it("resolves peer_prefix from configured value", () => {

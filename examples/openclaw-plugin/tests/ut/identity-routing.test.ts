@@ -4,6 +4,8 @@ import {
   createSessionAgentResolver,
   openClawSessionRefToOvStorageId,
   openClawSessionToOvStorageId,
+  resolveOpenVikingActorPeerId,
+  resolveOpenVikingMessagePeerId,
   sanitizeOpenVikingAgentIdHeader,
 } from "../../routing/identity-routing.js";
 
@@ -30,6 +32,26 @@ describe("identity routing registry", () => {
     expect(sanitizeOpenVikingAgentIdHeader("agent:role:v1")).toBe("agent_role_v1");
     expect(sanitizeOpenVikingAgentIdHeader("   ")).toBe("default");
     expect(sanitizeOpenVikingAgentIdHeader("@#$%")).toBe("ov_agent");
+  });
+
+  it("routes sender scope to the sender peer for messages and data-plane requests", () => {
+    expect(resolveOpenVikingMessagePeerId({
+      peerRole: "sender",
+      role: "user",
+      senderPeerId: "sender-42",
+    })).toBe("sender-42");
+    expect(resolveOpenVikingMessagePeerId({
+      peerRole: "sender",
+      role: "assistant",
+      senderPeerId: "sender-42",
+    })).toBeUndefined();
+    expect(resolveOpenVikingActorPeerId({
+      peerRole: "sender",
+      senderPeerId: "sender-42",
+    })).toBe("sender-42");
+    expect(() => resolveOpenVikingActorPeerId({ peerRole: "sender" })).toThrow(
+      "peer_role=sender requires a sender identity",
+    );
   });
 
   it("resolves session-scoped agents with aliases and config prefix unchanged", () => {

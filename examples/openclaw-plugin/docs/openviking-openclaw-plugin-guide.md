@@ -715,6 +715,7 @@ openclaw config get plugins.slots.contextEngine
 | `apiKey` | 环境变量或空 | OpenViking API Key |
 | `accountId` | 空 | Root key/trusted 部署需要 |
 | `userId` | 空 | Root key/trusted 部署需要 |
+| `peer_role` | `none` | 记忆归属：`none`、`assistant` 或 `sender`；旧值 `person` 作为 `sender` 的别名兼容 |
 | `peer_prefix` | 空 | Peer 路由前缀；非空时形成 `<prefix>_<ctx.agentId>` |
 | `targetUri` | `viking://user/memories` | 默认 memory search 目标 |
 | `timeoutMs` | `15000` | HTTP 请求超时 |
@@ -748,6 +749,16 @@ openclaw config get plugins.slots.contextEngine
 
 环境变量解析逻辑在 `config.ts:139`、`config.ts:147`。
 
+`peer_role` 决定 `viking://user/<user_id>` 下是否按交互对象建立 peer 记忆：
+
+| 值 | 归因与路径 | 案例 |
+| --- | --- | --- |
+| `none`（默认） | user / assistant message 都不写 `peer_id`；新增长期记忆位于 `viking://user/<user_id>/memories/...` | 通用场景，所有对话共享 user-level 记忆 |
+| `assistant` | assistant message 写入 `peer_id=<assistant_id>`；助手归因记忆位于 `.../peers/<assistant_id>/memories/...` | **人是 OpenViking user**：Alice 使用 `main` 和 `research` 两个助手，分别使用 `.../peers/main/...` 和 `.../peers/research/...` |
+| `sender` | user message 写入 `peer_id=<sender_id>`；发送者归因记忆位于 `.../peers/<sender_id>/memories/...` | **Agent 是 OpenViking user**：`support-agent` 面向 `customer-42` 和 `customer-99`，将两人的 peer 记忆分开 |
+
+`person` 是 `sender` 的旧别名；新配置统一使用 `sender`。OpenViking 会为每个用户初始化受管的 `peers/` 容器，`none` 只表示不使用具体的 `peers/<peer_id>/memories` 子树。在 peer 模式下，共享／自身记忆仍位于用户根记忆目录，召回范围是共享记忆 + 当前 peer 记忆，不包含其他 peer。切换 scope 不会搬迁已有记忆。Session 路径不受影响，始终位于 `viking://user/<user_id>/sessions/<session_id>`。
+
 ### 9.1 搜索 / 召回相关配置总表
 
 如果你关注的是“插件里的搜索能力可以怎么从外部设定”，可以按下面这张表看。这里的“搜索”包括三类：
@@ -762,7 +773,7 @@ openclaw config get plugins.slots.contextEngine
 | `apiKey` | 所有搜索/召回请求 | 空 | 是 | 是 | `OPENVIKING_API_KEY` | HTTP 认证 key；不配通常只能访问关闭认证的本地服务：`config.ts:202` |
 | `accountId` | 多租户搜索路由 | 空 | 是 | 是 | `OPENVIKING_ACCOUNT_ID` | Root key / trusted 部署下显式指定 account，影响搜索命中空间：`config.ts:212` |
 | `userId` | 多租户搜索路由 | 空 | 是 | 是 | `OPENVIKING_USER_ID` | Root key / trusted 部署下显式指定 user，影响 user memory 检索范围：`config.ts:216` |
-| `peer_role` | session peer 归因和 actor-peer 路由 | `none` | 是 | 安装脚本/setup 参数支持 | `OPENVIKING_PEER_ROLE`（安装脚本写入 setup 参数） | `none` 共用一份记忆、关闭 peer 路由（默认）；`assistant` 按助手分开，使用 runtime agent；`person` 按发送者分开，使用 sender 身份 |
+| `peer_role` | session peer 归因和 actor-peer 路由 | `none` | 是 | 安装脚本/setup 参数支持 | `OPENVIKING_PEER_ROLE`（安装脚本写入 setup 参数） | `none` 使用共享 user memory（默认）；`assistant` 用 runtime agent 归因到 `peers/<assistant_id>`；`sender` 用 sender 身份归因到 `peers/<sender_id>`；旧值 `person` 等价于 `sender` |
 | `peer_prefix` | assistant peer 前缀 | 空 | 是 | 间接支持 | 可通过配置值写 `${ENV}` | 非空时拼成 `<prefix>_<ctx.agentId>`，用于 assistant `peer_id` 与 `X-OpenViking-Actor-Peer` |
 | `targetUri` | `memory_recall` / `memory_forget` 默认搜索范围 | `viking://user/memories` | 是 | 否 | — | 未显式传 `targetUri` 时的默认 memory 搜索位置：`config.ts:275`、`index.ts:1366` |
 | `timeoutMs` | 所有搜索/读取请求超时 | `15000` | 是 | 否 | — | 控制 context search、`find/read/grep/session` 等 HTTP 请求超时：`config.ts:276` |
@@ -794,7 +805,7 @@ openclaw config get plugins.slots.contextEngine
 | `OPENVIKING_API_KEY` | `apiKey` | 指定 OpenViking API key |
 | `OPENVIKING_ACCOUNT_ID` | `accountId` | 指定租户 account |
 | `OPENVIKING_USER_ID` | `userId` | 指定租户 user |
-| `OPENVIKING_PEER_ROLE` | `peer_role` | 安装脚本/setup 写入的记忆归属（`none` / `assistant` / `person`） |
+| `OPENVIKING_PEER_ROLE` | `peer_role` | 安装脚本/setup 写入的记忆归属（`none` / `assistant` / `sender`；兼容旧值 `person`） |
 | `OPENVIKING_PEER_PREFIX` | `peer_prefix` | 安装脚本/setup 写入的 assistant peer 前缀 |
 | `OPENVIKING_RECALL_RESOURCES` | `recallResources` | 是否把 resources 纳入自动召回和默认 memory_recall |
 | `OPENVIKING_LOG_ROUTING` | `logFindRequests` | 打开检索/路由日志 |

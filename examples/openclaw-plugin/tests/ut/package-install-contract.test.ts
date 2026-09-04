@@ -121,6 +121,7 @@ describe("OpenClaw plugin package and install contract", () => {
     expect(installHelper).toContain(`slot: "${installManifest.plugin.slot}"`);
     expect(installHelper).toContain("OPENVIKING_PEER_ROLE");
     expect(installHelper).toContain("OPENVIKING_PEER_PREFIX");
+    expect(installHelper).toContain('if (role === "person") return "sender"');
     expect(installHelper).not.toContain("OPENVIKING_AGENT_PREFIX");
   });
 });

@@ -30,7 +30,8 @@ export type OpenVikingSecretRef =
 export type MemoryOpenVikingConfig = {
   mode?: "remote";
   baseUrl?: string;
-  peer_role?: "none" | "assistant" | "person";
+  /** `person` is a legacy alias for `sender`. */
+  peer_role?: "none" | "assistant" | "sender" | "person";
   peer_prefix?: string;
   apiKey?: string | OpenVikingSecretRef;
   /** Optional HTTP headers merged into every OpenViking request. */
@@ -127,10 +128,12 @@ export type MemoryOpenVikingConfig = {
 
 /** Runtime config after memoryOpenVikingConfigSchema.parse() has applied defaults. */
 export type ParsedMemoryOpenVikingConfig = Required<
-  Omit<MemoryOpenVikingConfig, "agentExperience" | "recallTargetTypes" | "apiKey">
+  Omit<MemoryOpenVikingConfig, "agentExperience" | "recallTargetTypes" | "apiKey" | "peer_role">
 > & {
   /** parse() resolves SecretRef values, so the runtime shape is always a plain string. */
   apiKey: string;
+  /** Runtime uses the canonical name; legacy `person` input normalizes to `sender`. */
+  peer_role: "none" | "assistant" | "sender";
   agentExperience: Required<NonNullable<MemoryOpenVikingConfig["agentExperience"]>>;
   recallTargetTypes: Array<"resource" | "user" | "agent">;
 };
@@ -292,16 +295,23 @@ function resolveSecret(
   }
 }
 
-function resolvePeerRole(configured: unknown) {
+function resolvePeerRole(configured: unknown): "none" | "assistant" | "sender" {
   if (typeof configured === "string") {
     const role = configured.trim().toLowerCase();
-    if (role === "none" || role === "assistant" || role === "person") {
+    if (role === "none" || role === "assistant" || role === "sender") {
       return role;
     }
-    throw new Error(`openviking peer_role must be "none", "assistant", or "person"`);
+    if (role === "person") {
+      return "sender";
+    }
+    throw new Error(
+      `openviking peer_role must be "none", "assistant", or "sender" (legacy alias: "person")`,
+    );
   }
   if (configured !== undefined) {
-    throw new Error(`openviking peer_role must be "none", "assistant", or "person"`);
+    throw new Error(
+      `openviking peer_role must be "none", "assistant", or "sender" (legacy alias: "person")`,
+    );
   }
   return DEFAULT_PEER_ROLE;
 }
@@ -779,8 +789,9 @@ export const memoryOpenVikingConfigSchema = {
       label: "Memory Scope (peer_role)",
       placeholder: DEFAULT_PEER_ROLE,
       help:
-        'Where memories are stored. "none" (default): one shared memory for this OpenViking user. ' +
-        '"assistant": a separate memory per assistant. "person": a separate memory per sender.',
+        'Where peer-scoped memories are stored. "none" (default): viking://user/<user_id>/memories. ' +
+        '"assistant": viking://user/<user_id>/peers/<assistant_id>/memories. ' +
+        '"sender": viking://user/<user_id>/peers/<sender_id>/memories. Legacy "person" is accepted as "sender".',
     },
     peer_prefix: {
       label: "Peer Prefix",

@@ -816,7 +816,7 @@ describe("plugin module seams", () => {
       getClient: async () => ({ addSessionMessage, commitSession, deleteUri, find }),
       normalizeSessionId: (sessionId: string) => `normalized:${sessionId}`,
       createTempSessionId: () => "memory-store-temp",
-      peerRole: "person" as const,
+      peerRole: "sender" as const,
       resolvePluginSessionRouting: () => ({ agentId: "agent-main", actorPeerId: "ou_01_abc" }),
       isBypassedSession: () => false,
       makeBypassedToolResult: (toolName: string) => ({ content: [{ type: "text" as const, text: `bypassed ${toolName}` }], details: { toolName } }),

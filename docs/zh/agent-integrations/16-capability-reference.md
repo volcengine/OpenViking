@@ -205,7 +205,7 @@ per-harness 章节（档案卡）只写差异；所有共享事实均在本章�
 5. mcpUrl：`OPENVIKING_MCP_URL`（非 cli 模式）→ `${baseUrl}/mcp`。
 6. 统一请求头：`Authorization: Bearer` + `X-OpenViking-Account/User/Actor-Peer` + `User-Agent: openviking-memory-<harness>/<version>`。
 
-**workspace peer**（家族 A 全体 + agent-plugins）：无显式 peerId 且 `OPENVIKING_WORKSPACE_PEER≠0` 时用 cwd 派生——把路径中所有非字母数字字符替换成 `-`（`/Users/x/Dev/OpenViking` → `-Users-x-Dev-OpenViking`），该值随 `X-OpenViking-Actor-Peer` 发送；服务端会对该头校验，含 `/` 或 `\` 返回 400。openclaw 的 peer 由 `peer_role`/`peer_prefix` 推导（`peer_role=person` 时需保证 sender 信息可用，否则工具调用报错）；hermes 的 peer 就是 `OPENVIKING_AGENT`（默认 `hermes`）。
+**workspace peer**（家族 A 全体 + agent-plugins）：无显式 peerId 且 `OPENVIKING_WORKSPACE_PEER≠0` 时用 cwd 派生——把路径中所有非字母数字字符替换成 `-`（`/Users/x/Dev/OpenViking` → `-Users-x-Dev-OpenViking`），该值随 `X-OpenViking-Actor-Peer` 发送；服务端会对该头校验，含 `/` 或 `\` 返回 400。openclaw 的 peer 由 `peer_role`/`peer_prefix` 推导（`peer_role=sender` 时需保证 sender 信息可用，否则工具调用报错；旧值 `person` 作为别名兼容）；hermes 的 peer 就是 `OPENVIKING_AGENT`（默认 `hermes`）。
 
 ### 3.1.4 配置体系分层
 

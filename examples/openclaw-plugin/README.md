@@ -124,14 +124,25 @@ The main rules are:
 - reuse `sessionId` directly when it is already a UUID
 - prefer `sessionKey` when deriving a stable `ovSessionId`
 - normalize unsafe path characters, or fall back to a stable SHA-256 when needed
-- `peer_role=none` is the default: memories are stored once under the OpenViking user, with no peer attribution and no actor-peer routing
-- `peer_role=assistant` writes assistant messages with `peer_id=<sessionAgent>`, giving each assistant its own memory; if `peer_prefix` is set, the value becomes `<peer_prefix>_<sessionAgent>`
-- `peer_role=person` scopes memories per sender: user messages use the OpenClaw sender identity as `peer_id`; assistant messages do not get `peer_id`
-- data-plane recall/search/read/import/delete sends the same resolved peer identity as `X-OpenViking-Actor-Peer` when `peer_role` is `assistant` or `person`
+- `peer_role=none` is the default: messages have no peer attribution and memory stays in the shared user scope, for example `viking://user/alice/memories/...`; no peer-specific memory subtree is used
+- `peer_role=assistant` writes assistant messages with `peer_id=<sessionAgent>` and uses peer-scoped memory such as `viking://user/alice/peers/main/memories/...`; if `peer_prefix` is set, the peer id becomes `<peer_prefix>_<sessionAgent>`
+- `peer_role=sender` writes user messages with the OpenClaw sender identity as `peer_id` and uses peer-scoped memory such as `viking://user/support-agent/peers/customer-42/memories/...`; assistant messages do not get `peer_id`
+- `person` remains accepted as a legacy config alias for `sender`, but new configuration and documentation use `sender`
+- data-plane recall/search/read/import/delete sends the same resolved peer identity as `X-OpenViking-Actor-Peer` when `peer_role` is `assistant` or `sender`
 - when OpenClaw does not provide a session agent, use its default agent `main` for local session and assistant peer metadata
 - only add `X-OpenViking-Account` / `X-OpenViking-User` when `accountId` / `userId` are explicitly configured
 
 This matters because OpenViking tenant identity is account/user-scoped, while OpenClaw agent identity is runtime metadata.
+
+Choose the scope from what `viking://user/<user_id>` represents:
+
+| Model | Example | Result |
+| --- | --- | --- |
+| General/shared (`none`) | `user_id=alice` uses any OpenClaw assistant | Shared user memory under `viking://user/alice/memories/...` |
+| Human is the OpenViking user (`assistant`) | Alice uses OpenClaw assistants `main` and `research` | Assistant-scoped memories are separated under `.../peers/main/memories/...` and `.../peers/research/memories/...` |
+| Agent is the OpenViking user (`sender`) | `user_id=support-agent` receives messages from `customer-42` and `customer-99` | Sender-scoped memories are separated under `.../peers/customer-42/memories/...` and `.../peers/customer-99/memories/...` |
+
+OpenViking creates the managed `peers/` container as part of the user namespace. `none` means that the plugin does not create or route into a specific `peers/<peer_id>/memories` subtree. With `assistant` or `sender`, actor-peer recall includes the shared user memory plus the current peer's memory; changing the setting does not move existing memories.
 
 The recommended remote-mode configuration only needs:
 

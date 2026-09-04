@@ -129,6 +129,22 @@ describe("OpenClaw 5.2 manifest contracts", () => {
 });
 
 describe("OpenClaw 5.5 package runtime contract", () => {
+  it("publishes sender as the canonical peer role while accepting legacy person configs", () => {
+    const peerRoleSchema = manifest.configSchema?.properties?.peer_role as {
+      enum?: string[];
+      description?: string;
+    };
+    expect(peerRoleSchema.enum).toEqual([
+      "none",
+      "assistant",
+      "sender",
+      "person",
+    ]);
+    expect(peerRoleSchema.description).toContain(
+      "person is a legacy alias for sender",
+    );
+  });
+
   it("builds and publishes compiled runtime output for TypeScript entries", () => {
     expect(packageJson.scripts?.build).toContain("rmSync('dist'");
     expect(packageJson.scripts?.build).toContain("tsc -p tsconfig.build.json");

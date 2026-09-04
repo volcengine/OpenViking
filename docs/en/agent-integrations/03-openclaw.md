@@ -53,11 +53,34 @@ Key parameters:
 | `--plugin-version=VER` | Plugin version: npm version, dist-tag, or Git ref |
 | `--base-url URL` | OpenViking server URL |
 | `--api-key KEY` | OpenViking API key |
+| `--peer-role ROLE` | Memory scope: `none`, `assistant`, or `sender` (`person` is a legacy alias) |
 | `--uninstall` | Uninstall the plugin |
 
 Full parameter list in the [install guide](https://github.com/volcengine/OpenViking/blob/main/examples/openclaw-plugin/INSTALL.md).
 
 </details>
+
+## Choose the Memory Scope
+
+`peer_role` decides whether long-term memory is shared at the OpenViking user level or attributed to a concrete peer:
+
+| Value | Memory layout | Use case |
+| --- | --- | --- |
+| `none` (default) | Shared memory at `viking://user/<user_id>/memories/...`; no peer-specific memory subtree is used | General-purpose setup where all conversations for this OpenViking user share user-level memory |
+| `assistant` | Assistant-attributed peer memory at `viking://user/<user_id>/peers/<assistant_id>/memories/...` | **Human as OpenViking user**: separate the peer memories of assistants such as `main` and `research` |
+| `sender` | Sender-attributed peer memory at `viking://user/<user_id>/peers/<sender_id>/memories/...` | **Agent as OpenViking user**: separate the peer memories of senders such as `customer-42` and `customer-99` |
+
+For example:
+
+```bash
+# Alice is the OpenViking user; separate memories by OpenClaw assistant.
+openclaw openviking setup --base-url http://your-server:1933 --api-key sk-xxx --peer-role assistant --json
+
+# support-agent is the OpenViking user; separate memories by human sender.
+openclaw openviking setup --base-url http://your-server:1933 --api-key sk-xxx --peer-role sender --json
+```
+
+New configuration should use `sender`; existing `peer_role=person` configurations remain compatible and are treated as `sender`. OpenViking initializes the managed `peers/` container for every user, so `none` means that no concrete `peers/<peer_id>/memories` subtree is used. Actor-peer recall includes shared user memory plus the current peer memory, and changing the scope does not move existing memories.
 
 ## Verify
 
@@ -96,6 +119,7 @@ Plugin config lives under `plugins.entries.openviking.config`. Setup usually wri
 | --- | --- | --- |
 | `baseUrl` | `http://127.0.0.1:1933` | OpenViking server endpoint |
 | `apiKey` | empty | OpenViking API key |
+| `peer_role` | `none` | `none`, `assistant`, or `sender`; legacy `person` is accepted as `sender` |
 | `peer_prefix` | empty | Optional prefix for assistant peer identity when `peer_role=assistant` |
 | `autoRecallTimeoutMs` | `5000` | Outer timeout (ms) for the whole auto-recall flow; increase for slow local embedding hardware (clamped 1000–300000) |
 
