@@ -471,6 +471,38 @@ class TestApplyStrPatch:
 
         assert result == "alpha\nBETA\ngamma"
 
+    def test_numbered_patch_strips_accumulated_line_number_prefixes(self):
+        """A REPLACE block echoing a stacked numbered view must not leak prefixes (#4413)."""
+        original = "## Roadmap\n- step one"
+        patch = StrPatch(
+            blocks=[
+                SearchReplaceBlock(
+                    search="1\t## Roadmap\n2\t- step one",
+                    replace="1\t1\t## Roadmap\n2\t2\t- step one\n3\t3\t- step two",
+                )
+            ]
+        )
+
+        result = apply_str_patch(original, patch)
+
+        assert result == "## Roadmap\n- step one\n- step two"
+
+    def test_numbered_patch_with_accumulated_prefixes_in_search_matches_clean_content(self):
+        """SEARCH copied from a stacked numbered view must fully strip prefixes (#4413)."""
+        original = "## Roadmap\n- step one"
+        patch = StrPatch(
+            blocks=[
+                SearchReplaceBlock(
+                    search="1\t1\t## Roadmap\n2\t2\t- step one",
+                    replace="1\t1\t## Roadmap\n2\t2\t- step one\n3\t3\t- step two",
+                )
+            ]
+        )
+
+        result = apply_str_patch(original, patch)
+
+        assert result == "## Roadmap\n- step one\n- step two"
+
 
 # ============================================================================
 # Test Schema Generation Integration - tested in test_schema_models.py
