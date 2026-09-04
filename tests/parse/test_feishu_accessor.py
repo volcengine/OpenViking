@@ -6,14 +6,19 @@ import asyncio
 import json
 import sys
 from types import ModuleType, SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from openviking.parse.accessors.feishu_accessor import (
     _MAX_MEDIA_DOWNLOAD_CONTEXTS,
+    _MAX_WIKI_SUBTREE_DEPTH,
+    _MAX_WIKI_SUBTREE_NODES,
     FeishuAccessor,
+    FeishuWikiNode,
+    _safe_path_segment,
 )
+from openviking_cli.exceptions import OpenVikingError
 
 
 class _SuccessResponse:
@@ -156,6 +161,7 @@ def _install_fake_lark_modules(monkeypatch):
     docx_v1.ListDocumentBlockRequest = _FakeListDocumentBlockRequest
     wiki_v2 = ModuleType("lark_oapi.api.wiki.v2")
     wiki_v2.GetNodeSpaceRequest = _FakeTypedRequest
+    wiki_v2.ListSpaceNodeRequest = _FakeTypedRequest
     bitable_v1 = ModuleType("lark_oapi.api.bitable.v1")
     bitable_v1.ListAppTableRequest = _FakeTypedRequest
     bitable_v1.ListAppTableFieldRequest = _FakeTypedRequest
@@ -495,6 +501,649 @@ def test_access_materializes_drive_folder_contract(monkeypatch):
         assert [(item["name"], item["token"], item["reason"]) for item in skipped] == [
             ("Blocked.pptx", "blocked", "HTTP 403")
         ]
+    finally:
+        resource.cleanup()
+
+
+def test_wiki_children_pagination_preserves_placement_identity(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    list_nodes = MagicMock(
+        side_effect=[
+            _SuccessResponse(
+                SimpleNamespace(
+                    items=[
+                        SimpleNamespace(
+                            space_id="space-1",
+                            node_token="node-a",
+                            parent_node_token="root",
+                            obj_token="shared-doc",
+                            obj_type="docx",
+                            title="Copy A",
+                            has_child=False,
+                        )
+                    ],
+                    has_more=True,
+                    page_token="page-2",
+                )
+            ),
+            _SuccessResponse(
+                SimpleNamespace(
+                    items=[
+                        SimpleNamespace(
+                            space_id="space-1",
+                            node_token="node-b",
+                            parent_node_token="root",
+                            obj_token="shared-doc",
+                            obj_type="docx",
+                            title="Copy B",
+                            has_child=False,
+                        )
+                    ],
+                    has_more=False,
+                    page_token=None,
+                )
+            ),
+        ]
+    )
+    accessor = FeishuAccessor()
+    accessor._user_token_client = SimpleNamespace(
+        wiki=SimpleNamespace(v2=SimpleNamespace(space=SimpleNamespace(list=list_nodes)))
+    )
+
+    children = accessor._list_wiki_children(
+        "space-1",
+        parent_node_token="root",
+        feishu_access_token="u-test",
+        source_url="https://example.feishu.cn/wiki/root",
+    )
+
+    assert [(node.node_token, node.obj_token) for node in children] == [
+        ("node-a", "shared-doc"),
+        ("node-b", "shared-doc"),
+    ]
+    assert list_nodes.call_args_list[1].args[0].page_token == "page-2"
+    assert all(call.args[1].user_access_token == "u-test" for call in list_nodes.call_args_list)
+
+
+def test_wiki_children_pagination_rejects_repeated_page_token(monkeypatch):
+    accessor = FeishuAccessor()
+    fetch_page = MagicMock(
+        side_effect=[
+            ([], True, "same-page"),
+            ([], True, "same-page"),
+        ]
+    )
+    monkeypatch.setattr(accessor, "_fetch_wiki_children_page", fetch_page)
+
+    with pytest.raises(RuntimeError, match="repeated a Wiki children page token"):
+        accessor._list_wiki_children(
+            "space-1",
+            parent_node_token="root",
+            source_url="https://example.feishu.cn/wiki/root",
+        )
+
+    assert fetch_page.call_count == 2
+
+
+def test_wiki_children_pagination_rejects_missing_page_token(monkeypatch):
+    accessor = FeishuAccessor()
+    fetch_page = MagicMock(return_value=([], True, None))
+    monkeypatch.setattr(accessor, "_fetch_wiki_children_page", fetch_page)
+
+    with pytest.raises(RuntimeError, match="without a page token"):
+        accessor._list_wiki_children(
+            "space-1",
+            parent_node_token="root",
+            source_url="https://example.feishu.cn/wiki/root",
+        )
+
+    fetch_page.assert_called_once()
+
+
+def test_call_api_retries_rate_limit_and_honors_retry_after(monkeypatch):
+    accessor = FeishuAccessor()
+    rate_limited = _FakeMediaResponse(
+        success=False,
+        code=99991402,
+        status_code=200,
+        headers={"Retry-After": "2"},
+    )
+    success = _FakeMediaResponse()
+    method = MagicMock(side_effect=[rate_limited, success])
+    sleep = MagicMock()
+    monkeypatch.setattr("openviking.parse.accessors.feishu_accessor.time.sleep", sleep)
+
+    assert accessor._call_api(method, object()) is success
+    assert method.call_count == 2
+    sleep.assert_called_once_with(2.0)
+
+
+def test_call_api_retries_transport_errors_but_not_permission_errors(monkeypatch):
+    accessor = FeishuAccessor()
+    success = _FakeMediaResponse()
+    transient_method = MagicMock(side_effect=[TimeoutError("timed out"), success])
+    permission_method = MagicMock(
+        return_value=_FakeMediaResponse(success=False, code=99991672, status_code=403)
+    )
+    sleep = MagicMock()
+    monkeypatch.setattr("openviking.parse.accessors.feishu_accessor.time.sleep", sleep)
+    monkeypatch.setattr("openviking.parse.accessors.feishu_accessor.random.uniform", lambda *_: 1.0)
+
+    assert accessor._call_api(transient_method, object()) is success
+    assert accessor._call_api(permission_method, object()) is permission_method.return_value
+    assert transient_method.call_count == 2
+    assert permission_method.call_count == 1
+    sleep.assert_called_once_with(0.5)
+
+
+def test_call_api_stops_after_three_transient_attempts(monkeypatch):
+    accessor = FeishuAccessor()
+    unavailable = _FakeMediaResponse(success=False, code=500, status_code=503)
+    method = MagicMock(return_value=unavailable)
+    sleep = MagicMock()
+    monkeypatch.setattr("openviking.parse.accessors.feishu_accessor.time.sleep", sleep)
+    monkeypatch.setattr("openviking.parse.accessors.feishu_accessor.random.uniform", lambda *_: 1.0)
+
+    assert accessor._call_api(method, object()) is unavailable
+    assert method.call_count == 3
+    assert [call.args[0] for call in sleep.call_args_list] == [0.5, 1.0]
+
+
+def test_wiki_subtree_preflight_and_space_url(monkeypatch):
+    accessor = FeishuAccessor()
+    root = FeishuWikiNode(
+        space_id="space-1",
+        node_token="root",
+        parent_node_token=None,
+        obj_token="root-doc",
+        obj_type="docx",
+        title="Root/Overview",
+        has_child=True,
+        url="https://example.feishu.cn/wiki/root",
+    )
+    probe_document = MagicMock()
+    probe_children = MagicMock(return_value=([], False, None))
+    monkeypatch.setattr(accessor, "_get_wiki_node", lambda *_args, **_kwargs: root)
+    monkeypatch.setattr(accessor, "_probe_document_permission", probe_document)
+    monkeypatch.setattr(accessor, "_fetch_wiki_children_page", probe_children)
+
+    identity = asyncio.run(
+        accessor.preflight_source(
+            "https://example.feishu.cn/wiki/root",
+            feishu_access_token="u-test",
+            feishu_wiki_scope="subtree",
+        )
+    )
+    space_identity = asyncio.run(
+        accessor.preflight_source(
+            "https://example.feishu.cn/wiki/settings/space-1",
+            feishu_access_token="u-test",
+        )
+    )
+
+    assert identity.source_name == "Root_Overview"
+    assert identity.source_format == "directory"
+    assert space_identity.doc_type == "wiki_space"
+    assert space_identity.source_name == "Feishu Wiki space-1"
+    assert space_identity.source_format == "directory"
+    assert accessor._parse_feishu_url("https://example.feishu.cn/wiki/settings/space-1") == (
+        "wiki_space",
+        "space-1",
+    )
+    probe_document.assert_called_once_with(
+        "docx",
+        "root-doc",
+        feishu_access_token="u-test",
+    )
+    assert probe_children.call_count == 2
+
+
+def test_wiki_scope_defaults_to_single_node_and_rejects_other_sources():
+    accessor = FeishuAccessor()
+
+    assert accessor._normalize_wiki_scope("wiki", None) == "node"
+    assert accessor._normalize_wiki_scope("wiki_space", None) == "subtree"
+    with pytest.raises(ValueError, match="only supported for Feishu Wiki"):
+        accessor._normalize_wiki_scope("docx", "subtree")
+    with pytest.raises(ValueError, match="can only be imported with subtree"):
+        accessor._normalize_wiki_scope("wiki_space", "node")
+
+    long_title = "文" * 100
+    duplicate_nodes = [
+        FeishuWikiNode("space", token, "root", token, "docx", long_title, False, "url")
+        for token in ("node-a", "node-b")
+    ]
+    names = accessor._wiki_child_directory_names(duplicate_nodes)
+    assert names[0].endswith("[node-a]")
+    assert names[1].endswith("[node-b]")
+    assert all(len(name.encode("utf-8")) <= 240 for name in names)
+
+
+def test_wiki_path_names_are_portable_and_unique_after_identity_collisions(monkeypatch):
+    accessor = FeishuAccessor()
+    assert _safe_path_segment("CON") == "_CON"
+    assert _safe_path_segment("aux.txt") == "_aux.txt"
+    assert accessor._markdown_file_name("NUL") == "_NUL.md"
+
+    long_tokens = [f"prefixAA-{'x' * 40}-{middle}-tail1234" for middle in ("one", "two", "three")]
+    nodes = [
+        FeishuWikiNode("space", token, "root", token, "docx", "Duplicate", False, "url")
+        for token in long_tokens
+    ]
+    names = accessor._wiki_child_directory_names(nodes)
+    assert len({name.casefold() for name in names}) == len(names)
+    assert all(len(name) <= 120 and len(name.encode("utf-8")) <= 240 for name in names)
+
+    parent_body_collision = accessor._wiki_child_directory_names(
+        [FeishuWikiNode("space", "child-node", "root", "doc", "docx", "Root.md", False, "url")],
+        reserved={"Root.md", "images"},
+    )
+    assert parent_body_collision[0].casefold() != "root.md"
+    assert parent_body_collision[0].startswith("Root.md [")
+
+    monkeypatch.setattr(
+        "openviking.parse.accessors.feishu_accessor._identified_path_segment",
+        lambda *_args: "Collision",
+    )
+    fallback_names = accessor._wiki_child_directory_names(
+        nodes[:2],
+        reserved={"Collision"},
+    )
+    assert fallback_names == ["Collision (2)", "Collision (3)"]
+
+
+def test_parse_wiki_settings_url_requires_space_id():
+    with pytest.raises(ValueError, match="must include a space ID"):
+        FeishuAccessor()._parse_feishu_url("https://example.feishu.cn/wiki/settings")
+
+
+@pytest.mark.parametrize(
+    ("extra_depth", "expected_count"),
+    [
+        (0, _MAX_WIKI_SUBTREE_DEPTH + 1),
+        (1, None),
+    ],
+)
+def test_wiki_subtree_depth_boundary_is_fail_closed(
+    monkeypatch,
+    tmp_path,
+    extra_depth,
+    expected_count,
+):
+    accessor = FeishuAccessor()
+    final_depth = _MAX_WIKI_SUBTREE_DEPTH + extra_depth
+    nodes = [
+        FeishuWikiNode(
+            "space-1",
+            f"node-{depth}",
+            f"node-{depth - 1}" if depth else None,
+            f"doc-{depth}",
+            "docx",
+            f"Node {depth}",
+            depth < final_depth,
+            f"https://example.feishu.cn/wiki/node-{depth}",
+        )
+        for depth in range(final_depth + 1)
+    ]
+    materialize = AsyncMock(return_value=True)
+    monkeypatch.setattr(accessor, "_get_wiki_node", lambda *_args, **_kwargs: nodes[0])
+    monkeypatch.setattr(
+        accessor,
+        "_list_wiki_children",
+        lambda _space_id, *, parent_node_token, **_kwargs: [
+            nodes[int(parent_node_token.removeprefix("node-")) + 1]
+        ],
+    )
+    monkeypatch.setattr(accessor, "_materialize_wiki_document", materialize)
+
+    operation = accessor._materialize_wiki_subtree(
+        "https://example.feishu.cn/wiki/node-0",
+        "wiki",
+        "node-0",
+        tmp_path / f"depth-{extra_depth}",
+    )
+    if expected_count is None:
+        with pytest.raises(RuntimeError, match="exceeds the supported depth limit"):
+            asyncio.run(operation)
+        assert materialize.await_count == 0
+    else:
+        snapshot = asyncio.run(operation)
+        assert snapshot["node_count"] == expected_count
+        assert snapshot["materialized_count"] == expected_count
+
+
+@pytest.mark.parametrize(
+    ("node_count", "should_succeed"),
+    [
+        (_MAX_WIKI_SUBTREE_NODES, True),
+        (_MAX_WIKI_SUBTREE_NODES + 1, False),
+    ],
+)
+def test_wiki_subtree_node_boundary_is_fail_closed(
+    monkeypatch,
+    tmp_path,
+    node_count,
+    should_succeed,
+):
+    accessor = FeishuAccessor()
+    root = FeishuWikiNode(
+        "space-1",
+        "root",
+        None,
+        "root-doc",
+        "docx",
+        "Root",
+        True,
+        "https://example.feishu.cn/wiki/root",
+    )
+    children = [
+        FeishuWikiNode(
+            "space-1",
+            f"node-{index}",
+            "root",
+            f"doc-{index}",
+            "docx",
+            f"Node {index}",
+            False,
+            f"https://example.feishu.cn/wiki/node-{index}",
+        )
+        for index in range(node_count - 1)
+    ]
+    materialize = AsyncMock(return_value=True)
+    monkeypatch.setattr(accessor, "_get_wiki_node", lambda *_args, **_kwargs: root)
+    monkeypatch.setattr(
+        accessor,
+        "_list_wiki_children",
+        lambda *_args, **_kwargs: children,
+    )
+    monkeypatch.setattr(accessor, "_materialize_wiki_document", materialize)
+
+    operation = accessor._materialize_wiki_subtree(
+        "https://example.feishu.cn/wiki/root",
+        "wiki",
+        "root",
+        tmp_path / f"nodes-{node_count}",
+    )
+    if should_succeed:
+        snapshot = asyncio.run(operation)
+        assert snapshot["node_count"] == _MAX_WIKI_SUBTREE_NODES
+        assert materialize.await_count == _MAX_WIKI_SUBTREE_NODES
+    else:
+        with pytest.raises(RuntimeError, match="exceeds the supported node limit"):
+            asyncio.run(operation)
+        assert materialize.await_count == 0
+
+
+def test_wiki_subtree_rejects_repeated_node_before_materialization(monkeypatch, tmp_path):
+    accessor = FeishuAccessor()
+    root = FeishuWikiNode(
+        "space-1",
+        "root",
+        None,
+        "root-doc",
+        "docx",
+        "Root",
+        True,
+        "https://example.feishu.cn/wiki/root",
+    )
+    duplicate = FeishuWikiNode(
+        "space-1",
+        "root",
+        "root",
+        "other-doc",
+        "docx",
+        "Duplicate",
+        False,
+        "https://example.feishu.cn/wiki/root",
+    )
+    materialize = AsyncMock(return_value=True)
+    monkeypatch.setattr(accessor, "_get_wiki_node", lambda *_args, **_kwargs: root)
+    monkeypatch.setattr(accessor, "_list_wiki_children", lambda *_args, **_kwargs: [duplicate])
+    monkeypatch.setattr(accessor, "_materialize_wiki_document", materialize)
+
+    with pytest.raises(RuntimeError, match="repeated node_token"):
+        asyncio.run(
+            accessor._materialize_wiki_subtree(
+                "https://example.feishu.cn/wiki/root",
+                "wiki",
+                "root",
+                tmp_path / "repeated",
+            )
+        )
+    assert materialize.await_count == 0
+
+
+def test_wiki_subtree_fails_when_every_document_body_fails(monkeypatch, tmp_path):
+    accessor = FeishuAccessor()
+    root = FeishuWikiNode(
+        "space-1",
+        "root",
+        None,
+        "root-doc",
+        "docx",
+        "Root",
+        False,
+        "https://example.feishu.cn/wiki/root",
+    )
+    monkeypatch.setattr(accessor, "_get_wiki_node", lambda *_args, **_kwargs: root)
+    monkeypatch.setattr(
+        accessor,
+        "_materialize_wiki_document",
+        AsyncMock(return_value=False),
+    )
+
+    with pytest.raises(OpenVikingError, match="no document body could be materialized") as exc:
+        asyncio.run(
+            accessor._materialize_wiki_subtree(
+                "https://example.feishu.cn/wiki/root",
+                "wiki",
+                "root",
+                tmp_path / "all-failed",
+            )
+        )
+    assert exc.value.code == "FAILED_PRECONDITION"
+    assert exc.value.details["node_count"] == 1
+    assert exc.value.details["skipped_count"] == 1
+
+
+def test_access_materializes_wiki_subtree_with_parent_child_structure(monkeypatch):
+    from openviking.parse.accessors.feishu_accessor import FeishuDocument
+
+    accessor = FeishuAccessor()
+    root = FeishuWikiNode(
+        space_id="space-1",
+        node_token="root",
+        parent_node_token=None,
+        obj_token="root-doc",
+        obj_type="docx",
+        title="Root",
+        has_child=True,
+        url="https://example.feishu.cn/wiki/root",
+    )
+    child_a = FeishuWikiNode(
+        space_id="space-1",
+        node_token="node-a",
+        parent_node_token="root",
+        obj_token="shared-doc",
+        obj_type="docx",
+        title="Child",
+        has_child=True,
+        url="https://example.feishu.cn/wiki/node-a",
+    )
+    child_b = FeishuWikiNode(
+        space_id="space-1",
+        node_token="node-b",
+        parent_node_token="root",
+        obj_token="shared-doc",
+        obj_type="docx",
+        title="Child",
+        has_child=False,
+        url="https://example.feishu.cn/wiki/node-b",
+    )
+    grandchild = FeishuWikiNode(
+        space_id="space-1",
+        node_token="grandchild",
+        parent_node_token="node-a",
+        obj_token="grandchild-doc",
+        obj_type="docx",
+        title="Grandchild",
+        has_child=False,
+        url="https://example.feishu.cn/wiki/grandchild",
+    )
+    children = {
+        "root": [child_a, child_b],
+        "node-a": [grandchild],
+    }
+
+    async def fake_fetch_document(url, **_kwargs):
+        _, token = accessor._parse_feishu_url(url)
+        return FeishuDocument(
+            doc_type="docx",
+            token=token,
+            markdown_content=f"# {token}",
+            title=token,
+            meta={},
+        )
+
+    monkeypatch.setattr(accessor, "_get_wiki_node", lambda *_args, **_kwargs: root)
+    monkeypatch.setattr(
+        accessor,
+        "_list_wiki_children",
+        lambda _space_id, *, parent_node_token, **_kwargs: children[parent_node_token],
+    )
+    monkeypatch.setattr(accessor, "_fetch_document", fake_fetch_document)
+    monkeypatch.setattr(
+        accessor,
+        "_resolve_image_refs",
+        lambda markdown, **_kwargs: (markdown, {}),
+    )
+
+    resource = asyncio.run(
+        accessor.access(
+            "https://example.feishu.cn/wiki/root",
+            feishu_access_token="u-test",
+            feishu_wiki_scope="subtree",
+        )
+    )
+    try:
+        child_a_dir = resource.path / "Child [node-a]"
+        child_b_dir = resource.path / "Child [node-b]"
+        assert (resource.path / "Root.md").read_text(encoding="utf-8") == "# root-doc"
+        assert (child_a_dir / "Child.md").read_text(encoding="utf-8") == "# shared-doc"
+        assert (child_b_dir / "Child.md").read_text(encoding="utf-8") == "# shared-doc"
+        assert (child_a_dir / "Grandchild" / "Grandchild.md").read_text(
+            encoding="utf-8"
+        ) == "# grandchild-doc"
+        assert resource.meta["feishu_wiki_space_id"] == "space-1"
+        assert resource.meta["feishu_wiki_root_node_token"] == "root"
+        assert resource.meta["feishu_wiki_node_count"] == 4
+        assert resource.meta["feishu_wiki_materialized_count"] == 4
+        assert resource.meta["feishu_wiki_skipped_count"] == 0
+        assert resource.meta["original_filename"] == "Root"
+    finally:
+        resource.cleanup()
+
+
+def test_access_wiki_subtree_reports_content_failure_but_keeps_structure(monkeypatch):
+    from openviking.parse.accessors.feishu_accessor import FeishuDocument
+
+    accessor = FeishuAccessor()
+    root = FeishuWikiNode(
+        space_id="space-1",
+        node_token="root",
+        parent_node_token=None,
+        obj_token="root-doc",
+        obj_type="docx",
+        title="Root",
+        has_child=True,
+        url="https://example.feishu.cn/wiki/root",
+    )
+    blocked = FeishuWikiNode(
+        space_id="space-1",
+        node_token="blocked-node",
+        parent_node_token="root",
+        obj_token="blocked-doc",
+        obj_type="docx",
+        title="Blocked",
+        has_child=False,
+        url="https://example.feishu.cn/wiki/blocked-node",
+    )
+
+    async def fake_fetch_document(url, **_kwargs):
+        _, token = accessor._parse_feishu_url(url)
+        if token == "blocked-doc":
+            raise RuntimeError("HTTP 403")
+        return FeishuDocument("docx", token, "# Root", "Root", {})
+
+    monkeypatch.setattr(accessor, "_get_wiki_node", lambda *_args, **_kwargs: root)
+    monkeypatch.setattr(
+        accessor,
+        "_list_wiki_children",
+        lambda *_args, **_kwargs: [blocked],
+    )
+    monkeypatch.setattr(accessor, "_fetch_document", fake_fetch_document)
+    monkeypatch.setattr(
+        accessor,
+        "_resolve_image_refs",
+        lambda markdown, **_kwargs: (markdown, {}),
+    )
+
+    resource = asyncio.run(
+        accessor.access(
+            "https://example.feishu.cn/wiki/root",
+            feishu_wiki_scope="subtree",
+        )
+    )
+    try:
+        assert (resource.path / "Root.md").exists()
+        assert (resource.path / "Blocked").is_dir()
+        assert not (resource.path / "Blocked" / "Blocked.md").exists()
+        assert resource.meta["feishu_wiki_node_count"] == 2
+        assert resource.meta["feishu_wiki_materialized_count"] == 1
+        assert resource.meta["feishu_wiki_skipped_count"] == 1
+        assert resource.meta["feishu_wiki_skipped_items"][0]["node_token"] == "blocked-node"
+        assert resource.meta["feishu_wiki_skipped_items"][0]["reason"] == "HTTP 403"
+    finally:
+        resource.cleanup()
+
+
+def test_explicit_leaf_wiki_subtree_remains_a_directory_resource(monkeypatch):
+    from openviking.parse.accessors.feishu_accessor import FeishuDocument
+
+    accessor = FeishuAccessor()
+    root = FeishuWikiNode(
+        "space-1",
+        "root",
+        None,
+        "root-doc",
+        "docx",
+        "Root",
+        False,
+        "https://example.feishu.cn/wiki/root",
+    )
+
+    async def fake_fetch_document(*_args, **_kwargs):
+        return FeishuDocument("docx", "root-doc", "# Root", "Root", {})
+
+    monkeypatch.setattr(accessor, "_get_wiki_node", lambda *_args, **_kwargs: root)
+    monkeypatch.setattr(accessor, "_fetch_document", fake_fetch_document)
+    monkeypatch.setattr(
+        accessor,
+        "_resolve_image_refs",
+        lambda markdown, **_kwargs: (markdown, {}),
+    )
+
+    resource = asyncio.run(
+        accessor.access(
+            "https://example.feishu.cn/wiki/root",
+            feishu_wiki_scope="subtree",
+        )
+    )
+    try:
+        assert resource.path.is_dir()
+        assert (resource.path / "Root.md").read_text(encoding="utf-8") == "# Root"
+        assert resource.meta["feishu_wiki_node_count"] == 1
+        assert resource.meta["feishu_wiki_materialized_count"] == 1
     finally:
         resource.cleanup()
 
