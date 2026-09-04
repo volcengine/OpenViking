@@ -47,7 +47,7 @@ OpenViking supports various resource types, categorized by functionality:
 
 | Type | Description |
 |------|-------------|
-| Feishu/Lark | URL-based, supports doc/docx, wiki, sheets, bitable. By default uses app credentials from FEISHU_APP_ID and FEISHU_APP_SECRET; user-token imports can pass `args.feishu_access_token`, and user-token watches also pass `args.feishu_refresh_token` plus an optional `args.feishu_app_id` / `args.feishu_app_secret` pair |
+| Feishu/Lark | URL-based, supports doc/docx, wiki, sheets, bitable, and mindnote/mindnotes. By default uses app credentials from FEISHU_APP_ID and FEISHU_APP_SECRET; user-token imports can pass `args.feishu_access_token`, and user-token watches also pass `args.feishu_refresh_token` plus an optional `args.feishu_app_id` / `args.feishu_app_secret` pair. Mindnote and wiki-wrapped Mindnote require a user token with `mindnote:node:read` |
 
 **Web Pages (recursive web crawler)**
 
@@ -203,6 +203,8 @@ This endpoint is the core entry point for resource management, supporting adding
 - When `watch_interval > 0`, the watch task binds to `to` if provided; otherwise it binds to the `root_uri` returned by this import. If no stable `root_uri` is available, the request fails and asks for an explicit `to`.
 - For Connector imports, `is_active=false` creates the paused Watch before submission. Native Feishu imports carry `is_active` through the resource queue and create the Watch after resolving the imported resource URI. In both cases, the initial import still runs once and periodic scheduling remains disabled.
 - Feishu/Lark app-token imports do not pass `args.feishu_access_token`. OpenViking keeps the existing app credential flow and the SDK obtains an app/tenant token from `app_id` and `app_secret`. This mode supports both one-time imports and `watch_interval > 0`.
+- Feishu/Lark Mindnote URLs may use `/mindnote/{token}` or `/mindnotes/{token}`. Wiki URLs that resolve to `obj_type=mindnote` use the same reader. The Mindnote Nodes API accepts only user tokens, so both forms require `args.feishu_access_token`, and the issuing user and app must have `mindnote:node:read`. Mindnote never falls back to an app/tenant token.
+- Mindnote node images use Feishu's Drive media API and the same user token as the Mindnote import. The user authorization must allow `docs:document.media:download`. If media download is unavailable, the text import still succeeds and keeps the original image reference.
 - Feishu/Lark one-time user-token imports pass `args={"feishu_access_token": "u-..."}` with `watch_interval <= 0`. OpenViking uses that user token only for the current import and does not store it.
 - Feishu/Lark user-token watches pass `args={"feishu_access_token": "u-...", "feishu_refresh_token": "r-..."}` with `watch_interval > 0`. They may also pass `feishu_app_id` and `feishu_app_secret` together; OpenViking stores the pair in the private watch task state and uses it to refresh that watch's user token.
 - If the request omits the app pair, user-token watches use `FEISHU_APP_ID` and `FEISHU_APP_SECRET`, or `feishu.app_id` and `feishu.app_secret` in `ov.conf`. Feishu refresh tokens are bound to their issuing app, so whichever app credentials are used must match the supplied user token.
@@ -312,6 +314,17 @@ curl -X POST http://localhost:1933/api/v1/resources \
     }
   }'
 
+# Add a Feishu Mindnote (a wiki URL backed by Mindnote is also supported)
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "https://example.feishu.cn/mindnote/mindnote_token",
+    "args": {
+      "feishu_access_token": "u-..."
+    }
+  }'
+
 # Add a Feishu document with scheduled user-token refresh
 curl -X POST http://localhost:1933/api/v1/resources \
   -H "Content-Type: application/json" \
@@ -405,6 +418,12 @@ client.add_resource(
 # Add a Feishu document with a one-time user access token
 client.add_resource(
     path="https://example.feishu.cn/docx/doc_token",
+    options={"args": {"feishu_access_token": "u-..."}},
+)
+
+# Add a Feishu Mindnote; the user and app need mindnote:node:read
+client.add_resource(
+    path="https://example.feishu.cn/mindnote/mindnote_token",
     options={"args": {"feishu_access_token": "u-..."}},
 )
 
