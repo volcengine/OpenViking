@@ -14,6 +14,10 @@ from typing import Any, Dict, Iterator, List, Optional
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from openviking.storage.vectordb.collection.collection import Collection, ICollection
+from openviking.storage.vectordb.collection.diversity import (
+    VectorDiversityOptions,
+    select_diverse_indices,
+)
 from openviking.storage.vectordb.collection.result import (
     AggregateResult,
     DataItem,
@@ -509,11 +513,23 @@ class LocalCollection(ICollection):
         filters: Optional[Dict[str, Any]] = None,
         sparse_vector: Optional[Dict[str, float]] = None,
         output_fields: Optional[List[str]] = None,
+        diversity: Optional[VectorDiversityOptions] = None,
     ) -> SearchResult:
         search_result = SearchResult()
         index = self.indexes.get(index_name)
         if not index:
             return search_result
+
+        query_vector = dense_vector or []
+        diversity_store: Optional[StoreManager] = None
+        if diversity is not None:
+            if limit <= 0:
+                return search_result
+            if not query_vector:
+                raise ValueError("vector diversity requires a dense query vector")
+            diversity_store = self.store_mgr
+            if diversity_store is None:
+                raise RuntimeError("Store manager is not initialized")
 
         sparse_raw_terms = []
         sparse_values = []
@@ -521,21 +537,66 @@ class LocalCollection(ICollection):
             sparse_raw_terms = list(sparse_vector.keys())
             sparse_values = list(sparse_vector.values())
 
-        # Request more results to handle offset
-        actual_limit = limit + offset
+        # Request more results to handle offset and optional index-layer diversity.
+        requested = limit + offset
+        actual_limit = diversity.candidate_limit(requested) if diversity is not None else requested
         label_list, scores_list = index.search(
-            dense_vector or [], actual_limit, filters, sparse_raw_terms, sparse_values
+            query_vector, actual_limit, filters, sparse_raw_terms, sparse_values
         )
+        if diversity is not None and not label_list:
+            return search_result
+
+        prefetched_cands: Optional[List[CandidateData]] = None
+        if diversity is not None and label_list:
+            if len(label_list) != len(scores_list):
+                raise ValueError("candidate labels and scores must have equal lengths")
+            if diversity_store is None:
+                raise RuntimeError("Store manager is not initialized")
+            # Diversity needs full payloads for up to 500 candidates. Sparse-only
+            # hybrid hits cannot participate in cosine selection, so skip them.
+            fetched_cands = diversity_store.fetch_cands_data(label_list)
+            dense_candidate_indices = []
+            prefetched_cands = []
+            for candidate_index, candidate in enumerate(fetched_cands):
+                if candidate is None or not candidate.vector:
+                    logger.debug(
+                        f"Skipping vector diversity candidate without a dense vector "
+                        f"(label={label_list[candidate_index]})"
+                    )
+                    continue
+                dense_candidate_indices.append(candidate_index)
+                prefetched_cands.append(candidate)
+
+            label_list = [label_list[i] for i in dense_candidate_indices]
+            scores_list = [scores_list[i] for i in dense_candidate_indices]
+            if not label_list:
+                return search_result
+
+            # Candidate order remains the engine's relevance order for duplicate
+            # retention and stable ties; raw engine scores are only returned.
+            selected_indices = select_diverse_indices(
+                query_vector,
+                [candidate.vector for candidate in prefetched_cands],
+                requested,
+                diversity,
+            )
+            label_list = [label_list[i] for i in selected_indices]
+            scores_list = [scores_list[i] for i in selected_indices]
+            prefetched_cands = [prefetched_cands[i] for i in selected_indices]
 
         # Apply offset by slicing the results
         if offset > 0:
             label_list = label_list[offset:]
             scores_list = scores_list[offset:]
+            if prefetched_cands is not None:
+                prefetched_cands = prefetched_cands[offset:]
 
         # Limit to requested size
         if len(label_list) > limit:
             label_list = label_list[:limit]
             scores_list = scores_list[:limit]
+            if prefetched_cands is not None:
+                prefetched_cands = prefetched_cands[:limit]
 
         pk_list = label_list
         fields_list = []
@@ -549,11 +610,17 @@ class LocalCollection(ICollection):
 
             cands_vectors: Optional[List[List[float]]] = None
             if include_vector:
-                cands_list = self.store_mgr.fetch_cands_data(label_list)
+                cands_list = (
+                    prefetched_cands
+                    if prefetched_cands is not None
+                    else self.store_mgr.fetch_cands_data(label_list)
+                )
                 cands_fields_payloads = [
                     cand.fields if cand is not None else None for cand in cands_list
                 ]
                 cands_vectors = [cand.vector if cand is not None else [] for cand in cands_list]
+            elif prefetched_cands is not None:
+                cands_fields_payloads = [candidate.fields for candidate in prefetched_cands]
             else:
                 cands_fields_payloads = self.store_mgr.fetch_cands_fields(label_list)
 
