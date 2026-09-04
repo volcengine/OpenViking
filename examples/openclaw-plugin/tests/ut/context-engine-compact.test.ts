@@ -73,24 +73,41 @@ describe("context-engine commitOVSession()", () => {
     expect(ok).toBe(true);
   });
 
-  it("returns false on failed commit", async () => {
-    const { engine } = makeEngine({
-      status: "failed",
-      error: "extraction error",
-    });
+  it.each([
+    {
+      name: "failed commit without archive",
+      commitResult: { status: "failed", error: "extraction error" },
+      expected: false,
+    },
+    {
+      name: "Phase 1 archived before Phase 2 failed",
+      commitResult: {
+        status: "failed",
+        archived: true,
+        error: "extraction error",
+        task_id: "task-failed",
+      },
+      expected: true,
+    },
+    {
+      name: "timeout commit without archive",
+      commitResult: { status: "timeout", task_id: "task-timeout" },
+      expected: false,
+    },
+    {
+      name: "Phase 1 archived but Phase 2 is still pending after timeout",
+      commitResult: {
+        status: "timeout",
+        archived: true,
+        task_id: "task-timeout",
+      },
+      expected: false,
+    },
+  ])("returns $expected for $name", async ({ commitResult, expected }) => {
+    const { engine } = makeEngine(commitResult);
 
     const ok = await engine.commitOVSession({ sessionId: "test-session" });
-    expect(ok).toBe(false);
-  });
-
-  it("returns false on timeout commit", async () => {
-    const { engine } = makeEngine({
-      status: "timeout",
-      task_id: "task-timeout",
-    });
-
-    const ok = await engine.commitOVSession({ sessionId: "test-session" });
-    expect(ok).toBe(false);
+    expect(ok).toBe(expected);
   });
 
   it("returns false when commit throws", async () => {
@@ -268,6 +285,36 @@ describe("context-engine compact()", () => {
     );
   });
 
+  it("returns compacted=true when Phase 1 archived before Phase 2 failed", async () => {
+    const { engine, logger } = makeEngine({
+      status: "failed",
+      archived: true,
+      archive_uri: "viking://user/default/sessions/s3/history/archive_001",
+      error: "extraction pipeline error",
+      task_id: "task-3",
+    });
+
+    const result = await engine.compact({
+      sessionId: "s3",
+      sessionFile: "",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(true);
+    expect(result.reason).toBe("commit_archived_phase2_failed");
+    expect(result.result?.firstKeptEntryId).toBe("archive_001");
+    expect(result.result?.details).toMatchObject({
+      commit: {
+        status: "failed",
+        archived: true,
+        error: "extraction pipeline error",
+      },
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("Phase 2 failed"),
+    );
+  });
+
   it("returns ok=false when commit status is 'timeout'", async () => {
     const { engine, logger } = makeEngine({
       status: "timeout",
@@ -282,6 +329,34 @@ describe("context-engine compact()", () => {
     expect(result.ok).toBe(false);
     expect(result.compacted).toBe(false);
     expect(result.reason).toBe("commit_timeout");
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("Phase 2 timed out"),
+    );
+  });
+
+  it("returns compacted=false when Phase 1 archived but Phase 2 is still pending after timeout", async () => {
+    const { engine, logger } = makeEngine({
+      status: "timeout",
+      archived: true,
+      archive_uri: "viking://user/default/sessions/s4/history/archive_001",
+      task_id: "task-4",
+    });
+
+    const result = await engine.compact({
+      sessionId: "s4",
+      sessionFile: "",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBe("commit_timeout");
+    expect(result.result?.details).toMatchObject({
+      commit: {
+        status: "timeout",
+        archived: true,
+        archive_uri: "viking://user/default/sessions/s4/history/archive_001",
+      },
+    });
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("Phase 2 timed out"),
     );
