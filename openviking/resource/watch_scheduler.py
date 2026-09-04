@@ -43,6 +43,7 @@ class WatchScheduler:
     """
 
     DEFAULT_CHECK_INTERVAL = 60.0
+    DEFAULT_TASK_TIMEOUT = 3 * 60 * 60
 
     def __init__(
         self,
@@ -50,6 +51,7 @@ class WatchScheduler:
         viking_fs: Optional[Any] = None,
         check_interval: float = DEFAULT_CHECK_INTERVAL,
         max_concurrency: int = 4,
+        task_timeout: float = DEFAULT_TASK_TIMEOUT,
         uri_mutation_coordinator: Optional[UriMutationCoordinator] = None,
     ):
         """Initialize WatchScheduler.
@@ -66,14 +68,18 @@ class WatchScheduler:
             raise ValueError("check_interval must be > 0")
         if max_concurrency <= 0:
             raise ValueError("max_concurrency must be > 0")
+        if task_timeout <= 0:
+            raise ValueError("task_timeout must be > 0")
         self._check_interval = check_interval
         self._max_concurrency = max_concurrency
+        self._task_timeout = task_timeout
         self._semaphore = asyncio.Semaphore(max_concurrency)
 
         self._watch_manager: Optional[WatchManager] = None
         self._running = False
         self._scheduler_task: Optional[asyncio.Task] = None
         self._executing_tasks: Set[str] = set()
+        self._execution_tasks: Set[asyncio.Task[None]] = set()
         self._lock = asyncio.Lock()
 
     @property
@@ -122,6 +128,13 @@ class WatchScheduler:
             except asyncio.CancelledError:
                 pass
             self._scheduler_task = None
+
+        execution_tasks = list(self._execution_tasks)
+        for task in execution_tasks:
+            task.cancel()
+        if execution_tasks:
+            await asyncio.gather(*execution_tasks, return_exceptions=True)
+        self._execution_tasks.clear()
 
         # Clean up WatchManager
         if self._watch_manager:
@@ -219,8 +232,21 @@ class WatchScheduler:
             finally:
                 await asyncio.shield(self._discard_executing(t.task_id))
 
-        if tasks_to_run:
-            await asyncio.gather(*(asyncio.create_task(run_one(t)) for t in tasks_to_run))
+        for due_task in tasks_to_run:
+            execution = asyncio.create_task(run_one(due_task))
+            self._execution_tasks.add(execution)
+            execution.add_done_callback(self._on_execution_done)
+
+    def _on_execution_done(self, task: asyncio.Task[None]) -> None:
+        self._execution_tasks.discard(task)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            logger.error(
+                "[WatchScheduler] Unhandled watch execution error",
+                exc_info=(type(error), error, error.__traceback__),
+            )
 
     async def _execute_task(self, task) -> None:
         """Execute a task only after confirming its target URI is stable."""
@@ -378,13 +404,34 @@ class WatchScheduler:
                     }:
                         from openviking.service.task_tracker import get_task_tracker
 
-                        ingestion_task = await get_task_tracker().wait(
-                            execution_task_id,
-                            account_id=task.account_id,
-                            user_id=task.user_id,
-                        )
-                        result_status = ingestion_task.status.value
-                        execution_error = ingestion_task.error
+                        task_tracker = get_task_tracker()
+                        try:
+                            ingestion_task = await task_tracker.wait(
+                                execution_task_id,
+                                account_id=task.account_id,
+                                user_id=task.user_id,
+                                timeout=self._task_timeout,
+                            )
+                        except asyncio.TimeoutError:
+                            execution_error = (
+                                f"ingestion task timed out after {self._task_timeout:g}s"
+                            )
+                            result_status = "failed"
+                            try:
+                                await task_tracker.cancel(
+                                    execution_task_id,
+                                    account_id=task.account_id,
+                                    user_id=task.user_id,
+                                )
+                            except Exception:
+                                logger.exception(
+                                    "[WatchScheduler] Failed to cancel timed-out ingestion "
+                                    "task %s",
+                                    execution_task_id,
+                                )
+                        else:
+                            result_status = ingestion_task.status.value
+                            execution_error = ingestion_task.error
 
                     if result_status in {"failed", "error"}:
                         execution_status = "failed"

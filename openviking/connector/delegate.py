@@ -38,6 +38,7 @@ from openviking.connector.routing import (
 from openviking.core.namespace import NamespaceShapeError
 from openviking.core.uri_validation import matches_content_kind
 from openviking.crypto.encryptor import MAGIC as ENCRYPTED_ENVELOPE_MAGIC
+from openviking.observability.http_error_context import sanitize_public_http_error
 from openviking.parse.mode import ParseMode
 from openviking.resource.processing_mode import (
     DEFAULT_PROCESSING_MODE,
@@ -668,6 +669,10 @@ class ConnectorDelegate:
             )
             raise
         except Exception as exc:
+            safe_error = sanitize_public_http_error(
+                code="CONNECTOR_SUBMISSION_FAILED",
+                message=exc,
+            ).message
             logger.error(
                 "[ConnectorDelegate] Connector submission failed: add_type=%s to=%s "
                 "ov_task_id=%s error_type=%s error=%s",
@@ -675,11 +680,11 @@ class ConnectorDelegate:
                 task_resource_id,
                 task.task_id,
                 type(exc).__name__,
-                exc,
+                safe_error,
             )
             await task_tracker.fail(
                 task.task_id,
-                str(exc),
+                safe_error,
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
             )
@@ -850,7 +855,11 @@ class ConnectorDelegate:
                         )
                         return {"status": "completed", **completion}
                     error_msg = info.get("ErrorMessage") or info.get("error_message") or status
-                    failure = f"connector task {status}: {error_msg}"
+                    safe_error = sanitize_public_http_error(
+                        code="CONNECTOR_TASK_FAILED",
+                        message=error_msg,
+                    ).message
+                    failure = f"connector task {status}: {safe_error}"
                     logger.warning(
                         "[ConnectorDelegate] Connector task %s ended %s after %.0fs "
                         "(ov_task_id=%s): %s",
@@ -858,7 +867,7 @@ class ConnectorDelegate:
                         status,
                         time.perf_counter() - started,
                         ov_task_id,
-                        error_msg,
+                        safe_error,
                     )
                     await task_tracker.fail(
                         ov_task_id,
@@ -866,7 +875,10 @@ class ConnectorDelegate:
                         account_id=ctx.account_id,
                         user_id=ctx.user.user_id,
                     )
-                    return {"status": "failed", "error": failure}
+                    return {
+                        "status": "cancelled" if status == "cancelled" else "failed",
+                        "error": failure,
+                    }
 
             timeout_msg = f"connector task timed out after {timeout_seconds}s"
             logger.warning(

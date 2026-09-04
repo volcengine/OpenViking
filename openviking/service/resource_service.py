@@ -365,6 +365,7 @@ class ResourceService:
         source_type: Optional[str] = None,
         connector_states: Optional[Dict[str, Any]] = None,
         is_active: Optional[bool] = None,
+        on_watch_ready: Optional[Callable[[str], None]] = None,
     ) -> None:
         if not watch_manager or not manage_watch:
             return
@@ -393,7 +394,7 @@ class ResourceService:
                     )
                 try:
                     sanitized = self._sanitize_watch_processor_kwargs(processor_kwargs)
-                    await self._handle_watch_task_creation(
+                    watch = await self._handle_watch_task_creation(
                         path=path,
                         to_uri=watch_to,
                         to_is_directory=to_is_directory,
@@ -411,6 +412,8 @@ class ResourceService:
                         ctx=ctx,
                         is_active=is_active is not False,
                     )
+                    if watch is not None and on_watch_ready is not None:
+                        on_watch_ready(watch.task_id)
                 except ConflictError:
                     raise
                 except Exception as e:
@@ -735,6 +738,7 @@ class ResourceService:
                 watch_auth_state=watch_auth_state,
                 prepared_resource=prepared_resource,
                 internal_task=msg.internal_task,
+                on_watch_ready=lambda task_id: setattr(msg, "watch_task_id", task_id),
                 **internal_kwargs,
             )
             if msg.staged_source is not None:
@@ -1754,6 +1758,7 @@ class ResourceService:
         stage_callback: Optional[Callable[[str], Any]] = None,
         prepared_resource: Optional["LocalResource"] = None,
         internal_task: bool = False,
+        on_watch_ready: Optional[Callable[[str], None]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Execute an already-routed resource ingestion."""
@@ -1842,6 +1847,7 @@ class ResourceService:
                 processor_kwargs=self._watch_processor_kwargs(kwargs, tags, tag_mode),
                 watch_auth_state=watch_auth_state,
                 ctx=ctx,
+                on_watch_ready=on_watch_ready,
             )
             if defer_post_processing:
                 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg

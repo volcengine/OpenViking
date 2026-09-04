@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -20,12 +21,15 @@ class TestWatchSchedulerValidation:
         with pytest.raises(ValueError, match="max_concurrency must be > 0"):
             WatchScheduler(resource_service=rs, max_concurrency=0)
 
+    def test_task_timeout_must_be_positive(self):
+        rs = ResourceService()
+        with pytest.raises(ValueError, match="task_timeout must be > 0"):
+            WatchScheduler(resource_service=rs, task_timeout=0)
+
 
 class TestWatchSchedulerExecutionHold:
     @pytest.mark.asyncio
     async def test_held_due_task_is_skipped_until_released(self):
-        from datetime import datetime, timedelta
-
         class FakeResourceService(ResourceService):
             def __init__(self):
                 super().__init__()
@@ -53,8 +57,67 @@ class TestWatchSchedulerExecutionHold:
 
         await scheduler.release_execution(task.task_id)
         await scheduler._check_and_execute_due_tasks()
+        await asyncio.gather(*list(scheduler._execution_tasks))
         assert len(resource_service.calls) == 1
         assert scheduler._executing_tasks == set()
+
+    @pytest.mark.asyncio
+    async def test_stuck_ingestion_does_not_block_later_scheduler_passes(self, monkeypatch):
+        second_started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        class FakeResourceService(ResourceService):
+            async def refresh_resource(self, **kwargs):
+                if kwargs["path"].endswith("stuck"):
+                    return {"status": "success", "task_id": "stuck-ingestion"}
+                second_started.set()
+                return {"status": "completed"}
+
+        class FakeTracker:
+            async def wait(self, *_args, timeout=None, **_kwargs):
+                await asyncio.wait_for(asyncio.Event().wait(), timeout=timeout)
+
+            async def cancel(self, *_args, **_kwargs):
+                cancelled.set()
+
+        monkeypatch.setattr(
+            "openviking.service.task_tracker.get_task_tracker",
+            lambda: FakeTracker(),
+        )
+        scheduler = WatchScheduler(
+            resource_service=FakeResourceService(),
+            check_interval=1,
+            max_concurrency=1,
+            task_timeout=0.01,
+        )
+        manager = WatchManager(viking_fs=None)
+        await manager.initialize()
+        scheduler._watch_manager = manager
+
+        stuck = await manager.create_task(
+            path="https://example.com/stuck",
+            to_uri="viking://resources/stuck",
+            watch_interval=5,
+        )
+        stuck.next_execution_time = datetime.now() - timedelta(minutes=1)
+        await asyncio.wait_for(scheduler._check_and_execute_due_tasks(), timeout=1)
+        await asyncio.sleep(0)
+
+        later = await manager.create_task(
+            path="https://example.com/later",
+            to_uri="viking://resources/later",
+            watch_interval=5,
+        )
+        later.next_execution_time = datetime.now() - timedelta(minutes=1)
+        await asyncio.wait_for(scheduler._check_and_execute_due_tasks(), timeout=1)
+        await asyncio.wait_for(second_started.wait(), timeout=1)
+        await asyncio.wait_for(cancelled.wait(), timeout=1)
+        await asyncio.gather(*list(scheduler._execution_tasks))
+
+        updated = await manager.get_task(stuck.task_id)
+        assert updated is not None
+        assert updated.last_status == "failed"
+        assert updated.last_error == "ingestion task timed out after 0.01s"
 
 
 class TestWatchSchedulerResourceExistence:
@@ -271,6 +334,7 @@ class TestWatchSchedulerResourceExistence:
             "add-resource-task-1",
             account_id=task.account_id,
             user_id=task.user_id,
+            timeout=10800,
         )
         updated = await manager.get_task(task.task_id)
         assert updated is not None

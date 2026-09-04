@@ -291,6 +291,10 @@ class AddResourceProcessor(DequeueHandlerBase):
                 terminal = True
                 self.report_success()
                 return None
+            except asyncio.CancelledError:
+                await self._record_watch_execution(msg, "cancelled")
+                terminal = True
+                raise
             except Exception as exc:
                 await self._record_watch_execution(
                     msg,

@@ -1265,29 +1265,32 @@ async def test_connector_import_persists_task_before_remote_submission(
     connector_config,
     ctx,
     service,
+    caplog,
 ):
     tracker = _task_tracker()
 
     async def fail_submission(**_kwargs):
         tracker.create.assert_awaited_once()
-        raise RuntimeError("submission failed")
+        raise RuntimeError("submission failed: token=secret-value")
 
     connector_client = SimpleNamespace(submit_doc_add=AsyncMock(side_effect=fail_submission))
     _install_connector_dependencies(monkeypatch, tracker, connector_client)
 
-    with pytest.raises(RuntimeError, match="submission failed"):
-        await service.add_resource(
-            path="tos://bucket/prefix",
-            ctx=ctx,
-            to="viking://resources/imports",
-        )
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(RuntimeError, match="submission failed"):
+            await service.add_resource(
+                path="tos://bucket/prefix",
+                ctx=ctx,
+                to="viking://resources/imports",
+            )
 
     tracker.fail.assert_awaited_once_with(
         "task-1",
-        "submission failed",
+        "submission failed: token=[REDACTED]",
         account_id="acct",
         user_id="alice",
     )
+    assert "secret-value" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -2183,13 +2186,20 @@ async def test_git_reason_routes_to_connector(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("task_info", "expected_stage", "expected_error"),
+    ("task_info", "expected_stage", "expected_status", "expected_error"),
     [
-        ({"Status": "succeeded"}, "connector:succeeded", None),
+        ({"Status": "succeeded"}, "connector:succeeded", "completed", None),
         (
-            {"status": "failed", "error_message": "source unavailable"},
+            {"status": "failed", "error_message": "source unavailable; token=secret-value"},
             "connector:failed",
-            "connector task failed: source unavailable",
+            "failed",
+            "connector task failed: source unavailable; token=[REDACTED]",
+        ),
+        (
+            {"status": "cancelled", "error_message": "stopped by user"},
+            "connector:cancelled",
+            "cancelled",
+            "connector task cancelled: stopped by user",
         ),
     ],
 )
@@ -2199,7 +2209,9 @@ async def test_monitor_connector_task_maps_terminal_status(
     ctx,
     task_info,
     expected_stage,
+    expected_status,
     expected_error,
+    caplog,
 ):
     tracker = _task_tracker()
     monkeypatch.setattr(
@@ -2214,27 +2226,29 @@ async def test_monitor_connector_task_maps_terminal_status(
     client = SimpleNamespace(get_task_info=AsyncMock(return_value=task_info))
     on_success = AsyncMock()
 
-    outcome = await ResourceService()._connector._monitor(
-        client=client,
-        connector_task_key="connector-1",
-        ov_task_id="task-1",
-        poll_interval_ms=1,
-        timeout_seconds=1,
-        ctx=ctx,
-        on_success=on_success,
-    )
+    with caplog.at_level(logging.WARNING):
+        outcome = await ResourceService()._connector._monitor(
+            client=client,
+            connector_task_key="connector-1",
+            ov_task_id="task-1",
+            poll_interval_ms=1,
+            timeout_seconds=1,
+            ctx=ctx,
+            on_success=on_success,
+        )
 
     assert tracker.update_stage.await_args.args[1] == expected_stage
+    assert outcome["status"] == expected_status
     if expected_error is None:
-        assert outcome["status"] == "completed"
         on_success.assert_awaited_once_with(None)
         tracker.complete.assert_awaited_once()
         tracker.fail.assert_not_awaited()
     else:
-        assert outcome == {"status": "failed", "error": expected_error}
+        assert outcome == {"status": expected_status, "error": expected_error}
         on_success.assert_not_awaited()
         assert tracker.fail.await_args.args[1] == expected_error
         tracker.complete.assert_not_awaited()
+    assert "secret-value" not in caplog.text
 
 
 @pytest.mark.asyncio

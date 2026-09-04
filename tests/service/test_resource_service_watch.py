@@ -593,6 +593,7 @@ class TestAddResourceArgs:
 
         task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is not None
+        assert message.watch_task_id == task.task_id
         assert task.is_active is (is_active is not False)
         assert (task.next_execution_time is not None) is (is_active is not False)
         assert len(resource_service._resource_processor.calls) == 1
@@ -751,6 +752,7 @@ class TestAddResourceArgs:
             "failed",
             "parse failed; write failed",
         ),
+        (None, asyncio.CancelledError(), "cancelled", None),
     ],
 )
 async def test_add_resource_processor_records_paused_watch_result(
@@ -773,7 +775,13 @@ async def test_add_resource_processor_records_paused_watch_result(
         "openviking.storage.queuefs.add_resource_processor.get_task_tracker",
         Mock(return_value=task_tracker),
     )
-    execute = AsyncMock(side_effect=error) if error else AsyncMock(return_value=result)
+    async def execute_add_resource_job(message, **_kwargs):
+        message.watch_task_id = "watch-1"
+        if error:
+            raise error
+        return result
+
+    execute = AsyncMock(side_effect=execute_add_resource_job)
     service = SimpleNamespace(
         execute_add_resource_job=execute,
         _link_resource_reason_memory=AsyncMock(),
@@ -787,7 +795,6 @@ async def test_add_resource_processor_records_paused_watch_result(
     )
     message = AddResourceMsg(
         task_id="add-resource-1",
-        watch_task_id="watch-1",
         path="https://example.feishu.cn/docx/doc_token",
         root_uri="viking://resources/paused_feishu",
         account_id="account-1",
@@ -797,7 +804,11 @@ async def test_add_resource_processor_records_paused_watch_result(
 
     data = message.to_dict()
     data[TASK_WORK_ID_FIELD] = "work-1"
-    await processor._process(message, data)
+    if isinstance(error, asyncio.CancelledError):
+        with pytest.raises(asyncio.CancelledError):
+            await processor._process(message, data)
+    else:
+        await processor._process(message, data)
 
     service.record_watch_execution.assert_awaited_once_with(
         "watch-1",
