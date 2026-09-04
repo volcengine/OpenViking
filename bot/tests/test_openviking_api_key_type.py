@@ -48,6 +48,8 @@ class _DummyHTTPClient:
         self.find_calls = []
         self.ls_calls = []
         self.read_calls = []
+        self.stat_calls = []
+        self.download_calls = []
         self.closed = False
         _DummyHTTPClient.instances.append(self)
 
@@ -104,6 +106,14 @@ class _DummyHTTPClient:
     async def read(self, uri):
         self.read_calls.append(("read", uri))
         return ""
+
+    async def stat(self, uri):
+        self.stat_calls.append(uri)
+        return {"size": 8, "isDir": False}
+
+    async def download_bytes(self, uri):
+        self.download_calls.append(uri)
+        return b"image"
 
     async def grep(self, *_args, **_kwargs):
         return {"matches": []}
@@ -1956,6 +1966,27 @@ async def test_read_content_trusted_owner_uri_uses_owner_identity(monkeypatch):
     assert scoped.kwargs["user"] == "sender-1"
     assert scoped.read_calls == [("read", "viking://user/sender-1/memories/profile.md")]
     assert scoped.closed is True
+
+
+@pytest.mark.asyncio
+async def test_image_reads_trusted_owner_uri_use_owner_identity(monkeypatch):
+    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
+    client = VikingClient()
+    uri = "viking://user/sender-1/resources/image.png"
+
+    stat = await client.stat(uri)
+    content = await client.download_bytes(uri)
+
+    assert stat == {"size": 8, "isDir": False}
+    assert content == b"image"
+    stat_client, download_client = _DummyHTTPClient.instances[1:]
+    for scoped in (stat_client, download_client):
+        assert scoped.kwargs["api_key"] == "root-key"
+        assert scoped.kwargs["account"] == "acct"
+        assert scoped.kwargs["user"] == "sender-1"
+        assert scoped.closed is True
+    assert stat_client.stat_calls == [uri]
+    assert download_client.download_calls == [uri]
 
 
 @pytest.mark.asyncio
