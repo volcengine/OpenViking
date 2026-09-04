@@ -194,11 +194,41 @@ Search and Find requests default to `limit: 10`; override the limit on each API 
 |---|---|---|---|
 | `workspace` | path | `"./data"` | OpenViking workspace |
 | `agfs.backend` | `local`, `memory`, `s3` | `local` | File and metadata backend |
-| `vectordb.backend` | `local`, `cuvs`, `http`, `volcengine`, `vikingdb` | `local` | Vector database backend |
+| `vectordb.backend` | `local`, `cuvs`, `http`, `milvus`, `volcengine`, `vikingdb` | `local` | Vector database backend |
 | `vectordb.dimension` | integer | follows Embedding | Vector collection dimension |
 | `skip_process_lock` | boolean | `false` | Skip the workspace process lock; use only when accepting concurrent-write risk |
 
 Remote backends also require endpoint, bucket/collection, credentials, and timeout fields. See [Configuration](../guides/01-configuration.md#storage) for complete examples.
+
+The Milvus backend is opt-in; install it with `uv sync --extra milvus` and set
+`vectordb.backend` to `milvus`. The default remains `local`, and importing or starting
+OpenViking with the default configuration does not require PyMilvus. A file URI such as
+`./milvus.db` starts Milvus Lite. HTTP endpoints and tokens select Milvus Server or Zilliz
+Cloud explicitly.
+
+Endpoint precedence is `milvus.uri`, then the legacy `vectordb.url`, then
+`vectordb.custom_params.uri`, and finally `./milvus.db`. An explicitly configured
+`milvus.uri` is never replaced by the local default.
+
+Milvus Lite creates physical `INVERTED` scalar indexes for supported `VARCHAR`, `INT64`, and
+`BOOL` fields. Lite does not support `ARRAY` scalar indexes, so grant arrays remain filterable
+but are reported as unavailable rather than as successfully indexed. Sparse and hybrid search
+is rejected because this adapter cannot guarantee complete sparse candidate recall. Scalar
+ordering and grouped aggregation also fail clearly when more than 10,000 matching rows would
+otherwise be truncated.
+
+Collections created by an older OpenViking schema can add ACL fields through dynamic fields;
+legacy null ACL values are read as public defaults. A static collection missing required fields,
+or a collection with an incompatible vector field/dimension, primary key, `auto_id`, dynamic
+schema setting, or array element/capacity, must be migrated or rebuilt before use. Validation
+finishes before OpenViking changes collection properties or sidecar metadata.
+
+New sidecar/property metadata records the exact logical project, logical collection, physical
+naming version, and physical collection name. A pre-existing physical collection or old sidecar
+without this verifiable ownership identity is not bound automatically and cannot be read,
+updated, or deleted through the adapter. Migrate or rebuild it, or establish an explicit binding
+only after independently verifying its owner. Business names that resolve to OpenViking's current
+or legacy metadata namespaces are rejected.
 
 ## Queue Worker Settings
 
