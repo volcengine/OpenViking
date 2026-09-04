@@ -288,6 +288,21 @@ Resource import supports remote URLs, Git URLs, local files, local directories, 
 
 For HTTP safety, the plugin never sends a direct local filesystem path to the OpenViking server. Local files and directories are first uploaded through `/api/v1/resources/temp_upload`; directories are zipped locally with a pure JavaScript zip implementation before upload.
 
+### Migrating Existing OpenClaw Memory
+
+If the user already has hand-written memory in OpenClaw (`workspace/MEMORY.md` and
+`workspace/memory/*.md`), the `migrate-openclaw-memory` skill moves it into OpenViking long-term
+memory. The agent reads each file, decides which memory category it belongs to, shows the mapping
+for confirmation, and writes to `viking://~/memories/<category>/<slug>.md`. It is re-runnable:
+existing targets are skipped unless the user asks to overwrite.
+
+Conversation transcripts are not part of that skill — they are handled server-side:
+
+```bash
+openviking-server ingest backfill --harness openclaw
+openviking-server ingest watch --harness openclaw
+```
+
 ## Runtime Mode
 
 ![Runtime modes and routing behavior](./images/openclaw-plugin-runtime-routing.png)

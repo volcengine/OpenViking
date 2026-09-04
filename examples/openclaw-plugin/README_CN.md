@@ -340,6 +340,20 @@ Recall trace 默认关闭。可通过插件配置 `traceRecall`、`traceRecallPe
 
 当 OpenViking 将超大工具输出外置时，可见 preview 会包含 `viking://session/<session_id>/tool-results/<tool_result_id>` 引用。使用 `openviking_tool_result_list` 发现 ref，使用 `openviking_tool_result_search` 定位片段，再使用 `openviking_tool_result_read` 结合 `offset`/`limit` 读取原始内容。
 
+### 迁移已有的 OpenClaw 记忆
+
+用户如果在 OpenClaw 里已经有手写记忆（`workspace/MEMORY.md` 和 `workspace/memory/*.md`），可以用
+`migrate-openclaw-memory` skill 迁进 OpenViking 长期记忆。Agent 会逐个读文件、判断该归到哪个记忆
+分类、把映射表拿给用户确认，然后写入 `viking://~/memories/<category>/<slug>.md`。可以重复跑：目标
+已存在时默认跳过，除非用户要求覆盖。
+
+对话记录不走这个 skill，由服务端的 ingest 流程处理：
+
+```bash
+openviking-server ingest backfill --harness openclaw
+openviking-server ingest watch --harness openclaw
+```
+
 ## 运行模式
 
 ![运行模式与路由解析](./images/openclaw-plugin-runtime-routing.png)
