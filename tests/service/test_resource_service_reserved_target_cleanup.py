@@ -264,10 +264,12 @@ async def test_prepared_file_failure_preserves_cleanup_policy(cleanup_on_failure
     ],
 )
 async def test_cleanup_reserved_target_removes_directory_with_internal_markers_only(names):
+    """#4501: empty / not-ready sidecars plus lock markers still roll back."""
     viking_fs = SimpleNamespace(
         exists=AsyncMock(return_value=True),
         stat=AsyncMock(return_value={"isDir": True}),
         ls=AsyncMock(return_value=[{"name": name, "isDir": False} for name in names]),
+        read_file=AsyncMock(return_value=""),
         rm=AsyncMock(),
     )
     service = _service(viking_fs)
@@ -285,6 +287,143 @@ async def test_cleanup_reserved_target_removes_directory_with_internal_markers_o
         ctx=ANY,
         lease_ref={"lease_ref": "lock-1"},
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "name,content",
+    [
+        (".abstract.md", "[.abstract.md is not ready]"),
+        (".abstract.md", "# viking://resources/demo [Directory abstract is not ready]"),
+        (".overview.md", "# demo\n\n[Directory overview is not ready]"),
+    ],
+)
+async def test_cleanup_reserved_target_removes_not_ready_sidecars(name, content):
+    viking_fs = SimpleNamespace(
+        exists=AsyncMock(return_value=True),
+        stat=AsyncMock(return_value={"isDir": True}),
+        ls=AsyncMock(
+            return_value=[
+                {"name": ".path.ovlock", "isDir": False},
+                {"name": name, "isDir": False, "size": len(content)},
+            ]
+        ),
+        read_file=AsyncMock(return_value=content),
+        rm=AsyncMock(),
+    )
+    service = _service(viking_fs)
+
+    removed = await service._cleanup_reserved_target_if_empty(
+        root_uri="viking://resources/repro/stub-only",
+        ctx=_ctx(),
+        resource_lock={"lease_ref": "lock-1"},
+    )
+
+    assert removed is True
+    viking_fs.rm.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_reserved_target_preserves_filled_abstract_sidecar():
+    filled = "# Summary\n\nReal ingest abstract body."
+    viking_fs = SimpleNamespace(
+        exists=AsyncMock(return_value=True),
+        stat=AsyncMock(return_value={"isDir": True}),
+        ls=AsyncMock(
+            return_value=[
+                {"name": ".path.ovlock", "isDir": False},
+                {"name": ".abstract.md", "isDir": False, "size": len(filled)},
+            ]
+        ),
+        read_file=AsyncMock(return_value=filled),
+        rm=AsyncMock(),
+    )
+    service = _service(viking_fs)
+
+    removed = await service._cleanup_reserved_target_if_empty(
+        root_uri="viking://resources/repro/filled-sidecar",
+        ctx=_ctx(),
+        resource_lock={"lease_ref": "lock-1"},
+    )
+
+    assert removed is False
+    viking_fs.rm.assert_not_awaited()
+    viking_fs.read_file.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_reserved_target_preserves_filled_relations_sidecar():
+    filled = '{"links":[{"uri":"viking://resources/other"}]}'
+    viking_fs = SimpleNamespace(
+        exists=AsyncMock(return_value=True),
+        stat=AsyncMock(return_value={"isDir": True}),
+        ls=AsyncMock(
+            return_value=[
+                {"name": ".path.ovlock", "isDir": False},
+                {"name": ".relations.json", "isDir": False, "size": len(filled)},
+            ]
+        ),
+        read_file=AsyncMock(return_value=filled),
+        rm=AsyncMock(),
+    )
+    service = _service(viking_fs)
+
+    removed = await service._cleanup_reserved_target_if_empty(
+        root_uri="viking://resources/repro/filled-relations",
+        ctx=_ctx(),
+        resource_lock={"lease_ref": "lock-1"},
+    )
+
+    assert removed is False
+    viking_fs.rm.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content", ["", "{}", "[]"])
+async def test_cleanup_reserved_target_removes_empty_relations_stub(content):
+    viking_fs = SimpleNamespace(
+        exists=AsyncMock(return_value=True),
+        stat=AsyncMock(return_value={"isDir": True}),
+        ls=AsyncMock(
+            return_value=[
+                {"name": ".path.ovlock", "isDir": False},
+                {"name": ".relations.json", "isDir": False, "size": len(content)},
+            ]
+        ),
+        read_file=AsyncMock(return_value=content),
+        rm=AsyncMock(),
+    )
+    service = _service(viking_fs)
+
+    removed = await service._cleanup_reserved_target_if_empty(
+        root_uri="viking://resources/repro/empty-relations",
+        ctx=_ctx(),
+        resource_lock={"lease_ref": "lock-1"},
+    )
+
+    assert removed is True
+    viking_fs.rm.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_reserved_target_preserves_when_sidecar_read_fails():
+    viking_fs = SimpleNamespace(
+        exists=AsyncMock(return_value=True),
+        stat=AsyncMock(return_value={"isDir": True}),
+        ls=AsyncMock(return_value=[{"name": ".overview.md", "isDir": False, "size": 12}]),
+        read_file=AsyncMock(side_effect=OSError("io error")),
+        rm=AsyncMock(),
+    )
+    service = _service(viking_fs)
+
+    removed = await service._cleanup_reserved_target_if_empty(
+        root_uri="viking://resources/repro/unreadable-sidecar",
+        ctx=_ctx(),
+        resource_lock={"lease_ref": "lock-1"},
+    )
+
+    assert removed is False
+    viking_fs.rm.assert_not_awaited()
 
 
 def _post_process_msg(cleanup_on_failure: bool) -> AddResourceMsg:

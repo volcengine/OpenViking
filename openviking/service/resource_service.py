@@ -55,7 +55,11 @@ from openviking.server.user_config import (
     effective_skill_add_target,
 )
 from openviking.storage.acl import AclAction
-from openviking.storage.internal_names import is_rollback_safe_entry_name
+from openviking.storage.internal_names import (
+    is_rollback_content_gated_entry_name,
+    is_rollback_safe_entry_name,
+    is_rollback_safe_sidecar_content,
+)
 from openviking.storage.queuefs import QueueManager, get_queue_manager
 from openviking.storage.queuefs.add_resource_msg import AddResourcePhase
 from openviking.storage.viking_fs import LS_ALL_NODES, VikingFS
@@ -541,10 +545,11 @@ class ResourceService:
         """Remove a newly reserved target while it holds no real content.
 
         Storage-internal markers (pathlock files, redirect/sync bookkeeping)
-        and ingest stub sidecars (``.abstract.md`` / ``.overview.md``) are
-        materialized while reserving a target, so they do not block rollback;
-        any other entry means real content (possibly from a concurrent writer)
-        and must preserve the directory (#4501).
+        are ignored by name. Ingest sidecars (``.abstract.md`` /
+        ``.overview.md`` / ``.relations.json``) are ignored only while empty
+        or still placeholder stubs; filled bodies block rollback. Any other
+        entry means real content (possibly from a concurrent writer) and must
+        preserve the directory (#4501).
         """
         try:
             if not await self._viking_fs.exists(root_uri, ctx=ctx):
@@ -552,6 +557,29 @@ class ResourceService:
             stat = await self._viking_fs.stat(root_uri, ctx=ctx)
             if not isinstance(stat, dict) or not stat.get("isDir"):
                 return False
+
+            async def _entry_blocks_rollback(entry: Dict[str, Any]) -> bool:
+                name = str(entry.get("name") or "")
+                if is_rollback_safe_entry_name(name):
+                    return False
+                if not is_rollback_content_gated_entry_name(name):
+                    return True
+                if entry.get("isDir"):
+                    return True
+                # size==0 stubs skip a round-trip; unknown/missing size still reads.
+                size = entry.get("size")
+                if size == 0:
+                    return False
+                try:
+                    content = await self._viking_fs.read_file(
+                        f"{root_uri.rstrip('/')}/{name}",
+                        ctx=ctx,
+                    )
+                except Exception:
+                    # Fail closed: unread sidecar must not authorize rm.
+                    return True
+                return not is_rollback_safe_sidecar_content(name, content)
+
             async def _has_real_content() -> bool:
                 entries = await self._viking_fs.ls(
                     root_uri,
@@ -559,13 +587,15 @@ class ResourceService:
                     node_limit=LS_ALL_NODES,
                     ctx=ctx,
                 )
-                return any(
-                    not is_rollback_safe_entry_name(str(entry.get("name") or ""))
-                    for entry in entries
-                )
+                for entry in entries:
+                    if await _entry_blocks_rollback(entry):
+                        return True
+                return False
 
-            # List twice so a concurrent writer between the emptiness check and
-            # rm preserves the target; rm(lease_ref=...) still guards the final race.
+            # Belt-and-suspenders while we hold resource_lock: lock-compliant
+            # writers for this target cannot run between the two listings, so the
+            # second ls mainly guards non-lock / future-buggy writers. The gap
+            # after the last check is still covered by rm(lease_ref=...).
             if await _has_real_content() or await _has_real_content():
                 return False
             await self._viking_fs.rm(
@@ -636,7 +666,8 @@ class ResourceService:
                 account_id=msg.account_id,
                 user_id=msg.user_id,
             )
-        except BaseException:
+        except Exception:
+            # Avoid awaiting AGFS cleanup/release on KeyboardInterrupt/SystemExit.
             if resource_lock is not None:
                 if on_failed_with_lock is not None:
                     await on_failed_with_lock(resource_lock)
@@ -752,7 +783,9 @@ class ResourceService:
                     internal_task=msg.internal_task,
                     **internal_kwargs,
                 )
-            except BaseException:
+            except Exception:
+                # Skip KeyboardInterrupt/SystemExit/CancelledError: do not await
+                # AGFS cleanup on process teardown (startup recovery covers leftovers).
                 if msg.cleanup_empty_target_on_failure and resource_lock is not None:
                     await self._cleanup_reserved_target_if_empty(
                         root_uri=msg.root_uri,
@@ -793,7 +826,8 @@ class ResourceService:
                     tag_mode=msg.tag_mode,
                 ),
             )
-        except BaseException:
+        except Exception:
+            # Same as SOURCE phase: BaseException must not await AGFS cleanup.
             if msg.cleanup_empty_target_on_failure and resource_lock is not None:
                 await self._cleanup_reserved_target_if_empty(
                     root_uri=msg.root_uri,
@@ -1188,7 +1222,8 @@ class ResourceService:
                 on_enqueued=(transfer_staged_source if plan.staged_source is not None else None),
                 on_failed_with_lock=cleanup_enqueue_failure,
             )
-        except BaseException:
+        except Exception:
+            # BaseException (Ctrl+C / SystemExit) skips await; recovery covers leftovers.
             if resource_lock is not None:
                 await self._release_lock_ref(resource_lock)
             if plan.staged_source is not None and not staged_enqueued:
@@ -1253,7 +1288,7 @@ class ResourceService:
         )
         try:
             await self._viking_fs._ensure_access(root_uri, ctx, action=AclAction.WRITE)
-        except BaseException:
+        except Exception:
             await self._release_lock_ref(resource_lock)
             raise
         return root_uri, resource_lock, False, not target_preexisting
