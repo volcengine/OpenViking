@@ -1377,6 +1377,35 @@ PyObject* py_index_engine_delete_data(PyObject*, PyObject* args) {
   }
 }
 
+PyObject* py_index_engine_rebuild_scalar_index(PyObject*, PyObject* args) {
+  PyObject* capsule = nullptr;
+  const char* scalar_index_json = nullptr;
+  PyObject* items = nullptr;
+  if (!PyArg_ParseTuple(args, "OsO", &capsule, &scalar_index_json, &items)) {
+    return nullptr;
+  }
+
+  auto* engine = capsule_to_ptr<vdb::IndexEngine>(capsule, kIndexCapsuleName);
+  if (engine == nullptr) {
+    return nullptr;
+  }
+
+  std::vector<vdb::AddDataRequest> requests;
+  if (!parse_request_list(items, parse_add_request, &requests)) {
+    return nullptr;
+  }
+
+  try {
+    const int result = call_without_gil([&]() {
+      return engine->rebuild_scalar_index(scalar_index_json, requests);
+    });
+    return PyLong_FromLong(result);
+  } catch (const std::exception& exc) {
+    raise_runtime_error(exc.what());
+    return nullptr;
+  }
+}
+
 PyObject* py_index_engine_search(PyObject*, PyObject* args) {
   PyObject* capsule = nullptr;
   PyObject* request_obj = nullptr;
@@ -1942,6 +1971,9 @@ PyMethodDef kModuleMethods[] = {
      "Add data to the index engine."},
     {"_index_engine_delete_data", py_index_engine_delete_data, METH_VARARGS,
      "Delete data from the index engine."},
+    {"_index_engine_rebuild_scalar_index",
+     py_index_engine_rebuild_scalar_index, METH_VARARGS,
+     "Rebuild scalar fields without rebuilding the vector index."},
     {"_index_engine_search", py_index_engine_search, METH_VARARGS,
      "Search the index engine."},
     {"_index_engine_search_with_filter_token",

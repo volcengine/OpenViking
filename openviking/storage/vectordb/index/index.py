@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from openviking.storage.vectordb.store.data import DeltaRecord
+from openviking.storage.vectordb.store.data import CandidateData, DeltaRecord
 
 
 class IIndex(ABC):
@@ -187,6 +187,13 @@ class IIndex(ABC):
         Note:
             Adding new scalar indexes may trigger background index building.
         """
+        raise NotImplementedError
+
+    @abstractmethod
+    def rebuild_scalar_index(
+        self, scalar_index: List[str], cands_list: List[CandidateData]
+    ) -> None:
+        """Replace the scalar index from a Store snapshot without rebuilding vectors."""
         raise NotImplementedError
 
     @abstractmethod

@@ -36,6 +36,10 @@ class IndexManager {
 
   virtual int delete_data(const std::vector<DeleteDataRequest>& data_list) = 0;
 
+  virtual int rebuild_scalar_index(
+      const std::string& scalar_index_json,
+      const std::vector<AddDataRequest>& data_list) = 0;
+
   virtual int64_t dump(const std::string& dir) = 0;
 
   virtual int get_state(StateResult& state_result) = 0;
