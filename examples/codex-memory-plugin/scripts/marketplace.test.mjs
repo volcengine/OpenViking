@@ -158,7 +158,11 @@ test("hooks.json uses Codex's native ${PLUGIN_ROOT}, not the legacy placeholder"
     .map((h) => h.command || "");
   assert.ok(commands.length >= 5, "expected at least 5 hook commands (SessionStart/UserPromptSubmit/Stop/SessionEnd/PreCompact)");
   for (const cmd of commands) {
-    assert.ok(cmd.includes("${PLUGIN_ROOT}/scripts/"), `hook command must be rooted at \${PLUGIN_ROOT}: ${cmd}`);
+    assert.match(
+      cmd,
+      /^node "\$\{PLUGIN_ROOT\}\/scripts\/[^"\n]+\.mjs"$/,
+      `hook command must quote the \${PLUGIN_ROOT} script path: ${cmd}`,
+    );
   }
 });
 
