@@ -635,7 +635,13 @@ class _GrepMixin:
                 return
 
             try:
-                entries = await self.ls(normalized_current_uri, ctx=ctx)
+                # Do not inherit ls()'s 1,000-entry UI cap: that would silently
+                # skip overflow children in the encrypted/fallback grep walk.
+                entries = await self.ls(
+                    normalized_current_uri,
+                    node_limit=1_000_000,
+                    ctx=ctx,
+                )
             except Exception:
                 return
 

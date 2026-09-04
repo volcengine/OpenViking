@@ -84,6 +84,28 @@ def test_grep_config_default_switch_to_remote_threshold_is_10000():
 
 
 @pytest.mark.asyncio
+async def test_collect_grep_files_does_not_use_ls_ui_limit(monkeypatch, fs):
+    calls = []
+
+    async def fake_ls(uri, *, node_limit=1000, ctx=None, **kwargs):
+        calls.append((uri, node_limit, ctx))
+        return []
+
+    monkeypatch.setattr(fs, "ls", fake_ls)
+
+    assert (
+        await fs._collect_grep_files(
+            "viking://resources/root",
+            excluded_prefix=None,
+            level_limit=10,
+            ctx=None,
+        )
+        == []
+    )
+    assert calls == [("viking://resources/root", 1_000_000, None)]
+
+
+@pytest.mark.asyncio
 async def test_grep_without_config_uses_documented_remote_threshold(monkeypatch):
     fs = VikingFS(agfs=_DummyAgfs())
     vector_store = _DummyVectorStore()
