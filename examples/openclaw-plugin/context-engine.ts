@@ -1,5 +1,5 @@
 import type { OpenVikingClient } from "./client.js";
-import type { MemoryOpenVikingConfig } from "./config.js";
+import type { ParsedMemoryOpenVikingConfig } from "./config.js";
 import type { RuntimeQueryConfigStore } from "./query-config.js";
 import {
   AUTO_RECALL_SOURCE_MARKER,
@@ -248,7 +248,7 @@ export function createMemoryOpenVikingContextEngine(params: {
   id: string;
   name: string;
   version?: string;
-  cfg: Required<MemoryOpenVikingConfig>;
+  cfg: ParsedMemoryOpenVikingConfig;
   logger: Logger;
   getClient: () => Promise<OpenVikingClient>;
   /** Extra args help match hook-populated routing when OpenClaw provides sessionKey / OV session id. */

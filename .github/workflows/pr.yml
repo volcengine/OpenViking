@@ -95,6 +95,18 @@ jobs:
           bash -n examples/codex-memory-plugin/setup-helper/install.sh
           bash -n examples/codex-memory-plugin/setup-helper/tos-install.sh
 
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: examples/openclaw-plugin/package-lock.json
+
+      - name: Verify OpenClaw plugin package
+        working-directory: examples/openclaw-plugin
+        run: |
+          npm ci
+          npm pack --dry-run
+
   check-deps:
     runs-on: ubuntu-24.04
     outputs:
