@@ -106,6 +106,7 @@ def _task_tracker():
         update_stage=AsyncMock(),
         complete=AsyncMock(),
         fail=AsyncMock(),
+        mark_cancelled=AsyncMock(),
     )
 
 
@@ -397,6 +398,40 @@ async def test_paused_connector_watch_keeps_submission_failure(
 
 
 @pytest.mark.asyncio
+async def test_connector_watch_releases_hold_when_submission_is_cancelled(
+    connector_config,
+    ctx,
+    service,
+):
+    scheduler = WatchScheduler(resource_service=service, check_interval=1)
+    watch_manager = WatchManager()
+    scheduler._watch_manager = watch_manager
+    service._watch_scheduler = scheduler
+    service._connector.create_watch_auth_state = AsyncMock(return_value={"provider": "test"})
+    service._connector.submit = AsyncMock(side_effect=asyncio.CancelledError)
+    to_uri = "viking://resources/docs"
+
+    with pytest.raises(asyncio.CancelledError):
+        await service.add_resource(
+            path="tos://bucket/docs/",
+            ctx=ctx,
+            to=to_uri,
+            watch_interval=5,
+        )
+
+    task = await watch_manager.get_task_by_uri(
+        to_uri,
+        account_id="acct",
+        user_id="alice",
+        role=str(Role.USER),
+    )
+    assert task is not None
+    assert task.last_status == "failed"
+    assert task.last_error == "connector task submission cancelled"
+    assert scheduler._executing_tasks == set()
+
+
+@pytest.mark.asyncio
 async def test_connector_watch_prechecks_only_active_conflicts(
     monkeypatch,
     connector_config,
@@ -520,6 +555,49 @@ async def test_connector_watch_rejects_overlapping_imports_at_submit(
     )
     assert task is not None
     assert task.path == "tos://bucket/first/"
+
+
+@pytest.mark.asyncio
+async def test_connector_watch_rejects_same_source_while_first_import_is_running(
+    connector_config,
+    ctx,
+    service,
+):
+    scheduler = WatchScheduler(resource_service=service, check_interval=1)
+    watch_manager = WatchManager()
+    scheduler._watch_manager = watch_manager
+    service._watch_scheduler = scheduler
+    service._connector.create_watch_auth_state = AsyncMock(return_value={"provider": "test"})
+    service._connector.submit = AsyncMock(return_value={"status": "accepted"})
+    to_uri = "viking://resources/x/y"
+    path = "tos://bucket/docs/"
+
+    await service.add_resource(
+        path=path,
+        ctx=ctx,
+        to=to_uri,
+        reason="first",
+        watch_interval=5,
+    )
+    with pytest.raises(ConflictError, match="already executing"):
+        await service.add_resource(
+            path=path,
+            ctx=ctx,
+            to=to_uri,
+            reason="second",
+            watch_interval=5,
+        )
+
+    task = await watch_manager.get_task_by_uri(
+        to_uri,
+        account_id="acct",
+        user_id="alice",
+        role=str(Role.USER),
+    )
+    assert task is not None
+    assert task.reason == "first"
+    assert service._connector.submit.await_count == 1
+    assert scheduler._executing_tasks == {task.task_id}
 
 
 @pytest.mark.asyncio
@@ -2239,14 +2317,26 @@ async def test_monitor_connector_task_maps_terminal_status(
 
     assert tracker.update_stage.await_args.args[1] == expected_stage
     assert outcome["status"] == expected_status
-    if expected_error is None:
+    if expected_status == "completed":
         on_success.assert_awaited_once_with(None)
         tracker.complete.assert_awaited_once()
         tracker.fail.assert_not_awaited()
+        tracker.mark_cancelled.assert_not_awaited()
+    elif expected_status == "cancelled":
+        assert outcome == {"status": "cancelled", "error": expected_error}
+        on_success.assert_not_awaited()
+        tracker.mark_cancelled.assert_awaited_once_with(
+            "task-1",
+            account_id="acct",
+            user_id="alice",
+        )
+        tracker.fail.assert_not_awaited()
+        tracker.complete.assert_not_awaited()
     else:
         assert outcome == {"status": expected_status, "error": expected_error}
         on_success.assert_not_awaited()
         assert tracker.fail.await_args.args[1] == expected_error
+        tracker.mark_cancelled.assert_not_awaited()
         tracker.complete.assert_not_awaited()
     assert "secret-value" not in caplog.text
 

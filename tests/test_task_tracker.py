@@ -204,6 +204,23 @@ async def test_fail_task(tracker: TaskTracker):
     assert "LLM timeout" in retrieved.error
 
 
+async def test_mark_externally_cancelled_task_without_enabling_active_cancel(
+    tracker: TaskTracker,
+):
+    task = await tracker.create("connector_import", **_owner_kwargs())
+    await tracker.start(task.task_id)
+
+    with pytest.raises(ValueError, match="does not support cancellation"):
+        await tracker.cancel(task.task_id, **_owner_kwargs())
+
+    await tracker.mark_cancelled(task.task_id, **_owner_kwargs())
+
+    retrieved = await tracker.get(task.task_id)
+    assert retrieved is not None
+    assert retrieved.status == TaskStatus.CANCELLED
+    assert retrieved.stage == "cancelled"
+
+
 async def test_get_nonexistent_returns_none(tracker: TaskTracker):
     assert await tracker.get("does-not-exist") is None
 

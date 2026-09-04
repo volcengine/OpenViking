@@ -869,12 +869,19 @@ class ConnectorDelegate:
                         ov_task_id,
                         safe_error,
                     )
-                    await task_tracker.fail(
-                        ov_task_id,
-                        failure,
-                        account_id=ctx.account_id,
-                        user_id=ctx.user.user_id,
-                    )
+                    if status == "cancelled":
+                        await task_tracker.mark_cancelled(
+                            ov_task_id,
+                            account_id=ctx.account_id,
+                            user_id=ctx.user.user_id,
+                        )
+                    else:
+                        await task_tracker.fail(
+                            ov_task_id,
+                            failure,
+                            account_id=ctx.account_id,
+                            user_id=ctx.user.user_id,
+                        )
                     return {
                         "status": "cancelled" if status == "cancelled" else "failed",
                         "error": failure,

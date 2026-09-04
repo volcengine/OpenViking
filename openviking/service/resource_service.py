@@ -227,11 +227,17 @@ class ResourceService:
             return None
         return self._watch_scheduler.watch_manager
 
-    async def _hold_watch_execution(self, task_id: str) -> None:
+    async def _hold_watch_execution(self, task_id: str) -> bool:
         """Keep the scheduler from running *task_id* while its first round is in flight."""
         hold = getattr(self._watch_scheduler, "hold_execution", None)
-        if hold is not None:
-            await hold(task_id)
+        if hold is None:
+            return True
+        return bool(await hold(task_id))
+
+    async def _release_watch_execution(self, task_id: str) -> None:
+        release = getattr(self._watch_scheduler, "release_execution", None)
+        if release is not None:
+            await release(task_id)
 
     async def record_watch_execution(
         self,
@@ -265,9 +271,7 @@ class ResourceService:
                     f" error={sanitized_error}" if sanitized_error else "",
                 )
         finally:
-            release = getattr(self._watch_scheduler, "release_execution", None)
-            if release is not None:
-                await release(task_id)
+            await self._release_watch_execution(task_id)
 
     def _sanitize_watch_processor_kwargs(self, processor_kwargs: Dict[str, Any]) -> Dict[str, Any]:
         sanitized: Dict[str, Any] = {}
@@ -1549,11 +1553,11 @@ class ResourceService:
                     source_type=resolved[0],
                     ctx=ctx,
                     is_active=is_active is not False,
+                    hold_execution=True,
                 )
                 if watch is None:
                     raise InternalError("Failed to create Connector watch task.")
                 watch_task_id = watch.task_id
-                await self._hold_watch_execution(watch_task_id)
                 logger.info(
                     "[ResourceService] Connector watch ready before import: watch_task_id=%s "
                     "to=%s add_type=%s is_active=%s",
@@ -1607,6 +1611,14 @@ class ResourceService:
                     on_complete=on_complete,
                     **kwargs,
                 )
+            except asyncio.CancelledError:
+                if on_complete is not None:
+                    await on_complete(
+                        "failed",
+                        None,
+                        "connector task submission cancelled",
+                    )
+                raise
             except Exception as exc:
                 if on_complete is not None:
                     await on_complete("failed", None, str(exc))
@@ -2055,6 +2067,7 @@ class ResourceService:
         source_type: Optional[str],
         ctx: RequestContext,
         is_active: bool = True,
+        hold_execution: bool = False,
     ) -> Optional["WatchTask"]:
         """Handle creation or update of watch task.
 
@@ -2081,56 +2094,79 @@ class ResourceService:
             user_id=ctx.user.user_id,
             role=str(ctx.role),
         )
-        if existing_task:
-            was_active = existing_task.is_active
-            task = await watch_manager.update_task(
-                task_id=existing_task.task_id,
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-                role=str(ctx.role),
-                path=path,
-                source_type=source_type,
-                to_uri=to_uri,
-                to_is_directory=to_is_directory,
-                parent_uri=parent_uri,
-                reason=reason,
-                instruction=instruction,
-                watch_interval=watch_interval,
-                build_index=build_index,
-                summarize=summarize,
-                processing_mode=processing_mode,
-                processor_kwargs=processor_kwargs,
-                auth_state=auth_state,
-                connector_states=connector_states,
-                is_active=is_active,
-            )
-            logger.info(
-                f"[ResourceService] {'Updated active' if was_active else 'Reactivated and updated'} "
-                f"watch task {existing_task.task_id} for {to_uri}"
-            )
-        else:
-            task = await watch_manager.create_task(
-                path=path,
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-                original_role=str(ctx.role),
-                source_type=source_type,
-                to_uri=to_uri,
-                to_is_directory=to_is_directory,
-                parent_uri=parent_uri,
-                reason=reason,
-                instruction=instruction,
-                watch_interval=watch_interval,
-                build_index=build_index,
-                summarize=summarize,
-                processing_mode=processing_mode,
-                processor_kwargs=processor_kwargs,
-                auth_state=auth_state,
-                connector_states=connector_states,
-                is_active=is_active,
-            )
-            logger.info(f"[ResourceService] Created watch task {task.task_id} for {to_uri}")
-        return task
+        held_task_id: Optional[str] = None
+        try:
+            if existing_task:
+                if hold_execution:
+                    if not await self._hold_watch_execution(existing_task.task_id):
+                        raise ConflictError(
+                            f"Watch task {existing_task.task_id} is already executing. "
+                            "Retry after it finishes.",
+                            resource=to_uri,
+                        )
+                    held_task_id = existing_task.task_id
+                was_active = existing_task.is_active
+                task = await watch_manager.update_task(
+                    task_id=existing_task.task_id,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                    role=str(ctx.role),
+                    path=path,
+                    source_type=source_type,
+                    to_uri=to_uri,
+                    to_is_directory=to_is_directory,
+                    parent_uri=parent_uri,
+                    reason=reason,
+                    instruction=instruction,
+                    watch_interval=watch_interval,
+                    build_index=build_index,
+                    summarize=summarize,
+                    processing_mode=processing_mode,
+                    processor_kwargs=processor_kwargs,
+                    auth_state=auth_state,
+                    connector_states=connector_states,
+                    is_active=is_active,
+                )
+                logger.info(
+                    f"[ResourceService] "
+                    f"{'Updated active' if was_active else 'Reactivated and updated'} "
+                    f"watch task {existing_task.task_id} for {to_uri}"
+                )
+            else:
+                task = await watch_manager.create_task(
+                    path=path,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                    original_role=str(ctx.role),
+                    source_type=source_type,
+                    to_uri=to_uri,
+                    to_is_directory=to_is_directory,
+                    parent_uri=parent_uri,
+                    reason=reason,
+                    instruction=instruction,
+                    watch_interval=watch_interval,
+                    build_index=build_index,
+                    summarize=summarize,
+                    processing_mode=processing_mode,
+                    processor_kwargs=processor_kwargs,
+                    auth_state=auth_state,
+                    connector_states=connector_states,
+                    is_active=is_active,
+                )
+                if hold_execution:
+                    if not await self._hold_watch_execution(task.task_id):
+                        raise ConflictError(
+                            f"Watch task {task.task_id} is already executing. "
+                            "Retry after it finishes.",
+                            resource=to_uri,
+                        )
+                    held_task_id = task.task_id
+                logger.info(f"[ResourceService] Created watch task {task.task_id} for {to_uri}")
+            return task
+        except BaseException:
+            if held_task_id is not None:
+                await self._release_watch_execution(held_task_id)
+            raise
 
     async def _handle_watch_task_cancellation(self, to_uri: str, ctx: RequestContext) -> None:
         """Handle cancellation of watch task.
