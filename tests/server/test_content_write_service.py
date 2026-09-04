@@ -8,6 +8,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from openviking.server.account_settings import (
+    AccountAclSettings,
+    AccountSettingsPatch,
+    update_account_settings,
+)
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils import MemoryFileUtils
@@ -104,17 +109,113 @@ async def test_memory_replace_preserves_metadata(service):
 
 
 @pytest.mark.asyncio
-async def test_resource_append_is_plain_concatenation(service):
-    """Appending to a non-memory file must not inject a MEMORY_FIELDS trailer
-    or strip the existing trailing newline (memory namespaces only)."""
-    ctx = RequestContext(user=service.user, role=Role.USER)
+async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
+    service, sample_markdown_file
+):
+    """New shared content grants creator manage without changing file content."""
+    creator = RequestContext(
+        user=service.user,
+        role=Role.USER,
+        group_ids=("writers",),
+    )
+    admin = RequestContext(user=service.user, role=Role.ADMIN)
+    reader = RequestContext(
+        user=UserIdentifier(admin.account_id, "reader"),
+        role=Role.USER,
+        group_ids=("readers",),
+    )
+    outsider = RequestContext(
+        user=UserIdentifier(admin.account_id, "outsider"),
+        role=Role.USER,
+    )
+    parent_uri = "viking://resources/append_plain"
+    auto_protected_dir = "viking://resources/auto_protected"
     uri = "viking://resources/append_plain/journal.md"
 
-    await service.fs.write(uri, content="line1\n", ctx=ctx, mode="create")
-    await service.fs.write(uri, content="line2\n", ctx=ctx, mode="append")
+    await update_account_settings(
+        service.viking_fs,
+        creator.account_id,
+        AccountSettingsPatch(acl=AccountAclSettings(enabled=True)),
+    )
+    await service.fs.mkdir(auto_protected_dir, ctx=creator)
+    await service.resources.wait_processed()
+    auto_protected_acl = await service.fs.get_acl(auto_protected_dir, ctx=creator)
+    creator_entry = {
+        "principal": f"user:{creator.user.user_id}",
+        "level": "manage",
+    }
+    assert auto_protected_acl["direct_entries"] == [creator_entry]
 
-    stored = await service.viking_fs.read_file(uri, ctx=ctx)
+    await service.viking_fs.mkdir(parent_uri, ctx=admin)
+    assert await service.vikingdb_manager.upsert(
+        {
+            "id": "append-plain-parent",
+            "uri": parent_uri,
+            "account_id": admin.account_id,
+            "context_type": "resource",
+            "level": 0,
+            "vector": [0.1] * service.vikingdb_manager.vector_dim,
+        },
+        ctx=admin,
+    )
+    await service.fs.set_acl(
+        parent_uri,
+        [
+            {"principal": "group:readers", "level": "read"},
+            {"principal": "group:writers", "level": "write"},
+        ],
+        ctx=admin,
+    )
+
+    await service.fs.write(uri, content="line1\n", ctx=creator, mode="create", wait=True)
+    inherited_entries = [
+        {"principal": "group:readers", "level": "read"},
+        {"principal": "group:writers", "level": "write"},
+    ]
+    created_acl = await service.fs.get_acl(uri, ctx=creator)
+    assert created_acl["direct_entries"] == [creator_entry]
+    assert created_acl["inherited_entries"] == inherited_entries
+
+    imported = await service.resources.add_resource(
+        path=str(sample_markdown_file),
+        parent=parent_uri,
+        ctx=creator,
+        reason="ACL import",
+        wait=True,
+    )
+    import_root = imported["root_uri"]
+    imported_acl = await service.fs.get_acl(import_root, ctx=creator)
+    assert imported_acl["direct_entries"] == [creator_entry]
+    assert imported_acl["inherited_entries"] == inherited_entries
+    children = await service.fs.ls(import_root, ctx=creator, simple=True)
+    child_acl = await service.fs.get_acl(children[0], ctx=creator)
+    assert child_acl["direct_entries"] == []
+    assert child_acl["inherited_entries"] == [*inherited_entries, creator_entry]
+
+    await service.fs.write(uri, content="line2\n", ctx=creator, mode="append", wait=True)
+
+    stored = await service.viking_fs.read_file(uri, ctx=reader)
     assert stored == "line1\nline2\n"
+    with pytest.raises(PermissionDeniedError):
+        await service.fs.write(uri, content="denied", ctx=reader)
+    with pytest.raises(PermissionDeniedError):
+        await service.viking_fs.read_file(uri, ctx=outsider)
+
+    await update_account_settings(
+        service.viking_fs,
+        creator.account_id,
+        AccountSettingsPatch(acl=AccountAclSettings(enabled=False)),
+    )
+    assert await service.viking_fs.read_file(uri, ctx=outsider) == stored
+
+    internal_ctx = RequestContext(
+        user=outsider.user,
+        role=outsider.role,
+        bypass_acl=True,
+    )
+    assert await service.viking_fs.read_file(uri, ctx=internal_ctx) == stored
+    with pytest.raises(PermissionDeniedError):
+        await service.fs.get_acl(uri, ctx=internal_ctx)
 
 
 @pytest.mark.asyncio
@@ -373,8 +474,11 @@ class _FakeVikingFS:
         del ctx
         return f"/fake/{uri.replace('://', '/').strip('/')}"
 
-    def _ensure_mutable_access(self, uri: str, ctx):
-        del uri, ctx
+    async def _ensure_access(self, uri: str, ctx, *, action):
+        del uri, ctx, action
+
+    async def _ensure_access_many(self, uris, ctx, *, action):
+        del uris, ctx, action
 
     async def delete_temp(self, temp_uri: str, ctx=None):
         del ctx
@@ -786,8 +890,8 @@ class _FakeVikingFSForCreate:
         del ctx
         return f"/fake/{uri.replace('://', '/').strip('/')}"
 
-    def _ensure_mutable_access(self, uri: str, ctx):
-        del uri, ctx
+    async def _ensure_access(self, uri: str, ctx, *, action):
+        del uri, ctx, action
 
     async def delete_temp(self, temp_uri: str, ctx=None):
         del ctx

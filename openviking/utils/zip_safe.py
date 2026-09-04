@@ -24,14 +24,19 @@ def _contains_cjk(text: str) -> bool:
 
 def _contains_common_mojibake(text: str) -> bool:
     return any(
-        "\u0370" <= ch <= "\u03ff" or "\u2200" <= ch <= "\u22ff" or "\u2500" <= ch <= "\u257f"
+        # CP437 decodes UTF-8 lead byte 0xE6 as U+00B5.  That byte covers
+        # a large part of the basic CJK block whose mojibake otherwise has
+        # no Greek, mathematical, or box-drawing characters.
+        ch == "\u00b5"
+        or "\u0370" <= ch <= "\u03ff"
+        or "\u2200" <= ch <= "\u22ff"
+        or "\u2500" <= ch <= "\u257f"
         for ch in text
     )
 
 
 def normalize_zip_filenames(zipf: zipfile.ZipFile) -> None:
     """Repair UTF-8 member names when archives forgot to set the UTF-8 flag."""
-    repaired_any = False
     for member in zipf.infolist():
         if member.flag_bits & _UTF8_FLAG:
             continue
@@ -51,12 +56,10 @@ def normalize_zip_filenames(zipf: zipfile.ZipFile) -> None:
         if not _contains_common_mojibake(member.filename):
             continue
 
+        # Keep orig_filename unchanged. ZipFile.open() compares the local-header
+        # name decoded as CP437 with this value; changing it would make repaired
+        # entries unreadable even though their output path is now correct.
         member.filename = repaired_name
-        member.orig_filename = repaired_name
-        repaired_any = True
-
-    if repaired_any:
-        zipf.metadata_encoding = "utf-8"
 
 
 def _safe_zip_member_path(filename: str) -> Path:

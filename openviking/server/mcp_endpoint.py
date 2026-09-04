@@ -65,6 +65,7 @@ from openviking.server.local_input_guard import (
 from openviking.server.resource_ingest import ingest_temp_upload
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.server.upload_token_store import upload_token_store
+from openviking.utils.media_limits import MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
 from openviking.utils.search_filters import SearchContextTypeInput, merge_search_filter
 from openviking_cli.exceptions import (
     InvalidArgumentError,
@@ -425,9 +426,7 @@ async def _format_search_result(result, *, service, ctx, read_content: bool = Fa
 _MCP_IMAGE_EXTENSIONS = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
 _MCP_AUDIO_EXTENSIONS = {".flac", ".m4a", ".mp3", ".oga", ".ogg", ".wav"}
 _MCP_VIDEO_EXTENSIONS = {".avi", ".m4v", ".mkv", ".mov", ".mp4", ".webm"}
-# Common clients cap an inline result at 5 MiB base64, or 3.75 MiB raw.
-# Apply the same limit to one file and to the aggregate media in one tool call.
-_MCP_MEDIA_MAX_BYTES = 3_932_160
+_MCP_MEDIA_MAX_BYTES = MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
 
 
 def _mcp_uri_suffix(uri: str) -> str:
@@ -969,11 +968,16 @@ async def add_resource(
             Only applies to remote-URL invocations.
         processing_mode: "semantic_and_vectors" for normal semantic processing, or
             "vectors_only" to skip semantic understanding and only build vector indexes.
-        to: Target URI under viking://resources/ (e.g. "viking://resources/volcengine/OpenViking").
-            Required when ``add_type`` is set; otherwise leave empty to derive a URI
-            from the source.
-        parent: Parent URI under viking://resources/ for remote imports. Mutually exclusive
-            with ``to`` and not supported when ``add_type`` is set.
+        to: Exact final URI including the leaf name (e.g.
+            "viking://resources/volcengine/OpenViking"). Written verbatim; an existing
+            target is synced to match the new source, so visible entries it does not
+            contain are deleted. Required when ``add_type`` is set.
+        parent: Existing directory to store the resource under, for remote or
+            local-file imports; the leaf name comes from the source. Never overwrites
+            — a collision reserves the next free name ("name_1", "name_2", ...) and
+            returns a warning. Mutually exclusive with ``to``; not supported when
+            ``add_type`` is set. Leaving both empty derives the directory and the name
+            from the source and handles collisions like ``parent``.
         tags: Optional explicit k=v retrieval tags to apply after ingestion.
         tag_mode: Tag update mode, "replace" or "append". Defaults to "replace".
         args: Parser-specific options, e.g. {"auth_config": {"token": "..."}}
@@ -1021,6 +1025,8 @@ async def add_resource(
         return "Error: add_type cannot be combined with parent."
     if add_type and not to:
         return "Error: add_type requires an exact 'to' target."
+    if to and parent:
+        return "Error: Cannot specify both 'to' and 'parent' at the same time."
 
     # Branch 1: ingest by temp_file_id. Kept for backward compat / REST-style use — the
     # signed upload now auto-ingests server-side, so agents no longer need this second leg.
@@ -1035,6 +1041,7 @@ async def add_resource(
                 temp_file_id,
                 ctx,
                 to=to,
+                parent=parent,
                 reason=description,
                 args=args,
                 processing_mode=processing_mode,
@@ -1133,6 +1140,7 @@ async def add_resource(
         ctx.user.user_id,
         ttl_seconds=ttl_seconds,
         to=to,
+        parent=parent,
         reason=description,
         actor_peer_id=ctx.actor_peer_id or "",
         processing_mode=processing_mode,

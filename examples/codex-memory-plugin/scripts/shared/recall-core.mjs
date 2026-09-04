@@ -417,6 +417,31 @@ export async function markContextFaceLegacy(path = stateFile("context-face.json"
   await writeJsonFile(path, { legacyUntil: now + LEGACY_CACHE_TTL_MS });
 }
 
+/**
+ * A `peer_scope` the server rejects is remembered the same way, but unlike the
+ * context face this one is not a silent capability probe: dropping the field
+ * widens recall from the caller's own peer to the whole user root, so doctor
+ * reads this file back and warns.
+ */
+export function peerScopeMemoPath() {
+  return stateFile("peer-scope.json");
+}
+
+export async function readPeerScopeDowngrade(path = peerScopeMemoPath(), now = Date.now()) {
+  const cached = await readJsonFile(path);
+  if (!cached?.legacyUntil || Number(cached.legacyUntil) <= now) return null;
+  return cached;
+}
+
+export async function markPeerScopeDowngrade(scope, status, path = peerScopeMemoPath(), now = Date.now()) {
+  await writeJsonFile(path, {
+    legacyUntil: now + LEGACY_CACHE_TTL_MS,
+    scope: String(scope || ""),
+    status: Number(status) || 0,
+    at: now,
+  });
+}
+
 function looksLikeUnknownField(res) {
   const text = JSON.stringify(res?.error ?? res?.result ?? res?.detail ?? "").toLowerCase();
   return text.includes("extra") || text.includes("mode") || text.includes("unexpected");
@@ -558,7 +583,15 @@ async function recallViaEndpoint(fetchJSON, cfg, query, actorPeerId = "", log = 
 export async function postRecall(fetchJSON, body, opts = {}) {
   const actorPeerId = opts.actorPeerId || "";
   const log = opts.log || (() => {});
+  const memoPath = opts.peerScopeMemoPath;
   const request = { ...body };
+
+  // A remembered downgrade is still a downgrade: recall runs wider than the
+  // caller asked for, so the memo doubles as the doctor's evidence.
+  if (request.peer_scope && await readPeerScopeDowngrade(memoPath)) {
+    delete request.peer_scope;
+  }
+
   const res = await fetchJSON("/api/v1/search/recall", {
     method: "POST",
     body: JSON.stringify(request),
@@ -566,9 +599,17 @@ export async function postRecall(fetchJSON, body, opts = {}) {
   if (!request.peer_scope || (res.status !== 400 && res.status !== 422)) {
     return res;
   }
+  // Only an unknown-field rejection means "this server predates peer_scope".
+  // Retrying every other 400/422 without it silently widens the search from
+  // the caller's own peer to the whole user root.
+  if (!looksLikeUnknownField(res)) {
+    log("recall_peer_scope_error", { status: res.status || 0 });
+    return res;
+  }
 
   const downgraded = { ...request };
   delete downgraded.peer_scope;
+  await markPeerScopeDowngrade(String(request.peer_scope), res.status || 0, memoPath);
   log("recall_peer_scope_downgrade", { status: res.status || 0 });
   return fetchJSON("/api/v1/search/recall", {
     method: "POST",
@@ -576,7 +617,31 @@ export async function postRecall(fetchJSON, body, opts = {}) {
   }, { actorPeerId });
 }
 
+/**
+ * Recall, plus whatever is still filed under the peer this workspace used
+ * before the identity rule changed.
+ *
+ * Under the default `peer_scope: "all"` this costs nothing: the server's own
+ * sweep of `{user_root}/peers` already reaches the old peer's memories. Under
+ * `"actor"` that sweep is off by definition, so the old peer is asked for
+ * separately — as itself, which is both cheaper and wider than a bare
+ * cross-peer read (that would need the user id, and reaches memories only).
+ */
 export async function buildRecallBlock(fetchJSON, cfg, query, options = {}) {
+  const primary = await recallForPeer(fetchJSON, cfg, query, options);
+
+  const legacyPeerId = String(options.legacyPeerId || "").trim();
+  const actorPeerId = options.actorPeerId ?? cfg.peerId ?? "";
+  if (cfg.recallPeerScope !== "actor" || !legacyPeerId || legacyPeerId === actorPeerId) return primary;
+
+  const log = options.log || (() => {});
+  const legacy = await recallForPeer(fetchJSON, cfg, query, { ...options, actorPeerId: legacyPeerId });
+  if (!legacy) return primary;
+  log("recall_legacy_peer_hit", { legacyPeerId });
+  return primary ? `${primary}\n${legacy}` : legacy;
+}
+
+async function recallForPeer(fetchJSON, cfg, query, options = {}) {
   const actorPeerId = options.actorPeerId ?? cfg.peerId ?? "";
   const log = options.log || (() => {});
   const trimmed = String(query || "").trim();

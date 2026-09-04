@@ -1,6 +1,5 @@
 import type { OVClient } from "./client.js";
-import { appendFileSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { createLogger } from "./shared/debug-log.mjs";
 import type { OVConfig } from "./config.js";
 import { deriveHarnessSessionId } from "./shared/session-model.mjs";
 import { enqueue, listPending, replayPending } from "./shared/pending-queue.mjs";
@@ -20,26 +19,20 @@ export interface SyncBranchResult {
   allDelivered: boolean;
 }
 
-function debugLog(message: string): void {
-  const file = process.env.OV_DEBUG_LOG;
-  if (!file) return;
-  try {
-    mkdirSync(dirname(file), { recursive: true });
-    appendFileSync(file, `${new Date().toISOString()} ${message}\n`);
-  } catch {
-    // Best effort; logging must never affect pi.
-  }
-}
-
 export class SyncManager {
   private client: OVClient;
   private config: OVConfig;
+  private logger: ReturnType<typeof createLogger>;
   private ovSessionId: string | null = null;
   private syncedEntryCount = 0;
 
   constructor(client: OVClient, config: OVConfig) {
     this.client = client;
     this.config = config;
+    this.logger = createLogger("pi", {
+      debug: Boolean(config.debugLogPath),
+      debugLogPath: config.debugLogPath,
+    });
   }
 
   get sessionId(): string | null { return this.ovSessionId; }
@@ -62,8 +55,7 @@ export class SyncManager {
     if (!this.client.connected) return;
     await replayPending(
       (path: string, init?: any) => this.client.fetchJSON(path, init, 10000),
-      (stage: string, data: unknown) =>
-        debugLog(`${stage}: ${JSON.stringify(data)}`),
+      (stage: string, data: unknown) => this.logger.log(stage, data),
     );
   }
 
@@ -123,11 +115,13 @@ export class SyncManager {
     );
     const result = response.result;
     if (!result) {
-      debugLog(
-        `commit: session=${this.ovSessionId} ok=false status=${response.status ?? 0} ` +
-          `trace_id=${response.traceId || "none"} ` +
-          `error=${response.error?.message || response.error?.code || "unknown"}`,
-      );
+      this.logger.log("commit", {
+        session: this.ovSessionId,
+        ok: false,
+        status: response.status ?? 0,
+        trace_id: response.traceId || "none",
+        error: response.error?.message || response.error?.code || "unknown",
+      });
       if (opts.queueOnFailure !== false) {
         await enqueue("commitSession", this.ovSessionId, {
           keep_recent_count: opts.keepRecentCount ?? this.config.commitKeepRecentCount,
@@ -135,9 +129,11 @@ export class SyncManager {
       }
       return null;
     }
-    debugLog(
-      `commit: session=${this.ovSessionId} ok=true trace_id=${result.trace_id || "none"}`,
-    );
+    this.logger.log("commit", {
+      session: this.ovSessionId,
+      ok: true,
+      trace_id: result.trace_id || "none",
+    });
     return result;
   }
 

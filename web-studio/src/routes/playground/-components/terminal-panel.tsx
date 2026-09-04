@@ -1379,12 +1379,6 @@ export function TerminalPanel({
       {toolbarContainer
         ? createPortal(
             <>
-              <span
-                className="min-w-0 max-w-40 truncate rounded-md border bg-muted/40 px-2 py-1 font-mono text-[11px] text-foreground"
-                title={currentUri}
-              >
-                {t('terminal.scopeLabel', { uri: currentUri })}
-              </span>
               <Button
                 type="button"
                 variant="ghost"
@@ -1447,6 +1441,12 @@ export function TerminalPanel({
               void runCommand(command)
             }}
           >
+            <span
+              className="max-w-[45%] shrink-0 truncate font-mono text-[11px] text-muted-foreground"
+              title={t('terminal.scopeLabel', { uri: currentUri })}
+            >
+              {currentUri}
+            </span>
             <input
               ref={inputRef}
               value={command}

@@ -93,6 +93,9 @@ class _FakeVikingFS:
             raise FileNotFoundError(uri)
         return self.files[uri]
 
+    async def _ensure_access(self, uri, ctx, *, action):
+        return None
+
     async def write_file(self, uri, content, **_kwargs):
         self.writes.append(uri)
         self.files[uri] = content
@@ -114,6 +117,9 @@ class _FakeService:
         return None
 
     async def initialize_user_directories(self, ctx):
+        return None
+
+    async def initialize_account_workspace(self, ctx):
         return None
 
 

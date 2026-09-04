@@ -1,16 +1,15 @@
 //! A transparent [`FileSystem`](crate::FileSystem) cache wrapper.
 
 use super::envelope::{CacheEnvelope, CacheObjectKind, GenerationSnapshot};
-use super::{
-    CacheError, CacheMetrics, CachePolicy, CacheProvider, CacheResult, CacheTraversalMode,
-};
+use super::{CacheMetrics, CachePolicy, CacheTraversalMode};
+use crate::cache_runtime::{CacheError, CacheResult, CacheRuntime, SetOptions, SetResult};
 use crate::core::filesystem::{
     compile_grep_regex, is_excluded_path, normalize_prefix_path, relative_depth,
-    relative_match_file,
+    relative_match_file, sort_directory_entries,
 };
 use crate::core::{
-    FileInfo, FileSystem, GlobPage, GrepMatch, GrepResult, MultiWriteWrappedFS, Result,
-    TreeEntry, WriteFlag,
+    FileInfo, FileSystem, GlobPage, GrepMatch, GrepResult, MultiWriteWrappedFS, Result, TreeEntry,
+    WriteFlag,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -23,6 +22,7 @@ use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
 const GREP_CACHE_FILE_CONCURRENCY: usize = 8;
+const GENERATION_PUT_CONCURRENCY: usize = 8;
 
 /// Namespace prepended to every provider key owned by one wrapper.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,7 +50,7 @@ impl CacheNamespace {
 /// default mount path, so existing filesystem behavior remains unchanged.
 pub struct CachedFileSystem {
     backend: Box<dyn FileSystem>,
-    provider: Arc<dyn CacheProvider>,
+    runtime: Arc<CacheRuntime>,
     namespace: CacheNamespace,
     policy: CachePolicy,
     metrics: Arc<CacheMetrics>,
@@ -62,16 +62,25 @@ pub struct CachedFileSystem {
 }
 
 impl CachedFileSystem {
-    /// Wrap an existing backend with a cache provider.
-    pub fn new(
+    /// Wrap an existing backend with the unified cache runtime.
+    pub fn with_runtime(
         backend: Box<dyn FileSystem>,
-        provider: Arc<dyn CacheProvider>,
+        runtime: Arc<CacheRuntime>,
+        namespace: CacheNamespace,
+        policy: CachePolicy,
+    ) -> Self {
+        Self::build(backend, runtime, namespace, policy)
+    }
+
+    fn build(
+        backend: Box<dyn FileSystem>,
+        runtime: Arc<CacheRuntime>,
         namespace: CacheNamespace,
         policy: CachePolicy,
     ) -> Self {
         Self {
             backend,
-            provider,
+            runtime,
             namespace,
             policy,
             metrics: Arc::new(CacheMetrics::default()),
@@ -88,9 +97,9 @@ impl CachedFileSystem {
         Arc::clone(&self.metrics)
     }
 
-    /// Return the provider used by this wrapper.
-    pub fn provider(&self) -> Arc<dyn CacheProvider> {
-        Arc::clone(&self.provider)
+    /// Return the unified cache runtime used by this wrapper.
+    pub fn runtime(&self) -> Arc<CacheRuntime> {
+        Arc::clone(&self.runtime)
     }
 
     /// Return the wrapped filesystem for mount-stack capability discovery.
@@ -140,7 +149,8 @@ impl CachedFileSystem {
                         }
                     }
 
-                    let entries = self.read_dir(&current_path).await?;
+                    let mut entries = self.read_dir(&current_path).await?;
+                    sort_directory_entries(&mut entries);
                     for entry in entries.into_iter().rev() {
                         let is_hidden_file = !entry.is_dir && entry.name.starts_with('.');
                         if is_hidden_file && !show_hidden {
@@ -368,7 +378,7 @@ impl CachedFileSystem {
 
     async fn cache_get(&self, key: &str) -> CacheResult<Option<Bytes>> {
         let started = Instant::now();
-        let result = self.provider.get(key).await;
+        let result = self.runtime.get(key).await;
         self.metrics.get(started.elapsed());
         result
     }
@@ -378,7 +388,7 @@ impl CachedFileSystem {
             return Ok(Vec::new());
         }
 
-        if keys.len() == 1 || !self.provider.capabilities().batch_get {
+        if keys.len() == 1 {
             let mut values = Vec::with_capacity(keys.len());
             for key in keys {
                 values.push(self.cache_get(key).await?);
@@ -387,7 +397,7 @@ impl CachedFileSystem {
         }
 
         let started = Instant::now();
-        let result = self.provider.batch_get(keys).await;
+        let result = self.runtime.mget(keys).await;
         self.metrics.get(started.elapsed());
         let values = result?;
         if values.len() != keys.len() {
@@ -402,10 +412,15 @@ impl CachedFileSystem {
 
     async fn cache_put(&self, key: &str, value: Bytes, affected_path: &str) -> bool {
         let started = Instant::now();
-        let result = self.provider.put(key, value).await;
+        let result = self.runtime.set(key, value, SetOptions::default()).await;
         self.metrics.put(started.elapsed());
         match result {
-            Ok(()) => true,
+            Ok(SetResult::Applied) => true,
+            Ok(SetResult::ConditionNotMet) => {
+                self.metrics.error();
+                self.mark_bypass(affected_path).await;
+                false
+            }
             Err(_) => {
                 self.metrics.error();
                 self.mark_bypass(affected_path).await;
@@ -416,10 +431,10 @@ impl CachedFileSystem {
 
     async fn cache_delete(&self, key: &str, affected_path: &str) {
         let started = Instant::now();
-        let result = self.provider.delete(key).await;
+        let result = self.runtime.del(&[key.to_string()]).await;
         self.metrics.delete(started.elapsed());
         match result {
-            Ok(()) => self.metrics.invalidation(),
+            Ok(_) => self.metrics.invalidation(),
             Err(_) => {
                 self.metrics.error();
                 self.mark_bypass(affected_path).await;
@@ -536,35 +551,23 @@ impl CachedFileSystem {
     }
 
     async fn put_missing_generations(&self, missing: Vec<(String, u64)>) {
-        if missing.is_empty() {
-            return;
-        }
-
-        if missing.len() > 1 && self.provider.capabilities().batch_put {
-            let entries = missing
-                .into_iter()
-                .map(|(key, value)| (key, Bytes::copy_from_slice(&value.to_be_bytes())))
-                .collect();
-            let started = Instant::now();
-            if self.provider.batch_put(entries).await.is_err() {
-                self.metrics.error();
-            }
-            self.metrics.put(started.elapsed());
-            return;
-        }
-
-        for (key, value) in missing {
-            let started = Instant::now();
-            if self
-                .provider
-                .put(&key, Bytes::copy_from_slice(&value.to_be_bytes()))
-                .await
-                .is_err()
-            {
-                self.metrics.error();
-            }
-            self.metrics.put(started.elapsed());
-        }
+        stream::iter(missing)
+            .for_each_concurrent(GENERATION_PUT_CONCURRENCY, |(key, value)| async move {
+                let started = Instant::now();
+                let result = self
+                    .runtime
+                    .set(
+                        &key,
+                        Bytes::copy_from_slice(&value.to_be_bytes()),
+                        SetOptions::default(),
+                    )
+                    .await;
+                self.metrics.put(started.elapsed());
+                if !matches!(result, Ok(SetResult::Applied)) {
+                    self.metrics.error();
+                }
+            })
+            .await;
     }
 
     async fn generation_snapshots(&self, path: &str) -> CacheResult<Vec<GenerationSnapshot>> {
@@ -1066,7 +1069,10 @@ impl FileSystem for CachedFileSystem {
         let key = self.file_key(&normalized);
         self.cache_delete(&key, &normalized).await;
         if offset == 0
-            && matches!(flags, WriteFlag::Create | WriteFlag::CreateNew | WriteFlag::Truncate)
+            && matches!(
+                flags,
+                WriteFlag::Create | WriteFlag::CreateNew | WriteFlag::Truncate
+            )
             && self.policy.cache_file(&normalized, data.len())
             && !self.is_runtime_bypassed(&normalized).await
         {

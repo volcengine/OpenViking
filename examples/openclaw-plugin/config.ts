@@ -45,13 +45,13 @@ export type MemoryOpenVikingConfig = {
   captureMode?: "semantic" | "keyword";
   captureMaxLength?: number;
   autoRecall?: boolean;
-  /** Outer time budget for the whole auto-recall flow, including search, ranking, and reads. */
+  /** Outer time budget for the whole server-assembled auto-recall flow. */
   autoRecallTimeoutMs?: number;
   /** Include resources in auto-recall and default memory_recall search. Default false. */
   recallResources?: boolean;
   recallLimit?: number;
   recallScoreThreshold?: number;
-  /** Maximum total characters injected by auto-recall. */
+  /** Legacy character budget, converted to the server context token budget. */
   recallMaxInjectedChars?: number;
   /** @deprecated Auto-recall no longer truncates individual memories. */
   recallMaxContentChars?: number;
@@ -140,7 +140,9 @@ const DEFAULT_TARGET_URI = "viking://~/memories";
 const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_CAPTURE_MODE = "semantic";
 const DEFAULT_CAPTURE_MAX_LENGTH = 24000;
-const DEFAULT_AUTO_RECALL_TIMEOUT_MS = 5000;
+// Session-aware context search may spend up to 5 seconds on query expansion
+// before returning its server-side fallback, so leave headroom for retrieval.
+const DEFAULT_AUTO_RECALL_TIMEOUT_MS = 15000;
 const DEFAULT_RECALL_LIMIT = 6;
 const DEFAULT_RECALL_SCORE_THRESHOLD = 0.15;
 const DEFAULT_RECALL_MAX_CONTENT_CHARS = 5000;
@@ -843,7 +845,7 @@ export const memoryOpenVikingConfigSchema = {
       label: "Auto-Recall Timeout (ms)",
       placeholder: String(DEFAULT_AUTO_RECALL_TIMEOUT_MS),
       advanced: true,
-      help: "Outer time budget for the whole auto-recall flow, including search, ranking, and memory reads.",
+      help: "Outer time budget for the server-assembled context search, including session-aware query expansion.",
     },
     recallResources: {
       label: "Recall Resources",
@@ -870,7 +872,7 @@ export const memoryOpenVikingConfigSchema = {
       label: "Recall Max Injected Chars",
       placeholder: String(DEFAULT_RECALL_MAX_INJECTED_CHARS),
       advanced: true,
-      help: "Maximum total characters for auto-recall memory injection. Complete memories that do not fit are skipped, not truncated.",
+      help: "Legacy auto-recall character budget. It is converted to the server context token budget at four characters per token.",
     },
     recallMaxContentChars: {
       label: "Deprecated Recall Max Content Chars",
@@ -881,7 +883,7 @@ export const memoryOpenVikingConfigSchema = {
     recallPreferAbstract: {
       label: "Recall Prefer Abstract",
       advanced: true,
-      help: "Use memory abstract instead of fetching full content when abstract is available. Reduces token usage.",
+      help: "Pin server-assembled auto-recall entries to abstract detail. When disabled, the server chooses each category's default detail tier.",
     },
     recallTokenBudget: {
       label: "Deprecated Recall Token Budget",

@@ -1,6 +1,6 @@
 # 管理员（多租户）
 
-Admin API 用于多租户环境下的账户和用户管理。包括工作区（account）的创建与删除、用户注册与移除、角色变更、API Key 重新生成。
+Admin API 用于多租户环境下的账户、用户和用户组管理。包括工作区（account）的创建与删除、用户注册与移除、用户组成员、角色变更、API Key 重新生成。
 
 该 API 适用于 `api_key` 和 `trusted` 两种模式下的管理链路：
 - 在 `api_key` 模式下，角色始终从 API Key 推导。
@@ -21,6 +21,7 @@ Admin API 用于多租户环境下的账户和用户管理。包括工作区（a
 | 创建/删除工作区 | Y | N | N |
 | 列出工作区 | Y | N | N |
 | 注册/移除用户 | Y | Y（本 account） | N |
+| 管理用户组和成员 | Y | Y（本 account） | N |
 | 列出 agents（已废弃，返回空列表） | Y | Y（本 account） | N |
 | 重新生成 User Key | Y | Y（本 account） | N |
 | 将用户提升为 ADMIN | Y | Y（本 account） | N |
@@ -54,6 +55,32 @@ Admin API 用于多租户环境下的账户和用户管理。包括工作区（a
 
 - `--sudo` 仅适用于上面的命令，用于普通数据命令会报错
 - 必须配置 `root_api_key` 才能使用 `--sudo`
+
+## 用户组
+
+用户组属于单个 account，用于通过一个 ACL principal 授权多个用户。`group_id` 由调用者创建时指定，使用与 `user_id` 相同的标识符规则，是 account 内唯一且稳定的标识；不存在单独的组名。组内只能加入当前 account 已存在的用户，不支持嵌套组。
+
+成员关系由服务端加入每次请求的 `RequestContext.group_ids`。添加或移除成员从下一次请求开始生效，不重写资源 ACL 或 context 记录。用户被删除时会自动退出所有组；用户组必须为空才能删除。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/v1/admin/accounts/{account_id}/groups` | 创建空组，请求体为 `{"group_id":"engineering"}` |
+| GET | `/api/v1/admin/accounts/{account_id}/groups` | 列出组 |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | 删除空组 |
+| GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 列出成员 |
+| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 幂等添加成员；重复调用返回 `added=true` |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 移除成员；重复调用返回 `removed=false` |
+
+```bash
+ov --sudo admin create-group acme engineering
+ov --sudo admin add-group-member acme engineering alice
+ov acl grant viking://resources/project-a \
+  --principal group:engineering --level read
+ov --sudo admin remove-group-member acme engineering alice
+ov --sudo admin delete-group acme engineering
+```
+
+Python SDK 提供对应的 `admin_create_group`、`admin_list_groups`、`admin_list_group_members`、`admin_add_group_member`、`admin_remove_group_member` 和 `admin_delete_group`；Go SDK 使用相同名称的 PascalCase 方法。
 
 ## API 参考
 
@@ -102,14 +129,26 @@ Content-Type: application/json
 ### account_settings
 
 ROOT 可管理任意 account，ADMIN 仅可管理自己所属的 account。通用配置接口仅允许
-显式列入白名单的字段；当前只允许修改 `agent_evolution.enabled`。
+显式列入白名单的字段；当前允许修改 `agent_evolution.enabled` 和
+`acl.enabled`。
 
 ```http
 GET /api/v1/admin/accounts/{account_id}/settings
 PATCH /api/v1/admin/accounts/{account_id}/settings
 Content-Type: application/json
 
-{"agent_evolution": {"enabled": true}}
+{
+  "agent_evolution": {"enabled": true},
+  "acl": {"enabled": true}
+}
+```
+
+`acl.enabled` 默认为 `false`。关闭时，共享资源按原有规则完全共享，不执行 ACL
+鉴权。开启后，账号内新增共享资源会写入 ACL，并对带 ACL 的共享资源执行鉴权；
+已有且未设置 ACL 的内容不会迁移或改权。重新关闭后，已有 ACL 也不再参与访问判断。
+
+```bash
+ov --sudo admin set-account-settings acme --acl-enabled true
 ```
 
 覆盖已有配置前，内核会先备份到
@@ -329,7 +368,7 @@ ov --sudo admin create-account acme-private --admin alice \
 
 **处理流程：**
 1. 验证请求者具有 ROOT 权限
-2. 调用 API Key Manager 获取所有账户列表（按账户 ID 字典序排列）
+2. 调用 API Key Manager 获取所有账户列表（按创建顺序排列）
 3. 应用可选的 `name` 过滤
 4. 应用可选的 `limit`/`page` 分页
 5. 返回包含账户 ID、创建时间和用户数量的列表
@@ -347,7 +386,7 @@ ov --sudo admin create-account acme-private --admin alice \
 | limit | int | 否 | null | 每页数量（≥1）。省略则返回所有匹配项 |
 | page | int | 否 | 1 | 从 1 开始的页码；仅在设置了 `limit` 时生效 |
 
-结果始终按账户 ID 字典序返回。
+结果按创建顺序返回。
 
 #### 3. 使用示例
 
@@ -664,7 +703,7 @@ ov admin register-user acme bob-private --role user \
 
 **处理流程：**
 1. 验证请求者具有 ROOT 权限，或为本账户的 ADMIN
-2. 调用 API Key Manager 获取活跃用户列表（按用户 ID 字典序排列）
+2. 调用 API Key Manager 获取活跃用户列表（按创建顺序排列）
 3. 应用可选的过滤条件（name、role）
 4. 应用可选的 `limit`/`page` 分页
 5. 返回用户列表（trusted 模式下不包含 user_key）
@@ -687,7 +726,7 @@ ov admin register-user acme bob-private --role user \
 | page | int | 否 | 1 | 从 1 开始的页码；仅在设置了 `limit` 时生效 |
 
 **说明：**
-- 结果始终按用户 ID 字典序返回
+- 结果按创建顺序返回
 - ADMIN 只能列出自己所属的 account 中的用户
 - 在 `trusted` 模式下，响应中不会包含 `user_key` 字段
 - 用户删除开始后，不再出现在该列表中

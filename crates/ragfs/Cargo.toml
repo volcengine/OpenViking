@@ -21,6 +21,21 @@ path = "src/shell/main.rs"
 [[test]]
 name = "cache_wrapper"
 path = "tests/cache_wrapper.rs"
+required-features = ["cache", "test-utils"]
+
+[[test]]
+name = "cache_runtime"
+path = "tests/cache_runtime.rs"
+required-features = ["cache", "test-utils"]
+
+[[test]]
+name = "redis_runtime"
+path = "tests/redis_runtime.rs"
+required-features = ["cache"]
+
+[[test]]
+name = "dynamic_provider"
+path = "tests/dynamic_provider.rs"
 required-features = ["cache"]
 
 [dependencies]
@@ -68,8 +83,9 @@ bytes = "1.5"
 
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }
-redis = { version = "1.5.0", features = ["cluster", "r2d2", "sentinel", "tls-rustls-insecure", "tokio-rustls-comp"] }
-r2d2 = "0.8"
+fred = { version = "10.1.0", default-features = false, features = ["i-keys", "i-lists", "i-scripts", "i-server", "i-sets", "sentinel-auth", "sha-1", "vendored-openssl"], optional = true }
+libloading = { version = "0.8", optional = true }
+native-tls = { version = "0.2", optional = true }
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "mysql"], optional = true }
 
 # AWS S3
@@ -84,6 +100,7 @@ lru = "0.12"
 regex = "1.10"
 mime_guess = "2.0"
 globset = "0.4"
+url = "2.5"
 
 # Encryption (envelope encryption: AES-256-GCM + HKDF-SHA256)
 aes-gcm = "0.10"
@@ -120,6 +137,7 @@ uuid = { version = "1.0", features = ["v4"] }
 
 [features]
 default = []
-cache = []
+cache = ["dep:fred", "dep:libloading", "dep:native-tls"]
+test-utils = []
 s3 = ["aws-sdk-s3", "aws-config", "aws-types"]
 full = ["s3", "cache"]

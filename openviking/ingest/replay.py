@@ -68,7 +68,8 @@ class ConversationReplayClient:
             return await self._client.get_session(ov_session_id)
         except NotFoundError:
             return await self._client.create_session(
-                session_id=ov_session_id, memory_policy=memory_policy or None
+                session_id=ov_session_id,
+                options={"memory_policy": memory_policy} if memory_policy else None,
             )
 
     async def append(self, ov_session_id: str, messages: List[Dict[str, Any]]) -> int:

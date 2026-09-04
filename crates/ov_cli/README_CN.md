@@ -130,10 +130,17 @@ ov grep "openviking" --uri viking://resources
 - `tree` - 显示目录树。
 - `mkdir` - 创建目录。
 - `rm` - 删除资源或目录。
+- `cp` - 复制文件，或使用 `-r` 递归复制目录。
 - `mv` - 移动或重命名资源。
 - `stat` - 查看资源元数据。
 - `attrs` - 获取逻辑扩展属性。
 - `get` - 下载文件到本地路径。
+
+```bash
+# 目标父目录必须已存在，目标本身必须不存在。
+ov cp viking://resources/docs/guide.md viking://resources/archive/guide-copy.md
+ov cp -r viking://resources/docs viking://resources/docs-backup
+```
 
 ### 内容访问
 
@@ -265,6 +272,13 @@ ov find "authentication" --uri viking://resources/project --level 0,1
 # 递归列目录
 ov ls viking://resources --recursive
 
+# 写入调用方提供的 tags，再按 tags 过滤或回显
+ov write viking://resources/docs/api.md --content "# API" \
+  --tags team=search,env=prod
+ov ls viking://resources/docs --tags team=search,env=prod --fields tags
+ov grep "TODO" --uri viking://resources/docs --tags team=search,env=prod
+ov glob "**/*.md" --uri viking://resources/docs --tags team=search,env=prod
+
 # 临时通过 CLI 参数覆盖身份
 ov --account acme --user alice ls viking://
 
@@ -275,6 +289,7 @@ ov admin regenerate-key acme bob --seed bob-new-seed
 
 # Glob 搜索
 ov glob "**/*.md" --uri viking://resources
+ov glob "**/*.md" --uri viking://resources -f tags
 
 # Session 工作流
 SESSION=$(ov -o json session new | jq -r '.result.session_id')

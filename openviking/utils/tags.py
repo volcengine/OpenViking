@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections import OrderedDict
 from typing import Any, Iterable
 
@@ -12,12 +13,25 @@ from openviking_cli.exceptions import InvalidArgumentError
 
 logger = logging.getLogger(__name__)
 
+# Explicit search tags are meant to be small, enumerable business dimensions
+# (env, team, source, ...). Constrain both sides of ``k=v`` so tags stay stable
+# identifiers rather than free-form text: bounded length and a predictable
+# character set after lower-casing (no internal spaces, no ``=``).
+MAX_TAG_KEY_LENGTH = 64
+MAX_TAG_VALUE_LENGTH = 128
+MAX_TAG_LENGTH = MAX_TAG_KEY_LENGTH + 1 + MAX_TAG_VALUE_LENGTH
+_TAG_TOKEN_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
+
 
 def normalize_search_tag(tag: str) -> str:
     """Validate and normalize a single k=v search tag."""
     value = str(tag).strip().lower()
     if not value:
         raise InvalidArgumentError("search tag must be a non-empty k=v string")
+    if len(value) > MAX_TAG_LENGTH:
+        raise InvalidArgumentError(
+            f"invalid search tag '{tag}': exceeds max length {MAX_TAG_LENGTH}"
+        )
     if value.count("=") != 1:
         raise InvalidArgumentError(f"invalid search tag '{tag}': expected strict k=v format")
 
@@ -25,6 +39,19 @@ def normalize_search_tag(tag: str) -> str:
     if not key or not raw_value:
         raise InvalidArgumentError(
             f"invalid search tag '{tag}': key and value must both be non-empty"
+        )
+    if len(key) > MAX_TAG_KEY_LENGTH:
+        raise InvalidArgumentError(
+            f"invalid search tag '{tag}': key exceeds max length {MAX_TAG_KEY_LENGTH}"
+        )
+    if len(raw_value) > MAX_TAG_VALUE_LENGTH:
+        raise InvalidArgumentError(
+            f"invalid search tag '{tag}': value exceeds max length {MAX_TAG_VALUE_LENGTH}"
+        )
+    if not _TAG_TOKEN_RE.match(key) or not _TAG_TOKEN_RE.match(raw_value):
+        raise InvalidArgumentError(
+            f"invalid search tag '{tag}': key and value may only contain lowercase "
+            "letters, digits, '_', '-', '.', and must start with a letter or digit"
         )
     return f"{key}={raw_value}"
 

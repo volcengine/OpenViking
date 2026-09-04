@@ -4,6 +4,7 @@
 
 from typing import Any, Dict, List, Literal, Optional
 
+import httpx
 import openai
 
 from openviking.models.embedder.base import (
@@ -147,13 +148,19 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             self._client_kwargs["api_version"] = self.api_version or DEFAULT_AZURE_API_VERSION
             if extra_headers:
                 self._client_kwargs["default_headers"] = extra_headers
-            self.client = openai.AzureOpenAI(**self._client_kwargs)
+            self.client = openai.AzureOpenAI(
+                http_client=openai.DefaultHttpxClient(limits=self._http_limits()),
+                **self._client_kwargs,
+            )
         else:
             if self.api_base:
                 self._client_kwargs["base_url"] = self.api_base
             if extra_headers:
                 self._client_kwargs["default_headers"] = extra_headers
-            self.client = openai.OpenAI(**self._client_kwargs)
+            self.client = openai.OpenAI(
+                http_client=openai.DefaultHttpxClient(limits=self._http_limits()),
+                **self._client_kwargs,
+            )
         self._async_client_cache = LoopScopedAsyncClientCache()
 
         # Auto-detect dimension
@@ -172,6 +179,14 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         except Exception:
             # Use default value, text-embedding-3-small defaults to 1536
             return 1536
+
+    def _http_limits(self) -> httpx.Limits:
+        pool_limit = max(1, self.max_concurrent)
+        return httpx.Limits(
+            max_connections=pool_limit,
+            max_keepalive_connections=pool_limit,
+            keepalive_expiry=5.0,
+        )
 
     def _truncate_vector(self, vector: List[float]) -> List[float]:
         """Truncate vector to target dimension if needed.
@@ -297,9 +312,16 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
 
     def _get_async_client(self):
         def _build_async_client():
+            http_client = openai.DefaultAsyncHttpxClient(limits=self._http_limits())
             if self._provider == "azure":
-                return openai.AsyncAzureOpenAI(**self._client_kwargs)
-            return openai.AsyncOpenAI(**self._client_kwargs)
+                return openai.AsyncAzureOpenAI(
+                    http_client=http_client,
+                    **self._client_kwargs,
+                )
+            return openai.AsyncOpenAI(
+                http_client=http_client,
+                **self._client_kwargs,
+            )
 
         return self._async_client_cache.get(_build_async_client)
 
@@ -364,6 +386,11 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             int: Vector dimension
         """
         return self._dimension
+
+    def close(self):
+        """Close the sync client and all event-loop-scoped async clients."""
+        self.client.close()
+        self._async_client_cache.close_all_with_close()
 
 
 class OpenAISparseEmbedder(SparseEmbedderBase):

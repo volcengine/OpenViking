@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use futures::stream::{self, StreamExt};
 use regex::Regex;
 use serde_json::Value;
 use tokio::sync::{Mutex, Notify};
@@ -21,11 +22,10 @@ use tokio::sync::{Mutex, Notify};
 use super::context::{FsContext, FS_CTX};
 use super::encryption_wrapper::EncryptionWrappedFS;
 use super::errors::{Error, Result};
-use super::filesystem::{normalize_prefix_path, relative_match_file, FileSystem};
+use super::filesystem::{normalize_prefix_path, relative_depth, relative_match_file, FileSystem};
 use super::types::{
-    BackendRole, BackendSyncState, FileInfo, GlobEntry, GlobPage, GrepResult,
-    OperationItemConfig, RedirectEntry, RedirectPolicy, SyncLogEntry, SyncOp, SyncType, TreeEntry,
-    WriteFlag,
+    BackendRole, BackendSyncState, FileInfo, GlobEntry, GlobPage, GrepResult, OperationItemConfig,
+    RedirectEntry, RedirectPolicy, SyncLogEntry, SyncOp, SyncType, TreeEntry, WriteFlag,
 };
 use crate::core::glob::{
     compare_rel_paths, decode_offset_token, encode_offset_token, PreparedGlob,
@@ -53,6 +53,8 @@ const DEFAULT_MAX_RETRIES_PER_ROUND: usize = 3;
 const DEFAULT_QUARANTINE_AFTER_FAILURES: u32 = 9;
 /// Default wait timeout when shutting down background tasks.
 const DEFAULT_SHUTDOWN_WAIT: Duration = Duration::from_secs(5);
+/// Maximum concurrent metadata reads when merging redirect entries into tree output.
+const DEFAULT_TREE_REDIRECT_META_CONCURRENCY: usize = 32;
 
 #[derive(Debug)]
 struct SyncFanoutTaskResult {
@@ -717,6 +719,10 @@ impl Inner {
         path: &str,
         ctx: &FsContext,
     ) -> Result<Option<Vec<String>>> {
+        if self.redirects.is_empty() {
+            return Ok(None);
+        }
+
         let dir = parent_dir(path);
         let name = file_name(path);
         let redirect_meta = self.meta_store.get_redirect_meta(&dir, ctx).await?;
@@ -1391,6 +1397,10 @@ impl FileSystem for MultiWriteWrappedFS {
         // Filter multi-write internal names.
         entries.retain(|e| !MULTIWRITE_INTERNAL_NAMES.contains(&e.name.as_str()));
 
+        if inner.redirects.is_empty() {
+            return Ok(entries);
+        }
+
         // Merge redirect entries so users can see redirected files in listings.
         let ctx =
             current_required_ctx().or_else(|_| inner.meta_store.ctx_resolver().resolve(path))?;
@@ -1546,6 +1556,10 @@ impl FileSystem for MultiWriteWrappedFS {
             !MULTIWRITE_INTERNAL_NAMES.contains(&file_name)
         });
         result.count = result.matches.len();
+
+        if inner.redirects.is_empty() {
+            return Ok(result);
+        }
 
         // For redirect files, also grep in target backends.
         let ctx = current_required_ctx()
@@ -1737,25 +1751,60 @@ impl FileSystem for MultiWriteWrappedFS {
             !MULTIWRITE_INTERNAL_NAMES.contains(&name)
         });
 
+        if self.inner.redirects.is_empty() {
+            return Ok(entries);
+        }
+
+        if node_limit.is_some_and(|limit| entries.len() >= limit) {
+            return Ok(entries);
+        }
+
         let ctx = current_required_ctx()
             .or_else(|_| self.inner.meta_store.ctx_resolver().resolve(&base))?;
         let mut seen_paths: HashSet<String> = entries.iter().map(|e| e.path.clone()).collect();
-        let mut dir_paths = vec![base.clone()];
+        let mut dir_paths = Vec::new();
+        let mut queued_dirs: HashSet<String> = HashSet::new();
+        if !matches!(level_limit, Some(0)) {
+            queued_dirs.insert(base.clone());
+            dir_paths.push(base.clone());
+        }
         for entry in &entries {
             if entry.info.is_dir {
                 let dir = normalize_prefix_path(&entry.path);
-                if !dir_paths.iter().any(|p| p == &dir) {
+                let may_emit_redirect_children = match level_limit {
+                    Some(limit) => {
+                        let rel = relative_match_file(&base, &dir);
+                        relative_depth(&rel) < limit
+                    }
+                    None => true,
+                };
+                if may_emit_redirect_children && queued_dirs.insert(dir.clone()) {
                     dir_paths.push(dir);
                 }
             }
         }
 
-        for dir in dir_paths {
-            let redirect_meta = match self.inner.meta_store.get_redirect_meta(&dir, &ctx).await {
-                Ok(meta) => meta,
-                Err(_) => continue,
+        let inner = Arc::clone(&self.inner);
+        let mut redirect_results = stream::iter(dir_paths)
+            .map(|dir| {
+                let inner = Arc::clone(&inner);
+                let ctx = ctx.clone();
+                async move {
+                    let redirect_meta = inner.meta_store.get_redirect_meta(&dir, &ctx).await.ok();
+                    (dir, redirect_meta)
+                }
+            })
+            .buffered(DEFAULT_TREE_REDIRECT_META_CONCURRENCY);
+
+        'redirect_dirs: while let Some((dir, redirect_meta)) = redirect_results.next().await {
+            let Some(redirect_meta) = redirect_meta else {
+                continue;
             };
             for (name, redirect_entry) in redirect_meta.entries {
+                if node_limit.is_some_and(|limit| entries.len() >= limit) {
+                    break 'redirect_dirs;
+                }
+
                 let virtual_path = if dir == "/" {
                     format!("/{}", name)
                 } else {
@@ -1773,6 +1822,9 @@ impl FileSystem for MultiWriteWrappedFS {
                         .trim_start_matches('/')
                         .to_string()
                 };
+                if level_limit.is_some_and(|limit| relative_depth(&rel_path) > limit) {
+                    continue;
+                }
                 let mut extra = HashMap::new();
                 extra.insert("redirect".to_string(), Value::Bool(true));
                 entries.push(TreeEntry {

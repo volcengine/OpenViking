@@ -815,6 +815,7 @@ class MemoryUpdater:
         memory_type: Optional[str],
         ctx: RequestContext,
         strict: bool = False,
+        ingest_options=None,
     ) -> bool:
         if not vikingdb or not bool(getattr(vikingdb, "has_queue_manager", False)):
             return False
@@ -829,6 +830,7 @@ class MemoryUpdater:
                 result,
                 ctx,
                 uri_memory_type_map={uri: memory_type} if memory_type else {},
+                ingest_options=ingest_options,
             )
             return attempted > 0
         except Exception:
@@ -906,6 +908,7 @@ class MemoryUpdater:
                 if resolution_skip.reason_code in {
                     MemoryOperationSkipCode.INVALID_PEER_ID,
                     MemoryOperationSkipCode.INVALID_RANGES,
+                    MemoryOperationSkipCode.PAGE_ID_TYPE_MISMATCH,
                 }:
                     logger.warning(message)
                 else:
@@ -1387,6 +1390,7 @@ class MemoryUpdater:
         extract_context: Any = None,
         uri_memory_type_map: Dict[str, str] = None,
         search_tags_by_uri: Dict[str, List[str]] = None,
+        ingest_options: Any = None,
     ) -> int:
         """Vectorize written and edited memory files.
 
@@ -1396,6 +1400,7 @@ class MemoryUpdater:
             extract_context: Extract context for embedding template rendering
             uri_memory_type_map: Mapping from URI to memory_type
             search_tags_by_uri: Transient search tags to attach while indexing each URI
+            ingest_options: Write options for a single-file content write.
         """
         if not self._vikingdb:
             logger.debug("VikingDB not available, skipping vectorization")
@@ -1483,12 +1488,18 @@ class MemoryUpdater:
                 # Convert to embedding msg and enqueue
                 embedding_msg = EmbeddingMsgConverter.from_context(memory_context)
                 if embedding_msg:
-                    transient_tags = search_tags_by_uri.get(uri)
-                    if transient_tags:
-                        embedding_msg.context_data["search_tags"] = list(transient_tags)
+                    if getattr(ingest_options, "search_tags", None) is not None:
+                        embedding_msg.context_data["search_tags"] = list(ingest_options.search_tags)
                         embedding_msg.context_data["_upsert_options"] = {
-                            "search_tag_mode": "append"
+                            "search_tag_mode": ingest_options.search_tag_mode
                         }
+                    else:
+                        transient_tags = search_tags_by_uri.get(uri)
+                        if transient_tags:
+                            embedding_msg.context_data["search_tags"] = list(transient_tags)
+                            embedding_msg.context_data["_upsert_options"] = {
+                                "search_tag_mode": "append"
+                            }
                     if embedding_msg.telemetry_id:
                         request_wait_tracker.register_embedding_root(
                             embedding_msg.telemetry_id, embedding_msg.id

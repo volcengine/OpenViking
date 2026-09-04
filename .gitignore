@@ -122,7 +122,11 @@ docker-compose.override.yml
 /demo_data/*
 /benchmark_data/*
 .claude
-.openviking
+# Only the parser's scratch dirs, not all of `.openviking/` — a workspace keeps
+# its committed `.openviking/config.json` there (`config.local.json` is private).
+.openviking/media/
+.openviking/downloads/
+.openviking/config.local.json
 *.code-workspace
 .openviking.pid
 exports/

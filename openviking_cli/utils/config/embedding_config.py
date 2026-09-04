@@ -639,7 +639,9 @@ class EmbeddingConfig(BaseModel):
     )
 
     max_concurrent: int = Field(
-        default=10, description="Maximum number of concurrent embedding requests"
+        default=10,
+        ge=1,
+        description="Maximum number of concurrent embedding requests",
     )
     max_retries: int = Field(
         default=3,

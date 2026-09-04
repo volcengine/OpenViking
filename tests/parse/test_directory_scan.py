@@ -13,7 +13,7 @@ from openviking.parse.directory_scan import (
     scan_directory,
 )
 from openviking.parse.registry import ParserRegistry
-from openviking_cli.exceptions import UnsupportedDirectoryFilesError
+from openviking_cli.exceptions import InvalidArgumentError, UnsupportedDirectoryFilesError
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -293,6 +293,58 @@ class TestScanDirectoryEdgeCases:
         assert len(all_p) == len(result.processable)
         for cf in all_p:
             assert cf.classification == CLASS_PROCESSABLE
+
+
+class TestDirectorySafetyLimits:
+    """Directory scans must fail before processing unbounded input trees."""
+
+    def test_rejects_too_many_files(self, tmp_path: Path, registry: ParserRegistry) -> None:
+        for index in range(3):
+            (tmp_path / f"{index}.txt").write_text("x", encoding="utf-8")
+
+        with pytest.raises(InvalidArgumentError, match="file count exceeds"):
+            scan_directory(tmp_path, registry=registry, max_files=2)
+
+    def test_additional_parser_marks_file_processable(
+        self, tmp_path: Path, registry: ParserRegistry
+    ) -> None:
+        (tmp_path / "large.external").write_bytes(b"12345")
+
+        result = scan_directory(
+            tmp_path,
+            registry=registry,
+            strict=True,
+            additional_can_process=lambda path: path.suffix == ".external",
+        )
+
+        assert [item.rel_path for item in result.processable] == ["large.external"]
+
+    def test_rejects_excessive_depth(self, tmp_path: Path, registry: ParserRegistry) -> None:
+        nested = tmp_path / "level-1" / "level-2"
+        nested.mkdir(parents=True)
+        (nested / "deep.txt").write_text("deep", encoding="utf-8")
+
+        with pytest.raises(InvalidArgumentError, match="depth exceeds") as exc_info:
+            scan_directory(tmp_path, registry=registry, max_depth=1)
+
+        assert "path=level-1/level-2" in str(exc_info.value)
+        assert str(tmp_path) not in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        "limit_name",
+        [
+            "max_files",
+            "max_depth",
+        ],
+    )
+    def test_rejects_non_positive_limit(
+        self,
+        tmp_path: Path,
+        registry: ParserRegistry,
+        limit_name: str,
+    ) -> None:
+        with pytest.raises(InvalidArgumentError, match=limit_name):
+            scan_directory(tmp_path, registry=registry, **{limit_name: 0})
 
 
 # ---------------------------------------------------------------------------

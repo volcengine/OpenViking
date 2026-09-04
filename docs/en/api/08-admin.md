@@ -1,6 +1,6 @@
 # Admin (Multi-tenant)
 
-The Admin API manages accounts and users in a multi-tenant environment. It covers workspace (account) creation/deletion, user registration/removal, role changes, and API key regeneration.
+The Admin API manages accounts, users, and groups in a multi-tenant environment. It covers workspace (account) creation/deletion, user registration/removal, group membership, role changes, and API key regeneration.
 
 This API is available in both `api_key` and `trusted` deployments:
 - In `api_key` mode, the effective role is always derived from the presented API key.
@@ -21,6 +21,7 @@ For `/api/v1/admin/*`, `trusted` mode permits requests with no explicit identity
 | Create/delete workspace | Y | N | N |
 | List workspaces | Y | N | N |
 | Register/remove users | Y | Y (own account) | N |
+| Manage groups and membership | Y | Y (own account) | N |
 | List agents (deprecated, returns empty list) | Y | Y (own account) | N |
 | Regenerate user key | Y | Y (own account) | N |
 | Promote user to ADMIN | Y | Y (own account) | N |
@@ -54,6 +55,32 @@ Configure `root_api_key` in `~/.openviking/ovcli.conf`:
 
 - `--sudo` only works with the commands above - using it with regular data commands will error
 - Must have `root_api_key` configured to use `--sudo`
+
+## Groups
+
+A group belongs to one account and lets one ACL principal grant access to multiple users. Its caller-supplied `group_id` follows the same identifier rules as `user_id` and is the account-unique, stable identifier; there is no separate group name. Only existing users from the same account can be members, and groups cannot be nested.
+
+The server adds memberships to `RequestContext.group_ids` for each request. Adding or removing a member takes effect on the next request without rewriting resource ACL or context records. Removing a user also removes all memberships. A group must be empty before deletion.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/admin/accounts/{account_id}/groups` | Create an empty group with `{"group_id":"engineering"}` |
+| GET | `/api/v1/admin/accounts/{account_id}/groups` | List groups |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | Delete an empty group |
+| GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | List members |
+| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Add a member idempotently; repeated calls return `added=true` |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Remove a member; repeated calls return `removed=false` |
+
+```bash
+ov --sudo admin create-group acme engineering
+ov --sudo admin add-group-member acme engineering alice
+ov acl grant viking://resources/project-a \
+  --principal group:engineering --level read
+ov --sudo admin remove-group-member acme engineering alice
+ov --sudo admin delete-group acme engineering
+```
+
+The Python SDK exposes `admin_create_group`, `admin_list_groups`, `admin_list_group_members`, `admin_add_group_member`, `admin_remove_group_member`, and `admin_delete_group`. The Go SDK uses matching PascalCase method names.
 
 ## API Reference
 
@@ -103,15 +130,28 @@ Content-Type: application/json
 ### account_settings
 
 ROOT can manage any account and ADMIN can manage only its own account. The
-generic settings endpoint accepts only explicitly allowlisted fields; currently
-only `agent_evolution.enabled` is writable.
+generic settings endpoint accepts only explicitly allowlisted fields. It currently
+allows `agent_evolution.enabled` and `acl.enabled`.
 
 ```http
 GET /api/v1/admin/accounts/{account_id}/settings
 PATCH /api/v1/admin/accounts/{account_id}/settings
 Content-Type: application/json
 
-{"agent_evolution": {"enabled": true}}
+{
+  "agent_evolution": {"enabled": true},
+  "acl": {"enabled": true}
+}
+```
+
+`acl.enabled` defaults to `false`. While disabled, shared resources use the
+original public behavior and ACL authorization is skipped. When enabled, newly
+created shared resources receive ACL fields and ACL-protected shared resources
+are authorized against them. Existing content without an ACL is not migrated or
+modified. Disabling the setting also stops enforcing existing ACLs.
+
+```bash
+ov --sudo admin set-account-settings acme --acl-enabled true
 ```
 
 Before an existing setting is replaced, it is backed up to
@@ -337,7 +377,7 @@ List all workspaces (ROOT only).
 
 **Processing Flow:**
 1. Verify requester has ROOT privileges
-2. Call API Key Manager to get all accounts (ordered lexicographically by account ID)
+2. Call API Key Manager to get all accounts (in creation order)
 3. Apply optional `name` filter
 4. Apply optional `limit`/`page` pagination
 5. Return list with account ID, creation time, and user count
@@ -355,7 +395,7 @@ List all workspaces (ROOT only).
 | limit | int | No | null | Page size (≥1). Omit to return all matches |
 | page | int | No | 1 | 1-based page number; only applies when `limit` is set |
 
-Results are always returned in lexicographic order of account ID.
+Results are returned in creation order.
 
 #### 3. Usage Examples
 
@@ -672,7 +712,7 @@ List active users in a workspace. Users with deletion in progress are omitted.
 
 **Processing Flow:**
 1. Verify requester has ROOT privileges or is an ADMIN of the account
-2. Call API Key Manager to get active users list (ordered lexicographically by user ID)
+2. Call API Key Manager to get active users list (in creation order)
 3. Apply optional filters (name, role)
 4. Apply optional `limit`/`page` pagination
 5. Return users list (trusted mode omits user_key)
@@ -695,7 +735,7 @@ List active users in a workspace. Users with deletion in progress are omitted.
 | page | int | No | 1 | 1-based page number; only applies when `limit` is set |
 
 **Notes:**
-- Results are always returned in lexicographic order of user ID
+- Results are returned in creation order
 - ADMIN can only list users in their own account
 - In `trusted` mode, `user_key` is omitted from the response
 - Users whose deletion has started are no longer returned

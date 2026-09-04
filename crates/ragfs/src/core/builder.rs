@@ -14,6 +14,15 @@ use super::filesystem::FileSystem;
 use super::mountable::MountableFS;
 use super::stats_wrapper::StatsWrappedFS;
 
+#[cfg(feature = "cache")]
+use super::errors::{Error, Result};
+#[cfg(feature = "cache")]
+use crate::cache::{CacheNamespace, CachePolicy};
+#[cfg(feature = "cache")]
+use crate::cache_runtime::{
+    CacheOperation, CacheRuntime, DynamicProviderConfig, RedisProviderConfig,
+};
+
 use crate::lock::{
     FilesystemPathLockProvider, MemoryPathLockProvider, PathLockConfig, PathLockManager,
     PathLockProvider, PathLockWrappedFS,
@@ -53,6 +62,49 @@ pub struct EncryptionConfig {
     pub provider_type: u8,
 }
 
+/// Production providers supported by the shared CacheRuntime.
+#[cfg(feature = "cache")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CacheRuntimeProviderConfig {
+    /// Built-in Redis provider.
+    Redis(RedisProviderConfig),
+    /// Provider loaded from a versioned dynamic library.
+    Dynamic(DynamicProviderConfig),
+}
+
+/// CacheFS-specific behavior layered over one shared Runtime.
+#[cfg(feature = "cache")]
+#[derive(Clone)]
+pub struct CacheFsConfig {
+    /// Whether mounted data filesystems are wrapped by CachedFileSystem.
+    pub enabled: bool,
+    /// CacheFS key namespace.
+    pub namespace: String,
+    /// Existing CacheFS policy and traversal settings.
+    pub policy: CachePolicy,
+}
+
+#[cfg(feature = "cache")]
+impl Default for CacheFsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            namespace: "openviking".into(),
+            policy: CachePolicy::default(),
+        }
+    }
+}
+
+/// Shared Runtime plus the business modules that opt into it.
+#[cfg(feature = "cache")]
+#[derive(Clone, Default)]
+pub struct CacheStackConfig {
+    /// One global provider. `None` means no Runtime is initialized.
+    pub provider: Option<CacheRuntimeProviderConfig>,
+    /// CacheFS enablement and policy.
+    pub cachefs: CacheFsConfig,
+}
+
 /// The assembled stack handles returned by the builder.
 pub struct RagfsStack {
     /// Mount manager (mount/unmount/list/stats/register_plugin live here).
@@ -61,6 +113,9 @@ pub struct RagfsStack {
     pub top: Arc<dyn FileSystem>,
     /// PathLock manager. OpenViking always constructs the stack with PathLock enabled.
     pub pathlock_manager: Arc<PathLockManager>,
+    /// Shared cache runtime, present only when a provider was configured.
+    #[cfg(feature = "cache")]
+    pub cache_runtime: Option<Arc<CacheRuntime>>,
 }
 
 /// Build the standard RAGFS stack.
@@ -81,6 +136,72 @@ pub async fn build_stack_with_mountable(
     config: RagfsConfig,
     mountable: Arc<MountableFS>,
 ) -> RagfsStack {
+    build_stack_with_mountable_and_runtime(config, mountable, None).await
+}
+
+#[cfg(feature = "cache")]
+/// Build the standard stack and initialize at most one shared CacheRuntime.
+pub async fn build_configured_stack(
+    config: RagfsConfig,
+    cache: Option<CacheStackConfig>,
+) -> Result<RagfsStack> {
+    let Some(cache) = cache else {
+        return Ok(build_default_stack(config).await);
+    };
+    if cache.cachefs.enabled && cache.provider.is_none() {
+        return Err(Error::config(
+            "cache provider is required when CacheFS is enabled".to_string(),
+        ));
+    }
+    let runtime = match cache.provider {
+        Some(CacheRuntimeProviderConfig::Redis(provider)) => Some(
+            CacheRuntime::redis(provider)
+                .await
+                .map_err(|error| Error::config(format!("cache provider init failed: {error}")))?,
+        ),
+        Some(CacheRuntimeProviderConfig::Dynamic(provider)) => Some(
+            CacheRuntime::dynamic(provider)
+                .await
+                .map_err(|error| Error::config(format!("cache provider init failed: {error}")))?,
+        ),
+        None => None,
+    };
+    if cache.cachefs.enabled {
+        runtime
+            .as_ref()
+            .expect("cache provider is validated")
+            .require_operations(&[
+                CacheOperation::Get,
+                CacheOperation::Set,
+                CacheOperation::Del,
+                CacheOperation::Mget,
+            ])
+            .map_err(|error| Error::config(format!("CacheFS provider is incompatible: {error}")))?;
+    }
+    let mountable = if cache.cachefs.enabled {
+        Arc::new(MountableFS::with_cache_runtime(
+            runtime
+                .as_ref()
+                .expect("cache provider is validated")
+                .clone(),
+            CacheNamespace::new(&cache.cachefs.namespace),
+            cache.cachefs.policy,
+        ))
+    } else {
+        Arc::new(MountableFS::new())
+    };
+    Ok(build_stack_with_mountable_and_runtime(config, mountable, runtime).await)
+}
+
+async fn build_stack_with_mountable_and_runtime(
+    config: RagfsConfig,
+    mountable: Arc<MountableFS>,
+    #[cfg(feature = "cache")] runtime: Option<Arc<CacheRuntime>>,
+    #[cfg(not(feature = "cache"))] _runtime: Option<()>,
+) -> RagfsStack {
+    #[cfg(feature = "cache")]
+    register_builtin_plugins_with_runtime(&mountable, runtime.clone()).await;
+    #[cfg(not(feature = "cache"))]
     register_builtin_plugins(&mountable).await;
 
     // Forward encryption config to MountableFS for per-backend wrapping.
@@ -94,6 +215,7 @@ pub async fn build_stack_with_mountable(
         "memory" => Arc::new(MemoryPathLockProvider::new()),
         _ => Arc::new(FilesystemPathLockProvider::new(
             mountable.clone() as Arc<dyn FileSystem>,
+            config.pathlock.lock_expire_secs,
         )),
     };
     let pathlock_manager = Arc::new(PathLockManager::new(
@@ -111,11 +233,45 @@ pub async fn build_stack_with_mountable(
     ));
 
     let top: Arc<dyn FileSystem> = Arc::new(StatsWrappedFS::with_arc(inner));
-    RagfsStack { mountable, top, pathlock_manager }
+    RagfsStack {
+        mountable,
+        top,
+        pathlock_manager,
+        #[cfg(feature = "cache")]
+        cache_runtime: runtime,
+    }
 }
 
 /// The single built-in plugin registration sequence (eliminates drift across call sites).
 pub async fn register_builtin_plugins(fs: &MountableFS) {
+    #[cfg(feature = "cache")]
+    return register_builtin_plugins_with_runtime(fs, None).await;
+
+    #[cfg(not(feature = "cache"))]
+    register_builtin_plugins_without_runtime(fs).await;
+}
+
+#[cfg(feature = "cache")]
+async fn register_builtin_plugins_with_runtime(
+    fs: &MountableFS,
+    runtime: Option<Arc<CacheRuntime>>,
+) {
+    fs.register_plugin(MemFSPlugin).await;
+    fs.register_plugin(KVFSPlugin).await;
+    fs.register_plugin(match runtime {
+        Some(runtime) => QueueFSPlugin::with_cache_runtime(runtime),
+        None => QueueFSPlugin::new(),
+    })
+    .await;
+    fs.register_plugin(SQLFSPlugin::new()).await;
+    fs.register_plugin(LocalFSPlugin::new()).await;
+    fs.register_plugin(ServerInfoFSPlugin::new()).await;
+    #[cfg(feature = "s3")]
+    fs.register_plugin(S3FSPlugin::new()).await;
+}
+
+#[cfg(not(feature = "cache"))]
+async fn register_builtin_plugins_without_runtime(fs: &MountableFS) {
     fs.register_plugin(MemFSPlugin).await;
     fs.register_plugin(KVFSPlugin).await;
     fs.register_plugin(QueueFSPlugin::new()).await;
@@ -297,11 +453,9 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(
-            error
-                .to_string()
-                .contains("does not cover the requested operation")
-        );
+        assert!(error
+            .to_string()
+            .contains("does not cover the requested operation"));
         manager.release(&outer).await.unwrap();
     }
 
@@ -325,6 +479,81 @@ mod tests {
             .unwrap();
         let raw = stack.mountable.read_raw("/mem/f", 0, 0).await.unwrap();
         assert_eq!(raw, b"hello", "plaintext stack stores raw bytes");
+    }
+
+    #[cfg(feature = "cache")]
+    #[tokio::test]
+    async fn configured_stack_does_not_create_runtime_when_cache_is_unused() {
+        let stack = build_configured_stack(RagfsConfig::default(), None)
+            .await
+            .unwrap();
+
+        assert!(stack.cache_runtime.is_none());
+    }
+
+    #[cfg(feature = "cache")]
+    #[tokio::test]
+    async fn configured_stack_rejects_cachefs_without_global_provider() {
+        let result = build_configured_stack(
+            RagfsConfig::default(),
+            Some(CacheStackConfig {
+                provider: None,
+                cachefs: CacheFsConfig {
+                    enabled: true,
+                    ..CacheFsConfig::default()
+                },
+            }),
+        )
+        .await;
+        let error = match result {
+            Ok(_) => panic!("CacheFS unexpectedly started without a provider"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("cache provider"));
+    }
+
+    #[cfg(feature = "cache")]
+    #[tokio::test]
+    async fn configured_runtime_can_power_queuefs_without_enabling_cachefs() {
+        let Ok(endpoint) = std::env::var("QUEUEFS_REDIS_TEST_URL") else {
+            return;
+        };
+        let stack = build_configured_stack(
+            RagfsConfig::default(),
+            Some(CacheStackConfig {
+                provider: Some(CacheRuntimeProviderConfig::Redis(RedisProviderConfig {
+                    endpoints: vec![endpoint],
+                    command_timeout_ms: 1_000,
+                    ..RedisProviderConfig::default()
+                })),
+                cachefs: CacheFsConfig::default(),
+            }),
+        )
+        .await
+        .unwrap();
+        let mut params = HashMap::new();
+        params.insert("backend".into(), ConfigValue::String("cache".into()));
+        params.insert(
+            "cache_key_prefix".into(),
+            ConfigValue::String(format!("builder-test-{}", uuid::Uuid::new_v4())),
+        );
+
+        stack
+            .mountable
+            .mount(plugin_config("queuefs", "/queue", params))
+            .await
+            .unwrap();
+        stack.top.mkdir("/queue/jobs", 0o755).await.unwrap();
+        stack
+            .top
+            .write("/queue/jobs/enqueue", b"job", 0, WriteFlag::None)
+            .await
+            .unwrap();
+        assert_eq!(
+            stack.top.read("/queue/jobs/size", 0, 0).await.unwrap(),
+            b"1"
+        );
     }
 
     #[tokio::test]

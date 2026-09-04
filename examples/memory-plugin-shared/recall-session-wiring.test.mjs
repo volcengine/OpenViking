@@ -39,7 +39,9 @@ for (const { name, file, pattern } of CALL_SITES) {
 
 test("pi wires the sync manager into the recall manager", async () => {
   const source = await readFile(join(ROOT, "examples", "pi-coding-agent-extension", "index.ts"), "utf-8");
-  assert.match(source, /new RecallManager\(client,\s*config,\s*\(\)\s*=>\s*sync\.sessionId\)/);
+  // Only the session-id getter is asserted; later arguments (the recall
+  // ledger) come and go without changing what this test is about.
+  assert.match(source, /new RecallManager\(\s*client,\s*config,\s*\(\)\s*=>\s*sync\.sessionId,/);
   // The getter exists because SyncManager has to be constructed first.
   assert.ok(
     source.indexOf("new SyncManager(") < source.indexOf("new RecallManager("),

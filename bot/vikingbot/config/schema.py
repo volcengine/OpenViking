@@ -469,6 +469,11 @@ class AgentsConfig(BaseModel):
         default=True,
         description="Enable the spawn tool so the main agent can start background subagents.",
     )
+    subagent_max_concurrency: int = Field(
+        default=4,
+        ge=1,
+        description="Maximum number of background subagents running at once.",
+    )
     session_context_enabled: bool = True
     session_context_token_budget: int = 3000
     commit_token_threshold: int = 200000

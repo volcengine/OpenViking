@@ -13,14 +13,12 @@ name = "ragfs_python"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = ["extension-module", "s3", "cache-redis"]
+default = ["extension-module", "s3"]
 extension-module = ["pyo3/extension-module"]
 s3 = ["ragfs/s3"]
-cache-redis = ["ragfs-cache-redis"]
 
 [dependencies]
 ragfs = { path = "../ragfs", features = ["cache"] }
-ragfs-cache-redis = { path = "../ragfs-cache-redis", optional = true }
 pyo3 = { version = "0.27", features = ["abi3", "abi3-py310"] }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
@@ -32,6 +30,3 @@ toml = "0.8"
 gix-hash = "0.14"
 bytes = "1.5"
 similar = "3.1"
-
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("yuanrong-native", "mooncake-native"))'] }

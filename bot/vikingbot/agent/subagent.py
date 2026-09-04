@@ -49,6 +49,9 @@ class SubagentManager:
         self.temperature = temperature
         self.sandbox_manager = sandbox_manager
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
+        self._max_concurrency = getattr(
+            getattr(config, "agents", None), "subagent_max_concurrency", 4
+        )
 
     async def spawn(
         self,
@@ -70,6 +73,9 @@ class SubagentManager:
         Returns:
             Status message indicating the subagent was started.
         """
+        if len(self._running_tasks) >= self._max_concurrency:
+            return f"Error: Subagent concurrency limit reached ({self._max_concurrency})"
+
         task_id = str(uuid.uuid4())[:8]
         display_label = label or task[:30] + ("..." if len(task) > 30 else "")
 

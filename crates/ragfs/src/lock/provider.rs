@@ -9,9 +9,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::sync::RwLock;
 
-use crate::crypto;
 use crate::core::internal_names::is_hidden_runtime_lock_name;
 use crate::core::FileSystem;
+use crate::crypto;
 
 use super::codec::LockTokenCodec;
 use super::types::{LockToken, PathLockError, PathLockResult};
@@ -47,8 +47,14 @@ pub trait PathLockProvider: Send + Sync {
     ) -> PathLockResult<bool>;
 
     /// Remove the token at `lock_path` if owned by `owner_id`.
+    /// `force` bypasses storage CAS after the ownership check.
     /// Returns `true` if removed, `false` if not found or wrong owner.
-    async fn remove_token(&self, lock_path: &str, owner_id: &str) -> PathLockResult<bool>;
+    async fn remove_token(
+        &self,
+        lock_path: &str,
+        owner_id: &str,
+        force: bool,
+    ) -> PathLockResult<bool>;
 
     /// Scan all descendant lock paths under `root`.
     async fn scan_descendant_locks(&self, root: &str) -> PathLockResult<Vec<String>>;
@@ -131,7 +137,12 @@ impl PathLockProvider for MemoryPathLockProvider {
         }
     }
 
-    async fn remove_token(&self, lock_path: &str, owner_id: &str) -> PathLockResult<bool> {
+    async fn remove_token(
+        &self,
+        lock_path: &str,
+        owner_id: &str,
+        _force: bool,
+    ) -> PathLockResult<bool> {
         let mut tokens = self.tokens.write().await;
         match tokens.get(lock_path) {
             Some(token) if token.owner_id == owner_id => {
@@ -164,12 +175,19 @@ impl PathLockProvider for MemoryPathLockProvider {
 /// Lock provider that stores tokens as files on the underlying filesystem.
 pub struct FilesystemPathLockProvider {
     fs: Arc<dyn FileSystem>,
+    empty_token_expire_secs: f64,
 }
 
 impl FilesystemPathLockProvider {
-    /// Create a filesystem-backed provider.
-    pub fn new(fs: Arc<dyn FileSystem>) -> Self {
-        Self { fs }
+    /// Create a filesystem-backed provider with an explicit empty-token expiry.
+    ///
+    /// `fs` stores lock files, and `lock_expire_secs` controls empty-token recovery.
+    /// Returns a configured filesystem provider.
+    pub fn new(fs: Arc<dyn FileSystem>, lock_expire_secs: f64) -> Self {
+        Self {
+            fs,
+            empty_token_expire_secs: lock_expire_secs,
+        }
     }
 
     /// Read raw token bytes from `lock_path`, returning `None` if no token exists.
@@ -217,10 +235,15 @@ mod tests {
     async fn read_token_cleans_up_legacy_encrypted_lock() {
         let fs = Arc::new(MemFileSystem::new());
         fs.mkdir("/data", 0o755).await.unwrap();
-        fs.write("/data/.path.ovlock", b"OVE1legacy-ciphertext", 0, WriteFlag::Create)
-            .await
-            .unwrap();
-        let provider = FilesystemPathLockProvider::new(fs.clone());
+        fs.write(
+            "/data/.path.ovlock",
+            b"OVE1legacy-ciphertext",
+            0,
+            WriteFlag::Create,
+        )
+        .await
+        .unwrap();
+        let provider = FilesystemPathLockProvider::new(fs.clone(), 30.0);
 
         let token = provider.read_token("/data/.path.ovlock").await.unwrap();
 
@@ -239,7 +262,7 @@ mod tests {
         fs.write("/data/.path.ovlock", b"not-a-token", 0, WriteFlag::Create)
             .await
             .unwrap();
-        let provider = FilesystemPathLockProvider::new(fs.clone());
+        let provider = FilesystemPathLockProvider::new(fs.clone(), 30.0);
 
         let err = provider.read_token("/data/.path.ovlock").await.unwrap_err();
 
@@ -258,9 +281,13 @@ mod tests {
         fs.write("/data/.path.ovlock", b"owner:123:E", 0, WriteFlag::Create)
             .await
             .unwrap();
-        let provider = FilesystemPathLockProvider::new(fs);
+        let provider = FilesystemPathLockProvider::new(fs, 30.0);
 
-        let token = provider.read_token("/data/.path.ovlock").await.unwrap().unwrap();
+        let token = provider
+            .read_token("/data/.path.ovlock")
+            .await
+            .unwrap()
+            .unwrap();
 
         assert_eq!(token.owner_id, "owner");
         assert_eq!(token.time_ns, 123);
@@ -289,10 +316,31 @@ impl PathLockProvider for FilesystemPathLockProvider {
         loop {
             match current {
                 Some(data) => {
-                    let raw = String::from_utf8_lossy(&data).trim().to_string();
-                    if raw.is_empty() {
+                    if data.is_empty() {
+                        let info = match self.fs.stat(lock_path).await {
+                            Ok(info) => info,
+                            Err(
+                                crate::core::Error::NotFound(_)
+                                | crate::core::Error::MountPointNotFound(_),
+                            ) => return Ok(None),
+                            Err(error) => {
+                                return Err(PathLockError::Io(format!(
+                                    "failed to stat empty lock token at '{lock_path}': {error}"
+                                )));
+                            }
+                        };
+                        let age = std::time::SystemTime::now()
+                            .duration_since(info.mod_time)
+                            .unwrap_or_default()
+                            .as_secs_f64();
+                        if age <= self.empty_token_expire_secs {
+                            return Err(PathLockError::EmptyToken {
+                                lock_path: lock_path.to_string(),
+                            });
+                        }
                         return Ok(None);
                     }
+                    let raw = String::from_utf8_lossy(&data).trim().to_string();
                     match LockTokenCodec::decode(&raw) {
                         Ok(token) => return Ok(Some(token)),
                         Err(error) if crypto::is_encrypted(&data) => {
@@ -300,7 +348,13 @@ impl PathLockProvider for FilesystemPathLockProvider {
                                 .fs
                                 .compare_and_remove(lock_path, &data)
                                 .await
-                                .map_err(|e| Self::map_cas_error("legacy encrypted lock cleanup", lock_path, e))?
+                                .map_err(|e| {
+                                    Self::map_cas_error(
+                                        "legacy encrypted lock cleanup",
+                                        lock_path,
+                                        e,
+                                    )
+                                })?
                             {
                                 return Ok(None);
                             }
@@ -318,27 +372,42 @@ impl PathLockProvider for FilesystemPathLockProvider {
         use crate::core::WriteFlag;
 
         let encoded = LockTokenCodec::encode(token);
-        match self
-            .fs
-            .write(lock_path, encoded.as_bytes(), 0, WriteFlag::CreateNew)
-            .await
-        {
-            Ok(_) => Ok(()),
-            Err(_) => {
+        let mut last_error = None;
+        for _ in 0..2 {
+            let error = match self
+                .fs
+                .write(lock_path, encoded.as_bytes(), 0, WriteFlag::CreateNew)
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(error) => error,
+            };
+            match self.read_token(lock_path).await? {
                 // Already exists — read and check if stale.
-                let existing = self.read_token(lock_path).await?;
-                match existing {
-                    Some(t) => Err(PathLockError::Conflict {
+                Some(t) => {
+                    return Err(PathLockError::Conflict {
                         lock_path: lock_path.to_string(),
                         owner: t.owner_id,
                         kind: t.lock_type,
-                    }),
-                    None => Err(PathLockError::Io(format!(
-                        "failed to create lock token at {lock_path}"
-                    ))),
+                    });
+                }
+                None => {
+                    last_error = Some(error);
+                    if self
+                        .fs
+                        .compare_and_write(lock_path, b"", encoded.as_bytes())
+                        .await
+                        .map_err(|e| Self::map_cas_error("empty lock recovery", lock_path, e))?
+                    {
+                        return Ok(());
+                    }
                 }
             }
         }
+        Err(PathLockError::Io(format!(
+            "failed to create lock token at {lock_path}: {}",
+            last_error.unwrap()
+        )))
     }
 
     async fn compare_and_write_token(
@@ -380,13 +449,29 @@ impl PathLockProvider for FilesystemPathLockProvider {
             .map_err(|e| Self::map_cas_error("refresh", lock_path, e))
     }
 
-    async fn remove_token(&self, lock_path: &str, owner_id: &str) -> PathLockResult<bool> {
+    async fn remove_token(
+        &self,
+        lock_path: &str,
+        owner_id: &str,
+        force: bool,
+    ) -> PathLockResult<bool> {
         let Some(raw) = self.read_token_raw(lock_path).await? else {
             return Ok(false);
         };
         let token = LockTokenCodec::decode(&String::from_utf8_lossy(&raw).trim())?;
         if token.owner_id != owner_id {
             return Ok(false);
+        }
+        if force {
+            return match self.fs.remove(lock_path).await {
+                Ok(()) => Ok(true),
+                Err(
+                    crate::core::Error::NotFound(_) | crate::core::Error::MountPointNotFound(_),
+                ) => Ok(false),
+                Err(error) => Err(PathLockError::Io(format!(
+                    "failed to force remove lock token at '{lock_path}': {error}"
+                ))),
+            };
         }
         self.fs
             .compare_and_remove(lock_path, &raw)
@@ -407,11 +492,7 @@ impl FilesystemPathLockProvider {
         is_hidden_runtime_lock_name(name)
     }
 
-    async fn scan_recursive(
-        &self,
-        dir: &str,
-        result: &mut Vec<String>,
-    ) -> PathLockResult<()> {
+    async fn scan_recursive(&self, dir: &str, result: &mut Vec<String>) -> PathLockResult<()> {
         let entries = match self.fs.read_internal_dir(dir).await {
             Ok(entries) => entries,
             Err(crate::core::Error::NotFound(_) | crate::core::Error::NotADirectory(_)) => {

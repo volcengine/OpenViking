@@ -153,11 +153,17 @@ class SchemaModelGenerator:
                 ),
             )
 
+        page_id_json_schema = {"type": "integer"}
+        page_id_description = "Temporary page_id for identifying the target memory item."
+        if memory_type.memory_type == "events" and memory_type.operation_mode == "add_only":
+            page_id_json_schema["minimum"] = 100
+            page_id_description = "Unique page_id for this new event; it MUST be at least 100."
+
         field_definitions["page_id"] = (
-            Annotated[int, WithJsonSchema({"type": "integer"})],
+            Annotated[int, WithJsonSchema(page_id_json_schema)],
             Field(
                 ...,
-                description="Temporary page_id for identifying the target memory item.",
+                description=page_id_description,
             ),
         )
 

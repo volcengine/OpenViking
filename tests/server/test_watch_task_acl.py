@@ -4,6 +4,7 @@
 """Regression tests for watch-task control file access boundaries."""
 
 import contextvars
+from types import SimpleNamespace
 
 import pytest
 
@@ -32,13 +33,14 @@ def user_ctx() -> RequestContext:
 @pytest.fixture
 def bare_viking_fs() -> VikingFS:
     fs = object.__new__(VikingFS)
+    fs.acl_manager = None
     fs._bound_ctx = contextvars.ContextVar("vikingfs_bound_ctx", default=None)
     return fs
 
 
 class _NoWriteVikingFS:
-    def _ensure_mutable_access(self, uri, ctx):
-        raise AssertionError(f"mutable access should not be reached for {uri}")
+    async def _ensure_access(self, uri, ctx, *, action):
+        raise AssertionError(f"write access should not be reached for {uri}")
 
 
 @pytest.mark.parametrize(
@@ -49,12 +51,12 @@ class _NoWriteVikingFS:
         WATCH_TASK_STORAGE_TMP_URI,
     ],
 )
-def test_watch_task_control_files_are_root_only(bare_viking_fs, root_ctx, user_ctx, uri):
-    assert bare_viking_fs._is_accessible(uri, root_ctx) is True
-    assert bare_viking_fs._is_accessible(uri, user_ctx) is False
-
+@pytest.mark.asyncio
+async def test_watch_task_control_files_are_root_only(bare_viking_fs, root_ctx, user_ctx, uri):
+    bare_viking_fs.acl_manager = SimpleNamespace(is_enabled=lambda _account_id: True)
+    await bare_viking_fs._ensure_access(uri, root_ctx)
     with pytest.raises(PermissionDeniedError):
-        bare_viking_fs._ensure_access(uri, user_ctx)
+        await bare_viking_fs._ensure_access(uri, user_ctx)
 
 
 @pytest.mark.asyncio

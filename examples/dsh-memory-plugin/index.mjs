@@ -33,13 +33,17 @@ export function apply(ctx, input = {}) {
 
   // prepend: downstream waterfall listeners run first, so this plugin sees
   // the final claimed batch and appends after every other contributor.
+  // Profile + recall are independent after `next()`; run them concurrently so
+  // the agent/pre-step waterfall (which currently gates user/message push in
+  // dsh-agent-loop) spends less wall time (#4515).
   ctx.on("agent/pre-step", async ({ agent, messages, signal }, next) => {
     const decision = await next();
     if (skipMemory(agent.session)) return decision;
     if (decision.kind !== "enter" || signal.aborted) return decision;
-    const profile = await runtime.profileMessage(agent);
-    if (signal.aborted) return decision;
-    const recall = await runtime.recallMessage(agent, decision.messages);
+    const [profile, recall] = await Promise.all([
+      runtime.profileMessage(agent),
+      runtime.recallMessage(agent, decision.messages),
+    ]);
     if (signal.aborted) return decision;
     const additions = [profile, recall].filter(Boolean);
     return additions.length > 0

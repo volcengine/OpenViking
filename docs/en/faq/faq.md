@@ -170,7 +170,7 @@ Embedding, VLM, storage, and other service configuration is managed by the OpenV
 # Add single file
 await client.add_resource(
     path="./document.pdf",
-    to="viking://resources/docs/",  # Specify storage location
+    parent="viking://resources/docs",  # Store under this directory; the name comes from the source
     options={"reason": "Project technical documentation"},  # Describe resource purpose to improve retrieval quality
 )
 
@@ -183,6 +183,29 @@ await client.add_resource(
 # Wait for processing to complete
 await client.wait_processed()
 ```
+
+### What is the difference between `to` and `parent`? Which should I use?
+
+|  | `to` | `parent` |
+|---|---|---|
+| What you pass | The exact final URI, **including the leaf name** | An **existing directory**; the leaf name comes from the source |
+| On a name collision | No renaming. An existing target is synced to the new source, so visible entries the source does not contain are deleted | Never overwrites. Falls back to `name_1`, `name_2`, … and returns a warning |
+| When to use it | The final name is known and must be honored verbatim, or you want to update an existing resource in place | The leaf name is derived server-side (URL / repository imports, split documents), or nothing already at the destination may be touched |
+
+Leaving both empty derives the directory and the leaf name from the source, with the same collision handling as `parent`.
+
+`to` and `parent` cannot be combined; passing both is an error.
+
+### What happens when `to` points at an existing directory?
+
+The content is synced to match the new source and the metadata is kept:
+
+- **Dot-prefixed entries survive untouched** — `.abstract.md`, `.overview.md`, `.search_tags.json`, `.image_mappings.json` and friends. The sync enumerates neither side's dotfiles, so they are neither deleted nor overwritten.
+- **Everything else visible is aligned with the source** — entries the source does not contain are deleted, changed ones are overwritten, unchanged ones stay in place and keep their URI, vectors and tags.
+
+So this preserves metadata and replaces the content itself; it is not a delete-and-recreate. Use `parent` when nothing already at the destination may be touched.
+
+Note: `processing_mode="vectors_only"` skips semantic processing, so the surviving `.abstract.md` / `.overview.md` are **not** regenerated and keep describing the content that was just replaced. Use the default `semantic_and_vectors` when summaries must follow the content.
 
 ### What's the difference between `find()` and `search()`? Which should I use?
 

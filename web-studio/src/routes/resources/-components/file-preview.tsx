@@ -5,6 +5,7 @@ import hljs from 'highlight.js/lib/core'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import rehypeRaw from 'rehype-raw'
 import rehypeSanitize from 'rehype-sanitize'
+import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
 import { X, Pencil, Save, XCircle, Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -13,12 +14,17 @@ import { Button } from '#/components/ui/button'
 import { ScrollArea } from '#/components/ui/scroll-area'
 import { client } from '#/gen/ov-client/client.gen'
 import { getContentDownload, ovClient } from '#/lib/ov-client'
+import { parseOkfSidecarMarkdown } from '#/lib/okf-markdown'
 import { fileNameFromUri } from '#/lib/viking-uri'
 import type { GetContentDownloadData } from '#/gen/ov-client/types.gen'
 import type { ContentDownloadQuery } from '@ov-server/api/v1/content'
 
-import { formatSize, normalizeReadContent } from '../-lib/normalize'
-import { fetchDirectoryLevelContent, saveFileContent } from '../-lib/api'
+import {
+  formatSize,
+  normalizeDirUri,
+  normalizeReadContent,
+} from '../-lib/normalize'
+import { fetchDirectorySidecarContent, saveFileContent } from '../-lib/api'
 import {
   useVikingFilePreview,
   useVikingFsStat,
@@ -27,6 +33,7 @@ import {
 import { useJsonFormat } from '../-hooks/use-json-format'
 import type { VikingFsEntry } from '../-types/viking-fm'
 import type { CodeEditorHandle } from './code-editor'
+import { OkfMetadataPanel } from './okf-metadata-panel'
 
 const LazyCodeEditor = lazy(() =>
   import('./code-editor').then((m) => ({ default: m.CodeEditor })),
@@ -151,15 +158,22 @@ type JsonlRecord = {
   parsed: unknown
 }
 
+/** One renderable unit of a JSONL message, classified by its structural type. */
+type JsonlPart =
+  | { input: unknown; kind: 'tool-call'; toolName: string }
+  | { kind: 'raw'; text: string }
+  | { kind: 'text'; text: string }
+  | { kind: 'tool-result'; text: string; toolName: string }
+
 type JsonlMessage = {
   id: string
-  kind: 'agent' | 'assistant' | 'invalid' | 'other' | 'tool-result' | 'user'
   label: string
   lineNo: number
+  parts: JsonlPart[]
+  role: 'agent' | 'assistant' | 'invalid' | 'other' | 'user'
   roleId: string
-  text: string
   time: string
-  toolName: string
+  toolShape: 'call' | 'none' | 'result'
 }
 
 function toDownloadUrl(vikingUri: string): string {
@@ -193,52 +207,78 @@ function cleanSummaryContent(value: unknown): string {
   return text
 }
 
+function directoryLevelPreview(
+  directoryUri: string,
+  level: DirectoryLevelId,
+  ...values: unknown[]
+) {
+  const rawContent =
+    values.map(cleanSummaryContent).find((content) => content.length > 0) ?? ''
+  const document = rawContent
+    ? parseOkfSidecarMarkdown(
+        `${normalizeDirUri(directoryUri)}.${level}.md`,
+        rawContent,
+      )
+    : null
+
+  return {
+    content: document?.body ?? rawContent,
+    document,
+  }
+}
+
 function useDirectoryPreview(file: VikingFsEntry | null) {
   const enabled = Boolean(file?.isDir)
   const abstractQuery = useQuery({
     enabled,
-    queryKey: ['viking-directory-level', file?.uri, 'abstract'],
-    queryFn: () => fetchDirectoryLevelContent(file!.uri, 'abstract'),
+    queryKey: ['viking-directory-sidecar', file?.uri, 'abstract'],
+    queryFn: () => fetchDirectorySidecarContent(file!.uri, 'abstract'),
     staleTime: 30_000,
   })
   const overviewQuery = useQuery({
     enabled,
-    queryKey: ['viking-directory-level', file?.uri, 'overview'],
-    queryFn: () => fetchDirectoryLevelContent(file!.uri, 'overview'),
+    queryKey: ['viking-directory-sidecar', file?.uri, 'overview'],
+    queryFn: () => fetchDirectorySidecarContent(file!.uri, 'overview'),
     staleTime: 30_000,
   })
 
-  return useMemo(
-    () => ({
+  return useMemo(() => {
+    const directoryUri = file?.uri ?? ''
+    return {
       isLoading: abstractQuery.isLoading || overviewQuery.isLoading,
       levels: [
         {
           ...DIRECTORY_LEVEL_META[0],
-          content:
-            cleanSummaryContent(abstractQuery.data) ||
-            cleanSummaryContent(file?.abstract),
+          ...directoryLevelPreview(
+            directoryUri,
+            'abstract',
+            abstractQuery.data,
+            file?.abstract,
+          ),
           error: abstractQuery.error,
         },
         {
           ...DIRECTORY_LEVEL_META[1],
-          content:
-            cleanSummaryContent(overviewQuery.data) ||
-            cleanSummaryContent(file?.overview),
+          ...directoryLevelPreview(
+            directoryUri,
+            'overview',
+            overviewQuery.data,
+            file?.overview,
+          ),
           error: overviewQuery.error,
         },
       ],
-    }),
-    [
-      abstractQuery.data,
-      abstractQuery.error,
-      abstractQuery.isLoading,
-      file?.abstract,
-      file?.overview,
-      overviewQuery.data,
-      overviewQuery.error,
-      overviewQuery.isLoading,
-    ],
-  )
+    }
+  }, [
+    abstractQuery.data,
+    abstractQuery.error,
+    abstractQuery.isLoading,
+    file?.abstract,
+    file?.overview,
+    overviewQuery.data,
+    overviewQuery.error,
+    overviewQuery.isLoading,
+  ])
 }
 
 function dirnameVikingUri(fileUri: string): string {
@@ -719,7 +759,7 @@ const markdownComponents = {
   ),
 }
 
-function parseJsonlRecords(text: string): JsonlRecord[] {
+export function parseJsonlRecords(text: string): JsonlRecord[] {
   return text
     .replace(/\r\n/g, '\n')
     .split('\n')
@@ -742,90 +782,194 @@ function parseJsonlRecords(text: string): JsonlRecord[] {
     })
 }
 
-function formatJsonlPart(part: unknown): string {
-  if (typeof part === 'string') return part
-  if (!isRecord(part)) return JSON.stringify(part)
-
-  if (typeof part.text === 'string') return part.text
-
-  if (part.type === 'tool_use') {
-    const name = typeof part.name === 'string' ? part.name : 'tool'
-    const input = part.input ?? part.arguments ?? {}
-    return `[tool: ${name}]\n${JSON.stringify(input, null, 2)}`
-  }
-
-  if (part.type === 'tool_result') {
-    const content = part.content ?? part.result ?? ''
-    return `[tool result]\n${
-      typeof content === 'string' ? content : JSON.stringify(content, null, 2)
-    }`
-  }
-
-  const payload = { ...part }
-  delete payload.type
-  const type = String(part.type || 'part')
-  const body = Object.keys(payload).length
-    ? JSON.stringify(payload, null, 2)
-    : ''
-  return body ? `[${type}]\n${body}` : `[${type}]`
+export function normalizeJsonlDisplayText(text: string): string {
+  return text.replace(/↵|⏎|\r\n?/g, '\n')
 }
 
-function stringifyJsonlContent(value: unknown): string {
+/** Flatten a tool_result `content` (string, or a list of text blocks) to text. */
+function jsonlContentToText(value: unknown): string {
   if (typeof value === 'string') return value
-  if (Array.isArray(value)) return value.map(formatJsonlPart).join('\n\n')
+  if (Array.isArray(value)) {
+    return value
+      .map((item) =>
+        typeof item === 'string'
+          ? item
+          : isRecord(item) && typeof item.text === 'string'
+            ? item.text
+            : JSON.stringify(item, null, 2),
+      )
+      .join('\n')
+  }
   if (value === undefined || value === null) return ''
   return JSON.stringify(value, null, 2)
 }
 
-function getJsonlMessage(record: JsonlRecord): JsonlMessage {
+/**
+ * Classify one content entry by its structural `type` field, never by a
+ * rendered string prefix. Covers the Anthropic transcript shape
+ * (`text` / `tool_use` / `tool_result`) and the OpenViking parts shape
+ * (`text` / `tool`, see openviking/message/part.py). An OpenViking `tool`
+ * part carries both the call and its output, so it expands to two entries.
+ */
+function toJsonlParts(part: unknown): JsonlPart[] {
+  if (typeof part === 'string') return [{ kind: 'text', text: part }]
+  if (!isRecord(part)) return [{ kind: 'raw', text: JSON.stringify(part) }]
+
+  const type = String(part.type ?? '')
+
+  if (type === 'tool_use') {
+    return [
+      {
+        input: part.input ?? part.arguments ?? {},
+        kind: 'tool-call',
+        toolName: typeof part.name === 'string' ? part.name : 'tool',
+      },
+    ]
+  }
+
+  if (type === 'tool_result') {
+    return [
+      {
+        kind: 'tool-result',
+        text: jsonlContentToText(part.content ?? part.result ?? ''),
+        toolName: '',
+      },
+    ]
+  }
+
+  if (type === 'tool') {
+    const toolName = typeof part.tool_name === 'string' ? part.tool_name : ''
+    const output = typeof part.tool_output === 'string' ? part.tool_output : ''
+    // A tool result arrives as its own record with `tool_output` and no
+    // `tool_input` (the call was logged on the preceding message). Inventing an
+    // empty call part there would classify the record as a call and print `{}`.
+    const hasInput =
+      isRecord(part.tool_input) && Object.keys(part.tool_input).length > 0
+    const parts: JsonlPart[] = []
+    if (hasInput || !output) {
+      parts.push({ input: part.tool_input ?? {}, kind: 'tool-call', toolName })
+    }
+    if (output) parts.push({ kind: 'tool-result', text: output, toolName })
+    return parts
+  }
+
+  if (type === 'text' || typeof part.text === 'string') {
+    return [
+      { kind: 'text', text: typeof part.text === 'string' ? part.text : '' },
+    ]
+  }
+
+  // Unknown part type: dump it verbatim. The `[type]` tag here is display-only
+  // and is never parsed back into a classification.
+  const payload = { ...part }
+  delete payload.type
+  const body = Object.keys(payload).length
+    ? JSON.stringify(payload, null, 2)
+    : ''
+  const label = type || 'part'
+  return [{ kind: 'raw', text: body ? `[${label}]\n${body}` : `[${label}]` }]
+}
+
+function toJsonlMessageParts(content: unknown): JsonlPart[] {
+  if (typeof content === 'string') {
+    return content ? [{ kind: 'text', text: content }] : []
+  }
+  if (Array.isArray(content)) return content.flatMap(toJsonlParts)
+  if (content === undefined || content === null) return []
+  return [{ kind: 'raw', text: JSON.stringify(content, null, 2) }]
+}
+
+export function hasJsonlToolPart(parts: JsonlPart[]): boolean {
+  return parts.some(
+    (part) => part.kind === 'tool-call' || part.kind === 'tool-result',
+  )
+}
+
+/**
+ * How the card should be styled. A message counts as tool-shaped only when it
+ * carries no text of its own: an assistant turn holding both `text` and
+ * `tool_use` is styled as a plain assistant message, because the text is the
+ * readable content and the calls are an aside. Pure `tool_result` messages
+ * (which arrive with role=user in Anthropic transcripts) keep the dashed
+ * tool-result look, so the tool-result check has to win over the role.
+ */
+function getJsonlToolShape(parts: JsonlPart[]): JsonlMessage['toolShape'] {
+  if (parts.some((part) => part.kind === 'text')) return 'none'
+  if (parts.some((part) => part.kind === 'tool-call')) return 'call'
+  if (parts.some((part) => part.kind === 'tool-result')) return 'result'
+  return 'none'
+}
+
+export function getJsonlMessage(record: JsonlRecord): JsonlMessage {
   const { error, index, line, parsed } = record
   if (error || !isRecord(parsed)) {
     return {
       id: '',
-      kind: 'invalid',
       label: 'invalid',
       lineNo: index + 1,
+      parts: [{ kind: 'raw', text: line }],
+      role: 'invalid',
       roleId: '',
-      text: line,
       time: '',
-      toolName: '',
+      toolShape: 'none',
     }
   }
 
   const nestedMessage = isRecord(parsed.message) ? parsed.message : null
   const source = nestedMessage ?? parsed
-  const role = String(source.role ?? parsed.role ?? parsed.type ?? 'message')
+  const rawRole = String(source.role ?? parsed.role ?? parsed.type ?? 'message')
     .trim()
     .toLowerCase()
   const content =
     source.content ?? source.parts ?? parsed.parts ?? parsed.content ?? parsed
-  const text = stringifyJsonlContent(content)
-  const toolCall = text.match(/^\[tool:\s*([^\]]+)\]/)
-  const toolResult = /^\[tool result\]/.test(text)
-  const kind = toolResult
-    ? 'tool-result'
-    : role === 'user'
-      ? 'user'
-      : role === 'assistant' || role === 'agent'
-        ? role
-        : 'other'
+  const parts = toJsonlMessageParts(content)
+  const toolShape = getJsonlToolShape(parts)
 
   return {
     id: String(parsed.uuid ?? parsed.id ?? source.id ?? ''),
-    kind,
-    label: toolResult ? 'tool-result' : role,
+    label: toolShape === 'result' ? 'tool-result' : rawRole,
     lineNo: index + 1,
+    parts,
+    role:
+      rawRole === 'user'
+        ? 'user'
+        : rawRole === 'assistant' || rawRole === 'agent'
+          ? rawRole
+          : 'other',
     roleId: String(parsed.peer_id ?? source.peer_id ?? ''),
-    text,
     time: String(
       parsed.timestamp ?? parsed.created_at ?? source.created_at ?? '',
     ),
-    toolName: toolCall?.[1] ?? '',
+    toolShape,
   }
 }
 
-function isJsonlMarkdownMessage(kind: JsonlMessage['kind']): boolean {
-  return kind === 'assistant' || kind === 'agent' || kind === 'user'
+function isJsonlMarkdownMessage(role: JsonlMessage['role']): boolean {
+  return role === 'assistant' || role === 'agent' || role === 'user'
+}
+
+/** Trim text parts against a shared character budget; tool parts pass through. */
+function collapseJsonlParts(parts: JsonlPart[], limit: number): JsonlPart[] {
+  let budget = limit
+  const collapsed: JsonlPart[] = []
+  for (const part of parts) {
+    if (part.kind !== 'text') {
+      collapsed.push(part)
+      continue
+    }
+    if (budget <= 0) continue
+    if (part.text.length <= budget) {
+      collapsed.push(part)
+      budget -= part.text.length
+      continue
+    }
+    collapsed.push({
+      kind: 'text',
+      text: `${part.text.slice(0, budget).trimEnd()}...`,
+    })
+    budget = 0
+  }
+  return collapsed
 }
 
 function formatJsonlTime(value: string): string {
@@ -896,25 +1040,25 @@ function JsonlRawRow({ record }: { record: JsonlRecord }) {
   )
 }
 
-function JsonlToolBody({ text, toolName }: { text: string; toolName: string }) {
+function JsonlToolBody({ input }: { input: unknown }) {
   const { t } = useTranslation('resources')
-  const afterTag = text.replace(/^\[tool:\s*[^\]]+\]\s*/, '')
-  const parsed = useMemo(() => {
-    if (!toolName || !afterTag.trim()) return null
-    try {
-      return JSON.parse(afterTag) as unknown
-    } catch {
-      return null
-    }
-  }, [afterTag, toolName])
+  // The input is already structured, so no normalization and no re-parsing.
+  const text =
+    input === undefined ||
+    input === null ||
+    (isRecord(input) && Object.keys(input).length === 0)
+      ? ''
+      : typeof input === 'string'
+        ? input
+        : JSON.stringify(input, null, 2)
 
-  return parsed ? (
+  return text ? (
     <pre className="max-h-96 overflow-auto rounded border bg-muted/30 p-2 text-xs leading-5">
-      {JSON.stringify(parsed, null, 2)}
+      {text}
     </pre>
   ) : (
     <pre className="whitespace-pre-wrap break-words text-xs leading-5">
-      {afterTag || t('filePreview.jsonl.noArguments')}
+      {t('filePreview.jsonl.noArguments')}
     </pre>
   )
 }
@@ -924,7 +1068,7 @@ function JsonlMarkdownBody({ content }: { content: string }) {
   return (
     <div className="prose prose-sm max-w-none break-words dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkBreaks]}
         components={markdownComponents}
       >
         {content || t('filePreview.jsonl.emptyMessage')}
@@ -933,25 +1077,82 @@ function JsonlMarkdownBody({ content }: { content: string }) {
   )
 }
 
-function JsonlMessageCard({ record }: { record: JsonlRecord }) {
+/**
+ * Render one part by its kind: text goes through Markdown (for roles that get
+ * Markdown at all), a tool call shows its structured input as JSON, everything
+ * else falls back to a `pre`. Only free text is normalized — a tool input is a
+ * structured object, and raw dumps are already JSON.
+ */
+function JsonlPartBody({
+  markdown,
+  part,
+}: {
+  markdown: boolean
+  part: JsonlPart
+}) {
+  const { t } = useTranslation('resources')
+  if (part.kind === 'tool-call') return <JsonlToolBody input={part.input} />
+  if (part.kind === 'text' && markdown) {
+    return <JsonlMarkdownBody content={normalizeJsonlDisplayText(part.text)} />
+  }
+  if (part.kind === 'tool-result') {
+    return (
+      <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded border bg-muted/30 p-2 text-xs leading-5">
+        {normalizeJsonlDisplayText(part.text) ||
+          t('filePreview.jsonl.emptyMessage')}
+      </pre>
+    )
+  }
+  const text =
+    part.kind === 'raw' ? part.text : normalizeJsonlDisplayText(part.text)
+  return (
+    <pre
+      className={`whitespace-pre-wrap break-words text-xs leading-5 ${
+        part.kind === 'raw' ? 'text-muted-foreground' : ''
+      }`}
+    >
+      {text || t('filePreview.jsonl.emptyMessage')}
+    </pre>
+  )
+}
+
+function JsonlMessageCard({ message }: { message: JsonlMessage }) {
   const { t } = useTranslation('resources')
   const [expanded, setExpanded] = useState(false)
-  const message = useMemo(() => getJsonlMessage(record), [record])
-  const isTool = Boolean(message.toolName || message.kind === 'tool-result')
-  const needsExpand =
-    !isTool && message.text.length > JSONL_MESSAGE_PREVIEW_LIMIT
-  const body =
+  const textLength = message.parts.reduce(
+    (total, part) => (part.kind === 'text' ? total + part.text.length : total),
+    0,
+  )
+  const needsExpand = textLength > JSONL_MESSAGE_PREVIEW_LIMIT
+  const displayParts =
     expanded || !needsExpand
-      ? message.text
-      : `${message.text.slice(0, JSONL_MESSAGE_PREVIEW_LIMIT).trimEnd()}...`
+      ? message.parts
+      : collapseJsonlParts(message.parts, JSONL_MESSAGE_PREVIEW_LIMIT)
+  const toolNames = [
+    ...new Set(
+      message.parts.flatMap((part) =>
+        (part.kind === 'tool-call' || part.kind === 'tool-result') &&
+        part.toolName
+          ? [part.toolName]
+          : [],
+      ),
+    ),
+  ]
+  const markdown = isJsonlMarkdownMessage(message.role)
+  // Tool-result first: it must win over role=user, since Anthropic transcripts
+  // deliver tool results as user messages.
   const alignClass =
-    message.kind === 'user'
-      ? 'bg-primary/10 border-primary/25'
-      : message.kind === 'tool-result'
-        ? 'border-dashed bg-muted/50'
-        : message.kind === 'invalid' || message.kind === 'other'
-          ? 'bg-muted/40'
-          : 'bg-background'
+    message.toolShape === 'result'
+      ? 'border-dashed bg-muted/50'
+      : message.role === 'user'
+        ? 'bg-primary/10 border-primary/25'
+        : message.role === 'invalid'
+          ? 'border-destructive/30 bg-muted/40'
+          : message.role === 'other'
+            ? 'bg-muted/40'
+            : message.toolShape === 'call'
+              ? 'border-dashed bg-background'
+              : 'border-l-2 border-l-primary/50 bg-background'
 
   return (
     <article
@@ -964,23 +1165,32 @@ function JsonlMessageCard({ record }: { record: JsonlRecord }) {
             {message.roleId}
           </span>
         ) : null}
-        {message.toolName ? (
-          <span className="truncate rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
-            {message.toolName}
+        {toolNames.map((toolName) => (
+          <span
+            key={toolName}
+            className="truncate rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
+          >
+            {toolName}
           </span>
-        ) : null}
+        ))}
         <span className="ml-auto shrink-0 font-mono text-[11px] text-muted-foreground">
           #{message.lineNo}
         </span>
       </div>
 
-      {message.toolName ? (
-        <JsonlToolBody text={message.text} toolName={message.toolName} />
-      ) : isJsonlMarkdownMessage(message.kind) ? (
-        <JsonlMarkdownBody content={body} />
+      {displayParts.length ? (
+        <div className="grid gap-2">
+          {displayParts.map((part, index) => (
+            <JsonlPartBody
+              key={`${part.kind}-${index}`}
+              markdown={markdown}
+              part={part}
+            />
+          ))}
+        </div>
       ) : (
         <pre className="whitespace-pre-wrap break-words text-xs leading-5">
-          {body || t('filePreview.jsonl.emptyMessage')}
+          {t('filePreview.jsonl.emptyMessage')}
         </pre>
       )}
 
@@ -1014,20 +1224,29 @@ function JsonlPreview({ content }: { content: string }) {
     return stored === null ? true : stored === 'true'
   })
   const records = useMemo(() => parseJsonlRecords(content), [content])
-  const filteredRecords = useMemo(() => {
-    if (!dialogMode || showTools) return records
-    return records.filter((record) => {
-      const message = getJsonlMessage(record)
-      return !message.toolName && message.kind !== 'tool-result'
-    })
-  }, [dialogMode, records, showTools])
+  const messages = useMemo(() => records.map(getJsonlMessage), [records])
+  // Hiding tool calls strips the tool parts but keeps any text the same message
+  // carried; a message left with nothing to show drops out entirely.
+  const visibleMessages = useMemo(() => {
+    if (showTools) return messages
+    return messages
+      .map((message) => ({
+        ...message,
+        parts: message.parts.filter(
+          (part) => part.kind !== 'tool-call' && part.kind !== 'tool-result',
+        ),
+      }))
+      .filter((message) => message.parts.length > 0)
+  }, [messages, showTools])
+  // Raw rows cannot be split part by part, so a record hidden in dialog mode is
+  // hidden here too; a mixed text+tool record keeps its whole line.
+  const visibleLineNos = useMemo(
+    () => new Set(visibleMessages.map((message) => message.lineNo)),
+    [visibleMessages],
+  )
   const hasTools = useMemo(
-    () =>
-      records.some((record) => {
-        const message = getJsonlMessage(record)
-        return Boolean(message.toolName || message.kind === 'tool-result')
-      }),
-    [records],
+    () => messages.some((message) => hasJsonlToolPart(message.parts)),
+    [messages],
   )
 
   if (!records.length) {
@@ -1045,7 +1264,7 @@ function JsonlPreview({ content }: { content: string }) {
           {t('filePreview.jsonl.recordCount', { count: records.length })}
         </span>
         <div className="flex items-center gap-2">
-          {dialogMode && hasTools ? (
+          {hasTools ? (
             <label className="inline-flex cursor-pointer items-center gap-2">
               <span className="font-medium">
                 {t('filePreview.jsonl.toolcall')}
@@ -1067,9 +1286,7 @@ function JsonlPreview({ content }: { content: string }) {
           ) : null}
           <label className="inline-flex cursor-pointer items-center gap-2">
             <span className="font-medium">
-              {dialogMode
-                ? t('filePreview.jsonl.dialogMode')
-                : t('filePreview.jsonl.rawMode')}
+              {t('filePreview.jsonl.dialogMode')}
             </span>
             <input
               type="checkbox"
@@ -1084,15 +1301,17 @@ function JsonlPreview({ content }: { content: string }) {
 
       {dialogMode ? (
         <div className="flex min-w-0 flex-col gap-3">
-          {filteredRecords.map((record) => (
-            <JsonlMessageCard key={record.index} record={record} />
+          {visibleMessages.map((message) => (
+            <JsonlMessageCard key={message.lineNo} message={message} />
           ))}
         </div>
       ) : (
         <div className="overflow-hidden rounded-md border">
-          {records.map((record) => (
-            <JsonlRawRow key={record.index} record={record} />
-          ))}
+          {records
+            .filter((record) => visibleLineNos.has(record.index + 1))
+            .map((record) => (
+              <JsonlRawRow key={record.index} record={record} />
+            ))}
         </div>
       )}
     </div>
@@ -1143,6 +1362,13 @@ export function FilePreview({
   const displayContent = useMemo(
     () => memoryFieldsDisplayContent(preview?.content || ''),
     [preview?.content],
+  )
+  const okfDocument = useMemo(
+    () =>
+      file && preview?.fileType === 'markdown'
+        ? parseOkfSidecarMarkdown(file.uri, displayContent)
+        : null,
+    [displayContent, file, preview?.fileType],
   )
   const jsonFormat = useJsonFormat(
     displayContent,
@@ -1312,8 +1538,8 @@ export function FilePreview({
   const isMarkdown = preview?.fileType === 'markdown'
   const isDark = document.documentElement.classList.contains('dark')
   const emptyFileText = t('filePreview.emptyFile')
-  const availableDirectoryLevels = directoryPreview.levels.filter((level) =>
-    level.content.trim(),
+  const availableDirectoryLevels = directoryPreview.levels.filter(
+    (level) => level.document !== null || level.content.trim(),
   )
   const visibleDirectoryLevels = availableDirectoryLevels.filter((level) =>
     activeDirectoryLevels.has(level.id),
@@ -1518,7 +1744,7 @@ export function FilePreview({
                           type="button"
                           className={`inline-flex items-baseline gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors ${
                             active
-                              ? 'border-primary bg-primary text-primary-foreground'
+                              ? 'border-border bg-muted text-foreground'
                               : 'border-border bg-background text-muted-foreground hover:border-foreground/30 hover:text-foreground'
                           }`}
                           title={level.title}
@@ -1534,13 +1760,7 @@ export function FilePreview({
                             })
                           }
                         >
-                          <span
-                            className={`font-mono text-[10px] font-semibold uppercase tracking-wide ${
-                              active
-                                ? 'text-primary-foreground'
-                                : 'text-primary'
-                            }`}
-                          >
+                          <span className="font-mono text-[10px] font-semibold uppercase tracking-wide text-primary">
                             {level.name}
                           </span>
                           <span className="font-medium">{level.label}</span>
@@ -1577,26 +1797,35 @@ export function FilePreview({
                             {level.title}
                           </span>
                         </header>
-                        <article className="prose prose-sm max-w-none break-words rounded-md border bg-muted/20 p-3 dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
-                          <ReactMarkdown
-                            remarkPlugins={[remarkGfm]}
-                            urlTransform={transformDirectoryMarkdownUrl}
-                            components={{
-                              ...markdownComponents,
-                              a: ({ href, children }) => (
-                                <DirectoryMarkdownLink
-                                  href={href}
-                                  fileUri={file.uri}
-                                  onNavigate={onNavigate}
-                                >
-                                  {children}
-                                </DirectoryMarkdownLink>
-                              ),
-                            }}
-                          >
-                            {level.content}
-                          </ReactMarkdown>
-                        </article>
+                        {level.document ? (
+                          <OkfMetadataPanel
+                            metadata={level.document.metadata}
+                            onNavigate={onNavigate}
+                            rawFrontmatter={level.document.rawFrontmatter}
+                          />
+                        ) : null}
+                        {level.content.trim() ? (
+                          <article className="prose prose-sm max-w-none break-words rounded-md border bg-muted/20 p-3 dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
+                            <ReactMarkdown
+                              remarkPlugins={[remarkGfm]}
+                              urlTransform={transformDirectoryMarkdownUrl}
+                              components={{
+                                ...markdownComponents,
+                                a: ({ href, children }) => (
+                                  <DirectoryMarkdownLink
+                                    href={href}
+                                    fileUri={file.uri}
+                                    onNavigate={onNavigate}
+                                  >
+                                    {children}
+                                  </DirectoryMarkdownLink>
+                                ),
+                              }}
+                            >
+                              {level.content}
+                            </ReactMarkdown>
+                          </article>
+                        ) : null}
                       </section>
                     ))}
                   </div>
@@ -1676,34 +1905,45 @@ export function FilePreview({
             preview?.fileType === 'markdown' &&
             hasPreviewContent &&
             markdownMode === 'preview' ? (
-              <article className="prose prose-sm max-w-none break-words dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  rehypePlugins={[rehypeRaw, rehypeSanitize]}
-                  urlTransform={(url) => url}
-                  components={{
-                    ...markdownComponents,
-                    img: ({ src, alt }) => (
-                      <MarkdownImage
-                        src={src ? String(src) : undefined}
-                        alt={alt}
-                        fileUri={file.uri}
-                      />
-                    ),
-                    a: ({ href, children }) => (
-                      <MarkdownLink
-                        href={href}
-                        fileUri={file.uri}
-                        onNavigate={onNavigate}
-                      >
-                        {children}
-                      </MarkdownLink>
-                    ),
-                  }}
-                >
-                  {displayContent || emptyFileText}
-                </ReactMarkdown>
-              </article>
+              <div className="space-y-5">
+                {okfDocument ? (
+                  <OkfMetadataPanel
+                    metadata={okfDocument.metadata}
+                    onNavigate={onNavigate}
+                    rawFrontmatter={okfDocument.rawFrontmatter}
+                  />
+                ) : null}
+                <article className="prose prose-sm max-w-none break-words dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    rehypePlugins={[rehypeRaw, rehypeSanitize]}
+                    urlTransform={(url) => url}
+                    components={{
+                      ...markdownComponents,
+                      img: ({ src, alt }) => (
+                        <MarkdownImage
+                          src={src ? String(src) : undefined}
+                          alt={alt}
+                          fileUri={file.uri}
+                        />
+                      ),
+                      a: ({ href, children }) => (
+                        <MarkdownLink
+                          href={href}
+                          fileUri={file.uri}
+                          onNavigate={onNavigate}
+                        >
+                          {children}
+                        </MarkdownLink>
+                      ),
+                    }}
+                  >
+                    {okfDocument
+                      ? okfDocument.body || emptyFileText
+                      : displayContent || emptyFileText}
+                  </ReactMarkdown>
+                </article>
+              </div>
             ) : null}
 
             {!previewLoading &&

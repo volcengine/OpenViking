@@ -10,6 +10,9 @@ import pytest
 
 from openviking.models.vlm.backends import codex_auth
 from openviking.models.vlm.backends.codex_auth import resolve_codex_runtime_credentials
+from openviking.models.vlm.backends.codex_responses_adapter import (
+    _convert_message_for_responses,
+)
 from openviking.models.vlm.backends.codex_vlm import CodexVLM
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
@@ -464,30 +467,6 @@ def test_codex_auth_refresh_requires_persisted_client_id(tmp_path, monkeypatch):
 
 @patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI")
 @patch("openviking.models.vlm.backends.codex_vlm.resolve_codex_runtime_credentials")
-def test_codex_streaming_is_rejected(mock_resolve, mock_openai_class):
-    mock_resolve.return_value = {
-        "api_key": "oauth-token",
-        "base_url": "https://chatgpt.com/backend-api/codex",
-    }
-    mock_real_client = MagicMock()
-    mock_openai_class.return_value = mock_real_client
-
-    vlm = CodexVLM(
-        {
-            "provider": "openai-codex",
-            "model": "gpt-5.3-codex",
-            "stream": True,
-        }
-    )
-
-    with pytest.raises(NotImplementedError, match="Streaming is not supported"):
-        vlm.get_completion("hello")
-
-    mock_real_client.responses.create.assert_not_called()
-
-
-@patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI")
-@patch("openviking.models.vlm.backends.codex_vlm.resolve_codex_runtime_credentials")
 def test_codex_sync_client_re_resolves_credentials_per_request(mock_resolve, mock_openai_class):
     mock_resolve.side_effect = [
         {
@@ -590,6 +569,89 @@ def test_codex_translates_tool_history_into_responses_input(mock_resolve, mock_o
             "output": '{"temperature":72}',
         },
     ]
+
+
+@pytest.mark.parametrize(
+    ("content", "expected_output"),
+    [
+        (
+            [
+                {"type": "text", "text": "first"},
+                {"type": "text", "text": "second"},
+            ],
+            "firstsecond",
+        ),
+        ({"ok": True}, '{"ok": true}'),
+    ],
+)
+def test_codex_preserves_legacy_text_tool_output_serialization(content, expected_output):
+    converted = _convert_message_for_responses(
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": content,
+        }
+    )
+
+    assert converted == [
+        {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": expected_output,
+        }
+    ]
+
+
+@patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI")
+@patch("openviking.models.vlm.backends.codex_vlm.resolve_codex_runtime_credentials")
+def test_codex_preserves_images_in_function_call_output(mock_resolve, mock_openai_class):
+    mock_resolve.return_value = {
+        "api_key": "oauth-token",
+        "base_url": "https://chatgpt.com/backend-api/codex",
+    }
+    mock_real_client = MagicMock()
+    mock_real_client.responses.create.return_value = _MockResponsesStream(
+        _build_final_response("image inspected")
+    )
+    mock_openai_class.return_value = mock_real_client
+    image_url = "data:image/png;base64,aW1hZ2U="
+
+    vlm = CodexVLM({"provider": "openai-codex", "model": "gpt-5.3-codex"})
+    result = vlm.get_completion(
+        messages=[
+            {"role": "user", "content": "Inspect the image"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "read_image", "arguments": "{}"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [
+                    {"type": "text", "text": "Source: image.png"},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ],
+            },
+        ]
+    )
+
+    assert result == "image inspected"
+    input_items = mock_real_client.responses.create.call_args.kwargs["input"]
+    assert input_items[-1] == {
+        "type": "function_call_output",
+        "call_id": "call_1",
+        "output": [
+            {"type": "input_text", "text": "Source: image.png"},
+            {"type": "input_image", "image_url": image_url},
+        ],
+    }
 
 
 def test_codex_auth_invalid_exp_claim_is_treated_as_expiring():

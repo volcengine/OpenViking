@@ -245,6 +245,7 @@ function normalizeConfig(config) {
   config.accountId = config.account
   config.userId = config.user
   config.userAgent = USER_AGENT
+  config.harness = "opencode"
   config.timeoutMs = normalizeNumber(config.timeoutMs, DEFAULT_CONFIG.timeoutMs, 1000, 300000)
   config.repoContext.cacheTtlMs = normalizeNumber(
     config.repoContext.cacheTtlMs,
@@ -294,7 +295,11 @@ export function loadConfig(pluginRoot, projectDirectory) {
   config.apiKey = creds.apiKey
   config.account = creds.account
   config.user = creds.user
-  config.peerId = creds.peerId
+  // Shared credentials only carry a peer when ovcli.conf sets actor_peer_id
+  // (or OPENVIKING_PEER_ID is exported); without one the project config's
+  // peerId still applies so authenticated setups keep writing peer-scoped
+  // data instead of silently dropping into the shared user tree (#4487).
+  config.peerId = creds.peerId || str(fileConfig.peerId, "")
   config.mcpUrl = creds.mcpUrl
   config.credentialSource = creds.credentialSource
   config.credentialPath = creds.cliPath || creds.ovPath || ""

@@ -192,16 +192,9 @@ openclaw config get plugins.slots.contextEngine  # 应输出：openviking
 1. 从最后一条 user message 提取查询文本。
 2. 基于当前 `sessionId/sessionKey` 解析本轮的 agent 路由。
 3. 先做一次快速可用性检查，避免在 OpenViking 不可用时拖慢模型请求。
-4. 检索配置的 `recallTargetTypes`（默认 `user,agent`；可选 `resource`；session 历史请使用 `ov_archive_search` 和 `ov_archive_expand`）。
-5. 在插件侧做去重、阈值筛选、重排和 token budget 裁剪。
-6. 把最终记忆块以 `<relevant-memories>` 形式 prepend 到当前 user message；不会追加独立 synthetic user message。
-
-这里的重排不是单纯依赖向量分数。当前实现还会额外考虑：
-
-- 是否是 `level == 2` 的叶子记忆
-- 是否属于偏好类记忆
-- 是否属于事件类记忆
-- 与当前 query 的词面重合度
+4. 按配置的 `recallTargetTypes` 发起一次带 session 上下文的 context search（默认 `user,agent`；可选 `resource`；原始 session 历史仍可用 `ov_archive_search` 和 `ov_archive_expand` 查看）。
+5. 由 OpenViking 服务端结合 session 历史扩展查询，完成候选过滤与排序、跨轮去重、内容层级选择和预算内组装。
+6. 把服务端渲染的上下文以 `<relevant-memories>` 形式 prepend 到当前 user message；不会追加独立 synthetic user message。
 
 ## Session 生命周期
 

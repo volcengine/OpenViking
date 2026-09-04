@@ -5,7 +5,7 @@
 import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 from uuid import uuid4
 
 from openviking.utils.ingest_options import IngestOptions
@@ -51,6 +51,7 @@ class SemanticMsg:
     recursive: bool = True  # Whether to recursively process subdirectories
     account_id: str = "default"
     user_id: str = "default"
+    group_ids: List[str] = field(default_factory=list)
     peer_id: str = "default"
     role: str = "root"
     # Additional flags
@@ -71,6 +72,7 @@ class SemanticMsg:
     aggregate_directory: bool = True
     use_hierarchical_aggregation: bool = False
     propagate_to_parent: bool = True
+    copy_source_uri: str = ""
 
     def __init__(
         self,
@@ -79,6 +81,7 @@ class SemanticMsg:
         recursive: bool = True,
         account_id: str = "default",
         user_id: str = "default",
+        group_ids: Optional[Sequence[str]] = None,
         peer_id: str = "default",
         role: str = "root",
         skip_vectorization: bool = False,
@@ -96,6 +99,7 @@ class SemanticMsg:
         aggregate_directory: bool = True,
         use_hierarchical_aggregation: bool = False,
         propagate_to_parent: bool = True,
+        copy_source_uri: str = "",
     ):
         self.id = str(uuid4())
         self.uri = uri
@@ -103,6 +107,7 @@ class SemanticMsg:
         self.recursive = recursive
         self.account_id = account_id
         self.user_id = user_id
+        self.group_ids = list(group_ids or [])
         self.peer_id = peer_id
         self.role = role
         self.skip_vectorization = skip_vectorization
@@ -120,6 +125,7 @@ class SemanticMsg:
         self.aggregate_directory = bool(aggregate_directory)
         self.use_hierarchical_aggregation = bool(use_hierarchical_aggregation)
         self.propagate_to_parent = bool(propagate_to_parent)
+        self.copy_source_uri = copy_source_uri
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert object to dictionary."""
@@ -154,6 +160,7 @@ class SemanticMsg:
             recursive=data.get("recursive", True),
             account_id=data.get("account_id", "default"),
             user_id=data.get("user_id", "default"),
+            group_ids=data.get("group_ids") if isinstance(data.get("group_ids"), list) else None,
             peer_id=data.get("peer_id", "default"),
             role=data.get("role", "root"),
             skip_vectorization=data.get("skip_vectorization", False),
@@ -177,6 +184,7 @@ class SemanticMsg:
             aggregate_directory=data.get("aggregate_directory", True),
             use_hierarchical_aggregation=data.get("use_hierarchical_aggregation", False),
             propagate_to_parent=data.get("propagate_to_parent", True),
+            copy_source_uri=data.get("copy_source_uri", ""),
         )
         if "id" in data and data["id"]:
             obj.id = data["id"]

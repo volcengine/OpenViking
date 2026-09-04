@@ -12,13 +12,13 @@ import fnmatch
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Set, Union
+from typing import Callable, List, Optional, Set, Union
 
 from openviking.parse.gitignore import GitignoreMatcher
 from openviking.parse.parsers.constants import IGNORE_DIRS
 from openviking.parse.parsers.upload_utils import is_text_file
 from openviking.parse.registry import ParserRegistry, get_registry
-from openviking_cli.exceptions import UnsupportedDirectoryFilesError
+from openviking_cli.exceptions import InvalidArgumentError, UnsupportedDirectoryFilesError
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -159,14 +159,18 @@ def _matches_exclude(rel_path_norm: str, path_name: str, patterns: List[str]) ->
 def _classify_file(
     file_path: Path,
     registry: ParserRegistry,
+    additional_can_process: Optional[Callable[[Path], bool]] = None,
 ) -> str:
     """
     Classify a single file as CLASS_PROCESSABLE or CLASS_UNSUPPORTED.
 
-    Processable: ParserRegistry has a parser, or is_text_file (code/config/docs).
+    Processable: ParserRegistry has a parser, an additional parser backend can
+    handle the file, or is_text_file (code/config/docs).
     """
     # Normal classification logic
     if registry.get_parser_for_file(file_path) is not None:
+        return CLASS_PROCESSABLE
+    if additional_can_process and additional_can_process(file_path):
         return CLASS_PROCESSABLE
     if is_text_file(file_path):
         return CLASS_PROCESSABLE
@@ -180,6 +184,9 @@ def scan_directory(
     ignore_dirs: Optional[Set[str]] = None,
     include: Optional[str] = None,
     exclude: Optional[str] = None,
+    additional_can_process: Optional[Callable[[Path], bool]] = None,
+    max_files: Optional[int] = None,
+    max_depth: Optional[int] = None,
 ) -> DirectoryScanResult:
     """
     Traverse directory tree and classify every file (phase-one validation).
@@ -190,7 +197,8 @@ def scan_directory(
       (e.g. include="*.pdf,*.md"). If exclude is set, files matching any exclude pattern are
       skipped (e.g. exclude="drafts/" for path prefix, or "*.tmp" for name glob).
     - Classifies remaining files:
-      - processable: ParserRegistry has a parser, or is_text_file (code/docs/config)
+      - processable: ParserRegistry has a parser, an additional parser backend
+        accepts it, or is_text_file (code/docs/config)
       - unsupported: everything else
 
     Args:
@@ -203,11 +211,16 @@ def scan_directory(
                  (e.g. "*.pdf,*.md"). If not set, all files (subject to exclude) are considered.
         exclude: Comma-separated patterns: trailing '/' = path prefix (e.g. "drafts/"),
                  else glob on file name (e.g. "*.tmp").
+        additional_can_process: Optional capability check for parser backends
+            outside ParserRegistry.
+        max_files: Optional maximum number of selected files admitted by the scan.
+        max_depth: Optional maximum nested directory depth below the root.
 
     Returns:
         DirectoryScanResult with processable, unsupported, warnings.
 
     Raises:
+        InvalidArgumentError: When a configured directory safety limit is exceeded.
         UnsupportedDirectoryFilesError: When strict=True and there is at least one unsupported file.
         FileNotFoundError: When root does not exist.
         NotADirectoryError: When root is not a directory.
@@ -218,6 +231,15 @@ def scan_directory(
     if not root.is_dir():
         raise NotADirectoryError(f"Not a directory: {root}")
 
+    limits = {
+        "max_files": max_files,
+        "max_depth": max_depth,
+    }
+    for name, value in limits.items():
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise InvalidArgumentError(f"directory.{name} must be a positive integer")
     effective_registry = registry if registry is not None else get_registry()
     include_patterns = _parse_patterns(include)
     exclude_patterns = _parse_patterns(exclude)
@@ -235,8 +257,21 @@ def scan_directory(
         ignore_dirs_set = ignore_dirs
 
     result = DirectoryScanResult(root=root)
+    selected_file_count = 0
     for dir_path_str, dir_names, file_names in os.walk(root, topdown=True):
         dir_path = Path(dir_path_str)
+        try:
+            relative_dir_path = dir_path.relative_to(root)
+            directory_depth = len(relative_dir_path.parts)
+        except ValueError:
+            relative_dir_path = Path("<outside-root>")
+            directory_depth = max_depth + 1 if max_depth is not None else 0
+        if max_depth is not None and directory_depth > max_depth:
+            display_path = _normalize_rel_path(str(relative_dir_path))
+            raise InvalidArgumentError(
+                f"Directory depth exceeds limit: depth={directory_depth}, "
+                f"max_depth={max_depth}, path={display_path}"
+            )
         dir_spec = gitignore_matcher.spec_for_dir(dir_path)
 
         # Prune subdirectories in-place so os.walk won't descend into them
@@ -283,7 +318,21 @@ def scan_directory(
                 result.skipped.append(f"{rel_path} (excluded by exclude filter)")
                 continue
 
-            classification = _classify_file(file_path, effective_registry)
+            accepted_by_additional_parser = bool(
+                additional_can_process and additional_can_process(file_path)
+            )
+            if max_files is not None:
+                selected_file_count += 1
+            if max_files is not None and selected_file_count > max_files:
+                raise InvalidArgumentError(
+                    f"Directory file count exceeds limit: count={selected_file_count}, "
+                    f"max_files={max_files}, path={rel_path_norm}"
+                )
+            classification = (
+                CLASS_PROCESSABLE
+                if accepted_by_additional_parser
+                else _classify_file(file_path, effective_registry)
+            )
             classified = ClassifiedFile(
                 path=file_path, rel_path=rel_path_norm, classification=classification
             )

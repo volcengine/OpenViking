@@ -56,9 +56,9 @@ TraeCode CLI 2.0 用户启动 `trae-cli`，并可用 `trae-cli plugin list` 确�
 
 ## 工作原理
 
-本插件深度挂载于 Codex 的生命周期之中：在 `SessionStart`（`startup`、`clear` 或 `resume`）阶段，它会复用其他 coding-agent 集成共用的 CJK-aware profile 构建逻辑，注入 `profile.md`，以及 `preferences/`、`entities/` 的 URI 和摘要索引；在每次用户输入前，它会搜索 OpenViking 并注入相关的记忆（触发 `UserPromptSubmit`）；在每轮对话结束后，会将新的对话追加至当前会话（触发 `Stop`）；在上下文压缩前，补齐并提交（commit）完整的对话记录（触发 `PreCompact`），以确保记忆抽取器能够在完整的上下文环境中运行。此外，在启动新会话时，插件还会自动清理前次运行遗留的孤儿会话（orphan session）。恢复已有会话时，固定 profile 背景还会与最新的 archive digest 合并注入。
+本插件深度挂载于 Codex 的生命周期之中：在 `SessionStart`（`startup`、`clear` 或 `resume`）阶段，它会复用其他 coding-agent 集成共用的 CJK-aware profile 构建逻辑，注入 `profile.md`，以及 `preferences/`、`entities/` 的 URI 和摘要索引；在每次用户输入前，它会搜索 OpenViking 并注入相关的记忆（触发 `UserPromptSubmit`）；在每轮对话结束后，会将新的对话追加至当前会话（触发 `Stop`）；在上下文压缩前，补齐并提交（commit）完整的对话记录（触发 `PreCompact`）；在线程正常退出时提交整段会话（触发 `SessionEnd`），以确保记忆抽取器能够在完整的上下文环境中运行。此外，在启动新会话时，插件还会清扫前次运行遗留的孤儿会话（orphan session）。恢复已有会话时，固定 profile 背景还会与最新的 archive digest 合并注入。
 
-> **已知局限**：当通过 `SIGTERM`、`Ctrl+C` 或输入 `/exit` 退出 Codex 时，不会触发任何 hook（钩子）。遗留的孤儿会话将在下一次触发 `SessionStart` 时，通过闲置 TTL（生存时间，默认为 30 分钟）机制或活动窗口启发式策略进行回收清理。
+> **已知局限**：`SessionEnd` 需要 Codex 0.145 及以上版本，且只在正常退出时触发（`/quit`、`/exit`、连按两次 `Ctrl-C`、EOF、`codex exec` 运行结束）。`SIGTERM`、直接关闭终端、`kill -9` 或崩溃都不会触发；当 TUI 挂在 `codex app-server` 守护进程上时，该事件会被延后。这些会话——以及 Codex 低于 0.145 的所有会话（以及没有该事件的 TraeCode CLI 版本）——由下一次 `SessionStart` 的闲置 TTL（生存时间，默认为 30 分钟）清扫回收。
 
 工具调用和结果会作为独立的 `tool` part 捕获，`tool_output` 原样上报。截断由服务端负责：超过 `tool_output_externalization.threshold_chars`（默认 `20000`）的输出会写入 session 的 tool-result 存储，part 中只保留 synopsis stub 和 `tool_output_ref`，原文仍可通过 [`/api/v1/sessions/{id}/tool-results`](../api/05-sessions.md#read_tool_result) 读回。
 
@@ -75,8 +75,8 @@ TraeCode CLI 2.0 用户启动 `trae-cli`，并可用 `trae-cli plugin list` 确�
 | `OPENVIKING_CREDENTIAL_SOURCE` | `auto` | `auto` 下已设置的凭据环境变量优先；设为 `cli` 强制使用激活的 ovcli 配置，设为 `env` 强制使用环境变量 |
 | `OPENVIKING_NO_AUTO_INJECT` | `false` | 关闭会话启动阶段的固定 profile/背景注入，但不关闭逐 prompt 语义召回 |
 | `OPENVIKING_PROFILE_TOKEN_BUDGET` | `10000` | `profile.md` 及 `preferences/`、`entities/` 索引共用的 CJK-aware token 预算 |
-| `OPENVIKING_CODEX_ACTIVE_WINDOW_MS` | `120000` | `SessionStart` 活动窗口阈值（毫秒） |
 | `OPENVIKING_CODEX_IDLE_TTL_MS` | `1800000` | `SessionStart` 闲置 TTL 清理阈值（毫秒） |
+| `OPENVIKING_CODEX_LOCK_WAIT_MS` | `120000`（SessionEnd）、`40000`（PreCompact） | 捕获类 hook 等待单会话状态锁的时长（毫秒） |
 | `OPENVIKING_CODEX_COMMITTED_TTL_MS` | `2592000000` | 已提交会话的转录游标保留时长（毫秒），过期后删除状态文件 |
 | `OPENVIKING_DEBUG` | `false` | 是否将日志写入 `~/.openviking/logs/codex-hooks.log` |
 
@@ -85,6 +85,12 @@ TraeCode CLI 2.0 用户启动 `trae-cli`，并可用 `trae-cli plugin list` 确�
 更多调参说明（如 `OPENVIKING_RECALL_LIMIT`、`OPENVIKING_CAPTURE_ASSISTANT_TURNS` 等），请参考 [插件 README](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md#tuning-the-plugin)。
 
 </details>
+
+## 工作区 peer
+
+记忆按你所在仓库派生出的 peer 归档，因此同一个项目在不同 clone、worktree 和子目录下共用同一份记忆。默认的 `peer.source: "git"` 取仓库归一化后的 `origin` URL——`origin` 为 `git@github.com:volcengine/OpenViking.git` 时，peer 就是 `github.com-volcengine-openviking`——其次是仓库根路径；不在仓库中则完全不发送 peer，在那里记下的内容进入用户级空间 `viking://user/<you>/memories`。fork 的 `origin` 不同，因此默认是独立的 peer。
+
+可通过 `OPENVIKING_PEER_SOURCE`、`ovcli.conf` 中的 `plugin.peerSource`，或工作区 `.openviking/config.json`（`"version": 1` 的配置文件，可提交给团队共用）中的 `peer.source` 修改：`"cwd"` 恢复此前的行为——把工作目录路径中的非字母数字字符全部替换成 `-`；`"none"` 表示不发送 peer；也可以用 `"team-{dir}"` 这样的模板自定义。要[让一个不是仓库的目录拥有独立记忆](../configuration/02-client.md#让一个目录拥有独立记忆)，在该目录下创建 `.openviking/config.json`，内容为 `{"version": 1, "peer": {"id": "my-project"}}`。此前按工作目录派生的 peer 下写入的记忆仍能被召回，无需迁移。分层优先级和工作区配置文件的完整 schema 见[客户端配置 → 工作区配置](../configuration/02-client.md#工作区配置)。
 
 ## 故障排查
 

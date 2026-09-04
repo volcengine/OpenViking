@@ -9,7 +9,7 @@ key, no on-disk state, no replay-set bookkeeping. ``dict.pop`` doubles as the
 consume-and-burn primitive.
 
 The token carries the identity bound at issue time (account/user), the caller's actor peer
-scope (``actor_peer_id``), and the business params (``to``/``reason``/``parse_mode``) so the server can
+scope (``actor_peer_id``), and the business params (``to``/``parent``/``reason``/``parse_mode``) so the server can
 finish ingestion automatically once the file lands — the caller does not re-invoke
 ``add_resource``, and the ingest keeps the original peer scope. The ``temp_file_id`` is minted by
 :class:`openviking.server.temp_upload_store.TempUploadStore` at upload time, so the token
@@ -44,6 +44,7 @@ class _TokenInfo:
     account_id: str
     user_id: str
     to: str
+    parent: str
     reason: str
     actor_peer_id: str
     processing_mode: ProcessingMode
@@ -62,6 +63,7 @@ class ConsumedUploadToken:
     to: str
     reason: str
     actor_peer_id: str
+    parent: str = ""
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
     tags: Optional[list[str]] = None
     tag_mode: str = "replace"
@@ -79,6 +81,7 @@ class UploadTokenStore:
         ttl_seconds: int,
         *,
         to: str = "",
+        parent: str = "",
         reason: str = "",
         actor_peer_id: str = "",
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
@@ -86,7 +89,7 @@ class UploadTokenStore:
         tag_mode: str = "replace",
         parse_mode: str = "default",
     ) -> Tuple[str, float]:
-        """Mint a fresh token bound to (account, user) plus ``to``/``reason``/``actor_peer_id``.
+        """Mint a fresh token bound to the caller identity and resource ingestion parameters.
 
         ``actor_peer_id`` is captured from the minting request's context so server-side
         auto-ingest keeps the caller's peer scope (reason-memory routing) — it is NOT taken
@@ -99,6 +102,7 @@ class UploadTokenStore:
             account_id,
             user_id,
             to,
+            parent,
             reason,
             actor_peer_id,
             processing_mode,
@@ -124,15 +128,16 @@ class UploadTokenStore:
         if info.expires_at < time.time():
             raise UploadTokenError("upload token expired")
         return ConsumedUploadToken(
-            info.account_id,
-            info.user_id,
-            info.to,
-            info.reason,
-            info.actor_peer_id,
-            info.processing_mode,
-            info.tags,
-            info.tag_mode,
-            info.parse_mode,
+            account_id=info.account_id,
+            user_id=info.user_id,
+            to=info.to,
+            parent=info.parent,
+            reason=info.reason,
+            actor_peer_id=info.actor_peer_id,
+            processing_mode=info.processing_mode,
+            tags=info.tags,
+            tag_mode=info.tag_mode,
+            parse_mode=info.parse_mode,
         )
 
     def peek(self, token: str) -> Optional[_TokenInfo]:

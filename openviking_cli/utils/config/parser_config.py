@@ -601,9 +601,34 @@ class DirectoryConfig(ParserConfig):
             adding directory resources. When True (default), files maintain their
             relative path hierarchy. When False, all files are flattened to a
             single level under the resource root.
+        max_files: Maximum number of selected files admitted by one Understanding
+            directory import.
+        max_depth: Maximum nested directory depth below an Understanding directory
+            import root.
+        max_concurrent: Maximum concurrent Understanding jobs shared by all
+            directory imports in one service event loop.
     """
 
     preserve_structure: bool = True
+    max_files: int = 1000
+    max_depth: int = 10
+    max_concurrent: int = 4
+
+    def validate(self) -> None:
+        """Validate directory resource and concurrency limits."""
+        super().validate()
+
+        for name in (
+            "max_files",
+            "max_depth",
+            "max_concurrent",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+
+    def __post_init__(self) -> None:
+        self.validate()
 
 
 @dataclass

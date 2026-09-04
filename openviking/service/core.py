@@ -14,6 +14,10 @@ from openviking.core.directories import DirectoryInitializer
 from openviking.privacy import UserPrivacyConfigService
 from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
 from openviking.resource.watch_scheduler import WatchScheduler
+from openviking.server.account_settings import (
+    effective_acl_enabled,
+    read_account_settings,
+)
 from openviking.server.identity import RequestContext, Role
 from openviking.service.agent_evolution_service import AgentEvolutionService
 from openviking.service.debug_service import DebugService
@@ -27,6 +31,7 @@ from openviking.service.session_auto_commit import SessionAutoCommitScheduler
 from openviking.service.session_service import SessionService
 from openviking.service.task_tracker import get_task_tracker, set_task_tracker
 from openviking.session import create_session_compressor
+from openviking.storage.acl import AclManager
 from openviking.storage.collection_schemas import init_context_collection
 from openviking.storage.index_consistency import check_index_consistency
 from openviking.storage.queuefs.add_resource_processor import AddResourceProcessor
@@ -180,6 +185,7 @@ class OpenVikingService:
         self._vikingdb_manager = VikingDBManager(
             vectordb_config=config.vectordb, queue_manager=self._queue_manager
         )
+        self._vikingdb_manager.acl_manager = AclManager(self._vikingdb_manager)
 
         # Configure queues if QueueManager is available.
         # Workers are NOT started here — start() is called after VikingFS is initialized
@@ -194,6 +200,18 @@ class OpenVikingService:
         """Build the single runtime binding config from OpenViking storage + encryption settings."""
         binding_config, self._encryptor = build_runtime_ragfs_binding_config(self._config)
         return binding_config
+
+    async def load_acl_settings(self, account_ids: list[str]) -> None:
+        if self._viking_fs is None:
+            raise NotInitializedError("VikingFS")
+        if self._vikingdb_manager is None or self._vikingdb_manager.acl_manager is None:
+            raise NotInitializedError("ACL")
+        for account_id in dict.fromkeys(account_ids):
+            settings = await read_account_settings(self._viking_fs, account_id)
+            self._vikingdb_manager.acl_manager.set_enabled(
+                account_id,
+                effective_acl_enabled(settings),
+            )
 
     def _ensure_data_dir_lock_acquired(self) -> None:
         """Acquire the process-level data directory lock once for this service instance."""
@@ -346,6 +364,7 @@ class OpenVikingService:
             query_embedder=self._embedder,
             rerank_config=config.rerank,
             vector_store=self._vikingdb_manager,
+            acl_manager=self._vikingdb_manager.acl_manager,
             retrieval_config=config.retrieval,
             grep_config=config.grep,
             enable_recorder=enable_recorder,
@@ -353,6 +372,7 @@ class OpenVikingService:
         )
         if enable_recorder:
             logger.info("VikingFS IO Recorder enabled")
+        await self.load_acl_settings([self._user.account_id])
 
         self._resource_processor = ResourceProcessor(
             vikingdb=self._vikingdb_manager,
@@ -365,14 +385,14 @@ class OpenVikingService:
         )
         self._directory_initializer = directory_initializer
         default_ctx = RequestContext(user=self._user, role=Role.ROOT)
-        account_count = await directory_initializer.initialize_account_directories(default_ctx)
-        user_count = await directory_initializer.initialize_user_directories(default_ctx)
+        account_count, user_count = await directory_initializer.initialize_account_workspace(
+            default_ctx
+        )
         logger.info(
             "Initialized preset directories account=%d user=%d",
             account_count,
             user_count,
         )
-
         self._privacy_config_service = UserPrivacyConfigService(self._viking_fs)
 
         # Initialize processors
@@ -537,6 +557,19 @@ class OpenVikingService:
             await self._vikingdb_manager.close()
             self._vikingdb_manager = None
 
+        if self._agfs_client:
+            close_agfs = getattr(self._agfs_client, "close", None)
+            if callable(close_agfs):
+                await asyncio.to_thread(close_agfs)
+            self._agfs_client = None
+            logger.info("RAGFS binding closed")
+
+        embedder = getattr(self, "_embedder", None)
+        if embedder is not None:
+            embedder.close()
+            self._embedder = None
+            await asyncio.sleep(0)
+
         self._viking_fs = None
         self._resource_processor = None
         self._skill_processor = None
@@ -635,6 +668,13 @@ class OpenVikingService:
         if not self._directory_initializer:
             return 0
         return await self._directory_initializer.initialize_account_directories(ctx)
+
+    async def initialize_account_workspace(self, ctx: RequestContext) -> tuple[int, int]:
+        """Initialize account and first-user preset directories in one batch."""
+        self._ensure_initialized()
+        if not self._directory_initializer:
+            return 0, 0
+        return await self._directory_initializer.initialize_account_workspace(ctx)
 
     async def initialize_user_directories(self, ctx: RequestContext) -> int:
         """Initialize current user's directory tree."""

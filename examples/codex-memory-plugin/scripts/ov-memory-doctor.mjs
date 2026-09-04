@@ -43,7 +43,11 @@ import {
   scanDebugLog,
   scanRcFiles,
   unknownOvcliKeys,
+  unknownPluginKeys,
   whichCommand,
+  checkWorkspace,
+  lintPeerScopeDowngrade,
+  WORKSPACE_PEER_HINT,
 } from "./shared/doctor-core.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
@@ -55,9 +59,9 @@ const LEGACY_MARKETPLACE = "openviking-plugins-local";
 const CODEX_DIR = join(homedir(), ".codex");
 const CODEX_CONFIG = process.env.CODEX_CONFIG_FILE || join(CODEX_DIR, "config.toml");
 const CACHE_DIR = join(CODEX_DIR, "plugins", "cache", MARKETPLACE, PLUGIN_NAME);
-const HOOK_EVENTS = ["session_start", "user_prompt_submit", "stop", "pre_compact"];
+const HOOK_EVENTS = ["session_start", "user_prompt_submit", "stop", "session_end", "pre_compact"];
 const RC_MARKERS = ["# >>> openviking-codex-plugin >>>", "codex-plugin.rc.sh"];
-const REQUIRED_PLUGIN_FILES = [".codex-plugin/plugin.json", "hooks/hooks.json", ".mcp.json", "servers/mcp-proxy.mjs", "scripts/config.mjs", "scripts/auto-recall.mjs", "scripts/auto-capture.mjs"];
+const REQUIRED_PLUGIN_FILES = [".codex-plugin/plugin.json", "hooks/hooks.json", ".mcp.json", "servers/mcp-proxy.mjs", "scripts/config.mjs", "scripts/auto-recall.mjs", "scripts/auto-capture.mjs", "scripts/session-end.mjs", "scripts/ov-session.mjs"];
 
 function parseArgs(argv) {
   const opts = { json: false, offline: false, timeoutMs: 5000, color: process.stdout.isTTY && !process.env.NO_COLOR };
@@ -226,8 +230,8 @@ function checkInstall(report, { codexOnPath }) {
       else trusted.push(event);
     }
     if (disabled.length) report.fail(`hooks disabled in [hooks.state]: ${disabled.join(", ")}`, "", `remove enabled = false from those [hooks.state] sections in ${homeShort(CODEX_CONFIG)}`);
-    if (untrusted.length) report.info(`hooks without a trust record yet: ${untrusted.join(", ")} (Codex records trusted_hash the first time a hook is approved; a changed hooks.json needs re-approval)`);
-    if (trusted.length === HOOK_EVENTS.length) report.ok("all four hooks have trust records in config.toml");
+    if (untrusted.length) report.info(`hooks without a trust record yet: ${untrusted.join(", ")} (Codex records trusted_hash the first time a hook is approved; a changed hooks.json — including a newly added event such as session_end — needs re-approval)`);
+    if (trusted.length === HOOK_EVENTS.length) report.ok(`all ${HOOK_EVENTS.length} hooks have trust records in config.toml`);
     const legacyKeys = Object.keys(toml).filter((k) => k.includes(LEGACY_MARKETPLACE));
     if (legacyKeys.length) report.info(`config.toml still has ${legacyKeys.length} section(s) for the legacy id ${LEGACY_MARKETPLACE} (harmless)`);
   }
@@ -290,6 +294,11 @@ function checkConfig(report, cfg) {
         if (conf.mode !== "600" && conf.mode !== "400") report.warn("ovcli.conf is not private", `mode ${conf.mode}; it holds the api key`, `chmod 600 ${homeShort(conf.path)}`);
         const unknown = unknownOvcliKeys(conf.data);
         if (unknown.length) report.warn("ovcli.conf has keys nobody reads", unknown.join(", "), "typos such as apiKey/base_url/token are silently ignored — use url, api_key, account, user");
+        // `plugin` is on the allowlist above, so until now nothing inside it
+        // was ever checked and a misspelled knob just sat there doing nothing.
+        for (const { key, suggestion } of unknownPluginKeys(conf.data.plugin)) {
+          report.warn(`ovcli.conf ${key} is not a knob any plugin reads`, "", suggestion ? `did you mean ${suggestion}?` : "remove it, or check the plugin README for the knob you meant");
+        }
         if (conf.data.plugin?.claude_code && !conf.data.plugin?.codex) report.info("ovcli.conf plugin.claude_code settings do not apply to Codex (use plugin.codex)");
       }
       if (label === "ov.conf" && conf.data.codex) report.info("ov.conf has a legacy codex block (still honoured; prefer ovcli.conf plugin.codex or env vars)");
@@ -322,7 +331,28 @@ function checkConfig(report, cfg) {
   }
   report.info(`auth mode ${cfg.authMode} (identity headers ${cfg.sendIdentityHeaders ? "sent" : "not sent"}; trusted is implied when account/user are set)`);
   const peer = resolveEffectivePeerId({ cfg, cwd: process.cwd() });
-  report.info(`peer     ${peer.peerId || "(none)"}  ← ${peer.source}${peer.source === "workspace" ? " (derived from cwd; changes when the directory moves)" : ""}`);
+  report.info(`peer     ${peer.peerId || "(none)"}  ← ${peer.source} (${peer.origin})`);
+  if (peer.origin === "unresolved") {
+    report.info(
+      "no peer is sent: this directory is in no git repository, so its memories go to your user-level space",
+      `to give it a memory of its own, create .openviking/config.json here with ${WORKSPACE_PEER_HINT}`,
+    );
+  } else if (peer.source === "none") {
+    report.warn(
+      "no peer is sent, so recall defaults to every memory under this user",
+      "sending a peer narrows the search to this workspace",
+      'unset OPENVIKING_WORKSPACE_PEER, or set peer.source to "git"',
+    );
+  }
+  if (peer.legacyPeerId) {
+    report.info(
+      `previous peer  ${peer.legacyPeerId}`,
+      cfg.recallPeerScope === "actor"
+        ? "recall asks it separately, because peer_scope actor turns off the server's cross-peer sweep"
+        : "already covered by the server's cross-peer sweep under peer_scope all",
+    );
+  }
+  for (const p of lintPeerScopeDowngrade()) report[p.level](p.message, p.detail, p.fix);
 
   report.info(`timeouts ${cfg.timeoutMs}ms request, ${cfg.recallTimeoutMs}ms recall, ${cfg.captureTimeoutMs}ms capture; recall limit ${cfg.recallLimit}, threshold ${cfg.scoreThreshold}`);
   const hooks = tryJson(join(PLUGIN_ROOT, "hooks", "hooks.json"))?.hooks || {};
@@ -382,9 +412,16 @@ function checkActivity(report, cfg, connection) {
     report.info(`${states.length} session state file(s) in ${homeShort(stateDir)}; newest ${fmtAge(newest.mtimeMs)}: ${d.ovSessionId || "(committed)"} captured ${d.capturedTurnCount ?? "?"} turns`);
     if (states.length > 3 && states.every((s) => (s.data?.capturedTurnCount ?? 0) === 0)) report.warn("no session has ever captured a turn", "the Stop hook runs but never appends messages", "check the Connection section; enable OPENVIKING_DEBUG=1 and read the hook log");
     const idleTtl = Number(process.env.OPENVIKING_CODEX_IDLE_TTL_MS) || 30 * 60 * 1000;
-    const orphans = states.filter((s) => s.data?.ovSessionId && Date.now() - (s.data.lastUpdatedAt || s.mtimeMs) > idleTtl);
-    if (orphans.length > 10) report.warn(`${orphans.length} idle sessions still uncommitted`, "the idle sweep at SessionStart commits them; a growing pile usually means commits are failing", "check the Connection section, then start a new Codex session to trigger the sweep");
-    else if (orphans.length) report.info(`${orphans.length} idle session(s) waiting for the SessionStart sweep`);
+    // Markers are `<id>.ended.<ts>`; the bare `<id>.ended` is a pre-0.8.1 leftover.
+    const ended = new Set(
+      readdirSync(stateDir)
+        .map((n) => /^(.*)\.ended(?:\.\d+)?$/.exec(n)?.[1])
+        .filter(Boolean),
+    );
+    const orphans = states.filter((s) => s.data?.ovSessionId
+      && (ended.has(s.name.slice(0, -5)) || Date.now() - (s.data.lastUpdatedAt || s.mtimeMs) > idleTtl));
+    if (orphans.length > 10) report.warn(`${orphans.length} sessions still uncommitted`, "SessionEnd commits a thread when it exits; the SessionStart sweep retries ended and idle ones, so a growing pile usually means commits are failing", "check the Connection section, then start a new Codex session to trigger the sweep");
+    else if (orphans.length) report.info(`${orphans.length} session(s) waiting for the SessionStart sweep`);
   }
   const profile = tryJson(join(stateDir, "recall-compressor-profile.json"));
   if (profile?.profile) {
@@ -419,6 +456,7 @@ async function main() {
   checkInstall(report, envInfo);
   const cfg = loadConfig();
   const configInfo = checkConfig(report, cfg);
+  const workspace = checkWorkspace(report);
   const connection = await checkConnection(report, cfg, configInfo, opts);
   const serverHealth = await checkServerHealth(report, { baseUrl: cfg.baseUrl, ovConf: configInfo.ovConf, health: connection?.probes?.health, offline: opts.offline, timeoutMs: opts.timeoutMs });
   checkActivity(report, cfg, connection);
@@ -438,6 +476,7 @@ async function main() {
         credentialSource: cfg.credentialSource,
         authMode: cfg.authMode,
       },
+      workspace,
       server: connection?.summary || null,
       serverHealth,
       ...report.toJSON(),

@@ -12,6 +12,7 @@ const manifest = JSON.parse(
   icon?: string;
   activation?: { onStartup?: boolean; onCapabilities?: string[] };
   contracts?: { tools?: string[] };
+  setup?: { providers?: Array<{ id?: string; envVars?: string[] }> };
   configSchema?: { properties?: Record<string, unknown> };
 };
 const packageJson = JSON.parse(
@@ -100,6 +101,14 @@ describe("OpenClaw 5.2 manifest contracts", () => {
     expect(manifest.activation?.onCapabilities?.toSorted()).toEqual(["hook", "tool"]);
   });
 
+  it("declares provider auth environment variables only in current setup metadata", () => {
+    expect(manifest).not.toHaveProperty("providerAuthEnvVars");
+    expect(manifest.setup?.providers).toContainEqual(expect.objectContaining({
+      id: "openviking",
+      envVars: ["OPENVIKING_API_KEY", "OPENVIKING_BASE_URL"],
+    }));
+  });
+
   it("declares recall trace configuration schema keys", () => {
     expect(Object.keys(manifest.configSchema?.properties ?? {})).toEqual(expect.arrayContaining([
       "traceRecall",
@@ -125,6 +134,7 @@ describe("OpenClaw 5.5 package runtime contract", () => {
     expect(packageJson.scripts?.build).toContain("tsc -p tsconfig.build.json");
     expect(packageJson.scripts?.prepack).toBe("npm run build");
     expect(packageJson.files).toContain("dist/");
+    expect(packageJson.files).toContain("shared/");
     expect(packageJson.files).toContain("install-manifest.json");
   });
 
@@ -140,6 +150,7 @@ describe("OpenClaw 5.5 package runtime contract", () => {
       "index.ts",
       "recall-trace.ts",
       "commands/setup.ts",
+      "shared/",
       "tsconfig.json",
       "tsconfig.build.json",
       "package.json",

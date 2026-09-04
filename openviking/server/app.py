@@ -31,6 +31,7 @@ from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Respo
 from openviking.server.profile_middleware import create_profile_http_middleware
 from openviking.server.request_id import REQUEST_ID_HEADER, RequestIdMiddleware
 from openviking.server.routers import (
+    acl_router,
     admin_router,
     agent_evolution_router,
     bot_router,
@@ -139,6 +140,15 @@ async def _initialize_runtime_state(
     """Initialize service and auth dependencies before traffic is accepted."""
     await service.initialize()
     await _initialize_auth_plugin(app, service, config)
+    manager = app.state.api_key_manager
+    if manager is not None:
+        await service.load_acl_settings(
+            [
+                item["account_id"]
+                for item in manager.get_accounts()
+                if item["account_id"] != service.user.account_id
+            ]
+        )
     from openviking.service.user_deletion import setup_user_deletion
 
     app.state.user_deletion_service = await setup_user_deletion(
@@ -607,6 +617,7 @@ def create_app(
 
     # Register routers
     app.include_router(system_router)
+    app.include_router(acl_router)
     app.include_router(admin_router)
     app.include_router(agent_evolution_router)
     app.include_router(resources_router)

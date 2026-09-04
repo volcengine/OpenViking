@@ -441,10 +441,16 @@ export async function assembleOpenVikingSession({
   hasAutoRecallBlock,
   prependRecallToLatestUserMessage,
 }: AssembleOpenVikingSessionParams): Promise<AssembleOpenVikingSessionResult> {
-  const ovSessionId = openClawSessionToOvStorageId(sessionId, sessionKey);
-  const sender = extractRuntimeSenderId(runtimeContext);
   const latestMessage = messages.at(-1);
   const isTransformContextAssemble = !isMainAssemble;
+
+  // Tool-loop calls do no recall work on non-user tails; avoid scanning the full history.
+  if (isTransformContextAssemble && latestMessage?.role !== "user") {
+    return { messages, estimatedTokens: 0 };
+  }
+
+  const ovSessionId = openClawSessionToOvStorageId(sessionId, sessionKey);
+  const sender = extractRuntimeSenderId(runtimeContext);
   const originalTokens = roughEstimate(messages);
 
   rememberSessionAgentId?.({
@@ -468,16 +474,6 @@ export async function assembleOpenVikingSession({
   }
 
   if (isTransformContextAssemble) {
-    if (latestMessage?.role !== "user") {
-      return assemblePassthrough({
-        diag,
-        ovSessionId,
-        reason: "transform_context_non_user_tail",
-        liveMessages: messages,
-        originalTokens,
-        extra: { latestRole: latestMessage?.role ?? null },
-      });
-    }
     if (!cfg.autoRecall) {
       return assemblePassthrough({ diag, ovSessionId, reason: "transform_context_auto_recall_disabled", liveMessages: messages, originalTokens });
     }

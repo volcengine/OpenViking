@@ -213,7 +213,7 @@ openviking-server doctor
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
-| `max_concurrent` | int | 最大并发 Embedding 请求数（`embedding.max_concurrent`，默认：`10`） |
+| `max_concurrent` | int | 最大并发 Embedding 请求数（`embedding.max_concurrent`，默认：`10`；必须 `>= 1`） |
 | `max_retries` | int | Embedding provider 瞬时错误的最大重试次数（`embedding.max_retries`，默认：`3`；`0` 表示禁用重试） |
 | `text_source` | str | 文本文件向量化时使用的文本来源。`content_only` 读取原文内容；`summary_first` 优先使用摘要，没有摘要时回退到原文；`summary_only` 只使用摘要。默认：`content_only` |
 | `max_input_tokens` | int | 使用原文内容向量化时，发送给 embedding 模型的最大估算 token 数。默认：`4096` |
@@ -608,14 +608,13 @@ provider，并设置 `storage.vectordb.sparse_weight > 0`。自托管模型的�
 | `thinking` | bool | 启用思考模式（仅对部分火山模型生效，默认：`false`） |
 | `max_concurrent` | int | 语义处理阶段 LLM 最大并发调用数（默认：`32`） |
 | `max_retries` | int | VLM provider 瞬时错误的最大重试次数（默认：`3`；`0` 表示禁用重试） |
-| `credentials` | array | 有序 VLM 凭据/模型列表，索引 0 优先级最高。每项可单独覆盖 `provider`、`model`、`api_key`、`api_base`、`api_version`、`extra_headers`、`extra_request_body`、`stream` 和 `reasoning_effort` |
+| `credentials` | array | 有序 VLM 凭据/模型列表，索引 0 优先级最高。每项可单独覆盖 `provider`、`model`、`api_key`、`api_base`、`api_version`、`extra_headers`、`extra_request_body` 和 `reasoning_effort` |
 | `failback_timeout_seconds` | float | 切换到低优先级 credential 后，尝试逐级切回的时间阈值（默认：`600`） |
 | `failback_request_count` | int | 低优先级 credential 成功处理多少次请求后尝试逐级切回（默认：`50`） |
 | `backup` | object | 可选的备用 VLM 配置（结构与 `vlm` 相同），当主 VLM 遇到限流、`5xx`、超时或连接失败等可重试错误时自动切换。仅支持 1 层备用 &mdash; 备用 VLM 本身不能再嵌套 `backup` |
 | `timeout` | float | 单次 VLM API 请求的 HTTP 超时时间（秒），传递给底层 OpenAI/LiteLLM 客户端。慢端点（如 DashScope、本地推理）可调大。必须 `> 0`（默认：`600.0`） |
 | `extra_headers` | object | 兼容 HTTP provider 的自定义请求头。`kimi` 默认已注入所需订阅请求头，也支持在这里覆盖或扩展 |
 | `extra_request_body` | object | 传给 OpenAI 兼容 completion 请求的额外 JSON body 字段，可用于 Ollama `{"think": false}` 等 provider 专有参数 |
-| `stream` | bool | 启用流式模式（OpenAI 兼容 provider 可用，默认：`false`） |
 | `reasoning_effort` | str | OpenAI Codex Responses 请求的推理强度。不设置时使用模型默认值 |
 | `media` | object | 音视频运行参数；音视频理解复用该 VLM 的 provider、模型、凭据、client、超时、重试、请求头、输出 token 限制、故障切换和 token 统计 |
 | `media.enabled` | bool | 启用音视频理解（默认：`false`） |
@@ -697,24 +696,6 @@ LiteLLM 的 Bedrock bearer-token API-key 鉴权，请设置 `forward_api_key=tru
   }
 }
 ```
-
-**流式模式**
-
-对于返回 SSE（Server-Sent Events）格式响应的 OpenAI 兼容 provider，启用 `stream` 模式：
-
-```json
-{
-  "vlm": {
-    "provider": "openai",
-    "api_key": "your-api-key",
-    "model": "gpt-4o",
-    "api_base": "https://api.example.com/v1",
-    "stream": true
-  }
-}
-```
-
-> **注意**: OpenAI SDK 需要 `stream=true` 才能正确解析 SSE 响应。使用强制返回 SSE 格式的 provider 时，必须将此选项设置为 `true`。
 
 **音视频理解**
 
@@ -1118,34 +1099,70 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 
 更多配置示例见 [多写存储指南](./13-multi-write-storage.md)。
 
+##### 全局 Cache Provider 与 CacheFS 配置
+
+全局 `cache` 与 `storage` 并列，标准配置只包含 Provider 名称和 Provider 自有参数：
+
+| 参数 | 类型 | 说明 | 默认值 |
+|------|------|------|--------|
+| `provider` | str | 全局 Cache Provider；本期支持 `redis` | 必填 |
+| `params` | object | Provider 自有参数；当 `provider=redis` 时解析为 Redis 连接参数 | `{}` |
+
+`storage.agfs.cachefs` 只控制 CacheFS 业务行为：
+
+| 参数 | 类型 | 说明 | 默认值 |
+|------|------|------|--------|
+| `backend` | str | `local` 完全沿用原文件系统；`cache` 启用 CacheFS wrapper | `local` |
+| `namespace` | str | CacheFS key 命名空间 | `openviking` |
+| `max_file_size_bytes` | int | 允许缓存的单文件最大字节数 | `1048576` |
+| `traversal_mode` | str | `backend` 或 `cached_traversal` | `backend` |
+| `bypass_prefixes` | array[str] | 绕过缓存的路径前缀 | `[]` |
+
+```json
+{
+  "cache": {
+    "provider": "redis",
+    "params": {
+      "mode": "sentinel",
+      "endpoints": [
+        "redis://sentinel-1:26379",
+        "redis://sentinel-2:26379"
+      ],
+      "master_name": "mymaster",
+      "password_env": "OPENVIKING_REDIS_PASSWORD",
+      "connect_timeout_ms": 1000,
+      "command_timeout_ms": 1000
+    }
+  },
+  "storage": {
+    "agfs": {
+      "cachefs": {
+        "backend": "cache",
+        "namespace": "production"
+      },
+      "queuefs": {
+        "backend": "cache",
+        "cache_key_prefix": "production"
+      }
+    }
+  }
+}
+```
+
+标准配置没有全局 `cache.enabled`。当 CacheFS 或 QueueFS 选择 `backend=cache` 时初始化 CacheRuntime；全部模块使用本地 backend 时不解析 `cache.params`，也不连接 Provider。
+
+这是一次配置破坏性变更：`storage.agfs.cache`、`storage.agfs.queuefs.backend="redis"` 和 `storage.agfs.queuefs.redis` 已删除并会被拒绝。请把 Provider 参数迁移到顶层 `cache.provider/cache.params`，业务模块改为 `cachefs.backend="cache"` 或 `queuefs.backend="cache"`；Redis 的 `singleton` 改为 `standalone`，`tls_enabled` 改为使用 `rediss://` endpoint。
+
 ##### QueueFS 配置
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
 | `mode` | str | QueueFS 命名空间模式：`"shared"` 使用 `/queue`；`"worker"` 为每个 worker 隔离到 `/queue/worker-<index\|pid>` | `"shared"` |
-| `backend` | str | QueueFS 后端：`"memory"`、`"sqlite"`、`"sqlite3"` 或 `"redis"` | `"sqlite"` |
+| `backend` | str | QueueFS 后端：`"memory"`、`"sqlite"`、`"sqlite3"` 或 `"cache"` | `"sqlite"` |
 | `db_path` | str（可选） | 当 backend 为 `"sqlite"` 或 `"sqlite3"` 时使用的 QueueFS sqlite 数据库路径 | `null` |
 | `recover_stale_sec` | int | 启动时恢复超过该秒数的 `processing` 队列消息；`0` 表示恢复全部 stale processing 消息 | `0` |
 | `busy_timeout_ms` | int | QueueFS sqlite 的 busy timeout，单位毫秒 | `5000` |
-| `redis` | object | 当 backend 为 `"redis"` 时使用的连接参数 | 见下表 |
-
-QueueFS Redis 参数：
-
-| 参数 | 类型 | 说明 | 默认值 |
-|------|------|------|--------|
-| `mode` | str | Redis 拓扑模式：`"singleton"`、`"cluster"` 或 `"sentinel"` | `"singleton"` |
-| `endpoints` | array[str] | Singleton 的唯一数据节点、Cluster 初始节点或 Sentinel 节点；仅允许协议、主机和端口，认证与 DB 使用独立字段 | `["redis://127.0.0.1:6379"]` |
-| `master_name` | str（可选） | Sentinel master 名称；Sentinel 模式必须配置 | `null` |
-| `username` | str（可选） | Redis ACL 用户名 | `null` |
-| `password` | str（可选） | Redis ACL 密码 | `null` |
-| `sentinel_username` | str（可选） | Sentinel ACL 用户名 | `null` |
-| `sentinel_password` | str（可选） | Sentinel ACL 密码 | `null` |
-| `db` | int | Redis database 编号 | `0` |
-| `connect_timeout_ms` | int | Redis 数据节点物理建连超时，单位毫秒 | `3000` |
-| `command_timeout_ms` | int | 命令读写超时，单位毫秒 | `3000` |
-| `key_prefix` | str | Redis key 隔离前缀，不能为空；所有 QueueFS key 使用 `{key_prefix}:ov:*` | `"default"` |
-| `tls_enabled` | bool | 对 `redis://` endpoint 强制启用 TLS | `false` |
-| `tls_insecure_skip_verify` | bool | 跳过 TLS 证书校验，仅用于受控测试环境 | `false` |
+| `cache_key_prefix` | str | 当 backend 为 `"cache"` 时使用的 QueueFS key 命名空间 | `"default"` |
 
 说明：
 
@@ -1153,15 +1170,15 @@ QueueFS Redis 参数：
 - `mode=shared` 会继续使用历史上的全局队列命名空间 `/queue`；`mode=worker` 会为每个 worker 隔离到 `/queue/worker-<index|pid>`。
 - `db_path` 仅在 QueueFS backend 为 `sqlite` 或 `sqlite3` 时生效。
 - `recover_stale_sec` 和 `busy_timeout_ms` 仅在 QueueFS backend 为 `sqlite` 或 `sqlite3` 时生效。
-- Redis Singleton 模式必须且只能配置一个 endpoint。
-- Redis Cluster 模式的 endpoints 是初始节点，且必须配置 `db=0`；slot 路由、`MOVED`/`ASK` 处理和节点重连由 redis-rs 完成。
-- Redis Sentinel 模式的 endpoints 是 Sentinel 节点，并且必须配置非空 `master_name`；master 发现和故障切换后的重连由 redis-rs 完成。
-- Redis Sentinel 模式下，`connect_timeout_ms` 作用于发现 Master 后的数据节点连接；redis-rs 同步 Sentinel discovery 不暴露物理建连 timeout，该阶段由内部固定 5 秒的 pool checkout timeout 限制调用方等待。
+- `queuefs.backend=cache` 自动绑定顶层 `cache.provider + cache.params`。
+- Redis Cluster 模式的 endpoints 是初始节点，且必须配置 `db=0`；slot 路由、`MOVED`/`ASK`、拓扑更新和重连由 Fred RedisProvider 处理。
+- Redis Sentinel 模式的 endpoints 是 Sentinel 节点，并且必须配置非空 `master_name`；master 发现和故障切换后的重连由 Fred RedisProvider 处理。
 - `username` 和 `password` 用于 Redis 数据节点；`sentinel_username` 和 `sentinel_password` 仅用于 Sentinel 节点。
-- Redis backend 使用 `{key_prefix}:ov:*` key；连接同一 Redis database 的不同业务必须配置不同的 `key_prefix`。
-- Redis backend 的实例心跳 TTL 为 30 秒，每 10 秒续约一次。
-- Redis backend 会在独立的 startup recovery 线程中按实例心跳状态执行三次有界 `recover_stale` 扫描，时间点分别为启动后立即、30 秒和 60 秒，用于覆盖容器异常退出后旧实例心跳尚未过期的恢复窗口；运行期间不做长期周期恢复。
-- `tls_insecure_skip_verify=true` 时必须同时设置 `tls_enabled=true`。
+- Cache backend 使用 `{cache_key_prefix}:ov:*` key；连接同一 Redis 集群的不同环境或租户必须配置不同的 `cache_key_prefix`。
+- Cache backend 的实例心跳 TTL 为 30 秒，每 10 秒续约一次。
+- Cache backend 会在独立的 startup recovery 任务中按实例心跳状态执行三次有界 `recover_stale` 扫描，时间点分别为启动后立即、30 秒和 60 秒，用于覆盖容器异常退出后旧实例心跳尚未过期的恢复窗口；正常关闭会先删除 heartbeat，使新实例可以立即恢复 processing 消息。
+- 所有 Redis 读命令都发送到主节点，不提供副本读配置。
+- `tls_insecure_skip_verify=true` 时 endpoint 必须使用 `rediss://`。
 - 如果同时设置了 `storage.agfs.queuefs.db_path` 和旧字段 `storage.agfs.queue_db_path`，以前者为准。
 - 如果 QueueFS backend 为 `memory`，则 `db_path` 和旧字段 `queue_db_path` 都会被忽略。
 
@@ -1177,95 +1194,6 @@ QueueFS Redis 参数：
         "mode": "shared",
         "backend": "sqlite",
         "db_path": "./data/_system/queue/custom-queue.db"
-      }
-    }
-  }
-}
-```
-
-Redis QueueFS 配置示例：
-
-```json
-{
-  "storage": {
-    "workspace": "./data",
-    "agfs": {
-      "backend": "local",
-      "queuefs": {
-        "mode": "shared",
-        "backend": "redis",
-        "redis": {
-          "mode": "singleton",
-          "endpoints": ["redis://127.0.0.1:6379"],
-          "master_name": null,
-          "username": null,
-          "password": null,
-          "sentinel_username": null,
-          "sentinel_password": null,
-          "db": 0,
-          "connect_timeout_ms": 3000,
-          "command_timeout_ms": 3000,
-          "key_prefix": "default",
-          "tls_enabled": false,
-          "tls_insecure_skip_verify": false
-        }
-      }
-    }
-  }
-}
-```
-
-Redis Cluster 只需配置可用于发现拓扑的初始节点：
-
-```json
-{
-  "storage": {
-    "workspace": "./data",
-    "agfs": {
-      "backend": "local",
-      "queuefs": {
-        "mode": "shared",
-        "backend": "redis",
-        "redis": {
-          "mode": "cluster",
-          "endpoints": [
-            "redis://redis-cluster-0:6379",
-            "redis://redis-cluster-1:6379"
-          ],
-          "db": 0,
-          "key_prefix": "default"
-        }
-      }
-    }
-  }
-}
-```
-
-Redis Sentinel 分别配置数据节点和 Sentinel 的 ACL：
-
-```json
-{
-  "storage": {
-    "workspace": "./data",
-    "agfs": {
-      "backend": "local",
-      "queuefs": {
-        "mode": "shared",
-        "backend": "redis",
-        "redis": {
-          "mode": "sentinel",
-          "endpoints": [
-            "redis://redis-sentinel-0:26379",
-            "redis://redis-sentinel-1:26379"
-          ],
-          "master_name": "mymaster",
-          "username": "queue-user",
-          "password": "queue-password",
-          "sentinel_username": "sentinel-user",
-          "sentinel_password": "sentinel-password",
-          "db": 0,
-          "key_prefix": "default"
-        }
       }
     }
   }
@@ -1514,6 +1442,56 @@ Redis Sentinel 分别配置数据节点和 Sentinel 的 ACL：
 }
 ```
 </details>
+
+##### ACL schema
+
+ACL 只维护在 context collection。除 `acl_enabled: bool` 外，需要以下 `list<string>` 标量索引字段：
+
+```text
+acl_direct_grants
+acl_inherited_grants
+```
+
+每个元素使用 `{mask}:{principal}` 格式，其中 `1` 表示 `read`、`3` 表示 `write`、`7` 表示 `manage`。
+
+本地 backend 会在启动时为存量 collection 增加字段并重建标量索引。旧记录不做全量回填；缺失 ACL 字段按 `acl_enabled=false` 和空列表读取。
+
+火山向量库等远端 backend 的存量 collection 需要由部署方预先添加这些字段和 scalar index，OpenViking 只校验 schema。`volcengine` API key 数据面模式还要求 context collection 和配置的 index 已存在。权限模型详见 [资源访问控制（ACL）](../concepts/15-acl.md)。
+
+<details>
+<summary><b>openGauss</b></summary>
+
+需要 openGauss 服务端支持原生 `vector` 类型，并使用允许远程连接的数据库用户。
+可通过 `pip install "openviking[opengauss]"` 安装可选驱动。
+官方容器中的初始 `omm` 用户可能限制远程登录，必要时请为 OpenViking 创建普通数据库用户。
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "name": "context",
+      "backend": "opengauss",
+      "project": "default",
+      "distance_metric": "cosine",
+      "dimension": 1024,
+      "opengauss": {
+        "host": "127.0.0.1",
+        "port": 5432,
+        "user": "openviking",
+        "password": "your-password",
+        "db_name": "postgres",
+        "schema": "public",
+        "mode": "standalone"
+      }
+    }
+  }
+}
+```
+
+分布式 openGauss 部署可将 `mode` 设为 `"distributed"`；OpenViking 会尝试把元数据表标记为 reference table，并按 `id` 分布集合表。
+</details>
+
+
 
 ## 配置文件
 
@@ -1908,8 +1886,7 @@ Task 记录文件位于所属账号的系统目录：
     "max_concurrent": 32,
     "max_retries": 3,
     "extra_headers": {},
-    "extra_request_body": {},
-    "stream": false
+    "extra_request_body": {}
   },
   "rerank": {
     "provider": "volcengine|openai",

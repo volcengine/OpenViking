@@ -70,8 +70,8 @@ type AdminRegisterUserOptions struct {
 }
 
 // AdminListAccountsOptions controls AdminListAccountsWithOptions.
-// Name uses wildcard (* and ?) matching against account IDs. Pagination is
-// opt-in: set Limit to page the (lexicographically ordered) result; Page is
+// Name uses wildcard (* and ?) matching against account IDs. Results are in
+// creation order. Pagination is opt-in: set Limit to page the result; Page is
 // 1-based and only applies when Limit is set.
 type AdminListAccountsOptions struct {
 	Name  string
@@ -80,8 +80,8 @@ type AdminListAccountsOptions struct {
 }
 
 // AdminListUsersOptions controls AdminListUsersWithOptions.
-// Name uses wildcard (* and ?) matching against user IDs. Pagination is
-// opt-in: set Limit to page the (lexicographically ordered) result; Page is
+// Name uses wildcard (* and ?) matching against user IDs. Results are in
+// creation order. Pagination is opt-in: set Limit to page the result; Page is
 // 1-based and only applies when Limit is set.
 type AdminListUsersOptions struct {
 	Limit *int
@@ -179,6 +179,8 @@ type ListOptions struct {
 	NodeLimit     int
 	SortBy        string
 	SortOrder     string
+	Tags          []string
+	IncludeTags   bool
 }
 
 // TreeOptions controls Tree.
@@ -188,6 +190,8 @@ type TreeOptions struct {
 	ShowAllHidden bool
 	NodeLimit     int
 	LevelLimit    *int
+	Tags          []string
+	IncludeTags   bool
 }
 
 // RemoveOptions controls Remove.
@@ -204,6 +208,8 @@ type WriteOptions struct {
 	Timeout        *float64
 	Telemetry      any
 	ProcessingMode string
+	Tags           []string
+	TagMode        string
 	Extra          map[string]any
 }
 
@@ -320,11 +326,15 @@ type GrepOptions struct {
 	NodeLimit       *int
 	LevelLimit      *int
 	ExcludeURI      string
+	Tags            []string
+	IncludeTags     bool
 }
 
 // GlobOptions controls Glob.
 type GlobOptions struct {
-	NodeLimit *int
+	NodeLimit   *int
+	Tags        []string
+	IncludeTags bool
 }
 
 // CreateSessionOptions controls CreateSession.

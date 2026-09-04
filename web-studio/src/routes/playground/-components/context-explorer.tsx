@@ -496,7 +496,7 @@ export function PanelTab({
       className={cn(
         'inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-xs font-medium transition-colors',
         active
-          ? 'bg-foreground text-background shadow-sm'
+          ? 'bg-muted text-foreground'
           : 'text-muted-foreground hover:bg-muted hover:text-foreground',
       )}
       onClick={onClick}

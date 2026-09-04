@@ -230,7 +230,7 @@ func TestFindUsesDefaultLimitAndPreservesEmptyValues(t *testing.T) {
 }
 
 func TestListAndTreeSendQueryOptions(t *testing.T) {
-	wantTreeLimits := []string{"0", "3"}
+	treeCalls := 0
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/fs/ls":
@@ -243,11 +243,21 @@ func TestListAndTreeSendQueryOptions(t *testing.T) {
 			if got := r.URL.Query().Get("sort_order"); got != "desc" {
 				t.Fatalf("sort_order = %q", got)
 			}
-		case "/api/v1/fs/tree":
-			if got := r.URL.Query().Get("level_limit"); got != wantTreeLimits[0] {
-				t.Fatalf("level_limit = %q, want %q", got, wantTreeLimits[0])
+			if got := r.URL.Query()["tags"]; !reflect.DeepEqual(got, []string{"env=prod", "team=search"}) {
+				t.Fatalf("tags = %#v", got)
 			}
-			wantTreeLimits = wantTreeLimits[1:]
+		case "/api/v1/fs/tree":
+			if treeCalls == 0 {
+				if got := r.URL.Query().Get("level_limit"); got != "0" {
+					t.Fatalf("level_limit = %q, want 0", got)
+				}
+				if got := r.URL.Query()["tags"]; !reflect.DeepEqual(got, []string{"env=prod"}) {
+					t.Fatalf("tags = %#v", got)
+				}
+			} else if got := r.URL.Query().Get("level_limit"); got != "3" {
+				t.Fatalf("level_limit = %q, want 3", got)
+			}
+			treeCalls++
 		default:
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
@@ -259,10 +269,11 @@ func TestListAndTreeSendQueryOptions(t *testing.T) {
 		NodeLimit: 200,
 		SortBy:    "mtime",
 		SortOrder: "desc",
+		Tags:      []string{"env=prod", "team=search"},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.Tree(context.Background(), "viking://resources/docs", &TreeOptions{LevelLimit: Int(0)}); err != nil {
+	if _, err := client.Tree(context.Background(), "viking://resources/docs", &TreeOptions{LevelLimit: Int(0), Tags: []string{"env=prod"}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := client.Tree(context.Background(), "viking://resources/docs", nil); err != nil {
@@ -613,7 +624,7 @@ func TestSearchContextSendsContextOptionsAndRejectsModeOverride(t *testing.T) {
 func TestWriteSendsProcessingModeAndExtra(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body := readJSONBody(t, r)
-		if body["processing_mode"] != "vectors_only" || body["future_flag"] != float64(0) || body["wait"] != true {
+		if body["processing_mode"] != "vectors_only" || body["future_flag"] != float64(0) || body["wait"] != true || !reflect.DeepEqual(body["tags"], []any{}) || body["tag_mode"] != "replace" {
 			t.Fatalf("body = %#v", body)
 		}
 		writeOK(t, w, map[string]any{"uri": "viking://resources/a.md"})
@@ -622,8 +633,66 @@ func TestWriteSendsProcessingModeAndExtra(t *testing.T) {
 
 	if _, err := client.Write(context.Background(), "resources/a.md", "", &WriteOptions{
 		ProcessingMode: "vectors_only",
+		Tags:           []string{},
+		TagMode:        "replace",
 		Wait:           true,
 		Extra:          map[string]any{"future_flag": 0},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFilesystemTagProjectionOptionsAreSent(t *testing.T) {
+	requests := 0
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		switch requests {
+		case 1:
+			if r.URL.Query().Get("include_tags") != "true" {
+				t.Fatalf("list query = %s", r.URL.RawQuery)
+			}
+		case 2:
+			if r.URL.Query().Get("include_tags") != "true" {
+				t.Fatalf("tree query = %s", r.URL.RawQuery)
+			}
+		case 3:
+			body := readJSONBody(t, r)
+			if body["include_tags"] != true {
+				t.Fatalf("grep body = %#v", body)
+			}
+		case 4:
+			if _, ok := r.URL.Query()["include_tags"]; ok {
+				t.Fatalf("default list query unexpectedly includes tags projection: %s", r.URL.RawQuery)
+			}
+		case 5:
+			body := readJSONBody(t, r)
+			if !reflect.DeepEqual(body["tags"], []any{"team=search", "env=prod"}) || body["include_tags"] != true {
+				t.Fatalf("glob body = %#v", body)
+			}
+		}
+		if requests == 3 || requests == 5 {
+			writeOK(t, w, map[string]any{})
+			return
+		}
+		writeOK(t, w, []any{})
+	}))
+	defer closeServer()
+
+	if _, err := client.List(context.Background(), "resources", &ListOptions{IncludeTags: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Tree(context.Background(), "resources", &TreeOptions{IncludeTags: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Grep(context.Background(), "resources", "needle", &GrepOptions{IncludeTags: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.List(context.Background(), "resources", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Glob(context.Background(), "**/*.md", "resources", &GlobOptions{
+		Tags:        []string{"team=search", "env=prod"},
+		IncludeTags: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1726,12 +1795,15 @@ func TestGrepForwardsLevelLimit(t *testing.T) {
 		if got, ok := body["level_limit"]; !ok || got != float64(3) {
 			t.Fatalf("level_limit = %#v (ok=%v)", body["level_limit"], ok)
 		}
+		if !reflect.DeepEqual(body["tags"], []any{"env=prod"}) {
+			t.Fatalf("tags = %#v", body["tags"])
+		}
 		writeOK(t, w, map[string]any{"matches": []any{}})
 	}))
 	defer closeServer()
 
 	level := 3
-	if _, err := client.Grep(context.Background(), "viking://user", "pat", &GrepOptions{LevelLimit: &level}); err != nil {
+	if _, err := client.Grep(context.Background(), "viking://user", "pat", &GrepOptions{LevelLimit: &level, Tags: []string{"env=prod"}}); err != nil {
 		t.Fatal(err)
 	}
 }

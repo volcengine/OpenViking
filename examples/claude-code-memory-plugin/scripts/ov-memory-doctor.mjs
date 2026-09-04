@@ -46,7 +46,11 @@ import {
   scanDebugLog,
   scanRcFiles,
   unknownOvcliKeys,
+  unknownPluginKeys,
   whichCommand,
+  checkWorkspace,
+  lintPeerScopeDowngrade,
+  WORKSPACE_PEER_HINT,
 } from "./shared/doctor-core.mjs";
 import { isBypassed } from "./shared/session-model.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
@@ -326,6 +330,11 @@ function checkConfig(report, cfg) {
         if (conf.mode !== "600" && conf.mode !== "400") report.warn("ovcli.conf is not private", `mode ${conf.mode}; it holds the api key`, `chmod 600 ${homeShort(conf.path)}`);
         const unknown = unknownOvcliKeys(conf.data);
         if (unknown.length) report.warn("ovcli.conf has keys nobody reads", unknown.join(", "), "typos such as apiKey/base_url/token are silently ignored — use url, api_key, account, user");
+        // `plugin` is on the allowlist above, so until now nothing inside it
+        // was ever checked and a misspelled knob just sat there doing nothing.
+        for (const { key, suggestion } of unknownPluginKeys(conf.data.plugin)) {
+          report.warn(`ovcli.conf ${key} is not a knob any plugin reads`, "", suggestion ? `did you mean ${suggestion}?` : "remove it, or check the plugin README for the knob you meant");
+        }
         if (conf.data.extra_headers && Object.keys(conf.data.extra_headers).some((h) => /^x-api-key$/i.test(h))) {
           report.warn("ovcli.conf extra_headers sets X-API-Key", "the server prefers X-API-Key over Authorization: Bearer, so it shadows api_key");
         }
@@ -368,7 +377,28 @@ function checkConfig(report, cfg) {
     if (cfg.userId && keyInfo.user && cfg.userId !== keyInfo.user) report.warn(`configured user '${cfg.userId}' differs from the key's user '${keyInfo.user}'`, "in api_key mode the key wins");
   }
   const peer = resolveEffectivePeerId({ cfg, cwd: process.cwd() });
-  report.info(`peer     ${peer.peerId || "(none)"}  ← ${peer.source}${peer.source === "workspace" ? " (derived from cwd; changes when the directory moves)" : ""}`);
+  report.info(`peer     ${peer.peerId || "(none)"}  ← ${peer.source} (${peer.origin})`);
+  if (peer.origin === "unresolved") {
+    report.info(
+      "no peer is sent: this directory is in no git repository, so its memories go to your user-level space",
+      `to give it a memory of its own, create .openviking/config.json here with ${WORKSPACE_PEER_HINT}`,
+    );
+  } else if (peer.source === "none") {
+    report.warn(
+      "no peer is sent, so recall defaults to every memory under this user",
+      "sending a peer narrows the search to this workspace",
+      'unset OPENVIKING_WORKSPACE_PEER, or set peer.source to "git"',
+    );
+  }
+  if (peer.legacyPeerId) {
+    report.info(
+      `previous peer  ${peer.legacyPeerId}`,
+      cfg.recallPeerScope === "actor"
+        ? "recall asks it separately, because peer_scope actor turns off the server's cross-peer sweep"
+        : "already covered by the server's cross-peer sweep under peer_scope all",
+    );
+  }
+  for (const p of lintPeerScopeDowngrade()) report[p.level](p.message, p.detail, p.fix);
   report.info(`timeouts ${cfg.timeoutMs}ms request, ${cfg.captureTimeoutMs}ms capture; recall limit ${cfg.recallLimit}, threshold ${cfg.scoreThreshold}`);
 
   const toggles = [`auto-inject ${cfg.noAutoInject ? "OFF" : "on"}`, `auto-recall ${cfg.autoRecall ? "on" : "OFF"}`, `auto-capture ${cfg.autoCapture ? "on" : "OFF"}`, `recall compress ${cfg.recallRewrite}`, `write path ${cfg.writePathAsync ? "async" : "sync"}`];
@@ -480,6 +510,7 @@ async function main() {
   checkInstall(report, envInfo);
   const cfg = loadConfig();
   const configInfo = checkConfig(report, cfg);
+  const workspace = checkWorkspace(report);
   const connection = await checkConnection(report, cfg, configInfo, opts);
   const serverHealth = await checkServerHealth(report, { baseUrl: cfg.baseUrl, ovConf: configInfo.ovConf, health: connection?.probes?.health, offline: opts.offline, timeoutMs: opts.timeoutMs });
   checkActivity(report, cfg, connection);
@@ -497,6 +528,7 @@ async function main() {
         user: cfg.userId,
         peerId: configInfo.peer.peerId,
       },
+      workspace,
       server: connection?.summary || null,
       serverHealth,
       ...report.toJSON(),

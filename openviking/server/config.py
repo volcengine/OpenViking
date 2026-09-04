@@ -300,6 +300,11 @@ class TempUploadConfig(BaseModel):
     default_mode: Literal["local", "shared"] = "local"
     shared_max_size_bytes: int = 512 * 1024 * 1024
     ttl_seconds: int = Field(12 * 60 * 60, ge=0)
+    # When True, shared-upload cleanup also removes directories whose names are
+    # not valid upload ids (missing/garbled `<ms-ts>-<uuid>` format). Off by
+    # default so a malformed entry never triggers an unexpected delete; enable
+    # to reclaim junk directories that would otherwise be skipped forever.
+    cleanup_invalid_dirs: bool = False
 
     model_config = {"extra": "forbid"}
 
@@ -454,7 +459,7 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
     if server_data is None:
         server_data = {}
     if not isinstance(server_data, dict):
-        raise ValueError("Invalid server config: 'server' section must be an object")
+        raise ValueError(f"Invalid server config in {path}: 'server' section must be an object")
 
     # Convert auth_mode string — built-in enums are converted to their string
     # value; custom modes are kept as-is for plugin extensibility.

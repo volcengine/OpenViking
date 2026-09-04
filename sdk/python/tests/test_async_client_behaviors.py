@@ -364,6 +364,39 @@ async def test_async_http_client_write_forwards_processing_mode():
 
 
 @pytest.mark.asyncio
+async def test_async_http_client_write_forwards_explicit_tags_and_mode():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {"result": {}}
+
+    await client.write(
+        "viking://resources/demo.md",
+        "updated",
+        options={"tags": [], "tag_mode": "replace"},
+    )
+
+    payload = fake_http.post.await_args.kwargs["json"]
+    assert payload["tags"] == []
+    assert payload["tag_mode"] == "replace"
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_filesystem_tags_are_omission_aware():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._request = AsyncMock(return_value=object())
+    client._handle_response = lambda _response: []
+
+    await client.ls("viking://resources")
+    await client.tree("viking://resources", tags=["env=prod"])
+
+    ls_params = client._request.await_args_list[0].kwargs["params"]
+    tree_params = client._request.await_args_list[1].kwargs["params"]
+    assert "tags" not in ls_params
+    assert tree_params["tags"] == ["env=prod"]
+
+
+@pytest.mark.asyncio
 async def test_async_http_client_write_omits_default_processing_mode_for_legacy_servers():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
@@ -420,6 +453,24 @@ def test_sync_http_client_reindex_forwards_to_async_client():
         recursive=True,
         options=None,
     )
+
+
+def test_sync_http_client_forwards_tags_to_filesystem_methods():
+    client = SyncHTTPClient(url="http://localhost:1933")
+
+    with (
+        patch.object(client._async_client, "ls", return_value=[]) as mock_ls,
+        patch.object(client._async_client, "tree", return_value=[]) as mock_tree,
+        patch.object(client._async_client, "grep", return_value={}) as mock_grep,
+        patch("openviking_sdk.client.run_async", side_effect=[[], [], {}]),
+    ):
+        client.ls("viking://resources", tags=["env=prod"])
+        client.tree("viking://resources", tags=["env=prod"])
+        client.grep("viking://resources", "Sample", tags=["env=prod"])
+
+    assert mock_ls.call_args.kwargs["tags"] == ["env=prod"]
+    assert mock_tree.call_args.kwargs["tags"] == ["env=prod"]
+    assert mock_grep.call_args.kwargs["tags"] == ["env=prod"]
 
 
 def test_sync_http_client_batch_add_messages_forwards_to_async_client():
@@ -1142,6 +1193,20 @@ async def test_grep_normalizes_uri_and_exclude_uri():
 
 
 @pytest.mark.asyncio
+async def test_grep_omits_unset_tags_and_forwards_explicit_tags():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response = lambda _response: {"count": 0, "matches": []}
+
+    await client.grep("viking://resources", pattern="Sample")
+    await client.grep("viking://resources", pattern="Sample", tags=["env=prod"])
+
+    assert "tags" not in fake_http.post.await_args_list[0].kwargs["json"]
+    assert fake_http.post.await_args_list[1].kwargs["json"]["tags"] == ["env=prod"]
+
+
+@pytest.mark.asyncio
 async def test_glob_normalizes_scope_uri():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
@@ -1161,6 +1226,85 @@ async def test_glob_normalizes_scope_uri():
             "node_limit": 256,
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_glob_preserves_explicit_empty_extra_fields():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response = lambda _response: {"count": 0, "matches": []}
+
+    await client.glob("**/*.md", extra_fields=[])
+
+    fake_http.post.assert_awaited_once_with(
+        "/api/v1/search/glob",
+        json={
+            "pattern": "**/*.md",
+            "uri": "viking://",
+            "node_limit": 256,
+            "extra_fields": [],
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_glob_omits_unset_tags_and_forwards_tag_options():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response = lambda _response: {"count": 0, "matches": []}
+
+    await client.glob("**/*.md")
+    await client.glob(
+        "**/*.md",
+        tags=["team=search", "env=prod"],
+        include_tags=True,
+    )
+
+    plain_request = fake_http.post.await_args_list[0].kwargs["json"]
+    tagged_request = fake_http.post.await_args_list[1].kwargs["json"]
+    assert "tags" not in plain_request
+    assert "include_tags" not in plain_request
+    assert tagged_request["tags"] == ["team=search", "env=prod"]
+    assert tagged_request["include_tags"] is True
+
+
+@pytest.mark.asyncio
+async def test_record_id_passthrough_is_limited_to_stat_and_read():
+    record_id = "0123456789abcdef0123456789abcdef"
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._request = AsyncMock(return_value=object())
+    client._handle_response = lambda _response: {}
+
+    await client.stat(record_id)
+    await client.read(record_id)
+    await client.rm(record_id)
+
+    calls = client._request.await_args_list
+    assert calls[0].kwargs["params"]["uri"] == record_id
+    assert calls[1].kwargs["params"]["uri"] == record_id
+    assert calls[2].kwargs["params"]["uri"] == f"viking://{record_id}"
+
+
+def test_not_found_reason_is_preserved_by_sdk_error_mapping():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    reason = "The data may not have been indexed yet or may have been deleted"
+
+    with pytest.raises(NotFoundError, match="not have been indexed yet") as exc_info:
+        client._raise_exception(
+            {
+                "code": "NOT_FOUND",
+                "message": "server message",
+                "details": {
+                    "resource": "0123456789abcdef0123456789abcdef",
+                    "type": "file",
+                    "reason": reason,
+                },
+            }
+        )
+
+    assert exc_info.value.details["reason"] == reason
 
 
 @pytest.mark.asyncio

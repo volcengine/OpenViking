@@ -11,6 +11,7 @@ import pytest_asyncio
 
 from openviking.pyagfs import AGFSNotFoundError
 from openviking.server.account_settings import (
+    AccountAclSettings,
     AccountAgentEvolutionSettings,
     AccountSettingsPatch,
     account_settings_backup_path,
@@ -66,9 +67,23 @@ class _FakeAGFS:
         del lease
 
 
+class _FakeAclManager:
+    def __init__(self):
+        self.enabled_accounts: set[str] = set()
+
+    def set_enabled(self, account_id: str, enabled: bool) -> None:
+        if enabled:
+            self.enabled_accounts.add(account_id)
+        else:
+            self.enabled_accounts.discard(account_id)
+
+    def is_enabled(self, account_id: str) -> bool:
+        return account_id in self.enabled_accounts
+
+
 @pytest.fixture
 def fake_viking_fs():
-    return SimpleNamespace(agfs=_FakeAGFS())
+    return SimpleNamespace(agfs=_FakeAGFS(), acl_manager=_FakeAclManager())
 
 
 @pytest_asyncio.fixture
@@ -209,18 +224,31 @@ async def test_account_settings_admin_api_reads_and_updates_effective_value(
     assert initial.status_code == 200, initial.text
     assert initial.json()["result"] == {
         "account_id": "default",
-        "settings": {"agent_evolution": {"enabled": False}},
+        "settings": {
+            "agent_evolution": {"enabled": False},
+            "acl": {"enabled": False},
+        },
         "overrides": {},
     }
 
     updated = await client.patch(
         "/api/v1/admin/accounts/default/settings",
-        json={"agent_evolution": {"enabled": True}},
+        json={
+            "agent_evolution": {"enabled": True},
+            "acl": {"enabled": True},
+        },
     )
     assert updated.status_code == 200, updated.text
     assert updated.json()["result"]["settings"]["agent_evolution"]["enabled"] is True
-    assert updated.json()["result"]["overrides"] == {"agent_evolution": {"enabled": True}}
-    assert (await read_account_settings(service.viking_fs, "default")).agent_evolution.enabled
+    assert updated.json()["result"]["settings"]["acl"] == {"enabled": True}
+    assert updated.json()["result"]["overrides"] == {
+        "agent_evolution": {"enabled": True},
+        "acl": {"enabled": True},
+    }
+    settings = await read_account_settings(service.viking_fs, "default")
+    assert settings.agent_evolution.enabled
+    assert settings.acl == AccountAclSettings(enabled=True)
+    assert service.viking_fs.acl_manager.is_enabled("default")
 
 
 async def test_account_settings_admin_api_rejects_non_allowlisted_fields(

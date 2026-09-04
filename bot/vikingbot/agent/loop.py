@@ -15,12 +15,14 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from openviking.utils.media_limits import MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
 from vikingbot.agent.context import ContextBuilder
 from vikingbot.agent.memory import MemoryStore
 from vikingbot.agent.remote_skills import SkillRuntimeContext
 from vikingbot.agent.skills import SkillsLoader
 from vikingbot.agent.subagent import SubagentManager
 from vikingbot.agent.tools import register_default_tools
+from vikingbot.agent.tools.base import MultimodalToolResult
 from vikingbot.agent.tools.registry import ToolExecutionResult, ToolRegistry
 from vikingbot.bus.events import InboundMessage, OutboundEventType, OutboundMessage
 from vikingbot.bus.queue import MessageBus
@@ -57,6 +59,75 @@ def _is_tool_result_success(result: Any) -> bool:
 
 def _compact_msg_chars(messages: list[dict]) -> int:
     return sum(len(json.dumps(m, ensure_ascii=False, default=str)) for m in messages)
+
+
+def _base64_data_url_bytes(url: str) -> int:
+    if not url.startswith("data:"):
+        return 0
+    marker = ";base64,"
+    marker_index = url.find(marker)
+    if marker_index < 0:
+        return 0
+    encoded_length = len(url) - marker_index - len(marker)
+    if encoded_length <= 0:
+        return 0
+    padding = 2 if url.endswith("==") else 1 if url.endswith("=") else 0
+    return max(0, encoded_length * 3 // 4 - padding)
+
+
+def _inline_media_bytes(messages: list[dict]) -> int:
+    total = 0
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if not isinstance(part, dict) or part.get("type") not in {
+                "image_url",
+                "input_image",
+            }:
+                continue
+            image_url = part.get("image_url")
+            url = image_url.get("url") if isinstance(image_url, dict) else image_url
+            if isinstance(url, str):
+                total += _base64_data_url_bytes(url)
+    return total
+
+
+def _demote_historical_tool_media(
+    messages: list[dict], *, history_end: int, bytes_needed: int
+) -> int:
+    candidates: list[tuple[dict, int]] = []
+    reclaimable_bytes = 0
+    for message in messages[:history_end]:
+        if message.get("role") != "tool" or not isinstance(message.get("content"), list):
+            continue
+        media_bytes = _inline_media_bytes([message])
+        if media_bytes <= 0:
+            continue
+        candidates.append((message, media_bytes))
+        reclaimable_bytes += media_bytes
+        if reclaimable_bytes >= bytes_needed:
+            break
+
+    if reclaimable_bytes < bytes_needed:
+        return 0
+
+    for message, _media_bytes in candidates:
+        text_parts = [
+            part["text"]
+            for part in message["content"]
+            if isinstance(part, dict)
+            and part.get("type") in {"text", "input_text"}
+            and isinstance(part.get("text"), str)
+        ]
+        text = "\n".join(text_parts)
+        omission_note = (
+            "Media content from this earlier tool result was omitted from subsequent "
+            "requests to keep the inline media budget."
+        )
+        message["content"] = f"{text}\n\n{omission_note}" if text else omission_note
+    return reclaimable_bytes
 
 
 def _compact_render_message(message: dict) -> str:
@@ -136,9 +207,9 @@ def _compact_split_chunks(text: str) -> list[str]:
 def _compact_strip_note_header(content: str) -> str:
     text = str(content or "").strip()
     if text.startswith("[Context compaction]"):
-        text = text[len("[Context compaction]"):].strip()
+        text = text[len("[Context compaction]") :].strip()
     if text.startswith("Findings so far:"):
-        text = text[len("Findings so far:"):].strip()
+        text = text[len("Findings so far:") :].strip()
     return text.strip()
 
 
@@ -1594,21 +1665,59 @@ class AgentLoop:
 
                 # Stage 3: Process results sequentially in original order
                 turn_tools: list[dict[str, Any]] = []
+                history_end = len(messages)
+                request_media_bytes = _inline_media_bytes(messages)
                 for _idx, tool_call, outcome, tool_execute_duration in results:
                     result = outcome.result
+                    result_text = str(result)
+                    recorded_result = (
+                        result_text if isinstance(result, MultimodalToolResult) else result
+                    )
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
-                    logger.info(f"[RESULT]: {str(result)[:600]}")
+                    logger.info(f"[RESULT]: {result_text[:600]}")
 
                     if publish_events:
                         await self.bus.publish_outbound(
                             OutboundMessage(
                                 session_key=session_key,
-                                content=str(result),
+                                content=result_text,
                                 event_type=OutboundEventType.TOOL_RESULT,
                             )
                         )
+                    model_result = result
+                    if isinstance(result, MultimodalToolResult):
+                        result_media_bytes = _inline_media_bytes([{"content": result.content}])
+                        if not self.provider.supports_tool_result_media(self.model):
+                            model_result = (
+                                f"{result_text}\n\nMedia content was omitted because the configured "
+                                "model provider does not support media in tool results."
+                            )
+                        else:
+                            overflow = (
+                                request_media_bytes
+                                + result_media_bytes
+                                - MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
+                            )
+                            if overflow > 0:
+                                reclaimed = _demote_historical_tool_media(
+                                    messages,
+                                    history_end=history_end,
+                                    bytes_needed=overflow,
+                                )
+                                request_media_bytes -= reclaimed
+                            if (
+                                request_media_bytes + result_media_bytes
+                                > MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
+                            ):
+                                model_result = (
+                                    f"{result_text}\n\nMedia content was omitted because adding it would "
+                                    "make this model request exceed the inline media "
+                                    f"limit of {MAX_INLINE_TOOL_RESULT_MEDIA_BYTES} bytes."
+                                )
+                            else:
+                                request_media_bytes += result_media_bytes
                     messages = self.context.add_tool_result(
-                        messages, tool_call.id, tool_call.name, result
+                        messages, tool_call.id, tool_call.name, model_result
                     )
 
                     tool_used_dict = {
@@ -1616,11 +1725,11 @@ class AgentLoop:
                         "tool_name": tool_call.name,
                         "args": args_str,
                         "resolved_args": outcome.effective_params,
-                        "result": result,
+                        "result": recorded_result,
                         "duration": tool_execute_duration,
                         "execute_success": _is_tool_result_success(result),
                         "input_token": tool_call.tokens,
-                        "output_token": cal_str_tokens(result, text_type="mixed"),
+                        "output_token": cal_str_tokens(result_text, text_type="mixed"),
                     }
                     if outcome.skill_uris:
                         tool_used_dict["skill_uri"] = outcome.skill_uris[0]

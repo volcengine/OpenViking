@@ -597,7 +597,17 @@ class VikingClient:
         return entries
 
     async def stat(self, uri: str) -> Dict[str, Any]:
-        return await self.client.stat(uri)
+        client = self.client
+        should_close = False
+        scoped_user_id = self._owner_user_id_for_uri(uri)
+        if scoped_user_id:
+            client, should_close = await self._get_user_scoped_client(scoped_user_id)
+
+        try:
+            return await client.stat(uri)
+        finally:
+            if should_close:
+                await client.close()
 
     async def attrs(self, uri: str) -> Dict[str, Any]:
         return await self.client.attrs(uri)
@@ -612,7 +622,17 @@ class VikingClient:
         return await self.client.read_raw(uri, offset=offset, limit=limit)
 
     async def download_bytes(self, uri: str) -> bytes:
-        return await self.client.download_bytes(uri)
+        client = self.client
+        should_close = False
+        scoped_user_id = self._owner_user_id_for_uri(uri)
+        if scoped_user_id:
+            client, should_close = await self._get_user_scoped_client(scoped_user_id)
+
+        try:
+            return await client.download_bytes(uri)
+        finally:
+            if should_close:
+                await client.close()
 
     async def find_skills(
         self,
@@ -1169,7 +1189,7 @@ class VikingClient:
 
         return await client.create_session(
             session_id=session_id,
-            memory_policy=memory_policy,
+            options={"memory_policy": memory_policy} if memory_policy else None,
         )
 
     @staticmethod

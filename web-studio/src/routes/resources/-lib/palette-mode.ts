@@ -69,3 +69,24 @@ export function buildDirBrowseQuery(uri: string): string {
   const path = normalized.slice(PALETTE_ROOT_URI.length)
   return `${PALETTE_COMMANDS.dir}${path}`
 }
+
+// `name` is the original client-side filename filter; the rest map 1:1 onto
+// RETRIEVAL_MODES and go through the shared retrieval hook.
+export const PALETTE_SEARCH_MODES = [
+  'name',
+  'find',
+  'search',
+  'grep',
+  'glob',
+] as const
+
+export type PaletteSearchMode = (typeof PALETTE_SEARCH_MODES)[number]
+
+export function cycleSearchMode(
+  current: PaletteSearchMode,
+  backwards = false,
+): PaletteSearchMode {
+  const index = PALETTE_SEARCH_MODES.indexOf(current)
+  const size = PALETTE_SEARCH_MODES.length
+  return PALETTE_SEARCH_MODES[(index + (backwards ? -1 : 1) + size) % size]
+}

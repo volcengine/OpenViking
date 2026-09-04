@@ -614,7 +614,7 @@ impl PathLockManager {
         lock_path: &str,
         owner_id: &str,
     ) -> PathLockResult<bool> {
-        match provider.remove_token(lock_path, owner_id).await {
+        match provider.remove_token(lock_path, owner_id, false).await {
             Ok(true) => Ok(true),
             Ok(false) => match provider.read_token(lock_path).await? {
                 None => Ok(true),
@@ -681,7 +681,9 @@ impl PathLockManager {
     fn is_retryable_error(error: &PathLockError) -> bool {
         matches!(
             error,
-            PathLockError::Conflict { .. } | PathLockError::Busy { .. }
+            PathLockError::Conflict { .. }
+                | PathLockError::Busy { .. }
+                | PathLockError::EmptyToken { .. }
         )
     }
 
@@ -914,7 +916,7 @@ impl PathLockManager {
                                     }
                                     let removed = match self
                                         .provider
-                                        .remove_token(lock_path, &token.owner_id)
+                                        .remove_token(lock_path, &token.owner_id, true)
                                         .await
                                     {
                                         Ok(removed) => removed,
@@ -1176,7 +1178,7 @@ impl PathLockManager {
             }
             // Stale — remove it before attempting to create our own token.
             self.provider
-                .remove_token(lock_path, &existing.owner_id)
+                .remove_token(lock_path, &existing.owner_id, true)
                 .await?;
         }
 
@@ -2225,7 +2227,12 @@ mod tests {
             self.inner.refresh_token(lock_path, owner_id, time_ns).await
         }
 
-        async fn remove_token(&self, lock_path: &str, owner_id: &str) -> PathLockResult<bool> {
+        async fn remove_token(
+            &self,
+            lock_path: &str,
+            owner_id: &str,
+            force: bool,
+        ) -> PathLockResult<bool> {
             if self.busy_next_remove.swap(false, Ordering::SeqCst) {
                 self.busy_remove_count.fetch_add(1, Ordering::SeqCst);
                 return Err(PathLockError::Busy {
@@ -2239,7 +2246,7 @@ mod tests {
             if self.fail_next_remove.swap(false, Ordering::SeqCst) {
                 return Err(PathLockError::Io("injected remove failure".to_string()));
             }
-            self.inner.remove_token(lock_path, owner_id).await
+            self.inner.remove_token(lock_path, owner_id, force).await
         }
 
         async fn scan_descendant_locks(&self, root: &str) -> PathLockResult<Vec<String>> {
@@ -2329,8 +2336,13 @@ mod tests {
             self.inner.refresh_token(lock_path, owner_id, time_ns).await
         }
 
-        async fn remove_token(&self, lock_path: &str, owner_id: &str) -> PathLockResult<bool> {
-            self.inner.remove_token(lock_path, owner_id).await
+        async fn remove_token(
+            &self,
+            lock_path: &str,
+            owner_id: &str,
+            force: bool,
+        ) -> PathLockResult<bool> {
+            self.inner.remove_token(lock_path, owner_id, force).await
         }
 
         async fn scan_descendant_locks(&self, root: &str) -> PathLockResult<Vec<String>> {
@@ -2402,6 +2414,7 @@ mod tests {
         fs.mkdir("/data/delete-me", 0o755).await.unwrap();
         let provider = Arc::new(crate::lock::provider::FilesystemPathLockProvider::new(
             fs.clone(),
+            PathLockConfig::default().lock_expire_secs,
         ));
         let mgr = PathLockManager::new(fs.clone(), provider, PathLockConfig::default());
         let lease = mgr

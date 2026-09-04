@@ -751,6 +751,70 @@ async def test_wm_creation_returns_two_products_in_one_model_call(
     assert "secret-source-id" not in calls[0]["prompt"]
 
 
+async def test_wm_creation_passes_configured_output_language_to_prompt(client, monkeypatch):
+    session = client(session_id="wm_output_language_prompt_test")
+    prompts: list[dict] = []
+
+    class FakeVLM:
+        @staticmethod
+        def is_available() -> bool:
+            return True
+
+        async def get_completion_async(self, **kwargs):
+            prompts.append(kwargs)
+            return "# Working Memory"
+
+    vlm = FakeVLM()
+    monkeypatch.setattr(
+        "openviking.session.session.get_openviking_config",
+        lambda: SimpleNamespace(vlm=vlm, output_language_override="zh-CN"),
+    )
+
+    result = await session._generate_archive_summary_async(
+        [_text_message("zh-user", "user", "请总结当前部署状态")]
+    )
+
+    assert result == "# Working Memory"
+    assert len(prompts) == 1
+    assert "zh-CN" in prompts[0]["prompt"]
+
+
+async def test_wm_creation_detects_language_from_multiline_user_message(client, monkeypatch):
+    session = client(session_id="wm_multiline_output_language_detection_test")
+    prompts: list[dict] = []
+
+    class FakeVLM:
+        @staticmethod
+        def is_available() -> bool:
+            return True
+
+        async def get_completion_async(self, **kwargs):
+            prompts.append(kwargs)
+            return "# Working Memory"
+
+    vlm = FakeVLM()
+    monkeypatch.setattr(
+        "openviking.session.session.get_openviking_config",
+        lambda: SimpleNamespace(vlm=vlm),
+    )
+
+    result = await session._generate_archive_summary_async(
+        [
+            _text_message(
+                "multiline-user",
+                "user",
+                "Task details:\n"
+                "当前生产环境已经完成部署。\n"
+                "请用中文总结当前状态和后续风险。",
+            )
+        ]
+    )
+
+    assert result == "# Working Memory"
+    assert len(prompts) == 1
+    assert "zh-CN" in prompts[0]["prompt"]
+
+
 async def test_wm_update_returns_two_products_in_one_model_call(
     client,
     monkeypatch,

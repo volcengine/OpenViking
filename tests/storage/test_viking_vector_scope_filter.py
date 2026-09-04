@@ -5,7 +5,8 @@ import pytest
 
 from openviking.core.namespace import uri_parts
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.expr import And, Eq, In, Or, PathScope
+from openviking.storage.acl import AclManager
+from openviking.storage.expr import And, Eq, In, Or, PathScope, RawDSL
 from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -27,6 +28,7 @@ def _build(
     level: list[int] | None = None,
 ):
     backend = object.__new__(VikingVectorIndexBackend)
+    backend.acl_manager = None
     return backend._build_scope_filter(
         ctx=ctx,
         context_type=context_type,
@@ -37,7 +39,9 @@ def _build(
 
 
 def _tenant_filter(ctx: RequestContext):
-    return VikingVectorIndexBackend._tenant_filter(ctx, context_type="resource")
+    backend = object.__new__(VikingVectorIndexBackend)
+    backend.acl_manager = None
+    return backend._tenant_filter(ctx)
 
 
 def test_descendant_target_elides_only_visible_root_path_filter():
@@ -117,7 +121,7 @@ def test_mixed_visible_and_outside_targets_keep_original_tenant_filter():
 
 
 @pytest.mark.asyncio
-async def test_cross_user_targets_cannot_bypass_visible_roots_in_tenant_search():
+async def test_tenant_search_enforces_visible_roots_and_shared_acl():
     ctx = _ctx()
     own_uri = "viking://user/alice/resources/notes"
     cross_user_uri = "viking://user/bob/resources/notes"
@@ -134,8 +138,43 @@ async def test_cross_user_targets_cannot_bypass_visible_roots_in_tenant_search()
             "account_id": "acct",
             "context_type": "resource",
         },
+        {
+            "id": "legacy-shared",
+            "uri": "viking://resources/legacy.md",
+            "account_id": "acct",
+            "context_type": "resource",
+        },
+        {
+            "id": "direct-shared",
+            "uri": "viking://resources/direct.md",
+            "account_id": "acct",
+            "context_type": "resource",
+            "acl_enabled": True,
+            "acl_direct_grants": ["1:user:alice"],
+        },
+        {
+            "id": "inherited-shared",
+            "uri": "viking://resources/inherited.md",
+            "account_id": "acct",
+            "context_type": "resource",
+            "acl_enabled": True,
+            "acl_inherited_grants": ["3:user:*"],
+        },
+        {
+            "id": "denied-shared",
+            "uri": "viking://resources/denied.md",
+            "account_id": "acct",
+            "context_type": "resource",
+            "acl_enabled": True,
+            "acl_direct_grants": ["7:user:bob"],
+        },
+        {
+            "id": "foreign-account",
+            "uri": "viking://resources/foreign.md",
+            "account_id": "other",
+            "context_type": "resource",
+        },
     ]
-    observed_filters = []
 
     def matches(expr, record):
         if isinstance(expr, And):
@@ -144,6 +183,11 @@ async def test_cross_user_targets_cannot_bypass_visible_roots_in_tenant_search()
             return any(matches(cond, record) for cond in expr.conds)
         if isinstance(expr, Eq):
             return record.get(expr.field) == expr.value
+        if isinstance(expr, In):
+            return any(value in expr.values for value in record.get(expr.field, []))
+        if isinstance(expr, RawDSL):
+            assert expr.payload["op"] == "must_not"
+            return record.get(expr.payload["field"]) not in expr.payload["conds"]
         if isinstance(expr, PathScope):
             root = uri_parts(expr.path)
             path = uri_parts(str(record.get(expr.field, "")))
@@ -153,47 +197,62 @@ async def test_cross_user_targets_cannot_bypass_visible_roots_in_tenant_search()
         raise AssertionError(f"Unexpected filter expression in test: {expr!r}")
 
     async def fake_search(*, filter, **_kwargs):
-        observed_filters.append(filter)
         return [record for record in records if matches(filter, record)]
 
     backend = object.__new__(VikingVectorIndexBackend)
+    backend.acl_manager = AclManager(backend)
+    backend.acl_manager.set_enabled(ctx.account_id, True)
     backend.search = fake_search
 
+    visible = await backend.search_in_tenant(
+        ctx=ctx,
+        query_vector=[1.0],
+        context_type="resource",
+    )
     cross_user_only = await backend.search_in_tenant(
         ctx=ctx,
         query_vector=[1.0],
         context_type="resource",
         target_directories=[cross_user_uri],
     )
-    mixed = await backend.search_in_tenant(
+    internal = await backend.search_in_tenant(
+        ctx=RequestContext(
+            user=ctx.user,
+            role=ctx.role,
+            bypass_acl=True,
+        ),
+        query_vector=[1.0],
+        context_type="resource",
+    )
+
+    assert [record["id"] for record in visible] == [
+        "own",
+        "legacy-shared",
+        "direct-shared",
+        "inherited-shared",
+    ]
+    assert cross_user_only == []
+    assert [record["id"] for record in internal] == [
+        "own",
+        "cross-user",
+        "legacy-shared",
+        "direct-shared",
+        "inherited-shared",
+        "denied-shared",
+    ]
+
+    backend.acl_manager.set_enabled(ctx.account_id, False)
+    shared = await backend.search_in_tenant(
         ctx=ctx,
         query_vector=[1.0],
         context_type="resource",
-        target_directories=[own_uri, cross_user_uri],
     )
-
-    assert cross_user_only == []
-    assert [record["id"] for record in mixed] == ["own"]
-    assert observed_filters == [
-        And(
-            [
-                Eq("context_type", "resource"),
-                _tenant_filter(ctx),
-                Or([PathScope("uri", cross_user_uri, depth=-1)]),
-            ]
-        ),
-        And(
-            [
-                Eq("context_type", "resource"),
-                _tenant_filter(ctx),
-                Or(
-                    [
-                        PathScope("uri", own_uri, depth=-1),
-                        PathScope("uri", cross_user_uri, depth=-1),
-                    ]
-                ),
-            ]
-        ),
+    assert [record["id"] for record in shared] == [
+        "own",
+        "legacy-shared",
+        "direct-shared",
+        "inherited-shared",
+        "denied-shared",
     ]
 
 

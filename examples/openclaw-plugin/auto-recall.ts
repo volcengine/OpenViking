@@ -1,12 +1,7 @@
-import type { FindResult, FindResultItem, OpenVikingClient } from "./client.js";
+import type { FindResultItem, OpenVikingClient, SearchContextEntry } from "./client.js";
 import type { MemoryOpenVikingConfig } from "./config.js";
 import type { EffectiveQueryConfig } from "./query-config.js";
-import {
-  pickMemoriesForInjection,
-  postProcessMemories,
-  summarizeInjectionMemories,
-  toJsonLog,
-} from "./memory-ranking.js";
+import { toJsonLog } from "./memory-ranking.js";
 import { quickRecallPrecheck, withTimeout } from "./process-manager.js";
 import {
   resolveRecallSearchPlan,
@@ -20,6 +15,8 @@ import { sanitizeUserTextForCapture } from "./text-utils.js";
 import { estimateTextTokens } from "./token-estimator.js";
 
 const RECALL_QUERY_MAX_CHARS = 4_000;
+const AUTO_RECALL_DEDUP_TURNS = 5;
+const LEGACY_CHARS_PER_TOKEN = 4;
 export const AUTO_RECALL_SOURCE_MARKER = "Source: openviking-auto-recall";
 
 type Logger = {
@@ -231,16 +228,26 @@ function preview(value: string | undefined, maxChars: number): string | undefine
   return trimmed.length > maxChars ? trimmed.slice(0, maxChars) : trimmed;
 }
 
-function toTraceResults(items: FindResultItem[], resourceType: RecallResourceType): RecallTraceResult[] {
-  return items.map((item) => ({
-    uri: item.uri,
+function traceResourceType(entry: SearchContextEntry): RecallResourceType {
+  if (entry.category === "resources" || entry.uri.startsWith("viking://resources")) {
+    return "resource";
+  }
+  if (entry.origin === "actor_peer") {
+    return "agent";
+  }
+  return "user";
+}
+
+function toTraceResult(entry: SearchContextEntry): RecallTraceResult {
+  const resourceType = traceResourceType(entry);
+  return {
+    uri: entry.uri,
     resourceType,
-    category: item.category,
-    score: item.score,
-    level: item.level,
-    abstractPreview: preview(item.abstract ?? item.overview, 240),
+    category: entry.category,
+    score: entry.score,
+    abstractPreview: preview(entry.text, 240),
     resultType: resourceType === "resource" ? "resource" : "memory",
-  }));
+  };
 }
 
 function boundTraceQuery(query: string, maxChars: number): { query: string; queryTruncated?: boolean } {
@@ -340,7 +347,6 @@ export async function buildAutoRecallContext(params: {
 
   return withTimeout(
     (async () => {
-      const candidateLimit = queryConfig?.candidateLimit ?? Math.max(cfg.recallLimit * 4, 20);
       const scoreThreshold = queryConfig?.scoreThreshold ?? cfg.recallScoreThreshold;
       const recallLimit = queryConfig?.recallLimit ?? cfg.recallLimit;
       const maxInjectedChars = queryConfig?.maxInjectedChars ?? cfg.recallMaxInjectedChars;
@@ -349,98 +355,88 @@ export async function buildAutoRecallContext(params: {
         ovSessionId: params.ovSessionId,
         agentId,
       });
-      const traceSearches: RecallTraceEntry["searches"] = searchPlan.skipped.map((skipped) => ({
-        resourceType: skipped.resourceType,
-        limit: candidateLimit,
-        scoreThreshold: 0,
-        durationMs: 0,
-        total: 0,
-        results: [],
-        error: skipped.reason,
-      }));
-      const autoRecallPromises: Promise<{
-        resourceType: RecallResourceType;
-        targetUri?: string;
-        result?: FindResult;
-        durationMs: number;
-      }>[] = searchPlan.searches.map(async (search) => {
-        const start = Date.now();
-        const result = await client.find(queryText, {
-          targetUri: search.targetUri,
-          limit: candidateLimit,
-          scoreThreshold: 0,
-          contextType: search.contextType,
-          actorPeerId,
-        });
-        return {
-          resourceType: search.resourceType,
-          targetUri: search.targetUri,
-          result,
-          durationMs: Date.now() - start,
-        };
-      });
-      const autoRecallSettled = await Promise.allSettled(autoRecallPromises);
+      const contextTypes = [...new Set(searchPlan.searches.map((search) => search.contextType))];
+      const maxTokens = Math.min(
+        32_000,
+        Math.max(64, Math.round(maxInjectedChars / LEGACY_CHARS_PER_TOKEN)),
+      );
+      const startedAt = Date.now();
+      let contextResult: Awaited<ReturnType<OpenVikingClient["searchContext"]>> | undefined;
+      let requestError: unknown;
 
-      const allMemories: FindResultItem[] = [];
-      for (const s of autoRecallSettled) {
-        if (s.status === "fulfilled") {
-          const result = s.value.result ?? {};
-          const memories = result.memories ?? [];
-          const resources = result.resources ?? [];
-          allMemories.push(...memories, ...resources);
-          traceSearches.push({
-            resourceType: s.value.resourceType,
-            targetUriInput: s.value.targetUri,
-            limit: candidateLimit,
-            scoreThreshold: 0,
-            durationMs: s.value.durationMs,
-            total: result.total ?? memories.length + resources.length + (result.skills?.length ?? 0),
-            results: [
-              ...toTraceResults(memories, s.value.resourceType),
-              ...toTraceResults(resources, "resource"),
-              ...(result.skills ?? []).map((item): RecallTraceResult => ({
-                uri: item.uri,
-                resourceType: s.value.resourceType,
-                category: item.category,
-                score: item.score,
-                level: item.level,
-                abstractPreview: preview(item.abstract ?? item.overview, 240),
-                resultType: "skill",
-              })),
-            ].slice(0, cfg.traceRecallMaxResultsPerSearch),
-          });
-        } else {
-          logger.warn?.(`openviking: auto-recall search failed: ${String(s.reason)}`);
-          const failedIndex = traceSearches.length;
-          const search = searchPlan.searches[failedIndex - searchPlan.skipped.length];
-          traceSearches.push({
-            resourceType: search?.resourceType ?? "user",
-            targetUriInput: search?.targetUri,
-            limit: candidateLimit,
-            scoreThreshold: 0,
-            durationMs: 0,
-            total: 0,
-            results: [],
-            error: String(s.reason),
-          });
-        }
+      try {
+        contextResult = await client.searchContext(queryText, {
+          sessionId: params.ovSessionId,
+          limit: recallLimit,
+          scoreThreshold,
+          contextType: contextTypes.length === 1 ? contextTypes[0] : contextTypes,
+          queryExpansion: "auto",
+          maxTokens,
+          detail: recallPreferAbstract ? "abstract" : undefined,
+          dedupTurns: params.ovSessionId ? AUTO_RECALL_DEDUP_TURNS : undefined,
+          peerScope: "actor",
+          actorPeerId,
+          requestTimeoutMs: cfg.autoRecallTimeoutMs,
+        });
+      } catch (error) {
+        requestError = error;
       }
 
-      const uniqueMemories = allMemories.filter((memory, index, self) =>
-        index === self.findIndex((m) => m.uri === memory.uri)
-      );
-      const leafOnly = uniqueMemories.filter((m) => !m.level || m.level === 2);
-      const processed = postProcessMemories(leafOnly, {
-        limit: candidateLimit,
-        scoreThreshold,
-      });
-      const memories = pickMemoriesForInjection(processed, recallLimit, queryText, scoreThreshold, queryConfig ? {
-        weights: queryConfig.rankingWeights,
-        categoryWeights: queryConfig.categoryWeights,
-        resourceTypeWeights: queryConfig.resourceTypeWeights,
-      } : undefined);
+      const durationMs = Date.now() - startedAt;
+      const entries = (contextResult?.entries ?? []).filter((entry) => Boolean(entry.uri));
+      const rawRetrievalErrors = contextResult?.stats?.retrieval_errors;
+      const retrievalErrors = Array.isArray(rawRetrievalErrors)
+        ? rawRetrievalErrors.map((error) => String(error))
+        : [];
+      const searchError = requestError
+        ? String(requestError)
+        : retrievalErrors.length > 0
+          ? retrievalErrors.join("; ")
+          : undefined;
 
-      const recordTrace = async (injectedMemories: FindResultItem[], injectedCount: number, estimatedTokens?: number) => {
+      if (searchError) {
+        logger.warn?.(`openviking: auto-recall context search failed: ${searchError}`);
+      }
+
+      const traceSearches: RecallTraceEntry["searches"] = [
+        ...searchPlan.skipped.map((skipped) => ({
+          resourceType: skipped.resourceType,
+          limit: recallLimit,
+          scoreThreshold,
+          durationMs: 0,
+          total: 0,
+          results: [],
+          error: skipped.reason,
+        })),
+        ...searchPlan.searches.map((search) => {
+          const matchingEntries = entries.filter((entry) =>
+            search.contextType === "resource"
+              ? traceResourceType(entry) === "resource"
+              : traceResourceType(entry) !== "resource"
+          );
+          return {
+            resourceType: search.resourceType,
+            contextType: search.contextType,
+            limit: recallLimit,
+            scoreThreshold,
+            durationMs,
+            total: matchingEntries.length,
+            results: matchingEntries
+              .map(toTraceResult)
+              .slice(0, cfg.traceRecallMaxResultsPerSearch),
+            error: searchError,
+          };
+        }),
+      ];
+
+      const candidateCount = typeof contextResult?.stats?.candidates === "number"
+        ? contextResult.stats.candidates
+        : entries.length;
+      const recordTrace = async (
+        injectedEntries: SearchContextEntry[],
+        injectedCount: number,
+        estimatedTokens?: number,
+      ) => {
         const entry: RecallTraceEntry = {
           schemaVersion: "1.0",
           traceId: newTraceId(),
@@ -459,17 +455,17 @@ export async function buildAutoRecallContext(params: {
             queryTruncated: params.queryTruncated || queryText.length > cfg.traceRecallQueryMaxChars,
           },
           searches: traceSearches,
-          selected: injectedMemories.map((memory) => ({
-            uri: memory.uri,
-            resourceType: memory.uri.startsWith("viking://resources") ? "resource" : undefined,
-            category: memory.category,
-            score: memory.score,
-            abstractPreview: preview(memory.abstract ?? memory.overview, cfg.traceRecallPreviewChars),
+          selected: injectedEntries.map((contextEntry) => ({
+            uri: contextEntry.uri,
+            resourceType: traceResourceType(contextEntry),
+            category: contextEntry.category,
+            score: contextEntry.score,
+            abstractPreview: preview(contextEntry.text, cfg.traceRecallPreviewChars),
             injected: true,
           })),
           stats: {
-            candidateCount: allMemories.length,
-            selectedCount: injectedMemories.length,
+            candidateCount,
+            selectedCount: injectedEntries.length,
             injectedCount,
             estimatedTokens,
           },
@@ -478,39 +474,34 @@ export async function buildAutoRecallContext(params: {
         params.traceRecorder?.record(entry);
       };
 
-      if (memories.length === 0) {
+      const rendered = contextResult?.rendered?.trim() ?? "";
+      if (requestError || entries.length === 0 || !rendered) {
         await recordTrace([], 0, 0);
         return { memoryCount: 0, estimatedTokens: 0 };
       }
 
-      const { lines: memoryLines, estimatedTokens } = await buildMemoryLinesWithBudget(
-        memories,
-        (uri) => client.read(uri, actorPeerId),
-        {
-          recallPreferAbstract,
-          recallMaxInjectedChars: maxInjectedChars,
-          includeUri: true,
-        },
-      );
-
-      if (memoryLines.length === 0) {
-        verbose?.(
-          `openviking: skipping auto-recall injection; no complete memories fit maxInjectedChars=${maxInjectedChars}`,
-        );
-        await recordTrace([], 0, 0);
-        return { memoryCount: 0, estimatedTokens: 0 };
-      }
-
-      const block = buildRecallContextBlock(memoryLines);
+      const usedTokens = contextResult?.stats?.used_tokens;
+      const estimatedTokens = typeof usedTokens === "number" && Number.isFinite(usedTokens)
+        ? Math.max(0, Math.ceil(usedTokens))
+        : estimateTokenCount(rendered);
+      const block = buildRecallContextBlock([rendered]);
       verbose?.(
-        `openviking: injecting ${memoryLines.length} memories (${block.length} chars, ~${estimatedTokens} tokens, maxInjectedChars=${maxInjectedChars})`,
+        `openviking: injecting ${entries.length} memories (${block.length} chars, ~${estimatedTokens} tokens, serverMaxTokens=${maxTokens})`,
       );
       verbose?.(
-        `openviking: inject-detail ${toJsonLog({ count: memories.length, memories: summarizeInjectionMemories(memories) })}`,
+        `openviking: inject-detail ${toJsonLog({
+          count: entries.length,
+          entries: entries.map((contextEntry) => ({
+            uri: contextEntry.uri,
+            category: contextEntry.category,
+            score: contextEntry.score,
+            detail: contextEntry.detail,
+          })),
+        })}`,
       );
 
-      await recordTrace(memories.slice(0, memoryLines.length), memoryLines.length, estimatedTokens);
-      return { block, memoryCount: memoryLines.length, estimatedTokens };
+      await recordTrace(entries, entries.length, estimatedTokens);
+      return { block, memoryCount: entries.length, estimatedTokens };
     })(),
     cfg.autoRecallTimeoutMs,
     "openviking: auto-recall search timeout",

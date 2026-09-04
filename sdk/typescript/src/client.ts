@@ -25,6 +25,7 @@ import type {
   ListOptions,
   GetSkillOptions,
   GrepOptions,
+  GlobOptions,
   ImportPackOptions,
   Message,
   PreflightAssetOptions,
@@ -450,6 +451,8 @@ export class OpenVikingClient {
         exclude_uri: options.excludeUri
           ? normalizeURI(options.excludeUri)
           : undefined,
+        tags: options.tags,
+        include_tags: options.includeTags || undefined,
       }),
     });
   }
@@ -457,10 +460,18 @@ export class OpenVikingClient {
   glob(
     pattern: string,
     uri = "viking://",
-    nodeLimit = 256,
+    options: GlobOptions | number = {},
   ): Promise<JsonObject> {
+    const resolvedOptions: GlobOptions =
+      typeof options === "number" ? { nodeLimit: options } : options;
     return this.request("POST", "/api/v1/search/glob", {
-      body: { pattern, uri: normalizeURI(uri), node_limit: nodeLimit },
+      body: compact({
+        pattern,
+        uri: normalizeURI(uri),
+        node_limit: resolvedOptions.nodeLimit ?? 256,
+        tags: resolvedOptions.tags,
+        include_tags: resolvedOptions.includeTags || undefined,
+      }),
     });
   }
   /** List directory contents. */
@@ -476,6 +487,8 @@ export class OpenVikingClient {
         node_limit: options.nodeLimit ?? 1000,
         sort_by: options.sortBy,
         sort_order: options.sortOrder,
+        tags: options.tags,
+        include_tags: options.includeTags || undefined,
       },
     });
   }
@@ -489,6 +502,8 @@ export class OpenVikingClient {
         show_all_hidden: options.showAllHidden ?? false,
         node_limit: options.nodeLimit ?? 1000,
         level_limit: options.levelLimit ?? 3,
+        tags: options.tags,
+        include_tags: options.includeTags || undefined,
       },
     });
   }
@@ -575,6 +590,9 @@ export class OpenVikingClient {
       content,
       mode: options.mode,
       processing_mode: options.processingMode,
+      tags: options.tags,
+      tag_mode:
+        options.tags === undefined ? undefined : (options.tagMode ?? "replace"),
       wait: options.wait,
       timeout: options.timeout,
       telemetry: options.telemetry,
@@ -1091,7 +1109,7 @@ export class OpenVikingClient {
       }),
     });
   }
-  /** List tenant accounts, ordered by account ID. `name` supports wildcard (* and ?) matching. */
+  /** List tenant accounts, in creation order. `name` supports wildcard (* and ?) matching. */
   adminListAccounts(
     options: { name?: string; limit?: number; page?: number } = {},
   ): Promise<unknown[]> {
@@ -1130,7 +1148,7 @@ export class OpenVikingClient {
       },
     );
   }
-  /** List users in an account, ordered by user ID. `name` supports wildcard (* and ?) matching. */
+  /** List users in an account, in creation order. `name` supports wildcard (* and ?) matching. */
   adminListUsers(
     accountId: string,
     options: { limit?: number; name?: string; role?: string; page?: number } = {},

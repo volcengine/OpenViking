@@ -128,6 +128,31 @@ class TestVikingFSBindingLocal:
                     stat_info = await vfs.stat(uri)
                     await vfs.rm(uri, recursive=bool(stat_info.get("isDir")))
 
+    async def test_recursive_cp_uses_parent_tree_batch_lease(
+        self,
+        viking_fs_binding_instance,
+    ):
+        """A batch lease on distinct parents must cover all recursive copy operations."""
+        vfs = viking_fs_binding_instance
+        unique = uuid.uuid4().hex
+        source_uri = f"viking://temp/cp_source_{unique}"
+        target_uri = f"viking://resources/cp_target_{unique}"
+
+        try:
+            await vfs.mkdir("viking://resources/", exist_ok=True)
+            await vfs.mkdir(source_uri)
+            await vfs.mkdir(f"{source_uri}/empty")
+            await vfs.write(f"{source_uri}/data.bin", b"\x00\xff")
+
+            await vfs.cp(source_uri, target_uri, recursive=True)
+
+            assert (await vfs.stat(f"{target_uri}/empty"))["isDir"] is True
+            assert await vfs.read(f"{target_uri}/data.bin") == b"\x00\xff"
+        finally:
+            for uri in (source_uri, target_uri):
+                if await vfs.exists(uri):
+                    await vfs.rm(uri, recursive=True)
+
     async def test_borrowed_pathlock_cannot_release_via_raw_ref(self, viking_fs_binding_instance):
         """Reject borrowed lifecycle control through typed and raw lease refs."""
         vfs = viking_fs_binding_instance

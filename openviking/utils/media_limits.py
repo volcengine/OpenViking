@@ -5,6 +5,9 @@
 from typing import Protocol
 
 MAX_MEDIA_FILE_BYTES = 512 * 1024 * 1024
+# Common model clients cap one inline tool result at 5 MiB after Base64 encoding.
+# Apply the equivalent raw-byte budget to both individual media and aggregates.
+MAX_INLINE_TOOL_RESULT_MEDIA_BYTES = 3_932_160
 
 DEFAULT_LARGE_IMAGE_MAX_FILE_SIZE_MB = 10.0
 DEFAULT_LARGE_IMAGE_THRESHOLD_DIMENSION = 4096

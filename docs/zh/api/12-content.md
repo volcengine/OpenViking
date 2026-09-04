@@ -143,7 +143,7 @@ openviking overview viking://resources/docs/
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| uri | str | 是 | - | Viking URI |
+| uri | str | 是 | - | Viking URI（如 `viking://resources/docs/api.md`）或 32 字符十六进制向量记录 `id`（由 `stat()` 返回） |
 | offset | int | 否 | 0 | 起始行号（0 开始） |
 | limit | int | 否 | -1 | 读取的行数，`-1` 表示读到结尾 |
 | raw | bool | 否 | false | 返回未过滤 MEMORY_FIELDS 的原始存储内容（仅 HTTP API，Python SDK 暂未暴露）。 |
@@ -151,6 +151,7 @@ openviking overview viking://resources/docs/
 **说明**
 
 - `read()` 只接受文件 URI。传入已存在的目录 URI 时返回 `INVALID_ARGUMENT`（`400`），而不是 `NOT_FOUND`。该错误会携带结构化的 `details` 字段——`details.expected` 为 `"file"`，`details.actual` 为 `"directory"`，`details.resource` 为出错的 URI（HTTP 路径上会带上）——客户端据此即可以编程方式判断"文件 vs 目录"不匹配（例如回退到 `list`），而无需对错误消息做字符串匹配。
+- 除 Viking URI 外，还可以传入 `stat()` 返回的 32 字符十六进制文件 `id`。服务端通过向量索引查找对应 URI 并执行相同的权限校验。由于索引是异步生成的，新返回的 ID 可能暂时无法解析；对应向量记录被删除后，按 ID 查询也会失败。这两种情况下，服务端都会返回 `NOT_FOUND`，并提示数据可能尚未索引或已经删除。
 - 公开 URI 参数接受 `resources` 和 `user` 作用域。访问 session 文件时，使用 `viking://user/{user_id}/sessions/{session_id}`，也可以使用向后兼容的 `viking://session/{session_id}` 别名。`temp`、`queue` 等内部作用域会返回 `INVALID_URI`。
 
 
@@ -221,6 +222,8 @@ openviking read viking://resources/docs/api.md
 | mode | str | 否 | `replace` | `replace` 覆盖已有文件、缺失时创建；`append` 追加已有文件、缺失时创建；`create` 仅创建缺失文件，目标已存在时返回 `409 Conflict` |
 | wait | bool | 否 | `false` | 是否等待后台语义/向量刷新完成 |
 | timeout | float | 否 | `null` | 当 `wait=true` 时的超时时间（秒） |
+| tags | string[] | 否 | 未设置 | 写入文件的显式检索标签，例如 `["team=search", "env=prod"]` |
+| tag_mode | string | 否 | `replace` | 提供 `tags` 时的更新方式：`replace` 覆盖标签，`append` 按 key 合并标签 |
 
 **说明**
 
@@ -229,6 +232,7 @@ openviking read viking://resources/docs/api.md
 - 已存在的 `.abstract.md` / `.overview.md` 可以修改正文，但不能通过公共 API 创建；只提交正文时会保留现有 OKF metadata，提交完整 OKF 时 metadata 必须与存量值一致。未知 metadata 字段会静默丢弃。sidecar 正文写入只重建该目录实际存在的 L0/L1 向量，不触发语义重新生成。
 - 文件内容会在 API 返回前完成更新；`wait` 只控制是否等待语义/向量刷新完成。
 - 公共 API 已不再接受 `regenerate_semantics` 或 `revectorize`；写入后一定会自动刷新相关语义与向量。
+- 提供 `tags` 时，标签会在该文件首次向量 upsert 时写入，而非在处理完成后再单独更新。省略 `tags` 不改变已有标签；显式 `tags: []` 配合 `tag_mode: "replace"` 可清空标签。
 
 
 **Python SDK**
@@ -239,6 +243,7 @@ result = client.write(
     content="# Updated API\n\nFresh content.",
     mode="replace",
     wait=True,
+    options={"tags": ["team=search", "env=prod"], "tag_mode": "replace"},
 )
 print(result["root_uri"])
 ```
@@ -246,7 +251,11 @@ print(result["root_uri"])
 **TypeScript SDK**
 
 ```typescript
-await client.write("viking://resources/docs/new.md", "# New document\n", { wait: true });
+await client.write("viking://resources/docs/new.md", "# New document\n", {
+  wait: true,
+  tags: ["team=search", "env=prod"],
+  tagMode: "replace",
+});
 ```
 
 **Go SDK**
@@ -259,6 +268,8 @@ result, err := client.Write(
     &openviking.WriteOptions{
         Mode: "replace",
         Wait: true,
+        Tags: []string{"team=search", "env=prod"},
+        TagMode: "replace",
     },
 )
 if err != nil {
@@ -281,7 +292,9 @@ curl -X POST "http://localhost:1933/api/v1/content/write" \
     "uri": "viking://resources/docs/api.md",
     "content": "# Updated API\n\nFresh content.",
     "mode": "replace",
-    "wait": true
+    "wait": true,
+    "tags": ["team=search", "env=prod"],
+    "tag_mode": "replace"
   }'
 ```
 
@@ -290,6 +303,8 @@ curl -X POST "http://localhost:1933/api/v1/content/write" \
 ```bash
 openviking write viking://resources/docs/api.md \
   --content "# Updated API\n\nFresh content." \
+  --tags team=search,env=prod \
+  --tag-mode replace \
   --wait
 ```
 
@@ -476,7 +491,7 @@ Content-Disposition: attachment; filename*=UTF-8''logo.png
 
 ### set_tags()
 
-设置用于检索过滤的显式 `k=v` 标签。`replace` 替换已有标签，`append` 追加标签；对目录设置 `recursive=true` 时会更新目录下的文件。
+设置用于检索过滤的显式 `k=v` 标签。key 和 value 都非空、只能有一个 `=`，仅由小写字母、数字、`_`、`-`、`.` 组成且以字母或数字开头（服务端会去空白并转小写），key 最长 64、value 最长 128 字符；不合规的标签会被拒绝。`replace` 替换已有标签，`append` 追加标签；对目录设置 `recursive=true` 时会更新目录下的文件。
 
 **Python SDK**
 
@@ -577,7 +592,7 @@ ov set-tags viking://resources/project/ \
 
 **认证**
 
-- HTTP 端点：在开启认证时要求 admin/root 角色。`api_key` 模式下，租户内容重建请使用 admin key；裸 root key 不能访问租户级数据。
+- `api_key` 模式下，共享区 `viking://resources/...` 需要 admin key；普通 user key 只能重建自己的 `viking://user/<user_id>/...`，也可以使用等价的 `viking://~/...` 家目录别名。root key 不能访问租户级数据 API。
 - Python HTTP client / CLI：使用当前认证身份发起请求
 
 **参数**
@@ -725,10 +740,10 @@ curl -X POST http://localhost:1933/api/v1/content/reindex \
 
 ```bash
 openviking reindex viking://resources --mode vectors_only \
-  --tag team=search --tag env=prod --tag-mode replace
+  --tags team=search,env=prod --tag-mode replace
 ```
 
-CLI 仅在至少传入一个 `--tag` 时发送标签字段；如需用 `tags: []` 清空标签，请使用 HTTP 或 SDK。
+CLI 仅在 `--tags` 非空时发送标签字段；如需用 `tags: []` 清空标签，请使用 HTTP 或 SDK。
 
 ```bash
 openviking reindex viking://user/default/skills --mode semantic_and_vectors --wait false

@@ -25,6 +25,11 @@ type ContextEngineInfo = {
   name: string;
   version?: string;
   ownsCompaction: true;
+  /** OpenClaw >=2026.8.1: without both declarations (and commitTurn) the engine is degraded to "legacy" every turn. */
+  transcriptSemantics: {
+    currentTurnFence: "before-current-turn-entry-v1";
+    turnAdvancementIdempotency: "atomic-idempotent-v1";
+  };
 };
 
 type AssembleResult = {
@@ -81,6 +86,14 @@ type ContextEngine = {
     tokenBudget?: number;
     runtimeContext?: Record<string, unknown>;
   }) => Promise<AssembleResult>;
+  /** OpenClaw >=2026.8.1 durable turn advancement; retried with the same advancementKey after host failure. */
+  commitTurn: (params: {
+    advancementKey: string;
+    messages: AgentMessage[];
+    sessionId: string;
+    sessionKey?: string;
+    isHeartbeat?: boolean;
+  }) => Promise<{ status: "committed" | "duplicate" }>;
   compact: (params: {
     sessionId: string;
     sessionKey?: string;
@@ -318,12 +331,18 @@ export function createMemoryOpenVikingContextEngine(params: {
     };
   }
 
+  const committedTurnKeys = new Set<string>();
+
   return {
     info: {
       id,
       name,
       version,
       ownsCompaction: true,
+      transcriptSemantics: {
+        currentTurnFence: "before-current-turn-entry-v1",
+        turnAdvancementIdempotency: "atomic-idempotent-v1",
+      },
     },
 
     commitOVSession: doCommitOVSession,
@@ -366,6 +385,22 @@ export function createMemoryOpenVikingContextEngine(params: {
         hasAutoRecallBlock,
         prependRecallToLatestUserMessage,
       });
+    },
+
+    // Capture still happens in afterTurn (host calls it per LLM call + on finalize);
+    // commitTurn only acknowledges the accepted turn so OpenClaw drains its outbox.
+    // ponytail: in-memory key set, not durable across restarts — the host outbox is.
+    async commitTurn({ advancementKey, sessionId }): Promise<{ status: "committed" | "duplicate" }> {
+      if (committedTurnKeys.has(advancementKey)) {
+        diag("commitTurn_duplicate", sessionId, { advancementKey });
+        return { status: "duplicate" };
+      }
+      committedTurnKeys.add(advancementKey);
+      if (committedTurnKeys.size > 1024) {
+        committedTurnKeys.delete(committedTurnKeys.values().next().value as string);
+      }
+      diag("commitTurn", sessionId, { advancementKey });
+      return { status: "committed" };
     },
 
     async afterTurn(afterTurnParams): Promise<void> {

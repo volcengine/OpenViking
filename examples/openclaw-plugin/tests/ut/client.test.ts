@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { OpenVikingClient } from "../../client.js";
 import type { ResourcePackager } from "../../adapters/resource-packager.js";
 import { isMemoryUri } from "../../routing/memory-uri.js";
+import { buildContextSearchBody } from "../../shared/recall-core.mjs";
 
 function okResponse(result: unknown): Response {
   return new Response(JSON.stringify({ status: "ok", result }), {
@@ -553,6 +554,115 @@ describe("OpenVikingClient tenant headers (advanced accountId / userId overrides
 });
 
 describe("OpenVikingClient canonical namespace policy", () => {
+  it("keeps server-assembled context requests aligned with the shared contract", async () => {
+    const transport = vi.fn().mockResolvedValue(okResponse({
+      entries: [{ uri: "viking://user/memories/events/a.md" }],
+      rendered: '<memory uri="viking://user/memories/events/a.md">body</memory>',
+      stats: { used_tokens: 12 },
+    }));
+    const routingDebugLog = vi.fn();
+    const client = new OpenVikingClient(
+      "http://127.0.0.1:1933", "", "agent", 5000,
+      "acct-123", "user-456", routingDebugLog, false, true, { transport },
+    );
+
+    const result = await client.searchContext("continue the refactor", {
+      sessionId: "ov-session-1",
+      limit: 6,
+      scoreThreshold: 0.15,
+      contextType: ["memory", "resource"],
+      queryExpansion: "auto",
+      maxTokens: 1000,
+      detail: "abstract",
+      dedupTurns: 5,
+      peerScope: "actor",
+      actorPeerId: "agent-main",
+    });
+
+    expect(result.stats).toEqual({ used_tokens: 12 });
+    expect(transport).toHaveBeenCalledTimes(1);
+    const [url, init] = transport.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:1933/api/v1/search/search");
+    const requestBody = JSON.parse(String(init.body));
+    const { context_type: contextType, detail, ...sharedRequestBody } = requestBody;
+    expect(sharedRequestBody).toEqual({
+      ...buildContextSearchBody({
+        recallLimit: 6,
+        recallLimitConfigured: true,
+        recallMaxTokens: 1000,
+        recallMaxTokensConfigured: true,
+        scoreThreshold: 0.15,
+        recallQueryExpansion: "auto",
+        recallQueryExpansionConfigured: true,
+        recallDedupTurns: 5,
+        recallPeerScope: "actor",
+        timeoutMs: 5000,
+      }, { sessionId: "ov-session-1" }),
+      query: "continue the refactor",
+    });
+    expect(contextType).toEqual(["memory", "resource"]);
+    expect(detail).toBe("abstract");
+    expect(requestBody).not.toHaveProperty("limit");
+    expect(new Headers(init.headers).get("X-OpenViking-Actor-Peer")).toBe("agent-main");
+    expect(new Headers(init.headers).get("X-OpenViking-Account")).toBe("acct-123");
+    expect(new Headers(init.headers).get("X-OpenViking-User")).toBe("user-456");
+    expect(routingDebugLog).toHaveBeenCalledWith(expect.stringContaining('"query_expansion":"auto"'));
+  });
+
+  it("normalizes context entries through the shared response contract", async () => {
+    const transport = vi.fn().mockResolvedValue(okResponse({
+      entries: [{
+        uri: "viking://user/memories/events/legacy.md",
+        type: "events",
+        mode: "abstract",
+        content: "legacy response body",
+        score: "0.82",
+        origin: "self",
+      }],
+      rendered: "legacy response body",
+    }));
+    const client = new OpenVikingClient(
+      "http://127.0.0.1:1933", "", "agent", 5000,
+      "", "", undefined, false, true, { transport },
+    );
+
+    const result = await client.searchContext("legacy response");
+
+    expect(result.entries?.[0]).toMatchObject({
+      uri: "viking://user/memories/events/legacy.md",
+      category: "events",
+      detail: "abstract",
+      text: "legacy response body",
+      score: 0.82,
+      origin: "self",
+    });
+  });
+
+  it("uses the shared session-aware timeout floor", async () => {
+    vi.useFakeTimers();
+    let requestSignal: AbortSignal | undefined;
+    const transport = vi.fn((_url: string, init: RequestInit) => {
+      requestSignal = init.signal ?? undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        requestSignal?.addEventListener("abort", () => {
+          reject(new DOMException("The operation was aborted", "AbortError"));
+        });
+      });
+    });
+    const client = new OpenVikingClient(
+      "http://127.0.0.1:1933", "", "agent", 5000,
+      "", "", undefined, false, true, { transport },
+    );
+
+    const pending = client.searchContext("session-aware timeout", { sessionId: "ov-session-1" });
+    const rejection = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    await vi.advanceTimersByTimeAsync(5001);
+    expect(requestSignal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(9999);
+    expect(requestSignal?.aborted).toBe(true);
+    await rejection;
+  });
+
   it("keeps user memory alias unchanged and routes by actor peer by default", async () => {
     const transport = vi.fn(async (url: string) => {
       if (url.endsWith("/api/v1/system/status")) {

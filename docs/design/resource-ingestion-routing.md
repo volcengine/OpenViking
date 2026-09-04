@@ -207,7 +207,27 @@ HTTPAccessor 按以下顺序收集和修正类型：
 
 ParserRegistry 只注册项目内置 Parser，不再提供自定义 Parser 类、回调注册或可选模块注册入口。新增数据源优先实现 Accessor；新增文件格式则直接增加内置 Parser 和对应测试。
 
-目录、网站和压缩包的“子文件遍历”属于当前内置 Parser 的内部实现，不回到顶层 `ResourceService`，也不会给每个子文件重新选择 Understanding。顶层压缩文件本身是否进入 Understanding，仍由其冻结扩展名和 `parser_api.extensions` 决定。
+目录、网站和由内置 ZipParser 展开的压缩包，其“子文件遍历”仍属于当前内置
+Parser 的内部实现，不回到顶层 `ResourceService`。`DirectoryParser` 会递归扫描
+每个叶子文件，并通过 `ParserRouter` 重新检查 `parser_api.extensions`：命中的文件
+交给 Understanding，未命中的文件继续使用内置 Parser 或直接写入。该过程在当前
+目录任务内执行，不会把每个子文件拆成独立的 `ExternalParse` 队列任务。顶层压缩
+文件本身是否直接进入 Understanding，仍由其冻结扩展名和
+`parser_api.extensions` 决定。
+
+启用 Understanding 目录路由后，每次 `DirectoryParser` 扫描在发起该层远程请求前执行
+预检，默认限制为 1000 个入选文件和 10 层目录深度；关闭 Understanding 时，
+OpenViking 原生目录解析不应用这两个限制。内置 `ZipParser` 递归展开压缩包时会创建新的
+目录扫描，嵌套 ZIP 不与外层共享文件数量和深度预算。
+客户端导入本地目录时，会先将整个目录压缩为 ZIP，再由
+`/resources/temp_upload` 对整个 ZIP 执行上传大小限制。ZIP 解压后的叶子文件不再由
+`DirectoryParser` 设置统一大小限制，而是交给对应内置 Parser 或 Understanding，遵循
+各自的格式和上传限制。这些文件使用固定 worker 池，默认并发为 4；远程解析可以并发，
+但向目录临时树的合并始终按扫描顺序串行执行。目录限制可通过
+`parsers.directory` 配置调整。目录内部分文件失败时仍提交成功文件并通过
+`meta.failed_files` 返回失败详情；嵌套 ZIP 的叶子失败使用 `bundle.zip/path/to/file`
+形式的路径并保留远端任务 ID。如果没有任何文件成功，则在 TreeBuilder 持久化前
+终止任务，并清理本次请求新预占的空目标目录。
 
 ## Understanding 链路
 

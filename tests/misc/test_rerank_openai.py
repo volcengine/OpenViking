@@ -268,10 +268,13 @@ class TestRerankConfig:
         with pytest.raises(ValidationError):
             RerankConfig(provider="openai", api_base="https://example.com/rerank")
 
-    def test_default_provider_is_vikingdb(self):
-        config = RerankConfig()
-        assert config.provider == "vikingdb"
-
     def test_unknown_provider_raises_value_error(self):
-        with pytest.raises(ValueError, match="provider"):
+        with pytest.raises(ValidationError, match="provider"):
+            RerankConfig(provider="unknown", api_key="key")
+
+    def test_explicit_provider_requires_its_own_credentials(self):
+        with pytest.raises(ValidationError, match="api_key"):
             RerankConfig(provider="cohere", ak="ak", sk="sk")
+
+        with pytest.raises(ValidationError, match="ak"):
+            RerankConfig(provider="vikingdb", api_key="key")

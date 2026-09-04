@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 from openviking.core.context import ContextType, ResourceContentType
 from openviking.models.embedder.base import embed_compat
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.acl import ACL_GRANT_FIELDS
 from openviking.storage.errors import (
     CollectionNotFoundError,
     EmbeddingConfigurationError,
@@ -26,6 +27,7 @@ from openviking.storage.errors import (
 )
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
+from openviking.storage.vector_ids import vector_record_id
 from openviking.storage.viking_vector_index_backend import (
     VIKINGDB_CONTENT_MAX_SIZE,
     VikingVectorIndexBackend,
@@ -118,6 +120,15 @@ class CollectionSchemas:
                 {"FieldName": "content", "FieldType": "text"},
                 {"FieldName": "account_id", "FieldType": "string"},
                 {"FieldName": "owner_user_id", "FieldType": "string"},
+                {"FieldName": "acl_enabled", "FieldType": "bool", "DefaultValue": False},
+                *[
+                    {
+                        "FieldName": field,
+                        "FieldType": "list<string>",
+                        "DefaultValue": [],
+                    }
+                    for field in ACL_GRANT_FIELDS
+                ],
             ]
         )
         scalar_index = [
@@ -136,6 +147,8 @@ class CollectionSchemas:
                 "search_tags",
                 "account_id",
                 "owner_user_id",
+                "acl_enabled",
+                *ACL_GRANT_FIELDS,
             ]
         )
         return {
@@ -503,20 +516,6 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             return cls._request_stats_by_telemetry_id.pop(telemetry_id, None)
 
     @staticmethod
-    def _seed_uri_for_id(uri: str, level: Any) -> str:
-        """Build deterministic id seed URI from canonical uri + hierarchy level."""
-        try:
-            level_int = int(level)
-        except (TypeError, ValueError):
-            level_int = 2
-
-        if level_int == 0:
-            return uri if uri.endswith("/.abstract.md") else f"{uri}/.abstract.md"
-        if level_int == 1:
-            return uri if uri.endswith("/.overview.md") else f"{uri}/.overview.md"
-        return uri
-
-    @staticmethod
     def _embedding_msg_log_context(embedding_msg: Optional[EmbeddingMsg]) -> str:
         """Return the URI allowed in embedding logs."""
         if embedding_msg is None:
@@ -586,8 +585,14 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             embedding_msg = EmbeddingMsg.from_json(data["data"])
             inserted_data = embedding_msg.context_data
             account_id = inserted_data.get("account_id", "default")
-            user = UserIdentifier(account_id=account_id, user_id="default")
-            ctx = RequestContext(user=user, role=Role.ROOT)
+            context_user = inserted_data.get("user") or {}
+            user_id = (
+                context_user.get("user_id")
+                or inserted_data.get("owner_user_id")
+                or "default"
+            )
+            user = UserIdentifier(account_id=account_id, user_id=user_id)
+            ctx = RequestContext(user=user, role=Role.USER, bypass_acl=True)
             collector = resolve_telemetry(embedding_msg.telemetry_id)
             telemetry_ctx = bind_telemetry(collector) if collector is not None else nullcontext()
 
@@ -792,9 +797,9 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     # Ensure vector DB has deterministic IDs per semantic layer.
                     uri = inserted_data.get("uri")
                     if uri:
-                        seed_uri = self._seed_uri_for_id(uri, inserted_data.get("level", 2))
-                        id_seed = f"{account_id}:{seed_uri}"
-                        inserted_data["id"] = hashlib.md5(id_seed.encode("utf-8")).hexdigest()
+                        inserted_data["id"] = vector_record_id(
+                            account_id, uri, inserted_data.get("level", 2)
+                        )
 
                     if self._vikingdb.uses_content_field:
                         inserted_data["content"] = await self._materialize_content(

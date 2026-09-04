@@ -48,14 +48,19 @@ class _DummyHTTPClient:
         self.find_calls = []
         self.ls_calls = []
         self.read_calls = []
+        self.stat_calls = []
+        self.download_calls = []
         self.closed = False
         _DummyHTTPClient.instances.append(self)
 
     async def initialize(self):
         return None
 
-    async def create_session(self, session_id=None, memory_policy=None):
-        return {"session_id": session_id or "s-1", "memory_policy": memory_policy}
+    async def create_session(self, session_id=None, options=None):
+        return {
+            "session_id": session_id or "s-1",
+            "memory_policy": (options or {}).get("memory_policy"),
+        }
 
     async def session_exists(self, _session_id):
         return False
@@ -101,6 +106,14 @@ class _DummyHTTPClient:
     async def read(self, uri):
         self.read_calls.append(("read", uri))
         return ""
+
+    async def stat(self, uri):
+        self.stat_calls.append(uri)
+        return {"size": 8, "isDir": False}
+
+    async def download_bytes(self, uri):
+        self.download_calls.append(uri)
+        return b"image"
 
     async def grep(self, *_args, **_kwargs):
         return {"matches": []}
@@ -1896,9 +1909,9 @@ async def test_viking_client_ensure_session_creates_after_legacy_not_found(monke
     async def _get_session(_session_id):
         raise NotFoundError("Resource not found")
 
-    async def _create_session(session_id=None, memory_policy=None):
-        created.append((session_id, memory_policy))
-        return {"session_id": session_id, "memory_policy": memory_policy}
+    async def _create_session(session_id=None, options=None):
+        created.append((session_id, options))
+        return {"session_id": session_id, "memory_policy": (options or {}).get("memory_policy")}
 
     monkeypatch.setattr(client.client, "get_session", _get_session)
     monkeypatch.setattr(client.client, "create_session", _create_session)
@@ -1909,7 +1922,7 @@ async def test_viking_client_ensure_session_creates_after_legacy_not_found(monke
     )
 
     assert result == {"session_id": "session-1", "memory_policy": {"strategy": "compact"}}
-    assert created == [("session-1", {"strategy": "compact"})]
+    assert created == [("session-1", {"memory_policy": {"strategy": "compact"}})]
 
 
 @pytest.mark.asyncio
@@ -1953,6 +1966,27 @@ async def test_read_content_trusted_owner_uri_uses_owner_identity(monkeypatch):
     assert scoped.kwargs["user"] == "sender-1"
     assert scoped.read_calls == [("read", "viking://user/sender-1/memories/profile.md")]
     assert scoped.closed is True
+
+
+@pytest.mark.asyncio
+async def test_image_reads_trusted_owner_uri_use_owner_identity(monkeypatch):
+    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
+    client = VikingClient()
+    uri = "viking://user/sender-1/resources/image.png"
+
+    stat = await client.stat(uri)
+    content = await client.download_bytes(uri)
+
+    assert stat == {"size": 8, "isDir": False}
+    assert content == b"image"
+    stat_client, download_client = _DummyHTTPClient.instances[1:]
+    for scoped in (stat_client, download_client):
+        assert scoped.kwargs["api_key"] == "root-key"
+        assert scoped.kwargs["account"] == "acct"
+        assert scoped.kwargs["user"] == "sender-1"
+        assert scoped.closed is True
+    assert stat_client.stat_calls == [uri]
+    assert download_client.download_calls == [uri]
 
 
 @pytest.mark.asyncio

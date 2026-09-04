@@ -143,7 +143,7 @@ Read the complete text of an L0, L1, or L2 file.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| uri | str | Yes | - | Viking URI |
+| uri | str | Yes | - | Viking URI (e.g. `viking://resources/docs/api.md`) or a 32-character hex vector record `id` (returned by `stat()`) |
 | offset | int | No | 0 | Starting line number (0-indexed) |
 | limit | int | No | -1 | Number of lines to read, `-1` means read to end |
 | raw | bool | No | false | Return raw stored content without memory-field cleanup. HTTP API only (Python SDK does not expose it yet). |
@@ -151,6 +151,7 @@ Read the complete text of an L0, L1, or L2 file.
 **Notes**
 
 - `read()` accepts file URIs only. Passing an existing directory URI returns `INVALID_ARGUMENT` (`400`), not `NOT_FOUND`. This error carries a structured `details` payload — `details.expected` is `"file"`, `details.actual` is `"directory"`, and `details.resource` is the offending URI (present on the HTTP path) — so clients can detect a file-vs-directory mismatch programmatically (for example, fall back to `list`) instead of string-matching the message.
+- Instead of a Viking URI, you may pass the 32-character hex `id` returned by `stat()` for a file. The server looks up the URI via the vector index and applies the same permission checks. Because indexing is asynchronous, a newly returned ID might not be resolvable immediately; lookup also fails if the corresponding vector record has been deleted. In both cases, the server returns `NOT_FOUND` and indicates that the data may not have been indexed yet or may have been deleted.
 - Public URI parameters accept `resources` and `user` scopes. For session files, use `viking://user/{user_id}/sessions/{session_id}` or the backward-compatible `viking://session/{session_id}` alias. Internal scopes such as `temp` and `queue` return `INVALID_URI`.
 
 
@@ -221,6 +222,8 @@ Write a file and automatically refresh related semantics and vectors.
 | mode | str | No | `replace` | `replace` overwrites an existing file or creates a missing file; `append` appends to an existing file or creates a missing file; `create` creates only a missing file and returns `409 Conflict` if it already exists |
 | wait | bool | No | `false` | Wait for background semantic/vector refresh |
 | timeout | float | No | `null` | Timeout in seconds when `wait=true` |
+| tags | string[] | No | Unset | Explicit retrieval tags for the written file, for example `["team=search", "env=prod"]` |
+| tag_mode | string | No | `replace` | Tag update mode when `tags` is supplied: `replace` overwrites tags; `append` merges tags by key |
 
 **Notes**
 
@@ -229,6 +232,7 @@ Write a file and automatically refresh related semantics and vectors.
 - Existing `.abstract.md` and `.overview.md` bodies may be updated, but public APIs cannot create them. A body-only request preserves stored OKF metadata; a full-OKF request must match the stored metadata. Unknown metadata fields are silently dropped. A sidecar body write rebuilds only the directory's existing L0/L1 vectors and does not regenerate semantics.
 - File content is updated before the API returns. `wait` only controls whether the call waits for semantic/vector refresh to finish.
 - The public API no longer accepts `regenerate_semantics` or `revectorize`; write always refreshes related semantics and vectors.
+- When `tags` is supplied, tags are included in the file's first vector upsert rather than updated after processing. Omitting `tags` preserves existing tags; explicit `tags: []` with `tag_mode: "replace"` clears them.
 
 
 **Python SDK**
@@ -239,6 +243,7 @@ result = client.write(
     content="# Updated API\n\nFresh content.",
     mode="replace",
     wait=True,
+    options={"tags": ["team=search", "env=prod"], "tag_mode": "replace"},
 )
 print(result["root_uri"])
 ```
@@ -246,7 +251,11 @@ print(result["root_uri"])
 **TypeScript SDK**
 
 ```typescript
-await client.write("viking://resources/docs/new.md", "# New document\n", { wait: true });
+await client.write("viking://resources/docs/new.md", "# New document\n", {
+  wait: true,
+  tags: ["team=search", "env=prod"],
+  tagMode: "replace",
+});
 ```
 
 **Go SDK**
@@ -259,6 +268,8 @@ result, err := client.Write(
     &openviking.WriteOptions{
         Mode: "replace",
         Wait: true,
+        Tags: []string{"team=search", "env=prod"},
+        TagMode: "replace",
     },
 )
 if err != nil {
@@ -281,7 +292,9 @@ curl -X POST "http://localhost:1933/api/v1/content/write" \
     "uri": "viking://resources/docs/api.md",
     "content": "# Updated API\n\nFresh content.",
     "mode": "replace",
-    "wait": true
+    "wait": true,
+    "tags": ["team=search", "env=prod"],
+    "tag_mode": "replace"
   }'
 ```
 
@@ -290,6 +303,8 @@ curl -X POST "http://localhost:1933/api/v1/content/write" \
 ```bash
 openviking write viking://resources/docs/api.md \
   --content "# Updated API\n\nFresh content." \
+  --tags team=search,env=prod \
+  --tag-mode replace \
   --wait
 ```
 
@@ -476,7 +491,7 @@ Content-Disposition: attachment; filename*=UTF-8''logo.png
 
 ### set_tags()
 
-Set explicit `k=v` tags used by retrieval filters. `replace` replaces existing tags, while `append` adds tags. When the target is a directory, `recursive=true` applies the update to files below it.
+Set explicit `k=v` tags used by retrieval filters. Both key and value are non-empty, contain exactly one `=`, are made only of lowercase letters, digits, `_`, `-`, `.` and start with a letter or digit (the server trims whitespace and lowercases); the key is capped at 64 and the value at 128 characters, and invalid tags are rejected. `replace` replaces existing tags, while `append` adds tags. When the target is a directory, `recursive=true` applies the update to files below it.
 
 **Python SDK**
 
@@ -577,7 +592,7 @@ This API operates on existing `viking://...` content. It does not import new fil
 
 **Authentication**
 
-- HTTP endpoint: requires admin/root role when authentication is enabled. In `api_key` mode, use an admin key for tenant content; a raw root key cannot access tenant-scoped data.
+- In `api_key` mode, shared `viking://resources/...` targets require an admin key. A regular user key may reindex only its own `viking://user/<user_id>/...` namespace, including the equivalent `viking://~/...` home alias. A root key cannot access tenant-scoped data APIs.
 - Python HTTP client / CLI: sends the current authenticated identity
 
 **Parameters**
@@ -725,10 +740,10 @@ curl -X POST http://localhost:1933/api/v1/content/reindex \
 
 ```bash
 openviking reindex viking://resources --mode vectors_only \
-  --tag team=search --tag env=prod --tag-mode replace
+  --tags team=search,env=prod --tag-mode replace
 ```
 
-The CLI sends tag fields only when at least one `--tag` is provided. Use HTTP or an SDK to clear tags with `tags: []`.
+The CLI sends tag fields only when non-empty `--tags` is provided. Use HTTP or an SDK to clear tags with `tags: []`.
 
 ```bash
 openviking reindex viking://user/default/skills --mode semantic_and_vectors --wait false

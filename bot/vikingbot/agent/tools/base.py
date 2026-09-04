@@ -8,6 +8,17 @@ from vikingbot.config.schema import SessionKey
 from vikingbot.sandbox.manager import SandboxManager
 
 
+@dataclass(frozen=True)
+class MultimodalToolResult:
+    """A tool result with model-facing content and a text-only representation."""
+
+    text: str
+    content: list[dict[str, Any]]
+
+    def __str__(self) -> str:
+        return self.text
+
+
 @dataclass
 class ToolContext:
     """Context passed to tools during execution, containing runtime information.
@@ -152,7 +163,7 @@ class Tool(ABC):
         return {}
 
     @abstractmethod
-    async def execute(self, tool_context: ToolContext, **kwargs: Any) -> str:
+    async def execute(self, tool_context: ToolContext, **kwargs: Any) -> str | MultimodalToolResult:
         """
         Execute the tool with given parameters.
 
@@ -161,7 +172,7 @@ class Tool(ABC):
             **kwargs: Tool-specific parameters.
 
         Returns:
-            String result of the tool execution.
+            Text result, optionally with model-facing multimodal content.
         """
         pass
 

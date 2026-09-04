@@ -10,6 +10,7 @@ from openviking.core.retrieval_targets import resolve_retrieval_targets
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext
 from openviking.storage.abstract_overview import body_for_preview, render_abstract_overview
+from openviking.storage.acl import AclAction
 from openviking.storage.viking_fs._base import (
     _ensure_non_empty_search_query,
     logger,
@@ -58,7 +59,7 @@ class _SemanticMixin:
         Bypasses stat() and isDir check. Caller (i.e. _batch_fetch_abstracts)
         must guarantee that the URI points to a directory.
         """
-        self._ensure_access(uri, ctx)
+        await self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
         primary_path = self._uri_to_path(uri, ctx=ctx)
         for path in self._read_paths(uri, ctx=ctx):
@@ -84,7 +85,7 @@ class _SemanticMixin:
         If the caller points to a file, its parent directory is used instead so
         the endpoint remains usable for both file and directory URIs.
         """
-        self._ensure_access(uri, ctx)
+        await self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
         primary_path = self._uri_to_path(uri, ctx=ctx)
         path = primary_path
@@ -131,7 +132,7 @@ class _SemanticMixin:
         If the caller points to a file, its parent directory is used instead so
         the endpoint remains usable for both file and directory URIs.
         """
-        self._ensure_access(uri, ctx)
+        await self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
         primary_path = self._uri_to_path(uri, ctx=ctx)
         path = primary_path
@@ -205,7 +206,10 @@ class _SemanticMixin:
         """
         _ensure_non_empty_search_query(query, image_url)
         telemetry = get_current_telemetry()
-        from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
+        from openviking.retrieve.hierarchical_retriever import (
+            HierarchicalRetriever,
+            RetrieverMode,
+        )
         from openviking_cli.retrieve import (
             ContextType,
             FindResult,
@@ -216,7 +220,7 @@ class _SemanticMixin:
         retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx)
 
         for target_dir in retrieval_targets.target_directories:
-            self._ensure_access(target_dir, ctx)
+            await self._ensure_retrieval_scope(target_dir, ctx)
 
         storage = self._get_vector_store()
         if not storage:
@@ -253,6 +257,7 @@ class _SemanticMixin:
             typed_query,
             ctx=real_ctx,
             limit=limit,
+            mode=RetrieverMode.QUICK,
             score_threshold=score_threshold,
             scope_dsl=filter,
             level=level,
@@ -322,7 +327,7 @@ class _SemanticMixin:
 
         query_plan: Optional[QueryPlan] = None
         for target_dir in retrieval_targets.target_directories:
-            self._ensure_access(target_dir, ctx)
+            await self._ensure_retrieval_scope(target_dir, ctx)
 
         # When target_uri exists, read its abstract as optional query-planning context.
         target_abstract = ""
@@ -435,7 +440,7 @@ class _SemanticMixin:
     ) -> None:
         """Write context to AGFS (L0/L1/L2)."""
 
-        self._ensure_mutable_access(uri, ctx)
+        await self._ensure_access(uri, ctx, action=AclAction.WRITE)
         path = self._uri_to_path(uri, ctx=ctx)
 
         try:

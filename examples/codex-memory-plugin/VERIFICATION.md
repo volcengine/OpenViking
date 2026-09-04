@@ -121,63 +121,74 @@ echo '{"session_id":"verify-sess","transcript_path":"'"$STATE_DIR"'/transcript.j
 
 Expect: `appended 2 turn(s) to OpenViking session cx-verify-sess`.
 
-## 6. SessionStart — active-window heuristic + idle-TTL sweep
+## 6. SessionEnd commit + SessionStart fallback sweep
 
-`source=startup` and `source=clear` both run the same logic
+`SessionEnd` (Codex ≥ 0.145) is the primary commit path; `SessionStart`
+`source=startup|clear` sweeps only what `SessionEnd` could not reach
 (matcher = `clear|startup|resume`). `source=resume` never commits or sweeps;
 all three sources inject the shared profile/background block by default, and
 resume may additionally inject latest archive context if a committed archive
 exists. Set `OPENVIKING_NO_AUTO_INJECT=1` when a cleanup-only smoke test needs
 the historical `{}` output.
-See `DESIGN.md` §3 + §5 for the full decision tree.
+See `DESIGN.md` §2 + §5 for the full decision tree.
 
-### 6a. `1 active` → commit
+### 6a. SessionEnd — catch-up append + commit
 
-After step 5, the `verify-sess` state file is fresh (touched within the
-last 2 min) and is the only state file other than the new session_id.
-Heuristic should commit it.
+After step 5, `verify-sess` has a live `cx-verify-sess` and a cursor of 6.
+Append two more turns that `Stop` never saw, then run the worker path
+directly (`OV_HOOK_WORKER=1` skips the detach, so the run is observable).
 
 ```bash
-echo '{"session_id":"new-after-verify","source":"startup","cwd":"/tmp","model":"x","permission_mode":"default","transcript_path":null,"hook_event_name":"SessionStart"}' \
+cat >> "$STATE_DIR/transcript.jsonl" <<'EOF'
+{"payload":{"role":"user","content":"One last thing: I ship on Fridays."}}
+{"payload":{"role":"assistant","content":"Noted — Friday releases."}}
+EOF
+
+echo '{"session_id":"verify-sess","transcript_path":"'"$STATE_DIR"'/transcript.jsonl","cwd":"/tmp","hook_event_name":"SessionEnd","reason":"other"}' \
   | OPENVIKING_CONFIG_FILE=$OV_CONF \
     OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
     CODEX_PLUGIN_ROOT=$PLUGIN \
-    node $PLUGIN/scripts/session-start-commit.mjs
+    OV_HOOK_WORKER=1 \
+    OPENVIKING_DEBUG=1 \
+    node $PLUGIN/scripts/session-end.mjs
 ```
 
-Expect: `hookSpecificOutput.additionalContext` contains the OpenViking profile
-block, and `systemMessage` is
-`OpenViking session cx-verify-sess is committed`.
-After this `verify-sess.json` is gone from `$STATE_DIR/state`.
-
-### 6b. `0 active` → no-op
+Expect: `{}` on stdout (SessionEnd output is ignored by Codex). In
+`~/.openviking/logs/codex-hooks.log`: `appended_catchup` with `added: 2`,
+then `commit` with `"reason":"session_end"`.
 
 ```bash
-# State dir empty (after 6a). Fire SessionStart-startup again.
-echo '{"session_id":"another-fresh","source":"startup","cwd":"/tmp","model":"x","permission_mode":"default","transcript_path":null,"hook_event_name":"SessionStart"}' \
+cat $STATE_DIR/state/verify-sess.json
+# ovSessionId is null, capturedTurnCount is 8 (cursor preserved for resume)
+ls $STATE_DIR/state/verify-sess.ended.*   # no such file — the marker was cleared
+```
+
+### 6b. SessionEnd parent — marker first, work detached
+
+```bash
+time (echo '{"session_id":"verify-sess","transcript_path":"'"$STATE_DIR"'/transcript.jsonl","cwd":"/tmp","hook_event_name":"SessionEnd","reason":"other"}' \
   | OPENVIKING_CONFIG_FILE=$OV_CONF \
     OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
     CODEX_PLUGIN_ROOT=$PLUGIN \
-    node $PLUGIN/scripts/session-start-commit.mjs
-# Expect: profile context in hookSpecificOutput.additionalContext.
-# Add OPENVIKING_NO_AUTO_INJECT=1 to expect {} (no orphan to commit).
+    node $PLUGIN/scripts/session-end.mjs)
 ```
 
-### 6c. `≥2 active` → skip; rely on idle TTL
+Expect: `{}` well under 1 s — the parent only writes
+`$STATE_DIR/state/verify-sess.ended.<timestamp>` and detaches the worker. The worker
+finds nothing live to commit and removes the marker again shortly after.
+
+### 6c. `.ended.<ts>` marker → next SessionStart commits immediately
 
 ```bash
-# Manufacture two fresh state files for different session_ids (no ovSessionId
-# so no real commit needed, just exercise the skip-path log).
+# A live session whose SessionEnd worker never finished: fresh timestamp,
+# so only the marker can make the sweep pick it up.
 NOW=$(node -e 'console.log(Date.now())')
 mkdir -p "$STATE_DIR/state"
-cat > "$STATE_DIR/state/sess-aaa.json" <<EOF
-{"codexSessionId":"sess-aaa","ovSessionId":null,"capturedTurnCount":0,"createdAt":$NOW,"lastUpdatedAt":$NOW}
+cat > "$STATE_DIR/state/sess-ended.json" <<EOF
+{"codexSessionId":"sess-ended","ovSessionId":"cx-sess-ended","capturedTurnCount":2,"createdAt":$NOW,"lastUpdatedAt":$NOW}
 EOF
-cat > "$STATE_DIR/state/sess-bbb.json" <<EOF
-{"codexSessionId":"sess-bbb","ovSessionId":null,"capturedTurnCount":0,"createdAt":$NOW,"lastUpdatedAt":$NOW}
-EOF
+printf '%s' "$NOW" > "$STATE_DIR/state/sess-ended.ended.$NOW"
 
-OPENVIKING_DEBUG=1 \
 echo '{"session_id":"sess-ccc","source":"startup","cwd":"/tmp","model":"x","permission_mode":"default","transcript_path":null,"hook_event_name":"SessionStart"}' \
   | OPENVIKING_CONFIG_FILE=$OV_CONF \
     OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
@@ -186,14 +197,40 @@ echo '{"session_id":"sess-ccc","source":"startup","cwd":"/tmp","model":"x","perm
     node $PLUGIN/scripts/session-start-commit.mjs
 ```
 
-Expect: profile context on stdout. In `~/.openviking/logs/codex-hooks.log` look for
-`"branch":">=2_active","action":"skip; rely on idle TTL"`. The two state
-files are still present — the skip path does not clear them.
+Expect: `systemMessage` reports `cx-sess-ended` committed, and the log shows
+`"reason":"ended_retry"` despite the fresh `lastUpdatedAt`. Afterwards
+`sess-ended.json` has `ovSessionId: null` with `capturedTurnCount: 2`, and
+`sess-ended.ended.$NOW` is gone.
 
-### 6d. Idle-TTL sweep at the tail
+### 6c-2. Held lock → sweep skips instead of racing
 
 ```bash
-# Backdate one of the state files to be older than IDLE_TTL_MS (default 30 min).
+# Re-arm the same session, then hold its lock as a concurrent worker would.
+cat > "$STATE_DIR/state/sess-ended.json" <<EOF
+{"codexSessionId":"sess-ended","ovSessionId":"cx-sess-ended","capturedTurnCount":2,"createdAt":$NOW,"lastUpdatedAt":$NOW}
+EOF
+printf '%s' "$NOW" > "$STATE_DIR/state/sess-ended.ended.$NOW"
+mkdir "$STATE_DIR/state/sess-ended.lock"
+
+echo '{"session_id":"sess-fff","source":"startup","cwd":"/tmp","model":"x","permission_mode":"default","transcript_path":null,"hook_event_name":"SessionStart"}' \
+  | OPENVIKING_CONFIG_FILE=$OV_CONF \
+    OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
+    CODEX_PLUGIN_ROOT=$PLUGIN \
+    OPENVIKING_DEBUG=1 \
+    node $PLUGIN/scripts/session-start-commit.mjs
+
+rmdir "$STATE_DIR/state/sess-ended.lock"
+```
+
+Expect: the log shows `sweep_skip` with `"reason":"locked by another writer"`,
+no `/commit` is issued, and `sess-ended.json` keeps `ovSessionId` and its
+marker. (A lock older than 5 min is treated as stale and taken over instead.)
+
+### 6d. Idle-TTL sweep
+
+```bash
+# A live state with no marker, backdated past IDLE_TTL_MS (default 30 min):
+# the signal/crash/old-Codex path.
 OLD=$(node -e 'console.log(Date.now() - 60*60*1000)')   # 1 hour ago
 cat > "$STATE_DIR/state/sess-aaa.json" <<EOF
 {"codexSessionId":"sess-aaa","ovSessionId":"cx-sess-aaa","capturedTurnCount":2,"createdAt":$OLD,"lastUpdatedAt":$OLD}
@@ -206,12 +243,11 @@ echo '{"session_id":"sess-ddd","source":"startup","cwd":"/tmp","model":"x","perm
     node $PLUGIN/scripts/session-start-commit.mjs
 ```
 
-Expect: log shows `idle_sweep` for `sess-aaa` (committed).
-`sess-bbb.json` is still present (still fresh). `sess-aaa.json` is also
-present with `ovSessionId: null` and `capturedTurnCount: 2` for resume.
-If `sess-bbb` was in `≥2 active` from 6c, the heuristic on this call sees
-just `sess-bbb` (1 active) and commits it — that's expected and shows the
-heuristic + sweep working together.
+Expect: log shows `sweep` for `sess-aaa` with `"reason":"idle_ttl"`, followed
+by the commit. `sess-aaa.json` is still present, with `ovSessionId: null` and
+`capturedTurnCount: 2` for resume. Any other state file that is both fresh and
+unmarked is left untouched — that is the whole point of dropping the old
+active-window heuristic.
 
 ### 6d-2. Cursor retention
 

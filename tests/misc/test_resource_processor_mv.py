@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 from types import SimpleNamespace
@@ -115,6 +116,139 @@ def _patch_viking_fs(monkeypatch, fake_fs):
 
 
 @pytest.mark.asyncio
+async def test_resource_processor_rejects_directory_when_every_file_failed(monkeypatch):
+    from openviking.server.responses import response_from_result
+    from openviking.utils.resource_processor import ResourceProcessor
+
+    fake_fs = _FakeVikingFS()
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.get_current_telemetry",
+        lambda: _DummyTelemetry(),
+    )
+    _patch_viking_fs(monkeypatch, fake_fs)
+
+    failed_files = [
+        {
+            "path": "native.pdf",
+            "parser": "PDFParser",
+            "error": "native parser rejected file",
+        },
+        {
+            "path": "remote.pdf",
+            "parser": "UnderstandingAPI",
+            "file_id": "file-1",
+            "response_id": "response-1",
+            "error": "remote parser rejected file",
+        },
+    ]
+    rp = ResourceProcessor(vikingdb=_DummyVikingDB(), media_storage=None)
+    rp._get_media_processor = MagicMock()
+    rp._get_media_processor.return_value.process = AsyncMock(
+        return_value=SimpleNamespace(
+            temp_dir_path="viking://temp/empty-directory",
+            source_path="directory.zip",
+            # Local directories arrive through temp-upload as ZIP files. ZipParser
+            # preserves DirectoryParser's aggregate metadata while changing this
+            # outer format marker to "zip".
+            source_format="zip",
+            meta={
+                "file_count": 0,
+                "total_processable": 2,
+                "processed_files": [],
+                "failed_files": failed_files,
+            },
+            warnings=[],
+        )
+    )
+    rp.tree_builder.finalize_from_temp = AsyncMock()
+
+    result = await rp.process_resource(path="directory.zip", ctx=object(), build_index=True)
+
+    assert result["status"] == "error"
+    assert result["meta"]["failed_files"] == failed_files
+    assert "all 2 processable file(s) failed" in result["errors"][0]
+    assert "native.pdf: native parser rejected file" in result["errors"][0]
+    assert (
+        "remote.pdf (file_id=file-1, response_id=response-1): remote parser rejected file"
+        in result["errors"][0]
+    )
+    response = response_from_result(result)
+    assert response.status_code == 500
+    assert json.loads(response.body)["error"]["code"] == "PROCESSING_ERROR"
+    assert fake_fs.delete_temp_calls == [("viking://temp/empty-directory", None)]
+    assert fake_fs.persist_calls == []
+    rp.tree_builder.finalize_from_temp.assert_not_awaited()
+
+
+@pytest.mark.parametrize("length", [119, 120, 121, 240])
+def test_empty_directory_error_keeps_120_character_limit(length):
+    from openviking.utils.resource_processor import ResourceProcessor
+
+    reason = "错误原因" * (length // 4) + "错" * (length % 4)
+    meta = {
+        "total_processable": 1,
+        "failed_files": [
+            {
+                "path": "空白.md",
+                "error": reason,
+                "file_id": "file-1",
+                "response_id": "response-1",
+            }
+        ],
+    }
+    message = ResourceProcessor._empty_directory_error(meta)
+    assert message.endswith(
+        f"failed files: 空白.md (file_id=file-1, response_id=response-1): {reason[:120]}"
+    )
+    assert message.count("response_id=response-1") == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "meta",
+    [None, {}, {"file_id": "file-1"}, {"response_id": "response-1"}],
+    ids=["native", "no_ids", "file_id_only", "response_id"],
+)
+@pytest.mark.parametrize(
+    "reason", ["文件解析任务失败：empty parse result", "错误原因" * 50], ids=["short", "long"]
+)
+async def test_resource_processor_preserves_single_file_reason_and_response_id(
+    monkeypatch, meta, reason
+):
+    from openviking.parse.understanding_api import UnderstandingAPIError
+    from openviking.server.responses import response_from_result
+    from openviking.utils.resource_processor import ResourceProcessor
+
+    fake_fs = _FakeVikingFS()
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.get_current_telemetry",
+        lambda: _DummyTelemetry(),
+    )
+    _patch_viking_fs(monkeypatch, fake_fs)
+    error = RuntimeError(reason) if meta is None else UnderstandingAPIError(reason, meta)
+    rp = ResourceProcessor(vikingdb=_DummyVikingDB(), media_storage=None)
+    rp._get_media_processor = MagicMock()
+    rp._get_media_processor.return_value.process = AsyncMock(side_effect=error)
+    rp.tree_builder.finalize_from_temp = AsyncMock()
+
+    result = await rp.process_resource(path="report.pdf", ctx=object(), build_index=False)
+
+    expected = f"Parse error: {reason}"
+    if meta and meta.get("response_id"):
+        expected += " (response_id=response-1)"
+    assert result["status"] == "error"
+    assert result["errors"] == [expected]
+    response = response_from_result(result)
+    assert response.status_code == 500
+    assert json.loads(response.body)["error"] == {
+        "code": "PROCESSING_ERROR",
+        "message": expected,
+    }
+    assert fake_fs.persist_calls == []
+    rp.tree_builder.finalize_from_temp.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_resource_processor_first_add_summarizes_from_committed_uri(monkeypatch):
     from openviking.utils.resource_processor import ResourceProcessor
 
@@ -217,13 +351,9 @@ async def test_resource_processor_allows_flat_root_only_for_single_no_split_sour
 
     assert result["status"] == "success"
     assert result["root_uri"] == root_uri
-    assert fake_fs._async_agfs.exact_attempts == [
-        ("/mock/resources/神雕_副本.md", 0.0)
-    ]
+    assert fake_fs._async_agfs.exact_attempts == [("/mock/resources/神雕_副本.md", 0.0)]
     assert fake_fs._async_agfs.tree_attempts == []
-    assert rp.tree_builder.finalize_from_temp.await_args.kwargs[
-        "flatten_single_file"
-    ] is True
+    assert rp.tree_builder.finalize_from_temp.await_args.kwargs["flatten_single_file"] is True
 
 
 @pytest.mark.asyncio
@@ -257,9 +387,7 @@ async def test_resource_processor_keeps_wrapper_for_directory_to_no_split(monkey
             _root_is_file=False,
         )
     )
-    rp._summarizer = SimpleNamespace(
-        summarize=AsyncMock(return_value={"status": "success"})
-    )
+    rp._summarizer = SimpleNamespace(summarize=AsyncMock(return_value={"status": "success"}))
 
     result = await rp.process_resource(
         path="神雕.md",
@@ -271,9 +399,7 @@ async def test_resource_processor_keeps_wrapper_for_directory_to_no_split(monkey
     )
 
     assert result["root_uri"] == "viking://resources/0803_shendiao_01"
-    assert rp.tree_builder.finalize_from_temp.await_args.kwargs[
-        "flatten_single_file"
-    ] is False
+    assert rp.tree_builder.finalize_from_temp.await_args.kwargs["flatten_single_file"] is False
 
 
 @pytest.mark.asyncio

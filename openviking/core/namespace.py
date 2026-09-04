@@ -401,9 +401,11 @@ def content_owner_context_for_uri(uri: str, ctx: RequestContext) -> RequestConte
     return RequestContext(
         user=UserIdentifier(ctx.account_id, owner_user_id),
         role=ctx.role,
+        group_ids=ctx.group_ids,
         actor_peer_id=ctx.actor_peer_id,
         from_oauth=ctx.from_oauth,
         api_key=ctx.api_key,
+        bypass_acl=ctx.bypass_acl,
     )
 
 

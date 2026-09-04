@@ -112,6 +112,49 @@ describe('RetrievalResults', () => {
     expect(screen.getByText(/expanded query/)).toBeDefined()
   })
 
+  it.each([
+    ['.abstract.md', 0],
+    ['.overview.md', 1],
+  ] as const)(
+    'shows parent context in the title of %s results',
+    (sidecar, level) => {
+      render(
+        <RetrievalResults
+          data={{
+            memories: [],
+            resources: [
+              {
+                abstract: 'Directory summary',
+                category: '',
+                context_type: 'resource',
+                level,
+                match_reason: '',
+                score: 0.8,
+                uri: `viking://resources/openviking-release/${sidecar}`,
+              },
+            ],
+            skills: [],
+            total: 1,
+          }}
+          hasRetrievableContext
+          hasSubmitted
+          isCheckingContext={false}
+          isError={false}
+          isLoading={false}
+          onUploadClick={vi.fn()}
+          resultCount={10}
+          t={t}
+        />,
+      )
+
+      expect(
+        screen.getByRole('heading', {
+          name: `openviking-release/${sidecar}`,
+        }),
+      ).toBeDefined()
+    },
+  )
+
   it('shows the API error message and diagnostic metadata', () => {
     render(
       <RetrievalResults

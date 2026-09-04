@@ -147,6 +147,8 @@ Changing the model or `dimension` can make existing vector collections incompati
 
 Rerank has no separate `enabled` field. It becomes available when the required provider credentials are configured.
 
+Setting `provider` explicitly requires the credentials that provider needs: `ak` and `sk` for `vikingdb`, `api_key` for `cohere`, `api_key` and `api_base` for `openai`, `model` for `litellm`. An incomplete block is rejected when the configuration loads.
+
 ## Retrieval Settings
 
 ```json
@@ -352,7 +354,12 @@ Parsers live under `parsers`:
     },
     "html": {},
     "text": {},
-    "directory": {},
+    "directory": {
+      "preserve_structure": true,
+      "max_files": 1000,
+      "max_depth": 10,
+      "max_concurrent": 4
+    },
     "feishu": {
       "domain": "https://open.feishu.cn",
       "max_rows_per_sheet": 1000,
@@ -363,6 +370,24 @@ Parsers live under `parsers`:
   }
 }
 ```
+
+`parsers.directory.max_concurrent` is shared by all directory imports in the
+server event loop. With the default value `4`, one directory can run four
+Understanding jobs concurrently, while multiple concurrent directories still
+run at most four in total.
+
+`max_files` and `max_depth` apply when Understanding directory routing is enabled.
+Each `DirectoryParser` scan applies these limits independently before submitting its
+own Understanding requests. A nested ZIP starts a new directory scan and does not
+share the outer scan's file-count or depth budget.
+When Understanding is disabled, native OpenViking directory parsing does not apply
+these two limits.
+
+When a local directory is added through the client, the complete directory ZIP is
+subject to the `/resources/temp_upload` size limit. After extraction,
+`DirectoryParser` does not impose a common per-file byte limit. Each selected file
+follows the limits and upload behavior of its assigned built-in parser or
+Understanding API backend.
 
 | Setting | Purpose |
 |---|---|

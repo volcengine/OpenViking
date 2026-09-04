@@ -98,6 +98,15 @@ def _get_plugin(request: Request):
     return plugin
 
 
+def resolve_group_ids(request: Request, account_id: str, user_id: str) -> tuple[str, ...]:
+    """Resolve server-managed account groups for a request identity."""
+    manager = getattr(request.app.state, "api_key_manager", None)
+    if manager is None:
+        return ()
+    resolver = getattr(manager, "get_user_group_ids", None)
+    return tuple(resolver(account_id, user_id)) if resolver is not None else ()
+
+
 def _build_request_context(
     request: Request,
     identity: ResolvedIdentity,
@@ -107,12 +116,12 @@ def _build_request_context(
 ) -> RequestContext:
     plugin = _get_plugin(request)
     plugin.get_request_context_checks(request.url.path, identity)
+    account_id = identity.account_id or "default"
+    user_id = identity.user_id or "default"
     ctx = RequestContext(
-        user=UserIdentifier(
-            identity.account_id or "default",
-            identity.user_id or "default",
-        ),
+        user=UserIdentifier(account_id, user_id),
         role=identity.role,
+        group_ids=resolve_group_ids(request, account_id, user_id),
         actor_peer_id=actor_peer_id,
         from_oauth=identity.from_oauth,
         api_key=api_key,
@@ -217,6 +226,7 @@ async def get_upload_request_context(
             ctx = RequestContext(
                 user=UserIdentifier(consumed.account_id, consumed.user_id),
                 role=Role.USER,
+                group_ids=resolve_group_ids(request, consumed.account_id, consumed.user_id),
                 # Actor peer comes from the token (bound at mint time from the trusted MCP
                 # context), never from this upload request's headers, so server-side
                 # auto-ingest keeps the caller's peer scope for reason-memory routing.

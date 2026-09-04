@@ -62,60 +62,57 @@ test("syncBranch returns added token accounting and delivered status", async () 
   });
 });
 
+async function readLastRecord(path) {
+  const lines = (await readFile(path, "utf8")).trim().split("\n");
+  return JSON.parse(lines[lines.length - 1]);
+}
+
 test("commit writes success trace_id to the pi debug log", async () => {
   await withPendingDir(async (dir) => {
-    const previous = process.env.OV_DEBUG_LOG;
     const debugLogPath = join(dir, "pi-debug.log");
-    process.env.OV_DEBUG_LOG = debugLogPath;
-    try {
-      const c = client({
-        commitSessionResponse: async () => ({
-          result: {
-            task_id: "t-trace",
-            archive_uri: "viking://archive/trace",
-            trace_id: "trace-pi-commit",
-          },
-          traceId: "trace-pi-commit",
-        }),
-      });
-      const sync = new SyncManager(c, config());
-      await sync.ensureSession("pi-trace-session");
+    const c = client({
+      commitSessionResponse: async () => ({
+        result: {
+          task_id: "t-trace",
+          archive_uri: "viking://archive/trace",
+          trace_id: "trace-pi-commit",
+        },
+        traceId: "trace-pi-commit",
+      }),
+    });
+    const sync = new SyncManager(c, config({ debugLogPath }));
+    await sync.ensureSession("pi-trace-session");
 
-      const result = await sync.commit();
-      assert.equal(result.trace_id, "trace-pi-commit");
-      assert.match(await readFile(debugLogPath, "utf8"), /trace_id=trace-pi-commit/);
-    } finally {
-      if (previous === undefined) delete process.env.OV_DEBUG_LOG;
-      else process.env.OV_DEBUG_LOG = previous;
-    }
+    const result = await sync.commit();
+    assert.equal(result.trace_id, "trace-pi-commit");
+    const record = await readLastRecord(debugLogPath);
+    assert.equal(record.hook, "pi");
+    assert.equal(record.stage, "commit");
+    assert.equal(record.data.ok, true);
+    assert.equal(record.data.trace_id, "trace-pi-commit");
   });
 });
 
 test("commit writes failure trace_id to the pi debug log", async () => {
   await withPendingDir(async (dir) => {
-    const previous = process.env.OV_DEBUG_LOG;
     const debugLogPath = join(dir, "pi-debug-error.log");
-    process.env.OV_DEBUG_LOG = debugLogPath;
-    try {
-      const c = client({
-        commitSessionResponse: async () => ({
-          result: null,
-          status: 500,
-          traceId: "trace-pi-error",
-          error: { message: "commit failed" },
-        }),
-      });
-      const sync = new SyncManager(c, config());
-      await sync.ensureSession("pi-trace-error");
+    const c = client({
+      commitSessionResponse: async () => ({
+        result: null,
+        status: 500,
+        traceId: "trace-pi-error",
+        error: { message: "commit failed" },
+      }),
+    });
+    const sync = new SyncManager(c, config({ debugLogPath }));
+    await sync.ensureSession("pi-trace-error");
 
-      assert.equal(await sync.commit({ queueOnFailure: false }), null);
-      const raw = await readFile(debugLogPath, "utf8");
-      assert.match(raw, /trace_id=trace-pi-error/);
-      assert.match(raw, /error=commit failed/);
-    } finally {
-      if (previous === undefined) delete process.env.OV_DEBUG_LOG;
-      else process.env.OV_DEBUG_LOG = previous;
-    }
+    assert.equal(await sync.commit({ queueOnFailure: false }), null);
+    const record = await readLastRecord(debugLogPath);
+    assert.equal(record.stage, "commit");
+    assert.equal(record.data.ok, false);
+    assert.equal(record.data.trace_id, "trace-pi-error");
+    assert.equal(record.data.error, "commit failed");
   });
 });
 

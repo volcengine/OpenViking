@@ -638,3 +638,58 @@ test("auto-recall preserves explicit default user memory target", async () => {
     await rm(stateDir, { recursive: true, force: true });
   }
 });
+
+test("the actor peer comes from the workspace named by the payload's cwd", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-workspace-"));
+  const workspaceDir = join(stateDir, "workspace");
+  const peers = [];
+
+  try {
+    // The `.git` is what makes the directory a workspace root; the hook itself
+    // runs from this test's directory, which has no such file.
+    await mkdir(join(workspaceDir, ".openviking"), { recursive: true });
+    await mkdir(join(workspaceDir, ".git"), { recursive: true });
+    await writeFile(
+      join(workspaceDir, ".openviking", "config.json"),
+      JSON.stringify({ version: 1, peer: { id: "team-a" } }),
+    );
+
+    await withMockOpenViking(async (req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      if (req.method === "GET" && url.pathname === "/health") {
+        writeJson(res, { status: "ok", result: { ok: true } });
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/v1/search/recall") {
+        peers.push(req.headers["x-openviking-actor-peer"]);
+        await readRequestBody(req);
+        writeJson(res, { status: "ok", result: { entries: [], rendered: "", stats: { returned: 0 } } });
+        return;
+      }
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "error", error: "not found" }));
+    }, async (baseUrl) => {
+      await runAutoRecall(
+        { prompt: "what did we decide", session_id: "codex:peer", cwd: workspaceDir },
+        {
+          OPENVIKING_AUTO_RECALL: "1",
+          OPENVIKING_CODEX_STATE_DIR: stateDir,
+          OPENVIKING_STATE_DIR: stateDir,
+          OPENVIKING_HOME: join(stateDir, "home"),
+          OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
+          OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
+          OPENVIKING_CREDENTIAL_SOURCE: "env",
+          OPENVIKING_RECALL_COMPRESS: "0",
+          OPENVIKING_RECALL_TIMEOUT_MS: "10000",
+          OPENVIKING_MIN_QUERY_LENGTH: "1",
+          OPENVIKING_TIMEOUT_MS: "5000",
+          OPENVIKING_URL: baseUrl,
+        },
+      );
+    });
+
+    assert.deepEqual(peers, ["team-a"]);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});

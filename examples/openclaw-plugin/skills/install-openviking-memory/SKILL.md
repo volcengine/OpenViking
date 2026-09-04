@@ -2,17 +2,14 @@
 name: install-openviking-memory
 description: >
   Install and configure the OpenViking long-term memory plugin for OpenClaw via natural conversation.
-  Once installed, the plugin automatically captures important facts from chats and recalls relevant
-  context before each reply (auto-capture + auto-recall, cross-session). Covers prerequisites check,
-  plugin install through OpenClaw's plugin manager first, with ov-install only as a backup path,
-  wizard-based configuration, slot activation,
-  gateway restart, verification, plus multi-tenant root-key support, multi-instance, and uninstall.
-  Trigger when the user says any of: "install OpenViking", "set up memory", "configure memory plugin",
-  "add long-term memory", "connect to OpenViking server", "RAG", "semantic memory",
-  "帮我装 OpenViking", "配置记忆插件", "安装记忆功能", "接入 OpenViking", "我有一台 OpenViking 服务器".
-  The user does NOT need to know any CLI commands — the agent runs everything and only asks for a few values.
-  This skill assumes the OpenViking server is already running. If the server is not ready, the skill
-  tells the user to contact their admin or set it up via the OpenViking docs — it does NOT install the server.
+  Once installed, the plugin automatically captures facts from chats and recalls relevant context
+  before each reply (auto-capture + auto-recall, cross-session). Covers prerequisites, install through
+  OpenClaw's plugin manager (ov-install as backup), wizard-based configuration, slot activation,
+  gateway restart, verification, multi-tenant root keys, multi-instance and uninstall. The user needs
+  no CLI knowledge — the agent runs everything and only asks for a few values. Assumes the OpenViking
+  server is already running; it does NOT install the server. Trigger on: "install OpenViking",
+  "set up memory", "configure memory plugin", "add long-term memory", "semantic memory", "RAG",
+  "帮我装 OpenViking", "配置记忆插件", "安装记忆功能", "接入 OpenViking".
 version: 2026.6.5
 metadata:
   openclaw:

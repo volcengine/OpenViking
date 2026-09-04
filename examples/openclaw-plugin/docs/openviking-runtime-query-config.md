@@ -34,17 +34,19 @@ For command compatibility, `--scope claw` is accepted as an alias for `peer`.
 | Field | Purpose |
 | --- | --- |
 | `recallLimit` | Number of final recall results to inject or display. |
-| `candidateLimit` | Number of candidates requested before local ranking/filtering. |
-| `candidateMultiplier` | Multiplier used to derive candidate count from recall limit when `candidateLimit` is not explicit. |
-| `scoreThreshold` | Client-side minimum score after semantic search. |
-| `maxInjectedChars` | Character budget for automatic recall injection. |
-| `recallPreferAbstract` | Prefer abstracts over full content when injecting recalled context. |
+| `candidateLimit` | Number of candidates requested before local ranking/filtering by explicit `memory_recall`. |
+| `candidateMultiplier` | Multiplier used to derive the explicit `memory_recall` candidate count when `candidateLimit` is not explicit. |
+| `scoreThreshold` | Minimum score; auto-recall sends it to context search, while explicit `memory_recall` also applies local post-processing. |
+| `maxInjectedChars` | Injection budget; auto-recall converts it to server `max_tokens` at four characters per token. |
+| `recallPreferAbstract` | Pin server-assembled auto-recall to abstract detail; explicit `memory_recall` prefers abstracts locally. |
 | `resourceTypes` | Default semantic recall target types: `user`, `agent`, `resource`. |
 | `targetUri` | Force a single `viking://` target URI for search. |
 | `ovSearchLimit` | Default result count for `ov_search`. |
-| `rankingWeights` | Local ranking weights, such as base score and lexical overlap. |
-| `categoryWeights` | Optional category-specific ranking adjustments. |
-| `resourceTypeWeights` | Optional resource type ranking adjustments. |
+| `rankingWeights` | Local ranking weights for explicit `memory_recall`, such as base score and lexical overlap. |
+| `categoryWeights` | Optional category-specific adjustments for explicit `memory_recall`. |
+| `resourceTypeWeights` | Optional resource-type adjustments for explicit `memory_recall`. |
+
+Automatic recall uses one session-aware context search and consumes `recallLimit`, `scoreThreshold`, `maxInjectedChars`, `recallPreferAbstract`, and `resourceTypes`. Candidate expansion and local ranking-weight fields remain available to explicit `memory_recall`, but no longer alter automatic recall assembly.
 
 Session history is not a semantic recall target. Use `ov_archive_search` and `ov_archive_expand` for session archive recovery.
 

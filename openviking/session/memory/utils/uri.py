@@ -6,12 +6,137 @@ URI generation and validation utilities.
 
 from __future__ import annotations
 
+import hashlib
 import re
-from typing import Any, Dict, Set
+from typing import Any, Dict
 
 from openviking.session.memory.dataclass import MemoryTypeSchema
 from openviking.session.memory.utils.model import model_to_dict
 from openviking.session.memory.utils.template_utils import TemplateUtils
+
+_PORTABLE_SEGMENT_MARKER = "~ov~"
+_PORTABLE_SEGMENT_HASH_LENGTH = 16
+_WINDOWS_INVALID_CHARS = frozenset('<>:"\\|?*')
+_TRUSTED_PATH_SEGMENT_TEMPLATE = re.compile(r"^\{\{\s*user_space\s*\}\}$")
+_WINDOWS_RESERVED_STEMS = frozenset(
+    {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{index}" for index in range(1, 10)),
+        *(f"LPT{index}" for index in range(1, 10)),
+    }
+)
+
+
+def _windows_reserved_stem(segment: str) -> str:
+    """Return the Win32 device-name stem used for portability checks."""
+    return segment.split(".", 1)[0].rstrip(" .").upper()
+
+
+def _is_portable_uri_segment(segment: str) -> bool:
+    """Return whether a rendered URI segment is safe as a Windows path component."""
+    if not segment or segment in {".", ".."}:
+        return False
+    if segment.endswith((" ", ".")):
+        return False
+    if _PORTABLE_SEGMENT_MARKER in segment:
+        # Reserve the generated marker so a literal segment cannot alias one.
+        return False
+    for character in segment:
+        codepoint = ord(character)
+        if (
+            character in _WINDOWS_INVALID_CHARS
+            or codepoint < 32
+            or codepoint == 127
+            or 0xD800 <= codepoint <= 0xDFFF
+        ):
+            return False
+    return _windows_reserved_stem(segment) not in _WINDOWS_RESERVED_STEMS
+
+
+def _split_safe_extension(segment: str) -> tuple[str, str]:
+    """Split a conventional final extension so rewritten memory files keep it."""
+    stem, separator, extension = segment.rpartition(".")
+    if not separator or not stem or not extension:
+        return segment, ""
+    if any(
+        character in _WINDOWS_INVALID_CHARS
+        or ord(character) < 32
+        or ord(character) == 127
+        or 0xD800 <= ord(character) <= 0xDFFF
+        for character in extension
+    ):
+        return segment, ""
+    return stem, f".{extension}"
+
+
+def _portable_uri_segment(segment: str) -> str:
+    """Rewrite one non-portable segment without collapsing distinct logical names."""
+    if _is_portable_uri_segment(segment):
+        return segment
+
+    digest = hashlib.sha256(segment.encode("utf-8", errors="surrogatepass")).hexdigest()
+    suffix = f"{_PORTABLE_SEGMENT_MARKER}{digest[:_PORTABLE_SEGMENT_HASH_LENGTH]}"
+
+    cleaned = "".join(
+        character
+        if (
+            character not in _WINDOWS_INVALID_CHARS
+            and ord(character) >= 32
+            and ord(character) != 127
+            and not 0xD800 <= ord(character) <= 0xDFFF
+        )
+        else "_"
+        for character in segment
+    ).rstrip(" .")
+    if not cleaned or cleaned in {".", ".."}:
+        cleaned = "_"
+    if _windows_reserved_stem(cleaned) in _WINDOWS_RESERVED_STEMS:
+        cleaned = f"_{cleaned}"
+
+    stem, extension = _split_safe_extension(cleaned)
+    stem = stem.rstrip(" .") or "_"
+    return f"{stem}{suffix}{extension}"
+
+
+def _render_portable_uri_template(
+    template: str,
+    context: Dict[str, Any],
+    extract_context: Any,
+) -> str:
+    """Render template-defined path segments without treating field data as hierarchy.
+
+    ``user_space`` is an internal path fragment that may contain the explicit
+    ``peers/<peer_id>`` namespace. Other expressions render into exactly one path
+    segment. A slash in dynamic data aliases an underscore because both spellings
+    identify the same memory name.
+    """
+    scheme_separator = "://"
+    if scheme_separator in template:
+        scheme, _, path_template = template.partition(scheme_separator)
+        prefix = f"{scheme}{scheme_separator}"
+    else:
+        prefix, path_template = "", template
+
+    if not path_template:
+        return prefix
+
+    segments = []
+    for segment_template in path_template.split("/"):
+        rendered = TemplateUtils.render(
+            segment_template,
+            context,
+            extract_context=extract_context,
+            debug_undefined=True,
+            strip=False,
+        )
+        if _TRUSTED_PATH_SEGMENT_TEMPLATE.fullmatch(segment_template):
+            segments.extend(rendered.split("/"))
+        else:
+            segments.append(rendered.replace("/", "_"))
+    return prefix + "/".join(_portable_uri_segment(segment) for segment in segments)
 
 
 def render_template(
@@ -46,7 +171,7 @@ def generate_uri(
     fields: Dict[str, Any],
     user_space: str = "default",
     extract_context: Any = None,
-) -> tuple[str, str]:
+) -> str:
     """
     Generate a full URI from memory type schema and field values.
 
@@ -70,18 +195,15 @@ def generate_uri(
         uri_template = f"{dir_template.rstrip('/')}/{filename_template.lstrip('/')}"
     else:
         uri_template = dir_template or filename_template
-    context = {"user_space": user_space}
-    # Add all fields to context (uri_fields with actual values)
-    context.update(fields)
+    context = dict(fields)
+    context["user_space"] = user_space
     template_vars = set(re.findall(r"\{\{\s*(\w+)\s*\}\}", uri_template))
     for var in template_vars:
         if var not in context:
             raise ValueError(f"Missing template variable: {var}")
         if context[var] is None:
             raise ValueError(f"Template variable '{var}' has None value")
-    # Render using unified render_template method (same as content_template)
-    uri = render_template(uri_template, context, extract_context)
-    return uri
+    return _render_portable_uri_template(uri_template, context, extract_context)
 
 
 def validate_uri_template(memory_type: MemoryTypeSchema) -> bool:
@@ -111,69 +233,6 @@ def validate_uri_template(memory_type: MemoryTypeSchema) -> bool:
                 return False
 
     return True
-
-
-def _pattern_matches_uri(pattern: str, uri: str) -> bool:
-    """
-    Check if a URI matches a pattern with variables like {{ topic }}, {{ tool_name }}, etc.
-
-    The pattern matching is flexible:
-    - {{ variable }} matches any sequence of characters except '/'
-    - * matches any sequence of characters except '/' (shell-style)
-    - ** matches any sequence of characters including '/' (shell-style)
-
-    Args:
-        pattern: The pattern to match against (may contain {{ variables }} or * wildcards)
-        uri: The URI to check
-
-    Returns:
-        True if the URI matches the pattern
-    """
-    import re
-
-    # First, convert the pattern to a regex
-    # Escape regex special chars except {, }, *, /
-    pattern = re.escape(pattern)
-    # Unescape {, }, * that we need to handle specially
-    pattern = pattern.replace(r"\{", "{").replace(r"\}", "}").replace(r"\*", "*")
-    # Convert {{ variable }} to [^/]+
-    pattern = re.sub(r"\{\{\s*[^}]+\s*\}\}", r"[^/]+", pattern)
-    # Also support legacy {variable} format
-    pattern = re.sub(r"\{[^}]+\}", r"[^/]+", pattern)
-    # Convert ** to .* and * to [^/]*
-    pattern = pattern.replace("**", ".*")
-    pattern = pattern.replace("*", "[^/]*")
-    # Anchor the pattern
-    pattern = "^" + pattern + "$"
-
-    return bool(re.match(pattern, uri))
-
-
-def is_uri_allowed(
-    uri: str,
-    allowed_directories: Set[str],
-    allowed_patterns: Set[str],
-) -> bool:
-    """
-    Check if a URI is allowed based on allowed directories and patterns.
-
-    Args:
-        uri: The URI to check
-        allowed_directories: Set of allowed directory paths
-        allowed_patterns: Set of allowed path patterns
-
-    Returns:
-        True if the URI is allowed
-    """
-    # Check if URI starts with any allowed directory
-    for dir_path in allowed_directories:
-        if uri == dir_path or uri.startswith(dir_path + "/"):
-            return True
-    # Check if URI matches any allowed pattern
-    for pattern in allowed_patterns:
-        if _pattern_matches_uri(pattern, uri):
-            return True
-    return False
 
 
 def extract_uri_fields_from_flat_model(model: Any, schema: MemoryTypeSchema) -> Dict[str, Any]:

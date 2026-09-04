@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import httpx
 
 from openviking.pyagfs.exceptions import AGFSHTTPError
+from openviking_cli.exceptions import ConflictError, FailedPreconditionError, NotFoundError
 
 
 def _assert_error(
@@ -109,6 +110,32 @@ async def test_stat_backend_unavailable_returns_structured_error(app, service, m
     _assert_error(response, status_code=503, error_code="UNAVAILABLE")
 
 
+async def test_record_id_miss_hint_reaches_stat_and_read_responses(app, service, monkeypatch):
+    record_id = "0123456789abcdef0123456789abcdef"
+    reason = "The data may not have been indexed yet or may have been deleted"
+
+    async def fake_not_found(*args, **kwargs):
+        raise NotFoundError(record_id, "file", reason=reason)
+
+    monkeypatch.setattr(service.fs, "stat", fake_not_found)
+    monkeypatch.setattr(service.fs, "read_visible", fake_not_found)
+
+    for endpoint in ("/api/v1/fs/stat", "/api/v1/content/read"):
+        response = await _request_with_handler(
+            app,
+            "GET",
+            endpoint,
+            params={"uri": record_id},
+        )
+        _assert_error(
+            response,
+            status_code=404,
+            error_code="NOT_FOUND",
+            message_fragment=reason,
+        )
+        assert response.json()["error"]["details"]["reason"] == reason
+
+
 async def test_mkdir_permission_denied_returns_structured_error(app, service, monkeypatch):
     async def fake_mkdir(*args, **kwargs):
         raise PermissionError("Access denied for viking://resources/blocked")
@@ -138,6 +165,110 @@ async def test_mv_missing_source_returns_not_found(app, service, monkeypatch):
         },
     )
     _assert_error(response, status_code=404, error_code="NOT_FOUND")
+
+
+async def test_cp_missing_source_returns_not_found(app, service, monkeypatch):
+    async def fake_cp(*args, **kwargs):
+        raise FileNotFoundError("cp source not found")
+
+    monkeypatch.setattr(service.fs, "cp", fake_cp, raising=False)
+    response = await _request_with_handler(
+        app,
+        "POST",
+        "/api/v1/fs/cp",
+        json={
+            "from_uri": "viking://resources/missing",
+            "to_uri": "viking://resources/target",
+        },
+    )
+    _assert_error(response, status_code=404, error_code="NOT_FOUND")
+
+
+async def test_cp_missing_target_parent_reports_directory(app, service, monkeypatch):
+    target_parent = "viking://resources/missing-parent"
+
+    async def fake_cp(*args, **kwargs):
+        raise NotFoundError(target_parent, "directory")
+
+    monkeypatch.setattr(service.fs, "cp", fake_cp, raising=False)
+    response = await _request_with_handler(
+        app,
+        "POST",
+        "/api/v1/fs/cp",
+        json={
+            "from_uri": "viking://resources/source.md",
+            "to_uri": f"{target_parent}/target.md",
+        },
+    )
+
+    _assert_error(
+        response,
+        status_code=404,
+        error_code="NOT_FOUND",
+        message_fragment=f"Directory not found: {target_parent}",
+    )
+    assert response.json()["error"]["details"] == {
+        "resource": target_parent,
+        "type": "directory",
+    }
+
+
+async def test_cp_existing_target_returns_conflict(app, service, monkeypatch):
+    async def fake_cp(*args, **kwargs):
+        raise ConflictError("copy target already exists")
+
+    monkeypatch.setattr(service.fs, "cp", fake_cp, raising=False)
+    response = await _request_with_handler(
+        app,
+        "POST",
+        "/api/v1/fs/cp",
+        json={
+            "from_uri": "viking://resources/source",
+            "to_uri": "viking://resources/target",
+            "recursive": True,
+        },
+    )
+    _assert_error(response, status_code=409, error_code="CONFLICT")
+
+
+async def test_cp_directory_without_recursive_returns_precondition(
+    app,
+    service,
+    monkeypatch,
+):
+    async def fake_cp(*args, **kwargs):
+        raise FailedPreconditionError("directory copy requires recursive")
+
+    monkeypatch.setattr(service.fs, "cp", fake_cp, raising=False)
+    response = await _request_with_handler(
+        app,
+        "POST",
+        "/api/v1/fs/cp",
+        json={
+            "from_uri": "viking://resources/source",
+            "to_uri": "viking://resources/target",
+        },
+    )
+    _assert_error(response, status_code=412, error_code="FAILED_PRECONDITION")
+
+
+async def test_cp_internal_rollback_error_is_redacted(app, service, monkeypatch):
+    async def fake_cp(*args, **kwargs):
+        raise RuntimeError("rollback failed with private vector payload")
+
+    monkeypatch.setattr(service.fs, "cp", fake_cp, raising=False)
+    response = await _request_with_handler(
+        app,
+        "POST",
+        "/api/v1/fs/cp",
+        json={
+            "from_uri": "viking://resources/source",
+            "to_uri": "viking://resources/target",
+        },
+    )
+
+    _assert_error(response, status_code=500, error_code="INTERNAL")
+    assert "private vector payload" not in response.text
 
 
 async def test_read_missing_uri_returns_not_found(app, service, monkeypatch):

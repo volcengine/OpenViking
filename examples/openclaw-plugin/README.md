@@ -164,16 +164,9 @@ During recall, the plugin:
 1. Extracts query text from the latest user message.
 2. Resolves the agent routing for the current `sessionId/sessionKey`.
 3. Runs a quick availability precheck so model requests do not stall when OpenViking is unavailable.
-4. Queries the configured `recallTargetTypes` (`user,agent` by default; optionally `resource`; use `ov_archive_search` and `ov_archive_expand` for session history).
-5. Deduplicates, threshold-filters, reranks, and trims the results under a token budget.
-6. Prepends the selected memories as a `## Long-term Memories` section inside `<openviking-context>` to the current user message; it does not append a standalone synthetic user message.
-
-The reranking logic is not pure vector-score sorting. The current implementation also considers:
-
-- whether a result is a leaf memory with `level == 2`
-- whether it looks like a preference memory
-- whether it looks like an event memory
-- lexical overlap with the current query
+4. Sends one session-aware context search for the configured `recallTargetTypes` (`user,agent` by default; optionally `resource`; use `ov_archive_search` and `ov_archive_expand` to inspect raw session history).
+5. Lets OpenViking expand the query from session history, filter and rank candidates, apply cross-turn deduplication, select detail tiers, and assemble the result under the injection budget.
+6. Prepends the server-rendered context inside `<relevant-memories>` to the current user message; it does not append a standalone synthetic user message.
 
 ## Session Lifecycle
 

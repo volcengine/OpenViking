@@ -20,6 +20,59 @@ test("capture plan maps host identity to the OpenViking turn_id contract", () =>
   assert.equal(plan.payloads[0].turnId, undefined);
 });
 
+test("acknowledgements and slash commands never reach the server", () => {
+  const plan = buildZcodeCapturePlan([
+    { role: "user", content: "/compact", turnId: "turn-001" },
+    { role: "assistant", content: "好的", turnId: "turn-001" },
+    { role: "user", content: "real question", turnId: "turn-002" },
+    { role: "assistant", content: "real answer", turnId: "turn-002" },
+  ], {});
+  assert.deepEqual(plan.payloads, [
+    { role: "user", content: "real question", turn_id: "turn-002" },
+    { role: "assistant", content: "real answer", turn_id: "turn-002" },
+  ]);
+});
+
+test("injected blocks cleanZcodeText does not know are stripped before sending", () => {
+  const plan = buildZcodeCapturePlan([{
+    role: "assistant",
+    content: "answer body <relevant-memory score=\"0.9\">recalled</relevant-memory>",
+    turnId: "turn-001",
+  }], {});
+  assert.ok(!plan.payloads[0].content.includes("recalled"));
+  assert.ok(plan.payloads[0].content.startsWith("answer body"));
+});
+
+test("a fully filtered turn still lets the cursor advance past it", () => {
+  const turnsWithNoise = [
+    { role: "user", content: "ok", turnId: "turn-001" },
+    { role: "user", content: "real question", turnId: "turn-002" },
+    { role: "assistant", content: "real answer", turnId: "turn-002" },
+  ];
+  const plan = buildZcodeCapturePlan(turnsWithNoise, {});
+  const next = applyZcodeCaptureResult({}, plan, { sent: 2, queued: 0, failed: 0 });
+  assert.equal(next.lastTurnId, "turn-002");
+});
+
+test("oversized turns are truncated to captureMaxLength before they are sent", () => {
+  const long = "a question that repeats. ".repeat(100);
+  const plan = buildZcodeCapturePlan(
+    [{ role: "user", content: long, turnId: "turn-001" }],
+    {},
+    { captureMaxLength: 200 },
+  );
+  assert.equal(plan.payloads.length, 1);
+  assert.ok(plan.payloads[0].content.length <= 200);
+  assert.ok(plan.payloads[0].content.endsWith("[truncated]"));
+  // Without a host turn id the key is hashed from the turn itself, so it must
+  // follow the raw text: a later captureMaxLength cannot make the turn look new.
+  const hashed = [{ role: "user", content: long }];
+  const narrow = buildZcodeCapturePlan(hashed, {}, { captureMaxLength: 200 });
+  const wider = buildZcodeCapturePlan(hashed, {}, { captureMaxLength: 24000 });
+  assert.equal(wider.candidates[0].dedupKey, narrow.candidates[0].dedupKey);
+  assert.equal(wider.payloads[0].content, long.trim());
+});
+
 test("non-retryable failure keeps cursor, dedup, and pending prompt unchanged", () => {
   const state = {
     lastTurnId: "turn-000",

@@ -94,13 +94,14 @@ $OPENCLAW_STATE_DIR/openclaw.json
 | 参数 | 类型 | 默认值 | 环境变量 | 说明 |
 | --- | --- | --- | --- | --- |
 | `autoRecall` | boolean | `true` | — | 是否在 assemble 阶段自动召回并注入上下文。 |
+| `autoRecallTimeoutMs` | number | `15000` | — | 服务端组装 context search 的总超时，范围 `1000` 到 `300000` ms。 |
 | `targetUri` | string | `viking://user/memories` | — | `memory_recall` / `memory_forget` 默认搜索范围。 |
 | `recallTargetTypes` | string[] | `["user", "agent"]` | — | 自动召回和默认 `memory_recall` 的搜索类型。允许 `resource`、`user`、`agent`。 |
 | `recallResources` | boolean | `false` | `OPENVIKING_RECALL_RESOURCES` | 旧兼容开关；仅在未显式配置 `recallTargetTypes` 时追加 `resource`。 |
-| `recallLimit` | number | `6` | — | 最终召回条数下限为 `1`。内部请求通常放大为 `max(limit * 4, 20)`。 |
-| `recallScoreThreshold` | number | `0.15` | — | 召回结果分数阈值，范围 `0` 到 `1`。 |
-| `recallMaxInjectedChars` | number | `4000` | — | 自动召回注入模型上下文的总字符预算，范围 `100` 到 `50000`。 |
-| `recallPreferAbstract` | boolean | `false` | — | 是否优先使用 abstract，减少读取完整内容的成本。 |
+| `recallLimit` | number | `6` | — | 自动召回按共享 context-search 契约映射为 coding quotas；显式 `memory_recall` 保留本地候选扩展。 |
+| `recallScoreThreshold` | number | `0.15` | — | 自动召回交给服务端过滤；显式 `memory_recall` 保留本地后处理。范围 `0` 到 `1`。 |
+| `recallMaxInjectedChars` | number | `4000` | — | 自动召回按 4 字符/token 换算为服务端 `max_tokens`；显式召回仍使用字符预算。范围 `100` 到 `50000`。 |
+| `recallPreferAbstract` | boolean | `false` | — | 自动召回为 true 时请求服务端 abstract detail；否则由服务端按类别选择层级。 |
 | `recallMaxContentChars` | number | `5000` | — | 已废弃兼容项。 |
 | `recallTokenBudget` | number | 跟随 `recallMaxInjectedChars` | — | 已废弃别名；未配置 `recallMaxInjectedChars` 时可作为 fallback。 |
 

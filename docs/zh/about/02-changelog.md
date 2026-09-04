@@ -7,6 +7,7 @@ OpenViking 的所有重要变更都将记录在此文件中。
 
 - **Session policy 兼容性**：字符串 `"false"` 现在会正确关闭对应的记忆抽取开关。
   现有 boolean-like 值暂时保持兼容并产生弃用警告；新配置应使用 JSON 布尔值。
+- **工作区 peer 派生规则**：coding agent 插件不再按工作目录派生工作区 peer，改为按 git 派生。新的默认值 `peer.source: "git"` 取仓库归一化后的 `origin` URL（`github.com-volcengine-openviking`），其次回退到仓库根路径，因此同一个仓库的每个 clone、worktree 和子目录共用同一个 peer，而 fork 仍是独立的 peer。不在 git 仓库中的目录现在完全不发送 peer，在那里记下的内容进入用户级空间，而不是为每个目录新建一个命名空间。要让这样的目录拥有独立记忆，在其中创建 `.openviking/config.json`，写入 `{"version": 1, "peer": {"id": "my-project"}}`。无需任何迁移：此前按工作目录派生的 id 随时可以在本地重新算出，而默认的 `peer_scope: "all"` 召回本来就会扫描所有 peer，因此写在旧 id 下的记忆照常召回（`peer_scope: "actor"` 时，Claude Code、Codex、OpenCode 和 DSH 插件会额外查询该 id）。设置 `peer.source: "cwd"`（或 `OPENVIKING_PEER_SOURCE=cwd`）即可保持旧行为。
 - **外部 peer identity 迁移**：日志导入中的混合文字标识改用无损的
   `ext-<base64>` id。`ext-` 命名空间为编码身份保留，因此原本会进入该命名空间的
   ASCII 身份也会被编码。系统不会自动读取旧的有损 peer 目录，因为多个身份可能彼此冲突，

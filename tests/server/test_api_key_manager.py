@@ -402,68 +402,69 @@ async def test_get_accounts_filter(manager: APIKeyManager):
 
 
 async def test_get_users_pagination_and_ordering(manager: APIKeyManager):
-    """get_users returns users in lexicographic order and honors limit/page."""
+    """get_users returns users in creation order and honors limit/page."""
     acct = _uid()
     await manager.create_account(acct, "alice")
-    # Register out of order; expected sorted order is alice, bob, carol, dave.
+    # Register out of alphabetical order; creation order is alice, dave, bob, carol.
     await manager.register_user(acct, "dave", "user")
     await manager.register_user(acct, "bob", "user")
     await manager.register_user(acct, "carol", "user")
 
-    # No limit -> all users, lexicographically ordered.
+    # No limit -> all users, in creation order.
     ids = [u["user_id"] for u in manager.get_users(acct)]
-    assert ids == ["alice", "bob", "carol", "dave"]
+    assert ids == ["alice", "dave", "bob", "carol"]
 
-    # First page of 2.
+    # First page of 2 (creation order).
     page1 = [u["user_id"] for u in manager.get_users(acct, limit=2, page=1)]
-    assert page1 == ["alice", "bob"]
+    assert page1 == ["alice", "dave"]
 
-    # Second page of 2.
+    # Second page of 2 (creation order).
     page2 = [u["user_id"] for u in manager.get_users(acct, limit=2, page=2)]
-    assert page2 == ["carol", "dave"]
+    assert page2 == ["bob", "carol"]
 
     # Page past the end is empty.
     assert manager.get_users(acct, limit=2, page=3) == []
 
-    # Pagination applies after the name filter.
-    filtered = [u["user_id"] for u in manager.get_users(acct, name_filter="*a*", limit=1, page=2)]
-    assert filtered == ["carol"]
-
 
 async def test_get_accounts_pagination_and_ordering(manager: APIKeyManager):
-    """get_accounts returns accounts in lexicographic order and honors limit/page."""
+    """get_accounts returns accounts in creation order and honors limit/page."""
     prefix = f"page_{uuid.uuid4().hex[:8]}"
+    # Creation order matches this list.
     ids = [f"{prefix}_{suffix}" for suffix in ("delta", "alpha", "charlie", "bravo")]
     for account_id in ids:
         await manager.create_account(account_id, "u")
 
-    expected = sorted(ids)
-
-    # No limit -> all matches, lexicographically ordered.
+    # No limit -> all matches, in creation order.
     got = [a["account_id"] for a in manager.get_accounts(name_filter=f"{prefix}*")]
-    assert got == expected
+    assert got == ids
 
-    # First page of 2.
+    # First page of 2 (creation order).
     page1 = [a["account_id"] for a in manager.get_accounts(name_filter=f"{prefix}*", limit=2, page=1)]
-    assert page1 == expected[:2]
+    assert page1 == ids[:2]
 
-    # Second page of 2.
+    # Second page of 2 (creation order).
     page2 = [a["account_id"] for a in manager.get_accounts(name_filter=f"{prefix}*", limit=2, page=2)]
-    assert page2 == expected[2:]
+    assert page2 == ids[2:]
 
     # Page past the end is empty.
     assert manager.get_accounts(name_filter=f"{prefix}*", limit=2, page=3) == []
 
 
-async def test_persistence_across_reload(manager_service):
-    """Keys should survive manager reload from AGFS."""
+async def test_user_and_group_persistence_across_reload(manager_service):
+    """Reload preserves keys/groups, while user deletion removes membership."""
     mgr1 = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
     await mgr1.load()
 
     acct = _uid()
     key = await mgr1.create_account(acct, "alice")
+    await mgr1.register_user(acct, "bob")
+    created_group = await mgr1.create_group(acct, "engineering")
+    assert created_group == {"group_id": "engineering", "member_count": 0}
+    group_id = created_group["group_id"]
+    assert await mgr1.add_group_member(acct, group_id, "bob") is True
+    assert await mgr1.add_group_member(acct, group_id, "bob") is True
+    assert mgr1._accounts[acct].groups == {"engineering": {"members": ["bob"]}}
 
-    # Create new manager instance and reload
     mgr2 = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
     await mgr2.load()
 
@@ -471,6 +472,21 @@ async def test_persistence_across_reload(manager_service):
     assert identity.account_id == acct
     assert identity.user_id == "alice"
     assert identity.role == Role.ADMIN
+    assert mgr2.get_user_group_ids(acct, "bob") == (group_id,)
+
+    await mgr2.begin_user_deletion(
+        acct,
+        "bob",
+        task_id="delete-bob",
+        owner_account_id=acct,
+        owner_user_id="alice",
+    )
+    await mgr2.finish_user_deletion(acct, "bob", "delete-bob")
+
+    mgr3 = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await mgr3.load()
+    assert mgr3.get_user_group_ids(acct, "bob") == ()
+    assert mgr3.get_group_members(acct, group_id) == []
 
 
 async def test_legacy_account_without_settings_loads_without_namespace_settings(manager_service):

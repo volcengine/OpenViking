@@ -95,9 +95,7 @@ def _resolve_search_filter(
         raise InvalidArgumentError(str(exc)) from exc
 
 
-def _resolve_uri_or_uris(
-    uri: Union[str, List[str]], ctx: RequestContext
-) -> Union[str, List[str]]:
+def _resolve_uri_or_uris(uri: Union[str, List[str]], ctx: RequestContext) -> Union[str, List[str]]:
     """Resolve path variables in a single URI or list of URIs."""
     if isinstance(uri, list):
         return [validate_request_viking_uri(resolve_path_variables(u), ctx) for u in uri]
@@ -310,6 +308,8 @@ class GrepRequest(BaseModel):
     case_insensitive: bool = False
     node_limit: Optional[int] = 256
     level_limit: int = 10
+    tags: Optional[List[str]] = None
+    include_tags: bool = False
 
 
 class GlobRequest(BaseModel):
@@ -318,6 +318,9 @@ class GlobRequest(BaseModel):
     pattern: str
     uri: str = "viking://"
     node_limit: Optional[int] = 256
+    extra_fields: Optional[list[str]] = None
+    tags: Optional[List[str]] = None
+    include_tags: bool = False
 
 
 @router.post("/find")
@@ -533,6 +536,8 @@ async def grep(
             case_insensitive=request.case_insensitive,
             node_limit=request.node_limit,
             level_limit=request.level_limit,
+            tags=request.tags,
+            include_tags=request.include_tags,
         )
     except AGFSNotFoundError:
         raise NotFoundError(resolved_uri, "file")
@@ -559,7 +564,13 @@ async def glob(
     resolved_uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
     try:
         result = await service.fs.glob(
-            request.pattern, ctx=_ctx, uri=resolved_uri, node_limit=request.node_limit
+            request.pattern,
+            ctx=_ctx,
+            uri=resolved_uri,
+            node_limit=request.node_limit,
+            extra_fields=request.extra_fields,
+            tags=request.tags,
+            include_tags=request.include_tags,
         )
     except AGFSNotFoundError:
         raise NotFoundError(resolved_uri or request.pattern, "file")

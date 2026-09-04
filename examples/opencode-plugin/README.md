@@ -145,14 +145,7 @@ when exact category ceilings are required.
 API keys are resolved from environment variables or `~/.openviking/ovcli.conf` and sent as `Authorization: Bearer ...` by both hooks and the MCP proxy. Recall goes through the server-side context face (`POST /api/v1/search/search` with `mode="context"`), falling back to the deprecated `/api/v1/search/recall` on older deployments. `account` and `user` are trusted-mode identity
 headers sent as `X-OpenViking-Account` and `X-OpenViking-User`; leave them empty
 when using API-key mode with user/admin API keys.
-By default the plugin derives a peer from the project directory using Claude's
-project-directory naming rule: every non-letter-or-digit character becomes `-`,
-with no path normalization. For example, `/Users/x/Dev/OpenViking` becomes
-`-Users-x-Dev-OpenViking`. Data-plane memory/resource requests send the
-effective peer as `X-OpenViking-Actor-Peer`; captured session messages store it
-as body `peer_id`. Configure `peerId` or `OPENVIKING_PEER_ID` to override the
-workspace-derived peer, or set `workspacePeer=false` /
-`OPENVIKING_WORKSPACE_PEER=0` to turn workspace-derived peers off.
+By default the plugin derives a peer from the git identity of the project directory: the normalized `origin` URL, else the repository root path. Outside a git repository no peer is sent at all, and what is remembered there goes to the user-level space `viking://user/<you>/memories`. `git@github.com:volcengine/OpenViking.git` becomes `github.com-volcengine-openviking`; the path fallback keeps the older naming rule where every non-letter-or-digit character becomes `-`, so `/Users/x/Dev/OpenViking` becomes `-Users-x-Dev-OpenViking`. One repository therefore keeps one peer across subdirectories, worktrees, clones and machines, while a fork's different origin keeps it separate. Derivation reads `.git` directly, so no `git` binary is needed. The plugin does not read workspace `.openviking/config.json` files, so a `peer.id` written there has no effect. Data-plane memory/resource requests send the effective peer as `X-OpenViking-Actor-Peer`; captured session messages store it as body `peer_id`. Configure `peerId` or `OPENVIKING_PEER_ID` to override the derived peer, or set `workspacePeer=false` / `OPENVIKING_WORKSPACE_PEER=0` to send no peer at all. Memories written under the older directory-derived peer stay reachable: the default broad recall sweeps every peer under the user, and `recallPeerScope="actor"` asks that previous peer separately.
 
 Recall defaults to the broad mode: global memory, the current workspace, and
 other workspace memories can all be recalled, with other workspaces penalized
@@ -164,7 +157,11 @@ with an explicit actor peer so one person's memories are not recalled into
 another person's session.
 
 `OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`,
-and `OPENVIKING_PEER_ID` take precedence over values in this file.
+and `OPENVIKING_PEER_ID` take precedence over values in this file. The config
+file's `peerId` still applies whenever shared credentials (ovcli.conf or
+environment variables) do not carry a peer of their own, so an authenticated
+setup keeps writing peer-scoped data instead of dropping into the shared user
+tree.
 
 For advanced setups, `OPENVIKING_PLUGIN_CONFIG` can point to another config file path.
 

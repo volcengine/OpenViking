@@ -76,7 +76,7 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 | `OPENVIKING_API_KEY` / `OPENVIKING_BEARER_TOKEN` | — | API Key（以 `Authorization: Bearer` 发送） |
 | `OPENVIKING_ACCOUNT` / `OPENVIKING_USER` | — | 可信模式下的 account 与 user |
 | `OPENVIKING_PEER_ID` | — | 显式指定 actor peer |
-| `OPENVIKING_WORKSPACE_PEER` | `true` | 按每个会话的工作区推导 peer |
+| `OPENVIKING_WORKSPACE_PEER` | `true` | 按每个会话的工作区推导 peer；设为 `0` 则不发送 peer |
 | `OPENVIKING_RECALL_PEER_SCOPE` | `all` | 设为 `actor` 可将召回限制在当前工作区 |
 | `OV_DEBUG_LOG` | — | 把调试日志写到该路径 |
 
@@ -98,6 +98,10 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
             captureToolResults: false
             commitTokenThreshold: 20000
 ```
+
+同一个 `config` 块里的 `syncTurns: false` 让该集成变成只读：画像注入和记忆召回照常，但什么都不再写回——不捕获对话、不 commit，也不重放此前会话排入队列的写入，那些写入会一直留在队列里，直到某个仍在写入的会话把它们排空。
+
+同一个 `config` 块里的 `peerSource` 决定工作区 peer 的派生方式。默认的 `"git"` 取仓库归一化后的 `origin` URL（`git@github.com:volcengine/OpenViking.git` 得到 `github.com-volcengine-openviking`），其次是仓库根路径，因此同一个仓库的每个 clone、worktree 和子目录共用同一个 peer；不在仓库中则完全不发送 peer，在那里记下的内容进入用户级空间 `viking://user/<you>/memories`。`"cwd"` 恢复此前的行为——把工作目录路径中的非字母数字字符全部替换成 `-`；`"none"` 则完全不发送 peer。要让仓库之外的目录拥有独立记忆，请为它设置 `OPENVIKING_PEER_ID`（见[让一个目录拥有独立记忆](../configuration/02-client.md#让一个目录拥有独立记忆)）。
 
 patch 中写的凭证优先于环境变量；行为开关则优先读环境变量。完整参数列表见[插件 README](https://github.com/volcengine/OpenViking/tree/main/examples/dsh-memory-plugin)。
 

@@ -476,6 +476,23 @@ class OpenVikingAPIClient:
         url = self._build_url(self.server_url, endpoint)
         return self.session.post(url, json={"from_uri": from_uri, "to_uri": to_uri})
 
+    def fs_cp(
+        self,
+        from_uri: str,
+        to_uri: str,
+        recursive: bool = False,
+    ) -> requests.Response:
+        endpoint = "/api/v1/fs/cp"
+        url = self._build_url(self.server_url, endpoint)
+        return self.session.post(
+            url,
+            json={
+                "from_uri": from_uri,
+                "to_uri": to_uri,
+                "recursive": recursive,
+            },
+        )
+
     def session_used(
         self,
         session_id: str,

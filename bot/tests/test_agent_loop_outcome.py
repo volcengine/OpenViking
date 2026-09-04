@@ -1,3 +1,4 @@
+import copy
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -9,6 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from vikingbot.agent import loop as loop_module
 from vikingbot.agent.context import ContextBuilder
 from vikingbot.agent.loop import AgentLoop
+from vikingbot.agent.tools.base import MultimodalToolResult
+from vikingbot.agent.tools.registry import ToolExecutionResult
 from vikingbot.bus.events import InboundMessage, OutboundEventType
 from vikingbot.bus.queue import MessageBus
 from vikingbot.config.schema import AgentsConfig, Config, SessionKey
@@ -106,6 +109,305 @@ def test_agents_config_enables_subagents_by_default():
 
 def test_agents_config_keeps_ten_recent_openviking_messages_by_default():
     assert AgentsConfig().commit_keep_recent_count == 10
+
+
+def test_context_keeps_multimodal_tool_result_on_tool_message(temp_dir: Path):
+    context = ContextBuilder(workspace=temp_dir / "workspace")
+    content = [
+        {"type": "text", "text": "Source: viking://resources/image.png"},
+        {
+            "type": "image_url",
+            "image_url": {"url": "data:image/png;base64,aW1hZ2U="},
+        },
+    ]
+    messages = context.add_tool_result(
+        [],
+        "call-1",
+        "openviking_multi_read",
+        MultimodalToolResult(text="Image resource.", content=content),
+    )
+
+    assert messages == [
+        {
+            "role": "tool",
+            "tool_call_id": "call-1",
+            "name": "openviking_multi_read",
+            "content": content,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("supports_media", [False, True])
+async def test_agent_loop_gates_multimodal_result_by_provider(
+    temp_dir: Path, monkeypatch, supports_media: bool
+):
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+
+    content = [
+        {"type": "text", "text": "Source: viking://resources/image.png"},
+        {
+            "type": "image_url",
+            "image_url": {"url": "data:image/png;base64,aW1hZ2U="},
+        },
+    ]
+
+    class Provider(LLMProvider):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        async def chat(self, messages, tools=None, **kwargs):
+            self.calls.append(messages)
+            if len(self.calls) == 1:
+                return LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCallRequest(
+                            id="call-1",
+                            name="read_image",
+                            arguments={},
+                            tokens=1,
+                        )
+                    ],
+                )
+            return LLMResponse(content="done")
+
+        def get_default_model(self) -> str:
+            return "fake-model"
+
+        def supports_tool_result_media(self, model=None) -> bool:
+            return supports_media
+
+    class Registry:
+        def get_definitions(self, **kwargs):
+            return [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read_image",
+                        "description": "Read an image",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ]
+
+        async def execute_detailed(self, name, params, **kwargs):
+            return ToolExecutionResult(
+                result=MultimodalToolResult(text="Image resource.", content=content),
+                effective_params=params,
+            )
+
+    provider = Provider()
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=provider,
+        workspace=temp_dir / "workspace",
+        config=Config(storage_workspace=str(temp_dir)),
+        max_iterations=2,
+    )
+
+    final, _reasoning, tools_used, _usage, _iteration = await loop._run_agent_loop(
+        messages=[{"role": "user", "content": "read it"}],
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="multimodal"),
+        publish_events=False,
+        tool_registry=Registry(),
+    )
+
+    assert final == "done"
+    tool_message = next(message for message in provider.calls[1] if message["role"] == "tool")
+    if supports_media:
+        assert tool_message["content"] == content
+    else:
+        assert tool_message["content"].startswith("Image resource.")
+        assert "does not support media in tool results" in tool_message["content"]
+    assert tools_used[0]["result"] == "Image resource."
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_limits_media_across_parallel_tool_results(temp_dir: Path, monkeypatch):
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+    monkeypatch.setattr(loop_module, "MAX_INLINE_TOOL_RESULT_MEDIA_BYTES", 5)
+
+    class Provider(LLMProvider):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        async def chat(self, messages, tools=None, **kwargs):
+            self.calls.append(messages)
+            if len(self.calls) == 1:
+                return LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCallRequest(
+                            id="call-1",
+                            name="read_image",
+                            arguments={"label": "first"},
+                            tokens=1,
+                        ),
+                        ToolCallRequest(
+                            id="call-2",
+                            name="read_image",
+                            arguments={"label": "second"},
+                            tokens=1,
+                        ),
+                    ],
+                )
+            return LLMResponse(content="done")
+
+        def get_default_model(self) -> str:
+            return "fake-model"
+
+        def supports_tool_result_media(self, model=None) -> bool:
+            return True
+
+    class Registry:
+        def get_definitions(self, **kwargs):
+            return [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read_image",
+                        "description": "Read an image",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ]
+
+        async def execute_detailed(self, name, params, **kwargs):
+            label = params["label"]
+            return ToolExecutionResult(
+                result=MultimodalToolResult(
+                    text=f"{label} image",
+                    content=[
+                        {"type": "text", "text": label},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/png;base64,ZGF0YQ=="},
+                        },
+                    ],
+                ),
+                effective_params=params,
+            )
+
+    provider = Provider()
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=provider,
+        workspace=temp_dir / "workspace",
+        config=Config(storage_workspace=str(temp_dir)),
+        max_iterations=2,
+    )
+
+    final, *_ = await loop._run_agent_loop(
+        messages=[{"role": "user", "content": "read both"}],
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="media-budget"),
+        publish_events=False,
+        tool_registry=Registry(),
+    )
+
+    assert final == "done"
+    tool_messages = [message for message in provider.calls[1] if message["role"] == "tool"]
+    assert isinstance(tool_messages[0]["content"], list)
+    assert isinstance(tool_messages[1]["content"], str)
+    assert "make this model request exceed" in tool_messages[1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_prefers_new_media_across_consecutive_tool_rounds(
+    temp_dir: Path, monkeypatch
+):
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+    monkeypatch.setattr(loop_module, "MAX_INLINE_TOOL_RESULT_MEDIA_BYTES", 5)
+
+    class Provider(LLMProvider):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        async def chat(self, messages, tools=None, **kwargs):
+            self.calls.append(copy.deepcopy(messages))
+            call_number = len(self.calls)
+            if call_number <= 2:
+                return LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCallRequest(
+                            id=f"call-{call_number}",
+                            name="read_image",
+                            arguments={"label": f"image-{call_number}"},
+                            tokens=1,
+                        )
+                    ],
+                )
+            return LLMResponse(content="done")
+
+        def get_default_model(self) -> str:
+            return "fake-model"
+
+        def supports_tool_result_media(self, model=None) -> bool:
+            return True
+
+    class Registry:
+        def get_definitions(self, **kwargs):
+            return [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read_image",
+                        "description": "Read an image",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ]
+
+        async def execute_detailed(self, name, params, **kwargs):
+            label = params["label"]
+            return ToolExecutionResult(
+                result=MultimodalToolResult(
+                    text=f"{label} result",
+                    content=[
+                        {"type": "text", "text": label},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/png;base64,ZGF0YQ=="},
+                        },
+                    ],
+                ),
+                effective_params=params,
+            )
+
+    provider = Provider()
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=provider,
+        workspace=temp_dir / "workspace",
+        config=Config(storage_workspace=str(temp_dir)),
+        max_iterations=3,
+    )
+
+    final, *_ = await loop._run_agent_loop(
+        messages=[{"role": "user", "content": "read two images in sequence"}],
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="media-rounds"),
+        publish_events=False,
+        tool_registry=Registry(),
+    )
+
+    assert final == "done"
+    first_round_tool = next(message for message in provider.calls[1] if message["role"] == "tool")
+    assert isinstance(first_round_tool["content"], list)
+
+    tool_messages = [message for message in provider.calls[-1] if message["role"] == "tool"]
+    assert isinstance(tool_messages[0]["content"], str)
+    assert "earlier tool result was omitted" in tool_messages[0]["content"]
+    assert isinstance(tool_messages[1]["content"], list)
 
 
 def test_agent_loop_omits_spawn_tool_when_subagents_disabled(temp_dir: Path, monkeypatch):

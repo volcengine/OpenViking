@@ -289,6 +289,33 @@ enum AttrsCommands {
     },
 }
 
+#[derive(Subcommand)]
+enum AclCommands {
+    Get {
+        uri: String,
+    },
+    Set {
+        uri: String,
+        #[arg(long = "entry", required = true)]
+        entries: Vec<String>,
+    },
+    Grant {
+        uri: String,
+        #[arg(long)]
+        principal: String,
+        #[arg(long)]
+        level: String,
+    },
+    Revoke {
+        uri: String,
+        #[arg(long)]
+        principal: String,
+    },
+    Rm {
+        uri: String,
+    },
+}
+
 // Commands are organized with category tags in their doc comments.
 //
 // # Command Tagging System
@@ -422,10 +449,10 @@ enum Commands {
         /// locally, e.g. --args dry_run:true (supported keys: catalog, dry_run, skip_failed)
         #[arg(long = "args")]
         resource_args: Option<String>,
-        /// Explicit k=v retrieval tag to apply after import. Can be repeated.
-        #[arg(long = "tag", value_name = "k=v", help_heading = "Common options")]
+        /// Comma-separated k=v retrieval tags to apply after import
+        #[arg(long = "tags", value_delimiter = ',', value_name = "k=v", help_heading = "Common options")]
         tags: Vec<String>,
-        /// Tag update mode when --tag is provided
+        /// Tag update mode when --tags is provided
         #[arg(
             long = "tag-mode",
             default_value = "replace",
@@ -503,6 +530,12 @@ enum Commands {
             help_heading = "Common options"
         )]
         node_limit: i32,
+        /// Comma-separated fields to display (name,uri,path,type,size,mode,mtime,locked,id,count,tags,abstract)
+        #[arg(short = 'f', long = "fields", value_delimiter = ',', value_name = "FIELDS", help_heading = "Output options")]
+        fields: Option<Vec<String>>,
+        /// Comma-separated k=v retrieval tags; all tags must match
+        #[arg(long = "tags", value_delimiter = ',', value_name = "k=v", help_heading = "Common options")]
+        tags: Vec<String>,
     },
     /// [Data] Get directory tree
     Tree {
@@ -541,6 +574,15 @@ enum Commands {
             help_heading = "Common options"
         )]
         level_limit: i32,
+        /// Simple path output (just paths, no tree formatting)
+        #[arg(short, long, help_heading = "Common options")]
+        simple: bool,
+        /// Comma-separated fields to display (name,uri,path,type,size,mode,mtime,locked,id,count,tags)
+        #[arg(short = 'f', long = "fields", value_delimiter = ',', value_name = "FIELDS", help_heading = "Output options")]
+        fields: Option<Vec<String>>,
+        /// Comma-separated k=v retrieval tags; all tags must match
+        #[arg(long = "tags", value_delimiter = ',', value_name = "k=v", help_heading = "Common options")]
+        tags: Vec<String>,
     },
     /// [Data] Create directory
     Mkdir {
@@ -572,6 +614,18 @@ enum Commands {
         )]
         timeout: Option<f64>,
     },
+    /// [Data] Copy a file or directory
+    Cp {
+        /// Source URI
+        #[arg(value_name = "source")]
+        from_uri: String,
+        /// Target URI
+        #[arg(value_name = "target")]
+        to_uri: String,
+        /// Copy a directory recursively
+        #[arg(short, long, help_heading = "Common options")]
+        recursive: bool,
+    },
     /// [Data] Move or rename resource
     #[command(alias = "rename")]
     Mv {
@@ -592,6 +646,11 @@ enum Commands {
     Attrs {
         #[command(subcommand)]
         action: AttrsCommands,
+    },
+    /// [Data] Manage resource ACL
+    Acl {
+        #[command(subcommand)]
+        action: AclCommands,
     },
     /// [Data] Read file content (Level 2)
     Read {
@@ -662,6 +721,12 @@ enum Commands {
             help_heading = "Common options"
         )]
         timeout: Option<f64>,
+        /// Comma-separated k=v retrieval tags to write with the content
+        #[arg(long = "tags", value_delimiter = ',')]
+        tags: Vec<String>,
+        /// Tag update mode when --tags is provided
+        #[arg(long = "tag-mode", default_value = "replace", value_parser = ["replace", "append"])]
+        tag_mode: String,
     },
     /// [Data] Update explicit retrieval tags metadata for a file or directory
     #[command(hide = true)]
@@ -873,6 +938,12 @@ enum Commands {
             help_heading = "Advanced options"
         )]
         level_limit: i32,
+        /// Comma-separated k=v retrieval tags; all tags must match
+        #[arg(long = "tags", value_delimiter = ',', value_name = "k=v", help_heading = "Common options")]
+        tags: Vec<String>,
+        /// Fields to include in output (currently: tags)
+        #[arg(short = 'f', long = "fields", value_delimiter = ',', value_name = "FIELDS", help_heading = "Output options")]
+        fields: Option<Vec<String>>,
     },
     /// [Data] Run file glob pattern search
     Glob {
@@ -899,6 +970,15 @@ enum Commands {
             help_heading = "Common options"
         )]
         node_limit: i32,
+        /// Simple output (one entry per line)
+        #[arg(short, long, help_heading = "Common options")]
+        simple: bool,
+        /// Comma-separated k=v retrieval tags; all tags must match
+        #[arg(long = "tags", value_delimiter = ',', value_name = "k=v", help_heading = "Common options")]
+        tags: Vec<String>,
+        /// Comma-separated fields to display (name,uri,path,type,size,mode,mtime,locked,id,tags)
+        #[arg(short = 'f', long = "fields", value_delimiter = ',', value_name = "FIELDS", help_heading = "Output options")]
+        fields: Option<Vec<String>>,
     },
     /// [Data] Session management commands
     Session {
@@ -1150,10 +1230,10 @@ enum Commands {
         /// Preview prune_orphans deletions without mutating vectors
         #[arg(long, help_heading = "Common options")]
         dry_run: bool,
-        /// Explicit k=v retrieval tag for rebuilt vector records. Can be repeated.
-        #[arg(long = "tag", value_name = "k=v", help_heading = "Common options")]
+        /// Comma-separated k=v retrieval tags for rebuilt vector records
+        #[arg(long = "tags", value_delimiter = ',', value_name = "k=v", help_heading = "Common options")]
         tags: Vec<String>,
-        /// Tag update mode when --tag is provided
+        /// Tag update mode when --tags is provided
         #[arg(
             long = "tag-mode",
             default_value = "replace",
@@ -1891,6 +1971,50 @@ enum AdminCommands {
         #[arg(long, default_value = "1", value_name = "n")]
         page: u32,
     },
+    /// Create an empty account-scoped group
+    CreateGroup {
+        #[arg(value_name = "account-id")]
+        account_id: String,
+        #[arg(value_name = "group-id")]
+        group_id: String,
+    },
+    /// List groups in an account
+    ListGroups {
+        #[arg(value_name = "account-id")]
+        account_id: String,
+    },
+    /// List the users in a group
+    ListGroupMembers {
+        #[arg(value_name = "account-id")]
+        account_id: String,
+        #[arg(value_name = "group-id")]
+        group_id: String,
+    },
+    /// Add an existing account user to a group
+    AddGroupMember {
+        #[arg(value_name = "account-id")]
+        account_id: String,
+        #[arg(value_name = "group-id")]
+        group_id: String,
+        #[arg(value_name = "user-id")]
+        user_id: String,
+    },
+    /// Remove a user from a group
+    RemoveGroupMember {
+        #[arg(value_name = "account-id")]
+        account_id: String,
+        #[arg(value_name = "group-id")]
+        group_id: String,
+        #[arg(value_name = "user-id")]
+        user_id: String,
+    },
+    /// Delete an empty group
+    DeleteGroup {
+        #[arg(value_name = "account-id")]
+        account_id: String,
+        #[arg(value_name = "group-id")]
+        group_id: String,
+    },
     /// Remove a user from an account
     RemoveUser {
         /// Account ID
@@ -1923,6 +2047,20 @@ enum AdminCommands {
         /// Deterministic API key seed
         #[arg(long, value_name = "seed")]
         seed: Option<String>,
+    },
+    /// Update allowlisted settings for an account
+    SetAccountSettings {
+        /// Account ID
+        #[arg(value_name = "account-id")]
+        account_id: String,
+        /// Enable ACL authorization for shared resources
+        #[arg(
+            long,
+            required = true,
+            action = ArgAction::Set,
+            value_name = "true|false"
+        )]
+        acl_enabled: bool,
     },
 }
 
@@ -2513,9 +2651,16 @@ fn is_admin_subcommand(token: &str) -> bool {
             | "migrate"
             | "register-user"
             | "list-users"
+            | "create-group"
+            | "list-groups"
+            | "list-group-members"
+            | "add-group-member"
+            | "remove-group-member"
+            | "delete-group"
             | "remove-user"
             | "set-role"
             | "regenerate-key"
+            | "set-account-settings"
     )
 }
 
@@ -3053,6 +3198,8 @@ async fn main() {
             instruction,
             wait,
             timeout,
+            tags,
+            tag_mode,
             strict_mode,
             ignore_dirs,
             include,
@@ -3061,8 +3208,6 @@ async fn main() {
             watch_interval,
             processing_mode,
             resource_args,
-            tags,
-            tag_mode,
             upload_options,
         } => {
             let ctx =
@@ -3373,14 +3518,19 @@ async fn main() {
             abs_limit,
             all,
             node_limit,
-        } => handlers::handle_ls(uri, simple, recursive, abs_limit, all, node_limit, ctx).await,
+            fields,
+            tags,
+        } => handlers::handle_ls(uri, simple, recursive, abs_limit, all, node_limit, fields, tags, ctx).await,
         Commands::Tree {
             uri,
             abs_limit,
             all,
             node_limit,
             level_limit,
-        } => handlers::handle_tree(uri, abs_limit, all, node_limit, level_limit, ctx).await,
+            simple,
+            fields,
+            tags,
+        } => handlers::handle_tree(uri, abs_limit, all, node_limit, level_limit, simple, fields, tags, ctx).await,
         Commands::Mkdir { uri, description } => handlers::handle_mkdir(uri, description, ctx).await,
         Commands::Rm {
             uri,
@@ -3388,6 +3538,11 @@ async fn main() {
             wait,
             timeout,
         } => handlers::handle_rm(uri, recursive, wait, timeout, ctx).await,
+        Commands::Cp {
+            from_uri,
+            to_uri,
+            recursive,
+        } => handlers::handle_cp(from_uri, to_uri, recursive, ctx).await,
         Commands::Mv { from_uri, to_uri } => handlers::handle_mv(from_uri, to_uri, ctx).await,
         Commands::Stat { uri } => handlers::handle_stat(uri, ctx).await,
         Commands::Attrs { action } => match action {
@@ -3399,6 +3554,7 @@ async fn main() {
                 recursive,
             } => handlers::handle_set_tags(uri, tags, mode, recursive, ctx).await,
         },
+        Commands::Acl { action } => handlers::handle_acl(action, ctx).await,
         Commands::AddMemory { content } => handlers::handle_add_memory(content, ctx).await,
         Commands::Tui { uri } => handlers::handle_tui(uri, ctx).await,
         Commands::Chat {
@@ -3496,6 +3652,8 @@ async fn main() {
             wait,
             processing_mode,
             timeout,
+            tags,
+            tag_mode,
         } => {
             let effective_mode = if let Some(m) = mode {
                 m
@@ -3512,6 +3670,8 @@ async fn main() {
                 wait,
                 timeout,
                 processing_mode,
+                tags,
+                tag_mode,
                 ctx,
             )
             .await
@@ -3601,6 +3761,8 @@ async fn main() {
             ignore_case,
             node_limit,
             level_limit,
+            tags,
+            fields,
         } => {
             handlers::handle_grep(
                 uri,
@@ -3609,6 +3771,8 @@ async fn main() {
                 ignore_case,
                 node_limit,
                 level_limit,
+                tags,
+                fields,
                 ctx,
             )
             .await
@@ -3618,7 +3782,10 @@ async fn main() {
             pattern,
             uri,
             node_limit,
-        } => handlers::handle_glob(pattern, uri, node_limit, ctx).await,
+            simple,
+            fields,
+            tags,
+        } => handlers::handle_glob(pattern, uri, node_limit, simple, fields, tags, ctx).await,
     };
 
     if let Err(e) = result {
@@ -3673,6 +3840,42 @@ mod tests {
         assert_eq!(cli.account.as_deref(), Some("acme"));
         assert_eq!(cli.user.as_deref(), Some("alice"));
         assert_eq!(cli.actor_peer_id.as_deref(), Some("peer-a"));
+    }
+
+    #[test]
+    fn cli_parses_copy_recursive_flag() {
+        let file = Cli::try_parse_from([
+            "ov",
+            "cp",
+            "viking://resources/a.md",
+            "viking://resources/b.md",
+        ])
+        .expect("file copy should parse");
+        match file.command {
+            Commands::Cp {
+                from_uri,
+                to_uri,
+                recursive,
+            } => {
+                assert_eq!(from_uri, "viking://resources/a.md");
+                assert_eq!(to_uri, "viking://resources/b.md");
+                assert!(!recursive);
+            }
+            _ => panic!("expected cp command"),
+        }
+
+        let directory = Cli::try_parse_from([
+            "ov",
+            "cp",
+            "-r",
+            "viking://resources/src",
+            "viking://resources/dst",
+        ])
+        .expect("recursive directory copy should parse");
+        match directory.command {
+            Commands::Cp { recursive, .. } => assert!(recursive),
+            _ => panic!("expected cp command"),
+        }
     }
 
     #[test]
@@ -4137,9 +4340,16 @@ mod tests {
             &["ov", "admin", "migrate"],
             &["ov", "admin", "register-user"],
             &["ov", "admin", "list-users"],
+            &["ov", "admin", "create-group"],
+            &["ov", "admin", "list-groups"],
+            &["ov", "admin", "list-group-members"],
+            &["ov", "admin", "add-group-member"],
+            &["ov", "admin", "remove-group-member"],
+            &["ov", "admin", "delete-group"],
             &["ov", "admin", "remove-user"],
             &["ov", "admin", "set-role"],
             &["ov", "admin", "regenerate-key"],
+            &["ov", "admin", "set-account-settings"],
             &["ov", "system", "wait"],
             &["ov", "system", "status"],
             &["ov", "system", "health"],
@@ -4411,10 +4621,8 @@ mod tests {
             "ov",
             "add-resource",
             "./README.md",
-            "--tag",
-            "team=search",
-            "--tag",
-            "env=test",
+            "--tags",
+            "team=search,env=test",
             "--tag-mode",
             "append",
         ])
@@ -5386,7 +5594,7 @@ mod tests {
             "prune_orphans",
             "--wait=false",
             "--dry-run",
-            "--tag",
+            "--tags",
             "team=search",
             "--tag-mode",
             "append",

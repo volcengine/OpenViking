@@ -27,6 +27,10 @@ pub use builder::{
     build_default_stack, build_stack_with_mountable, register_builtin_plugins,
     EncryptionConfig as BuilderEncryptionConfig, RagfsConfig, RagfsStack,
 };
+#[cfg(feature = "cache")]
+pub use builder::{
+    build_configured_stack, CacheFsConfig, CacheRuntimeProviderConfig, CacheStackConfig,
+};
 pub use context::{FsContext, FsContextInner, FsContextView, PathLockContext, FS_CTX};
 pub use encryption_wrapper::EncryptionWrappedFS;
 pub use errors::{Error, Result};

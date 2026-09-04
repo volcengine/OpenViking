@@ -91,18 +91,6 @@ class CodexVLM(OpenAIVLM):
         self.api_base = explicit_api_base or credentials["base_url"]
         return self.api_key, self.api_base
 
-    def _build_text_kwargs(self, *args, **kwargs):
-        request_kwargs = super()._build_text_kwargs(*args, **kwargs)
-        if self.stream:
-            request_kwargs["stream"] = True
-        return request_kwargs
-
-    def _build_vision_kwargs(self, *args, **kwargs):
-        request_kwargs = super()._build_vision_kwargs(*args, **kwargs)
-        if self.stream:
-            request_kwargs["stream"] = True
-        return request_kwargs
-
     def get_client(self):
         if openai is None:
             raise ImportError("Please install openai: pip install openai")

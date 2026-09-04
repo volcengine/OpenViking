@@ -721,6 +721,32 @@ class VLMProviderAdapter(LLMProvider):
     def get_default_model(self) -> str:
         return self._default_model
 
+    def supports_tool_result_media(self, model: str | None = None) -> bool:
+        """Return true only for backends with native rich tool-result support."""
+        return self._backend_supports_tool_result_media(self._vlm)
+
+    @classmethod
+    def _backend_supports_tool_result_media(cls, vlm: Any) -> bool:
+        instances = getattr(vlm, "_vlm_instances", None)
+        if instances is not None:
+            return bool(instances) and all(
+                cls._backend_supports_tool_result_media(item) for item in instances
+            )
+
+        primary = getattr(vlm, "primary", None)
+        backup = getattr(vlm, "backup", None)
+        if primary is not None and backup is not None:
+            return cls._backend_supports_tool_result_media(
+                primary
+            ) and cls._backend_supports_tool_result_media(backup)
+
+        resolve_provider = getattr(vlm, "resolved_provider", None)
+        provider = (
+            resolve_provider() if callable(resolve_provider) else getattr(vlm, "provider", "")
+        )
+        provider = str(provider or "").lower()
+        return provider in {"anthropic", "openai-codex"}
+
     # ------------------------------------------------------------------
     # Langfuse helpers (same pattern as LiteLLMProvider.chat())
     # ------------------------------------------------------------------

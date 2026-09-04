@@ -233,6 +233,7 @@ class NewAPIKeyManager:
         self._legacy._accounts[account_id] = AccountInfo(
             created_at=now,
             users={admin_user_id: user_info},
+            groups={},
         )
 
         entry = UserKeyEntry(
@@ -251,6 +252,7 @@ class NewAPIKeyManager:
         try:
             await self._legacy._save_accounts_json()
             await self._legacy._save_users_json(account_id)
+            await self._legacy._write_groups_json(account_id, {})
         except Exception:
             await self._legacy._rollback_create_account(account_id)
             raise
@@ -489,6 +491,29 @@ class NewAPIKeyManager:
         Returns Role.USER if the account or user doesn't exist.
         """
         return self._legacy.get_user_role(account_id, user_id)
+
+    def get_user_group_ids(self, account_id: str, user_id: str) -> tuple[str, ...]:
+        return self._legacy.get_user_group_ids(account_id, user_id)
+
+    async def create_group(self, account_id: str, group_id: str) -> dict:
+        return await self._legacy.create_group(account_id, group_id)
+
+    def get_groups(self, account_id: str) -> list[dict]:
+        return self._legacy.get_groups(account_id)
+
+    def get_group_members(self, account_id: str, group_id: str) -> list[str]:
+        return self._legacy.get_group_members(account_id, group_id)
+
+    async def add_group_member(self, account_id: str, group_id: str, user_id: str) -> bool:
+        return await self._legacy.add_group_member(account_id, group_id, user_id)
+
+    async def remove_group_member(
+        self, account_id: str, group_id: str, user_id: str
+    ) -> bool:
+        return await self._legacy.remove_group_member(account_id, group_id, user_id)
+
+    async def delete_group(self, account_id: str, group_id: str) -> None:
+        await self._legacy.delete_group(account_id, group_id)
 
     def get_user_key_fingerprint(self, account_id: str, user_id: str) -> Optional[str]:
         """SHA-256 hex digest of the user's stored API key value, or None.

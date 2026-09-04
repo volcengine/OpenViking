@@ -163,7 +163,7 @@ Embedding、VLM、存储等服务配置由 OpenViking Server 通过 `ov.conf` �
 # 添加单个文件
 await client.add_resource(
     path="./document.pdf",
-    to="viking://resources/docs/",  # 指定存储位置
+    parent="viking://resources/docs",  # 存到这个目录下面，文件名由来源决定
     options={"reason": "项目技术文档"},  # 描述资源用途，提升检索质量
 )
 
@@ -176,6 +176,29 @@ await client.add_resource(
 # 等待处理完成
 await client.wait_processed()
 ```
+
+### `to` 和 `parent` 有什么区别？该用哪个？
+
+|  | `to` | `parent` |
+|---|---|---|
+| 传什么 | 完整最终 URI，**含叶子名** | 一个**已存在的目录**，叶子名由来源决定 |
+| 撞名怎么办 | 不改名。目标已存在时按新来源同步，来源里没有的可见条目会被删除 | 不覆盖。退到 `name_1`、`name_2`……并返回一条 warning |
+| 什么时候用 | 名字已知且必须逐字生效；或者要原地更新一个已有资源 | 叶子名由服务端派生（URL / 仓库导入、大文件切分），或者目标下已有的内容一点都不能动 |
+
+两个都留空 = 目录和叶子名都从来源推导，撞名行为同 `parent`。
+
+`to` 和 `parent` 不能同时传，会直接报错。
+
+### `to` 指到一个已存在的目录会发生什么？
+
+内容被同步成新来源的样子，metadata 保留。具体是：
+
+- **点号开头的条目原样保留** —— `.abstract.md`、`.overview.md`、`.search_tags.json`、`.image_mappings.json` 等；同步时两侧都不枚举它们，所以既不会被删也不会被覆盖。
+- **其余可见内容和新来源对齐** —— 来源里没有的删掉，变了的覆盖，没变的留在原地（URI 不变，挂在上面的向量和 tags 都还在）。
+
+所以这是「保留 metadata、替换内容本身」，不是把目录删掉重建。不想动目标里已有的东西就用 `parent`。
+
+注意：`processing_mode="vectors_only"` 不跑语义处理，保留下来的 `.abstract.md` / `.overview.md` **不会重算**，会继续描述已经被替换掉的旧内容。需要摘要跟着更新，就用默认的 `semantic_and_vectors`。
 
 ### `find()` 和 `search()` 有什么区别？应该用哪个？
 

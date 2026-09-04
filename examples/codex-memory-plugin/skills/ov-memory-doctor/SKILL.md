@@ -1,21 +1,16 @@
 ---
 name: ov-memory-doctor
 description: >
-  Diagnose and fix the OpenViking memory plugin for Codex on this machine: the
-  plugin install (marketplace, config.toml enablement, hook trust records, MCP
-  server), the client configuration (ovcli.conf / ov.conf / OPENVIKING_* env —
-  which one wins, what the API key claims) and the connection to the OpenViking
-  server (reachability, 401/403, /mcp). Use whenever memory "isn't working":
-  no <openviking-context> block appears, recall is always empty, turns are not
-  captured, MCP memory tools are missing or fail, 401/403 errors, right after
-  installing/updating the plugin or switching servers/keys, or when the user
-  asks for the plugin's status. Trigger phrases include "memory not working",
-  "check OpenViking", "plugin status", "记忆没生效", "插件状态", "连不上
-  OpenViking", "recall 为空", "401", "0 memories
-  extracted". When the server runs on this machine (loopback url) it also
-  checks the port, plugin-only keys in ov.conf that stop the server from
-  starting, and `GET /ready`; everything else server-side stays with
-  `openviking-server doctor`.
+  Diagnose and fix the OpenViking memory plugin for Codex on this machine: the plugin
+  install (enablement, hooks, MCP server), the client configuration
+  (ovcli.conf / ov.conf / OPENVIKING_* env) and the connection to the
+  OpenViking server (reachability, 401/403, /mcp). Use whenever memory "isn't
+  working": no <openviking-context> block, empty recall, captures not landing,
+  missing or failing MCP memory tools, 401/403, an offline statusline, right
+  after installing/updating the plugin or switching servers/keys, or when the
+  user asks for the plugin's status. Triggers: "memory not working", "check
+  OpenViking", "plugin status", "记忆没生效", "插件状态", "连不上 OpenViking",
+  "recall 为空", "401".
 ---
 
 # OpenViking Memory Doctor (Codex)

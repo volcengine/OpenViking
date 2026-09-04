@@ -19,7 +19,7 @@ from openviking_cli.utils.config.config_loader import (
     resolve_config_path,
 )
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfig, ParserApiConfig
-from openviking_cli.utils.config.parser_config import CodeHostingConfig
+from openviking_cli.utils.config.parser_config import CodeHostingConfig, DirectoryConfig
 from openviking_cli.utils.config.queue_worker_config import QueueWorkersConfig
 
 
@@ -166,6 +166,53 @@ def test_parser_api_rejects_worker_max_concurrent():
         ParserApiConfig(max_concurrent=9)
 
     assert exc_info.value.errors()[0]["type"] == "extra_forbidden"
+
+
+def test_parser_api_upload_defaults():
+    config = ParserApiConfig()
+
+    assert config.enable_resumable_upload is False
+    assert config.upload_simple_max_bytes == 512 * 1024 * 1024
+    assert config.upload_part_size_bytes == 8 * 1024 * 1024
+
+
+def test_directory_safety_limits_have_bounded_defaults():
+    config = DirectoryConfig()
+
+    assert config.max_files == 1000
+    assert config.max_depth == 10
+    assert config.max_concurrent == 4
+
+
+def test_directory_safety_limits_load_from_parser_config():
+    config = OpenVikingConfig.from_dict(
+        {
+            "parsers": {
+                "directory": {
+                    "max_files": 20,
+                    "max_depth": 5,
+                    "max_concurrent": 2,
+                }
+            }
+        }
+    )
+
+    assert config.directory.max_files == 20
+    assert config.directory.max_depth == 5
+    assert config.directory.max_concurrent == 2
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "max_files",
+        "max_depth",
+        "max_concurrent",
+    ],
+)
+def test_directory_safety_limits_reject_non_positive_values(field):
+    with pytest.raises(ValueError, match=field):
+        DirectoryConfig.from_dict({field: 0})
 
 
 def test_generic_code_hosting_domains_include_supported_platforms():

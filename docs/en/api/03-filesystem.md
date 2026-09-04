@@ -25,6 +25,10 @@ List directory contents.
 | node_limit | int | No | 1000 | Maximum number of results |
 | sort_by | str | No | None | Sort directories and files within their groups by `name` or `mtime` before applying `node_limit`; directories remain first |
 | sort_order | str | No | `asc` | Sort direction: `asc` or `desc` |
+| extra_fields | list[str] | No | None | Extra fields to include: `locked`, `id`, `count` |
+| tags | string[] | No | Unset | Return only entries matching every supplied `k=v` retrieval tag |
+
+`tags` uses AND semantics and is applied before `node_limit`. Tags are included for filtered responses; for an unfiltered response, request `include_tags=true` (CLI: `-f tags`).
 
 **Entry Structure**
 
@@ -39,6 +43,26 @@ List directory contents.
     "meta": {}                # Optional metadata
 }
 ```
+
+If the caller can read the parent directory but cannot read one of its direct
+children, `ls` still returns a name placeholder without size, modification
+time, abstract, or storage metadata:
+
+```python
+{
+    "name": "restricted",
+    "isDir": True,
+    "uri": "viking://resources/restricted",
+    "access": "denied"
+}
+```
+
+Content operations such as `stat` and `read` return HTTP 403 `PermissionDenied` for
+that URI. Recursive listing retains the inaccessible directory itself but does
+not descend into it, and search results omit unreadable content. This
+discoverable-name behavior applies only to the shared
+`viking://resources` namespace; private user and peer namespaces retain their
+existing hiding rules.
 
 
 **Python HTTP SDK**
@@ -77,7 +101,7 @@ for _, entry := range entries {
 **HTTP API**
 
 ```
-GET /api/v1/fs/ls?uri={uri}&simple={bool}&recursive={bool}
+GET /api/v1/fs/ls?uri={uri}&simple={bool}&recursive={bool}&tags={k=v}&include_tags={bool}
 ```
 
 ```bash
@@ -97,8 +121,12 @@ curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&recursiv
 **CLI**
 
 ```bash
-openviking ls viking://resources/ [--simple] [--recursive]
+openviking ls viking://resources/ [--simple] [--recursive] [--tags team=search,env=prod] [-f FIELDS]
+openviking tree viking://resources/my-project/ [--simple] [--tags team=search,env=prod] [-f FIELDS]
+openviking glob "**/*.md" [--uri viking://resources/] [--simple] [--tags team=search,env=prod] [-f FIELDS]
 ```
+
+`-f`/`--fields` accepts a comma-separated list of columns to display (ps `-o` style), producing a column-aligned table with a header row. Available fields: `name`, `uri`, `path`, `type`, `size`, `mode`, `mtime`, `locked`, `id`, `count`, `abstract`, `tags`. Combining `--simple` with `-f` outputs comma-separated values (no header, no tree indentation), one entry per line — suitable for scripting pipelines. When `--simple` is used without `-f`, the previous behavior (bare URI per line) is preserved.
 
 
 **Response**
@@ -136,6 +164,10 @@ Get directory tree structure.
 | show_all_hidden | bool | No | False | Include hidden files like `-a` |
 | node_limit | int | No | 1000 | Maximum number of results |
 | level_limit | int | No | 3 | Maximum directory depth to traverse |
+| extra_fields | list[str] | No | None | Extra fields to include: `locked`, `id`, `count` |
+| tags | string[] | No | Unset | Retain only nodes matching every supplied `k=v` retrieval tag |
+
+`tags` uses AND semantics and is applied before `node_limit`. Tags are included for filtered responses; for an unfiltered response, request `include_tags=true` (CLI: `-f tags`).
 
 
 **Python HTTP SDK**
@@ -169,7 +201,7 @@ for _, entry := range entries {
 **HTTP API**
 
 ```
-GET /api/v1/fs/tree?uri={uri}
+GET /api/v1/fs/tree?uri={uri}&tags={k=v}&include_tags={bool}
 ```
 
 ```bash
@@ -219,7 +251,7 @@ Get file or directory status information. For directories, returns the count of 
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| uri | str | Yes | - | Viking URI |
+| uri | str | Yes | - | Viking URI (e.g. `viking://resources/docs/api.md`) or a 32-character hex vector record `id` |
 
 
 **Python HTTP SDK**
@@ -283,6 +315,7 @@ openviking stat viking://resources/my-project/docs
     "modTime": "2024-01-01T00:00:00Z",
     "isDir": false,
     "isLocked": false,
+    "id": "a1b2c3d4e5f678901234567890abcdef",
     "uri": "viking://resources/docs/api.md"
   },
   "time": 0.1
@@ -309,6 +342,8 @@ openviking stat viking://resources/my-project/docs
 ```
 
 The `isLocked` field reports whether the path is currently held by a path lock: the path itself has a valid lock (including an exact-path lock for the target), or any ancestor directory holds a TreeLock. Returns `false` when the LockManager is unavailable or the lookup fails, so callers can avoid attempting a write only to observe `ResourceBusyError`.
+
+The `id` field (files only) is the deterministic vector record primary key in VikingDB, computed as `md5(f"{account_id}:{uri}")` for level 2 (regular file) records. This value matches the `id` field in the vector collection schema and can be used to cross-reference vector records without an additional lookup. The field is omitted for directories because a directory may have multiple vector records across semantic levels (L0 abstract, L1 overview). Because indexing is asynchronous, a newly returned ID might not be resolvable immediately; lookup by ID can also fail after its vector record is deleted. In either case, `stat(id)` returns `NOT_FOUND` with a reason indicating that the data may not have been indexed yet or may have been deleted.
 
 The `count` field (directories only) contains the estimated number of items (files and subdirectories) under this directory (from vector index).
 
@@ -584,6 +619,90 @@ openviking rm viking://resources/old.md [--recursive]
 The `estimated_deleted_count` field (for recursive deletes) contains the estimated number of items (files and directories) deleted (from vector index). The CLI will display this information in output.
 
 When deleting `viking://resources/...`, the response may include `memory_cleanup`, indicating that user memories referencing that resource URI were cleaned up before deletion.
+
+---
+
+### cp()
+
+Copy a file or directory to a new Viking URI. The source remains unchanged. Existing vector records under the source URI are copied and rewritten for the destination, so the copied content does not need to be parsed, described by a VLM, or embedded again.
+
+The destination parent directory must already exist, and the destination itself must not exist. Copying a directory requires `recursive=true` (or `-r` in the CLI). The destination cannot equal the source or be inside the source directory tree.
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| from_uri | str | Yes | - | Source Viking URI |
+| to_uri | str | Yes | - | Destination Viking URI, including the new file or directory name |
+| recursive | bool | No | False | Required when the source is a directory |
+
+**HTTP API**
+
+```
+POST /api/v1/fs/cp
+```
+
+```bash
+# Copy one file
+curl -X POST http://localhost:1933/api/v1/fs/cp \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "from_uri": "viking://resources/docs/guide.md",
+    "to_uri": "viking://resources/archive/guide-copy.md",
+    "recursive": false
+  }'
+
+# Copy a directory recursively
+curl -X POST http://localhost:1933/api/v1/fs/cp \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "from_uri": "viking://resources/docs",
+    "to_uri": "viking://resources/docs-backup",
+    "recursive": true
+  }'
+```
+
+**CLI**
+
+```bash
+# Copy one file
+ov cp viking://resources/docs/guide.md viking://resources/archive/guide-copy.md
+
+# Copy a directory recursively
+ov cp -r viking://resources/docs viking://resources/docs-backup
+```
+
+**Response**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "operation_id": "61ec2a80bf5f46a28aa3497fbdcb56dd",
+    "operation": "copy",
+    "from": "viking://resources/docs/guide.md",
+    "to": "viking://resources/archive/guide-copy.md",
+    "recursive": false,
+    "phase": "completed",
+    "files_created": 1,
+    "vectors": {
+      "scanned": 3,
+      "written": 3,
+      "deleted": 0,
+      "restored": 0,
+      "batches": 1
+    },
+    "semantic_root_uri": "viking://resources/archive",
+    "semantic_status": "queued"
+  }
+}
+```
+
+`semantic_status: "queued"` means the copy has already committed and the destination parent's overview and abstract will be rebuilt asynchronously from summaries available at the destination. The API does not wait for that refresh. A refresh enqueue failure may return `semantic_status: "failed"` and `semantic_error`; it does not roll back the completed file and vector copy.
+
+Common errors include `NOT_FOUND` when the source or destination parent is missing, `CONFLICT` when the destination already exists or a path lock is busy, `FAILED_PRECONDITION` when a directory is copied without `recursive=true`, and `INVALID_ARGUMENT` for invalid source/destination relationships.
 
 ---
 

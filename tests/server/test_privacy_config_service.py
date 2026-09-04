@@ -1,13 +1,68 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import asyncio
+
 import pytest
 
 from openviking.core.namespace import canonical_user_root
 from openviking.privacy.skill_extractor import extract_skill_privacy_values
 from openviking.privacy.skill_placeholder import placeholderize_skill_content_with_blocks
+from openviking.privacy.service import UserPrivacyConfigService
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.viking_fs import VikingFS
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
+
+
+class _MemoryPrivacyStorage:
+    def __init__(self):
+        self.files: dict[str, str] = {}
+        self._lock = asyncio.Lock()
+        self._async_agfs = self
+        self.lock_timeouts = []
+
+    def _uri_to_path(self, uri, ctx=None):
+        return uri
+
+    async def pathlock_acquire_tree(self, _path, timeout_secs=0.0):
+        self.lock_timeouts.append(timeout_secs)
+        if timeout_secs == 0.0:
+            acquired = self._lock.locked() is False and await self._lock.acquire()
+        else:
+            try:
+                await asyncio.wait_for(self._lock.acquire(), timeout_secs)
+                acquired = True
+            except asyncio.TimeoutError:
+                acquired = False
+        if not acquired:
+            raise RuntimeError("lock acquire timed out")
+        return {"lease_ref": "test"}
+
+    async def pathlock_release(self, _lease):
+        self._lock.release()
+
+    async def mkdir(self, *_args, **_kwargs):
+        await asyncio.sleep(0)
+
+    async def read_file(self, uri, **_kwargs):
+        await asyncio.sleep(0)
+        if uri not in self.files:
+            raise NotFoundError(uri, "file")
+        return self.files[uri]
+
+    async def write_file(self, uri, content, **_kwargs):
+        await asyncio.sleep(0)
+        self.files[uri] = content
+
+    async def ls(self, uri, **_kwargs):
+        await asyncio.sleep(0)
+        prefix = f"{uri}/"
+        return [
+            {"name": path.removeprefix(prefix)}
+            for path in self.files
+            if path.startswith(prefix) and "/" not in path.removeprefix(prefix)
+        ]
 
 
 @pytest.mark.asyncio
@@ -50,6 +105,57 @@ async def test_privacy_config_service_versions(service):
     assert restored.version == 1
     assert current.version == 1
     assert current.values["api_key"] == "secret-1"
+
+
+@pytest.mark.asyncio
+async def test_privacy_config_concurrent_updates_keep_every_version():
+    ctx = RequestContext(user=UserIdentifier.the_default_user("privacy_race"), role=Role.ROOT)
+    privacy = UserPrivacyConfigService(_MemoryPrivacyStorage())
+    results = await asyncio.gather(
+        *(
+            privacy.upsert(
+                ctx=ctx,
+                category="skill",
+                target_key="concurrent-skill",
+                values={"api_key": f"secret-{index}"},
+                updated_by=ctx.user.user_id,
+            )
+            for index in range(8)
+        )
+    )
+
+    assert sorted(result.version for result in results) == list(range(1, 9))
+    assert await privacy.list_versions(ctx, "skill", "concurrent-skill") == list(range(1, 9))
+
+
+@pytest.mark.asyncio
+async def test_privacy_config_exists_propagates_storage_errors():
+    class FailingStorage:
+        async def stat(self, *_args, **_kwargs):
+            raise RuntimeError("storage unavailable")
+
+    privacy = UserPrivacyConfigService(FailingStorage())
+    ctx = RequestContext(user=UserIdentifier.the_default_user("privacy_error"), role=Role.ROOT)
+
+    with pytest.raises(RuntimeError, match="storage unavailable"):
+        await privacy.exists(ctx, "skill", "demo-skill")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("read_method", ["read_file", "read_file_bytes"])
+async def test_viking_fs_read_propagates_storage_errors(read_method):
+    class FailingReadStorage:
+        def stat(self, _path, **_kwargs):
+            return {"isDir": False}
+
+        def read(self, _path, **_kwargs):
+            raise RuntimeError("storage unavailable")
+
+    fs = VikingFS(FailingReadStorage())
+    ctx = RequestContext(user=UserIdentifier.the_default_user("privacy_read_error"), role=Role.ROOT)
+
+    with pytest.raises(RuntimeError, match="storage unavailable"):
+        await getattr(fs, read_method)("viking://user/privacy/meta.json", ctx=ctx)
 
 
 @pytest.mark.asyncio

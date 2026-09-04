@@ -43,6 +43,15 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 PREPARED_RESPONSE_ID_ARG = "understanding_response_id"
+PREPARED_FILE_ID_ARG = "understanding_file_id"
+
+
+class UnderstandingAPIError(RuntimeError):
+    """Parser API failure carrying the remote identifiers already observed."""
+
+    def __init__(self, message: str, meta: Optional[Dict[str, Any]] = None):
+        self.meta = dict(meta or {})
+        super().__init__(message)
 
 
 class UnderstandingAPI(BaseParser):
@@ -97,13 +106,22 @@ class UnderstandingAPI(BaseParser):
             if not isinstance(prepared_response_id, str) or not prepared_response_id.strip():
                 raise ValueError(f"{PREPARED_RESPONSE_ID_ARG} must be a non-empty string")
             prepared_response_id = prepared_response_id.strip()
+        prepared_file_id = kwargs.get(PREPARED_FILE_ID_ARG)
+        if prepared_file_id is not None:
+            if not isinstance(prepared_file_id, str) or not prepared_file_id.strip():
+                raise ValueError(f"{PREPARED_FILE_ID_ARG} must be a non-empty string")
+            prepared_file_id = prepared_file_id.strip()
+        if prepared_response_id and prepared_file_id:
+            raise ValueError(
+                f"{PREPARED_RESPONSE_ID_ARG} and {PREPARED_FILE_ID_ARG} are mutually exclusive"
+            )
 
         # Only a directly routed Feishu URL uses the Lark protocol. Accessor
         # output is an existing local Markdown file and must stay local.
         is_feishu_url = self._is_feishu_url(source_str)
         lark_file = (
             await self._resolve_lark_file(kwargs)
-            if is_feishu_url and not prepared_response_id
+            if is_feishu_url and not prepared_response_id and not prepared_file_id
             else None
         )
 
@@ -118,6 +136,8 @@ class UnderstandingAPI(BaseParser):
             ("http://", "https://")
         ):
             url = original_source
+        elif prepared_file_id:
+            local_path = None
         else:
             local_path = source_path
 
@@ -132,71 +152,90 @@ class UnderstandingAPI(BaseParser):
                     "base": "bitable",
                 }.get(path_parts[0], path_parts[0])
         else:
-            inferred_name = local_path.name if local_path is not None else ""
-            if local_path is None or not local_path.is_file():
+            inferred_name = local_path.name if local_path is not None else Path(source_str).name
+            if not prepared_file_id and (local_path is None or not local_path.is_file()):
                 raise ValueError(
                     "UnderstandingAPI supports http(s) URLs or local files. "
                     "Got an invalid local file path."
                 )
-            doc_type = resolved_extension or local_path.suffix.lower().lstrip(".")
+            doc_type = resolved_extension or (
+                local_path.suffix.lower().lstrip(".") if local_path is not None else ""
+            )
 
         effective_name = str(display_name or inferred_name or "resource")
         doc_name = Path(effective_name).stem or "resource"
         doc_type = doc_type or "unknown"
 
-        task_meta: Dict[str, Any] = {}
+        task_meta: Dict[str, Any] = {"doc_name": doc_name, "doc_type": doc_type}
+        source_name = kwargs.get("source_name")
+        if isinstance(source_name, str) and source_name:
+            task_meta["source_name"] = source_name
+        if local_path is not None:
+            task_meta["file_name"] = local_path.name
 
-        if prepared_response_id:
-            response_id = prepared_response_id
-        elif url is None and local_path is not None:
-            file_obj = await self._create_file(local_path=local_path)
-            file_id = file_obj.get("id")
-            if not file_id:
-                raise RuntimeError(
-                    f"files api missing file_id: {self._safe_error_summary(file_obj)}"
-                )
-            task_meta["file_id"] = file_id
-            response_obj = await self._create_response_for_file(file_id=file_id)
-        else:
-            if url is None:
-                raise RuntimeError("missing url for url mode")
-            response_obj = await self._create_response_for_url(
-                url=url,
-                doc_type=doc_type,
-                lark_file=lark_file if is_feishu_url else None,
-            )
-
-        if not prepared_response_id:
-            response_id_value = response_obj.get("id")
-            if not response_id_value:
-                raise RuntimeError(
-                    f"responses api missing id: {self._safe_error_summary(response_obj)}"
-                )
-            response_id = str(response_id_value)
-        task_meta["response_id"] = response_id
-
-        response_obj = await self._poll_response(response_id=response_id)
-        zip_url = self._extract_zip_url(response_obj)
-        if not zip_url:
-            raise RuntimeError(
-                f"understanding result missing zip_url: {self._safe_error_summary(response_obj)}"
-            )
-
-        zip_path = await self._download_zip(zip_url)
         try:
-            if is_feishu_url and not display_name:
-                archive_root = self._single_zip_root_name(zip_path)
-                if archive_root:
-                    doc_name = archive_root
-            temp_dir_path = await self._unpack_zip_to_temp_dir(
-                zip_path=zip_path,
-                resource_name=doc_name,
-            )
-        finally:
+            if prepared_response_id:
+                response_id = prepared_response_id
+            elif prepared_file_id:
+                task_meta["file_id"] = prepared_file_id
+                response_obj = await self._create_response_for_file(file_id=prepared_file_id)
+            elif url is None and local_path is not None:
+                file_obj = await self._create_file(local_path=local_path)
+                file_id_value = file_obj.get("id")
+                if not file_id_value:
+                    raise RuntimeError(
+                        f"files api missing file_id: {self._safe_error_summary(file_obj)}"
+                    )
+                file_id = str(file_id_value)
+                task_meta["file_id"] = file_id
+                response_obj = await self._create_response_for_file(file_id=file_id)
+            else:
+                if url is None:
+                    raise RuntimeError("missing url for url mode")
+                response_obj = await self._create_response_for_url(
+                    url=url,
+                    doc_type=doc_type,
+                    lark_file=lark_file,
+                )
+
+            if not prepared_response_id:
+                response_id_value = response_obj.get("id")
+                if not response_id_value:
+                    raise RuntimeError(
+                        f"responses api missing id: {self._safe_error_summary(response_obj)}"
+                    )
+                response_id = str(response_id_value)
+            task_meta["response_id"] = response_id
+
+            response_obj = await self._poll_response(response_id=response_id)
+            zip_url = self._extract_zip_url(response_obj)
+            if not zip_url:
+                raise RuntimeError(
+                    "understanding result missing zip_url: "
+                    f"{self._safe_error_summary(response_obj)}"
+                )
+
+            zip_path = await self._download_zip(zip_url)
             try:
-                zip_path.unlink()
-            except Exception:
-                pass
+                if is_feishu_url and not display_name:
+                    archive_root = self._single_zip_root_name(zip_path)
+                    if archive_root:
+                        doc_name = archive_root
+                        task_meta["doc_name"] = doc_name
+                temp_dir_path = await self._unpack_zip_to_temp_dir(
+                    zip_path=zip_path,
+                    resource_name=doc_name,
+                )
+            finally:
+                try:
+                    zip_path.unlink()
+                except Exception:
+                    pass
+        except UnderstandingAPIError:
+            raise
+        except Exception as exc:
+            logger.warning("[UnderstandingAPI] Parse failed: %s; meta=%s", exc, task_meta)
+            raise UnderstandingAPIError(str(exc), task_meta) from exc
 
         content_type = (
             "video"
@@ -231,23 +270,27 @@ class UnderstandingAPI(BaseParser):
             ),
             temp_dir_path=temp_dir_path,
             parser_name="UnderstandingAPI",
-            meta=task_meta,
+            meta={key: task_meta[key] for key in ("file_id", "response_id") if task_meta.get(key)},
         )
 
         logger.info("[UnderstandingAPI] done")
         return result
 
-    async def submit_file(self, source: Union[str, Path]) -> str:
-        """Upload a local file and submit it without retaining the local artifact."""
+    async def upload_file(self, source: Union[str, Path]) -> str:
+        """Upload a local file and return a durable Files API file_id."""
         local_path = Path(source)
         if not local_path.is_file():
-            raise ValueError("UnderstandingAPI file submission requires an existing local file")
+            raise ValueError("UnderstandingAPI file upload requires an existing local file")
 
         file_obj = await self._create_file(local_path=local_path)
         file_id = file_obj.get("id")
         if not file_id:
             raise RuntimeError(f"files api missing file_id: {self._safe_error_summary(file_obj)}")
+        return str(file_id)
 
+    async def submit_file(self, source: Union[str, Path]) -> str:
+        """Upload a local file and submit it without retaining the local artifact."""
+        file_id = await self.upload_file(source)
         response_obj = await self._create_response_for_file(file_id=str(file_id))
         response_id = response_obj.get("id")
         if not response_id:
@@ -308,7 +351,10 @@ class UnderstandingAPI(BaseParser):
         return json.dumps(obj, ensure_ascii=False).encode("utf-8")
 
     def _auth_headers(self, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
-        headers = {"Authorization": f"Bearer {self._api_key}"}
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "x-kb-env": "snake",
+        }
         if extra:
             headers.update(extra)
         return headers
@@ -322,15 +368,66 @@ class UnderstandingAPI(BaseParser):
                 summary[key] = obj.get(key)
         err = obj.get("error")
         if isinstance(err, dict):
-            summary["error"] = {k: err.get(k) for k in ("type", "code", "message") if k in err}
+            summary["error"] = {
+                k: err.get(k) for k in ("type", "code", "message", "param") if k in err
+            }
+        # Failed Responses tasks carry the reason in output_text, not error.
+        output = obj.get("output")
+        if obj.get("status") == "failed" and isinstance(output, list):
+            texts = []
+            for item in output:
+                if not isinstance(item, dict):
+                    continue
+                content = item.get("content")
+                if not isinstance(content, list):
+                    continue
+                for part in content:
+                    if not isinstance(part, dict) or part.get("type") != "output_text":
+                        continue
+                    text = part.get("text")
+                    if isinstance(text, str) and text.strip():
+                        texts.append(text)
+            if texts:
+                summary["output_text"] = texts
         return summary
+
+    def _error_message(self, obj: Any) -> str:
+        """Extract the failure reason without adding remote identifiers."""
+        summary = self._safe_error_summary(obj)
+        error = summary.get("error") or {}
+        for message in (error.get("message"), summary.get("message")):
+            if isinstance(message, str) and message.strip():
+                return message.strip()
+        if summary.get("output_text"):
+            return "; ".join(summary["output_text"])
+        return str(error.get("code") or "request failed")
 
     def _raise_if_error(self, obj: Any, *, context: str) -> None:
         if not isinstance(obj, dict):
             return
         err = obj.get("error")
         if isinstance(err, dict) and err.get("code"):
-            raise RuntimeError(f"{context}: {self._safe_error_summary(obj)}")
+            raise RuntimeError(f"{context}: {self._error_message(obj)}")
+
+    def _read_api_response(self, rsp: httpx.Response, *, context: str) -> Dict[str, Any]:
+        """Preserve business error details and the HTTP exception's status metadata."""
+        try:
+            rsp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            try:
+                summary = self._safe_error_summary(rsp.json())
+            except ValueError:
+                summary = None
+            if summary is not None:
+                raise httpx.HTTPStatusError(
+                    f"{context}: HTTP {rsp.status_code}: {summary}",
+                    request=exc.request,
+                    response=exc.response,
+                ) from exc
+            raise
+        body = rsp.json()
+        self._raise_if_error(body, context=context)
+        return body
 
     async def _create_file(self, *, local_path: Path) -> Dict[str, Any]:
         file_size = local_path.stat().st_size
@@ -339,7 +436,9 @@ class UnderstandingAPI(BaseParser):
         if file_size > self._upload_simple_max_bytes:
             if not self._enable_resumable_upload:
                 raise ValueError(
-                    f"file too large ({file_size} bytes), enable parser_api.enable_resumable_upload to continue"
+                    f"file too large: size={file_size}, "
+                    f"upload_simple_max_bytes={self._upload_simple_max_bytes}; "
+                    "enable parser_api.enable_resumable_upload to continue"
                 )
             return await self._multipart_create_file(local_path)
 
@@ -355,10 +454,7 @@ class UnderstandingAPI(BaseParser):
                     data=data,
                     files=files,
                 )
-        rsp.raise_for_status()
-        body = rsp.json()
-        self._raise_if_error(body, context="files api error")
-        return body
+        return self._read_api_response(rsp, context="files api error")
 
     async def _create_response_for_file(self, *, file_id: str) -> Dict[str, Any]:
         content: Dict[str, Any] = {"type": "file", "file": {"file_id": file_id}}
@@ -375,10 +471,7 @@ class UnderstandingAPI(BaseParser):
                 content=self._json_bytes(payload),
                 headers=self._auth_headers({"Content-Type": "application/json;charset=UTF-8"}),
             )
-        rsp.raise_for_status()
-        body = rsp.json()
-        self._raise_if_error(body, context="responses api error")
-        return body
+        return self._read_api_response(rsp, context="responses api error")
 
     async def _create_response_for_url(
         self,
@@ -410,10 +503,7 @@ class UnderstandingAPI(BaseParser):
                 content=self._json_bytes(payload),
                 headers=self._auth_headers({"Content-Type": "application/json;charset=UTF-8"}),
             )
-        rsp.raise_for_status()
-        body = rsp.json()
-        self._raise_if_error(body, context="responses api error")
-        return body
+        return self._read_api_response(rsp, context="responses api error")
 
     @staticmethod
     def _is_feishu_url(source: str) -> bool:
@@ -487,11 +577,7 @@ class UnderstandingAPI(BaseParser):
                     f"{self._api_base}/responses/{response_id}",
                     headers=self._auth_headers(),
                 )
-                rsp.raise_for_status()
-                body = rsp.json()
-                self._raise_if_error(
-                    body, context=f"responses api error: response_id={response_id}"
-                )
+                body = self._read_api_response(rsp, context="responses api error")
                 status = body.get("status")
                 if status != last_status:
                     logger.info(f"[UnderstandingAPI] response_id={response_id} status={status}")
@@ -499,13 +585,9 @@ class UnderstandingAPI(BaseParser):
                 if status == "completed":
                     return body
                 if status == "failed":
-                    raise RuntimeError(
-                        f"understanding failed: response_id={response_id} body={self._safe_error_summary(body)}"
-                    )
+                    raise RuntimeError(f"understanding failed: {self._error_message(body)}")
                 if asyncio.get_running_loop().time() > deadline:
-                    raise TimeoutError(
-                        f"understanding timeout: response_id={response_id} last_status={last_status}"
-                    )
+                    raise TimeoutError(f"understanding timeout: last_status={last_status}")
                 await asyncio.sleep(max(self._default_poll_interval_ms, 200) / 1000.0)
 
     def _extract_zip_url(self, response_obj: Dict[str, Any]) -> Optional[str]:
@@ -538,10 +620,7 @@ class UnderstandingAPI(BaseParser):
                 content=self._json_bytes(payload),
                 headers=self._auth_headers({"Content-Type": "application/json;charset=UTF-8"}),
             )
-        rsp.raise_for_status()
-        body = rsp.json()
-        self._raise_if_error(body, context="uploads init error")
-        return body
+        return self._read_api_response(rsp, context="uploads init error")
 
     async def _uploads_status(self, *, upload_id: str, object_key: str) -> Dict[str, Any]:
         async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
@@ -549,10 +628,7 @@ class UnderstandingAPI(BaseParser):
                 f"{self._api_base}/files?upload_id={upload_id}&object_key={object_key}",
                 headers=self._auth_headers(),
             )
-        rsp.raise_for_status()
-        body = rsp.json()
-        self._raise_if_error(body, context="uploads status error")
-        return body
+        return self._read_api_response(rsp, context="uploads status error")
 
     async def _uploads_put_part(
         self, *, upload_id: str, object_key: str, part_number: int, data: bytes
@@ -564,10 +640,7 @@ class UnderstandingAPI(BaseParser):
                 headers=headers,
                 content=data,
             )
-        rsp.raise_for_status()
-        body = rsp.json()
-        self._raise_if_error(body, context="uploads part error")
-        return body
+        return self._read_api_response(rsp, context="uploads part error")
 
     async def _uploads_complete(
         self, *, upload_id: str, object_key: str, parts: List[Dict[str, Any]]
@@ -579,10 +652,7 @@ class UnderstandingAPI(BaseParser):
                 content=self._json_bytes(payload),
                 headers=self._auth_headers({"Content-Type": "application/json;charset=UTF-8"}),
             )
-        rsp.raise_for_status()
-        body = rsp.json()
-        self._raise_if_error(body, context="uploads complete error")
-        return body
+        return self._read_api_response(rsp, context="uploads complete error")
 
     async def _multipart_create_file(self, file_path: Path) -> Dict[str, Any]:
         init_obj = await self._uploads_init(file_path=file_path)

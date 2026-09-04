@@ -14,8 +14,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use tracing::Level;
-use tracing_subscriber::fmt::writer::BoxMakeWriter;
 use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::fmt::writer::BoxMakeWriter;
 
 /// Cached reference to the Python `openviking.storage.errors.LockAcquisitionError` class,
 /// imported at module init so that native and Python code share the same exception type.
@@ -66,10 +66,7 @@ fn open_tracing_log_file(path: &Path) -> Result<std::fs::File, String> {
 }
 
 /// Swap the shared Rust tracing file handle to the current active log file.
-fn replace_tracing_log_file(
-    shared: &Arc<Mutex<std::fs::File>>,
-    path: &Path,
-) -> Result<(), String> {
+fn replace_tracing_log_file(shared: &Arc<Mutex<std::fs::File>>, path: &Path) -> Result<(), String> {
     let new_file = open_tracing_log_file(path)?;
     let mut file = shared
         .lock()
@@ -164,7 +161,9 @@ fn pathlock_err_to_py(err: PathLockError) -> PyErr {
         PathLockError::Conflict { .. }
         | PathLockError::Timeout { .. }
         | PathLockError::HandoffFailed(_)
-        | PathLockError::Busy { .. } => {
+        | PathLockError::Busy { .. }
+        | PathLockError::EmptyToken { .. } =>
+        {
             #[allow(deprecated)]
             Python::with_gil(|py| {
                 let ty = LOCK_ACQUISITION_ERROR_TYPE
@@ -179,6 +178,7 @@ fn pathlock_err_to_py(err: PathLockError) -> PyErr {
         }
     }
 }
+use std::fmt;
 use std::fs;
 use std::future::Future;
 use std::time::{Duration, UNIX_EPOCH};
@@ -210,21 +210,21 @@ fn validate_expire_secs(v: f64) -> PyResult<f64> {
     }
 }
 
-use ragfs::cache::{
-    CacheError, CacheNamespace, CachePolicy, CacheProvider, CacheResult, CacheTraversalMode,
-    MemoryCacheProvider,
+use ragfs::cache::{CachePolicy, CacheTraversalMode};
+use ragfs::cache_runtime::{CacheRuntime, DynamicProviderConfig, RedisProviderConfig};
+use ragfs::core::builder::{
+    CacheFsConfig, CacheRuntimeProviderConfig, CacheStackConfig, EncryptionConfig,
 };
-use ragfs::core::builder::EncryptionConfig;
 use ragfs::core::{
-    build_default_stack, build_stack_with_mountable, ConfigValue, FileInfo, FileSystem,
-    FilesystemStats, FsContext, FsContextInner, FsOperation, GlobPage, GrepResult, MountableFS,
-    OperationStats, PathLockContext, PluginConfig, RagfsConfig, TreeEntry, WriteFlag, FS_CTX,
+    build_configured_stack, ConfigValue, FileInfo, FileSystem, FilesystemStats, FsContext,
+    FsContextInner, FsOperation, GlobPage, GrepResult, MountableFS, OperationStats,
+    PathLockContext, PluginConfig, RagfsConfig, TreeEntry, WriteFlag, FS_CTX,
 };
+use ragfs::lock::types::PathLockError;
 use ragfs::lock::{
     BorrowedPathLockLease, OwnedPathLockLease, PathLockConfig, PathLockHandoffRef, PathLockKind,
     PathLockManager, PathLockRequest,
 };
-use ragfs::lock::types::PathLockError;
 
 /// Parse one Python pathlock request without silently defaulting invalid fields.
 fn parse_pathlock_request(raw: &HashMap<String, String>) -> PyResult<PathLockRequest> {
@@ -261,103 +261,79 @@ fn parse_pathlock_request_batch(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CacheProviderKind {
-    Memory,
-    Yuanrong,
-    Mooncake,
     Redis,
+    Dynamic,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RagfsCacheConfig {
     enabled: bool,
+    runtime_enabled: bool,
     provider: CacheProviderKind,
     namespace: String,
     max_file_size_bytes: usize,
     traversal_mode: CacheTraversalMode,
     bypass_prefixes: Vec<String>,
-    yuanrong: YuanrongCacheConfig,
-    mooncake: MooncakeCacheConfig,
     redis: RedisCacheConfig,
+    dynamic: DynamicCacheConfig,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct YuanrongCacheConfig {
-    host: String,
-    port: u16,
-    connect_timeout_ms: u64,
-    request_timeout_ms: u64,
-    sdk_concurrency: usize,
+#[derive(Clone, PartialEq, Eq)]
+struct DynamicCacheConfig {
+    library: String,
+    params: serde_json::Value,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct MooncakeCacheConfig {
-    local_hostname: String,
-    metadata_server: String,
-    master_server_addr: String,
-    protocol: String,
-    device_name: String,
-    global_segment_size: u64,
-    local_buffer_size: u64,
-    replica_num: usize,
-    sdk_concurrency: usize,
-    operation_timeout_ms: u64,
+impl fmt::Debug for DynamicCacheConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DynamicCacheConfig")
+            .field("library", &self.library)
+            .field("params", &"<redacted>")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RedisCacheConfig {
     mode: String,
     endpoints: Vec<String>,
+    master_name: Option<String>,
     username: String,
     password_env: String,
+    password: String,
+    sentinel_username: String,
+    sentinel_password_env: String,
+    sentinel_password: String,
+    db: i64,
     pool_size: usize,
     connect_timeout_ms: u64,
     command_timeout_ms: u64,
-    key_prefix: String,
     default_ttl_seconds: u64,
-    read_from_replica: bool,
+    tls_insecure_skip_verify: bool,
 }
 
 impl Default for RagfsCacheConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            provider: CacheProviderKind::Memory,
+            runtime_enabled: false,
+            provider: CacheProviderKind::Redis,
             namespace: "openviking".to_string(),
             max_file_size_bytes: CachePolicy::default().max_file_size(),
             traversal_mode: CacheTraversalMode::Backend,
             bypass_prefixes: Vec::new(),
-            yuanrong: YuanrongCacheConfig::default(),
-            mooncake: MooncakeCacheConfig::default(),
             redis: RedisCacheConfig::default(),
+            dynamic: DynamicCacheConfig::default(),
         }
     }
 }
 
-impl Default for YuanrongCacheConfig {
+impl Default for DynamicCacheConfig {
     fn default() -> Self {
         Self {
-            host: "127.0.0.1".to_string(),
-            port: 31501,
-            connect_timeout_ms: 5_000,
-            request_timeout_ms: 5_000,
-            sdk_concurrency: 4,
-        }
-    }
-}
-
-impl Default for MooncakeCacheConfig {
-    fn default() -> Self {
-        Self {
-            local_hostname: "127.0.0.1".to_string(),
-            metadata_server: "http://127.0.0.1:8080/metadata".to_string(),
-            master_server_addr: "127.0.0.1:50051".to_string(),
-            protocol: "tcp".to_string(),
-            device_name: String::new(),
-            global_segment_size: 512 << 20,
-            local_buffer_size: 128 << 20,
-            replica_num: 2,
-            sdk_concurrency: 4,
-            operation_timeout_ms: 5_000,
+            library: String::new(),
+            params: serde_json::Value::Object(serde_json::Map::new()),
         }
     }
 }
@@ -367,113 +343,63 @@ impl Default for RedisCacheConfig {
         Self {
             mode: "standalone".to_string(),
             endpoints: vec!["redis://127.0.0.1:6379".to_string()],
+            master_name: None,
             username: String::new(),
             password_env: String::new(),
+            password: String::new(),
+            sentinel_username: String::new(),
+            sentinel_password_env: String::new(),
+            sentinel_password: String::new(),
+            db: 0,
             pool_size: 32,
             connect_timeout_ms: 1_000,
             command_timeout_ms: 20,
-            key_prefix: "ragfs-cache".to_string(),
             default_ttl_seconds: 3_600,
-            read_from_replica: false,
+            tls_insecure_skip_verify: false,
         }
     }
 }
 
-struct CacheProviderFactory;
-
-impl CacheProviderFactory {
-    async fn create(config: &RagfsCacheConfig) -> CacheResult<Arc<dyn CacheProvider>> {
-        match config.provider {
-            CacheProviderKind::Memory => Ok(Arc::new(MemoryCacheProvider::new())),
-            CacheProviderKind::Yuanrong => create_yuanrong_provider(config).await,
-            CacheProviderKind::Mooncake => create_mooncake_provider(config).await,
-            CacheProviderKind::Redis => create_redis_provider(config).await,
+impl RagfsCacheConfig {
+    fn stack_config(&self) -> Option<CacheStackConfig> {
+        if !self.enabled && !self.runtime_enabled {
+            return None;
         }
+        let provider = match self.provider {
+            CacheProviderKind::Redis => CacheRuntimeProviderConfig::Redis(RedisProviderConfig {
+                mode: self.redis.mode.clone(),
+                endpoints: self.redis.endpoints.clone(),
+                master_name: self.redis.master_name.clone(),
+                username: self.redis.username.clone(),
+                password_env: self.redis.password_env.clone(),
+                password: self.redis.password.clone(),
+                sentinel_username: self.redis.sentinel_username.clone(),
+                sentinel_password_env: self.redis.sentinel_password_env.clone(),
+                sentinel_password: self.redis.sentinel_password.clone(),
+                db: self.redis.db,
+                pool_size: self.redis.pool_size,
+                connect_timeout_ms: self.redis.connect_timeout_ms,
+                command_timeout_ms: self.redis.command_timeout_ms,
+                default_ttl_seconds: self.redis.default_ttl_seconds,
+                tls_insecure_skip_verify: self.redis.tls_insecure_skip_verify,
+            }),
+            CacheProviderKind::Dynamic => {
+                CacheRuntimeProviderConfig::Dynamic(DynamicProviderConfig {
+                    library_path: PathBuf::from(&self.dynamic.library),
+                    params_json: serde_json::to_string(&self.dynamic.params)
+                        .expect("dynamic provider params are valid JSON"),
+                })
+            }
+        };
+        Some(CacheStackConfig {
+            provider: Some(provider),
+            cachefs: CacheFsConfig {
+                enabled: self.enabled,
+                namespace: self.namespace.clone(),
+                policy: cache_policy_from_config(self),
+            },
+        })
     }
-}
-
-#[cfg(feature = "yuanrong-native")]
-async fn create_yuanrong_provider(
-    config: &RagfsCacheConfig,
-) -> CacheResult<Arc<dyn CacheProvider>> {
-    use ragfs_cache_yuanrong::{YuanrongConfig, YuanrongProvider};
-
-    let provider = YuanrongProvider::connect(YuanrongConfig {
-        host: config.yuanrong.host.clone(),
-        port: config.yuanrong.port,
-        connect_timeout_ms: config.yuanrong.connect_timeout_ms,
-        request_timeout_ms: config.yuanrong.request_timeout_ms,
-        sdk_concurrency: config.yuanrong.sdk_concurrency,
-    })
-    .await?;
-    Ok(Arc::new(provider))
-}
-
-#[cfg(not(feature = "yuanrong-native"))]
-async fn create_yuanrong_provider(
-    _config: &RagfsCacheConfig,
-) -> CacheResult<Arc<dyn CacheProvider>> {
-    Err(CacheError::Unavailable(
-        "Yuanrong support requires the yuanrong-native feature".to_string(),
-    ))
-}
-
-#[cfg(feature = "mooncake-native")]
-async fn create_mooncake_provider(
-    config: &RagfsCacheConfig,
-) -> CacheResult<Arc<dyn CacheProvider>> {
-    use ragfs_cache_mooncake::{MooncakeConfig, MooncakeProvider};
-
-    let provider = MooncakeProvider::connect(MooncakeConfig {
-        local_hostname: config.mooncake.local_hostname.clone(),
-        metadata_server: config.mooncake.metadata_server.clone(),
-        master_server_addr: config.mooncake.master_server_addr.clone(),
-        protocol: config.mooncake.protocol.clone(),
-        device_name: config.mooncake.device_name.clone(),
-        global_segment_size: config.mooncake.global_segment_size,
-        local_buffer_size: config.mooncake.local_buffer_size,
-        replica_num: config.mooncake.replica_num,
-        sdk_concurrency: config.mooncake.sdk_concurrency,
-        operation_timeout_ms: config.mooncake.operation_timeout_ms,
-    })
-    .await?;
-    Ok(Arc::new(provider))
-}
-
-#[cfg(not(feature = "mooncake-native"))]
-async fn create_mooncake_provider(
-    _config: &RagfsCacheConfig,
-) -> CacheResult<Arc<dyn CacheProvider>> {
-    Err(CacheError::Unavailable(
-        "Mooncake support requires the mooncake-native feature".to_string(),
-    ))
-}
-
-#[cfg(feature = "cache-redis")]
-async fn create_redis_provider(config: &RagfsCacheConfig) -> CacheResult<Arc<dyn CacheProvider>> {
-    use ragfs_cache_redis::{RedisConfig, RedisProvider};
-
-    let provider = RedisProvider::connect(RedisConfig {
-        mode: config.redis.mode.clone(),
-        endpoints: config.redis.endpoints.clone(),
-        username: config.redis.username.clone(),
-        password_env: config.redis.password_env.clone(),
-        pool_size: config.redis.pool_size,
-        connect_timeout_ms: config.redis.connect_timeout_ms,
-        command_timeout_ms: config.redis.command_timeout_ms,
-        key_prefix: config.redis.key_prefix.clone(),
-        default_ttl_seconds: config.redis.default_ttl_seconds,
-        read_from_replica: config.redis.read_from_replica,
-    })
-    .await?;
-    Ok(Arc::new(provider))
-}
-
-#[cfg(not(feature = "cache-redis"))]
-async fn create_redis_provider(_config: &RagfsCacheConfig) -> CacheResult<Arc<dyn CacheProvider>> {
-    Err(CacheError::Unavailable(
-        "Redis support requires the cache-redis feature".to_string(),
-    ))
 }
 
 fn cache_config_from_ov_conf(path: &str) -> Result<RagfsCacheConfig, String> {
@@ -481,15 +407,107 @@ fn cache_config_from_ov_conf(path: &str) -> Result<RagfsCacheConfig, String> {
         .map_err(|error| format!("failed to read OpenViking config {path}: {error}"))?;
     let json: serde_json::Value = serde_json::from_str(&raw)
         .map_err(|error| format!("failed to parse OpenViking config {path}: {error}"))?;
+    cache_config_from_canonical_ov_conf(&json)
+}
 
-    match json
-        .get("storage")
-        .and_then(|storage| storage.get("agfs"))
-        .and_then(|agfs| agfs.get("cache"))
-    {
-        Some(cache) => cache_config_from_value(cache),
-        None => Ok(RagfsCacheConfig::default()),
+fn cache_config_from_canonical_ov_conf(
+    json: &serde_json::Value,
+) -> Result<RagfsCacheConfig, String> {
+    let agfs = json.get("storage").and_then(|storage| storage.get("agfs"));
+    if agfs.and_then(|agfs| agfs.get("cache")).is_some() {
+        return Err(
+            "storage.agfs.cache has been removed; use cache.provider/cache.params and ".to_string()
+                + "storage.agfs.cachefs.backend=cache",
+        );
     }
+
+    let queuefs = agfs.and_then(|agfs| agfs.get("queuefs"));
+    if queuefs.and_then(|queuefs| queuefs.get("redis")).is_some() {
+        return Err(
+            "storage.agfs.queuefs.redis has been removed; use queuefs backend=cache with "
+                .to_string()
+                + "cache.provider/cache.params",
+        );
+    }
+    let queuefs_backend = optional_backend(queuefs, "storage.agfs.queuefs", "sqlite")?;
+    if queuefs_backend == "redis" {
+        return Err(
+            "queuefs backend=redis has been removed; use backend=cache with ".to_string()
+                + "cache.provider/cache.params",
+        );
+    }
+
+    let cachefs = agfs.and_then(|agfs| agfs.get("cachefs"));
+    let cachefs_backend = optional_backend(cachefs, "storage.agfs.cachefs", "local")?;
+    if !matches!(cachefs_backend.as_str(), "local" | "cache") {
+        return Err(format!(
+            "unsupported storage.agfs.cachefs.backend: {cachefs_backend}; expected local or cache"
+        ));
+    }
+
+    let mut config = RagfsCacheConfig::default();
+    config.enabled = cachefs_backend == "cache";
+    config.runtime_enabled = config.enabled || queuefs_backend == "cache";
+    if let Some(cachefs) = cachefs {
+        let cachefs = cachefs
+            .as_object()
+            .ok_or_else(|| "storage.agfs.cachefs must be an object".to_string())?;
+        config.namespace = string_field(cachefs, "namespace", &config.namespace)?;
+        config.max_file_size_bytes =
+            usize_field(cachefs, "max_file_size_bytes", config.max_file_size_bytes)?;
+        config.traversal_mode =
+            traversal_mode(string_field(cachefs, "traversal_mode", "backend")?)?;
+        config.bypass_prefixes = string_array_field(cachefs, "bypass_prefixes")?;
+    }
+
+    if !config.runtime_enabled {
+        return Ok(config);
+    }
+    let cache = json
+        .get("cache")
+        .ok_or_else(|| {
+            "top-level cache.provider/cache.params is required when CacheFS or QueueFS uses backend=cache"
+                .to_string()
+        })?
+        .as_object()
+        .ok_or_else(|| "top-level cache must be an object".to_string())?;
+    let provider = cache
+        .get("provider")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "top-level cache.provider must be a string".to_string())?;
+    let params = cache
+        .get("params")
+        .map(|params| {
+            params
+                .as_object()
+                .ok_or_else(|| "top-level cache.params must be an object".to_string())
+        })
+        .transpose()?
+        .cloned()
+        .unwrap_or_default();
+    config.provider = provider_kind(provider.to_string())?;
+    match config.provider {
+        CacheProviderKind::Redis => parse_redis_config(&mut config.redis, &params, "cache.params")?,
+        CacheProviderKind::Dynamic => {
+            parse_dynamic_config(&mut config.dynamic, &params)?;
+        }
+    }
+    validate_cache_runtime_config(&config)?;
+    Ok(config)
+}
+
+fn optional_backend(
+    section: Option<&serde_json::Value>,
+    name: &str,
+    default: &str,
+) -> Result<String, String> {
+    let Some(section) = section else {
+        return Ok(default.to_string());
+    };
+    let section = section
+        .as_object()
+        .ok_or_else(|| format!("{name} must be an object"))?;
+    string_field(section, "backend", default)
 }
 
 fn cache_config_from_value(cache: &serde_json::Value) -> Result<RagfsCacheConfig, String> {
@@ -498,116 +516,120 @@ fn cache_config_from_value(cache: &serde_json::Value) -> Result<RagfsCacheConfig
     }
     let cache = cache
         .as_object()
-        .ok_or_else(|| "storage.agfs.cache must be an object".to_string())?;
+        .ok_or_else(|| "binding cache config must be an object".to_string())?;
 
     let mut config = RagfsCacheConfig::default();
     config.enabled = bool_field(cache, "enabled", config.enabled)?;
-    config.provider = provider_kind(string_field(cache, "provider", "memory")?)?;
+    config.runtime_enabled = bool_field(cache, "runtime_enabled", config.enabled)?;
+    let provider = string_field(cache, "provider", "redis")?;
+    config.provider = provider_kind(provider)?;
     config.namespace = string_field(cache, "namespace", &config.namespace)?;
     if config.namespace.trim().is_empty() {
-        return Err("storage.agfs.cache.namespace must not be empty".to_string());
+        return Err("cache.namespace must not be empty".to_string());
     }
     config.max_file_size_bytes =
         usize_field(cache, "max_file_size_bytes", config.max_file_size_bytes)?;
     config.traversal_mode = traversal_mode(string_field(cache, "traversal_mode", "backend")?)?;
     config.bypass_prefixes = string_array_field(cache, "bypass_prefixes")?;
 
-    if let Some(yuanrong) = cache.get("yuanrong") {
-        let yuanrong = yuanrong
-            .as_object()
-            .ok_or_else(|| "storage.agfs.cache.yuanrong must be an object".to_string())?;
-        config.yuanrong.host = string_field(yuanrong, "host", &config.yuanrong.host)?;
-        config.yuanrong.port = u16_field(yuanrong, "port", config.yuanrong.port)?;
-        config.yuanrong.connect_timeout_ms = u64_field(
-            yuanrong,
-            "connect_timeout_ms",
-            config.yuanrong.connect_timeout_ms,
-        )?;
-        config.yuanrong.request_timeout_ms = u64_field(
-            yuanrong,
-            "request_timeout_ms",
-            config.yuanrong.request_timeout_ms,
-        )?;
-        config.yuanrong.sdk_concurrency =
-            usize_field(yuanrong, "sdk_concurrency", config.yuanrong.sdk_concurrency)?;
-    }
-
-    if let Some(mooncake) = cache.get("mooncake") {
-        let mooncake = mooncake
-            .as_object()
-            .ok_or_else(|| "storage.agfs.cache.mooncake must be an object".to_string())?;
-        config.mooncake.local_hostname =
-            string_field(mooncake, "local_hostname", &config.mooncake.local_hostname)?;
-        config.mooncake.metadata_server = string_field(
-            mooncake,
-            "metadata_server",
-            &config.mooncake.metadata_server,
-        )?;
-        config.mooncake.master_server_addr = string_field(
-            mooncake,
-            "master_server_addr",
-            &config.mooncake.master_server_addr,
-        )?;
-        config.mooncake.protocol = string_field(mooncake, "protocol", &config.mooncake.protocol)?;
-        config.mooncake.device_name =
-            string_field(mooncake, "device_name", &config.mooncake.device_name)?;
-        config.mooncake.global_segment_size = u64_field(
-            mooncake,
-            "global_segment_size",
-            config.mooncake.global_segment_size,
-        )?;
-        config.mooncake.local_buffer_size = u64_field(
-            mooncake,
-            "local_buffer_size",
-            config.mooncake.local_buffer_size,
-        )?;
-        config.mooncake.replica_num =
-            usize_field(mooncake, "replica_num", config.mooncake.replica_num)?;
-        config.mooncake.sdk_concurrency =
-            usize_field(mooncake, "sdk_concurrency", config.mooncake.sdk_concurrency)?;
-        config.mooncake.operation_timeout_ms = u64_field(
-            mooncake,
-            "operation_timeout_ms",
-            config.mooncake.operation_timeout_ms,
-        )?;
-    }
-
     if let Some(redis) = cache.get("redis") {
         let redis = redis
             .as_object()
-            .ok_or_else(|| "storage.agfs.cache.redis must be an object".to_string())?;
-        config.redis.mode = string_field(redis, "mode", &config.redis.mode)?;
-        config.redis.endpoints =
-            string_array_field_or_default(redis, "endpoints", &config.redis.endpoints)?;
-        config.redis.username = string_field(redis, "username", &config.redis.username)?;
-        config.redis.password_env =
-            string_field(redis, "password_env", &config.redis.password_env)?;
-        config.redis.pool_size = usize_field(redis, "pool_size", config.redis.pool_size)?;
-        config.redis.connect_timeout_ms =
-            u64_field(redis, "connect_timeout_ms", config.redis.connect_timeout_ms)?;
-        config.redis.command_timeout_ms =
-            u64_field(redis, "command_timeout_ms", config.redis.command_timeout_ms)?;
-        config.redis.key_prefix = string_field(redis, "key_prefix", &config.redis.key_prefix)?;
-        config.redis.default_ttl_seconds = u64_field_allow_zero(
-            redis,
-            "default_ttl_seconds",
-            config.redis.default_ttl_seconds,
-        )?;
-        config.redis.read_from_replica =
-            bool_field(redis, "read_from_replica", config.redis.read_from_replica)?;
+            .ok_or_else(|| "cache.redis must be an object".to_string())?;
+        parse_redis_config(&mut config.redis, redis, "cache.redis")?;
     }
 
+    if let Some(dynamic) = cache.get("dynamic") {
+        let dynamic = dynamic
+            .as_object()
+            .ok_or_else(|| "cache.dynamic must be an object".to_string())?;
+        parse_dynamic_config(&mut config.dynamic, dynamic)?;
+    }
+    validate_cache_runtime_config(&config)?;
     Ok(config)
+}
+
+fn parse_dynamic_config(
+    config: &mut DynamicCacheConfig,
+    params: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    config.library = string_field(params, "library", &config.library)?;
+    let mut provider_params = params.clone();
+    provider_params.remove("library");
+    config.params = serde_json::Value::Object(provider_params);
+    Ok(())
+}
+
+fn parse_redis_config(
+    config: &mut RedisCacheConfig,
+    redis: &serde_json::Map<String, serde_json::Value>,
+    name: &str,
+) -> Result<(), String> {
+    const FIELDS: &[&str] = &[
+        "mode",
+        "endpoints",
+        "master_name",
+        "username",
+        "password_env",
+        "password",
+        "sentinel_username",
+        "sentinel_password_env",
+        "sentinel_password",
+        "db",
+        "pool_size",
+        "connect_timeout_ms",
+        "command_timeout_ms",
+        "default_ttl_seconds",
+        "tls_insecure_skip_verify",
+    ];
+    if let Some(field) = redis.keys().find(|field| !FIELDS.contains(&field.as_str())) {
+        return Err(format!("unsupported {name} field: {field}"));
+    }
+    config.mode = string_field(redis, "mode", &config.mode)?;
+    config.endpoints = string_array_field_or_default(redis, "endpoints", &config.endpoints)?;
+    config.master_name = optional_string_field(redis, "master_name")?;
+    config.username = string_field(redis, "username", &config.username)?;
+    config.password_env = string_field(redis, "password_env", &config.password_env)?;
+    config.password = string_field(redis, "password", &config.password)?;
+    config.sentinel_username = string_field(redis, "sentinel_username", &config.sentinel_username)?;
+    config.sentinel_password_env = string_field(
+        redis,
+        "sentinel_password_env",
+        &config.sentinel_password_env,
+    )?;
+    config.sentinel_password = string_field(redis, "sentinel_password", &config.sentinel_password)?;
+    config.db = i64_field(redis, "db", config.db)?;
+    config.pool_size = usize_field(redis, "pool_size", config.pool_size)?;
+    config.connect_timeout_ms = u64_field(redis, "connect_timeout_ms", config.connect_timeout_ms)?;
+    config.command_timeout_ms = u64_field(redis, "command_timeout_ms", config.command_timeout_ms)?;
+    config.default_ttl_seconds =
+        u64_field_allow_zero(redis, "default_ttl_seconds", config.default_ttl_seconds)?;
+    config.tls_insecure_skip_verify = bool_field(
+        redis,
+        "tls_insecure_skip_verify",
+        config.tls_insecure_skip_verify,
+    )?;
+    Ok(())
+}
+
+fn validate_cache_runtime_config(config: &RagfsCacheConfig) -> Result<(), String> {
+    if !config.enabled && !config.runtime_enabled {
+        return Ok(());
+    }
+    if matches!(config.provider, CacheProviderKind::Dynamic)
+        && config.dynamic.library.trim().is_empty()
+    {
+        return Err("cache dynamic provider library must not be empty".to_string());
+    }
+    Ok(())
 }
 
 fn provider_kind(value: String) -> Result<CacheProviderKind, String> {
     match value.as_str() {
-        "memory" => Ok(CacheProviderKind::Memory),
-        "yuanrong" => Ok(CacheProviderKind::Yuanrong),
-        "mooncake" => Ok(CacheProviderKind::Mooncake),
         "redis" => Ok(CacheProviderKind::Redis),
+        "dynamic" => Ok(CacheProviderKind::Dynamic),
         other => Err(format!(
-            "unsupported storage.agfs.cache.provider: {other}; expected memory, yuanrong, mooncake, or redis"
+            "unsupported cache.provider: {other}; expected redis or dynamic"
         )),
     }
 }
@@ -617,7 +639,7 @@ fn traversal_mode(value: String) -> Result<CacheTraversalMode, String> {
         "backend" => Ok(CacheTraversalMode::Backend),
         "cached_traversal" => Ok(CacheTraversalMode::CachedTraversal),
         other => Err(format!(
-            "unsupported storage.agfs.cache.traversal_mode: {other}; expected backend or cached_traversal"
+            "unsupported cachefs.traversal_mode: {other}; expected backend or cached_traversal"
         )),
     }
 }
@@ -649,6 +671,32 @@ fn string_field(
     }
 }
 
+fn optional_string_field(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<Option<String>, String> {
+    match object.get(key) {
+        Some(serde_json::Value::Null) | None => Ok(None),
+        Some(value) => value
+            .as_str()
+            .map(|value| Some(value.to_string()))
+            .ok_or_else(|| format!("{key} must be a string or null")),
+    }
+}
+
+fn i64_field(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    default: i64,
+) -> Result<i64, String> {
+    match object.get(key) {
+        Some(value) => value
+            .as_i64()
+            .ok_or_else(|| format!("{key} must be an integer")),
+        None => Ok(default),
+    }
+}
+
 fn u64_field(
     object: &serde_json::Map<String, serde_json::Value>,
     key: &str,
@@ -674,15 +722,6 @@ fn u64_field_allow_zero(
             .ok_or_else(|| format!("{key} must be a non-negative integer")),
         None => Ok(default),
     }
-}
-
-fn u16_field(
-    object: &serde_json::Map<String, serde_json::Value>,
-    key: &str,
-    default: u16,
-) -> Result<u16, String> {
-    let value = u64_field(object, key, default as u64)?;
-    u16::try_from(value).map_err(|_| format!("{key} must fit in u16"))
 }
 
 fn usize_field(
@@ -1050,7 +1089,10 @@ fn build_fs_context(ctx: Option<HashMap<String, String>>) -> FsContext {
     let mut bypass_cache = false;
     if let Some(m) = &ctx {
         account_id = m.get("account_id").cloned().unwrap_or_default();
-        disable_auto_pathlock = m.get("disable_auto_pathlock").map(|s| s == "true").unwrap_or(false);
+        disable_auto_pathlock = m
+            .get("disable_auto_pathlock")
+            .map(|s| s == "true")
+            .unwrap_or(false);
         lease_ref = m.get("lease_ref").cloned();
         bypass_cache = m.get("bypass_cache").map(|s| s == "true").unwrap_or(false);
     }
@@ -1135,10 +1177,7 @@ fn extract_lease_ref(py: Python<'_>, lease_ref: &Py<PyAny>) -> PyResult<String> 
 }
 
 /// Extract an owned PathLock lease and lifecycle capability from a typed dictionary.
-fn extract_owned_lease_ref(
-    py: Python<'_>,
-    lease_ref: &Py<PyAny>,
-) -> PyResult<(String, String)> {
+fn extract_owned_lease_ref(py: Python<'_>, lease_ref: &Py<PyAny>) -> PyResult<(String, String)> {
     let ref_dict: HashMap<String, Py<PyAny>> = lease_ref.extract(py)?;
     require_owned_lease_ref(py, &ref_dict)
 }
@@ -1201,9 +1240,8 @@ fn load_git_from_config(
     fs: &Arc<MountableFS>,
     rt: &tokio::runtime::Runtime,
 ) -> PyResult<(Option<Arc<ragfs::git::GitService>>, Option<String>)> {
-    let body = std::fs::read_to_string(path).map_err(|e| {
-        PyRuntimeError::new_err(format!("read config_path {}: {}", path, e))
-    })?;
+    let body = std::fs::read_to_string(path)
+        .map_err(|e| PyRuntimeError::new_err(format!("read config_path {}: {}", path, e)))?;
     let cfg: BindingConfig = toml::from_str(&body)
         .map_err(|e| PyRuntimeError::new_err(format!("parse config_path: {}", e)))?;
     match cfg.git {
@@ -1227,6 +1265,8 @@ struct RAGFSBindingClient {
     git_backend: Option<String>,
     /// PathLock manager. OpenViking always builds ragfs with PathLock enabled.
     pathlock_manager: Arc<PathLockManager>,
+    /// Shared cache runtime. Closed only after mounted QueueFS instances shut down.
+    cache_runtime: Option<Arc<CacheRuntime>>,
 }
 
 impl RAGFSBindingClient {
@@ -1256,18 +1296,18 @@ impl RAGFSBindingClient {
 impl RAGFSBindingClient {
     /// Create a new RAGFS binding client.
     ///
-    /// `config_path` is a deprecated compatibility parameter kept only so legacy callers using
-    /// `RAGFSBindingClient(config_path=...)` do not fail. `config` is an optional sectioned dict
-    /// (mirrors ov.conf). The `encryption` section, when present, carries `root_key` (32 bytes) +
-    /// `provider_type` (int) and causes the stack to include an `EncryptionWrappedFS` layer.
-    /// Runtime `cache` configuration takes precedence over `config_path`.
+    /// `config_path` loads the canonical ov.conf schema. Removed cache schemas are rejected.
+    /// `config` is an optional sectioned dict produced by the Python runtime. The `encryption`
+    /// section, when present, carries `root_key` (32 bytes) + `provider_type` (int) and causes the
+    /// stack to include an `EncryptionWrappedFS` layer. Runtime `cache` configuration takes
+    /// precedence over `config_path`.
     #[new]
     #[pyo3(signature = (config_path=None, config=None, git_config_path=None))]
     fn new(
         py: Python<'_>,
         config_path: Option<&str>,
         config: Option<HashMap<String, Py<PyAny>>>,
-        git_config_path: Option<&str>
+        git_config_path: Option<&str>,
     ) -> PyResult<Self> {
         let rt = tokio::runtime::Runtime::new()
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to create runtime: {}", e)))?;
@@ -1355,34 +1395,24 @@ impl RAGFSBindingClient {
             }
         }
 
-        let cache_config = match runtime_cache_config {
-            Some(config) => config,
-            None => match config_path {
-                Some(path) => cache_config_from_ov_conf(path).map_err(|error| {
-                    PyRuntimeError::new_err(format!("Invalid cache config: {error}"))
-                })?,
-                None => RagfsCacheConfig::default(),
-            },
-        };
+        let file_cache_config = config_path
+            .map(cache_config_from_ov_conf)
+            .transpose()
+            .map_err(|error| PyRuntimeError::new_err(format!("Invalid cache config: {error}")))?;
+        let cache_config = runtime_cache_config
+            .or(file_cache_config)
+            .unwrap_or_default();
 
-        // Phase B: build the stack. Cache, when enabled, replaces the mountable
-        // layer with a cache-aware mountable while preserving the same plugin
-        // registration and per-backend encryption setup.
-        let stack = if cache_config.enabled {
-            let provider = rt
-                .block_on(CacheProviderFactory::create(&cache_config))
-                .map_err(|error| {
-                    PyRuntimeError::new_err(format!("Failed to initialize cache provider: {error}"))
-                })?;
-            let mountable = Arc::new(MountableFS::with_cache(
-                provider,
-                CacheNamespace::new(&cache_config.namespace),
-                cache_policy_from_config(&cache_config),
-            ));
-            rt.block_on(build_stack_with_mountable(ragfs_cfg, mountable))
-        } else {
-            rt.block_on(build_default_stack(ragfs_cfg))
-        };
+        // Phase B: RAGFS owns Runtime construction and injects the same instance
+        // into CacheFS and QueueFS. The binding only translates configuration.
+        let stack = rt
+            .block_on(build_configured_stack(
+                ragfs_cfg,
+                cache_config.stack_config(),
+            ))
+            .map_err(|error| {
+                PyRuntimeError::new_err(format!("Failed to build RAGFS stack: {error}"))
+            })?;
 
         // Build the git service from inline config when present; otherwise fall
         // back to loading the [git] section from a config file path.
@@ -1401,6 +1431,24 @@ impl RAGFSBindingClient {
             git_service,
             git_backend,
             pathlock_manager: stack.pathlock_manager,
+            cache_runtime: stack.cache_runtime,
+        })
+    }
+
+    /// Stop mounted background services, then close the shared CacheRuntime.
+    fn close(&self, py: Python<'_>) -> PyResult<()> {
+        let mountable = Arc::clone(&self.mountable);
+        let cache_runtime = self.cache_runtime.clone();
+        py_detach_blocking(py, || {
+            self.rt.block_on(async move {
+                let mount_result = mountable.shutdown().await;
+                let cache_result = match cache_runtime {
+                    Some(runtime) => runtime.close().await.map_err(|error| error.to_string()),
+                    None => Ok(()),
+                };
+                mount_result.map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+                cache_result.map_err(PyRuntimeError::new_err)
+            })
         })
     }
 
@@ -1410,7 +1458,11 @@ impl RAGFSBindingClient {
         m.insert("status".to_string(), "healthy".to_string());
         m.insert(
             "git_enabled".to_string(),
-            if self.git_service.is_some() { "true".into() } else { "false".into() },
+            if self.git_service.is_some() {
+                "true".into()
+            } else {
+                "false".into()
+            },
         );
         if let Some(b) = &self.git_backend {
             m.insert("git_backend".to_string(), b.clone());
@@ -1456,11 +1508,7 @@ impl RAGFSBindingClient {
 
     /// Read a commit's metadata or a blob's bytes at a path.
     #[pyo3(signature = (**kwargs))]
-    fn git_show(
-        &self,
-        py: Python<'_>,
-        kwargs: Option<&Bound<'_, PyDict>>,
-    ) -> PyResult<Py<PyAny>> {
+    fn git_show(&self, py: Python<'_>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Py<PyAny>> {
         let svc = self.git_service.clone().ok_or_else(|| {
             git::new_py_err_pub(py, "AGFSNotSupportedError", "git feature disabled".into())
         })?;
@@ -1471,7 +1519,7 @@ impl RAGFSBindingClient {
         let resp = py_detach_blocking(py, move || {
             self.rt.block_on(svc.show_with_limit(req, max_blob_bytes))
         })
-            .map_err(|e| git::map_git_error(py, e))?;
+        .map_err(|e| git::map_git_error(py, e))?;
         git::show_response_to_pydict(py, resp)
     }
 
@@ -1509,11 +1557,7 @@ impl RAGFSBindingClient {
 
     /// Walk snapshot history, optionally filtered to commits touching paths.
     #[pyo3(signature = (**kwargs))]
-    fn git_log(
-        &self,
-        py: Python<'_>,
-        kwargs: Option<&Bound<'_, PyDict>>,
-    ) -> PyResult<Py<PyAny>> {
+    fn git_log(&self, py: Python<'_>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Py<PyAny>> {
         let svc = self.git_service.clone().ok_or_else(|| {
             git::new_py_err_pub(py, "AGFSNotSupportedError", "git feature disabled".into())
         })?;
@@ -2210,22 +2254,20 @@ impl RAGFSBindingClient {
         let mgr = self.clone_pathlock_manager();
         let fs_ctx = build_fs_context(ctx);
         let timeout = validate_timeout_secs(timeout_secs)?;
-        let owner_capability =
-            extract_optional_owned_lease_ref(py, owner_lease_ref.as_ref())?;
-        let lease = self.run_scoped(py, fs_ctx, move || {
-            let mgr = mgr.clone();
-            let path = path.clone();
-            let capability = owner_capability.clone();
-            async move {
-                let capability = capability
-                    .as_ref()
-                    .map(|(lease_ref, ownership_ref)| {
+        let owner_capability = extract_optional_owned_lease_ref(py, owner_lease_ref.as_ref())?;
+        let lease = self
+            .run_scoped(py, fs_ctx, move || {
+                let mgr = mgr.clone();
+                let path = path.clone();
+                let capability = owner_capability.clone();
+                async move {
+                    let capability = capability.as_ref().map(|(lease_ref, ownership_ref)| {
                         (lease_ref.as_str(), ownership_ref.as_str())
                     });
-                mgr.acquire_exact(&path, timeout, capability).await
-            }
-        })
-        .map_err(pathlock_err_to_py)?;
+                    mgr.acquire_exact(&path, timeout, capability).await
+                }
+            })
+            .map_err(pathlock_err_to_py)?;
         Python::attach(|py| owned_lease_to_py_dict(py, &lease))
     }
 
@@ -2242,22 +2284,20 @@ impl RAGFSBindingClient {
         let mgr = self.clone_pathlock_manager();
         let fs_ctx = build_fs_context(ctx);
         let timeout = validate_timeout_secs(timeout_secs)?;
-        let owner_capability =
-            extract_optional_owned_lease_ref(py, owner_lease_ref.as_ref())?;
-        let lease = self.run_scoped(py, fs_ctx, move || {
-            let mgr = mgr.clone();
-            let paths = paths.clone();
-            let capability = owner_capability.clone();
-            async move {
-                let capability = capability
-                    .as_ref()
-                    .map(|(lease_ref, ownership_ref)| {
+        let owner_capability = extract_optional_owned_lease_ref(py, owner_lease_ref.as_ref())?;
+        let lease = self
+            .run_scoped(py, fs_ctx, move || {
+                let mgr = mgr.clone();
+                let paths = paths.clone();
+                let capability = owner_capability.clone();
+                async move {
+                    let capability = capability.as_ref().map(|(lease_ref, ownership_ref)| {
                         (lease_ref.as_str(), ownership_ref.as_str())
                     });
-                mgr.acquire_exact_batch(&paths, timeout, capability).await
-            }
-        })
-        .map_err(pathlock_err_to_py)?;
+                    mgr.acquire_exact_batch(&paths, timeout, capability).await
+                }
+            })
+            .map_err(pathlock_err_to_py)?;
         Python::attach(|py| owned_lease_to_py_dict(py, &lease))
     }
 
@@ -2274,22 +2314,20 @@ impl RAGFSBindingClient {
         let mgr = self.clone_pathlock_manager();
         let fs_ctx = build_fs_context(ctx);
         let timeout = validate_timeout_secs(timeout_secs)?;
-        let owner_capability =
-            extract_optional_owned_lease_ref(py, owner_lease_ref.as_ref())?;
-        let lease = self.run_scoped(py, fs_ctx, move || {
-            let mgr = mgr.clone();
-            let path = path.clone();
-            let capability = owner_capability.clone();
-            async move {
-                let capability = capability
-                    .as_ref()
-                    .map(|(lease_ref, ownership_ref)| {
+        let owner_capability = extract_optional_owned_lease_ref(py, owner_lease_ref.as_ref())?;
+        let lease = self
+            .run_scoped(py, fs_ctx, move || {
+                let mgr = mgr.clone();
+                let path = path.clone();
+                let capability = owner_capability.clone();
+                async move {
+                    let capability = capability.as_ref().map(|(lease_ref, ownership_ref)| {
                         (lease_ref.as_str(), ownership_ref.as_str())
                     });
-                mgr.acquire_tree(&path, timeout, capability).await
-            }
-        })
-        .map_err(pathlock_err_to_py)?;
+                    mgr.acquire_tree(&path, timeout, capability).await
+                }
+            })
+            .map_err(pathlock_err_to_py)?;
         Python::attach(|py| owned_lease_to_py_dict(py, &lease))
     }
 
@@ -2306,22 +2344,20 @@ impl RAGFSBindingClient {
         let mgr = self.clone_pathlock_manager();
         let fs_ctx = build_fs_context(ctx);
         let timeout = validate_timeout_secs(timeout_secs)?;
-        let owner_capability =
-            extract_optional_owned_lease_ref(py, owner_lease_ref.as_ref())?;
-        let lease = self.run_scoped(py, fs_ctx, move || {
-            let mgr = mgr.clone();
-            let paths = paths.clone();
-            let capability = owner_capability.clone();
-            async move {
-                let capability = capability
-                    .as_ref()
-                    .map(|(lease_ref, ownership_ref)| {
+        let owner_capability = extract_optional_owned_lease_ref(py, owner_lease_ref.as_ref())?;
+        let lease = self
+            .run_scoped(py, fs_ctx, move || {
+                let mgr = mgr.clone();
+                let paths = paths.clone();
+                let capability = owner_capability.clone();
+                async move {
+                    let capability = capability.as_ref().map(|(lease_ref, ownership_ref)| {
                         (lease_ref.as_str(), ownership_ref.as_str())
                     });
-                mgr.acquire_tree_batch(&paths, timeout, capability).await
-            }
-        })
-        .map_err(pathlock_err_to_py)?;
+                    mgr.acquire_tree_batch(&paths, timeout, capability).await
+                }
+            })
+            .map_err(pathlock_err_to_py)?;
         Python::attach(|py| owned_lease_to_py_dict(py, &lease))
     }
 
@@ -2339,24 +2375,22 @@ impl RAGFSBindingClient {
         let mgr = self.clone_pathlock_manager();
         let fs_ctx = build_fs_context(ctx);
         let timeout = validate_timeout_secs(timeout_secs)?;
-        let owner_capability =
-            extract_optional_owned_lease_ref(py, owner_lease_ref.as_ref())?;
-        let lease = self.run_scoped(py, fs_ctx, move || {
-            let mgr = mgr.clone();
-            let exact = exact_paths.clone();
-            let tree = tree_paths.clone();
-            let capability = owner_capability.clone();
-            async move {
-                let capability = capability
-                    .as_ref()
-                    .map(|(lease_ref, ownership_ref)| {
+        let owner_capability = extract_optional_owned_lease_ref(py, owner_lease_ref.as_ref())?;
+        let lease = self
+            .run_scoped(py, fs_ctx, move || {
+                let mgr = mgr.clone();
+                let exact = exact_paths.clone();
+                let tree = tree_paths.clone();
+                let capability = owner_capability.clone();
+                async move {
+                    let capability = capability.as_ref().map(|(lease_ref, ownership_ref)| {
                         (lease_ref.as_str(), ownership_ref.as_str())
                     });
-                mgr.acquire_exact_tree_batch(&exact, &tree, timeout, capability)
-                    .await
-            }
-        })
-        .map_err(pathlock_err_to_py)?;
+                    mgr.acquire_exact_tree_batch(&exact, &tree, timeout, capability)
+                        .await
+                }
+            })
+            .map_err(pathlock_err_to_py)?;
         Python::attach(|py| owned_lease_to_py_dict(py, &lease))
     }
 
@@ -2374,25 +2408,23 @@ impl RAGFSBindingClient {
         let mgr = self.clone_pathlock_manager();
         let fs_ctx = build_fs_context(ctx);
         let timeout = validate_timeout_secs(timeout_secs)?;
-        let owner_capability =
-            extract_optional_owned_lease_ref(py, owner_lease_ref.as_ref())?;
+        let owner_capability = extract_optional_owned_lease_ref(py, owner_lease_ref.as_ref())?;
 
         let lock_requests = parse_pathlock_request_batch(&requests)?;
 
-        let lease = self.run_scoped(py, fs_ctx, move || {
-            let mgr = mgr.clone();
-            let reqs = lock_requests.clone();
-            let capability = owner_capability.clone();
-            async move {
-                let capability = capability
-                    .as_ref()
-                    .map(|(lease_ref, ownership_ref)| {
+        let lease = self
+            .run_scoped(py, fs_ctx, move || {
+                let mgr = mgr.clone();
+                let reqs = lock_requests.clone();
+                let capability = owner_capability.clone();
+                async move {
+                    let capability = capability.as_ref().map(|(lease_ref, ownership_ref)| {
                         (lease_ref.as_str(), ownership_ref.as_str())
                     });
-                mgr.acquire_batch(&reqs, timeout, capability).await
-            }
-        })
-        .map_err(pathlock_err_to_py)?;
+                    mgr.acquire_batch(&reqs, timeout, capability).await
+                }
+            })
+            .map_err(pathlock_err_to_py)?;
         Python::attach(|py| owned_lease_to_py_dict(py, &lease))
     }
 
@@ -2408,16 +2440,17 @@ impl RAGFSBindingClient {
         let mgr2 = mgr.clone();
         let fs_ctx = build_fs_context(ctx);
         let lease_ref = extract_lease_ref(py, &owned_lease_ref)?;
-        let lease = self.run_scoped(py, fs_ctx, move || {
-            let mgr = mgr2.clone();
-            let lr = lease_ref.clone();
-            async move {
-                mgr.get_owned_lease_by_ref(&lr).await.ok_or_else(|| {
-                    PathLockError::Internal(format!("lease not found for ref '{lr}'"))
-                })
-            }
-        })
-        .map_err(|e: PathLockError| PyRuntimeError::new_err(e.to_string()))?;
+        let lease = self
+            .run_scoped(py, fs_ctx, move || {
+                let mgr = mgr2.clone();
+                let lr = lease_ref.clone();
+                async move {
+                    mgr.get_owned_lease_by_ref(&lr).await.ok_or_else(|| {
+                        PathLockError::Internal(format!("lease not found for ref '{lr}'"))
+                    })
+                }
+            })
+            .map_err(|e: PathLockError| PyRuntimeError::new_err(e.to_string()))?;
         let borrowed = mgr.as_borrowed(&lease);
         Python::attach(|py| borrowed_lease_to_py_dict(py, &borrowed))
     }
@@ -2433,23 +2466,24 @@ impl RAGFSBindingClient {
         let mgr = self.clone_pathlock_manager();
         let fs_ctx = build_fs_context(ctx);
         let (lease_ref, ownership_ref) = extract_owned_lease_ref(py, &owned_lease_ref)?;
-        let status = self.run_scoped(py, fs_ctx, move || {
-            let mgr = mgr.clone();
-            let lr = lease_ref.clone();
-            let ownership = ownership_ref.clone();
-            async move {
-                let lease = mgr
-                    .get_owned_lease_by_capability(&lr, &ownership)
-                    .await
-                    .ok_or_else(|| {
-                        PathLockError::InvalidRequest(format!(
-                            "owned lease capability does not match ref '{lr}'"
-                        ))
-                    })?;
-                mgr.refresh(&lease).await
-            }
-        })
-        .map_err(pathlock_err_to_py)?;
+        let status = self
+            .run_scoped(py, fs_ctx, move || {
+                let mgr = mgr.clone();
+                let lr = lease_ref.clone();
+                let ownership = ownership_ref.clone();
+                async move {
+                    let lease = mgr
+                        .get_owned_lease_by_capability(&lr, &ownership)
+                        .await
+                        .ok_or_else(|| {
+                            PathLockError::InvalidRequest(format!(
+                                "owned lease capability does not match ref '{lr}'"
+                            ))
+                        })?;
+                    mgr.refresh(&lease).await
+                }
+            })
+            .map_err(pathlock_err_to_py)?;
         Ok(status)
     }
 
@@ -2528,23 +2562,24 @@ impl RAGFSBindingClient {
         let mgr = self.clone_pathlock_manager();
         let fs_ctx = build_fs_context(ctx);
         let (lease_ref, ownership_ref) = extract_owned_lease_ref(py, &owned_lease_ref)?;
-        let handoff = self.run_scoped(py, fs_ctx, move || {
-            let mgr = mgr.clone();
-            let lr = lease_ref.clone();
-            let ownership = ownership_ref.clone();
-            async move {
-                let lease = mgr
-                    .get_owned_lease_by_capability(&lr, &ownership)
-                    .await
-                    .ok_or_else(|| {
-                        PathLockError::InvalidRequest(format!(
-                            "owned lease capability does not match ref '{lr}'"
-                        ))
-                    })?;
-                Ok(mgr.to_handoff(&lease))
-            }
-        })
-        .map_err(pathlock_err_to_py)?;
+        let handoff = self
+            .run_scoped(py, fs_ctx, move || {
+                let mgr = mgr.clone();
+                let lr = lease_ref.clone();
+                let ownership = ownership_ref.clone();
+                async move {
+                    let lease = mgr
+                        .get_owned_lease_by_capability(&lr, &ownership)
+                        .await
+                        .ok_or_else(|| {
+                            PathLockError::InvalidRequest(format!(
+                                "owned lease capability does not match ref '{lr}'"
+                            ))
+                        })?;
+                    Ok(mgr.to_handoff(&lease))
+                }
+            })
+            .map_err(pathlock_err_to_py)?;
         Python::attach(|py| handoff_ref_to_py_dict(py, &handoff))
     }
 
@@ -2627,12 +2662,13 @@ impl RAGFSBindingClient {
             lock_paths,
             covered_paths,
         };
-        let lease = self.run_scoped(py, fs_ctx, move || {
-            let mgr = mgr.clone();
-            let h = handoff.clone();
-            async move { mgr.adopt(&h).await }
-        })
-        .map_err(pathlock_err_to_py)?;
+        let lease = self
+            .run_scoped(py, fs_ctx, move || {
+                let mgr = mgr.clone();
+                let h = handoff.clone();
+                async move { mgr.adopt(&h).await }
+            })
+            .map_err(pathlock_err_to_py)?;
         Python::attach(|py| owned_lease_to_py_dict(py, &lease))
     }
 
@@ -2823,9 +2859,9 @@ mod tests {
     }
 
     #[test]
-    fn constructor_accepts_legacy_config_path_keyword() {
+    fn constructor_accepts_canonical_config_path() {
         let path = std::env::temp_dir().join(format!(
-            "openviking-legacy-config-path-{}.json",
+            "openviking-canonical-config-path-{}.json",
             std::process::id()
         ));
         fs::write(&path, r#"{"storage": {"agfs": {"backend": "local"}}}"#).unwrap();
@@ -2862,7 +2898,9 @@ mod tests {
         let _ = fs::remove_file(&rotated);
 
         let shared = Arc::new(Mutex::new(open_tracing_log_file(&active).unwrap()));
-        let mut writer = SharedFileWriter { file: shared.clone() };
+        let mut writer = SharedFileWriter {
+            file: shared.clone(),
+        };
         writer.write_all(b"before-rotate\n").unwrap();
         writer.flush().unwrap();
 
@@ -2872,53 +2910,19 @@ mod tests {
         writer.write_all(b"after-rotate\n").unwrap();
         writer.flush().unwrap();
 
-        assert!(fs::read_to_string(&rotated).unwrap().contains("before-rotate"));
-        assert!(fs::read_to_string(&active).unwrap().contains("after-rotate"));
+        assert!(fs::read_to_string(&rotated)
+            .unwrap()
+            .contains("before-rotate"));
+        assert!(fs::read_to_string(&active)
+            .unwrap()
+            .contains("after-rotate"));
 
         let _ = fs::remove_file(&active);
         let _ = fs::remove_file(&rotated);
     }
 
-    #[tokio::test]
-    async fn cache_provider_factory_creates_memory_provider_from_ov_conf() {
-        let path = std::env::temp_dir().join(format!(
-            "openviking-cache-config-{}.json",
-            std::process::id()
-        ));
-        fs::write(
-            &path,
-            r#"{
-                "storage": {
-                    "agfs": {
-                        "cache": {
-                            "enabled": true,
-                            "provider": "memory",
-                            "namespace": "ov-test",
-                            "traversal_mode": "cached_traversal"
-                        }
-                    }
-                }
-            }"#,
-        )
-        .unwrap();
-
-        let cache_config = cache_config_from_ov_conf(path.to_str().unwrap()).unwrap();
-        let provider = CacheProviderFactory::create(&cache_config).await.unwrap();
-
-        assert!(cache_config.enabled);
-        assert_eq!(cache_config.provider, CacheProviderKind::Memory);
-        assert_eq!(cache_config.namespace, "ov-test");
-        assert_eq!(
-            cache_config.traversal_mode,
-            CacheTraversalMode::CachedTraversal
-        );
-        assert_eq!(provider.name(), "memory");
-
-        fs::remove_file(path).unwrap();
-    }
-
     #[test]
-    fn missing_cache_config_defaults_to_disabled_memory_config() {
+    fn missing_cache_config_defaults_to_disabled_redis_config() {
         let path = std::env::temp_dir().join(format!(
             "openviking-no-cache-config-{}.json",
             std::process::id()
@@ -2928,11 +2932,194 @@ mod tests {
         let cache_config = cache_config_from_ov_conf(path.to_str().unwrap()).unwrap();
 
         assert!(!cache_config.enabled);
-        assert_eq!(cache_config.provider, CacheProviderKind::Memory);
+        assert_eq!(cache_config.provider, CacheProviderKind::Redis);
         assert_eq!(cache_config.namespace, "openviking");
         assert_eq!(cache_config.traversal_mode, CacheTraversalMode::Backend);
 
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn canonical_cache_config_is_parsed_from_ov_conf() {
+        let path = std::env::temp_dir().join(format!(
+            "openviking-canonical-cache-config-{}.json",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            r#"{
+                "cache": {
+                    "provider": "redis",
+                    "params": {
+                        "mode": "sentinel",
+                        "endpoints": ["redis://sentinel:26379"],
+                        "master_name": "mymaster",
+                        "command_timeout_ms": 750
+                    }
+                },
+                "storage": {
+                    "agfs": {
+                        "cachefs": {
+                            "backend": "cache",
+                            "namespace": "tenant-a",
+                            "traversal_mode": "cached_traversal"
+                        },
+                        "queuefs": {"backend": "cache"}
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let cache_config = cache_config_from_ov_conf(path.to_str().unwrap()).unwrap();
+
+        assert!(cache_config.enabled);
+        assert!(cache_config.runtime_enabled);
+        assert_eq!(cache_config.provider, CacheProviderKind::Redis);
+        assert_eq!(cache_config.namespace, "tenant-a");
+        assert_eq!(
+            cache_config.traversal_mode,
+            CacheTraversalMode::CachedTraversal
+        );
+        assert_eq!(cache_config.redis.mode, "sentinel");
+        assert_eq!(cache_config.redis.master_name.as_deref(), Some("mymaster"));
+        assert_eq!(cache_config.redis.command_timeout_ms, 750);
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn config_path_rejects_removed_nested_cache_schema() {
+        let path = std::env::temp_dir().join(format!(
+            "openviking-removed-cache-config-{}.json",
+            std::process::id()
+        ));
+        fs::write(&path, r#"{"storage":{"agfs":{"cache":{"enabled":true}}}}"#).unwrap();
+
+        let error = cache_config_from_ov_conf(path.to_str().unwrap()).unwrap_err();
+
+        assert!(error.contains("storage.agfs.cache has been removed"));
+        assert!(error.contains("cache.provider"));
+        assert!(error.contains("storage.agfs.cachefs.backend"));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn config_path_rejects_removed_queuefs_redis_schema() {
+        let path = std::env::temp_dir().join(format!(
+            "openviking-removed-queue-redis-config-{}.json",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            r#"{"storage":{"agfs":{"queuefs":{"backend":"redis"}}}}"#,
+        )
+        .unwrap();
+
+        let error = cache_config_from_ov_conf(path.to_str().unwrap()).unwrap_err();
+
+        assert!(error.contains("queuefs backend=redis has been removed"));
+        assert!(error.contains("backend=cache"));
+        assert!(error.contains("cache.params"));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn queuefs_cache_runtime_does_not_enable_cachefs() {
+        let path = std::env::temp_dir().join(format!(
+            "openviking-queue-cache-config-{}.json",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            r#"{
+                "cache": {"provider": "redis", "params": {}},
+                "storage": {
+                    "agfs": {
+                        "queuefs": {"backend": "cache"}
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let cache_config = cache_config_from_ov_conf(path.to_str().unwrap()).unwrap();
+        let stack_config = cache_config.stack_config().unwrap();
+
+        assert!(cache_config.runtime_enabled);
+        assert!(!stack_config.cachefs.enabled);
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn queuefs_cache_runtime_rejects_redis_provider_key_prefix() {
+        let path = std::env::temp_dir().join(format!(
+            "openviking-queue-cache-prefix-config-{}.json",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            r#"{
+                "cache": {
+                    "provider": "redis",
+                    "params": {"key_prefix": "provider-prefix"}
+                },
+                "storage": {
+                    "agfs": {
+                        "queuefs": {"backend": "cache"}
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let error = cache_config_from_ov_conf(path.to_str().unwrap()).unwrap_err();
+
+        assert!(error.contains("key_prefix"));
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn queuefs_cache_runtime_rejects_unsupported_provider_name() {
+        let path = std::env::temp_dir().join(format!(
+            "openviking-queue-cache-legacy-provider-{}.json",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            r#"{
+                "cache": {"provider": "mooncake", "params": {}},
+                "storage": {
+                    "agfs": {
+                        "queuefs": {"backend": "cache"}
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let error = cache_config_from_ov_conf(path.to_str().unwrap()).unwrap_err();
+
+        assert!(error.contains("mooncake"));
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn disabled_binding_cache_rejects_removed_provider_names() {
+        for provider in ["memory", "yuanrong", "mooncake"] {
+            let config = serde_json::json!({
+                "enabled": false,
+                "runtime_enabled": false,
+                "provider": provider,
+            });
+
+            let error = cache_config_from_value(&config).unwrap_err();
+
+            assert!(error.contains(provider));
+        }
     }
 
     #[test]
@@ -2943,7 +3130,13 @@ mod tests {
         ));
         fs::write(
             &path,
-            r#"{"storage": {"agfs": {"cache": {"traversal_mode": "bogus"}}}}"#,
+            r#"{
+                "cache": {"provider": "redis", "params": {}},
+                "storage": {"agfs": {"cachefs": {
+                    "backend": "cache",
+                    "traversal_mode": "bogus"
+                }}}
+            }"#,
         )
         .unwrap();
 
@@ -2963,15 +3156,18 @@ mod tests {
         ));
         fs::write(
             &path,
-            r#"{"storage": {"agfs": {"cache": {"enabled": true, "provider": "invalid"}}}}"#,
+            r#"{
+                "cache": {"provider": "redis", "params": {}},
+                "storage": {"agfs": {"cachefs": {"backend": "cache"}}}
+            }"#,
         )
         .unwrap();
 
         Python::attach(|py| {
             let ty = py.get_type::<RAGFSBindingClient>();
             let cache = PyDict::new(py);
-            cache.set_item("enabled", true).unwrap();
-            cache.set_item("provider", "memory").unwrap();
+            cache.set_item("enabled", false).unwrap();
+            cache.set_item("provider", "redis").unwrap();
             cache.set_item("namespace", "runtime-cache").unwrap();
             let config = PyDict::new(py);
             config.set_item("cache", cache).unwrap();
@@ -2989,116 +3185,75 @@ mod tests {
     }
 
     #[test]
-    fn redis_cache_config_is_parsed_from_ov_conf() {
+    fn constructor_rejects_removed_config_path_schema_with_runtime_config() {
+        Python::initialize();
         let path = std::env::temp_dir().join(format!(
-            "openviking-redis-cache-config-{}.json",
+            "openviking-removed-runtime-cache-override-{}.json",
             std::process::id()
         ));
         fs::write(
             &path,
-            r#"{
-                "storage": {
-                    "agfs": {
-                        "cache": {
-                            "enabled": true,
-                            "provider": "redis",
-                            "namespace": "ov-test",
-                            "redis": {
-                                "mode": "standalone",
-                                "endpoints": ["redis://127.0.0.1:6379"],
-                                "pool_size": 8,
-                                "connect_timeout_ms": 1000,
-                                "command_timeout_ms": 20,
-                                "key_prefix": "ragfs-cache",
-                                "default_ttl_seconds": 3600,
-                                "read_from_replica": false
-                            }
-                        }
-                    }
-                }
-            }"#,
+            r#"{"storage": {"agfs": {"cache": {"enabled": false}}}}"#,
         )
         .unwrap();
 
-        let cache_config = cache_config_from_ov_conf(path.to_str().unwrap()).unwrap();
+        Python::attach(|py| {
+            let ty = py.get_type::<RAGFSBindingClient>();
+            let cache = PyDict::new(py);
+            cache.set_item("enabled", false).unwrap();
+            cache.set_item("runtime_enabled", false).unwrap();
+            cache.set_item("provider", "redis").unwrap();
+            let config = PyDict::new(py);
+            config.set_item("cache", cache).unwrap();
+            let kwargs = PyDict::new(py);
+            kwargs
+                .set_item("config_path", path.to_str().unwrap())
+                .unwrap();
+            kwargs.set_item("config", config).unwrap();
 
-        assert!(cache_config.enabled);
-        assert_eq!(cache_config.provider, CacheProviderKind::Redis);
-        assert_eq!(cache_config.redis.mode, "standalone");
-        assert_eq!(cache_config.redis.endpoints, vec!["redis://127.0.0.1:6379"]);
-        assert_eq!(cache_config.redis.pool_size, 8);
-        assert_eq!(cache_config.redis.connect_timeout_ms, 1000);
-        assert_eq!(cache_config.redis.command_timeout_ms, 20);
-        assert_eq!(cache_config.redis.key_prefix, "ragfs-cache");
-        assert_eq!(cache_config.redis.default_ttl_seconds, 3600);
-        assert!(!cache_config.redis.read_from_replica);
+            let error = ty.call((), Some(&kwargs)).unwrap_err().to_string();
+            assert!(error.contains("storage.agfs.cache has been removed"));
+        });
 
         fs::remove_file(path).unwrap();
     }
 
-    #[cfg(not(feature = "cache-redis"))]
-    #[tokio::test]
-    async fn redis_provider_requires_cache_redis_feature() {
-        let config = RagfsCacheConfig {
-            enabled: true,
-            provider: CacheProviderKind::Redis,
-            ..RagfsCacheConfig::default()
-        };
+    #[test]
+    fn canonical_config_rejects_removed_redis_fields() {
+        for field in ["key_prefix", "read_from_replica", "tls_enabled"] {
+            let path = std::env::temp_dir().join(format!(
+                "openviking-removed-redis-field-{field}-{}.json",
+                std::process::id()
+            ));
+            fs::write(
+                &path,
+                format!(
+                    r#"{{
+                        "cache": {{"provider": "redis", "params": {{"{field}": true}}}},
+                        "storage": {{"agfs": {{"cachefs": {{"backend": "cache"}}}}}}
+                    }}"#
+                ),
+            )
+            .unwrap();
 
-        let error = match CacheProviderFactory::create(&config).await {
-            Ok(provider) => panic!("unexpected provider: {}", provider.name()),
-            Err(error) => error,
-        };
+            let error = cache_config_from_ov_conf(path.to_str().unwrap()).unwrap_err();
 
-        assert!(matches!(
-            error,
-            CacheError::Unavailable(message)
-                if message == "Redis support requires the cache-redis feature"
-        ));
+            assert!(error.contains(field));
+            fs::remove_file(path).unwrap();
+        }
     }
 
-    #[cfg(feature = "cache-redis")]
-    #[tokio::test]
-    async fn cache_provider_factory_creates_redis_provider_from_ov_conf() {
-        let Ok(endpoint) = std::env::var("REDIS_URL") else {
-            return;
+    #[test]
+    fn dynamic_cache_debug_output_redacts_provider_params() {
+        let config = DynamicCacheConfig {
+            library: "/opt/openviking/libprovider.so".to_string(),
+            params: serde_json::json!({"password": "binding-secret"}),
         };
-        let path = std::env::temp_dir().join(format!(
-            "openviking-cache-redis-factory-{}.json",
-            std::process::id()
-        ));
-        fs::write(
-            &path,
-            format!(
-                r#"{{
-                    "storage": {{
-                        "agfs": {{
-                            "cache": {{
-                                "enabled": true,
-                                "provider": "redis",
-                                "namespace": "ov-test",
-                                "redis": {{
-                                    "mode": "standalone",
-                                    "endpoints": ["{endpoint}"],
-                                    "connect_timeout_ms": 30000,
-                                    "command_timeout_ms": 1000,
-                                    "key_prefix": "ragfs-python-cache-test",
-                                    "default_ttl_seconds": 60
-                                }}
-                            }}
-                        }}
-                    }}
-                }}"#
-            ),
-        )
-        .unwrap();
 
-        let cache_config = cache_config_from_ov_conf(path.to_str().unwrap()).unwrap();
-        let provider = CacheProviderFactory::create(&cache_config).await.unwrap();
+        let output = format!("{config:?}");
 
-        assert_eq!(provider.name(), "redis");
-        provider.close().await.unwrap();
-
-        fs::remove_file(path).unwrap();
+        assert!(output.contains("/opt/openviking/libprovider.so"));
+        assert!(!output.contains("binding-secret"));
+        assert!(output.contains("<redacted>"));
     }
 }

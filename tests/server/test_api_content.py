@@ -29,6 +29,18 @@ def test_write_content_request_defaults_processing_mode():
     assert request.processing_mode == "semantic_and_vectors"
 
 
+def test_write_content_request_accepts_tags_and_tag_mode():
+    request = WriteContentRequest(
+        uri="viking://resources/demo.md",
+        content="updated",
+        tags=["Env=Prod", "team=search"],
+        tag_mode="append",
+    )
+
+    assert request.tags == ["Env=Prod", "team=search"]
+    assert request.tag_mode == "append"
+
+
 async def test_write_forwards_processing_mode_to_service(monkeypatch):
     seen = {}
 
@@ -51,6 +63,31 @@ async def test_write_forwards_processing_mode_to_service(monkeypatch):
 
     assert response["status"] == "ok"
     assert seen["processing_mode"] == "vectors_only"
+
+
+async def test_write_forwards_tags_and_tag_mode_to_service(monkeypatch):
+    seen = {}
+
+    async def fake_write(**kwargs):
+        seen.update(kwargs)
+        return {"uri": kwargs["uri"]}
+
+    service = SimpleNamespace(fs=SimpleNamespace(write=fake_write))
+    monkeypatch.setattr(content_router, "get_service", lambda: service)
+    ctx = RequestContext(user=UserIdentifier("account-1", "user-1"), role=Role.USER)
+
+    await content_router.write(
+        WriteContentRequest(
+            uri="viking://resources/demo.md",
+            content="updated",
+            tags=["env=prod"],
+            tag_mode="append",
+        ),
+        ctx,
+    )
+
+    assert seen["tags"] == ["env=prod"]
+    assert seen["tag_mode"] == "append"
 
 
 async def _first_child_uri(client, uri: str) -> str:

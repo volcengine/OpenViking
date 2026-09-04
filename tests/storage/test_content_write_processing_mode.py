@@ -15,6 +15,7 @@ from openviking.storage.abstract_overview import (
 )
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
+from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -41,6 +42,9 @@ class _FakeVikingFS:
 
     def _uri_to_path(self, uri, ctx=None):
         return f"/fake/{uri}"
+
+    async def _ensure_access(self, uri, ctx, action):
+        del uri, ctx, action
 
 
 def _sidecar(level=ContextLevel.ABSTRACT, body="Original body."):
@@ -127,6 +131,7 @@ async def test_direct_write_skips_semantic_refresh_for_vectors_only_and_sidecar_
         ctx=ctx,
         written_bytes=len("Updated body only.".encode()),
         telemetry_id="",
+        ingest_options=IngestOptions.from_search_tags(["team=search"], mode="append"),
     )
 
     written = sidecar_fs.write_file.await_args.args[1]
@@ -134,8 +139,31 @@ async def test_direct_write_skips_semantic_refresh_for_vectors_only_and_sidecar_
     assert parse_abstract_overview(written).metadata == parse_abstract_overview(current).metadata
     sidecar_coordinator._enqueue_semantic_refresh.assert_not_awaited()
     vectorize_directory.assert_awaited_once()
+    assert vectorize_directory.await_args.kwargs["ingest_options"] == IngestOptions(
+        search_tags=["team=search"], search_tag_mode="append"
+    )
     assert sidecar_result["semantic_status"] == "skipped"
     assert sidecar_result["vector_status"] == "queued"
+
+
+@pytest.mark.asyncio
+async def test_write_builds_ingest_options_before_scheduling_resource_refresh(ctx):
+    coordinator = ContentWriteCoordinator(viking_fs=_FakeVikingFS())
+    coordinator._safe_stat = AsyncMock(return_value={"isDir": False})
+    coordinator._resolve_root_uri = AsyncMock(return_value="viking://resources")
+    coordinator._write_direct_with_refresh = AsyncMock(return_value={"uri": "viking://resources/demo.md"})
+
+    await coordinator.write(
+        uri="viking://resources/demo.md",
+        content="updated",
+        ctx=ctx,
+        tags=["team=search"],
+        tag_mode="append",
+    )
+
+    ingest_options = coordinator._write_direct_with_refresh.await_args.kwargs["ingest_options"]
+    assert ingest_options.search_tags == ["team=search"]
+    assert ingest_options.search_tag_mode == "append"
 
 
 @pytest.mark.asyncio

@@ -6,6 +6,8 @@ import {
   ArrowLeftIcon,
   BotIcon,
   ClipboardIcon,
+  PanelRightCloseIcon,
+  PanelRightOpenIcon,
   TerminalIcon,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -54,6 +56,7 @@ import {
   PLAYGROUND_LEFT_WIDTH,
   PLAYGROUND_LEFT_WIDTH_STORAGE_KEY,
   PLAYGROUND_MAIN_MIN_WIDTH,
+  PLAYGROUND_RIGHT_COLLAPSED_STORAGE_KEY,
   PLAYGROUND_RIGHT_WIDTH,
   PLAYGROUND_RIGHT_WIDTH_STORAGE_KEY,
 } from './-lib/constants'
@@ -118,6 +121,8 @@ function PlaygroundWorkbench() {
       ? createEntryFromUri(search.file, false)
       : createEntryFromUri(initialCurrentUri, true),
   )
+  const selectedFileRef = useRef(selectedFile)
+  selectedFileRef.current = selectedFile
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(() =>
     mergeExpanded(
       new Set(readPlaygroundExpandedUris(identityScopeKey)),
@@ -154,6 +159,23 @@ function PlaygroundWorkbench() {
   )
   const [resizingPane, setResizingPane] = useState<'context' | 'action' | null>(
     null,
+  )
+  const [rightCollapsed, setRightCollapsed] = useState(
+    () =>
+      typeof window !== 'undefined' &&
+      window.localStorage.getItem(PLAYGROUND_RIGHT_COLLAPSED_STORAGE_KEY) ===
+        '1',
+  )
+  const toggleRightCollapsed = useCallback(
+    () =>
+      setRightCollapsed((collapsed) => {
+        window.localStorage.setItem(
+          PLAYGROUND_RIGHT_COLLAPSED_STORAGE_KEY,
+          collapsed ? '0' : '1',
+        )
+        return !collapsed
+      }),
+    [],
   )
   const isDraggingPaneRef = useRef(false)
   const activeResizeTeardownRef = useRef<(() => void) | null>(null)
@@ -380,11 +402,38 @@ function PlaygroundWorkbench() {
     [syncSearch],
   )
 
+  const handleRefreshContextTree = useCallback(async () => {
+    const refreshedFile = selectedFileRef.current
+    await invalidateList()
+    if (!refreshedFile || refreshedFile.isDir) return
+
+    try {
+      await fetchFsStat(refreshedFile.uri, { throwOnError: true })
+      return
+    } catch (error) {
+      if ((error as { statusCode?: number }).statusCode !== 404) return
+    }
+    if (selectedFileRef.current?.uri !== refreshedFile.uri) return
+
+    setSelectedFile(null)
+    syncSearch({
+      file: undefined,
+      uri: normalizeDirUri(parentUri(refreshedFile.uri)),
+    })
+  }, [invalidateList, syncSearch])
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault()
         setFindPaletteOpen((open) => !open)
+        return
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') {
+        // Let CodeMirror keep its own in-file search when it has focus.
+        if ((event.target as HTMLElement | null)?.closest('.cm-editor')) return
+        event.preventDefault()
+        setFindPaletteOpen(true)
       }
     }
 
@@ -517,10 +566,7 @@ function PlaygroundWorkbench() {
             onAddResource={() => setUploadDialogOpen(true)}
             onOpenProcessingTasks={handleOpenProcessingTasks}
             onOpenSearch={handleOpenSearch}
-            onRefresh={() => {
-              void invalidateList(currentUri)
-              void listQuery.refetch()
-            }}
+            onRefresh={() => void handleRefreshContextTree()}
           />
           <div className="min-h-0 flex-1">
             <ContextTree
@@ -590,6 +636,19 @@ function PlaygroundWorkbench() {
                 <BotIcon className="size-4" />
               </Button>
             </div>
+            {rightCollapsed ? (
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                className="hidden shrink-0 lg:inline-flex"
+                title={t('actionPanel.expand')}
+                aria-label={t('actionPanel.expand')}
+                onClick={toggleRightCollapsed}
+              >
+                <PanelRightOpenIcon className="size-4" />
+              </Button>
+            ) : null}
           </div>
           <div className="min-h-0 flex-1">
             <LazyFilePreview
@@ -601,18 +660,21 @@ function PlaygroundWorkbench() {
             />
           </div>
         </main>
-        <PlaygroundResizeHandle
-          active={resizingPane === 'action'}
-          label={t('resizeAction')}
-          onPointerDown={(event) => handleResizeStart('action', event)}
-        />
+        {!rightCollapsed ? (
+          <PlaygroundResizeHandle
+            active={resizingPane === 'action'}
+            label={t('resizeAction')}
+            onPointerDown={(event) => handleResizeStart('action', event)}
+          />
+        ) : null}
 
-        {!isCompactLayout ? (
+        {!isCompactLayout && !rightCollapsed ? (
           <aside className="hidden min-h-0 min-w-0 flex-col bg-muted/15 lg:flex lg:w-[var(--playground-right-width)] lg:min-w-[var(--playground-right-width)]">
             <PlaygroundActionPanel
               activePanel={activePanel}
               currentUri={currentUri}
               entries={entries}
+              onCollapse={toggleRightCollapsed}
               onOpenAddResource={() => setUploadDialogOpen(true)}
               onOpenResource={revealResource}
               onPanelChange={handlePanelChange}
@@ -707,6 +769,7 @@ function PlaygroundActionPanel({
   activePanel,
   currentUri,
   entries,
+  onCollapse,
   onOpenAddResource,
   onOpenResource,
   onPanelChange,
@@ -717,6 +780,7 @@ function PlaygroundActionPanel({
   activePanel: PlaygroundPanel
   currentUri: string
   entries: VikingFsEntry[]
+  onCollapse: () => void
   onOpenAddResource: () => void
   onOpenResource: ResourceOpenHandler
   onPanelChange: (panel: PlaygroundPanel) => void
@@ -739,6 +803,17 @@ function PlaygroundActionPanel({
           ref={setToolbarContainer}
           className="ml-auto flex min-w-0 items-center gap-1"
         />
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="ghost"
+          className="shrink-0"
+          title={t('actionPanel.collapse')}
+          aria-label={t('actionPanel.collapse')}
+          onClick={onCollapse}
+        >
+          <PanelRightCloseIcon className="size-4" />
+        </Button>
       </div>
 
       <PlaygroundActionContent

@@ -53,6 +53,7 @@ import {
   AppConnectionProvider,
   useAppConnection,
 } from '#/hooks/use-app-connection'
+import type { ServerMode } from '#/hooks/use-server-mode'
 import { cn } from '#/lib/utils'
 import { resolveStudioManagementCapabilities } from '#/lib/studio-permissions'
 
@@ -246,8 +247,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 }
 
 function IdentityScopedAppShell({ children }: { children: React.ReactNode }) {
-  const { identityScopeKey } = useAppConnection()
-  return <AppShellInner key={identityScopeKey}>{children}</AppShellInner>
+  const { identityScopeKey, serverMode } = useAppConnection()
+  return (
+    <AppShellInner key={identityScopeKey}>
+      <ConnectionScopedRouteContent serverMode={serverMode}>
+        {children}
+      </ConnectionScopedRouteContent>
+    </AppShellInner>
+  )
+}
+
+export function ConnectionScopedRouteContent({
+  children,
+  serverMode,
+}: {
+  children: React.ReactNode
+  serverMode: ServerMode
+}) {
+  return serverMode === 'checking' ? null : children
 }
 
 function AppShellInner({ children }: { children: React.ReactNode }) {
@@ -490,7 +507,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
             >
               <span
                 className={cn(
-                  'absolute h-8 min-w-10 rounded-xl bg-foreground shadow-sm transition-transform duration-200 ease-in-out',
+                  'absolute h-8 min-w-10 rounded-xl bg-background shadow-sm transition-transform duration-200 ease-in-out',
                   currentLanguage === 'en' && 'translate-x-full',
                 )}
               />
@@ -504,7 +521,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
                     aria-pressed={isActive}
                     className={cn(
                       'relative z-10 h-8 min-w-10 rounded-xl px-2 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
-                      isActive && 'text-background',
+                      isActive && 'text-foreground',
                     )}
                     onClick={() => {
                       if (!isActive) {
@@ -542,10 +559,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
 
             <div className="h-6 w-px bg-border/80" aria-hidden="true" />
 
-            <CurrentUserMenu
-              accountId={connection.accountId}
-              userId={connection.userId}
-            />
+            <CurrentUserMenu />
           </div>
         </header>
 

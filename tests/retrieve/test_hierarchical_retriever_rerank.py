@@ -6,6 +6,7 @@
 import asyncio
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -51,8 +52,12 @@ class DummyEmbedder:
 class DummyStorage:
     def __init__(self) -> None:
         self.collection_name = "context"
+        self.acl_manager = None
         self.search_calls = []
         self.child_search_calls = []
+
+    def _acl_enabled(self, ctx: RequestContext) -> bool:
+        return self.acl_manager is not None and self.acl_manager.is_enabled(ctx.account_id)
 
     async def collection_exists_bound(self) -> bool:
         return True
@@ -365,8 +370,18 @@ async def test_retrieve_falls_back_to_vector_scores_when_rerank_returns_none(mon
         lambda config: fake_client,
     )
 
+    storage = QuickSearchStorage([
+        _result("viking://resources/a/deep-a.md", 0.2, abstract="deep A"),
+        _result("viking://resources/b/deep-b.md", 0.8, abstract="deep B"),
+    ])
+    storage.acl_manager = SimpleNamespace(is_enabled=lambda _account_id: True)
+
+    async def no_hierarchical_children(*_args, **_kwargs):
+        return []
+
+    storage.search_children_in_tenant = no_hierarchical_children
     retriever = HierarchicalRetriever(
-        storage=DummyStorage(),
+        storage=storage,
         embedder=DummyEmbedder(),
         rerank_config=_config(),
     )
@@ -374,9 +389,10 @@ async def test_retrieve_falls_back_to_vector_scores_when_rerank_returns_none(mon
     result = await retriever.retrieve(_query(), ctx=_ctx(), limit=2, mode=RetrieverMode.THINKING)
 
     assert [ctx.uri for ctx in result.matched_contexts] == [
-        "viking://resources/file-b",
-        "viking://resources/file-a",
+        "viking://resources/b/deep-b.md",
+        "viking://resources/a/deep-a.md",
     ]
+    assert [call["level"] for call in storage.search_calls] == [[0, 1], [2]]
     assert fake_client.calls
 
 

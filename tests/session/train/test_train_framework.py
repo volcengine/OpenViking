@@ -1206,8 +1206,8 @@ class FakeSessionCommitClient:
         self.committed_sessions = []
         self.task_poll_counts = {}
 
-    async def create_session(self, *, session_id, memory_policy=None):
-        self.created_sessions.append((session_id, memory_policy))
+    async def create_session(self, session_id=None, options=None):
+        self.created_sessions.append((session_id, options))
 
     async def batch_add_messages(self, session_id, messages):
         self.messages.setdefault(session_id, []).extend(messages)
@@ -1257,8 +1257,10 @@ async def test_session_commit_policy_trainer_records_commit_trace_id():
         (
             commit_result["session_id"],
             {
-                "memory_types": ["cases", "trajectories", "experiences"],
-                "working_memory": {"enabled": False},
+                "memory_policy": {
+                    "memory_types": ["cases", "trajectories", "experiences"],
+                    "working_memory": {"enabled": False},
+                }
             },
         )
     ]

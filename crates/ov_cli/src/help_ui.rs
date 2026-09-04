@@ -71,8 +71,9 @@ const CORE_WORKFLOW: &[HelpCommand] = help_commands![
     "set-tags",
 ];
 
-const FILESYSTEM: &[HelpCommand] =
-    help_commands!["ls", "tree", "mkdir", "rm", "mv", "stat", "attrs", "get"];
+const FILESYSTEM: &[HelpCommand] = help_commands![
+    "ls", "tree", "mkdir", "rm", "cp", "mv", "stat", "attrs", "acl", "get"
+];
 
 const SEARCH_CONTEXT: &[HelpCommand] = help_commands![
     "find", "search", "grep", "glob", "abstract", "overview", "read"
@@ -290,6 +291,30 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         ],
     },
     CommandHelpSpec {
+        path: &["cp"],
+        purpose: "Copy a file or directory without reparsing or regenerating vectors.",
+        examples: &[
+            HelpItem {
+                label: "ov cp viking://resources/notes/draft.md viking://resources/notes/draft-copy.md",
+                description: "Copy one file and its vector records.",
+            },
+            HelpItem {
+                label: "ov cp -r viking://resources/projects/source viking://resources/projects/backup",
+                description: "Recursively copy a directory and all vector records.",
+            },
+        ],
+        next_steps: &[
+            HelpItem {
+                label: "ov stat <target-uri>",
+                description: "Confirm the copied resource metadata.",
+            },
+            HelpItem {
+                label: "ov read <target-uri>",
+                description: "Read the copied resource.",
+            },
+        ],
+    },
+    CommandHelpSpec {
         path: &["mv"],
         purpose: "Move or rename a resource.",
         examples: &[HelpItem {
@@ -344,6 +369,24 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Search with updated context.",
             },
         ],
+    },
+    CommandHelpSpec {
+        path: &["acl"],
+        purpose: "Get or update access permissions for a resource.",
+        examples: &[
+            HelpItem {
+                label: "ov acl get viking://resources/project-a",
+                description: "Show direct and effective permissions.",
+            },
+            HelpItem {
+                label: "ov acl grant viking://resources/project-a --principal user:bob --level read",
+                description: "Grant read access to a user.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov find \"query\" -u <uri>",
+            description: "Search within the permitted resource tree.",
+        }],
     },
     CommandHelpSpec {
         path: &["read"],
@@ -2321,6 +2364,7 @@ fn localized_command_description<'a>(
         "rm" => "删除资源",
         "mv" => "移动或重命名资源",
         "stat" => "查看资源元数据",
+        "acl" => "管理资源访问权限",
         "get" => "下载文件",
         "search" => "上下文感知检索",
         "grep" => "模式搜索",
@@ -2561,7 +2605,15 @@ fn version() -> String {
 fn is_bare_group_help_command(command: &str) -> bool {
     matches!(
         command,
-        "task" | "skills" | "session" | "snapshot" | "privacy" | "admin" | "system" | "observer"
+        "task"
+            | "skills"
+            | "session"
+            | "snapshot"
+            | "privacy"
+            | "acl"
+            | "admin"
+            | "system"
+            | "observer"
     )
 }
 
@@ -2706,6 +2758,13 @@ mod tests {
         assert!(rendered.contains("experimental"));
         assert!(rendered.contains("ov <command> --help"));
         assert!(!rendered.contains("Commands:\n  add-resource"));
+        assert!(rendered.contains("cp"));
+        let cp = command_spec(&["cp".to_string()]).expect("cp command help");
+        assert!(
+            cp.examples
+                .iter()
+                .any(|item| item.label.contains("ov cp -r"))
+        );
     }
 
     #[test]

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional, TypeVa
 from openviking.core.namespace import canonical_user_root
 from openviking.core.uri_validation import validate_content_target_uri
 from openviking.server.config import AddTargetsConfig, UserConfig
+from openviking.storage.acl import AclAction
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
 if TYPE_CHECKING:
@@ -67,12 +68,6 @@ def _user_config_from_payload(payload: Any) -> UserConfig:
         raise InvalidArgumentError(str(exc)) from exc
 
 
-def _ensure_mutable(viking_fs: VikingFS, uri: str, ctx: RequestContext) -> None:
-    ensure = getattr(viking_fs, "_ensure_mutable_access", None)
-    if callable(ensure):
-        ensure(uri, ctx)
-
-
 def validate_user_memory_policy(memory_policy: Optional[dict[str, Any]]) -> None:
     if memory_policy is None:
         return
@@ -84,7 +79,7 @@ def validate_user_memory_policy(memory_policy: Optional[dict[str, Any]]) -> None
     )
 
 
-def validate_resource_add_target(
+async def validate_resource_add_target(
     uri: str,
     *,
     ctx: RequestContext,
@@ -96,11 +91,11 @@ def validate_resource_add_target(
         kind="resource",
         field_name="resource_uri",
     )
-    _ensure_mutable(viking_fs, resolved, ctx)
+    await viking_fs._ensure_access(resolved, ctx, action=AclAction.WRITE)
     return resolved
 
 
-def validate_skill_add_target(
+async def validate_skill_add_target(
     uri: str,
     *,
     ctx: RequestContext,
@@ -112,27 +107,29 @@ def validate_skill_add_target(
         kind="skill",
         field_name="skill_uri",
     )
-    _ensure_mutable(viking_fs, resolved, ctx)
+    await viking_fs._ensure_access(resolved, ctx, action=AclAction.WRITE)
     return resolved
 
 
-def validate_add_targets(
+async def validate_add_targets(
     settings: AddTargetsConfig,
     *,
     ctx: RequestContext,
     viking_fs: VikingFS,
 ) -> ResolvedAddTargets:
+    resource_uri = (
+        await validate_resource_add_target(settings.resource_uri, ctx=ctx, viking_fs=viking_fs)
+        if settings.resource_uri
+        else None
+    )
+    skill_uri = (
+        await validate_skill_add_target(settings.skill_uri, ctx=ctx, viking_fs=viking_fs)
+        if settings.skill_uri
+        else None
+    )
     return ResolvedAddTargets(
-        resource_uri=(
-            validate_resource_add_target(settings.resource_uri, ctx=ctx, viking_fs=viking_fs)
-            if settings.resource_uri
-            else None
-        ),
-        skill_uri=(
-            validate_skill_add_target(settings.skill_uri, ctx=ctx, viking_fs=viking_fs)
-            if settings.skill_uri
-            else None
-        ),
+        resource_uri=resource_uri,
+        skill_uri=skill_uri,
     )
 
 
@@ -166,7 +163,7 @@ async def update_user_config(
         current = await read_user_config(viking_fs, ctx)
         before = current.model_dump()
         result = updater(current)
-        runtime = validate_add_targets(current.add_targets, ctx=ctx, viking_fs=viking_fs)
+        runtime = await validate_add_targets(current.add_targets, ctx=ctx, viking_fs=viking_fs)
         current.add_targets.resource_uri = runtime.resource_uri
         current.add_targets.skill_uri = runtime.skill_uri
         validate_user_memory_policy(current.memory_policy)
@@ -204,7 +201,7 @@ async def write_user_config(
     ctx: RequestContext,
     user_config: UserConfig,
 ) -> ResolvedAddTargets:
-    runtime = validate_add_targets(user_config.add_targets, ctx=ctx, viking_fs=viking_fs)
+    runtime = await validate_add_targets(user_config.add_targets, ctx=ctx, viking_fs=viking_fs)
     user_config.add_targets.resource_uri = runtime.resource_uri
     user_config.add_targets.skill_uri = runtime.skill_uri
     validate_user_memory_policy(user_config.memory_policy)
@@ -242,7 +239,7 @@ async def write_user_add_targets(
     ctx: RequestContext,
     settings: AddTargetsConfig,
 ) -> ResolvedAddTargets:
-    runtime = validate_add_targets(settings, ctx=ctx, viking_fs=viking_fs)
+    runtime = await validate_add_targets(settings, ctx=ctx, viking_fs=viking_fs)
 
     def _set(user_config: UserConfig) -> None:
         user_config.add_targets = settings
@@ -288,7 +285,7 @@ async def effective_resource_add_target(
 ) -> Optional[str]:
     user_settings = await read_user_add_targets(viking_fs, ctx)
     if user_settings.resource_uri:
-        return validate_resource_add_target(
+        return await validate_resource_add_target(
             user_settings.resource_uri, ctx=ctx, viking_fs=viking_fs
         )
     configured = getattr(
@@ -297,7 +294,7 @@ async def effective_resource_add_target(
         None,
     )
     if configured:
-        return validate_resource_add_target(configured, ctx=ctx, viking_fs=viking_fs)
+        return await validate_resource_add_target(configured, ctx=ctx, viking_fs=viking_fs)
     return None
 
 
@@ -309,14 +306,16 @@ async def effective_skill_add_target(
 ) -> Optional[str]:
     user_settings = await read_user_add_targets(viking_fs, ctx)
     if user_settings.skill_uri:
-        return validate_skill_add_target(user_settings.skill_uri, ctx=ctx, viking_fs=viking_fs)
+        return await validate_skill_add_target(
+            user_settings.skill_uri, ctx=ctx, viking_fs=viking_fs
+        )
     configured = getattr(
         getattr(getattr(server_config, "user_config_defaults", None), "add_targets", None),
         "skill_uri",
         None,
     )
     if configured:
-        return validate_skill_add_target(configured, ctx=ctx, viking_fs=viking_fs)
+        return await validate_skill_add_target(configured, ctx=ctx, viking_fs=viking_fs)
     return None
 
 

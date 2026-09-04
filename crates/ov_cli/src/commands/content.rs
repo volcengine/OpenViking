@@ -44,11 +44,22 @@ pub async fn write(
     wait: bool,
     timeout: Option<f64>,
     processing_mode: &str,
+    tags: Vec<String>,
+    tag_mode: &str,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     let result = client
-        .write(uri, content, mode, wait, timeout, processing_mode)
+        .write(
+            uri,
+            content,
+            mode,
+            wait,
+            timeout,
+            processing_mode,
+            tags,
+            tag_mode,
+        )
         .await?;
     crate::output::output_success(result, output_format, compact);
     Ok(())

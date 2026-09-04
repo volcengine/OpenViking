@@ -563,3 +563,10 @@ class LiteLLMProvider(LLMProvider):
     def get_default_model(self) -> str:
         """Get the default model."""
         return self.default_model
+
+    def supports_tool_result_media(self, model: str | None = None) -> bool:
+        """Enable only the native tool-result media path verified for Anthropic."""
+        if self._gateway is not None:
+            return False
+        spec = find_by_model(model or self.default_model)
+        return spec is not None and spec.name == "anthropic"
