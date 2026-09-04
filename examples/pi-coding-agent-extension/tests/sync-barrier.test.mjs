@@ -271,22 +271,22 @@ test("failed batch keeps its entries queued with one retry and leaves the rest u
   });
 });
 
-test("non-retryable batch failure still enqueues and advances the sync watermark", async () => {
+test("non-retryable batch failure drops the payloads but still advances the sync watermark", async () => {
   await withPendingDir(async () => {
     const { c, calls } = batchClient({ respond: () => ({ ok: false, status: 400, error: { message: "bad" } }) });
     const sync = new SyncManager(c, config());
     await sync.ensureSession("pi-session");
 
     const result = await sync.syncBranch([
-      { type: "message", message: { role: "user", content: "Poison payload one for watermark enqueue test." } },
-      { type: "message", message: { role: "user", content: "Poison payload two for watermark enqueue test." } },
+      { type: "message", message: { role: "user", content: "Poison payload one for watermark test." } },
+      { type: "message", message: { role: "user", content: "Poison payload two for watermark test." } },
     ]);
 
     assert.equal(result.added, 2);
     assert.equal(result.allDelivered, false);
     assert.equal(sync.syncedCount, 2);
     assert.equal(calls.length, 1);
-    assert.equal((await listPending()).length, 2);
+    assert.equal((await listPending()).length, 0);
   });
 });
 

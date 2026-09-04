@@ -191,7 +191,12 @@ export class SyncManager {
         error: res.lastError?.message || res.lastError?.code || "unknown",
       });
     }
-    return { accepted: res.sent + res.queued, delivered: res.sent };
+    // A non-retryable rejection (4xx) drops the remaining payloads, the same
+    // outcome replayPending() applies to such entries. Count them as accepted
+    // so the watermark still advances past them; otherwise the next turn would
+    // re-extract and re-send the payloads that were already delivered.
+    const dropped = res.retryable ? 0 : res.failed;
+    return { accepted: res.sent + res.queued + dropped, delivered: res.sent };
   }
 
   async commitIfNeeded(): Promise<void> {
