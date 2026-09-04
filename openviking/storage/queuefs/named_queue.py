@@ -4,6 +4,7 @@ import abc
 import asyncio
 import json
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Union
@@ -226,17 +227,32 @@ class NamedQueue:
 
     async def enqueue(self, data: Union[str, Dict[str, Any]]) -> str:
         """Send message to queue (enqueue)."""
+        started_at = time.perf_counter()
+        last_at = started_at
+        timings: List[tuple[str, float]] = []
+
+        def mark(step: str) -> None:
+            nonlocal last_at
+            now = time.perf_counter()
+            timings.append((step, (now - last_at) * 1000))
+            last_at = now
+
+        task_id = ""
         await self._ensure_initialized()
+        mark("ensure_initialized")
         enqueue_file = f"{self.path}/enqueue"
 
         # Execute enqueue hook
         if self._enqueue_hook:
             data = await self._enqueue_hook.on_enqueue(data)
+        mark("enqueue_hook")
 
         if isinstance(data, dict):
             data, task_metadata = prepare_task_payload(data)
+            task_id = task_metadata.task_id
         else:
             task_metadata = None
+        mark("prepare_payload")
 
         if self._task_work_index is not None and not self._task_work_index.register(
             self.name, task_metadata
@@ -249,16 +265,27 @@ class NamedQueue:
             raise TaskWorkRejected(
                 f"Task {task_metadata.task_id} is cancelling; rejected work for {self.name}"
             )
+        mark("register_work")
 
         try:
             if isinstance(data, dict):
                 data = json.dumps(data)
 
             msg_id = await self._async_agfs.write(enqueue_file, data.encode("utf-8"))
+            mark("agfs_write")
         except BaseException:
             if self._task_work_index is not None and task_metadata is not None:
                 await self._task_work_index.discard(self.name, task_metadata)
             raise
+        total_ms = (time.perf_counter() - started_at) * 1000
+        if total_ms >= 1000:
+            logger.warning(
+                "[NamedQueue] slow enqueue queue=%s task_id=%s total_ms=%.1f timings=%s",
+                self.name,
+                task_id,
+                total_ms,
+                ",".join(f"{name}:{duration_ms:.1f}" for name, duration_ms in timings),
+            )
         return msg_id if isinstance(msg_id, str) else str(msg_id)
 
     async def ack(self, msg_id: str, message: Optional[Dict[str, Any]] = None) -> None:

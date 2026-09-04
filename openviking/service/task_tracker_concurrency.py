@@ -201,6 +201,7 @@ class StoreIOLimiter:
     ) -> _ResultT:
         started_at = time.monotonic()
         async with self._semaphore:
+            admitted_at = time.monotonic()
             self._inflight += 1
             self._max_observed_inflight = max(
                 self._max_observed_inflight,
@@ -210,12 +211,17 @@ class StoreIOLimiter:
                 return await factory()
             finally:
                 self._inflight -= 1
-                duration_seconds = time.monotonic() - started_at
+                finished_at = time.monotonic()
+                duration_seconds = finished_at - started_at
                 if duration_seconds >= self._slow_threshold_seconds:
                     logger.warning(
-                        "Slow task store operation: operation=%s duration_ms=%.1f",
+                        "Slow task store operation: operation=%s duration_ms=%.1f "
+                        "wait_ms=%.1f run_ms=%.1f max_observed_inflight=%d",
                         operation,
                         duration_seconds * 1000,
+                        (admitted_at - started_at) * 1000,
+                        (finished_at - admitted_at) * 1000,
+                        self._max_observed_inflight,
                     )
 
 
