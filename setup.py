@@ -27,6 +27,9 @@ get_host_engine_build_config = importlib.import_module(
 resolve_openviking_version = importlib.import_module(
     "build_support.versioning"
 ).resolve_openviking_version
+validate_linux_ragfs_wheel = importlib.import_module(
+    "build_support.ragfs_wheel"
+).validate_linux_ragfs_wheel
 
 CMAKE_PATH = shutil.which("cmake") or "cmake"
 C_COMPILER_PATH = os.environ.get("CC") or shutil.which("gcc") or "gcc"
@@ -332,6 +335,9 @@ class OpenVikingBuildExt(build_ext):
                         raise RuntimeError(message)
                     print(f"[Warning] {message}")
                     return
+
+                if require_ragfs_artifact and sys.platform.startswith("linux"):
+                    validate_linux_ragfs_wheel(whl_files[0])
 
                 ragfs_lib_dir.mkdir(parents=True, exist_ok=True)
                 for stale_artifact in ragfs_lib_dir.glob("ragfs_python*.so"):
