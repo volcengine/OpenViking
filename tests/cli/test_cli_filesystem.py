@@ -138,26 +138,19 @@ class TestFsMv:
 
 
 class TestFsCp:
-    def test_cp_file_json_and_human_output(self, test_dir_uri):
+    def test_cp_file_json_and_human_output(self, test_dir_uri, test_file_uri):
         suffix = uuid.uuid4().hex[:6]
-        source = f"{test_dir_uri}/cp_source_{suffix}.txt"
         json_target = f"{test_dir_uri}/cp_json_{suffix}.txt"
         human_target = f"{test_dir_uri}/cp_human_{suffix}.txt"
-        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False, mode="w") as f:
-            f.write("copy me")
-            temp_path = f.name
         try:
-            assert ov_add_resource(temp_path, source)["exit_code"] == 0
-            json_result = ov_cp(source, json_target)
+            json_result = ov_cp(test_file_uri, json_target)
             assert json_result["exit_code"] == 0, json_result["stderr"]
             assert json_result["json"] and json_result["json"].get("ok") is True
 
-            human_result = ov_cp(source, human_target, output=None)
+            human_result = ov_cp(test_file_uri, human_target, output=None)
             assert human_result["exit_code"] == 0, human_result["stderr"]
             assert "Copied:" in human_result["stdout"]
         finally:
-            os.unlink(temp_path)
-            ov_rm(source)
             ov_rm(json_target)
             ov_rm(human_target)
 
