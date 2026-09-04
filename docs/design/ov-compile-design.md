@@ -2,9 +2,11 @@
 
 | 项目 | 信息 |
 | --- | --- |
-| 状态 | 待实现 |
+| 状态 | 历史设计，现行方案见下方说明 |
 | 目标版本 | v1 |
-| 更新日期 | 2026-07-20 |
+| 更新日期 | 2026-08-28 |
+
+> 本文保留最初由 VikingBot 直接托管任务的历史设计。现行方案由 OpenViking 托管 TaskRecord、QueueFS、查询和取消，外部 Server 只负责执行；整体流程和接口以 [外部 Compile Server 对接说明](./external-compile-server-api.md) 为准。
 
 ## 1. 概述
 
@@ -36,8 +38,7 @@ ov compile \
   --from viking://resources/周报 \
   --to viking://resources/团队知识库 \
   --reason "按月整理团队的成本优化进展" \
-  --skill viking://agent/skills/monthly_wiki \
-  --wait
+  --skill viking://agent/skills/monthly_wiki
 ```
 
 | 参数 | 规则 |
@@ -46,16 +47,12 @@ ov compile \
 | `--to` | 必填，目标 Wiki 目录 |
 | `--skill` | 必填，Skill 目录或 `SKILL.md` 的 Viking URI |
 | `--reason` | 可选，本次整理任务的描述 |
-| `--wait` | 可选，等待任务完成 |
-| `--timeout` | 可选，仅与 `--wait` 一起使用；只限制 CLI 等待时间，不取消任务 |
-| `--runtime-timeout` | 可选，正数且有限的服务端运行时限；只能缩短服务端最大值（默认 60 分钟） |
 
 参数在 OpenViking 用户身份下 canonicalize 后满足以下约束：
 
 - `from` 必须是一个或多个可读目录；重复项去重，空项报错；
 - `to` 必须是可写的 resource 或 memory 目录，不能是 namespace 根、文件、Skill 目录或 OpenViking 派生目录；
 - `skill` 必须解析为 Skill root，目录 URI 和其 `SKILL.md` URI 视为同一个 Skill；
-- `runtime_timeout_seconds` 省略时使用服务端最大值，显式值不得超过该上限；
 - `from`、`to` 和 `skill` 的权限最终仍由 OpenViking Server 校验，CLI 不根据 URI 文本推断权限。
 
 `--reason` 为空时，VikingBot 使用以下默认任务描述：
@@ -66,7 +63,7 @@ Follow the loaded Skill's instructions to transform the provided source material
 
 ### 2.2 返回结果
 
-未指定 `--wait` 时，CLI 在任务创建后返回：
+CLI 在任务创建后立即返回：
 
 ```text
 task_id: cmp_01...
@@ -74,22 +71,9 @@ status: accepted
 to: viking://resources/团队知识库
 ```
 
-指定 `--wait` 时，CLI 轮询任务并返回最终结果：
+CLI 不等待任务完成。用户通过 `ov task status <task_id>` 查询状态和结果，通过 `ov task cancel <task_id>` 取消任务。
 
-```text
-to: viking://resources/团队知识库
-created: 1
-updated: 2
-unchanged: 3
-page_count: 6
-link_count: 8
-```
-
-完整 URI 列表通过全局 JSON 输出返回。
-
-`created`、`updated` 和 `unchanged` 只统计 Agent 本次提交的页面；未被草稿触达的目标页面不计入 `unchanged`。`page_count` 等于三者之和，`link_count` 只统计最终正文中实际渲染出的 bundle 内 WikiLink。
-
-`--wait` 使用单调时钟计算整体等待 deadline，并以有上限的 polling interval 查询任务；CLI timeout 或 Ctrl-C 只结束本地等待，不向 Bot 发送取消请求。
+Task 结果中的 `created`、`updated` 和 `unchanged` 只统计 Agent 本次提交的页面；未被草稿触达的目标页面不计入 `unchanged`。`page_count` 等于三者之和，`link_count` 只统计最终正文中实际渲染出的 bundle 内 WikiLink。
 
 ## 3. 架构
 
@@ -187,8 +171,6 @@ VikingBot 负责规范化参数并计算实际任务描述：
 ```python
 effective_reason = (request.reason or "").strip() or DEFAULT_COMPILE_REASON
 ```
-
-可选的 `runtime_timeout_seconds` 必须为正数且有限，并且只能缩短 `CompileLimits.task_runtime_seconds` 定义的服务端最大值（默认 3600 秒）；超限请求在创建任务时以 `RESOURCE_EXHAUSTED` 拒绝。
 
 ### 4.2 查询任务
 
@@ -562,11 +544,11 @@ task_id, principal_scope, sanitized_request, status, stage, timestamps, result, 
 
 Bot 当前没有通用的持久化后台任务管理器，因此这里实现一个最小 JSON task store，使用 per-task lock 和临时文件原子替换。进程内以有界的 `asyncio.Task` 集合和 semaphore 承载 accepted task；全局和单 principal admission 在任务创建前计数，超限同步返回 `RESOURCE_EXHAUSTED`。现有 `SessionManager` 继续只管理 chat JSONL，不承载 Compile 状态。
 
-`sanitized_request` 只包含 canonical `from/to/skill`、effective reason 和可选的 `runtime_timeout_seconds`；`openviking_connection` 仅由运行中 `asyncio.Task` 持有，不进入 JSON、异常详情或日志。
+`sanitized_request` 只包含 canonical `from/to/skill` 和 effective reason；`openviking_connection` 仅由运行中 `asyncio.Task` 持有，不进入 JSON、异常详情或日志。
 
 运行中任务目录可以保存有大小限制的 Skill 快照、catalog 和 draft，但不能保存用户凭证。任务进入终态后删除 workspace、Skill snapshot 和 draft；task/result/error JSON 最长保留 24 小时且最多保留 1,000 条，启动和任务结束时都会清理。
 
-VikingBot 使用独立的 compile 并发限制，并对同一 canonical 目标目录串行执行。accepted task 最多排队 60 分钟，取得 target lock 和全局执行 slot 后才开始计算 runtime；服务端最大值和缺省值均为 60 分钟，客户端只能请求更短的时限，超限请求以 `RESOURCE_EXHAUSTED` 拒绝。只有 Agent 阶段的 runtime deadline 和迭代上限允许 salvage；salvage 与 cleanup 各自受独立的短 grace deadline 约束，rendering/writing/refreshing 阶段超时直接失败。该锁只减少同一 Bot 进程内的浪费；跨进程或人工写入冲突仍由 batch-write 的 tree lock 和 content hash 检查解决。v1 task store 以单个 VikingBot gateway 进程为部署边界，不承诺多副本共享 task 查询。
+VikingBot 使用独立的 compile 并发限制，并对同一 canonical 目标目录串行执行。accepted task 最多排队 60 分钟，取得 target lock 和全局执行 slot 后持续运行，直到任务完成、失败或被取消。Agent 阶段达到迭代上限时允许 salvage；salvage 与 cleanup 各自受独立的短 grace deadline 约束。该锁只减少同一 Bot 进程内的浪费；跨进程或人工写入冲突仍由 batch-write 的 tree lock 和 content hash 检查解决。v1 task store 以单个 VikingBot gateway 进程为部署边界，不承诺多副本共享 task 查询。
 
 VikingBot 启动时把 store 中所有非终态任务统一标记为 `BOT_RESTARTED`，包括处于 committing 的任务；因为 API key 不落盘，重启后不能安全恢复原任务。用户可以重新提交，batch-write 通过最终 content hash 跳过已落盘内容并继续收敛。
 
@@ -655,7 +637,7 @@ bot/vikingbot/compile/
 
 至少覆盖：
 
-- CLI 参数展开、默认 reason、`--wait` 和 timeout；
+- CLI 参数展开、默认 reason 和 Task ID 返回；
 - Bot proxy 的创建/GET 查询身份转交、未启用 Bot 的 503 和上游错误；
 - Skill 复用现有 parser/loader、相对引用、requirements 和路径逃逸检查；`allowed-tools` 可正常解析但不影响 Compile 工具集合；
 - request registry 固定包含本地核心工具、scope-guarded OpenViking 只读工具和 `submit_wiki_bundle`，不包含 message/cron/spawn/Web/image/MCP/OV write，用户 connection 只进入 OV read adapter；
@@ -675,8 +657,7 @@ ov compile \
   --from viking://resources/周报 \
   --to viking://resources/团队知识库 \
   --reason "按月整理团队的成本优化进展" \
-  --skill viking://agent/skills/monthly_wiki \
-  --wait
+  --skill viking://agent/skills/monthly_wiki
 ```
 
 验收结果：

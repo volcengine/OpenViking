@@ -36,6 +36,7 @@ def message_bus():
 def _make_client(channel: OpenAPIChannel) -> TestClient:
     app = FastAPI()
     app.include_router(channel.get_router(), prefix="/bot/v1")
+    app.include_router(channel.get_gateway_router())
     return TestClient(app)
 
 
@@ -57,10 +58,16 @@ class TestOpenAPIAuth:
         class FakeCompileService:
             def __init__(self):
                 self.scope = None
+                self.idempotency_key = None
 
-            async def create_task(self, request, *, principal_scope):
+            async def create_task(self, request, *, principal_scope, task_id=None):
                 self.scope = principal_scope
-                return CompileAccepted(task_id="cmp_test", to=request.to)
+                self.idempotency_key = task_id
+                return CompileAccepted(
+                    session_id="cmp_test",
+                    task_id="cmp_test",
+                    to=request.to,
+                )
 
             async def get_task(self, task_id, *, principal_scope):
                 if task_id != "cmp_test" or principal_scope != self.scope:
@@ -90,6 +97,7 @@ class TestOpenAPIAuth:
         client = _make_client(channel)
         created = client.post(
             "/bot/v1/compile",
+            headers={"Idempotency-Key": "cmp_test"},
             json={
                 "from": ["viking://resources/source"],
                 "to": "viking://resources/wiki",
@@ -97,12 +105,26 @@ class TestOpenAPIAuth:
             },
         )
         assert created.status_code == 202
+        assert created.json()["session_id"] == "cmp_test"
         assert created.json()["task_id"] == "cmp_test"
+        assert service.idempotency_key == "cmp_test"
         assert client.get("/bot/v1/compile/cmp_test").status_code == 200
         assert client.get("/bot/v1/compile/cmp_other").status_code == 404
+        status_response = client.post(
+            "/compile/status",
+            json={"session_id": "cmp_test"},
+        )
+        assert status_response.status_code == 200
+        assert status_response.json()["stage"] == "compile: agent"
         cancelled = client.post("/bot/v1/compile/cmp_test/cancel")
         assert cancelled.status_code == 200
         assert cancelled.json()["status"] == "cancelled"
+        session_cancelled = client.post(
+            "/compile/cancel",
+            json={"session_id": "cmp_test"},
+        )
+        assert session_cancelled.status_code == 200
+        assert session_cancelled.json()["status"] == "cancelled"
         assert client.post("/bot/v1/compile/cmp_other/cancel").status_code == 404
 
     def test_dev_compile_with_forwarded_connection_uses_same_principal_for_status(
@@ -113,10 +135,15 @@ class TestOpenAPIAuth:
                 self.scope = None
                 self.connection = "unset"
 
-            async def create_task(self, request, *, principal_scope):
+            async def create_task(self, request, *, principal_scope, task_id=None):
+                assert task_id is None
                 self.scope = principal_scope
                 self.connection = request.openviking_connection
-                return CompileAccepted(task_id="cmp_dev", to=request.to)
+                return CompileAccepted(
+                    session_id="cmp_dev",
+                    task_id="cmp_dev",
+                    to=request.to,
+                )
 
             async def get_task(self, task_id, *, principal_scope):
                 if task_id != "cmp_dev" or principal_scope != self.scope:

@@ -134,7 +134,7 @@ data: {"event":"response","data":{"content":"当前知识库包含……","respo
 
 ### compile()
 
-启动一个异步、由 Skill 驱动的 Compile 任务。VikingBot 会加载指定 Skill，使用当前认证用户身份读取来源目录，在任务独立的 AgentLoop 中执行，并将通过校验的产物提交到目标 URI 下。
+启动一个由 OV 托管的异步 Compile 任务。OV 负责校验请求、持久化任务，并把执行交给配置的 Compile Server；内置 VikingBot 实现了同一协议，可用于本地运行。
 
 | 字段 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
@@ -142,16 +142,16 @@ data: {"event":"response","data":{"content":"当前知识库包含……","respo
 | `to` | string | 是 | - | 目标 Resource 或 Memory 目录，或受支持的 Skill namespace |
 | `skill` | string | 是 | - | Skill 目录或其 `SKILL.md` URI |
 | `reason` | string | 否 | Skill 驱动的默认值 | 本次 Compile 的补充指令 |
-| `runtime_timeout_seconds` | number | 否 | 3600 | 正数且有限，且不得超过服务端最大运行时限（默认 3600 秒） |
+| `args` | object | 否 | - | Provider 扩展参数，例如 `model_name` 和 `user_key` |
 
 **HTTP API**
 
 ```
-POST /bot/v1/compile
+POST /api/v1/compile
 ```
 
 ```bash
-curl -X POST http://localhost:1933/bot/v1/compile \
+curl -X POST http://localhost:1933/api/v1/compile \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
   -d '{
@@ -169,11 +169,10 @@ ov compile \
   --from viking://resources/research \
   --to viking://resources/research-wiki \
   --skill viking://user/default/skills/research-compiler \
-  --reason "追踪历史进展，并保留支撑证据。" \
-  --wait
+  --reason "追踪历史进展，并保留支撑证据。"
 ```
 
-`--wait` 会轮询状态接口，直到任务进入终态。`--timeout` 只限制本地等待时间，不会取消服务端任务；`--runtime-timeout` 用于设置本次任务的 `runtime_timeout_seconds`，只能缩短服务端拥有的最大运行时限，超限请求会以 `429 RESOURCE_EXHAUSTED` 拒绝。在 Agent 执行期间达到该时限，或达到配置的 AgentLoop 迭代上限（`bot.agents.max_tool_iterations`，默认 50）时，会在独立的短 grace period 内尝试保存符合条件的 Resource 阶段性产物；没有可保存产物时任务失败，非 Resource 目标以及后续阶段超时不使用该 fallback。
+命令提交后立即返回 Task ID；通过 `ov task status` 查询状态，通过 `ov task cancel` 取消任务。达到配置的 AgentLoop 迭代上限（`bot.agents.max_tool_iterations`，默认 50）时，会在独立的短 grace period 内尝试保存符合条件的 Resource 阶段性产物；没有可保存产物时任务失败，非 Resource 目标不使用该 fallback。
 
 `direct` backend 会以 Bot 宿主机权限执行 Compile 的 `exec` 命令。`bot.sandbox.backends.direct.allow_compile_exec` 默认为 `true`：Compile 工具链开源，`exec` 默认直接以用户 shell 权限运行，普通 Wiki 和产物文件整理仍通过文件工具运行。声明了 `requires.bins` 或 `requires.env` 的 Skill 仍会先探测命令；将该选项设为 `false` 时 Compile 不会暴露 `exec`，此类 Skill 会在执行任何命令探测前以 `SKILL_CAPABILITY_UNAVAILABLE` 失败。依赖 CLI 的 Skill 推荐使用具备文件系统和网络策略的隔离 backend。超过 admission 上限时返回 `429 RESOURCE_EXHAUSTED`。
 
@@ -186,11 +185,23 @@ HTTP 接口返回 `202 Accepted`：
   "status": "ok",
   "result": {
     "task_id": "cmp_01abc",
-    "status": "accepted",
-    "to": "viking://resources/research-wiki"
+    "task_type": "compile",
+    "status": "pending",
+    "stage": "queued",
+    "resource_id": "viking://resources/research"
   }
 }
 ```
+
+公开接口返回 OV TaskRecord。以下旧接口不再执行 Compile 操作，会返回迁移错误：
+
+```http
+POST /bot/v1/compile
+GET /bot/v1/compile/{task_id}
+POST /bot/v1/compile/{task_id}/cancel
+```
+
+请改用 `POST /api/v1/compile` 创建任务、`GET /api/v1/tasks/{task_id}` 轮询状态，并通过 `POST /api/v1/tasks/{task_id}/cancel` 取消任务。
 
 ### compile_status()
 
@@ -199,11 +210,11 @@ HTTP 接口返回 `202 Accepted`：
 **HTTP API**
 
 ```
-GET /bot/v1/compile/{task_id}
+GET /api/v1/tasks/{task_id}
 ```
 
 ```bash
-curl http://localhost:1933/bot/v1/compile/cmp_01abc \
+curl http://localhost:1933/api/v1/tasks/cmp_01abc \
   -H "X-API-Key: your-key"
 ```
 
@@ -253,11 +264,11 @@ ov task cancel cmp_01abc
 **HTTP API**
 
 ```http
-POST /bot/v1/compile/{task_id}/cancel
+POST /api/v1/tasks/{task_id}/cancel
 ```
 
 ```bash
-curl -X POST http://localhost:1933/bot/v1/compile/cmp_01abc/cancel \
+curl -X POST http://localhost:1933/api/v1/tasks/cmp_01abc/cancel \
   -H "X-API-Key: your-key"
 ```
 
@@ -265,12 +276,11 @@ curl -X POST http://localhost:1933/bot/v1/compile/cmp_01abc/cancel \
 
 | Status | 常见 Stage |
 |--------|------------|
-| `accepted` | `queued` |
-| `running` | `loading_skill`、`collecting_context`、`agent`、`rendering` |
-| `committing` | `writing`、`refreshing`、`salvaging` |
+| `pending` | `queued` |
+| `running` | 外部服务返回的执行 Stage，例如 `agent`、`writing` |
 | `cancelling` | 收敛当前进程内工作和清理资源 |
 | `completed` | `completed`、`salvaged` |
-| `failed` | 失败发生时的 Stage；响应包含 `error.code` 和 `error.message` |
+| `failed` | 失败发生时的 Stage；响应包含 `error` |
 | `cancelled` | `cancelled` |
 
 ### feedback()

@@ -136,6 +136,27 @@ class ParserApiConfig(BaseModel):
         return self
 
 
+class CompileApiConfig(BaseModel):
+    """Configuration for the external Compile task API."""
+
+    base_url: str = ""
+    gateway_token: str = ""
+    http_timeout_seconds: float = 10.0
+    poll_interval_ms: int = 3000
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def _validate(self) -> "CompileApiConfig":
+        if self.base_url and "://" not in self.base_url:
+            raise ValueError("compile_api.base_url must include scheme (e.g., https://...)")
+        if self.http_timeout_seconds <= 0:
+            raise ValueError("compile_api.http_timeout_seconds must be > 0")
+        if self.poll_interval_ms <= 0:
+            raise ValueError("compile_api.poll_interval_ms must be > 0")
+        self.base_url = self.base_url.rstrip("/")
+        return self
+
+
 class OpenVikingConfig(BaseModel):
     """Main configuration for OpenViking."""
 
@@ -253,6 +274,11 @@ class OpenVikingConfig(BaseModel):
     parser_api: ParserApiConfig = Field(
         default_factory=ParserApiConfig,
         description="Third-party parser API configuration (files/responses)",
+    )
+
+    compile_api: CompileApiConfig = Field(
+        default_factory=CompileApiConfig,
+        description="External Compile task API configuration",
     )
 
     connector: ConnectorConfig = Field(

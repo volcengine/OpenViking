@@ -27,7 +27,7 @@ from openviking.storage.abstract_overview import (
     plan_abstract_overview_refresh,
     render_abstract_overview,
 )
-from openviking.storage.acl import CreatorAclGrant
+from openviking.storage.acl import AclAction, CreatorAclGrant
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.expr import And, Eq, In, Or
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
@@ -858,6 +858,11 @@ class FSService:
         """Get resource status."""
         viking_fs = self._ensure_initialized()
         return await viking_fs.stat(uri, ctx=ctx)
+
+    async def ensure_write_access(self, uri: str, ctx: RequestContext) -> None:
+        """Validate write access without mutating the target."""
+        viking_fs = self._ensure_initialized()
+        await viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
 
     async def system_sync_status(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
         """Return multi-write sync status for one Viking URI subtree."""

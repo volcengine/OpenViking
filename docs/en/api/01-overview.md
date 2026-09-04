@@ -465,6 +465,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 
 | Method | Path | Description |
 |--------|------|-------------|
+| POST | `/api/v1/compile` | Create an OV-owned Compile task |
 | GET | `/api/v1/tasks/{task_id}` | Get a background task |
 | POST | `/api/v1/tasks/{task_id}/cancel` | Cancel a background task |
 | GET | `/api/v1/tasks` | List background tasks |
@@ -527,9 +528,9 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/bot/v1/chat` | Non-streaming VikingBot chat |
 | POST | `/bot/v1/chat/stream` | Streaming VikingBot chat |
 | POST | `/bot/v1/feedback` | Submit feedback for a VikingBot answer |
-| POST | `/bot/v1/compile` | Start a Skill-driven Compile task |
-| GET | `/bot/v1/compile/{task_id}` | Get Compile task status |
-| POST | `/bot/v1/compile/{task_id}/cancel` | Cancel a Compile task |
+| POST | `/bot/v1/compile` | Retired; returns migration guidance for the new endpoint |
+| GET | `/bot/v1/compile/{task_id}` | Retired; returns Task API migration guidance |
+| POST | `/bot/v1/compile/{task_id}/cancel` | Retired; returns Task cancellation API migration guidance |
 
 ---
 

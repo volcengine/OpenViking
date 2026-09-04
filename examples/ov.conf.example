@@ -110,6 +110,13 @@
             "file_vectorization_concurrency": 8
         },
         "session_commit": {"max_concurrent": 8},
+        "external_task": {"max_concurrent": 10},
+    },
+    "compile_api": {
+        "base_url": "",
+        "gateway_token": "",
+        "http_timeout_seconds": 10,
+        "poll_interval_ms": 3000,
     },
     "reindex": {
         "file_vectorization_concurrency": 8

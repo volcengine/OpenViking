@@ -576,6 +576,16 @@ class OpenAPIChannel(BaseChannel):
         ) -> GatewayRequestAuth:
             return await channel._verify_gateway_request(http_request, x_gateway_token)
 
+        if channel._compile_service is not None:
+            from vikingbot.compile.router import register_compile_control_routes
+
+            register_compile_control_routes(
+                router,
+                channel=channel,
+                verify_gateway_request=verify_gateway_request,
+                service=channel._compile_service,
+            )
+
         @router.get("/health")
         async def gateway_health(
             http_request: Request,

@@ -137,7 +137,7 @@ data: {"event":"response","data":{"content":"The knowledge base contains…","re
 
 ### compile()
 
-Start an asynchronous, Skill-driven Compile task. VikingBot loads the selected Skill, reads the supplied OpenViking directories with the authenticated user identity, runs a task-scoped AgentLoop, and commits validated outputs below the target URI.
+Start an asynchronous, Skill-driven Compile task owned by OV. OV validates the request, persists the task, and delegates execution to the configured Compile server. The bundled VikingBot implements the same server protocol for local use.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
@@ -145,16 +145,16 @@ Start an asynchronous, Skill-driven Compile task. VikingBot loads the selected S
 | `to` | string | Yes | - | Target Resource or Memory directory, or a supported Skill namespace |
 | `skill` | string | Yes | - | Skill directory or its `SKILL.md` URI |
 | `reason` | string | No | Skill-driven default | Additional instructions for this Compile run |
-| `runtime_timeout_seconds` | number | No | 3600 | Positive finite runtime limit no greater than the server maximum (3600 seconds by default) |
+| `args` | object | No | - | Provider-specific extensions such as `model_name` and `user_key` |
 
 **HTTP API**
 
 ```
-POST /bot/v1/compile
+POST /api/v1/compile
 ```
 
 ```bash
-curl -X POST http://localhost:1933/bot/v1/compile \
+curl -X POST http://localhost:1933/api/v1/compile \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
   -d '{
@@ -172,11 +172,10 @@ ov compile \
   --from viking://resources/research \
   --to viking://resources/research-wiki \
   --skill viking://user/default/skills/research-compiler \
-  --reason "Track the historical progress and preserve supporting evidence." \
-  --wait
+  --reason "Track the historical progress and preserve supporting evidence."
 ```
 
-`--wait` polls the status endpoint until the task reaches a terminal state. `--timeout` limits only the local wait and does not cancel the server task. `--runtime-timeout` sets `runtime_timeout_seconds` for this run and can only shorten the server-owned runtime maximum; an excessive value is rejected with `429 RESOURCE_EXHAUSTED`. Reaching that deadline while the Agent is running, or reaching the configured AgentLoop iteration limit (`bot.agents.max_tool_iterations`, 50 by default), attempts to save eligible partial Resource output within a separate short grace period. The task fails if there is no eligible output to save; non-Resource targets and deadlines in later stages do not use this fallback.
+The command returns a task ID immediately after submission. Use `ov task status` to inspect the task and `ov task cancel` to cancel it. Reaching the configured AgentLoop iteration limit (`bot.agents.max_tool_iterations`, 50 by default) attempts to save eligible partial Resource output within a separate short grace period. The task fails if there is no eligible output to save; non-Resource targets do not use this fallback.
 
 The `direct` backend runs Compile `exec` commands with the Bot host's permissions. `bot.sandbox.backends.direct.allow_compile_exec` defaults to `true`: the Compile toolchain is open source, so `exec` runs directly in the user's shell by default, and ordinary Wiki and artifact generation run through file tools as before. A Skill that declares `requires.bins` or `requires.env` still probes the commands; set the option to `false` to omit `exec` from Compile (then such Skills fail with `SKILL_CAPABILITY_UNAVAILABLE` before any command probe runs). Isolated backends with filesystem and network policies are recommended for CLI-dependent Skills. Admission overflow returns `429 RESOURCE_EXHAUSTED`.
 
@@ -189,11 +188,23 @@ The HTTP endpoint returns `202 Accepted`:
   "status": "ok",
   "result": {
     "task_id": "cmp_01abc",
-    "status": "accepted",
-    "to": "viking://resources/research-wiki"
+    "task_type": "compile",
+    "status": "pending",
+    "stage": "queued",
+    "resource_id": "viking://resources/research"
   }
 }
 ```
+
+The public endpoint returns the OV task record. The following legacy endpoints no longer perform Compile operations and return a migration error:
+
+```http
+POST /bot/v1/compile
+GET /bot/v1/compile/{task_id}
+POST /bot/v1/compile/{task_id}/cancel
+```
+
+Use `POST /api/v1/compile` to create a task, poll `GET /api/v1/tasks/{task_id}`, and cancel it with `POST /api/v1/tasks/{task_id}/cancel`.
 
 ### compile_status()
 
@@ -202,11 +213,11 @@ Get the current state and, for a terminal task, its result or error. A task is v
 **HTTP API**
 
 ```
-GET /bot/v1/compile/{task_id}
+GET /api/v1/tasks/{task_id}
 ```
 
 ```bash
-curl http://localhost:1933/bot/v1/compile/cmp_01abc \
+curl http://localhost:1933/api/v1/tasks/cmp_01abc \
   -H "X-API-Key: your-key"
 ```
 
@@ -256,11 +267,11 @@ ov task cancel cmp_01abc
 **HTTP API**
 
 ```http
-POST /bot/v1/compile/{task_id}/cancel
+POST /api/v1/tasks/{task_id}/cancel
 ```
 
 ```bash
-curl -X POST http://localhost:1933/bot/v1/compile/cmp_01abc/cancel \
+curl -X POST http://localhost:1933/api/v1/tasks/cmp_01abc/cancel \
   -H "X-API-Key: your-key"
 ```
 
@@ -268,12 +279,11 @@ Task lifecycle values are:
 
 | Status | Typical stages |
 |--------|----------------|
-| `accepted` | `queued` |
-| `running` | `loading_skill`, `collecting_context`, `agent`, `rendering` |
-| `committing` | `writing`, `refreshing`, `salvaging` |
+| `pending` | `queued` |
+| `running` | Execution stage reported by the external service, such as `agent` or `writing` |
 | `cancelling` | Settling in-process work and resource cleanup |
 | `completed` | `completed`, `salvaged` |
-| `failed` | Stage where the failure occurred; the response contains `error.code` and `error.message` |
+| `failed` | Stage where the failure occurred; the response contains `error` |
 | `cancelled` | `cancelled` |
 
 ### feedback()

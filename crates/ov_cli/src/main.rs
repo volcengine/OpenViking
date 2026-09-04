@@ -1123,24 +1123,6 @@ enum Commands {
         /// Description of this organization task
         #[arg(long, value_name = "text")]
         reason: Option<String>,
-        /// Wait for the Compile task to finish
-        #[arg(long)]
-        wait: bool,
-        /// Local wait timeout in seconds; does not cancel the task
-        #[arg(
-            long,
-            requires = "wait",
-            value_parser = config::parse_positive_timeout,
-            value_name = "seconds"
-        )]
-        timeout: Option<f64>,
-        /// Server-side runtime limit in seconds; reaching it saves partial resource output
-        #[arg(
-            long = "runtime-timeout",
-            value_parser = config::parse_positive_timeout,
-            value_name = "seconds"
-        )]
-        runtime_timeout: Option<f64>,
     },
 
     // --- Status & Observability ---
@@ -3594,9 +3576,6 @@ async fn main() {
             to,
             skill,
             reason,
-            wait,
-            timeout,
-            runtime_timeout,
         } => {
             let client = ctx.get_client();
             commands::compile::run(
@@ -3605,9 +3584,6 @@ async fn main() {
                 to,
                 skill,
                 reason,
-                wait,
-                timeout,
-                runtime_timeout,
                 ctx.output_format,
                 ctx.compact,
             )
@@ -4049,11 +4025,6 @@ mod tests {
             "viking://resources/wiki",
             "--skill",
             "viking://agent/skills/wiki",
-            "--wait",
-            "--timeout",
-            "10",
-            "--runtime-timeout",
-            "86400",
         ])
         .expect("compile flags should parse");
         match cli.command {
@@ -4061,17 +4032,11 @@ mod tests {
                 from_uris,
                 skill,
                 reason,
-                wait,
-                timeout,
-                runtime_timeout,
                 ..
             } => {
                 assert_eq!(from_uris.len(), 3);
                 assert_eq!(skill, "viking://agent/skills/wiki");
                 assert!(reason.is_none());
-                assert!(wait);
-                assert_eq!(timeout, Some(10.0));
-                assert_eq!(runtime_timeout, Some(86_400.0));
             }
             _ => panic!("expected compile command"),
         }
@@ -4084,21 +4049,6 @@ mod tests {
                 "viking://resources/a",
                 "--to",
                 "viking://resources/wiki",
-            ])
-            .is_err()
-        );
-        assert!(
-            Cli::try_parse_from([
-                "ov",
-                "compile",
-                "--from",
-                "viking://resources/a",
-                "--to",
-                "viking://resources/wiki",
-                "--skill",
-                "viking://agent/skills/wiki",
-                "--timeout",
-                "10",
             ])
             .is_err()
         );
@@ -4924,18 +4874,6 @@ mod tests {
                 "viking://resources/item",
                 "--content",
                 "value",
-                "--timeout",
-            ],
-            vec![
-                "ov",
-                "compile",
-                "--from",
-                "viking://resources/source",
-                "--to",
-                "viking://resources/target",
-                "--skill",
-                "viking://user/skills/compiler",
-                "--wait",
                 "--timeout",
             ],
             vec!["ov", "wait", "--timeout"],

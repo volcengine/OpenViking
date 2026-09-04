@@ -4,9 +4,14 @@ from __future__ import annotations
 
 from typing import Any, Awaitable, Callable
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
-from vikingbot.compile.models import CompileAccepted, CompileFailure, CompileRequest
+from vikingbot.compile.models import (
+    CompileAccepted,
+    CompileFailure,
+    CompileRequest,
+    CompileSessionRequest,
+)
 from vikingbot.compile.service import BotCompileService
 
 _ERROR_HTTP_STATUS = {
@@ -47,12 +52,14 @@ def register_compile_routes(
         compile_request: CompileRequest,
         http_request: Request,
         auth: Any = Depends(verify_gateway_request),
+        idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
     ) -> CompileAccepted:
         await channel._prepare_compile_request(http_request, compile_request, auth)
         try:
             return await service.create_task(
                 compile_request,
                 principal_scope=compile_request._principal_scope,
+                task_id=idempotency_key,
             )
         except CompileFailure as exc:
             _raise_http_failure(exc)
@@ -88,4 +95,58 @@ def register_compile_routes(
         return task
 
 
-__all__ = ["register_compile_routes"]
+def register_compile_control_routes(
+    router: APIRouter,
+    *,
+    channel: Any,
+    verify_gateway_request: Callable[..., Awaitable[Any]],
+    service: BotCompileService,
+) -> None:
+    """Attach the root-level status and cancellation session endpoints."""
+
+    async def load_session(
+        body: CompileSessionRequest,
+        http_request: Request,
+        auth: Any,
+        *,
+        cancel: bool,
+    ) -> dict[str, Any]:
+        principal_scope = await channel._resolve_request_principal(http_request, auth)
+        if cancel:
+            task = await service.cancel_task(body.session_id, principal_scope=principal_scope)
+        else:
+            task = await service.get_task(body.session_id, principal_scope=principal_scope)
+        if task is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "NOT_FOUND", "message": "Compile session not found"},
+            )
+        task_status = str(task.get("status") or "running")
+        response: dict[str, Any] = {
+            "status": "pending" if task_status == "accepted" else task_status,
+            "stage": f"compile: {task.get('stage') or task_status}",
+            "error": task.get("error"),
+            "meta": task.get("meta") or {},
+        }
+        if task.get("result") is not None:
+            response["result"] = task["result"]
+        return response
+
+    @router.post("/compile/status")
+    async def get_compile_status(
+        body: CompileSessionRequest,
+        http_request: Request,
+        auth: Any = Depends(verify_gateway_request),
+    ) -> dict[str, Any]:
+        return await load_session(body, http_request, auth, cancel=False)
+
+    @router.post("/compile/cancel")
+    async def cancel_compile_session(
+        body: CompileSessionRequest,
+        http_request: Request,
+        auth: Any = Depends(verify_gateway_request),
+    ) -> dict[str, Any]:
+        return await load_session(body, http_request, auth, cancel=True)
+
+
+__all__ = ["register_compile_control_routes", "register_compile_routes"]

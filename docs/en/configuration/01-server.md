@@ -57,6 +57,7 @@ Optional sections use their defaults when omitted. Unknown fields are rejected.
 | `parsers` | object | parser defaults | PDF, code, image, audio, video, and text parsing |
 | `semantic` | object | built-in defaults | Abstract and overview generation limits |
 | `parser_api` | object | disabled | Third-party file parser API |
+| `compile_api` | object | disabled | External Compile task API |
 | `connector` | object | disabled | External Connector ingestion service |
 | `encryption` | object | disabled | File and secret encryption |
 | `git` | object | local | Version backend: `local` or `s3` |
@@ -224,6 +225,23 @@ This setting controls queue-job concurrency. It is separate from `vlm.media.max_
 | Field | Type | Default | Description |
 |---|---|---:|---|
 | `max_concurrent` | integer | `8` | Number of SessionCommit jobs consumed concurrently; must be greater than `0`; requires a server restart after changes |
+
+### `queue_workers.external_task`
+
+| Field | Type | Default | Description |
+|---|---|---:|---|
+| `max_concurrent` | integer | `10` | Number of external asynchronous tasks consumed concurrently; must be greater than `0`; requires a server restart after changes |
+
+## Compile API Settings
+
+| Field | Type | Default | Description |
+|---|---|---:|---|
+| `base_url` | string | `""` | External service base URL, including `http://` or `https://`; a non-empty value enables external Compile |
+| `gateway_token` | string | `""` | Optional service credential used by OV to call the Compile Gateway |
+| `http_timeout_seconds` | number | `10` | Timeout for one HTTP request |
+| `poll_interval_ms` | integer | `3000` | External task polling interval |
+
+When `base_url` is configured, OV sends the current user's OV API key in `X-API-Key`. It sends `X-Gateway-Token` only when `gateway_token` is configured.
 
 ## Reindex Settings
 

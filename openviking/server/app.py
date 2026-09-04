@@ -35,6 +35,7 @@ from openviking.server.routers import (
     admin_router,
     agent_evolution_router,
     bot_router,
+    compile_router,
     console_router,
     content_router,
     debug_router,
@@ -303,6 +304,8 @@ def create_app(
     if service is not None:
         _configure_session_runtime(service)
 
+    bot_gateway_token = load_bot_gateway_token() if config.with_bot else ""
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """Application lifespan handler."""
@@ -312,6 +315,8 @@ def create_app(
             service = OpenVikingService()
 
         assert service is not None
+        if config.with_bot:
+            service.compile.configure_local_backend(config.bot_api_url, bot_gateway_token)
         _configure_session_runtime(service)
         set_service(service)
 
@@ -610,7 +615,7 @@ def create_app(
         import openviking.server.routers.bot as bot_module
 
         bot_module.set_bot_api_url(config.bot_api_url)
-        bot_module.set_bot_api_key(load_bot_gateway_token())
+        bot_module.set_bot_api_key(bot_gateway_token)
         logger.info(f"Bot API proxy enabled, forwarding to {config.bot_api_url}")
     else:
         logger.info("Bot API proxy disabled (use --with-bot to enable)")
@@ -620,6 +625,7 @@ def create_app(
     app.include_router(acl_router)
     app.include_router(admin_router)
     app.include_router(agent_evolution_router)
+    app.include_router(compile_router)
     app.include_router(resources_router)
     app.include_router(filesystem_router)
     app.include_router(content_router)

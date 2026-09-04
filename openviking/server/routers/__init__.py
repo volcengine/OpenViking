@@ -6,6 +6,7 @@ from openviking.server.routers.acl import router as acl_router
 from openviking.server.routers.admin import router as admin_router
 from openviking.server.routers.agent_evolution import router as agent_evolution_router
 from openviking.server.routers.bot import router as bot_router
+from openviking.server.routers.compile import router as compile_router
 from openviking.server.routers.console import router as console_router
 from openviking.server.routers.content import router as content_router
 from openviking.server.routers.debug import router as debug_router
@@ -32,6 +33,7 @@ __all__ = [
     "admin_router",
     "agent_evolution_router",
     "bot_router",
+    "compile_router",
     "system_router",
     "resources_router",
     "filesystem_router",

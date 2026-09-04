@@ -57,6 +57,7 @@ openviking-server --config /path/to/ov.conf
 | `parsers` | object | 各解析器默认值 | PDF、代码、图片、音视频等解析行为 |
 | `semantic` | object | 内置默认值 | abstract 和 overview 的生成限制 |
 | `parser_api` | object | disabled | 第三方文件解析 API |
+| `compile_api` | object | disabled | 外部 Compile 任务 API |
 | `connector` | object | disabled | 外部 Connector 数据导入服务 |
 | `encryption` | object | disabled | 文件和敏感字段加密 |
 | `git` | object | local | 版本管理后端，可使用 `local` 或 `s3` |
@@ -224,6 +225,23 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 | 字段 | 类型 | 默认值 | 说明 |
 |---|---|---:|---|
 | `max_concurrent` | integer | `8` | 同时消费的 SessionCommit 作业数，必须大于 `0`；修改后需重启服务 |
+
+### `queue_workers.external_task`
+
+| 字段 | 类型 | 默认值 | 说明 |
+|---|---|---:|---|
+| `max_concurrent` | integer | `10` | 同时消费的外部异步任务数，必须大于 `0`；修改后需重启服务 |
+
+## Compile API 配置
+
+| 字段 | 类型 | 默认值 | 说明 |
+|---|---|---:|---|
+| `base_url` | string | `""` | 外部服务地址，必须包含 `http://` 或 `https://`；非空即启用外部 Compile |
+| `gateway_token` | string | `""` | OV 调用 Compile Gateway 使用的可选服务凭证 |
+| `http_timeout_seconds` | number | `10` | 单次 HTTP 请求超时 |
+| `poll_interval_ms` | integer | `3000` | 外部任务状态轮询间隔 |
+
+配置 `base_url` 后，OV 通过 `X-API-Key` 传递当前用户的 OV API Key；仅在配置 `gateway_token` 时发送 `X-Gateway-Token`。完整协议见[Compile Server 对接说明](../../design/external-compile-server-api.md)。
 
 ## Reindex 配置
 
