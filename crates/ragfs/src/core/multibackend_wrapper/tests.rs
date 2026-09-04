@@ -91,6 +91,93 @@ async fn test_read_dir_redirect_entries_use_target_stat() {
         })
         .await
         .unwrap();
+
+    let no_redirect_fs = test_multiwrite_fs(Vec::new());
+    let no_redirect_ctx = test_ctx();
+
+    FS_CTX
+        .scope(no_redirect_ctx.clone(), async {
+            no_redirect_fs
+                .ensure_parent_dirs("/local/acct/docs/real.txt", 0o755)
+                .await?;
+            no_redirect_fs
+                .write(
+                    "/local/acct/docs/real.txt",
+                    b"real body",
+                    0,
+                    WriteFlag::Create,
+                )
+                .await?;
+            no_redirect_fs
+                .inner
+                .meta_store
+                .update_dir_meta(
+                    "/local/acct/docs",
+                    &no_redirect_ctx,
+                    |redirect, _sync_log| {
+                        redirect.entries.insert(
+                            "ghost.pdf".to_string(),
+                            RedirectEntry {
+                                targets: vec!["backup1".to_string()],
+                            },
+                        );
+                        Ok(())
+                    },
+                )
+                .await?;
+            let backup = no_redirect_fs
+                .inner
+                .backup_by_name("backup1")
+                .expect("backup exists")
+                .backend
+                .clone();
+            backup
+                .ensure_parent_dirs("/local/acct/docs/ghost.pdf", 0o755)
+                .await?;
+            backup
+                .write(
+                    "/local/acct/docs/ghost.pdf",
+                    b"GHOST_MARKER\n",
+                    0,
+                    WriteFlag::Create,
+                )
+                .await?;
+
+            let entries = no_redirect_fs.read_dir("/local/acct/docs").await?;
+            let names: Vec<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
+            assert_eq!(names, vec!["real.txt"]);
+
+            let tree = no_redirect_fs
+                .tree_directory("/local/acct", false, None, Some(3))
+                .await?;
+            let paths: Vec<&str> = tree.iter().map(|entry| entry.path.as_str()).collect();
+            assert!(!paths.contains(&"/local/acct/docs/ghost.pdf"));
+
+            let grep = no_redirect_fs
+                .grep(
+                    "/local/acct/docs",
+                    "GHOST_MARKER",
+                    false,
+                    false,
+                    None,
+                    None,
+                    Some(1),
+                )
+                .await?;
+            assert_eq!(grep.count, 0);
+
+            let err = no_redirect_fs
+                .rename("/local/acct/docs/ghost.pdf", "/local/acct/docs/renamed.pdf")
+                .await
+                .expect_err("stale redirect metadata is ignored when redirects are disabled");
+            assert!(matches!(err, Error::NotFound(_)));
+            assert!(backup.exists("/local/acct/docs/ghost.pdf").await);
+            assert!(!backup.exists("/local/acct/docs/renamed.pdf").await);
+
+            Ok::<(), Error>(())
+        })
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -112,6 +199,36 @@ async fn test_recursive_grep_finds_nested_redirected_files() {
                 WriteFlag::Create,
             )
             .await?;
+
+            let shallow = fs
+                .tree_directory("/local/acct/resources", false, None, Some(1))
+                .await?;
+            let shallow_paths: Vec<&str> =
+                shallow.iter().map(|entry| entry.path.as_str()).collect();
+            assert_eq!(shallow_paths, vec!["/local/acct/resources/doc-1"]);
+
+            let root_only = fs
+                .tree_directory("/local/acct/resources", false, None, Some(0))
+                .await?;
+            assert!(root_only.is_empty());
+
+            let deep = fs
+                .tree_directory("/local/acct/resources", false, None, Some(2))
+                .await?;
+            let deep_paths: Vec<&str> = deep.iter().map(|entry| entry.path.as_str()).collect();
+            assert_eq!(
+                deep_paths,
+                vec![
+                    "/local/acct/resources/doc-1",
+                    "/local/acct/resources/doc-1/page.md",
+                ]
+            );
+
+            let capped = fs
+                .tree_directory("/local/acct/resources", false, Some(1), Some(2))
+                .await?;
+            let capped_paths: Vec<&str> = capped.iter().map(|entry| entry.path.as_str()).collect();
+            assert_eq!(capped_paths, vec!["/local/acct/resources/doc-1"]);
 
             let result = fs
                 .grep(
