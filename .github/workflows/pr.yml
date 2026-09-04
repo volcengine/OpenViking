@@ -85,6 +85,43 @@ jobs:
           bash -n examples/codex-memory-plugin/setup-helper/install.sh
           bash -n examples/codex-memory-plugin/setup-helper/tos-install.sh
 
+  unit-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install test dependencies
+        env:
+          # The unit-test tier below exercises pure-Python paths only; the
+          # native ragfs/ov/studio artifacts are not needed.
+          OV_SKIP_RAGFS_BUILD: '1'
+          OV_SKIP_OV_BUILD: '1'
+          OV_SKIP_STUDIO_BUILD: '1'
+        run: uv sync --frozen --extra test
+
+      - name: Run unit tests
+        run: |
+          # tests/test_session_task_tracking.py and tests/test_session_async_commit.py
+          # require the native task backend and are excluded from this tier.
+          UNIT_FILES=$(ls tests/test_*.py | grep -v -e test_session_task_tracking -e test_session_async_commit)
+          uv run pytest -q -o addopts='' -m "not integration and not cli_remote"             $UNIT_FILES             tests/ingest tests/metrics tests/models tests/observability             tests/resource tests/retrieve tests/telemetry tests/utils
+
+      # tests/cli must run in its own pytest process: its test modules do a bare
+      # ``from conftest import ...`` that resolves against whichever sibling
+      # tests/ subdirectory was collected first.
+      - name: Run unit tests (tests/cli)
+        run: |
+          uv run pytest -q -o addopts='' -m "not integration and not cli_remote" tests/cli
+
   check-deps:
     runs-on: ubuntu-24.04
     outputs:
