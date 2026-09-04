@@ -1557,6 +1557,12 @@ enum SessionCommands {
         #[arg(long = "no-event-tags", conflicts_with = "event_tags")]
         no_event_tags: bool,
     },
+    /// Re-run memory extraction against a session's archived messages
+    Extract {
+        /// Session ID
+        #[arg(value_name = "session-id")]
+        session_id: String,
+    },
 }
 
 #[derive(Subcommand)]

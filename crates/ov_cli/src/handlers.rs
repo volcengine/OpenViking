@@ -598,6 +598,10 @@ pub async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()>
             )
             .await
         }
+        SessionCommands::Extract { session_id } => {
+            commands::session::extract_session(&client, &session_id, ctx.output_format, ctx.compact)
+                .await
+        }
     }
 }
 
