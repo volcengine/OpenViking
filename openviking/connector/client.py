@@ -64,6 +64,7 @@ class ConnectorClient:
         include_child: bool = True,
         param_config: Optional[Dict[str, Any]] = None,
         auth_config: Optional[Dict[str, Any]] = None,
+        stream_states: Optional[Dict[str, Any]] = None,
         extra_params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Submit a document import job via the configured doc/add endpoint.
@@ -89,10 +90,23 @@ class ConnectorClient:
             payload["param_config"] = param_config
         if auth_config:
             payload["auth_config"] = auth_config
+        if stream_states is not None:
+            payload["stream_states"] = stream_states
         if extra_params:
             # Authentication belongs exclusively in the Authorization header.
             payload.update({key: value for key, value in extra_params.items() if key != "api_key"})
 
+        # Log shape only: param_config values and auth_config may carry source credentials.
+        logger.info(
+            "[ConnectorClient] doc/add: add_type=%s to=%s include_child=%s param_config_keys=%s "
+            "has_auth_config=%s has_stream_states=%s",
+            add_type,
+            to,
+            include_child,
+            sorted(param_config or {}),
+            bool(auth_config),
+            stream_states is not None,
+        )
         async with httpx.AsyncClient(timeout=30.0) as client:
             rsp = await client.post(
                 self._doc_add_url,
@@ -120,4 +134,8 @@ class ConnectorClient:
             return data
         if not isinstance(task, dict):
             raise InternalError("Connector task response contains an invalid Task object")
+        task = dict(task)
+        for key in ("StreamStates", "stream_states"):
+            if key in data:
+                task[key] = data[key]
         return task

@@ -189,7 +189,9 @@ class TestWatchE2EConflictDetection:
     """End-to-end tests for conflict detection."""
 
     @pytest.mark.asyncio
-    async def test_conflict_when_active_watch_exists(self, e2e_service, watch_test_file: Path):
+    async def test_conflict_when_active_watch_exists(
+        self, e2e_service, watch_test_file: Path, tmp_path: Path
+    ):
         """Test that conflict is raised when trying to watch an already watched URI."""
         service, ctx = e2e_service
 
@@ -202,10 +204,12 @@ class TestWatchE2EConflictDetection:
             watch_interval=30.0,
         )
 
+        conflicting_file = tmp_path / "watch_conflict.md"
+        conflicting_file.write_text(watch_test_file.read_text())
         with pytest.raises(ConflictError) as exc_info:
             await service.resources.add_resource(
                 ctx=ctx,
-                path=str(watch_test_file),
+                path=str(conflicting_file),
                 to=to_uri,
                 watch_interval=60.0,
             )
@@ -357,7 +361,11 @@ class TestWatchE2EErrorHandling:
 
         class MockResourceProcessor:
             async def process_resource(self, **kwargs):
-                return {"root_uri": kwargs.get("to", "viking://resources/test")}
+                root_uri = kwargs.get("to", "viking://resources/test")
+                return {"root_uri": root_uri, "_post_process": {"root_uri": root_uri}}
+
+            async def finish_prepared_resource(self, *_args, **_kwargs):
+                return {}
 
         class MockSkillProcessor:
             async def process_skill(self, **kwargs):

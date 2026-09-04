@@ -24,9 +24,6 @@ from openviking_cli.exceptions import InvalidArgumentError
 
 router = APIRouter(prefix="/api/v1", tags=["resources"])
 
-_CONNECTOR_TASK_ORIGIN_HEADER = "X-OpenViking-Task-Origin"
-_CONNECTOR_TASK_ORIGIN = "connector_import"
-
 
 class AddResourceRequest(BaseModel):
     """Request model for add_resource.
@@ -56,6 +53,7 @@ class AddResourceRequest(BaseModel):
             Default is False (async processing).
         timeout: Timeout in seconds when wait=True. None means no timeout.
         strict: Whether to use strict mode for processing. Default is True.
+        internal_task: Whether to hide this task from the default task list.
         ignore_dirs: Comma-separated list of directory names to ignore during parsing.
         include: Glob pattern for files to include during parsing.
         exclude: Glob pattern for files to exclude during parsing.
@@ -78,10 +76,13 @@ class AddResourceRequest(BaseModel):
 
             Note: Re-adding the same source to the same target updates its active watch task.
             A different source targeting an active watch raises ConflictError; cancel that
-            watch first with watch_interval <= 0. For Connector imports this check is
-            eventually consistent: the Watch is created only after the background import
-            succeeds, so overlapping imports may both write before Watch finalization
-            reports the conflict.
+            watch first with watch_interval <= 0. Connector imports create the Watch before
+            the import runs, so it is visible immediately and the conflict is reported at
+            submission; the scheduler does not run it until the first round has recorded
+            its result.
+        is_active: Initial Watch state for Connector and native Feishu imports. When false,
+            requires watch_interval > 0 and an explicit to or parent target and creates the Watch
+            paused; it stays paused until updated, regardless of the import result.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -97,6 +98,7 @@ class AddResourceRequest(BaseModel):
     wait: bool = False
     timeout: Optional[float] = None
     strict: bool = False
+    internal_task: bool = False
     source_name: Optional[str] = None
     ignore_dirs: Optional[str] = None
     include: Optional[str] = None
@@ -106,6 +108,7 @@ class AddResourceRequest(BaseModel):
     args: Dict[str, Any] = Field(default_factory=dict)
     telemetry: TelemetryRequest = False
     watch_interval: float = 0
+    is_active: bool = True
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
     tags: Optional[list[str]] = None
     tag_mode: str = "replace"
@@ -128,6 +131,15 @@ class AddResourceRequest(BaseModel):
             raise ValueError("'add_type' cannot be combined with 'parent'")
         if self.add_type and not self.to:
             raise ValueError("'add_type' requires an exact 'to' target")
+        return self
+
+    @model_validator(mode="after")
+    def check_paused_watch(self):
+        has_target = bool((self.to or "").strip() or (self.parent or "").strip())
+        if self.is_active is False and (self.watch_interval <= 0 or not has_target):
+            raise ValueError(
+                "is_active=false requires watch_interval > 0 and either 'to' or 'parent'"
+            )
         return self
 
 
@@ -300,10 +312,8 @@ async def add_resource(
                 tag_mode=request.tag_mode,
                 allow_local_path_resolution=allow_local_path_resolution,
                 enforce_public_remote_targets=True,
-                internal_task=(
-                    http_request.headers.get(_CONNECTOR_TASK_ORIGIN_HEADER, "").strip().lower()
-                    == _CONNECTOR_TASK_ORIGIN
-                ),
+                internal_task=request.internal_task,
+                is_active=request.is_active,
                 args=request.args,
                 **kwargs,
             )

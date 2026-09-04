@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from openviking.observability.http_error_context import sanitize_public_http_error
 from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.resource.uri_mutation_coordinator import (
     UriMutationCoordinator,
@@ -81,8 +82,14 @@ class WatchTask(BaseModel):
     auth_state: Optional[Dict[str, Any]] = Field(
         default=None, description="Private authentication state for scheduled re-processing"
     )
+    connector_states: Optional[Dict[str, Any]] = Field(
+        default=None, description="Private external Connector stream states"
+    )
     created_at: datetime = Field(default_factory=datetime.now, description="Task creation time")
     last_execution_time: Optional[datetime] = Field(None, description="Last execution time")
+    last_task_id: Optional[str] = Field(None, description="Latest ingestion task identifier")
+    last_status: Optional[str] = Field(None, description="Latest execution status")
+    last_error: Optional[str] = Field(None, description="Latest sanitized execution error")
     next_execution_time: Optional[datetime] = Field(None, description="Next execution time")
     is_active: bool = Field(default=True, description="Whether the task is active")
     account_id: str = Field(default="default", description="Account ID (tenant)")
@@ -112,6 +119,9 @@ class WatchTask(BaseModel):
             "last_execution_time": self.last_execution_time.isoformat()
             if self.last_execution_time
             else None,
+            "last_task_id": self.last_task_id,
+            "last_status": self.last_status,
+            "last_error": self.last_error,
             "next_execution_time": self.next_execution_time.isoformat()
             if self.next_execution_time
             else None,
@@ -127,6 +137,8 @@ class WatchTask(BaseModel):
         data["to_is_directory"] = self.to_is_directory
         if self.auth_state is not None:
             data["auth_state"] = self.auth_state
+        if self.connector_states is not None:
+            data["connector_states"] = self.connector_states
         return data
 
     @classmethod
@@ -143,6 +155,10 @@ class WatchTask(BaseModel):
             data["processor_kwargs"] = {}
         if data.get("auth_state") is not None and not isinstance(data.get("auth_state"), dict):
             data["auth_state"] = None
+        if data.get("connector_states") is not None and not isinstance(
+            data.get("connector_states"), dict
+        ):
+            data["connector_states"] = None
         return cls(**data)
 
     def calculate_next_execution_time(self) -> datetime:
@@ -405,6 +421,8 @@ class WatchManager:
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
         processor_kwargs: Optional[Dict[str, Any]] = None,
         auth_state: Optional[Dict[str, Any]] = None,
+        connector_states: Optional[Dict[str, Any]] = None,
+        is_active: bool = True,
     ) -> WatchTask:
         """Create and persist a watch task while its target URI is stable."""
         if not path:
@@ -434,12 +452,16 @@ class WatchManager:
                     processing_mode=processing_mode,
                     processor_kwargs=processor_kwargs or {},
                     auth_state=auth_state,
+                    connector_states=connector_states,
+                    is_active=is_active,
                     account_id=account_id,
                     user_id=user_id,
                     original_role=original_role,
                 )
 
-                task.next_execution_time = task.calculate_next_execution_time()
+                task.next_execution_time = (
+                    task.calculate_next_execution_time() if task.is_active else None
+                )
 
                 self._tasks[task.task_id] = task
                 if to_uri:
@@ -472,6 +494,7 @@ class WatchManager:
         processing_mode: Optional[ProcessingMode] = None,
         processor_kwargs: Optional[Dict[str, Any]] = None,
         auth_state: Any = _UNSET,
+        connector_states: Any = _UNSET,
         is_active: Optional[bool] = None,
     ) -> WatchTask:
         """Update a watch task while its current and requested target URIs are stable."""
@@ -514,6 +537,7 @@ class WatchManager:
                         processing_mode=processing_mode,
                         processor_kwargs=processor_kwargs,
                         auth_state=auth_state,
+                        connector_states=connector_states,
                         is_active=is_active,
                     )
 
@@ -536,6 +560,7 @@ class WatchManager:
         processing_mode: Optional[ProcessingMode],
         processor_kwargs: Optional[Dict[str, Any]],
         auth_state: Any,
+        connector_states: Any,
         is_active: Optional[bool],
     ) -> WatchTask:
         task_id = task.task_id
@@ -579,6 +604,10 @@ class WatchManager:
             task.processor_kwargs = processor_kwargs
         if auth_state is not _UNSET:
             task.auth_state = auth_state
+        if connector_states is not _UNSET:
+            if connector_states is not None and not isinstance(connector_states, dict):
+                raise ValueError("connector_states must be an object")
+            task.connector_states = connector_states
         if is_active is not None:
             task.is_active = is_active
 
@@ -617,6 +646,52 @@ class WatchManager:
             if not task:
                 return
             task.auth_state = auth_state
+            await self._save_tasks()
+
+    async def update_connector_states(
+        self,
+        task_id: str,
+        connector_states: Dict[str, Any],
+    ) -> None:
+        """Update private stream states for an external Connector watch."""
+        if not isinstance(connector_states, dict):
+            raise ValueError("connector_states must be an object")
+        async with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return
+            task.connector_states = connector_states
+            await self._save_tasks()
+
+    async def record_execution(
+        self,
+        task_id: str,
+        *,
+        status: str,
+        execution_task_id: Optional[str] = None,
+        error: Optional[str] = None,
+    ) -> None:
+        """Persist the latest execution result exposed by watch APIs."""
+        if not status:
+            raise ValueError("status is required")
+        sanitized_error = (
+            sanitize_public_http_error(code="WATCH_EXECUTION_FAILED", message=error).message
+            if error
+            else None
+        )
+        async with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return
+            task.last_task_id = execution_task_id
+            task.last_status = status
+            task.last_error = sanitized_error
+            task.last_execution_time = datetime.now()
+            task.next_execution_time = (
+                task.calculate_next_execution_time()
+                if task.is_active and task.watch_interval > 0
+                else None
+            )
             await self._save_tasks()
 
     def _plan_target_prefix_rewrite_unlocked(
@@ -846,7 +921,7 @@ class WatchManager:
                 if active_only and not task.is_active:
                     continue
                 tasks.append(task)
-            return tasks
+            return sorted(tasks, key=lambda task: task.created_at, reverse=True)
 
     async def get_task_by_uri(
         self,

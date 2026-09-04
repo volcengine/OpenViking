@@ -43,6 +43,7 @@ class WatchScheduler:
     """
 
     DEFAULT_CHECK_INTERVAL = 60.0
+    DEFAULT_TASK_TIMEOUT = 3 * 60 * 60
 
     def __init__(
         self,
@@ -50,6 +51,7 @@ class WatchScheduler:
         viking_fs: Optional[Any] = None,
         check_interval: float = DEFAULT_CHECK_INTERVAL,
         max_concurrency: int = 4,
+        task_timeout: float = DEFAULT_TASK_TIMEOUT,
         uri_mutation_coordinator: Optional[UriMutationCoordinator] = None,
     ):
         """Initialize WatchScheduler.
@@ -66,14 +68,18 @@ class WatchScheduler:
             raise ValueError("check_interval must be > 0")
         if max_concurrency <= 0:
             raise ValueError("max_concurrency must be > 0")
+        if task_timeout <= 0:
+            raise ValueError("task_timeout must be > 0")
         self._check_interval = check_interval
         self._max_concurrency = max_concurrency
+        self._task_timeout = task_timeout
         self._semaphore = asyncio.Semaphore(max_concurrency)
 
         self._watch_manager: Optional[WatchManager] = None
         self._running = False
         self._scheduler_task: Optional[asyncio.Task] = None
         self._executing_tasks: Set[str] = set()
+        self._execution_tasks: Set[asyncio.Task[None]] = set()
         self._lock = asyncio.Lock()
 
     @property
@@ -122,6 +128,13 @@ class WatchScheduler:
             except asyncio.CancelledError:
                 pass
             self._scheduler_task = None
+
+        execution_tasks = list(self._execution_tasks)
+        for task in execution_tasks:
+            task.cancel()
+        if execution_tasks:
+            await asyncio.gather(*execution_tasks, return_exceptions=True)
+        self._execution_tasks.clear()
 
         # Clean up WatchManager
         if self._watch_manager:
@@ -178,9 +191,11 @@ class WatchScheduler:
                     next_time = await self._watch_manager.get_next_execution_time()
                     if next_time is not None:
                         now = datetime.now()
+                        # Floor at 1s: a due task that is still executing (or held by
+                        # an in-flight first round) would otherwise spin this loop.
                         sleep_seconds = min(
                             self._check_interval,
-                            max(0.0, (next_time - now).total_seconds()),
+                            max(1.0, (next_time - now).total_seconds()),
                         )
                 await asyncio.sleep(sleep_seconds)
             except asyncio.CancelledError:
@@ -217,8 +232,21 @@ class WatchScheduler:
             finally:
                 await asyncio.shield(self._discard_executing(t.task_id))
 
-        if tasks_to_run:
-            await asyncio.gather(*(asyncio.create_task(run_one(t)) for t in tasks_to_run))
+        for due_task in tasks_to_run:
+            execution = asyncio.create_task(run_one(due_task))
+            self._execution_tasks.add(execution)
+            execution.add_done_callback(self._on_execution_done)
+
+    def _on_execution_done(self, task: asyncio.Task[None]) -> None:
+        self._execution_tasks.discard(task)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            logger.error(
+                "[WatchScheduler] Unhandled watch execution error",
+                exc_info=(type(error), error, error.__traceback__),
+            )
 
     async def _execute_task(self, task) -> None:
         """Execute a task only after confirming its target URI is stable."""
@@ -267,6 +295,9 @@ class WatchScheduler:
         cancelled = False
         should_deactivate = False
         deactivation_reason = ""
+        execution_task_id = None
+        execution_status = None
+        execution_error = None
 
         try:
             auth_state = getattr(task, "auth_state", None)
@@ -343,6 +374,9 @@ class WatchScheduler:
                         processor_kwargs["args"] = connector_args
 
                 if not should_deactivate:
+                    refresh_kwargs = {}
+                    if connector_watch:
+                        refresh_kwargs["connector_states"] = getattr(task, "connector_states", None)
                     result = await self._resource_service.refresh_resource(
                         path=task.path,
                         ctx=ctx,
@@ -356,15 +390,71 @@ class WatchScheduler:
                         processing_mode=getattr(task, "processing_mode", "semantic_and_vectors"),
                         watch_interval=task.watch_interval,
                         enforce_public_remote_targets=True,
+                        **refresh_kwargs,
                         **processor_kwargs,
                     )
 
-                    if result.get("status") == "failed":
+                    execution_task_id = result.get("task_id")
+                    result_status = str(result.get("status") or "").lower()
+                    if execution_task_id and result_status not in {
+                        "completed",
+                        "failed",
+                        "cancelled",
+                        "error",
+                    }:
+                        from openviking.service.task_tracker import get_task_tracker
+
+                        task_tracker = get_task_tracker()
+                        try:
+                            ingestion_task = await task_tracker.wait(
+                                execution_task_id,
+                                account_id=task.account_id,
+                                user_id=task.user_id,
+                                timeout=self._task_timeout,
+                            )
+                        except asyncio.TimeoutError:
+                            execution_error = (
+                                f"ingestion task timed out after {self._task_timeout:g}s"
+                            )
+                            result_status = "failed"
+                            try:
+                                await task_tracker.cancel(
+                                    execution_task_id,
+                                    account_id=task.account_id,
+                                    user_id=task.user_id,
+                                )
+                            except Exception:
+                                logger.exception(
+                                    "[WatchScheduler] Failed to cancel timed-out ingestion "
+                                    "task %s",
+                                    execution_task_id,
+                                )
+                        else:
+                            result_status = ingestion_task.status.value
+                            execution_error = ingestion_task.error
+
+                    if result_status in {"failed", "error"}:
+                        execution_status = "failed"
+                        if execution_error is None:
+                            execution_error = result.get("error")
+                        if execution_error is None and result.get("errors"):
+                            execution_error = "; ".join(
+                                str(error) for error in result["errors"]
+                            )
+                        execution_error = execution_error or "watch ingestion failed"
                         logger.warning(
                             f"[WatchScheduler] Task {task.task_id} execution finished with "
                             "a failed ingestion task"
                         )
+                    elif result_status == "cancelled":
+                        execution_status = "cancelled"
                     else:
+                        execution_status = "completed"
+                        if connector_watch and "connector_states" in result:
+                            await self._watch_manager.update_connector_states(
+                                task.task_id,
+                                result["connector_states"],
+                            )
                         logger.info(
                             f"[WatchScheduler] Task {task.task_id} executed successfully, "
                             f"result: {result.get('root_uri', 'N/A')}"
@@ -376,10 +466,14 @@ class WatchScheduler:
         except FileNotFoundError as e:
             should_deactivate = True
             deactivation_reason = f"Resource not found: {e}"
+            execution_status = "failed"
+            execution_error = deactivation_reason
             logger.error(
                 f"[WatchScheduler] Task {task.task_id} resource not found: {e}. Deactivating task."
             )
         except Exception as e:
+            execution_status = "failed"
+            execution_error = str(e) or type(e).__name__
             logger.error(
                 f"[WatchScheduler] Task {task.task_id} execution failed, "
                 f"error_type={type(e).__name__}"
@@ -388,6 +482,17 @@ class WatchScheduler:
         finally:
             try:
                 if not cancelled:
+                    if should_deactivate:
+                        execution_status = "failed"
+                        execution_error = deactivation_reason
+                    await asyncio.shield(
+                        self._watch_manager.record_execution(
+                            task.task_id,
+                            status=execution_status or "completed",
+                            execution_task_id=execution_task_id,
+                            error=execution_error,
+                        )
+                    )
                     if should_deactivate:
                         await asyncio.shield(
                             self._watch_manager.update_task(
@@ -402,9 +507,6 @@ class WatchScheduler:
                             f"[WatchScheduler] Deactivated task {task.task_id}: {deactivation_reason}"
                         )
                     else:
-                        await asyncio.shield(
-                            self._watch_manager.update_execution_time(task.task_id)
-                        )
                         logger.info(
                             f"[WatchScheduler] Updated execution time for task {task.task_id}"
                         )
@@ -413,6 +515,20 @@ class WatchScheduler:
                     f"[WatchScheduler] Failed to update task {task.task_id}: {e}",
                     exc_info=True,
                 )
+
+    async def hold_execution(self, task_id: str) -> bool:
+        """Mark *task_id* as executing outside the scheduler.
+
+        Used while an import's first round runs so a due tick does not start an
+        overlapping run; release with :meth:`release_execution`.
+        """
+        held = await self._try_mark_executing(task_id)
+        logger.debug(f"[WatchScheduler] hold_execution task_id={task_id} held={held}")
+        return held
+
+    async def release_execution(self, task_id: str) -> None:
+        await self._discard_executing(task_id)
+        logger.debug(f"[WatchScheduler] release_execution task_id={task_id}")
 
     async def _try_mark_executing(self, task_id: str) -> bool:
         async with self._lock:
