@@ -285,3 +285,95 @@ async def test_delete_vector_records_deletes_records_in_scope_only():
 
     assert result.deleted == 2
     assert store.deleted_ids == ["old-dir", "old-file"]
+
+
+@pytest.mark.asyncio
+async def test_copy_vector_records_leaves_hash_named_sibling_untouched():
+    """A sibling whose own name contains '#' is a file, not a chunk of the base."""
+    store = FakeVectorStore(
+        [
+            {
+                "id": "old-file",
+                "uri": "viking://user/alice/memories/notes/meeting.md",
+                "account_id": "acct",
+                "context_type": "memory",
+                "level": 2,
+                "abstract": "meeting",
+                "vector": [0.1, 0.2],
+            },
+            {
+                "id": "old-chunk",
+                "uri": "viking://user/alice/memories/notes/meeting.md#chunk_0000",
+                "account_id": "acct",
+                "context_type": "memory",
+                "level": 2,
+                "abstract": "chunk",
+                "vector": [0.3, 0.4],
+            },
+            {
+                "id": "old-hash-sibling",
+                "uri": "viking://user/alice/memories/notes/meeting.md#1.md",
+                "account_id": "acct",
+                "context_type": "memory",
+                "level": 2,
+                "abstract": "separate file",
+                "vector": [0.5, 0.6],
+            },
+        ]
+    )
+
+    result = await copy_vector_records(
+        store,
+        account_id="acct",
+        source_uri="viking://user/alice/memories/notes/meeting.md",
+        target_uri="viking://user/alice/memories/notes/archived.md",
+        recursive=False,
+    )
+
+    assert result.copied == 2
+    assert {record["uri"] for record in store.upserts} == {
+        "viking://user/alice/memories/notes/archived.md",
+        "viking://user/alice/memories/notes/archived.md#chunk_0000",
+    }
+
+
+@pytest.mark.asyncio
+async def test_delete_vector_records_keeps_hash_named_sibling():
+    store = FakeVectorStore(
+        [
+            {
+                "id": "old-file",
+                "uri": "viking://user/alice/memories/notes/meeting.md",
+                "account_id": "acct",
+                "vector": [0.1, 0.2],
+            },
+            {
+                "id": "old-chunk",
+                "uri": "viking://user/alice/memories/notes/meeting.md#chunk_0000",
+                "account_id": "acct",
+                "vector": [0.3, 0.4],
+            },
+            {
+                "id": "old-hash-sibling",
+                "uri": "viking://user/alice/memories/notes/meeting.md#1.md",
+                "account_id": "acct",
+                "vector": [0.5, 0.6],
+            },
+            {
+                # Unicode digits pass str.isdigit() but are not \d chunk indices
+                "id": "old-unicode-digit-sibling",
+                "uri": "viking://user/alice/memories/notes/meeting.md#chunk_²",
+                "account_id": "acct",
+                "vector": [0.7, 0.8],
+            },
+        ]
+    )
+
+    result = await delete_vector_records(
+        store,
+        account_id="acct",
+        uri="viking://user/alice/memories/notes/meeting.md",
+    )
+
+    assert result.deleted == 2
+    assert sorted(store.deleted_ids) == ["old-chunk", "old-file"]

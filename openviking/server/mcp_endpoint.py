@@ -65,6 +65,7 @@ from openviking.server.local_input_guard import (
 from openviking.server.resource_ingest import ingest_temp_upload
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.server.upload_token_store import upload_token_store
+from openviking.utils.chunk_uri import strip_chunk_suffix
 from openviking.utils.search_filters import SearchContextTypeInput, merge_search_filter
 from openviking_cli.exceptions import (
     InvalidArgumentError,
@@ -430,22 +431,36 @@ _MCP_VIDEO_EXTENSIONS = {".avi", ".m4v", ".mkv", ".mov", ".mp4", ".webm"}
 _MCP_MEDIA_MAX_BYTES = 3_932_160
 
 
+def _mcp_uri_path(uri: str) -> str:
+    """Path portion of a URI, ignoring any query and a trailing chunk suffix."""
+    return strip_chunk_suffix(uri.split("?", 1)[0])
+
+
 def _mcp_uri_suffix(uri: str) -> str:
-    """Lowercased file extension of a URI, ignoring any query or fragment."""
-    path = uri.split("#", 1)[0].split("?", 1)[0]
-    return PurePosixPath(path).suffix.lower()
+    """Lowercased file extension of a URI, ignoring any query and a trailing chunk suffix."""
+    return PurePosixPath(_mcp_uri_path(uri)).suffix.lower()
 
 
 def _is_mcp_image_uri(uri: str) -> bool:
-    return _mcp_uri_suffix(uri) in _MCP_IMAGE_EXTENSIONS
+    return _mcp_uri_matches_extension(uri, _MCP_IMAGE_EXTENSIONS)
 
 
 def _is_mcp_audio_uri(uri: str) -> bool:
-    return _mcp_uri_suffix(uri) in _MCP_AUDIO_EXTENSIONS
+    return _mcp_uri_matches_extension(uri, _MCP_AUDIO_EXTENSIONS)
 
 
 def _is_mcp_video_uri(uri: str) -> bool:
-    return _mcp_uri_suffix(uri) in _MCP_VIDEO_EXTENSIONS
+    return _mcp_uri_matches_extension(uri, _MCP_VIDEO_EXTENSIONS)
+
+
+def _mcp_uri_matches_extension(uri: str, extensions: set[str]) -> bool:
+    """Two-stage extension match: the literal path suffix wins ('#' in a real
+    filename keeps its meaning), with a fallback to the pre-'#' portion so a
+    media-fragment reference like 'video.mp4#t=5' keeps its extension."""
+    if _mcp_uri_suffix(uri) in extensions:
+        return True
+    head = uri.split("#", 1)[0]
+    return head != uri and _mcp_uri_suffix(head) in extensions
 
 
 def _sniff_mcp_image_mime_type(data: bytes) -> Optional[str]:
@@ -468,16 +483,15 @@ def _mcp_image_content(data: bytes, mime_type: str) -> ImageContent:
 
 def _sniff_mcp_audio_mime_type(data: bytes, uri: str) -> Optional[str]:
     """Recognize audio formats represented by MCP AudioContent."""
-    suffix = _mcp_uri_suffix(uri)
     if data.startswith(b"RIFF") and len(data) >= 12 and data[8:12] == b"WAVE":
         return "audio/wav"
     if data.startswith(b"fLaC"):
         return "audio/flac"
-    if data.startswith(b"OggS") and suffix in {".oga", ".ogg"}:
+    if data.startswith(b"OggS") and _mcp_uri_matches_extension(uri, {".oga", ".ogg"}):
         return "audio/ogg"
     if data.startswith(b"ID3") or (len(data) >= 2 and data[0] == 0xFF and data[1] & 0xE0 == 0xE0):
         return "audio/mpeg"
-    if len(data) >= 12 and data[4:8] == b"ftyp" and suffix == ".m4a":
+    if len(data) >= 12 and data[4:8] == b"ftyp" and _mcp_uri_matches_extension(uri, {".m4a"}):
         return "audio/mp4"
     return None
 
@@ -489,8 +503,7 @@ def _mcp_audio_content(data: bytes, mime_type: str) -> AudioContent:
 
 def _mcp_media_download_hint(uri: str) -> str:
     """Return actionable fallbacks when media cannot be inlined."""
-    path = uri.split("#", 1)[0].split("?", 1)[0]
-    filename = PurePosixPath(path).name or "download"
+    filename = PurePosixPath(_mcp_uri_path(uri)).name or "download"
     encoded_uri = quote(uri, safe="")
     return (
         f'Use `ov get "{uri}" "./{filename}"` or GET '

@@ -19,6 +19,7 @@ from openviking.storage.abstract_overview import (
 )
 from openviking.storage.expr import And, Contains, Eq, Or, PathScope
 from openviking.storage.vector_ids import vector_record_id
+from openviking.utils.chunk_uri import CHUNK_MARKER, chunk_base_uri
 from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.uri import VikingURI
@@ -82,13 +83,20 @@ def _has_vector_payload(record: dict[str, Any]) -> bool:
     return False
 
 
+def _is_chunk_of(uri: str, base_uri: str) -> bool:
+    # Only an exact chunk suffix ({base}#chunk_{idx:04d}) counts, so a sibling
+    # whose own name contains '#' (accepted by add/write) is never treated as
+    # a chunk of the base URI.
+    return chunk_base_uri(uri) == base_uri
+
+
 def uri_in_transfer_scope(uri: str, scope_uri: str, *, recursive: bool) -> bool:
     """Return whether *uri* belongs to a file or recursive directory transfer."""
     scope_uri = _normalize_uri(scope_uri)
     return (
         uri == scope_uri
-        or uri.startswith(scope_uri + "#")
         or (recursive and uri.startswith(scope_uri + "/"))
+        or _is_chunk_of(uri, scope_uri)
     )
 
 
@@ -98,7 +106,7 @@ def rewrite_transfer_uri(uri: str, source_uri: str, target_uri: str) -> str:
     target_uri = _normalize_uri(target_uri)
     if uri == source_uri:
         return target_uri
-    if uri.startswith(source_uri + "/") or uri.startswith(source_uri + "#"):
+    if uri.startswith(source_uri + "/") or _is_chunk_of(uri, source_uri):
         return target_uri + uri[len(source_uri) :]
     return uri
 
@@ -180,7 +188,10 @@ async def _records_in_scope(
         if parent is not None and parent.uri != "viking://":
             filters.append(PathScope("uri", parent.uri, depth=1))
     else:
-        filters.append(Contains("uri", uri + "#"))
+        # Cheap pre-filter for chunk records ahead of the exact suffix check in
+        # uri_in_transfer_scope; real files whose name merely contains
+        # CHUNK_MARKER are fetched too and dropped there.
+        filters.append(Contains("uri", uri + CHUNK_MARKER))
 
     ctx = _root_ctx(account_id)
     records = await vector_store.filter(

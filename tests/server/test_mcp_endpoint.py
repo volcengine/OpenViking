@@ -632,6 +632,8 @@ async def test_read_delegates_to_visible_read(monkeypatch):
         ("viking://resources/result.jpg", b"\xff\xd8\xffimage", "image/jpeg"),
         ("viking://resources/result.gif", b"GIF89aimage", "image/gif"),
         ("viking://resources/result.webp", b"RIFF\x00\x00\x00\x00WEBPimage", "image/webp"),
+        # media-fragment reference falls back to the pre-'#' extension
+        ("viking://resources/img.png#section", b"\x89PNG\r\n\x1a\nimage", "image/png"),
     ],
 )
 async def test_read_image_returns_native_mcp_content(monkeypatch, uri, image_bytes, mime_type):
@@ -700,6 +702,13 @@ async def test_read_mixed_batch_preserves_source_order(monkeypatch):
         ("viking://resources/clip.m4a", b"\x00\x00\x00\x18ftypM4A audio", "audio/mp4"),
         # suffix sniffing must ignore a query string, like the extension gate does
         ("viking://resources/clip.ogg?v=2", b"OggSaudio", "audio/ogg"),
+        # '#' is a literal path character; only a trailing chunk suffix is stripped
+        ("viking://resources/song#1.mp3", b"ID3audio", "audio/mpeg"),
+        ("viking://resources/clip.mp3#chunk_0000", b"ID3audio", "audio/mpeg"),
+        ("viking://resources/clip.mp3#chunk_0000?v=2", b"ID3audio", "audio/mpeg"),
+        # media-fragment references fall back to the pre-'#' extension
+        ("viking://resources/clip.ogg#t=5", b"OggSaudio", "audio/ogg"),
+        ("viking://resources/clip.m4a#t=10,20", b"\x00\x00\x00\x18ftypM4A audio", "audio/mp4"),
     ],
 )
 async def test_read_audio_returns_native_mcp_content(monkeypatch, uri, audio_bytes, mime_type):
@@ -748,6 +757,73 @@ async def test_read_video_returns_unsupported_hint(monkeypatch):
     assert 'ov get "viking://resources/demo.mp4" "./demo.mp4"' in result
     stat.assert_awaited_once_with("viking://resources/demo.mp4", ctx=DEFAULT_CTX)
     read_visible.assert_not_awaited()
+
+
+async def test_read_video_hash_named_file_keeps_full_download_filename(monkeypatch):
+    stat = AsyncMock(return_value={"size": 1024, "isDir": False})
+    read_visible = AsyncMock()
+    monkeypatch.setattr(
+        mcp_endpoint,
+        "get_service",
+        lambda: SimpleNamespace(
+            fs=SimpleNamespace(
+                read_file_bytes=AsyncMock(),
+                read_visible=read_visible,
+                stat=stat,
+            )
+        ),
+    )
+
+    result = await read("viking://resources/demo#1.mp4")
+
+    assert 'ov get "viking://resources/demo#1.mp4" "./demo#1.mp4"' in result
+
+
+async def test_read_video_media_fragment_keeps_download_hint(monkeypatch):
+    """A '#t=...' suffix still recognizes the pre-'#' video extension and gets
+    the download hint instead of falling through to a text read."""
+    stat = AsyncMock(return_value={"size": 1024, "isDir": False})
+    read_visible = AsyncMock()
+    monkeypatch.setattr(
+        mcp_endpoint,
+        "get_service",
+        lambda: SimpleNamespace(
+            fs=SimpleNamespace(
+                read_file_bytes=AsyncMock(),
+                read_visible=read_visible,
+                stat=stat,
+            )
+        ),
+    )
+
+    result = await read("viking://resources/demo.mp4#t=5")
+
+    assert "no standard VideoContent" in result
+    assert 'ov get "viking://resources/demo.mp4#t=5" "./demo.mp4#t=5"' in result
+    read_visible.assert_not_awaited()
+
+
+async def test_read_fragment_like_text_name_stays_text(monkeypatch):
+    """A file literally named 'notes#t=5.md' matches no media extension in
+    either stage and keeps going through the visible-text read path."""
+    read_visible = AsyncMock(return_value="text body")
+    read_file_bytes = AsyncMock()
+    monkeypatch.setattr(
+        mcp_endpoint,
+        "get_service",
+        lambda: SimpleNamespace(
+            fs=SimpleNamespace(
+                read_file_bytes=read_file_bytes,
+                read_visible=read_visible,
+            )
+        ),
+    )
+
+    result = await read("viking://resources/notes#t=5.md")
+
+    assert result == "text body"
+    read_visible.assert_awaited_once_with("viking://resources/notes#t=5.md", ctx=DEFAULT_CTX)
+    read_file_bytes.assert_not_awaited()
 
 
 async def test_read_video_nonexistent_uri_preserves_not_found(monkeypatch):
