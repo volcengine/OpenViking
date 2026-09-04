@@ -760,6 +760,15 @@ class EmbeddingConfig(BaseModel):
                     "dimension": cfg.dimension,
                     "provider": "openai",
                     "configured_provider": "openai",
+                    # ``input`` historically defaults to multimodal for the
+                    # Volcengine provider. Only forward it for OpenAI when the
+                    # user explicitly configured the field, so existing text
+                    # embedding configurations stay text-only.
+                    **(
+                        {"input_type": cfg.input}
+                        if "input" in cfg.model_fields_set
+                        else {}
+                    ),
                     "config": dict(runtime_config),
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),

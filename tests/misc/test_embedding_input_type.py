@@ -138,6 +138,42 @@ class TestEmbeddingConfigContextualEmbedders:
         assert "query_param" not in call_kwargs
         assert "document_param" not in call_kwargs
 
+    @patch("openviking.models.embedder.OpenAIDenseEmbedder")
+    def test_get_embedder_openai_forwards_explicit_multimodal_input(self, mock_embedder_class):
+        """An explicit multimodal mode must reach OpenAI-compatible embedders."""
+        mock_embedder_class.return_value = MagicMock()
+        config = EmbeddingConfig(
+            dense=EmbeddingModelConfig(
+                model="custom-multimodal",
+                provider="openai",
+                api_key="sk-test",
+                api_base="http://localhost:8000/v1",
+                input="multimodal",
+            )
+        )
+
+        config.get_embedder()
+
+        call_kwargs = mock_embedder_class.call_args[1]
+        assert call_kwargs["input_type"] == "multimodal"
+
+    @patch("openviking.models.embedder.OpenAIDenseEmbedder")
+    def test_get_embedder_openai_defaults_to_text_only(self, mock_embedder_class):
+        """Omitting input keeps existing OpenAI text-model behavior."""
+        mock_embedder_class.return_value = MagicMock()
+        config = EmbeddingConfig(
+            dense=EmbeddingModelConfig(
+                model="text-embedding-3-small",
+                provider="openai",
+                api_key="sk-test",
+            )
+        )
+
+        config.get_embedder()
+
+        call_kwargs = mock_embedder_class.call_args[1]
+        assert "input_type" not in call_kwargs
+
     @patch("openviking.models.embedder.JinaDenseEmbedder")
     def test_get_embedder_jina_no_params_when_not_set(self, mock_embedder_class):
         """get_embedder should not pass query_param and document_param when not set."""
@@ -184,6 +220,25 @@ class TestOpenAIDenseEmbedderInputType:
         mock_client.embeddings.create.assert_called_once()
         call_kwargs = mock_client.embeddings.create.call_args[1]
         assert call_kwargs.get("extra_body") == {"input_type": "search_query"}
+
+    @patch("openai.OpenAI")
+    def test_explicit_multimodal_mode_preserves_content_parts(self, mock_openai_class):
+        """Multimodal mode must prevent the base guard from stripping images."""
+        from openviking.models.embedder import OpenAIDenseEmbedder
+
+        embedder = OpenAIDenseEmbedder(
+            model_name="custom-multimodal",
+            api_key="sk-test",
+            dimension=1536,
+            input_type="multimodal",
+        )
+
+        content = [
+            {"type": "text", "text": "a diagram"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+        ]
+        assert embedder.supports_multimodal is True
+        assert embedder.prepare_embedding_input(content) == content
 
     @patch("openai.OpenAI")
     def test_embed_no_extra_body_when_input_type_not_set(self, mock_openai_class):

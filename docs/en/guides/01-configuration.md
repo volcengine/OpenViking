@@ -219,7 +219,7 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 | `api_key` | str | API key |
 | `model` | str | Model name |
 | `dimension` | int | Vector dimension. For Voyage, this maps to `output_dimension` |
-| `input` | str | Input type: `"text"` or `"multimodal"` |
+| `input` | str | Input type: `"text"` or `"multimodal"`. For OpenAI-compatible providers such as `openai`/`ollama`, image parts are sent only when this is explicitly set to `"multimodal"` and the backend supports them; use `"text"` or omit it for official OpenAI text models. |
 | `batch_size` | int | Batch size for embedding requests |
 | `encoding_format` | str | (OpenAI / Azure only) Wire format for embedding values: `"float"` or `"base64"`. Leave unset to use the OpenAI Python SDK default. Set to `"float"` when the upstream gateway cannot deserialize base64 embedding payloads correctly. |
 | `extra_body` | object | (OpenAI / Azure only) Extra JSON body fields merged into every embeddings request. Useful for OpenAI-compatible gateways that accept vendor-specific fields, e.g. OpenRouter provider routing `{"provider": {"sort": "latency"}}`. Explicit `query_param`/`document_param` keys take precedence on conflict. |
@@ -255,7 +255,7 @@ When the embedding provider experiences consecutive transient failures (e.g. `42
 | `doubao-embedding-vision-251215` | 1024 | multimodal | Recommended |
 | `doubao-embedding-250615` | 1024 | text | Text only |
 
-With `input: "multimodal"`, OpenViking can embed text, images (PNG, JPG, etc.), and mixed content. Image-to-image search requires this mode; text-only embedding models continue to index image summaries but cannot accept image queries.
+With `input: "multimodal"`, OpenViking can embed text, images (PNG, JPG, etc.), and mixed content. Image-to-image search requires this mode; text-only embedding models continue to index image summaries but cannot accept image queries. For OpenAI-compatible backends, verify that the selected model accepts content parts (for example, `image_url`); OpenViking does not translate image inputs for a text-only backend.
 
 **Supported providers:**
 - `openai`: OpenAI Embedding API
