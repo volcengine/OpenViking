@@ -30,7 +30,7 @@ import { catchUpTurns, commitOvSession, hasCaptureKeyword, makeFetchJSON } from 
 import { clearEnded, loadState, saveState, withSessionLock } from "./session-state.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
-const cfg = loadConfig();
+let cfg = loadConfig();
 const { log, logError } = createLogger("pre-compact", cfg);
 let activePeerId = cfg.peerId || "";
 
@@ -52,9 +52,9 @@ function noop(message) {
   output(message ? { systemMessage: message } : {});
 }
 
-async function compact(sessionId, transcriptPath, trigger, heartbeat) {
+async function compact(sessionId, transcriptPath, trigger, cwd, heartbeat) {
   const state = await loadState(sessionId);
-  activePeerId = cfg.peerId || state.workspacePeerId || resolveEffectivePeerId({ cfg, cwd: process.cwd() }).peerId;
+  activePeerId = cfg.peerId || state.workspacePeerId || resolveEffectivePeerId({ cfg, cwd }).peerId;
   log("start", { sessionId, transcriptPath, trigger, hasPeer: Boolean(activePeerId) });
 
   const health = await fetchJSON("/health");
@@ -157,13 +157,17 @@ async function main() {
   const sessionId = input.session_id || "unknown";
   const transcriptPath = input.transcript_path || null;
   const trigger = input.trigger || "auto";
+  // The workspace layer belongs to the session's directory, which only the
+  // payload knows; see loadConfig for why re-resolving this late is safe.
+  const cwd = typeof input.cwd === "string" && input.cwd.trim() ? input.cwd : process.cwd();
+  cfg = loadConfig(cwd);
 
   // Compaction means the thread is running, so any earlier end marker is stale.
   await clearEnded(sessionId, { before: HOOK_STARTED_AT });
 
   const outcome = await withSessionLock(
     sessionId,
-    ({ heartbeat }) => compact(sessionId, transcriptPath, trigger, heartbeat),
+    ({ heartbeat }) => compact(sessionId, transcriptPath, trigger, cwd, heartbeat),
     { waitMs: LOCK_WAIT_MS },
   );
   if (outcome.skipped) {

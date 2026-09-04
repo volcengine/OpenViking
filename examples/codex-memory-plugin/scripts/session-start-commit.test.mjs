@@ -174,6 +174,11 @@ function profileHandler(requests, { archiveOverview = "" } = {}) {
 
 test("startup injects the shared profile block with workspace peer routing", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "ov-codex-session-start-"));
+  // The peer comes from the repository, so the cwd has to be one — outside a
+  // repository the plugin deliberately sends no peer at all.
+  const repo = await mkdtemp(join(tmpdir(), "ov-codex-profile-repo-"));
+  await mkdir(join(repo, ".git"), { recursive: true });
+  await writeFile(join(repo, ".git", "config"), '[remote "origin"]\n\turl = git@github.com:acme/codex-profile.git\n');
   const requests = [];
   try {
     await withMockOpenViking(profileHandler(requests), async (baseUrl) => {
@@ -181,7 +186,7 @@ test("startup injects the shared profile block with workspace peer routing", asy
         {
           session_id: "startup-profile",
           source: "startup",
-          cwd: "/tmp/codex-profile",
+          cwd: repo,
           hook_event_name: "SessionStart",
         },
         baseEnv(baseUrl, stateDir),
@@ -200,9 +205,10 @@ test("startup injects the shared profile block with workspace peer routing", asy
       request.path === "/api/v1/content/read" || request.path === "/api/v1/fs/ls"
     );
     assert.ok(profileRequests.length >= 4);
-    assert.ok(profileRequests.every((request) => request.actorPeerId === "-tmp-codex-profile"));
+    assert.ok(profileRequests.every((request) => request.actorPeerId === "github.com-acme-codex-profile"));
   } finally {
     await rm(stateDir, { recursive: true, force: true });
+    await rm(repo, { recursive: true, force: true });
   }
 });
 

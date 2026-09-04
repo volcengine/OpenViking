@@ -79,8 +79,9 @@ Credential environment variables:
 | `OPENVIKING_ACCOUNT` | Trusted-mode account |
 | `OPENVIKING_USER` | Trusted-mode user |
 | `OPENVIKING_PEER_ID` | Actor peer id |
-| `OPENVIKING_WORKSPACE_PEER` | Derive an actor peer from the current workspace by default; set `0` to disable |
+| `OPENVIKING_WORKSPACE_PEER` | Derive an actor peer from the workspace's git identity by default; set `0` to send no peer |
 | `OPENVIKING_RECALL_PEER_SCOPE` | `all` recalls other project memories with a score penalty; `actor` only sees global plus the current project |
+| `OPENVIKING_DEBUG_LOG` | Write JSON Lines debug records to this path. `OV_DEBUG_LOG` is a deprecated alias kept for existing setups |
 
 Recall asks the server to assemble the context block in one request
 (`POST /api/v1/search/search` with `mode="context"`), so token budgeting, detail
@@ -88,7 +89,7 @@ tiers and cross-turn dedup are shared with every other harness. Deployments
 without that endpoint fall back to `/api/v1/search/recall`, and that outcome is
 cached so only the first turn pays for the probe.
 
-API keys are sent as `Authorization: Bearer ...`. By default the extension derives a peer from the process workspace path using Claude's project-directory naming rule: every non-letter-or-digit character becomes `-`, with no path normalization. For example, `/Users/x/Dev/OpenViking` becomes `-Users-x-Dev-OpenViking`. The effective peer is sent as `X-OpenViking-Actor-Peer` and stored as `peer_id` on captured session messages. An explicit peer from the shared credential sources (`OPENVIKING_PEER_ID`, `ovcli.conf`, or `ov.conf`) takes precedence over `config.json`'s `peerId`; the local `peerId` in turn takes precedence over workspace derivation.
+API keys are sent as `Authorization: Bearer ...`. By default the extension derives a peer from the git identity of the process workspace path: the normalized `origin` URL of the repository the workspace sits in, else that repository's root path. Outside a git repository no peer is sent at all, and what is remembered there goes to the user-level space `viking://user/<you>/memories`. `git@github.com:volcengine/OpenViking.git` becomes `github.com-volcengine-openviking`; the path fallback keeps the older naming rule where every non-letter-or-digit character becomes `-`, so `/Users/x/Dev/OpenViking` becomes `-Users-x-Dev-OpenViking`. One repository therefore keeps one peer across subdirectories, worktrees, clones and machines, while a fork's different origin keeps it separate. The extension does not read workspace `.openviking/config.json` files, so a `peer.id` written there has no effect. The effective peer is sent as `X-OpenViking-Actor-Peer` and stored as `peer_id` on captured session messages. An explicit peer from the shared credential sources (`OPENVIKING_PEER_ID`, `ovcli.conf`, or `ov.conf`) takes precedence over `config.json`'s `peerId`; the local `peerId` in turn takes precedence over workspace derivation. Memories written under the older path-derived peer stay reachable under the default broad recall, which sweeps every peer under the user.
 
 Recall defaults to the broad mode: global memory, the current workspace, and other workspace memories can all be recalled, with other workspaces penalized and rendered later. Set `OPENVIKING_RECALL_PEER_SCOPE=actor` for the isolation mode, which only sees global memory plus the current workspace. In deployments where one bot serves multiple real people, such as zouk, vikingbot, or AstrBot, use the isolation mode with an explicit actor peer so one person's memories are not recalled into another person's session.
 
@@ -116,7 +117,7 @@ All fields below live in `config.json`. Defaults are shown.
 | Field                    | Default    | Description                                                              |
 |--------------------------|------------|--------------------------------------------------------------------------|
 | `peerId`                 | `""`      | Local explicit peer fallback; shared credential sources take precedence  |
-| `workspacePeer`          | `true`     | Derive a peer from the current workspace when no explicit peer is set    |
+| `workspacePeer`          | `true`     | Derive a peer from the workspace's git identity when no explicit peer is set; `false` sends no peer |
 | `recallPeerScope`        | `"all"`   | Use `"actor"` for strict current-peer recall or `"all"` for broad recall |
 
 ### Recall tuning
@@ -193,6 +194,7 @@ recent live tail.
 |--------------------------|------------|--------------------------------------------------------------------------|
 | `bypassPatterns`         | `[]`       | Glob patterns to skip extension processing                               |
 | `logLevel`               | `"error"`  | `"silent"`, `"error"`, or `"info"`                                      |
+| `debugLogPath`           | `""`       | Write JSON Lines debug records to this path; empty disables the log      |
 
 ## Architecture
 
@@ -322,7 +324,7 @@ All TypeScript files are loaded directly by pi's built-in `jiti` transpiler — 
 | Tools not showing after `pi -c` resume  | Known pi issue (tools not re-registered on resume)   | Workaround built in — tools register in `before_agent_start`|
 | Extension crashes on load               | Wrong OV server URL or network issue                 | Check `logLevel` and server accessibility                   |
 | No memories extracted                   | Wrong embedding/extraction model in OV config        | Check OV's `embedding` / `vlm` configuration                |
-| Takeover never advances                  | Pending addMessage replay, commit, or overview polling failed | Set `OV_DEBUG_LOG=/tmp/ov-pi.log` and retry `/viking commit` |
+| Takeover never advances                  | Pending addMessage replay, commit, or overview polling failed | Set `OPENVIKING_DEBUG_LOG=/tmp/ov-pi.log` and retry `/viking commit` |
 
 ## License
 

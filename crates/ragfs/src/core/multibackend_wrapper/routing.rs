@@ -80,6 +80,11 @@ impl Inner {
             return Some(self.primary().backend.clone());
         }
 
+        if self.redirects.is_empty() {
+            self.record_read_route(ReadRouteSource::Miss);
+            return None;
+        }
+
         let dir = parent_dir(&normalized);
         let name = file_name(&normalized).to_string();
         let ctx = current_required_ctx()

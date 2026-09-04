@@ -34,7 +34,7 @@ import {
 import { maybeDetach, readHookStdin } from "./shared/async-writer.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
-const cfg = loadConfig();
+let cfg = loadConfig();
 const { log, logError } = createLogger("session-end", cfg);
 let activePeerId = cfg.peerId || "";
 
@@ -49,7 +49,7 @@ function output(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
 }
 
-async function finish(sessionId, transcriptPath, endToken, heartbeat) {
+async function finish(sessionId, transcriptPath, cwd, endToken, heartbeat) {
   // Verify the marker this worker was launched for before doing any work. A
   // marker that is gone means the thread was resumed; a different one belongs
   // to a later exit whose own worker will commit.
@@ -60,7 +60,7 @@ async function finish(sessionId, transcriptPath, endToken, heartbeat) {
   }
 
   const state = await loadState(sessionId);
-  activePeerId = cfg.peerId || state.workspacePeerId || resolveEffectivePeerId({ cfg, cwd: process.cwd() }).peerId;
+  activePeerId = cfg.peerId || state.workspacePeerId || resolveEffectivePeerId({ cfg, cwd }).peerId;
   log("start", { sessionId, transcriptPath, hasPeer: Boolean(activePeerId) });
 
   const health = await fetchJSON("/health");
@@ -162,6 +162,17 @@ async function main() {
 
   const sessionId = input.session_id;
   const transcriptPath = input.transcript_path || null;
+  // The workspace layer belongs to the session's directory, which only the
+  // payload knows; see loadConfig for why re-resolving this late is safe.
+  const cwd = typeof input.cwd === "string" && input.cwd.trim() ? input.cwd : process.cwd();
+  cfg = loadConfig(cwd);
+  if (!cfg.autoCapture) {
+    // The gate above ran against this process's directory, not the session's.
+    log("skip", { stage: "init", reason: "autoCapture disabled" });
+    output({});
+    return;
+  }
+
   if (!sessionId) {
     log("skip", { stage: "init", reason: "no session_id" });
     output({});
@@ -193,7 +204,7 @@ async function main() {
 
   const outcome = await withSessionLock(
     sessionId,
-    ({ heartbeat }) => finish(sessionId, transcriptPath, endToken, heartbeat),
+    ({ heartbeat }) => finish(sessionId, transcriptPath, cwd, endToken, heartbeat),
     { waitMs: LOCK_WAIT_MS },
   );
   if (outcome.skipped) {

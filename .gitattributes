@@ -9,3 +9,6 @@ agent-plugins/servers/shared/*.mjs linguist-generated=true
 
 # Pi owns this module; sync.mjs does not generate it.
 examples/pi-coding-agent-extension/shared/recall-ledger.mjs -linguist-generated
+
+# The openclaw target sync.mjs gained in #4450.
+examples/openclaw-plugin/shared/*.mjs linguist-generated=true

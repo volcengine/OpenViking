@@ -110,12 +110,19 @@ function lockPath(codexSessionId) {
   return join(getStateDir(), `${safeId(codexSessionId)}.lock`);
 }
 
+// Stamps the pinned `workspacePeerId` only. A session's peer is frozen for the
+// session's lifetime, so a pin written under an older derivation rule would
+// outlive that rule; bump this whenever the derivation changes. The rest of the
+// state (ovSessionId, capture progress) stays valid across a bump and is kept.
+export const PEER_PIN_VERSION = 3;
+
 function defaultState(codexSessionId) {
   const now = Date.now();
   return {
     codexSessionId,
     ovSessionId: null,
     workspacePeerId: "",
+    peerPinVersion: PEER_PIN_VERSION,
     // Last rollout path seen by a capture hook, so the SessionStart sweep can
     // catch up turns for a session whose own workers never ran.
     transcriptPath: null,
@@ -129,7 +136,12 @@ export async function loadState(codexSessionId) {
   try {
     const raw = await readFile(statePath(codexSessionId), "utf-8");
     const parsed = JSON.parse(raw);
-    return { ...defaultState(codexSessionId), ...parsed };
+    const state = { ...defaultState(codexSessionId), ...parsed };
+    if (parsed?.peerPinVersion !== PEER_PIN_VERSION) {
+      state.workspacePeerId = "";
+      state.peerPinVersion = PEER_PIN_VERSION;
+    }
+    return state;
   } catch {
     return defaultState(codexSessionId);
   }

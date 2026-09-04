@@ -15,6 +15,7 @@ export interface OVConfig {
   user: string;
   peerId: string;
   userAgent: string;
+  harness: string;
   workspacePeer: boolean;
   recallPeerScope: "actor" | "all";
   recallQueryExpansion: "auto" | "off";
@@ -45,6 +46,7 @@ export interface OVConfig {
   captureAssistantTurns: boolean;
   bypassPatterns: string[];
   logLevel: "silent" | "error" | "info";
+  debugLogPath: string;
 }
 
 const DEFAULT_CONFIG: OVConfig = {
@@ -55,6 +57,7 @@ const DEFAULT_CONFIG: OVConfig = {
   user: "",
   peerId: "",
   userAgent: "",
+  harness: "pi",
   workspacePeer: true,
   recallPeerScope: "all",
   // Server-side query expansion costs a model call before retrieval starts, so
@@ -89,6 +92,7 @@ const DEFAULT_CONFIG: OVConfig = {
   captureAssistantTurns: true,
   bypassPatterns: [],
   logLevel: "error",
+  debugLogPath: "",
 };
 
 export function loadConfigFromModuleUrl(moduleUrl: string): OVConfig {
@@ -115,6 +119,7 @@ export function loadConfig(extensionDir: string): OVConfig {
     user: creds.user,
     peerId: creds.peerId || (typeof file.peerId === "string" ? file.peerId : DEFAULT_CONFIG.peerId),
     userAgent: buildUserAgent("pi", EXTENSION_VERSION),
+    harness: "pi",
     recallLimitConfigured: Object.prototype.hasOwnProperty.call(file, "recallLimit"),
     recallQueryExpansionConfigured: Object.prototype.hasOwnProperty.call(file, "recallQueryExpansion"),
     recallTokenBudget: file.recallTokenBudget ?? file.recallBudget ?? DEFAULT_CONFIG.recallTokenBudget,
@@ -151,6 +156,10 @@ export function loadConfig(extensionDir: string): OVConfig {
   if (process.env.OPENVIKING_RECALL_LEDGER !== undefined) {
     config.recallLedger = envBool(process.env.OPENVIKING_RECALL_LEDGER, config.recallLedger);
   }
+  // OPENVIKING_DEBUG_LOG is the shared spelling; OV_DEBUG_LOG is pi's older
+  // name, kept working so existing setups still log.
+  const debugLogEnv = process.env.OPENVIKING_DEBUG_LOG || process.env.OV_DEBUG_LOG;
+  if (debugLogEnv) config.debugLogPath = debugLogEnv;
 
   config.recallLimit = clampInt(config.recallLimit, 1, 50, DEFAULT_CONFIG.recallLimit);
   config.recallMaxContentChars = clampInt(config.recallMaxContentChars, 100, 5000, DEFAULT_CONFIG.recallMaxContentChars);
@@ -174,6 +183,7 @@ export function loadConfig(extensionDir: string): OVConfig {
   config.recallQueryExpansion = config.recallQueryExpansion === "off" ? "off" : "auto";
   config.recallLedger = config.recallLedger !== false;
   if (!Array.isArray(config.bypassPatterns)) config.bypassPatterns = [];
+  config.debugLogPath = typeof config.debugLogPath === "string" ? config.debugLogPath.trim() : "";
   config.peerId = resolveEffectivePeerId({ cfg: config as any, cwd: process.cwd() }).peerId;
   return config;
 }

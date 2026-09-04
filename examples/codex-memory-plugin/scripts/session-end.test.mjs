@@ -419,7 +419,21 @@ test("a concurrent Stop worker and session-end worker never double-send a turn",
     assert.equal(sentMessages(calls).length, 6, "each transcript turn must be sent exactly once");
     const state = await readState(stateDir, "s8");
     assert.equal(state.capturedTurnCount, 6);
-    assert.equal(state.ovSessionId, null);
+    // The two hooks race over the end marker. auto-capture clears markers
+    // older than its own start (resume semantics), so when the SessionEnd
+    // parent writes its marker just before the Stop hook starts — the exit
+    // race this test spawns — the marker is gone by the time the session-end
+    // worker takes the lock and it exits as superseded. The system then
+    // settles on the Stop worker's terminal state: the live session stays
+    // uncommitted for the SessionStart sweep's idle-TTL pass instead of being
+    // committed inline. Both convergences are correct as long as no turn is
+    // double-sent and no stale marker survives, so accept either one.
+    if (state.ovSessionId !== null) {
+      assert.equal(state.ovSessionId, "cx-s8",
+        "only the derived cx-s8 session may remain live");
+    }
+    assert.equal(await endedMarkerExists(stateDir, "s8"), false,
+      "a converged run must not leave a stale end marker");
   } finally {
     await rm(stateDir, { recursive: true, force: true });
   }

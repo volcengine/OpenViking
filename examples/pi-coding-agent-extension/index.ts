@@ -10,8 +10,7 @@
  * (most mature, production-hardened), Hermes (anti-pattern: stale prefetch).
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { appendFileSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { createLogger } from "./shared/debug-log.mjs";
 import { loadConfigFromModuleUrl, type OVConfig } from "./config.js";
 import { OVClient } from "./client.js";
 import { RecallManager } from "./recall.js";
@@ -40,17 +39,14 @@ export default async function (pi: ExtensionAPI) {
     // caches (#4137); it is per pi session and opened once the id is known.
     config.recallLedger ? new RecallLedger() : null,
   );
-  const debugLog = (message: string) => {
-    const file = process.env.OV_DEBUG_LOG;
-    if (!file) return;
-    try {
-      mkdirSync(dirname(file), { recursive: true });
-      appendFileSync(file, `${new Date().toISOString()} ${message}\n`);
-    } catch {
-      // Best effort; logging must never affect pi.
-    }
-  };
-  const takeover = createTakeoverManager({ pi, client, sync, config, log: debugLog });
+  const logger = createLogger("pi", {
+    debug: Boolean(config.debugLogPath),
+    debugLogPath: config.debugLogPath,
+  });
+  const takeover = createTakeoverManager({
+    pi, client, sync, config,
+    log: (message: string) => logger.log("takeover", message),
+  });
 
   // Session state
   let connected = false;
@@ -142,7 +138,7 @@ export default async function (pi: ExtensionAPI) {
     // before_agent_start awaits the same in-flight chain before the first
     // provider request — the first turn still gets profile + recall.
     void start(ctx).catch((error) => {
-      debugLog(`session_start: ${error instanceof Error ? error.message : String(error)}`);
+      logger.logError("session_start", error);
     });
   });
 
@@ -181,13 +177,28 @@ export default async function (pi: ExtensionAPI) {
     // still receives current-query memory, without blocking user-message UI.
     await recall.searchPending();
 
-    // The context hook omits persisted entry ids, but its user messages are a
-    // deep copy of the active SessionManager context. Associate those objects
-    // with stable ids before takeover may filter the array; retained messages
-    // keep object identity through that transform.
-    const userEntryIds = ctx.sessionManager.buildContextEntries()
-      .filter((entry: any) => entry?.type === "message" && entry.message?.role === "user")
-      .map((entry: any) => entry.id as string);
+    // The entry IDs are an optional optimization for replaying the recall
+    // ledger. Compatible hosts may omit buildContextEntries(), so fail closed
+    // to nullable IDs rather than guessing from another SessionManager API.
+    const sessionManager = ctx.sessionManager;
+    const entries = typeof sessionManager?.buildContextEntries === "function"
+      ? sessionManager.buildContextEntries()
+      : [];
+    const userEntryIds = entries
+      .filter((entry: unknown): entry is { id?: unknown; type: "message"; message: { role: "user" } } => {
+        if (!entry || typeof entry !== "object") return false;
+        if (!("type" in entry) || !("message" in entry)) return false;
+        const type = entry.type;
+        const message = entry.message;
+        return type === "message" &&
+          !!message &&
+          typeof message === "object" &&
+          "role" in message &&
+          message.role === "user";
+      })
+      .map((entry): string | undefined =>
+        typeof entry.id === "string" ? entry.id : undefined
+      );
     const messageIds = new WeakMap<object, string>();
     let userIndex = 0;
     for (const message of event.messages as any[]) {
@@ -221,7 +232,7 @@ export default async function (pi: ExtensionAPI) {
 
     const branch = ctx.sessionManager.getBranch();
     const result = await sync.syncBranch(branch);
-    debugLog(`turn_end: synced ${result.added} entries, ~${result.tokens} tokens`);
+    logger.log("turn_end", { added: result.added, tokens: result.tokens });
     await takeover.onTurnSynced(result.tokens);
     updateStatus(ctx, connected, result.added, sync.sessionId, config, takeover.state);
   });

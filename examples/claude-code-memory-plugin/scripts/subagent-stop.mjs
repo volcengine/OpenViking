@@ -38,7 +38,7 @@ if (!isPluginEnabled()) {
   process.exit(0);
 }
 
-const cfg = loadConfig();
+let cfg = loadConfig();
 const { log, logError } = createLogger("subagent-stop");
 
 const STATE_DIR = join(tmpdir(), "openviking-cc-subagent-state");
@@ -309,6 +309,15 @@ async function main() {
   const cwd = input.cwd;
   const subagentId = input.agent_id;
   const transcriptPath = input.agent_transcript_path;
+  // The workspace layer belongs to the session's directory, which only the
+  // payload knows; see loadConfig for why re-resolving this late is safe.
+  cfg = loadConfig(cwd);
+  if (!cfg.autoCapture) {
+    // The gate above ran against this process's directory, not the session's.
+    log("skip", { reason: "autoCapture disabled" });
+    approve();
+    return;
+  }
 
   if (!sessionId || !subagentId || !transcriptPath) {
     log("skip", { reason: "missing required input fields" });

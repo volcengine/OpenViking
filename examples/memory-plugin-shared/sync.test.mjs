@@ -1,66 +1,12 @@
 import assert from "node:assert/strict";
 import { readFile, readdir } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { join, relative } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const SHARED_DIR = join(ROOT, "examples", "memory-plugin-shared", "lib");
-const HARNESS_SHARED_FILES = [
-  "credentials.mjs",
-  "capture-utils.mjs",
-  "session-model.mjs",
-  "pending-queue.mjs",
-  "debug-log.mjs",
-  "setup-wizard.mjs",
-  "recall-core.mjs",
-  "workspace-peer.mjs",
-  "profile-inject.mjs",
-  "uri-guard.mjs",
-];
-const OPENCODE_SHARED_FILES = [...HARNESS_SHARED_FILES, "mcp-proxy-core.mjs", "async-writer.mjs", "batch-send.mjs"];
-const DOCTOR_SHARED_FILES = [...OPENCODE_SHARED_FILES, "doctor-core.mjs"];
-const ZCODE_SHARED_FILES = [...OPENCODE_SHARED_FILES, "agent-hook-runtime.mjs", "agent-uri-guard.mjs"];
-const AGENT_PLUGINS_SHARED_FILES = [
-  "credentials.mjs",
-  "debug-log.mjs",
-  "mcp-proxy-core.mjs",
-  "workspace-peer.mjs",
-];
-const OPENCLAW_SHARED_FILES = [
-  "recall-compress-core.mjs",
-  "recall-core.mjs",
-];
-const TARGETS = [
-  { dir: join(ROOT, "examples", "claude-code-memory-plugin", "scripts", "shared"), files: DOCTOR_SHARED_FILES },
-  { dir: join(ROOT, "examples", "codex-memory-plugin", "scripts", "shared"), files: DOCTOR_SHARED_FILES },
-  { dir: join(ROOT, "examples", "opencode-plugin", "lib", "shared"), files: OPENCODE_SHARED_FILES },
-  { dir: join(ROOT, "examples", "dsh-memory-plugin", "shared"), files: HARNESS_SHARED_FILES },
-  { dir: join(ROOT, "examples", "pi-coding-agent-extension", "shared"), files: HARNESS_SHARED_FILES },
-  { dir: join(ROOT, "examples", "zcode-memory-plugin", "scripts", "shared") , files: ZCODE_SHARED_FILES },
-  { dir: join(ROOT, "agent-plugins", "servers", "shared"), files: AGENT_PLUGINS_SHARED_FILES },
-  { dir: join(ROOT, "examples", "openclaw-plugin", "shared"), files: OPENCLAW_SHARED_FILES },
-];
-const GENERATED_HEADER = "// GENERATED FROM examples/memory-plugin-shared/lib. DO NOT EDIT.\n";
-const SKILLS_DIR = join(ROOT, "examples", "skills");
-const SKILL_TARGETS = [
-  {
-    skill: "openviking-memory",
-    dirs: [
-      join(ROOT, "examples", "codex-memory-plugin", "skills"),
-      join(ROOT, "examples", "claude-code-memory-plugin", "skills"),
-      join(ROOT, "examples", "cursor-memory-plugin", "skills"),
-      join(ROOT, "examples", "dsh-memory-plugin", "skills"),
-    ],
-  },
-  {
-    skill: "ov-experience-memory",
-    dirs: [
-      join(ROOT, "examples", "codex-memory-plugin", "skills"),
-      join(ROOT, "examples", "claude-code-memory-plugin", "skills"),
-    ],
-  },
-];
+// Imported, not re-declared: the copies kept here had drifted from sync.mjs
+// (dsh, opencode and agent-plugins were all missing modules the sync actually
+// ships), so a stale vendored file went unnoticed by this very test.
+import { GENERATED_HEADER, ROOT, SHARED_DIR, SKILLS_DIR, SKILL_TARGETS, TARGETS } from "./sync.mjs";
 
 test("vendored shared modules are synchronized", async () => {
   const files = (await readdir(SHARED_DIR)).filter((file) => file.endsWith(".mjs")).sort();
@@ -68,8 +14,8 @@ test("vendored shared modules are synchronized", async () => {
 
   for (const target of TARGETS) {
     const targetFiles = target.files ?? files;
-    for (const file of files) {
-      if (!targetFiles.includes(file)) continue;
+    for (const file of targetFiles) {
+      assert.ok(files.includes(file), `${file} is listed for ${relative(ROOT, target.dir)} but missing from lib/`);
       const expected = `${GENERATED_HEADER}${await readFile(join(SHARED_DIR, file), "utf-8")}`;
       const actual = await readFile(join(target.dir, file), "utf-8");
       assert.equal(
@@ -78,6 +24,36 @@ test("vendored shared modules are synchronized", async () => {
         `${relative(ROOT, join(target.dir, file))} is out of sync; run node examples/memory-plugin-shared/sync.mjs`,
       );
     }
+  }
+});
+
+// A module that lib/ ships but no target lists is dead weight nobody consumes;
+// one that a target dir holds but no list names is an orphan the sync will
+// never refresh again. Both drift silently without this.
+test("every shared module is claimed by a target, and no target holds an orphan", async () => {
+  const files = (await readdir(SHARED_DIR)).filter((file) => file.endsWith(".mjs")).sort();
+  const claimed = new Set(TARGETS.flatMap((target) => target.files ?? files));
+  assert.deepEqual(
+    files.filter((file) => !claimed.has(file)),
+    [],
+    "shared modules that no sync target ships",
+  );
+
+  for (const target of TARGETS) {
+    const expected = new Set(target.files ?? files);
+    const orphans = [];
+    for (const file of (await readdir(target.dir)).filter((name) => name.endsWith(".mjs")).sort()) {
+      if (expected.has(file)) continue;
+      // A target dir may also hold plugin-local modules; only a file still
+      // carrying the banner is a copy the sync has stopped refreshing.
+      const body = await readFile(join(target.dir, file), "utf-8");
+      if (body.startsWith(GENERATED_HEADER)) orphans.push(file);
+    }
+    assert.deepEqual(
+      orphans,
+      [],
+      `${relative(ROOT, target.dir)} holds vendored modules that sync.mjs no longer ships; delete them`,
+    );
   }
 });
 

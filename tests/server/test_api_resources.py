@@ -145,6 +145,41 @@ async def test_add_resource_with_wait(
     assert "root_uri" in body["result"]
 
 
+async def test_add_resource_remote_empty_with_wait_returns_invalid_argument(
+    client: httpx.AsyncClient,
+    temp_dir,
+    monkeypatch,
+):
+    from openviking.parse.accessors.base import LocalResource, SourceType
+    from openviking.parse.accessors.http_accessor import HTTPAccessor
+
+    downloaded = temp_dir / "remote-empty.txt"
+    downloaded.write_bytes(b"")
+
+    async def return_empty_download(self, source, **kwargs):
+        return LocalResource(
+            path=downloaded,
+            source_type=SourceType.HTTP,
+            original_source=str(source),
+            meta={"original_filename": downloaded.name},
+            is_temporary=True,
+        )
+
+    monkeypatch.setattr(HTTPAccessor, "access", return_empty_download)
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={"path": "https://example.com/remote-empty.txt", "wait": True},
+    )
+
+    assert resp.status_code == 400, resp.text
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
+    assert "empty" in body["error"]["message"].lower()
+    assert not downloaded.exists()
+
+
 async def test_add_resource_forwards_args_to_service(
     client: httpx.AsyncClient,
     service,

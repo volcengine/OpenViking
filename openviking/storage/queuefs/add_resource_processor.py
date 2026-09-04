@@ -24,6 +24,7 @@ from openviking.telemetry import (
 )
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import record_resource_queue_metrics
+from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.logger import get_logger
 
@@ -209,11 +210,14 @@ class AddResourceProcessor(DequeueHandlerBase):
                     )
                     if result.get("status") == "error":
                         errors = result.get("errors") or ["resource processing failed"]
+                        code = result.get("code")
+                        failure_result = {"code": code} if isinstance(code, str) and code else None
                         await tracker.fail(
                             msg.task_id,
                             "; ".join(str(error) for error in errors),
                             account_id=ctx.account_id,
                             user_id=ctx.user.user_id,
+                            result=failure_result,
                         )
                         terminal = True
                         self.report_error("resource processing failed", data)
@@ -267,11 +271,15 @@ class AddResourceProcessor(DequeueHandlerBase):
                 self.report_success()
                 return None
             except Exception as exc:
+                failure_result = (
+                    {"code": exc.code} if isinstance(exc, OpenVikingError) and exc.code else None
+                )
                 await tracker.fail(
                     msg.task_id,
                     str(exc),
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
+                    result=failure_result,
                 )
                 terminal = True
                 self.report_error(str(exc), data)

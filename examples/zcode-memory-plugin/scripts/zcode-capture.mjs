@@ -1,4 +1,5 @@
 import { stableHash } from "./shared/agent-hook-runtime.mjs";
+import { shouldCaptureText } from "./shared/capture-utils.mjs";
 import { cleanZcodeText } from "./zcode-turns.mjs";
 
 export function zcodeTurnDedupKey(turn) {
@@ -7,18 +8,22 @@ export function zcodeTurnDedupKey(turn) {
     : stableHash(turn.role, turn.content);
 }
 
-export function buildZcodeCapturePlan(turns, state = {}) {
+export function buildZcodeCapturePlan(turns, state = {}, cfg = {}) {
   const capturedTurnIds = new Set(
     Array.isArray(state.capturedTurnIds) ? state.capturedTurnIds : [],
   );
-  const candidates = turns.map((turn) => ({
-    dedupKey: zcodeTurnDedupKey(turn),
-    turn,
-  }));
+  const candidates = [];
+  for (const turn of turns) {
+    const decision = shouldCaptureText(turn.content, turn.role, cfg);
+    if (!decision.shouldCapture) continue;
+    // The dedup key stays keyed on the raw turn so raising captureMaxLength
+    // never resends a turn the server already holds in truncated form.
+    candidates.push({ dedupKey: zcodeTurnDedupKey(turn), turn, content: decision.text });
+  }
   const toSend = candidates.filter((item) => !capturedTurnIds.has(item.dedupKey));
-  const payloads = toSend.map(({ turn }) => ({
+  const payloads = toSend.map(({ turn, content }) => ({
     role: turn.role,
-    content: turn.content,
+    content,
     ...(turn.turnId ? { turn_id: turn.turnId } : {}),
   }));
   return { candidates, toSend, payloads };

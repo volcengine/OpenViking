@@ -540,9 +540,17 @@ class TaskTracker:
         error: str,
         account_id: Optional[str] = None,
         user_id: Optional[str] = None,
+        *,
+        result: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Record failure and finalize after owned work settles."""
-        await self._record_outcome(task_id, account_id, user_id, error=error)
+        """Record failure and optional structured metadata, then finalize."""
+        await self._record_outcome(
+            task_id,
+            account_id,
+            user_id,
+            result=result,
+            error=error,
+        )
 
     async def _record_outcome(
         self,

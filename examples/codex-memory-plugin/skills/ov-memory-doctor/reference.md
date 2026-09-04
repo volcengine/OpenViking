@@ -12,6 +12,8 @@ and `CODEX_CONFIG_FILE` relocate individual pieces.
 | `~/.openviking/ovcli.conf` | Client connection: `url`, `api_key`, `account`, `user`, optional `plugin.codex.*` tuning. Mode 0600. |
 | `~/.openviking/ov.conf` | Server config. The plugin reads only `server.url/host/port`, `server.root_api_key` (last-resort key) and the legacy `codex` block. |
 | `~/.openviking/ovcli.conf.<name>` | Saved CLI profiles (`ov config switch` copies one over `ovcli.conf`). `ovcli.conf.bak.<epoch>` are installer backups. |
+| `<repo root>/.openviking/config.json` / `config.local.json` | Workspace config layers, `version: 1` required: `peer.source`, `peer.id`, `recall.*`, `capture.*`, `bypass.session_patterns`, `labels`. `config.json` is committed and shared; `config.local.json` is private and gitignored. Trusted without a prompt, but connection and credential keys (`url`, `api_key`, `account`, `user`, `extra_headers`, …) are stripped with a warning and `${VAR}` is never expanded. A blanket `.openviking/` rule in `.gitignore` stops `config.json` from ever being committed — narrow it to `.openviking/media/` and `.openviking/downloads/`. |
+| `~/.openviking/workspaces/<slot>.json` | Per-machine workspace registry, one file per workspace (`<dir name>-<hash>.json`, mode 0600). Outranks both workspace files, and nothing writes it — a user creates the file by hand. An entry recorded for a different repository is ignored, not inherited. |
 | `~/.codex/config.toml` | `[features] plugin_hooks`, `[plugins."openviking-memory@openviking"] enabled`, `[marketplaces.openviking]` (source, ref), `[hooks.state."openviking-memory@openviking:hooks/hooks.json:<event>:0:0"] trusted_hash` for `session_start`, `user_prompt_submit`, `stop`, `session_end`, `pre_compact`. |
 | `~/.codex/plugins/cache/openviking/openviking-memory/<version>/` | The copy Codex runs hooks from. Keyed by `plugin.json` version. |
 | `~/.codex/.tmp/marketplaces/openviking/` | Git clone of the marketplace (GitHub/TOS dist); `examples/codex-memory-plugin` inside it is what `codex plugin list` reports as the source path. |
@@ -33,9 +35,14 @@ doctor prints the effective mode as `credential source`.
 | url | `OPENVIKING_URL` → `OPENVIKING_BASE_URL` → `ovcli.conf url` → `ov.conf server.url` → `http://{server.host\|127.0.0.1}:{server.port\|1933}` |
 | api_key | `OPENVIKING_BEARER_TOKEN` → `OPENVIKING_API_KEY` → `ovcli.conf api_key` → `ov.conf codex.apiKey` → `ov.conf server.root_api_key` |
 | account / user | `OPENVIKING_ACCOUNT` / `OPENVIKING_USER` → `ovcli.conf account/account_id`, `user/user_id` → `ov.conf codex.accountId/userId` |
-| peer | `OPENVIKING_PEER_ID` → `ovcli.conf actor_peer_id/peer_id` → `ov.conf codex.peerId` → derived from cwd unless `OPENVIKING_WORKSPACE_PEER=0` |
+| peer | `OPENVIKING_PEER_ID` → registry → `config.local.json` → `config.json` (`peer.id`) → `ovcli.conf plugin.codex.peerId` → `ovcli.conf plugin.peerId` → `ovcli.conf actor_peer_id/peer_id` → `ov.conf codex.peerId` → derived per `peer.source` unless `OPENVIKING_WORKSPACE_PEER=0` |
+| peer.source | `OPENVIKING_PEER_SOURCE` → registry → `config.local.json` → `config.json` → `ovcli.conf plugin.codex.peerSource` → `ovcli.conf plugin.peerSource` → `ov.conf codex.peerSource` → `git` |
 | auth mode | `OPENVIKING_AUTH_MODE` → `codex.authMode` → `server.auth_mode` → `trusted` when account/user are set, else `api_key` |
-| tuning | env → `ovcli.conf plugin.codex.*` → `ovcli.conf plugin.*` → `ov.conf codex.*` → defaults |
+| tuning | env → registry → `config.local.json` → `config.json` → `ovcli.conf plugin.codex.*` → `ovcli.conf plugin.*` → `ov.conf codex.*` → defaults |
+
+`peer.source` decides the derivation. `git` (the default) is the template list `["{git_remote}", "{git_root}"]`: the normalized origin URL (`git@github.com:volcengine/OpenViking.git` → `github.com-volcengine-openviking`, userinfo dropped so an embedded token can never reach the id), else the repository root path (the legacy `[^A-Za-z0-9] → -` rule), else nothing — outside a git repository no peer is sent at all, and what is remembered there goes to the user-level space. `{cwd}` is still a variable but sits in no default chain, and `{dir}` is the workspace root's directory name, empty when the directory is not a workspace. `cwd` is that legacy rule alone (the pre-git behaviour); `none` sends no peer, which is also what `OPENVIKING_WORKSPACE_PEER=0` means. Anything else is a template, or a list of templates tried in order (`"git-{git_remote}"`, `["team-{dir}", "{cwd}"]`); a template naming an empty variable falls through to the next. Derivation is filesystem-only — no `git` subprocess, which also keeps it inside the hook budgets below — so it survives a missing `git` and a dubious-ownership refusal; worktrees converge through `commondir`, a submodule keeps its own identity, and `$HOME` and `/` are never workspace roots. Every clone of one repository shares one peer; a fork's origin differs, so it stays separate, and `gh pr checkout` does not change origin.
+
+Peers minted before this need no migration: the old cwd-derived id is recomputed locally, `peer_scope: "all"` already sweeps it, and under `"actor"` recall asks it separately. Doctor prints it as `previous peer`. Across the workspace layers lists union rather than replace, with a leading `"!reset"` dropping what the lower layers contributed; unknown keys are kept and ignored, and a file declaring a version other than `1` is skipped with a warning.
 
 There is no global kill switch: `OPENVIKING_MEMORY_ENABLED` is ignored by the
 Codex plugin. Disable features with `OPENVIKING_AUTO_RECALL=0`,
@@ -51,6 +58,24 @@ Sent headers: `Authorization: Bearer <key>`, `X-OpenViking-Account/User` (truste
 mode only), `X-OpenViking-Actor-Peer`, `User-Agent: openviking-memory-codex/<version>`.
 The open-source server also accepts `X-API-Key` (and prefers it when both are
 sent); the Volcengine-hosted OpenViking Service (`https://api.vikingdb.cn-beijing.volces.com/openviking`) accepts Bearer only.
+
+## Peer: giving a directory its own memory
+
+```json
+{"version": 1, "peer": {"id": "my-project"}}
+```
+
+Stored as `.openviking/config.json` in the directory to be named; that directory and everything below it then writes to that peer, repository or not.
+
+| What the user says | What to do |
+|---|---|
+| "make this folder remember separately" | Write `peer.id` in `.openviking/config.json` in that folder |
+| "these two repos should share memory" | Write the same `peer.id` in `.openviking/config.json` in both |
+| "only recall this project's memories" | Set `recall.peer_scope` to `"actor"` in the same file |
+| "go back to the old per-directory behaviour" | `peer.source: "cwd"` in the same file, or `OPENVIKING_PEER_SOURCE=cwd` for every directory on this machine |
+| "do not separate by project at all" | `peer.source: "none"` in the same file |
+
+That file and the registry file whose path the doctor prints are the whole surface. No `ov` subcommand creates, renames or merges a peer. Changing the id moves no existing memory: the cross-peer sweep under `peer_scope: "all"` still reaches what was written before, and under `"actor"` the extra query still reaches the pre-git cwd-derived id.
 
 ## Server auth modes (from `GET /health` → `auth_mode`)
 
@@ -157,7 +182,9 @@ reports `unknown command`.
 | Worked until an edit to `ovcli.conf` | JSON broken by the edit | doctor "cannot be parsed" | Fix JSON |
 | Edits to `ovcli.conf` or `ov config switch` have no effect | Env var or rc-file export wins (`credential source: env`) | doctor "← env"; `env \| grep OPENVIKING_` | Remove the export |
 | Recall empty on a healthy server | Wrong key (401 reads as no results), wrong user space, peer scope, threshold | `/health` with key; `/api/v1/system/status` → `result.user` | Fix key; `OPENVIKING_PEER_ID`; lower `OPENVIKING_SCORE_THRESHOLD` |
-| Recall empty after moving/renaming the repo | Workspace peer derived from cwd changed (with `recallPeerScope: actor`) | doctor `peer … ← workspace` | Pin `OPENVIKING_PEER_ID` or `OPENVIKING_WORKSPACE_PEER=0` |
+| Recall empty after moving/renaming the repo | Mostly gone: the peer follows `origin`, so a move, rename, worktree or fresh clone keeps it. What still changes identity is a repository with no origin, which falls back to the root path | doctor `peer … ← workspace (…)` — `{git_remote}` is move-proof, `{git_root}` is not; `previous peer` names the id left behind | `git remote add origin …`, or pin `peer.id` in `.openviking/config.json` / `OPENVIKING_PEER_ID` |
+| No project memory in a directory that is not a repository | By design: no `.git` and no `.openviking/config.json` above it means no peer, so those memories are in the user-level space | doctor Workspace section: `not a workspace: …` | Create `.openviking/config.json` there with a `peer.id`, or leave it as it is |
+| Recall or capture dead in one repository only | A committed `.openviking/config.json` turns `recall.enabled` / `capture.enabled` off, or changes `peer.source` | doctor Workspace section: `<key> = … ← config.json (workspace)` plus the announcement warning | Override in `.openviking/config.local.json` or `~/.openviking/workspaces/<slot>.json` |
 | Hooks stopped after a plugin update | `hooks.json` hash changed; Codex re-prompts for trust | doctor "hooks without a trust record" | Accept the prompt in a new session |
 | MCP tools missing | `.mcp.json` not loaded (plugin disabled), node missing, or `/mcp` not proxied | doctor Connection `/mcp` probe | Fix enablement / node / reverse proxy |
 | Everything duplicated | Two plugin ids installed (legacy `openviking-plugins-local`) | doctor "more than one copy" | `codex plugin remove <stale id>` |

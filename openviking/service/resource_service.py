@@ -1727,10 +1727,15 @@ class ResourceService:
             return completed
         if task.status == TaskStatus.CANCELLED:
             return {"status": "cancelled"}
-        return {
+        failure: Dict[str, Any] = {
             "status": "error",
             "errors": [task.error],
         }
+        if isinstance(task.result, dict):
+            code = task.result.get("code")
+            if isinstance(code, str) and code:
+                failure["code"] = code
+        return failure
 
     async def _execute_resource_ingestion(
         self,

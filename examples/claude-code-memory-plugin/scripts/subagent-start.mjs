@@ -30,7 +30,7 @@ if (!isPluginEnabled()) {
   process.exit(0);
 }
 
-const cfg = loadConfig();
+let cfg = loadConfig();
 const { log, logError } = createLogger("subagent-start");
 
 const STATE_DIR = join(tmpdir(), "openviking-cc-subagent-state");
@@ -45,14 +45,6 @@ function stateFile(subagentId) {
 }
 
 async function main() {
-  // Paired with subagent-stop.mjs (a write path): when capture is off the
-  // stop hook will skip, so there's no point stashing start state either.
-  if (!cfg.autoCapture) {
-    log("skip", { reason: "autoCapture disabled" });
-    approve();
-    return;
-  }
-
   let input = {};
   try {
     const chunks = [];
@@ -64,6 +56,18 @@ async function main() {
   const subagentId = input.agent_id;
   const agentType = input.agent_type || "subagent";
   const cwd = input.cwd;
+  // The workspace layer belongs to the session's directory, which only the
+  // payload knows; see loadConfig for why re-resolving this late is safe.
+  cfg = loadConfig(cwd);
+
+  // Paired with subagent-stop.mjs (a write path): when capture is off the
+  // stop hook will skip, so there's no point stashing start state either.
+  if (!cfg.autoCapture) {
+    log("skip", { reason: "autoCapture disabled" });
+    approve();
+    return;
+  }
+
   const effectivePeer = getEffectivePeerId(cfg, { sessionId, cwd });
 
   if (!sessionId || !subagentId) {
