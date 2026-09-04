@@ -31,7 +31,7 @@ async def test_cleanup_reserved_target_removes_only_empty_directory():
     ctx = _ctx()
     viking_fs = SimpleNamespace(
         exists=AsyncMock(return_value=True),
-        stat=AsyncMock(return_value={"isDir": True}),
+        stat_metadata=AsyncMock(return_value={"isDir": True}),
         ls=AsyncMock(return_value=[]),
         rm=AsyncMock(),
     )
@@ -56,7 +56,7 @@ async def test_cleanup_reserved_target_removes_only_empty_directory():
 async def test_cleanup_reserved_target_preserves_nonempty_directory():
     viking_fs = SimpleNamespace(
         exists=AsyncMock(return_value=True),
-        stat=AsyncMock(return_value={"isDir": True}),
+        stat_metadata=AsyncMock(return_value={"isDir": True}),
         ls=AsyncMock(return_value=[{"name": "document.md", "isDir": False}]),
         rm=AsyncMock(),
     )

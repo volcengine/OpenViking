@@ -56,28 +56,31 @@ impl Inner {
         FileInfo::new_file(name.to_string(), 0, 0o644)
     }
 
-    /// Resolve the read backend for a path using the fallback chain.
-    pub(super) async fn resolve_read_backend(&self, path: &str) -> Option<Arc<dyn FileSystem>> {
+    /// Resolve the read backend and metadata for a path using the fallback chain.
+    pub(super) async fn resolve_read_route(
+        &self,
+        path: &str,
+    ) -> Option<(Arc<dyn FileSystem>, FileInfo)> {
         let normalized = normalize_prefix_path(path);
         let read_backups = self.read_backups_sorted();
-        let backup_exists = futures::future::join_all(read_backups.iter().map(|backup| async {
+        let backup_stats = futures::future::join_all(read_backups.iter().map(|backup| async {
             (
                 backup.name.clone(),
                 backup.backend.clone(),
-                backup.backend.exists(&normalized).await,
+                backup.backend.stat(&normalized).await,
             )
         }))
         .await;
-        for (_name, backend, exists) in backup_exists {
-            if exists {
+        for (_name, backend, info) in backup_stats {
+            if let Ok(info) = info {
                 self.record_read_route(ReadRouteSource::Backup);
-                return Some(backend);
+                return Some((backend, info));
             }
         }
 
-        if self.primary().backend.exists(&normalized).await {
+        if let Ok(info) = self.primary().backend.stat(&normalized).await {
             self.record_read_route(ReadRouteSource::Primary);
-            return Some(self.primary().backend.clone());
+            return Some((self.primary().backend.clone(), info));
         }
 
         if self.redirects.is_empty() {
@@ -100,20 +103,20 @@ impl Inner {
                             .map(|be| (be.name.clone(), be.backend.clone()))
                     })
                     .collect();
-                let redirect_exists = futures::future::join_all(redirect_targets.iter().map(
+                let redirect_stats = futures::future::join_all(redirect_targets.iter().map(
                     |(target_name, backend)| async {
                         (
                             target_name.clone(),
                             backend.clone(),
-                            backend.exists(&normalized).await,
+                            backend.stat(&normalized).await,
                         )
                     },
                 ))
                 .await;
-                for (_target_name, backend, exists) in redirect_exists {
-                    if exists {
+                for (_target_name, backend, info) in redirect_stats {
+                    if let Ok(info) = info {
                         self.record_read_route(ReadRouteSource::Redirect);
-                        return Some(backend);
+                        return Some((backend, info));
                     }
                 }
             }

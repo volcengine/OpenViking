@@ -25,7 +25,7 @@ def _ctx() -> RequestContext:
 async def test_list_trajectories_by_experience_uses_exact_scalar_filter_and_pagination():
     experience_uri = "viking://user/alice/memories/experiences/exchange.md"
     viking_fs = Mock()
-    viking_fs.stat = AsyncMock(return_value={"isDir": False})
+    viking_fs.stat_metadata = AsyncMock(return_value={"isDir": False})
     vikingdb = Mock()
     vikingdb.filter = AsyncMock(
         return_value=[
@@ -96,7 +96,7 @@ async def test_list_trajectories_by_experience_rejects_other_user_uri():
 async def test_list_trajectories_by_experience_filters_created_at_by_utc_date():
     experience_uri = "viking://user/alice/memories/experiences/exchange.md"
     viking_fs = Mock()
-    viking_fs.stat = AsyncMock(return_value={"isDir": False})
+    viking_fs.stat_metadata = AsyncMock(return_value={"isDir": False})
     vikingdb = Mock()
     vikingdb.filter = AsyncMock(return_value=[])
     vikingdb.count = AsyncMock(return_value=0)
@@ -155,7 +155,7 @@ async def test_list_trajectories_by_experience_rejects_limit_above_1000():
 async def test_list_trajectories_by_experience_accepts_1000_and_paginates_all_results():
     experience_uri = "viking://user/alice/memories/experiences/exchange.md"
     viking_fs = Mock()
-    viking_fs.stat = AsyncMock(return_value={"isDir": False})
+    viking_fs.stat_metadata = AsyncMock(return_value={"isDir": False})
     vikingdb = Mock()
     vikingdb.filter = AsyncMock(
         side_effect=[
@@ -192,7 +192,7 @@ async def test_list_trajectories_by_experience_accepts_1000_and_paginates_all_re
 async def test_get_experience_outcome_distribution_counts_two_tags_on_same_list_field():
     experience_uri = "viking://user/alice/memories/experiences/exchange.md"
     viking_fs = Mock()
-    viking_fs.stat = AsyncMock(return_value={"isDir": False})
+    viking_fs.stat_metadata = AsyncMock(return_value={"isDir": False})
     vikingdb = Mock()
     vikingdb.count = AsyncMock(side_effect=[4, 2, 1, 0, 3])
     service = AgentEvolutionService(viking_fs=viking_fs, vikingdb=vikingdb)
@@ -233,7 +233,7 @@ async def test_get_experience_outcome_distribution_counts_two_tags_on_same_list_
 async def test_get_experience_outcome_distribution_filters_created_at_by_utc_date():
     experience_uri = "viking://user/alice/memories/experiences/exchange.md"
     viking_fs = Mock()
-    viking_fs.stat = AsyncMock(return_value={"isDir": False})
+    viking_fs.stat_metadata = AsyncMock(return_value={"isDir": False})
     vikingdb = Mock()
     vikingdb.count = AsyncMock(return_value=0)
     service = AgentEvolutionService(viking_fs=viking_fs, vikingdb=vikingdb)

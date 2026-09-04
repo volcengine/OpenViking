@@ -638,7 +638,7 @@ class OpenVikingService:
             raise NotInitializedError("VikingFS")
 
         effective_ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
-        stat = await self._viking_fs.stat(uri, ctx=effective_ctx, skip_count=True)
+        stat = await self._viking_fs.stat_metadata(uri, ctx=effective_ctx)
         if not stat.get("isDir", False):
             raise InvalidArgumentError("Consistency check only supports directory URIs.")
         entries = await self._viking_fs.tree(

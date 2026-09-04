@@ -52,7 +52,7 @@ class _MemoryVikingFS:
     def __init__(self) -> None:
         self.files: dict[str, str] = {}
 
-    async def stat(self, uri, ctx=None):
+    async def stat_metadata(self, uri, ctx=None):
         return {"path": uri}
 
     async def write_file(self, uri, content, ctx=None, lease_ref=None):

@@ -518,7 +518,7 @@ async def read(uris: str | list[str]) -> str | list[ContentBlock]:
                 return resolved_uri, None, None
 
             async with semaphore:
-                stat = await service.fs.stat(resolved_uri, ctx=ctx)
+                stat = await service.fs.stat_metadata(resolved_uri, ctx=ctx)
             if stat.get("isDir"):
                 return (
                     resolved_uri,

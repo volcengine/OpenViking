@@ -65,7 +65,7 @@ def _service_with_fs(stat_result: dict) -> tuple[OpenVikingService, AsyncMock]:
     service._user = UserIdentifier.the_default_user()
     service._vikingdb_manager = AsyncMock()
     service._viking_fs = AsyncMock()
-    service._viking_fs.stat.return_value = stat_result
+    service._viking_fs.stat_metadata.return_value = stat_result
     return service, service._viking_fs
 
 
@@ -100,10 +100,9 @@ async def test_check_consistency_preserves_directory_behavior() -> None:
         result = await service.check_consistency(uri="viking://resources", ctx=ctx)
 
     assert result == report.to_dict()
-    viking_fs.stat.assert_awaited_once_with(
+    viking_fs.stat_metadata.assert_awaited_once_with(
         "viking://resources",
         ctx=ctx,
-        skip_count=True,
     )
     viking_fs.tree.assert_awaited_once()
     check.assert_awaited_once()

@@ -88,7 +88,7 @@ class _FakeVikingFS:
             )
         return out
 
-    async def stat(self, uri: str, **_: Any) -> Dict[str, Any]:
+    async def stat_metadata(self, uri: str, **_: Any) -> Dict[str, Any]:
         if uri in self.dirs:
             return {"name": uri.rstrip("/").split("/")[-1], "isDir": True}
         if uri in self.files:

@@ -1033,7 +1033,7 @@ class ContentWriteCoordinator:
         self, uri: str, *, ctx: RequestContext, allow_not_found: bool = False
     ) -> Dict[str, Any]:
         try:
-            return await self._viking_fs.stat(uri, ctx=ctx)
+            return await self._viking_fs.stat_metadata(uri, ctx=ctx)
         except Exception as exc:
             if self._is_not_found(exc):
                 if allow_not_found:

@@ -49,7 +49,7 @@ class _VFS:
         del ctx
         return "/virtual/" + uri.removeprefix("viking://")
 
-    async def stat(self, uri, ctx=None):
+    async def stat_metadata(self, uri, ctx=None):
         del ctx
         if uri == self.root:
             return {"uri": uri, "isDir": True}

@@ -37,7 +37,7 @@ class _FakeVikingFS:
     async def ls(self, uri, node_limit=None, ctx=None):
         return self._tree.get(self._norm(uri), [])
 
-    async def stat(self, uri, ctx=None):
+    async def stat_metadata(self, uri, ctx=None):
         content = self._file_contents.get(self._norm(uri), "")
         return {"size": len(content)}
 

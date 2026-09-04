@@ -1217,24 +1217,16 @@ impl MultiWriteWrappedFS {
         let source_path = src_path.to_string();
         let destination_path = dst_path.to_string();
 
-        let source_exists_on_primary = FS_CTX
-            .scope(ctx.clone(), async {
-                inner.primary().backend.exists(&source_path).await
-            })
+        let source_info = FS_CTX
+            .scope(ctx.clone(), inner.primary().backend.stat(&source_path))
             .await;
-        if !source_exists_on_primary {
+        let Ok(source_info) = source_info else {
             return Ok(false);
+        };
+        if source_info.is_dir {
+            return Err(Error::IsADirectory(source_path.clone()));
         }
-
-        let source_size = FS_CTX
-            .scope(ctx.clone(), async {
-                let source_info = inner.primary().backend.stat(&source_path).await?;
-                if source_info.is_dir {
-                    return Err(Error::IsADirectory(source_path.clone()));
-                }
-                Ok::<u64, Error>(source_info.size)
-            })
-            .await?;
+        let source_size = source_info.size;
 
         if inner
             .check_redirect(&destination_path, source_size)
@@ -1352,7 +1344,7 @@ impl FileSystem for MultiWriteWrappedFS {
         if is_hidden_internal_name(file_name(path)) {
             return self.inner.primary().backend.read(path, offset, size).await;
         }
-        if let Some(fs) = self.inner.resolve_read_backend(path).await {
+        if let Some((fs, _)) = self.inner.resolve_read_route(path).await {
             return fs.read(path, offset, size).await;
         }
         Err(Error::not_found(path))
@@ -1429,8 +1421,8 @@ impl FileSystem for MultiWriteWrappedFS {
         if is_hidden_internal_name(file_name(path)) {
             return self.inner.primary().backend.stat(path).await;
         }
-        if let Some(fs) = self.inner.resolve_read_backend(path).await {
-            return fs.stat(path).await;
+        if let Some((_, info)) = self.inner.resolve_read_route(path).await {
+            return Ok(info);
         }
         Err(Error::not_found(path))
     }
@@ -1594,7 +1586,7 @@ impl FileSystem for MultiWriteWrappedFS {
                 if is_excluded_grep_path(&entry.path, exclude_owned.as_deref()) {
                     continue;
                 }
-                let Some(read_backend) = inner.resolve_read_backend(&entry.path).await else {
+                let Some((read_backend, _)) = inner.resolve_read_route(&entry.path).await else {
                     continue;
                 };
                 let rel_path = relative_match_file(&path_owned, &entry.path);

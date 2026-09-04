@@ -373,42 +373,7 @@ def _ensure_remote_parent_dir(
     fs_ctx: dict[str, str] | None = None,
 ) -> None:
     """Ensure the parent directory exists for a remote path."""
-    parent = "/".join(path.rstrip("/").split("/")[:-1])
-    if parent and parent != "/":
-        # Try to create parent directory (and its parents)
-        _ensure_remote_dir_recursive(client, parent, fs_ctx=fs_ctx)
-
-
-def _ensure_remote_dir_recursive(
-    client: AGFSSyncClientProtocol,
-    path: str,
-    *,
-    fs_ctx: dict[str, str] | None = None,
-) -> None:
-    """Recursively ensure a directory exists in AGFS."""
-    if not path or path == "/":
-        return
-
-    # Check if directory already exists
-    try:
-        info = _call_with_optional_ctx(client.stat, path, ctx=fs_ctx)
-        if info.get("isDir", False):
-            return  # Directory exists
-    except Exception:
-        # Directory doesn't exist, need to create it
-        pass
-
-    # Ensure parent exists first
-    parent = "/".join(path.rstrip("/").split("/")[:-1])
-    if parent and parent != "/":
-        _ensure_remote_dir_recursive(client, parent, fs_ctx=fs_ctx)
-
-    # Create this directory
-    try:
-        _call_with_optional_ctx(client.mkdir, path, ctx=fs_ctx)
-    except Exception:
-        # Might already exist due to race condition, ignore
-        pass
+    _call_with_optional_ctx(client.ensure_parent_dirs, path, ctx=fs_ctx)
 
 
 def _iter_file_bytes(data: bytes | AGFSByteStream) -> AGFSByteStream:

@@ -20,7 +20,7 @@ def _stub_media_prompt(monkeypatch):
 class _FS:
     def __init__(self, content=b"media"):
         self.content = content
-        self.stat = AsyncMock(return_value={"size": len(content)})
+        self.stat_metadata = AsyncMock(return_value={"size": len(content)})
 
     async def read(self, _uri, offset=0, size=-1, ctx=None):
         if offset >= len(self.content):
@@ -39,7 +39,7 @@ class _BlockingReadFS:
         self.two_reads_entered = asyncio.Event()
         self.release_reads = asyncio.Event()
 
-    async def stat(self, *_args, **_kwargs):
+    async def stat_metadata(self, *_args, **_kwargs):
         return {"size": 5}
 
     async def read(self, _uri, offset=0, size=-1, ctx=None):
@@ -232,7 +232,7 @@ async def test_unknown_size_media_stops_at_hard_staging_limit(
     monkeypatch,
 ):
     fs = _FS()
-    fs.stat.return_value = {"size": 0}
+    fs.stat_metadata.return_value = {"size": 0}
     fs.read = AsyncMock(side_effect=[b"a" * 4, b"b" * 4, b"c", b""])
     client = _CapturingPathClient()
     model_config = SimpleNamespace(get_client_instance=lambda: client)

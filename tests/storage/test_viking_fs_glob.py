@@ -315,7 +315,7 @@ async def test_glob_directory_metadata_uses_is_dir_instead_of_trailing_slash(mon
     async def fake_stat(*_args, **_kwargs):
         raise NotFoundError("viking://resources/folder", "file")
 
-    monkeypatch.setattr(fs, "stat", fake_stat)
+    monkeypatch.setattr(fs, "stat_metadata", fake_stat)
 
     result = await fs.glob(
         "**/*",

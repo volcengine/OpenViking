@@ -52,7 +52,7 @@ class _FakeVikingFS:
             pathlock_release=lambda lease: None,
         )
 
-    async def stat(self, uri: str, ctx=None):
+    async def stat_metadata(self, uri: str, ctx=None):
         del ctx
         if uri == self._file_uri:
             return {"isDir": False}

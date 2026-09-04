@@ -40,7 +40,9 @@ class UserPrivacyConfigService:
 
     async def exists(self, ctx: RequestContext, category: str, target_key: str) -> bool:
         try:
-            await self._viking_fs.stat(self.get_config_root(ctx, category, target_key), ctx=ctx)
+            await self._viking_fs.stat_metadata(
+                self.get_config_root(ctx, category, target_key), ctx=ctx
+            )
             return True
         except (NotFoundError, FileNotFoundError):
             return False

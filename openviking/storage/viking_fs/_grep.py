@@ -60,10 +60,7 @@ class _GrepMixin:
         Returns:
             Dict with matches, count, match_count, files_scanned
         """
-        await self._ensure_access(uri, ctx)
-        # Skip vector_store.count() — the count field is not needed for grep,
-        # and avoiding it saves one VikingDB API call.
-        await self.stat(uri, ctx=ctx, skip_count=True)
+        await self.stat_metadata(uri, ctx=ctx)
 
         # Read engine and threshold from grep_config (ov.conf)
         engine = self.grep_config.engine if self.grep_config else "auto"
@@ -659,7 +656,7 @@ class _GrepMixin:
             logger.debug(f"Skipping excluded uri during grep: {normalized_uri}")
             return file_uris
         try:
-            root_stat = await self.stat(normalized_uri, ctx=ctx)
+            root_stat = await self.stat_metadata(normalized_uri, ctx=ctx)
         except Exception:
             return file_uris
         if not root_stat.get("isDir", False):

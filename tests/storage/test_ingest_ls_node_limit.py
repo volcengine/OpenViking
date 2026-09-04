@@ -48,7 +48,7 @@ class _TruncatingVikingFS:
     async def read_file(self, uri, ctx=None):
         return ""
 
-    async def stat(self, uri, ctx=None):
+    async def stat_metadata(self, uri, ctx=None):
         return {"size": 0}
 
     async def mv(self, src, dst, ctx=None, lease_ref=None):

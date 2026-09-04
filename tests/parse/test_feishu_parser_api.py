@@ -756,7 +756,7 @@ async def test_uat_producer_cancellation_respects_queue_ownership(
     service = ResourceService(
         viking_fs=SimpleNamespace(
             exists=AsyncMock(return_value=False),
-            stat=AsyncMock(return_value={"isDir": True}),
+            stat_metadata=AsyncMock(return_value={"isDir": True}),
             ls=AsyncMock(return_value=[]),
             rm=AsyncMock(),
             _uri_to_path=lambda _uri, ctx: "/resources/fixed",

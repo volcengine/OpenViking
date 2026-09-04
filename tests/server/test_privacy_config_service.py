@@ -131,7 +131,7 @@ async def test_privacy_config_concurrent_updates_keep_every_version():
 @pytest.mark.asyncio
 async def test_privacy_config_exists_propagates_storage_errors():
     class FailingStorage:
-        async def stat(self, *_args, **_kwargs):
+        async def stat_metadata(self, *_args, **_kwargs):
             raise RuntimeError("storage unavailable")
 
     privacy = UserPrivacyConfigService(FailingStorage())

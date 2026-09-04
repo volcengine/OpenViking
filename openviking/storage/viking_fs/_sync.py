@@ -112,8 +112,8 @@ class _SyncMixin:
 
         async def default_is_changed(root_file: str, target_file: str) -> bool:
             try:
-                current_stat = await self.stat(root_file, ctx=ctx)
-                target_stat = await self.stat(target_file, ctx=ctx)
+                current_stat = await self.stat_metadata(root_file, ctx=ctx)
+                target_stat = await self.stat_metadata(target_file, ctx=ctx)
                 current_size = current_stat.get("size") if isinstance(current_stat, dict) else None
                 target_size = target_stat.get("size") if isinstance(target_stat, dict) else None
                 if current_size is not None and target_size is not None and current_size != target_size:

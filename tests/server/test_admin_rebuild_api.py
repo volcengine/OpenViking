@@ -458,7 +458,7 @@ async def test_reindex_file_target_uses_exact_lock(monkeypatch):
         def _uri_to_path(self, uri, ctx):
             return "/local/default/resources/demo.md"
 
-        async def stat(self, uri, ctx):
+        async def stat_metadata(self, uri, ctx):
             return {"isDir": False}
 
     executor = ReindexExecutor()
@@ -525,7 +525,7 @@ async def test_reindex_prune_existing_file_uses_exact_lock(monkeypatch):
         async def exists(self, uri, ctx):
             return True
 
-        async def stat(self, uri, ctx):
+        async def stat_metadata(self, uri, ctx):
             return {"isDir": False}
 
     executor = ReindexExecutor()
@@ -1396,7 +1396,7 @@ async def test_reindex_memory_semantic_and_vectors_rebuilds_full_subtree(monkeyp
         seen["vectors"].append(uri)
 
     class FakeVikingFS:
-        async def stat(self, uri, ctx=None):
+        async def stat_metadata(self, uri, ctx=None):
             return {"isDir": True}
 
     monkeypatch.setattr(ReindexExecutor, "_run_semantic_processor", fake_run_semantic_processor)
@@ -1463,7 +1463,7 @@ async def test_reindex_memory_non_recursive_limits_semantics_and_vectors(monkeyp
         seen["vectors"] = kwargs
 
     class FakeVikingFS:
-        async def stat(self, uri, ctx=None):
+        async def stat_metadata(self, uri, ctx=None):
             return {"isDir": True}
 
     monkeypatch.setattr(ReindexExecutor, "_run_semantic_processor", fake_run_semantic_processor)
@@ -1552,7 +1552,7 @@ async def test_reindex_resource_vectors_non_recursive_skips_tree(monkeypatch):
         async def exists(self, uri, ctx=None):
             return True
 
-        async def stat(self, uri, ctx=None):
+        async def stat_metadata(self, uri, ctx=None):
             return {"isDir": True}
 
     async def fail_tree_all(*args, **kwargs):
@@ -2043,7 +2043,7 @@ async def test_reindex_resource_vectors_parallelize_files_and_isolate_failures(m
         async def exists(self, uri, ctx=None):
             return True
 
-        async def stat(self, uri, ctx=None):
+        async def stat_metadata(self, uri, ctx=None):
             return {"isDir": True}
 
         async def tree(
@@ -2249,7 +2249,7 @@ async def test_reindex_resource_l2_falls_back_to_vector_text_when_summary_missin
         async def exists(self, uri, ctx=None):
             return True
 
-        async def stat(self, uri, ctx=None):
+        async def stat_metadata(self, uri, ctx=None):
             return {"isDir": True}
 
         async def tree(
@@ -2448,7 +2448,7 @@ async def test_reindex_memory_fallback_reads_existing_record_as_uri_owner(monkey
         async def exists(self, uri, ctx=None):
             return True
 
-        async def stat(self, uri, ctx=None):
+        async def stat_metadata(self, uri, ctx=None):
             return {"isDir": False}
 
     async def fake_read_memory_body(self, uri, *, ctx):
@@ -2496,7 +2496,7 @@ async def test_reindex_memory_skips_fallback_when_body_read_fails(monkeypatch):
         async def exists(self, uri, ctx=None):
             return True
 
-        async def stat(self, uri, ctx=None):
+        async def stat_metadata(self, uri, ctx=None):
             return {"isDir": False}
 
         async def read_file(self, uri, ctx=None):
@@ -2570,7 +2570,7 @@ async def test_reindex_resource_vectors_accepts_single_file_uri(monkeypatch):
         async def exists(self, uri, ctx=None):
             return True
 
-        async def stat(self, uri, ctx=None):
+        async def stat_metadata(self, uri, ctx=None):
             return {"isDir": False}
 
         async def tree(self, *args, **kwargs):
@@ -2626,7 +2626,7 @@ async def test_reindex_memory_l2_falls_back_to_body_when_abstract_missing(monkey
         async def exists(self, uri, ctx=None):
             return True
 
-        async def stat(self, uri, ctx=None):
+        async def stat_metadata(self, uri, ctx=None):
             return {"isDir": False}
 
     seen = {}
@@ -2677,7 +2677,7 @@ async def test_reindex_memory_l2_strips_memory_fields_from_abstract(monkeypatch)
         async def exists(self, uri, ctx=None):
             return True
 
-        async def stat(self, uri, ctx=None):
+        async def stat_metadata(self, uri, ctx=None):
             return {"isDir": False}
 
     seen = {}
@@ -2739,7 +2739,7 @@ async def test_reindex_memory_vectors_walks_deep_subtree(monkeypatch):
         async def exists(self, uri, ctx=None):
             return True
 
-        async def stat(self, uri, ctx=None):
+        async def stat_metadata(self, uri, ctx=None):
             return {"isDir": True}
 
         async def tree(
@@ -2814,7 +2814,7 @@ async def test_reindex_memory_vectors_rebuilds_directory_levels_without_regenera
         async def exists(self, uri, ctx=None):
             return True
 
-        async def stat(self, uri, ctx=None):
+        async def stat_metadata(self, uri, ctx=None):
             return {"isDir": True}
 
         async def tree(

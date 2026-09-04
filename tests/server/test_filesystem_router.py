@@ -189,7 +189,7 @@ async def test_attrs_returns_memory_fields_and_tags(monkeypatch):
         filesystem,
         "get_service",
         lambda: SimpleNamespace(
-            fs=SimpleNamespace(stat=fake_stat, read=fake_read),
+            fs=SimpleNamespace(stat_metadata=fake_stat, read=fake_read),
             vikingdb_manager=FakeVectorManager(),
         ),
     )

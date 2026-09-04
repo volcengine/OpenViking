@@ -215,7 +215,7 @@ async def download(
     # Try to get filename from stat
     filename = "download"
     try:
-        stat = await service.fs.stat(uri, ctx=_ctx)
+        stat = await service.fs.stat_metadata(uri, ctx=_ctx)
         if stat and "name" in stat:
             filename = stat["name"]
     except Exception:

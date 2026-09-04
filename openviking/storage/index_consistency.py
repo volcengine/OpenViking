@@ -100,8 +100,6 @@ def _leaf_name(uri_or_path: str) -> str:
 
 async def _read_text_if_exists(viking_fs, uri: str, ctx: RequestContext) -> str:
     try:
-        if not await viking_fs.exists(uri, ctx=ctx):
-            return ""
         content = await viking_fs.read_file(uri, ctx=ctx)
         return content.decode("utf-8") if isinstance(content, bytes) else str(content)
     except Exception:

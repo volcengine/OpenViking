@@ -596,7 +596,7 @@ class ResourceService:
         try:
             if not await self._viking_fs.exists(root_uri, ctx=ctx):
                 return True
-            stat = await self._viking_fs.stat(root_uri, ctx=ctx)
+            stat = await self._viking_fs.stat_metadata(root_uri, ctx=ctx)
             if not isinstance(stat, dict) or not stat.get("isDir"):
                 return False
             entries = await self._viking_fs.ls(

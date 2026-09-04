@@ -29,7 +29,7 @@ class TestFinalizeFromTemp:
             return uri in existing_uris
 
         fs.ls = AsyncMock(side_effect=_ls)
-        fs.stat = AsyncMock(side_effect=_stat)
+        fs.stat_metadata = AsyncMock(side_effect=_stat)
         fs.exists = AsyncMock(side_effect=_exists)
         return fs
 

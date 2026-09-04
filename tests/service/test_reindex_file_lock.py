@@ -23,7 +23,7 @@ class _FakeVikingFS:
     async def exists(self, uri: str, ctx=None):
         return uri == self._uri
 
-    async def stat(self, uri: str, ctx=None):
+    async def stat_metadata(self, uri: str, ctx=None):
         assert uri == self._uri
         return {"isDir": False}
 

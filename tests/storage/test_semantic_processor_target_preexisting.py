@@ -51,7 +51,7 @@ class _SyncWrapperVikingFS:
     async def read_file(self, uri, ctx=None):
         return "{}"
 
-    async def stat(self, uri, ctx=None):
+    async def stat_metadata(self, uri, ctx=None):
         raise FileNotFoundError(uri)
 
     async def write_file(self, uri, content, ctx=None, lease_ref=None):

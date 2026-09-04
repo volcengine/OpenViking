@@ -18,6 +18,7 @@ from openviking.pyagfs.exceptions import (
     AGFSClientError,
     AGFSDirectoryNotEmptyError,
     AGFSHTTPError,
+    AGFSIsADirectoryError,
 )
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
@@ -1030,8 +1031,61 @@ class _OpsMixin:
             raise NotFoundError(uri_or_id, "file", reason=missing_reason)
         return resolved
 
+    async def _stat_metadata(
+        self,
+        uri: str,
+        ctx: Optional[RequestContext] = None,
+    ) -> tuple[Dict[str, Any], str, str, RequestContext]:
+        """Resolve a URI and return its storage metadata and backing path."""
+        real_ctx = self._ctx_or_default(ctx)
+        uri = await self.resolve_uri(uri, real_ctx)
+        await self._ensure_access(uri, ctx)
+        primary_path = self._uri_to_path(uri, ctx=ctx)
+        path = primary_path
+        last_not_found: Optional[Exception] = None
+        for candidate_path in self._read_paths(uri, ctx=ctx):
+            if not await self._read_path_visible(uri, candidate_path, primary_path, real_ctx):
+                continue
+            try:
+                result = await self._async_agfs.stat(candidate_path)
+                path = candidate_path
+                break
+            except Exception as exc:
+                if is_not_found_error(exc):
+                    last_not_found = exc
+                    continue
+                raise
+        else:
+            if self._is_session_root_uri(uri):
+                now = datetime.now(timezone.utc).isoformat()
+                return (
+                    {
+                        "name": "session",
+                        "size": 0,
+                        "mode": 0o755,
+                        "modTime": now,
+                        "isDir": True,
+                    },
+                    primary_path,
+                    uri,
+                    real_ctx,
+                )
+            raise NotFoundError(uri, "file") from last_not_found
+        return result, path, uri, real_ctx
+
+    async def stat_metadata(
+        self,
+        uri: str,
+        ctx: Optional[RequestContext] = None,
+    ) -> Dict[str, Any]:
+        """Return storage metadata without path-lock or vector-index fields."""
+        result, _, resolved_uri, _ = await self._stat_metadata(uri, ctx=ctx)
+        if isinstance(result, dict):
+            result["uri"] = resolved_uri
+        return result
+
     async def stat(
-        self, uri: str, ctx: Optional[RequestContext] = None, skip_count: bool = False
+        self, uri: str, ctx: Optional[RequestContext] = None
     ) -> Dict[str, Any]:
         """
         File/directory information.
@@ -1056,42 +1110,13 @@ class _OpsMixin:
         Args:
             uri: Viking URI, or a 32-char hex vector record id (resolves to URI via vector store)
             ctx: Request context
-            skip_count: If True, skip the vector_store.count() call for directories.
-                Use this when the count field is not needed (e.g. in grep) to avoid
-                an extra VikingDB API call.
         """
-        real_ctx = self._ctx_or_default(ctx)
-        uri = await self.resolve_uri(uri, real_ctx)
-        await self._ensure_access(uri, ctx)
-        primary_path = self._uri_to_path(uri, ctx=ctx)
-        path = primary_path
-        last_not_found: Optional[Exception] = None
-        for candidate_path in self._read_paths(uri, ctx=ctx):
-            if not await self._read_path_visible(uri, candidate_path, primary_path, real_ctx):
-                continue
-            try:
-                result = await self._async_agfs.stat(candidate_path)
-                path = candidate_path
-                break
-            except Exception as exc:
-                if is_not_found_error(exc):
-                    last_not_found = exc
-                    continue
-                raise
-        else:
-            if self._is_session_root_uri(uri):
-                now = datetime.now(timezone.utc).isoformat()
-                return {
-                    "name": "session",
-                    "size": 0,
-                    "mode": 0o755,
-                    "modTime": now,
-                    "isDir": True,
-                    "isLocked": False,
-                }
-            raise NotFoundError(uri, "file") from last_not_found
+        result, path, uri, real_ctx = await self._stat_metadata(uri, ctx=ctx)
         if isinstance(result, dict):
             result["uri"] = uri
+            if self._is_session_root_uri(uri):
+                result["isLocked"] = False
+                return result
             result["isLocked"] = await self._is_path_locked_async(path)
             # Add deterministic vector record id for files (level 2).
             # This matches the ID used in VikingDB so callers can cross-reference
@@ -1099,7 +1124,7 @@ class _OpsMixin:
             if not result.get("isDir", False):
                 result["id"] = vector_record_id(real_ctx.account_id, uri, level=2)
             # Add count for directories if vector store available
-            if not skip_count and result.get("isDir", False):
+            if result.get("isDir", False):
                 try:
                     vector_store = self._get_vector_store()
                     if vector_store:
@@ -1210,7 +1235,7 @@ class _OpsMixin:
                     continue
                 if return_entries:
                     try:
-                        entry_stat = await self.stat(entry_uri, ctx=ctx, skip_count=True)
+                        entry_stat = await self.stat_metadata(entry_uri, ctx=ctx)
                     except NotFoundError:
                         name = entry.get("name") or entry["path"].rsplit("/", 1)[-1]
                         entry_stat = {
@@ -1574,46 +1599,15 @@ class _OpsMixin:
         Raises:
             FileNotFoundError: If the file does not exist.
         """
-        real_ctx = self._ctx_or_default(ctx)
-        uri = await self.resolve_uri(uri, real_ctx)
-        await self._ensure_access(uri, ctx)
-        primary_path = self._uri_to_path(uri, ctx=ctx)
-        # Verify the file exists before reading, because AGFS read returns
-        # empty bytes for non-existent files instead of raising an error.
-        last_not_found: Optional[Exception] = None
-        for path in self._read_paths(uri, ctx=ctx):
-            if not await self._read_path_visible(uri, path, primary_path, real_ctx):
-                continue
-            try:
-                stat = await self._async_agfs.stat(path)
-                break
-            except Exception as exc:
-                if is_not_found_error(exc):
-                    last_not_found = exc
-                    continue
-                raise
-        else:
-            raise NotFoundError(uri, "file") from last_not_found
-        if isinstance(stat, dict) and stat.get("isDir", False):
+        try:
+            raw = await self.read(uri, ctx=ctx)
+        except AGFSIsADirectoryError as exc:
             raise InvalidArgumentError(
                 f"Directory URI is not readable as a file: {uri}. "
                 "List it first, then read a file URI.",
                 details={"resource": uri, "expected": "file", "actual": "directory"},
-            )
-        try:
-            content = await self._async_agfs.read(path)
-            if isinstance(content, bytes):
-                raw = content
-            elif content is not None and hasattr(content, "content"):
-                raw = content.content
-            else:
-                raw = b""
-
-            text = self._decode_bytes(raw)
-        except Exception as exc:
-            if is_not_found_error(exc):
-                raise NotFoundError(uri, "file") from exc
-            raise
+            ) from exc
+        text = self._decode_bytes(raw)
 
         if offset == 0 and limit == -1:
             return text
@@ -1626,37 +1620,14 @@ class _OpsMixin:
         uri: str,
         ctx: Optional[RequestContext] = None,
     ) -> bytes:
-        """Read single binary file. Accepts a Viking URI or a 32-char hex vector record id."""
-        real_ctx = self._ctx_or_default(ctx)
-        uri = await self.resolve_uri(uri, real_ctx)
-        await self._ensure_access(uri, ctx)
-        primary_path = self._uri_to_path(uri, ctx=ctx)
-        last_not_found: Optional[Exception] = None
-        for path in self._read_paths(uri, ctx=ctx):
-            if not await self._read_path_visible(uri, path, primary_path, real_ctx):
-                continue
-            try:
-                stat = await self._async_agfs.stat(path)
-                break
-            except Exception as exc:
-                if is_not_found_error(exc):
-                    last_not_found = exc
-                    continue
-                raise
-        else:
-            raise NotFoundError(uri, "file") from last_not_found
-        if isinstance(stat, dict) and stat.get("isDir", False):
+        """Read single binary file. Accepts a Viking URI or vector record ID."""
+        try:
+            return await self.read(uri, ctx=ctx)
+        except AGFSIsADirectoryError as exc:
             raise InvalidArgumentError(
                 f"Cannot read directory as file: {uri}",
                 details={"resource": uri, "expected": "file", "actual": "directory"},
-            )
-        try:
-            raw = self._handle_agfs_read(await self._async_agfs.read(path))
-            return raw
-        except Exception as exc:
-            if is_not_found_error(exc):
-                raise NotFoundError(uri, "file") from exc
-            raise
+            ) from exc
 
     async def write_file_bytes(
         self,

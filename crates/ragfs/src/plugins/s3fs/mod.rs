@@ -470,13 +470,7 @@ impl FileSystem for S3FileSystem {
         let normalized = Self::normalize_path(path);
         let key = self.client.build_key(&normalized);
 
-        // Check if already exists
-        if self.client.head_object(&key).await?.is_some() {
-            return Err(Error::already_exists(&normalized));
-        }
-
-        // Create empty file
-        self.client.put_object(&key, Vec::new()).await?;
+        self.client.put_object_create_new(&key, Vec::new()).await?;
 
         // Invalidate caches
         self.dir_cache.invalidate_parent(&normalized).await;
@@ -576,21 +570,25 @@ impl FileSystem for S3FileSystem {
         let normalized = Self::normalize_path(path);
         let key = self.client.build_key(&normalized);
 
-        // Check if it's a directory
-        if key.ends_with('/') || self.client.directory_exists(&normalized).await? {
-            // Try to read as file first
-            if self.client.head_object(&key).await?.is_none() {
-                return Err(Error::IsADirectory(normalized));
-            }
+        if normalized == "/" {
+            return Err(Error::IsADirectory(normalized));
         }
 
-        if offset == 0 && size == 0 {
+        let result = if offset == 0 && size == 0 {
             // Full read
             self.client.get_object(&key).await
         } else {
             // Range read
             self.client.get_object_range(&key, offset, size).await
+        };
+
+        if matches!(&result, Err(Error::NotFound(_)))
+            && self.client.directory_exists(&normalized).await?
+        {
+            return Err(Error::IsADirectory(normalized));
         }
+
+        result
     }
 
     async fn write(&self, path: &str, data: &[u8], _offset: u64, flags: WriteFlag) -> Result<u64> {

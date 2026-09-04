@@ -806,7 +806,7 @@ class Session:
     async def exists(self) -> bool:
         """Check whether this session already exists in storage."""
         try:
-            await self._viking_fs.stat(self._session_uri, ctx=self.ctx)
+            await self._viking_fs.stat_metadata(self._session_uri, ctx=self.ctx)
             return True
         except Exception as exc:
             if not _is_storage_not_found(exc):
@@ -816,7 +816,7 @@ class Session:
     async def is_materialized(self) -> bool:
         """Check whether the session's authoritative live-message file exists."""
         try:
-            await self._viking_fs.stat(
+            await self._viking_fs.stat_metadata(
                 f"{self._session_uri}/messages.jsonl",
                 ctx=self.ctx,
             )

@@ -859,6 +859,11 @@ class FSService:
         viking_fs = self._ensure_initialized()
         return await viking_fs.stat(uri, ctx=ctx)
 
+    async def stat_metadata(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
+        """Get storage metadata without lock or vector-index enrichment."""
+        viking_fs = self._ensure_initialized()
+        return await viking_fs.stat_metadata(uri, ctx=ctx)
+
     async def system_sync_status(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
         """Return multi-write sync status for one Viking URI subtree."""
         viking_fs = self._ensure_initialized()

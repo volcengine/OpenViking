@@ -87,8 +87,6 @@ async def call_vector_filter(
 
 async def read_text_if_exists(viking_fs, uri: str, ctx: RequestContext) -> str:
     try:
-        if not await viking_fs.exists(uri, ctx=ctx):
-            return ""
         content = await viking_fs.read_file(uri, ctx=ctx)
         return content.decode("utf-8") if isinstance(content, bytes) else content
     except Exception:

@@ -266,7 +266,7 @@ class FakeVikingFS:
     async def rm(self, uri, **kw):
         self.files.pop(uri, None)
 
-    async def stat(self, uri, **kw):
+    async def stat_metadata(self, uri, **kw):
         if uri not in self.files:
             raise FileNotFoundError(uri)
         return {"name": uri.rsplit("/", 1)[-1], "isDir": False}

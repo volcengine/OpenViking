@@ -962,7 +962,7 @@ impl FileSystem for LocalFileSystem {
         let metadata = fs::metadata(&local_path).map_err(|_| Error::NotFound(path.to_string()))?;
 
         if metadata.is_dir() {
-            return Err(Error::plugin(format!("is a directory: {}", path)));
+            return Err(Error::IsADirectory(path.to_string()));
         }
 
         // Read file

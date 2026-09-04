@@ -931,7 +931,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     else f"{target_prefix}/{mapping_name}"
                 )
                 try:
-                    await viking_fs.stat(target_mapping, ctx=ctx)
+                    await viking_fs.stat_metadata(target_mapping, ctx=ctx)
                     continue  # already carried over
                 except Exception:
                     pass

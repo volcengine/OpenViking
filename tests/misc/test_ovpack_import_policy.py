@@ -36,7 +36,7 @@ class FakeVikingFS:
         self.existing_roots = existing_roots or set()
         self.removed_roots: list[str] = []
 
-    async def stat(self, uri: str, ctx=None):
+    async def stat_metadata(self, uri: str, ctx=None):
         return {"uri": uri, "isDir": True}
 
     async def mkdir(self, uri: str, exist_ok: bool = False, ctx=None):
@@ -675,7 +675,7 @@ async def test_backup_restore_contract(
 
     fake_fs = FakeVikingFS()
     fake_fs.ls = AsyncMock(return_value=[])
-    fake_fs.stat = AsyncMock(side_effect=FileNotFoundError())
+    fake_fs.stat_metadata = AsyncMock(side_effect=FileNotFoundError())
     fake_fs.rm = AsyncMock()
     assert (
         await PackService(fake_fs).restore_ovpack(

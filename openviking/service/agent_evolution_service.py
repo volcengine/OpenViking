@@ -122,7 +122,7 @@ class AgentEvolutionService:
             )
 
         viking_fs = self._ensure_initialized()
-        stat = await viking_fs.stat(canonical_uri, ctx=ctx, skip_count=True)
+        stat = await viking_fs.stat_metadata(canonical_uri, ctx=ctx)
         if stat.get("isDir", False):
             raise InvalidArgumentError("experience_uri must identify an Experience file")
 
