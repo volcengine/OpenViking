@@ -62,9 +62,12 @@ async def test_patch_merge_context_provider_prefetch_reads_originals_and_renders
     assert provider.get_tools() == []
     assert provider.read_file.await_count == 1
     read_message = json.loads(messages[0]["content"])
-    assert read_message["tool_call_name"] == "read"
-    assert read_message["args"] == {"uri": "viking://user/u/memories/experiences/booking.md"}
-    assert read_message["result"]["experience_name"] == "booking"
+    assert read_message["message_type"] == "prefetched_context"
+    assert read_message["context_type"] == "memory_file"
+    assert read_message["uri"] == "viking://user/u/memories/experiences/booking.md"
+    assert read_message["data"]["experience_name"] == "booking"
+    assert "tool_call_name" not in read_message
+    assert "tool_name" not in read_message
     assert messages[1]["role"] == "user"
     assert messages[1]["content"].startswith("# Memory File Patches")
     assert "Patch 1" in messages[1]["content"]
@@ -147,7 +150,9 @@ async def test_patch_merge_context_provider_skips_extra_candidates_for_existing_
             )
         ],
     )
-    provider.search_files = AsyncMock(return_value=["viking://user/u/memories/experiences/other.md"])
+    provider.search_files = AsyncMock(
+        return_value=["viking://user/u/memories/experiences/other.md"]
+    )
     provider.read_file = AsyncMock(
         return_value={
             "memory_type": "experiences",
