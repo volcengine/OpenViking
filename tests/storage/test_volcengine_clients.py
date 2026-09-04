@@ -1,3 +1,4 @@
+import requests
 from volcengine.base.Request import Request
 
 from openviking.storage.vectordb.collection.volcengine_clients import (
@@ -52,13 +53,10 @@ def test_console_client_do_req_uses_signed_query_params(monkeypatch):
         }
         return request
 
-    monkeypatch.setattr(
-        "openviking.storage.vectordb.collection.volcengine_clients.requests.request",
-        fake_request,
-    )
     monkeypatch.setattr(ClientForConsoleApi, "prepare_request", fake_prepare_request)
 
     client = ClientForConsoleApi("test-ak", "test-sk", "cn-beijing")
+    monkeypatch.setattr(client._session, "request", fake_request)
     client.do_req(
         "POST",
         req_params={"Action": "ListVikingdbCollection", "Version": "2025-06-09"},
@@ -90,13 +88,10 @@ def test_data_client_do_req_uses_signed_query_params(monkeypatch):
         }
         return request
 
-    monkeypatch.setattr(
-        "openviking.storage.vectordb.collection.volcengine_clients.requests.request",
-        fake_request,
-    )
     monkeypatch.setattr(ClientForDataApi, "prepare_request", fake_prepare_request)
 
     client = ClientForDataApi("test-ak", "test-sk", "cn-beijing")
+    monkeypatch.setattr(client._session, "request", fake_request)
     client.do_req(
         "POST",
         "/api/vikingdb/data/search/vector",
@@ -106,6 +101,49 @@ def test_data_client_do_req_uses_signed_query_params(monkeypatch):
 
     assert captured["params"]["X-Date"] == "20260405T091640Z"
     assert captured["params"]["X-Signature"] == "signed"
+
+
+def test_clients_keep_pooled_session_reused_across_calls(monkeypatch):
+    """Each client owns one keep-alive session that serves every request."""
+    from requests.adapters import HTTPAdapter
+
+    for client in (
+        ClientForConsoleApi("test-ak", "test-sk", "cn-beijing"),
+        ClientForDataApi("test-ak", "test-sk", "cn-beijing"),
+        ClientForDataApiWithApiKey(
+            api_key="vk-test-token",
+            host="api-vikingdb.vikingdb.cn-beijing.volces.com",
+        ),
+    ):
+        adapter = client._session.get_adapter("https://example.com")
+        assert isinstance(adapter, HTTPAdapter)
+        # HTTP and HTTPS share the same pooled adapter instance.
+        assert client._session.get_adapter("http://example.com") is adapter
+
+    seen_sessions = []
+
+    def fake_prepare_request(self, *args, **kwargs):
+        request = Request()
+        request.method = "POST"
+        request.path = "/api/vikingdb/data/search/vector"
+        request.body = "{}"
+        request.headers = {}
+        request.query = {}
+        return request
+
+    def fake_request(self, **kwargs):
+        seen_sessions.append(self)
+        return object()
+
+    monkeypatch.setattr(ClientForDataApi, "prepare_request", fake_prepare_request)
+    monkeypatch.setattr(requests.Session, "request", fake_request)
+
+    client = ClientForDataApi("test-ak", "test-sk", "cn-beijing")
+    client.do_req("POST", "/api/vikingdb/data/search/vector")
+    client.do_req("POST", "/api/vikingdb/data/search/vector")
+
+    assert len(seen_sessions) == 2
+    assert seen_sessions[0] is seen_sessions[1] is client._session
 
 
 def test_data_api_key_client_prepare_request_sets_bearer_auth():

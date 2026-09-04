@@ -872,10 +872,11 @@ def test_private_vikingdb_client_wraps_connection_error(monkeypatch):
         del kwargs
         raise requests.ConnectionError("connection refused")
 
-    monkeypatch.setattr(requests, "request", _raise_connection_error)
+    client = VikingDBClient("https://vikingdb.example.com")
+    monkeypatch.setattr(client._session, "request", _raise_connection_error)
 
     with pytest.raises(ConnectionError, match="connection refused") as exc_info:
-        VikingDBClient("https://vikingdb.example.com").do_req(
+        client.do_req(
             "POST",
             "/api/vikingdb/data/upsert",
             req_body={},
