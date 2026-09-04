@@ -854,10 +854,10 @@ class FSService:
             result = result[:node_limit]
         return result
 
-    async def stat(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
+    async def stat(self, uri: str, ctx: RequestContext, skip_count: bool = False) -> Dict[str, Any]:
         """Get resource status."""
         viking_fs = self._ensure_initialized()
-        return await viking_fs.stat(uri, ctx=ctx)
+        return await viking_fs.stat(uri, ctx=ctx, skip_count=skip_count)
 
     async def system_sync_status(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
         """Return multi-write sync status for one Viking URI subtree."""

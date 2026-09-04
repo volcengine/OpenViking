@@ -659,7 +659,7 @@ class _GrepMixin:
             logger.debug(f"Skipping excluded uri during grep: {normalized_uri}")
             return file_uris
         try:
-            root_stat = await self.stat(normalized_uri, ctx=ctx)
+            root_stat = await self.stat(normalized_uri, ctx=ctx, skip_count=True)
         except Exception:
             return file_uris
         if not root_stat.get("isDir", False):

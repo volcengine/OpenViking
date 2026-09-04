@@ -204,7 +204,7 @@ async def attrs(
     service = get_service()
     uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
-        stat_result = await service.fs.stat(uri, ctx=_ctx)
+        stat_result = await service.fs.stat(uri, ctx=_ctx, skip_count=True)
         result = {
             "uri": uri,
             "context_type": context_type_for_uri(uri),

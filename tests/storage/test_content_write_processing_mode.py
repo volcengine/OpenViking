@@ -47,6 +47,20 @@ class _FakeVikingFS:
         del uri, ctx, action
 
 
+@pytest.mark.asyncio
+async def test_content_write_stat_skips_directory_vector_count(ctx):
+    fake_fs = _FakeVikingFS()
+    fake_fs.stat = AsyncMock(return_value={"isDir": True})
+    coordinator = ContentWriteCoordinator(viking_fs=fake_fs)
+
+    assert await coordinator._safe_stat("viking://resources/demo", ctx=ctx) == {"isDir": True}
+    fake_fs.stat.assert_awaited_once_with(
+        "viking://resources/demo",
+        ctx=ctx,
+        skip_count=True,
+    )
+
+
 def _sidecar(level=ContextLevel.ABSTRACT, body="Original body."):
     return render_abstract_overview(
         level,
@@ -151,7 +165,9 @@ async def test_write_builds_ingest_options_before_scheduling_resource_refresh(ct
     coordinator = ContentWriteCoordinator(viking_fs=_FakeVikingFS())
     coordinator._safe_stat = AsyncMock(return_value={"isDir": False})
     coordinator._resolve_root_uri = AsyncMock(return_value="viking://resources")
-    coordinator._write_direct_with_refresh = AsyncMock(return_value={"uri": "viking://resources/demo.md"})
+    coordinator._write_direct_with_refresh = AsyncMock(
+        return_value={"uri": "viking://resources/demo.md"}
+    )
 
     await coordinator.write(
         uri="viking://resources/demo.md",
@@ -229,9 +245,7 @@ async def test_vectors_only_write_wait_reports_skipped_when_nothing_enqueued(mon
 async def test_automatic_wide_directory_delay_reports_deferred(monkeypatch, ctx):
     fake_fs = _FakeVikingFS()
     coordinator = ContentWriteCoordinator(viking_fs=fake_fs)
-    coordinator._enqueue_semantic_refresh = AsyncMock(
-        return_value=FreshnessAction.MARK_PENDING
-    )
+    coordinator._enqueue_semantic_refresh = AsyncMock(return_value=FreshnessAction.MARK_PENDING)
 
     result = await coordinator._write_direct_with_refresh(
         uri="viking://resources/wide/demo.md",

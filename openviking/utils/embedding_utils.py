@@ -165,7 +165,7 @@ async def _resolve_context_timestamps(
 ) -> tuple[datetime, datetime]:
     updated_at = datetime.now(timezone.utc)
     try:
-        stat_result = await get_viking_fs().stat(uri, ctx=ctx)
+        stat_result = await get_viking_fs().stat(uri, ctx=ctx, skip_count=True)
         stat_mod_time = _coerce_datetime((stat_result or {}).get("modTime"))
         if stat_mod_time is not None:
             updated_at = stat_mod_time

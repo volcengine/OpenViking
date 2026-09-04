@@ -806,7 +806,7 @@ class Session:
     async def exists(self) -> bool:
         """Check whether this session already exists in storage."""
         try:
-            await self._viking_fs.stat(self._session_uri, ctx=self.ctx)
+            await self._viking_fs.stat(self._session_uri, ctx=self.ctx, skip_count=True)
             return True
         except Exception as exc:
             if not _is_storage_not_found(exc):

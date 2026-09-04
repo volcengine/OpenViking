@@ -439,7 +439,7 @@ class ResourceProcessor:
                         target_preexisting = await viking_fs.exists(root_uri, ctx=ctx)
                         if target_preexisting:
                             try:
-                                stat = await viking_fs.stat(root_uri, ctx=ctx)
+                                stat = await viking_fs.stat(root_uri, ctx=ctx, skip_count=True)
                                 if isinstance(stat, dict) and stat.get("isDir"):
                                     entries = await viking_fs.ls(
                                         root_uri,

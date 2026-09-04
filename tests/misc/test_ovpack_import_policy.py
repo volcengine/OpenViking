@@ -36,7 +36,8 @@ class FakeVikingFS:
         self.existing_roots = existing_roots or set()
         self.removed_roots: list[str] = []
 
-    async def stat(self, uri: str, ctx=None):
+    async def stat(self, uri: str, ctx=None, skip_count=False):
+        assert skip_count is True
         return {"uri": uri, "isDir": True}
 
     async def mkdir(self, uri: str, exist_ok: bool = False, ctx=None):

@@ -179,7 +179,7 @@ async def _write_text_resource(service, uri: str, content: str, ctx: RequestCont
 
 async def _safe_stat(service, uri: str, ctx: RequestContext) -> Optional[dict[str, Any]]:
     try:
-        return await service.fs.stat(uri, ctx=ctx)
+        return await service.fs.stat(uri, ctx=ctx, skip_count=True)
     except (FileNotFoundError, NotFoundError):
         return None
 

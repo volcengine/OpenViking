@@ -49,8 +49,9 @@ class _VFS:
         del ctx
         return "/virtual/" + uri.removeprefix("viking://")
 
-    async def stat(self, uri, ctx=None):
+    async def stat(self, uri, ctx=None, skip_count=False):
         del ctx
+        assert skip_count is True
         if uri == self.root:
             return {"uri": uri, "isDir": True}
         if uri in self.files:

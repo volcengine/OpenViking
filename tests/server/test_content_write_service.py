@@ -342,7 +342,9 @@ async def test_memory_write_linkifies_resource_uri_marker_with_readable_anchor(s
     refs = mf.extra_fields["resource_refs"]
     assert refs[0]["resource_uri"] == resource_uri
     assert refs[0]["source"] == "content.write"
-    assert refs[0]["match_text"] == "2026-06-12，用户保存了粉丝创作的越前龙马动漫插画资源，资源URI为"
+    assert (
+        refs[0]["match_text"] == "2026-06-12，用户保存了粉丝创作的越前龙马动漫插画资源，资源URI为"
+    )
     assert mf.links == []
 
 
@@ -462,8 +464,9 @@ class _FakeVikingFS:
         self.tree_entries = []
         self._async_agfs = _FakePathLock()
 
-    async def stat(self, uri: str, ctx=None):
+    async def stat(self, uri: str, ctx=None, skip_count=False):
         del ctx
+        assert skip_count is True
         if uri == self._file_uri or uri in self.content:
             return {"isDir": False}
         if uri == self._root_uri:
@@ -873,8 +876,9 @@ class _FakeVikingFSForCreate:
         self.existing_dirs = set({root_uri} if existing_dirs is None else existing_dirs)
         self._async_agfs = _FakePathLock()
 
-    async def stat(self, uri: str, ctx=None):
+    async def stat(self, uri: str, ctx=None, skip_count=False):
         del ctx
+        assert skip_count is True
         if uri == self._file_uri:
             if self._file_exists:
                 return {"isDir": False}
@@ -1216,8 +1220,9 @@ class _AnyDirVikingFS:
     def __init__(self, file_uri: str):
         self._file_uri = file_uri
 
-    async def stat(self, uri: str, ctx=None):
+    async def stat(self, uri: str, ctx=None, skip_count=False):
         del ctx
+        assert skip_count is True
         return {"isDir": uri != self._file_uri}
 
 

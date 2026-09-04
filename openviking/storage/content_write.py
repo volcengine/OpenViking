@@ -168,9 +168,7 @@ class ContentWriteCoordinator:
             )
 
         context_type = context_type_for_uri(normalized_uri)
-        root_uri = await self._resolve_root_uri(
-            normalized_uri, ctx=ctx, anchor_to_parent=True
-        )
+        root_uri = await self._resolve_root_uri(normalized_uri, ctx=ctx, anchor_to_parent=True)
         written_bytes = len(content.encode("utf-8"))
         telemetry_id = get_current_telemetry().telemetry_id
 
@@ -870,9 +868,7 @@ class ContentWriteCoordinator:
             elif refresh_action is FreshnessAction.MARK_PENDING:
                 # Changed-file semantic/vector work may still be queued, while
                 # the directory aggregation itself is intentionally deferred.
-                _, vector_status = self._refresh_statuses(
-                    wait=wait, queue_status=queue_status
-                )
+                _, vector_status = self._refresh_statuses(wait=wait, queue_status=queue_status)
                 result_kwargs = {
                     "semantic_status": "deferred",
                     "vector_status": vector_status,
@@ -1033,7 +1029,7 @@ class ContentWriteCoordinator:
         self, uri: str, *, ctx: RequestContext, allow_not_found: bool = False
     ) -> Dict[str, Any]:
         try:
-            return await self._viking_fs.stat(uri, ctx=ctx)
+            return await self._viking_fs.stat(uri, ctx=ctx, skip_count=True)
         except Exception as exc:
             if self._is_not_found(exc):
                 if allow_not_found:

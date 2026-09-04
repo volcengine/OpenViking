@@ -746,7 +746,11 @@ async def test_read_video_returns_unsupported_hint(monkeypatch):
 
     assert "no standard VideoContent" in result
     assert 'ov get "viking://resources/demo.mp4" "./demo.mp4"' in result
-    stat.assert_awaited_once_with("viking://resources/demo.mp4", ctx=DEFAULT_CTX)
+    stat.assert_awaited_once_with(
+        "viking://resources/demo.mp4",
+        ctx=DEFAULT_CTX,
+        skip_count=True,
+    )
     read_visible.assert_not_awaited()
 
 
@@ -769,7 +773,11 @@ async def test_read_video_nonexistent_uri_preserves_not_found(monkeypatch):
 
     assert "not found" in result.lower()
     assert "VideoContent" not in result
-    stat.assert_awaited_once_with("viking://resources/missing.mp4", ctx=DEFAULT_CTX)
+    stat.assert_awaited_once_with(
+        "viking://resources/missing.mp4",
+        ctx=DEFAULT_CTX,
+        skip_count=True,
+    )
     read_visible.assert_not_awaited()
 
 
@@ -792,7 +800,11 @@ async def test_read_video_directory_uri_preserves_directory_hint(monkeypatch):
 
     assert "URI points to a directory" in result
     assert "VideoContent" not in result
-    stat.assert_awaited_once_with("viking://resources/archive.mp4", ctx=DEFAULT_CTX)
+    stat.assert_awaited_once_with(
+        "viking://resources/archive.mp4",
+        ctx=DEFAULT_CTX,
+        skip_count=True,
+    )
     read_visible.assert_not_awaited()
 
 

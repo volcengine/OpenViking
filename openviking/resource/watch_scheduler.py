@@ -467,7 +467,7 @@ class WatchScheduler:
         if self._viking_fs is None:
             return True
         try:
-            await self._viking_fs.stat(uri, ctx=ctx)
+            await self._viking_fs.stat(uri, ctx=ctx, skip_count=True)
             return True
         except NotFoundError:
             return False

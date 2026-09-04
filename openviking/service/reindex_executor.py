@@ -509,7 +509,7 @@ class ReindexExecutor:
 
         acquire_lock = service.viking_fs._async_agfs.pathlock_acquire_tree
         if mode != "prune_orphans" or await service.viking_fs.exists(uri, ctx=ctx):
-            stat = await service.viking_fs.stat(uri, ctx=ctx)
+            stat = await service.viking_fs.stat(uri, ctx=ctx, skip_count=True)
             if not stat.get("isDir", stat.get("is_dir")):
                 acquire_lock = service.viking_fs._async_agfs.pathlock_acquire_exact
         lease = await acquire_lock(path)
@@ -1009,7 +1009,7 @@ class ReindexExecutor:
         counters = run.counters
         ctx = run.ctx
         if mode == "semantic_and_vectors":
-            stat = await get_viking_fs().stat(uri, ctx=ctx)
+            stat = await get_viking_fs().stat(uri, ctx=ctx, skip_count=True)
             if stat.get("isDir", stat.get("is_dir")):
                 semantic_kwargs = {
                     "uri": uri,
@@ -1078,7 +1078,7 @@ class ReindexExecutor:
         try:
             if not await viking_fs.exists(uri, ctx=ctx):
                 raise NotFoundError(uri, "resource")
-            stat = await viking_fs.stat(uri, ctx=ctx)
+            stat = await viking_fs.stat(uri, ctx=ctx, skip_count=True)
             is_dir = stat.get("isDir", stat.get("is_dir")) if isinstance(stat, dict) else False
             if is_dir and recursive:
                 entries = await self._tree_all(viking_fs, uri, show_all_hidden=True, ctx=ctx)
@@ -1582,7 +1582,7 @@ class ReindexExecutor:
     ) -> None:
         viking_fs = get_viking_fs()
         if await viking_fs.exists(uri, ctx=ctx):
-            stat = await viking_fs.stat(uri, ctx=ctx)
+            stat = await viking_fs.stat(uri, ctx=ctx, skip_count=True)
             if stat.get("isDir", stat.get("is_dir")):
                 entries = (
                     await self._tree_all(viking_fs, uri, show_all_hidden=False, ctx=ctx)

@@ -635,8 +635,8 @@ class SemanticDagExecutor:
         if not target_path:
             return True
         try:
-            current_stat = await self._viking_fs.stat(file_path, ctx=self._ctx)
-            target_stat = await self._viking_fs.stat(target_path, ctx=self._ctx)
+            current_stat = await self._viking_fs.stat(file_path, ctx=self._ctx, skip_count=True)
+            target_stat = await self._viking_fs.stat(target_path, ctx=self._ctx, skip_count=True)
             current_size = current_stat.get("size") if isinstance(current_stat, dict) else None
             target_size = target_stat.get("size") if isinstance(target_stat, dict) else None
             if current_size is not None and target_size is not None and current_size != target_size:

@@ -64,6 +64,21 @@ async def _fake_stat(uri, ctx=None, skip_count=False):
     return {"name": uri.rsplit("/", 1)[-1], "isDir": True}
 
 
+@pytest.mark.asyncio
+async def test_collect_grep_files_skips_directory_vector_count(monkeypatch):
+    viking_fs = VikingFS(agfs=_DummyAgfs())
+    stat = AsyncMock(return_value={"isDir": True})
+    monkeypatch.setattr(viking_fs, "stat", stat)
+    monkeypatch.setattr(viking_fs, "ls", AsyncMock(return_value=[]))
+
+    assert await viking_fs._collect_grep_files(
+        "viking://resources",
+        excluded_prefix=None,
+        level_limit=1,
+    ) == []
+    stat.assert_awaited_once_with("viking://resources", ctx=None, skip_count=True)
+
+
 def test_grep_config_default_switch_to_remote_threshold_is_10000():
     assert GrepConfig().switch_to_remote_threshold == 10000
 
