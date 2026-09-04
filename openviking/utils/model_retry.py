@@ -6,7 +6,7 @@ import random
 import re
 import threading
 import time
-from typing import Awaitable, Callable, TypeVar
+from typing import AsyncIterator, Awaitable, Callable, Iterable, Iterator, TypeVar
 
 from openviking.utils.exceptions import AllCredentialsFailedError
 
@@ -42,6 +42,27 @@ def _normalize_metric_error_code(value: object) -> str | None:
     return code
 
 
+def _iter_structured_error_codes(error: BaseException) -> Iterator[str]:
+    for exc in _iter_exception_chain(error):
+        candidates = [getattr(exc, attr, None) for attr in ("status_code", "error_code", "code")]
+        response = getattr(exc, "response", None)
+        if response is not None:
+            candidates.append(getattr(response, "status_code", None))
+        body = getattr(exc, "body", None)
+        if isinstance(body, dict):
+            candidates.extend([body.get("status_code"), body.get("error_code"), body.get("code")])
+            nested = body.get("error")
+            if isinstance(nested, dict):
+                candidates.extend(
+                    [nested.get("status_code"), nested.get("error_code"), nested.get("code")]
+                )
+
+        for value in candidates:
+            normalized = _normalize_metric_error_code(value)
+            if normalized is not None:
+                yield normalized
+
+
 def extract_metric_error_code(error: BaseException) -> str:
     """Extract a low-cardinality provider error code for model-call metrics.
 
@@ -49,30 +70,16 @@ def extract_metric_error_code(error: BaseException) -> str:
     provider messages and request IDs are intentionally never used as metric labels.
     """
     error_chain = _iter_exception_chain(error)
-    for exc in error_chain:
-        for attr in ("status_code", "error_code", "code"):
-            normalized = _normalize_metric_error_code(getattr(exc, attr, None))
-            if normalized is not None:
-                return normalized
-
-        body = getattr(exc, "body", None)
-        if isinstance(body, dict):
-            candidates = [body.get("status_code"), body.get("error_code"), body.get("code")]
-            nested = body.get("error")
-            if isinstance(nested, dict):
-                candidates.extend(
-                    [nested.get("status_code"), nested.get("error_code"), nested.get("code")]
-                )
-            for value in candidates:
-                normalized = _normalize_metric_error_code(value)
-                if normalized is not None:
-                    return normalized
+    structured_code = next(_iter_structured_error_codes(error), None)
+    if structured_code is not None:
+        return structured_code
 
     if any(isinstance(exc, TimeoutError) for exc in error_chain):
         return "timeout"
     if any(isinstance(exc, ConnectionError) for exc in error_chain):
         return "connection_error"
     return "unknown"
+
 
 INPUT_TOO_LARGE_PATTERNS = (
     "413",
@@ -184,13 +191,31 @@ def _pattern_matches(text_lower: str, text_compact: str, pattern: str) -> bool:
         return bool(_get_numeric_pattern_re(pattern).search(text_lower)) or bool(
             _get_numeric_pattern_re(pattern).search(text_compact)
         )
-    return pattern in text_lower or pattern in text_compact
+    return pattern in text_lower or pattern.replace(" ", "") in text_compact
+
+
+def _classify_error_values(values: Iterable[str]) -> str:
+    texts = [(value.lower(), value.lower().replace(" ", "")) for value in values]
+    categories = (
+        (ERROR_CLASS_INPUT_TOO_LARGE, INPUT_TOO_LARGE_PATTERNS),
+        (ERROR_CLASS_CONTENT_SAFETY, CONTENT_SAFETY_PATTERNS),
+        (ERROR_CLASS_AUTH, AUTH_API_ERROR_PATTERNS),
+        (ERROR_CLASS_QUOTA_EXCEEDED, QUOTA_EXCEEDED_PATTERNS),
+        (ERROR_CLASS_PERMANENT, PERMANENT_API_ERROR_PATTERNS),
+        (ERROR_CLASS_TRANSIENT, TRANSIENT_API_ERROR_PATTERNS),
+    )
+    for error_class, patterns in categories:
+        for text_lower, text_compact in texts:
+            if any(_pattern_matches(text_lower, text_compact, pattern) for pattern in patterns):
+                return error_class
+    return ERROR_CLASS_UNKNOWN
 
 
 def classify_api_error(error: Exception) -> str:
     """Classify an API error into one of the ERROR_CLASS_* categories.
 
     Order matters:
+    - structured HTTP status codes are checked before falling back to text matching.
     - ``content_safety`` is checked before ``permanent`` so a moderation
       rejection that happens to embed "400" in its message is not misclassified.
     - ``auth`` (401/403) is separated from ``permanent`` (400): auth errors are
@@ -213,60 +238,17 @@ def classify_api_error(error: Exception) -> str:
             return ERROR_CLASS_AUTH
         return ERROR_CLASS_UNKNOWN
 
-    for exc in (error, getattr(error, "__cause__", None)):
-        if exc is not None and isinstance(exc, _PERMANENT_IO_ERRORS):
-            return ERROR_CLASS_PERMANENT
+    error_chain = _iter_exception_chain(error)
+    if any(isinstance(exc, _PERMANENT_IO_ERRORS) for exc in error_chain):
+        return ERROR_CLASS_PERMANENT
+    if any(isinstance(exc, (TimeoutError, ConnectionError)) for exc in error_chain):
+        return ERROR_CLASS_TRANSIENT
 
-    texts = [str(error)]
-    if error.__cause__ is not None:
-        texts.append(str(error.__cause__))
+    structured_class = _classify_error_values(_iter_structured_error_codes(error))
+    if structured_class != ERROR_CLASS_UNKNOWN:
+        return structured_class
 
-    for text in texts:
-        text_lower = text.lower()
-        text_compact = text_lower.replace(" ", "")
-        for pattern in INPUT_TOO_LARGE_PATTERNS:
-            if _pattern_matches(text_lower, text_compact, pattern):
-                return ERROR_CLASS_INPUT_TOO_LARGE
-
-    # Content safety before permanent so a moderation message containing "400"
-    # is not misclassified as a permanent parameter error.
-    for text in texts:
-        text_lower = text.lower()
-        text_compact = text_lower.replace(" ", "")
-        for pattern in CONTENT_SAFETY_PATTERNS:
-            if _pattern_matches(text_lower, text_compact, pattern):
-                return ERROR_CLASS_CONTENT_SAFETY
-
-    for text in texts:
-        text_lower = text.lower()
-        text_compact = text_lower.replace(" ", "")
-        for pattern in PERMANENT_API_ERROR_PATTERNS:
-            if _pattern_matches(text_lower, text_compact, pattern):
-                return ERROR_CLASS_PERMANENT
-
-    for text in texts:
-        text_lower = text.lower()
-        text_compact = text_lower.replace(" ", "")
-        for pattern in AUTH_API_ERROR_PATTERNS:
-            if _pattern_matches(text_lower, text_compact, pattern):
-                return ERROR_CLASS_AUTH
-
-    # Check quota_exceeded *before* transient so that "429 … AccountQuotaExceeded"
-    # is classified as quota_exceeded, not transient.
-    for text in texts:
-        text_lower = text.lower()
-        for pattern in QUOTA_EXCEEDED_PATTERNS:
-            if pattern in text_lower:
-                return ERROR_CLASS_QUOTA_EXCEEDED
-
-    for text in texts:
-        text_lower = text.lower()
-        text_compact = text_lower.replace(" ", "")
-        for pattern in TRANSIENT_API_ERROR_PATTERNS:
-            if _pattern_matches(text_lower, text_compact, pattern):
-                return ERROR_CLASS_TRANSIENT
-
-    return ERROR_CLASS_UNKNOWN
+    return _classify_error_values(str(exc) for exc in _iter_exception_chain(error))
 
 
 def is_retryable_api_error(error: Exception) -> bool:
@@ -339,9 +321,8 @@ def _structured_rate_limit_match(exc: BaseException) -> bool:
 def is_retryable_rate_limit_error(exc: BaseException) -> bool:
     """Return True for SDK/text-shaped LLM rate-limit errors.
 
-    This intentionally lives in a lightweight OpenViking utility module so both
-    VikingBot provider adapters and benchmark integrations can share the same
-    classifier without importing each other's heavier runtime dependencies.
+    This remains in a lightweight OpenViking utility module for benchmark
+    integrations that cannot import heavier runtime dependencies.
     """
     if _structured_rate_limit_match(exc):
         return True
@@ -456,11 +437,52 @@ async def retry_async(
             attempt += 1
 
 
+async def retry_async_iterator(
+    func: Callable[[], AsyncIterator[T]],
+    *,
+    max_retries: int,
+    base_delay: float = 0.5,
+    max_delay: float = 8.0,
+    jitter: bool = True,
+    is_retryable: Callable[[Exception], bool] = is_retryable_api_error,
+    logger=None,
+    operation_name: str = "operation",
+) -> AsyncIterator[T]:
+    """Retry an async stream only if it fails before emitting output."""
+    attempt = 0
+
+    while True:
+        emitted = False
+        try:
+            async for item in func():
+                emitted = True
+                yield item
+            return
+        except Exception as error:
+            if emitted or max_retries <= 0 or attempt >= max_retries or not is_retryable(error):
+                raise
+
+            delay = _compute_delay(
+                attempt,
+                base_delay=base_delay,
+                max_delay=max_delay,
+                jitter=jitter,
+            )
+            if logger:
+                logger.warning(
+                    f"{operation_name} failed before emitting output "
+                    f"(retry {attempt + 1}/{max_retries}): {error}; "
+                    f"retrying in {delay:.2f}s"
+                )
+            await asyncio.sleep(delay)
+            attempt += 1
+
+
 class PrimaryBackupSwitcher:
     """Thread-safe primary/backup switcher with automatic failback logic.
 
-    When an error of type ERROR_CLASS_PERMANENT or ERROR_CLASS_QUOTA_EXCEEDED occurs,
-    switches to backup immediately. Then, after either:
+    Credential errors and transient failures exhausted by the active provider
+    switch to backup. Then, after either:
     - 10 minutes have passed, OR
     - 200 requests have been made to backup
     it will attempt to failback to primary. If failback fails, it switches back
@@ -518,14 +540,14 @@ class PrimaryBackupSwitcher:
     def record_primary_failure(self, error: Exception) -> bool:
         """Record a primary failure. Returns True if should switch to backup.
 
-        Switches to backup immediately for ERROR_CLASS_PERMANENT,
-        ERROR_CLASS_AUTH or ERROR_CLASS_QUOTA_EXCEEDED.
+        Request-level and unknown errors fail fast. Credential-level errors and
+        exhausted transient failures switch to the backup.
         """
         error_class = classify_api_error(error)
         if error_class in (
-            ERROR_CLASS_PERMANENT,
             ERROR_CLASS_AUTH,
             ERROR_CLASS_QUOTA_EXCEEDED,
+            ERROR_CLASS_TRANSIENT,
         ):
             with self._lock:
                 if not self._using_backup:
@@ -553,8 +575,8 @@ class PrimaryBackupSwitcher:
 class OrderedCredentialSwitcher:
     """Thread-safe ordered N-credential switcher with hierarchical failback.
 
-    Supports ordered failover across multiple credentials. When a credential fails
-    with quota_exceeded or permanent error, it advances to the next credential.
+    Supports ordered failover across multiple credentials. Credential-level errors
+    and exhausted transient failures advance to the next credential.
     After failback thresholds are met, it attempts to move back to a higher-priority
     credential (one step at a time, not all the way back to index 0).
 
@@ -584,8 +606,9 @@ class OrderedCredentialSwitcher:
             - credential-level ``auth`` errors (401/403) advance to the next
               credential in multi-credential mode; the last (or single)
               credential fails fast.
-            - ``quota_exceeded`` (and ``transient`` once its retries are
-              exhausted) and ``unknown`` advance to the next credential.
+            - ``quota_exceeded`` and ``transient`` once its retries are
+              exhausted advance to the next credential.
+            - ``unknown`` fails fast because replay safety is not known.
         """
         if n < 1:
             raise ValueError("Number of credentials must be >= 1")
@@ -652,14 +675,14 @@ class OrderedCredentialSwitcher:
     def is_fail_fast(error_class: str) -> bool:
         """Whether an error is request-level and must not try other credentials.
 
-        Request-level errors (400 parameter error, input too large, content
-        safety) fail on every credential of the same model, so the caller should
-        re-raise immediately instead of cycling through credentials.
+        Request-level errors fail on every credential of the same model. Unknown
+        errors also fail fast because issuing the request again may duplicate work.
         """
         return error_class in (
             ERROR_CLASS_PERMANENT,
             ERROR_CLASS_INPUT_TOO_LARGE,
             ERROR_CLASS_CONTENT_SAFETY,
+            ERROR_CLASS_UNKNOWN,
         )
 
     def commit_success(self, idx: int) -> None:

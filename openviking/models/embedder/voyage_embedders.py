@@ -82,6 +82,7 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
         self.client = openai.OpenAI(
             api_key=self.api_key,
             base_url=self.api_base,
+            max_retries=0,
         )
         self._async_client_cache = LoopScopedAsyncClientCache()
 
@@ -98,6 +99,7 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
             lambda: openai.AsyncOpenAI(
                 api_key=self.api_key,
                 base_url=self.api_base,
+                max_retries=0,
             )
         )
 

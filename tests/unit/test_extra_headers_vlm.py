@@ -6,6 +6,8 @@ import asyncio
 import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from openviking.models.vlm.backends.litellm_vlm import (
     LiteLLMVLMProvider,
     detect_provider_by_model,
@@ -340,11 +342,16 @@ class TestOpenAIVLMClientRetries:
         assert call_kwargs["max_retries"] == 0
 
     @patch("volcenginesdkarkruntime.AsyncArk")
-    def test_volcengine_async_client_applies_timeout_and_disables_sdk_retries(
+    def test_volcengine_async_client_does_not_retry_permanent_provider_errors(
         self,
         mock_async_ark_class,
     ):
-        mock_async_ark_class.return_value = MagicMock()
+        error = RuntimeError("InvalidParameter")
+        error.status_code = 400
+        error.code = "InvalidParameter"
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(side_effect=error)
+        mock_async_ark_class.return_value = mock_client
 
         vlm = VolcEngineVLM(
             {
@@ -355,12 +362,14 @@ class TestOpenAIVLMClientRetries:
             }
         )
 
-        _ = vlm._build_async_client()
+        with pytest.raises(RuntimeError, match="InvalidParameter"):
+            asyncio.run(vlm.get_completion_async("hello"))
 
         mock_async_ark_class.assert_called_once()
         call_kwargs = mock_async_ark_class.call_args[1]
         assert call_kwargs["timeout"] == 12.0
         assert call_kwargs["max_retries"] == 0
+        mock_client.chat.completions.create.assert_awaited_once()
 
     @patch("openviking.models.vlm.backends.openai_vlm.openai.AzureOpenAI")
     def test_azure_sync_client_disables_sdk_retries(self, mock_azure_openai_class):
@@ -518,6 +527,7 @@ class TestVLMExtraRequestBody:
 
         # Ollama models also get a default num_ctx; the explicit think is kept.
         assert kwargs["extra_body"] == {"think": False, "num_ctx": 16384}
+        assert kwargs["max_retries"] == 0
 
     def test_ollama_defaults_num_ctx_and_think(self):
         """Ollama models get a larger context window and thinking disabled by default."""

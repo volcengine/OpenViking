@@ -75,6 +75,7 @@ class _FakeStreamingVLM:
     provider = "volcengine"
     model = "test-model"
     thinking = False
+    max_retries = 1
 
     def __init__(self, completions: _FakeStreamingCompletions):
         self._client = SimpleNamespace(
@@ -94,19 +95,10 @@ class _CaptureLogger:
 
 
 @pytest.mark.asyncio
-async def test_chat_retries_rate_limit_until_success(monkeypatch):
-    sleep_delays: list[float] = []
-
-    async def _sleep(delay: float):
-        sleep_delays.append(delay)
-
-    monkeypatch.setattr(vlm_adapter, "rate_limit_retry_delay", lambda attempt: attempt)
-    monkeypatch.setattr(vlm_adapter.asyncio, "sleep", _sleep)
-
+async def test_chat_leaves_retry_to_vlm_layer():
     fake_vlm = _FakeVLM(
         [
             RuntimeError("Error code: 429 - ModelAccountTpmRateLimitExceeded"),
-            RuntimeError("TooManyRequests: rate limit"),
         ],
         result="done",
     )
@@ -114,19 +106,13 @@ async def test_chat_retries_rate_limit_until_success(monkeypatch):
 
     response = await adapter.chat(messages=[{"role": "user", "content": "hello"}])
 
-    assert response.content == "done"
-    assert response.finish_reason == "stop"
-    assert fake_vlm.calls == 3
-    assert sleep_delays == [1, 2]
+    assert response.finish_reason == "error"
+    assert "ModelAccountTpmRateLimitExceeded" in response.content
+    assert fake_vlm.calls == 1
 
 
 @pytest.mark.asyncio
-async def test_chat_does_not_retry_errors_without_rate_limit_markers(monkeypatch):
-    async def _sleep(_delay: float):
-        raise AssertionError("non-retryable errors must not sleep/retry")
-
-    monkeypatch.setattr(vlm_adapter.asyncio, "sleep", _sleep)
-
+async def test_chat_does_not_retry_errors_without_rate_limit_markers():
     fake_vlm = _FakeVLM([RuntimeError("AuthenticationError Unauthorized")])
     adapter = VLMProviderAdapter(fake_vlm, "test-model", langfuse_client=_DisabledLangfuse())
 
@@ -217,8 +203,7 @@ async def test_chat_stream_retries_rate_limit_until_success(monkeypatch):
     async def _sleep(delay: float):
         sleep_delays.append(delay)
 
-    monkeypatch.setattr(vlm_adapter, "rate_limit_retry_delay", lambda attempt: attempt)
-    monkeypatch.setattr(vlm_adapter.asyncio, "sleep", _sleep)
+    monkeypatch.setattr("openviking.utils.model_retry.asyncio.sleep", _sleep)
 
     chunk = SimpleNamespace(
         usage=None,
@@ -247,7 +232,7 @@ async def test_chat_stream_retries_rate_limit_until_success(monkeypatch):
     ]
 
     assert completions.calls == 2
-    assert sleep_delays == [1]
+    assert len(sleep_delays) == 1
     assert [event.type for event in events] == ["content_delta", "response"]
     assert events[0].content == "streamed"
     assert events[1].response.content == "streamed"

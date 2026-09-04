@@ -302,15 +302,11 @@ class TestBuildConfig:
         assert "RETRIEVAL_DOCUMENT" in r
 
     @patch("openviking.models.embedder.gemini_embedders.genai.Client")
-    def test_client_constructed_with_retry_options(self, mock_client_class):
-        from openviking.models.embedder.gemini_embedders import (
-            _HTTP_RETRY_AVAILABLE,
-            GeminiDenseEmbedder,
-        )
+    def test_client_constructed_without_sdk_retry_options(self, mock_client_class):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
 
         GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key")
         mock_client_class.assert_called_once()
         call_kwargs = mock_client_class.call_args[1]
         assert call_kwargs.get("api_key") == "key"
-        if _HTTP_RETRY_AVAILABLE:
-            assert "http_options" in call_kwargs
+        assert "http_options" not in call_kwargs

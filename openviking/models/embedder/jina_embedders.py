@@ -121,6 +121,7 @@ class JinaDenseEmbedder(DenseEmbedderBase):
         self.client = openai.OpenAI(
             api_key=self.api_key,
             base_url=self.api_base,
+            max_retries=0,
         )
         self._async_client_cache = LoopScopedAsyncClientCache()
 
@@ -163,6 +164,7 @@ class JinaDenseEmbedder(DenseEmbedderBase):
             lambda: openai.AsyncOpenAI(
                 api_key=self.api_key,
                 base_url=self.api_base,
+                max_retries=0,
             )
         )
 

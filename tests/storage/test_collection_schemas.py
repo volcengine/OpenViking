@@ -4,7 +4,6 @@
 import hashlib
 import inspect
 import json
-import logging
 from types import SimpleNamespace
 
 import pytest
@@ -298,9 +297,7 @@ async def test_embedding_handler_skip_all_work_when_manager_is_closing(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_embedding_handler_open_breaker_logs_summary_instead_of_per_item_warning(
-    monkeypatch, caplog
-):
+async def test_embedding_handler_open_breaker_fails_without_reenqueue(monkeypatch):
     from openviking.utils.circuit_breaker import CircuitBreakerOpen
 
     class _QueueingVikingDB:
@@ -333,27 +330,18 @@ async def test_embedding_handler_open_breaker_logs_summary_instead_of_per_item_w
         lambda: (_ for _ in ()).throw(CircuitBreakerOpen("open")),
     )
 
-    import openviking.storage.collection_schemas as collection_schemas
+    result = await handler.on_dequeue(_build_queue_payload())
 
-    collection_schemas.logger.addHandler(caplog.handler)
-    collection_schemas.logger.setLevel(logging.WARNING)
-    try:
-        with caplog.at_level(logging.WARNING):
-            await handler.on_dequeue(_build_queue_payload())
-            await handler.on_dequeue(_build_queue_payload())
-    finally:
-        collection_schemas.logger.removeHandler(caplog.handler)
-
-    warnings = [record.message for record in caplog.records if record.levelno == logging.WARNING]
-    assert warnings.count("Embedding circuit breaker is open; re-enqueueing messages") == 1
-    assert status == {"success": 2, "requeue": 2, "error": 0}
+    assert result is None
+    assert handler._vikingdb.enqueued == []
+    assert status == {"success": 0, "requeue": 0, "error": 1}
 
 
 @pytest.mark.asyncio
 async def test_embedding_auth_error_fails_terminally_without_reenqueue(monkeypatch):
     """A credential (401/403) failure must fail terminally, not re-enqueue: an
     infinite re-enqueue holds the resource's tree lock and add-resource --wait
-    open, and must not trip the circuit breaker (which re-enqueues too). #2916."""
+    open. Request-specific auth failures must not trip the shared breaker. #2916."""
 
     class _QueueingVikingDB:
         is_closing = False

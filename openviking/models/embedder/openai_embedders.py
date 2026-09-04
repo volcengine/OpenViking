@@ -135,7 +135,10 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         self.extra_body = extra_body
         self._provider = provider.lower()
         self.provider = (configured_provider or provider).lower()
-        self._client_kwargs: Dict[str, Any] = {"api_key": self.api_key or "no-key"}
+        self._client_kwargs: Dict[str, Any] = {
+            "api_key": self.api_key or "no-key",
+            "max_retries": 0,
+        }
 
         # Allow missing api_key when api_base is set (e.g. local OpenAI-compatible servers)
         if not self.api_key and not self.api_base:

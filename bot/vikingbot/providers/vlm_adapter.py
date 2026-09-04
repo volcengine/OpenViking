@@ -5,7 +5,6 @@ LLMProvider interface, so that bot.agents.provider / bot.agents.model
 configuration semantics are consistent with openviking server's vlm section.
 """
 
-import asyncio
 import json
 import re
 import time
@@ -16,7 +15,7 @@ from typing import Any
 from loguru import logger
 
 from openviking.models.vlm.backends.volcengine_vlm import build_volcengine_request_headers
-from openviking.utils.model_retry import is_retryable_rate_limit_error, rate_limit_retry_delay
+from openviking.utils.model_retry import retry_async_iterator
 from openviking.utils.multimodal import redact_image_data_urls
 from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.providers.base import (
@@ -283,31 +282,15 @@ class VLMProviderAdapter(LLMProvider):
                         )
 
             # --- Call VLM backend ---
-            attempt = 1
             # An explicit empty list asks VLM backends for a structured response
             # without exposing tools, so per-response usage is preserved.
             response_tools = tools if tools is not None else []
-            while True:
-                try:
-                    result = await self._vlm.get_completion_async(
-                        messages=messages,
-                        thinking=getattr(self._vlm, "thinking", None),
-                        tools=response_tools,
-                        tool_choice="auto" if response_tools else None,
-                    )
-                    break
-                except Exception as e:
-                    if not is_retryable_rate_limit_error(e):
-                        raise
-                    delay = rate_limit_retry_delay(attempt)
-                    logger.warning(
-                        "VLM adapter chat rate limited; retrying attempt={} delay={:.1f}s error={}",
-                        attempt,
-                        delay,
-                        e,
-                    )
-                    await asyncio.sleep(delay)
-                    attempt += 1
+            result = await self._vlm.get_completion_async(
+                messages=messages,
+                thinking=getattr(self._vlm, "thinking", None),
+                tools=response_tools,
+                tool_choice="auto" if response_tools else None,
+            )
 
             llm_response = self._convert_response(result)
 
@@ -350,13 +333,15 @@ class VLMProviderAdapter(LLMProvider):
         try:
             stream_with_failover = getattr(self._vlm, "stream_with_failover", None)
             if callable(stream_with_failover):
-                async for event in self._chat_stream_failover_with_retry(
-                    stream_with_failover,
-                    messages=messages,
-                    tools=tools,
-                    model=model,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
+                async for event in stream_with_failover(
+                    lambda vlm: self._chat_stream_with_retry(
+                        vlm,
+                        messages=messages,
+                        tools=tools,
+                        model=model,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                    )
                 ):
                     yield event
                 return
@@ -425,47 +410,6 @@ class VLMProviderAdapter(LLMProvider):
             getattr(vlm, "get_async_client", None)
         )
 
-    async def _chat_stream_failover_with_retry(
-        self,
-        stream_with_failover: Any,
-        *,
-        messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]] | None,
-        model: str | None,
-        max_tokens: int | None,
-        temperature: float,
-    ) -> AsyncIterator[LLMStreamEvent]:
-        attempt = 1
-        while True:
-            emitted = False
-            try:
-                async for event in stream_with_failover(
-                    lambda vlm: self._chat_stream_backend(
-                        vlm,
-                        messages=messages,
-                        tools=tools,
-                        model=model,
-                        max_tokens=max_tokens,
-                        temperature=temperature,
-                    )
-                ):
-                    emitted = True
-                    yield event
-                return
-            except Exception as exc:
-                if emitted or not is_retryable_rate_limit_error(exc):
-                    raise
-                delay = rate_limit_retry_delay(attempt)
-                logger.warning(
-                    "VLM credential stream rate limited; retrying attempt={} "
-                    "delay={:.1f}s error={}",
-                    attempt,
-                    delay,
-                    exc,
-                )
-                await asyncio.sleep(delay)
-                attempt += 1
-
     async def _chat_stream_with_retry(
         self,
         vlm: Any,
@@ -475,33 +419,20 @@ class VLMProviderAdapter(LLMProvider):
         max_tokens: int | None,
         temperature: float,
     ) -> AsyncIterator[LLMStreamEvent]:
-        attempt = 1
-        while True:
-            emitted = False
-            try:
-                async for event in self._chat_stream_backend(
-                    vlm,
-                    messages=messages,
-                    tools=tools,
-                    model=model,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                ):
-                    emitted = True
-                    yield event
-                return
-            except Exception as exc:
-                if emitted or not is_retryable_rate_limit_error(exc):
-                    raise
-                delay = rate_limit_retry_delay(attempt)
-                logger.warning(
-                    "VLM adapter stream rate limited; retrying attempt={} delay={:.1f}s error={}",
-                    attempt,
-                    delay,
-                    exc,
-                )
-                await asyncio.sleep(delay)
-                attempt += 1
+        async for event in retry_async_iterator(
+            lambda: self._chat_stream_backend(
+                vlm,
+                messages=messages,
+                tools=tools,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            ),
+            max_retries=int(getattr(vlm, "max_retries", 0)),
+            logger=logger,
+            operation_name="VLM adapter stream",
+        ):
+            yield event
 
     async def _chat_stream_backend(
         self,

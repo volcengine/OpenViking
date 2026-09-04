@@ -6,8 +6,6 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
@@ -78,8 +76,7 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
         if not self.api_key:
             raise ValueError("api_key is required for MiniMax embedder")
 
-        # Initialize session with retry logic
-        self.session = self._create_session()
+        self.session = requests.Session()
         self._async_client_cache = LoopScopedAsyncClientCache()
 
         # Auto-detect dimension if not provided
@@ -89,20 +86,6 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
             except Exception as e:
                 logger.warning(f"Failed to detect MiniMax dimension: {e}. Defaulting to 1536.")
                 self._dimension = 1536
-
-    def _create_session(self) -> requests.Session:
-        """Create a requests session with retry logic"""
-        session = requests.Session()
-        retry_strategy = Retry(
-            total=self.max_retries,
-            backoff_factor=0.5,
-            status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["POST"],
-        )
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        session.mount("https://", adapter)
-        session.mount("http://", adapter)
-        return session
 
     def _detect_dimension(self) -> int:
         """Detect dimension by making an actual API call"""
@@ -200,8 +183,16 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
 
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform dense embedding on text"""
-        vectors = self._call_api([text], is_query=is_query)
-        result = EmbedResult(dense_vector=vectors[0])
+
+        def _call() -> EmbedResult:
+            vectors = self._call_api([text], is_query=is_query)
+            return EmbedResult(dense_vector=vectors[0])
+
+        result = self._run_with_retry(
+            _call,
+            logger=logger,
+            operation_name="MiniMax embedding",
+        )
         # Estimate token usage
         estimated_tokens = self._estimate_tokens(text)
         self.update_token_usage(

@@ -89,6 +89,7 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
         self._openai_client = openai.OpenAI(
             api_key=self.api_key,
             base_url=f"{self.api_base}/compatible-mode/v1",
+            max_retries=0,
         )
         # Multimodal mode: httpx
         self._httpx_client = httpx.Client(
@@ -208,6 +209,7 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
             lambda: openai.AsyncOpenAI(
                 api_key=self.api_key,
                 base_url=f"{self.api_base}/compatible-mode/v1",
+                max_retries=0,
             )
         )
 

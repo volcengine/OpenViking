@@ -411,8 +411,8 @@ def _annotate_vlm_error(exc: Exception, vlm_instance: "VLMBase") -> None:
 class FailoverVLM(VLMBase):
     """VLM wrapper that provides failover to a backup VLM instance.
 
-    When the primary VLM instance fails with permanent or quota errors,
-    this wrapper will automatically switch to using the backup VLM instance.
+    When the primary VLM instance has a credential error or exhausts retries for
+    a transient error, this wrapper switches to the backup VLM instance.
     After 10 minutes or 50 requests, it will attempt to failback to primary.
     """
 
@@ -762,9 +762,8 @@ class FailoverVLM(VLMBase):
 class MultiCredentialVLM(VLMBase):
     """VLM wrapper that provides failover across multiple ordered credentials.
 
-    When a credential fails with quota_exceeded or permanent errors, this wrapper
-    automatically advances to the next credential in the list. After failback thresholds
-    are met, it attempts to move back to a higher-priority credential.
+    Credential errors and exhausted transient failures advance to the next credential.
+    Request-level and unknown failures are returned without trying another credential.
 
     Credentials are tried in order (index 0 is highest priority).
     """
