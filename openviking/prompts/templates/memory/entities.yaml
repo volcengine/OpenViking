@@ -3,6 +3,10 @@ description: |
   Third-party entity memory: stable cards for real people, organizations, places,
   works, media, products, animals/pets, programs, activities, and concepts the
   user mentions. Store what the entity is and its durable relations.
+  Entity identity is the referenced real-world object, not its category or semantic
+  similarity. Merge only explicit aliases of the same object. Distinct people, pets,
+  works, artworks, products, possessions, places, events, and activities remain separate
+  even when they share a theme, owner, participants, appearance, or use.
 directory: "viking://user/{{ user_space }}/memories/entities"
 filename_template: "{{ category|lower }}/{{ name|lower }}.md"
 enabled: true
@@ -55,6 +59,8 @@ fields:
       generalize. Keep one-off facts only when they are concrete and likely useful
       for future who/what/when/where/how-long questions.
 
-      Keep it readable: usually 6-14 bullets total / about 1200 chars. When updating,
-      merge and deduplicate; preserve existing atomic facts unless contradicted.
+      Keep it readable: 6-14 bullets / about 1200 chars is a soft target. Never drop or
+      generalize a distinct answerable fact to meet it. When updating, deduplicate exact or
+      paraphrased facts about this same entity and preserve every other existing atomic fact
+      unless contradicted.
     merge_op: patch

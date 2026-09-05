@@ -82,6 +82,36 @@ def test_build_vlm_response_from_str_with_tools(vlm_type, config):
     assert response.usage == {}
 
 
+@pytest.mark.parametrize(
+    ("vlm_type", "config"),
+    [
+        (OpenAIVLM, {"provider": "openai", "model": "gpt-5.6-terra"}),
+        (LiteLLMVLMProvider, {"provider": "litellm", "model": "gpt-5.6-terra"}),
+        (VolcEngineVLM, {"provider": "volcengine", "model": "test-model"}),
+    ],
+    ids=["openai", "litellm", "volcengine"],
+)
+def test_text_request_drops_empty_assistant_but_preserves_tool_only_turn(vlm_type, config):
+    vlm = vlm_type(config)
+    tool_call = {
+        "id": "call-1",
+        "type": "function",
+        "function": {"name": "read", "arguments": "{}"},
+    }
+    messages = [
+        {"role": "user", "content": "start"},
+        {"role": "assistant", "content": None},
+        {"role": "assistant", "content": "   "},
+        {"role": "assistant", "content": None, "tool_calls": [tool_call]},
+        {"role": "tool", "tool_call_id": "call-1", "content": "ok"},
+    ]
+
+    kwargs = vlm._build_text_kwargs(messages=messages)
+
+    assert kwargs["messages"] == [messages[0], messages[3], messages[4]]
+    assert messages[1] == {"role": "assistant", "content": None}
+
+
 @pytest.mark.asyncio
 async def test_openai_async_completion_from_str_with_tools(monkeypatch):
     async def create(**_kwargs):

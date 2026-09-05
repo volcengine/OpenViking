@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 from openviking.telemetry import tracer
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
+from openviking.utils.message_format import format_messages, sanitize_openai_messages
 from openviking.utils.multimodal import redact_image_data_urls
 from openviking_cli.utils import get_logger
 
@@ -223,9 +224,13 @@ class OpenAIVLM(VLMBase):
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
         thinking: Optional[bool] = None,
+        max_tokens: Optional[int] = None,
     ) -> Dict[str, Any]:
         effective_thinking = self.thinking if thinking is None else thinking
-        kwargs_messages = messages or [{"role": "user", "content": prompt}]
+        effective_max_tokens = max_tokens if max_tokens is not None else self.max_tokens
+        kwargs_messages = sanitize_openai_messages(
+            messages or [{"role": "user", "content": prompt}]
+        )
         model = self.model or "gpt-4o-mini"
         is_reasoning = _is_reasoning_model(model)
         kwargs: Dict[str, Any] = {
@@ -237,8 +242,8 @@ class OpenAIVLM(VLMBase):
         else:
             kwargs["temperature"] = self.temperature
         self._apply_provider_specific_extra_body(kwargs, effective_thinking)
-        if self.max_tokens is not None:
-            kwargs["max_completion_tokens" if is_reasoning else "max_tokens"] = self.max_tokens
+        if effective_max_tokens is not None:
+            kwargs["max_completion_tokens" if is_reasoning else "max_tokens"] = effective_max_tokens
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
@@ -255,14 +260,14 @@ class OpenAIVLM(VLMBase):
     ) -> Dict[str, Any]:
         effective_thinking = self.thinking if thinking is None else thinking
         if messages:
-            kwargs_messages = messages
+            kwargs_messages = sanitize_openai_messages(messages)
         else:
             content = []
             if images:
                 content.extend(self._prepare_image(img) for img in images)
             if prompt:
                 content.append({"type": "text", "text": prompt})
-            kwargs_messages = [{"role": "user", "content": content}]
+            kwargs_messages = sanitize_openai_messages([{"role": "user", "content": content}])
 
         model = self.model or "gpt-4o-mini"
         is_reasoning = _is_reasoning_model(model)
@@ -321,7 +326,6 @@ class OpenAIVLM(VLMBase):
             operation_name="OpenAI VLM completion",
         )
 
-    @tracer("openai.vlm.call", ignore_result=True, ignore_args=["messages"])
     async def get_completion_async(
         self,
         prompt: str = "",
@@ -329,11 +333,14 @@ class OpenAIVLM(VLMBase):
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
+        max_tokens: Optional[int] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously"""
         effective_thinking = self.thinking if thinking is None else thinking
         client = self.get_async_client()
-        kwargs = self._build_text_kwargs(prompt, tools, tool_choice, messages, effective_thinking)
+        kwargs = self._build_text_kwargs(
+            prompt, tools, tool_choice, messages, effective_thinking, max_tokens=max_tokens
+        )
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
@@ -344,9 +351,10 @@ class OpenAIVLM(VLMBase):
                 return self._build_vlm_response(response, has_tools=True)
             return await self._extract_completion_content_async(response, elapsed)
 
-        # 用 tracer.info 打印请求
+        # 用 tracer.info 打印请求（人类可读格式）
         tracer.info(
-            f"messages={json.dumps(redact_image_data_urls(kwargs), ensure_ascii=False, indent=2)}"
+            "llm_input_messages="
+            + format_messages(redact_image_data_urls(kwargs.get("messages", [])))
         )
 
         return await retry_async(

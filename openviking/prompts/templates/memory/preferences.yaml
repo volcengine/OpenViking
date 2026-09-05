@@ -37,14 +37,20 @@ fields:
       {% if language == 'en' %}Use lowercase with underscores, max 3 words.{% else %}Keep the topic concise and natural in {{ language }}.{% endif %}
       Preference topic used to uniquely identify this preference memory.
       Should be a semantic topic description such as "Python code style", "Communication style", "Food preference", "Commute preference", etc.
-      Store unrelated preferences separately, but merge overlapping or synonymous topics into one stable topic.
+      This topic is an identity component together with user. Merge only true aliases for
+      the same owner's same behavioral choice dimension. Related dimensions may share words
+      but remain separate; for example, preferred movie genres and preferred games are not
+      one preference merely because both are entertainment.
     merge_op: immutable
 
   - name: content
     type: string
     description: |
       Preference content in Markdown format describing "what the user prefers/is accustomed to".
-      Write one concise bullet per distinct, reusable preference; omit duplicates, events, dates, plans, and supporting evidence.
+      Write one concise bullet per distinct, reusable preference; omit exact duplicates,
+      events, dates, and plans. Preserve the specific choice, list members, conditions,
+      exceptions, and user-stated reason or emotional meaning when they make the preference
+      answerable or distinguish it from nearby preferences.
       Example:
       - Prefers concise written updates with decisions and next actions.
       - Chooses lightweight tools when they cover the workflow.

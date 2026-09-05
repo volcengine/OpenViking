@@ -561,12 +561,15 @@ class VikingClient:
         limit: int = 10,
     ):
         """搜索资源"""
-        kwargs: Dict[str, Any] = {"limit": limit}
+        # The SDK find/search sync moved context_type/filter out of top-level
+        # find() kwargs into FindOptions. Adapt here so callers keep the stable
+        # VikingClient.find(context_type=..., filter=...) interface.
         options: Dict[str, Any] = {}
         if context_type is not None:
             options["context_type"] = context_type
         if filter is not None:
             options["filter"] = filter
+        kwargs: Dict[str, Any] = {"limit": limit}
         if options:
             kwargs["options"] = options
         if target_uri:

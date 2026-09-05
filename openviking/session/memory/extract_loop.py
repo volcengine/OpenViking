@@ -24,18 +24,16 @@ from openviking.session.memory.dataclass import (
     StoredLink,
     WikiLink,
 )
+from openviking.session.memory.extraction_output_protocol import (
+    ExtractionOutputContext,
+    ExtractionOutputProtocol,
+    create_extraction_output_protocol,
+)
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.merge_op import FieldType, MergeOp, PatchOp
 from openviking.session.memory.page_id_map import ResponsePageIdAllocator
 from openviking.session.memory.schema_model_generator import SchemaModelGenerator
-from openviking.session.memory.tools import (
-    MEMORY_TOOLS_REGISTRY,
-    add_tool_call_pair_to_messages,
-)
-from openviking.session.memory.utils import (
-    parse_json_with_stability,
-    pretty_print_messages,
-)
+from openviking.session.memory.tools import MEMORY_TOOLS_REGISTRY
 from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
 from openviking.telemetry import bind_telemetry_stage, tracer
@@ -43,6 +41,14 @@ from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
+
+# Memory extraction may rewrite an entire memory file in one response. Without an
+# explicit cap, providers fall back to a small server-side default (e.g. Ark's
+# 4096) and truncate the program mid-string, making the output unusable. This is
+# a functional floor for extraction, tuned for the primary Doubao models.
+# Models whose max output tokens is BELOW this value (e.g. gpt-4o-mini at 16384)
+# must set `vlm.max_tokens` in ov.conf to their own limit to override this default.
+_DEFAULT_EXTRACTION_MAX_OUTPUT_TOKENS = 32768
 
 
 @dataclass
@@ -122,6 +128,7 @@ class ExtractLoop:
         context_provider: Optional[Any] = None,  # ExtractContextProvider
         isolation_handler: MemoryIsolationHandler = None,
         thinking: bool = False,
+        max_output_tokens: Optional[int] = None,
     ):
         """
         Initialize the ExtractLoop.
@@ -134,6 +141,10 @@ class ExtractLoop:
             ctx: Request context
             context_provider: ExtractContextProvider - 必须提供（由 provider 加载 schema）
             thinking: Whether to explicitly enable model thinking for this extraction loop.
+            max_output_tokens: Per-call output cap for the extraction LLM. When None, the
+                configured vlm.max_tokens is used, falling back to a value large enough for
+                full memory rewrites so providers do not apply a small server-side default
+                (e.g. Ark's 4096) and truncate the program mid-string.
         """
         self.vlm = vlm
         self.viking_fs = viking_fs or get_viking_fs()
@@ -142,20 +153,30 @@ class ExtractLoop:
         self.ctx = ctx
         self.context_provider = context_provider
         self.thinking = bool(thinking)
+        self.max_output_tokens = max_output_tokens
+        # Resolved in run() via _resolve_effective_max_output_tokens(); default to
+        # the extraction floor so a direct _call_llm() before run() stays safe.
+        self._effective_max_output_tokens = (
+            max_output_tokens
+            if max_output_tokens is not None
+            else _DEFAULT_EXTRACTION_MAX_OUTPUT_TOKENS
+        )
         # Use provided isolation_handler or create one in run()
         self._isolation_handler = isolation_handler
         # Track format error retry (max 1 retry)
         self._format_retry_count = 0
         self._last_llm_failure_kind: Optional[str] = None
         self._last_llm_failure_content: str = ""
+        self._last_parse_error: Optional[str] = None
 
         # Schema 生成器（在 run() 中初始化）
         self.schema_model_generator = None
 
         # 预计算：避免每次迭代重复计算
         self._tool_schemas: Optional[List[Dict[str, Any]]] = None
-        self._expected_fields: Optional[List[str]] = None
         self._operations_model: Optional[Any] = None
+        self._output_protocol: Optional[ExtractionOutputProtocol] = None
+        self._output_context: Optional[ExtractionOutputContext] = None
 
         # Transaction handle for file locking
         self._transaction_handle = None
@@ -208,6 +229,8 @@ class ExtractLoop:
         config = get_openviking_config()
         self._link_enabled = config.memory.link_enabled if config.memory else False
 
+        self._resolve_effective_max_output_tokens(config)
+
         # 获取 ExtractContext（整个流程复用）
         self._extract_context = self.context_provider.get_extract_context()
         if self._extract_context is None:
@@ -219,55 +242,48 @@ class ExtractLoop:
         self._operations_model = self.schema_model_generator.create_structured_operations_model(
             role_scope
         )
-        # Keep the stability parser's allowlist aligned with the generated
-        # contract, including conditional fields such as delete_ids and links.
-        self._expected_fields = list(self._operations_model.model_fields)
 
-        json_schema = self._operations_model.model_json_schema()
+        output_format = getattr(config.memory, "extraction_output_format", "python")
+        self._output_protocol = create_extraction_output_protocol(output_format)
+        self._output_context = ExtractionOutputContext(
+            operations_model=self._operations_model,
+            schemas=tuple(schemas),
+            page_id_map=self._extract_context.page_id_map,
+            read_file_contents=self.context_provider.read_file_contents,
+            link_enabled=self._link_enabled,
+            role_scope=role_scope,
+            available_tools=tuple(allowed_tools),
+        )
+        tracer.set("memory.extraction.output_format", output_format)
 
         # Build initial messages from provider
-        schema_str = json.dumps(json_schema, ensure_ascii=False)
         messages = []
-        page_id_rules = """
-## Page ID Rules
-- Every memory item you create or edit MUST include "page_id".
-- For existing items, use the page_id shown in read/search results.
-- For new items, assign a unique page_id >= 100.
-- When editing an existing item, reuse its existing page_id.
-- To delete an existing item, add an entry to `delete_ids` using its page_id.
-- `delete_ids` deletes the whole item: use it only if every substantive fact is in scope; otherwise MUST use DELETE blocks for affected lines, preserving the rest and not inferring scope from the file name/topic.
-- For canonical merges, set `replacement_page_id` to the surviving page that should inherit the deleted page's existing links/backlinks; for pure deletes, set `replacement_page_id` to null.
-"""
-        link_rules = ""
-        if self._link_enabled:
-            link_rules = """
-## Link Rules
-- Link fields `f` and `t` must reference these page_id values.
-- Only create links when the relationship is meaningful and clear from the conversation. Do NOT force links between unrelated items.
-"""
+        reference_rules = self._output_protocol.render_reference_rules(self._output_context)
+        provider_instruction = self._output_protocol.normalize_provider_instruction(
+            self.context_provider.instruction()
+        )
+        output_contract = self._output_protocol.render_contract(self._output_context)
         messages.append(
             {
                 "role": "system",
                 "content": f"""
-{self.context_provider.instruction()}
-{page_id_rules}
-{link_rules}
+{provider_instruction}
+{reference_rules}
 ## Read Format Rules
 - The read tool accepts `uri`, optional `offset` (0-indexed), and optional `limit`.
 - Read content is returned in Claude Code format: each visible line is prefixed with `line_number<TAB>`.
 - When you copy text from read results into SEARCH/REPLACE or DELETE operations, copy the exact text after the line-number prefix. Never include the line-number prefix itself in `search`, `replace`, or `delete`.
-## Output Format
-The final output of the model must strictly follow the JSON Schema format shown below:
-```json
-{schema_str}
-```
+{output_contract}
         """,
             }
         )
 
         # Pre-fetch context via provider
         tool_call_messages = await self.context_provider.prefetch()
-        messages.extend(tool_call_messages)
+        prefetch_messages = self._output_protocol.render_prefetch_messages(
+            tool_call_messages, self._output_context
+        )
+        messages.extend(prefetch_messages)
 
         for uri in self.context_provider.read_file_contents:
             self._extract_context.page_id_map.get_page_id(uri)
@@ -288,9 +304,9 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     }
                 )
 
-            # Call LLM with tools - model decides: tool calls OR final operations
-            pretty_print_messages(messages)
-
+            # Call LLM with tools - model decides: tool calls OR final operations.
+            # The VLM backend traces the (human-readable) input and output, so we do
+            # not re-dump them here (avoids duplicate, oversized span events).
             tool_calls, operations = await self._call_llm(messages)
 
             if tool_calls:
@@ -349,6 +365,9 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     tracer.info(f"Found unread existing files: {refetch_uris}, refetching...")
                     # Add refetch results to messages and continue loop
                     await self._add_refetch_results_to_messages(messages, refetch_uris)
+                    # A valid program started a new generation phase with richer context.
+                    # Give that regenerated response its own format-repair opportunity.
+                    self._format_retry_count = 0
                     # Allow one extra iteration for refetch
                     if iteration >= max_iterations:
                         max_iterations += 1
@@ -367,32 +386,42 @@ The final output of the model must strictly follow the JSON Schema format shown 
                         }
                     )
                     tracer.info(
-                        f"Extended max_iterations to {max_iterations} for retry patch repair",
-                        console=True,
+                        f"Extended max_iterations to {max_iterations} for retry patch repair"
                     )
                     continue
                 break
             # If no tool calls either, continue to next iteration (don't break!)
             failure_kind = self._last_llm_failure_kind or "unknown"
             failure_preview = _preview_text(self._last_llm_failure_content)
-            tracer.error(
-                "LLM returned neither tool calls nor operations "
-                f"(iteration {iteration}/{max_iterations}) "
-                f"failure_kind={failure_kind} response_preview={failure_preview!r}"
-            )
-            # Add format error message if parse failed (max 1 retry)
+            parse_error = self._last_parse_error
+            # Add format error message if parse failed (max 1 retry). This may raise
+            # max_iterations, granting one more attempt after this failure.
             if self._format_retry_count == 0:
                 self._format_retry_count += 1
                 max_iterations += 1
-                retry_reason = (
-                    "refusal_text" if failure_kind == "refusal_text" else "format_retry"
-                )
+                retry_reason = "refusal_text" if failure_kind == "refusal_text" else "format_retry"
                 tracer.info(f"Extended max_iterations to {max_iterations} for {retry_reason}")
                 self._add_format_error_message(messages)
 
-            # If it's the last iteration, treat unparseable response as
-            # "no memory operations" rather than failing hard.
-            if iteration >= max_iterations:
+            # A failure is only terminal when no retry attempt remains after it.
+            retry_remaining = iteration < max_iterations
+            failure_message = (
+                "Failed to parse memory operations "
+                f"(iteration {iteration}/{max_iterations}) "
+                f"failure_kind={failure_kind} error={parse_error} "
+                f"response_preview={failure_preview!r}"
+            )
+            if retry_remaining:
+                # Recoverable: another attempt will run. Keep it in the trace only,
+                # not the console/log stream.
+                tracer.info(failure_message)
+            else:
+                # ERROR: retries exhausted; this extraction will yield no operations.
+                tracer.error(failure_message)
+
+            # If no retry remains, treat unparseable response as "no memory
+            # operations" rather than failing hard.
+            if not retry_remaining:
                 if pending_resolution_repair is not None:
                     final_operations, raw_links = pending_resolution_repair
                     pending_resolution_repair = None
@@ -402,23 +431,22 @@ The final output of the model must strictly follow the JSON Schema format shown 
                         console=True,
                     )
                     break
-                tracer.info(
-                    "Memory extraction final response could not be parsed as JSON operations "
-                    f"after {max_iterations} iterations — treating as no operations "
-                    f"failure_kind={failure_kind} response_preview={failure_preview!r}"
-                )
                 final_operations = ResolvedOperations(
                     upsert_operations=[],
                     delete_file_contents=[],
                     errors=[
-                        "Final response could not be parsed as JSON operations "
+                        "Final response could not be parsed as operations "
                         f"after {max_iterations} iterations "
                         f"(failure_kind={failure_kind})"
                     ],
                 )
                 break
 
-            self._disable_tools_for_iteration = True
+            self._disable_tools_for_iteration = (
+                not self._output_protocol.keep_tools_enabled_after_parse_error(
+                    self._last_parse_error
+                )
+            )
             continue
 
         if final_operations is None:
@@ -433,6 +461,24 @@ The final output of the model must strictly follow the JSON Schema format shown 
         await self.finalize_operations(final_operations, raw_links)
 
         return final_operations, tools_used
+
+    def _resolve_effective_max_output_tokens(self, config: Any = None) -> None:
+        """Resolve the extraction output cap.
+
+        Priority: explicit per-loop value > configured vlm.max_tokens >
+        _DEFAULT_EXTRACTION_MAX_OUTPUT_TOKENS. The default is a functional floor
+        that suits the primary Doubao models; a model with a lower max output
+        (e.g. gpt-4o-mini) must set vlm.max_tokens in ov.conf to override it.
+        """
+        if config is None:
+            config = get_openviking_config()
+        if self.max_output_tokens is not None:
+            self._effective_max_output_tokens = self.max_output_tokens
+            return
+        configured = getattr(getattr(config, "vlm", None), "max_tokens", None)
+        self._effective_max_output_tokens = (
+            configured if configured is not None else _DEFAULT_EXTRACTION_MAX_OUTPUT_TOKENS
+        )
 
     def _retryable_resolution_issues(self, operations: ResolvedOperations) -> List[Dict[str, Any]]:
         issues: List[Dict[str, Any]] = []
@@ -459,21 +505,8 @@ The final output of the model must strictly follow the JSON Schema format shown 
             issues.append(issue)
         return issues
 
-    @staticmethod
-    def _build_resolution_repair_instruction(issues: List[Dict[str, Any]]) -> str:
-        details = json.dumps(issues, ensure_ascii=False, indent=2)
-        return (
-            "Some event operations could not resolve a safe write target. "
-            "Return only corrected event operations for the failed items below; leave every "
-            "other memory-type field, delete_ids, and links empty. The server has preserved "
-            "all successful operations from the previous response. "
-            "Reuse exactly the page_id shown for each failed event. "
-            "For event ranges, use valid in-bounds message indexes and include the user-role "
-            "message that establishes the event so its owner can be resolved. "
-            "Do not target a disallowed or ambiguous peer. Output ONLY one JSON object matching "
-            "the required schema.\n\n"
-            f"Resolution issues:\n{details}"
-        )
+    def _build_resolution_repair_instruction(self, issues: List[Dict[str, Any]]) -> str:
+        return self._output_protocol.render_resolution_repair(issues)
 
     @staticmethod
     def _is_event_schema(schema: Any) -> bool:
@@ -1047,12 +1080,15 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 }
             )
 
-            add_tool_call_pair_to_messages(
-                messages,
-                call_id=tool_call.id,
-                tool_name=tool_call.name,
-                params=tool_call.arguments,
-                result=result,
+            messages.extend(
+                self._output_protocol.render_tool_result_messages(
+                    self._output_context,
+                    call_id=tool_call.id,
+                    tool_name=tool_call.name,
+                    params=tool_call.arguments,
+                    result=result,
+                    source="tool call",
+                )
             )
 
         return has_unknown_tool
@@ -1082,10 +1118,11 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 tools=tools,
                 tool_choice=tool_choice,
                 thinking=self.thinking,
+                max_tokens=self._effective_max_output_tokens,
             )
-        tracer.info(f"llm_response={response}")
         self._last_llm_failure_kind = None
         self._last_llm_failure_content = ""
+        self._last_parse_error = None
         # print(f'response={response}')
         # Log cache hit info
         if hasattr(response, "usage") and response.usage:
@@ -1138,12 +1175,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 # print(f'LLM response content: {content}')
                 logger.debug(f"[assistant]\n{content}")
 
-                # Use cached operations_model and expected_fields
-                operations, error = parse_json_with_stability(
-                    content=content,
-                    model_class=self._operations_model,
-                    expected_fields=self._expected_fields,
-                )
+                operations, error = self._output_protocol.parse(content, self._output_context)
 
                 if error is not None:
                     failure_kind = (
@@ -1151,7 +1183,10 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     )
                     self._last_llm_failure_kind = failure_kind
                     self._last_llm_failure_content = content
-                    tracer.error(
+                    self._last_parse_error = error
+                    tracer.set("memory.extraction.parse_error", error)
+                    # Diagnostic only; the run loop emits the WARNING/ERROR decision.
+                    logger.debug(
                         "Failed to parse memory operations "
                         f"failure_kind={failure_kind} error={error} "
                         f"response_preview={_preview_text(content)!r}"
@@ -1160,12 +1195,19 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
                 return (None, operations)
             except Exception as e:
-                logger.exception(f"Error parsing operations: {e}")
+                self._last_parse_error = str(e)
+                tracer.set("memory.extraction.parse_error", self._last_parse_error)
+                logger.debug(f"Error parsing operations: {e}")
 
         # Case 3: No tool calls and no parsable operations
         self._last_llm_failure_kind = "empty_response" if not content else "parse_error"
         self._last_llm_failure_content = content or ""
-        tracer.error(
+        if not content:
+            empty_error = self._output_protocol.describe_empty_response()
+            if empty_error:
+                self._last_parse_error = empty_error
+                tracer.set("memory.extraction.parse_error", empty_error)
+        logger.debug(
             "No tool calls or operations parsed "
             f"failure_kind={self._last_llm_failure_kind} "
             f"response_preview={_preview_text(self._last_llm_failure_content)!r}"
@@ -1197,33 +1239,13 @@ The final output of the model must strictly follow the JSON Schema format shown 
         messages.append(
             {
                 "role": "user",
-                "content": (
-                    "Your previous output could not be parsed as valid JSON. "
-                    "Please output ONLY a valid JSON object matching the required schema. "
-                    "Do not include any explanation, markdown formatting, or text outside the JSON."
-                ),
+                "content": self._output_protocol.render_format_retry(self._last_parse_error),
             }
         )
 
-    def _build_final_operations_skeleton(self) -> Dict[str, List[Any]]:
-        """Build an empty operations object matching the expected flat schema fields."""
-        fields = ["delete_ids", *(self._expected_fields or [])]
-        return {field: [] for field in dict.fromkeys(fields)}
-
     def _build_final_operations_instruction(self) -> str:
         """Build schema-aware final-iteration instructions for the LLM."""
-        skeleton = json.dumps(
-            self._build_final_operations_skeleton(),
-            ensure_ascii=False,
-            indent=2,
-        )
-        return (
-            "You have reached the maximum number of tool call iterations. "
-            "Do not call any more tools. Return your final result now as ONLY a valid JSON object "
-            "matching the required schema. Do not include explanations or markdown. "
-            "If there are no memory changes, return this exact empty-shape JSON with all fields present:\n"
-            f"{skeleton}"
-        )
+        return self._output_protocol.render_final_instruction(self._output_context)
 
     async def _validate_patch_operations(
         self,
@@ -1308,19 +1330,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
         return errors
 
     def _build_patch_repair_instruction(self, patch_errors: List[Dict[str, Any]]) -> str:
-        details = json.dumps(patch_errors, ensure_ascii=False, indent=2)
-        return (
-            "The SEARCH/REPLACE or DELETE patch could not be applied to the target memory file. "
-            "The SEARCH or DELETE text must be copied exactly from the read result of the file bound to that operation's page_id. "
-            "The matched text must occur exactly once in the target file. "
-            "If it occurs more than once, include enough contiguous surrounding context to make it unique. "
-            "Do not use match text from the conversation or from another page. "
-            "If you copy from numbered read output, exclude the `line_number<TAB>` prefix from SEARCH, REPLACE, and DELETE text. "
-            "If found_in_other_uris is non-empty, diagnose this as a possible page_id mismatch and choose the correct target page_id or rewrite the patch for the current page_id; do not silently move the patch. "
-            "Regenerate the complete operations JSON, including previous successful operations and fixed failed operations. "
-            "Output ONLY the complete JSON object matching the required schema.\n\n"
-            f"Failed patch operations:\n{details}"
-        )
+        return self._output_protocol.render_patch_repair(patch_errors)
 
     async def _add_refetch_results_to_messages(
         self,
@@ -1331,12 +1341,15 @@ The final output of the model must strictly follow the JSON Schema format shown 
         # Calculate call_id based on existing tool messages
         call_id_seq = len([m for m in messages if m.get("role") == "tool"]) + 1000
         for uri, parsed in refetch_uris.items():
-            add_tool_call_pair_to_messages(
-                messages=messages,
-                call_id=call_id_seq,
-                tool_name="read",
-                params={"uri": uri},
-                result=parsed,
+            messages.extend(
+                self._output_protocol.render_tool_result_messages(
+                    self._output_context,
+                    call_id=call_id_seq,
+                    tool_name="read",
+                    params={"uri": uri},
+                    result=parsed,
+                    source="automatic read",
+                )
             )
             call_id_seq += 1
 
