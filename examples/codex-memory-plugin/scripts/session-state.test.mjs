@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -7,7 +7,7 @@ import test from "node:test";
 const STATE_DIR = await mkdtemp(join(tmpdir(), "ov-session-state-"));
 process.env.OPENVIKING_CODEX_STATE_DIR = STATE_DIR;
 
-const { clearEnded, markEnded, readEndedAt, withSessionLock } = await import("./session-state.mjs");
+const { claimStaleLock, clearEnded, markEnded, readEndedAt, withSessionLock } = await import("./session-state.mjs");
 
 async function exists(path) {
   try { await stat(path); return true; } catch { return false; }
@@ -50,6 +50,81 @@ test("concurrent stale takeovers leave exactly one holder", async () => {
   assert.equal(maxInside, 1, "a stale takeover must never hand the lock to two takers");
   assert.equal(outcomes.filter((o) => o.value === true).length, 3);
   assert.equal(await exists(dir), false, "the last holder releases the lock");
+});
+
+test("a delayed stale claimant cannot overwrite the next owner generation", async () => {
+  const dir = join(STATE_DIR, "delayed-generation.lock");
+  const ownerFile = join(dir, "owner");
+  await mkdir(dir, { recursive: true });
+  await writeFile(ownerFile, "old-owner");
+  const old = new Date(Date.now() - 600_000);
+  await utimes(ownerFile, old, old);
+
+  // The delayed claimant took both of these observations before another
+  // claimant won, dropped the generation claim, and installed a live owner.
+  const seen = await readFile(ownerFile, "utf-8");
+  const observed = await stat(ownerFile);
+  await writeFile(ownerFile, "live-owner");
+
+  const claimed = await claimStaleLock(
+    dir,
+    ownerFile,
+    "delayed-owner",
+    seen,
+    300_000,
+    observed,
+  );
+
+  assert.equal(claimed, false);
+  assert.equal(await readFile(ownerFile, "utf-8"), "live-owner");
+  assert.deepEqual(await readdir(dir), ["owner"], "the losing claim is cleaned up");
+  await rm(dir, { recursive: true, force: true });
+});
+
+test("a heartbeat that refreshed the observed owner prevents stale takeover", async () => {
+  const dir = join(STATE_DIR, "refreshed-generation.lock");
+  const ownerFile = join(dir, "owner");
+  await mkdir(dir, { recursive: true });
+  await writeFile(ownerFile, "same-owner");
+  const old = new Date(Date.now() - 600_000);
+  await utimes(ownerFile, old, old);
+  const observed = await stat(ownerFile);
+
+  const now = new Date();
+  await utimes(ownerFile, now, now);
+  const claimed = await claimStaleLock(
+    dir,
+    ownerFile,
+    "stale-claimant",
+    "same-owner",
+    300_000,
+    observed,
+  );
+
+  assert.equal(claimed, false);
+  assert.equal(await readFile(ownerFile, "utf-8"), "same-owner");
+  await rm(dir, { recursive: true, force: true });
+});
+
+test("a release race after claiming returns false instead of throwing", async () => {
+  const dir = join(STATE_DIR, "released-during-claim.lock");
+  await mkdir(dir, { recursive: true });
+  const old = new Date(Date.now() - 600_000);
+  await utimes(dir, old, old);
+  const observed = await stat(dir);
+
+  const claimed = await claimStaleLock(
+    dir,
+    join(dir, "released", "owner"),
+    "new-owner",
+    null,
+    300_000,
+    observed,
+  );
+
+  assert.equal(claimed, false);
+  assert.deepEqual(await readdir(dir), [], "the failed claim is cleaned up");
+  await rm(dir, { recursive: true, force: true });
 });
 
 test("a claim left behind by a dead taker does not wedge the lock", async () => {
