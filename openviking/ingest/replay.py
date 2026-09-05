@@ -18,20 +18,27 @@ from the confirmed cursor). The cursor only advances on a confirmed append, and
 
 from __future__ import annotations
 
+import asyncio
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 import openviking as ov
 from openviking.ingest.cursor_store import CursorStore
 from openviking.ingest.models import Cursor, NormalizedMessage, SessionRef
 from openviking.ingest.normalize import to_add_message_requests
-from openviking_cli.exceptions import NotFoundError
+from openviking_cli.exceptions import NotFoundError, UnavailableError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
 _BATCH = 100  # server-side cap for batch_add_messages
 _SID_ALLOWED = re.compile(r"[^a-zA-Z0-9_.@-]+")
+
+# Wait before each retry of a commit that failed with UnavailableError (a
+# transient path-lock conflict, e.g. Windows ERROR_LOCK_VIOLATION surfacing as
+# "Storage backend unavailable: lock error"), so one flaky lock does not cost a
+# backfilled session its memory extraction (#4494).
+_COMMIT_TRANSIENT_RETRY_DELAYS: tuple = (5.0, 20.0, 60.0)
 
 
 def _sanitize_id(value: str) -> str:
@@ -112,11 +119,17 @@ class SessionReplayer:
         *,
         session_id_prefix: str = "import",
         memory_policy: Optional[Dict[str, Any]] = None,
+        commit_retry_delays: Optional[Sequence[float]] = None,
     ):
         self.client = client
         self.store = store
         self.prefix = session_id_prefix
         self.memory_policy = memory_policy or None
+        self._commit_retry_delays = (
+            tuple(commit_retry_delays)
+            if commit_retry_delays is not None
+            else _COMMIT_TRANSIENT_RETRY_DELAYS
+        )
 
     def ov_session_id(self, harness: str, native_session_id: str) -> str:
         return "__".join(
@@ -178,6 +191,31 @@ class SessionReplayer:
         self.store.confirm_append(harness, ref.native_session_id, new_cursor, len(payloads))
         return len(payloads)
 
+    async def _commit_with_retry(self, sid: str, keep_recent_count: int = 0) -> Dict[str, Any]:
+        """Commit, retrying only transient storage unavailability.
+
+        Retries are scoped to ``UnavailableError`` — the class the server maps
+        transient path-lock conflicts to — so deterministic failures keep their
+        current semantics.
+        """
+        last: Optional[UnavailableError] = None
+        for attempt, delay in enumerate((0.0,) + self._commit_retry_delays):
+            if attempt:
+                logger.warning(
+                    "[ingest] storage unavailable while committing %s (attempt %d/%d); retrying in %.1fs",
+                    sid,
+                    attempt,
+                    len(self._commit_retry_delays),
+                    delay,
+                )
+                await asyncio.sleep(delay)
+            try:
+                return await self.client.commit(sid, keep_recent_count=keep_recent_count)
+            except UnavailableError as exc:
+                last = exc
+        assert last is not None
+        raise last
+
     async def commit_if_needed(
         self, harness: str, ref: SessionRef, keep_recent_count: int = 0
     ) -> bool:
@@ -192,7 +230,7 @@ class SessionReplayer:
             # Nothing live to archive (already committed elsewhere); clear the stale flag.
             self.store.mark_committed(harness, ref.native_session_id)
             return False
-        await self.client.commit(sid, keep_recent_count=keep_recent_count)
+        await self._commit_with_retry(sid, keep_recent_count=keep_recent_count)
         self.store.mark_committed(harness, ref.native_session_id)
         return True
 
@@ -203,7 +241,7 @@ class SessionReplayer:
         pending = await self.client.pending_tokens(sid)
         if pending < threshold:
             return False
-        await self.client.commit(sid, keep_recent_count=keep_recent_count)
+        await self._commit_with_retry(sid, keep_recent_count=keep_recent_count)
         self.store.mark_committed(harness, ref.native_session_id)
         return True
 

@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Replay driver: SDK-client chunking/ensure, batch append, commit, and crash reconcile."""
 
+import pytest
+
 from openviking.ingest.cursor_store import CursorStore
 from openviking.ingest.models import BYTE_OFFSET, Cursor, NormalizedMessage, SessionRef
 from openviking.ingest.replay import ConversationReplayClient, SessionReplayer
-from openviking_cli.exceptions import NotFoundError
+from openviking_cli.exceptions import NotFoundError, UnavailableError
 
 
 class _FakeSDK:
@@ -195,3 +197,88 @@ async def test_commit_if_needed_commits_when_needs_commit_and_pending(tmp_path):
     assert await replayer.commit_if_needed("claude_code", _ref()) is True
     assert replayer.client.committed == ["import__claude_code__s1"]
     assert store.get("claude_code", "s1").needs_commit is False
+
+
+class _FlakyCommitReplay(_FakeReplay):
+    """Fails commit with UnavailableError `failures` times before succeeding."""
+
+    def __init__(self, pending=500, failures=0, permanent_error=None):
+        super().__init__(pending=pending)
+        self.failures = failures
+        self.permanent_error = permanent_error
+        self.commit_calls = 0
+
+    async def commit(self, sid, keep_recent_count=0):
+        self.commit_calls += 1
+        if self.permanent_error is not None:
+            raise self.permanent_error
+        if self.commit_calls <= self.failures:
+            raise UnavailableError("Storage backend", "internal error: lock error")
+        await super().commit(sid, keep_recent_count)
+
+
+def _replayer_with_pending(tmp_path, client):
+    store = CursorStore(tmp_path)
+    store.set_pending(
+        "claude_code",
+        "s1",
+        "import__claude_code__s1",
+        Cursor(BYTE_OFFSET, {"offset": 0}),
+        Cursor(BYTE_OFFSET, {"offset": 10}),
+        1,
+        0,
+    )
+    store.confirm_append("claude_code", "s1", Cursor(BYTE_OFFSET, {"offset": 10}), 1)
+    return SessionReplayer(client, store, commit_retry_delays=(0.0, 0.0, 0.0)), store
+
+
+async def test_commit_if_needed_retries_transient_unavailability(tmp_path):
+    client = _FlakyCommitReplay(failures=2)
+    replayer, store = _replayer_with_pending(tmp_path, client)
+    assert await replayer.commit_if_needed("claude_code", _ref()) is True
+    assert client.commit_calls == 3  # 2 transient failures + success
+    assert store.get("claude_code", "s1").needs_commit is False
+
+
+async def test_commit_if_needed_raises_after_exhausted_retries(tmp_path):
+    client = _FlakyCommitReplay(failures=99)
+    replayer, store = _replayer_with_pending(tmp_path, client)
+    with pytest.raises(UnavailableError):
+        await replayer.commit_if_needed("claude_code", _ref())
+    assert client.commit_calls == 4  # initial + 3 retries
+    assert store.get("claude_code", "s1").needs_commit is True  # still owed a commit
+
+
+async def test_commit_if_needed_does_not_retry_non_transient_errors(tmp_path):
+    client = _FlakyCommitReplay(permanent_error=ValueError("boom"))
+    replayer, store = _replayer_with_pending(tmp_path, client)
+    with pytest.raises(ValueError, match="boom"):
+        await replayer.commit_if_needed("claude_code", _ref())
+    assert client.commit_calls == 1
+    assert store.get("claude_code", "s1").needs_commit is True
+
+
+async def test_threshold_commit_retries_transient_unavailability(tmp_path):
+    """maybe_commit_on_threshold routes through the same retry (#4494)."""
+    client = _FlakyCommitReplay(pending=500, failures=1)
+    store = CursorStore(tmp_path)
+    replayer = SessionReplayer(client, store, commit_retry_delays=(0.0,))
+
+    committed = await replayer.maybe_commit_on_threshold(
+        "claude_code", _ref(), threshold=100
+    )
+    assert committed is True
+    assert client.commit_calls == 2  # 1 transient failure + success
+    assert client.committed == ["import__claude_code__s1"]
+
+
+async def test_threshold_commit_no_retry_below_threshold(tmp_path):
+    client = _FlakyCommitReplay(pending=50, failures=99)
+    store = CursorStore(tmp_path)
+    replayer = SessionReplayer(client, store, commit_retry_delays=(0.0,))
+
+    committed = await replayer.maybe_commit_on_threshold(
+        "claude_code", _ref(), threshold=100
+    )
+    assert committed is False
+    assert client.commit_calls == 0
