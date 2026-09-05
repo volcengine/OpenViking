@@ -322,6 +322,27 @@ async def test_non_recursive_memory_samples_files_and_reads_child_abstracts(monk
     assert coverage["total_children"] == 2
 
 
+def test_non_aggregation_rejects_recursive_execution():
+    processor = _FakeProcessor()
+    ctx = RequestContext(
+        user=UserIdentifier("acc1", "user1"),
+        role=Role.USER,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="aggregate_directory=False requires recursive=False",
+    ):
+        SemanticDagExecutor(
+            processor=processor,
+            context_type="resource",
+            max_concurrent_llm=2,
+            ctx=ctx,
+            recursive=True,
+            aggregate_directory=False,
+        )
+
+
 @pytest.mark.asyncio
 async def test_deferred_aggregation_processes_only_changed_files(monkeypatch):
     root_uri = "viking://resources/wide"

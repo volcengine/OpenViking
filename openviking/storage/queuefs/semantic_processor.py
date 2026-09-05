@@ -345,6 +345,12 @@ class SemanticProcessor(DequeueHandlerBase):
 
             assert data is not None
             msg = SemanticMsg.from_dict(data)
+            if not msg.aggregate_directory and msg.recursive:
+                logger.info(
+                    "Normalizing legacy file-only semantic message to non-recursive: uri=%s",
+                    msg.uri,
+                )
+                msg.recursive = False
             if VikingURI(msg.uri).parent is None:
                 logger.warning("Skipping semantic generation for root URI: %s", msg.uri)
                 if msg.telemetry_id and msg.id:
@@ -367,6 +373,7 @@ class SemanticProcessor(DequeueHandlerBase):
                         msg.coalesce_version,
                     )
                     msg.aggregate_directory = False
+                    msg.recursive = False
                     msg.changes = live_file_changes
                     msg.coalesce_key = ""
                     msg.coalesce_version = 0

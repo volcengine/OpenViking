@@ -180,6 +180,8 @@ class SemanticDagExecutor:
         aggregate_directory: bool = True,
         copy_source_uri: str = "",
     ):
+        if not aggregate_directory and recursive:
+            raise ValueError("aggregate_directory=False requires recursive=False")
         self._processor = processor
         self._context_type = context_type
         self._ctx = ctx

@@ -150,7 +150,7 @@ async def test_stale_content_write_keeps_file_work_without_directory_aggregation
     msg = SemanticMsg(
         uri="viking://resources/wiki",
         context_type="resource",
-        recursive=False,
+        recursive=True,
         coalesce_key="resource|wiki",
         coalesce_version=1,
         changes={"modified": [changed], "deleted": ["viking://resources/wiki/old.md"]},
@@ -160,10 +160,49 @@ async def test_stale_content_write_keeps_file_work_without_directory_aggregation
     await processor.on_dequeue(msg.to_dict())
 
     assert _FakeDagExecutor.calls[0]["aggregate_directory"] is False
+    assert _FakeDagExecutor.calls[0]["recursive"] is False
     assert _FakeDagExecutor.calls[0]["changes"] == {"modified": [changed]}
     assert _FakeDagExecutor.calls[0]["coalesce_key"] == ""
     assert _FakeDagExecutor.runs == ["viking://resources/wiki"]
     processor._enqueue_parent_refresh.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_file_only_message_disables_recursive_execution_without_requeue(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: _FakeVikingFS(),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticDagExecutor",
+        _FakeDagExecutor,
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticLockScope.resolve",
+        AsyncMock(return_value=SimpleNamespace(lock=None, close=AsyncMock())),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.is_semantic_msg_stale",
+        lambda msg: False,
+    )
+
+    _FakeDagExecutor.calls = []
+    _FakeDagExecutor.runs = []
+    processor = SemanticProcessor()
+    processor._requeue_semantic_msg_after_error = AsyncMock()
+    msg = SemanticMsg(
+        uri="viking://resources/wiki",
+        context_type="resource",
+        aggregate_directory=False,
+        recursive=True,
+    )
+
+    await processor.on_dequeue(msg.to_dict())
+
+    assert _FakeDagExecutor.calls[0]["aggregate_directory"] is False
+    assert _FakeDagExecutor.calls[0]["recursive"] is False
+    assert _FakeDagExecutor.runs == [msg.uri]
+    processor._requeue_semantic_msg_after_error.assert_not_awaited()
 
 
 @pytest.mark.asyncio
