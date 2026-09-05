@@ -180,6 +180,8 @@ class SemanticDagExecutor:
         aggregate_directory: bool = True,
         copy_source_uri: str = "",
     ):
+        if not aggregate_directory and recursive:
+            raise ValueError("aggregate_directory=False requires recursive=False")
         self._processor = processor
         self._context_type = context_type
         self._ctx = ctx
@@ -418,23 +420,21 @@ class SemanticDagExecutor:
             # Recursive/initial work still maintains every file. Incremental
             # parent aggregation prepares only sampled inputs plus files that
             # changed and therefore need their own vector maintenance.
-            required_file_paths = (
-                set(file_paths)
-                if self._recursive
-                else (
-                    set(file_paths) & self._changed_paths
-                    if not self._aggregate_directory
-                    else (
-                        sampled_file_paths | (set(file_paths) & self._changed_paths)
-                        if self._incremental_update
-                        else sampled_file_paths
-                    )
-                )
-            )
-            if self._recursive:
-                pending = len(children_dirs) + len(required_file_paths)
+            if not self._aggregate_directory:
+                required_file_paths = set(file_paths) & self._changed_paths
+                required_children_dirs: set[str] = set()
+            elif self._recursive:
+                required_file_paths = set(file_paths)
+                required_children_dirs = set(children_dirs)
             else:
-                pending = len(required_file_paths)
+                required_file_paths = (
+                    sampled_file_paths | (set(file_paths) & self._changed_paths)
+                    if self._incremental_update
+                    else sampled_file_paths
+                )
+                required_children_dirs = set()
+
+            pending = len(required_file_paths) + len(required_children_dirs)
 
             node = DirNode(
                 uri=dir_uri,
@@ -461,10 +461,9 @@ class SemanticDagExecutor:
                     continue
                 self._schedule_file(dir_uri, file_path)
 
-            if children_dirs:
-                if self._recursive:
-                    for child_uri in children_dirs:
-                        self._schedule_dir(child_uri, dir_uri)
+            for child_uri in children_dirs:
+                if child_uri in required_children_dirs:
+                    self._schedule_dir(child_uri, dir_uri)
             return False
         except Exception as e:
             logger.error(f"Failed to dispatch directory {dir_uri}: {e}", exc_info=True)
