@@ -317,3 +317,91 @@ async def test_directory_mv_reuses_parent_tree_for_failed_copy_cleanup(monkeypat
             "owned": True,
         },
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("competing_write", ["default", "direct", "description"])
+async def test_default_mkdir_preserves_concurrent_abstract(monkeypatch, competing_write):
+    """Defaults are created once and cannot overwrite a concurrent explicit write."""
+    import asyncio
+
+    from openviking.service.fs_service import FSService
+
+    uri = "viking://resources/shared"
+    abstract_uri = uri + "/.abstract.md"
+    lock = asyncio.Lock()
+    storage = {}
+    writes = []
+
+    class ConcurrentAGFS:
+        async def pathlock_acquire_exact(self, path):
+            await lock.acquire()
+            return {"lease_ref": "held"}
+
+        async def pathlock_release(self, lease):
+            lock.release()
+
+        async def write(self, path, data, fs_ctx=None, auto_pathlock=True):
+            owned = not (fs_ctx and fs_ctx.get("lease_ref") == "held")
+            if owned:
+                await lock.acquire()
+            try:
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+                storage[path] = data
+                writes.append(data)
+            finally:
+                if owned:
+                    lock.release()
+
+    fs = VikingFS(agfs=_FakeAGFS())
+    fs._async_agfs = ConcurrentAGFS()
+    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
+    monkeypatch.setattr(fs, "_ensure_parent_dirs", AsyncMock())
+    monkeypatch.setattr(fs, "_uri_to_path", lambda value, **kw: value)
+    monkeypatch.setattr(fs, "mkdir", AsyncMock())
+
+    async def exists(value, ctx=None):
+        present = value in storage
+        await asyncio.sleep(0)
+        return present
+
+    monkeypatch.setattr(fs, "exists", exists)
+    vectorize = AsyncMock()
+    monkeypatch.setattr("openviking.service.fs_service.vectorize_directory_meta", vectorize)
+    service = FSService(viking_fs=fs)
+    ctx = _default_ctx()
+    if competing_write == "direct":
+        other = fs.write_file(abstract_uri, "custom", ctx=ctx)
+    else:
+        other = service.mkdir(
+            uri, ctx, description="custom" if competing_write == "description" else None
+        )
+    await asyncio.gather(other, service.mkdir(uri, ctx))
+    await service.mkdir(uri, ctx)  # A later default also preserves the stored abstract.
+
+    assert len(writes) == 1
+    assert vectorize.await_count == (0 if competing_write == "direct" else 1)
+    if competing_write != "default":
+        assert b"custom" in storage[abstract_uri]
+    assert not lock.locked()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["exists", "write_file"])
+async def test_create_if_absent_releases_lease_on_failure(monkeypatch, failure):
+    fs = VikingFS(agfs=_FakeAGFS())
+    backend = _AsyncAppendAGFS()
+    fs._async_agfs = backend
+    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
+    monkeypatch.setattr(fs, "_ensure_parent_dirs", AsyncMock())
+    monkeypatch.setattr(fs, "exists", AsyncMock(return_value=False))
+    monkeypatch.setattr(fs, "write_file", AsyncMock())
+    monkeypatch.setattr(fs, failure, AsyncMock(side_effect=OSError("backend unavailable")))
+
+    with pytest.raises(OSError, match="backend unavailable"):
+        await fs.write_file_if_absent("viking://resources/note.md", "default", _default_ctx())
+
+    assert backend.events[-1] == ("release", {"lease_ref": "lease-1"})
+    if failure == "exists":
+        fs.write_file.assert_not_awaited()

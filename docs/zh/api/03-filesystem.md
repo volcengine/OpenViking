@@ -494,7 +494,7 @@ openviking attrs set-tags viking://resources/docs --tags team=search --mode appe
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | uri | str | 是 | - | 新目录的 Viking URI |
-| description | str | 否 | `null` | 目录初始说明。未传入时使用目录名作为默认 L0；传入后使用该说明。两种情况都会写入 `.abstract.md` 并进入 L0 向量化队列。 |
+| description | str | 否 | `null` | 目录初始说明。未传入时使用目录名作为默认 L0；传入后使用该说明。默认创建在存储路径锁内保留已有的 `.abstract.md`，仅在新建文件时进入 L0 向量化队列。显式传入说明仍会替换摘要并触发向量化。 |
 
 
 **Python HTTP SDK**

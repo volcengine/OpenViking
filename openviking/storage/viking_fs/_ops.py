@@ -6,7 +6,7 @@ import asyncio
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
@@ -67,6 +67,10 @@ class TransferRollbackError(RuntimeError):
         super().__init__(message)
         self.phase = phase
         self.residual_uri = residual_uri
+
+
+if TYPE_CHECKING:
+    from openviking.storage.viking_fs import VikingFS
 
 
 class _OpsMixin:
@@ -1556,6 +1560,26 @@ class _OpsMixin:
             fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
             auto_pathlock=auto_pathlock,
         )
+
+    async def write_file_if_absent(
+        self,
+        uri: str,
+        content: Union[str, bytes],
+        ctx: Optional[RequestContext] = None,
+    ) -> bool:
+        """Create a file under an exact pathlock; return False if it already exists."""
+        fs = cast("VikingFS", self)
+        await fs._ensure_access(uri, ctx, action=AclAction.WRITE)
+        path = fs._uri_to_path(uri, ctx=ctx)
+        await fs._ensure_parent_dirs(path, ctx=ctx)
+        lease = await fs._async_agfs.pathlock_acquire_exact(path)
+        try:
+            if await fs.exists(uri, ctx=ctx):
+                return False
+            await fs.write_file(uri, content, ctx=ctx, lease_ref=lease)
+            return True
+        finally:
+            await fs._async_agfs.pathlock_release(lease)
 
     async def read_file(
         self,

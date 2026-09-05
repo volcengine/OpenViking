@@ -283,32 +283,32 @@ class FSService:
         await viking_fs.mkdir(uri, ctx=ctx)
 
         abstract = self._normalize_directory_description(description)
+        create_default = not abstract
         if not abstract:
-            if await viking_fs.exists(abstract_uri, ctx=ctx):
-                return
             abstract = f"# {uri_leaf_name(directory_uri)}"
 
-        await viking_fs.write_file(
-            abstract_uri,
-            render_abstract_overview(
-                ContextLevel.ABSTRACT,
-                directory_uri,
-                abstract,
-                {
-                    "generated_by": {
-                        "component": "FSService",
-                        "trigger": "mkdir",
-                    },
-                    "freshness": {
-                        "total_entries": 0,
-                        "sampled_entries": 0,
-                        "unsampled_entries": 0,
-                        "pending_child_changes": 0,
-                    },
+        content = render_abstract_overview(
+            ContextLevel.ABSTRACT,
+            directory_uri,
+            abstract,
+            {
+                "generated_by": {
+                    "component": "FSService",
+                    "trigger": "mkdir",
                 },
-            ),
-            ctx=ctx,
+                "freshness": {
+                    "total_entries": 0,
+                    "sampled_entries": 0,
+                    "unsampled_entries": 0,
+                    "pending_child_changes": 0,
+                },
+            },
         )
+        if create_default:
+            if not await viking_fs.write_file_if_absent(abstract_uri, content, ctx=ctx):
+                return
+        else:
+            await viking_fs.write_file(abstract_uri, content, ctx=ctx)
         await vectorize_directory_meta(
             uri=directory_uri,
             abstract=abstract,
