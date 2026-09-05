@@ -36,6 +36,8 @@
                 "endpoint": "localhost:4317",
                 "service_name": "openviking-server",
                 "headers": {},
+                "capture_content": false,
+                "content_max_length": 4096,
             },
             "logs": {
                 "enabled": false,

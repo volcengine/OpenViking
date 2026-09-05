@@ -4,6 +4,7 @@
 
 import base64
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -34,6 +35,16 @@ _DASHSCOPE_HOSTS = {
 
 
 _REASONING_MODEL_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+_GEN_AI_PROVIDER_NAMES = {
+    "azure": "azure.ai.openai",
+    "openai": "openai",
+}
+
+
+def _get_field(value: Any, name: str) -> Any:
+    if isinstance(value, dict):
+        return value.get(name)
+    return getattr(value, name, None)
 
 
 def _is_reasoning_model(model: Optional[str]) -> bool:
@@ -156,7 +167,6 @@ class OpenAIVLM(VLMBase):
         duration_seconds: float = 0.0,
     ):
         if hasattr(response, "usage") and response.usage:
-            tracer.info(f"response.usage={response.usage}")
             prompt_tokens = response.usage.prompt_tokens
             completion_tokens = response.usage.completion_tokens
             prompt_tokens_details = getattr(response.usage, "prompt_tokens_details", None)
@@ -174,7 +184,79 @@ class OpenAIVLM(VLMBase):
                 prompt_cached_tokens=prompt_cached_tokens,
                 completion_reasoning_tokens=completion_reasoning_tokens,
             )
+        self._record_inference_event(response)
         return
+
+    def _record_inference_event(self, response: Any) -> None:
+        """Record safe metadata for a successful OpenAI-compatible response."""
+        try:
+            provider = str(self.provider or "unknown")
+            attributes: Dict[str, Any] = {
+                "gen_ai.operation.name": "chat",
+                "gen_ai.provider.name": _GEN_AI_PROVIDER_NAMES.get(provider.lower(), provider),
+                "gen_ai.request.model": str(self.model or "gpt-4o-mini"),
+            }
+
+            response_id = _get_field(response, "id")
+            if response_id:
+                attributes["gen_ai.response.id"] = str(response_id)
+            response_model = _get_field(response, "model")
+            if response_model:
+                attributes["gen_ai.response.model"] = str(response_model)
+
+            finish_reasons = []
+            for choice in _get_field(response, "choices") or []:
+                finish_reason = _get_field(choice, "finish_reason")
+                if finish_reason:
+                    finish_reasons.append(str(finish_reason))
+            if finish_reasons:
+                attributes["gen_ai.response.finish_reasons"] = finish_reasons
+
+            usage = _get_field(response, "usage")
+            prompt_details = _get_field(usage, "prompt_tokens_details")
+            completion_details = _get_field(usage, "completion_tokens_details")
+
+            def add_int(key: str, value: Any) -> None:
+                if value is None or isinstance(value, bool):
+                    return
+                try:
+                    attributes[key] = int(value)
+                except (TypeError, ValueError, OverflowError):
+                    return
+
+            add_int("gen_ai.usage.input_tokens", _get_field(usage, "prompt_tokens"))
+            add_int("gen_ai.usage.output_tokens", _get_field(usage, "completion_tokens"))
+            cache_creation_tokens = _get_field(usage, "cache_creation_input_tokens")
+            if cache_creation_tokens is None:
+                cache_creation_tokens = _get_field(prompt_details, "cache_write_tokens")
+            add_int(
+                "gen_ai.usage.cache_creation.input_tokens",
+                cache_creation_tokens,
+            )
+            cache_read_tokens = _get_field(usage, "cache_read_input_tokens")
+            if cache_read_tokens is None:
+                cache_read_tokens = _get_field(prompt_details, "cached_tokens")
+            add_int(
+                "gen_ai.usage.cache_read.input_tokens",
+                cache_read_tokens,
+            )
+            reasoning_tokens = _get_field(usage, "reasoning_tokens")
+            if reasoning_tokens is None:
+                reasoning_tokens = _get_field(completion_details, "reasoning_tokens")
+            add_int(
+                "gen_ai.usage.reasoning.output_tokens",
+                reasoning_tokens,
+            )
+            tracer.add_event("gen_ai.client.inference.operation.details", attributes)
+        except Exception as e:
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "vlm inference event emit failed provider=%s model_name=%s err=%s: %s",
+                    self.provider,
+                    self.model,
+                    type(e).__name__,
+                    e,
+                )
 
     def _parse_tool_calls(self, message) -> List[ToolCall]:
         """Parse tool calls from OpenAI response message."""
