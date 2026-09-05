@@ -2,7 +2,7 @@
 
 OpenViking ACL shares directories or files from the shared resource scope with users or groups inside one account. ACL never changes the account boundary: every grant is limited to the current account.
 
-ACL uses a collaborative-document inheritance model. A directory grant continuously applies to its descendants, while child directories and files can add direct grants. A child ACL does not replace grants inherited from ancestors.
+ACL uses a collaborative-document inheritance model. A directory grant applies to descendants by default. Child directories and files can add direct grants or establish a restricted boundary that ignores inherited permissions.
 
 ## Supported URIs
 
@@ -39,11 +39,13 @@ Each higher level includes the lower levels. A `manage` grant therefore includes
 
 ## Inheritance
 
-A node's effective ACL is the union of every ancestor's direct ACL and the node's own direct ACL:
+A normal node combines direct and inherited grants. A restricted node uses only direct grants:
 
 ```text
-effective(node) = UNION(direct_acl(each ancestor), direct_acl(node))
+effective(node) = direct(node) + (restricted(node) ? empty : inherited(node))
 ```
+
+`inherited(node)` always stores the parent's current effective permissions. It continues to refresh while the node is restricted, and disabling restricted mode applies the latest inherited value immediately. Descendants inherit the current node's effective permissions, so they cannot bypass an intermediate restricted boundary.
 
 For example:
 
@@ -59,7 +61,7 @@ The effective permissions on `report.md` are:
 - Members of `engineering`: `write`
 - Carol: `read`
 
-Removing the group's direct ACL from `A/B` does not remove entries from `A` or `report.md`. Descendants only lose the permissions contributed by that entry.
+If `A/B` becomes restricted, Bob's grant on `A` no longer applies to `A/B` or its descendants, but the stored inherited value is not deleted. Disabling restricted mode immediately restores Bob's inherited access.
 
 ## Default Behavior and `acl_enabled`
 
@@ -77,13 +79,13 @@ remains public. Disabling the setting also stops enforcing existing ACLs.
 descendants only inherit it. Re-embedding or replacing an existing context record
 does not change its direct ACL.
 
-When the node or any ancestor has a direct ACL, the node enters the ACL-controlled domain:
+When the node or any ancestor has a direct ACL, or the path contains a restricted node, the node enters the ACL-controlled domain:
 
 ```text
 acl_enabled = true
 ```
 
-`acl_enabled` is derived by the system and cannot be set by an API caller. It returns to `false` automatically after the last applicable direct ACL is removed.
+`acl_enabled` is derived by the system and cannot be set by an API caller. It returns to `false` only after the last applicable direct ACL and restricted boundary are removed.
 
 ## File Operations
 
@@ -106,7 +108,7 @@ capability.
 
 An ACL grant on a directory is inherited by every descendant. `list`, `tree`, and other batch results still check every returned node because an ACL-free directory may be visible under legacy URI rules while one of its descendants has entered the ACL-controlled domain through its own ACL.
 
-Within the shared scope, a moved node keeps its direct ACL and recalculates inherited permissions from its new ancestors. A private resource moved into the shared scope carries no ACL and inherits the destination directory; a shared resource moved back to a private area has its ACL cleared.
+Within the shared scope, a moved node keeps its direct ACL and restricted state, then recalculates inherited permissions from its new parent. A private resource moved into the shared scope carries no ACL and inherits the destination directory; a shared resource moved back to a private area has its ACL cleared.
 
 Recursive tag updates, directory deletion, and directory moves validate the complete affected subtree first. The operation stops if any node lacks the required capability or the subtree cannot be scanned completely.
 
@@ -118,13 +120,14 @@ ACL data exists only in the context collection. Each context record stores direc
 
 ```text
 acl_enabled
+acl_restricted
 acl_direct_grants
 acl_inherited_grants
 ```
 
-`acl_direct_grants` is the ACL assigned to the current node. `acl_inherited_grants` is the union of all ancestor direct ACLs. Each principal stores only its highest level as `{mask}:{principal}`: `1` means `read`, `3` means `write`, and `7` means `manage`. For example, `3:group:dev` gives `group:dev` `write` and therefore also `read`. Effective permission is the union of the two fields; there is no separate ACL collection.
+`acl_direct_grants` is the ACL assigned to the current node. `acl_inherited_grants` stores the parent's current effective ACL. `acl_restricted` controls whether inherited grants contribute to the current node's effective permissions. Each principal stores only its highest level as `{mask}:{principal}`: `1` means `read`, `3` means `write`, and `7` means `manage`. There is no separate ACL collection.
 
-The request principals are `user:{ctx.user_id}`, `user:*`, and one `group:{group_id}` for each ID in `ctx.group_ids`. For reads, `find/search` matches the `1`, `3`, and `7` tokens for each principal against both native `list<string>` grant fields within the `viking://resources` scope; private resources remain isolated by URI owner. Legacy records without ACL fields are treated as `acl_enabled=false`, so they do not require a full data backfill.
+The request principals are `user:{ctx.user_id}`, `user:*`, and one `group:{group_id}` for each ID in `ctx.group_ids`. `find/search` always matches direct grants and matches inherited grants only when `acl_restricted=false`. Private resources remain isolated by URI owner. Legacy records without ACL fields are treated as `acl_enabled=false` and `acl_restricted=false`, so they do not require a full data backfill.
 
 A retrieval target URI is only a search scope; the caller does not need to read the target node itself. A user can discover a deeply shared file even when intermediate directories are not readable.
 
@@ -158,6 +161,12 @@ ov acl revoke viking://resources/project-a --principal user:bob
 ```
 
 If an ancestor still grants Bob access, that inherited permission remains effective.
+
+Use only direct grants on the current node while preserving and refreshing inherited grants:
+
+```bash
+ov acl set viking://resources/project-a --restricted true
+```
 
 ## Related Documentation
 

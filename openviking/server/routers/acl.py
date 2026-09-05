@@ -1,7 +1,7 @@
 """ACL endpoints."""
 
 from fastapi import APIRouter, Body, Depends, Query
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
@@ -25,7 +25,14 @@ class AclEntryRequest(_AclRequest):
 
 class SetAclRequest(_AclRequest):
     uri: str
-    entries: list[AclEntryRequest]
+    entries: list[AclEntryRequest] | None = None
+    restricted: bool | None = None
+
+    @model_validator(mode="after")
+    def require_acl_update(self) -> "SetAclRequest":
+        if self.entries is None and self.restricted is None:
+            raise ValueError("entries or restricted must be provided")
+        return self
 
 
 class GrantAclRequest(_AclRequest):
@@ -57,7 +64,12 @@ async def set_acl(
     uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
     result = await get_service().fs.set_acl(
         uri,
-        [entry.model_dump() for entry in request.entries],
+        (
+            [entry.model_dump() for entry in request.entries]
+            if request.entries is not None
+            else None
+        ),
+        restricted=request.restricted,
         ctx=_ctx,
     )
     return Response(status="ok", result=result)

@@ -441,12 +441,20 @@ impl HttpClient {
             .await
     }
 
-    pub async fn acl_set(&self, uri: &str, entries: Vec<Value>) -> Result<Value> {
-        self.put(
-            "/api/v1/acl",
-            &serde_json::json!({"uri": uri, "entries": entries}),
-        )
-        .await
+    pub async fn acl_set(
+        &self,
+        uri: &str,
+        entries: Vec<Value>,
+        restricted: Option<bool>,
+    ) -> Result<Value> {
+        let mut body = serde_json::json!({"uri": uri});
+        if !entries.is_empty() {
+            body["entries"] = serde_json::Value::Array(entries);
+        }
+        if let Some(restricted) = restricted {
+            body["restricted"] = serde_json::Value::Bool(restricted);
+        }
+        self.put("/api/v1/acl", &body).await
     }
 
     pub async fn acl_grant(&self, uri: &str, principal: &str, level: &str) -> Result<Value> {

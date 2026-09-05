@@ -1072,9 +1072,15 @@ class FSService:
         return await self._ensure_initialized().get_acl(uri, ctx=ctx)
 
     async def set_acl(
-        self, uri: str, entries: List[Dict[str, str]], ctx: RequestContext
+        self,
+        uri: str,
+        entries: Optional[List[Dict[str, str]]],
+        ctx: RequestContext,
+        restricted: Optional[bool] = None,
     ) -> Dict[str, Any]:
-        return await self._ensure_initialized().set_acl(uri, entries, ctx=ctx)
+        return await self._ensure_initialized().set_acl(
+            uri, entries, ctx=ctx, restricted=restricted
+        )
 
     async def grant_acl(
         self, uri: str, principal: str, level: str, ctx: RequestContext

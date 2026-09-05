@@ -21,9 +21,15 @@ pub async fn set(
     client: &HttpClient,
     uri: &str,
     raw_entries: Vec<String>,
+    restricted: Option<bool>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
+    if raw_entries.is_empty() && restricted.is_none() {
+        return Err(Error::Client(
+            "Provide at least one --entry or --restricted true|false.".to_string(),
+        ));
+    }
     let mut entries = Vec::new();
     for raw in raw_entries {
         let Some((principal, level)) = raw.split_once('=') else {
@@ -33,7 +39,11 @@ pub async fn set(
         };
         entries.push(json!({"principal": principal, "level": level}));
     }
-    show(client.acl_set(uri, entries).await?, output_format, compact)
+    show(
+        client.acl_set(uri, entries, restricted).await?,
+        output_format,
+        compact,
+    )
 }
 
 pub async fn grant(

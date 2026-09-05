@@ -67,6 +67,7 @@ async def test_sdk_add_resource(http_client):
     )
     acl = await service.fs.get_acl(result["root_uri"], ctx=creator)
     assert acl["acl_enabled"] is False
+    assert acl["acl_restricted"] is False
     assert acl["direct_entries"] == []
 
 

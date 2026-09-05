@@ -161,6 +161,25 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl():
             "acl_inherited_grants": ["3:user:*"],
         },
         {
+            "id": "restricted-inherited-shared",
+            "uri": "viking://resources/restricted-inherited.md",
+            "account_id": "acct",
+            "context_type": "resource",
+            "acl_enabled": True,
+            "acl_restricted": True,
+            "acl_inherited_grants": ["3:user:*"],
+        },
+        {
+            "id": "restricted-direct-shared",
+            "uri": "viking://resources/restricted-direct.md",
+            "account_id": "acct",
+            "context_type": "resource",
+            "acl_enabled": True,
+            "acl_restricted": True,
+            "acl_direct_grants": ["1:user:alice"],
+            "acl_inherited_grants": ["7:user:bob"],
+        },
+        {
             "id": "denied-shared",
             "uri": "viking://resources/denied.md",
             "account_id": "acct",
@@ -230,6 +249,7 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl():
         "legacy-shared",
         "direct-shared",
         "inherited-shared",
+        "restricted-direct-shared",
     ]
     assert cross_user_only == []
     assert [record["id"] for record in internal] == [
@@ -238,6 +258,8 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl():
         "legacy-shared",
         "direct-shared",
         "inherited-shared",
+        "restricted-inherited-shared",
+        "restricted-direct-shared",
         "denied-shared",
     ]
 
@@ -252,6 +274,8 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl():
         "legacy-shared",
         "direct-shared",
         "inherited-shared",
+        "restricted-inherited-shared",
+        "restricted-direct-shared",
         "denied-shared",
     ]
 

@@ -732,6 +732,8 @@ def test_context_collection_excludes_parent_uri():
 
     assert "parent_uri" not in field_names
     assert "parent_uri" not in schema["ScalarIndex"]
+    assert "acl_restricted" in field_names
+    assert "acl_restricted" in schema["ScalarIndex"]
 
 
 def test_context_collection_signature_has_no_include_parent_uri():

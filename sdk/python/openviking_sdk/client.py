@@ -1306,11 +1306,22 @@ class AsyncHTTPClient:
         return self._handle_response_data(response).get("result", {})
 
     async def acl_set(
-        self, uri: str, entries: List[Dict[str, str]]
+        self,
+        uri: str,
+        entries: Optional[List[Dict[str, str]]] = None,
+        *,
+        restricted: Optional[bool] = None,
     ) -> Dict[str, Any]:
+        if entries is None and restricted is None:
+            raise ValueError("Either entries or restricted must be provided")
+        payload: Dict[str, Any] = {"uri": VikingURI.normalize(uri)}
+        if entries is not None:
+            payload["entries"] = entries
+        if restricted is not None:
+            payload["restricted"] = restricted
         response = await self._http.put(
             "/api/v1/acl",
-            json={"uri": VikingURI.normalize(uri), "entries": entries},
+            json=payload,
         )
         return self._handle_response_data(response).get("result", {})
 
@@ -2512,8 +2523,16 @@ class SyncHTTPClient:
     def acl_get(self, uri: str) -> Dict[str, Any]:
         return run_async(self._async_client.acl_get(uri))
 
-    def acl_set(self, uri: str, entries: List[Dict[str, str]]) -> Dict[str, Any]:
-        return run_async(self._async_client.acl_set(uri, entries))
+    def acl_set(
+        self,
+        uri: str,
+        entries: Optional[List[Dict[str, str]]] = None,
+        *,
+        restricted: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._async_client.acl_set(uri, entries, restricted=restricted)
+        )
 
     def acl_grant(self, uri: str, principal: str, level: str) -> Dict[str, Any]:
         return run_async(self._async_client.acl_grant(uri, principal, level))

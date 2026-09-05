@@ -1825,8 +1825,20 @@ pub async fn handle_acl(action: crate::AclCommands, ctx: CliContext) -> Result<(
         crate::AclCommands::Get { uri } => {
             commands::acl::get(&client, &uri, ctx.output_format, ctx.compact).await
         }
-        crate::AclCommands::Set { uri, entries } => {
-            commands::acl::set(&client, &uri, entries, ctx.output_format, ctx.compact).await
+        crate::AclCommands::Set {
+            uri,
+            entries,
+            restricted,
+        } => {
+            commands::acl::set(
+                &client,
+                &uri,
+                entries,
+                restricted,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
         }
         crate::AclCommands::Grant {
             uri,

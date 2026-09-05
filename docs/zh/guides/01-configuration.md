@@ -1445,7 +1445,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 
 ##### ACL schema
 
-ACL 只维护在 context collection。除 `acl_enabled: bool` 外，需要以下 `list<string>` 标量索引字段：
+ACL 只维护在 context collection。需要 `acl_enabled: bool`、`acl_restricted: bool`，以及以下 `list<string>` 标量索引字段：
 
 ```text
 acl_direct_grants
@@ -1454,7 +1454,7 @@ acl_inherited_grants
 
 每个元素使用 `{mask}:{principal}` 格式，其中 `1` 表示 `read`、`3` 表示 `write`、`7` 表示 `manage`。
 
-本地 backend 会在启动时为存量 collection 增加字段并重建标量索引。旧记录不做全量回填；缺失 ACL 字段按 `acl_enabled=false` 和空列表读取。
+本地 backend 会在启动时为存量 collection 增加字段并重建标量索引。旧记录不做全量回填；缺失 ACL 字段按 `acl_enabled=false`、`acl_restricted=false` 和空列表读取。
 
 火山向量库等远端 backend 的存量 collection 需要由部署方预先添加这些字段和 scalar index，OpenViking 只校验 schema。`volcengine` API key 数据面模式还要求 context collection 和配置的 index 已存在。权限模型详见 [资源访问控制（ACL）](../concepts/15-acl.md)。
 

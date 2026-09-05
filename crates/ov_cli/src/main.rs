@@ -296,8 +296,11 @@ enum AclCommands {
     },
     Set {
         uri: String,
-        #[arg(long = "entry", required = true)]
+        #[arg(long = "entry")]
         entries: Vec<String>,
+        /// Whether inherited ACL entries are ignored by this node
+        #[arg(long, action = clap::ArgAction::Set, value_name = "true|false")]
+        restricted: Option<bool>,
     },
     Grant {
         uri: String,

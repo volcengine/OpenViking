@@ -2,7 +2,7 @@
 
 OpenViking ACL 用于在同一个 account 内，把共享资源目录或文件授权给用户或用户组。ACL 不改变 account 隔离：任何授权都只在当前 account 内生效。
 
-ACL 采用协作文档式的继承模型。目录授权持续作用于所有后代，子目录和文件可以继续增加直接授权；祖先授权不会被子节点覆盖。
+ACL 采用协作文档式的继承模型。目录授权默认持续作用于所有后代，子目录和文件可以继续增加直接授权，也可以用 restricted 模式在某个节点切断继承权限。
 
 ## 适用 URI
 
@@ -39,11 +39,13 @@ ACL 条目使用带类型的 principal：
 
 ## 继承规则
 
-节点的有效 ACL 是所有祖先直接 ACL 与节点自身直接 ACL 的并集：
+普通节点合并 direct 与 inherited；restricted 节点只使用 direct：
 
 ```text
-effective(node) = UNION(direct_acl(each ancestor), direct_acl(node))
+effective(node) = direct(node) + (restricted(node) ? empty : inherited(node))
 ```
+
+`inherited(node)` 始终保存父节点当前的有效权限。即使节点处于 restricted 模式，这个字段也会随父节点继续更新；退出 restricted 后会立即使用最新 inherited。后代继承的是当前节点的有效权限，因此不会绕过中间的 restricted 边界。
 
 例如：
 
@@ -59,7 +61,7 @@ read user:carol on viking://resources/A/B/C/report.md
 - `engineering` 的成员：`write`
 - Carol：`read`
 
-删除 `A/B` 上用户组的直接 ACL 不会删除 `A` 或 `report.md` 上的条目。子节点只会失去由该条目提供的权限。
+如果把 `A/B` 设为 restricted，Bob 在 `A` 上的权限不会对 `A/B` 及其后代生效，但保存的 inherited 不会被删除。删除 restricted 后，Bob 会立即恢复从 `A` 继承的权限。
 
 ## 默认行为与 `acl_enabled`
 
@@ -72,13 +74,13 @@ read user:carol on viking://resources/A/B/C/report.md
 的根目录（`no_split` 时为根文件）作为创建节点：根节点获得创建者直接 `manage`，
 内部节点只继承，不重复写直接授权。重新向量化或覆盖已有 context 不会改变直接 ACL。
 
-只要节点或任一祖先存在直接 ACL，该节点就进入 ACL 控制域：
+只要节点或任一祖先存在直接 ACL，或路径中存在 restricted 节点，该节点就进入 ACL 控制域：
 
 ```text
 acl_enabled = true
 ```
 
-`acl_enabled` 是系统派生字段，不能由 API 调用者设置。删除最后一个相关直接 ACL 后，它会自动恢复为 `false`。
+`acl_enabled` 是系统派生字段，不能由 API 调用者设置。删除最后一个相关直接 ACL，且路径中没有 restricted 节点后，它会自动恢复为 `false`。
 
 ## 文件操作
 
@@ -100,7 +102,7 @@ bootstrap，后续 ACL 修改要求有效 `manage` 能力。
 
 目录上的 ACL 授权会被所有后代继承。`list`、`tree` 和批量结果仍逐个检查有效 ACL，因为未设置 ACL 的目录可能按原有 URI 规则可见，而某个后代已经通过自己的 ACL 进入控制域。
 
-共享区内部移动时，节点自己的直接 ACL 随节点移动，继承权限按新祖先重新计算。个人资源移入共享区时不携带 ACL，只继承目标目录权限；共享资源移回个人区时清空 ACL。
+共享区内部移动时，节点自己的 direct ACL 和 restricted 状态随节点移动，inherited 按新父节点重新计算。个人资源移入共享区时不携带 ACL，只继承目标目录权限；共享资源移回个人区时清空 ACL。
 
 递归修改 tags、删除或移动目录会先校验完整目标子树。任一节点缺少所需能力，或子树扫描不完整，操作都会整体中止。
 
@@ -112,13 +114,14 @@ ACL 只保存在 context collection。每条 context 记录维护当前节点和
 
 ```text
 acl_enabled
+acl_restricted
 acl_direct_grants
 acl_inherited_grants
 ```
 
-`acl_direct_grants` 是当前节点直接 ACL，`acl_inherited_grants` 是所有祖先直接 ACL 的并集。每个 principal 只保存最高 level，编码为 `{mask}:{principal}`：`1` 表示 `read`、`3` 表示 `write`、`7` 表示 `manage`。例如 `3:group:dev` 表示 `group:dev` 拥有 `write`，同时也具备 `read`。有效权限是两组列表的并集，不维护独立 ACL collection。
+`acl_direct_grants` 是当前节点直接 ACL，`acl_inherited_grants` 是父节点当前有效 ACL，`acl_restricted` 决定 inherited 是否参与当前节点的有效权限。每个 principal 只保存最高 level，编码为 `{mask}:{principal}`：`1` 表示 `read`、`3` 表示 `write`、`7` 表示 `manage`。不维护独立 ACL collection。
 
-请求的可用 principal 为 `user:{ctx.user_id}`、`user:*`，以及 `ctx.group_ids` 中每个 ID 对应的 `group:{group_id}`。`find/search` 读取时为每个 principal 匹配 `1`、`3`、`7` 三种 token，并在 `viking://resources` scope 内对 direct 和 inherited 两个原生 `list<string>` 字段做过滤；个人资源始终按 URI owner 隔离。旧记录缺少 ACL 字段时按 `acl_enabled=false` 处理，无需全量回填。
+请求的可用 principal 为 `user:{ctx.user_id}`、`user:*`，以及 `ctx.group_ids` 中每个 ID 对应的 `group:{group_id}`。`find/search` 始终匹配 direct；仅当 `acl_restricted=false` 时匹配 inherited。个人资源始终按 URI owner 隔离。旧记录缺少 ACL 字段时按 `acl_enabled=false`、`acl_restricted=false` 处理，无需全量回填。
 
 检索 target URI 只是搜索范围，不要求调用者能够读取 target 节点本身。用户即使不能读取中间目录，也可以检索到深层单独授权给自己的文件。
 
@@ -149,6 +152,12 @@ ov acl revoke viking://resources/project-a --principal user:bob
 ```
 
 如果 Bob 仍被祖先目录授权，该继承权限继续有效。
+
+只使用当前节点直接授权，同时保留并继续更新继承字段：
+
+```bash
+ov acl set viking://resources/project-a --restricted true
+```
 
 ## 相关文档
 

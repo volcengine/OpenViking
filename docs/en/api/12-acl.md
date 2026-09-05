@@ -1,6 +1,6 @@
 # ACL API
 
-The ACL API manages direct grants on shared `viking://resources/...` nodes and reports their inherited effective permissions. Private resources do not accept ACLs and must be moved into the shared scope to be shared.
+The ACL API manages direct grants and restricted mode on shared `viking://resources/...` nodes and reports their inherited effective permissions. Private resources do not accept ACLs and must be moved into the shared scope to be shared.
 
 Read [Resource Access Control (ACL)](../concepts/15-acl.md) for the permission and inheritance model.
 
@@ -9,8 +9,8 @@ Read [Resource Access Control (ACL)](../concepts/15-acl.md) for the permission a
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/acl?uri={uri}` | Get direct, inherited, and effective ACLs |
-| PUT | `/api/v1/acl` | Replace the node's direct ACL |
-| DELETE | `/api/v1/acl?uri={uri}` | Clear the node's direct ACL |
+| PUT | `/api/v1/acl` | Update the node's direct ACL or restricted mode |
+| DELETE | `/api/v1/acl?uri={uri}` | Clear the direct ACL and restricted mode |
 | POST | `/api/v1/acl/grant` | Set one principal's direct level |
 | POST | `/api/v1/acl/revoke` | Remove one principal's direct grant |
 
@@ -48,6 +48,7 @@ The caller supplies the account-unique, stable `group_id` through the [Admin API
 {
   "uri": "viking://resources/project-a",
   "acl_enabled": true,
+  "acl_restricted": false,
   "direct_entries": [
     {"principal": "user:bob", "level": "read"}
   ],
@@ -64,9 +65,10 @@ The caller supplies the account-unique, stable `group_id` through the [Admin API
 | Field | Description |
 |-------|-------------|
 | `direct_entries` | Entries set directly on this node |
-| `inherited_entries` | Merged direct ACLs from all ancestors |
-| `effective_entries` | The merged direct and inherited entries |
-| `acl_enabled` | `true` when this node or an ancestor has a direct ACL; read-only and derived |
+| `inherited_entries` | Permissions continuously refreshed from the parent, including while restricted |
+| `effective_entries` | Direct plus inherited entries normally; direct entries only while restricted |
+| `acl_restricted` | When `true`, this node does not use inherited permissions |
+| `acl_enabled` | `true` when this node is ACL-controlled; read-only and derived |
 
 The account `ADMIN` implicit `manage` permission is not included in these lists.
 
@@ -95,7 +97,7 @@ report = client.acl_get("viking://resources/project-a")
 report, err := client.ACL(ctx, "viking://resources/project-a")
 ```
 
-## Replace a Direct ACL
+## Update a Direct ACL or Restricted Mode
 
 ```
 PUT /api/v1/acl
@@ -109,11 +111,12 @@ Request body:
   "entries": [
     {"principal": "user:bob", "level": "read"},
     {"principal": "group:engineering", "level": "write"}
-  ]
+  ],
+  "restricted": true
 }
 ```
 
-`entries` completely replaces this node's direct ACL without changing direct ACLs on ancestors or descendants. Duplicate principals keep their highest level. An empty list is equivalent to deleting this node's direct ACL.
+`entries` and `restricted` are optional, but at least one must be provided. `entries` replaces the full direct ACL. With `restricted=true`, only direct entries are effective; `restricted=false` enables inherited entries again. Omitted fields remain unchanged. Inherited entries continue to refresh while restricted, so disabling the mode applies the latest inherited permissions immediately. Duplicate principals keep their highest level.
 
 ```bash
 curl -X PUT http://localhost:1933/api/v1/acl \
@@ -124,7 +127,8 @@ curl -X PUT http://localhost:1933/api/v1/acl \
     "entries": [
       {"principal": "user:bob", "level": "read"},
       {"principal": "group:engineering", "level": "write"}
-    ]
+    ],
+    "restricted": true
   }'
 ```
 
@@ -137,13 +141,14 @@ report = client.acl_set(
         {"principal": "user:bob", "level": "read"},
         {"principal": "group:engineering", "level": "write"},
     ],
+    restricted=True,
 )
 ```
 
 The asynchronous client uses the same method name:
 
 ```python
-report = await client.acl_set(uri, entries)
+report = await client.acl_set(uri, entries, restricted=True)
 ```
 
 **Go SDK**
@@ -152,15 +157,22 @@ report = await client.acl_set(uri, entries)
 report, err := client.SetACL(ctx, "viking://resources/project-a", []openviking.ACLEntry{
     {Principal: "user:bob", Level: "read"},
     {Principal: "group:engineering", Level: "write"},
-})
+}, openviking.SetACLOptions{Restricted: openviking.Bool(true)})
+
+// Change only the mode without changing the direct ACL.
+report, err = client.SetACLRestricted(ctx, "viking://resources/project-a", true)
 ```
 
 **CLI**
 
 ```bash
 ov acl set viking://resources/project-a \
+  --restricted true \
   --entry user:bob=read \
   --entry group:engineering=write
+
+# Disable restricted mode only.
+ov acl set viking://resources/project-a --restricted false
 ```
 
 ## Set One Principal's Level
@@ -231,7 +243,7 @@ ov acl revoke viking://resources/project-a --principal user:bob
 DELETE /api/v1/acl?uri={uri}
 ```
 
-This does not remove direct ACLs on descendants. The current node is recalculated from its ancestors, while each descendant continues to combine its own direct ACL with its ancestors.
+This clears the current node's direct ACL and sets `restricted` to `false`. It does not delete stored inherited entries or direct ACLs on descendants. The node immediately uses the latest inherited permissions.
 
 ```bash
 curl -X DELETE \
@@ -259,9 +271,9 @@ The API checks manage permission before confirming existence to an authorized ca
 | ACL mutation targets a URI without a context record | `INVALID_ARGUMENT`; index it first |
 | Invalid `principal` syntax or `group:*` | `INVALID_ARGUMENT` |
 | Level is not `read/write/manage` | `INVALID_ARGUMENT` |
-| Request includes unknown fields such as `acl_enabled` | `INVALID_ARGUMENT` |
+| Request provides neither `entries` nor `restricted`, or includes unknown fields such as `acl_enabled` | `INVALID_ARGUMENT` |
 
-Direct and inherited ACL fields are both stored in context records. An update changes the target direct ACL and recalculates descendant inherited ACLs in one subtree batch; a failed write restores the previous context ACL fields.
+Restricted, direct, and inherited ACL fields are stored in context records. An update changes the target fields and recalculates descendant inherited ACLs in one subtree batch; a failed write restores the previous context ACL fields.
 
 ## Related Documentation
 

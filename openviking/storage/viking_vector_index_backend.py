@@ -14,6 +14,7 @@ from openviking.core.namespace import canonical_user_root, resolve_uri, uri_part
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.acl import (
     ACL_CONTEXT_FIELDS,
+    ACL_RESTRICTED_FIELD,
     AclAction,
     AclManager,
     acl_grant_tokens,
@@ -2126,7 +2127,18 @@ class VikingVectorIndexBackend:
                 Or(
                     [
                         In("acl_direct_grants", read_grants),
-                        In("acl_inherited_grants", read_grants),
+                        And(
+                            [
+                                RawDSL(
+                                    {
+                                        "op": "must_not",
+                                        "field": ACL_RESTRICTED_FIELD,
+                                        "conds": [True],
+                                    }
+                                ),
+                                In("acl_inherited_grants", read_grants),
+                            ]
+                        ),
                     ]
                 ),
             ]

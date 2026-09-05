@@ -12,6 +12,11 @@ type ACLEntry struct {
 	Level     string `json:"level"`
 }
 
+// SetACLOptions controls optional ACL properties updated together with direct entries.
+type SetACLOptions struct {
+	Restricted *bool
+}
+
 // ACL returns the direct, inherited, and effective ACL for a URI.
 func (c *Client) ACL(ctx context.Context, uri string) (map[string]any, error) {
 	query := url.Values{"uri": []string{NormalizeURI(uri)}}
@@ -20,15 +25,28 @@ func (c *Client) ACL(ctx context.Context, uri string) (map[string]any, error) {
 	return result, err
 }
 
-// SetACL replaces the direct ACL on a URI.
-func (c *Client) SetACL(ctx context.Context, uri string, entries []ACLEntry) (map[string]any, error) {
+// SetACL replaces the direct ACL on a URI and can update restricted mode atomically.
+func (c *Client) SetACL(ctx context.Context, uri string, entries []ACLEntry, options ...SetACLOptions) (map[string]any, error) {
 	if entries == nil {
 		entries = []ACLEntry{}
 	}
-	var result map[string]any
-	err := c.doJSON(ctx, http.MethodPut, "/api/v1/acl", nil, map[string]any{
+	body := map[string]any{
 		"uri":     NormalizeURI(uri),
 		"entries": entries,
+	}
+	if len(options) > 0 && options[0].Restricted != nil {
+		body["restricted"] = *options[0].Restricted
+	}
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPut, "/api/v1/acl", nil, body, &result)
+	return result, err
+}
+
+// SetACLRestricted changes whether inherited grants are effective without changing them.
+func (c *Client) SetACLRestricted(ctx context.Context, uri string, restricted bool) (map[string]any, error) {
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPut, "/api/v1/acl", nil, map[string]any{
+		"uri": NormalizeURI(uri), "restricted": restricted,
 	}, &result)
 	return result, err
 }
@@ -51,7 +69,7 @@ func (c *Client) RevokeACL(ctx context.Context, uri, principal string) (map[stri
 	return result, err
 }
 
-// DeleteACL clears the direct ACL on a URI.
+// DeleteACL clears the direct ACL and restricted mode on a URI.
 func (c *Client) DeleteACL(ctx context.Context, uri string) (map[string]any, error) {
 	query := url.Values{"uri": []string{NormalizeURI(uri)}}
 	var result map[string]any

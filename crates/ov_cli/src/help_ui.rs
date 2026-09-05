@@ -382,6 +382,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 label: "ov acl grant viking://resources/project-a --principal user:bob --level read",
                 description: "Grant read access to a user.",
             },
+            HelpItem {
+                label: "ov acl set viking://resources/project-a --restricted true",
+                description: "Ignore inherited permissions without deleting them.",
+            },
         ],
         next_steps: &[HelpItem {
             label: "ov find \"query\" -u <uri>",
