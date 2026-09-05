@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse
 
+import httpx
+
 from openviking.telemetry import tracer
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking.utils.multimodal import redact_image_data_urls
@@ -85,6 +87,28 @@ class OpenAIVLM(VLMBase):
         self.api_version = config.get("api_version")
         self.reasoning_effort = config.get("reasoning_effort", "low")
 
+    def _http_limits(self) -> httpx.Limits:
+        defaults = openai.DEFAULT_CONNECTION_LIMITS
+        return httpx.Limits(
+            max_connections=defaults.max_connections,
+            max_keepalive_connections=defaults.max_keepalive_connections,
+            keepalive_expiry=self.keepalive_expiry,
+        )
+
+    def _configure_sync_http_client(self, kwargs: Dict[str, Any]) -> None:
+        if self.keepalive_expiry is not None:
+            kwargs["http_client"] = openai.DefaultHttpxClient(
+                limits=self._http_limits(),
+                timeout=self.timeout,
+            )
+
+    def _configure_async_http_client(self, kwargs: Dict[str, Any]) -> None:
+        if self.keepalive_expiry is not None:
+            kwargs["http_client"] = openai.DefaultAsyncHttpxClient(
+                limits=self._http_limits(),
+                timeout=self.timeout,
+            )
+
     def get_client(self):
         """Get sync client"""
         if self._sync_client is None:
@@ -98,6 +122,7 @@ class OpenAIVLM(VLMBase):
                 self.extra_headers,
                 self.timeout,
             )
+            self._configure_sync_http_client(kwargs)
             if self.provider == "azure":
                 self._sync_client = openai.AzureOpenAI(**kwargs)
             else:
@@ -116,6 +141,7 @@ class OpenAIVLM(VLMBase):
             self.extra_headers,
             self.timeout,
         )
+        self._configure_async_http_client(kwargs)
         if self.provider == "azure":
             return openai.AsyncAzureOpenAI(**kwargs)
         return openai.AsyncOpenAI(**kwargs)
@@ -123,6 +149,13 @@ class OpenAIVLM(VLMBase):
     def get_async_client(self):
         """Get an async client scoped to the current event loop."""
         return self._async_client_cache.get(self._build_async_client)
+
+    def close(self):
+        """Close clients and HTTP transports owned by this backend."""
+        close_sync_client = getattr(self._sync_client, "close", None)
+        if close_sync_client is not None:
+            close_sync_client()
+        self._async_client_cache.close_all_with_close()
 
     def _supports_enable_thinking(self) -> bool:
         """Return True for OpenAI-compatible DashScope endpoints that accept enable_thinking."""
