@@ -101,6 +101,34 @@ For `provider: "openai-codex"`, `vlm.api_key` is optional when Codex OAuth is al
 </details>
 
 <details>
+<summary><b>Self-hosted Embedding (OpenAI-compatible server)</b></summary>
+
+Any embedding server that exposes an OpenAI-compatible `/v1/embeddings` endpoint works through the `openai` provider — Ollama, llama.cpp's `llama-server`, vLLM, or Text Embeddings Inference (TEI). The example below targets Ollama serving `bge-m3`:
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "api_base" : "http://127.0.0.1:11434/v1",
+      "api_key"  : "ollama",
+      "provider" : "openai",
+      "dimension": 1024,
+      "model"    : "bge-m3"
+    }
+  }
+}
+```
+
+Notes for local deployments (#4646):
+
+- `api_key` is required by the config schema but unused by local servers; any non-empty placeholder works.
+- `dimension` must match the model's actual output dimension (`bge-m3`: 1024, `nomic-embed-text`: 768, `mxbai-embed-large`: 1024). A mismatch fails vector index creation loudly.
+- Switching embedding models after ingestion changes vector semantics: re-run `ov reindex --mode vectors` (or `semantic_and_vectors`) so all existing content is re-embedded with the new model.
+- Retrieval quality with local models depends mostly on model size and language coverage; multilingual corpora generally do better with `bge-m3` or larger instruction-tuned models than with small English-only embedders.
+
+</details>
+
+<details>
 <summary><b>Volcengine Embedding + Codex VLM</b></summary>
 
 Use `openviking-server init` to complete the Codex login/import step, then run `openviking-server doctor`.

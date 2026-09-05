@@ -102,6 +102,34 @@ openviking-server doctor
 </details>
 
 <details>
+<summary><b>自托管 Embedding（OpenAI 兼容服务）</b></summary>
+
+任何暴露 OpenAI 兼容 `/v1/embeddings` 端点的 embedding 服务都可以通过 `openai` provider 接入 —— Ollama、llama.cpp 的 `llama-server`、vLLM 或 Text Embeddings Inference（TEI）。以下示例为 Ollama 部署 `bge-m3`：
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "api_base" : "http://127.0.0.1:11434/v1",
+      "api_key"  : "ollama",
+      "provider" : "openai",
+      "dimension": 1024,
+      "model"    : "bge-m3"
+    }
+  }
+}
+```
+
+自部署注意事项（#4646）：
+
+- `api_key` 为配置必填项，本地服务不校验，填任意非空占位值即可。
+- `dimension` 必须与模型实际输出维度一致（`bge-m3`：1024，`nomic-embed-text`：768，`mxbai-embed-large`：1024），不匹配会在向量索引创建时报错。
+- 已有数据切换 embedding 模型后向量语义随之改变，需要执行 `ov reindex --mode vectors`（或 `semantic_and_vectors`）用新模型重新嵌入全部存量内容。
+- 本地模型的检索质量主要取决于模型规模与语言覆盖：多语言语料建议选用 `bge-m3` 或更大的指令微调模型，小型英文模型对中文/混合语料效果明显下降。
+
+</details>
+
+<details>
 <summary><b>火山引擎 Embedding + Codex VLM</b></summary>
 
 使用 `openviking-server init` 完成 Codex 登录/导入后，再执行 `openviking-server doctor`。
