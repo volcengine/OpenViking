@@ -34,10 +34,12 @@ class _FakeVikingFS:
         self._tree = tree
         self._abstracts = abstracts or {}
         self.writes = []
+        self.ls_calls = []
         self._async_agfs = self
 
     async def ls(self, uri, node_limit=None, ctx=None):
-        del node_limit
+        del node_limit, ctx
+        self.ls_calls.append(uri)
         return self._tree.get(uri, [])
 
     async def write_file(self, path, content, ctx=None, lease_ref=None):
@@ -344,18 +346,35 @@ def test_non_aggregation_rejects_recursive_execution():
 
 
 @pytest.mark.asyncio
-async def test_deferred_aggregation_processes_only_changed_files(monkeypatch):
+async def test_deferred_aggregation_processes_only_live_changed_direct_files(monkeypatch):
     root_uri = "viking://resources/wide"
-    changed = f"{root_uri}/file-020.txt"
+    changed = f"{root_uri}/changed.txt"
+    also_changed = f"{root_uri}/also-changed.txt"
+    not_changed = f"{root_uri}/not-changed.txt"
+    deleted = f"{root_uri}/deleted.txt"
+    child_uri = f"{root_uri}/child"
+    nested = f"{child_uri}/nested.txt"
     tree = {
-        root_uri: [{"name": f"file-{idx:03}.txt", "isDir": False} for idx in range(40)],
+        root_uri: [
+            {"name": "changed.txt", "isDir": False},
+            {"name": "also-changed.txt", "isDir": False},
+            {"name": "not-changed.txt", "isDir": False},
+            {"name": "child", "isDir": True},
+        ],
+        child_uri: [{"name": "nested.txt", "isDir": False}],
     }
     fake_fs = _FakeVikingFS(tree)
-    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.get_viking_fs",
+        lambda: fake_fs,
+    )
     _patch_semantic_config(monkeypatch, overview_sample_limit=4)
 
     processor = _FakeProcessor()
-    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
+    ctx = RequestContext(
+        user=UserIdentifier("acc1", "user1"),
+        role=Role.USER,
+    )
     executor = SemanticDagExecutor(
         processor=processor,
         context_type="resource",
@@ -364,15 +383,28 @@ async def test_deferred_aggregation_processes_only_changed_files(monkeypatch):
         incremental_update=True,
         target_uri=root_uri,
         recursive=False,
-        changes={"modified": [changed]},
+        changes={
+            "modified": [changed, also_changed],
+            "deleted": [deleted],
+        },
         aggregate_directory=False,
     )
 
     await executor.run(root_uri)
 
-    assert processor.vectorized_files == [changed]
+    assert set(processor.summarized_files) == {changed, also_changed}
+    assert set(processor.vectorized_files) == {changed, also_changed}
+    assert not_changed not in processor.summarized_files
+    assert not_changed not in processor.vectorized_files
     assert processor.vectorized_dirs == []
-    assert executor.get_stats().total_nodes == 2
+    assert nested not in processor.summarized_files
+    assert fake_fs.ls_calls == [root_uri]
+    assert fake_fs.writes == []
+    stats = executor.get_stats()
+    assert stats.total_nodes == 3
+    assert stats.pending_nodes == 0
+    assert stats.in_progress_nodes == 0
+    assert stats.done_nodes == 3
 
 
 @pytest.mark.asyncio
