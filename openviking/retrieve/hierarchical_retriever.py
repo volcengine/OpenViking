@@ -20,6 +20,7 @@ from openviking.core.retrieval_targets import default_target_directories
 from openviking.models.embedder.base import EmbedResult, embed_compat
 from openviking.models.rerank import RerankClient
 from openviking.retrieve.memory_lifecycle import hotness_score
+from openviking.retrieve.query_embedding_cache import QueryEmbeddingCache
 from openviking.retrieve.retrieval_stats import get_stats_collector
 from openviking.server.identity import RequestContext
 from openviking.storage.abstract_overview import body_for_preview
@@ -108,6 +109,7 @@ class HierarchicalRetriever:
         score_gte: bool = False,
         scope_dsl: Optional[FilterExpr | Dict[str, Any]] = None,
         level: Optional[List[int]] = None,
+        query_embedding_cache: Optional[QueryEmbeddingCache] = None,
     ) -> QueryResult:
         """
         Execute hierarchical retrieval.
@@ -118,6 +120,7 @@ class HierarchicalRetriever:
             score_gte: True uses >=, False uses >
             scope_dsl: Additional scope constraints passed from public find/search filter
             level: Optional result level filter (0=L0, 1=L1, 2=L2)
+            query_embedding_cache: Request-local cache shared across retrieval scopes
         """
         t0 = time.monotonic()
         telemetry = get_current_telemetry()
@@ -152,15 +155,27 @@ class HierarchicalRetriever:
         if self.embedder:
             if image_query and not getattr(self.embedder, "supports_multimodal", False):
                 raise InvalidArgumentError("Image search requires a multimodal embedding model.")
-            with telemetry.measure("search.embed_query"):
-                embedding_input = getattr(query, "embedding_input", None) or query.query
-                result: EmbedResult = await embed_compat(
-                    self.embedder,
-                    embedding_input,
-                    is_query=True,
+
+            embedding_input = getattr(query, "embedding_input", None) or query.query
+
+            async def _embed_query() -> EmbedResult:
+                with telemetry.measure("search.embed_query"):
+                    return await embed_compat(
+                        self.embedder,
+                        embedding_input,
+                        is_query=True,
+                    )
+
+            if query_embedding_cache is None:
+                result = await _embed_query()
+            else:
+                result = await query_embedding_cache.get_or_create(
+                    embedder=self.embedder,
+                    embedding_input=embedding_input,
+                    factory=_embed_query,
                 )
-                query_vector = result.dense_vector
-                sparse_query_vector = result.sparse_vector
+            query_vector = result.dense_vector
+            sparse_query_vector = result.sparse_vector
 
         # Step 1: Determine starting directories based on explicit target dirs.
         if target_dirs:
@@ -647,9 +662,7 @@ class HierarchicalRetriever:
                     abstract=abstract,
                     category=c.get("category", ""),
                     score=final_score,
-                    search_tags=normalize_search_tags(
-                        c.get("search_tags"), discard_invalid=True
-                    ),
+                    search_tags=normalize_search_tags(c.get("search_tags"), discard_invalid=True),
                 )
             )
 

@@ -8,6 +8,7 @@ Provides semantic search operations: search, find.
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+from openviking.retrieve.query_embedding_cache import QueryEmbeddingCache
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import VikingFS
 from openviking.utils.image_search import (
@@ -146,6 +147,7 @@ class SearchService:
         filter: Optional[Dict] = None,
         level: Optional[List[int]] = None,
         image_url: Optional[str] = None,
+        query_embedding_cache: Optional[QueryEmbeddingCache] = None,
     ) -> Any:
         """Semantic search without session context.
 
@@ -172,5 +174,6 @@ class SearchService:
             filter=filter,
             level=level,
             image_url=resolved_image_url,
+            query_embedding_cache=query_embedding_cache,
         )
         return result

@@ -140,6 +140,7 @@ async def test_assembly_returns_readable_entries_within_budget():
 
 async def test_query_expansion_fans_out_planned_queries(monkeypatch):
     queries_seen = []
+    caches_seen = []
 
     async def fake_expand(*, query, session, mode, timeout_s=None):
         del session, mode, timeout_s
@@ -147,6 +148,7 @@ async def test_query_expansion_fans_out_planned_queries(monkeypatch):
 
     async def fake_find(**kwargs):
         queries_seen.append(kwargs["query"])
+        caches_seen.append(kwargs["query_embedding_cache"])
         return _FakeFindResult()
 
     async def fake_get(session_id, ctx, *, auto_create=False):
@@ -175,6 +177,7 @@ async def test_query_expansion_fans_out_planned_queries(monkeypatch):
     )
 
     assert queries_seen == ["short", "expanded query"]
+    assert len({id(cache) for cache in caches_seen}) == 1
     assert result.stats["query_expansion"] == "used"
 
 
