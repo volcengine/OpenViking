@@ -144,12 +144,12 @@ per-harness 章节（档案卡）只写差异；所有共享事实均在本章�
 
 - **会话隐式创建**：插件普遍不显式调用 `POST /sessions`（dsh 例外，它会发一个只含 `session_id` 的 create）；首次 `POST /sessions/{id}/messages(/batch)` 时由服务端 `auto_create=True` 建会话。召回侧 `mode="context"` 的 `_load_session(auto_create=True)` 也会建（第一次召回即在服务端创建会话）。
 - **commit 两阶段**：`POST /sessions/{id}/commit` 的 Phase 1（归档 archive）同步完成后才返回，Phase 2（记忆抽取）作为后台任务返回 `task_id`。`keep_recent_count` 服务端默认 **0**（全量归档，不留 live tail）。
-- **服务端自动 commit 默认关闭，且插件建会话的路径不会打开它**：
+- **服务端自动 commit 默认关闭，除非显式策略或部署级默认策略将其启用**：
   - `memory.session_auto_commit.default_enabled = false`、`idle_enabled = false`（`memory_config.py:15-16`）；无存储 policy 的会话自动 commit 关闭（`session_service.py:637-638`）；idle 扫描器在 `idle_enabled=false` 时根本不创建（`core.py:440-448`），构成双重门控。
-  - `POST /messages` 的 auto_create 不接受 policy 参数；只有 `POST /sessions`（create）与 `PATCH /sessions/{id}/config` 能设 `auto_commit_policy`。
+  - `POST /messages` 的 auto_create 不接受 policy 参数，但配置后会继承 `server.user_config_defaults.auto_commit_policy`；`POST /sessions`（create）与 `PATCH /sessions/{id}/config` 仍是显式的 Session 级控制面。
   - 当前没有插件下发 `auto_commit_policy`；第一方客户端中会下发该字段的是 **ov CLI**（`ov session new --auto-commit-policy-json` / `--no-auto-commit`、`ov session config set`）。
   - policy 显式启用时，服务端默认阈值是 `pending_token_threshold=150000（严格大于）/ message_count_threshold=100 / idle_timeout_seconds=86400 / keep_recent_count=0 / min_commit_interval_seconds=0`。注意这组服务端默认值与各插件客户端的 20000/10 是相互独立的两层配置。
-- **由此**：现状下所有自动 commit 都是客户端各自实现的阈值逻辑（[§3.3](#_3-3-会话与-commit-生命周期)），服务端不做兜底；进程异常终止后遗留的 pending 消息，需在同一会话后续再触发 commit 才会归档与抽取。
+- **由此**：插件可通过 `server.user_config_defaults.auto_commit_policy` 继承新 Session 的 token/message 阈值；idle timeout 兜底还需开启 `memory.session_auto_commit.idle_enabled=true`。未配置该 fallback 时，客户端仍需自行安排 commit 路径（[§3.3](#_3-3-会话与-commit-生命周期)）。
 - **tool output 外置**：服务端 `tool_output_externalization.enabled=True`、`threshold_chars=20000`（`server/config.py:257-258`）——客户端普遍把 `captureToolMaxChars` 设到 1000000 仅作兜底，真正的截断/外置在服务端做，externalized 结果通过 `tool_output_ref` 引用（openclaw 有三个专门工具读它）。
 - **服务端召回相关熔断**：`retrieval.recall_intent_timeout_s=5.0`（query expansion）、`recall_rewrite_timeout_s=30.0`（digest，[§3.2.5](#_3-2-5-召回再摘要)）、`enable_intent=true`。客户端超时预算按这两条推导（[§3.2.4](#_3-2-4-超时与预算链)）。
 
@@ -680,7 +680,7 @@ MCP `write` / REST `content/write` 的三道 guard（`content_write.py`）：可
 
 ## 6.3 路径②：程序化接入
 
-- **直连 REST**：召回用 `POST /api/v1/search/search`（必须 `mode:"context"` + `session_id` 才有 expansion/去重，[§3.2.1](#_3-2-1-机制底座-一条共享管线-两条服务端路径)；可传 `rewrite` 获得服务端 digest，[§3.2.5](#_3-2-5-召回再摘要)）；写入用 `POST /api/v1/sessions/{id}/messages/batch`（≤100 条/批，auto_create）；提交用 `POST /api/v1/sessions/{id}/commit`；读取用 `GET /api/v1/content/read` 等。要用服务端自动 commit，需在 `POST /api/v1/sessions` 时显式带 `auto_commit_policy`，或通过 `PATCH /{id}/config` 修改（[§2.3](#_2-3-服务端会话与-commit-语义)）。
+- **直连 REST**：召回用 `POST /api/v1/search/search`（必须 `mode:"context"` + `session_id` 才有 expansion/去重，[§3.2.1](#_3-2-1-机制底座-一条共享管线-两条服务端路径)；可传 `rewrite` 获得服务端 digest，[§3.2.5](#_3-2-5-召回再摘要)）；写入用 `POST /api/v1/sessions/{id}/messages/batch`（≤100 条/批，auto_create）；提交用 `POST /api/v1/sessions/{id}/commit`；读取用 `GET /api/v1/content/read` 等。自动 commit policy 可来自 `server.user_config_defaults.auto_commit_policy`、`POST /api/v1/sessions` 或 `PATCH /{id}/config`（[§2.3](#_2-3-服务端会话与-commit-语义)）。
 - **LangChain / LangGraph SDK**（`pip install langchain-openviking`）：`OpenVikingContextMiddleware` 提供 `wrap_model_call`（把召回内容注入 `<openviking_context>`）与 `after_agent`（捕获 + 按 `CommitPolicy` 提交，默认 `never`）。这是本组唯一带 session + token 预算的现成自动召回；容错是"只读方法重试一次、写方法不重试"，部分成功时抛 `OpenVikingPartialWriteError`（可按 `input_messages_consumed` 切片重试）。参考 [§7](#_7-附录-非-coding-集成速览) B。
 - **Open WebUI**（OpenAPI 工具服务器）：`python -m openviking_openwebui` 起独立进程，在 Open WebUI 里添加 Tool Server URL，即可得 7 个工具（无删除、无 hook）。参考 [§7](#_7-附录-非-coding-集成速览) A。
 ## 6.4 路径③：要自动 hook 面时复用参考实现
@@ -690,7 +690,7 @@ MCP `write` / REST `content/write` 的三道 guard（`content_write.py`）：可
 - **`examples/memory-plugin-shared/lib/`**（Node）：包含完整的核心功能模块，例如 `recall-core`（三级降级召回）、`profile-inject`、`capture-utils`（消息归一 + 注入回流防护）、`pending-queue`（离线重放）、`batch-send`、`mcp-proxy-core`（stdio↔HTTP 代理）、`session-model`（会话 id 派生）以及 `credentials`。构建瘦 harness 时，只需实现一个适配层，把宿主生命周期事件映射到这些模块即可（例如 `agent-hook-runtime.mjs` 就是 cursor、trae、zcode 共用的现成一体化运行时，接新宿主时的主要工作只是解析其 stdin JSON 字段名）。
 - **Agent Plugins 1.0 便携包**（位于 `agent-plugins/`）：采用 `plugin.json` + `skills/` + `mcp.json`（stdio→HTTP 代理）的规范化便携格式。该方案刻意不含 hooks（召回/沉淀靠 skill 教模型自调工具），非常适合符合 Agent Plugins 规范的客户端直接加载；此外，`plugin.test.mjs` 定义了规范一致性校验（schema URL、name 规则、静态 headers 不含机密、`mcp.json` 引用不逃逸插件根等），可作为自行打包的 lint 依据。
 
-**接入时务必对齐的三个约定**（与现有 harness 保持一致的行为）：① 召回调用点必须转发 `session_id`，这样才有服务端 expansion + 跨轮去重（详见 [§3.2.1](#_3-2-1-机制底座-一条共享管线-两条服务端路径)）；② 适配器不要用自己的超时压过 helper 下发的 deadline；③ 关闭时要安排一条 commit 路径，否则未达阈值的尾部对话需等待后续触发才能归档（详见 [§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)）——若宿主不提供关闭事件，可依赖服务端 idle 兜底（在服务端开 `memory.session_auto_commit.idle_enabled` 并下发 per-session policy）。这三条正是 `recall-session-wiring.test.mjs` 用跨插件正则钉死的。
+**接入时务必对齐的三个约定**（与现有 harness 保持一致的行为）：① 召回调用点必须转发 `session_id`，这样才有服务端 expansion + 跨轮去重（详见 [§3.2.1](#_3-2-1-机制底座-一条共享管线-两条服务端路径)）；② 适配器不要用自己的超时压过 helper 下发的 deadline；③ 关闭时要安排一条 commit 路径，否则未达阈值的尾部对话需等待后续触发才能归档（详见 [§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)）——若宿主没有关闭事件，需开启 `memory.session_auto_commit.idle_enabled`，并提供 Session 级或部署级默认 policy。这三条正是 `recall-session-wiring.test.mjs` 用跨插件正则钉死的。
 
 ---
 

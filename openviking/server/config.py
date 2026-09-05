@@ -164,6 +164,19 @@ class UserConfig(BaseModel):
         return MemoryPolicy.from_dict(value).to_dict()
 
 
+class UserConfigDefaults(UserConfig):
+    """Deployment defaults for users without persisted overrides."""
+
+    auto_commit_policy: Optional[Dict[str, Any]] = None
+
+    @field_validator("auto_commit_policy", mode="before")
+    @classmethod
+    def validate_auto_commit_policy(cls, value: Any) -> Optional[Dict[str, Any]]:
+        from openviking.session.auto_commit_policy import AutoCommitPolicy
+
+        return None if value is None else AutoCommitPolicy.from_dict(value).to_dict()
+
+
 class MetricsAccountDimensionConfig(BaseModel):
     """Account-dimension configuration for metrics label injection."""
 
@@ -363,13 +376,18 @@ class ServerConfig(BaseModel):
     public_base_url: Optional[str] = None
     upload_signed_ttl_seconds: int = 600
     temp_upload: TempUploadConfig = Field(default_factory=TempUploadConfig)
-    user_config_defaults: UserConfig = Field(default_factory=UserConfig)
+    user_config_defaults: UserConfigDefaults = Field(default_factory=UserConfigDefaults)
     agent_evolution: AgentEvolutionConfig = Field(default_factory=AgentEvolutionConfig)
     tool_output_externalization: ToolOutputExternalizationConfig = Field(
         default_factory=ToolOutputExternalizationConfig
     )
 
     model_config = {"extra": "forbid"}
+
+    @field_validator("user_config_defaults", mode="before")
+    @classmethod
+    def normalize_user_config_defaults(cls, value: Any) -> Any:
+        return value.model_dump() if isinstance(value, UserConfig) else value
 
     def get_effective_auth_mode(self) -> str:
         """Get effective auth mode, auto-detecting if not explicitly set.
