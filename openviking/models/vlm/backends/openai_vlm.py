@@ -19,7 +19,12 @@ try:
 except ImportError:
     openai = None
 
-from openviking.utils.model_retry import retry_async, retry_sync
+from openviking.utils.model_retry import (
+    completion_retry_delay,
+    is_completion_retryable,
+    retry_async,
+    retry_sync,
+)
 
 from ..base import ToolCall, VLMBase, VLMResponse
 from ..registry import DEFAULT_AZURE_API_VERSION
@@ -349,12 +354,25 @@ class OpenAIVLM(VLMBase):
             f"messages={json.dumps(redact_image_data_urls(kwargs), ensure_ascii=False, indent=2)}"
         )
 
-        return await retry_async(
-            _call,
-            max_retries=self.max_retries,
-            logger=logger,
-            operation_name="OpenAI VLM async completion",
-        )
+        # Bound in-flight completions process-wide via vlm.max_concurrent (shared
+        # across sessions/backends) and retry rate-limit (429) responses with
+        # backoff instead of failing the extraction (issue #3008).
+        semaphore = self._get_completion_semaphore()
+
+        async def _retry() -> Union[str, VLMResponse]:
+            return await retry_async(
+                _call,
+                max_retries=self.max_retries,
+                is_retryable=is_completion_retryable,
+                delay_fn=completion_retry_delay,
+                logger=logger,
+                operation_name="OpenAI VLM async completion",
+            )
+
+        if semaphore is None:
+            return await _retry()
+        async with semaphore:
+            return await _retry()
 
     def _detect_image_format(self, data: bytes) -> str:
         """Detect image format from magic bytes.
@@ -464,9 +482,19 @@ class OpenAIVLM(VLMBase):
                 return self._build_vlm_response(response, has_tools=True)
             return await self._extract_completion_content_async(response, elapsed)
 
-        return await retry_async(
-            _call,
-            max_retries=self.max_retries,
-            logger=logger,
-            operation_name="OpenAI VLM async vision completion",
-        )
+        semaphore = self._get_completion_semaphore()
+
+        async def _retry() -> Union[str, VLMResponse]:
+            return await retry_async(
+                _call,
+                max_retries=self.max_retries,
+                is_retryable=is_completion_retryable,
+                delay_fn=completion_retry_delay,
+                logger=logger,
+                operation_name="OpenAI VLM async vision completion",
+            )
+
+        if semaphore is None:
+            return await _retry()
+        async with semaphore:
+            return await _retry()
