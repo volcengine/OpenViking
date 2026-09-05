@@ -4,6 +4,7 @@ import {
   BlocksIcon,
   BookOpenIcon,
   BracesIcon,
+  BrainCircuitIcon,
   ChevronRightIcon,
   ClipboardListIcon,
   Clock3Icon,
@@ -108,6 +109,13 @@ const NAV_ITEMS: readonly NavItem[] = [
     section: 'workspace',
     titleKey: 'navigation.skills.title',
     to: '/skills',
+  },
+  {
+    icon: BrainCircuitIcon,
+    id: 'agentExperience',
+    section: 'workspace',
+    titleKey: 'navigation.agentExperience.title',
+    to: '/agent-experience',
   },
   {
     icon: BlocksIcon,

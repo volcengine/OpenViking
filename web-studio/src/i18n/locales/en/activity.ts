@@ -71,6 +71,7 @@ const activity = {
       loadFailed: 'Could not load memory changes',
       retry: 'Retry',
       empty: 'This session commit did not produce any memory changes.',
+      viewExperienceImpact: 'View impact for this experience',
     },
     empty: {
       description: 'Select a session from the list or create a new one.',
