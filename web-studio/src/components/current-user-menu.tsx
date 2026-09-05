@@ -18,6 +18,7 @@ import {
 import { useAppConnection } from '#/hooks/use-app-connection'
 import { fetchAdminUsers } from '#/lib/admin'
 import type { AdminConnection } from '#/lib/admin'
+import { resolveStudioManagementCapabilities } from '#/lib/studio-permissions'
 
 export function getUserInitial(userId: string): string {
   const normalizedUserId = userId.trim()
@@ -26,15 +27,28 @@ export function getUserInitial(userId: string): string {
 
 export function CurrentUserMenu() {
   const { t } = useTranslation('appShell')
-  const { connection, serverMode, switchIdentity } = useAppConnection()
+  const {
+    connection,
+    connectionRole,
+    isConnectionRoleLoading,
+    serverMode,
+    switchIdentity,
+  } = useAppConnection()
   const [open, setOpen] = React.useState(false)
   const [manualUserId, setManualUserId] = React.useState('')
   const [switchingUserId, setSwitchingUserId] = React.useState('')
   const { accountId, userId } = connection
   const accountLabel = accountId || t('header.currentUser.unset')
   const userLabel = userId || t('header.currentUser.unset')
-  const canSwitchUser = serverMode === 'trusted' && Boolean(accountId)
-  const canListUsers = Boolean(connection.adminApiKey)
+  const { canManageUsers } = resolveStudioManagementCapabilities({
+    hasControlCredential: Boolean(connection.adminApiKey.trim()),
+    isRoleLoading: isConnectionRoleLoading,
+    role: connectionRole,
+    serverMode,
+  })
+  const canSwitchUser =
+    Boolean(accountId) && (serverMode === 'trusted' || canManageUsers)
+  const canListUsers = canManageUsers
   const manualTargetUserId = manualUserId.trim()
   const adminConnection = React.useMemo<AdminConnection>(
     () => ({
@@ -57,7 +71,10 @@ export function CurrentUserMenu() {
     retry: false,
   })
 
-  async function selectUser(nextUserId: string): Promise<void> {
+  async function selectUser(
+    nextUserId: string,
+    nextApiKey = '',
+  ): Promise<void> {
     const normalizedUserId = nextUserId.trim()
     if (!normalizedUserId || normalizedUserId === userId) {
       return
@@ -68,7 +85,7 @@ export function CurrentUserMenu() {
       await switchIdentity({
         accountId,
         allowLegacyIdentityFallback: true,
-        apiKey: '',
+        apiKey: serverMode === 'trusted' ? '' : nextApiKey,
         userId: normalizedUserId,
       })
       setManualUserId('')
@@ -205,15 +222,19 @@ export function CurrentUserMenu() {
                 usersQuery.data.map((user) => {
                   const current = user.userId === userId
                   const switching = switchingUserId === user.userId
+                  const canUseIdentity =
+                    serverMode === 'trusted' || Boolean(user.apiKey)
                   return (
                     <button
                       key={user.userId}
                       type="button"
                       aria-current={current ? 'true' : undefined}
                       aria-label={user.userId}
-                      disabled={current || Boolean(switchingUserId)}
+                      disabled={
+                        current || !canUseIdentity || Boolean(switchingUserId)
+                      }
                       className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-accent disabled:cursor-default disabled:opacity-70"
-                      onClick={() => void selectUser(user.userId)}
+                      onClick={() => void selectUser(user.userId, user.apiKey)}
                     >
                       <span className="flex size-7 shrink-0 items-center justify-center rounded-md border bg-background text-xs font-semibold">
                         {getUserInitial(user.userId)}
@@ -225,6 +246,10 @@ export function CurrentUserMenu() {
                         <LoaderCircleIcon className="size-3.5 animate-spin" />
                       ) : current ? (
                         <CheckIcon className="size-3.5 text-primary" />
+                      ) : !canUseIdentity ? (
+                        <span className="text-[10px] text-muted-foreground">
+                          {t('header.currentUser.keyUnavailable')}
+                        </span>
                       ) : null}
                     </button>
                   )

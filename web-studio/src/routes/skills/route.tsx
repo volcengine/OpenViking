@@ -1,8 +1,7 @@
 import * as React from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, createFileRoute } from '@tanstack/react-router'
 import {
-  ChevronRightIcon,
   ExternalLinkIcon,
   FileCode2Icon,
   LoaderCircleIcon,
@@ -11,16 +10,11 @@ import {
   UserRoundIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 
 import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '#/components/ui/card'
+import { Card } from '#/components/ui/card'
 import {
   Sheet,
   SheetContent,
@@ -29,10 +23,15 @@ import {
   SheetTitle,
 } from '#/components/ui/sheet'
 import { useAppConnection } from '#/hooks/use-app-connection'
-import { getOvResult, isOvClientError, ovClient } from '#/lib/ov-client'
-
 import {
-  SKILL_SCOPE_ICONS,
+  getOvResult,
+  isOvClientError,
+  ovClient,
+  postFsMv,
+} from '#/lib/ov-client'
+
+import { SkillCard } from './-components/skill-card'
+import {
   SkillScopeTabs,
   getSkillsForScope,
 } from './-components/skill-scope-tabs'
@@ -181,9 +180,22 @@ async function fetchSkillDetail(skill: SkillItem): Promise<SkillDetail> {
   return normalizeSkillDetail(result, skill)
 }
 
+async function shareSkill(skill: SkillItem): Promise<void> {
+  await getOvResult(
+    postFsMv({
+      body: {
+        from_uri: skill.uri,
+        to_uri: `viking://agent/skills/${skill.name}`,
+      },
+      client: ovClient.client,
+    }),
+  )
+}
+
 function SkillsRoute() {
   const { t } = useTranslation('skillsPage')
   const { identityScopeKey } = useAppConnection()
+  const queryClient = useQueryClient()
   const [selectedSkill, setSelectedSkill] = React.useState<SkillItem | null>(
     null,
   )
@@ -205,6 +217,23 @@ function SkillsRoute() {
     enabled: Boolean(selectedSkill),
     queryFn: () => fetchSkillDetail(selectedSkill as SkillItem),
     queryKey: ['skill-detail', identityScopeKey, selectedSkill?.uri],
+  })
+  const shareMutation = useMutation({
+    mutationFn: shareSkill,
+    onSuccess: async (_, skill) => {
+      if (selectedSkill?.uri === skill.uri) {
+        setSelectedSkill(null)
+      }
+      await queryClient.invalidateQueries({
+        queryKey: ['skills', identityScopeKey],
+      })
+      setActiveScope('agent')
+      toast.success(t('shareSuccess', { name: skill.name }))
+    },
+    onError: (error) =>
+      toast.error(t('shareFailed'), {
+        description: getErrorMessage(error),
+      }),
   })
 
   return (
@@ -306,57 +335,17 @@ function SkillsRoute() {
             ) : (
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 {visibleSkills.map((skill) => {
-                  const ScopeIcon = SKILL_SCOPE_ICONS[skill.scope]
-
                   return (
-                    <button
+                    <SkillCard
                       key={`${skill.scope}:${skill.uri}`}
-                      type="button"
-                      className="min-w-0 rounded-xl text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-                      aria-label={t('viewDetail', { name: skill.name })}
-                      onClick={() => setSelectedSkill(skill)}
-                    >
-                      <Card
-                        size="sm"
-                        className="h-full transition-colors hover:bg-muted/35"
-                      >
-                        <CardHeader>
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="flex min-w-0 items-center gap-2.5">
-                              <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                                <SparklesIcon className="size-4" />
-                              </div>
-                              <CardTitle className="truncate">
-                                {skill.name}
-                              </CardTitle>
-                            </div>
-                            <Badge
-                              variant="outline"
-                              className="gap-1 font-normal"
-                            >
-                              <ScopeIcon />
-                              {t(`scopes.${skill.scope}`)}
-                            </Badge>
-                          </div>
-                          {skill.description ? (
-                            <CardDescription className="line-clamp-2 pt-1 leading-5">
-                              {skill.description}
-                            </CardDescription>
-                          ) : null}
-                        </CardHeader>
-                        <CardContent className="mt-auto">
-                          <div className="flex items-center justify-between gap-3">
-                            <code className="min-w-0 truncate text-xs text-muted-foreground">
-                              {skill.uri}
-                            </code>
-                            <span className="flex shrink-0 items-center gap-0.5 text-xs font-medium text-primary">
-                              {t('detail')}
-                              <ChevronRightIcon className="size-3.5" />
-                            </span>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    </button>
+                      skill={skill}
+                      isSharing={
+                        shareMutation.isPending &&
+                        shareMutation.variables.uri === skill.uri
+                      }
+                      onOpen={() => setSelectedSkill(skill)}
+                      onShare={() => shareMutation.mutate(skill)}
+                    />
                   )
                 })}
               </div>
