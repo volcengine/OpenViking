@@ -608,6 +608,8 @@ class FSService:
         ctx: RequestContext,
     ) -> Dict[str, Any]:
         """Copy a resource without exposing a cancellable partial transaction."""
+        from_uri = VikingFS._normalize_transfer_uri(from_uri)
+        to_uri = VikingFS._normalize_transfer_uri(to_uri)
         return await self._finish_transfer_after_caller_cancel(
             self._cp_and_refresh(from_uri, to_uri, recursive=recursive, ctx=ctx),
             operation="copy",
@@ -664,6 +666,8 @@ class FSService:
 
     async def mv(self, from_uri: str, to_uri: str, ctx: RequestContext) -> None:
         """Move a resource without exposing a cancellable partial transaction."""
+        from_uri = VikingFS._normalize_transfer_uri(from_uri)
+        to_uri = VikingFS._normalize_transfer_uri(to_uri)
         await self._finish_transfer_after_caller_cancel(
             self._mv_and_refresh(from_uri, to_uri, ctx=ctx),
             operation="move",

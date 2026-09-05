@@ -626,7 +626,9 @@ When deleting `viking://resources/...`, the response may include `memory_cleanup
 
 Copy a file or directory to a new Viking URI. The source remains unchanged. Existing vector records under the source URI are copied and rewritten for the destination, so the copied content does not need to be parsed, described by a VLM, or embedded again.
 
-The destination parent directory must already exist, and the destination itself must not exist. Copying a directory requires `recursive=true` (or `-r` in the CLI). The destination cannot equal the source or be inside the source directory tree.
+The destination parent directory must already exist. Existing files are overwritten; existing directories are merged recursively, preserving destination-only files. `to_uri` is the exact destination, without appending the source directory name. File/directory type conflicts are rejected. Copying a directory requires `recursive=true` (or `-r` in the CLI). Source and destination must be distinct and neither may contain the other. Overwrite preserves the destination ACL; new entries inherit permissions from their destination parent.
+
+Files use Exact Locks on both paths; directories use Tree Locks on both subtrees, without locking their parent trees. A content-copy failure can leave a partial destination. A vector-copy failure attempts to remove copied vectors and destination data. Existing destination contents are not backed up: rollback after a merge can delete the entire destination, including its preexisting contents. This is not an atomic transaction.
 
 **Parameters**
 
@@ -702,13 +704,15 @@ ov cp -r viking://resources/docs viking://resources/docs-backup
 
 `semantic_status: "queued"` means the copy has already committed and the destination parent's overview and abstract will be rebuilt asynchronously from summaries available at the destination. The API does not wait for that refresh. A refresh enqueue failure may return `semantic_status: "failed"` and `semantic_error`; it does not roll back the completed file and vector copy.
 
-Common errors include `NOT_FOUND` when the source or destination parent is missing, `CONFLICT` when the destination already exists or a path lock is busy, `FAILED_PRECONDITION` when a directory is copied without `recursive=true`, and `INVALID_ARGUMENT` for invalid source/destination relationships.
+Common errors include `NOT_FOUND` when the source or destination parent is missing, `CONFLICT` when a path lock is busy, `FAILED_PRECONDITION` when a directory is copied without `recursive=true`, and `INVALID_ARGUMENT` for invalid source/destination relationships or file/directory type conflicts.
 
 ---
 
 ### mv()
 
-Move file or directory.
+Move a file or directory. Existing files are overwritten; existing directories are merged recursively, preserving destination-only entries. `to_uri` is the exact destination without appending the source directory name. Type conflicts and overlapping source/destination paths are rejected.
+
+Files use two Exact Locks; directories use Tree Locks on the source and destination, not their parent trees. The operation copies destination data, moves vector records, then deletes source data. Content-copy failures leave partial destinations. Vector or ACL update failures attempt to restore source vectors and remove destination data. A final source-deletion failure leaves the destination and any remaining source data; it does not rebuild the source. Old destination contents are not backed up, and rollback may remove an entire merged destination, so failure does not guarantee restoration of the original state.
 
 **Parameters**
 

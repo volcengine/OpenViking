@@ -786,7 +786,10 @@ async def test_resource_rm_does_not_deactivate_watch_task_control_uri(request_co
 
 
 @pytest.mark.asyncio
-async def test_resource_mv_validates_then_moves_then_rewrites_watch_tasks(request_context):
+@pytest.mark.parametrize("separator", ["/", "//"])
+async def test_resource_mv_validates_then_moves_then_rewrites_watch_tasks(
+    request_context, separator
+):
     events = []
     viking_fs = _FakeVikingFS(events=events)
     watch_manager = _FakeWatchManager(events=events)
@@ -810,8 +813,8 @@ async def test_resource_mv_validates_then_moves_then_rewrites_watch_tasks(reques
     service._enqueue_copy_refresh = enqueue_refresh
 
     await service.mv(
-        "viking://resources/codeask/wiki",
-        "viking://resources/codeask/wiki-renamed",
+        f"viking://resources{separator}codeask/wiki",
+        f"viking://resources{separator}codeask/wiki-renamed",
         ctx=request_context,
     )
 
@@ -922,7 +925,10 @@ async def test_resource_mv_watch_control_file_skips_parent_refresh(request_conte
 
 
 @pytest.mark.asyncio
-async def test_resource_cp_coordinates_mutation_without_copying_watch_tasks(request_context):
+@pytest.mark.parametrize("separator", ["/", "//"])
+async def test_resource_cp_coordinates_mutation_without_copying_watch_tasks(
+    request_context, separator
+):
     source = "viking://resources/codeask/wiki"
     target = "viking://resources/archive/wiki"
     events = []
@@ -948,7 +954,12 @@ async def test_resource_cp_coordinates_mutation_without_copying_watch_tasks(requ
 
     service._enqueue_copy_refresh = enqueue_refresh
 
-    result = await service.cp(source, target, recursive=True, ctx=request_context)
+    result = await service.cp(
+        source.replace("resources/", f"resources{separator}"),
+        target.replace("resources/", f"resources{separator}"),
+        recursive=True,
+        ctx=request_context,
+    )
 
     assert coordinator.calls == [{"account_id": "default", "uris": [source, target]}]
     assert viking_fs.cp_calls == [
