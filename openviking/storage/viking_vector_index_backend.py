@@ -8,9 +8,14 @@ import asyncio
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, Dict, List, Mapping, Optional
+from typing import Any, AsyncIterator, Awaitable, Callable, Container, Dict, List, Mapping, Optional
 
-from openviking.core.namespace import canonical_user_root, resolve_uri, uri_parts, visible_roots
+from openviking.core.namespace import (
+    canonical_user_root,
+    resolve_uri,
+    uri_parts,
+    visible_roots,
+)
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.acl import (
     ACL_CONTEXT_FIELDS,
@@ -18,9 +23,11 @@ from openviking.storage.acl import (
     AclManager,
     acl_grant_tokens,
     acl_principals,
+    is_acl_uri,
 )
 from openviking.storage.expr import And, Contains, Eq, FilterExpr, In, Or, PathScope, RawDSL
 from openviking.storage.vector_migration import (
+    rewrite_transfer_uri,
     rewrite_vector_record,
     uri_in_transfer_scope,
 )
@@ -30,7 +37,7 @@ from openviking.storage.vectordb.utils.logging_init import init_cpp_logging
 from openviking.storage.vectordb_adapters import create_collection_adapter
 from openviking.utils.tags import merge_search_tags
 from openviking.utils.time_utils import get_current_timestamp
-from openviking_cli.exceptions import ConflictError, InvalidArgumentError
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.vectordb_config import DEFAULT_INDEX_NAME, VectorDBBackendConfig
 from openviking_cli.utils.uri import VikingURI
@@ -181,9 +188,7 @@ class _AsyncVectorAdapter:
             index_meta = collection.get_index_meta_data(index_name) or {}
             current_scalar_index = index_meta.get("ScalarIndex", [])
             indexed_fields = set(current_scalar_index)
-            missing_scalar_fields = [
-                field for field in scalar_index if field not in indexed_fields
-            ]
+            missing_scalar_fields = [field for field in scalar_index if field not in indexed_fields]
             if missing_scalar_fields:
                 collection.update_index(
                     index_name,
@@ -389,9 +394,7 @@ class _SingleAccountBackend:
     async def update_collection_schema(
         self, fields: List[Dict[str, Any]], scalar_index: List[str]
     ) -> None:
-        await self._async_adapter.update_collection_schema(
-            fields, scalar_index, self._index_name
-        )
+        await self._async_adapter.update_collection_schema(fields, scalar_index, self._index_name)
         await self._refresh_meta_data_async()
 
     # =========================================================================
@@ -1725,9 +1728,37 @@ class VikingVectorIndexBackend:
         recursive: bool,
         include_full_records: bool,
         batch_size: int = 100,
+        entry_uris: List[str] | None = None,
     ) -> tuple[List[Dict[str, Any]], int]:
         """Scan one URI scope without a fixed total-record limit."""
-        transfer_filter = self._uri_transfer_filter(ctx, uri, recursive=recursive)
+        selected_entries = set(entry_uris) if entry_uris is not None else None
+        if selected_entries is not None:
+            if not selected_entries:
+                return [], 0
+            filters: List[FilterExpr] = []
+            for entry in sorted(selected_entries):
+                if self.mode == "volcengine":
+                    filters.append(self._uri_transfer_filter(ctx, entry, recursive=False))
+                else:
+                    # Raw prefix filters encode URI values to the stored path format.
+                    filters.append(
+                        And(
+                            [
+                                Eq("account_id", ctx.account_id),
+                                Or(
+                                    [
+                                        Eq("uri", entry),
+                                        RawDSL(
+                                            {"op": "prefix", "field": "uri", "prefix": entry + "#"}
+                                        ),
+                                    ]
+                                ),
+                            ]
+                        )
+                    )
+            transfer_filter = filters[0] if len(filters) == 1 else Or(filters)
+        else:
+            transfer_filter = self._uri_transfer_filter(ctx, uri, recursive=recursive)
         expected_count = await self._strict_transfer_count(ctx, transfer_filter)
         records: List[Dict[str, Any]] = []
         cursor: Optional[str] = None
@@ -1763,7 +1794,11 @@ class VikingVectorIndexBackend:
                 record
                 for record in page
                 if isinstance(record.get("uri"), str)
-                and uri_in_transfer_scope(record["uri"], uri, recursive=recursive)
+                and (
+                    self._vector_entry_uri(record["uri"], selected_entries) in selected_entries
+                    if selected_entries is not None
+                    else uri_in_transfer_scope(record["uri"], uri, recursive=recursive)
+                )
             ]
             if include_full_records and scoped:
                 ids = [str(record["id"]) for record in scoped if record.get("id")]
@@ -1821,38 +1856,155 @@ class VikingVectorIndexBackend:
             deleted += batch_deleted
         return deleted
 
-    async def copy_uri_mapping(
+    @staticmethod
+    def _vector_entry_uri(uri: str, known_uris: Container[str] = ()) -> str:
+        """Prefer real entry URIs; only strip a trailing chunk identifier."""
+        if uri in known_uris:
+            return uri
+        base, marker, suffix = uri.rpartition("#")
+        if marker and "/" not in suffix and suffix.startswith(("chunk_", "chunk-")):
+            return base
+        return uri
+
+    @staticmethod
+    def _validate_uri_transfer_scopes(source_uri: str, target_uri: str) -> None:
+        if uri_in_transfer_scope(target_uri, source_uri, recursive=True) or uri_in_transfer_scope(
+            source_uri, target_uri, recursive=True
+        ):
+            raise InvalidArgumentError(
+                "source and target vector scopes must not be equal or contain one another"
+            )
+
+    async def _prepare_uri_transfer(
         self,
         ctx: RequestContext,
         source_uri: str,
         target_uri: str,
-        recursive: bool = False,
-    ) -> VectorTransferResult:
-        """Copy every vector record in a URI scope without regenerating embeddings."""
-        source_uri = resolve_uri(source_uri).uri
-        target_uri = resolve_uri(target_uri).uri
-        target_records, _ = await self._scan_uri_transfer_scope(
-            ctx,
-            target_uri,
-            recursive=recursive,
-            include_full_records=False,
-        )
-        if target_records:
-            raise ConflictError(
-                f"copy target vector scope already exists: {target_uri}",
-                resource=target_uri,
-            )
-
+        *,
+        recursive: bool,
+        source_uris: List[str] | None,
+        preserve_target_acl: bool = False,
+        target_entry_exists: Callable[[str], Awaitable[bool]] | None = None,
+    ) -> tuple[List[Dict[str, Any]], int, Dict[str, Dict[str, Any]]]:
+        """Read selected source records and remove affected target records."""
         source_records, batches = await self._scan_uri_transfer_scope(
             ctx,
             source_uri,
             recursive=recursive,
             include_full_records=True,
         )
-        result = VectorTransferResult(scanned=len(source_records), batches=batches)
-        if not source_records:
-            return result
 
+        selected_source_uris = {
+            resolve_uri(uri).uri
+            for uri in (source_uris if source_uris is not None else [source_uri])
+        }
+        if source_uris is not None:
+            source_records = [
+                record
+                for record in source_records
+                if self._vector_entry_uri(str(record["uri"]), selected_source_uris)
+                in selected_source_uris
+            ]
+
+        # Match legacy mv: unindexed source entries leave old target records intact.
+        if not source_records:
+            return source_records, batches, {}
+        replacement_source_uris = {
+            self._vector_entry_uri(str(record["uri"]), selected_source_uris)
+            for record in source_records
+        }
+        replacement_target_uris = {
+            rewrite_transfer_uri(uri, source_uri, target_uri) for uri in replacement_source_uris
+        }
+        if any(
+            not uri_in_transfer_scope(uri, target_uri, recursive=recursive)
+            for uri in replacement_target_uris
+        ):
+            raise InvalidArgumentError("replacement entry is outside the target vector scope")
+        # URI spelling alone cannot distinguish a chunk from a real file whose
+        # name ends in #chunk_*. Ask the filesystem only for ambiguous candidates.
+        independent_targets: Dict[str, bool] = {}
+
+        async def is_independent_target(uri: str) -> bool:
+            if target_entry_exists is None or uri in replacement_target_uris:
+                return False
+            if self._vector_entry_uri(uri, replacement_target_uris) == uri:
+                return False
+            if uri not in independent_targets:
+                independent_targets[uri] = await target_entry_exists(uri)
+            return independent_targets[uri]
+
+        for record in source_records:
+            written_uri = rewrite_transfer_uri(str(record["uri"]), source_uri, target_uri)
+            if await is_independent_target(written_uri):
+                raise InvalidArgumentError(
+                    f"vector chunk conflicts with an existing filesystem entry: {written_uri}"
+                )
+        # A chunk cannot carry ACL for its base file URI. Keep the old main record
+        # when copy has no main record to replace it, accepting its stale content.
+        preserved_acl_uris: set[str] = set()
+        if preserve_target_acl and self._acl_enabled(ctx):
+            written_uris = {
+                rewrite_transfer_uri(str(record["uri"]), source_uri, target_uri)
+                for record in source_records
+            }
+            preserved_acl_uris = {
+                uri for uri in replacement_target_uris - written_uris if is_acl_uri(uri)
+            }
+        # Bound the query expression and avoid scanning destination-only subtrees.
+        target_entries = sorted(replacement_target_uris)
+        affected_target_ids: List[str] = []
+        for offset in range(0, len(target_entries), 100):
+            target_records, _ = await self._scan_uri_transfer_scope(
+                ctx,
+                target_uri,
+                recursive=False,
+                include_full_records=False,
+                entry_uris=target_entries[offset : offset + 100],
+            )
+            for record in target_records:
+                if record["uri"] not in preserved_acl_uris and not await is_independent_target(
+                    str(record["uri"])
+                ):
+                    affected_target_ids.append(str(record["id"]))
+        target_acl_fields: Dict[str, Dict[str, Any]] = {}
+        if preserve_target_acl and self._acl_enabled(ctx) and replacement_target_uris:
+            assert self.acl_manager is not None
+            acl_target_uris = {uri for uri in replacement_target_uris if is_acl_uri(uri)}
+            target_acl_fields = {
+                uri: effective.context_fields()
+                for uri, effective in (
+                    await self.acl_manager.resolve_many(acl_target_uris, ctx)
+                ).items()
+            }
+        if affected_target_ids:
+            await self._delete_vector_transfer_ids(ctx, affected_target_ids)
+        return source_records, batches, target_acl_fields
+
+    async def copy_uri_mapping(
+        self,
+        ctx: RequestContext,
+        source_uri: str,
+        target_uri: str,
+        recursive: bool = False,
+        *,
+        source_uris: List[str] | None = None,
+        target_entry_exists: Callable[[str], Awaitable[bool]] | None = None,
+    ) -> VectorTransferResult:
+        """Copy every vector record in a URI scope without regenerating embeddings."""
+        source_uri = resolve_uri(source_uri).uri
+        target_uri = resolve_uri(target_uri).uri
+        self._validate_uri_transfer_scopes(source_uri, target_uri)
+        source_records, batches, target_acl_fields = await self._prepare_uri_transfer(
+            ctx,
+            source_uri,
+            target_uri,
+            recursive=recursive,
+            source_uris=source_uris,
+            target_entry_exists=target_entry_exists,
+            preserve_target_acl=True,
+        )
+        result = VectorTransferResult(scanned=len(source_records), batches=batches)
         timestamp = get_current_timestamp()
         target_payloads = [
             rewrite_vector_record(
@@ -1865,12 +2017,27 @@ class VikingVectorIndexBackend:
             )
             for record in source_records
         ]
+        if target_acl_fields:
+            for payload in target_payloads:
+                acl_fields = target_acl_fields.get(
+                    self._vector_entry_uri(str(payload["uri"]), target_acl_fields)
+                )
+                if acl_fields is not None:
+                    payload.update(acl_fields)
+
+        if not target_payloads:
+            return result
+
         attempted_target_ids: List[str] = []
         try:
             for offset in range(0, len(target_payloads), 100):
                 payload_batch = target_payloads[offset : offset + 100]
                 attempted_target_ids.extend(str(payload["id"]) for payload in payload_batch)
-                written_ids = await self.upsert_many(payload_batch, ctx=ctx)
+                written_ids = (
+                    await self._upsert_many_raw(payload_batch, ctx=ctx)
+                    if target_acl_fields
+                    else await self.upsert_many(payload_batch, ctx=ctx)
+                )
                 if len(written_ids) != len(payload_batch):
                     raise RuntimeError(
                         f"Vector copy wrote {len(written_ids)} of {len(payload_batch)} records"
@@ -1882,13 +2049,7 @@ class VikingVectorIndexBackend:
             except Exception as rollback_error:
                 diagnostic_suffix = ""
                 try:
-                    residual_records, _ = await self._scan_uri_transfer_scope(
-                        ctx,
-                        target_uri,
-                        recursive=recursive,
-                        include_full_records=False,
-                    )
-                    residual_count = len(residual_records)
+                    residual_count = len(await self._strict_transfer_get(ctx, attempted_target_ids))
                 except Exception as diagnostic_error:
                     residual_count = len(attempted_target_ids)
                     diagnostic_suffix = f"; residual scan failed: {diagnostic_error}"
@@ -1907,27 +2068,21 @@ class VikingVectorIndexBackend:
         source_uri: str,
         target_uri: str,
         recursive: bool = False,
+        *,
+        source_uris: List[str] | None = None,
+        target_entry_exists: Callable[[str], Awaitable[bool]] | None = None,
     ) -> VectorTransferResult:
         """Move every vector record in a URI scope with compensating rollback."""
         source_uri = resolve_uri(source_uri).uri
         target_uri = resolve_uri(target_uri).uri
-        target_records, _ = await self._scan_uri_transfer_scope(
-            ctx,
-            target_uri,
-            recursive=recursive,
-            include_full_records=False,
-        )
-        if target_records:
-            raise ConflictError(
-                f"move target vector scope already exists: {target_uri}",
-                resource=target_uri,
-            )
-
-        source_records, batches = await self._scan_uri_transfer_scope(
+        self._validate_uri_transfer_scopes(source_uri, target_uri)
+        source_records, batches, _ = await self._prepare_uri_transfer(
             ctx,
             source_uri,
+            target_uri,
             recursive=recursive,
-            include_full_records=True,
+            source_uris=source_uris,
+            target_entry_exists=target_entry_exists,
         )
         result = VectorTransferResult(scanned=len(source_records), batches=batches)
         if not source_records:
@@ -1979,10 +2134,17 @@ class VikingVectorIndexBackend:
             try:
                 await self._delete_vector_transfer_ids(ctx, attempted_target_ids)
             except Exception as rollback_error:
+                diagnostic_suffix = ""
+                try:
+                    residual_count = len(await self._strict_transfer_get(ctx, attempted_target_ids))
+                except Exception as diagnostic_error:
+                    residual_count = len(attempted_target_ids)
+                    diagnostic_suffix = f"; residual scan failed: {diagnostic_error}"
                 raise VectorTransferRollbackError(
-                    f"Vector move prepare failed and target cleanup failed: {rollback_error}",
+                    f"Vector move prepare failed and target cleanup failed: {rollback_error}"
+                    f"{diagnostic_suffix}",
                     phase="move_target_cleanup",
-                    residual_count=len(attempted_target_ids),
+                    residual_count=residual_count,
                 ) from transfer_error
             raise
 

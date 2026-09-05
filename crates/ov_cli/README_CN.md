@@ -137,7 +137,7 @@ ov grep "openviking" --uri viking://resources
 - `get` - 下载文件到本地路径。
 
 ```bash
-# 目标父目录必须已存在，目标本身必须不存在。
+# 目标父目录必须已存在；已有文件直接覆盖，已有目录递归合并。
 ov cp viking://resources/docs/guide.md viking://resources/archive/guide-copy.md
 ov cp -r viking://resources/docs viking://resources/docs-backup
 ```
