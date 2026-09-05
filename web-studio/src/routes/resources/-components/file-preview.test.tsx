@@ -17,6 +17,11 @@ const previewState = vi.hoisted(() => ({
   override: null as { content: string; fileType: string } | null,
 }))
 
+const apiMocks = vi.hoisted(() => ({
+  fetchFileContent: vi.fn(),
+  fetchFsStat: vi.fn(),
+}))
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }))
@@ -33,30 +38,7 @@ vi.mock('#/lib/ov-client', () => ({
   ovClient: { getOptions: () => ({ baseUrl: '' }) },
 }))
 
-vi.mock('../-hooks/viking-fm', () => ({
-  useInvalidateVikingFs: () => ({
-    invalidateList: vi.fn(),
-    invalidatePreview: vi.fn(),
-    invalidateTree: vi.fn(),
-  }),
-  useVikingFilePreview: () => ({
-    canLoadContent: false,
-    isContentLoaded: true,
-    isFetching: false,
-    isLoading: false,
-    preview: {
-      content: '[Target](./target.md)',
-      fileType: 'markdown',
-      shouldAutoRead: true,
-      ...(previewState.override ?? {}),
-    },
-    refetch: vi.fn(),
-  }),
-  useVikingFsStat: () => ({
-    data: undefined,
-    isLoading: false,
-  }),
-}))
+vi.mock('../-lib/api', () => apiMocks)
 
 const file: VikingFsEntry = {
   abstract: '',
@@ -84,16 +66,42 @@ function renderPreview(
   directoryOverview?: string,
   directoryAbstract?: string,
 ) {
+  const preview = previewState.override ?? {
+    content: '[Target](./target.md)',
+    fileType: 'markdown',
+  }
+  const previewEntry =
+    preview.fileType === 'jsonl'
+      ? {
+          ...entry,
+          name: 'preview.jsonl',
+          uri: 'viking://resources/wiki/preview.jsonl',
+        }
+      : entry
   const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
+    defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   })
-  if (entry.isDir) {
+  const readKey = [
+    'viking-file-read',
+    previewEntry.uri,
+    previewEntry.modTime || '',
+    { limit: -1, offset: 0, raw: true },
+  ]
+  const readResult = {
+    content: preview.content,
+    limit: -1,
+    offset: 0,
+    truncated: false,
+    uri: previewEntry.uri,
+  }
+  queryClient.setQueryData(readKey, readResult)
+  if (previewEntry.isDir) {
     queryClient.setQueryData(
-      ['viking-directory-sidecar', entry.uri, 'abstract'],
+      ['viking-directory-sidecar', previewEntry.uri, 'abstract'],
       directoryAbstract ?? '',
     )
     queryClient.setQueryData(
-      ['viking-directory-sidecar', entry.uri, 'overview'],
+      ['viking-directory-sidecar', previewEntry.uri, 'overview'],
       directoryOverview,
     )
   }
@@ -103,7 +111,7 @@ function renderPreview(
 
   return render(
     <FilePreview
-      file={entry}
+      file={previewEntry}
       onClose={vi.fn()}
       onNavigate={onNavigate}
       showCloseButton={false}
@@ -111,6 +119,35 @@ function renderPreview(
     { wrapper },
   )
 }
+
+describe('FilePreview metadata hydration', () => {
+  afterEach(() => {
+    previewState.override = null
+    vi.clearAllMocks()
+  })
+
+  it('hydrates missing Markdown metadata without reloading its content', async () => {
+    const entry: VikingFsEntry = {
+      ...file,
+      modTime: '',
+      size: '',
+      sizeBytes: null,
+    }
+    apiMocks.fetchFsStat.mockResolvedValue({
+      ...entry,
+      modTime: '2026-09-01 10:30',
+      size: '321 B',
+      sizeBytes: 321,
+    })
+    previewState.override = { content: 'Memory body', fileType: 'markdown' }
+
+    renderPreview(entry, vi.fn())
+
+    expect(await screen.findByText('321 B · 2026-09-01 10:30')).toBeDefined()
+    expect(screen.getByText('Memory body')).toBeDefined()
+    expect(apiMocks.fetchFileContent).not.toHaveBeenCalled()
+  })
+})
 
 describe('FilePreview Markdown links', () => {
   it('opens internal Markdown links in the resource preview', () => {
