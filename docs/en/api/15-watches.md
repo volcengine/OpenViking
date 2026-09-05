@@ -15,7 +15,7 @@ This control plane wraps the `WatchManager` primitives without changing any serv
 **Operations**:
 - **List** (`GET /api/v1/watches`) — returns `{tasks, total}`; pass `?active_only=true` to filter; pass `?to_uri=...` to collapse to a single-task lookup
 - **Show** (`GET /api/v1/watches/{task_id}`) — inspect one task; optional `?to_uri=` performs a cross-key sanity check
-- **Update** (`PATCH /api/v1/watches/{task_id}` or `PATCH /api/v1/watches?to_uri=...`) — partial update of `watch_interval`, `is_active`, `reason`, `instruction`. `is_active` is orthogonal to `watch_interval`: flip `is_active` to pause/resume without losing the configured cadence.
+- **Update** (`PATCH /api/v1/watches/{task_id}` or `PATCH /api/v1/watches?to_uri=...`) — partial update of `watch_interval`, `is_active`, `reason`, `instruction`, `schedule_time`, `schedule_timezone`. `is_active` is orthogonal to `watch_interval`: flip `is_active` to pause/resume without losing the configured cadence.
 - **Delete** (`DELETE /api/v1/watches/{task_id}` or `DELETE /api/v1/watches?to_uri=...`)
 - **Trigger** (`POST /api/v1/watches/{task_id}/trigger` or `POST /api/v1/watches/trigger?to_uri=...`) — fire-and-forget refresh; returns immediately while the underlying re-ingest runs in the background
 
@@ -34,6 +34,8 @@ For every single-task endpoint the path `{task_id}` can be replaced with a `?to_
 | Field | Type | Description |
 |-------|------|-------------|
 | watch_interval | float | New cadence in minutes. Must be `> 0`; use `is_active=false` to pause without losing the cadence. |
+| schedule_time | string | Wall-clock daily execution time `"HH:MM"` (24h) in `schedule_timezone`. Anchors each run to the next occurrence of that time instead of the interval, so delayed runs cannot drift the schedule. Empty string clears it (must clear `schedule_timezone` together). |
+| schedule_timezone | string | IANA timezone name (e.g. `Asia/Shanghai`) for `schedule_time`; server-local when unset. Empty string clears it (must clear `schedule_time` together). |
 | is_active | bool | Toggle activation without losing the cadence (pause / resume). |
 | reason | string | Update the recorded reason for the watch. |
 | instruction | string | Update the semantic processing instruction. |

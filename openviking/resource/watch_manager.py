@@ -8,6 +8,7 @@ Provides task creation, update, deletion, query, and persistence storage.
 
 import asyncio
 import json
+import re
 import uuid
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -91,6 +92,12 @@ class WatchTask(BaseModel):
     last_status: Optional[str] = Field(None, description="Latest execution status")
     last_error: Optional[str] = Field(None, description="Latest sanitized execution error")
     next_execution_time: Optional[datetime] = Field(None, description="Next execution time")
+    schedule_time: Optional[str] = Field(
+        None, description='Wall-clock daily execution time "HH:MM" in schedule_timezone (#3932)'
+    )
+    schedule_timezone: Optional[str] = Field(
+        None, description="IANA timezone name for schedule_time; server-local when unset"
+    )
     is_active: bool = Field(default=True, description="Whether the task is active")
     account_id: str = Field(default="default", description="Account ID (tenant)")
     user_id: str = Field(default="default", description="User ID who created this task")
@@ -126,6 +133,8 @@ class WatchTask(BaseModel):
             if self.next_execution_time
             else None,
             "is_active": self.is_active,
+            "schedule_time": self.schedule_time,
+            "schedule_timezone": self.schedule_timezone,
             "account_id": self.account_id,
             "user_id": self.user_id,
             "original_role": self.original_role,
@@ -161,10 +170,62 @@ class WatchTask(BaseModel):
             data["connector_states"] = None
         return cls(**data)
 
-    def calculate_next_execution_time(self) -> datetime:
-        """Calculate next execution time based on interval."""
+    def calculate_next_execution_time(self, now: Optional[datetime] = None) -> datetime:
+        """Calculate the next execution time.
+
+        Wall-clock schedules (``schedule_time`` set) anchor to the next
+        occurrence of that time of day in ``schedule_timezone`` (#3932), so a
+        delayed run cannot drift the schedule. Interval tasks keep the previous
+        behavior: previous execution (or creation) plus ``watch_interval``.
+        """
+        if self.schedule_time:
+            return self._next_wallclock_execution(now or datetime.now())
         base_time = self.last_execution_time or self.created_at
         return base_time + timedelta(minutes=self.watch_interval)
+
+    def _next_wallclock_execution(self, now: datetime) -> datetime:
+        """Return the next future occurrence of ``schedule_time`` as server-local naive time."""
+        hour_s, minute_s = self.schedule_time.split(":")
+        hour, minute = int(hour_s), int(minute_s)
+        if self.schedule_timezone:
+            try:
+                from zoneinfo import ZoneInfo
+
+                tz = ZoneInfo(self.schedule_timezone)
+            except Exception as exc:
+                raise ValueError(
+                    f"Unknown schedule_timezone {self.schedule_timezone!r}"
+                ) from exc
+            now_in_tz = now.astimezone(tz)
+        else:
+            now_in_tz = now.astimezone()
+
+        candidate = now_in_tz.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if candidate <= now_in_tz:
+            candidate = candidate + timedelta(days=1)
+        return candidate.astimezone().replace(tzinfo=None)
+
+
+_SCHEDULE_TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+def _validate_wallclock_schedule(schedule_time: Optional[str], schedule_timezone: Optional[str]) -> None:
+    """Validate a wall-clock schedule pair; empty strings clear the schedule."""
+    if schedule_time == "" and schedule_timezone in ("", None):
+        return
+    if schedule_time == "" or schedule_timezone == "":
+        raise ValueError("schedule_time and schedule_timezone must be cleared together")
+    if schedule_time is None:
+        return
+    if not _SCHEDULE_TIME_RE.match(schedule_time):
+        raise ValueError(f'schedule_time must be "HH:MM" (24h), got {schedule_time!r}')
+    if schedule_timezone:
+        try:
+            from zoneinfo import ZoneInfo
+
+            ZoneInfo(schedule_timezone)
+        except Exception as exc:
+            raise ValueError(f"Unknown schedule_timezone {schedule_timezone!r}") from exc
 
 
 class PermissionDeniedError(Exception):
@@ -496,6 +557,8 @@ class WatchManager:
         auth_state: Any = _UNSET,
         connector_states: Any = _UNSET,
         is_active: Optional[bool] = None,
+        schedule_time: Optional[str] = None,
+        schedule_timezone: Optional[str] = None,
     ) -> WatchTask:
         """Update a watch task while its current and requested target URIs are stable."""
         while True:
@@ -539,6 +602,8 @@ class WatchManager:
                         auth_state=auth_state,
                         connector_states=connector_states,
                         is_active=is_active,
+                        schedule_time=schedule_time,
+                        schedule_timezone=schedule_timezone,
                     )
 
     async def _update_task_unlocked(
@@ -562,6 +627,8 @@ class WatchManager:
         auth_state: Any,
         connector_states: Any,
         is_active: Optional[bool],
+        schedule_time: Optional[str] = None,
+        schedule_timezone: Optional[str] = None,
     ) -> WatchTask:
         task_id = task.task_id
         if self._check_uri_conflict(to_uri, account_id=task.account_id, exclude_task_id=task_id):
@@ -610,13 +677,24 @@ class WatchManager:
             task.connector_states = connector_states
         if is_active is not None:
             task.is_active = is_active
+        schedule_changed = False
+        if schedule_time is not None:
+            if schedule_time != task.schedule_time:
+                schedule_changed = True
+            task.schedule_time = schedule_time
+        if schedule_timezone is not None:
+            if schedule_timezone != task.schedule_timezone:
+                schedule_changed = True
+            task.schedule_timezone = schedule_timezone
+        if schedule_time == "" or schedule_timezone == "":
+            _validate_wallclock_schedule(task.schedule_time, task.schedule_timezone)
 
-        if watch_interval is not None:
+        if watch_interval is not None or schedule_changed:
             if task.is_active and task.watch_interval > 0:
                 task.next_execution_time = task.calculate_next_execution_time()
             else:
                 task.next_execution_time = None
-        if is_active is not None and watch_interval is None:
+        if is_active is not None and watch_interval is None and not schedule_changed:
             if task.is_active:
                 if task.watch_interval <= 0:
                     raise ValueError("watch_interval must be > 0 for active tasks")
