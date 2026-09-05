@@ -1444,25 +1444,18 @@ class MemoryUpdater:
                     if schema and schema.embedding_template:
                         template_vars = dict(mf.extra_fields)
                         template_vars["content"] = abstract
-                        missing_vars = TemplateUtils.find_missing_variables(
-                            schema.embedding_template,
-                            template_vars,
-                        )
-                        if missing_vars:
-                            logger.warning(
-                                f"Missing embedding template variables for {uri}, falling back to plain content: {sorted(missing_vars)}"
+                        try:
+                            rendered_embedding_text = TemplateUtils.render(
+                                schema.embedding_template,
+                                template_vars,
+                                extract_context=extract_context,
                             )
-                        else:
-                            try:
-                                embedding_text = render_template(
-                                    schema.embedding_template,
-                                    template_vars,
-                                    extract_context=extract_context,
-                                )
-                            except Exception as e:
-                                logger.warning(
-                                    f"Failed to render embedding template for {uri}, falling back to plain content: {e}"
-                                )
+                            if rendered_embedding_text:
+                                embedding_text = rendered_embedding_text
+                        except Exception as e:
+                            logger.warning(
+                                f"Failed to render embedding template for {uri}, falling back to plain content: {e}"
+                            )
 
                 # Get parent URI
                 from openviking_cli.utils.uri import VikingURI
