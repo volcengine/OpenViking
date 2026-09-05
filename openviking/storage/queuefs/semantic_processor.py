@@ -1133,27 +1133,59 @@ class SemanticProcessor(DequeueHandlerBase):
 
         return candidate + "..."
 
+    # CommonMark thematic break: three or more matching -, _ or * chars,
+    # optionally separated by spaces or tabs (---, * * *, ___).
+    _THEMATIC_BREAK_RE = re.compile(r"^ {0,3}([-_*])(?:[ \t]*\1){2,}[ \t]*$")
+    _HEADING_RE = re.compile(r"^#{1,6}[ \t]+(.*)$")
+    # Label prefix of a heading that carries its body inline, e.g.
+    # "Brief Description: This directory contains ..." (also fullwidth colon).
+    _HEADING_LABEL_RE = re.compile(r"^([^:：]{1,48})[:：][ \t]*(\S.*)$")
+
+    @classmethod
+    def _inline_heading_body(cls, heading_text: str) -> Optional[str]:
+        """Return the body carried inline after a heading label, if any."""
+        match = cls._HEADING_LABEL_RE.match(heading_text.strip())
+        return match.group(2).strip() if match else None
+
     def _extract_abstract_from_overview(self, overview_content: str) -> str:
-        """Extract an abstract from the Markdown overview brief description."""
+        """Extract an abstract from the Markdown overview brief description.
+
+        Headings, blank lines and Markdown thematic breaks before the first
+        prose line are structural decoration (title block, separators) and are
+        skipped; a heading that carries its brief inline
+        (``#### Brief Description: ...``) yields the text after the label.
+        Once prose has started, the next heading of any level ends the
+        abstract section. This prevents a bare ``---`` separator from becoming
+        the whole abstract (issue #4336), which the semantic-sidecar parser
+        would then misread as unclosed YAML frontmatter.
+        """
         overview_content = body_for_preview(overview_content)
         lines = overview_content.split("\n")
 
-        # Skip header lines (starting with #)
-        content_lines = []
+        content_lines: List[str] = []
         in_header = True
 
         for line in lines:
-            if in_header and line.startswith("#"):
+            if self._THEMATIC_BREAK_RE.match(line):
+                # Structural, never content: a leading thematic break must
+                # not end the header block nor be collected as the abstract.
                 continue
-            elif in_header and line.strip():
-                in_header = False
 
-            if not in_header:
-                # Stop at first ##
-                if line.startswith("##"):
+            heading = self._HEADING_RE.match(line)
+            if heading:
+                if not in_header:
+                    # The brief-description body has ended at the next heading.
                     break
-                if line.strip():
-                    content_lines.append(line.strip())
+                inline_body = self._inline_heading_body(heading.group(1))
+                if inline_body:
+                    content_lines.append(inline_body)
+                    in_header = False
+                continue
+
+            stripped = line.strip()
+            if stripped:
+                content_lines.append(stripped)
+                in_header = False
 
         return "\n".join(content_lines).strip()
 

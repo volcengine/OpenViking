@@ -490,18 +490,34 @@ async def write_abstract_overview(
             next_freshness["pending_child_changes"] = max(current_pending - consumed, 0)
             merged_metadata["freshness"] = next_freshness
 
-        overview_body_changed = existing_overview is None or semantic_body_digest(
-            existing_overview.body
-        ) != semantic_body_digest(overview)
-        abstract_body_changed = existing_abstract is None or semantic_body_digest(
-            existing_abstract.body
-        ) != semantic_body_digest(abstract)
+        overview_body_changed = (
+            existing_overview is None
+            or semantic_body_digest(existing_overview.body) != semantic_body_digest(overview)
+        )
+        # A content-free abstract must not be persisted: a bare structural
+        # marker (e.g. a thematic break) would be misparsed as unclosed YAML
+        # frontmatter and break semantic search for the subtree (issue #4336).
+        write_abstract = bool(abstract.strip())
+        if not write_abstract:
+            logger.info(
+                "%s Skipping empty abstract write for %s (no prose extracted)",
+                log_prefix,
+                dir_uri,
+            )
+        abstract_body_changed = write_abstract and (
+            existing_abstract is None
+            or semantic_body_digest(existing_abstract.body) != semantic_body_digest(abstract)
+        )
 
         rendered_overview = render_abstract_overview(
             ContextLevel.OVERVIEW, dir_uri, overview, merged_metadata
         )
-        rendered_abstract = render_abstract_overview(
-            ContextLevel.ABSTRACT, dir_uri, abstract, merged_metadata
+        rendered_abstract = (
+            render_abstract_overview(
+                ContextLevel.ABSTRACT, dir_uri, abstract, merged_metadata
+            )
+            if write_abstract
+            else ""
         )
         current_overview = await _raw_if_exists(viking_fs, overview_uri, ctx)
         current_abstract = await _raw_if_exists(viking_fs, abstract_uri, ctx)
@@ -510,7 +526,7 @@ async def write_abstract_overview(
             await viking_fs.write_file(
                 overview_uri, rendered_overview, ctx=ctx, lease_ref=sidecar_lease
             )
-        if current_abstract != rendered_abstract:
+        if write_abstract and current_abstract != rendered_abstract:
             await viking_fs.write_file(
                 abstract_uri, rendered_abstract, ctx=ctx, lease_ref=sidecar_lease
             )
