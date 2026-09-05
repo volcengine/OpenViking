@@ -58,6 +58,22 @@ def optimize_tool_result(tool_name: str, result: Any) -> Any:
     return result
 
 
+UNTRUSTED_MEMORY_FILE_OPEN = "<untrusted-memory-file>"
+UNTRUSTED_MEMORY_FILE_CLOSE = "</untrusted-memory-file>"
+
+
+def fence_untrusted_memory_content(content: str) -> str:
+    """Wrap file bodies so extract LLMs treat them as data, not instructions (#4292).
+
+    Forged fence markers already present in ``content`` are neutralized so
+    untrusted text cannot close the span early (same approach as #4664).
+    """
+    neutralized = content.replace(
+        UNTRUSTED_MEMORY_FILE_CLOSE, "</\\untrusted-memory-file"
+    ).replace(UNTRUSTED_MEMORY_FILE_OPEN, "<\\untrusted-memory-file")
+    return f"{UNTRUSTED_MEMORY_FILE_OPEN}\n{neutralized}\n{UNTRUSTED_MEMORY_FILE_CLOSE}"
+
+
 def extract_error_summary(error: str) -> str:
     if "File not found" in error:
         return "File not found"
@@ -208,7 +224,9 @@ class MemoryReadTool(MemoryTool):
             plain_content = mf.plain_content() or ""
             visible_content = slice_content_lines(plain_content, offset=offset, limit=limit)
             if visible_content:
-                llm_result["content"] = add_line_numbers(visible_content, start_line=offset + 1)
+                llm_result["content"] = fence_untrusted_memory_content(
+                    add_line_numbers(visible_content, start_line=offset + 1)
+                )
             elif line_count(plain_content) == 0:
                 llm_result["content"] = (
                     "<system-reminder>Warning: the file exists but the contents are empty.</system-reminder>"
