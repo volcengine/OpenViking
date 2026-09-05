@@ -544,6 +544,30 @@ class ContentWriteCoordinator:
                     strict=True,
                 )
                 embedding_requested = embedding_requested or requested
+            # Trigger semantic processing for memory directories (#4657 review).
+            # Without this, batch writes to memory files would not generate
+            # L0 directory abstracts — same root cause as the single-write fix.
+            # Pass through refresh_kinds so semantic_dag.py classifies paths
+            # correctly: added vs modified affects DAG treatment (#4657 review #1).
+            changes_by_type: dict[str, list[str]] = defaultdict(list)
+            for uri in uris:
+                changes_by_type[refresh_kinds[uri]].append(uri)
+            try:
+                action = await self._enqueue_semantic_refresh_changes(
+                    root_uri=directory_uri,
+                    context_type="memory",
+                    changes=dict(changes_by_type),
+                    ctx=ctx,
+                    force_refresh=wait,
+                )
+                if action:
+                    semantic_actions.append(action)
+            except Exception as exc:
+                logger.debug(
+                    "Batch memory semantic refresh enqueue skipped for %s: %s",
+                    directory_uri,
+                    exc,
+                )
 
         if not wait or (not resource_groups and not embedding_requested):
             return _BatchRefreshOutcome(
@@ -624,15 +648,50 @@ class ContentWriteCoordinator:
             generation_trigger="content_write",
             aggregate_directory=aggregate_directory,
         )
-        if msg.telemetry_id:
-            get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)
+        # Register AFTER enqueue to avoid phantom roots when dedup occurs.
+        # SemanticQueue.enqueue returns "deduplicated" for memory writes within
+        # the 45s dedupe window (#769). If we registered before enqueue, a
+        # deduplicated msg.id would sit in pending_semantic_roots forever,
+        # causing _wait_for_request to hang until timeout (#4657 review).
         try:
-            await semantic_queue.enqueue(msg)
+            enqueue_result = await semantic_queue.enqueue(msg)
         except Exception as exc:
             if msg.telemetry_id:
                 get_request_wait_tracker().mark_semantic_failed(msg.telemetry_id, msg.id, str(exc))
             raise
+        if enqueue_result == "deduplicated":
+            # Deduplicated — no worker will process this message, so skip registration.
+            return decision.action
+        if msg.telemetry_id:
+            get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)
         return decision.action
+
+    @staticmethod
+    def _map_semantic_status(
+        semantic_action: "FreshnessAction | None", *, wait: bool
+    ) -> str:
+        """Map a FreshnessAction to a human-readable semantic_status string.
+
+        Note on the deduplicated + wait=True case (see #4657 review #2):
+        When SemanticQueue.enqueue returns "deduplicated" (45s dedupe window,
+        #769), _enqueue_semantic_refresh_changes returns the planner's action
+        without registering a root. If the planner returned REFRESH_NOW and
+        wait=True, this maps to "complete" — even though no worker is
+        processing *this* request's semantic job. This is acceptable because
+        (a) the earlier write's job covers the same directory, and
+        (b) _process_memory_directory re-lists the whole directory anyway.
+        A future follow-up could add a "deduplicated" status string for
+        full self-description, but the current mapping is honest enough
+        for the write result contract.
+        """
+        if semantic_action is None:
+            return "skipped"
+        if semantic_action is FreshnessAction.REFRESH_NOW:
+            return "complete" if wait else "queued"
+        if semantic_action is FreshnessAction.MARK_PENDING:
+            return "deferred"
+        # NOOP or any other action
+        return "skipped"
 
     @staticmethod
     def _raise_refresh_errors(queue_status: Dict[str, Any]) -> None:
@@ -1267,6 +1326,25 @@ class ContentWriteCoordinator:
                 ctx=ctx,
                 ingest_options=ingest_options,
             )
+            # Trigger semantic processing to generate L0 directory abstracts.
+            # _write_direct_with_refresh does this for resources/skills but
+            # _write_memory_with_refresh historically skipped it, causing
+            # memory directories to never get .abstract.md generated.
+            semantic_action = None
+            try:
+                # Use "modified" for replace/append, "added" for create (#4657 review)
+                change_type = "added" if mode == "create" else "modified"
+                semantic_action = await self._enqueue_semantic_refresh_changes(
+                    root_uri=root_uri,
+                    context_type="memory",
+                    changes={change_type: [uri]},
+                    ctx=ctx,
+                    force_refresh=wait,
+                )
+            except Exception as exc:
+                logger.debug(
+                    "Memory semantic refresh enqueue skipped for %s: %s", root_uri, exc
+                )
             queue_status = None
             if embedding_requested and wait:
                 queue_status = (
@@ -1287,7 +1365,7 @@ class ContentWriteCoordinator:
                 written_bytes=written_bytes,
                 wait=wait,
                 queue_status=queue_status,
-                semantic_status="skipped",
+                semantic_status=self._map_semantic_status(semantic_action, wait=wait),
                 vector_status=vector_status,
                 overview_status="complete" if overview_refreshed else "skipped",
             )
