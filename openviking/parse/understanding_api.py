@@ -170,8 +170,10 @@ class UnderstandingAPI(BaseParser):
         source_name = kwargs.get("source_name")
         if isinstance(source_name, str) and source_name:
             task_meta["source_name"] = source_name
+        upload_file_name = None
         if local_path is not None:
-            task_meta["file_name"] = local_path.name
+            upload_file_name = self._resolve_upload_file_name(local_path, source_name)
+            task_meta["file_name"] = upload_file_name
 
         try:
             if prepared_response_id:
@@ -180,7 +182,10 @@ class UnderstandingAPI(BaseParser):
                 task_meta["file_id"] = prepared_file_id
                 response_obj = await self._create_response_for_file(file_id=prepared_file_id)
             elif url is None and local_path is not None:
-                file_obj = await self._create_file(local_path=local_path)
+                file_obj = await self._create_file(
+                    local_path=local_path,
+                    file_name=upload_file_name,
+                )
                 file_id_value = file_obj.get("id")
                 if not file_id_value:
                     raise RuntimeError(
@@ -276,21 +281,31 @@ class UnderstandingAPI(BaseParser):
         logger.info("[UnderstandingAPI] done")
         return result
 
-    async def upload_file(self, source: Union[str, Path]) -> str:
+    async def upload_file(
+        self,
+        source: Union[str, Path],
+        *,
+        file_name: Optional[str] = None,
+    ) -> str:
         """Upload a local file and return a durable Files API file_id."""
         local_path = Path(source)
         if not local_path.is_file():
             raise ValueError("UnderstandingAPI file upload requires an existing local file")
 
-        file_obj = await self._create_file(local_path=local_path)
+        file_obj = await self._create_file(local_path=local_path, file_name=file_name)
         file_id = file_obj.get("id")
         if not file_id:
             raise RuntimeError(f"files api missing file_id: {self._safe_error_summary(file_obj)}")
         return str(file_id)
 
-    async def submit_file(self, source: Union[str, Path]) -> str:
+    async def submit_file(
+        self,
+        source: Union[str, Path],
+        *,
+        file_name: Optional[str] = None,
+    ) -> str:
         """Upload a local file and submit it without retaining the local artifact."""
-        file_id = await self.upload_file(source)
+        file_id = await self.upload_file(source, file_name=file_name)
         response_obj = await self._create_response_for_file(file_id=str(file_id))
         response_id = response_obj.get("id")
         if not response_id:
@@ -429,7 +444,20 @@ class UnderstandingAPI(BaseParser):
         self._raise_if_error(body, context=context)
         return body
 
-    async def _create_file(self, *, local_path: Path) -> Dict[str, Any]:
+    @staticmethod
+    def _resolve_upload_file_name(local_path: Path, file_name: Optional[str]) -> str:
+        if file_name:
+            candidate = PurePosixPath(str(file_name).replace("\\", "/")).name
+            if candidate not in {"", ".", ".."}:
+                return candidate
+        return local_path.name
+
+    async def _create_file(
+        self,
+        *,
+        local_path: Path,
+        file_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
         file_size = local_path.stat().st_size
         if file_size == 0:
             raise InvalidArgumentError("Understanding parser does not support empty files.")
@@ -440,13 +468,14 @@ class UnderstandingAPI(BaseParser):
                     f"upload_simple_max_bytes={self._upload_simple_max_bytes}; "
                     "enable parser_api.enable_resumable_upload to continue"
                 )
-            return await self._multipart_create_file(local_path)
+            return await self._multipart_create_file(local_path, file_name=file_name)
 
         data: Dict[str, Any] = {"purpose": "user_data"}
 
+        upload_file_name = self._resolve_upload_file_name(local_path, file_name)
         content_type = mimetypes.guess_type(str(local_path))[0] or "application/octet-stream"
         with open(local_path, "rb") as f:
-            files = {"file": (local_path.name, f, content_type)}
+            files = {"file": (upload_file_name, f, content_type)}
             async with httpx.AsyncClient(timeout=1200.0, follow_redirects=True) as client:
                 rsp = await client.post(
                     f"{self._api_base}/files",
@@ -607,9 +636,15 @@ class UnderstandingAPI(BaseParser):
                     return str(zip_obj["url"])
         return None
 
-    async def _uploads_init(self, *, file_path: Path) -> Dict[str, Any]:
+    async def _uploads_init(
+        self,
+        *,
+        file_path: Path,
+        file_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        upload_file_name = self._resolve_upload_file_name(file_path, file_name)
         payload = {
-            "file_name": file_path.name,
+            "file_name": upload_file_name,
             "file_size": file_path.stat().st_size,
             "content_type": mimetypes.guess_type(str(file_path))[0] or "application/octet-stream",
             "part_size": int(self._upload_part_size_bytes),
@@ -654,8 +689,13 @@ class UnderstandingAPI(BaseParser):
             )
         return self._read_api_response(rsp, context="uploads complete error")
 
-    async def _multipart_create_file(self, file_path: Path) -> Dict[str, Any]:
-        init_obj = await self._uploads_init(file_path=file_path)
+    async def _multipart_create_file(
+        self,
+        file_path: Path,
+        *,
+        file_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        init_obj = await self._uploads_init(file_path=file_path, file_name=file_name)
         upload_id = init_obj.get("upload_id") or init_obj.get("uploadId")
         object_key = init_obj.get("object_key") or init_obj.get("objectKey")
         part_size = int(
