@@ -111,14 +111,23 @@ store backend，而不是让多个实例各写各的本地 SQLite。
 
 ### 今日检索
 
-来自 HTTP 请求完成事件 `http.request`：
+REST 请求来自 HTTP 请求完成事件 `http.request`：
 
 | API route | operation |
 | --- | --- |
 | `POST /api/v1/search/find` | `find` |
 | `POST /api/v1/search/search` | `search` |
 
-`2xx` 和 `3xx` 记为 `success`，`4xx/5xx` 记为 `error`。Dashboard 今日检索只展示成功请求数。
+MCP 工具调用（`POST /mcp` 无 per-tool 路由）来自 `mcp.tool` 事件，MCP `find`/`search`
+工具与 REST 端点计入同一组计数器。
+
+| MCP tool | operation |
+| --- | --- |
+| `find` | `find` |
+| `search` | `search` |
+
+REST `2xx` 和 `3xx` 记为 `success`，`4xx/5xx` 记为 `error`；MCP 工具调用成功记为
+`success`，参数校验或后端失败记为 `error`。Dashboard 今日检索只展示成功请求数。
 
 ### 上下文提交热力图
 

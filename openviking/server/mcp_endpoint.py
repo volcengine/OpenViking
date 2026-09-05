@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import contextvars
+import functools
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -100,6 +101,53 @@ def _get_ctx() -> RequestContext:
     if ctx is None:
         raise UnauthenticatedError("MCP request identity not set")
     return ctx
+
+
+def _emit_mcp_tool_usage(tool_name: str, *, ok: bool) -> None:
+    """Emit a best-effort ``mcp.tool`` usage event for Studio dashboard counters.
+
+    MCP tool traffic arrives as ``POST /mcp``, so route-based usage projections
+    cannot tell which tool ran. The usage-audit pipeline consumes these events
+    to count MCP find/search calls alongside the REST search endpoints.
+    """
+    try:
+        from openviking.observability.events import try_publish_event
+
+        payload: Dict[str, Any] = {
+            "tool": tool_name,
+            "status": "success" if ok else "error",
+        }
+        ctx = _mcp_ctx.get()
+        if ctx is not None:
+            payload["account_id"] = ctx.account_id
+            payload["user_id"] = ctx.user.user_id
+        try_publish_event("mcp.tool", payload)
+    except Exception:
+        pass
+
+
+def _count_retrieval_usage(tool_name: str):
+    """Wrap an MCP retrieval tool so every completed call emits a usage event.
+
+    Argument-validation and backend failures count as ``error`` outcomes, which
+    matches the REST projection where non-2xx search calls land in the error
+    bucket rather than being dropped.
+    """
+
+    def decorator(fn):
+        @functools.wraps(fn)
+        async def wrapper(*args, **kwargs):
+            ok = False
+            try:
+                result = await fn(*args, **kwargs)
+                ok = True
+                return result
+            finally:
+                _emit_mcp_tool_usage(tool_name, ok=ok)
+
+        return wrapper
+
+    return decorator
 
 
 def _resolve_mcp_workspace_uri(uri: str, ctx: RequestContext) -> str:
@@ -246,6 +294,7 @@ def _resolve_context_type_filter(
 
 
 @mcp.tool()
+@_count_retrieval_usage("find")
 async def find(
     query: str,
     target_uri: str = "",
@@ -273,6 +322,7 @@ async def find(
 
 
 @mcp.tool()
+@_count_retrieval_usage("search")
 async def search(
     query: str,
     target_uri: str = "",

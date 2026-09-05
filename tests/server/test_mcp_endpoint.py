@@ -1852,3 +1852,97 @@ async def test_tree_include_abstract_still_renders(service):
 
     result = await tree(uri="viking://resources/test_tree_abs", include_abstract=True)
     assert "\nnote.md (11 B)" in result
+
+
+# ---------------------------------------------------------------------------
+# retrieval usage events (mcp.tool)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def published_usage_events(monkeypatch):
+    """Capture mcp.tool usage events emitted during a test."""
+    events: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        "openviking.observability.events.try_publish_event",
+        lambda name, payload: events.append((name, dict(payload))),
+    )
+    return events
+
+
+@pytest.mark.asyncio
+async def test_find_tool_emits_retrieval_usage_event(service, monkeypatch, published_usage_events):
+    async def fake_find(**kwargs):
+        return SimpleNamespace(memories=[], resources=[], skills=[])
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+
+    result = await mcp_endpoint.find(query="fast lookup")
+
+    assert result == "No matching context found."
+    assert published_usage_events == [
+        (
+            "mcp.tool",
+            {
+                "tool": "find",
+                "status": "success",
+                "account_id": "default",
+                "user_id": "test_user",
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_find_tool_error_counts_as_error(service, monkeypatch, published_usage_events):
+    async def fake_find(**kwargs):
+        raise InvalidArgumentError("bad query")
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+
+    with pytest.raises(InvalidArgumentError):
+        await mcp_endpoint.find(query="q")
+
+    assert published_usage_events[-1][0] == "mcp.tool"
+    assert published_usage_events[-1][1]["tool"] == "find"
+    assert published_usage_events[-1][1]["status"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_search_tool_emits_retrieval_usage_event(service, monkeypatch, published_usage_events):
+    async def fake_search(**kwargs):
+        return SimpleNamespace(memories=[], resources=[], skills=[])
+
+    monkeypatch.setattr(service.search, "search", fake_search)
+
+    await mcp_endpoint.search(query="deep lookup")
+
+    assert published_usage_events[-1][0] == "mcp.tool"
+    assert published_usage_events[-1][1]["tool"] == "search"
+    assert published_usage_events[-1][1]["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_search_tool_validation_failure_counts_as_error(
+    service, monkeypatch, published_usage_events
+):
+    # mode="context" + read_content=True is rejected before any backend call.
+    with pytest.raises(InvalidArgumentError):
+        await mcp_endpoint.search(query="q", mode="context", read_content=True)
+
+    assert published_usage_events[-1][0] == "mcp.tool"
+    assert published_usage_events[-1][1]["tool"] == "search"
+    assert published_usage_events[-1][1]["status"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_read_tool_does_not_emit_retrieval_usage_event(
+    service, monkeypatch, published_usage_events
+):
+    async def fake_read(*args, **kwargs):
+        return "content"
+
+    monkeypatch.setattr(service.fs, "read", fake_read)
+    await mcp_endpoint.read(uris="viking://user/test_user/a.md")
+
+    assert published_usage_events == []

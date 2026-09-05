@@ -196,7 +196,7 @@ test("Codex MCP entrypoint forwards only native OpenViking tools", () => {
 test("canonical MCP tool list matches server registrations", () => {
   const source = readFileSync(mcpEndpointPath, "utf-8");
   const registered = [
-    ...source.matchAll(/@mcp\.tool\(([^)]*)\)\s*\nasync def ([a-z_]+)\(/g),
+    ...source.matchAll(/@mcp\.tool\(([^)]*)\)\s*\n(?:@[^\n]+\n\s*)*async def ([a-z_]+)\(/g),
   ].map((match) => match[1].match(/(?:^|,\s*)name="([a-z_]+)"/)?.[1] || match[2]);
   assert.deepEqual(registered, REAL_MCP_TOOLS);
 });
