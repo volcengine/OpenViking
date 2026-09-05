@@ -867,8 +867,34 @@ async def test_add_resource_uploads_local_file_even_when_url_is_localhost(tmp_pa
     fake_http.post.assert_awaited_once()
     payload = fake_http.post.await_args.kwargs["json"]
     assert payload["temp_file_id"] == "upload_resource.md"
+    assert payload["source_name"] == "demo.md"
     assert payload["watch_interval"] == 60
     assert "path" not in payload
+
+
+@pytest.mark.asyncio
+async def test_add_resource_uploads_local_directory_with_source_name(tmp_path):
+    resource_dir = tmp_path / "notes pack"
+    resource_dir.mkdir()
+    (resource_dir / "a.md").write_text("# A\n")
+
+    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+
+    async def fake_upload(_path: str) -> str:
+        return "upload_resource.zip"
+
+    client._upload_temp_file = fake_upload
+    client._handle_response_data = lambda _response: {
+        "result": {"root_uri": "viking://resources/notes"}
+    }
+
+    await client.add_resource(str(resource_dir))
+
+    payload = fake_http.post.await_args.kwargs["json"]
+    assert payload["temp_file_id"] == "upload_resource.zip"
+    assert payload["source_name"] == "notes pack"
 
 
 @pytest.mark.asyncio
