@@ -3,6 +3,7 @@
 
 """Unit tests for TaskTracker."""
 
+import asyncio
 import json
 import time
 
@@ -61,33 +62,12 @@ class _FakeAgfs:
     def __init__(self):
         self.files = {}
         self.dirs = {"/", "/local"}
-        self.fail_rm = False
-        self.mkdir_calls = []
-        self.write_calls = []
-        self.rm_calls = []
 
     def mkdir(self, path: str, mode: str = "755"):
-        self.mkdir_calls.append({"path": path, "mode": mode})
         self.dirs.add(path.rstrip("/") or "/")
         return {"message": "created", "mode": mode}
 
-    def write(
-        self,
-        path: str,
-        data,
-        max_retries: int = 3,
-        *,
-        fs_ctx=None,
-        auto_pathlock: bool = True,
-    ):
-        self.write_calls.append(
-            {
-                "path": path,
-                "max_retries": max_retries,
-                "fs_ctx": fs_ctx,
-                "auto_pathlock": auto_pathlock,
-            }
-        )
+    def write(self, path: str, data):
         if isinstance(data, str):
             data = data.encode("utf-8")
         self.files[path] = data
@@ -122,38 +102,25 @@ class _FakeAgfs:
                     children[name] = {"name": name, "path": f"{prefix}/{name}", "is_dir": False}
         return list(children.values())
 
-    def rm(
-        self,
-        path: str,
-        recursive: bool = False,
-        force: bool = False,
-        *,
-        fs_ctx=None,
-        auto_pathlock: bool = True,
-    ):
-        self.rm_calls.append(
-            {
-                "path": path,
-                "recursive": recursive,
-                "force": force,
-                "fs_ctx": fs_ctx,
-                "auto_pathlock": auto_pathlock,
-            }
-        )
-        if self.fail_rm:
-            raise OSError("simulated delete failure")
-        self.files.pop(path, None)
-        return {"message": "removed", "recursive": recursive, "force": force}
-
 
 class _FakeAgfsExistingDir(_FakeAgfs):
     def mkdir(self, path: str, mode: str = "755"):
-        self.mkdir_calls.append({"path": path, "mode": mode})
         normalized = path.rstrip("/") or "/"
         if normalized in self.dirs:
             raise AGFSAlreadyExistsError(f"already exists: {path}")
         self.dirs.add(normalized)
         return {"message": "created", "mode": mode}
+
+
+class _FakeAgfsCamelCase(_FakeAgfs):
+    """Emulates the production AsyncAGFSClient/VikingFS shape: ls entries
+    carry ``isDir`` (camelCase) rather than ``is_dir``."""
+
+    def ls(self, path: str = "/"):
+        entries = super().ls(path)
+        for entry in entries:
+            entry["isDir"] = entry.pop("is_dir")
+        return entries
 
 
 # ── Basic CRUD ──
@@ -240,23 +207,6 @@ async def test_fail_task(tracker: TaskTracker):
     assert retrieved.status == TaskStatus.FAILED
     assert retrieved.stage == "failed"
     assert "LLM timeout" in retrieved.error
-
-
-async def test_mark_externally_cancelled_task_without_enabling_active_cancel(
-    tracker: TaskTracker,
-):
-    task = await tracker.create("connector_import", **_owner_kwargs())
-    await tracker.start(task.task_id)
-
-    with pytest.raises(ValueError, match="does not support cancellation"):
-        await tracker.cancel(task.task_id, **_owner_kwargs())
-
-    await tracker.mark_cancelled(task.task_id, **_owner_kwargs())
-
-    retrieved = await tracker.get(task.task_id)
-    assert retrieved is not None
-    assert retrieved.status == TaskStatus.CANCELLED
-    assert retrieved.stage == "cancelled"
 
 
 async def test_get_nonexistent_returns_none(tracker: TaskTracker):
@@ -346,17 +296,6 @@ async def test_list_limit(tracker: TaskTracker):
     assert len(tasks) == 3
 
 
-async def test_list_can_hide_internal_tasks_before_limit(tracker: TaskTracker):
-    visible = await tracker.create("add_resource", meta={}, **_owner_kwargs())
-    internal = await tracker.create("add_resource", meta={"internal": True}, **_owner_kwargs())
-
-    assert [task.task_id for task in await tracker.list_tasks(limit=1)] == [internal.task_id]
-    assert [
-        task.task_id
-        for task in await tracker.list_tasks(limit=1, include_internal=False)
-    ] == [visible.task_id]
-
-
 async def test_list_order_most_recent_first(tracker: TaskTracker):
     await tracker.create("session_commit", resource_id="first", **_owner_kwargs())
     await tracker.create("session_commit", resource_id="second", **_owner_kwargs())
@@ -419,7 +358,6 @@ async def test_to_dict(tracker: TaskTracker):
     task = await tracker.create(
         "session_commit",
         resource_id="s1",
-        auth={"provider": "git_http_basic", "password": "secret"},
         **_owner_kwargs(),
     )
     d = task.to_dict()
@@ -435,13 +373,6 @@ async def test_to_dict(tracker: TaskTracker):
     assert isinstance(d["updated_at_iso"], str)
     assert "account_id" not in d
     assert "user_id" not in d
-    assert "auth" not in d
-    assert await tracker.get_task_auth(task.task_id, **_owner_kwargs()) == {
-        "provider": "git_http_basic",
-        "password": "secret",
-    }
-    assert (await tracker.get(task.task_id, **_owner_kwargs())).auth == {}
-    assert (await tracker.list_tasks(**_owner_kwargs()))[0].auth == {}
 
 
 # ── Sanitization ──
@@ -478,34 +409,10 @@ async def test_evict_expired_completed(tracker: TaskTracker):
     t = await tracker.create("session_commit", **_owner_kwargs())
     await tracker.start(t.task_id)
     await tracker.complete(t.task_id, {})
-    assert await tracker._store.get(t.task_id, **_owner_kwargs()) is not None
     # Simulate old timestamp (access internal state; get() returns defensive copies)
     tracker._tasks[t.task_id].updated_at = time.time() - tracker.TTL_COMPLETED - 1
     await tracker._evict_expired()
     assert await tracker.get(t.task_id) is None
-    assert await tracker._store.get(t.task_id, **_owner_kwargs()) is None
-
-
-async def test_evict_keeps_cached_task_when_persistent_delete_fails():
-    agfs = _FakeAgfs()
-    tracker = TaskTracker(store=PersistentTaskStore(agfs))
-    t = await tracker.create("session_commit", **_owner_kwargs())
-    await tracker.start(t.task_id)
-    await tracker.complete(t.task_id, {})
-    tracker._tasks[t.task_id].updated_at = time.time() - tracker.TTL_COMPLETED - 1
-    agfs.fail_rm = True
-
-    await tracker._evict_expired()
-
-    assert await tracker.get(t.task_id) is not None
-    assert await tracker._store.get(t.task_id, **_owner_kwargs()) is not None
-
-    agfs.fail_rm = False
-    await tracker._evict_expired()
-
-    assert await tracker.get(t.task_id) is None
-    assert await tracker._store.get(t.task_id, **_owner_kwargs()) is None
-    assert all(call["auto_pathlock"] is False for call in agfs.rm_calls)
 
 
 async def test_evict_keeps_recent_completed(tracker: TaskTracker):
@@ -576,31 +483,18 @@ async def test_persistent_store_writes_task_record_json():
     task = await tracker.create(
         "add_resource",
         resource_id="viking://resources/demo",
-        auth={"provider": "feishu", "access_token": "secret-token"},
         **_owner_kwargs(),
     )
 
     raw = agfs.files[f"/local/acme/_system/tasks/alice/{task.task_id}.json"]
     payload = json.loads(raw.decode("utf-8"))
 
-    assert agfs.write_calls[-1]["auto_pathlock"] is False
     assert payload["task_id"] == task.task_id
     assert payload["task_type"] == "add_resource"
     assert payload["account_id"] == "acme"
     assert payload["user_id"] == "alice"
     assert payload["stage"] is None
-    assert payload["auth"] == {
-        "provider": "feishu",
-        "access_token": "secret-token",
-    }
     assert "schema_version" not in payload
-
-    await tracker.complete(task.task_id, {"ok": True}, **_owner_kwargs())
-    terminal_payload = json.loads(
-        agfs.files[f"/local/acme/_system/tasks/alice/{task.task_id}.json"].decode("utf-8")
-    )
-    assert terminal_payload["auth"] == {}
-    assert all(call["auto_pathlock"] is False for call in agfs.write_calls)
 
 
 async def test_persistent_store_keeps_tasktracker_tasks_dict():
@@ -612,12 +506,7 @@ async def test_persistent_store_keeps_tasktracker_tasks_dict():
 async def test_persistent_store_survives_tracker_reset():
     agfs = _FakeAgfs()
     tracker1 = TaskTracker(store=PersistentTaskStore(agfs))
-    task = await tracker1.create(
-        "session_commit",
-        resource_id="sess-123",
-        auth={"provider": "feishu", "access_token": "secret-token"},
-        **_owner_kwargs(),
-    )
+    task = await tracker1.create("session_commit", resource_id="sess-123", **_owner_kwargs())
     await tracker1.start(task.task_id, account_id="acme", user_id="alice")
 
     tracker2 = TaskTracker(store=PersistentTaskStore(agfs))
@@ -625,11 +514,6 @@ async def test_persistent_store_survives_tracker_reset():
 
     assert loaded is not None
     assert loaded.status == TaskStatus.RUNNING
-    assert loaded.auth == {}
-    assert await tracker2.get_task_auth(task.task_id, **_owner_kwargs()) == {
-        "provider": "feishu",
-        "access_token": "secret-token",
-    }
 
 
 async def test_persistent_store_ignores_existing_task_dirs():
@@ -637,20 +521,11 @@ async def test_persistent_store_ignores_existing_task_dirs():
     tracker = TaskTracker(store=PersistentTaskStore(agfs))
 
     first = await tracker.create("session_commit", resource_id="sess-1", **_owner_kwargs())
-    first_mkdir_calls = list(agfs.mkdir_calls)
     second = await tracker.create("session_commit", resource_id="sess-2", **_owner_kwargs())
 
     assert first.task_id != second.task_id
     assert agfs.files[f"/local/acme/_system/tasks/alice/{first.task_id}.json"]
     assert agfs.files[f"/local/acme/_system/tasks/alice/{second.task_id}.json"]
-    assert [call["path"] for call in first_mkdir_calls] == [
-        "/local/acme",
-        "/local/acme/_system",
-        "/local/acme/_system/tasks",
-        "/local/acme/_system/tasks/alice",
-    ]
-    assert agfs.mkdir_calls == first_mkdir_calls
-    assert all(call["auto_pathlock"] is False for call in agfs.write_calls)
 
 
 async def test_create_requires_owner(tracker: TaskTracker):
@@ -698,3 +573,215 @@ async def test_session_service_get_commit_task_also_filters_account():
     )
 
     assert other_account_result is None
+
+
+# ── Live task references (issue #3396) ──
+
+
+async def test_register_live_task_holds_reference_until_done(tracker: TaskTracker):
+    record = await tracker.create("admin_reindex", resource_id="r1", **_owner_kwargs())
+
+    background = asyncio.create_task(asyncio.sleep(3600))
+    tracker.register_live_task(record.task_id, background)
+    assert tracker.has_live_task(record.task_id) is True
+
+    background.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await background
+    await asyncio.sleep(0)  # let the done callback run
+
+    assert tracker.has_live_task(record.task_id) is False
+
+
+async def test_register_live_task_discards_reference_after_completion(tracker: TaskTracker):
+    record = await tracker.create("admin_reindex", resource_id="r1", **_owner_kwargs())
+
+    background = asyncio.create_task(asyncio.sleep(0))
+    tracker.register_live_task(record.task_id, background)
+    await background
+
+    assert tracker.has_live_task(record.task_id) is False
+
+
+# ── Startup zombie reaping (issue #3396) ──
+
+
+async def _age_heartbeat(tracker: TaskTracker, task_id: str, stale_seconds: float) -> None:
+    """Backdate a task's updated_at heartbeat in cache AND persistent store."""
+    task = tracker._tasks[task_id]
+    task.updated_at = time.time() - stale_seconds
+    await tracker._store.update(task)
+
+
+async def test_reap_stale_active_fails_zombie_running_task(tracker: TaskTracker):
+    record = await tracker.create(
+        "admin_reindex",
+        resource_id="viking://user/alice/memories",
+        **_owner_kwargs(),
+    )
+    await tracker.start(record.task_id, **_owner_kwargs())
+    await _age_heartbeat(tracker, record.task_id, tracker.TTL_STALE_ACTIVE + 1)
+
+    reaped = await tracker.reap_stale_active()
+
+    assert reaped == 1
+    loaded = await tracker.get(record.task_id)
+    assert loaded is not None
+    assert loaded.status == TaskStatus.FAILED
+    assert loaded.stage == "interrupted"
+    assert "interrupted" in (loaded.error or "")
+
+
+async def test_reap_stale_active_keeps_task_with_live_driver(tracker: TaskTracker):
+    record = await tracker.create("admin_reindex", resource_id="r1", **_owner_kwargs())
+    await tracker.start(record.task_id, **_owner_kwargs())
+    await _age_heartbeat(tracker, record.task_id, tracker.TTL_STALE_ACTIVE + 1)
+
+    background = asyncio.create_task(asyncio.sleep(3600))
+    tracker.register_live_task(record.task_id, background)
+    try:
+        reaped = await tracker.reap_stale_active()
+    finally:
+        background.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await background
+
+    assert reaped == 0
+    loaded = await tracker.get(record.task_id)
+    assert loaded is not None
+    assert loaded.status == TaskStatus.RUNNING
+
+
+async def test_reap_stale_active_keeps_recently_active_task(tracker: TaskTracker):
+    record = await tracker.create("admin_reindex", resource_id="r1", **_owner_kwargs())
+    await tracker.start(record.task_id, **_owner_kwargs())
+
+    reaped = await tracker.reap_stale_active()
+
+    assert reaped == 0
+    loaded = await tracker.get(record.task_id)
+    assert loaded is not None
+    assert loaded.status == TaskStatus.RUNNING
+
+
+async def test_reap_stale_active_ignores_terminal_tasks(tracker: TaskTracker):
+    completed = await tracker.create("admin_reindex", resource_id="r1", **_owner_kwargs())
+    await tracker.complete(completed.task_id, {}, **_owner_kwargs())
+    failed = await tracker.create("admin_reindex", resource_id="r2", **_owner_kwargs())
+    await tracker.fail(failed.task_id, "boom", **_owner_kwargs())
+    await _age_heartbeat(tracker, completed.task_id, tracker.TTL_STALE_ACTIVE + 1)
+    await _age_heartbeat(tracker, failed.task_id, tracker.TTL_STALE_ACTIVE + 1)
+
+    reaped = await tracker.reap_stale_active()
+
+    assert reaped == 0
+    assert (await tracker.get(completed.task_id)).status == TaskStatus.COMPLETED
+    assert (await tracker.get(failed.task_id)).status == TaskStatus.FAILED
+
+
+async def test_reap_stale_active_unblocks_same_resource_retry(tracker: TaskTracker):
+    zombie = await tracker.create_if_no_running(
+        "admin_reindex",
+        "viking://user/alice/memories",
+        **_owner_kwargs(),
+    )
+    assert zombie is not None
+    await tracker.start(zombie.task_id, **_owner_kwargs())
+    await _age_heartbeat(tracker, zombie.task_id, tracker.TTL_STALE_ACTIVE + 1)
+
+    await tracker.reap_stale_active()
+
+    retried = await tracker.create_if_no_running(
+        "admin_reindex",
+        "viking://user/alice/memories",
+        **_owner_kwargs(),
+    )
+    assert retried is not None
+    assert retried.task_id != zombie.task_id
+
+
+async def test_reap_stale_active_persists_failure_to_store():
+    agfs = _FakeAgfs()
+    tracker = TaskTracker(store=PersistentTaskStore(agfs))
+    record = await tracker.create("admin_reindex", resource_id="r1", **_owner_kwargs())
+    await tracker.start(record.task_id, **_owner_kwargs())
+    await _age_heartbeat(tracker, record.task_id, tracker.TTL_STALE_ACTIVE + 1)
+
+    await tracker.reap_stale_active()
+
+    raw = agfs.files[f"/local/acme/_system/tasks/alice/{record.task_id}.json"]
+    payload = json.loads(raw.decode("utf-8"))
+    assert payload["status"] == "failed"
+    assert payload["stage"] == "interrupted"
+
+
+async def test_reap_stale_active_finds_zombie_from_fresh_tracker():
+    """Simulate a restart: a fresh tracker (empty cache) must reap the
+    persisted zombie via store enumeration, not just cached tasks."""
+    agfs = _FakeAgfs()
+    tracker1 = TaskTracker(store=PersistentTaskStore(agfs))
+    record = await tracker1.create("admin_reindex", resource_id="r1", **_owner_kwargs())
+    await tracker1.start(record.task_id, **_owner_kwargs())
+
+    tracker2 = TaskTracker(store=PersistentTaskStore(agfs))
+    reaped = await tracker2.reap_stale_active(stale_after=0)
+
+    assert reaped == 1
+    loaded = await tracker2.get(record.task_id, **_owner_kwargs())
+    assert loaded is not None
+    assert loaded.status == TaskStatus.FAILED
+    assert loaded.stage == "interrupted"
+
+
+async def test_reap_stale_active_covers_other_accounts_and_system_owner():
+    agfs = _FakeAgfs()
+    tracker = TaskTracker(store=PersistentTaskStore(agfs))
+    other = await tracker.create(
+        "admin_reindex",
+        resource_id="r-other",
+        account_id="other-acct",
+        user_id="bob",
+    )
+    await tracker.start(other.task_id, account_id="other-acct", user_id="bob")
+    system = await tracker.create(
+        "legacy_migration",
+        resource_id="legacy-data",
+        account_id="_system",
+        user_id="root",
+    )
+    await tracker.start(system.task_id, account_id="_system", user_id="root")
+
+    fresh = TaskTracker(store=PersistentTaskStore(agfs))
+    reaped = await fresh.reap_stale_active(stale_after=0)
+
+    assert reaped == 2
+    other_loaded = await fresh.get(other.task_id, account_id="other-acct", user_id="bob")
+    system_loaded = await fresh.get(system.task_id, account_id="_system", user_id="root")
+    assert other_loaded is not None and other_loaded.status == TaskStatus.FAILED
+    assert system_loaded is not None and system_loaded.status == TaskStatus.FAILED
+
+
+async def test_reap_stale_active_with_camel_case_isdir_entries():
+    """Regression: production AGFS ls entries use ``isDir`` (camelCase).
+    A fresh tracker must still enumerate accounts/user dirs and reap the
+    cross-process zombie with real-shaped entries."""
+    agfs = _FakeAgfsCamelCase()
+    tracker1 = TaskTracker(store=PersistentTaskStore(agfs))
+    record = await tracker1.create(
+        "admin_reindex",
+        resource_id="r-camel",
+        account_id="acme",
+        user_id="alice",
+    )
+    await tracker1.start(record.task_id, account_id="acme", user_id="alice")
+
+    store = PersistentTaskStore(agfs)
+    all_tasks = await store.list_all()
+    assert any(task["task_id"] == record.task_id for task in all_tasks)
+
+    fresh = TaskTracker(store=store)
+    reaped = await fresh.reap_stale_active(stale_after=0)
+
+    assert reaped == 1
+    loaded = await fresh.get(record.task_id, account_id="acme", user_id="alice")
+    assert loaded is not None and loaded.status == TaskStatus.FAILED
