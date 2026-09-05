@@ -1,6 +1,7 @@
 """Base channel interface for chat platforms."""
 
 import base64
+import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Tuple
@@ -243,6 +244,45 @@ class BaseChannel(ABC):
                 candidate_paths.append(path_obj)
 
             return False, path_obj.read_bytes()
+
+    async def _extract_send_images(self, content: str) -> tuple[str, list[tuple[str, bytes]]]:
+        """Split send:// image URIs out of outbound text.
+
+        generate_image publishes send://<filename>. Feishu already loads those
+        files through _parse_data_uri; other channels should reuse this helper
+        instead of treating the URI as a local path.
+        """
+        if not content:
+            return "", []
+
+        # Optional ! so both ![alt](send://x.png) and [alt](send://x.png) are
+        # removed whole; otherwise the bare-URI pass leaves "[alt](".
+        markdown_pattern = r"!?\[([^\]]*)\]\((send://[^)\s]+\.(?:png|jpeg|jpg|gif|bmp|webp))\)"
+        send_pattern = r"(send://[^)\s]+\.(?:png|jpeg|jpg|gif|bmp|webp))\)?"
+        uris: list[str] = []
+        for match in re.finditer(markdown_pattern, content, flags=re.IGNORECASE):
+            uris.append(match.group(2))
+        for match in re.finditer(send_pattern, content, flags=re.IGNORECASE):
+            uris.append(match.group(1))
+
+        images: list[tuple[str, bytes]] = []
+        seen: set[str] = set()
+        for uri in uris:
+            if uri in seen:
+                continue
+            seen.add(uri)
+            try:
+                is_content, result = await self._parse_data_uri(uri)
+            except Exception as exc:
+                logger.warning(f"Failed to load outbound image {uri}: {exc}")
+                continue
+            if is_content or not isinstance(result, bytes):
+                continue
+            images.append((uri.split("send://", 1)[1], result))
+
+        cleaned = re.sub(markdown_pattern, "", content, flags=re.IGNORECASE)
+        cleaned = re.sub(send_pattern, "", cleaned, flags=re.IGNORECASE).strip()
+        return cleaned, images
 
     def _is_image_data(self, data: bytes) -> bool:
         """Check if bytes represent a valid image by magic numbers."""

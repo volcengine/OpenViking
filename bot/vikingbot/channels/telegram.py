@@ -4,16 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import re
+from pathlib import Path
+
 from loguru import logger
 from telegram import BotCommand, Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from telegram.request import HTTPXRequest
 
 from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
-from vikingbot.config.schema import TelegramChannelConfig
 from vikingbot.channels.utils import extract_image_paths, read_image_file
+from vikingbot.config.schema import TelegramChannelConfig
 
 
 def _markdown_to_telegram_html(text: str) -> str:
@@ -210,17 +212,25 @@ class TelegramChannel(BaseChannel):
             # chat_id should be the Telegram chat ID (integer)
             chat_id = int(msg.session_key.chat_id)
 
-            # First extract local image file paths
-            local_image_paths, content_no_paths = extract_image_paths(msg.content)
+            from io import BytesIO
 
-            # Send local images first
+            cleaned, send_images = await self._extract_send_images(msg.content)
+            local_image_paths, content_no_paths = extract_image_paths(cleaned)
+
+            for filename, image_bytes in send_images:
+                try:
+                    photo = BytesIO(image_bytes)
+                    photo.name = filename
+                    await self._app.bot.send_photo(chat_id=chat_id, photo=photo)
+                    logger.debug(f"Sent generated image to {chat_id}: {filename}")
+                except Exception as e:
+                    logger.warning(f"Failed to send generated image {filename}: {e}")
+
             if local_image_paths:
                 for img_path in local_image_paths:
                     try:
                         logger.debug(f"Processing local image file: {img_path}")
                         image_bytes = read_image_file(img_path)
-                        from io import BytesIO
-
                         await self._app.bot.send_photo(chat_id=chat_id, photo=BytesIO(image_bytes))
                         logger.debug(f"Sent local image to {chat_id}: {img_path}")
                     except Exception as e:
@@ -319,7 +329,6 @@ class TelegramChannel(BaseChannel):
                 ext = self._get_extension(media_type, getattr(media_file, "mime_type", None))
 
                 # Save to workspace/media/
-                from pathlib import Path
                 from vikingbot.utils.helpers import get_media_path
 
                 if self.workspace_path:
