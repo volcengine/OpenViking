@@ -101,6 +101,26 @@ class TelemetryBridgeCollector(EventMetricCollector):
     MEMORY_OPERATIONS_TOTAL: ClassVar[str] = MetricCollector.metric_name(
         DOMAIN_MEMORY, "operations", unit="total"
     )
+    # rule: <METRICS_NAMESPACE>_<DOMAIN_MEMORY>_parse_failures_total
+    # e.g.: openviking_memory_parse_failures_total
+    MEMORY_PARSE_FAILURES_TOTAL: ClassVar[str] = MetricCollector.metric_name(
+        DOMAIN_MEMORY, "parse_failures", unit="total"
+    )
+    # rule: <METRICS_NAMESPACE>_<DOMAIN_MEMORY>_parse_exhausted_total
+    # e.g.: openviking_memory_parse_exhausted_total
+    MEMORY_PARSE_EXHAUSTED_TOTAL: ClassVar[str] = MetricCollector.metric_name(
+        DOMAIN_MEMORY, "parse_exhausted", unit="total"
+    )
+    # rule: <METRICS_NAMESPACE>_<DOMAIN_MEMORY>_parse_format_retries
+    # e.g.: openviking_memory_parse_format_retries (histogram)
+    MEMORY_PARSE_FORMAT_RETRIES: ClassVar[str] = MetricCollector.metric_name(
+        DOMAIN_MEMORY, "parse_format_retries"
+    )
+    # rule: <METRICS_NAMESPACE>_<DOMAIN_MEMORY>_parse_iterations
+    # e.g.: openviking_memory_parse_iterations (histogram)
+    MEMORY_PARSE_ITERATIONS: ClassVar[str] = MetricCollector.metric_name(
+        DOMAIN_MEMORY, "parse_iterations"
+    )
     # rule: <METRICS_NAMESPACE>_<DOMAIN_RESOURCE>_stage_total
     # e.g.: openviking_resource_stage_total
     RESOURCE_STAGE_TOTAL: ClassVar[str] = MetricCollector.metric_name(
@@ -284,6 +304,40 @@ class TelemetryBridgeCollector(EventMetricCollector):
                 label_names=("operation", "memory_type"),
                 amount=extracted,
             )
+
+        parse = extract.get("parse") or {}
+        if isinstance(parse, Mapping) and parse:
+            failure_kind = str(parse.get("failure_kind") or "")
+            if failure_kind:
+                registry.inc_counter(
+                    self.MEMORY_PARSE_FAILURES_TOTAL,
+                    labels={"operation": operation, "failure_kind": failure_kind},
+                    label_names=("operation", "failure_kind"),
+                )
+            if int(parse.get("exhausted", 0) or 0) > 0:
+                registry.inc_counter(
+                    self.MEMORY_PARSE_EXHAUSTED_TOTAL,
+                    labels={"operation": operation},
+                    label_names=("operation",),
+                )
+            iterations = int(parse.get("iterations_used", 0) or 0)
+            if iterations > 0:
+                # Aggregate-safe observability for "N iterations / M format retries used":
+                # histograms expose distributions without per-operation label cardinality.
+                registry.observe_histogram(
+                    self.MEMORY_PARSE_ITERATIONS,
+                    iterations,
+                    labels={"operation": operation},
+                    label_names=("operation",),
+                    buckets=(1, 2, 3, 4, 6, 8, 12, 16),
+                )
+                registry.observe_histogram(
+                    self.MEMORY_PARSE_FORMAT_RETRIES,
+                    int(parse.get("format_retries_used", 0) or 0),
+                    labels={"operation": operation},
+                    label_names=("operation",),
+                    buckets=(0, 1, 2, 3, 4, 8),
+                )
 
         actions = extract.get("actions") or {}
         if isinstance(actions_by_type, Mapping) and actions_by_type:
