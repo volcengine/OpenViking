@@ -154,6 +154,7 @@
         "api_base": "https://ark.cn-beijing.volces.com/api/v3",
         "temperature": 0.0,
         "max_retries": 2,
+        "keepalive_expiry": 0,
         "provider": "volcengine",
         "thinking": false,
         "media": {
