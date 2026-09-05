@@ -69,6 +69,43 @@ _CANNED_REFUSAL_RE = re.compile(
 )
 
 
+
+# Rescue DSML-leaked tool calls (DeepSeek V4 family). Serving stacks sometimes
+# leave native DSML markup in `content` instead of structured tool_calls.
+# See https://github.com/volcengine/OpenViking/issues/4580 and vllm#48931.
+_DSML_INVOKE_RE = re.compile(
+    r"<[|｜]+DSML[|｜]+invoke\s+name=\"([^\"]+)\"[^>]*>(.*?)</[|｜]+DSML[|｜]+invoke\s*>",
+    re.DOTALL,
+)
+_DSML_PARAM_RE = re.compile(
+    r"<[|｜]+DSML[|｜]+parameter\s+name=\"([^\"]+)\"\s+string=\"(true|false)\"[^>]*>"
+    r"(.*?)</[|｜]+DSML[|｜]+parameter\s*>",
+    re.DOTALL,
+)
+
+
+def _parse_dsml_tool_calls(content: str) -> List[ToolCall]:
+    """Extract tool calls from DSML markup leaked into plain content."""
+    if "DSML" not in content:
+        return []
+    calls: List[ToolCall] = []
+    for idx, m in enumerate(_DSML_INVOKE_RE.finditer(content)):
+        arguments: Dict[str, Any] = {}
+        for pm in _DSML_PARAM_RE.finditer(m.group(2)):
+            p_name = pm.group(1).strip()
+            if pm.group(2) == "true":
+                arguments[p_name] = pm.group(3)
+            else:
+                try:
+                    arguments[p_name] = json.loads(pm.group(3))
+                except Exception:
+                    arguments[p_name] = pm.group(3)
+        calls.append(
+            ToolCall(id=f"dsml_{idx}", name=m.group(1).strip(), arguments=arguments)
+        )
+    return calls
+
+
 def _looks_like_canned_refusal(content: str) -> bool:
     """Return whether a non-JSON LLM response looks like a generic refusal."""
 
@@ -178,6 +215,7 @@ class ExtractLoop:
         tools_used: List[Dict[str, Any]] = []
         # Reset format retry counter for each run
         self._format_retry_count = 0
+        self._continue_with_tools_count = 0
         patch_repair_count = 0
         resolution_repair_count = 0
         pending_resolution_repair: Optional[Tuple[ResolvedOperations, List]] = None
@@ -380,6 +418,33 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 f"(iteration {iteration}/{max_iterations}) "
                 f"failure_kind={failure_kind} response_preview={failure_preview!r}"
             )
+            # When the model answers with free-form reasoning instead of a tool
+            # call or final JSON, give one chance to continue WITH TOOLS still
+            # enabled before falling back to disable-tools retry. Thinking
+            # models otherwise lose tools exactly when they asked to use them.
+            if (
+                getattr(self, "_continue_with_tools_count", 0) == 0
+                and not self._disable_tools_for_iteration
+                and failure_kind == "parse_error"
+                and self._last_llm_failure_content
+            ):
+                self._continue_with_tools_count = 1
+                messages.append(
+                    {"role": "assistant", "content": self._last_llm_failure_content}
+                )
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Continue. If you need more information, call the available "
+                            "tools now; otherwise return the final result strictly as the "
+                            "JSON operations document described in the system instructions. "
+                            "Do not describe your plan in prose."
+                        ),
+                    }
+                )
+                tracer.info("parse_error with prose content: continue with tools enabled")
+                continue
             # Add format error message if parse failed (max 1 retry)
             if self._format_retry_count == 0:
                 self._format_retry_count += 1
@@ -1131,6 +1196,16 @@ The final output of the model must strictly follow the JSON Schema format shown 
         else:
             # Case 2: VLMResponse without tool calls - get content from response
             content = response.content or ""
+
+        # Rescue DSML-markup tool calls that leaked into content (DeepSeek V4).
+        if content and "DSML" in content:
+            dsml_calls = _parse_dsml_tool_calls(content)
+            if dsml_calls:
+                tracer.info(
+                    f"rescued {len(dsml_calls)} DSML tool call(s) from content: "
+                    + ", ".join(tc.name for tc in dsml_calls)
+                )
+                return (dsml_calls, None)
 
         # Parse operations from content
         if content:
