@@ -441,6 +441,30 @@ Configure third-party MCP Servers under `bot.tools.mcp_servers`:
 
 Supported transports are `stdio`, `sse`, and `streamableHttp`. Tool names use the form `mcp_<server>_<tool>`. A failed MCP connection does not block other Agent capabilities.
 
+#### Parallel Search example
+
+[Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp) provides public web search and page extraction without a Parallel account or API key. To enable it, merge this example into your `ov.conf`, keeping your existing settings and MCP servers:
+
+```json
+{
+  "bot": {
+    "tools": {
+      "mcp_servers": {
+        "parallel": {
+          "type": "streamableHttp",
+          "url": "https://search.parallel.ai/mcp",
+          "enabled_tools": ["web_search", "web_fetch"]
+        }
+      }
+    }
+  }
+}
+```
+
+Restart VikingBot to make `mcp_parallel_web_search` and `mcp_parallel_web_fetch` available alongside the built-in web tools. The agent can choose these tools during a conversation. Queries, requested URLs, and any supplied objectives or context are sent to Parallel. Free access is rate limited.
+
+To disable the connection, remove the `parallel` entry and restart VikingBot. This example does not change the built-in search backend or its fallback order.
+
 ## Sandbox
 
 | Backend | Description |
