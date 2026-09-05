@@ -74,9 +74,14 @@ class AddResourceRequest(BaseModel):
             - watch_interval < 0: Same as watch_interval = 0, cancels any existing watch task.
             Default is 0 (no monitoring).
 
-            Note: Re-adding the same source to the same target updates its active watch task.
-            A different source targeting an active watch raises ConflictError; cancel that
-            watch first with watch_interval <= 0. Connector imports create the Watch before
+            Note: The resolved target URI is the watch identity. A native watch owns its
+            target alone: any existing watch there, active or paused, rejects a new
+            native import with ConflictError; change or reactivate it through the
+            watches API (PATCH /watches/{id}), or delete it. Connector watches may share
+            one target with each other (never with a native watch); a shared target
+            must then be addressed by task_id, and ``?to_uri=`` lookups return 409.
+            The same source imported into a different target gets its own watch. With
+            ``parent`` the target is resolved after the import. Connector imports create the Watch before
             the import runs, so it is visible immediately and the conflict is reported at
             submission; the scheduler does not run it until the first round has recorded
             its result.

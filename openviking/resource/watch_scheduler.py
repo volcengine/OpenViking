@@ -327,7 +327,10 @@ class WatchScheduler:
                     bypass_acl=True,
                 )
 
-                if task.to_uri:
+                # Connector targets are materialized by the plugin's own writes: an
+                # empty first round leaves ``to`` absent and a deleted target is simply
+                # rebuilt next round, so only native watches are tied to its existence.
+                if task.to_uri and not connector_watch:
                     target_exists = await self._check_target_uri_exists(task.to_uri, ctx)
                     if target_exists is False:
                         should_deactivate = True

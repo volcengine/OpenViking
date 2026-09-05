@@ -890,10 +890,38 @@ class TestWatchTaskConflict:
         assert to_uri in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_same_source_updates_active_task(
+    async def test_same_source_to_different_targets_creates_separate_tasks(
         self, resource_service: ResourceService, request_context: RequestContext
     ):
-        """Re-applying one source updates its active watch instead of conflicting."""
+        """Only the target decides: one source may be watched into several targets."""
+        source = "/test/shared-source"
+        first_to = "viking://resources/shared_source_a"
+        second_to = "viking://resources/shared_source_b"
+
+        await resource_service.add_resource(
+            path=source, ctx=request_context, to=first_to, watch_interval=30.0
+        )
+        await resource_service.add_resource(
+            path=source, ctx=request_context, to=second_to, watch_interval=45.0
+        )
+
+        first = await get_task_by_uri(resource_service, first_to, request_context)
+        second = await get_task_by_uri(resource_service, second_to, request_context)
+        assert first is not None and second is not None
+        assert first.task_id != second.task_id
+        assert first.path == second.path == source
+        assert (first.watch_interval, second.watch_interval) == (30.0, 45.0)
+        assert first.is_active and second.is_active
+
+    @pytest.mark.asyncio
+    async def test_same_source_conflicts_with_active_task(
+        self, resource_service: ResourceService, request_context: RequestContext
+    ):
+        """An active watch on the target rejects re-adding even the same source.
+
+        The kernel cannot tell whether two imports are the same source (Connector
+        types carry their identity in args), so only the target decides.
+        """
         to_uri = "viking://resources/idempotent_watch"
         source = "/test/same-path"
 
@@ -908,23 +936,23 @@ class TestWatchTaskConflict:
         original = await get_task_by_uri(resource_service, to_uri, request_context)
         assert original is not None
 
-        await resource_service.add_resource(
-            path=source,
-            ctx=request_context,
-            to=to_uri,
-            reason="Updated reason",
-            watch_interval=45.0,
-            args={"branch": "release"},
-        )
+        with pytest.raises(ConflictError, match="already being monitored"):
+            await resource_service.add_resource(
+                path=source,
+                ctx=request_context,
+                to=to_uri,
+                reason="Updated reason",
+                watch_interval=45.0,
+                args={"branch": "release"},
+            )
 
-        updated = await get_task_by_uri(resource_service, to_uri, request_context)
-        assert updated is not None
-        assert updated.task_id == original.task_id
-        assert updated.path == source
-        assert updated.reason == "Updated reason"
-        assert updated.watch_interval == 45.0
-        assert updated.processor_kwargs == {"branch": "release"}
-        assert updated.is_active is True
+        unchanged = await get_task_by_uri(resource_service, to_uri, request_context)
+        assert unchanged is not None
+        assert unchanged.task_id == original.task_id
+        assert unchanged.reason == "Original reason"
+        assert unchanged.watch_interval == 30.0
+        assert unchanged.processor_kwargs == {"branch": "main"}
+        assert unchanged.is_active is True
 
     @pytest.mark.asyncio
     async def test_conflict_does_not_create_async_task(
@@ -982,7 +1010,7 @@ class TestWatchTaskConflict:
                 watch_interval=45.0,
             )
 
-        assert "already used by another task" in str(exc_info.value)
+        assert "already being monitored" in str(exc_info.value)
         assert to_uri in str(exc_info.value)
 
         task = await get_task_by_uri(resource_service, to_uri, request_context)
@@ -1039,7 +1067,8 @@ class TestWatchTaskConflict:
         assert task is not None
         task_id = task.task_id
 
-        await resource_service._watch_scheduler.watch_manager.update_task(
+        watch_manager = resource_service._watch_scheduler.watch_manager
+        await watch_manager.update_task(
             task_id=task_id,
             account_id=request_context.account_id,
             user_id=request_context.user.user_id,
@@ -1047,18 +1076,31 @@ class TestWatchTaskConflict:
             is_active=False,
         )
 
-        await resource_service.add_resource(
-            path="/test/path2",
-            ctx=request_context,
-            to=to_uri,
+        # A paused watch still owns its target: re-adding conflicts, and the watch
+        # is reactivated through the watch itself.
+        with pytest.raises(ConflictError, match="already being monitored"):
+            await resource_service.add_resource(
+                path="/test/path2",
+                ctx=request_context,
+                to=to_uri,
+                reason="Updated reason",
+                watch_interval=45.0,
+            )
+
+        await watch_manager.update_task(
+            task_id=task_id,
+            account_id=request_context.account_id,
+            user_id=request_context.user.user_id,
+            role=str(request_context.role),
             reason="Updated reason",
             watch_interval=45.0,
+            is_active=True,
         )
 
         task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is not None
         assert task.task_id == task_id
-        assert task.path == "/test/path2"
+        assert task.path == "/test/path1"
         assert task.reason == "Updated reason"
         assert task.watch_interval == 45.0
         assert task.is_active is True
@@ -1188,7 +1230,8 @@ class TestWatchTaskUpdate:
         assert task is not None
         original_task_id = task.task_id
 
-        await resource_service._watch_scheduler.watch_manager.update_task(
+        watch_manager = resource_service._watch_scheduler.watch_manager
+        await watch_manager.update_task(
             task_id=task.task_id,
             account_id=request_context.account_id,
             user_id=request_context.user.user_id,
@@ -1196,19 +1239,32 @@ class TestWatchTaskUpdate:
             is_active=False,
         )
 
-        await resource_service.add_resource(
-            path="/test/path2",
-            ctx=request_context,
-            to=to_uri,
+        # Parameters change through the watch, never by re-adding to its target.
+        with pytest.raises(ConflictError, match="already being monitored"):
+            await resource_service.add_resource(
+                path="/test/path2",
+                ctx=request_context,
+                to=to_uri,
+                reason="Updated reason",
+                instruction="Updated instruction",
+                watch_interval=60.0,
+            )
+
+        await watch_manager.update_task(
+            task_id=original_task_id,
+            account_id=request_context.account_id,
+            user_id=request_context.user.user_id,
+            role=str(request_context.role),
             reason="Updated reason",
             instruction="Updated instruction",
             watch_interval=60.0,
+            is_active=True,
         )
 
         task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is not None
         assert task.task_id == original_task_id
-        assert task.path == "/test/path2"
+        assert task.path == "/test/path1"
         assert task.reason == "Updated reason"
         assert task.instruction == "Updated instruction"
         assert task.watch_interval == 60.0
