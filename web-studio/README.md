@@ -384,4 +384,3 @@ The API key is missing or invalid, the key belongs to a different server, or the
 
 - [Web Studio internationalization contribution guide](./CONTRIBUTING.md): translation ownership, dynamic server text, and the review checklist.
 - [OpenViking server deployment](../docs/en/guides/03-deployment.md): server-side deployment details.
-- [VikingBot validation with OpenViking Server](../bot/docs/vikingbot-phase1-validation-with-openviking-server.md): bot proxy validation flow.

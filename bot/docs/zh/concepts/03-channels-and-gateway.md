@@ -121,4 +121,4 @@ Gateway 使用多层安全边界：
 - [VikingBot 架构](./01-architecture.md)
 - [Agent 能力体系](./02-agent-capabilities.md)
 - [与 OpenViking 集成](./04-openviking-integration.md)
-- [渠道配置](../../CHANNEL.md)
+- [渠道配置](./05-channel.md)
