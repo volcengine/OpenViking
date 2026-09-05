@@ -2977,9 +2977,21 @@ fn render_pre_language_help_request(args: &[OsString]) -> Option<String> {
     help_ui::render_command_help_request(args).or_else(|| Some(error.to_string()))
 }
 
+fn render_pre_language_version_request(args: &[OsString]) -> Option<&'static str> {
+    if args.len() == 2 && matches!(args[1].to_str(), Some("--version" | "-V")) {
+        Some(concat!("openviking ", env!("OPENVIKING_CLI_VERSION")))
+    } else {
+        None
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let args = preprocess_cli_args(std::env::args_os().collect());
+    if let Some(version) = render_pre_language_version_request(&args) {
+        println!("{version}");
+        return;
+    }
     let command_display = error_ui::display_command(&args);
     let (pre_parse_output_format, pre_parse_compact) = pre_parse_output_options(&args);
     if let Some(help) = render_pre_language_help_request(&args) {
@@ -3811,7 +3823,8 @@ mod tests {
         language_command_can_run_picker, language_gate_action, language_required_message,
         legacy_upload_option_error, plain_help_misuse, pre_parse_output_options,
         pre_parse_requires_cli_config_file, preprocess_cli_args, preprocess_privacy_args,
-        render_pre_language_help_request, resolve_output_format,
+        render_pre_language_help_request, render_pre_language_version_request,
+        resolve_output_format,
     };
     use crate::config::{Config, DEFAULT_CUSTOM_URL};
     use crate::output::OutputFormat;
@@ -5102,6 +5115,16 @@ mod tests {
         assert_eq!(
             language_gate_action(&os_args(&["ov", "status"]), false, false),
             LanguageGateAction::ExitNonInteractive
+        );
+    }
+
+    #[test]
+    fn version_flags_render_before_language_setup() {
+        for flag in ["--version", "-V"] {
+            assert!(render_pre_language_version_request(&os_args(&["ov", flag])).is_some());
+        }
+        assert!(
+            render_pre_language_version_request(&os_args(&["ov", "status", "--version"])).is_none()
         );
     }
 
