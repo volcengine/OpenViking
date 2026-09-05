@@ -438,6 +438,30 @@ Agent 实际使用的活动目录还取决于 `bot.sandbox.mode`：
 
 支持 `stdio`、`sse` 和 `streamableHttp`。工具注册名为 `mcp_<server>_<tool>`；单个 MCP 连接失败不会阻断其他 Agent 能力。
 
+#### Parallel Search 示例
+
+[Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp) 提供公开网页搜索和内容提取，无需 Parallel 账号或 API Key。要启用它，请将以下示例合并到 `ov.conf`，保留现有设置和 MCP Server：
+
+```json
+{
+  "bot": {
+    "tools": {
+      "mcp_servers": {
+        "parallel": {
+          "type": "streamableHttp",
+          "url": "https://search.parallel.ai/mcp",
+          "enabled_tools": ["web_search", "web_fetch"]
+        }
+      }
+    }
+  }
+}
+```
+
+重启 VikingBot 后，`mcp_parallel_web_search` 和 `mcp_parallel_web_fetch` 将与内置网页工具一起可用。Agent 可以在对话中自行选择调用这些工具。查询、请求的 URL，以及提供的目标或上下文会发送给 Parallel。免费访问有速率限制。
+
+要禁用该连接，请删除 `parallel` 配置项并重启 VikingBot。此示例不会更改内置搜索后端及其回退顺序。
+
 ## 沙箱
 
 | 后端 | 说明 |
