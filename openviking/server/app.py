@@ -15,9 +15,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from starlette.middleware.exceptions import ExceptionMiddleware
 
-from openviking.observability.http_error_context import capture_public_http_error
 from openviking.server.config import (
     ServerConfig,
     load_bot_gateway_token,
@@ -29,21 +27,19 @@ from openviking.server.error_mapping import map_exception
 from openviking.server.identity import Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.server.profile_middleware import create_profile_http_middleware
-from openviking.server.request_id import REQUEST_ID_HEADER, RequestIdMiddleware
 from openviking.server.routers import (
-    acl_router,
     admin_router,
-    agent_evolution_router,
     bot_router,
+    code_router,
     console_router,
     content_router,
     debug_router,
     filesystem_router,
     metrics_router,
     observer_router,
-    openviking_assets_router,
     pack_router,
     privacy_configs_router,
+    relations_router,
     resources_router,
     search_router,
     sessions_router,
@@ -60,36 +56,11 @@ from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
 from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.utils import get_logger
-from openviking_cli.utils.config import (
-    DEFAULT_OV_CONF,
-    OPENVIKING_CONFIG_ENV,
-    get_openviking_config,
-    resolve_config_path,
-)
+from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import init_otel_log_handler_from_server_config
 
 logger = get_logger(__name__)
 
-WORKER_WITH_BOT_ENV = "OPENVIKING_WORKER_WITH_BOT"
-WORKER_BOT_API_URL_ENV = "OPENVIKING_WORKER_BOT_API_URL"
-
-
-def create_worker_app() -> FastAPI:
-    """Load file config and replay parent-process Bot CLI overrides."""
-    resolved_config_path = resolve_config_path(
-        None,
-        OPENVIKING_CONFIG_ENV,
-        DEFAULT_OV_CONF,
-    )
-    config_path = str(resolved_config_path) if resolved_config_path is not None else None
-    config = load_server_config(config_path)
-    with_bot = os.environ.get(WORKER_WITH_BOT_ENV)
-    if with_bot is not None:
-        config.with_bot = with_bot == "1"
-    bot_api_url = os.environ.get(WORKER_BOT_API_URL_ENV)
-    if bot_api_url is not None:
-        config.bot_api_url = bot_api_url
-    return create_app(config, config_path=config_path)
 
 
 async def _initialize_auth_plugin(
@@ -140,23 +111,6 @@ async def _initialize_runtime_state(
     """Initialize service and auth dependencies before traffic is accepted."""
     await service.initialize()
     await _initialize_auth_plugin(app, service, config)
-    manager = app.state.api_key_manager
-    if manager is not None:
-        await service.load_acl_settings(
-            [
-                item["account_id"]
-                for item in manager.get_accounts()
-                if item["account_id"] != service.user.account_id
-            ]
-        )
-    from openviking.service.user_deletion import setup_user_deletion
-
-    app.state.user_deletion_service = await setup_user_deletion(
-        service=service,
-        manager=app.state.api_key_manager,
-        oauth_store=getattr(app.state, "oauth_store", None),
-        usage_audit_runtime=getattr(app.state, "usage_audit_runtime", None),
-    )
     logger.info("OpenVikingService initialization complete")
 
 
@@ -233,27 +187,18 @@ def _message_from_http_detail(detail: object) -> str:
 def create_app(
     config: Optional[ServerConfig] = None,
     service: Optional[OpenVikingService] = None,
-    config_path: Optional[str] = None,
 ) -> FastAPI:
     """Create FastAPI application.
 
     Args:
         config: Server configuration. If None, loads from default location.
         service: Pre-initialized OpenVikingService (optional).
-        config_path: Resolved ov.conf path used for live configuration reload.
 
     Returns:
         FastAPI application instance
     """
-    resolved_config_path = (
-        resolve_config_path(config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
-        if config_path is not None or config is None
-        else None
-    )
     if config is None:
-        config = load_server_config(
-            str(resolved_config_path) if resolved_config_path is not None else config_path
-        )
+        config = load_server_config()
 
     validate_server_config(config)
 
@@ -277,28 +222,6 @@ def create_app(
         usage_reporter_setter = getattr(sessions, "set_usage_reporter", None)
         if callable(usage_reporter_setter):
             usage_reporter_setter(_get_usage_reporter())
-
-        agent_evolution_setter = getattr(sessions, "set_agent_evolution_config", None)
-        if callable(agent_evolution_setter):
-            agent_evolution_setter(config.agent_evolution)
-
-        user_memory_policy_setter = getattr(
-            sessions,
-            "set_default_user_memory_policy",
-            None,
-        )
-        if callable(user_memory_policy_setter):
-            user_memory_policy_setter(config.user_config_defaults.memory_policy)
-
-        agent_evolution_path_setter = getattr(
-            sessions,
-            "set_agent_evolution_config_path",
-            None,
-        )
-        if callable(agent_evolution_path_setter):
-            agent_evolution_path_setter(
-                str(resolved_config_path) if resolved_config_path is not None else None
-            )
 
     if service is not None:
         _configure_session_runtime(service)
@@ -352,6 +275,17 @@ def create_app(
         task_tracker = get_task_tracker()
         task_tracker.start_cleanup_loop()
 
+        # Reconcile zombie tasks: PENDING/RUNNING records persisted by a
+        # previous process whose in-memory asyncio drivers are gone (issue
+        # #3396). Done before traffic so stuck reindex tasks stop blocking
+        # same-URI retries without hand-editing task JSON.
+        try:
+            reaped = await task_tracker.reap_stale_active()
+            if reaped:
+                logger.warning("Reaped %d stale background task(s) at startup", reaped)
+        except Exception:
+            logger.exception("Startup task reconciliation failed; continuing")
+
         # Initialize tracing and OTLP log export from server.observability.
         from openviking.telemetry import tracer_module
 
@@ -373,12 +307,6 @@ def create_app(
         await shutdown_usage_audit(app=app)
         await shutdown_metrics_async(app=app)
         task_tracker.stop_cleanup_loop()
-        auth_plugin_state = getattr(app.state, "auth_plugin", None)
-        if auth_plugin_state is not None:
-            try:
-                await auth_plugin_state.shutdown()
-            except Exception as e:  # noqa: BLE001
-                logger.warning("Auth plugin shutdown failed: %s", e)
         if oauth_gc_task is not None:
             oauth_gc_task.cancel()
             try:
@@ -411,8 +339,16 @@ def create_app(
 
     app.state.config = config
     app.state.api_key_manager = None
-    app.state.user_deletion_service = None
     set_server_config(config)
+
+    # Add CORS middleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=config.cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     # Body dump middleware must be registered BEFORE observability so it ends up
     # nested inside the trace span (in Starlette, middleware added later wraps
@@ -498,7 +434,6 @@ def create_app(
     @app.exception_handler(OpenVikingError)
     async def openviking_error_handler(request: Request, exc: OpenVikingError):
         http_status = ERROR_CODE_TO_HTTP_STATUS.get(exc.code, 500)
-        capture_public_http_error(code=exc.code, message=exc.message, details=exc.details)
         return JSONResponse(
             status_code=http_status,
             content=Response(
@@ -515,21 +450,14 @@ def create_app(
     async def request_validation_error_handler(request: Request, exc: RequestValidationError):
         errors = [_normalize_validation_error(error) for error in exc.errors()]
         code = "INVALID_ARGUMENT"
-        message = _validation_error_message(errors)
-        details = {"validation_errors": errors}
-        capture_public_http_error(
-            code=code,
-            message=message,
-            details=details,
-        )
         return JSONResponse(
             status_code=ERROR_CODE_TO_HTTP_STATUS[code],
             content=Response(
                 status="error",
                 error=ErrorInfo(
                     code=code,
-                    message=message,
-                    details=details,
+                    message=_validation_error_message(errors),
+                    details={"validation_errors": errors},
                 ),
             ).model_dump(exclude_none=True),
         )
@@ -543,8 +471,6 @@ def create_app(
         details = None
         if exc.status_code != response_status:
             details = {"original_http_status_code": exc.status_code}
-        message = _message_from_http_detail(exc.detail)
-        capture_public_http_error(code=code, message=message, details=details)
         return JSONResponse(
             status_code=response_status,
             headers=exc.headers,
@@ -552,14 +478,15 @@ def create_app(
                 status="error",
                 error=ErrorInfo(
                     code=code,
-                    message=message,
+                    message=_message_from_http_detail(exc.detail),
                     details=details,
                 ),
             ).model_dump(exclude_none=True),
         )
 
     # Catch-all for unhandled exceptions so clients always get JSON
-    async def general_error_handler(_request: Request, exc: Exception):
+    @app.exception_handler(Exception)
+    async def general_error_handler(request: Request, exc: Exception):
         mapped = map_exception(exc)
         if mapped is not None:
             http_status = ERROR_CODE_TO_HTTP_STATUS.get(mapped.code, 500)
@@ -592,19 +519,6 @@ def create_app(
             ).model_dump(),
         )
 
-    # Keep exception rendering inside the request-ID and CORS layers. This lets
-    # those middleware own their response headers without special error paths.
-    app.add_middleware(ExceptionMiddleware, handlers={Exception: general_error_handler})
-    app.add_middleware(RequestIdMiddleware)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=config.cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-        expose_headers=[REQUEST_ID_HEADER],
-    )
-
     # Configure Bot API if --with-bot is enabled
     if config.with_bot:
         import openviking.server.routers.bot as bot_module
@@ -617,14 +531,14 @@ def create_app(
 
     # Register routers
     app.include_router(system_router)
-    app.include_router(acl_router)
     app.include_router(admin_router)
-    app.include_router(agent_evolution_router)
     app.include_router(resources_router)
     app.include_router(filesystem_router)
     app.include_router(content_router)
     app.include_router(console_router)
     app.include_router(search_router)
+    app.include_router(code_router)
+    app.include_router(relations_router)
     app.include_router(privacy_configs_router)
     app.include_router(skills_router)
     app.include_router(sessions_router)
@@ -633,7 +547,6 @@ def create_app(
     app.include_router(pack_router)
     app.include_router(debug_router)
     app.include_router(observer_router)
-    app.include_router(openviking_assets_router)
     app.include_router(metrics_router)
     app.include_router(tasks_router)
     app.include_router(user_settings_router)
@@ -807,9 +720,8 @@ def create_app(
     else:
         logger.info("Web Studio bundle not found at %s; skipping /studio mount", _studio_dir)
 
-    # MCP endpoint — serves 15 tools (find, search, read, write, edit,
-    # list, tree, remember, add_resource, list_watches, cancel_watch, grep,
-    # glob, forget, health) via streamable HTTP for MCP clients.
+    # MCP endpoint — serves 5 tools (search, read, store, forget, health)
+    # via streamable HTTP for Claude Code and other MCP clients.
     from starlette.routing import Match, Route
 
     from openviking.server.mcp_endpoint import create_mcp_app
