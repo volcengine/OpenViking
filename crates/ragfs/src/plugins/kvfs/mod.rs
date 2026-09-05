@@ -256,7 +256,14 @@ impl FileSystem for KVFileSystem {
         }
     }
 
-    async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
+    async fn read_dir(
+        &self,
+        path: &str,
+        offset: Option<usize>,
+        limit: Option<usize>,
+        sort_by: Option<crate::core::ListSortBy>,
+        sort_order: Option<crate::core::SortOrder>,
+    ) -> Result<Vec<FileInfo>> {
         let key = Self::path_to_key(path);
         let store = self.store.read().await;
 
@@ -281,7 +288,9 @@ impl FileSystem for KVFileSystem {
             }
         }
 
-        Ok(result)
+        Ok(crate::core::filesystem::apply_read_dir_options(
+            result, offset, limit, sort_by, sort_order,
+        ))
     }
 
     async fn stat(&self, path: &str) -> Result<FileInfo> {
@@ -517,7 +526,7 @@ mod tests {
         write_key(&fs, "/key2", b"val2").await;
         write_key(&fs, "/key3", b"val3").await;
 
-        let entries = fs.read_dir("/").await.unwrap();
+        let entries = fs.read_dir("/", None, None, None, None).await.unwrap();
         assert_eq!(entries.len(), 3);
     }
 
@@ -531,7 +540,7 @@ mod tests {
         write_key(&fs, "/user/123", b"alice").await;
         write_key(&fs, "/user/456", b"bob").await;
 
-        let entries = fs.read_dir("/user").await.unwrap();
+        let entries = fs.read_dir("/user", None, None, None, None).await.unwrap();
         assert_eq!(entries.len(), 2);
     }
 

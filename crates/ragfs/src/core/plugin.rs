@@ -220,7 +220,14 @@ mod tests {
                 ) -> Result<u64> {
                     Ok(_data.len() as u64)
                 }
-                async fn read_dir(&self, _path: &str) -> Result<Vec<FileInfo>> {
+                async fn read_dir(
+                    &self,
+                    _path: &str,
+                    _offset: Option<usize>,
+                    _limit: Option<usize>,
+                    _sort_by: Option<crate::core::ListSortBy>,
+                    _sort_order: Option<crate::core::SortOrder>,
+                ) -> Result<Vec<FileInfo>> {
                     Ok(vec![])
                 }
                 async fn stat(&self, _path: &str) -> Result<FileInfo> {

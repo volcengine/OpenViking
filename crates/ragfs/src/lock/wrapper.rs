@@ -7,13 +7,15 @@
 //! It is NOT a lock protocol implementation — all lock logic is delegated to
 //! `PathLockManager`.
 
-use std::sync::Arc;
 use async_trait::async_trait;
+use std::sync::Arc;
 use tracing::debug;
 
 use crate::core::filesystem::FileSystem;
 use crate::core::internal_names::is_hidden_runtime_lock_name;
-use crate::core::types::{FileInfo, GlobPage, GrepResult, TreeEntry, WriteFlag};
+use crate::core::types::{
+    FileInfo, GlobPage, GrepResult, ListSortBy, SortOrder, TreeEntry, WriteFlag,
+};
 use crate::core::MountableFS;
 
 use super::manager::{AutoPathLockAction, PathLockManager};
@@ -58,9 +60,18 @@ impl PathLockWrappedFS {
         requests: &[PathLockRequest],
     ) -> crate::core::Result<bool> {
         match self.manager.resolve_auto_pathlock_action(requests).await {
-            Ok(AutoPathLockAction::Disabled) => { debug!(requests = ?requests, "pathlock wrapper skipped auto-lock because context disabled it"); Ok(true) }
-            Ok(AutoPathLockAction::Covered(lease)) => { debug!(lease_ref = %lease.lease.lease_ref, requests = ?requests, "pathlock wrapper skipped auto-lock because active lease already covers request"); Ok(true) }
-            Ok(AutoPathLockAction::Acquire) => { debug!(requests = ?requests, "pathlock wrapper will auto-acquire lease for request"); Ok(false) }
+            Ok(AutoPathLockAction::Disabled) => {
+                debug!(requests = ?requests, "pathlock wrapper skipped auto-lock because context disabled it");
+                Ok(true)
+            }
+            Ok(AutoPathLockAction::Covered(lease)) => {
+                debug!(lease_ref = %lease.lease.lease_ref, requests = ?requests, "pathlock wrapper skipped auto-lock because active lease already covers request");
+                Ok(true)
+            }
+            Ok(AutoPathLockAction::Acquire) => {
+                debug!(requests = ?requests, "pathlock wrapper will auto-acquire lease for request");
+                Ok(false)
+            }
             Err(error) => Err(crate::core::Error::internal(format!(
                 "lock lease error: {error}"
             ))),
@@ -191,8 +202,17 @@ impl FileSystem for PathLockWrappedFS {
         Self::merge_operation_and_release(result, release)
     }
 
-    async fn read_dir(&self, path: &str) -> crate::core::Result<Vec<FileInfo>> {
-        self.inner.read_dir(path).await
+    async fn read_dir(
+        &self,
+        path: &str,
+        offset: Option<usize>,
+        limit: Option<usize>,
+        sort_by: Option<ListSortBy>,
+        sort_order: Option<SortOrder>,
+    ) -> crate::core::Result<Vec<FileInfo>> {
+        self.inner
+            .read_dir(path, offset, limit, sort_by, sort_order)
+            .await
     }
 
     async fn stat(&self, path: &str) -> crate::core::Result<FileInfo> {
@@ -332,9 +352,20 @@ impl FileSystem for PathLockWrappedFS {
         show_hidden: bool,
         node_limit: Option<usize>,
         level_limit: Option<usize>,
+        offset: Option<usize>,
+        sort_by: Option<ListSortBy>,
+        sort_order: Option<SortOrder>,
     ) -> crate::core::Result<Vec<TreeEntry>> {
         self.inner
-            .tree_directory(path, show_hidden, node_limit, level_limit)
+            .tree_directory(
+                path,
+                show_hidden,
+                node_limit,
+                level_limit,
+                offset,
+                sort_by,
+                sort_order,
+            )
             .await
     }
 

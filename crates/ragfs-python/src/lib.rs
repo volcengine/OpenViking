@@ -217,14 +217,51 @@ use ragfs::core::builder::{
 };
 use ragfs::core::{
     build_configured_stack, ConfigValue, FileInfo, FileSystem, FilesystemStats, FsContext,
-    FsContextInner, FsOperation, GlobPage, GrepResult, MountableFS, OperationStats,
-    PathLockContext, PluginConfig, RagfsConfig, TreeEntry, WriteFlag, FS_CTX,
+    FsContextInner, FsOperation, GlobPage, GrepResult, ListSortBy, MountableFS, OperationStats,
+    PathLockContext, PluginConfig, RagfsConfig, SortOrder, TreeEntry, WriteFlag, FS_CTX,
 };
 use ragfs::lock::types::PathLockError;
 use ragfs::lock::{
     BorrowedPathLockLease, OwnedPathLockLease, PathLockConfig, PathLockHandoffRef, PathLockKind,
     PathLockManager, PathLockRequest,
 };
+
+/// Parse an optional listing sort field and return the matching RagFS value.
+fn parse_list_sort_by(value: Option<&str>) -> PyResult<Option<ListSortBy>> {
+    match value {
+        None => Ok(None),
+        Some("name") => Ok(Some(ListSortBy::Name)),
+        Some("mtime") => Ok(Some(ListSortBy::Mtime)),
+        Some(value) => Err(PyValueError::new_err(format!(
+            "sort_by must be 'name' or 'mtime', got {value:?}"
+        ))),
+    }
+}
+
+/// Parse an optional listing sort direction and return the matching RagFS value.
+fn parse_sort_order(value: Option<&str>) -> PyResult<Option<SortOrder>> {
+    match value {
+        None | Some("asc") => Ok(Some(SortOrder::Asc)),
+        Some("desc") => Ok(Some(SortOrder::Desc)),
+        Some(value) => Err(PyValueError::new_err(format!(
+            "sort_order must be 'asc' or 'desc', got {value:?}"
+        ))),
+    }
+}
+
+/// Validate `offset` and return it as an unsigned RagFS offset.
+fn parse_listing_offset(offset: i64) -> PyResult<usize> {
+    usize::try_from(offset).map_err(|_| PyValueError::new_err("offset must be non-negative"))
+}
+
+/// Validate `limit` and return it as an optional unsigned RagFS limit.
+fn parse_listing_limit(limit: Option<i64>) -> PyResult<Option<usize>> {
+    match limit {
+        None => Ok(None),
+        Some(value) if value > 0 => Ok(Some(value as usize)),
+        Some(_) => Err(PyValueError::new_err("limit must be positive")),
+    }
+}
 
 /// Parse one Python pathlock request without silently defaulting invalid fields.
 fn parse_pathlock_request(raw: &HashMap<String, String>) -> PyResult<PathLockRequest> {
@@ -1599,17 +1636,28 @@ impl RAGFSBindingClient {
     ///
     /// Returns a list of file info dicts with keys:
     /// name, size, mode, modTime, isDir
-    #[pyo3(signature = (path, ctx=None))]
+    #[pyo3(signature = (path, ctx=None, *, offset=0, limit=None, sort_by=None, sort_order=None))]
     fn ls(
         &self,
         py: Python<'_>,
         path: String,
         ctx: Option<HashMap<String, String>>,
+        offset: i64,
+        limit: Option<i64>,
+        sort_by: Option<&str>,
+        sort_order: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
         let fs_ctx = build_fs_context(ctx);
         let top = self.top.clone();
+        let offset = parse_listing_offset(offset)?;
+        let limit = parse_listing_limit(limit)?;
+        let sort_by = parse_list_sort_by(sort_by)?;
+        let sort_order = parse_sort_order(sort_order)?;
         let entries = self
-            .run_scoped(py, fs_ctx, move || async move { top.read_dir(&path).await })
+            .run_scoped(py, fs_ctx, move || async move {
+                top.read_dir(&path, Some(offset), limit, sort_by, sort_order)
+                    .await
+            })
             .map_err(to_py_err)?;
 
         Python::attach(|py| {
@@ -2095,7 +2143,7 @@ impl RAGFSBindingClient {
     ///
     /// Returns:
     ///     A list of dicts, each with keys: path, rel_path, info, extra
-    #[pyo3(signature = (path, show_hidden=false, node_limit=None, level_limit=None, ctx=None))]
+    #[pyo3(signature = (path, show_hidden=false, node_limit=None, level_limit=None, ctx=None, *, offset=0, sort_by=None, sort_order=None))]
     fn tree_directory(
         &self,
         py: Python<'_>,
@@ -2104,16 +2152,30 @@ impl RAGFSBindingClient {
         node_limit: Option<i32>,
         level_limit: Option<i32>,
         ctx: Option<HashMap<String, String>>,
+        offset: i64,
+        sort_by: Option<&str>,
+        sort_order: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
         let fs_ctx = build_fs_context(ctx);
         let top = self.top.clone();
         let limit = node_limit.map(|n| if n < 0 { 0 } else { n as usize });
         let level_limit_usize = level_limit.map(|n| if n < 0 { 0 } else { n as usize });
+        let offset = parse_listing_offset(offset)?;
+        let sort_by = parse_list_sort_by(sort_by)?;
+        let sort_order = parse_sort_order(sort_order)?;
 
         let entries = self
             .run_scoped(py, fs_ctx, move || async move {
-                top.tree_directory(&path, show_hidden, limit, level_limit_usize)
-                    .await
+                top.tree_directory(
+                    &path,
+                    show_hidden,
+                    limit,
+                    level_limit_usize,
+                    Some(offset),
+                    sort_by,
+                    sort_order,
+                )
+                .await
             })
             .map_err(to_py_err)?;
 

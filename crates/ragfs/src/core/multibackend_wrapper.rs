@@ -22,10 +22,14 @@ use tokio::sync::{Mutex, Notify};
 use super::context::{FsContext, FS_CTX};
 use super::encryption_wrapper::EncryptionWrappedFS;
 use super::errors::{Error, Result};
-use super::filesystem::{normalize_prefix_path, relative_depth, relative_match_file, FileSystem};
+use super::filesystem::{
+    apply_read_dir_options, normalize_prefix_path, paginate_entries, relative_depth,
+    relative_match_file, FileSystem,
+};
 use super::types::{
-    BackendRole, BackendSyncState, FileInfo, GlobEntry, GlobPage, GrepResult, OperationItemConfig,
-    RedirectEntry, RedirectPolicy, SyncLogEntry, SyncOp, SyncType, TreeEntry, WriteFlag,
+    BackendRole, BackendSyncState, FileInfo, GlobEntry, GlobPage, GrepResult, ListSortBy,
+    OperationItemConfig, RedirectEntry, RedirectPolicy, SortOrder, SyncLogEntry, SyncOp, SyncType,
+    TreeEntry, WriteFlag,
 };
 use crate::core::glob::{
     compare_rel_paths, decode_offset_token, encode_offset_token, PreparedGlob,
@@ -1390,15 +1394,28 @@ impl FileSystem for MultiWriteWrappedFS {
         .await
     }
 
-    async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
+    async fn read_dir(
+        &self,
+        path: &str,
+        offset: Option<usize>,
+        limit: Option<usize>,
+        sort_by: Option<ListSortBy>,
+        sort_order: Option<SortOrder>,
+    ) -> Result<Vec<FileInfo>> {
         let inner = &self.inner;
-        let mut entries = inner.primary().backend.read_dir(path).await?;
+        let mut entries = inner
+            .primary()
+            .backend
+            .read_dir(path, None, None, None, None)
+            .await?;
 
         // Filter multi-write internal names.
         entries.retain(|e| !MULTIWRITE_INTERNAL_NAMES.contains(&e.name.as_str()));
 
         if inner.redirects.is_empty() {
-            return Ok(entries);
+            return Ok(apply_read_dir_options(
+                entries, offset, limit, sort_by, sort_order,
+            ));
         }
 
         // Merge redirect entries so users can see redirected files in listings.
@@ -1422,7 +1439,9 @@ impl FileSystem for MultiWriteWrappedFS {
             }
         }
 
-        Ok(entries)
+        Ok(apply_read_dir_options(
+            entries, offset, limit, sort_by, sort_order,
+        ))
     }
 
     async fn stat(&self, path: &str) -> Result<FileInfo> {
@@ -1439,7 +1458,12 @@ impl FileSystem for MultiWriteWrappedFS {
         if is_hidden_internal_name(file_name(old_path))
             || is_hidden_internal_name(file_name(new_path))
         {
-            return self.inner.primary().backend.rename(old_path, new_path).await;
+            return self
+                .inner
+                .primary()
+                .backend
+                .rename(old_path, new_path)
+                .await;
         }
         let ctx = current_required_ctx()?;
         let inner = &self.inner;
@@ -1580,7 +1604,7 @@ impl FileSystem for MultiWriteWrappedFS {
 
         if recursive && search_dir == path_owned {
             let redirect_entries = self
-                .tree_directory(&path_owned, true, None, level_limit)
+                .tree_directory(&path_owned, true, None, level_limit, None, None, None)
                 .await?;
             for entry in redirect_entries {
                 if node_limit.is_some_and(|limit| result.count >= limit) {
@@ -1692,7 +1716,7 @@ impl FileSystem for MultiWriteWrappedFS {
         }
 
         let entries = self
-            .tree_directory(path, show_hidden, None, level_limit)
+            .tree_directory(path, show_hidden, None, level_limit, None, None, None)
             .await?;
 
         let mut matched = Vec::new();
@@ -1737,13 +1761,33 @@ impl FileSystem for MultiWriteWrappedFS {
         show_hidden: bool,
         node_limit: Option<usize>,
         level_limit: Option<usize>,
+        offset: Option<usize>,
+        sort_by: Option<ListSortBy>,
+        sort_order: Option<SortOrder>,
     ) -> Result<Vec<TreeEntry>> {
         let base = normalize_prefix_path(path);
+        if sort_by.is_some() {
+            let mut entries = Vec::new();
+            let traversal_limit = node_limit.map(|limit| offset.unwrap_or(0).saturating_add(limit));
+            self.tree_directory_internal(
+                &base,
+                &base,
+                show_hidden,
+                traversal_limit,
+                level_limit,
+                sort_by,
+                sort_order,
+                &mut entries,
+            )
+            .await?;
+            return Ok(paginate_entries(entries, offset, node_limit));
+        }
+
         let mut entries = self
             .inner
             .primary()
             .backend
-            .tree_directory(path, show_hidden, node_limit, level_limit)
+            .tree_directory(path, show_hidden, None, level_limit, None, None, None)
             .await?;
 
         entries.retain(|e| {
@@ -1752,11 +1796,7 @@ impl FileSystem for MultiWriteWrappedFS {
         });
 
         if self.inner.redirects.is_empty() {
-            return Ok(entries);
-        }
-
-        if node_limit.is_some_and(|limit| entries.len() >= limit) {
-            return Ok(entries);
+            return Ok(paginate_entries(entries, offset, node_limit));
         }
 
         let ctx = current_required_ctx()
@@ -1796,15 +1836,11 @@ impl FileSystem for MultiWriteWrappedFS {
             })
             .buffered(DEFAULT_TREE_REDIRECT_META_CONCURRENCY);
 
-        'redirect_dirs: while let Some((dir, redirect_meta)) = redirect_results.next().await {
+        while let Some((dir, redirect_meta)) = redirect_results.next().await {
             let Some(redirect_meta) = redirect_meta else {
                 continue;
             };
             for (name, redirect_entry) in redirect_meta.entries {
-                if node_limit.is_some_and(|limit| entries.len() >= limit) {
-                    break 'redirect_dirs;
-                }
-
                 let virtual_path = if dir == "/" {
                     format!("/{}", name)
                 } else {
@@ -1840,6 +1876,6 @@ impl FileSystem for MultiWriteWrappedFS {
             }
         }
 
-        Ok(entries)
+        Ok(paginate_entries(entries, offset, node_limit))
     }
 }

@@ -630,13 +630,49 @@ async def read(uris: str | list[str]) -> str | list[ContentBlock]:
 
 
 @mcp.tool(name="list")
-async def ls(uri: str, recursive: bool = False) -> str:
-    """List files and subdirectories under a viking:// directory URI. Use recursive=true for deep listing."""
+async def ls(
+    uri: str,
+    recursive: bool = False,
+    offset: int = 0,
+    limit: int | None = None,
+    sort_by: Literal["name", "mtime"] | None = None,
+    sort_order: Literal["asc", "desc"] = "asc",
+) -> str:
+    """List one sorted page under a viking:// directory URI.
+
+    Args:
+        uri: Directory URI to list.
+        recursive: Whether to recursively list descendants.
+        offset: Number of visible entries to skip.
+        limit: Optional maximum number of entries.
+        sort_by: Optional name or modification-time ordering.
+        sort_order: Ascending or descending order.
+
+    Returns:
+        A line-oriented directory listing.
+    """
+    if offset < 0:
+        raise InvalidArgumentError("offset must be greater than or equal to 0")
+    if limit is not None and limit <= 0:
+        raise InvalidArgumentError("limit must be greater than 0")
+
     service = get_service()
     ctx = _get_ctx()
     resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
 
-    entries = await service.fs.ls(resolved_uri, ctx=ctx, recursive=recursive, output="original")
+    options: dict[str, Any] = {
+        "ctx": ctx,
+        "recursive": recursive,
+        "output": "original",
+    }
+    if offset:
+        options["offset"] = offset
+    if limit is not None:
+        options["node_limit"] = limit
+    if sort_by is not None:
+        options["sort_by"] = sort_by
+        options["sort_order"] = sort_order
+    entries = await service.fs.ls(resolved_uri, **options)
     if not entries:
         return f"(no entries under {uri})"
 
@@ -661,19 +697,40 @@ async def tree(
     level_limit: int = 3,
     node_limit: int = 1000,
     include_abstract: bool = False,
+    offset: int = 0,
+    limit: int | None = None,
 ) -> str:
-    """Show the recursive directory tree under a viking:// URI, indented by depth, so you can understand the whole layout at a glance. Use this when you need a full picture of the file tree; use list for a single directory level, glob for filename patterns, and grep for content. level_limit caps the depth (default 3); node_limit caps the total entries. Set include_abstract=true to also see each file's summary (slower, but useful for orientation in unfamiliar directories)."""
+    """Show one visible page from a recursive directory tree.
+
+    Args:
+        uri: Directory URI to traverse.
+        level_limit: Maximum traversal depth.
+        node_limit: Existing default result limit.
+        include_abstract: Whether to include file summaries.
+        offset: Number of visible nodes to skip.
+        limit: Optional result limit that overrides node_limit.
+
+    Returns:
+        An indented directory tree.
+    """
+    if offset < 0:
+        raise InvalidArgumentError("offset must be greater than or equal to 0")
+    if limit is not None and limit <= 0:
+        raise InvalidArgumentError("limit must be greater than 0")
+
     service = get_service()
     ctx = _get_ctx()
     resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
     output = "agent" if include_abstract else "original"
+    effective_limit = limit if limit is not None else node_limit
     try:
         entries = await service.fs.tree(
             resolved_uri,
             ctx=ctx,
             output=output,
-            node_limit=node_limit,
+            node_limit=effective_limit,
             level_limit=level_limit,
+            offset=offset,
         )
     except NotFoundError:
         entries = []
@@ -695,9 +752,9 @@ async def tree(
         abstract = (e.get("abstract") or "").strip().replace("\n", " ")
         if include_abstract and abstract:
             lines.append(f"{indent}  - {abstract}")
-    if len(entries) >= node_limit:
+    if len(entries) >= effective_limit:
         lines.append(
-            f"(truncated at node_limit={node_limit}; narrow the uri or raise node_limit to see more)"
+            f"(truncated at node_limit={effective_limit}; narrow the uri or raise node_limit to see more)"
         )
     return "\n".join(lines)
 

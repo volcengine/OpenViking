@@ -2113,8 +2113,17 @@ mod tests {
             self.inner.write(path, data, offset, flags).await
         }
 
-        async fn read_dir(&self, path: &str) -> FsResult<Vec<FileInfo>> {
-            self.inner.read_dir(path).await
+        async fn read_dir(
+            &self,
+            path: &str,
+            offset: Option<usize>,
+            limit: Option<usize>,
+            sort_by: Option<crate::core::ListSortBy>,
+            sort_order: Option<crate::core::SortOrder>,
+        ) -> FsResult<Vec<FileInfo>> {
+            self.inner
+                .read_dir(path, offset, limit, sort_by, sort_order)
+                .await
         }
 
         async fn stat(&self, path: &str) -> FsResult<FileInfo> {

@@ -1267,6 +1267,10 @@ impl GitService {
             let is_empty = match crate::core::filesystem::FileSystem::read_dir(
                 self.vfs.as_ref(),
                 &abs,
+                None,
+                None,
+                None,
+                None,
             )
             .await
             {
@@ -1948,7 +1952,14 @@ mod tests {
                 .insert(path.to_string(), data.to_vec());
             Ok(data.len() as u64)
         }
-        async fn read_dir(&self, _path: &str) -> Result<Vec<FileInfo>> {
+        async fn read_dir(
+            &self,
+            _path: &str,
+            _offset: Option<usize>,
+            _limit: Option<usize>,
+            _sort_by: Option<crate::core::ListSortBy>,
+            _sort_order: Option<crate::core::SortOrder>,
+        ) -> Result<Vec<FileInfo>> {
             unimplemented!()
         }
 
@@ -1974,6 +1985,9 @@ mod tests {
             _show_hidden: bool,
             _node_limit: Option<usize>,
             _level_limit: Option<usize>,
+            _offset: Option<usize>,
+            _sort_by: Option<crate::core::ListSortBy>,
+            _sort_order: Option<crate::core::SortOrder>,
         ) -> Result<Vec<TreeEntry>> {
             let prefix = if path == "/" {
                 "/".to_string()
@@ -6070,7 +6084,14 @@ mod fast_path1_tests {
                 .insert(path.to_string(), (data.to_vec(), 0));
             Ok(data.len() as u64)
         }
-        async fn read_dir(&self, _path: &str) -> Result<Vec<FileInfo>> {
+        async fn read_dir(
+            &self,
+            _path: &str,
+            _offset: Option<usize>,
+            _limit: Option<usize>,
+            _sort_by: Option<crate::core::ListSortBy>,
+            _sort_order: Option<crate::core::SortOrder>,
+        ) -> Result<Vec<FileInfo>> {
             unimplemented!()
         }
 
@@ -6102,6 +6123,9 @@ mod fast_path1_tests {
             _show_hidden: bool,
             _node_limit: Option<usize>,
             _level_limit: Option<usize>,
+            _offset: Option<usize>,
+            _sort_by: Option<crate::core::ListSortBy>,
+            _sort_order: Option<crate::core::SortOrder>,
         ) -> Result<Vec<TreeEntry>> {
             let prefix = if path == "/" {
                 "/".to_string()

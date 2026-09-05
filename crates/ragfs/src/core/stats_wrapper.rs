@@ -106,9 +106,19 @@ impl FileSystem for StatsWrappedFS {
         result
     }
 
-    async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
+    async fn read_dir(
+        &self,
+        path: &str,
+        offset: Option<usize>,
+        limit: Option<usize>,
+        sort_by: Option<crate::core::ListSortBy>,
+        sort_order: Option<crate::core::SortOrder>,
+    ) -> Result<Vec<FileInfo>> {
         let timer = OperationTimer::start(FsOperation::ReadDir, Arc::clone(&self.stats));
-        let result = self.inner.read_dir(path).await;
+        let result = self
+            .inner
+            .read_dir(path, offset, limit, sort_by, sort_order)
+            .await;
         timer.finish().await;
         result
     }
@@ -195,11 +205,22 @@ impl FileSystem for StatsWrappedFS {
         show_hidden: bool,
         node_limit: Option<usize>,
         level_limit: Option<usize>,
+        offset: Option<usize>,
+        sort_by: Option<crate::core::ListSortBy>,
+        sort_order: Option<crate::core::SortOrder>,
     ) -> Result<Vec<TreeEntry>> {
         let timer = OperationTimer::start(FsOperation::TreeDir, Arc::clone(&self.stats));
         let result = self
             .inner
-            .tree_directory(path, show_hidden, node_limit, level_limit)
+            .tree_directory(
+                path,
+                show_hidden,
+                node_limit,
+                level_limit,
+                offset,
+                sort_by,
+                sort_order,
+            )
             .await;
         timer.finish().await;
         result

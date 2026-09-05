@@ -530,18 +530,30 @@ async def test_tagged_grep_reuses_tags_returned_by_viking_fs(request_context):
 
 
 @pytest.mark.asyncio
-async def test_ls_projects_tags_filters_with_and_before_applying_node_limit(request_context):
+async def test_ls_applies_offset_and_node_limit_after_tag_filtering(request_context):
     entries = [
-        {"uri": "viking://resources/a.md", "isDir": False},
+        {
+            "uri": f"viking://resources/unmatched-{index:03d}.md",
+            "isDir": False,
+        }
+        for index in range(256)
+    ] + [
         {"uri": "viking://resources/b.md", "isDir": False},
         {"uri": "viking://resources/c.md", "isDir": False},
     ]
-    viking_fs = SimpleNamespace(ls=AsyncMock(return_value=entries))
+
+    async def fake_ls(*_args, offset=0, node_limit=None, **_kwargs):
+        return entries[offset:] if node_limit is None else entries[offset : offset + node_limit]
+
+    finalized = [{"uri": "viking://resources/c.md", "isDir": False, "abstract": "summary"}]
+    viking_fs = SimpleNamespace(
+        ls=AsyncMock(side_effect=fake_ls),
+        _finalize_listing_entries=AsyncMock(return_value=finalized),
+    )
 
     class FakeVikingDB:
         async def filter(self, **_kwargs):
             return [
-                {"uri": "viking://resources/a.md", "level": 2, "search_tags": ["team=search"]},
                 {
                     "uri": "viking://resources/b.md",
                     "level": 2,
@@ -560,12 +572,19 @@ async def test_ls_projects_tags_filters_with_and_before_applying_node_limit(requ
         ctx=request_context,
         tags=["team=search", "env=prod"],
         node_limit=1,
+        offset=1,
+        output="agent",
     )
 
-    assert result == [
-        {"uri": "viking://resources/b.md", "isDir": False, "tags": ["team=search", "env=prod"]}
+    assert result == finalized
+    assert viking_fs.ls.await_count == 2
+    assert viking_fs.ls.await_args_list[0].kwargs["output"] == "original"
+    assert viking_fs.ls.await_args_list[0].kwargs["node_limit"] == 256
+    assert viking_fs.ls.await_args_list[1].kwargs["offset"] == 256
+    selected = viking_fs._finalize_listing_entries.await_args.args[0]
+    assert selected == [
+        {"uri": "viking://resources/c.md", "isDir": False, "tags": ["team=search", "env=prod"]}
     ]
-    assert viking_fs.ls.await_args.kwargs["node_limit"] is None
 
 
 @pytest.mark.asyncio
@@ -635,7 +654,7 @@ async def test_tree_projects_directory_tags_from_abstract_and_overview_records(r
     assert result == [
         {"uri": "viking://resources/docs", "isDir": True, "tags": ["team=search", "env=prod"]}
     ]
-    assert viking_fs.tree.await_args.kwargs["node_limit"] is None
+    assert viking_fs.tree.await_args.kwargs["node_limit"] == 1000
 
 
 @pytest.mark.asyncio

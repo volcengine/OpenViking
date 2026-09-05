@@ -1644,6 +1644,10 @@ pub async fn handle_ls(
     abs_limit: i32,
     show_all_hidden: bool,
     node_limit: i32,
+    offset: i32,
+    limit: Option<i32>,
+    sort_by: Option<String>,
+    sort_order: Option<String>,
     fields: Option<Vec<String>>,
     tags: Vec<String>,
     ctx: CliContext,
@@ -1661,6 +1665,18 @@ pub async fn handle_ls(
     }
     if show_all_hidden {
         params.push("-a".to_string());
+    }
+    if offset != 0 {
+        params.push(format!("--offset {}", offset));
+    }
+    if let Some(limit) = limit {
+        params.push(format!("--limit {}", limit));
+    }
+    if let Some(sort_by) = &sort_by {
+        params.push(format!("--sort-by {}", sort_by));
+    }
+    if let Some(sort_order) = &sort_order {
+        params.push(format!("--sort-order {}", sort_order));
     }
     if !tags.is_empty() {
         params.push(format!("--tags {}", tags.join(",")));
@@ -1685,6 +1701,10 @@ pub async fn handle_ls(
         abs_limit,
         show_all_hidden,
         node_limit,
+        offset,
+        limit,
+        sort_by.as_deref(),
+        sort_order.as_deref(),
         ctx.output_format,
         ctx.compact,
         fields,
@@ -1698,6 +1718,8 @@ pub async fn handle_tree(
     abs_limit: i32,
     show_all_hidden: bool,
     node_limit: i32,
+    offset: i32,
+    limit: Option<i32>,
     level_limit: i32,
     simple: bool,
     fields: Option<Vec<String>>,
@@ -1715,6 +1737,12 @@ pub async fn handle_tree(
     }
     if simple {
         params.push("-s".to_string());
+    }
+    if offset != 0 {
+        params.push(format!("--offset {}", offset));
+    }
+    if let Some(limit) = limit {
+        params.push(format!("--limit {}", limit));
     }
     if !tags.is_empty() {
         params.push(format!("--tags {}", tags.join(",")));
@@ -1738,6 +1766,8 @@ pub async fn handle_tree(
         show_all_hidden,
         node_limit,
         level_limit,
+        offset,
+        limit,
         ctx.output_format,
         ctx.compact,
         simple,

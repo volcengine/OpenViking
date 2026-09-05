@@ -211,7 +211,14 @@ impl FileSystem for ServerInfoFileSystem {
         ))
     }
 
-    async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
+    async fn read_dir(
+        &self,
+        path: &str,
+        offset: Option<usize>,
+        limit: Option<usize>,
+        sort_by: Option<crate::core::ListSortBy>,
+        sort_order: Option<crate::core::SortOrder>,
+    ) -> Result<Vec<FileInfo>> {
         if path != "/" {
             return Err(Error::plugin(format!("not a directory: {}", path)));
         }
@@ -225,7 +232,7 @@ impl FileSystem for ServerInfoFileSystem {
         let stats = self.get_stats();
         let readme = self.get_readme();
 
-        Ok(vec![
+        let entries = vec![
             FileInfo::new("README".to_string(), readme.len() as u64, 0o444, now, false),
             FileInfo::new(
                 "server_info".to_string(),
@@ -243,7 +250,10 @@ impl FileSystem for ServerInfoFileSystem {
                 false,
             ),
             FileInfo::new("stats".to_string(), stats.len() as u64, 0o444, now, false),
-        ])
+        ];
+        Ok(crate::core::filesystem::apply_read_dir_options(
+            entries, offset, limit, sort_by, sort_order,
+        ))
     }
 
     async fn stat(&self, path: &str) -> Result<FileInfo> {
