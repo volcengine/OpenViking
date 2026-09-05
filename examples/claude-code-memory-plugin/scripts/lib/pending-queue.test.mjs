@@ -207,9 +207,55 @@ test("replayPending sends queued entries and removes them after success", async 
 
     assert.deepEqual(result, { replayed: 1, failed: 0, skipped: 0, deferred: 0 });
     assert.equal(calls.length, 1);
-    assert.equal(calls[0].path, "/api/v1/sessions/cc-replay/messages");
-    assert.deepEqual(JSON.parse(calls[0].init.body), payload);
+    assert.equal(calls[0].path, "/api/v1/sessions/cc-replay/messages/batch");
+    assert.deepEqual(JSON.parse(calls[0].init.body), { messages: [payload] });
     assert.deepEqual(await listPending(), []);
+  });
+});
+
+test("replayPending batches consecutive same-session addMessage entries", async () => {
+  await withPendingDir(async () => {
+    const t0 = Date.now();
+    await enqueue("addMessage", "cc-batch", { role: "user", content: "a" }, { createdAt: t0 });
+    await enqueue("addMessage", "cc-batch", { role: "user", content: "b" }, { createdAt: t0 + 1 });
+    await enqueue("addMessage", "cc-batch", { role: "user", content: "c" }, { createdAt: t0 + 2 });
+    await enqueue("addMessage", "other", { role: "user", content: "x" }, { createdAt: t0 + 3 });
+
+    const calls = [];
+    const result = await replayPending(async (path, init) => {
+      calls.push({ path, body: JSON.parse(init.body) });
+      return { ok: true };
+    }, () => {});
+
+    assert.deepEqual(result, { replayed: 4, failed: 0, skipped: 0, deferred: 0 });
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].path, "/api/v1/sessions/cc-batch/messages/batch");
+    assert.deepEqual(
+      calls[0].body.messages.map((m) => m.content),
+      ["a", "b", "c"],
+    );
+    assert.equal(calls[1].path, "/api/v1/sessions/other/messages/batch");
+    assert.deepEqual(await listPending(), []);
+  });
+});
+
+test("replayPending failed batch increments retries and stops for order", async () => {
+  await withPendingDir(async () => {
+    const t0 = Date.now();
+    for (let i = 0; i < 3; i++) {
+      await enqueue("addMessage", "cc-fail", { role: "user", content: `m${i}` }, { createdAt: t0 + i });
+    }
+    await enqueue("addMessage", "other-session", { role: "user", content: "later" }, { createdAt: t0 + 10 });
+
+    const result = await replayPending(async () => ({ ok: false, status: 503 }), () => {});
+
+    assert.equal(result.replayed, 0);
+    assert.equal(result.failed, 3);
+    assert.ok(result.deferred >= 1);
+    const left = await listPending();
+    assert.equal(left.length, 4);
+    assert.equal(left.filter((p) => p.entry.sessionId === "cc-fail" && p.entry.retries === 1).length, 3);
+    assert.equal(left.filter((p) => p.entry.sessionId === "other-session" && (p.entry.retries || 0) === 0).length, 1);
   });
 });
 
@@ -241,6 +287,7 @@ test("replayPending honors the per-run replay limit", async () => {
     assert.equal(result.replayed, 1);
     assert.equal(result.deferred, 1);
     assert.equal(calls.length, 1);
+    assert.match(calls[0].path, /\/messages\/batch$/);
     assert.equal((await listPending()).length, 1);
   });
 });

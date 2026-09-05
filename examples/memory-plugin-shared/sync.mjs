@@ -51,7 +51,8 @@ const DOCTOR_SHARED_FILES = [
 const OPENCODE_SHARED_FILES = [...HOOK_SHARED_FILES, ...SETUP_WIZARD_SHARED_FILES, ...MCP_PROXY_SHARED_FILES, ...BATCH_SHARED_FILES];
 // dsh and zcode ship no setup entry point, so nothing there calls the wizard.
 const ZCODE_SHARED_FILES = [...HOOK_SHARED_FILES, ...MCP_PROXY_SHARED_FILES, ...BATCH_SHARED_FILES, ...ASYNC_WRITE_SHARED_FILES, "agent-hook-runtime.mjs", "agent-uri-guard.mjs"];
-const DSH_SHARED_FILES = [...HOOK_SHARED_FILES, ...MCP_PROXY_SHARED_FILES];
+// pending-queue.mjs dynamically imports batch-send for batched addMessage replay.
+const DSH_SHARED_FILES = [...HOOK_SHARED_FILES, ...MCP_PROXY_SHARED_FILES, ...BATCH_SHARED_FILES];
 const PI_SHARED_FILES = [...HOOK_SHARED_FILES, ...SETUP_WIZARD_SHARED_FILES, ...BATCH_SHARED_FILES];
 // Agent Plugins 1.0 has no hooks: it is the proxy and nothing else.
 const AGENT_PLUGINS_SHARED_FILES = ["credentials.mjs", "debug-log.mjs", ...MCP_PROXY_SHARED_FILES];
