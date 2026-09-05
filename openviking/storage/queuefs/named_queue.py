@@ -4,6 +4,7 @@ import abc
 import asyncio
 import json
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Union
@@ -20,6 +21,33 @@ from openviking.service.task_work_index import (
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _parse_processing_started_at(value: Any) -> Optional[float]:
+    """Parse a message's ``processing_started_at`` into epoch seconds.
+
+    The QueueFS backend may emit either an ISO-8601 string or an epoch
+    timestamp. Returns ``None`` when the value is absent or unparseable.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        # ISO-8601 (handle a trailing 'Z' UTC marker).
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            pass
+        # Bare epoch seconds.
+        try:
+            return float(text)
+        except ValueError:
+            return None
+    return None
 
 
 @dataclass
@@ -267,8 +295,8 @@ class NamedQueue:
         Must be called after the dequeue handler finishes processing a message.
         Task-owned work is provisionally removed from the runtime index first so
         the last message can persist its task's terminal state before deletion.
-        If not called (e.g. process crashes), the message will be automatically
-        re-queued on the next startup via RecoverStale.
+        If not called (e.g. process crashes), the message is re-queued on the
+        next startup via RecoverStale / ``recover_stale`` (see ``dequeue``).
         """
         if not msg_id:
             return
@@ -286,6 +314,74 @@ class NamedQueue:
             if self._task_work_index is not None and prepared is not None:
                 self._task_work_index.rollback_ack(self.name, prepared)
             logger.warning(f"[NamedQueue] Ack failed for {self.name} msg_id={msg_id}: {e}")
+
+    async def recover_stale(self, max_age_sec: float) -> int:
+        """Reset ``processing`` rows older than ``max_age_sec`` back to pending.
+
+        This is the Python-layer recovery for the crash-between-dequeue-and-ack
+        case. The QueueFS backend has its own ``RecoverStale`` (gated on
+        ``recover_stale_sec`` and fired at mount / dequeue time); this sweep is
+        a belt-and-suspenders layer that works regardless of when the backend
+        fires, by operating purely through the existing ``/messages``,
+        ``/enqueue`` and ``/ack`` path verbs.
+
+        For each message returned by ``snapshot()`` that is stuck in
+        ``processing`` whose ``processing_started_at`` predates
+        ``now - max_age_sec``, the payload is re-enqueued (as a fresh pending
+        row) and the stale row is acked (deleted). The reset message therefore
+        gets a new id and moves to the tail of the queue — at-least-once retry
+        semantics. Returns the number of messages reset.
+        """
+        if max_age_sec <= 0:
+            return 0
+        await self._ensure_initialized()
+        try:
+            messages = await self.snapshot()
+        except Exception as e:
+            logger.warning(
+                "[NamedQueue] recover_stale snapshot failed for %s: %s", self.name, e
+            )
+            return 0
+
+        cutoff = time.time() - max_age_sec
+        reset = 0
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("status") != "processing":
+                continue
+            msg_id = msg.get("id", "")
+            if not msg_id:
+                continue
+            started_at = _parse_processing_started_at(msg.get("processing_started_at"))
+            if started_at is None or started_at > cutoff:
+                # Still actively processing (or no timestamp to judge by) — leave it.
+                continue
+            try:
+                payload = {
+                    key: value
+                    for key, value in msg.items()
+                    if key not in {"id", "status", "processing_started_at"}
+                }
+                await self._async_agfs.write(
+                    f"{self.path}/enqueue", json.dumps(payload).encode("utf-8")
+                )
+                await self._async_agfs.write(f"{self.path}/ack", msg_id.encode("utf-8"))
+                reset += 1
+            except Exception as e:
+                logger.warning(
+                    "[NamedQueue] recover_stale reset failed for %s msg_id=%s: %s",
+                    self.name,
+                    msg_id,
+                    e,
+                )
+        if reset:
+            logger.info(
+                "[NamedQueue] Recovered %d stale processing row(s) on %s",
+                reset,
+                self.name,
+            )
+        return reset
 
     async def _read_queue_message(self) -> Optional[Dict[str, Any]]:
         """Read and remove one message from the AGFS queue; return parsed dict or None.
@@ -313,8 +409,12 @@ class NamedQueue:
           2. Call on_dequeue()   → actual processing
           3. Call ack()          → backend deletes the message permanently
 
-        If the process crashes between steps 1 and 3, the backend's RecoverStale
-        on the next startup resets the message back to 'pending' for retry.
+        If the process crashes between steps 1 and 3, the message is recovered
+        on the next startup: the backend's RecoverStale runs when
+        ``recover_stale_sec > 0`` (default 300s), and QueueManager.start() also
+        runs a Python-layer sweep (``recover_stale``) as a belt-and-suspenders
+        fallback. With ``recover_stale_sec = 0`` the backend recovery is
+        disabled, so the startup sweep is what prevents zombie rows.
         """
         await self._ensure_initialized()
         try:

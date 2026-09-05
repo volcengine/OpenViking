@@ -22,6 +22,10 @@ from .semantic_queue import SemanticQueue
 logger = get_logger(__name__)
 
 DEFAULT_MAX_CONCURRENT_SESSION_COMMIT = 8
+# Reset processing rows older than this on startup so a crash between dequeue
+# and ack cannot strand a message in 'processing' forever. Mirrors the
+# QueueFS config default (see openviking_cli/utils/config/agfs_config.py).
+DEFAULT_RECOVER_STALE_SEC = 300
 
 # ========== Singleton Pattern ==========
 _instance: Optional["QueueManager"] = None
@@ -36,6 +40,7 @@ def init_queue_manager(
     max_concurrent_external_parse: int = 4,
     max_concurrent_add_resource: int = 4,
     max_concurrent_session_commit: int = DEFAULT_MAX_CONCURRENT_SESSION_COMMIT,
+    recover_stale_sec: float = DEFAULT_RECOVER_STALE_SEC,
 ) -> "QueueManager":
     """Initialize QueueManager singleton.
 
@@ -48,6 +53,8 @@ def init_queue_manager(
         max_concurrent_external_parse: Max concurrent ExternalParse tasks.
         max_concurrent_add_resource: Max concurrent AddResource tasks.
         max_concurrent_session_commit: Max concurrent SessionCommit tasks.
+        recover_stale_sec: Reset ``processing`` rows older than this many seconds
+            back to ``pending`` on startup. 0 disables the Python-layer sweep.
     """
     global _instance
     _instance = QueueManager(
@@ -59,6 +66,7 @@ def init_queue_manager(
         max_concurrent_external_parse=max_concurrent_external_parse,
         max_concurrent_add_resource=max_concurrent_add_resource,
         max_concurrent_session_commit=max_concurrent_session_commit,
+        recover_stale_sec=recover_stale_sec,
     )
     return _instance
 
@@ -97,6 +105,7 @@ class QueueManager:
         max_concurrent_external_parse: int = 4,
         max_concurrent_add_resource: int = 4,
         max_concurrent_session_commit: int = DEFAULT_MAX_CONCURRENT_SESSION_COMMIT,
+        recover_stale_sec: float = DEFAULT_RECOVER_STALE_SEC,
     ):
         """Initialize QueueManager."""
         self._agfs = agfs
@@ -107,6 +116,7 @@ class QueueManager:
         self._max_concurrent_external_parse = max_concurrent_external_parse
         self._max_concurrent_add_resource = max_concurrent_add_resource
         self._max_concurrent_session_commit = max_concurrent_session_commit
+        self._recover_stale_sec = recover_stale_sec
         self._queues: Dict[str, NamedQueue] = {}
         self._started = False
         self._queue_threads: Dict[str, threading.Thread] = {}
@@ -124,6 +134,10 @@ class QueueManager:
         if self._started:
             return
 
+        # Recover stale processing rows before consumers start, so work orphaned
+        # by a previous crash is retried instead of blocking the queue forever.
+        self._run_recovery_blocking()
+
         self._started = True
 
         # Start queue workers for existing queues
@@ -132,8 +146,55 @@ class QueueManager:
 
         logger.info(f"[QueueManager] mount_point={self.mount_point} Started")
 
+    async def recover_stale_all(self) -> int:
+        """Reset stale processing rows to pending on every registered queue.
+
+        Returns the total number of messages reset. Safe to call more than
+        once (idempotent): after the first sweep no row is 'processing' older
+        than the threshold, so subsequent sweeps reset nothing.
+        """
+        total = 0
+        for queue in list(self._queues.values()):
+            try:
+                total += await queue.recover_stale(self._recover_stale_sec)
+            except Exception as e:
+                logger.warning(
+                    "[QueueManager] recover_stale failed for %s: %s", queue.name, e
+                )
+        if total:
+            logger.info(
+                "[QueueManager] Recovered %d stale processing row(s) across queues", total
+            )
+        return total
+
+    def _run_recovery_blocking(self) -> None:
+        """Run ``recover_stale_all`` from a worker thread.
+
+        ``start()`` is sync and may be called from inside a running event loop
+        (the OpenViking service calls it from an async ``initialize``), so the
+        async recovery runs in a dedicated thread with its own loop instead of
+        blocking the caller's loop directly.
+        """
+        if self._recover_stale_sec <= 0:
+            return
+
+        def _worker() -> None:
+            loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(self.recover_stale_all())
+            finally:
+                loop.close()
+
+        thread = threading.Thread(target=_worker, name="queue-recover-stale", daemon=True)
+        thread.start()
+        thread.join()
+
     async def prepare_task_tracking(self, tracker: Any) -> None:
         """Rebuild task work from QueueFS before any consumer starts."""
+        # Recover before rebuilding the index so the snapshot reflects rows
+        # reset back to 'pending' rather than their stale 'processing' state.
+        await self.recover_stale_all()
         snapshots = {name: await queue.snapshot() for name, queue in self._queues.items()}
         owners = self._task_work_index.rebuild(snapshots)
         tracker.attach_work_index(self._task_work_index)

@@ -127,8 +127,12 @@ class QueueFSConfig(BaseModel):
     )
 
     recover_stale_sec: int = Field(
-        default=0,
-        description="Recover processing messages older than this many seconds on startup (0 = recover all).",
+        default=300,
+        description=(
+            "Recover processing messages older than this many seconds on startup. "
+            "A crash between dequeue and ack can otherwise leave a row stuck in "
+            "'processing' forever. 0 disables recovery (not recommended)."
+        ),
     )
 
     busy_timeout_ms: int = Field(
