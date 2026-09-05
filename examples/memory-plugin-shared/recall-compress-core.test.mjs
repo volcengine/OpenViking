@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -28,6 +28,36 @@ test("compressed context keeps only citations to served URIs", () => {
   );
 });
 
+test("URI repair validates every citation while preserving served paths with spaces", () => {
+  const plain = "viking://user/u/a.md";
+  const served = "viking://user/u/memories/preferences/cross runtime.md";
+  assert.equal(repairDigestUris(`- raw source: ${served}`, [served]), `- raw source: ${served}`);
+  assert.equal(
+    repairDigestUris("- escaped source: viking://user/u/memories/preferences/cross%20runtime.md", [served]),
+    `- escaped source: ${served}`,
+  );
+  assert.equal(repairDigestUris(`- near miss source: ${plain}.evil`, [plain]), `- near miss source: ${plain}`);
+  assert.equal(repairDigestUris(`- mixed source: ${plain} and viking://evil/x.md`, [plain]), "");
+  assert.equal(repairDigestUris(`- mixed source: ${served} and viking://evil/x.md`, [served]), "");
+});
+
+test("short compression input returns the caller's bounded context", async () => {
+  let called = false;
+  const result = await compressRecallContext({
+    query: "q",
+    rendered: "full compressor input",
+    shortContext: "bounded display context",
+    cfg: { recallCompressMinInputChars: 100 },
+    runCompressor: async () => {
+      called = true;
+      return "NO_RELEVANT_MEMORY";
+    },
+  });
+
+  assert.deepEqual(result, { status: "ok", context: "bounded display context" });
+  assert.equal(called, false);
+});
+
 test("compression cache is reused only for the same request", async () => {
   const cachePath = await tempPath("digest.json");
   const rendered = `<memory uri="viking://a">${"x".repeat(2000)}</memory>`;
@@ -44,11 +74,16 @@ test("compression cache is reused only for the same request", async () => {
   await compressRecallContext({
     query: "first", rendered, entries, runCompressor, cachePath,
   });
+  const cached = JSON.parse(await readFile(cachePath, "utf8"));
+  await writeFile(cachePath, JSON.stringify({ ...cached, digest: "OpenViking memory digest:" }));
+  await compressRecallContext({
+    query: "first", rendered, entries, runCompressor, cachePath,
+  });
   await compressRecallContext({
     query: "different", rendered, entries, runCompressor, cachePath,
   });
 
-  assert.equal(calls, 2);
+  assert.equal(calls, 3);
 });
 
 test("unusable compressor output triggers the caller fallback", async () => {
@@ -57,6 +92,17 @@ test("unusable compressor output triggers the caller fallback", async () => {
     rendered: `<memory uri="viking://a">${"x".repeat(2000)}</memory>`,
     entries: [{ uri: "viking://a" }],
     runCompressor: async () => "I could not find anything relevant.",
+  });
+
+  assert.deepEqual(result, { status: "failed", context: "" });
+});
+
+test("compression fails when URI repair rejects every bullet", async () => {
+  const result = await compressRecallContext({
+    query: "q",
+    rendered: `<memory uri="viking://served/a.md">${"x".repeat(2000)}</memory>`,
+    entries: [{ uri: "viking://served/a.md" }],
+    runCompressor: async () => "- invented source: viking://unrelated/fake.md",
   });
 
   assert.deepEqual(result, { status: "failed", context: "" });

@@ -118,12 +118,14 @@ async function withFakeCodex(output, fn, { exitCode = 0 } = {}) {
   );
   const callLog = join(binDir, "calls.log");
   const argsLog = join(binDir, "args.log");
+  const promptLog = join(binDir, "prompt.log");
   const fakeCodex = `#!/usr/bin/env node
 const fs = require("node:fs");
 
 const outputFlagIndex = process.argv.indexOf("--output-last-message");
 const outputPath = outputFlagIndex >= 0 ? process.argv[outputFlagIndex + 1] : "";
-fs.readFileSync(0);
+const prompt = fs.readFileSync(0, "utf8");
+fs.writeFileSync(process.env.FAKE_CODEX_PROMPT_LOG, prompt);
 fs.appendFileSync(process.env.FAKE_CODEX_CALL_LOG, "called\\n");
 fs.appendFileSync(process.env.FAKE_CODEX_ARGS_LOG, process.argv.slice(2).join("\\n") + "\\n");
 
@@ -140,10 +142,12 @@ fs.writeFileSync(outputPath, process.env.FAKE_CODEX_OUTPUT || "");
     return await fn({
       callLog,
       argsLog,
+      promptLog,
       env: {
         PATH: `${binDir}${delimiter}${process.env.PATH}`,
         FAKE_CODEX_CALL_LOG: callLog,
         FAKE_CODEX_ARGS_LOG: argsLog,
+        FAKE_CODEX_PROMPT_LOG: promptLog,
         FAKE_CODEX_EXIT_CODE: String(exitCode),
         FAKE_CODEX_OUTPUT: output,
       },
@@ -160,11 +164,12 @@ async function runEndpointCompressionCase({
   compressorOutput,
   exitCode = 0,
   extraEnv = {},
+  stateDir: providedStateDir = "",
 }) {
-  const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-endpoint-compress-"));
+  const stateDir = providedStateDir || await mkdtemp(join(tmpdir(), "ov-auto-recall-endpoint-compress-"));
   let requestBody = null;
   try {
-    return await withFakeCodex(compressorOutput, async ({ callLog, argsLog, env }) => {
+    return await withFakeCodex(compressorOutput, async ({ callLog, argsLog, promptLog, env }) => {
       const result = await withMockOpenViking(async (req, res) => {
         const url = new URL(req.url, "http://127.0.0.1");
         if (req.method === "GET" && url.pathname === "/health") {
@@ -202,15 +207,17 @@ async function runEndpointCompressionCase({
       ));
       const compressorCallLog = await readFile(callLog, "utf-8").catch(() => "");
       const compressorArgs = await readFile(argsLog, "utf-8").catch(() => "");
+      const compressorPrompt = await readFile(promptLog, "utf-8").catch(() => "");
       return {
         output: JSON.parse(result.stdout.trim()),
         compressorCalls: compressorCallLog.trim().split("\n").filter(Boolean).length,
         compressorArgs: compressorArgs.trim().split("\n").filter(Boolean),
+        compressorPrompt,
         requestBody,
       };
     }, { exitCode });
   } finally {
-    await rm(stateDir, { recursive: true, force: true });
+    if (!providedStateDir) await rm(stateDir, { recursive: true, force: true });
   }
 }
 
@@ -381,11 +388,132 @@ test("auto-recall applies the relevance compressor to server recall entries", as
     },
     rendered: "<memory_group>Unrelated remembered detail</memory_group>",
     compressorOutput: "NO_RELEVANT_MEMORY",
+    extraEnv: { OPENVIKING_RECALL_COMPRESS_MIN_INPUT_CHARS: "0" },
   });
 
   assert.deepEqual(result.output, {});
   assert.equal(result.compressorCalls, 1);
   assert.equal(result.requestBody.max_chars, 18000);
+});
+
+test("auto-recall skips the compressor for a bounded short recall", async () => {
+  const result = await runEndpointCompressionCase({
+    prompt: "Which editor do I prefer?",
+    entry: {
+      uri: "viking://user/zeus/memories/preferences/editor.md",
+      score: 0.91,
+      type: "preferences",
+      mode: "summary",
+      summary: "Use Vim",
+    },
+    rendered: '<memory uri="viking://user/zeus/memories/preferences/editor.md">Use Vim</memory>',
+    compressorOutput: "NO_RELEVANT_MEMORY",
+  });
+
+  assert.equal(result.compressorCalls, 0);
+  assert.match(result.output.hookSpecificOutput.additionalContext, /Use Vim/);
+});
+
+test("auto-recall reuses a cached digest for an identical recall", async () => {
+  const uri = "viking://user/zeus/memories/events/retry.md";
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-cache-"));
+  const options = {
+    prompt: "How should retries work?",
+    entry: { uri, score: 0.91, type: "events", mode: "full", summary: "Retry with backoff" },
+    rendered: `<memory uri="${uri}">${"Retry with exponential backoff. ".repeat(80)}</memory>`,
+    compressorOutput: `- Retry with exponential backoff. source: ${uri}`,
+    stateDir,
+  };
+  try {
+    const first = await runEndpointCompressionCase(options);
+    const second = await runEndpointCompressionCase(options);
+    assert.equal(first.compressorCalls, 1);
+    assert.equal(second.compressorCalls, 0);
+    assert.match(second.output.hookSpecificOutput.additionalContext, /exponential backoff/);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("auto-recall gives the compressor full content from the raw-search fallback", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-raw-compress-"));
+  const memories = Array.from({ length: 6 }, (_, index) => ({
+    uri: `viking://user/zeus/memories/events/raw-${index}.md`,
+    level: 2,
+    score: 0.9 - (index * 0.01),
+    category: "events",
+    abstract: `raw fallback memory ${index}`,
+  }));
+  const sentinels = memories.map((_, index) => `DETAIL_AFTER_320_${index}`);
+
+  try {
+    await withFakeCodex(
+      `- kept raw detail source: ${memories[0].uri}`,
+      async ({ promptLog, env }) => {
+        const result = await withMockOpenViking(async (req, res) => {
+          const url = new URL(req.url, "http://127.0.0.1");
+          if (req.method === "GET" && url.pathname === "/health") {
+            writeJson(res, { status: "ok", result: { ok: true } });
+            return;
+          }
+          if (req.method === "POST" && url.pathname === "/api/v1/search/recall") {
+            writeStatusJson(res, 404, { status: "error", error: "not found" });
+            return;
+          }
+          if (req.method === "POST" && url.pathname === "/api/v1/search/search") {
+            const body = await readRequestBody(req);
+            if (body.mode === "context") {
+              writeStatusJson(res, 400, {
+                status: "error",
+                error: "Extra inputs are not permitted: mode",
+              });
+              return;
+            }
+            const isMemoryScope = body.target_uri === "viking://user/zeus/memories";
+            writeJson(res, {
+              status: "ok",
+              result: { memories: isMemoryScope ? memories : [], skills: [] },
+            });
+            return;
+          }
+          if (req.method === "GET" && url.pathname === "/api/v1/content/read") {
+            const index = memories.findIndex((item) => item.uri === url.searchParams.get("uri"));
+            writeJson(res, {
+              status: "ok",
+              result: `${"x".repeat(320)}${sentinels[index]}${"y".repeat(80)}`,
+            });
+            return;
+          }
+          writeStatusJson(res, 404, { status: "error", error: "not found" });
+        }, async (baseUrl) => runAutoRecall(
+          { prompt: "use the raw fallback details", session_id: "codex:raw-compress" },
+          {
+            ...env,
+            OPENVIKING_AUTO_RECALL: "1",
+            OPENVIKING_CODEX_STATE_DIR: stateDir,
+            OPENVIKING_STATE_DIR: stateDir,
+            OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
+            OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
+            OPENVIKING_CREDENTIAL_SOURCE: "env",
+            OPENVIKING_RECALL_COMPRESS: "1",
+            OPENVIKING_RECALL_LIMIT: "6",
+            OPENVIKING_RECALL_TIMEOUT_MS: "10000",
+            OPENVIKING_MIN_QUERY_LENGTH: "1",
+            OPENVIKING_SCORE_THRESHOLD: "0",
+            OPENVIKING_TIMEOUT_MS: "5000",
+            OPENVIKING_URL: baseUrl,
+            OPENVIKING_USER: "zeus",
+          },
+        ));
+
+        const compressorPrompt = await readFile(promptLog, "utf8");
+        for (const sentinel of sentinels) assert.match(compressorPrompt, new RegExp(sentinel));
+        assert.match(JSON.parse(result.stdout).hookSpecificOutput.additionalContext, /kept raw detail/);
+      },
+    );
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
 });
 
 test("auto-recall passes the configured compressor base URL to Codex", async () => {
@@ -400,7 +528,10 @@ test("auto-recall passes the configured compressor base URL to Codex", async () 
     },
     rendered: "<memory_group>Retry with backoff</memory_group>",
     compressorOutput: "NO_RELEVANT_MEMORY",
-    extraEnv: { OPENVIKING_RECALL_COMPRESS_BASE_URL: "https://compressor.example/v1" },
+    extraEnv: {
+      OPENVIKING_RECALL_COMPRESS_BASE_URL: "https://compressor.example/v1",
+      OPENVIKING_RECALL_COMPRESS_MIN_INPUT_CHARS: "0",
+    },
   });
 
   assert.ok(result.compressorArgs.includes('model_provider="openviking_compressor"'));
@@ -421,6 +552,7 @@ test("auto-recall falls back to a bounded deterministic digest when endpoint com
     rendered: "<memory_group>Use Vim</memory_group>",
     compressorOutput: "",
     exitCode: 1,
+    extraEnv: { OPENVIKING_RECALL_COMPRESS_MIN_INPUT_CHARS: "0" },
   });
 
   assert.match(result.output.hookSpecificOutput.additionalContext, /Use Vim/);
@@ -456,7 +588,10 @@ syncBuiltinESMExports();
       },
       rendered: "<memory_group>Use Vim</memory_group>",
       compressorOutput: "unused",
-      extraEnv: { NODE_OPTIONS: `--require=${preloadPath}` },
+      extraEnv: {
+        NODE_OPTIONS: `--require=${preloadPath}`,
+        OPENVIKING_RECALL_COMPRESS_MIN_INPUT_CHARS: "0",
+      },
     });
 
     assert.match(result.output.hookSpecificOutput.additionalContext, /Use Vim/);
