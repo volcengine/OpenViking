@@ -772,6 +772,8 @@ class SemanticProcessor(DequeueHandlerBase):
                 total_entries=len(file_paths),
                 sampled_entries=len(sampled_summaries),
             )
+        except LockAcquisitionError:
+            raise
         except Exception as e:
             raise RuntimeError(f"Failed to write abstract/overview for {dir_uri}: {e}") from e
         if not wrote_semantics.wrote:
