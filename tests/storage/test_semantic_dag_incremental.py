@@ -627,3 +627,120 @@ async def test_content_copy_propagates_vector_summary_read_failure(monkeypatch):
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+@pytest.mark.asyncio
+async def test_pending_child_uris_rebuild_only_dirty_sampled_files(monkeypatch):
+    """With a recorded changed-child URI set, aggregation rebuilds only dirty sampled inputs (#4577).
+
+    The legacy test above (no URI collection) rebuilds every sampled file once
+    pending triggers; here freshness also recorded *which* child changed, so
+    untouched sampled files trust their existing L1 summaries.
+    """
+    root_uri = "viking://resources/narrow"
+    file_names = [f"file-{idx:03}.txt" for idx in range(40)]
+    file_paths = [f"{root_uri}/{name}" for name in file_names]
+    sampled_paths = deterministic_sample(file_paths, 4)
+    changed_path = f"{root_uri}/file-020.txt"
+    old_overview = "FILES:\n" + "\n".join(f"- {name}: old-summary" for name in file_names)
+    metadata = {
+        "freshness": {
+            **freshness_metadata(40, 4, pending=1),
+            "pending_child_uris": [changed_path],
+        }
+    }
+    fake_fs = _FakeVikingFS(
+        tree={
+            root_uri: [{"name": name, "isDir": False} for name in file_names],
+        },
+        file_contents={
+            **dict.fromkeys(file_paths, "content"),
+            f"{root_uri}/.overview.md": render_abstract_overview(
+                ContextLevel.OVERVIEW, root_uri, old_overview, metadata
+            ),
+            f"{root_uri}/.abstract.md": render_abstract_overview(
+                ContextLevel.ABSTRACT, root_uri, "old abstract", metadata
+            ),
+        },
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=4)),
+    )
+
+    processor = _FakeProcessor(fake_fs)
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=ctx,
+        incremental_update=True,
+        target_uri=root_uri,
+        recursive=False,
+        changes={"modified": [changed_path]},
+    )
+
+    await executor.run(root_uri)
+
+    # Only the dirty file is re-summarized; other sampled files keep their L1.
+    assert processor.summarized_files == [changed_path]
+    assert processor.vectorized_files == [changed_path]
+    overview = parse_abstract_overview(fake_fs._file_contents[f"{root_uri}/.overview.md"])
+    assert overview.metadata["freshness"]["pending_child_changes"] == 0
+
+
+@pytest.mark.asyncio
+async def test_pending_child_uris_overflow_falls_back_to_full_sample_rebuild(monkeypatch):
+    """An overflowed URI collection must fall back to the conservative rebuild."""
+    root_uri = "viking://resources/overflow"
+    file_names = [f"file-{idx:03}.txt" for idx in range(40)]
+    file_paths = [f"{root_uri}/{name}" for name in file_names]
+    sampled_paths = deterministic_sample(file_paths, 4)
+    changed_path = f"{root_uri}/file-020.txt"
+    old_overview = "FILES:\n" + "\n".join(f"- {name}: old-summary" for name in file_names)
+    metadata = {
+        "freshness": {
+            **freshness_metadata(40, 4, pending=4),
+            "pending_child_uris": [],
+            "pending_child_uris_overflow": True,
+        }
+    }
+    fake_fs = _FakeVikingFS(
+        tree={
+            root_uri: [{"name": name, "isDir": False} for name in file_names],
+        },
+        file_contents={
+            **dict.fromkeys(file_paths, "content"),
+            f"{root_uri}/.overview.md": render_abstract_overview(
+                ContextLevel.OVERVIEW, root_uri, old_overview, metadata
+            ),
+            f"{root_uri}/.abstract.md": render_abstract_overview(
+                ContextLevel.ABSTRACT, root_uri, "old abstract", metadata
+            ),
+        },
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=4)),
+    )
+
+    processor = _FakeProcessor(fake_fs)
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=ctx,
+        incremental_update=True,
+        target_uri=root_uri,
+        recursive=False,
+        changes={"modified": [changed_path]},
+    )
+
+    await executor.run(root_uri)
+
+    # Overflow: conservative full-sample rebuild, same as the legacy behavior.
+    assert set(processor.summarized_files) == set(sampled_paths) | {changed_path}

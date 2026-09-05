@@ -488,6 +488,7 @@ class FSService:
             overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
             refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
             force_refresh=force_refresh,
+            changed_child_uris=[deleted_uri],
         )
         if decision.action is not FreshnessAction.REFRESH_NOW:
             return decision.action

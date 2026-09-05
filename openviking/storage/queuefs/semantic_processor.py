@@ -273,6 +273,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 changed_entries=1,
                 ctx=parent_ctx,
                 l0_body_changed=l0_body_changed,
+                changed_child_uris=[uri.rstrip("/")],
                 # This helper handles automatic upward propagation only. Manual
                 # refresh/ingest bypasses the threshold for its requested root,
                 # not for every ancestor reached afterwards.

@@ -89,6 +89,13 @@ def _bounded_string(value: Any, *, field: str, limit: int) -> str:
     return normalized
 
 
+# Upper bound for remembering *which* children changed. Beyond this the set is
+# dropped and an overflow flag forces aggregations back to full sampled rebuilds
+# (#4577): a pending counter alone cannot tell the executor which sampled inputs
+# are actually dirty, so every aggregation rebuilds the whole sample set.
+PENDING_CHILD_URIS_LIMIT = 128
+
+
 def _normalize_metadata(metadata: Mapping[str, Any]) -> Dict[str, Any]:
     """Validate known fields and silently discard fields outside the schema.
 
@@ -165,6 +172,23 @@ def _normalize_metadata(metadata: Mapping[str, Any]) -> Dict[str, Any]:
                     "must be a non-negative integer"
                 )
             counters["missing_summary_entries"] = value
+        if "pending_child_uris" in freshness:
+            value = freshness["pending_child_uris"]
+            if not isinstance(value, list) or len(value) > PENDING_CHILD_URIS_LIMIT or not all(
+                isinstance(item, str) and item for item in value
+            ):
+                raise AbstractOverviewFormatError(
+                    "abstract overview freshness.pending_child_uris must be a "
+                    f"bounded list of non-empty strings (max {PENDING_CHILD_URIS_LIMIT})"
+                )
+            counters["pending_child_uris"] = list(value)
+        if "pending_child_uris_overflow" in freshness:
+            value = freshness["pending_child_uris_overflow"]
+            if not isinstance(value, bool):
+                raise AbstractOverviewFormatError(
+                    "abstract overview freshness.pending_child_uris_overflow must be a boolean"
+                )
+            counters["pending_child_uris_overflow"] = value
         if counters["sampled_entries"] + counters["unsampled_entries"] != counters["total_entries"]:
             raise AbstractOverviewFormatError(
                 "abstract overview freshness sampled + unsampled must equal total"
@@ -541,6 +565,34 @@ async def _raw_if_exists(viking_fs: Any, uri: str, ctx: Optional[RequestContext]
         raise
 
 
+def _merge_pending_child_uris(
+    freshness: Mapping[str, Any],
+    changed_child_uris: Optional[Sequence[str]],
+) -> Dict[str, Any]:
+    """Merge changed-child URIs into a bounded pending set under one update.
+
+    Returns only the freshness keys to update. When the accumulated set would
+    exceed ``PENDING_CHILD_URIS_LIMIT`` the set is cleared and an overflow flag
+    is stored so aggregation falls back to the conservative full-sample rebuild.
+    """
+    overflow = bool(freshness.get("pending_child_uris_overflow"))
+    existing = freshness.get("pending_child_uris")
+    merged: set = {str(uri) for uri in existing} if isinstance(existing, list) else set()
+    if changed_child_uris:
+        merged.update(str(uri) for uri in changed_child_uris)
+    if not merged:
+        updates: Dict[str, Any] = {}
+        if overflow:
+            # already overflowed: keep the empty collection + sticky flag so
+            # aggregation stays on the conservative full-sample rebuild.
+            updates["pending_child_uris"] = []
+            updates["pending_child_uris_overflow"] = True
+        return updates
+    if overflow or len(merged) > PENDING_CHILD_URIS_LIMIT:
+        return {"pending_child_uris": [], "pending_child_uris_overflow": True}
+    return {"pending_child_uris": sorted(merged)}
+
+
 async def plan_abstract_overview_refresh(
     *,
     viking_fs: Any,
@@ -552,6 +604,7 @@ async def plan_abstract_overview_refresh(
     overview_sample_limit: int = 32,
     refresh_ratio: float = 0.10,
     lock_timeout_secs: float = 0.0,
+    changed_child_uris: Optional[Sequence[str]] = None,
 ) -> FreshnessDecision:
     """Atomically record direct-child changes and choose refresh scheduling.
 
@@ -642,6 +695,9 @@ async def plan_abstract_overview_refresh(
             metadata = dict(document.metadata)
             updated_freshness = dict(freshness)
             updated_freshness["pending_child_changes"] = decision.pending_after
+            updated_freshness.update(
+                _merge_pending_child_uris(updated_freshness, changed_child_uris)
+            )
             metadata["freshness"] = updated_freshness
             rendered = render_abstract_overview(level, dir_uri, document.body, metadata)
             raw = await _raw_if_exists(viking_fs, uri, ctx)
@@ -678,6 +734,53 @@ async def read_abstract_overview_pending_snapshot(
             if document is not None and not document.legacy and isinstance(freshness, Mapping):
                 pending_values.append(int(freshness["pending_child_changes"]))
         return max(pending_values, default=0)
+    finally:
+        if owns_lease:
+            await viking_fs._async_agfs.pathlock_release(snapshot_lease)
+
+
+async def read_abstract_overview_pending_child_uris(
+    *,
+    viking_fs: Any,
+    dir_uri: str,
+    ctx: Optional[RequestContext],
+    lock: Optional[Dict[str, Any]] = None,
+) -> tuple[set, bool]:
+    """Read the bounded set of changed-child URIs captured by freshness accounting.
+
+    Returns ``(uris, overflow)``. An empty set with ``overflow=False`` means the
+    accounting never recorded URIs (legacy sidecars) — callers must fall back to
+    the conservative full-sample rebuild (#4577).
+    """
+    uris = [
+        f"{dir_uri.rstrip('/')}/.overview.md",
+        f"{dir_uri.rstrip('/')}/.abstract.md",
+    ]
+    owns_lease = lock is None
+    snapshot_lease = lock
+    if owns_lease:
+        lock_paths = [viking_fs._uri_to_path(uri, ctx=ctx) for uri in uris]
+        snapshot_lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(lock_paths)
+    try:
+        merged: set = set()
+        overflow = False
+        saw_collection = False
+        for uri in uris:
+            document = await _read_existing_document(viking_fs, uri, ctx)
+            freshness = document.metadata.get("freshness") if document else None
+            if document is None or document.legacy or not isinstance(freshness, Mapping):
+                continue
+            if "pending_child_uris" in freshness:
+                saw_collection = True
+                value = freshness.get("pending_child_uris")
+                if isinstance(value, list):
+                    merged.update(str(item) for item in value)
+            if freshness.get("pending_child_uris_overflow"):
+                overflow = True
+                saw_collection = True
+        if not saw_collection:
+            return set(), False  # legacy sidecar: no collection recorded
+        return merged, overflow
     finally:
         if owns_lease:
             await viking_fs._async_agfs.pathlock_release(snapshot_lease)
