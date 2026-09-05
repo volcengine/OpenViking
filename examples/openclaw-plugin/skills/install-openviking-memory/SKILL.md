@@ -485,10 +485,10 @@ These are the plugin tools the agent can call once installed.
 | Parameter | Required | Description |
 |---|---|---|
 | `query` | Yes | Search query text |
-| `limit` | No | Maximum number of results (defaults to plugin config) |
-| `scoreThreshold` | No | Minimum relevance score 0–1 (defaults to plugin config) |
-| `targetUri` | No | Exact search scope URI. If provided, only that URI is searched. |
-| `resourceTypes` | No | Array of target types used when `targetUri` is omitted: `resource`, `user`, `agent`. Defaults to plugin `recallTargetTypes`. |
+| `limit` | No | Recall result target. Tool value wins; otherwise an explicitly configured `recallLimit` is used. If neither exists, the server default applies. Explicit values use the standard coding quota mapping. |
+| `scoreThreshold` | No | Minimum relevance score 0–1 sent to context search (defaults to plugin config). |
+| `targetUri` | No | Exact `viking://` scope. When set, preserves the legacy targeted `/find` and read path. |
+| `resourceTypes` | No | Default context-search target types: `resource`, `user`, `agent`. Defaults to plugin `recallTargetTypes`. |
 
 Example: user asks "What programming language did I say I like?"
 
@@ -610,18 +610,18 @@ These are the keys under `plugins.entries.openviking.config` in `openclaw.json`.
 | `peer_prefix` | `""` | Optional prefix for assistant `peer_id` / actor peer values. Only used when `peer_role=assistant`. Letters / digits / `_` / `-`. |
 | `accountId` | — | Required when `apiKey` is a root key. |
 | `userId` | — | Required when `apiKey` is a root key. |
-| `targetUri` | `viking://~/memories` | Default search scope URI. |
+| `targetUri` | `viking://~/memories` | Default exact search scope for `ov_search` and `memory_forget`; `memory_recall` uses an exact scope only when `targetUri` is passed as a tool argument. |
 | `timeoutMs` | (plugin default) | HTTP timeout for OpenViking calls. |
 | `autoCapture` | `true` | Auto-append turn messages to the OpenViking session at `afterTurn`; extraction runs only after a threshold commit, `/compact`, or explicit `memory_store`. |
 | `captureMode` | `"semantic"` | Filter mode used by the server-side extraction pipeline: `semantic` or `keyword`. |
 | `captureMaxLength` | `24000` | Max text length per archived turn. |
 | `autoRecall` | `true` | Auto-recall and inject memories before reply. |
-| `recallTargetTypes` | `user,agent` | Default target types when `targetUri` is omitted. Allowed: `resource`, `user`, `agent`. |
+| `recallTargetTypes` | `user,agent` | Default context-search target types for auto-recall and `memory_recall`. Allowed: `resource`, `user`, `agent`. |
 | `recallResources` | `false` | Compatibility shortcut that appends `resource` to default recall targets when `recallTargetTypes` is unset. |
-| `recallLimit` | `6` | Max memories injected per recall. |
+| `recallLimit` | unset (server currently defaults to `10`) | Optional result target for auto-recall and `memory_recall`. If unset, both requests omit quotas; explicit values use the standard coding quota mapping. |
 | `recallScoreThreshold` | `0.15` | Min relevance score to inject. |
-| `recallMaxInjectedChars` | `4000` | Hard cap on injected character count. Complete memories that do not fit are skipped, not truncated. |
-| `recallPreferAbstract` | (plugin default) | Prefer abstract memories over raw. |
+| `recallMaxInjectedChars` | `4000` | Converted to the server context-search `max_tokens` budget for auto-recall and `memory_recall`. |
+| `recallPreferAbstract` | (plugin default) | When true, request abstract detail for both recall paths; false leaves the server default unchanged. |
 | `recallTokenBudget` | deprecated | Compatibility alias for `recallMaxInjectedChars`. |
 | `commitTokenThresholdRatio` | `0.5` | Async-commit threshold as a fraction (0-1) of the model context window (e.g. 0.5 = 50%); `0` commits every turn. |
 | `commitKeepRecentCount` | `10` | Recent messages kept live after afterTurn commit. Compact always uses `0`. |

@@ -115,7 +115,7 @@
     "targetUri": {
       "label": "Search Target URI",
       "placeholder": "viking://~/memories",
-      "help": "Default OpenViking target URI for memory search"
+      "help": "Default exact search scope for ov_search and memory_forget. memory_recall uses an exact scope only when targetUri is passed as a tool argument."
     },
     "timeoutMs": {
       "label": "Request Timeout (ms)",
@@ -161,7 +161,8 @@
     },
     "recallLimit": {
       "label": "Recall Limit",
-      "placeholder": "6",
+      "placeholder": "10",
+      "help": "Optional recall result target for auto-recall and memory_recall. When unset, the request omits quotas and uses the OpenViking server default; explicit values use the standard coding quota mapping.",
       "advanced": true
     },
     "recallScoreThreshold": {
@@ -173,7 +174,7 @@
       "label": "Recall Max Injected Chars",
       "placeholder": "4000",
       "advanced": true,
-      "help": "Maximum total characters for auto-recall memory injection. Complete memories that do not fit are skipped, not truncated."
+      "help": "Character budget for auto-recall and memory_recall, converted to the server context token budget at four characters per token."
     },
     "recallMaxContentChars": {
       "label": "Deprecated Recall Max Content Chars",
@@ -184,7 +185,7 @@
     "recallPreferAbstract": {
       "label": "Recall Prefer Abstract",
       "advanced": true,
-      "help": "Use memory abstract instead of fetching full content when available"
+      "help": "Pin server-assembled auto-recall and memory_recall entries to abstract detail. When disabled, the server chooses each category's default detail tier."
     },
     "recallTokenBudget": {
       "label": "Deprecated Recall Token Budget",

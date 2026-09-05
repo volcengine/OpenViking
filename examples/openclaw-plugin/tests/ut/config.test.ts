@@ -12,7 +12,7 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
   it("empty object uses all defaults", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({});
     expect(cfg.mode).toBe("remote");
-    expect(cfg.recallLimit).toBe(6);
+    expect(cfg.recallLimit).toBe(10);
     expect(cfg.recallScoreThreshold).toBe(0.15);
     expect(cfg.autoCapture).toBe(true);
     expect(cfg.autoRecall).toBe(true);
@@ -47,6 +47,18 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.enabledTools).not.toContain("add_resource");
     expect(cfg.disabledTools).toContain("add_resource");
     expect(cfg.agentExperience.enabled).toBe(false);
+    expect(cfg.recallLimitConfigured).toBe(false);
+  });
+
+  it("records whether recallLimit was explicitly configured", () => {
+    const defaultCfg = memoryOpenVikingConfigSchema.parse({});
+    const explicitCfg = memoryOpenVikingConfigSchema.parse({ recallLimit: 7 });
+    const reparsedDefaultCfg = memoryOpenVikingConfigSchema.parse({ ...defaultCfg });
+
+    expect(defaultCfg.recallLimitConfigured).toBe(false);
+    expect(reparsedDefaultCfg.recallLimitConfigured).toBe(false);
+    expect(explicitCfg.recallLimitConfigured).toBe(true);
+    expect(explicitCfg.recallLimit).toBe(7);
   });
 
   it("tolerates the deprecated commitTokenThreshold key and ignores it", () => {

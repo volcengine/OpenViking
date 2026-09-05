@@ -146,7 +146,7 @@ describe("Tool: memory_recall (registration)", () => {
     expect(recall!.description).toContain("Search long-term memories");
   });
 
-  it("registers with query, limit, scoreThreshold, targetUri parameters", () => {
+  it("registers with context-search parameters and the targetUri compatibility option", () => {
     const { tools, api } = setupPlugin();
     contextEnginePlugin.register(api as any);
     const recall = tools.get("memory_recall");
@@ -156,40 +156,29 @@ describe("Tool: memory_recall (registration)", () => {
     expect(props).toHaveProperty("query");
     expect(props).toHaveProperty("limit");
     expect(props).toHaveProperty("scoreThreshold");
+    expect(props).toHaveProperty("resourceTypes");
     expect(props).toHaveProperty("targetUri");
   });
 
-  it("fills L2 content and filters explicit recall results like auto-recall", async () => {
+  it("sends an explicit tool limit to context search and returns the server digest", async () => {
     const openVikingTransport = vi.fn(async (url: string, init?: RequestInit) => {
       const requestUrl = new URL(url);
       if (requestUrl.pathname === "/api/v1/system/status") {
         return okResponse({ user: "default" });
       }
 
-      if (requestUrl.pathname === "/api/v1/search/find") {
-        const body = JSON.parse(String(init?.body ?? "{}"));
-        const contextType = String(body.context_type ?? "");
-        const memories =
-          contextType === "memory"
-            ? [
-                makeMemory({
-                  uri: "viking://user/default/memories/high",
-                  abstract: "Abstract only text",
-                  score: 0.92,
-                }),
-                makeMemory({
-                  uri: "viking://user/default/memories/low",
-                  abstract: "Low score text",
-                  score: 0.05,
-                }),
-              ]
-            : [];
-        return okResponse({ memories, total: memories.length });
-      }
-
-      if (requestUrl.pathname === "/api/v1/content/read") {
-        expect(requestUrl.searchParams.get("uri")).toBe("viking://user/default/memories/high");
-        return okResponse("Full L2 content from read");
+      if (requestUrl.pathname === "/api/v1/search/search") {
+        return okResponse({
+          entries: [{
+            uri: "viking://user/default/memories/high",
+            category: "preferences",
+            score: 0.92,
+            text: "Server-selected abstract",
+          }],
+          rendered: "Server-rendered context",
+          digest: "Server digest",
+          stats: { candidates: 2, used_tokens: 7 },
+        });
       }
 
       return okResponse({});
@@ -213,54 +202,93 @@ describe("Tool: memory_recall (registration)", () => {
       scoreThreshold: 0.2,
     }) as ToolResult;
 
-    expect(result.content[0]!.text).toContain("Full L2 content from read");
-    expect(result.content[0]!.text).not.toContain("Abstract only text");
-    expect(result.content[0]!.text).not.toContain("Low score text");
+    expect(result.content[0]!.text).toBe("Server digest");
 
-    const findCalls = openVikingTransport.mock.calls.filter(([calledUrl]) =>
-      String(calledUrl).includes("/api/v1/search/find")
+    const searchCalls = openVikingTransport.mock.calls.filter(([calledUrl]) =>
+      String(calledUrl).includes("/api/v1/search/search")
     );
-    expect(findCalls).toHaveLength(1);
-    for (const [, init] of findCalls) {
-      const body = JSON.parse(String((init as RequestInit).body));
-      expect(body.limit).toBe(20);
-      expect(body.score_threshold).toBe(0);
-      expect(body.context_type).toBe("memory");
-      expect(body.target_uri).toBeUndefined();
-    }
+    expect(searchCalls).toHaveLength(1);
+    const body = JSON.parse(String((searchCalls[0]![1] as RequestInit).body));
+    expect(body).toMatchObject({
+      mode: "context",
+      purpose: "coding",
+      score_threshold: 0.2,
+      context_type: "memory",
+      detail: "abstract",
+    });
+    expect(body.limit).toBeUndefined();
+    expect(body.quotas).toEqual({
+      events: 1,
+      entities: 1,
+      preferences: 1,
+      experiences: 1,
+      resources: 1,
+      skills: 1,
+    });
+    expect(openVikingTransport.mock.calls.some(([url]) => String(url).includes("/api/v1/content/read"))).toBe(false);
   });
 
-  it("applies recallMaxInjectedChars to explicit memory_recall output", async () => {
+  it("preserves exact targetUri recall through the legacy find and read path", async () => {
+    const openVikingTransport = vi.fn(async (url: string, init?: RequestInit) => {
+      const requestUrl = new URL(url);
+      if (requestUrl.pathname === "/api/v1/search/find") {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        expect(body.target_uri).toBe("viking://user/default/memories");
+        expect(body.limit).toBe(20);
+        return okResponse({
+          memories: [makeMemory({
+            uri: "viking://user/default/memories/high",
+            abstract: "Abstract only text",
+            score: 0.92,
+          })],
+          total: 1,
+        });
+      }
+      if (requestUrl.pathname === "/api/v1/content/read") {
+        expect(requestUrl.searchParams.get("uri")).toBe("viking://user/default/memories/high");
+        return okResponse("Full L2 content from read");
+      }
+      return okResponse({});
+    });
+
+    const { factoryTools, api } = setupPlugin(undefined, {
+      recallLimit: 1,
+      recallScoreThreshold: 0.2,
+    });
+    (api as any).openVikingTransport = openVikingTransport;
+    contextEnginePlugin.register(api as any);
+    const tool = factoryTools.get("memory_recall")!({ sessionId: "test-session", agentId: "main" });
+    const result = await tool.execute("tc-memory-recall-target", {
+      query: "backend preference",
+      limit: 1,
+      scoreThreshold: 0.2,
+      targetUri: "viking://user/default/memories",
+    }) as ToolResult;
+
+    expect(result.content[0]!.text).toContain("Full L2 content from read");
+    expect(result.details).toMatchObject({
+      count: 1,
+      targetUri: "viking://user/default/memories",
+    });
+    expect(openVikingTransport.mock.calls.some(([url]) => String(url).includes("/api/v1/search/search"))).toBe(false);
+  });
+
+  it("converts recallMaxInjectedChars to max_tokens without client-side filtering", async () => {
     const openVikingTransport = vi.fn(async (url: string, init?: RequestInit) => {
       const requestUrl = new URL(url);
       if (requestUrl.pathname === "/api/v1/system/status") {
         return okResponse({ user: "default" });
       }
 
-      if (requestUrl.pathname === "/api/v1/search/find") {
-        const body = JSON.parse(String(init?.body ?? "{}"));
-        const contextType = String(body.context_type ?? "");
-        const memories =
-          contextType === "memory"
-            ? [
-                makeMemory({
-                  uri: "viking://user/default/memories/large",
-                  abstract: "Large abstract",
-                  score: 0.95,
-                }),
-                makeMemory({
-                  uri: "viking://user/default/memories/small",
-                  abstract: "Small abstract",
-                  score: 0.9,
-                }),
-              ]
-            : [];
-        return okResponse({ memories, total: memories.length });
-      }
-
-      if (requestUrl.pathname === "/api/v1/content/read") {
-        const uri = requestUrl.searchParams.get("uri");
-        return okResponse(uri?.endsWith("/large") ? "x".repeat(200) : "short");
+      if (requestUrl.pathname === "/api/v1/search/search") {
+        return okResponse({
+          entries: [
+            { uri: "viking://user/default/memories/large", category: "preferences", score: 0.95, text: "Large abstract" },
+            { uri: "viking://user/default/memories/small", category: "preferences", score: 0.9, text: "Small abstract" },
+          ],
+          rendered: "Server-bounded context",
+          stats: { candidates: 2, used_tokens: 5 },
+        });
       }
 
       return okResponse({});
@@ -268,7 +296,7 @@ describe("Tool: memory_recall (registration)", () => {
 
     const { factoryTools, api } = setupPlugin(undefined, {
       recallLimit: 2,
-      recallMaxInjectedChars: 20,
+      recallMaxInjectedChars: 400,
       recallScoreThreshold: 0.2,
       recallTargetTypes: ["user", "agent"],
     });
@@ -284,10 +312,14 @@ describe("Tool: memory_recall (registration)", () => {
       scoreThreshold: 0.2,
     }) as ToolResult;
 
-    expect(result.content[0]!.text).toContain("Found 1 memories");
-    expect(result.content[0]!.text).toContain("- [preferences] short");
-    expect(result.content[0]!.text).not.toContain("x".repeat(200));
-    expect(result.details.count).toBe(1);
+    expect(result.content[0]!.text).toBe("Server-bounded context");
+    expect(result.details.count).toBe(2);
+    const searchCall = openVikingTransport.mock.calls.find(([url]) =>
+      String(url).includes("/api/v1/search/search")
+    );
+    const body = JSON.parse(String((searchCall![1] as RequestInit).body));
+    expect(body.max_tokens).toBe(100);
+    expect(openVikingTransport.mock.calls.some(([url]) => String(url).includes("/api/v1/content/read"))).toBe(false);
   });
 
   it("applies /ov-query-config session settings to subsequent memory_recall", async () => {
@@ -297,28 +329,17 @@ describe("Tool: memory_recall (registration)", () => {
         return okResponse({ user: "default" });
       }
 
-      if (requestUrl.pathname === "/api/v1/search/find") {
-        const body = JSON.parse(String(init?.body ?? "{}"));
-        const contextType = String(body.context_type ?? "");
-        const memories = contextType === "memory"
-          ? [
-              makeMemory({
-                uri: "viking://user/default/memories/high",
-                abstract: "High score runtime memory",
-                score: 0.92,
-              }),
-              makeMemory({
-                uri: "viking://user/default/memories/low",
-                abstract: "Low score runtime memory",
-                score: 0.1,
-              }),
-            ]
-          : [];
-        return okResponse({ memories, total: memories.length });
-      }
-
-      if (requestUrl.pathname === "/api/v1/content/read") {
-        return okResponse("High score runtime memory content");
+      if (requestUrl.pathname === "/api/v1/search/search") {
+        return okResponse({
+          entries: [{
+            uri: "viking://user/default/memories/high",
+            category: "preferences",
+            score: 0.92,
+            text: "High score runtime memory",
+          }],
+          rendered: "High score runtime memory content",
+          stats: { candidates: 1, used_tokens: 8 },
+        });
       }
 
       return okResponse({});
@@ -347,14 +368,23 @@ describe("Tool: memory_recall (registration)", () => {
 
     expect(result.content[0]!.text).toContain("High score runtime memory content");
     expect(result.content[0]!.text).not.toContain("Low score runtime memory");
-    const findCalls = openVikingTransport.mock.calls.filter(([calledUrl]) =>
-      String(calledUrl).includes("/api/v1/search/find")
+    const searchCalls = openVikingTransport.mock.calls.filter(([calledUrl]) =>
+      String(calledUrl).includes("/api/v1/search/search")
     );
-    expect(findCalls).toHaveLength(1);
-    const body = JSON.parse(String((findCalls[0]![1] as RequestInit).body));
+    expect(searchCalls).toHaveLength(1);
+    const body = JSON.parse(String((searchCalls[0]![1] as RequestInit).body));
     expect(body.context_type).toBe("memory");
     expect(body.target_uri).toBeUndefined();
-    expect(body.limit).toBe(3);
+    expect(body.limit).toBeUndefined();
+    expect(body.score_threshold).toBe(0.5);
+    expect(body.quotas).toEqual({
+      events: 1,
+      entities: 1,
+      preferences: 1,
+      experiences: 1,
+      resources: 1,
+      skills: 1,
+    });
   });
 
   it("supports /ov-query-config get, unset, and reset for session scope", async () => {
@@ -1864,15 +1894,17 @@ describe("Tool: ov_recall_trace", () => {
       if (requestUrl.pathname === "/api/v1/system/status") {
         return okResponse({ user: "default" });
       }
-      if (requestUrl.pathname === "/api/v1/search/find") {
-        const body = JSON.parse(String(init?.body ?? "{}"));
-        const memories = String(body.context_type ?? "") === "memory"
-          ? [makeMemory({ uri: "viking://user/default/memories/high", abstract: "Backend preference", score: 0.91 })]
-          : [];
-        return okResponse({ memories, resources: [], skills: [], total: memories.length });
-      }
-      if (requestUrl.pathname === "/api/v1/content/read") {
-        return okResponse("Full backend memory content");
+      if (requestUrl.pathname === "/api/v1/search/search") {
+        return okResponse({
+          entries: [{
+            uri: "viking://user/default/memories/high",
+            category: "preferences",
+            score: 0.91,
+            text: "Backend preference",
+          }],
+          rendered: "Backend preference",
+          stats: { candidates: 1, used_tokens: 4 },
+        });
       }
       return okResponse({});
     });
@@ -1902,15 +1934,17 @@ describe("Tool: ov_recall_trace", () => {
   it("defaults explicit memory_recall to backward-compatible user and agent memory recall", async () => {
     const openVikingTransport = vi.fn(async (url: string, init?: RequestInit) => {
       const requestUrl = new URL(url);
-      if (requestUrl.pathname === "/api/v1/search/find") {
-        const body = JSON.parse(String(init?.body ?? "{}"));
-        const memories = String(body.context_type ?? "") === "memory"
-          ? [makeMemory({ uri: "viking://user/default/memories/project-docs", abstract: "User memory docs", score: 0.9 })]
-          : [];
-        return okResponse({ memories, resources: [], skills: [], total: memories.length });
-      }
-      if (requestUrl.pathname === "/api/v1/content/read") {
-        return okResponse("Full resource content");
+      if (requestUrl.pathname === "/api/v1/search/search") {
+        return okResponse({
+          entries: [{
+            uri: "viking://user/default/memories/project-docs",
+            category: "memories",
+            score: 0.9,
+            text: "User memory docs",
+          }],
+          rendered: "User memory docs",
+          stats: { candidates: 1, used_tokens: 4 },
+        });
       }
       return okResponse({});
     });
@@ -1919,19 +1953,21 @@ describe("Tool: ov_recall_trace", () => {
     (api as any).openVikingTransport = openVikingTransport;
     contextEnginePlugin.register(api as any);
     const recall = factoryTools.get("memory_recall")!({ sessionId: "test-session", agentId: "main" });
-    await recall.execute("tc-recall-resource", { query: "project docs", limit: 1, scoreThreshold: 0.2 });
+    await recall.execute("tc-recall-resource", { query: "project docs", scoreThreshold: 0.2 });
 
-    const findBodies = openVikingTransport.mock.calls
-      .filter(([calledUrl]) => String(calledUrl).includes("/api/v1/search/find"))
+    const searchBodies = openVikingTransport.mock.calls
+      .filter(([calledUrl]) => String(calledUrl).includes("/api/v1/search/search"))
       .map(([, init]) => JSON.parse(String((init as RequestInit).body)));
-    expect(findBodies).toHaveLength(1);
-    expect(findBodies[0]).toMatchObject({ context_type: "memory" });
-    expect(findBodies[0]!.target_uri).toBeUndefined();
+    expect(searchBodies).toHaveLength(1);
+    expect(searchBodies[0]).toMatchObject({ mode: "context", purpose: "coding", context_type: "memory" });
+    expect(searchBodies[0]!.limit).toBeUndefined();
+    expect(searchBodies[0]!.quotas).toBeUndefined();
+    expect(searchBodies[0]!.target_uri).toBeUndefined();
 
     const trace = factoryTools.get("ov_recall_trace")!({ sessionId: "test-session" });
     const result = await trace.execute("tc-trace", { source: "memory_recall", limit: 10 }) as ToolResult;
     const entry = (result.details.entries as any[])[0];
-    expect(entry.resourceTypes).toEqual(["user"]);
+    expect(entry.resourceTypes).toEqual(["user", "agent"]);
     expect(entry.searches.map((search: any) => search.resourceType)).toEqual(["user"]);
     expect(entry.searches[0].targetUriResolved).toBeUndefined();
   });
@@ -1939,15 +1975,17 @@ describe("Tool: ov_recall_trace", () => {
   it("allows explicit memory_recall resourceTypes to opt into user recall", async () => {
     const openVikingTransport = vi.fn(async (url: string, init?: RequestInit) => {
       const requestUrl = new URL(url);
-      if (requestUrl.pathname === "/api/v1/search/find") {
-        const body = JSON.parse(String(init?.body ?? "{}"));
-        const memories = String(body.context_type ?? "") === "memory"
-          ? [makeMemory({ uri: "viking://user/default/memories/preference", abstract: "User preference", score: 0.9 })]
-          : [];
-        return okResponse({ memories, resources: [], skills: [], total: memories.length });
-      }
-      if (requestUrl.pathname === "/api/v1/content/read") {
-        return okResponse("Full user preference content");
+      if (requestUrl.pathname === "/api/v1/search/search") {
+        return okResponse({
+          entries: [{
+            uri: "viking://user/default/memories/preference",
+            category: "preferences",
+            score: 0.9,
+            text: "User preference",
+          }],
+          rendered: "User preference",
+          stats: { candidates: 1, used_tokens: 4 },
+        });
       }
       return okResponse({});
     });
@@ -1963,12 +2001,23 @@ describe("Tool: ov_recall_trace", () => {
       resourceTypes: ["user"],
     });
 
-    const findBodies = openVikingTransport.mock.calls
-      .filter(([calledUrl]) => String(calledUrl).includes("/api/v1/search/find"))
+    const searchBodies = openVikingTransport.mock.calls
+      .filter(([calledUrl]) => String(calledUrl).includes("/api/v1/search/search"))
       .map(([, init]) => JSON.parse(String((init as RequestInit).body)));
-    expect(findBodies).toHaveLength(1);
-    expect(findBodies[0]).toMatchObject({ context_type: "memory" });
-    expect(findBodies[0]!.target_uri).toBeUndefined();
+    expect(searchBodies).toHaveLength(1);
+    expect(searchBodies[0]).toMatchObject({
+      context_type: "memory",
+      quotas: {
+        events: 1,
+        entities: 1,
+        preferences: 1,
+        experiences: 1,
+        resources: 1,
+        skills: 1,
+      },
+    });
+    expect(searchBodies[0]!.limit).toBeUndefined();
+    expect(searchBodies[0]!.target_uri).toBeUndefined();
 
     const trace = factoryTools.get("ov_recall_trace")!({ sessionId: "test-session" });
     const result = await trace.execute("tc-trace", { source: "memory_recall", limit: 10 }) as ToolResult;

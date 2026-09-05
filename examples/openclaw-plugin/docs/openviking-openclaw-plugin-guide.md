@@ -48,7 +48,7 @@
 | `client.ts` | OpenViking HTTP Client；统一添加认证/租户/agent header；封装 session、search、resource、skill、tool-result API |
 | `config.ts` | 插件配置 schema、默认值、环境变量解析、peer identity routing 配置 |
 | `auto-recall.ts` | 自动召回查询清洗、召回超时控制、记忆块构建与注入 |
-| `memory-ranking.ts` | 显式 `memory_recall` 的结果去重、阈值过滤和本地重排；自动召回由服务端组装 |
+| `memory-ranking.ts` | `memory_forget` 候选处理及共用日志/分数工具；auto-recall 与 `memory_recall` 均由服务端组装 |
 | `text-utils.ts` | 会话文本清洗、metadata/心跳/命令过滤、增量 turn 消息提取、bypass session pattern |
 | `commands/setup.ts` | setup/status CLI，配置写入、health check、root/user key 探测、slot 激活 |
 | `session-transcript-repair.ts` | 修复 toolCall/toolResult 配对、去重、孤儿 tool result 等 transcript 结构问题 |
@@ -157,10 +157,10 @@ transformContext auto recall 流程：
 | 配置 | 默认值 | 说明 |
 | --- | --- | --- |
 | `autoRecall` | `true` | 是否启用自动召回 |
-| `recallLimit` | `6` | 最终注入记忆条数上限 |
-| `recallScoreThreshold` | `0.15` | 候选过滤阈值 |
-| `recallMaxInjectedChars` | `4000` | 注入总字符上限；单条记忆不截断，不完整则跳过 |
-| `recallPreferAbstract` | `false` | 是否优先使用 abstract，而非读取 leaf 记忆全文 |
+| `recallLimit` | 未配置（服务端当前默认 `10`） | auto-recall 与 `memory_recall` 的可选结果目标；显式值使用标准 coding quota 映射 |
+| `recallScoreThreshold` | `0.15` | 发送给服务端 context search 的候选过滤阈值 |
+| `recallMaxInjectedChars` | `4000` | 按 4 字符/token 换算为服务端 `max_tokens` |
+| `recallPreferAbstract` | `false` | true 时请求 abstract；false 时由服务端选择默认 detail |
 | `recallTargetTypes` | `["user","agent"]` | 自动召回和默认显式召回目标类型；可选 `resource`、`user`、`agent` |
 | `recallResources` | `false` | 旧兼容开关；仅在未显式配置 `recallTargetTypes` 时把 `resource` 追加到默认 `user` + `agent` |
 
@@ -260,8 +260,8 @@ transformContext auto recall 流程：
 
 | API | 官方用途 | 当前插件映射 | 关键参数 / 返回 |
 | --- | --- | --- | --- |
-| `POST /api/v1/search/find` | 快速语义检索，不依赖 session context | 自动召回、`memory_recall`、`ov_search`、`memory_forget` | body: `query`、`target_uri`、`limit`、`score_threshold`；返回 `memories[]`、`resources[]`、`skills[]`，每项含 `uri`、`level`、`abstract`、`score`、`category`：`client.ts:428` |
-| `POST /api/v1/search/search` | 带 session context 和 intent analysis 的检索 | 暂未使用 | body 可带 `session_id`；返回 `query_plan` / `query_results`。当前插件为了稳定和低延迟统一用 `find()`，session context 由插件自己组装 |
+| `POST /api/v1/search/find` | 快速语义检索，不依赖 session context | `ov_search`、`memory_forget` | body: `query`、`target_uri`、`limit`、`score_threshold`；返回 `memories[]`、`resources[]`、`skills[]`，每项含 `uri`、`level`、`abstract`、`score`、`category`：`client.ts:428` |
+| `POST /api/v1/search/search` | 带 session context、intent analysis 和 token budget 的检索 | 自动召回、`memory_recall` | 使用 `mode="context"`、`purpose="coding"`，可带 `session_id`、`quotas`、`max_tokens`；返回 `entries`、`digest`、`rendered`。未显式配置 recall limit 时不发送 `quotas`，使用服务端默认；显式值沿用标准 coding quota 映射 |
 | `POST /api/v1/search/grep` | 正则/关键词内容搜索 | `ov_archive_search` | body: `uri`、`pattern`、`case_insensitive`、`node_limit`；插件限定在 `viking://session/{id}/history` 内搜 archive：`client.ts:897` |
 | `POST /api/v1/search/glob` | glob 文件匹配 | 暂未封装 | body: `pattern`、`uri`、`node_limit`；适合按 `**/*.md`、`src/**/*.ts` 找资源路径 |
 
@@ -277,7 +277,7 @@ transformContext auto recall 流程：
 | `DELETE /api/v1/fs?uri=...&recursive=...` | 删除资源/目录 | `memory_forget`、`deleteUri` | 插件默认 `recursive=false`，用于删除具体 memory URI：`client.ts:934` |
 | `GET /api/v1/content/abstract?uri=...` | 读取 L0 abstract | 暂未封装 | 约 100 token 摘要，适合快速判断目录/文件主题 |
 | `GET /api/v1/content/overview?uri=...` | 读取 L1 overview | 暂未封装 | 目录级结构化概览，适合介于 abstract 和 full content 之间的排查 |
-| `GET /api/v1/content/read?uri=...&offset=...&limit=...` | 读取 L2 full content | 显式 `memory_recall`、`ov_read` | 自动召回的分层读取已由服务端 context search 完成；`ov_read` 暴露 `uri` 参数，未暴露 `offset/limit`。 |
+| `GET /api/v1/content/read?uri=...&offset=...&limit=...` | 读取 L2 full content | `ov_read` | 两种 recall 的分层读取均由服务端 context search 完成；`ov_read` 暴露 `uri` 参数，未暴露 `offset/limit`。 |
 
 #### 6.2.4 Resources / Skills Import
 
@@ -391,7 +391,7 @@ bash install.sh --source tos --channel prod --version 2026.6.2
 | --- | --- |
 | Node.js | >= 22 |
 | OpenClaw | >= 2026.5.27 |
-| OpenViking Server | >= 0.4.1 |
+| OpenViking Server | >= 0.4.13 |
 
 兼容性声明在 `install-manifest.json` 的 `compatibility` 字段。
 
@@ -717,7 +717,7 @@ openclaw config get plugins.slots.contextEngine
 | `userId` | 空 | Root key/trusted 部署需要 |
 | `peer_role` | `none` | 记忆归属：`none`、`assistant` 或 `sender`；旧值 `person` 作为 `sender` 的别名兼容 |
 | `peer_prefix` | 空 | Peer 路由前缀；非空时形成 `<prefix>_<ctx.agentId>` |
-| `targetUri` | `viking://user/memories` | 默认 memory search 目标 |
+| `targetUri` | `viking://user/memories` | `ov_search` / `memory_forget` 默认精确搜索目标；`memory_recall` 默认不使用，显式工具参数可启用兼容路径 |
 | `timeoutMs` | `15000` | HTTP 请求超时 |
 | `autoCapture` | `true` | 是否每轮后写入 OpenViking session |
 | `captureMode` | `semantic` | `semantic` 全量候选；`keyword` 先过触发词 |
@@ -726,9 +726,9 @@ openclaw config get plugins.slots.contextEngine
 | `autoRecallTimeoutMs` | `15000` | 服务端组装自动召回的总超时；为 session query expansion 和检索留出预算 |
 | `recallTargetTypes` | `["user","agent"]` | 自动召回和默认显式召回目标类型；可选 `resource`、`user`、`agent` |
 | `recallResources` | `false` | 旧兼容开关；仅在未显式配置 `recallTargetTypes` 时追加 `resource` |
-| `recallLimit` | `6` | 召回条数 |
-| `recallScoreThreshold` | `0.15` | 召回阈值 |
-| `recallMaxInjectedChars` | `4000` | 注入字符预算 |
+| `recallLimit` | 未配置（服务端当前默认 `10`） | auto-recall 与 `memory_recall` 的可选结果目标；显式值使用标准 coding quota 映射 |
+| `recallScoreThreshold` | `0.15` | 两种 recall 均发送给服务端的召回阈值 |
+| `recallMaxInjectedChars` | `4000` | 两种 recall 均换算为服务端 `max_tokens` 的注入预算 |
 | `commitTokenThresholdRatio` | `0.5` | `pending_tokens` 达到「模型上下文窗口 × 该比例」触发 afterTurn commit（0-1，例 0.5=50%）；设 0 可每轮 commit |
 | `commitKeepRecentCount` | `10` | afterTurn commit 后保留最近消息数；compact 固定 0 |
 | `bypassSessionPatterns` | `[]` | 匹配 sessionKey/sessionId 时完全绕过 OpenViking |
@@ -775,16 +775,16 @@ openclaw config get plugins.slots.contextEngine
 | `userId` | 多租户搜索路由 | 空 | 是 | 是 | `OPENVIKING_USER_ID` | Root key / trusted 部署下显式指定 user，影响 user memory 检索范围：`config.ts:216` |
 | `peer_role` | session peer 归因和 actor-peer 路由 | `none` | 是 | 安装脚本/setup 参数支持 | `OPENVIKING_PEER_ROLE`（安装脚本写入 setup 参数） | `none` 使用共享 user memory（默认）；`assistant` 用 runtime agent 归因到 `peers/<assistant_id>`；`sender` 用 sender 身份归因到 `peers/<sender_id>`；旧值 `person` 等价于 `sender` |
 | `peer_prefix` | assistant peer 前缀 | 空 | 是 | 间接支持 | 可通过配置值写 `${ENV}` | 非空时拼成 `<prefix>_<ctx.agentId>`，用于 assistant `peer_id` 与 `X-OpenViking-Actor-Peer` |
-| `targetUri` | `memory_recall` / `memory_forget` 默认搜索范围 | `viking://user/memories` | 是 | 否 | — | 未显式传 `targetUri` 时的默认 memory 搜索位置：`config.ts:275`、`index.ts:1366` |
+| `targetUri` | `ov_search` / `memory_forget` 默认精确搜索范围 | `viking://user/memories` | 是 | 否 | — | `memory_recall` 默认走 context search；显式工具参数 `targetUri` 保留原来的精确 `/find` + read 路径。 |
 | `timeoutMs` | 所有搜索/读取请求超时 | `15000` | 是 | 否 | — | 控制 context search、`find/read/grep/session` 等 HTTP 请求超时：`config.ts:276` |
 | `autoRecall` | 自动召回总开关 | `true` | 是 | 否 | — | 关闭后插件不再在 `assemble()` 阶段自动发起 recall：`config.ts:283`、`context-engine.ts:1132` |
 | `autoRecallTimeoutMs` | 自动召回总超时 | `15000` | 是 | 否 | — | 覆盖单次服务端 context search；默认值为最长 5 秒的 session query expansion 及后续检索保留余量。显式配置的值仍会按 `1000..300000` ms 限制。 |
 | `recallTargetTypes` | 自动召回 + 默认 `memory_recall` 资源类型集合 | `["user","agent"]` | 是 | 安装脚本/setup 参数支持 | `OPENVIKING_RECALL_TARGET_TYPES`（安装脚本写入 setup 参数） | 当前默认只查 `user` + `agent` 记忆。设置为 `["resource"]` 才会切成 resource-only；可组合 `resource,user,agent`：`config.ts:174`、`config.ts:360` |
 | `recallResources` | 自动召回 + 默认 `memory_recall` resources 兼容开关 | `false` | 是 | 是 | `OPENVIKING_RECALL_RESOURCES` | 旧兼容字段；只有未显式配置 `recallTargetTypes` 时才把 `resource` 追加到默认 `user` + `agent`，不会覆盖显式 resource-only：`config.ts:360` |
-| `recallLimit` | 自动召回 / `memory_recall` 返回条数 | `6` | 是 | 否 | — | 自动召回按共享 context-search 契约映射为 coding quotas；显式 `memory_recall` 仍按该值做最终选择。 |
-| `recallScoreThreshold` | 自动召回 / `memory_recall` 过滤阈值 | `0.15` | 是 | 否 | — | 自动召回交给服务端过滤；显式 `memory_recall` 保留本地后处理。 |
-| `recallMaxInjectedChars` | 自动召回 / `memory_recall` 注入预算 | `4000` | 是 | 否 | — | 自动召回按 4 字符/token 换算为服务端 `max_tokens`；显式 `memory_recall` 仍使用字符预算。 |
-| `recallPreferAbstract` | 自动召回读取策略 | `false` | 是 | 否 | — | 为 `true` 时把服务端 detail 固定为 `abstract`；否则由服务端按类别选择默认层级。 |
+| `recallLimit` | 自动召回 / `memory_recall` 结果目标 | 未配置（服务端当前默认 `10`） | 是 | 否 | — | 未配置时省略 `quotas` 并使用服务端默认；显式值沿用其他 memory-plugin harness 的 coding quota 映射。 |
+| `recallScoreThreshold` | 自动召回 / `memory_recall` 过滤阈值 | `0.15` | 是 | 否 | — | 两种路径均交给服务端 context search 过滤。 |
+| `recallMaxInjectedChars` | 自动召回 / `memory_recall` 注入预算 | `4000` | 是 | 否 | — | 两种路径均按 4 字符/token 换算为服务端 `max_tokens`。 |
+| `recallPreferAbstract` | 自动召回 / `memory_recall` 读取策略 | `false` | 是 | 否 | — | 为 `true` 时固定 `detail="abstract"`；否则不指定 detail，由服务端选择默认层级。 |
 | `recallTokenBudget` | 自动召回预算旧别名 | 跟随 `recallMaxInjectedChars` | 是 | 否 | — | 已废弃，仅兼容旧配置；解析时会折叠为 `recallMaxInjectedChars`：`config.ts:257`、`config.ts:299` |
 | `recallMaxContentChars` | 旧版单条截断兼容项 | `5000` | 是 | 否 | — | 已废弃；当前自动召回不再裁剪单条 memory 内容：`config.ts:290` |
 | `captureMode` | 间接影响可搜索记忆的入库方式 | `semantic` | 是 | 否 | — | 虽然不是“搜索参数”，但它决定哪些用户内容会先被写入 session 并进入后续可检索空间：`config.ts:203`、`config.ts:278` |
@@ -898,10 +898,11 @@ export OPENVIKING_RECALL_RESOURCES=1
 
 搜索相关配置的实际生效顺序可以概括为：
 
-1. **显式工具参数优先**：例如 `memory_recall(limit=3, scoreThreshold=0.4, targetUri=...)`、`/ov-search --limit 20 --uri ...` 会优先覆盖默认配置：`index.ts:1046`、`index.ts:1050`、`index.ts:1054`、`index.ts:824`、`index.ts:408`
-2. **插件配置文件其次**：`plugins.entries.openviking.config.*`
-3. **环境变量补默认值**：只对少数支持 env 的项生效，如 `OPENVIKING_BASE_URL`、`OPENVIKING_API_KEY`、`OPENVIKING_RECALL_RESOURCES`：`config.ts:139`、`config.ts:202`、`config.ts:284`
-4. **代码默认值兜底**：例如 `recallLimit=6`、`recallScoreThreshold=0.15`、`recallMaxInjectedChars=4000`：`config.ts:63`、`config.ts:64`、`config.ts:67`
+1. **显式工具参数优先**：例如 `memory_recall(limit=3, scoreThreshold=0.4)`、`/ov-search --limit 20 --uri ...`。
+2. **session 运行期配置**：`/ov-query-config set --scope session ...`。
+3. **peer/claw 运行期配置**：`--scope peer`（`claw` 是兼容别名）。
+4. **显式插件静态配置**：`plugins.entries.openviking.config.*`。对 `recallLimit`，只有用户显式配置才会发送。
+5. **服务端默认值兜底**：若以上均未设置 recall limit，请求省略 `quotas`，由 OpenViking 服务端决定（当前默认 `10`）；显式值使用标准 coding quota 映射。
 
 ### 9.5 搜索相关配置的排查建议
 
@@ -911,8 +912,8 @@ export OPENVIKING_RECALL_RESOURCES=1
 | `memory_recall` 默认搜不到 resources | `recallResources` | 默认是 `false`，不会自动查 `viking://resources` |
 | 同样的 query 在不同 agent / user 命中不一致 | `accountId`、`userId`、`peer_role`、`peer_prefix` | actor peer 或租户身份不一致 |
 | `/ov-search` 查不到刚导入的内容 | `baseUrl`、`apiKey`、服务端队列状态 | 导入后语义/向量处理还没完成，或连到了错误服务 |
-| 明明命中结果很多，但注入数量少 | `recallLimit`、`recallMaxInjectedChars`、`recallPreferAbstract` | limit 太小或预算太紧，必要时改成 abstract 优先 |
-| 不知道插件自动召回使用了哪些范围 | `logFindRequests` | 开启后查看插件日志中的 context search routing；显式检索仍记录 `find POST` |
+| 明明命中结果很多，但注入数量少 | 服务端 quota、`recallMaxInjectedChars`、`recallPreferAbstract` | 条数或 token 预算太紧；必要时显式配置 `recallLimit` 或改成 abstract 优先。 |
+| 不知道插件召回使用了哪些范围 | `logFindRequests` | 开启后查看 context search routing；`ov_search` / `memory_forget` 仍记录 `find POST`。 |
 
 ---
 
@@ -1107,7 +1108,7 @@ OPENVIKING_DEBUG=1 openclaw gateway restart
 | 日志/字段 | 含义 | 关键路径 |
 | --- | --- | --- |
 | `openviking: context search POST .../api/v1/search/search {...}` | 自动召回向 OpenViking 发起服务端组装检索 | `purpose` / `quotas` / `session_id` / `context_type` / `query_expansion` / `max_tokens` / `peer_scope` / actor 与租户路由 |
-| `openviking: find POST .../api/v1/search/find {...}` | 显式 recall/search 工具发起底层语义检索 | `target_uri` / `target_uri_input` / `query` / `X_OpenViking_Agent` |
+| `openviking: find POST .../api/v1/search/find {...}` | `ov_search` / `memory_forget` 发起精确范围语义检索 | `target_uri` / `target_uri_input` / `query` / `X_OpenViking_Agent` |
 | `openviking: injecting N memories ...` | 插件决定向本轮 prompt 注入 N 条召回内容 | `N`、注入字符数、估算 token |
 | `openviking: inject-detail {...}` | 本轮实际注入模型的服务端组装条目摘要 | `entries[].uri`、`category`、`score`、`detail` |
 | `openviking: diag {"stage":"assemble_result"...}` | assemble 阶段是否发生自动召回 | `phase=transform_context`、`autoRecallMemoryCount` |
@@ -1213,9 +1214,9 @@ curl -sS "$OPENVIKING_BASE_URL/api/v1/content/read?uri=$(python3 -c 'import urll
 | --- | --- | --- | --- |
 | 健康检查 | `GET /health` | `openclaw openviking status` | 判断服务是否可达 |
 | 身份/用户探测 | `GET /api/v1/system/status` | `client.getRuntimeIdentity` | 解析服务端当前 user，辅助 canonical URI 展开 |
-| 服务端上下文组装 | `POST /api/v1/search/search` + `mode="context"` | auto recall | 结合 session 历史返回 `entries`、`rendered` 和预算/去重统计 |
-| 语义检索 | `POST /api/v1/search/find` | `memory_recall` / `ov_search` | 返回 `memories[]`、`resources[]`、`skills[]`，每项含 `uri`、`score`、`abstract`、`level` |
-| 内容读取 | `GET /api/v1/content/read?uri=...` | `memory_recall` / `ov_read` / 手工排查 | 根据命中的 `viking://...` URI 读取完整内容 |
+| 服务端上下文组装 | `POST /api/v1/search/search` + `mode="context"` | auto recall / `memory_recall` | 结合 session 历史返回 `entries`、`digest`、`rendered` 和预算/去重统计 |
+| 精确范围语义检索 | `POST /api/v1/search/find` | `ov_search` / `memory_forget` | 返回 `memories[]`、`resources[]`、`skills[]`，每项含 `uri`、`score`、`abstract`、`level` |
+| 内容读取 | `GET /api/v1/content/read?uri=...` | `ov_read` / 手工排查 | 根据命中的 `viking://...` URI 读取完整内容 |
 | 写入 session 消息 | `POST /api/v1/sessions/{sessionId}/messages` | `afterTurn` | 保存 OpenClaw 本轮 user/assistant/tool 片段 |
 | 获取 session 元信息 | `GET /api/v1/sessions/{sessionId}` | `afterTurn` | 查看 `pending_tokens`、message count、commit count |
 | 获取组装上下文 | `GET /api/v1/sessions/{sessionId}/context?token_budget=...` | 主 assemble / compact | 获取 archive summary + active messages |
@@ -1336,7 +1337,7 @@ python health_check_tools/ov-healthcheck.py
 6. **peer 配置要一致**：确认 `peer_role` / `peer_prefix` 与期望的 OpenClaw 会话身份一致，否则写入和召回会落在不同 actor peer 视角。
 7. **afterTurn commit 是异步抽取**：立即返回不代表长期记忆已可检索；看 task 或服务端日志。
 8. **compact 是同步边界**：需要明确压缩和抽取完成时用 compact，但它会阻塞等待服务端 Phase 2。
-9. **记忆注入有预算**：`recallMaxInjectedChars` 会跳过放不下的完整记忆，而不是截断。
+9. **记忆注入有预算**：`recallMaxInjectedChars` 按 4 字符/token 转成服务端 `max_tokens`，由服务端选择 detail 和最终注入内容。
 10. **bypassSessionPatterns 会完全绕过 OpenViking**：匹配后自动捕获、召回、工具都会跳过。
 11. **tool result 工具限制当前 session**：插件拒绝读取其他 session 的外置结果。
 12. **本地资源导入先上传**：本地文件/目录通过 temp upload，不把本地路径直接交给服务端；目录会 zip，注意权限与体积。

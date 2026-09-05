@@ -12,11 +12,11 @@ Effective query config is resolved per request with this priority:
 explicit tool request arguments
   > session runtime config
   > peer runtime config
-  > static plugin config
-  > code defaults
+  > explicitly configured static plugin value
+  > plugin field default
 ```
 
-The higher layer wins field by field. Object fields such as ranking weights are shallow-merged. Array fields such as `resourceTypes` replace the lower layer.
+The higher layer wins field by field. Object fields such as ranking weights are shallow-merged. Array fields such as `resourceTypes` replace the lower layer. `recallLimit` is the exception at the bottom: when no layer sets it explicitly, the plugin omits quotas and uses the OpenViking server default.
 
 ## Scopes
 
@@ -33,20 +33,20 @@ For command compatibility, `--scope claw` is accepted as an alias for `peer`.
 
 | Field | Purpose |
 | --- | --- |
-| `recallLimit` | Number of final recall results to inject or display. |
-| `candidateLimit` | Number of candidates requested before local ranking/filtering by explicit `memory_recall`. |
-| `candidateMultiplier` | Multiplier used to derive the explicit `memory_recall` candidate count when `candidateLimit` is not explicit. |
-| `scoreThreshold` | Minimum score; auto-recall sends it to context search, while explicit `memory_recall` also applies local post-processing. |
-| `maxInjectedChars` | Injection budget; auto-recall converts it to server `max_tokens` at four characters per token. |
-| `recallPreferAbstract` | Pin server-assembled auto-recall to abstract detail; explicit `memory_recall` prefers abstracts locally. |
+| `recallLimit` | Optional result target for auto-recall and `memory_recall`; explicit values use the standard coding quota mapping. |
+| `candidateLimit` | Legacy candidate width used only by an explicit `memory_recall.targetUri` compatibility request. |
+| `candidateMultiplier` | Legacy multiplier used only to derive that targeted compatibility candidate width. |
+| `scoreThreshold` | Minimum score sent to server context search for auto-recall and `memory_recall`. |
+| `maxInjectedChars` | Injection budget converted to server `max_tokens` at four characters per token for both recall paths. |
+| `recallPreferAbstract` | When true, pin server-assembled recall to abstract detail; false leaves the server detail default unchanged. |
 | `resourceTypes` | Default semantic recall target types: `user`, `agent`, `resource`. |
-| `targetUri` | Force a single `viking://` target URI for search. |
+| `targetUri` | Exact `viking://` scope for `ov_search` and `memory_forget`. An explicit `memory_recall.targetUri` also selects the legacy targeted recall path. |
 | `ovSearchLimit` | Default result count for `ov_search`. |
-| `rankingWeights` | Local ranking weights for explicit `memory_recall`, such as base score and lexical overlap. |
-| `categoryWeights` | Optional category-specific adjustments for explicit `memory_recall`. |
-| `resourceTypeWeights` | Optional resource-type adjustments for explicit `memory_recall`. |
+| `rankingWeights` | Legacy ranking weights used only by an explicit `memory_recall.targetUri` request. |
+| `categoryWeights` | Legacy category weights used only by an explicit `memory_recall.targetUri` request. |
+| `resourceTypeWeights` | Legacy resource-type weights used only by an explicit `memory_recall.targetUri` request. |
 
-Automatic recall uses one session-aware context search and consumes `recallLimit`, `scoreThreshold`, `maxInjectedChars`, `recallPreferAbstract`, and `resourceTypes`. Candidate expansion and local ranking-weight fields remain available to explicit `memory_recall`, but no longer alter automatic recall assembly.
+Automatic recall and the default `memory_recall` path both use one session-aware context/coding search. When no tool, runtime, or static `recallLimit` is set, the request omits quotas and uses the server default. Explicit values follow the same coding quota mapping as the other memory-plugin harnesses. `memory_recall` returns the server's token-budgeted `digest` or `rendered` context directly. The explicit `targetUri` compatibility path keeps the previous targeted `/find`, local ranking, and read behavior.
 
 Session history is not a semantic recall target. Use `ov_archive_search` and `ov_archive_expand` for session archive recovery.
 

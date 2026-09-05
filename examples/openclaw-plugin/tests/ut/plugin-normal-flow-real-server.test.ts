@@ -276,14 +276,6 @@ describe("plugin normal flow with healthy backend", () => {
     expect(contextSearchBody).toMatchObject({
       mode: "context",
       purpose: "coding",
-      quotas: {
-        events: 1,
-        entities: 1,
-        preferences: 1,
-        experiences: 1,
-        resources: 1,
-        skills: 1,
-      },
       session_id: "session-normal",
       context_type: "memory",
       query_expansion: "auto",
@@ -292,6 +284,7 @@ describe("plugin normal flow with healthy backend", () => {
       peer_scope: "actor",
     });
     expect(contextSearchBody).not.toHaveProperty("limit");
+    expect(contextSearchBody).not.toHaveProperty("quotas");
     expect(
       requests.some((entry) => entry.method === "GET" && entry.path.startsWith("/api/v1/sessions/session-normal/context")),
     ).toBe(true);

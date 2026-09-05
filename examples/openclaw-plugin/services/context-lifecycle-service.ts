@@ -88,7 +88,7 @@ export type AssembleOpenVikingSessionParams = {
   isBypassedSession: (params: { sessionId?: string; sessionKey?: string }) => boolean;
   queryConfigStore?: {
     getEffective(params: {
-      agentId?: string;
+      peerId: string;
       sessionId?: string;
       sessionKey?: string;
       ovSessionId?: string;
@@ -504,7 +504,7 @@ export async function assembleOpenVikingSession({
         assistantPeerId: agentId,
       });
       const queryConfig = await queryConfigStore?.getEffective({
-        agentId,
+        peerId: agentId,
         sessionId,
         sessionKey,
         ovSessionId,

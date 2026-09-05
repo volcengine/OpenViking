@@ -372,7 +372,6 @@ describe("buildAutoRecallContext trace", () => {
     expect(client.searchContext).toHaveBeenCalledTimes(1);
     expect(client.searchContext.mock.calls[0]?.[1]).toMatchObject({
       sessionId: "ov-1",
-      limit: 6,
       scoreThreshold: 0.15,
       contextType: "memory",
       queryExpansion: "auto",
@@ -382,11 +381,33 @@ describe("buildAutoRecallContext trace", () => {
       peerScope: "actor",
       requestTimeoutMs: 15000,
     });
+    expect(client.searchContext.mock.calls[0]?.[1]).not.toHaveProperty("limit");
     expect(client.find).not.toHaveBeenCalled();
     expect(client.read).not.toHaveBeenCalled();
     const recorded = traces.query({ turn: "latest", sessionId: "session-resource-only", limit: 10 }).entries[0]!;
     expect(recorded.resourceTypes).toEqual(["user", "agent"]);
     expect(recorded.searches.map((search) => search.resourceType)).toEqual(["user"]);
+  });
+
+  it("sends recallLimit only when static config explicitly sets it", async () => {
+    const cfg = makeCfg({ recallLimit: 3, recallTargetTypes: ["user"] });
+    const client = {
+      healthCheck: vi.fn().mockResolvedValue(undefined),
+      searchContext: vi.fn().mockResolvedValue({ entries: [], rendered: "", stats: {} }),
+      find: vi.fn(),
+      read: vi.fn(),
+    };
+
+    await buildAutoRecallContext({
+      cfg,
+      client: client as any,
+      agentId: "agent-1",
+      queryText: "which explicit recall limit should apply?",
+      logger: { info: vi.fn(), warn: vi.fn() },
+    });
+
+    expect(client.searchContext.mock.calls[0]?.[1]).toMatchObject({ limit: 3 });
+    expect(client.searchContext.mock.calls[0]?.[1]).not.toHaveProperty("quotas");
   });
 
   it("uses configured autoRecallTimeoutMs for both the request and outer budget", async () => {
