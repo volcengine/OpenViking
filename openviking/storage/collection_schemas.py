@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 from openviking.core.context import ContextType, ResourceContentType
 from openviking.models.embedder.base import embed_compat
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.acl import ACL_GRANT_FIELDS
+from openviking.storage.acl import ACL_CONTEXT_FIELDS, ACL_GRANT_FIELDS
 from openviking.storage.errors import (
     CollectionNotFoundError,
     EmbeddingConfigurationError,
@@ -325,6 +325,17 @@ async def init_context_collection(storage) -> bool:
     expected_scalar_indexes = set(schema["ScalarIndex"])
     existing_scalar_indexes = set(existing_meta.get("ScalarIndex", []))
     missing_scalar_indexes = sorted(expected_scalar_indexes - existing_scalar_indexes)
+    missing_acl_fields = sorted(ACL_CONTEXT_FIELDS & set(missing_fields))
+    existing_count: Optional[int] = None
+
+    async def _existing_count() -> int:
+        nonlocal existing_count
+        if existing_count is None:
+            count = getattr(storage, "count", None)
+            if vectordb_cfg.backend == "qdrant":
+                count = getattr(storage, "count_unscoped", None) or count
+            existing_count = await count() if count else 0
+        return existing_count
 
     async def _update_local_schema() -> None:
         if vectordb_cfg.backend not in {"local", "cuvs"} or "Fields" not in existing_meta:
@@ -336,6 +347,35 @@ async def init_context_collection(storage) -> bool:
                 "Local context collection does not support automatic schema updates"
             )
         await storage.update_collection_schema(schema["Fields"], schema["ScalarIndex"])
+
+    async def _migrate_acl_schema() -> None:
+        if vectordb_cfg.backend != "qdrant":
+            return
+        if not hasattr(storage, "update_collection_schema"):
+            raise EmbeddingConfigurationError(
+                "Qdrant context collection does not support automatic schema migration"
+            )
+        await storage.update_collection_schema(schema["Fields"], schema["ScalarIndex"])
+        if missing_acl_fields:
+            try:
+                count = await _existing_count()
+            except Exception as exc:
+                logger.warning(
+                    "Qdrant ACL schema migration added %s but could not inspect "
+                    "existing records (%s); ACL fields were not backfilled.",
+                    ", ".join(missing_acl_fields),
+                    exc,
+                )
+                return
+            if count:
+                logger.warning(
+                    "Qdrant ACL schema migration added %s to a non-empty collection "
+                    "(%d vector(s)) without backfilling records. If ACL is enabled, "
+                    "existing records remain under legacy URI-namespace visibility "
+                    "until they are rewritten or re-ingested.",
+                    ", ".join(missing_acl_fields),
+                    count,
+                )
 
     base_description, existing_embedding_meta = _decode_collection_description(
         existing_meta.get("Description")
@@ -355,11 +395,13 @@ async def init_context_collection(storage) -> bool:
         )
 
     if _embedding_metadata_compatible(existing_embedding_meta, embedding_meta):
+        await _migrate_acl_schema()
         await _update_local_schema()
         return False
 
-    existing_count = await storage.count() if hasattr(storage, "count") else 0
+    existing_count = await _existing_count()
     if existing_embedding_meta is None and existing_count == 0:
+        await _migrate_acl_schema()
         if hasattr(storage, "update_collection_description"):
             await storage.update_collection_description(
                 _encode_collection_description(
@@ -371,6 +413,7 @@ async def init_context_collection(storage) -> bool:
             return False
 
     if existing_embedding_meta is None:
+        await _migrate_acl_schema()
         logger.warning(
             "Existing collection has %d vector(s) but no embedding metadata "
             "(created by an older version). Backfilling with current config and continuing.",
@@ -387,6 +430,7 @@ async def init_context_collection(storage) -> bool:
         return False
 
     if existing_count == 0 and hasattr(storage, "update_collection_description"):
+        await _migrate_acl_schema()
         await storage.update_collection_description(
             _encode_collection_description(
                 base_description or "Unified context collection",
@@ -415,6 +459,7 @@ async def init_context_collection(storage) -> bool:
         and not dimension_changed
         and hasattr(storage, "update_collection_description")
     ):
+        await _migrate_acl_schema()
         logger.warning(
             "Embedding metadata changed (provider/model) but dimension is "
             "unchanged; embedding.allow_metadata_override=true, so the existing "

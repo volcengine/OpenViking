@@ -169,26 +169,55 @@ class _AsyncVectorAdapter:
     ) -> None:
         def _update() -> None:
             collection = self._adapter.get_collection()
-            existing_fields = {
-                field.get("FieldName") for field in collection.get_meta_data().get("Fields", [])
-            }
-            missing_fields = [
-                field for field in fields if field.get("FieldName") not in existing_fields
-            ]
-            if missing_fields:
-                collection.update(fields=missing_fields)
-
-            index_meta = collection.get_index_meta_data(index_name) or {}
-            current_scalar_index = index_meta.get("ScalarIndex", [])
-            indexed_fields = set(current_scalar_index)
-            missing_scalar_fields = [
-                field for field in scalar_index if field not in indexed_fields
-            ]
-            if missing_scalar_fields:
-                collection.update_index(
-                    index_name,
-                    scalar_index=[*current_scalar_index, *missing_scalar_fields],
+            if self._adapter.mode == "qdrant":
+                current_schema = collection.get_meta_data()
+                schema_scalar_index = list(
+                    dict.fromkeys(
+                        [*(current_schema.get("ScalarIndex") or []), *scalar_index]
+                    )
                 )
+                current_index = collection.get_index_meta_data(index_name) or {}
+                index_scalar_index = list(
+                    dict.fromkeys(
+                        [*(current_index.get("ScalarIndex") or []), *scalar_index]
+                    )
+                )
+                collection.update(
+                    fields={"Fields": fields, "ScalarIndex": schema_scalar_index}
+                )
+                if collection.has_index(index_name):
+                    collection.update_index(index_name, scalar_index=index_scalar_index)
+                else:
+                    index_meta = self._adapter._build_default_index_meta(
+                        index_name=index_name,
+                        distance=self._adapter._distance_metric,
+                        use_sparse=self._adapter._sparse_weight > 0.0,
+                        sparse_weight=self._adapter._sparse_weight,
+                        scalar_index_fields=schema_scalar_index,
+                    )
+                    collection.create_index(index_name, index_meta)
+            else:
+                existing_fields = {
+                    field.get("FieldName")
+                    for field in collection.get_meta_data().get("Fields", [])
+                }
+                missing_fields = [
+                    field for field in fields if field.get("FieldName") not in existing_fields
+                ]
+                if missing_fields:
+                    collection.update(fields=missing_fields)
+
+                index_meta = collection.get_index_meta_data(index_name) or {}
+                current_scalar_index = index_meta.get("ScalarIndex", [])
+                indexed_fields = set(current_scalar_index)
+                missing_scalar_fields = [
+                    field for field in scalar_index if field not in indexed_fields
+                ]
+                if missing_scalar_fields:
+                    collection.update_index(
+                        index_name,
+                        scalar_index=[*current_scalar_index, *missing_scalar_fields],
+                    )
 
         await asyncio.to_thread(_update)
 
@@ -1432,6 +1461,10 @@ class VikingVectorIndexBackend:
         else:
             backend = self._get_default_backend()
         return await backend.count(filter=filter)
+
+    async def count_unscoped(self) -> int:
+        """Count all collection records for internal startup maintenance."""
+        return await self._get_root_backend().count()
 
     async def search_by_keywords(
         self,
