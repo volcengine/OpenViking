@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react'
 import type { PropsWithChildren } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -17,8 +23,40 @@ const previewState = vi.hoisted(() => ({
   override: null as { content: string; fileType: string } | null,
 }))
 
+const previewMocks = vi.hoisted(() => ({
+  renderMermaid: vi.fn(async (_id: string, _source: string) => ({
+    svg: '<svg viewBox="0 0 120 40"><text>Client to server</text></svg>',
+  })),
+}))
+
+vi.mock('@streamdown/mermaid', () => ({
+  mermaid: {
+    getMermaid: () => ({
+      initialize: vi.fn(),
+      render: previewMocks.renderMermaid,
+    }),
+    language: 'mermaid',
+    name: 'mermaid',
+    type: 'diagram',
+  },
+}))
+
+vi.mock('next-themes', () => ({
+  useTheme: () => ({ resolvedTheme: 'light' }),
+}))
+
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    t: (key: string) =>
+      ({
+        'filePreview.mermaid.diagramLabel': 'Mermaid diagram',
+        'filePreview.mermaid.errorDetails': 'Error details',
+        'filePreview.mermaid.loading': 'Rendering Mermaid diagram...',
+        'filePreview.mermaid.renderFailed': 'Unable to render Mermaid diagram.',
+        'filePreview.mermaid.showSource': 'Show Mermaid source',
+        'filePreview.mermaid.unknownError': 'Unknown Mermaid rendering error.',
+      })[key] ?? key,
+  }),
 }))
 
 vi.mock('#/gen/ov-client/client.gen', () => ({
@@ -112,7 +150,12 @@ function renderPreview(
   )
 }
 
-describe('FilePreview Markdown links', () => {
+describe('FilePreview Markdown rendering', () => {
+  beforeEach(() => {
+    previewState.override = null
+    previewMocks.renderMermaid.mockClear()
+  })
+
   it('opens internal Markdown links in the resource preview', () => {
     const onNavigate = vi.fn()
     renderPreview(file, onNavigate)
@@ -124,6 +167,7 @@ describe('FilePreview Markdown links', () => {
 
     expect(onNavigate).toHaveBeenCalledOnce()
     expect(onNavigate).toHaveBeenCalledWith('viking://resources/wiki/target.md')
+    expect(previewMocks.renderMermaid).not.toHaveBeenCalled()
   })
 
   it('opens viking links from a directory overview', () => {
@@ -204,6 +248,48 @@ describe('FilePreview Markdown links', () => {
     expect(screen.queryByRole('link', { name: 'Data' })).toBeNull()
     expect(screen.queryByRole('link', { name: 'Blob' })).toBeNull()
     expect(onNavigate).not.toHaveBeenCalled()
+  })
+
+  it('renders Mermaid fences as diagrams', async () => {
+    previewState.override = {
+      content: [
+        '```mermaid',
+        'graph TD',
+        '    A[Client] --> B[Server]',
+        '```',
+      ].join('\n'),
+      fileType: 'markdown',
+    }
+
+    const { container } = renderPreview(file, vi.fn())
+
+    const diagram = await screen.findByRole('img', {
+      name: 'Mermaid diagram',
+    })
+    await waitFor(() => {
+      expect(diagram.innerHTML).toContain('<svg')
+      expect(diagram.textContent).toContain('Client to server')
+    })
+    expect(previewMocks.renderMermaid).toHaveBeenCalledWith(
+      expect.stringMatching(/^mermaid-/),
+      expect.stringContaining('graph TD\n    A[Client] --> B[Server]'),
+    )
+    expect(diagram.parentElement?.style.width).toBe('120px')
+    expect(container.querySelector('code.language-mermaid')).toBeNull()
+  })
+
+  it('shows Mermaid errors with the original source', async () => {
+    previewState.override = {
+      content: ['```mermaid', 'this is not a diagram', '```'].join('\n'),
+      fileType: 'markdown',
+    }
+    previewMocks.renderMermaid.mockRejectedValueOnce(new Error('parse error'))
+    const { container } = renderPreview(file, vi.fn())
+
+    await screen.findByText('Unable to render Mermaid diagram.')
+    expect(container.textContent).toContain('parse error')
+    expect(container.textContent).toContain('Show Mermaid source')
+    expect(container.textContent).toContain('this is not a diagram')
   })
 
   it('renders directory L0 and L1 frontmatter as independent metadata panels', () => {
