@@ -4,6 +4,7 @@ import abc
 import asyncio
 import json
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Union
@@ -250,6 +251,11 @@ class NamedQueue:
                 f"Task {task_metadata.task_id} is cancelling; rejected work for {self.name}"
             )
 
+        if isinstance(data, dict):
+            # Queue-wait observability (#4578): stamp the enqueue wall time so the
+            # dequeue side can report how long the message sat behind backlog.
+            # Popped before handlers run, so consumers never see this field.
+            data["_ov_enqueued_at"] = time.time()
         try:
             if isinstance(data, dict):
                 data = json.dumps(data)
@@ -345,12 +351,40 @@ class NamedQueue:
             logger.debug(f"[NamedQueue] Dequeue raw failed for {self.name}: {e}")
             return None
 
+    def _report_queue_wait(self, data: Dict[str, Any]) -> None:
+        """Pop the enqueue timestamp and publish the queue-wait duration (best-effort).
+
+        Long waits are the visible symptom of bulk ingestion starving interactive
+        queues (#4578); a per-queue histogram makes starvation measurable before it
+        becomes a multi-day incident.
+        """
+        if not isinstance(data, dict):
+            return
+        enqueued_at = data.pop("_ov_enqueued_at", None)
+        if enqueued_at is None:
+            return
+        try:
+            wait_seconds = max(0.0, time.time() - float(enqueued_at))
+        except (TypeError, ValueError):
+            return
+        try:
+            from openviking.observability.events import try_publish_event
+
+            try_publish_event(
+                "queue.wait",
+                {"queue": self.name, "wait_seconds": wait_seconds},
+            )
+        except Exception:  # noqa: BLE001 - observability must never break dequeue
+            logger.debug("[NamedQueue] Failed to publish queue.wait event", exc_info=True)
+
     async def process_dequeued(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Invoke the dequeue handler on already-fetched raw data.
 
         NOTE: caller must call _on_dequeue_start() before invoking this method
         so that in_progress is incremented atomically with the dequeue.
         """
+        self._report_queue_wait(data)
+
         if self._dequeue_handler is None:
             return data
 
