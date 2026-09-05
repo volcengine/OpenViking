@@ -4,7 +4,7 @@
 
 import asyncio
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import AsyncGenerator
 from unittest.mock import AsyncMock
@@ -668,6 +668,35 @@ class TestWatchManager:
 
         assert len(due_tasks) == 1
         assert due_tasks[0].task_id == task1.task_id
+
+    @pytest.mark.asyncio
+    async def test_get_due_tasks_handles_timezone_aware_persisted_times(
+        self,
+    ):
+        """Persisted ISO timestamps may include timezone offsets."""
+        watch_manager = WatchManager()
+        task = WatchTask.from_dict(
+            {
+                "task_id": "aware-due-task",
+                "path": "/test/aware",
+                "watch_interval": 60.0,
+                "created_at": (
+                    datetime.now(timezone.utc) - timedelta(hours=2)
+                ).isoformat(),
+                "last_execution_time": (
+                    datetime.now(timezone.utc) - timedelta(hours=2)
+                ).isoformat(),
+                "next_execution_time": (
+                    datetime.now(timezone.utc) - timedelta(hours=1)
+                ).isoformat(),
+                "is_active": True,
+            }
+        )
+        watch_manager._tasks[task.task_id] = task
+
+        due_tasks = await watch_manager.get_due_tasks()
+
+        assert [due.task_id for due in due_tasks] == ["aware-due-task"]
 
     @pytest.mark.asyncio
     async def test_create_task_with_non_positive_interval_raises(self, watch_manager: WatchManager):
