@@ -6,35 +6,23 @@ from __future__ import annotations
 
 import ipaddress
 import socket
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Optional
 from urllib.parse import urlparse
 
-from openviking.utils.code_hosting_utils import get_configured_code_hosting_domains
+import httpx
+
+from openviking.utils.httpx_transport import PinnedAddressHTTPTransport
 from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.utils.config import get_openviking_config
-from openviking_cli.utils.config.parser_config import CodeHostingConfig
 
-RequestValidator = Callable[[str], None]
+RequestValidationResult = Optional[str | Sequence[str]]
+RequestValidator = Callable[[str], RequestValidationResult]
 
 _LOCAL_HOSTNAMES = {
     "localhost",
     "localhost.localdomain",
 }
-
-
-def _get_allowed_code_hosting_domains() -> set[str]:
-    """Get allowed code hosting domains from config."""
-    try:
-        config = get_openviking_config()
-        if hasattr(config, "code"):
-            return get_configured_code_hosting_domains(config.code)
-    except Exception:
-        pass
-
-    # Derive the fallback from the config object instead of maintaining a
-    # second hard-coded allowlist in the network layer.
-    return get_configured_code_hosting_domains(CodeHostingConfig())
 
 
 def _is_allow_private_networks() -> bool:
@@ -71,21 +59,26 @@ def _normalize_host(host: str) -> str:
     return host.rstrip(".").lower()
 
 
-def _resolve_host_addresses(host: str) -> set[str]:
+def _resolve_host_addresses(host: str) -> tuple[str, ...]:
     try:
         infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
     except (socket.gaierror, UnicodeError, OSError):
-        return set()
+        return ()
 
-    addresses: set[str] = set()
+    addresses: list[str] = []
+    seen: set[str] = set()
     for family, _, _, _, sockaddr in infos:
         if family not in {socket.AF_INET, socket.AF_INET6}:
             continue
         addr = sockaddr[0]
+        if not isinstance(addr, str):
+            continue
         if "%" in addr:
             addr = addr.split("%", 1)[0]
-        addresses.add(addr)
-    return addresses
+        if addr not in seen:
+            addresses.append(addr)
+            seen.add(addr)
+    return tuple(addresses)
 
 
 def _is_public_ip(address: str) -> bool:
@@ -95,12 +88,45 @@ def _is_public_ip(address: str) -> bool:
         return False
 
 
-def ensure_public_remote_target(source: str) -> None:
+def normalize_verified_addresses(
+    verified_addresses: RequestValidationResult,
+) -> Optional[tuple[str, ...]]:
+    """Normalize a validator result while retaining every approved address."""
+    if verified_addresses is None:
+        return None
+
+    candidates = (
+        (verified_addresses,) if isinstance(verified_addresses, str) else tuple(verified_addresses)
+    )
+    if not candidates:
+        raise PermissionDeniedError("The request validator returned no verified addresses.")
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for address in candidates:
+        if not isinstance(address, str):
+            raise PermissionDeniedError(
+                f"The request validator returned invalid address '{address}'."
+            )
+        try:
+            canonical_address = str(ipaddress.ip_address(address))
+        except ValueError as exc:
+            raise PermissionDeniedError(
+                f"The request validator returned invalid address '{address}'."
+            ) from exc
+        if canonical_address not in seen:
+            normalized.append(canonical_address)
+            seen.add(canonical_address)
+    return tuple(normalized)
+
+
+def ensure_public_remote_target(source: str) -> Optional[tuple[str, ...]]:
     """Reject loopback, link-local, private, and other non-public targets.
 
-    Skips validation if:
-    - allow_private_networks is True in config
-    - Host is in any configured code platform domain list
+    Returns every validated address so guarded transports can connect to an
+    address that passed validation without resolving the hostname a second
+    time. Returns ``None`` only when private networks are explicitly enabled
+    in configuration.
     """
     host = extract_remote_host(source)
     if not host:
@@ -117,27 +143,85 @@ def ensure_public_remote_target(source: str) -> None:
 
     # Check if private networks are allowed globally
     if _is_allow_private_networks():
-        return
-
-    # Check if host is in allowed code hosting domains
-    allowed_domains = _get_allowed_code_hosting_domains()
-    normalized_domains = {_normalize_host(d) for d in allowed_domains}
-    if normalized_host in normalized_domains:
-        return
+        return None
 
     resolved_addresses = _resolve_host_addresses(host)
     if not resolved_addresses:
-        return
+        raise PermissionDeniedError(
+            "HTTP server could not resolve the remote resource destination; "
+            "the request was blocked because its network target could not be verified."
+        )
 
     non_public = sorted(addr for addr in resolved_addresses if not _is_public_ip(addr))
     if non_public:
         raise PermissionDeniedError(
             "HTTP server only accepts public remote resource targets; "
             f"host '{host}' resolves to non-public address '{non_public[0]}'. "
-            "To allow this, add the domain to its code.<platform>_domains list "
-            "or code.code_hosting_domains "
-            "or set allow_private_networks=true in your ov.conf."
+            "To allow private destinations, set allow_private_networks=true in your ov.conf."
         )
+    return tuple(resolved_addresses)
+
+
+class ValidatedAsyncHTTPTransport(httpx.AsyncBaseTransport):
+    """Resolve, validate, and pin every HTTP request to the verified address."""
+
+    def __init__(
+        self,
+        request_validator: RequestValidator,
+        *,
+        transport: Optional[httpx.AsyncBaseTransport] = None,
+    ) -> None:
+        self._request_validator = request_validator
+        self._transport = transport
+        self._origin_transports: dict[
+            tuple[str, str, Optional[int], Optional[tuple[str, ...]]],
+            httpx.AsyncBaseTransport,
+        ] = {}
+
+    def _transport_for(
+        self,
+        url: httpx.URL,
+        verified_addresses: Optional[tuple[str, ...]],
+    ) -> httpx.AsyncBaseTransport:
+        if self._transport is not None:
+            return self._transport
+        key = (url.scheme, url.host, url.port, verified_addresses)
+        transport = self._origin_transports.get(key)
+        if transport is None:
+            transport = (
+                httpx.AsyncHTTPTransport()
+                if verified_addresses is None
+                else PinnedAddressHTTPTransport(verified_addresses)
+            )
+            self._origin_transports[key] = transport
+        return transport
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        original_url = request.url
+        verified_addresses = normalize_verified_addresses(
+            self._request_validator(str(original_url))
+        )
+        if verified_addresses is None:
+            transport = self._transport_for(original_url, None)
+            return await transport.handle_async_request(request)
+        transport = self._transport_for(original_url, verified_addresses)
+        return await transport.handle_async_request(request)
+
+    async def aclose(self) -> None:
+        if self._transport is not None:
+            await self._transport.aclose()
+        for transport in self._origin_transports.values():
+            await transport.aclose()
+        self._origin_transports.clear()
+
+
+def build_httpx_secure_transport(
+    request_validator: Optional[RequestValidator],
+) -> Optional[httpx.AsyncBaseTransport]:
+    """Build a transport that pins each validated request, including redirects."""
+    if request_validator is None:
+        return None
+    return ValidatedAsyncHTTPTransport(request_validator)
 
 
 def build_httpx_request_validation_hooks(
