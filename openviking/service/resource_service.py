@@ -427,6 +427,8 @@ class ResourceService:
             elif to:
                 try:
                     await self._handle_watch_task_cancellation(to_uri=to, ctx=ctx)
+                except ConflictError:
+                    raise
                 except Exception as e:
                     logger.warning(
                         f"[ResourceService] Failed to cancel watch task for {to}: {e}"
@@ -1382,6 +1384,16 @@ class ResourceService:
     ) -> Dict[str, Any]:
         """Validate and route one resource ingestion request.
 
+        Watch ownership:
+            Native Watches require an unoccupied resolved target and keep it while
+            paused. Connector Watches may share targets only with other Connector
+            Watches; repeating a source and target creates another independent task.
+            Re-importing never updates or resumes an existing Watch: use
+            PATCH /api/v1/watches/{task_id}, or delete it before creating a replacement.
+            URI lookup is ambiguous when multiple accessible Watches share a target;
+            address those tasks by task_id. Connector Watches are visible before the
+            initial import and held by the scheduler until it records its result.
+
         Args:
             path: Resource path (local file or URL)
             add_type: Explicitly declared Connector source type. Routes the
@@ -1400,20 +1412,11 @@ class ResourceService:
             build_index: Whether to build vector index immediately (default: True)
             summarize: Whether to generate summary (default: False)
             processing_mode: Post-ingest processing mode for semantic/vector work
-            watch_interval: Watch interval in minutes for automatic resource monitoring.
-                - watch_interval > 0: Creates or updates a watch task. The resource will be
-                  automatically re-processed at the specified interval by the scheduler.
-                - watch_interval = 0: No watch task is created. If a watch task exists for
-                  this resource, it will be cancelled (deactivated).
-                - watch_interval < 0: Same as watch_interval = 0, cancels any existing watch task.
-                Default is 0 (no monitoring).
-
-                Note: Re-adding the same source to the same target updates its active watch
-                task in place. A different source targeting an active watch raises
-                ConflictError; cancel that watch first with watch_interval <= 0. Connector
-                imports create the Watch before the import runs, so the conflict is reported
-                at submission and the Watch is visible at once; the scheduler holds it until
-                the first round records its result.
+            watch_interval: Interval in minutes (default: 0). Positive values create
+                a new Watch subject to target ownership rules, using explicit ``to``
+                or the imported ``root_uri``. Nonpositive values create no Watch:
+                native imports with explicit ``to`` pause a single accessible Watch
+                (ConflictError if ambiguous); Connector imports leave Watches untouched.
             is_active: When false, the Connector or native Feishu Watch is created paused.
                 Requires watch_interval > 0 and an explicit to or parent target.
             enforce_public_remote_targets: When True, reject non-public remote hosts and
@@ -1425,7 +1428,7 @@ class ResourceService:
             Processing result containing 'root_uri' and other metadata
 
         Raises:
-            ConflictError: If a different source targets an active watch task
+            ConflictError: Incompatible target occupancy or ambiguous cancellation by URI
             InvalidArgumentError: If the URI scope is not 'resources'
         """
         self._ensure_initialized()
@@ -1642,26 +1645,10 @@ class ResourceService:
                 if on_complete is not None:
                     await on_complete("failed", None, str(exc))
                 raise
-            if not create_watch:
-                await self._manage_watch_if_needed(
-                    watch_manager=watch_manager,
-                    manage_watch=manage_watch,
-                    watch_interval=watch_interval,
-                    to=target_to,
-                    parent=target_parent,
-                    to_is_directory=to_is_directory,
-                    root_uri=target_to,
-                    path=path,
-                    reason=reason,
-                    instruction=instruction,
-                    build_index=build_index,
-                    summarize=summarize,
-                    processing_mode=processing_mode,
-                    processor_kwargs=connector_watch_processor_kwargs,
-                    watch_auth_state=watch_auth_state,
-                    ctx=ctx,
-                    source_type=resolved[0],
-                )
+            # A one-off Connector import (watch_interval <= 0) leaves any watch on the
+            # target alone: many imports share one folder, so the native
+            # "watch_interval=0 cancels the watch" rule would pause it as a side
+            # effect. Connector watches are paused or deleted only via the watches API.
             return result
 
         from openviking.parse.accessors.feishu_accessor import FeishuAccessor
@@ -2088,104 +2075,45 @@ class ResourceService:
         is_active: bool = True,
         hold_execution: bool = False,
     ) -> Optional["WatchTask"]:
-        """Handle creation or update of watch task.
+        """Create the watch task for the resolved target URI.
 
-        Args:
-            path: Resource path to monitor
-            to_uri: Target URI
-            parent_uri: Parent URI
-            reason: Reason for monitoring
-            instruction: Monitoring instruction
-            watch_interval: Monitoring interval in minutes
-            ctx: Request context with user identity
+        Native Watches require an unoccupied target; Connector Watches may share
+        only with other Connector Watches. Paused Watches retain ownership.
+        Callers using ``parent`` pass the root URI resolved after ingestion.
 
         Raises:
-            ConflictError: If target URI is actively watched from a different source
+            ConflictError: If the target URI has an incompatible Watch
         """
         watch_manager = self._get_watch_manager()
         if not watch_manager:
             return None
 
-        existing_task = await watch_manager.get_upsertable_task_by_uri(
+        task = await watch_manager.create_task(
             path=path,
-            to_uri=to_uri,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
-            role=str(ctx.role),
+            original_role=str(ctx.role),
+            source_type=source_type,
+            to_uri=to_uri,
+            to_is_directory=to_is_directory,
+            parent_uri=parent_uri,
+            reason=reason,
+            instruction=instruction,
+            watch_interval=watch_interval,
+            build_index=build_index,
+            summarize=summarize,
+            processing_mode=processing_mode,
+            processor_kwargs=processor_kwargs,
+            auth_state=auth_state,
+            connector_states=connector_states,
+            is_active=is_active,
         )
-        held_task_id: Optional[str] = None
-        try:
-            if existing_task:
-                if hold_execution:
-                    if not await self._hold_watch_execution(existing_task.task_id):
-                        raise ConflictError(
-                            f"Watch task {existing_task.task_id} is already executing. "
-                            "Retry after it finishes.",
-                            resource=to_uri,
-                        )
-                    held_task_id = existing_task.task_id
-                was_active = existing_task.is_active
-                task = await watch_manager.update_task(
-                    task_id=existing_task.task_id,
-                    account_id=ctx.account_id,
-                    user_id=ctx.user.user_id,
-                    role=str(ctx.role),
-                    path=path,
-                    source_type=source_type,
-                    to_uri=to_uri,
-                    to_is_directory=to_is_directory,
-                    parent_uri=parent_uri,
-                    reason=reason,
-                    instruction=instruction,
-                    watch_interval=watch_interval,
-                    build_index=build_index,
-                    summarize=summarize,
-                    processing_mode=processing_mode,
-                    processor_kwargs=processor_kwargs,
-                    auth_state=auth_state,
-                    connector_states=connector_states,
-                    is_active=is_active,
-                )
-                logger.info(
-                    f"[ResourceService] "
-                    f"{'Updated active' if was_active else 'Reactivated and updated'} "
-                    f"watch task {existing_task.task_id} for {to_uri}"
-                )
-            else:
-                task = await watch_manager.create_task(
-                    path=path,
-                    account_id=ctx.account_id,
-                    user_id=ctx.user.user_id,
-                    original_role=str(ctx.role),
-                    source_type=source_type,
-                    to_uri=to_uri,
-                    to_is_directory=to_is_directory,
-                    parent_uri=parent_uri,
-                    reason=reason,
-                    instruction=instruction,
-                    watch_interval=watch_interval,
-                    build_index=build_index,
-                    summarize=summarize,
-                    processing_mode=processing_mode,
-                    processor_kwargs=processor_kwargs,
-                    auth_state=auth_state,
-                    connector_states=connector_states,
-                    is_active=is_active,
-                )
-                if hold_execution:
-                    if not await self._hold_watch_execution(task.task_id):
-                        raise ConflictError(
-                            f"Watch task {task.task_id} is already executing. "
-                            "Retry after it finishes.",
-                            resource=to_uri,
-                        )
-                    held_task_id = task.task_id
-                logger.info(f"[ResourceService] Created watch task {task.task_id} for {to_uri}")
-            return task
-        except BaseException:
-            if held_task_id is not None:
-                await self._release_watch_execution(held_task_id)
-            raise
+        if hold_execution:
+            # Brand-new task: the hold cannot be contended, it just parks the id
+            # until the caller's first round records its result.
+            await self._hold_watch_execution(task.task_id)
+        logger.info(f"[ResourceService] Created watch task {task.task_id} for {to_uri}")
+        return task
 
     async def _handle_watch_task_cancellation(self, to_uri: str, ctx: RequestContext) -> None:
         """Handle cancellation of watch task.

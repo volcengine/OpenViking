@@ -445,7 +445,7 @@ class TestWatchManager:
             to_uri="viking://resources/test",
         )
 
-        with pytest.raises(ConflictError, match="already used by another task"):
+        with pytest.raises(ConflictError, match="already being monitored"):
             await watch_manager.create_task(
                 path="/test/path2",
                 to_uri="viking://resources/test",
@@ -498,7 +498,7 @@ class TestWatchManager:
             to_uri="viking://resources/test2",
         )
 
-        with pytest.raises(ConflictError, match="already used by another task"):
+        with pytest.raises(ConflictError, match="already being monitored"):
             await watch_manager.update_task(
                 task_id=task2.task_id,
                 account_id=TEST_ACCOUNT_ID,
@@ -882,3 +882,128 @@ class TestWatchManagerConcurrency:
 
         final_task = await watch_manager.get_task(task.task_id)
         assert final_task is not None
+
+
+_CONNECTOR_AUTH = {"provider": "connector_encrypted", "ciphertext": "unused"}
+
+
+class TestSharedConnectorTargets:
+    """Connector watches may share a target; native watches are exclusive."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("with_connector", [False, True])
+    @pytest.mark.parametrize("operation", ["create", "update", "rewrite"])
+    async def test_missing_indexed_task_blocks_target_sharing(
+        self, watch_manager_no_fs: WatchManager, with_connector: bool, operation: str
+    ):
+        manager = watch_manager_no_fs
+        target = "viking://resources/shared"
+        source = "viking://resources/source"
+        if with_connector:
+            await manager.create_task(
+                path="tos://bucket/existing/", to_uri=target, auth_state=dict(_CONNECTOR_AUTH)
+            )
+        moving = await manager.create_task(
+            path="tos://bucket/moving/", to_uri=source, auth_state=dict(_CONNECTOR_AUTH)
+        )
+        manager._index_add(TEST_ACCOUNT_ID, target, "missing-task")
+        original_index = {key: set(ids) for key, ids in manager._uri_to_task.items()}
+        original_tasks = set(manager._tasks)
+
+        with pytest.raises(ConflictError, match="already being monitored"):
+            if operation == "create":
+                await manager.create_task(
+                    path="tos://bucket/new/", to_uri=target, auth_state=dict(_CONNECTOR_AUTH)
+                )
+            elif operation == "update":
+                await manager.update_task(
+                    moving.task_id, TEST_ACCOUNT_ID, TEST_USER_ID, TEST_ROLE, to_uri=target
+                )
+            else:
+                await manager.rewrite_target_prefix_internal(source, target, TEST_ACCOUNT_ID)
+
+        assert manager._uri_to_task == original_index
+        assert set(manager._tasks) == original_tasks
+        assert moving.to_uri == source
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("user_id", "role", "visible_indexes"),
+        [
+            ("carol", "user", ()),
+            ("bob", "user", (2,)),
+            ("alice", "user", (0, 1)),
+            ("bob", "admin", (0, 1, 2)),
+            ("bob", "root", (0, 1, 2)),
+        ],
+    )
+    async def test_uri_lookup_only_considers_visible_tasks(
+        self, watch_manager_no_fs: WatchManager, user_id, role, visible_indexes
+    ):
+        manager = watch_manager_no_fs
+        to_uri = "viking://resources/shared"
+        tasks = []
+        for index, owner in enumerate(("alice", "alice", "bob")):
+            tasks.append(
+                await manager.create_task(
+                    path=f"tos://bucket/{index}/",
+                    user_id=owner,
+                    to_uri=to_uri,
+                    auth_state=dict(_CONNECTOR_AUTH),
+                )
+            )
+
+        if len(visible_indexes) > 1:
+            with pytest.raises(
+                ConflictError, match=f"has {len(visible_indexes)} watch tasks"
+            ) as exc_info:
+                await manager.get_task_by_uri(to_uri, TEST_ACCOUNT_ID, user_id, role)
+            for index, task in enumerate(tasks):
+                assert (task.task_id in str(exc_info.value)) == (index in visible_indexes)
+        else:
+            task = await manager.get_task_by_uri(to_uri, TEST_ACCOUNT_ID, user_id, role)
+            assert task is (tasks[visible_indexes[0]] if visible_indexes else None)
+
+    @pytest.mark.asyncio
+    async def test_connector_watches_coexist_and_native_is_refused(
+        self, watch_manager: WatchManager
+    ):
+        to_uri = "viking://resources/shared"
+        first = await watch_manager.create_task(
+            path="tos://bucket/a/",
+            to_uri=to_uri,
+            watch_interval=5,
+            auth_state=dict(_CONNECTOR_AUTH),
+        )
+        second = await watch_manager.create_task(
+            path="tos://bucket/b/",
+            to_uri=to_uri,
+            watch_interval=5,
+            auth_state=dict(_CONNECTOR_AUTH),
+        )
+        assert first.task_id != second.task_id
+
+        with pytest.raises(ConflictError, match="already being monitored"):
+            await watch_manager.create_task(path="/local/doc", to_uri=to_uri, watch_interval=5)
+
+        # Removing one Connector watch keeps the other addressable by URI again.
+        await watch_manager.delete_task(
+            first.task_id, account_id="default", user_id="default", role="user"
+        )
+        remaining = await watch_manager.get_task_by_uri(
+            to_uri, account_id="default", user_id="default", role="user"
+        )
+        assert remaining is not None
+        assert remaining.task_id == second.task_id
+
+    @pytest.mark.asyncio
+    async def test_native_watch_blocks_connector_watch(self, watch_manager: WatchManager):
+        to_uri = "viking://resources/native"
+        await watch_manager.create_task(path="/local/doc", to_uri=to_uri, watch_interval=5)
+        with pytest.raises(ConflictError, match="already being monitored"):
+            await watch_manager.create_task(
+                path="tos://bucket/a/",
+                to_uri=to_uri,
+                watch_interval=5,
+                auth_state=dict(_CONNECTOR_AUTH),
+            )

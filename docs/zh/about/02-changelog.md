@@ -5,6 +5,14 @@ OpenViking 的所有重要变更都将记录在此文件中。
 
 ## 未发布
 
+- **Watch API 迁移（不兼容变更）**：使用 `watch_interval > 0` 重新导入不再更新或恢复已有 Watch。
+  原生 Watch 暂停后仍独占目标，不兼容的目标复用返回 `409 Conflict`。
+  依赖重新导入来更新 Watch 的脚本应改用 `PATCH /api/v1/watches/{task_id}`
+  （恢复时设置 `is_active: true`），或先删除旧 Watch 再创建替代任务。
+  Connector Watch 可共享目标，但重复导入相同来源和目标会创建新的独立 Watch，重试并不幂等。
+  共享目标应通过任务 ID 管理；按 URI 查询多个可访问的 Watch 时返回 409。
+  一次性 Connector 导入（`watch_interval <= 0`）不影响已有 Watch，暂停或删除请使用 watches API。
+  详见[资源任务管理](../api/02-resources.md#任务管理操作)。
 - **Session policy 兼容性**：字符串 `"false"` 现在会正确关闭对应的记忆抽取开关。
   现有 boolean-like 值暂时保持兼容并产生弃用警告；新配置应使用 JSON 布尔值。
 - **外部 peer identity 迁移**：日志导入中的混合文字标识改用无损的

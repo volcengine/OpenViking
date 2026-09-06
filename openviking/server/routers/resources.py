@@ -66,20 +66,11 @@ class AddResourceRequest(BaseModel):
             pass {"feishu_access_token": "..."}. For Feishu user-token watches,
             also pass "feishu_refresh_token". The optional "feishu_app_id" and
             "feishu_app_secret" pair overrides the server app for that watch.
-        watch_interval: Watch interval in minutes for automatic resource monitoring.
-            - watch_interval > 0: Creates or updates a watch task. The resource will be
-              automatically re-processed at the specified interval.
-            - watch_interval = 0: No watch task is created. If a watch task exists for
-              this resource, it will be cancelled (deactivated).
-            - watch_interval < 0: Same as watch_interval = 0, cancels any existing watch task.
-            Default is 0 (no monitoring).
-
-            Note: Re-adding the same source to the same target updates its active watch task.
-            A different source targeting an active watch raises ConflictError; cancel that
-            watch first with watch_interval <= 0. Connector imports create the Watch before
-            the import runs, so it is visible immediately and the conflict is reported at
-            submission; the scheduler does not run it until the first round has recorded
-            its result.
+        watch_interval: Interval in minutes (default: 0). Positive values create a new
+            Watch using explicit ``to`` or the imported ``root_uri``. Nonpositive values
+            create no Watch: native imports with explicit ``to`` pause a single accessible
+            Watch (409 if ambiguous); Connector imports leave Watches untouched.
+            See the endpoint's Watch ownership rules.
         is_active: Initial Watch state for Connector and native Feishu imports. When false,
             requires watch_interval > 0 and an explicit to or parent target and creates the Watch
             paused; it stays paused until updated, regardless of the import result.
@@ -233,7 +224,16 @@ async def add_resource(
     request: AddResourceRequest,
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Add resource to OpenViking."""
+    """Add resource to OpenViking.
+
+    Native Watches require an unoccupied resolved target and keep it while paused.
+    Connector Watches may share targets only with other Connector Watches; repeating
+    a source and target creates another independent task. Re-importing never updates
+    or resumes a Watch: use PATCH /api/v1/watches/{task_id}, or delete it first.
+    URI lookups return 409 for multiple accessible Watches; address them by task_id.
+    Connector Watches are visible before the initial import and held by the scheduler
+    until that import records its result.
+    """
     service = get_service()
     to_uri = resolve_path_variables(request.to).strip() if request.to else ""
     if to_uri:
@@ -373,6 +373,7 @@ async def add_skill(
             source_metadata["original_filename"] = resolved.original_filename
 
     source_path_hint = resolved.original_filename if resolved else None
+
     async def _add() -> dict[str, Any]:
         try:
             result = await service.resources.add_skill(
