@@ -13,6 +13,7 @@ import traceback
 from typing import Any, Dict, Optional, Set, Union
 
 from openviking.service.task_work_index import TaskWorkIndex
+from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking_cli.utils.logger import get_logger
 
 from .embedding_queue import EmbeddingQueue
@@ -244,7 +245,13 @@ class QueueManager:
                         traceback.print_exc()
                         stop_event.wait(poll_interval)
         finally:
-            loop.close()
+            try:
+                loop.run_until_complete(LoopScopedAsyncClientCache.close_current_loop_clients())
+            except Exception:
+                logger.exception("[QueueManager] Failed to close worker-loop async clients")
+            finally:
+                asyncio.set_event_loop(None)
+                loop.close()
 
     async def _worker_async_concurrent(
         self, queue: NamedQueue, stop_event: threading.Event, max_concurrent: int

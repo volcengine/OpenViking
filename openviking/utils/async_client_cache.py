@@ -28,6 +28,14 @@ def _aclose_client(client: AsyncCloseable) -> Any:
     return client.aclose()
 
 
+def _close_async_client(client: Any) -> Any:
+    """Prefer an async close method for a client owned by a running loop."""
+    close = getattr(client, "aclose", None)
+    if close is None:
+        close = getattr(client, "close", None)
+    return close() if close is not None else None
+
+
 class LoopScopedAsyncClientCache:
     """Cache async clients per running event loop.
 
@@ -36,12 +44,17 @@ class LoopScopedAsyncClientCache:
     across worker threads with separate event loops can then fail at runtime.
     """
 
+    _instances: weakref.WeakSet[LoopScopedAsyncClientCache] = weakref.WeakSet()
+    _instances_lock = threading.Lock()
+
     def __init__(self) -> None:
         self._clients_by_loop: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, Any] = (
             weakref.WeakKeyDictionary()
         )
         self._fallback_client: Any = None
         self._lock = threading.Lock()
+        with self._instances_lock:
+            self._instances.add(self)
 
     def __copy__(self) -> LoopScopedAsyncClientCache:
         """Return an empty cache instead of sharing live async clients."""
@@ -88,6 +101,12 @@ class LoopScopedAsyncClientCache:
                 self._fallback_client = None
             return clients
 
+    def pop_for_loop(self, loop: asyncio.AbstractEventLoop) -> list[Any]:
+        """Remove and return the client owned by ``loop``, if one exists."""
+        with self._lock:
+            client = self._clients_by_loop.pop(loop, None)
+            return [] if client is None else [client]
+
     @staticmethod
     async def _close_clients(clients: list[Any], close_client: Callable[[Any], Any]) -> None:
         seen: set[int] = set()
@@ -100,6 +119,15 @@ class LoopScopedAsyncClientCache:
             result = close_client(client)
             if inspect.isawaitable(result):
                 await result
+
+    @classmethod
+    async def close_current_loop_clients(cls) -> None:
+        """Close every cached client owned by the current event loop."""
+        loop = asyncio.get_running_loop()
+        with cls._instances_lock:
+            caches = list(cls._instances)
+        clients = [client for cache in caches for client in cache.pop_for_loop(loop)]
+        await cls._close_clients(clients, _close_async_client)
 
     def close_all(self, close_client: Callable[[Any], Any]) -> None:
         """Close and clear all cached clients on a best-effort basis."""

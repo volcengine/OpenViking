@@ -59,3 +59,34 @@ def test_loop_scoped_async_client_cache_copies_without_live_clients():
     assert cache.has_clients()
     assert not shallow.has_clients()
     assert not deep.has_clients()
+
+
+def test_close_current_loop_clients_closes_only_clients_owned_by_that_loop():
+    cache = LoopScopedAsyncClientCache()
+    closed = []
+
+    class Client:
+        async def aclose(self):
+            closed.append(threading.get_ident())
+
+    async def get_client():
+        return cache.get(Client)
+
+    async def get_and_close_current_loop():
+        cache.get(Client)
+        await LoopScopedAsyncClientCache.close_current_loop_clients()
+
+    retained_loop = asyncio.new_event_loop()
+    closing_loop = asyncio.new_event_loop()
+    try:
+        retained_loop.run_until_complete(get_client())
+        closing_loop.run_until_complete(get_and_close_current_loop())
+
+        assert closed == [threading.get_ident()]
+        assert cache.has_clients()
+
+        retained_loop.run_until_complete(LoopScopedAsyncClientCache.close_current_loop_clients())
+        assert not cache.has_clients()
+    finally:
+        retained_loop.close()
+        closing_loop.close()
