@@ -68,11 +68,13 @@ export type MemoryOpenVikingConfig = {
    * compatibility). Set to 0 to commit every turn.
    */
   commitTokenThresholdRatio?: number;
+  /** Auto-commit retention: legacy message count (default) or the server's turn-budget policy. */
+  commitRetentionMode?: "message_count" | "turn_budget";
   /**
    * WM v2: number of most-recent messages to keep live after an afterTurn
    * commit so the next turn still has immediate context. Forwarded to the
-   * server as `keep_recent_count`. Default 10. The compact path ignores this
-   * value and always passes 0.
+   * server as `keep_recent_count`. Default 10. Ignored in turn_budget mode.
+   * The compact path ignores this value and always passes 0.
    */
   commitKeepRecentCount?: number;
   bypassSessionPatterns?: string[];
@@ -538,6 +540,7 @@ export const memoryOpenVikingConfigSchema = {
         "recallTokenBudget",
         "commitTokenThreshold",
         "commitTokenThresholdRatio",
+        "commitRetentionMode",
         "commitKeepRecentCount",
         "bypassSessionPatterns",
         "ingestReplyAssist",
@@ -588,6 +591,14 @@ export const memoryOpenVikingConfigSchema = {
         ? (cfg.apiKey as string | OpenVikingSecretRef)
         : getEnv("OPENVIKING_API_KEY") || undefined;
     const captureMode = cfg.captureMode;
+    const commitRetentionMode = cfg.commitRetentionMode;
+    if (
+      commitRetentionMode !== undefined &&
+      commitRetentionMode !== "message_count" &&
+      commitRetentionMode !== "turn_budget"
+    ) {
+      throw new Error('openviking commitRetentionMode must be "message_count" or "turn_budget"');
+    }
     if (
       typeof captureMode !== "undefined" &&
       captureMode !== "semantic" &&
@@ -666,6 +677,7 @@ export const memoryOpenVikingConfigSchema = {
         0,
         Math.min(1, toNumber(cfg.commitTokenThresholdRatio, DEFAULT_COMMIT_TOKEN_THRESHOLD_RATIO)),
       ),
+      commitRetentionMode: commitRetentionMode ?? "message_count",
       commitKeepRecentCount: Math.max(
         0,
         Math.min(
@@ -916,13 +928,18 @@ export const memoryOpenVikingConfigSchema = {
       advanced: true,
       help: "Auto-commit triggers once estimated pending tokens reach this fraction (0-1) of the model context window (e.g. 0.5 = 50%). Set to 0 to commit every turn.",
     },
+    commitRetentionMode: {
+      label: "Commit Retention Mode",
+      advanced: true,
+      help: "Auto-commit only: message_count (default) keeps recent messages; turn_budget uses the server's turn-aware defaults. Manual commit and compact still archive everything.",
+    },
     commitKeepRecentCount: {
       label: "Commit Keep Recent Count",
       placeholder: String(DEFAULT_COMMIT_KEEP_RECENT_COUNT),
       advanced: true,
       help:
         "Number of most-recent messages to keep live after an afterTurn commit. " +
-        "Forwarded as keep_recent_count to the server. Compact path always uses 0.",
+        "Forwarded as keep_recent_count to the server in message_count mode; ignored in turn_budget mode. Compact path always uses 0.",
     },
     emitStandardDiagnostics: {
       label: "Standard diagnostics (diag JSON lines)",

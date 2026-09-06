@@ -244,6 +244,14 @@ preflight 阶段的 `assemble()` 并不是简单地把旧聊天记录塞回来�
 
 这条自动路径是 best-effort，并且依赖 commit。短但重要的事实可能会先停留在 live session 里，直到阈值 commit、`/compact` 或显式存储发生后，才进入长期记忆抽取流程。
 
+自动 commit 默认保留最近 10 条消息（`commitKeepRecentCount`），这个按条数切分的窗口可能从一轮对话中间开始。如果服务端支持按轮保留，可在插件配置中设置 `"commitRetentionMode": "turn_budget"` 来启用：
+
+- 忽略 `commitKeepRecentCount`，采用服务端默认值：最多保留最近 3 轮用户对话、12,000 Token 保留预算，以及至少最后一个 assistant/tool 步骤。
+- 最新一轮过长时，服务端保留用户问题与最近步骤，将更早的步骤归档并生成检查点；必须保留的尾部可能超过保留预算。
+- `pending_tokens` 只计算将离开活跃窗口的消息，不重复计入归档与活跃窗口共有的用户问题。
+
+手动 commit 和 `/compact` 仍然全部归档。不设置该选项（或使用 `"message_count"`）即可保持原有行为。
+
 ### 显式长期记忆写入
 
 当用户明确要求 Agent “记住”“保存”“存一下”某个重要长期事实、偏好、项目或决定时，应优先使用 `memory_store`，而不是等待普通 auto-capture 自然触发。`memory_store` 会把文本写入 OpenViking session 并调用 `commit(wait=true)`，因此是集成侧让重要事实尽快进入长期记忆的可靠路径。
