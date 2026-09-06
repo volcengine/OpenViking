@@ -169,7 +169,12 @@ class CronService:
             ],
         }
 
-        self.store_path.write_text(json.dumps(data, indent=2))
+        temporary = self.store_path.with_name(f".{self.store_path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            temporary.write_text(json.dumps(data, indent=2))
+            temporary.replace(self.store_path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     async def start(self) -> None:
         """Start the cron service."""
