@@ -4,7 +4,7 @@
 Tests for memory ExtractLoop orchestrator.
 """
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import BaseModel, Field
@@ -503,3 +503,82 @@ class TestExtractLoopFinalJsonRetry:
         assert "only if every substantive fact is in scope" in initial_system_prompt
         assert "otherwise MUST use DELETE blocks" in initial_system_prompt
         assert "not inferring scope from the file name/topic" in initial_system_prompt
+
+    @pytest.mark.asyncio
+    async def test_exhaustion_warns_with_failure_kind_and_short_tracer(self):
+        """Lock #4486 visibility: full warning + short tracer breadcrumb on exhaustion."""
+
+        class FakeVLM:
+            model = "test-model"
+
+            async def get_completion_async(self, **kwargs):
+                return "this is not json"
+
+        class FakeContextProvider:
+            read_file_contents = {}
+
+            def get_memory_schemas(self, ctx):
+                return [
+                    MemoryTypeSchema(
+                        memory_type="preferences",
+                        description="Preferences",
+                        directory="viking://user/{user_space}/memories/preferences",
+                        filename_template="{topic}.md",
+                        fields=[],
+                    )
+                ]
+
+            def get_tools(self):
+                return []
+
+            def get_extract_context(self):
+                return MagicMock()
+
+            def get_output_language(self):
+                return "en"
+
+            def instruction(self):
+                return "Extract memory operations."
+
+            async def prefetch(self):
+                return []
+
+        extract_loop = ExtractLoop(
+            vlm=FakeVLM(),
+            viking_fs=MagicMock(),
+            context_provider=FakeContextProvider(),
+            max_iterations=1,
+        )
+
+        with (
+            patch("openviking.session.memory.extract_loop.logger") as mock_logger,
+            patch("openviking.session.memory.extract_loop.tracer") as mock_tracer,
+        ):
+            result, _ = await extract_loop.run()
+
+        assert result is not None
+        assert result.errors
+        assert any("failure_kind=" in err for err in result.errors)
+
+        warning_msgs = [
+            str(call.args[0]) for call in mock_logger.warning.call_args_list if call.args
+        ]
+        assert any(
+            "after" in msg
+            and "iterations" in msg
+            and "failure_kind=" in msg
+            and "response_preview=" in msg
+            for msg in warning_msgs
+        ), warning_msgs
+
+        tracer_error_msgs = [
+            str(call.args[0]) for call in mock_tracer.error.call_args_list if call.args
+        ]
+        exhaustion_breadcrumbs = [
+            msg
+            for msg in tracer_error_msgs
+            if "exhausted iterations without parseable operations" in msg
+        ]
+        assert exhaustion_breadcrumbs
+        assert all("response_preview=" not in msg for msg in exhaustion_breadcrumbs)
+        assert all("failure_kind=" in msg for msg in exhaustion_breadcrumbs)

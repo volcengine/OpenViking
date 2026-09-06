@@ -719,6 +719,12 @@ class SessionCompressorV3:
             tracer.info("[v3_patch_merge] No memory operations generated")
             return _V3ExtractionResult()
 
+        if operations.has_errors():
+            logger.warning(
+                "Memory extraction completed with errors (may look like Extracted 0): %s",
+                operations.errors,
+            )
+
         # Attach caller-provided custom scalar tags to event memories so they
         # ride the same first write into the vector index (人填标量).
         _apply_event_search_tags(operations, event_search_tags)
