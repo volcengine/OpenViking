@@ -21,6 +21,8 @@ class SessionCommitMsg:
     # Resolved custom scalar tags to attach to event memories extracted in this
     # commit. Already normalized by the producer; empty means "no tags".
     event_search_tags: List[str] = field(default_factory=list)
+    # Number of queue-level retries after a recoverable Phase 2 failure.
+    phase2_retry_count: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

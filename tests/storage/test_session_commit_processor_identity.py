@@ -11,7 +11,7 @@ worker binds the committing account/user (so tokens are not attributed to
 import asyncio
 import concurrent.futures
 import json
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 from openviking.observability.context import get_root_observability_context
 from openviking.server.identity import RequestContext, Role
@@ -106,12 +106,61 @@ async def test_process_requeues_deferred_commit_and_resets_root_context(monkeypa
         "openviking.storage.queuefs.get_queue_manager",
         lambda: _QueueManager(),
     )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.session_commit_processor.asyncio.sleep",
+        AsyncMock(),
+    )
     ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
     await processor._process(_make_msg(), ctx)
 
-    assert queued == [("SessionCommit", _make_msg().to_dict())]
+    expected = _make_msg().to_dict()
+    expected["phase2_retry_count"] = 1
+    assert queued == [("SessionCommit", expected)]
     assert get_root_observability_context() is None
+
+
+async def test_process_retries_phase2_then_completes_without_restart(monkeypatch):
+    queued = []
+    outcomes = iter([False, True])
+    files: dict[str, str] = {}
+
+    class _RetrySession(_FakeSession):
+        async def resume_queued_commit(self, msg):
+            self._processed = next(outcomes)
+            processed = await super().resume_queued_commit(msg)
+            if processed:
+                files[f"{msg.archive_uri}/.done"] = "completed"
+            return processed
+
+    class _RetryService(_FakeSessionService):
+        def session(self, ctx, session_id, session_uri=None):
+            return _RetrySession({}, processed=True)
+
+    class _QueueManager:
+        async def enqueue(self, queue_name, data):
+            queued.append((queue_name, data))
+
+    processor = SessionCommitProcessor(_RetryService({}), asyncio.get_running_loop())
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: _QueueManager(),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.session_commit_processor.asyncio.sleep",
+        AsyncMock(),
+    )
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+
+    first = await processor._process(_make_msg(), ctx)
+    assert first is False
+    assert queued[0][1]["phase2_retry_count"] == 1
+
+    retry_msg = SessionCommitMsg.from_dict(queued[0][1])
+    second = await processor._process(retry_msg, ctx)
+    assert second is True
+    assert len(queued) == 1
+    assert files[f"{retry_msg.archive_uri}/.done"] == "completed"
 
 
 async def test_cancelled_queued_commit_writes_terminal_marker_before_success(monkeypatch):

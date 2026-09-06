@@ -18,9 +18,14 @@ from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
 from openviking.telemetry.span_models import create_root_span_attributes
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from openviking.service.session_service import SessionService
+
+
+MAX_PHASE2_RETRIES = 3
+logger = get_logger(__name__)
 
 
 class SessionCommitProcessor(DequeueHandlerBase):
@@ -86,11 +91,22 @@ class SessionCommitProcessor(DequeueHandlerBase):
             with bind_task_context(msg.task_id, ctx.account_id, ctx.user.user_id):
                 processed = await session.resume_queued_commit(msg)
             if not processed:
+                if msg.phase2_retry_count >= MAX_PHASE2_RETRIES:
+                    error = (
+                        f"session commit Phase 2 failed after {MAX_PHASE2_RETRIES} retries"
+                    )
+                    await session.finalize_failed_commit(msg.archive_uri, error=error)
+                    logger.error("%s: %s", error, msg.archive_uri)
+                    return True
                 from openviking.storage.queuefs import QueueManager, get_queue_manager
 
+                retry_payload = msg.to_dict()
+                retry_payload["phase2_retry_count"] = msg.phase2_retry_count + 1
+                retry_delay = min(2 ** msg.phase2_retry_count, 30)
+                await asyncio.sleep(retry_delay)
                 await get_queue_manager().enqueue(
                     QueueManager.SESSION_COMMIT,
-                    msg.to_dict(),
+                    retry_payload,
                 )
                 self.report_requeue()
             return processed
