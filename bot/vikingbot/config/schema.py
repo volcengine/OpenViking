@@ -466,6 +466,11 @@ class AgentsConfig(BaseModel):
     )
     max_tool_iterations: int = 50
     memory_window: int = 50
+    message_max_concurrency: int = Field(
+        default=4,
+        ge=1,
+        description="Maximum number of inbound messages processed at once.",
+    )
     subagent_enabled: bool = Field(
         default=True,
         description="Enable the spawn tool so the main agent can start background subagents.",

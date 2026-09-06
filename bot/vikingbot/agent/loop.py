@@ -419,6 +419,13 @@ class AgentLoop:
         )
 
         self._running = False
+        message_max_concurrency = getattr(
+            getattr(config, "agents", None), "message_max_concurrency", 4
+        )
+        self._message_semaphore = asyncio.Semaphore(message_max_concurrency)
+        self._message_tasks: set[asyncio.Task] = set()
+        self._session_locks: dict[SessionKey, asyncio.Lock] = {}
+        self._session_lock_users: dict[SessionKey, int] = {}
         self._mcp_servers = mcp_servers or {}
         self._mcp_stack: AsyncExitStack | None = None
         self._mcp_connected = False
@@ -1108,34 +1115,68 @@ class AgentLoop:
             await self.sessions.save(session)
         return True
 
+    async def _process_queued_message(
+        self, msg: InboundMessage, session_lock: asyncio.Lock
+    ) -> None:
+        try:
+            async with session_lock:
+                async with self._message_semaphore:
+                    try:
+                        response = await self._process_message(msg)
+                        if response:
+                            await self.bus.publish_outbound(response)
+                    except Exception as e:
+                        logger.exception(f"Error processing message: {e}")
+                        try:
+                            await self.bus.publish_outbound(
+                                OutboundMessage(
+                                    session_key=msg.session_key,
+                                    content=f"Sorry, I encountered an error: {str(e)}",
+                                    metadata=msg.metadata,
+                                )
+                            )
+                        except Exception as publish_error:
+                            logger.exception(
+                                f"Error publishing failure response: {publish_error}"
+                            )
+        finally:
+            users = self._session_lock_users[msg.session_key] - 1
+            if users:
+                self._session_lock_users[msg.session_key] = users
+            else:
+                self._session_lock_users.pop(msg.session_key)
+                self._session_locks.pop(msg.session_key)
+
     async def run(self) -> None:
-        """Run the agent loop, processing messages from the bus."""
+        """Run the agent loop, processing independent sessions concurrently."""
         self._running = True
         await self._connect_mcp()
         logger.info("Agent loop started")
 
-        while self._running:
-            try:
-                # Wait for next message
-                msg = await asyncio.wait_for(self.bus.consume_inbound(), timeout=1.0)
-
-                # Process it
+        try:
+            while self._running:
                 try:
-                    response = await self._process_message(msg)
-                    if response:
-                        await self.bus.publish_outbound(response)
-                except Exception as e:
-                    logger.exception(f"Error processing message: {e}")
-                    # Send error response
-                    await self.bus.publish_outbound(
-                        OutboundMessage(
-                            session_key=msg.session_key,
-                            content=f"Sorry, I encountered an error: {str(e)}",
-                            metadata=msg.metadata,
-                        )
-                    )
-            except asyncio.TimeoutError:
-                continue
+                    msg = await asyncio.wait_for(self.bus.consume_inbound(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    continue
+
+                if not self._running:
+                    await self.bus.publish_inbound(msg)
+                    break
+
+                session_lock = self._session_locks.setdefault(
+                    msg.session_key, asyncio.Lock()
+                )
+                self._session_lock_users[msg.session_key] = (
+                    self._session_lock_users.get(msg.session_key, 0) + 1
+                )
+                task = asyncio.create_task(self._process_queued_message(msg, session_lock))
+                self._message_tasks.add(task)
+                task.add_done_callback(self._message_tasks.discard)
+        finally:
+            self._running = False
+            if self._message_tasks:
+                await asyncio.gather(*self._message_tasks)
 
     def stop(self) -> None:
         """Stop the agent loop."""
