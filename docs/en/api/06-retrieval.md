@@ -398,7 +398,7 @@ The `search()` method adds session context understanding and intent analysis cap
 | context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
 | tags | List[str] | No | None | Explicit retrieval tags in strict `k=v` form (lowercase letters/digits/`_`/`-`/`.`, starting with a letter or digit, key<=64, value<=128). Multiple tags are combined with AND; a result must contain every requested tag |
 | node_limit | int | No | None | Maximum number of results |
-| score_threshold | float | No | None | Minimum relevance score threshold |
+| score_threshold | float | No | None | Minimum retrieval relevance score, applied before optional hotness blending. When hotness weighting is applied, the returned `score` is the blended ranking score and may be lower than this threshold |
 | filter | Dict | No | None | Metadata filter |
 | since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--after` maps to this field |
 | until | str | No | None | Upper time bound, accepts `30m` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--before` maps to this field |
