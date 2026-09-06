@@ -5,6 +5,16 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 
 ## Unreleased
 
+- **Watch API migration (breaking change)**: Re-importing with `watch_interval > 0`
+  no longer updates or reactivates an existing Watch. Native Watches retain exclusive
+  ownership while paused, and incompatible target reuse returns `409 Conflict`.
+  Replace scripts that re-import to update a Watch with `PATCH /api/v1/watches/{task_id}`
+  (use `is_active: true` to resume), or delete the old Watch before creating its replacement.
+  Connector Watches may share targets; repeating the same source and target creates a new
+  independent Watch, so retries are not idempotent. Use task IDs to manage shared targets;
+  URI lookups with multiple accessible Watches return 409. One-off Connector imports
+  (`watch_interval <= 0`) leave existing Watches untouched; pause or delete them through
+  the watches API. See [resource task management](../api/02-resources.md#task-management-operations).
 - **Session policy compatibility**: String `"false"` memory-policy switches now disable
   extraction correctly. Existing boolean-like values remain temporarily compatible and
   emit deprecation warnings; use JSON booleans for new configurations.

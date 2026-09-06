@@ -406,10 +406,10 @@ class WatchManager:
         return ConnectorDelegate.is_watch_auth_state(auth_state)
 
     def _all_connector_tasks(self, task_ids: set[str]) -> bool:
+        if not task_ids or not task_ids <= self._tasks.keys():
+            return False
         return all(
-            self._is_connector_auth_state(self._tasks[task_id].auth_state)
-            for task_id in task_ids
-            if task_id in self._tasks
+            self._is_connector_auth_state(self._tasks[task_id].auth_state) for task_id in task_ids
         )
 
     def _blocking_task_ids(
@@ -477,8 +477,8 @@ class WatchManager:
                     # The target URI is the watch identity; only Connector watches
                     # may share one, and never with a native watch.
                     raise ConflictError(
-                        f"Target URI '{to_uri}' is already being monitored by task "
-                        f"{', '.join(sorted(blocking))}. Delete or update that watch first.",
+                        f"Target URI '{to_uri}' is already being monitored by an incompatible watch. "
+                        "Delete the conflicting watch or choose another target.",
                         resource=to_uri,
                     )
 
@@ -614,7 +614,8 @@ class WatchManager:
             auth_state=task.auth_state if auth_state is _UNSET else auth_state,
         ):
             raise ConflictError(
-                f"Target URI '{to_uri}' is already used by another task",
+                f"Target URI '{to_uri}' is already being monitored by an incompatible watch. "
+                "Delete the conflicting watch or choose another target.",
                 resource=to_uri,
             )
 
@@ -764,7 +765,8 @@ class WatchManager:
             occupants = (self._index_get(account_id, target_uri) - moving_task_ids) | movers
             if len(occupants) > 1 and not self._all_connector_tasks(occupants):
                 raise ConflictError(
-                    f"Target URI '{target_uri}' is already used by another task",
+                    f"Target URI '{target_uri}' is already being monitored by an incompatible watch. "
+                    "Delete the conflicting watch or choose another target.",
                     resource=target_uri,
                 )
         return plan

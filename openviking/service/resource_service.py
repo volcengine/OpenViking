@@ -432,6 +432,8 @@ class ResourceService:
             elif to:
                 try:
                     await self._handle_watch_task_cancellation(to_uri=to, ctx=ctx)
+                except ConflictError:
+                    raise
                 except Exception as e:
                     logger.warning(f"[ResourceService] Failed to cancel watch task for {to}: {e}")
 
@@ -1474,6 +1476,16 @@ class ResourceService:
     ) -> Dict[str, Any]:
         """Validate and route one resource ingestion request.
 
+        Watch ownership:
+            Native Watches require an unoccupied resolved target and keep it while
+            paused. Connector Watches may share targets only with other Connector
+            Watches; repeating a source and target creates another independent task.
+            Re-importing never updates or resumes an existing Watch: use
+            PATCH /api/v1/watches/{task_id}, or delete it before creating a replacement.
+            URI lookup is ambiguous when multiple accessible Watches share a target;
+            address those tasks by task_id. Connector Watches are visible before the
+            initial import and held by the scheduler until it records its result.
+
         Args:
             path: Resource path (local file or URL)
             add_type: Explicitly declared Connector source type. Routes the
@@ -1498,28 +1510,11 @@ class ResourceService:
             build_index: Whether to build vector index immediately (default: True)
             summarize: Whether to generate summary (default: False)
             processing_mode: Post-ingest processing mode for semantic/vector work
-            watch_interval: Watch interval in minutes for automatic resource monitoring.
-                - watch_interval > 0: Creates or updates a watch task. The resource will be
-                  automatically re-processed at the specified interval by the scheduler.
-                - watch_interval = 0: No watch task is created. If a watch task exists for
-                  this resource, it will be cancelled (deactivated).
-                - watch_interval < 0: Same as watch_interval = 0, cancels any existing watch task.
-                Default is 0 (no monitoring).
-
-                Note: The resolved target URI is the watch identity. A native watch owns
-                its target alone: any existing watch there, active or paused, rejects a
-                new native import with ConflictError; change or reactivate it through the
-                watches API, or delete it. Connector watches lay their files out under
-                the target themselves, so several Connector watches may share one target
-                (never with a native watch); a shared target must then be addressed by
-                task_id rather than by URI. The same source imported into a different
-                target gets its own watch. With ``parent`` the target is resolved after
-                the import. A Connector import without
-                watch_interval never pauses a watch already on its target (the native
-                watch_interval <= 0 cancel rule does not apply). Connector imports create the Watch before the
-                import runs, so the conflict is reported at submission and the Watch is
-                visible at once; the scheduler holds it until the first round records its
-                result.
+            watch_interval: Interval in minutes (default: 0). Positive values create
+                a new Watch subject to target ownership rules, using explicit ``to``
+                or the imported ``root_uri``. Nonpositive values create no Watch:
+                native imports with explicit ``to`` pause a single accessible Watch
+                (ConflictError if ambiguous); Connector imports leave Watches untouched.
             is_active: When false, the Connector or native Feishu Watch is created paused.
                 Requires watch_interval > 0 and an explicit to or parent target.
             enforce_public_remote_targets: When True, reject non-public remote hosts and
@@ -1531,7 +1526,7 @@ class ResourceService:
             Processing result containing 'root_uri' and other metadata
 
         Raises:
-            ConflictError: If a different source targets an active watch task
+            ConflictError: Incompatible target occupancy or ambiguous cancellation by URI
             InvalidArgumentError: If the URI scope is not 'resources'
         """
         self._ensure_initialized()
@@ -2187,13 +2182,12 @@ class ResourceService:
     ) -> Optional["WatchTask"]:
         """Create the watch task for the resolved target URI.
 
-        The target URI is the whole watch identity: ``create_task`` raises when any
-        watch already exists on it, whatever its source or active state. Callers
-        that resolve the target after ingestion (``parent`` imports) reach here with
-        the final root URI, so the same rule covers ``to`` and ``parent``.
+        Native Watches require an unoccupied target; Connector Watches may share
+        only with other Connector Watches. Paused Watches retain ownership.
+        Callers using ``parent`` pass the root URI resolved after ingestion.
 
         Raises:
-            ConflictError: If the target URI already has a watch task
+            ConflictError: If the target URI has an incompatible Watch
         """
         watch_manager = self._get_watch_manager()
         if not watch_manager:

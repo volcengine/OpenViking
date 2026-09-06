@@ -118,6 +118,12 @@ Resource incremental updates are implemented via the **Watch Task** mechanism:
 - `WatchManager` handles task persistence
 - Supports multi-tenant permission control (ROOT/ADMIN/USER permission levels)
 
+#### Target Ownership
+
+- Within an account, a native Watch exclusively owns its resolved target, even while paused. A new native Watch requires an unoccupied target; a Connector Watch cannot share with a native Watch.
+- Multiple Connector Watches may share a target. Repeating the same source and target creates another independent Watch; imports do not update or reactivate an existing Watch. The same source imported into different targets also gets separate Watches.
+- Connector Watches are created before the initial import and held by the scheduler until that import records its result.
+
 #### Task Scheduling & Execution
 - `WatchScheduler` checks for expired tasks every 60 seconds
 - Default concurrency control prevents duplicate execution
@@ -125,10 +131,10 @@ Resource incremental updates are implemented via the **Watch Task** mechanism:
 - Updates task's last execution time and next execution time
 
 #### Task Management Operations
-- **Create**: Creates new task or reactivates disabled task when `watch_interval > 0`
-- **Update**: Re-sets parameters for the same target URI
-- **Cancel**: Disables task when `watch_interval <= 0` for the same target URI
-- **Query**: Queries task status by task ID or target URI
+- **Create**: `watch_interval > 0` creates a new task subject to the target ownership rules above; incompatible occupancy returns `409 Conflict`.
+- **Update or resume**: Use `PATCH /api/v1/watches/{task_id}` to change parameters or set `is_active: true`. Re-importing does not update or reactivate a task.
+- **Pause or delete**: Use `PATCH /api/v1/watches/{task_id}` with `is_active: false` to pause, or `DELETE /api/v1/watches/{task_id}` to release the target. A native import with an explicit `to` and `watch_interval <= 0` pauses the single accessible Watch on that target; multiple accessible Watches produce `409 Conflict`. A one-off Connector import leaves existing Watches untouched.
+- **Query**: Use the task ID, or the target URI when it identifies a single accessible Watch. URI lookup returns `409 Conflict` for multiple accessible Watches; use `task_id` to query, update, or delete an individual task.
 
 ## API Reference
 
@@ -178,7 +184,7 @@ This endpoint is the core entry point for resource management, supporting adding
 | directly_upload_media | bool | No | True | Whether to directly upload media files |
 | preserve_structure | bool | No | None | Whether to preserve directory structure |
 | args | object | No | `{}` | Parser-specific import options forwarded to the source parser/accessor. Native HTTPS Git imports and watches accept HTTP Basic credentials over TLS as `args.auth_config={"username":"oauth2","token":"..."}`; `username` defaults to `oauth2`. Git `branch` or `commit` remains at the top level of `args`. To import a private TOS object through its HTTP(S) URL, pass exactly one non-empty string: `args.tos_signature` (sent as `X-Tos-Signature`) or `args.tos_access` (sent as `X-Tos-Access`). TOS credentials are used only for the current HEAD/GET fetch, which is staged as a snapshot; they are not persisted to resource metadata or queue jobs. `args.parse_mode` accepts `default` (existing splitting behavior) or `no_split` (parse and convert each source document to one Markdown body). E.g. `args.site=true/false` forces/opts out of whole-site (sitemap/RSS) ingestion, `args.max_pages` etc. override the `webfeed` config; the recursive web crawler accepts `args.depth`, `args.max_pages`, `args.include_paths`, `args.exclude_paths`, `args.allow_external_links`, `args.skip_download_links`; Feishu user-token imports pass `args.feishu_access_token`. Core `add_resource` fields such as `path`, `to`, `watch_interval`, `include`, and `exclude` are not allowed inside `args` |
-| watch_interval | float | No | 0 | Scheduled update interval (minutes). >0 creates a task for a re-readable URL/sitemap/RSS source; uploaded `temp_file_id` content is a static snapshot and must be re-added when it changes. <=0 cancels a task; explicit `to` wins, otherwise binds to the imported `root_uri` |
+| watch_interval | float | No | 0 | Scheduled update interval (minutes). >0 creates a new Watch for a re-readable source, subject to target ownership rules; uploaded `temp_file_id` snapshots cannot be watched. <=0 creates no Watch: native imports with explicit `to` pause a single accessible task (409 if ambiguous), while Connector imports leave Watches untouched. Explicit `to` wins, otherwise the Watch binds to the imported `root_uri`. |
 | is_active | bool | No | True | Initial Watch scheduling state. `false` requires `watch_interval > 0` and either `to` or `parent`. `parent` is supported for native Feishu URL imports; Connector imports still require an exact `to`. The initial import still runs once and the Watch remains paused afterward |
 | processing_mode | string | No | `semantic_and_vectors` | Post-ingest processing mode. `semantic_and_vectors` is the normal flow: generate semantic artifacts (`.abstract.md`, `.overview.md`) and vectors. `vectors_only` skips semantic understanding/VLM summarization and only vectorizes current resource files |
 | telemetry | TelemetryRequest | No | False | Whether to return telemetry data |
@@ -482,8 +488,9 @@ ov add-resource https://github.com/example/repo.git --to viking://resources/guid
 # Enable scheduled updates and bind to the URI created by this import
 ov add-resource https://github.com/example/repo.git --watch-interval 60
 
-# Cancel scheduled updates
-ov add-resource https://github.com/example/repo.git --to viking://resources/guide.md --watch-interval 0
+# Pause a Watch through PATCH /api/v1/watches/{task_id} with {"is_active": false}.
+# For a native import, --watch-interval 0 also pauses a single accessible target Watch.
+# One-off Connector imports leave existing Watches untouched.
 
 # Add a Feishu document with a one-time user access token
 ov add-resource https://example.feishu.cn/docx/doc_token --args feishu_access_token:u-...

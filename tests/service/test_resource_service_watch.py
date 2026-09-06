@@ -1016,6 +1016,8 @@ class TestWatchTaskConflict:
         task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is not None
 
+        assert task.task_id not in str(exc_info.value)
+
     @pytest.mark.asyncio
     async def test_same_user_context_sees_existing_task(
         self, resource_service: ResourceService, request_context: RequestContext
@@ -1108,6 +1110,36 @@ class TestWatchTaskConflict:
 
 class TestWatchTaskCancellation:
     """Tests for watch task cancellation."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("watch_interval", [0, -5])
+    async def test_native_cancellation_reports_shared_target_conflict(
+        self, resource_service: ResourceService, request_context: RequestContext, watch_interval
+    ):
+        manager = resource_service._watch_scheduler.watch_manager
+        to_uri = "viking://resources/shared"
+        tasks = [
+            await manager.create_task(
+                path=f"tos://bucket/{index}/",
+                to_uri=to_uri,
+                account_id=request_context.account_id,
+                user_id=request_context.user.user_id,
+                auth_state={"provider": "connector_encrypted", "ciphertext": "unused"},
+            )
+            for index in range(2)
+        ]
+
+        with pytest.raises(ConflictError, match="address one by task_id") as exc_info:
+            await resource_service.add_resource(
+                path="/test/path",
+                ctx=request_context,
+                to=to_uri,
+                watch_interval=watch_interval,
+            )
+
+        assert all(task.is_active for task in tasks)
+        assert all(task.task_id in str(exc_info.value) for task in tasks)
+        resource_service._enqueue_add_resource_job.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_cancel_watch_task_with_zero_interval(
