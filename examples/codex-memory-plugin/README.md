@@ -138,7 +138,7 @@ Upgrading from the path-derived peer needs no action: memories written under the
 
 Recall defaults to broad mode: global memory, the current workspace, and other workspace memories can all be recalled, with other workspaces ranked lower and rendered later. In this mode, the MCP proxy omits `X-OpenViking-Actor-Peer` so it can read any URI returned by broad recall for the authenticated user.
 
-Set `OPENVIKING_RECALL_PEER_SCOPE=actor` or `codex.recallPeerScope="actor"` for isolation mode, which only sees global memory plus the configured peer. The MCP proxy requires `actor_peer_id` or `OPENVIKING_PEER_ID` in this mode and exits with a configuration error if neither is set. In deployments where one bot serves multiple people, such as zouk, vikingbot, or AstrBot, use isolation mode with an explicit actor peer so sessions cannot read another person's memories.
+Set `OPENVIKING_RECALL_PEER_SCOPE=actor` or `codex.recallPeerScope="actor"` to scope recall to global memory plus the configured peer. The MCP proxy uses an explicit `actor_peer_id` or `OPENVIKING_PEER_ID` in this mode. If neither is set, it warns on stderr and falls back to broad recall across the authenticated user's peers; it does not derive a peer from the plugin's launch directory. In deployments where one bot serves multiple people, such as zouk, vikingbot, or AstrBot, configure an explicit actor peer for each connection before relying on actor scope. Restart the MCP connection after changing its peer configuration.
 
 The checked-in `.mcp.json` contains only a stdio command. It never stores server URLs, bearer-token env mappings, or identity headers, so switching `ovcli.conf` changes the MCP target on the next Codex launch without cache rendering.
 
