@@ -23,6 +23,72 @@ from openviking.utils.image_search import build_multimodal_embedding_input
 from openviking_cli.exceptions import NotFoundError
 
 
+MAX_TYPED_QUERIES = 5
+"""Hard cap on typed queries per search.
+
+The intent-analysis prompt already asks for at most five queries; this cap
+only enforces that contract when a model over-emits, bounding the fan-out
+cost of the concurrent retrieve() calls.
+"""
+
+
+def _cap_typed_queries(queries: List["TypedQuery"]) -> List["TypedQuery"]:
+    """Bound the typed-query fan-out to MAX_TYPED_QUERIES."""
+    if len(queries) <= MAX_TYPED_QUERIES:
+        return queries
+    logger.warning(
+        "Intent analysis returned %d queries; running only the first %d",
+        len(queries),
+        MAX_TYPED_QUERIES,
+    )
+    return queries[:MAX_TYPED_QUERIES]
+
+
+def _merge_query_results(
+    query_results: List["QueryResult"],
+    limit: int,
+) -> tuple:
+    """Merge per-typed-query results into deduped, score-ordered buckets.
+
+    Intent analysis routinely emits near-duplicate phrasings, so the same
+    URI can surface under several typed queries. Keep the best-scoring
+    occurrence per URI (mirroring the dedupe in ``_find_by_filter``: a
+    duplicate would inflate the total and eat two of the caller's limit
+    slots for one result), order each bucket by score instead of by which
+    query block an item happened to land in, and honor the caller's limit
+    per bucket.
+    """
+    from openviking_cli.retrieve import ContextType
+
+    buckets = {
+        ContextType.MEMORY: [],
+        ContextType.RESOURCE: [],
+        ContextType.SKILL: [],
+    }
+    for result in query_results:
+        for matched in result.matched_contexts:
+            bucket = buckets.get(matched.context_type)
+            if bucket is not None:
+                bucket.append(matched)
+
+    merged = {}
+    for context_type, items in buckets.items():
+        best: Dict[str, Any] = {}
+        for item in items:
+            previous = best.get(item.uri)
+            if previous is None or item.score > previous.score:
+                best[item.uri] = item
+        merged[context_type] = sorted(
+            best.values(), key=lambda m: m.score, reverse=True
+        )[: max(0, limit)]
+
+    return (
+        merged[ContextType.MEMORY],
+        merged[ContextType.RESOURCE],
+        merged[ContextType.SKILL],
+    )
+
+
 class _SemanticMixin:
     """Abstract/overview/find/search semantic retrieval layer."""
 
@@ -449,7 +515,7 @@ class _SemanticMixin:
                     current_message=query,
                     target_abstract=target_abstract,
                 )
-            typed_queries = query_plan.queries
+            typed_queries = _cap_typed_queries(query_plan.queries)
             for tq in typed_queries:
                 tq.target_directories = retrieval_targets.target_directories
         else:
@@ -492,16 +558,10 @@ class _SemanticMixin:
 
         query_results = await asyncio.gather(*[_execute(tq) for tq in typed_queries])
 
-        # Aggregate results to FindResult
-        memories, resources, skills = [], [], []
-        for result in query_results:
-            for ctx in result.matched_contexts:
-                if ctx.context_type == ContextType.MEMORY:
-                    memories.append(ctx)
-                elif ctx.context_type == ContextType.RESOURCE:
-                    resources.append(ctx)
-                elif ctx.context_type == ContextType.SKILL:
-                    skills.append(ctx)
+        # Aggregate results to FindResult: dedupe by URI across typed queries
+        # (keep the best score), order each bucket by score, and honor the
+        # caller's limit per bucket.
+        memories, resources, skills = _merge_query_results(query_results, limit)
 
         find_result = FindResult(
             memories=memories,
