@@ -237,6 +237,12 @@ func TestListAndTreeSendQueryOptions(t *testing.T) {
 			if got := r.URL.Query().Get("node_limit"); got != "200" {
 				t.Fatalf("node_limit = %q", got)
 			}
+			if got := r.URL.Query().Get("offset"); got != "4" {
+				t.Fatalf("offset = %q", got)
+			}
+			if got := r.URL.Query().Get("limit"); got != "5" {
+				t.Fatalf("limit = %q", got)
+			}
 			if got := r.URL.Query().Get("sort_by"); got != "mtime" {
 				t.Fatalf("sort_by = %q", got)
 			}
@@ -251,11 +257,25 @@ func TestListAndTreeSendQueryOptions(t *testing.T) {
 				if got := r.URL.Query().Get("level_limit"); got != "0" {
 					t.Fatalf("level_limit = %q, want 0", got)
 				}
+				if got := r.URL.Query().Get("offset"); got != "6" {
+					t.Fatalf("offset = %q", got)
+				}
+				if got := r.URL.Query().Get("limit"); got != "7" {
+					t.Fatalf("limit = %q", got)
+				}
 				if got := r.URL.Query()["tags"]; !reflect.DeepEqual(got, []string{"env=prod"}) {
 					t.Fatalf("tags = %#v", got)
 				}
-			} else if got := r.URL.Query().Get("level_limit"); got != "3" {
-				t.Fatalf("level_limit = %q, want 3", got)
+			} else {
+				if got := r.URL.Query().Get("level_limit"); got != "3" {
+					t.Fatalf("level_limit = %q, want 3", got)
+				}
+				if _, ok := r.URL.Query()["offset"]; ok {
+					t.Fatal("default tree request should omit offset")
+				}
+				if _, ok := r.URL.Query()["limit"]; ok {
+					t.Fatal("default tree request should omit limit")
+				}
 			}
 			treeCalls++
 		default:
@@ -267,13 +287,21 @@ func TestListAndTreeSendQueryOptions(t *testing.T) {
 
 	if _, err := client.List(context.Background(), "viking://session", &ListOptions{
 		NodeLimit: 200,
+		Offset:    4,
+		Limit:     5,
 		SortBy:    "mtime",
 		SortOrder: "desc",
 		Tags:      []string{"env=prod", "team=search"},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.Tree(context.Background(), "viking://resources/docs", &TreeOptions{LevelLimit: Int(0), Tags: []string{"env=prod"}}); err != nil {
+	if _, err := client.Tree(context.Background(), "viking://resources/docs", &TreeOptions{
+		NodeLimit:  200,
+		LevelLimit: Int(0),
+		Offset:     6,
+		Limit:      7,
+		Tags:       []string{"env=prod"},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := client.Tree(context.Background(), "viking://resources/docs", nil); err != nil {

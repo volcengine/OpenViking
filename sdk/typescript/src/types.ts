@@ -202,6 +202,8 @@ export interface ListOptions {
   absLimit?: number;
   showAllHidden?: boolean;
   nodeLimit?: number;
+  offset?: number;
+  limit?: number;
   sortBy?: "name" | "mtime";
   sortOrder?: "asc" | "desc";
   tags?: string[];
@@ -214,6 +216,8 @@ export interface TreeOptions {
   showAllHidden?: boolean;
   nodeLimit?: number;
   levelLimit?: number;
+  offset?: number;
+  limit?: number;
   tags?: string[];
   includeTags?: boolean;
 }

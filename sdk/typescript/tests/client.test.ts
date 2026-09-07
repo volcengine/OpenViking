@@ -556,21 +556,38 @@ describe("OpenVikingClient", () => {
 
     await client.list("viking://session", {
       nodeLimit: 200,
+      offset: 4,
+      limit: 5,
       sortBy: "mtime",
       sortOrder: "desc",
     });
-    await client.tree("viking://resources/docs", { levelLimit: 2 });
+    await client.tree("viking://resources/docs", {
+      levelLimit: 2,
+      offset: 6,
+      limit: 7,
+    });
     await client.tree("viking://resources/docs", { levelLimit: 0 });
     await client.tree("viking://resources/docs");
 
     const listUrl = new URL(String(fetcher.mock.calls[0]![0]));
     expect(listUrl.searchParams.get("node_limit")).toBe("200");
+    expect(listUrl.searchParams.get("offset")).toBe("4");
+    expect(listUrl.searchParams.get("limit")).toBe("5");
     expect(listUrl.searchParams.get("sort_by")).toBe("mtime");
     expect(listUrl.searchParams.get("sort_order")).toBe("desc");
-    const treeLimits = fetcher.mock.calls
+    const treeUrls = fetcher.mock.calls
       .slice(1)
-      .map((call) => new URL(String(call[0])).searchParams.get("level_limit"));
+      .map((call) => new URL(String(call[0])));
+    const treeLimits = treeUrls.map((url) =>
+      url.searchParams.get("level_limit"),
+    );
     expect(treeLimits).toEqual(["2", "0", "3"]);
+    expect(treeUrls[0]!.searchParams.get("offset")).toBe("6");
+    expect(treeUrls[0]!.searchParams.get("limit")).toBe("7");
+    expect(treeUrls[1]!.searchParams.has("offset")).toBe(false);
+    expect(treeUrls[1]!.searchParams.has("limit")).toBe(false);
+    expect(treeUrls[2]!.searchParams.has("offset")).toBe(false);
+    expect(treeUrls[2]!.searchParams.has("limit")).toBe(false);
   });
 
   it("sends addResource tags and tagMode to the server", async () => {

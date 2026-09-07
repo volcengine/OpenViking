@@ -177,6 +177,8 @@ type ListOptions struct {
 	AbsLimit      int
 	ShowAllHidden bool
 	NodeLimit     int
+	Offset        int
+	Limit         int
 	SortBy        string
 	SortOrder     string
 	Tags          []string
@@ -190,6 +192,8 @@ type TreeOptions struct {
 	ShowAllHidden bool
 	NodeLimit     int
 	LevelLimit    *int
+	Offset        int
+	Limit         int
 	Tags          []string
 	IncludeTags   bool
 }
