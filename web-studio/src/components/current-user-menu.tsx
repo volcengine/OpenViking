@@ -2,7 +2,6 @@ import * as React from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   Building2Icon,
-  CheckIcon,
   ChevronDownIcon,
   LoaderCircleIcon,
   UserRoundIcon,
@@ -15,6 +14,13 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '#/components/ui/popover'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '#/components/ui/select'
 import { useAppConnection } from '#/hooks/use-app-connection'
 import { fetchAdminUsers } from '#/lib/admin'
 import type { AdminConnection } from '#/lib/admin'
@@ -219,41 +225,49 @@ export function CurrentUserMenu() {
                   </button>
                 </div>
               ) : usersQuery.data?.length ? (
-                usersQuery.data.map((user) => {
-                  const current = user.userId === userId
-                  const switching = switchingUserId === user.userId
-                  const canUseIdentity =
-                    serverMode === 'trusted' || Boolean(user.apiKey)
-                  return (
-                    <button
-                      key={user.userId}
-                      type="button"
-                      aria-current={current ? 'true' : undefined}
-                      aria-label={user.userId}
-                      disabled={
-                        current || !canUseIdentity || Boolean(switchingUserId)
-                      }
-                      className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-accent disabled:cursor-default disabled:opacity-70"
-                      onClick={() => void selectUser(user.userId, user.apiKey)}
+                <div className="px-2.5 pb-2">
+                  <Select
+                    value={userId}
+                    onValueChange={(nextUserId) => {
+                      const user = usersQuery.data.find(
+                        (item) => item.userId === nextUserId,
+                      )
+                      if (user) void selectUser(user.userId, user.apiKey)
+                    }}
+                  >
+                    <SelectTrigger
+                      aria-label={t('header.currentUser.switchUser')}
+                      className="w-full"
+                      disabled={Boolean(switchingUserId)}
                     >
-                      <span className="flex size-7 shrink-0 items-center justify-center rounded-md border bg-background text-xs font-semibold">
-                        {getUserInitial(user.userId)}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                        {user.userId}
-                      </span>
-                      {switching ? (
+                      {switchingUserId ? (
                         <LoaderCircleIcon className="size-3.5 animate-spin" />
-                      ) : current ? (
-                        <CheckIcon className="size-3.5 text-primary" />
-                      ) : !canUseIdentity ? (
-                        <span className="text-[10px] text-muted-foreground">
-                          {t('header.currentUser.keyUnavailable')}
-                        </span>
                       ) : null}
-                    </button>
-                  )
-                })
+                      <SelectValue>{userLabel}</SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {usersQuery.data.map((user) => {
+                        const canUseIdentity =
+                          serverMode === 'trusted' || Boolean(user.apiKey)
+                        return (
+                          <SelectItem
+                            key={user.userId}
+                            value={user.userId}
+                            aria-label={user.userId}
+                            disabled={!canUseIdentity}
+                          >
+                            {user.userId}
+                            {!canUseIdentity ? (
+                              <span className="text-[10px] text-muted-foreground">
+                                {t('header.currentUser.keyUnavailable')}
+                              </span>
+                            ) : null}
+                          </SelectItem>
+                        )
+                      })}
+                    </SelectContent>
+                  </Select>
+                </div>
               ) : (
                 <p className="px-2.5 py-4 text-center text-xs text-muted-foreground">
                   {t('header.currentUser.noUsers')}

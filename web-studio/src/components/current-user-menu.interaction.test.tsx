@@ -8,6 +8,7 @@ import {
   screen,
   waitFor,
 } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { CurrentUserMenu } from './current-user-menu'
@@ -97,8 +98,13 @@ describe('CurrentUserMenu', () => {
       screen.getByRole('button', { name: 'header.currentUser.openMenu' }),
     )
 
-    const bob = await screen.findByRole('button', { name: 'bob' })
-    fireEvent.click(bob)
+    const selector = await screen.findByRole('combobox', {
+      name: 'header.currentUser.switchUser',
+    })
+    expect(screen.queryByRole('option', { name: 'bob' })).toBeNull()
+    await userEvent.click(selector)
+    const bob = await screen.findByRole('option', { name: 'bob' })
+    await userEvent.click(bob)
 
     await waitFor(() => {
       expect(connectionMocks.switchIdentity).toHaveBeenCalledWith({
@@ -135,8 +141,13 @@ describe('CurrentUserMenu', () => {
       screen.getByRole('button', { name: 'header.currentUser.openMenu' }),
     )
 
-    const bob = await screen.findByRole('button', { name: 'bob' })
-    fireEvent.click(bob)
+    const selector = await screen.findByRole('combobox', {
+      name: 'header.currentUser.switchUser',
+    })
+    expect(screen.queryByRole('option', { name: 'bob' })).toBeNull()
+    await userEvent.click(selector)
+    const bob = await screen.findByRole('option', { name: 'bob' })
+    await userEvent.click(bob)
 
     await waitFor(() => {
       expect(connectionMocks.switchIdentity).toHaveBeenCalledWith({
@@ -183,8 +194,13 @@ describe('CurrentUserMenu', () => {
       screen.getByRole('button', { name: 'header.currentUser.openMenu' }),
     )
 
-    const bob = await screen.findByRole('button', { name: 'bob' })
-    expect((bob as HTMLButtonElement).disabled).toBe(true)
+    const selector = await screen.findByRole('combobox', {
+      name: 'header.currentUser.switchUser',
+    })
+    expect(screen.queryByRole('option', { name: 'bob' })).toBeNull()
+    await userEvent.click(selector)
+    const bob = await screen.findByRole('option', { name: 'bob' })
+    expect(bob.getAttribute('aria-disabled')).toBe('true')
     expect(screen.getByText('header.currentUser.keyUnavailable')).toBeTruthy()
   })
 
