@@ -1,4 +1,5 @@
 import json
+import time
 import uuid
 
 
@@ -14,10 +15,27 @@ class TestFsRm:
                 f"Failed to create test directory: {response.status_code}"
             )
 
+            # mkdir schedules async directory-abstract generation that briefly
+            # holds the new directory's path lock; an rm landing inside that
+            # window returns a retryable 409 path_busy, so retry those instead
+            # of flaking.
             response = api_client.fs_rm(test_dir, recursive=True)
+            data = response.json()
+            for attempt in range(5):
+                if response.status_code == 200 and data.get("status") == "ok":
+                    break
+                error = data.get("error") or {}
+                if response.status_code != 409 or not (
+                    (error.get("details") or {}).get("retryable")
+                ):
+                    break
+                print(f"path busy, retrying rm (attempt {attempt + 1}/5)")
+                time.sleep(0.5 * (attempt + 1))
+                response = api_client.fs_rm(test_dir, recursive=True)
+                data = response.json()
+
             print(f"\nFS rm API status code: {response.status_code}")
 
-            data = response.json()
             print("\n" + "=" * 80)
             print("FS Rm API Response:")
             print("=" * 80)

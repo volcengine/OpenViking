@@ -1,5 +1,25 @@
 import os
+import time
 import uuid
+
+
+def _fs_cp_with_retry(api_client, *args, **kwargs):
+    # mkdir schedules async directory-abstract generation that briefly holds
+    # the new directory's path lock; a cp landing inside that window returns
+    # a retryable 409 path_busy, so retry those instead of flaking.
+    response = api_client.fs_cp(*args, **kwargs)
+    data = response.json()
+    for attempt in range(5):
+        error = data.get("error") or {}
+        if response.status_code != 409 or not (
+            (error.get("details") or {}).get("retryable")
+        ):
+            break
+        print(f"path busy, retrying cp (attempt {attempt + 1}/5)")
+        time.sleep(0.5 * (attempt + 1))
+        response = api_client.fs_cp(*args, **kwargs)
+        data = response.json()
+    return response
 
 
 class TestFsCp:
@@ -12,7 +32,7 @@ class TestFsCp:
             write = api_client.fs_write(source, content, mode="create", wait=True)
             assert write.status_code == 200
 
-            copied = api_client.fs_cp(source, target)
+            copied = _fs_cp_with_retry(api_client, source, target)
             assert copied.status_code == 200, copied.text
             result = copied.json().get("result", {})
             assert result.get("from") == source
@@ -54,10 +74,10 @@ class TestFsCp:
                 == 200
             )
 
-            without_recursive = api_client.fs_cp(source, target)
+            without_recursive = _fs_cp_with_retry(api_client, source, target)
             assert without_recursive.status_code == 412, without_recursive.text
 
-            copied = api_client.fs_cp(source, target, recursive=True)
+            copied = _fs_cp_with_retry(api_client, source, target, recursive=True)
             assert copied.status_code == 200, copied.text
             assert api_client.fs_read(f"{target}/nested/child.md").status_code == 200
             tree = api_client.fs_tree(target)
@@ -83,7 +103,7 @@ class TestFsCp:
                 == 200
             )
 
-            copied = api_client.fs_cp(source, target)
+            copied = _fs_cp_with_retry(api_client, source, target)
             assert copied.status_code == 409, copied.text
             assert "source remains" in api_client.fs_read(source).json().get("result", "")
             assert "target remains" in api_client.fs_read(target).json().get("result", "")

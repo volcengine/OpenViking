@@ -1,4 +1,5 @@
 import json
+import time
 import uuid
 
 
@@ -15,10 +16,23 @@ class TestFsMv:
                 f"Failed to create source directory: {response.status_code}"
             )
 
+            # mkdir schedules async directory-abstract generation that briefly
+            # holds the new directory's path lock; an mv landing inside that
+            # window returns a retryable 409 path_busy, so retry those instead
+            # of flaking.
             response = api_client.fs_mv(src_dir, dst_dir)
-            print(f"\nFS mv API status code: {response.status_code}")
-
             data = response.json()
+            for attempt in range(5):
+                error = data.get("error") or {}
+                if response.status_code != 409 or not (
+                    (error.get("details") or {}).get("retryable")
+                ):
+                    break
+                print(f"path busy, retrying mv (attempt {attempt + 1}/5)")
+                time.sleep(0.5 * (attempt + 1))
+                response = api_client.fs_mv(src_dir, dst_dir)
+                data = response.json()
+            print(f"\nFS mv API status code: {response.status_code}")
             print("\n" + "=" * 80)
             print("FS Mv API Response:")
             print("=" * 80)
