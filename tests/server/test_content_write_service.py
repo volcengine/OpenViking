@@ -1509,7 +1509,7 @@ async def test_set_tags_append_merges_existing_tags(monkeypatch):
         ["k" * 256 + "=" + "v" * 512],
     ],
 )
-async def test_set_tags_preserves_free_form_tags(monkeypatch, tags):
+async def test_set_tags_preserves_free_form_tags_and_discards_commas(monkeypatch, tags):
     file_uri = "viking://resources/demo/doc.md"
     root_uri = "viking://resources/demo"
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
@@ -1529,7 +1529,7 @@ async def test_set_tags_preserves_free_form_tags(monkeypatch, tags):
     fake_vfs.vector_store = fake_store
     result = await coordinator.set_tags(
         uri=file_uri,
-        tags=tags,
+        tags=[*tags, "project=bad,value", "bad,key=value"],
         ctx=ctx,
     )
 

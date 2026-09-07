@@ -491,7 +491,7 @@ Content-Disposition: attachment; filename*=UTF-8''logo.png
 
 ### set_tags()
 
-Set explicit tag strings used by retrieval filters. There are no tag-level restrictions on characters, length, empty content, or the number of `=` separators. The server trims whitespace around each tag and lowercases it. For `k=v` tags, the first `=` separates the key from the value, and duplicate keys keep the last value. Tags without `=` are preserved and deduplicated separately. `replace` replaces existing tags, while `append` merges tags and replaces existing values for matching keys. When the target is a directory, `recursive=true` applies the update to files below it.
+Set explicit tag strings used by retrieval filters. Tags must not contain the ASCII comma `,`; this endpoint discards such tags and logs a warning. There are no other tag-level restrictions on characters, length, empty content, or the number of `=` separators. The server trims whitespace around each tag and lowercases it. For `k=v` tags, the first `=` separates the key from the value, and duplicate keys keep the last value. Tags without `=` are preserved and deduplicated separately. `replace` replaces existing tags, while `append` merges tags and replaces existing values for matching keys. When the target is a directory, `recursive=true` applies the update to files below it.
 
 **Python SDK**
 

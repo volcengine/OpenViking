@@ -10,6 +10,7 @@ from openviking.utils.tags import (
     normalize_search_tag,
     normalize_search_tags,
 )
+from openviking_cli.exceptions import InvalidArgumentError
 
 
 def test_search_tags_filter_keeps_single_tag_as_single_must():
@@ -47,6 +48,8 @@ def test_search_tag_allows_dot_dash_underscore():
         "-team=search",
         "team=-search",
         "工作 流程=发布检查",
+        "team=search，platform",  # full-width comma is not the ASCII delimiter
+        "team=search%2cplatform",  # percent escapes are not decoded
         "viking://user/default/memories/experiences/cfg_streaming.md=1",
         "viking://user/%41lice/memories/experiences/%41%3d%42.md=1",
     ],
@@ -71,7 +74,7 @@ def test_search_tag_allows_free_form_characters(tag):
     ],
 )
 @pytest.mark.parametrize("discard_invalid", [False, True])
-def test_search_tag_accepts_unrestricted_strings(tag, discard_invalid):
+def test_search_tag_accepts_strings_without_commas(tag, discard_invalid):
     assert normalize_search_tag(tag) == tag
     assert normalize_search_tags([tag], discard_invalid=discard_invalid) == [tag]
     assert merge_search_tags([tag], [tag]) == [tag]
@@ -82,10 +85,24 @@ def test_search_tag_accepts_unrestricted_strings(tag, discard_invalid):
     }
 
 
+@pytest.mark.parametrize(
+    "tag",
+    [",", ",key=value", "key,part=value", "key=value,part", "plain,tag", "key=value,", "a=b=c,d"],
+)
+def test_search_tag_rejects_only_commas(tag):
+    with pytest.raises(InvalidArgumentError, match="must not contain ','"):
+        normalize_search_tag(tag)
+    with pytest.raises(InvalidArgumentError, match="must not contain ','"):
+        normalize_search_tags(["team=search", tag])
+    with pytest.raises(InvalidArgumentError, match="must not contain ','"):
+        build_search_tags_filter([tag])
+    assert normalize_search_tags([tag, "team=search"], discard_invalid=True) == ["team=search"]
+
+
 def test_merge_search_tags_preserves_plain_tags_and_replaces_keyed_values():
     assert merge_search_tags(
-        [" Team ", "team=old", "", "=old", "owner=alice"],
-        ["team", "team=new=value", "=new", "   ", "other"],
+        [" Team ", "team=old", "", "=old", "owner=alice", "old,tag"],
+        ["team", "team=new=value", "=new", "   ", "other", "team=bad,value"],
     ) == ["team", "team=new=value", "", "=new", "owner=alice", "other"]
 
 
