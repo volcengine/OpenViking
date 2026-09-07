@@ -16,6 +16,11 @@ from openviking.pyagfs import AGFSAlreadyExistsError, AGFSNotFoundError, AsyncAG
 from openviking.pyagfs.async_client import fs_ctx_from_agfs_path
 from openviking.session.memory.dataclass import MemoryTypeSchema
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+from openviking.session.memory.utils.content_template import (
+    CONTENT_TEMPLATE_FIELDS,
+    ContentTemplateError,
+    validate_content_template,
+)
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking_cli.exceptions import FailedPreconditionError, InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import validate_account_id
@@ -26,6 +31,7 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 _MAX_CONFIG_BYTES = 1024 * 1024
+_MAX_DESCRIPTION_CHARS = 50_000
 
 # Field names select existing fields; only their descriptions are editable.
 EDITABLE_MEMORY_TEMPLATE_FIELDS = {
@@ -36,7 +42,7 @@ EDITABLE_MEMORY_TEMPLATE_FIELDS = {
     "soul": ("core_truths", "boundaries", "vibe", "continuity"),
     "identity": ("creature", "name", "vibe", "avatar", "emoji", "introduction"),
 }
-_EDITABLE_CONTENT_TEMPLATES = {"events", "soul", "identity"}
+_EDITABLE_CONTENT_TEMPLATES = set(CONTENT_TEMPLATE_FIELDS)
 
 
 def account_memory_template_path(account_id: str, memory_type: str) -> str:
@@ -70,14 +76,20 @@ def default_memory_template(registry: MemoryTypeRegistry, memory_type: str) -> d
     return memory_template_data(schema)
 
 
-def _validate_template(data: dict, memory_type: str) -> MemoryTypeSchema:
+def _validate_template(
+    data: dict, memory_type: str, *, validate_content: bool = True
+) -> MemoryTypeSchema:
     if data.get("memory_type") != memory_type:
         raise ValueError("memory_type must match the template in the request path")
     schema = MemoryTypeRegistry(load_schemas=False)._parse_memory_type(data)
     names = [field.name for field in schema.fields]
     if any(not name for name in names) or len(names) != len(set(names)):
         raise ValueError("Template field names must be nonempty and unique")
-    # Validate syntax without evaluating templates or restricting variables.
+    if memory_type in _EDITABLE_CONTENT_TEMPLATES and schema.content_template is not None:
+        if validate_content:
+            validate_content_template(schema.content_template, memory_type)
+        schema._account_content_template = True
+    # Description and locked deployment templates retain their existing contract.
     env = Environment()
     for template in (
         schema.description,
@@ -101,6 +113,9 @@ def _apply_editable_values(target: dict, supplied: dict, editable: set[str], pat
         if key in editable:
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{location} must be a nonempty string")
+            # Python len(str) counts Unicode code points, not UTF-8 bytes.
+            if key == "description" and len(value) > _MAX_DESCRIPTION_CHARS:
+                raise ValueError(f"{location} must not exceed 50000 Unicode characters")
             target[key] = value
         elif type(value) is not type(target[key]) or value != target[key]:
             # Unchanged locked values are accepted so GET effective -> PUT works.
@@ -158,7 +173,9 @@ def _parse_template(raw: bytes | None, memory_type: str) -> dict | None:
         data = yaml.safe_load(raw)
         if not isinstance(data, dict):
             raise ValueError("Expected a YAML mapping")
-        _validate_template(data, memory_type)
+        # Keep well-formed older configurations readable/resettable even if their
+        # content Jinja is outside the new contract. Never execute them unchecked.
+        _validate_template(data, memory_type, validate_content=False)
         return data
     except (ValueError, TypeError, AttributeError, yaml.YAMLError, TemplateSyntaxError) as exc:
         raise FailedPreconditionError(f"Invalid persisted memory template: {memory_type}") from exc
@@ -216,6 +233,11 @@ async def update_account_memory_template(
     if template is not None:
         try:
             complete = _complete_template(defaults, template, memory_type)
+        except ContentTemplateError as exc:
+            raise InvalidArgumentError(
+                str(exc),
+                details={"field": "content_template", "reason": exc.reason, "line": exc.line},
+            ) from exc
         except (ValueError, TypeError, KeyError, AttributeError, TemplateSyntaxError) as exc:
             raise InvalidArgumentError(f"Invalid memory template: {exc}") from exc
         complete["_updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -280,9 +302,14 @@ async def resolve_account_memory_registry(
     )
     resolved = MemoryTypeRegistry(load_schemas=False)
     for schema, template in zip(schemas, templates, strict=True):
-        resolved.register(
-            _validate_template(template, schema.memory_type)
-            if template is not None
-            else schema.model_copy(deep=True)
-        )
+        try:
+            resolved.register(
+                _validate_template(template, schema.memory_type)
+                if template is not None
+                else schema.model_copy(deep=True)
+            )
+        except ContentTemplateError as exc:
+            raise FailedPreconditionError(
+                f"Invalid account content_template for {schema.memory_type}; republish or reset it"
+            ) from exc
     return resolved

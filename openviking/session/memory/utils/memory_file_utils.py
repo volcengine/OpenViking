@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 from openviking.session.memory.dataclass import MemoryFile
+from openviking.session.memory.utils.content_template import render_content_template
 from openviking.session.memory.utils.link_renderer import LinkRenderer
 from openviking.session.memory.utils.messages import parse_memory_file_with_fields
 from openviking.session.memory.utils.uri import render_template
@@ -37,9 +38,9 @@ def next_memory_version(old_file: Optional[MemoryFile]) -> int:
 
 def bump_memory_version(memory_file: MemoryFile) -> None:
     """Increment a MemoryFile's persisted MEMORY_FIELDS version in-place."""
-    memory_file.extra_fields["version"] = memory_version_from_fields(
-        memory_file.extra_fields, default=1
-    ) + 1
+    memory_file.extra_fields["version"] = (
+        memory_version_from_fields(memory_file.extra_fields, default=1) + 1
+    )
 
 
 def _serialize_datetime(obj: Any) -> Any:
@@ -59,8 +60,6 @@ def _deserialize_datetime(metadata: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-
-
 def _uri_basename(uri: str) -> str:
     name = str(uri or "").rstrip("/").rsplit("/", 1)[-1]
     return name.removesuffix(".md")
@@ -71,16 +70,24 @@ def _template_link_target(source_uri: Optional[str], target_uri: str) -> str:
         return LinkRenderer.relative_path(str(source_uri), str(target_uri)) or str(target_uri)
     return str(target_uri or "")
 
+
 def _serialize_with_metadata(
     metadata: Dict[str, Any],
     content_template: str = None,
     extract_context: Any = None,
     source_uri: Optional[str] = None,
     render_links: bool = True,
+    account_content_template_type: Optional[str] = None,
 ) -> str:
     content = metadata.pop("content", "") or ""
 
-    if content_template:
+    if content_template and account_content_template_type:
+        # Managed-template failures must not be swallowed by the legacy plain
+        # content fallback: that could silently overwrite a valid Markdown body.
+        content = render_content_template(
+            content_template, account_content_template_type, metadata, extract_context
+        )
+    elif content_template:
         try:
             template_vars = metadata.copy()
             template_vars["content"] = content
@@ -88,7 +95,9 @@ def _serialize_with_metadata(
             template_vars.setdefault("backlinks", [])
             template_vars["source_uri"] = source_uri or ""
             template_vars["uri_basename"] = _uri_basename
-            template_vars["link_target"] = lambda target_uri: _template_link_target(source_uri, target_uri)
+            template_vars["link_target"] = lambda target_uri: _template_link_target(
+                source_uri, target_uri
+            )
             content = render_template(content_template, template_vars, extract_context)
         except Exception:
             logger.exception(
@@ -138,6 +147,8 @@ class MemoryFileUtils:
         content_template: Optional[str] = None,
         extract_context: Any = None,
         render_links: bool = True,
+        *,
+        account_content_template_type: Optional[str] = None,
     ) -> str:
         """Serialize a MemoryFile as plain-text body plus MEMORY_FIELDS metadata."""
         metadata = memory_file.to_metadata()
@@ -147,6 +158,7 @@ class MemoryFileUtils:
             extract_context=extract_context,
             source_uri=memory_file.uri,
             render_links=render_links,
+            account_content_template_type=account_content_template_type,
         )
 
     @staticmethod

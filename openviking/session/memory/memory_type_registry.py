@@ -301,6 +301,9 @@ class MemoryTypeRegistry:
             full_content = MemoryFileUtils.write(
                 mf,
                 content_template=schema.content_template,
+                account_content_template_type=(
+                    schema.memory_type if schema._account_content_template else None
+                ),
             )
 
             # Write the file

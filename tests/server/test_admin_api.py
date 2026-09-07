@@ -38,6 +38,7 @@ from openviking.service.task_store import (
 from openviking.service.task_tracker import get_task_tracker
 from openviking.service.user_deletion import setup_user_deletion
 from openviking.session.memory.account_templates import (
+    EDITABLE_MEMORY_TEMPLATE_FIELDS,
     account_memory_template_path,
     resolve_account_memory_registry,
 )
@@ -440,6 +441,12 @@ async def test_account_memory_templates_publish_and_reset(
         {"fields": [{"name": "x"}, {"name": "x"}]},
         {"fields": [{"name": "x", "description": "{{"}]},
         {"content_template": "{{"},
+        {"content_template": "{{ unknown_field }}"},
+        {"content_template": "{{ extract_context.messages }}"},
+        {"content_template": "{{ extract_context.get_year('0-999999999') }}"},
+        {"content_template": "{% include 'private.yaml' %}"},
+        {"content_template": "{{ summary | attr('__class__') }}"},
+        {"content_template": "x" * (64 * 1024 + 1)},
     ],
 )
 async def test_account_memory_templates_reject_invalid_configuration(
@@ -460,6 +467,99 @@ async def test_account_memory_templates_reject_invalid_configuration(
     response = await lightweight_admin_client.put(url, json=body, headers=headers)
     assert response.status_code in {400, 422}, response.text
     assert fs.agfs._files == original
+
+
+@pytest.mark.parametrize("memory_type", list(EDITABLE_MEMORY_TEMPLATE_FIELDS))
+@pytest.mark.parametrize("character", ["a", "中", "😀"])
+async def test_account_memory_templates_description_character_limit(
+    lightweight_admin_client,
+    lightweight_admin_app,
+    template_account,
+    memory_type,
+    character,
+):
+    account_id, headers = template_account
+    url = f"/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}"
+    text = character * 50_000
+    fs = lightweight_admin_app.state.fake_service.viking_fs
+    # Check one field at a time without exceeding the aggregate 1 MiB cap.
+    for field_name in [None, *EDITABLE_MEMORY_TEMPLATE_FIELDS[memory_type]]:
+        body = {"description": text}
+        target = body
+        if field_name is not None:
+            target = {"name": field_name, "description": text}
+            body["fields"] = [target]
+        response = await lightweight_admin_client.put(url, json=body, headers=headers)
+        assert response.status_code == 200, response.text
+        effective = response.json()["result"]["effective"]
+        assert effective["description"] == text
+        if field_name is not None:
+            field = next(field for field in effective["fields"] if field["name"] == field_name)
+            assert field["description"] == text
+        original = dict(fs.agfs._files)
+        target["description"] = text + character
+        response = await lightweight_admin_client.put(url, json=body, headers=headers)
+        assert response.status_code == 400, response.text
+        assert "50000 Unicode characters" in response.json()["error"]["message"]
+        assert fs.agfs._files == original
+    assert (await lightweight_admin_client.get(url, headers=headers)).status_code == 200
+    assert (await lightweight_admin_client.delete(url, headers=headers)).status_code == 200
+
+
+async def test_account_memory_templates_content_validation_error_details(
+    lightweight_admin_client,
+    template_account,
+):
+    account_id, headers = template_account
+    response = await lightweight_admin_client.put(
+        f"/api/v1/admin/accounts/{account_id}/memory-templates/events",
+        json={"content_template": "# Summary\n{{ typo }}"},
+        headers=headers,
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["details"] == {
+        "field": "content_template",
+        "reason": "unknown_variable",
+        "line": 2,
+    }
+
+
+async def test_account_memory_templates_old_content_can_be_read_replaced_and_reset(
+    lightweight_admin_client,
+    lightweight_admin_app,
+    template_account,
+):
+    from openviking_cli.exceptions import FailedPreconditionError
+
+    account_id, headers = template_account
+    fs = lightweight_admin_app.state.fake_service.viking_fs
+    url = f"/api/v1/admin/accounts/{account_id}/memory-templates/events"
+    path = account_memory_template_path(account_id, "events")
+    assert (await lightweight_admin_client.put(url, json={}, headers=headers)).status_code == 200
+    legacy = yaml.safe_load(fs.agfs._files[path])
+    legacy["content_template"] = "{{ summary.upper() }}"
+    raw = yaml.safe_dump(legacy).encode()
+    for operation in ("PUT", "DELETE"):
+        fs.agfs._files[path] = raw
+        response = await lightweight_admin_client.get(url, headers=headers)
+        assert response.status_code == 200
+        assert (
+            response.json()["result"]["effective"]["content_template"] == legacy["content_template"]
+        )
+        with pytest.raises(FailedPreconditionError):
+            await resolve_account_memory_registry(fs, account_id, MemoryTypeRegistry())
+        response = await lightweight_admin_client.request(
+            operation,
+            url,
+            headers=headers,
+            **(
+                {"json": {"content_template": "{{ summary | upper }}"}}
+                if operation == "PUT"
+                else {}
+            ),
+        )
+        assert response.status_code == 200, response.text
+        assert fs.agfs._files[path + ".backup"] == raw
 
 
 @pytest.mark.parametrize(

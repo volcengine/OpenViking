@@ -422,6 +422,7 @@ class StreamingMemoryUpdater:
             serialized = (
                 "\n".join(
                     schema.model_dump_json()
+                    + f":account_content={schema._account_content_template}"
                     for schema in sorted(registry.list_all(True), key=lambda s: s.memory_type)
                 )
                 if registry is not None
@@ -1185,6 +1186,9 @@ async def render_operation_after_file_content(
     return MemoryFileUtils.write(
         mf,
         content_template=schema.content_template,
+        account_content_template_type=(
+            schema.memory_type if schema._account_content_template else None
+        ),
         extract_context=extract_context,
     )
 

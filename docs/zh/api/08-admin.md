@@ -240,9 +240,68 @@ DELETE 幂等。
 记忆，后续 Commit 可按生效规则更新已有记忆。
 
 白名单内提交的说明和正文模板必须是非空字符串，并通过 Jinja 语法校验；单文件序列化后不超过 1 MiB。
-发布不调用 LLM，也不限制模板变量、方法调用或过滤器。这是**受信任管理员的配置接口**，
-不是供不可信模板执行的沙箱；现有 `content_template` 渲染逻辑不变。存储错误或文件损坏
-明确报错，不伪装成系统默认。本次不增加公共文件浏览目录、SDK/CLI 命令、草稿或历史版本 UI。
+每个可编辑 `description`（类型说明及 `fields[].description`）最多 50,000 个 Unicode 码点，按提交的原文计数，包含空格、换行和 Jinja 源码，不按 UTF-8 字节或渲染后的长度计数。各说明独立计数，不合并计算；整个配置仍受 1 MiB 上限约束。超过上限返回 400，不修改当前配置。
+发布不调用 LLM。存储错误或文件损坏明确报错，不伪装成系统默认。本次不增加公共文件浏览目录、SDK/CLI 命令、草稿或历史版本 UI。
+
+#### content_template 的编辑与执行边界
+
+正文模板用于将已抽取/合并的字段组织为 Markdown，不是抽取 Prompt。
+允许修改标题、顺序、固定文案，按条件显示/隐藏字段。不要求保留默认标题或输出全部字段；
+但隐藏字段不等于停止抽取/删除该字段，也不会删除原始 Session 或系统保存的字段元数据。
+Events 的默认 embedding 模板引用正文，因此正文变化也可能影响后续检索输入。
+路径、文件名、字段定义、merge_op（包括 Identity name 的 immutable）仍锁定。
+
+| 类型 | 正文中可引用的字段 |
+| --- | --- |
+| events | event_name、goal、summary、ranges |
+| soul | core_truths、boundaries、vibe、continuity |
+| identity | name、creature、vibe、emoji、avatar、introduction |
+
+`language` 仍是说明字段的变量，不属于上述正文变量；正文不要引用其他 Account/User、请求上下文或任意 Python 对象。
+仅 Events 可调用以下 `extract_context` 只读方法（位置参数）：
+
+- `get_resource_event_content(ranges, summary)`：资源添加事件正文；非资源事件为空。
+- `get_first_message_time_from_ranges(ranges)`：第一条来源消息日期。
+- `get_first_message_time_with_weekday_from_ranges(ranges)`：日期及星期。
+- `get_event_content(ranges, summary[, ratio_threshold])`：按已有逻辑选择 ChatLog/摘要；省略阈值为 0.2，显式 0 表示存在原文时优先原文。
+- `get_year(ranges)`、`get_month(ranges)`、`get_day(ranges)`：来源日期分量。
+
+首个参数使用 `ranges`（或 `ranges|default('')`），不能自行构造消息范围；阈值只能为 0～1 的数字字面量。
+允许去掉 ChatLog 或资源事件分支，但去掉后不再自动展示这些正文/资源链接；原始 Session 仍保留。
+
+支持的 Jinja 子集：
+
+- `if/elif/else`、比较/布尔条件、`set` 局部变量（不能覆盖内置字段、extract_context、loop）。
+- `for` 遍历模板中显式写出的列表/元组，最多 32 项；支持标题/字段二元组和 `loop.index/index0/first/last/length`。不支持嵌套/递归循环、range() 或遍历消息/长字符串。
+- 过滤器：`default`、`trim`、`lower`、`upper`、`length`；测试：`defined`、`undefined`、`none`、`string`。
+- 不支持模板导入/继承、宏、任意函数/对象属性访问、下标访问、算术或字符串倍增/拼接。不能注入系统保留的 `<!-- MEMORY_FIELDS ... -->` 元数据。
+
+模板 UTF-8 大小 ≤ 64 KiB，AST 节点 ≤ 2048，渲染正文 ≤ 1 MiB（不含系统追加元数据）。
+Account 覆盖在发布时和抽取加载时验证，运行时使用受限 Jinja 环境，只提供白名单字段/方法。
+渲染失败会报告错误并停止该次文件写入，不走旧的空正文 fallback；部署内置模板的渲染路径不变。
+这些保护不代替 Worker 的 CPU/内存配额，也不评估记忆效果或做前端 Markdown/HTML 安全过滤。
+说明字段的既有渲染规则不在本次正文模板限制的改动范围内。
+
+校验失败返回 `INVALID_ARGUMENT`，`error.details` 含 `field=content_template`、受控 `reason` 和可用时的 `line`。
+失败不修改当前发布配置。此前保存的、结构有效但使用不支持 Jinja 的模板仍可读取、重新发布或恢复默认；
+不会绕过新规则继续执行，抽取加载时提示修复。损坏 YAML 仍明确报错。
+
+示例：只展示事件名称和摘要，不输出 ChatLog：
+
+```json
+{"content_template": "# {{ event_name }}\n\n## 事件摘要\n{{ summary }}"}
+```
+
+示例：Soul 的分节展示：
+
+```jinja
+{% for title, text in [('核心价值', core_truths), ('边界', boundaries), ('气质', vibe), ('连续性', continuity)] %}
+{% if text %}
+## {{ title }}
+{{ text }}
+{% endif %}
+{% endfor %}
+```
 
 ### user_settings
 
