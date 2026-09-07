@@ -12,6 +12,7 @@ from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryFile, MemoryTypeSchema
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.session_extract_context_provider import (
+    PREFETCHED_CONTEXT_POLICY,
     SessionExtractContextProvider,
 )
 from openviking.session.memory.utils.language import resolve_output_language_from_text
@@ -138,6 +139,8 @@ class PatchMergeContextProvider(SessionExtractContextProvider):
 You are given original memory files and structured memory-file field diffs. Merge them by producing final memory operations that follow the provided JSON schema.
 
 Do not call tools. Output JSON only.
+
+{PREFETCHED_CONTEXT_POLICY}
 
 All memory content must be written in {output_language}.
 

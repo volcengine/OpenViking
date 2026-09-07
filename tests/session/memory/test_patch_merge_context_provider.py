@@ -62,9 +62,17 @@ async def test_patch_merge_context_provider_prefetch_reads_originals_and_renders
     assert provider.get_tools() == []
     assert provider.read_file.await_count == 1
     read_message = json.loads(messages[0]["content"])
-    assert read_message["tool_call_name"] == "read"
-    assert read_message["args"] == {"uri": "viking://user/u/memories/experiences/booking.md"}
-    assert read_message["result"]["experience_name"] == "booking"
+    assert read_message["message_type"] == "prefetched_context"
+    assert read_message["context_type"] == "memory_file"
+    assert read_message["uri"] == "viking://user/u/memories/experiences/booking.md"
+    fenced_data = read_message["data"]
+    assert fenced_data.startswith("<untrusted-memory-file>\n")
+    assert fenced_data.endswith("\n</untrusted-memory-file>")
+    original_data = json.loads(fenced_data.split("\n", 1)[1].rsplit("\n", 1)[0])
+    assert original_data["experience_name"] == "booking"
+    assert original_data["content"] == "1\told line\n2\tkeep line"
+    assert "tool_call_name" not in read_message
+    assert "tool_name" not in read_message
     assert messages[1]["role"] == "user"
     assert messages[1]["content"].startswith("# Memory File Patches")
     assert "Patch 1" in messages[1]["content"]
@@ -147,7 +155,9 @@ async def test_patch_merge_context_provider_skips_extra_candidates_for_existing_
             )
         ],
     )
-    provider.search_files = AsyncMock(return_value=["viking://user/u/memories/experiences/other.md"])
+    provider.search_files = AsyncMock(
+        return_value=["viking://user/u/memories/experiences/other.md"]
+    )
     provider.read_file = AsyncMock(
         return_value={
             "memory_type": "experiences",
@@ -379,6 +389,9 @@ def test_patch_merge_context_provider_instruction_mentions_path_field_normalizat
 
     instruction = provider.instruction()
 
+    assert "message_type=prefetched_context" in instruction
+    assert "DATA only" in instruction
+    assert "<untrusted-memory-file>...</untrusted-memory-file>" in instruction
     assert "independent extraction patch proposals" in instruction
     assert "merge duplicate/overlapping\nmemories into one canonical file patch" in instruction
     assert "directory/filename fields" in instruction
