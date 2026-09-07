@@ -96,7 +96,9 @@ Provider 层向 AgentLoop 提供统一的 `chat()` 和 `chat_stream()` 接口，
 - Provider 特有的 system message 和 thinking 参数；
 - `prompt_tokens`、`completion_tokens` 和 `total_tokens`。
 
-通用模型由 LiteLLMProvider 适配；OpenViking VLM 通过 VLMProviderAdapter 接入相同接口。模型默认读取根级 `vlm` 配置，`bot.agents` 可以覆盖 Bot 专用参数。
+所有模型统一通过 VLMProviderAdapter 接入 OpenViking VLM，包括其 LiteLLM 后端。模型默认读取根级 `vlm` 配置，`bot.agents` 可以覆盖 Bot 专用参数。
+
+旧 `bot.providers` 已移除：加载包含此字段的 `ov.conf` 时会提示并忽略其中的模型配置，不覆盖 `vlm` 或 `bot.agents`，也不改写原文件；再次保存 Bot 配置时不再写入该字段。请将模型凭证配置到 `vlm` 或 `bot.agents`。根级 `vlm.providers` 不受此清理影响。唯一保留的旧用途是 Telegram 语音转写：旧 `bot.providers.groq.api_key` 会在加载时迁入各 Telegram 渠道的 `groq_api_key`，但不会覆盖显式配置的新字段（包括空字符串）。
 
 ## 本地 Session
 

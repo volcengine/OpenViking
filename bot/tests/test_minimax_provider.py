@@ -2,9 +2,15 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for MiniMax provider support (MiniMax-M3, MiniMax-M2.7, MiniMax-M2.7-highspeed)."""
 
+from copy import deepcopy
+from types import SimpleNamespace
 from urllib.parse import urlparse
 
+import pytest
 from vikingbot.providers.registry import ProviderSpec, find_by_model, find_by_name
+from vikingbot.providers.vlm_adapter import VLMProviderAdapter
+
+from openviking.models.vlm.backends.litellm_vlm import LiteLLMVLMProvider
 
 
 class TestMiniMaxRegistry:
@@ -64,122 +70,39 @@ class TestMiniMaxRegistry:
         )
 
 
-class TestMiniMaxModelPrefixResolution:
-    """Tests for LiteLLM model prefix resolution with MiniMax models."""
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model",
+    ["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed", "minimax/MiniMax-M2.7"],
+)
+async def test_minimax_chat_uses_core_litellm_backend(monkeypatch, model):
+    """The active adapter forwards MiniMax messages and resolves the provider prefix."""
+    captured = {}
 
-    def _resolve_model(self, model: str) -> str:
-        """Reproduce _resolve_model logic from LiteLLMProvider."""
-        from vikingbot.providers.registry import find_by_model
+    async def fake_acompletion(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="Hello!", tool_calls=None),
+                    finish_reason="stop",
+                )
+            ],
+            usage=None,
+        )
 
-        spec = find_by_model(model)
-        if spec and spec.litellm_prefix:
-            if not any(model.startswith(s) for s in spec.skip_prefixes):
-                model = f"{spec.litellm_prefix}/{model}"
-        return model
+    monkeypatch.setattr("openviking.models.vlm.backends.litellm_vlm.acompletion", fake_acompletion)
+    vlm = LiteLLMVLMProvider({"provider": "minimax", "model": model})
+    provider = VLMProviderAdapter(vlm, default_model=model)
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Hi!"},
+    ]
+    original = deepcopy(messages)
 
-    def test_m3_gets_minimax_prefix(self):
-        """MiniMax-M3 should be prefixed as minimax/MiniMax-M3."""
-        resolved = self._resolve_model("MiniMax-M3")
-        assert resolved == "minimax/MiniMax-M3"
+    response = await provider.chat(messages=messages)
 
-    def test_m2_7_gets_minimax_prefix(self):
-        """MiniMax-M2.7 should be prefixed as minimax/MiniMax-M2.7."""
-        resolved = self._resolve_model("MiniMax-M2.7")
-        assert resolved == "minimax/MiniMax-M2.7"
-
-    def test_m2_7_highspeed_gets_minimax_prefix(self):
-        """MiniMax-M2.7-highspeed should be prefixed as minimax/MiniMax-M2.7-highspeed."""
-        resolved = self._resolve_model("MiniMax-M2.7-highspeed")
-        assert resolved == "minimax/MiniMax-M2.7-highspeed"
-
-    def test_already_prefixed_model_not_double_prefixed(self):
-        """Model already carrying minimax/ prefix must not be double-prefixed."""
-        resolved = self._resolve_model("minimax/MiniMax-M2.7")
-        assert resolved == "minimax/MiniMax-M2.7"
-
-
-class TestMiniMaxSystemMessageHandling:
-    """Tests for MiniMax system message merging in LiteLLMProvider."""
-
-    # ------------------------------------------------------------------ #
-    # Helpers
-    # ------------------------------------------------------------------ #
-
-    def _handle_system_litellm(self, model: str, messages: list[dict]) -> list[dict]:
-        """Call the LiteLLMProvider._handle_system_message without a real provider."""
-        from vikingbot.providers.litellm_provider import LiteLLMProvider
-
-        # Instantiate without a real API key — we only call the static-ish helper.
-        provider = LiteLLMProvider.__new__(LiteLLMProvider)
-        provider._gateway = None
-        return provider._handle_system_message(model, messages)
-
-    # ------------------------------------------------------------------ #
-    # LiteLLMProvider tests (model name after prefix resolution)
-    # ------------------------------------------------------------------ #
-
-    def test_litellm_system_message_merged_for_m3(self):
-        """System message is merged into the first user message for minimax/MiniMax-M3."""
-        messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "Hello!"},
-        ]
-        result = self._handle_system_litellm("minimax/MiniMax-M3", messages)
-        assert all(m["role"] != "system" for m in result), "System message not removed"
-        user_content = next(m["content"] for m in result if m["role"] == "user")
-        assert "You are a helpful assistant." in user_content
-        assert "Hello!" in user_content
-
-    def test_litellm_system_message_merged_for_m2_7(self):
-        """System message is merged into the first user message for minimax/MiniMax-M2.7."""
-        messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "Hello!"},
-        ]
-        result = self._handle_system_litellm("minimax/MiniMax-M2.7", messages)
-        assert all(m["role"] != "system" for m in result), "System message not removed"
-        user_content = next(m["content"] for m in result if m["role"] == "user")
-        assert "You are a helpful assistant." in user_content
-        assert "Hello!" in user_content
-
-    def test_litellm_system_message_merged_for_m2_7_highspeed(self):
-        """System message is merged for minimax/MiniMax-M2.7-highspeed."""
-        messages = [
-            {"role": "system", "content": "Be concise."},
-            {"role": "user", "content": "What is 2+2?"},
-        ]
-        result = self._handle_system_litellm("minimax/MiniMax-M2.7-highspeed", messages)
-        assert all(m["role"] != "system" for m in result)
-        user_content = next(m["content"] for m in result if m["role"] == "user")
-        assert "Be concise." in user_content
-
-    def test_litellm_multiple_system_messages_combined(self):
-        """Multiple system messages are combined before merging."""
-        messages = [
-            {"role": "system", "content": "Rule 1."},
-            {"role": "system", "content": "Rule 2."},
-            {"role": "user", "content": "Go!"},
-        ]
-        result = self._handle_system_litellm("minimax/MiniMax-M2.7", messages)
-        assert all(m["role"] != "system" for m in result)
-        user_content = next(m["content"] for m in result if m["role"] == "user")
-        assert "Rule 1." in user_content
-        assert "Rule 2." in user_content
-
-    def test_litellm_no_system_message_passthrough(self):
-        """Messages without a system role are returned unchanged."""
-        messages = [
-            {"role": "user", "content": "Hello!"},
-            {"role": "assistant", "content": "Hi there!"},
-        ]
-        result = self._handle_system_litellm("minimax/MiniMax-M2.7", messages)
-        assert result == messages
-
-    def test_litellm_non_minimax_model_not_affected(self):
-        """System messages for non-MiniMax models must not be touched."""
-        messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "Hello!"},
-        ]
-        result = self._handle_system_litellm("anthropic/claude-opus-4-5", messages)
-        assert result == messages
+    assert response.content == "Hello!"
+    assert captured["model"] == f"minimax/{model.removeprefix('minimax/')}"
+    assert captured["messages"] == original
+    assert messages == original

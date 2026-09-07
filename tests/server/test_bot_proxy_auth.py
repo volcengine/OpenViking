@@ -146,10 +146,6 @@ async def test_chat_proxy_attaches_authenticated_openviking_connection(monkeypat
         "role": "user",
         "api_key_type": "root",
         "server_url": "http://127.0.0.1:1944",
-        "namespace_policy": {
-            "isolate_user_scope_by_agent": False,
-            "isolate_agent_scope_by_user": False,
-        },
     }
     assert forwarded["headers"]["X-Gateway-Token"] == "gateway-secret"
     assert forwarded["timeout"] == 300.0
@@ -213,10 +209,6 @@ async def test_chat_proxy_forwards_trusted_request_without_root_api_key(monkeypa
         "role": "user",
         "api_key_type": "root",
         "server_url": "http://127.0.0.1:1955",
-        "namespace_policy": {
-            "isolate_user_scope_by_agent": False,
-            "isolate_agent_scope_by_user": False,
-        },
     }
     assert "X-Gateway-Token" not in forwarded["headers"]
     assert forwarded["timeout"] == 300.0

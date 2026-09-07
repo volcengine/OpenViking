@@ -153,10 +153,6 @@ class OpenVikingConnection(BaseModel):
     actor_peer_id: Optional[str] = Field(default=None, description="Effective actor peer ID")
     role: Optional[str] = Field(default=None, description="Effective OpenViking role")
     api_key_type: Optional[str] = Field(default=None, description="OpenViking API key type")
-    namespace_policy: Optional[Dict[str, bool]] = Field(
-        default=None,
-        description="Effective account namespace policy",
-    )
     server_url: Optional[str] = Field(default=None, description="OpenViking server URL")
 
 

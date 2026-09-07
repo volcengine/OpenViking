@@ -26,10 +26,6 @@ logger = get_logger(__name__)
 BOT_API_URL: Optional[str] = None  # e.g., "http://localhost:18791"
 BOT_API_KEY: str = ""
 DEFAULT_BOT_AGENT_ID = "web-playground"
-DEFAULT_NAMESPACE_POLICY = {
-    "isolate_user_scope_by_agent": False,
-    "isolate_agent_scope_by_user": False,
-}
 
 
 def _create_bot_proxy_client() -> httpx.AsyncClient:
@@ -88,7 +84,6 @@ def _build_openviking_connection(
         "role": getattr(ctx.role, "value", str(ctx.role)),
         "api_key_type": "root" if effective_auth_mode == "trusted" else "user",
         "server_url": server_url,
-        "namespace_policy": dict(DEFAULT_NAMESPACE_POLICY),
     }
     if api_key:
         connection["api_key"] = api_key

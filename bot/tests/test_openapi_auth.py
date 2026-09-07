@@ -633,10 +633,6 @@ class TestOpenAPIAuth:
             "agent_id": "web-playground",
             "role": "user",
             "api_key_type": "user",
-            "namespace_policy": {
-                "isolate_user_scope_by_agent": False,
-                "isolate_agent_scope_by_user": False,
-            },
             "server_url": "http://ov.local",
             "actor_peer_id": "peer-a",
         }
