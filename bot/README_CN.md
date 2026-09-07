@@ -408,6 +408,8 @@ Agent 实际使用的活动目录还取决于 `bot.sandbox.mode`：
 
 `readonly` 模式不会注册 `openviking_add_resource`。渠道设置 `ov_tools_enable: false` 时，该渠道不显示 OpenViking 工具，也不注入 Profile、Memory 和 Experience。
 
+`web_search` 自动选择后端：配置了对应密钥时依次使用 Tavily、Exa、Brave（`bot.tools.web.search.tavily_api_key`、`EXA_API_KEY`、`bot.tools.web.search.api_key`），否则使用无需密钥的 Keenable，最后回退到 DuckDuckGo。`bot.tools.web.search.keenable_api_key`（或 `KEENABLE_API_KEY`）为可选项，仅用于提升 Keenable 的速率限制。
+
 ### MCP 工具
 
 第三方 MCP Server 配置在 `bot.tools.mcp_servers`：

@@ -575,6 +575,7 @@ class WebSearchConfig(BaseModel):
 
     api_key: str = ""  # Brave Search API key
     tavily_api_key: str = ""  # Tavily Search API key
+    keenable_api_key: str = ""  # Keenable API key (optional, lifts rate limits)
     max_results: int = 5
 
 
