@@ -104,6 +104,7 @@ jobs:
       deps_changed: ${{ steps.check.outputs.deps_changed }}
       cuvs_changed: ${{ steps.check.outputs.cuvs_changed }}
       langchain_changed: ${{ steps.check.outputs.langchain_changed }}
+      web_studio_changed: ${{ steps.check.outputs.web_studio_changed }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -153,6 +154,19 @@ jobs:
           else
             echo "No LangChain integration changes detected."
             echo "langchain_changed=false" >> $GITHUB_OUTPUT
+          fi
+
+          # Run the web-studio Vitest suite when the frontend or its lane changes.
+          WEB_STUDIO_PATTERN="web-studio/|\.github/workflows/pr\.yml"
+          WEB_STUDIO_CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep -E "$WEB_STUDIO_PATTERN" || true)
+
+          if [ -n "$WEB_STUDIO_CHANGED_FILES" ]; then
+            echo "web-studio changes detected:"
+            echo "$WEB_STUDIO_CHANGED_FILES"
+            echo "web_studio_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "No web-studio changes detected."
+            echo "web_studio_changed=false" >> $GITHUB_OUTPUT
           fi
 
   build:
@@ -244,3 +258,21 @@ jobs:
           "${GITHUB_WORKSPACE}/.langchain-wheel-venv/bin/python" \
             "${GITHUB_WORKSPACE}/integrations/langchain/tests/installed_smoke.py"
           uv pip check --python "${GITHUB_WORKSPACE}/.langchain-wheel-venv/bin/python"
+
+  web-studio-tests:
+    needs: check-deps
+    if: ${{ needs.check-deps.outputs.web_studio_changed == 'true' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web-studio/package-lock.json
+
+      - run: npm ci --prefix web-studio
+
+      - name: Run web-studio tests
+        run: npm test --prefix web-studio
