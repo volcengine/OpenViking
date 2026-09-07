@@ -239,7 +239,7 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 | `base_url` | string | `""` | 外部服务地址，必须包含 `http://` 或 `https://`；非空即启用外部 Compile |
 | `gateway_token` | string | `""` | OV 调用 Compile Gateway 使用的可选服务凭证 |
 | `http_timeout_seconds` | number | `10` | 单次 HTTP 请求超时 |
-| `poll_interval_ms` | integer | `3000` | 外部任务状态轮询间隔 |
+| `poll_interval_ms` | integer | `30000` | 外部任务状态轮询间隔 |
 
 配置 `base_url` 后，OV 通过 `X-API-Key` 传递当前用户的 OV API Key；仅在配置 `gateway_token` 时发送 `X-Gateway-Token`。完整协议见[Compile Server 对接说明](../../design/external-compile-server-api.md)。
 

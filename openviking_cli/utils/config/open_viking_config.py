@@ -142,7 +142,7 @@ class CompileApiConfig(BaseModel):
     base_url: str = ""
     gateway_token: str = ""
     http_timeout_seconds: float = 10.0
-    poll_interval_ms: int = 3000
+    poll_interval_ms: int = 30000
     model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")

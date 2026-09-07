@@ -99,7 +99,7 @@ POST /compile/cancel
   "compile_api": {
     "base_url": "https://compile.example.com",
     "http_timeout_seconds": 10,
-    "poll_interval_ms": 3000
+    "poll_interval_ms": 30000
   }
 }
 ```
