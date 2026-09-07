@@ -74,6 +74,66 @@ async def seed_vector(backend, uri, content):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["copy_uri_mapping", "update_uri_mapping"])
+@pytest.mark.parametrize("directory", [False, True])
+async def test_path_transfer_scans_native_chunks_without_unrelated_subtrees(
+    indexed_fs, monkeypatch, operation, directory
+):
+    _, backend = indexed_fs
+    ctx = root_ctx()
+    source_file = "viking://resources/source/file.md"
+    target_file = "viking://resources/target/file.md"
+    source = "viking://resources/source" if directory else source_file
+    target = "viking://resources/target" if directory else target_file
+    source_uris = [source_file] + [f"{source_file}#chunk_{i:04d}" for i in range(205)]
+    old_targets = [target_file] + [f"{target_file}#chunk_{i:04d}" for i in range(206)]
+    untouched = [
+        "viking://resources/target/keep.md",
+        "viking://resources/target/unrelated/deep.md",
+    ]
+    records = [
+        {
+            "id": uri,
+            "uri": uri,
+            "level": 2,
+            "vector": [0.1, 0.2, 0.3, 0.4],
+            "account_id": ctx.account_id,
+        }
+        for uri in source_uris + old_targets + untouched
+    ]
+    await backend._upsert_many_raw(records, ctx=ctx)
+    read_ids = set()
+    original_page = backend._strict_transfer_page
+
+    async def tracked_page(*args, **kwargs):
+        page, cursor = await original_page(*args, **kwargs)
+        read_ids.update(record["id"] for record in page)
+        return page, cursor
+
+    monkeypatch.setattr(backend, "_strict_transfer_page", tracked_page)
+    result = await getattr(backend, operation)(
+        ctx,
+        source,
+        target,
+        recursive=directory,
+        **({"source_uris": [source, source_file]} if directory else {}),
+    )
+
+    assert result.scanned == result.written == 206
+    assert result.batches >= 3
+    assert set(source_uris + old_targets).issubset(read_ids)
+    assert untouched[1] not in read_ids
+    expected_targets = [target_file] + [f"{target_file}#chunk_{i:04d}" for i in range(205)]
+    target_ids = [vector_record_id(ctx.account_id, uri, 2) for uri in expected_targets]
+    copied = await backend.get(target_ids, ctx=ctx)
+    assert {record["uri"] for record in copied} == set(expected_targets)
+    assert not await backend.get(old_targets, ctx=ctx)
+    assert {record["uri"] for record in await backend.get(untouched, ctx=ctx)} == set(untouched)
+    remaining_source = await backend.get(source_uris, ctx=ctx)
+    assert len(remaining_source) == (206 if operation == "copy_uri_mapping" else 0)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("operation,indexed_source", [("cp", False), ("cp", True), ("mv", False)])
 async def test_overwrite_preserves_target_acl_with_real_storage(
     indexed_fs, operation, indexed_source
@@ -279,20 +339,21 @@ async def test_directory_merge_replaces_only_affected_file_vectors(
     await seed_vector(backend, f"{target}/tasks/indexed.txt", "old task")
     await seed_vector(backend, f"{target}/only.txt", "keep")
 
-    scanned_uris: list[str] = []
-    original_page = backend._strict_transfer_page
+    fetched_ids: list[str] = []
+    original_get = backend._strict_transfer_get
 
-    async def counted_page(*args, **kwargs):
-        page, cursor = await original_page(*args, **kwargs)
-        scanned_uris.extend(record["uri"] for record in page)
-        return page, cursor
+    async def counted_get(ctx, ids):
+        fetched_ids.extend(ids)
+        return await original_get(ctx, ids)
 
-    monkeypatch.setattr(backend, "_strict_transfer_page", counted_page)
+    monkeypatch.setattr(backend, "_strict_transfer_get", counted_get)
     kwargs = {"recursive": True} if operation == "cp" else {}
     await getattr(fs, operation)(source, target, ctx=ctx, **kwargs)
 
-    assert f"{target}/only.txt" not in scanned_uris
-    assert f"{target}/unindexed.txt" not in scanned_uris
+    # Path queries may scan sibling IDs/URIs, but discard unrelated entries
+    # before loading their full vector records.
+    assert f"{target}/only.txt" not in fetched_ids
+    assert f"{target}/unindexed.txt" not in fetched_ids
     copied = await backend.get_context_by_uri(f"{target}/indexed.txt", ctx=ctx)
     copied = await backend.get([record["id"] for record in copied], ctx=ctx)
     assert [record["abstract"] for record in copied] == ["new"]
