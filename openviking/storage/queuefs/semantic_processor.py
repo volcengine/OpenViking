@@ -69,6 +69,28 @@ from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+UNTRUSTED_RESOURCE_FILE_OPEN = "<untrusted-resource-file>"
+UNTRUSTED_RESOURCE_FILE_CLOSE = "</untrusted-resource-file>"
+
+
+def fence_untrusted_resource_content(content: str) -> str:
+    """Wrap untrusted file bodies and derived summaries so LLMs treat them as data, not instructions (#4292).
+
+    Forged fence markers already present in ``content`` are neutralized so
+    untrusted text cannot close (or open) the fenced span early.
+    """
+    neutralized = content.replace(
+        UNTRUSTED_RESOURCE_FILE_CLOSE, "</\\untrusted-resource-file"
+    ).replace(UNTRUSTED_RESOURCE_FILE_OPEN, "<\\untrusted-resource-file")
+    return f"{UNTRUSTED_RESOURCE_FILE_OPEN}\n{neutralized}\n{UNTRUSTED_RESOURCE_FILE_CLOSE}"
+
+
+def _fence_optional_prompt_section(section: str, empty_marker: str = "None") -> str:
+    """Fence an optional prompt section, leaving empty markers untouched."""
+    if not section or section == empty_marker:
+        return section
+    return fence_untrusted_resource_content(section)
+
 
 class RequestQueueStats:
     processed: int = 0
@@ -984,6 +1006,10 @@ class SemanticProcessor(DequeueHandlerBase):
         if len(content) > max_chars:
             content = content[:max_chars] + "\n...(truncated)"
 
+        # Untrusted file bodies are fenced so the summarizer LLM treats them as
+        # data, never as instructions (#4292). Empty bodies are left as-is.
+        fenced_content = fence_untrusted_resource_content(content) if content.strip() else content
+
         # Detect file type and select appropriate prompt
         file_type = self._detect_file_type(file_name)
 
@@ -1006,7 +1032,7 @@ class SemanticProcessor(DequeueHandlerBase):
             output_language = resolve_output_language(content, config=config)
             prompt = render_prompt(
                 "semantic.code_summary",
-                {"file_name": file_name, "content": content, "output_language": output_language},
+                {"file_name": file_name, "content": fenced_content, "output_language": output_language},
             )
             async with llm_sem:
                 with bind_telemetry_stage("resource_summarize"):
@@ -1027,7 +1053,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
         prompt = render_prompt(
             prompt_id,
-            {"file_name": file_name, "content": content, "output_language": output_language},
+            {"file_name": file_name, "content": fenced_content, "output_language": output_language},
         )
 
         async with llm_sem:
@@ -1414,8 +1440,8 @@ class SemanticProcessor(DequeueHandlerBase):
                 "semantic.overview_generation",
                 {
                     "dir_name": dir_uri.split("/")[-1],
-                    "file_summaries": file_summaries_str,
-                    "children_abstracts": children_abstracts_str,
+                    "file_summaries": _fence_optional_prompt_section(file_summaries_str),
+                    "children_abstracts": _fence_optional_prompt_section(children_abstracts_str),
                     "output_language": output_language,
                     "directory_coverage": directory_coverage,
                 },
@@ -1489,8 +1515,8 @@ class SemanticProcessor(DequeueHandlerBase):
                 "semantic.overview_generation",
                 {
                     "dir_name": dir_name,
-                    "file_summaries": "\n".join(batch_lines) or "None",
-                    "children_abstracts": "\n".join(child_lines) or "None",
+                    "file_summaries": _fence_optional_prompt_section("\n".join(batch_lines) or "None"),
+                    "children_abstracts": _fence_optional_prompt_section("\n".join(child_lines) or "None"),
                     "output_language": output_language,
                     "directory_coverage": directory_coverage,
                 },
@@ -1530,7 +1556,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 "semantic.overview_generation",
                 {
                     "dir_name": dir_name,
-                    "file_summaries": combined,
+                    "file_summaries": _fence_optional_prompt_section(combined),
                     "children_abstracts": "None",
                     "output_language": output_language,
                     "directory_coverage": directory_coverage,
