@@ -378,17 +378,17 @@ async def test_reindex_executor_rejects_dry_run_for_non_prune_mode_direct():
 
 
 @pytest.mark.asyncio
-async def test_reindex_executor_discards_invalid_tags_before_creating_background_task():
+async def test_reindex_executor_preserves_plain_tags_before_creating_background_task():
     from openviking.service.reindex_executor import ReindexExecutor
 
     ingest_options = ReindexExecutor._resolve_ingest_options(
         mode="vectors_only",
-        tags=["invalid", "team=search"],
+        tags=["plain-tag", "team=search"],
         tag_mode="replace",
     )
 
     assert ingest_options is not None
-    assert ingest_options.search_tags == ["team=search"]
+    assert ingest_options.search_tags == ["plain-tag", "team=search"]
 
 
 @pytest.mark.asyncio

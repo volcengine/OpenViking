@@ -491,7 +491,7 @@ Content-Disposition: attachment; filename*=UTF-8''logo.png
 
 ### set_tags()
 
-Set explicit `k=v` tags used by retrieval filters. Both key and value are non-empty and the tag contains exactly one `=`. Other characters are allowed; the server trims whitespace around the tag and lowercases it. The key is capped at 64 and the value at 128 characters, and invalid tags are rejected. `replace` replaces existing tags, while `append` adds tags. When the target is a directory, `recursive=true` applies the update to files below it.
+Set explicit tag strings used by retrieval filters. There are no tag-level restrictions on characters, length, empty content, or the number of `=` separators. The server trims whitespace around each tag and lowercases it. For `k=v` tags, the first `=` separates the key from the value, and duplicate keys keep the last value. Tags without `=` are preserved and deduplicated separately. `replace` replaces existing tags, while `append` merges tags and replaces existing values for matching keys. When the target is a directory, `recursive=true` applies the update to files below it.
 
 **Python SDK**
 

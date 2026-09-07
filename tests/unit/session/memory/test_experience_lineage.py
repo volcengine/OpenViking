@@ -186,6 +186,8 @@ def test_collect_read_experience_uris_ignores_removed_dedicated_tool():
     [
         "viking://user/alice/memories/experiences/cfg_streaming.md",
         "viking://user/alice/memories/experiences/无订单号换货处理.md",
+        "viking://user/alice/memories/experiences/vikingdb_fe_repo_workflows.md",
+        "viking://user/alice/memories/experiences/" + "nested/" * 40 + "workflow.md",
     ],
 )
 def test_experience_source_tag_uses_experience_uri_as_key(uri):
@@ -203,14 +205,14 @@ def test_experience_source_tag_uses_experience_uri_as_key(uri):
 
 
 def test_experience_source_tag_preserves_case_and_escapes_equals_without_collisions():
-    uppercase_uri = "viking://user/Alice/memories/experiences/A=B.md"
-    lowercase_uri = "viking://user/alice/memories/experiences/a=b.md"
+    uppercase_uri = "viking://user/Alice/memories/experiences/Exchange=Flow.md"
+    lowercase_uri = "viking://user/alice/memories/experiences/exchange=flow.md"
 
     uppercase_tag = experience_source_tag(uppercase_uri)
     lowercase_tag = experience_source_tag(lowercase_uri)
 
-    assert uppercase_tag == "viking://user/%41lice/memories/experiences/%41%3d%42.md=1"
-    assert lowercase_tag == "viking://user/alice/memories/experiences/a%3db.md=1"
+    assert uppercase_tag == ("viking://user/%41lice/memories/experiences/%45xchange%3d%46low.md=1")
+    assert lowercase_tag == "viking://user/alice/memories/experiences/exchange%3dflow.md=1"
     assert uppercase_tag != lowercase_tag
     assert uppercase_tag.count("=") == 1
     assert lowercase_tag.count("=") == 1

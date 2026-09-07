@@ -1501,7 +1501,15 @@ async def test_set_tags_append_merges_existing_tags(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_set_tags_discards_non_kv_tags(monkeypatch):
+@pytest.mark.parametrize(
+    "tags",
+    [
+        ["project-a", "team=search"],
+        ["", "=search", "team=", "te=am=search"],
+        ["k" * 256 + "=" + "v" * 512],
+    ],
+)
+async def test_set_tags_preserves_free_form_tags(monkeypatch, tags):
     file_uri = "viking://resources/demo/doc.md"
     root_uri = "viking://resources/demo"
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
@@ -1521,12 +1529,12 @@ async def test_set_tags_discards_non_kv_tags(monkeypatch):
     fake_vfs.vector_store = fake_store
     result = await coordinator.set_tags(
         uri=file_uri,
-        tags=["project-a", "team=search"],
+        tags=tags,
         ctx=ctx,
     )
 
-    assert result["tags"] == ["team=search"]
-    assert fake_store.update_calls == [(file_uri, ["team=search"], "replace")]
+    assert result["tags"] == tags
+    assert fake_store.update_calls == [(file_uri, tags, "replace")]
 
 
 @pytest.mark.asyncio

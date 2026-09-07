@@ -1,21 +1,15 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-import logging
-
 import pytest
 
 from openviking.server.routers.search import _resolve_search_filter
-from openviking.utils import tags as tags_module
 from openviking.utils.tags import (
-    MAX_TAG_KEY_LENGTH,
-    MAX_TAG_VALUE_LENGTH,
     build_search_tags_filter,
     merge_search_tags,
     normalize_search_tag,
     normalize_search_tags,
 )
-from openviking_cli.exceptions import InvalidArgumentError
 
 
 def test_search_tags_filter_keeps_single_tag_as_single_must():
@@ -61,68 +55,48 @@ def test_search_tag_allows_free_form_characters(tag):
     assert normalize_search_tag(tag) == tag
 
 
-@pytest.mark.parametrize("tag", ["", "team", "=search", "team=", "te=am=search"])
-def test_search_tag_rejects_invalid_format(tag):
-    with pytest.raises(InvalidArgumentError):
-        normalize_search_tag(tag)
+@pytest.mark.parametrize(
+    "tag",
+    [
+        "",
+        "team",
+        "=search",
+        "team=",
+        "te=am=search",
+        "=",
+        "k" * 65 + "=v",
+        "team=" + "v" * 129,
+        "k" * 256 + "=" + "v" * 512,
+        "viking://user/default/memories/experiences/vikingdb_fe_repo_workflows.md=1",
+    ],
+)
+@pytest.mark.parametrize("discard_invalid", [False, True])
+def test_search_tag_accepts_unrestricted_strings(tag, discard_invalid):
+    assert normalize_search_tag(tag) == tag
+    assert normalize_search_tags([tag], discard_invalid=discard_invalid) == [tag]
+    assert merge_search_tags([tag], [tag]) == [tag]
+    assert build_search_tags_filter([tag]) == {
+        "op": "must",
+        "field": "search_tags",
+        "conds": [tag],
+    }
 
 
-def test_search_tag_rejects_over_length_key():
-    over_key = "k" * (MAX_TAG_KEY_LENGTH + 1)
-    with pytest.raises(InvalidArgumentError):
-        normalize_search_tag(f"{over_key}=v")
+def test_merge_search_tags_preserves_plain_tags_and_replaces_keyed_values():
+    assert merge_search_tags(
+        [" Team ", "team=old", "", "=old", "owner=alice"],
+        ["team", "team=new=value", "=new", "   ", "other"],
+    ) == ["team", "team=new=value", "", "=new", "owner=alice", "other"]
 
 
-def test_experience_uri_tag_still_obeys_key_length_limit():
-    uri = "viking://user/default/memories/experiences/vikingdb_fe_repo_workflows.md"
-    with pytest.raises(InvalidArgumentError, match="key exceeds max length 64"):
-        normalize_search_tag(f"{uri}=1")
-
-
-def test_search_tag_rejects_over_length_value():
-    over_value = "v" * (MAX_TAG_VALUE_LENGTH + 1)
-    with pytest.raises(InvalidArgumentError):
-        normalize_search_tag(f"team={over_value}")
-
-
-def test_search_tag_accepts_boundary_lengths():
-    key = "k" * MAX_TAG_KEY_LENGTH
-    value = "v" * MAX_TAG_VALUE_LENGTH
-    assert normalize_search_tag(f"{key}={value}") == f"{key}={value}"
-
-
-def test_discard_invalid_search_tags_logs_one_warning_for_batch(caplog):
-    tags_module.logger.addHandler(caplog.handler)
-    try:
-        with caplog.at_level(logging.WARNING, logger="openviking.utils.tags"):
-            result = normalize_search_tags(
-                ["bad-one", "also-bad", "team=search"],
-                discard_invalid=True,
-            )
-    finally:
-        tags_module.logger.removeHandler(caplog.handler)
-
-    assert result == ["team=search"]
-    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
-    assert len(warnings) == 1
-    assert warnings[0].invalid_tags == ["bad-one", "also-bad"]
-    assert "Discarded invalid search tags" in warnings[0].message
-    assert "bad-one" in warnings[0].message
-    assert "also-bad" in warnings[0].message
-
-
-def test_merge_search_tags_discards_invalid_existing_tags(caplog):
-    tags_module.logger.addHandler(caplog.handler)
-    try:
-        with caplog.at_level(logging.WARNING, logger="openviking.utils.tags"):
-            result = merge_search_tags(["bad-existing", "team=old"], ["owner=alice"])
-    finally:
-        tags_module.logger.removeHandler(caplog.handler)
-
-    assert result == ["team=old", "owner=alice"]
-    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
-    assert len(warnings) == 1
-    assert warnings[0].invalid_tags == ["bad-existing"]
+def test_normalize_search_tags_handles_empty_iterables():
+    assert normalize_search_tags(None) == []
+    assert build_search_tags_filter([]) is None
+    assert merge_search_tags(None, None) == []
+    assert merge_search_tags(iter(["tag", "team=old"]), iter(["team=new"])) == [
+        "tag",
+        "team=new",
+    ]
 
 
 def test_find_tags_filter_requires_all_tags():
