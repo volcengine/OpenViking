@@ -26,7 +26,7 @@ ov compile \
   --reason "Organize the research into a knowledge base the team can search"
 ```
 
-The command returns a `cmp_...` task ID immediately. Use `ov task status <id>` to check progress and `ov task cancel <id>` to stop it. The full field reference, task lifecycle, and HTTP API are in the [Compile API](../api/23-compile.md).
+The command returns a `cmp_...` task ID immediately. Use `ov task status <id>` to check progress and `ov task cancel <id>` to stop it. The full field reference, task lifecycle, and HTTP API are in the [Agent Runtime API](../api/23-agent-runtime.md).
 
 ## Swap the Skill, get a different output
 
@@ -50,5 +50,5 @@ The first two examples also give the complete `ov` commands from **importing sou
 ## Related docs
 
 - [VikingBot concepts](../concepts/15-vikingbot.md) — the runtime behind Compile
-- [Compile API](../api/23-compile.md) — full reference for creating, inspecting, and cancelling Compile tasks
+- [Agent Runtime API](../api/23-agent-runtime.md) — full reference for creating, inspecting, and cancelling Compile tasks
 - [Skills API](../api/04-skills.md) — managing and customizing Skills

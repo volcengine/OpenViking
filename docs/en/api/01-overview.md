@@ -511,7 +511,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/api/v1/privacy-configs/{category}/{target_key}` | Write and activate a new version |
 | POST | `/api/v1/privacy-configs/{category}/{target_key}/activate` | Activate a version |
 
-### [OpenViking Assets](22-openviking-assets.md), [WebDAV](20-webdav.md), [Compile API](23-compile.md), and [VikingBot API](24-vikingbot.md)
+### [OpenViking Assets](22-openviking-assets.md), [WebDAV](20-webdav.md), [Agent Runtime API](23-agent-runtime.md), and [VikingBot API](24-vikingbot.md)
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -546,4 +546,4 @@ The sidebar is organized by responsibility rather than historical file size:
 | Data Lifecycle | Watches, snapshots, and OVPack |
 | Operations & Observability | System, tasks, Observer, and Metrics |
 | Identity & Governance | Administration, ACL, and privacy configuration |
-| Protocols & Extensions | OpenViking Assets, WebDAV, Compile API, and VikingBot API |
+| Protocols & Extensions | OpenViking Assets, WebDAV, Agent Runtime API, and VikingBot API |

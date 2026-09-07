@@ -26,7 +26,7 @@ ov compile \
   --reason "把研究资料整理成便于团队检索的知识库"
 ```
 
-命令会立即返回一个 `cmp_...` 任务 ID，之后用 `ov task status <id>` 查看进度、用 `ov task cancel <id>` 取消。完整的字段说明、任务生命周期和 HTTP 接口见 [Compile API](../api/23-compile.md)。
+命令会立即返回一个 `cmp_...` 任务 ID，之后用 `ov task status <id>` 查看进度、用 `ov task cancel <id>` 取消。完整的字段说明、任务生命周期和 HTTP 接口见 [Agent Runtime API](../api/23-agent-runtime.md)。
 
 ## 换个 Skill，就换一种产物
 
@@ -50,5 +50,5 @@ Compile 本身不规定「编译成什么」——那由 Skill 决定。同一�
 ## 相关文档
 
 - [VikingBot 概念](../concepts/15-vikingbot.md) — Compile 背后的执行体
-- [Compile API](../api/23-compile.md) — 创建、查询和取消 Compile 任务的完整参考
+- [Agent Runtime API](../api/23-agent-runtime.md) — 创建、查询和取消 Compile 任务的完整参考
 - [Skills API](../api/04-skills.md) — 如何管理和自定义 Skill

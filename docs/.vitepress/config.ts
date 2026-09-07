@@ -246,7 +246,7 @@ const apiReferenceSidebar = {
         items: [
           ['22-openviking-assets.md', 'OpenViking Assets'],
           ['20-webdav.md', 'WebDAV'],
-          ['23-compile.md', 'Compile API'],
+          ['23-agent-runtime.md', 'Agent Runtime API'],
           ['24-vikingbot.md', 'VikingBot API']
         ]
       },
@@ -304,7 +304,7 @@ const apiReferenceSidebar = {
         items: [
           ['22-openviking-assets.md', 'OpenViking Assets'],
           ['20-webdav.md', 'WebDAV'],
-          ['23-compile.md', 'Compile API'],
+          ['23-agent-runtime.md', 'Agent Runtime API'],
           ['24-vikingbot.md', 'VikingBot API']
         ]
       },

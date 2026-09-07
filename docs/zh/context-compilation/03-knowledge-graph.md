@@ -102,4 +102,4 @@ python examples/compile/graph-show/knowledge-graph/knowledge_graph.py \
 
 - [上下文编译概览](./01-overview.md)
 - [LLM Wiki 示例](./02-llm-wiki.md)
-- [Compile API](../api/23-compile.md)
+- [Agent Runtime API](../api/23-agent-runtime.md)

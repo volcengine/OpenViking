@@ -241,7 +241,7 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 | `http_timeout_seconds` | number | `10` | 单次 HTTP 请求超时 |
 | `poll_interval_ms` | integer | `30000` | 外部任务状态轮询间隔 |
 
-配置 `base_url` 后，OV 通过 `X-API-Key` 传递当前用户的 OV API Key；仅在配置 `gateway_token` 时发送 `X-Gateway-Token`。完整协议见[Compile Server 对接说明](../../design/external-compile-server-api.md)。
+配置 `base_url` 后，OV 通过 `X-API-Key` 传递当前用户的 OV API Key；仅在配置 `gateway_token` 时发送 `X-Gateway-Token`。
 
 ## Reindex 配置
 

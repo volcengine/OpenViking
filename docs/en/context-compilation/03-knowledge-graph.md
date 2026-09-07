@@ -102,4 +102,4 @@ Open `journal-kg.html` in a browser. The script validates first — `relations.j
 
 - [Context Compilation Overview](./01-overview.md)
 - [LLM Wiki example](./02-llm-wiki.md)
-- [Compile API](../api/23-compile.md)
+- [Agent Runtime API](../api/23-agent-runtime.md)

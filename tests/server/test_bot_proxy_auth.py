@@ -310,12 +310,12 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(monkey
 
         async def request(self, method, url, headers, json):
             forwarded.append({"method": method, "url": url, "body": json, "headers": headers})
-            if url.endswith("/bot/v1/compile"):
+            if url.endswith("/runtime/v1/tasks"):
                 if response_status["submit_failures"]:
                     response_status["submit_failures"] -= 1
                     return FakeResponse({"detail": "temporarily unavailable"}, status_code=503)
                 return FakeResponse({"session_id": "ma-session-1"})
-            if url.endswith("/compile/cancel"):
+            if url.endswith("/runtime/v1/tasks/cancel"):
                 status = response_status["cancel"]
                 return FakeResponse(
                     {
@@ -381,16 +381,23 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(monkey
 
     assert external_task_id == "ma-session-1"
     assert [request["url"] for request in forwarded] == [
-        "https://compile.example.com/bot/v1/compile",
-        "https://compile.example.com/compile/status",
-        "https://compile.example.com/compile/cancel",
+        "https://compile.example.com/runtime/v1/tasks",
+        "https://compile.example.com/runtime/v1/tasks/status",
+        "https://compile.example.com/runtime/v1/tasks/cancel",
     ]
     assert all(request["method"] == "POST" for request in forwarded)
     assert "X-Gateway-Token" not in forwarded[0]["headers"]
     assert forwarded[0]["headers"]["Idempotency-Key"] == "cmp_ov_1"
     assert forwarded[0]["headers"]["X-API-Key"] == "active-user-key"
-    assert forwarded[0]["body"]["args"]["user_key"] == "model-user-key"
-    assert "openviking_connection" not in forwarded[0]["body"]
+    assert forwarded[0]["body"] == {
+        "task_type": "compile",
+        "payload": {
+            "from": ["viking://resources/source"],
+            "to": "viking://resources/wiki",
+            "skill": "viking://agent/skills/wiki",
+            "args": {"user_key": "model-user-key"},
+        },
+    }
     assert forwarded[1]["body"] == {"session_id": "ma-session-1"}
     assert status_snapshot.meta == {"token_usage": {"total_tokens": 12}}
     assert cancel_snapshot.status == "cancelled"
@@ -462,10 +469,10 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(monkey
     await tasks.execute("cmp_ov_1", "acct", "alice")
 
     assert [request["url"] for request in forwarded] == [
-        "https://compile.example.com/bot/v1/compile",
-        "https://compile.example.com/bot/v1/compile",
-        "https://compile.example.com/compile/status",
-        "https://compile.example.com/compile/status",
+        "https://compile.example.com/runtime/v1/tasks",
+        "https://compile.example.com/runtime/v1/tasks",
+        "https://compile.example.com/runtime/v1/tasks/status",
+        "https://compile.example.com/runtime/v1/tasks/status",
     ]
     assert forwarded[0]["headers"]["Idempotency-Key"] == "cmp_ov_1"
     assert forwarded[1]["headers"]["Idempotency-Key"] == "cmp_ov_1"
@@ -482,9 +489,9 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(monkey
     await tasks.cancel_recovered("cmp_ov_1", "acct", "alice")
 
     assert [request["url"] for request in forwarded] == [
-        "https://compile.example.com/compile/cancel",
-        "https://compile.example.com/compile/status",
-        "https://compile.example.com/compile/status",
+        "https://compile.example.com/runtime/v1/tasks/cancel",
+        "https://compile.example.com/runtime/v1/tasks/status",
+        "https://compile.example.com/runtime/v1/tasks/status",
     ]
     assert tracker.stage_updates == []
 

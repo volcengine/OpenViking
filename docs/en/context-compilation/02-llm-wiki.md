@@ -127,4 +127,4 @@ python examples/compile/graph-show/llm-wiki/wiki_graph.py \
 
 - [Context Compilation Overview](./01-overview.md)
 - [Knowledge Graph example](./03-knowledge-graph.md)
-- [Compile API](../api/23-compile.md)
+- [Agent Runtime API](../api/23-agent-runtime.md)

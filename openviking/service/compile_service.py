@@ -96,7 +96,7 @@ class _CompileEndpoint:
 
 
 class CompileAPIClient:
-    """Client for the Compile Server session protocol."""
+    """Client for submitting Compile tasks through the Runtime API."""
 
     def __init__(self, endpoint: _CompileEndpoint) -> None:
         self._endpoint = endpoint
@@ -128,7 +128,7 @@ class CompileAPIClient:
     ) -> CompileSessionAccepted:
         response = await self._request(
             "POST",
-            "/bot/v1/compile",
+            "/runtime/v1/tasks",
             json=payload,
             headers=self._headers(connection, idempotency_key=idempotency_key),
         )
@@ -142,7 +142,7 @@ class CompileAPIClient:
     ) -> CompileSessionStatus:
         body = await self._request(
             "POST",
-            "/compile/status",
+            "/runtime/v1/tasks/status",
             json={"session_id": session_id},
             headers=self._headers(connection),
         )
@@ -156,7 +156,7 @@ class CompileAPIClient:
     ) -> CompileSessionStatus:
         body = await self._request(
             "POST",
-            "/compile/cancel",
+            "/runtime/v1/tasks/cancel",
             json={"session_id": session_id},
             headers=self._headers(connection),
         )
@@ -312,7 +312,7 @@ class CompileService:
                 **(private_args if isinstance(private_args, dict) else {}),
             }
         accepted = await self._client().create(
-            request_payload,
+            {"task_type": self.task_type, "payload": request_payload},
             connection=connection,
             idempotency_key=ov_task_id,
         )

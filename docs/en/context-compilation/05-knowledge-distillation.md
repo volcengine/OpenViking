@@ -79,4 +79,4 @@ By default **no `index.md` is created** — a distillation is itself a set of co
 
 - [Context Compilation Overview](./01-overview.md)
 - [Daily Report example](./04-daily-report.md)
-- [Compile API](../api/23-compile.md)
+- [Agent Runtime API](../api/23-agent-runtime.md)

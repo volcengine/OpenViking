@@ -64,4 +64,4 @@ ov read viking://resources/daily-report/2026-08-20.md
 
 - [Context Compilation Overview](./01-overview.md)
 - [Knowledge Distillation example](./05-knowledge-distillation.md)
-- [Compile API](../api/23-compile.md)
+- [Agent Runtime API](../api/23-agent-runtime.md)
