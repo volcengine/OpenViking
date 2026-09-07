@@ -280,8 +280,7 @@ async def test_compile_route_uses_ov_owned_task_and_rejects_legacy_routes(monkey
     assert "GET /api/v1/tasks/{task_id}" in legacy_status.json()["detail"]
     assert legacy_cancel.status_code == 400
     assert "POST /api/v1/tasks/{task_id}/cancel" in legacy_cancel.json()["detail"]
-    assert calls["connection"]["api_key"] == "active-user-key"
-    assert calls["connection"]["server_url"] == "http://127.0.0.1:1944"
+    assert calls["connection"] == {"api_key": "active-user-key"}
     assert calls["owner"] == ("acct", "alice")
 
 
@@ -369,12 +368,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(monkey
         {
             "args": {"user_key": "model-user-key"},
         },
-        {
-            "server_url": "https://ov.example.com",
-            "api_key": "active-user-key",
-            "account_id": "acct",
-            "user_id": "alice",
-        },
+        {"api_key": "active-user-key"},
     )
     status_snapshot = await service.get(
         external_task_id,

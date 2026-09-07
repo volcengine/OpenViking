@@ -11,9 +11,9 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
-from openviking.server.auth import get_request_context
+from openviking.server.auth import _auth_mode, get_request_context
+from openviking.server.config import get_server_url_from_server_data
 from openviking.server.identity import RequestContext
-from openviking.server.openviking_connection import attach_openviking_connection
 from openviking_cli.utils.logger import get_logger
 
 router = APIRouter(prefix="", tags=["bot"])
@@ -23,6 +23,7 @@ logger = get_logger(__name__)
 # Bot API configuration - set when --with-bot is enabled
 BOT_API_URL: Optional[str] = None  # e.g., "http://localhost:18791"
 BOT_API_KEY: str = ""
+DEFAULT_BOT_AGENT_ID = "web-playground"
 
 
 def _create_bot_proxy_client() -> httpx.AsyncClient:
@@ -55,6 +56,80 @@ def get_bot_url() -> str:
             detail="Bot service not enabled. Start server with --with-bot option.",
         )
     return BOT_API_URL
+
+
+def _extract_forward_api_key(request: Request) -> str:
+    api_key = request.headers.get("X-API-Key") or request.headers.get("x-api-key")
+    if api_key:
+        return api_key
+    authorization = request.headers.get("Authorization") or request.headers.get("authorization")
+    if authorization and authorization.lower().startswith("bearer "):
+        return authorization[7:].strip()
+    return ""
+
+
+def _build_openviking_connection(
+    *,
+    api_key: str,
+    ctx: RequestContext,
+    effective_auth_mode: str,
+    server_url: str,
+) -> dict:
+    connection = {
+        "account_id": ctx.user.account_id,
+        "user_id": ctx.user.user_id,
+        "agent_id": DEFAULT_BOT_AGENT_ID,
+        "role": getattr(ctx.role, "value", str(ctx.role)),
+        "api_key_type": "root" if effective_auth_mode == "trusted" else "user",
+        "server_url": server_url,
+    }
+    if api_key:
+        connection["api_key"] = api_key
+    return connection
+
+
+def _attach_openviking_connection(
+    body: dict,
+    request: Request,
+    ctx: RequestContext,
+    *,
+    include_legacy_user_id: bool = True,
+) -> dict:
+    """Attach the authenticated Studio connection to the bot request body.
+
+    The OpenViking proxy authenticates the browser request before forwarding it to
+    vikingbot. Bot tools must keep using that same identity instead of falling back
+    to vikingbot's static root/user-key configuration.
+    """
+    enriched = dict(body)
+    api_key = _extract_forward_api_key(request)
+    plugin = getattr(request.app.state, "auth_plugin", None)
+    effective_auth_mode = _auth_mode(request)
+    server_url = get_server_url_from_server_data(getattr(request.app.state, "config", None))
+    if not api_key:
+        if plugin is not None and plugin.can_skip_api_key_for_bot_proxy():
+            if effective_auth_mode == "trusted":
+                enriched["openviking_connection"] = _build_openviking_connection(
+                    api_key="",
+                    ctx=ctx,
+                    effective_auth_mode=effective_auth_mode,
+                    server_url=server_url,
+                )
+                return enriched
+            if include_legacy_user_id:
+                enriched.setdefault("user_id", ctx.user.user_id)
+            return enriched
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Bot proxy requires a forwardable OpenViking API key.",
+        )
+    enriched["openviking_connection"] = _build_openviking_connection(
+        api_key=api_key,
+        ctx=ctx,
+        effective_auth_mode=effective_auth_mode,
+        server_url=server_url,
+    )
+    return enriched
 
 
 @router.post("/compile")
@@ -162,7 +237,7 @@ async def chat(
             # Forward to Vikingbot OpenAPIChannel chat endpoint
             response = await client.post(
                 f"{bot_url}/bot/v1/chat",
-                json=attach_openviking_connection(body, request, _ctx),
+                json=_attach_openviking_connection(body, request, _ctx),
                 headers=headers,
                 timeout=300.0,  # 5 minute timeout for chat
             )
@@ -212,7 +287,7 @@ async def feedback(
 
             response = await client.post(
                 f"{bot_url}/bot/v1/feedback",
-                json=attach_openviking_connection(body, request, _ctx),
+                json=_attach_openviking_connection(body, request, _ctx),
                 headers=headers,
                 timeout=30.0,
             )
@@ -270,7 +345,7 @@ async def chat_stream(
                 async with client.stream(
                     "POST",
                     f"{bot_url}/bot/v1/chat/stream",
-                    json=attach_openviking_connection(body, request, _ctx),
+                    json=_attach_openviking_connection(body, request, _ctx),
                     headers=headers,
                     timeout=300.0,
                 ) as response:
