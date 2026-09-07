@@ -1,4 +1,6 @@
-import { getOvResult, getTasks } from '#/lib/ov-client'
+import type { TaskSummary } from '@ov-server/api/v1/tasks'
+
+import { getOvResult, getTasks, ovClient } from '#/lib/ov-client'
 import {
   normalizeTasks,
   normalizeTaskStatus,
@@ -63,4 +65,15 @@ export async function fetchTasks(
     )
   }
   return fetched
+}
+
+export async function fetchTaskSummary(
+  taskType: TaskTypeFilter,
+): Promise<TaskSummary> {
+  return getOvResult<TaskSummary>(
+    ovClient.client.get({
+      url: '/api/v1/tasks/summary',
+      query: taskType === 'all' ? {} : { task_type: taskType },
+    }),
+  )
 }

@@ -362,6 +362,14 @@ const workspace = {
     },
   },
   tasksPage: {
+    summary: {
+      successRate: '近 24 小时任务成功率',
+      loading: '正在加载统计...',
+      loadFailed: '任务统计加载失败',
+      counts: '成功 {{completed}} 次 / 失败 {{failed}} 次',
+      listEntries: '列表条目数',
+      listHint: '筛选、折叠后的条目；最多取最近 200 条任务',
+    },
     title: '任务中心',
     description: '集中查看资源处理、会话提交和重建索引等后台任务。',
     refresh: '刷新',

@@ -52,7 +52,12 @@ import { TaskDetailSheet } from '#/routes/tasks/-components/task-detail-sheet'
 import { normalizeTaskStatus } from '#/routes/tasks/-lib/task-record'
 import type { TaskRecord } from '#/routes/tasks/-lib/task-record'
 import { formatTaskDuration, getTaskDate } from '#/routes/tasks/-lib/task-time'
-import { fetchTasks, getEffectiveTaskStatus, MAX_TASKS } from './-lib/task-list'
+import {
+  fetchTasks,
+  fetchTaskSummary,
+  getEffectiveTaskStatus,
+  MAX_TASKS,
+} from './-lib/task-list'
 import type { TaskStatusFilter, TaskTypeFilter } from './-lib/task-list'
 import { getTaskPipelineGroups } from './-lib/task-pipeline'
 
@@ -99,6 +104,12 @@ function TasksRoute() {
     queryKey: ['tasks', identityScopeKey, taskType, statusFilter],
     refetchInterval: 10_000,
   })
+  const summaryQuery = useQuery({
+    queryFn: () => fetchTaskSummary(taskType),
+    queryKey: ['task-summary', identityScopeKey, taskType],
+    refetchInterval: 10_000,
+  })
+  const summary = summaryQuery.data
   const rawTasks = tasksQuery.data ?? []
   const allTasks = React.useMemo(() => {
     if (!dedupByResource) return rawTasks
@@ -492,8 +503,6 @@ function TasksRoute() {
     const running = Math.min(rawRunning, MAX_CONCURRENT_CAP)
     const pending = rawPending + Math.max(0, rawRunning - MAX_CONCURRENT_CAP)
 
-    const successRate = total > 0 ? (completed / total) * 100 : 100
-
     const durations = allTasks
       .map((item) => {
         const start = Number(item.created_at || 0)
@@ -580,7 +589,6 @@ function TasksRoute() {
       running,
       pending,
       failed,
-      successRate,
       avgDurationSec,
       topType,
       topCount,
@@ -604,8 +612,11 @@ function TasksRoute() {
             type="button"
             variant="outline"
             size="sm"
-            disabled={tasksQuery.isFetching}
-            onClick={() => void tasksQuery.refetch()}
+            disabled={tasksQuery.isFetching || summaryQuery.isFetching}
+            onClick={() => {
+              void tasksQuery.refetch()
+              void summaryQuery.refetch()
+            }}
           >
             <RefreshCwIcon
               className={tasksQuery.isFetching ? 'animate-spin' : undefined}
@@ -619,19 +630,21 @@ function TasksRoute() {
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Card className="flex flex-col gap-1 p-3 shadow-none transition-colors hover:border-primary/40">
           <div className="flex items-center justify-between text-xs text-muted-foreground">
-            <span className="font-medium">
-              {i18n.language.startsWith('zh') ? '任务成功率' : 'Success Rate'}
-            </span>
+            <span className="font-medium">{t('summary.successRate')}</span>
           </div>
           <div className="flex items-baseline gap-1">
             <span className="font-mono text-xl font-bold tabular-nums text-foreground">
-              {kpiData.successRate.toFixed(1)}%
+              {summaryQuery.isError || summary?.success_rate == null
+                ? '—'
+                : `${summary.success_rate.toFixed(1)}%`}
             </span>
           </div>
           <p className="text-[11px] text-muted-foreground truncate">
-            {i18n.language.startsWith('zh')
-              ? `共 ${kpiData.total} 条任务 (${kpiData.failed} 异常)`
-              : `Total ${kpiData.total} (${kpiData.failed} Failed)`}
+            {summaryQuery.isError
+              ? t('summary.loadFailed')
+              : summaryQuery.isPending
+                ? t('summary.loading')
+                : t('summary.counts', summary)}
           </p>
         </Card>
 
@@ -657,19 +670,15 @@ function TasksRoute() {
 
         <Card className="flex flex-col gap-1 p-3 shadow-none transition-colors hover:border-primary/40">
           <div className="flex items-center justify-between text-xs text-muted-foreground">
-            <span className="font-medium">
-              {i18n.language.startsWith('zh') ? '任务总数' : 'Total Tasks'}
-            </span>
+            <span className="font-medium">{t('summary.listEntries')}</span>
           </div>
           <div className="flex items-baseline gap-1">
             <span className="font-mono text-xl font-bold tabular-nums text-foreground">
-              {kpiData.total} 条
+              {kpiData.total}
             </span>
           </div>
           <p className="text-[11px] text-muted-foreground truncate">
-            {i18n.language.startsWith('zh')
-              ? `已完成 ${kpiData.completed} 条`
-              : `Completed ${kpiData.completed} Tasks`}
+            {t('summary.listHint')}
           </p>
         </Card>
 
