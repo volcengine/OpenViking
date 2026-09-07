@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sqlite3
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from pathlib import Path
@@ -21,7 +22,33 @@ from openviking.observability.events import ObservabilityEvent
 from .projection import UsageAuditProjection, project_events, safe_int
 from .schema import RESET_ON_SCHEMA_UPGRADE_TABLES, SCHEMA_VERSION, SQLITE_SCHEMA
 
+logger = logging.getLogger(__name__)
+
 UTC = timezone.utc
+
+
+def _rollback_safely(conn: sqlite3.Connection, *, context: str) -> None:
+    """Roll back the active transaction without masking the original error.
+
+    SQLite auto-rolls-back a transaction after certain fatal errors (e.g.
+    SQLITE_FULL / SQLITE_IOERR). By the time the ``except`` block runs there
+    is no transaction left, so a bare ``conn.execute("ROLLBACK")`` raises
+    ``OperationalError: cannot rollback - no transaction is active`` and
+    replaces the underlying failure with a misleading secondary error.
+    Skip the rollback when nothing is active and never let rollback failures
+    shadow the exception being handled.
+    """
+    if not conn.in_transaction:
+        logger.debug(
+            "Usage/Audit %s: transaction already auto-rolled-back by SQLite; "
+            "skipping explicit ROLLBACK",
+            context,
+        )
+        return
+    try:
+        conn.execute("ROLLBACK")
+    except sqlite3.Error as exc:
+        logger.warning("Usage/Audit %s: ROLLBACK failed: %s", context, exc)
 
 
 def _date_range(start_date: str, end_date: str) -> Iterable[str]:
@@ -123,7 +150,7 @@ class SQLiteUsageAuditStore:
                     conn.execute(f"ALTER TABLE request_audit ADD COLUMN {name} TEXT")
             conn.execute("COMMIT")
         except Exception:
-            conn.execute("ROLLBACK")
+            _rollback_safely(conn, context="v4->v5 migration")
             raise
 
     async def close(self) -> None:
@@ -158,7 +185,7 @@ class SQLiteUsageAuditStore:
             }
             self._conn.execute("COMMIT")
         except Exception:
-            self._conn.execute("ROLLBACK")
+            _rollback_safely(self._conn, context="delete_user_data")
             raise
         return deleted
 
@@ -183,7 +210,7 @@ class SQLiteUsageAuditStore:
             self._trim_audit_rows(conn, projection.touched_audit_accounts)
             conn.execute("COMMIT")
         except Exception:
-            conn.execute("ROLLBACK")
+            _rollback_safely(conn, context="record_batch")
             raise
 
     @staticmethod
