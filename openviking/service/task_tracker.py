@@ -540,9 +540,31 @@ class TaskTracker:
         error: str,
         account_id: Optional[str] = None,
         user_id: Optional[str] = None,
+        *,
+        result: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Record failure and finalize after owned work settles."""
-        await self._record_outcome(task_id, account_id, user_id, error=error)
+        """Record failure and optional structured metadata, then finalize."""
+        await self._record_outcome(
+            task_id,
+            account_id,
+            user_id,
+            result=result,
+            error=error,
+        )
+
+    async def mark_cancelled(
+        self,
+        task_id: str,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> None:
+        """Record an externally observed cancellation without requesting local cancellation."""
+        await self._record_outcome(
+            task_id,
+            account_id,
+            user_id,
+            terminal_status=TaskStatus.CANCELLED,
+        )
 
     async def _record_outcome(
         self,
@@ -553,6 +575,7 @@ class TaskTracker:
         result: Optional[Dict[str, Any]] = None,
         error: Optional[str] = None,
         resource_id: Optional[str] = None,
+        terminal_status: Optional[TaskStatus] = None,
     ) -> None:
         await self._dispatcher.run(
             lambda: self._record_outcome_on_owner(
@@ -562,6 +585,7 @@ class TaskTracker:
                 result=result,
                 error=error,
                 resource_id=resource_id,
+                terminal_status=terminal_status,
             )
         )
 
@@ -574,6 +598,7 @@ class TaskTracker:
         result: Optional[Dict[str, Any]],
         error: Optional[str],
         resource_id: Optional[str],
+        terminal_status: Optional[TaskStatus],
     ) -> None:
         cancellation: asyncio.CancelledError | None = None
         outcome_persisted = False
@@ -590,6 +615,9 @@ class TaskTracker:
                 work_error = self._work_index.failure(task_id)
                 if work_error and updated.error is None:
                     updated.error = _sanitize_error(work_error)
+                if terminal_status is not None:
+                    updated.status = terminal_status
+                    updated.stage = terminal_status.value
                 updated.updated_at = self._next_updated_at(task)
                 updated.auth = {}
                 try:

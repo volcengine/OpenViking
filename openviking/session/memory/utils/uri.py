@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from typing import Any, Dict, Set
+from typing import Any, Dict
 
 from openviking.session.memory.dataclass import MemoryTypeSchema
 from openviking.session.memory.utils.model import model_to_dict
@@ -17,6 +17,7 @@ from openviking.session.memory.utils.template_utils import TemplateUtils
 _PORTABLE_SEGMENT_MARKER = "~ov~"
 _PORTABLE_SEGMENT_HASH_LENGTH = 16
 _WINDOWS_INVALID_CHARS = frozenset('<>:"\\|?*')
+_TRUSTED_PATH_SEGMENT_TEMPLATE = re.compile(r"^\{\{\s*user_space\s*\}\}$")
 _WINDOWS_RESERVED_STEMS = frozenset(
     {
         "CON",
@@ -100,23 +101,42 @@ def _portable_uri_segment(segment: str) -> str:
     return f"{stem}{suffix}{extension}"
 
 
-def _make_uri_path_segments_portable(uri: str) -> str:
-    """Make every rendered memory URI segment portable on supported filesystems.
+def _render_portable_uri_template(
+    template: str,
+    context: Dict[str, Any],
+    extract_context: Any,
+) -> str:
+    """Render template-defined path segments without treating field data as hierarchy.
 
-    Clean segments remain byte-identical. A non-portable segment keeps a readable
-    safe prefix and receives a deterministic digest of its original value, so
-    values such as ``Desktop``, ``Desktop ``, and ``Desktop.`` stay distinct.
+    ``user_space`` is an internal path fragment that may contain the explicit
+    ``peers/<peer_id>`` namespace. Other expressions render into exactly one path
+    segment. A slash in dynamic data aliases an underscore because both spellings
+    identify the same memory name.
     """
     scheme_separator = "://"
-    if scheme_separator in uri:
-        scheme, _, path = uri.partition(scheme_separator)
+    if scheme_separator in template:
+        scheme, _, path_template = template.partition(scheme_separator)
         prefix = f"{scheme}{scheme_separator}"
     else:
-        prefix, path = "", uri
+        prefix, path_template = "", template
 
-    if not path:
-        return uri
-    return prefix + "/".join(_portable_uri_segment(segment) for segment in path.split("/"))
+    if not path_template:
+        return prefix
+
+    segments = []
+    for segment_template in path_template.split("/"):
+        rendered = TemplateUtils.render(
+            segment_template,
+            context,
+            extract_context=extract_context,
+            debug_undefined=True,
+            strip=False,
+        )
+        if _TRUSTED_PATH_SEGMENT_TEMPLATE.fullmatch(segment_template):
+            segments.extend(rendered.split("/"))
+        else:
+            segments.append(rendered.replace("/", "_"))
+    return prefix + "/".join(_portable_uri_segment(segment) for segment in segments)
 
 
 def render_template(
@@ -175,18 +195,15 @@ def generate_uri(
         uri_template = f"{dir_template.rstrip('/')}/{filename_template.lstrip('/')}"
     else:
         uri_template = dir_template or filename_template
-    context = {"user_space": user_space}
-    # Add all fields to context (uri_fields with actual values)
-    context.update(fields)
+    context = dict(fields)
+    context["user_space"] = user_space
     template_vars = set(re.findall(r"\{\{\s*(\w+)\s*\}\}", uri_template))
     for var in template_vars:
         if var not in context:
             raise ValueError(f"Missing template variable: {var}")
         if context[var] is None:
             raise ValueError(f"Template variable '{var}' has None value")
-    # Render using unified render_template method (same as content_template)
-    uri = render_template(uri_template, context, extract_context)
-    return _make_uri_path_segments_portable(uri)
+    return _render_portable_uri_template(uri_template, context, extract_context)
 
 
 def validate_uri_template(memory_type: MemoryTypeSchema) -> bool:
@@ -216,69 +233,6 @@ def validate_uri_template(memory_type: MemoryTypeSchema) -> bool:
                 return False
 
     return True
-
-
-def _pattern_matches_uri(pattern: str, uri: str) -> bool:
-    """
-    Check if a URI matches a pattern with variables like {{ topic }}, {{ tool_name }}, etc.
-
-    The pattern matching is flexible:
-    - {{ variable }} matches any sequence of characters except '/'
-    - * matches any sequence of characters except '/' (shell-style)
-    - ** matches any sequence of characters including '/' (shell-style)
-
-    Args:
-        pattern: The pattern to match against (may contain {{ variables }} or * wildcards)
-        uri: The URI to check
-
-    Returns:
-        True if the URI matches the pattern
-    """
-    import re
-
-    # First, convert the pattern to a regex
-    # Escape regex special chars except {, }, *, /
-    pattern = re.escape(pattern)
-    # Unescape {, }, * that we need to handle specially
-    pattern = pattern.replace(r"\{", "{").replace(r"\}", "}").replace(r"\*", "*")
-    # Convert {{ variable }} to [^/]+
-    pattern = re.sub(r"\{\{\s*[^}]+\s*\}\}", r"[^/]+", pattern)
-    # Also support legacy {variable} format
-    pattern = re.sub(r"\{[^}]+\}", r"[^/]+", pattern)
-    # Convert ** to .* and * to [^/]*
-    pattern = pattern.replace("**", ".*")
-    pattern = pattern.replace("*", "[^/]*")
-    # Anchor the pattern
-    pattern = "^" + pattern + "$"
-
-    return bool(re.match(pattern, uri))
-
-
-def is_uri_allowed(
-    uri: str,
-    allowed_directories: Set[str],
-    allowed_patterns: Set[str],
-) -> bool:
-    """
-    Check if a URI is allowed based on allowed directories and patterns.
-
-    Args:
-        uri: The URI to check
-        allowed_directories: Set of allowed directory paths
-        allowed_patterns: Set of allowed path patterns
-
-    Returns:
-        True if the URI is allowed
-    """
-    # Check if URI starts with any allowed directory
-    for dir_path in allowed_directories:
-        if uri == dir_path or uri.startswith(dir_path + "/"):
-            return True
-    # Check if URI matches any allowed pattern
-    for pattern in allowed_patterns:
-        if _pattern_matches_uri(pattern, uri):
-            return True
-    return False
 
 
 def extract_uri_fields_from_flat_model(model: Any, schema: MemoryTypeSchema) -> Dict[str, Any]:

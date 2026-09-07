@@ -52,6 +52,10 @@ class IndexManagerImpl : public IndexManager {
 
   int delete_data(const std::vector<DeleteDataRequest>& data_list) override;
 
+  int rebuild_scalar_index(
+      const std::string& scalar_index_json,
+      const std::vector<AddDataRequest>& data_list) override;
+
   int64_t dump(const std::string& dir) override;
 
   int get_state(StateResult& state_result) override;

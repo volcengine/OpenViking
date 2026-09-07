@@ -58,6 +58,35 @@ describe("OpenVikingClient", () => {
     });
   });
 
+  it("sends glob tags only when requested", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => ok({ matches: [] }));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await client.glob("**/*.md", "resources");
+    await client.glob("**/*.md", "resources", {
+      tags: ["team=search", "env=prod"],
+      includeTags: true,
+    });
+
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
+      pattern: "**/*.md",
+      uri: "viking://resources",
+      node_limit: 256,
+    });
+    expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toEqual({
+      pattern: "**/*.md",
+      uri: "viking://resources",
+      node_limit: 256,
+      tags: ["team=search", "env=prod"],
+      include_tags: true,
+    });
+  });
+
   it("assembles context with dedicated options and rejects mode override", async () => {
     const fetcher = vi
       .fn<typeof fetch>()
@@ -406,6 +435,23 @@ describe("OpenVikingClient", () => {
     });
   });
 
+  it("sends explicit tags for write, list, tree, and grep", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => ok({}));
+    const client = new OpenVikingClient({ baseUrl: "https://example.com", fetch: fetcher });
+
+    await client.write("resources/demo.md", "updated", { tags: [], tagMode: "replace" });
+    await client.list("resources", { tags: ["env=prod"], includeTags: true });
+    await client.tree("resources", { tags: ["env=prod"], includeTags: true });
+    await client.grep("resources", "needle", { tags: ["env=prod"], includeTags: true });
+
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toMatchObject({ tags: [], tag_mode: "replace" });
+    expect(new URL(String(fetcher.mock.calls[1]![0])).searchParams.get("tags")).toBe("env=prod");
+    expect(new URL(String(fetcher.mock.calls[1]![0])).searchParams.get("include_tags")).toBe("true");
+    expect(new URL(String(fetcher.mock.calls[2]![0])).searchParams.get("tags")).toBe("env=prod");
+    expect(new URL(String(fetcher.mock.calls[2]![0])).searchParams.get("include_tags")).toBe("true");
+    expect(JSON.parse(String(fetcher.mock.calls[3]![1]?.body))).toMatchObject({ tags: ["env=prod"], include_tags: true });
+  });
+
   it("supports batch write, byte download, and resource extra", async () => {
     const fetcher = vi
       .fn<typeof fetch>()
@@ -510,21 +556,38 @@ describe("OpenVikingClient", () => {
 
     await client.list("viking://session", {
       nodeLimit: 200,
+      offset: 4,
+      limit: 5,
       sortBy: "mtime",
       sortOrder: "desc",
     });
-    await client.tree("viking://resources/docs", { levelLimit: 2 });
+    await client.tree("viking://resources/docs", {
+      levelLimit: 2,
+      offset: 6,
+      limit: 7,
+    });
     await client.tree("viking://resources/docs", { levelLimit: 0 });
     await client.tree("viking://resources/docs");
 
     const listUrl = new URL(String(fetcher.mock.calls[0]![0]));
     expect(listUrl.searchParams.get("node_limit")).toBe("200");
+    expect(listUrl.searchParams.get("offset")).toBe("4");
+    expect(listUrl.searchParams.get("limit")).toBe("5");
     expect(listUrl.searchParams.get("sort_by")).toBe("mtime");
     expect(listUrl.searchParams.get("sort_order")).toBe("desc");
-    const treeLimits = fetcher.mock.calls
+    const treeUrls = fetcher.mock.calls
       .slice(1)
-      .map((call) => new URL(String(call[0])).searchParams.get("level_limit"));
+      .map((call) => new URL(String(call[0])));
+    const treeLimits = treeUrls.map((url) =>
+      url.searchParams.get("level_limit"),
+    );
     expect(treeLimits).toEqual(["2", "0", "3"]);
+    expect(treeUrls[0]!.searchParams.get("offset")).toBe("6");
+    expect(treeUrls[0]!.searchParams.get("limit")).toBe("7");
+    expect(treeUrls[1]!.searchParams.has("offset")).toBe(false);
+    expect(treeUrls[1]!.searchParams.has("limit")).toBe(false);
+    expect(treeUrls[2]!.searchParams.has("offset")).toBe(false);
+    expect(treeUrls[2]!.searchParams.has("limit")).toBe(false);
   });
 
   it("sends addResource tags and tagMode to the server", async () => {

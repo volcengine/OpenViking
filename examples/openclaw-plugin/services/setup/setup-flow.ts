@@ -13,6 +13,8 @@ import {
 
 export type { SetupIO, SlotActivationResult };
 
+type SetupPeerRole = "none" | "assistant" | "sender" | "person";
+
 export type VersionCompatibility = "compatible" | "server_too_old" | "server_too_new" | "unknown";
 
 export type HealthResult = {
@@ -38,7 +40,7 @@ export type SetupResult = {
     mode: string;
     baseUrl: string;
     apiKey?: string;
-    peer_role?: "none" | "assistant" | "person";
+    peer_role?: SetupPeerRole;
     peer_prefix?: string;
     accountId?: string;
     userId?: string;
@@ -57,7 +59,7 @@ export type StatusResult = {
     mode: string;
     baseUrl: string;
     hasApiKey: boolean;
-    peer_role?: "none" | "assistant" | "person";
+    peer_role?: SetupPeerRole;
     peer_prefix?: string;
     hasAccountId: boolean;
     hasUserId: boolean;
@@ -71,7 +73,7 @@ export type SetupParams = {
   baseUrl: string;
   apiKey?: string;
   headers?: OpenVikingRequestHeaders;
-  peerRole?: "none" | "assistant" | "person";
+  peerRole?: SetupPeerRole;
   peerPrefix?: string;
   accountId?: string;
   userId?: string;
@@ -85,7 +87,7 @@ export type InteractiveRemoteConfigParams = {
   baseUrl: string;
   apiKey?: string;
   headers?: OpenVikingRequestHeaders;
-  peerRole?: "none" | "assistant" | "person";
+  peerRole?: SetupPeerRole;
   peerPrefix?: string;
   accountId?: string;
   userId?: string;
@@ -315,7 +317,7 @@ export function createOpenVikingSetupService({
           baseUrl,
           ...(apiKey ? { apiKey: maskKey(apiKey) } : {}),
           ...(headers ? { headers } : {}),
-          ...(existing.peer_role ? { peer_role: String(existing.peer_role) as "none" | "assistant" | "person" } : {}),
+          ...(existing.peer_role ? { peer_role: String(existing.peer_role) as SetupPeerRole } : {}),
           ...(existing.peer_prefix ? { peer_prefix: String(existing.peer_prefix) } : {}),
           ...(existing.accountId ? { accountId: String(existing.accountId) } : {}),
           ...(existing.userId ? { userId: String(existing.userId) } : {}),
@@ -346,7 +348,7 @@ export function createOpenVikingSetupService({
           mode: String(existing.mode ?? "remote"),
           baseUrl,
           hasApiKey: !!existing.apiKey,
-          ...(existing.peer_role ? { peer_role: String(existing.peer_role) as "none" | "assistant" | "person" } : {}),
+          ...(existing.peer_role ? { peer_role: String(existing.peer_role) as SetupPeerRole } : {}),
           ...(existing.peer_prefix ? { peer_prefix: String(existing.peer_prefix) } : {}),
           hasAccountId: !!existing.accountId,
           hasUserId: !!existing.userId,

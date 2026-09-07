@@ -92,6 +92,7 @@ class _FakeProcessor:
         overview,
         ctx=None,
         ingest_options=None,
+        creator_acl_grant=None,
     ):
         self.vectorized_dirs.append(uri)
 
@@ -104,6 +105,7 @@ class _FakeProcessor:
         ctx=None,
         use_summary=False,
         ingest_options=None,
+        creator_acl_grant=None,
     ):
         if self.verify_streaming:
             assert summary_dict["content"]
@@ -156,7 +158,9 @@ class _ScheduledExecutor:
 def _patch_semantic_config(monkeypatch, *, overview_sample_limit=32):
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_dag.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=overview_sample_limit)),
+        lambda: SimpleNamespace(
+            semantic=SimpleNamespace(overview_sample_limit=overview_sample_limit)
+        ),
     )
 
 

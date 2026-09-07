@@ -2,6 +2,28 @@ import uuid
 
 
 class TestFsMvDeep:
+    def test_mv_rejects_existing_target_without_changing_files(self, api_client):
+        suffix = uuid.uuid4().hex[:8]
+        src = f"viking://resources/mvdeep_conflict_src_{suffix}.md"
+        dst = f"viking://resources/mvdeep_conflict_dst_{suffix}.md"
+        try:
+            assert (
+                api_client.fs_write(src, "source unchanged", mode="create", wait=True).status_code
+                == 200
+            )
+            assert (
+                api_client.fs_write(dst, "target unchanged", mode="create", wait=True).status_code
+                == 200
+            )
+
+            mv_resp = api_client.fs_mv(src, dst)
+            assert mv_resp.status_code == 409, mv_resp.text
+            assert "source unchanged" in api_client.fs_read(src).json().get("result", "")
+            assert "target unchanged" in api_client.fs_read(dst).json().get("result", "")
+        finally:
+            api_client.fs_rm(src)
+            api_client.fs_rm(dst)
+
     def test_mv_file_preserves_content(self, api_client):
         src = f"viking://resources/mvdeep_src_{uuid.uuid4().hex[:8]}.md"
         dst = f"viking://resources/mvdeep_dst_{uuid.uuid4().hex[:8]}.md"

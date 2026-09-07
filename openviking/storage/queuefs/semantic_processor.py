@@ -248,6 +248,8 @@ class SemanticProcessor(DequeueHandlerBase):
     async def _enqueue_parent_refresh(
         self, msg: SemanticMsg, uri: str, *, l0_body_changed: bool
     ) -> None:
+        if msg.generation_trigger == "content_copy":
+            return
         if msg.context_type not in {"resource", "skill"}:
             return
         if not msg.propagate_to_parent:
@@ -264,19 +266,28 @@ class SemanticProcessor(DequeueHandlerBase):
             return
         parent_ctx = self._ctx_from_semantic_msg(msg)
         semantic_config = get_openviking_config().semantic
-        decision = await plan_abstract_overview_refresh(
-            viking_fs=get_viking_fs(),
-            dir_uri=parent_uri,
-            changed_entries=1,
-            ctx=parent_ctx,
-            l0_body_changed=l0_body_changed,
-            # This helper handles automatic upward propagation only. Manual
-            # refresh/ingest bypasses the threshold for its requested root,
-            # not for every ancestor reached afterwards.
-            force_refresh=False,
-            overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
-            refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
-        )
+        try:
+            decision = await plan_abstract_overview_refresh(
+                viking_fs=get_viking_fs(),
+                dir_uri=parent_uri,
+                changed_entries=1,
+                ctx=parent_ctx,
+                l0_body_changed=l0_body_changed,
+                # This helper handles automatic upward propagation only. Manual
+                # refresh/ingest bypasses the threshold for its requested root,
+                # not for every ancestor reached afterwards.
+                force_refresh=False,
+                overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
+                refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
+                lock_timeout_secs=1.0,
+            )
+        except LockAcquisitionError:
+            logger.info(
+                "Skipping best-effort parent freshness update because sidecars are busy: %s",
+                parent_uri,
+            )
+            return
+
         if decision.action is not FreshnessAction.REFRESH_NOW:
             logger.debug(
                 "Parent semantic refresh %s for %s (pending=%d, total=%d)",
@@ -290,8 +301,6 @@ class SemanticProcessor(DequeueHandlerBase):
         from openviking.storage.queuefs import get_queue_manager
 
         queue_manager = get_queue_manager()
-        if queue_manager is None:
-            return
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
         parent_msg = SemanticMsg(
             uri=parent_uri,
@@ -353,8 +362,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     # maintenance. Let the newest message aggregate while this
                     # one still summarizes/vectorizes its changed files.
                     logger.info(
-                        "Downgrading stale semantic message to file-only work: "
-                        "uri=%s version=%s",
+                        "Downgrading stale semantic message to file-only work: uri=%s version=%s",
                         msg.uri,
                         msg.coalesce_version,
                     )
@@ -486,6 +494,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                 source=msg.source,
                                 generation_trigger=msg.generation_trigger,
                                 aggregate_directory=msg.aggregate_directory,
+                                copy_source_uri=msg.copy_source_uri,
                             )
                             await executor.run(run_uri)
                             self._cache_dag_stats(
@@ -772,10 +781,7 @@ class SemanticProcessor(DequeueHandlerBase):
         if msg.skip_vectorization:
             logger.info(f"Skipping vectorization for {dir_uri} (requested via SemanticMsg)")
             return
-        if not (
-            wrote_semantics.overview_body_changed
-            or wrote_semantics.abstract_body_changed
-        ):
+        if not (wrote_semantics.overview_body_changed or wrote_semantics.abstract_body_changed):
             logger.info(
                 "Skipping directory vectorization for %s (visible semantics unchanged)",
                 dir_uri,
@@ -925,7 +931,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     else f"{target_prefix}/{mapping_name}"
                 )
                 try:
-                    await viking_fs.stat(target_mapping, ctx=ctx)
+                    await viking_fs.stat(target_mapping, ctx=ctx, skip_count=True)
                     continue  # already carried over
                 except Exception:
                     pass
@@ -1565,6 +1571,21 @@ class SemanticProcessor(DequeueHandlerBase):
             ingest_options=ingest_options,
             creator_acl_grant=creator_acl_grant,
         )
+
+    async def _load_transfer_file_summaries(
+        self,
+        file_paths: List[str],
+        ctx: Optional[RequestContext] = None,
+    ) -> Dict[str, str]:
+        """Load copied/moved file summaries from their existing target L2 vectors."""
+        if not file_paths:
+            return {}
+        viking_fs = get_viking_fs()
+        vector_store = viking_fs._get_vector_store()
+        if vector_store is None:
+            return {}
+        active_ctx = ctx or self._default_ctx
+        return await vector_store.get_l2_abstracts_by_uris(file_paths, ctx=active_ctx)
 
     async def _vectorize_single_file(
         self,

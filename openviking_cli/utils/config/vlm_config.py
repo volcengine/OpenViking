@@ -22,6 +22,21 @@ def _normalize_provider_name(name: Optional[str]) -> Optional[str]:
     return cleaned or None
 
 
+def _reject_stream_config(data: Any, location: str) -> None:
+    if not isinstance(data, dict):
+        return
+    if "stream" in data:
+        raise ValueError(
+            f"{location}.stream is not supported; OpenViking VLM calls return complete responses"
+        )
+    extra_request_body = data.get("extra_request_body")
+    if isinstance(extra_request_body, dict) and "stream" in extra_request_body:
+        raise ValueError(
+            f"{location}.extra_request_body.stream is not supported; "
+            "OpenViking VLM calls return complete responses"
+        )
+
+
 class VLMCredential(BaseModel):
     """Single VLM credential configuration for multi-credential failover."""
 
@@ -45,7 +60,6 @@ class VLMCredential(BaseModel):
     extra_request_body: Optional[Dict[str, Any]] = Field(
         default=None, description="Extra JSON body fields"
     )
-    stream: Optional[bool] = Field(default=None, description="Enable streaming mode")
     reasoning_effort: Optional[str] = Field(
         default=None,
         description="Reasoning effort for OpenAI-compatible reasoning models",
@@ -60,6 +74,12 @@ class VLMCredential(BaseModel):
     )
 
     model_config = {"extra": "forbid"}
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_stream_config(cls, data: Any) -> Any:
+        _reject_stream_config(data, "vlm.credentials[]")
+        return data
 
 
 class VLMMediaConfig(BaseModel):
@@ -163,10 +183,6 @@ class VLMConfig(BaseModel):
         ),
     )
 
-    stream: bool = Field(
-        default=False, description="Enable streaming mode for OpenAI-compatible providers"
-    )
-
     reasoning_effort: Optional[str] = Field(
         default=None,
         description="Reasoning effort for OpenAI-compatible reasoning models",
@@ -198,6 +214,7 @@ class VLMConfig(BaseModel):
     @classmethod
     def sync_provider_backend(cls, data: Any) -> Any:
         if isinstance(data, dict):
+            _reject_stream_config(data, "vlm")
             provider = data.get("provider")
             backend = data.get("backend")
 
@@ -212,6 +229,7 @@ class VLMConfig(BaseModel):
                 provider_sources: Dict[str, str] = {}
                 for name, config in providers.items():
                     normalized_name = _normalize_provider_name(name) or str(name)
+                    _reject_stream_config(config, f"vlm.providers.{normalized_name}")
                     existing_name = provider_sources.get(normalized_name)
                     if existing_name is not None and existing_name != str(name):
                         raise ValueError(
@@ -293,7 +311,6 @@ class VLMConfig(BaseModel):
             or self.api_base
             or self.extra_headers
             or self.extra_request_body
-            or self.stream
             or self.reasoning_effort
             or self.forward_api_key is not None
         ):
@@ -315,8 +332,6 @@ class VLMConfig(BaseModel):
                 and "extra_request_body" not in self.providers[self.provider]
             ):
                 self.providers[self.provider]["extra_request_body"] = self.extra_request_body
-            if self.stream and "stream" not in self.providers[self.provider]:
-                self.providers[self.provider]["stream"] = self.stream
             if self.reasoning_effort and "reasoning_effort" not in self.providers[self.provider]:
                 self.providers[self.provider]["reasoning_effort"] = self.reasoning_effort
 
@@ -352,11 +367,6 @@ class VLMConfig(BaseModel):
                 extra_request_body=(
                     primary_cfg.get("extra_request_body") or self.extra_request_body
                 ),
-                stream=(
-                    primary_cfg.get("stream")
-                    if primary_cfg.get("stream") is not None
-                    else self.stream
-                ),
                 reasoning_effort=(primary_cfg.get("reasoning_effort") or self.reasoning_effort),
                 max_tokens=self.max_tokens,
             )
@@ -381,11 +391,6 @@ class VLMConfig(BaseModel):
                 extra_headers=backup_cfg.get("extra_headers") or self.backup.extra_headers,
                 extra_request_body=(
                     backup_cfg.get("extra_request_body") or self.backup.extra_request_body
-                ),
-                stream=(
-                    backup_cfg.get("stream")
-                    if backup_cfg.get("stream") is not None
-                    else self.backup.stream
                 ),
                 reasoning_effort=(
                     backup_cfg.get("reasoning_effort") or self.backup.reasoning_effort
@@ -425,11 +430,6 @@ class VLMConfig(BaseModel):
                         extra_request_body=(
                             provider_cfg.get("extra_request_body") or self.extra_request_body
                         ),
-                        stream=(
-                            provider_cfg.get("stream")
-                            if provider_cfg.get("stream") is not None
-                            else self.stream
-                        ),
                         reasoning_effort=(
                             provider_cfg.get("reasoning_effort") or self.reasoning_effort
                         ),
@@ -461,8 +461,6 @@ class VLMConfig(BaseModel):
                 cred.extra_headers = self.extra_headers
             if not cred.extra_request_body:
                 cred.extra_request_body = self.extra_request_body
-            if cred.stream is None:
-                cred.stream = self.stream
             if not cred.reasoning_effort:
                 cred.reasoning_effort = self.reasoning_effort
 
@@ -516,8 +514,6 @@ class VLMConfig(BaseModel):
             config["extra_headers"] = self.extra_headers
         if self.extra_request_body and "extra_request_body" not in config:
             config["extra_request_body"] = self.extra_request_body
-        if self.stream and "stream" not in config:
-            config["stream"] = self.stream
         if self.reasoning_effort and "reasoning_effort" not in config:
             config["reasoning_effort"] = self.reasoning_effort
         return config
@@ -547,8 +543,6 @@ class VLMConfig(BaseModel):
             config["extra_headers"] = cred.extra_headers
         if cred.extra_request_body:
             config["extra_request_body"] = cred.extra_request_body
-        if cred.stream:
-            config["stream"] = cred.stream
         if cred.reasoning_effort:
             config["reasoning_effort"] = cred.reasoning_effort
         return config
@@ -649,7 +643,6 @@ class VLMConfig(BaseModel):
             "max_tokens": (
                 credential.max_tokens if credential.max_tokens is not None else self.max_tokens
             ),
-            "stream": credential.stream if credential.stream is not None else self.stream,
             "api_version": credential.api_version,
             "media": self.media.model_dump(),
         }
@@ -673,11 +666,6 @@ class VLMConfig(BaseModel):
         """Build VLM instance config dict."""
         config, name = self.get_provider_config()
 
-        # Get stream from provider config if available, fallback to self.stream
-        stream = (
-            config.get("stream") if config and config.get("stream") is not None else self.stream
-        )
-
         result = {
             "model": self.model,
             "temperature": self.temperature,
@@ -686,7 +674,6 @@ class VLMConfig(BaseModel):
             "provider": name,
             "thinking": self.thinking,
             "max_tokens": self.max_tokens,
-            "stream": stream,
             "api_version": self.api_version,
             "media": self.media.model_dump(),
         }

@@ -111,10 +111,10 @@ per-harness 章节（档案卡）只写差异；所有共享事实均在本章�
 
 ## 2.2 memory-plugin-shared 共享层
 
-`examples/memory-plugin-shared/lib/` 下共 18 个 `.mjs` 模块，是 JS 系 harness 的唯一事实源。两种消费形态：
+`examples/memory-plugin-shared/lib/` 下共 23 个 `.mjs` 模块，是 JS 系 harness 的唯一事实源。两种消费形态：
 
-1. **Vendoring（复制）**：由 `sync.mjs` 分发到 7 个目标，每个文件首行加 `// GENERATED FROM ... DO NOT EDIT.`（因此 vendored 副本行号 = lib 源行号 + 1，交叉读行号引用时要换算）。分发清单：claude-code / codex / opencode 各 17 个（HARNESS 13 + mcp-proxy-core + mcp-proxy-config + async-writer + batch-send）；dsh 15 个（HARNESS 13 + stdio 代理需要的两个 mcp-proxy-* 模块）；pi 13 个；zcode 全量 19 个；agent-plugins 5 个。当前 HEAD 各目标与 lib 源零漂移。
-2. **相对路径直接 import（不复制）**：cursor / trae / trae-cn 直接 `import "../../memory-plugin-shared/lib/..."`；安装器把包与共享 lib 一起复制到 `~/.openviking/agent-integrations/{<client>,memory-plugin-shared}/`，使相对层级成立。运行期这个共享目录被这几个 harness 共用，任一重装都会整体覆盖。
+1. **Vendoring（复制）**：由 `sync.mjs` 分发到 7 个目标，每个文件首行加 `// GENERATED FROM ... DO NOT EDIT.`（因此 vendored 副本行号 = lib 源行号 + 1，交叉读行号引用时要换算）。每个目标只发它真正 import 的模块，因此分发清单跟的是 import 图而不是 harness。在每个 hook 型插件都会拿的 12 个 hook 模块（`sync.mjs` 里的 `HOOK_SHARED_FILES`）之上：pi 加 setup-wizard（13 个）；dsh 加 stdio 代理需要的两个 mcp-proxy-*（14 个）；opencode 加 setup-wizard、两个 mcp-proxy-* 与 batch-send（16 个）；zcode 加两个 mcp-proxy-*、batch-send、async-writer、agent-hook-runtime 与 agent-uri-guard（18 个）；claude-code / codex 加 setup-wizard、两个 mcp-proxy-*、batch-send、async-writer、plugin-config、workspace-config、workspace-registry 与 doctor-core（各 21 个）。agent-plugins 没有 hook，因此一个 hook 模块都不拿，只有 credentials、debug-log 与两个 mcp-proxy-*（4 个）。当前 HEAD 各目标与 lib 源零漂移。
+2. **相对路径直接 import（不复制）**：cursor / trae / trae-cn 直接 `import "../../memory-plugin-shared/lib/..."`；安装器把包与这些 hook 传递 import 到的 15 个共享模块一起复制到 `~/.openviking/agent-integrations/{<client>,memory-plugin-shared}/`，使相对层级成立。这份安装集合对 import 闭合，不含任何 hook 运行时都够不到的 workspace 配置层。运行期这个共享目录被这几个 harness 共用，任一重装都会整体覆盖。
 
 核心模块速览（细节在各维度章展开）：
 
@@ -127,11 +127,14 @@ per-harness 章节（档案卡）只写差异；所有共享事实均在本章�
 | `batch-send.mjs` | 100 条/批写入 + 404/405 逐条降级 + 连续前缀入队 | cc / codex / opencode + agent-hook 系 |
 | `profile-inject.mjs` | session-start 的 profile + 可用记忆清单注入 | 9 个 harness（openclaw / hermes 除外） |
 | `recall-compress-core.mjs` | 召回压缩 prompt + URI 编辑距离修复 + 缓存 | claude-code |
-| `capture-utils.mjs` | 消息归一 + 注入回流防护 + 捕获过滤 | codex / opencode / dsh / pi |
+| `capture-utils.mjs` | 消息归一 + 注入回流防护 + 捕获过滤 | codex / opencode / dsh / pi / zcode |
 | `credentials.mjs` | 凭据解析链（详见 [§3.1.3](#_3-1-3-凭据体系)） | 全部 JS 系 |
 | `session-model.mjs` | 会话 id 前缀派生 + bypass glob | 全部 JS 系 |
 | `async-writer.mjs` | 写路径 detach（drain stdin → spawn → approve → write → unref；spawn 失败回落同步） | cc / codex / zcode |
-| `workspace-peer.mjs` | cwd → actor peer（非字母数字全替换成 `-`） | 全部 JS 系 |
+| `workspace-peer.mjs` | 按 `peer.source` 解析 actor peer（预设 / 模板 / 保留用于双读的旧 peer id，详见 [§3.1.3](#_3-1-3-凭据体系)） | 全部 JS 系 |
+| `workspace-identity.mjs` | workspace 根目录 + git 身份（归一化 `origin`、仓库根路径、worktree/submodule 类型），纯文件系统上溯、不起 `git` 子进程，按 cwd 缓存 | 全部 JS 系 |
+| `workspace-config.mjs` | 分层 workspace 配置：读 `<root>/.openviking/config.json` 与 `config.local.json`，带来源（provenance）合并各层，剥离连接与凭据类 key | claude-code / codex |
+| `workspace-registry.mjs` | 每机注册表 `~/.openviking/workspaces/<slot>.json`——一个 workspace 一个文件，由人工创建、插件只读，优先级高于任何已提交的文件 | claude-code / codex |
 | `uri-guard.mjs` / `agent-uri-guard.mjs` | 拦截 `viking://` 被误当成本地路径的情况 | 各 harness 的 PreToolUse/tool.execute.before 类 hook |
 | `plugin-config.mjs` | ovcli.conf `plugin` 段读取 | claude-code / codex |
 | `setup-wizard.mjs` | 交互式写 ovcli.conf | cc / codex / opencode / pi 暴露入口 |
@@ -205,13 +208,37 @@ per-harness 章节（档案卡）只写差异；所有共享事实均在本章�
 5. mcpUrl：`OPENVIKING_MCP_URL`（非 cli 模式）→ `${baseUrl}/mcp`。
 6. 统一请求头：`Authorization: Bearer` + `X-OpenViking-Account/User/Actor-Peer` + `User-Agent: openviking-memory-<harness>/<version>`。
 
-**workspace peer**（家族 A 全体 + agent-plugins）：无显式 peerId 且 `OPENVIKING_WORKSPACE_PEER≠0` 时用 cwd 派生——把路径中所有非字母数字字符替换成 `-`（`/Users/x/Dev/OpenViking` → `-Users-x-Dev-OpenViking`），该值随 `X-OpenViking-Actor-Peer` 发送；服务端会对该头校验，含 `/` 或 `\` 返回 400。openclaw 的 peer 由 `peer_role`/`peer_prefix` 推导（`peer_role=person` 时需保证 sender 信息可用，否则工具调用报错）；hermes 的 peer 就是 `OPENVIKING_AGENT`（默认 `hermes`）。
+**workspace peer**（家族 A 各 harness 均适用；agent-plugins 包不做派生，只发显式 `OPENVIKING_PEER_ID`）：无显式 peerId 且 `OPENVIKING_WORKSPACE_PEER≠0` 时由 workspace 派生，随 `X-OpenViking-Actor-Peer` 发送（服务端会对该头校验，含 `/` 或 `\` 返回 400）。派生规则由 `peer.source` 决定，**默认 `git`**：先取归一化后的 `origin` URL，取不到回落到仓库根路径；不在仓库中则什么都不发送，在那里记下的内容进入用户级空间 `viking://user/<you>/memories`。例如在 `/Users/x/Dev/OpenViking/examples/codex-memory-plugin` 下、origin 为 `git@github.com:volcengine/OpenViking.git` 时，peer 是 `github.com-volcengine-openviking`——任意子目录、任意 worktree、任意机器、任意 clone 都是同一个值。`peer.source` 的读取层为 env `OPENVIKING_PEER_SOURCE`、ovcli.conf `plugin.peerSource` / `plugin.<harness>.peerSource`、workspace 文件的 `peer.source`；只有 claude-code 和 codex 读这几层，其余家族 A harness 一律走默认值。
+
+| `peer.source` | 展开为 | 得到的 peer |
+|---|---|---|
+| `git`（默认） | `["{git_remote}", "{git_root}"]` | 归一化 origin → 仓库根路径；不在仓库中则什么都不发送，预设一律不加前缀 |
+| `cwd` | `["{cwd}"]` | 旧行为，逐字节等价：路径中所有非字母数字字符替换成 `-`（`/Users/x/Dev/OpenViking` → `-Users-x-Dev-OpenViking`） |
+| `none` | `[]` | 完全不发 peer；`OPENVIKING_WORKSPACE_PEER=0` 仍是同一含义 |
+| 模板串（如 `"git-{git_remote}"`、`"team-{dir}"`） | 自身 | 自由形式；也可给一组模板（如 `["team-{dir}", "{cwd}"]`）按顺序尝试，变量为空的模板跳过、落到下一个 |
+
+| 变量 | 取值 | 何时为空 |
+|---|---|---|
+| `{git_remote}` | 归一化后的 `origin`，形如 `github.com-org-repo`；host 与 path 转小写，`.git` 后缀与 userinfo 一并丢弃，因此同一仓库的 ssh / https 两种写法结果一致，且 URL 里内嵌的 token 不可能进入 peer id | 非 git 仓库，或未配 `origin` |
+| `{git_root}` | 仓库根路径，按上述旧 sanitation 处理 | 不在 git 仓库中。仓库内某个子目录放了标记文件时，它仍然是仓库自己的根，因此标记子目录不会拆散默认 peer |
+| `{cwd}` | 当前工作目录，按上述旧 sanitation 处理 | 从不为空——它也不在任何默认链里，裸路径只有在你明确要求时才会成为 peer |
+| `{dir}` | 工作区根目录的目录名：仓库根，或放着 `.openviking/config.json` 的那个目录 | 该目录不是工作区 |
+| `{harness}` | 当前 agent 的名字，与 User-Agent 里那个一致 | 从不为空——但 MCP proxy 不参与推导（它的 cwd 不是可靠身份），只走 proxy 的读路径解析不出它 |
+
+在 claude-code 和 codex 下，要让一个不是仓库的目录拥有独立 peer，在该目录下创建 `.openviking/config.json`，写上 `{"version": 1, "peer": {"id": "my-project"}}`；其余 harness 只能改用显式的 `OPENVIKING_PEER_ID`。
+
+**身份语义**：同一仓库的所有 clone 共用一个 peer，项目记忆跟着项目走而非跟着 checkout 走。fork 的 `origin` 不同，因此默认就是另一个 peer；用 `gh pr checkout` 评审外部 PR 不改 `origin`，身份也就不受影响。派生是纯文件系统操作（`workspace-identity.mjs`），不起 `git` 子进程，因此能塞进最紧的 hook 预算，也能在 `git` 不在 `PATH` 上、或因 dubious ownership 拒绝该仓库时照常工作。worktree 经 `commondir` 收敛回主仓库，submodule 保留自己的身份，`$HOME` 与 `/` 永远不会被当作 workspace 根。
+
+**迁移**（无需用户操作）：旧 peer id 是 cwd 的纯函数，客户端随时可以本地重算，召回仍能覆盖到写在它名下的记忆。默认 `peer_scope: "all"` 下，服务端本就有的跨 peer 扫描零成本地把它包含在内；`peer_scope: "actor"` 下插件会另外向该 peer 发一次召回并拼接结果。此事没有截止期限。
+
+openclaw 的 peer 由 `peer_role`/`peer_prefix` 推导（`peer_role=sender` 时需保证 sender 信息可用，否则工具调用报错；旧值 `person` 作为别名兼容）；hermes 的 peer 就是 `OPENVIKING_AGENT`（默认 `hermes`）。
 
 ### 3.1.4 配置体系分层
 
 | 配置层 | 生效范围 | 备注 |
 |---|---|---|
 | env `OPENVIKING_*` | 各家族见上；行为旋钮见各档案卡 | 唯一横跨所有 JS 系的层 |
+| workspace 层：每机注册表 `~/.openviking/workspaces/<slot>.json` > `<repo-root>/.openviking/config.local.json`（私有，gitignore）> `<repo-root>/.openviking/config.json`（提交进仓库、团队共享） | claude-code / codex | schema v1，必须写 `version: 1`，声明其他版本的文件会被跳过并告警。可用 key：`peer.source`、`peer.id`、`recall.{enabled,peer_scope,dedup_turns,max_items,score_threshold}`、`capture.{enabled,commit_token_threshold}`、`bypass.session_patterns`、`labels`。列表类跨层取并集，首元素写 `"!reset"` 可清空继承来的内容；不认识的 key 原样保留但不生效。hook 是非交互的，这些文件因此无提示直接信任，换来的是结构性的拒绝：连接与凭据类 key（`url`、`api_key`、`account`、`user`、`extra_headers` 等）一律剥离并告警，这些文件里的 `${VAR}` 永不展开。注册表目前没有写入方：条目由人工创建，`ov-memory-doctor` 会打印该放到哪个 slot 路径。提交进仓库的文件关掉了什么，由 `ov-memory-doctor` 播报而不是拦截 |
 | ovcli.conf `plugin` 段（`plugin.claude_code` / `plugin.codex` / 共享标量） | claude-code / codex | 其余 harness 名下的 `plugin.<x>` 条目不参与解析。注意：`ov config add/edit` 会以 Rust Config 结构重写整个文件，从而丢弃其不识别的 `plugin` 段；而 `ov config switch` 为字节复制，不受影响 |
 | ov.conf harness 段（`claude_code.*` / `codex.*`） | claude-code / codex（legacy 回落） | |
 | harness 自有配置文件 | opencode `openviking-config.json`、pi `config.json`、dsh cordis patch、openclaw `openclaw.json`、hermes `config.yaml`+`.env` | |
@@ -222,6 +249,7 @@ per-harness 章节（档案卡）只写差异；所有共享事实均在本章�
 - `OPENVIKING_WRITE_PATH_ASYNC`：claude-code / codex / zcode。
 - 召回再摘要相关（`OPENVIKING_RECALL_COMPRESS` / `OPENVIKING_RECALL_REWRITE` 及配套项）：claude-code / codex（服务端 `rewrite` 参数本身对所有调用方可用，[§3.2.5](#_3-2-5-召回再摘要)）。
 - `OPENVIKING_RECALL_DEDUP_TURNS`、`OPENVIKING_RECALL_QUERY_EXPANSION`：claude-code / codex。
+- `OPENVIKING_PEER_SOURCE` 与 workspace 配置文件：claude-code / codex（其余家族 A harness 一律按默认 `git` 规则派生 peer，`OPENVIKING_PEER_ID` 与 `OPENVIKING_WORKSPACE_PEER` 仍然生效）。
 - ovcli.conf `plugin` 段：claude-code / codex。
 
 ## 3.2 自动召回与注入
@@ -515,7 +543,7 @@ MCP `write` / REST `content/write` 的三道 guard（`content_write.py`）：可
 ## zcode
 
 - **集成文档**：[社区插件 → ZCode](./08-community-plugins.md)
-- **形态**：配置驱动（合并进 `~/.zcode/cli/config.json`，强制 `hooks.enabled=true`）+ MCP 代理。4 hook：SessionStart(30s) / UserPromptSubmit(20s) / PreToolUse:Read\|Glob\|Grep(5s) / Stop(30s)。唯一全量 vendoring 18 个共享文件的 harness。版本 0.1.1。
+- **形态**：配置驱动（合并进 `~/.zcode/cli/config.json`，强制 `hooks.enabled=true`）+ MCP 代理。4 hook：SessionStart(30s) / UserPromptSubmit(20s) / PreToolUse:Read\|Glob\|Grep(5s) / Stop(30s)。共 vendoring 18 个共享模块，也是唯一 vendoring `agent-hook-runtime` 那一对、而不是相对 import 的 harness。版本 0.1.2。
 - **能力亮点**：以 rollout 文件 `~/.zcode/cli/rollout/model-io-<sid>.jsonl` 为增量真相源（`lastTurnId` 差集补齐漏掉的 Stop）；Stop 默认 detach（Ctrl+C 不丢写入）。
 - **行为要点**：每 Stop commit（keep 0）；捕获路径仅剥离三类注入块（不做额外文本清洗，[§3.2.6](#_3-2-6-注入回流防护)）；首次捕获会一次性读取整个 rollout（长会话首装时单次推送量大）。
 - **配置**：仅 env；`OPENVIKING_WRITE_PATH_ASYNC` 对 zcode 生效。

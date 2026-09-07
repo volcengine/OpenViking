@@ -24,6 +24,7 @@ from openviking.telemetry import (
 )
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import record_resource_queue_metrics
+from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.logger import get_logger
 
@@ -88,6 +89,28 @@ class AddResourceProcessor(DequeueHandlerBase):
         with suppress(Exception):
             await self._cleanup_staged_source(msg, ctx)
 
+    async def _record_watch_execution(
+        self,
+        msg: AddResourceMsg,
+        status: str,
+        error: Optional[str] = None,
+    ) -> None:
+        if not msg.watch_task_id:
+            return
+        try:
+            await self._resource_service.record_watch_execution(
+                msg.watch_task_id,
+                status=status,
+                execution_task_id=msg.task_id,
+                error=error,
+            )
+        except Exception:
+            logger.exception("[AddResource] Failed to record initial Watch execution")
+
+    async def _handle_cancelled(self, msg: AddResourceMsg, ctx: RequestContext) -> None:
+        await self._release_cancelled_resources(msg, ctx)
+        await self._record_watch_execution(msg, "cancelled")
+
     async def _requeue_lock_handoff(self, msg: AddResourceMsg, exc: Exception) -> bool:
         if msg.lock_handoff_retry >= 2:
             return False
@@ -122,10 +145,7 @@ class AddResourceProcessor(DequeueHandlerBase):
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
             task_id=msg.task_id,
-            meta={
-                "source_path": msg.source_path,
-                **({"internal": True} if msg.internal_task else {}),
-            },
+            meta=({"internal": True} if msg.internal_task else {"source_path": msg.source_path}),
         )
         if task.status in (
             TaskStatus.CANCELLING,
@@ -138,6 +158,12 @@ class AddResourceProcessor(DequeueHandlerBase):
             else:
                 with suppress(Exception):
                     await self._cleanup_staged_source(msg, ctx)
+            status = (
+                "cancelled"
+                if task.status in (TaskStatus.CANCELLING, TaskStatus.CANCELLED)
+                else task.status.value
+            )
+            await self._record_watch_execution(msg, status, getattr(task, "error", None))
             unregister_telemetry(telemetry_id)
             self.report_success()
             return None
@@ -156,6 +182,11 @@ class AddResourceProcessor(DequeueHandlerBase):
                     f"Invalid lock_handoff: {exc}",
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
+                )
+                await self._record_watch_execution(
+                    msg,
+                    "failed",
+                    f"Invalid lock_handoff: {exc}",
                 )
                 self.report_error(f"Invalid lock_handoff: {exc}", data)
                 unregister_telemetry(telemetry_id)
@@ -209,22 +240,28 @@ class AddResourceProcessor(DequeueHandlerBase):
                     )
                     if result.get("status") == "error":
                         errors = result.get("errors") or ["resource processing failed"]
+                        error = "; ".join(str(error) for error in errors)
+                        code = result.get("code")
+                        failure_result = {"code": code} if isinstance(code, str) and code else None
                         await tracker.fail(
                             msg.task_id,
-                            "; ".join(str(error) for error in errors),
+                            error,
                             account_id=ctx.account_id,
                             user_id=ctx.user.user_id,
+                            result=failure_result,
                         )
+                        await self._record_watch_execution(msg, "failed", error)
                         terminal = True
                         self.report_error("resource processing failed", data)
                         return None
-                    await tracker.complete(
-                        msg.task_id,
-                        deepcopy(result),
-                        account_id=ctx.account_id,
-                        user_id=ctx.user.user_id,
-                        resource_id=result.get("root_uri"),
-                    )
+                    if not msg.watch_task_id:
+                        await tracker.complete(
+                            msg.task_id,
+                            deepcopy(result),
+                            account_id=ctx.account_id,
+                            user_id=ctx.user.user_id,
+                            resource_id=result.get("root_uri"),
+                        )
                 else:
                     result = deepcopy(replay_result)
                 await tracker.wait_for_descendants(msg.task_id, metadata.work_id)
@@ -256,6 +293,7 @@ class AddResourceProcessor(DequeueHandlerBase):
                     source_name=msg.source_name,
                     timeout=msg.timeout,
                 )
+                await self._record_watch_execution(msg, "completed")
                 await tracker.complete(
                     msg.task_id,
                     result,
@@ -266,12 +304,25 @@ class AddResourceProcessor(DequeueHandlerBase):
                 terminal = True
                 self.report_success()
                 return None
+            except asyncio.CancelledError:
+                await self._record_watch_execution(msg, "cancelled")
+                terminal = True
+                raise
             except Exception as exc:
+                await self._record_watch_execution(
+                    msg,
+                    "failed",
+                    str(exc) or type(exc).__name__,
+                )
+                failure_result = (
+                    {"code": exc.code} if isinstance(exc, OpenVikingError) and exc.code else None
+                )
                 await tracker.fail(
                     msg.task_id,
                     str(exc),
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
+                    result=failure_result,
                 )
                 terminal = True
                 self.report_error(str(exc), data)
@@ -297,7 +348,7 @@ class AddResourceProcessor(DequeueHandlerBase):
             self.report_error(str(exc), data)
             return None
         future = asyncio.run_coroutine_threadsafe(
-            self._release_cancelled_resources(
+            self._handle_cancelled(
                 msg,
                 RequestContext(
                     user=UserIdentifier(msg.account_id, msg.user_id),

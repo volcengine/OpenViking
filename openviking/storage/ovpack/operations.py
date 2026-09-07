@@ -118,7 +118,7 @@ async def _root_exists(viking_fs, root_uri: str, ctx: RequestContext) -> bool:
 
 async def _ensure_parent_exists(viking_fs, parent: str, ctx: RequestContext) -> None:
     try:
-        await viking_fs.stat(parent, ctx=ctx)
+        await viking_fs.stat(parent, ctx=ctx, skip_count=True)
     except Exception:
         await viking_fs.mkdir(parent, ctx=ctx)
 
@@ -699,7 +699,7 @@ async def restore_ovpack(
                 continue
 
             try:
-                target_stat = await viking_fs.stat(target_uri, ctx=ctx)
+                target_stat = await viking_fs.stat(target_uri, ctx=ctx, skip_count=True)
             except (NotFoundError, FileNotFoundError):
                 target_stat = None
 

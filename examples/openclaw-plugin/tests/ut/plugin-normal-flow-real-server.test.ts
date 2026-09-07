@@ -60,18 +60,18 @@ describe("plugin normal flow with healthy backend", () => {
         return;
       }
 
-      if (method === "POST" && url.pathname === "/api/v1/search/find") {
+      if (method === "POST" && url.pathname === "/api/v1/search/search") {
         json(res, 200, {
           result: {
-            memories: [
-              {
-                uri: "viking://user/default/memories/rust-pref",
-                level: 2,
-                abstract: "User prefers Rust for backend tasks.",
-                score: 0.91,
-              },
-            ],
-            total: 1,
+            entries: [{
+              uri: "viking://user/default/memories/rust-pref",
+              category: "preferences",
+              detail: "abstract",
+              text: "User prefers Rust for backend tasks.",
+              score: 0.91,
+            }],
+            rendered: '<memory uri="viking://user/default/memories/rust-pref">User prefers Rust for backend tasks.</memory>',
+            stats: { candidates: 1, used_tokens: 18 },
           },
           status: "ok",
         });
@@ -267,8 +267,31 @@ describe("plugin normal flow with healthy backend", () => {
 
     expect(requests.some((entry) => entry.method === "GET" && entry.path === "/health")).toBe(true);
     expect(
-      requests.some((entry) => entry.method === "POST" && entry.path === "/api/v1/search/find"),
+      requests.some((entry) => entry.method === "POST" && entry.path === "/api/v1/search/search"),
     ).toBe(true);
+    const contextSearchRequest = requests.find(
+      (entry) => entry.method === "POST" && entry.path === "/api/v1/search/search",
+    );
+    const contextSearchBody = JSON.parse(contextSearchRequest?.body ?? "{}");
+    expect(contextSearchBody).toMatchObject({
+      mode: "context",
+      purpose: "coding",
+      quotas: {
+        events: 1,
+        entities: 1,
+        preferences: 1,
+        experiences: 1,
+        resources: 1,
+        skills: 1,
+      },
+      session_id: "session-normal",
+      context_type: "memory",
+      query_expansion: "auto",
+      max_tokens: 1000,
+      dedup_turns: 5,
+      peer_scope: "actor",
+    });
+    expect(contextSearchBody).not.toHaveProperty("limit");
     expect(
       requests.some((entry) => entry.method === "GET" && entry.path.startsWith("/api/v1/sessions/session-normal/context")),
     ).toBe(true);

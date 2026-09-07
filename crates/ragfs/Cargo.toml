@@ -84,6 +84,7 @@ bytes = "1.5"
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }
 fred = { version = "10.1.0", default-features = false, features = ["i-keys", "i-lists", "i-scripts", "i-server", "i-sets", "sentinel-auth", "sha-1", "vendored-openssl"], optional = true }
+libloading = { version = "0.8", optional = true }
 native-tls = { version = "0.2", optional = true }
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "mysql"], optional = true }
 
@@ -136,7 +137,7 @@ uuid = { version = "1.0", features = ["v4"] }
 
 [features]
 default = []
-cache = ["dep:fred", "dep:native-tls"]
+cache = ["dep:fred", "dep:libloading", "dep:native-tls"]
 test-utils = []
 s3 = ["aws-sdk-s3", "aws-config", "aws-types"]
 full = ["s3", "cache"]

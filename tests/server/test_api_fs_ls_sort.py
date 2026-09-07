@@ -27,20 +27,21 @@ def service(temp_dir):
     )
 
 
-async def test_ls_sorts_by_mtime_before_applying_node_limit(client, service):
+async def test_ls_sorts_before_applying_offset_and_node_limit(client, service):
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
     root_uri = "viking://resources/mtime-before-limit"
     await service.viking_fs.mkdir(root_uri, exist_ok=True, ctx=ctx)
 
-    for index in range(200):
+    for index in range(300):
         await service.viking_fs.mkdir(f"{root_uri}/a-{index:03d}", ctx=ctx)
 
     newest_uri = f"{root_uri}/zz-newest"
     await service.viking_fs.mkdir(newest_uri, ctx=ctx)
+    await service.viking_fs.mkdir(f"{root_uri}/tasks", ctx=ctx)
     await service.viking_fs.mkdir(f"{newest_uri}/activity", ctx=ctx)
     await service.viking_fs.write_file(f"{root_uri}/newer-file.md", "newer", ctx=ctx)
 
-    response = await client.get(
+    mtime_response = await client.get(
         "/api/v1/fs/ls",
         params={
             "uri": root_uri,
@@ -50,11 +51,48 @@ async def test_ls_sorts_by_mtime_before_applying_node_limit(client, service):
             "sort_order": "desc",
         },
     )
+    response = await client.get(
+        "/api/v1/fs/ls",
+        params={
+            "uri": root_uri,
+            "output": "original",
+            "offset": 1,
+            "node_limit": 2,
+            "sort_by": "name",
+            "sort_order": "desc",
+        },
+    )
 
+    assert mtime_response.status_code == 200
+    assert mtime_response.json()["result"][0]["name"] == "zz-newest"
     assert response.status_code == 200
     entries = response.json()["result"]
-    assert len(entries) == 200
-    assert entries[0]["name"] == "zz-newest"
+    assert [entry["name"] for entry in entries] == ["a-299", "a-298"]
+
+    filtered_page = await client.get(
+        "/api/v1/fs/ls",
+        params={
+            "uri": root_uri,
+            "output": "original",
+            "limit": 256,
+            "sort_by": "name",
+            "sort_order": "desc",
+        },
+    )
+    filtered_entries = filtered_page.json()["result"]
+    assert len(filtered_entries) == 256
+    assert all(entry["name"] != "tasks" for entry in filtered_entries)
+
+    invalid_offset = await client.get(
+        "/api/v1/fs/ls",
+        params={"uri": root_uri, "offset": -1},
+    )
+    invalid_limit = await client.get(
+        "/api/v1/fs/ls",
+        params={"uri": root_uri, "limit": 0},
+    )
+    assert invalid_offset.status_code == 400
+    assert invalid_limit.status_code == 400
 
 
 async def test_session_list_keeps_newest_directory_past_storage_limit(client, service):

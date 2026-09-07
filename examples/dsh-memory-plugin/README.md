@@ -85,10 +85,7 @@ change.
 
 Two consequences follow from the proxy being one process per profile:
 
-- **The actor peer is process-level.** Recall, capture, and commit still resolve
-  a peer per session from that session's workspace, but tool calls carry the
-  peer resolved at boot. Set `OPENVIKING_PEER_ID` when one process serves
-  several workspaces and you need tool calls attributed exactly.
+- **The actor peer is process-level.** Recall, capture, and commit still resolve a peer per session from that session's workspace repository, but tool calls carry the peer resolved at boot. Set `OPENVIKING_PEER_ID` when one process serves several repositories and you need tool calls attributed exactly.
 - **`remember` is not session-scoped.** The server's MCP `remember` stores into
   its own short-lived session rather than the live `dsh-<session-id>` stream —
   the same behavior the Claude Code, Codex, and Cursor integrations have.
@@ -121,7 +118,7 @@ Common environment variables:
 | `OPENVIKING_ACCOUNT` | Trusted-mode account |
 | `OPENVIKING_USER` | Trusted-mode user |
 | `OPENVIKING_PEER_ID` | Explicit actor peer |
-| `OPENVIKING_WORKSPACE_PEER` | Derive a peer from each DSH session workspace by default |
+| `OPENVIKING_WORKSPACE_PEER` | Derive a peer from each DSH session workspace's git identity by default; `0` sends no peer |
 | `OPENVIKING_RECALL_PEER_SCOPE` | `all` for cross-workspace recall or `actor` for isolation |
 
 The patch can also carry plugin config:
@@ -153,10 +150,11 @@ The patch can also carry plugin config:
 - `session/event` captures user, assistant, and optionally tool-result messages without scraping a transcript.
 - `turn/end` checks the OpenViking pending-token threshold and commits when required.
 - `skipSubagentSessions: true` excludes sessions marked with `header.origin: subagent` from automatic profile, recall, capture, and commit; it defaults to `false`.
+- `syncTurns: false` stops every write: no captured messages, no threshold or shutdown commit, and no replay of writes an earlier session queued — those stay queued for a session that still writes. Profile injection and recall are unaffected; it defaults to `true`.
 - Failed writes enter the shared OpenViking pending queue for replay at the next session start.
 - `tools/pre-execute` blocks DSH filesystem and shell tools from treating `viking://` URIs as local paths, pointing the model at the bridged `mcp__openviking__*` tools instead.
 
-Each DSH session maps to `dsh-<session-id>` in OpenViking. Workspace-derived actor peers are resolved per session and sent on every session-specific request.
+Each DSH session maps to `dsh-<session-id>` in OpenViking. Workspace-derived actor peers are resolved per session and sent on every session-specific request: the peer is the git identity of the session's workspace — the normalized `origin` URL (`git@github.com:volcengine/OpenViking.git` becomes `github.com-volcengine-openviking`), else the repository root path, that fallback keeping the older rule where every non-letter-or-digit character becomes `-`. Outside a git repository no peer is sent at all, and what is remembered there goes to the user-level space `viking://user/<you>/memories`. One repository therefore keeps one peer across subdirectories, worktrees, clones and machines, while a fork's different origin keeps it separate. DSH does not read workspace `.openviking/config.json` files, so a `peer.id` written there has no effect; pin a peer with `OPENVIKING_PEER_ID` instead. Memories written under the older path-derived peer stay reachable: the default `recallPeerScope: all` sweeps every peer under the user.
 
 ## Tools
 

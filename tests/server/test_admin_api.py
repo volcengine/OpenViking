@@ -119,6 +119,9 @@ class _FakeService:
     async def initialize_user_directories(self, ctx):
         return None
 
+    async def initialize_account_workspace(self, ctx):
+        return None
+
 
 def _build_lightweight_admin_test_app() -> FastAPI:
     from openviking.server.auth.plugins import ApiKeyAuthPlugin

@@ -161,7 +161,8 @@ fn pathlock_err_to_py(err: PathLockError) -> PyErr {
         PathLockError::Conflict { .. }
         | PathLockError::Timeout { .. }
         | PathLockError::HandoffFailed(_)
-        | PathLockError::Busy { .. } =>
+        | PathLockError::Busy { .. }
+        | PathLockError::EmptyToken { .. } =>
         {
             #[allow(deprecated)]
             Python::with_gil(|py| {
@@ -177,6 +178,7 @@ fn pathlock_err_to_py(err: PathLockError) -> PyErr {
         }
     }
 }
+use std::fmt;
 use std::fs;
 use std::future::Future;
 use std::time::{Duration, UNIX_EPOCH};
@@ -215,14 +217,51 @@ use ragfs::core::builder::{
 };
 use ragfs::core::{
     build_configured_stack, ConfigValue, FileInfo, FileSystem, FilesystemStats, FsContext,
-    FsContextInner, FsOperation, GlobPage, GrepResult, MountableFS, OperationStats,
-    PathLockContext, PluginConfig, RagfsConfig, TreeEntry, WriteFlag, FS_CTX,
+    FsContextInner, FsOperation, GlobPage, GrepResult, ListSortBy, MountableFS, OperationStats,
+    PathLockContext, PluginConfig, RagfsConfig, SortOrder, TreeEntry, WriteFlag, FS_CTX,
 };
 use ragfs::lock::types::PathLockError;
 use ragfs::lock::{
     BorrowedPathLockLease, OwnedPathLockLease, PathLockConfig, PathLockHandoffRef, PathLockKind,
     PathLockManager, PathLockRequest,
 };
+
+/// Parse an optional listing sort field and return the matching RagFS value.
+fn parse_list_sort_by(value: Option<&str>) -> PyResult<Option<ListSortBy>> {
+    match value {
+        None => Ok(None),
+        Some("name") => Ok(Some(ListSortBy::Name)),
+        Some("mtime") => Ok(Some(ListSortBy::Mtime)),
+        Some(value) => Err(PyValueError::new_err(format!(
+            "sort_by must be 'name' or 'mtime', got {value:?}"
+        ))),
+    }
+}
+
+/// Parse an optional listing sort direction and return the matching RagFS value.
+fn parse_sort_order(value: Option<&str>) -> PyResult<Option<SortOrder>> {
+    match value {
+        None | Some("asc") => Ok(Some(SortOrder::Asc)),
+        Some("desc") => Ok(Some(SortOrder::Desc)),
+        Some(value) => Err(PyValueError::new_err(format!(
+            "sort_order must be 'asc' or 'desc', got {value:?}"
+        ))),
+    }
+}
+
+/// Validate `offset` and return it as an unsigned RagFS offset.
+fn parse_listing_offset(offset: i64) -> PyResult<usize> {
+    usize::try_from(offset).map_err(|_| PyValueError::new_err("offset must be non-negative"))
+}
+
+/// Validate `limit` and return it as an optional unsigned RagFS limit.
+fn parse_listing_limit(limit: Option<i64>) -> PyResult<Option<usize>> {
+    match limit {
+        None => Ok(None),
+        Some(value) if value > 0 => Ok(Some(value as usize)),
+        Some(_) => Err(PyValueError::new_err("limit must be positive")),
+    }
+}
 
 /// Parse one Python pathlock request without silently defaulting invalid fields.
 fn parse_pathlock_request(raw: &HashMap<String, String>) -> PyResult<PathLockRequest> {
@@ -276,10 +315,20 @@ struct RagfsCacheConfig {
     dynamic: DynamicCacheConfig,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 struct DynamicCacheConfig {
     library: String,
     params: serde_json::Value,
+}
+
+impl fmt::Debug for DynamicCacheConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DynamicCacheConfig")
+            .field("library", &self.library)
+            .field("params", &"<redacted>")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -477,11 +526,7 @@ fn cache_config_from_canonical_ov_conf(
     match config.provider {
         CacheProviderKind::Redis => parse_redis_config(&mut config.redis, &params, "cache.params")?,
         CacheProviderKind::Dynamic => {
-            config.dynamic.library = string_field(&params, "library", "")?;
-            config.dynamic.params = params
-                .get("params")
-                .cloned()
-                .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
+            parse_dynamic_config(&mut config.dynamic, &params)?;
         }
     }
     validate_cache_runtime_config(&config)?;
@@ -535,14 +580,21 @@ fn cache_config_from_value(cache: &serde_json::Value) -> Result<RagfsCacheConfig
         let dynamic = dynamic
             .as_object()
             .ok_or_else(|| "cache.dynamic must be an object".to_string())?;
-        config.dynamic.library = string_field(dynamic, "library", &config.dynamic.library)?;
-        config.dynamic.params = dynamic
-            .get("params")
-            .cloned()
-            .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
+        parse_dynamic_config(&mut config.dynamic, dynamic)?;
     }
     validate_cache_runtime_config(&config)?;
     Ok(config)
+}
+
+fn parse_dynamic_config(
+    config: &mut DynamicCacheConfig,
+    params: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    config.library = string_field(params, "library", &config.library)?;
+    let mut provider_params = params.clone();
+    provider_params.remove("library");
+    config.params = serde_json::Value::Object(provider_params);
+    Ok(())
 }
 
 fn parse_redis_config(
@@ -1584,17 +1636,28 @@ impl RAGFSBindingClient {
     ///
     /// Returns a list of file info dicts with keys:
     /// name, size, mode, modTime, isDir
-    #[pyo3(signature = (path, ctx=None))]
+    #[pyo3(signature = (path, ctx=None, *, offset=0, limit=None, sort_by=None, sort_order=None))]
     fn ls(
         &self,
         py: Python<'_>,
         path: String,
         ctx: Option<HashMap<String, String>>,
+        offset: i64,
+        limit: Option<i64>,
+        sort_by: Option<&str>,
+        sort_order: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
         let fs_ctx = build_fs_context(ctx);
         let top = self.top.clone();
+        let offset = parse_listing_offset(offset)?;
+        let limit = parse_listing_limit(limit)?;
+        let sort_by = parse_list_sort_by(sort_by)?;
+        let sort_order = parse_sort_order(sort_order)?;
         let entries = self
-            .run_scoped(py, fs_ctx, move || async move { top.read_dir(&path).await })
+            .run_scoped(py, fs_ctx, move || async move {
+                top.read_dir(&path, Some(offset), limit, sort_by, sort_order)
+                    .await
+            })
             .map_err(to_py_err)?;
 
         Python::attach(|py| {
@@ -2080,7 +2143,7 @@ impl RAGFSBindingClient {
     ///
     /// Returns:
     ///     A list of dicts, each with keys: path, rel_path, info, extra
-    #[pyo3(signature = (path, show_hidden=false, node_limit=None, level_limit=None, ctx=None))]
+    #[pyo3(signature = (path, show_hidden=false, node_limit=None, level_limit=None, ctx=None, *, offset=0, sort_by=None, sort_order=None))]
     fn tree_directory(
         &self,
         py: Python<'_>,
@@ -2089,16 +2152,30 @@ impl RAGFSBindingClient {
         node_limit: Option<i32>,
         level_limit: Option<i32>,
         ctx: Option<HashMap<String, String>>,
+        offset: i64,
+        sort_by: Option<&str>,
+        sort_order: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
         let fs_ctx = build_fs_context(ctx);
         let top = self.top.clone();
         let limit = node_limit.map(|n| if n < 0 { 0 } else { n as usize });
         let level_limit_usize = level_limit.map(|n| if n < 0 { 0 } else { n as usize });
+        let offset = parse_listing_offset(offset)?;
+        let sort_by = parse_list_sort_by(sort_by)?;
+        let sort_order = parse_sort_order(sort_order)?;
 
         let entries = self
             .run_scoped(py, fs_ctx, move || async move {
-                top.tree_directory(&path, show_hidden, limit, level_limit_usize)
-                    .await
+                top.tree_directory(
+                    &path,
+                    show_hidden,
+                    limit,
+                    level_limit_usize,
+                    Some(offset),
+                    sort_by,
+                    sort_order,
+                )
+                .await
             })
             .map_err(to_py_err)?;
 
@@ -2907,51 +2984,6 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_cache_config_is_parsed_from_ov_conf() {
-        let path = std::env::temp_dir().join(format!(
-            "openviking-cache-config-{}.json",
-            std::process::id()
-        ));
-        fs::write(
-            &path,
-            r#"{
-                "cache": {
-                    "provider": "dynamic",
-                    "params": {
-                        "library": "/opt/openviking/libprovider.so",
-                        "params": {"endpoint": "provider:1234"}
-                    }
-                },
-                "storage": {
-                    "agfs": {
-                        "cachefs": {
-                            "backend": "cache",
-                            "namespace": "ov-test",
-                            "traversal_mode": "cached_traversal"
-                        }
-                    }
-                }
-            }"#,
-        )
-        .unwrap();
-
-        let cache_config = cache_config_from_ov_conf(path.to_str().unwrap()).unwrap();
-        assert!(cache_config.enabled);
-        assert_eq!(cache_config.provider, CacheProviderKind::Dynamic);
-        assert_eq!(cache_config.namespace, "ov-test");
-        assert_eq!(
-            cache_config.traversal_mode,
-            CacheTraversalMode::CachedTraversal
-        );
-        assert_eq!(
-            cache_config.dynamic.library,
-            "/opt/openviking/libprovider.so"
-        );
-
-        fs::remove_file(path).unwrap();
-    }
-
-    #[test]
     fn missing_cache_config_defaults_to_disabled_redis_config() {
         let path = std::env::temp_dir().join(format!(
             "openviking-no-cache-config-{}.json",
@@ -3271,5 +3303,19 @@ mod tests {
             assert!(error.contains(field));
             fs::remove_file(path).unwrap();
         }
+    }
+
+    #[test]
+    fn dynamic_cache_debug_output_redacts_provider_params() {
+        let config = DynamicCacheConfig {
+            library: "/opt/openviking/libprovider.so".to_string(),
+            params: serde_json::json!({"password": "binding-secret"}),
+        };
+
+        let output = format!("{config:?}");
+
+        assert!(output.contains("/opt/openviking/libprovider.so"));
+        assert!(!output.contains("binding-secret"));
+        assert!(output.contains("<redacted>"));
     }
 }

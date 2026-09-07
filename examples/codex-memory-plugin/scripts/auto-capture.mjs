@@ -29,7 +29,7 @@ import { clearEnded, loadState, saveState, withSessionLock } from "./session-sta
 import { maybeDetach, readHookStdin } from "./shared/async-writer.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
-const cfg = loadConfig();
+let cfg = loadConfig();
 const { log, logError } = createLogger("auto-capture", cfg);
 let activePeerId = cfg.peerId || "";
 
@@ -97,9 +97,9 @@ async function maybeCommitByThreshold(ovSessionId, added) {
   };
 }
 
-async function capture(sessionId, transcriptPath, heartbeat) {
+async function capture(sessionId, transcriptPath, cwd, heartbeat) {
   const state = await loadState(sessionId);
-  activePeerId = cfg.peerId || state.workspacePeerId || resolveEffectivePeerId({ cfg, cwd: process.cwd() }).peerId;
+  activePeerId = cfg.peerId || state.workspacePeerId || resolveEffectivePeerId({ cfg, cwd }).peerId;
   log("start", { sessionId, transcriptPath, hasPeer: Boolean(activePeerId) });
 
   const health = await fetchJSON("/health");
@@ -158,6 +158,16 @@ async function main() {
 
   const sessionId = input.session_id || "unknown";
   const transcriptPath = input.transcript_path || null;
+  // The workspace layer belongs to the session's directory, which only the
+  // payload knows; see loadConfig for why re-resolving this late is safe.
+  const cwd = typeof input.cwd === "string" && input.cwd.trim() ? input.cwd : process.cwd();
+  cfg = loadConfig(cwd);
+  if (!cfg.autoCapture) {
+    // The gate above ran against this process's directory, not the session's.
+    log("skip", { stage: "init", reason: "autoCapture disabled" });
+    noop();
+    return;
+  }
 
   // A turn ended for this session, so it is alive again after any resume — but
   // only for markers older than this hook run.
@@ -165,7 +175,7 @@ async function main() {
 
   const outcome = await withSessionLock(
     sessionId,
-    ({ heartbeat }) => capture(sessionId, transcriptPath, heartbeat),
+    ({ heartbeat }) => capture(sessionId, transcriptPath, cwd, heartbeat),
     { waitMs: LOCK_WAIT_MS },
   );
   if (outcome.skipped) {

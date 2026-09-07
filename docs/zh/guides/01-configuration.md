@@ -213,7 +213,7 @@ openviking-server doctor
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
-| `max_concurrent` | int | 最大并发 Embedding 请求数（`embedding.max_concurrent`，默认：`10`） |
+| `max_concurrent` | int | 最大并发 Embedding 请求数（`embedding.max_concurrent`，默认：`10`；必须 `>= 1`） |
 | `max_retries` | int | Embedding provider 瞬时错误的最大重试次数（`embedding.max_retries`，默认：`3`；`0` 表示禁用重试） |
 | `text_source` | str | 文本文件向量化时使用的文本来源。`content_only` 读取原文内容；`summary_first` 优先使用摘要，没有摘要时回退到原文；`summary_only` 只使用摘要。默认：`content_only` |
 | `max_input_tokens` | int | 使用原文内容向量化时，发送给 embedding 模型的最大估算 token 数。默认：`4096` |
@@ -608,14 +608,13 @@ provider，并设置 `storage.vectordb.sparse_weight > 0`。自托管模型的�
 | `thinking` | bool | 启用思考模式（仅对部分火山模型生效，默认：`false`） |
 | `max_concurrent` | int | 语义处理阶段 LLM 最大并发调用数（默认：`32`） |
 | `max_retries` | int | VLM provider 瞬时错误的最大重试次数（默认：`3`；`0` 表示禁用重试） |
-| `credentials` | array | 有序 VLM 凭据/模型列表，索引 0 优先级最高。每项可单独覆盖 `provider`、`model`、`api_key`、`api_base`、`api_version`、`extra_headers`、`extra_request_body`、`stream` 和 `reasoning_effort` |
+| `credentials` | array | 有序 VLM 凭据/模型列表，索引 0 优先级最高。每项可单独覆盖 `provider`、`model`、`api_key`、`api_base`、`api_version`、`extra_headers`、`extra_request_body` 和 `reasoning_effort` |
 | `failback_timeout_seconds` | float | 切换到低优先级 credential 后，尝试逐级切回的时间阈值（默认：`600`） |
 | `failback_request_count` | int | 低优先级 credential 成功处理多少次请求后尝试逐级切回（默认：`50`） |
 | `backup` | object | 可选的备用 VLM 配置（结构与 `vlm` 相同），当主 VLM 遇到限流、`5xx`、超时或连接失败等可重试错误时自动切换。仅支持 1 层备用 &mdash; 备用 VLM 本身不能再嵌套 `backup` |
 | `timeout` | float | 单次 VLM API 请求的 HTTP 超时时间（秒），传递给底层 OpenAI/LiteLLM 客户端。慢端点（如 DashScope、本地推理）可调大。必须 `> 0`（默认：`600.0`） |
 | `extra_headers` | object | 兼容 HTTP provider 的自定义请求头。`kimi` 默认已注入所需订阅请求头，也支持在这里覆盖或扩展 |
 | `extra_request_body` | object | 传给 OpenAI 兼容 completion 请求的额外 JSON body 字段，可用于 Ollama `{"think": false}` 等 provider 专有参数 |
-| `stream` | bool | 启用流式模式（OpenAI 兼容 provider 可用，默认：`false`） |
 | `reasoning_effort` | str | OpenAI Codex Responses 请求的推理强度。不设置时使用模型默认值 |
 | `media` | object | 音视频运行参数；音视频理解复用该 VLM 的 provider、模型、凭据、client、超时、重试、请求头、输出 token 限制、故障切换和 token 统计 |
 | `media.enabled` | bool | 启用音视频理解（默认：`false`） |
@@ -697,24 +696,6 @@ LiteLLM 的 Bedrock bearer-token API-key 鉴权，请设置 `forward_api_key=tru
   }
 }
 ```
-
-**流式模式**
-
-对于返回 SSE（Server-Sent Events）格式响应的 OpenAI 兼容 provider，启用 `stream` 模式：
-
-```json
-{
-  "vlm": {
-    "provider": "openai",
-    "api_key": "your-api-key",
-    "model": "gpt-4o",
-    "api_base": "https://api.example.com/v1",
-    "stream": true
-  }
-}
-```
-
-> **注意**: OpenAI SDK 需要 `stream=true` 才能正确解析 SSE 响应。使用强制返回 SSE 格式的 provider 时，必须将此选项设置为 `true`。
 
 **音视频理解**
 
@@ -1464,7 +1445,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 
 ##### ACL schema
 
-ACL 只维护在 context collection。除 `acl_enabled: bool` 外，需要以下 `list<string>` 标量索引字段：
+ACL 只维护在 context collection。除 `acl_mode: string`（`none` 或 `inherit`）外，需要以下 `list<string>` 标量索引字段：
 
 ```text
 acl_direct_grants
@@ -1473,7 +1454,7 @@ acl_inherited_grants
 
 每个元素使用 `{mask}:{principal}` 格式，其中 `1` 表示 `read`、`3` 表示 `write`、`7` 表示 `manage`。
 
-本地 backend 会在启动时为存量 collection 增加字段并重建标量索引。旧记录不做全量回填；缺失 ACL 字段按 `acl_enabled=false` 和空列表读取。
+本地 backend 会在启动时为存量 collection 增加字段并重建标量索引。旧记录不做全量回填；缺失 ACL 字段按 `acl_mode=none` 和空列表读取。
 
 火山向量库等远端 backend 的存量 collection 需要由部署方预先添加这些字段和 scalar index，OpenViking 只校验 schema。`volcengine` API key 数据面模式还要求 context collection 和配置的 index 已存在。权限模型详见 [资源访问控制（ACL）](../concepts/15-acl.md)。
 
@@ -1905,8 +1886,7 @@ Task 记录文件位于所属账号的系统目录：
     "max_concurrent": 32,
     "max_retries": 3,
     "extra_headers": {},
-    "extra_request_body": {},
-    "stream": false
+    "extra_request_body": {}
   },
   "rerank": {
     "provider": "volcengine|openai",

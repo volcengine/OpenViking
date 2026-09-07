@@ -152,7 +152,7 @@ function toolId(block) {
 
 function toolStatus(block, kind) {
   if (kind === "call") return "running";
-  if (block?.is_error || block?.error || block?.state?.error) return "error";
+  if (block?.is_error || block?.isError || block?.state?.isError || block?.error || block?.state?.error) return "error";
   const status = oneLine(block?.status || block?.state?.status || "");
   return status || "completed";
 }

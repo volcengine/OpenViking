@@ -316,3 +316,71 @@ test("captureToolMaxChars still caps tool output when an operator lowers it", as
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("the workspace that decides capture is the payload's, not the hook process's", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-workspace-"));
+  const home = join(root, "home");
+  const workspaceDir = join(root, "workspace");
+  const plainDir = join(root, "plain");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const paths = [];
+
+  try {
+    // The `.git` is what makes the directory a workspace root; the hook itself
+    // runs from this test's directory, which has no such file.
+    await mkdir(join(workspaceDir, ".openviking"), { recursive: true });
+    await mkdir(join(workspaceDir, ".git"), { recursive: true });
+    await mkdir(join(plainDir, ".git"), { recursive: true });
+    await mkdir(home, { recursive: true });
+    await writeFile(
+      join(workspaceDir, ".openviking", "config.json"),
+      JSON.stringify({ version: 1, capture: { enabled: false } }),
+    );
+    await writeTranscript(transcriptPath);
+
+    const env = (baseUrl) => {
+      const base = hookEnv(root, baseUrl);
+      delete base.OPENVIKING_AUTO_CAPTURE;
+      return { ...base, HOME: home, OPENVIKING_HOME: join(home, ".openviking") };
+    };
+
+    await withMockOpenViking(async (req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      paths.push(url.pathname);
+      if (req.method === "GET" && url.pathname === "/health") {
+        writeJson(res, 200, { status: "ok", result: { healthy: true } });
+        return;
+      }
+      if (req.method === "POST" && url.pathname.endsWith("/messages/batch")) {
+        const body = await readRequestBody(req);
+        writeJson(res, 200, { status: "ok", result: { added: body.messages.length } });
+        return;
+      }
+      if (req.method === "GET" && url.pathname.startsWith("/api/v1/sessions/")) {
+        writeJson(res, 200, {
+          status: "ok",
+          result: { message_count: 0, pending_tokens: 10, commit_count: 0 },
+        });
+        return;
+      }
+      writeJson(res, 404, { status: "error", error: { code: "NOT_FOUND" } });
+    }, async (baseUrl) => {
+      await runAutoCapture(
+        { session_id: "ws-off", transcript_path: transcriptPath, cwd: workspaceDir },
+        env(baseUrl),
+      );
+      assert.deepEqual(paths, [], "the workspace file turned capture off for this directory");
+
+      await runAutoCapture(
+        { session_id: "ws-on", transcript_path: transcriptPath, cwd: plainDir },
+        env(baseUrl),
+      );
+      assert.ok(
+        paths.some((path) => path.endsWith("/messages/batch")),
+        `expected the same env to capture outside that workspace; paths=${JSON.stringify(paths)}`,
+      );
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

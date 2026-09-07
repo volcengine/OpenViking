@@ -147,6 +147,8 @@ Changing the model or `dimension` can make existing vector collections incompati
 
 Rerank has no separate `enabled` field. It becomes available when the required provider credentials are configured.
 
+Setting `provider` explicitly requires the credentials that provider needs: `ak` and `sk` for `vikingdb`, `api_key` for `cohere`, `api_key` and `api_base` for `openai`, `model` for `litellm`. An incomplete block is rejected when the configuration loads.
+
 ## Retrieval Settings
 
 ```json

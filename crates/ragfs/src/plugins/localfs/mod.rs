@@ -20,7 +20,9 @@ use crate::core::errors::{Error, Result};
 use crate::core::filesystem::{validate_virtual_path, FileSystem};
 use crate::core::glob::{decode_offset_token, encode_offset_token, PreparedGlob};
 use crate::core::plugin::ServicePlugin;
-use crate::core::types::{ConfigParameter, FileInfo, GlobEntry, GlobPage, GrepResult, PluginConfig, WriteFlag};
+use crate::core::types::{
+    ConfigParameter, FileInfo, GlobEntry, GlobPage, GrepResult, PluginConfig, WriteFlag,
+};
 
 /// LocalFS - Local file system implementation
 pub struct LocalFileSystem {
@@ -208,8 +210,9 @@ impl LocalFileSystem {
             return Ok(false);
         }
 
-        file.set_len(0)
-            .map_err(|e| Error::plugin(format!("failed to truncate for compare_and_write: {}", e)))?;
+        file.set_len(0).map_err(|e| {
+            Error::plugin(format!("failed to truncate for compare_and_write: {}", e))
+        })?;
         file.seek(SeekFrom::Start(0))
             .map_err(|e| Error::plugin(format!("failed to rewind for compare_and_write: {}", e)))?;
         file.write_all(&new_data)
@@ -261,8 +264,9 @@ impl LocalFileSystem {
             return Ok(false);
         }
 
-        fs::remove_file(&local_path)
-            .map_err(|e| Error::plugin(format!("failed to remove for compare_and_remove: {}", e)))?;
+        fs::remove_file(&local_path).map_err(|e| {
+            Error::plugin(format!("failed to remove for compare_and_remove: {}", e))
+        })?;
         Ok(true)
     }
 
@@ -815,7 +819,8 @@ impl LocalFileSystem {
                 break;
             }
 
-            let dent = dent.map_err(|e| Error::plugin(format!("failed to walk directory: {}", e)))?;
+            let dent =
+                dent.map_err(|e| Error::plugin(format!("failed to walk directory: {}", e)))?;
             raw_seen += 1;
 
             if raw_seen <= start {
@@ -849,11 +854,14 @@ impl LocalFileSystem {
             });
         }
 
-        let next_token = next_offset
-            .filter(|_| page_size.is_some())
-            .map(|offset| encode_offset_token(offset, virtual_path, pattern, show_hidden, level_limit));
+        let next_token = next_offset.filter(|_| page_size.is_some()).map(|offset| {
+            encode_offset_token(offset, virtual_path, pattern, show_hidden, level_limit)
+        });
 
-        Ok(GlobPage { entries, next_token })
+        Ok(GlobPage {
+            entries,
+            next_token,
+        })
     }
 
     fn resolve_virtual_path(base_path: &Path, path: &str) -> PathBuf {
@@ -1058,11 +1066,18 @@ impl FileSystem for LocalFileSystem {
         Self::run_blocking_fs(move || Self::compare_and_remove_locked(local_path, expected)).await
     }
 
-    async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
+    async fn read_dir(
+        &self,
+        path: &str,
+        offset: Option<usize>,
+        limit: Option<usize>,
+        sort_by: Option<crate::core::ListSortBy>,
+        sort_order: Option<crate::core::SortOrder>,
+    ) -> Result<Vec<FileInfo>> {
         let local_path = self.resolve_path(path)?;
         let path = path.to_string();
 
-        Self::run_blocking_fs(move || {
+        let entries = Self::run_blocking_fs(move || {
             // Check if directory exists
             if !local_path.exists() {
                 return Err(Error::NotFound(path.clone()));
@@ -1101,7 +1116,10 @@ impl FileSystem for LocalFileSystem {
 
             Ok(files)
         })
-        .await
+        .await?;
+        Ok(crate::core::filesystem::apply_read_dir_options(
+            entries, offset, limit, sort_by, sort_order,
+        ))
     }
 
     async fn stat(&self, path: &str) -> Result<FileInfo> {
@@ -1180,58 +1198,58 @@ impl FileSystem for LocalFileSystem {
             }
         }
 
-          // Keep replace semantics explicit instead of inheriting rename behavior:
-          // encrypted publish needs an overwrite-on-destination move.
-          #[cfg(windows)]
-          {
-              use std::ffi::OsStr;
-              use std::io;
-              use std::os::windows::ffi::OsStrExt;
+        // Keep replace semantics explicit instead of inheriting rename behavior:
+        // encrypted publish needs an overwrite-on-destination move.
+        #[cfg(windows)]
+        {
+            use std::ffi::OsStr;
+            use std::io;
+            use std::os::windows::ffi::OsStrExt;
 
-              type BOOL = i32;
-              type DWORD = u32;
-              type LPCWSTR = *const u16;
+            type BOOL = i32;
+            type DWORD = u32;
+            type LPCWSTR = *const u16;
 
-              const MOVEFILE_REPLACE_EXISTING: DWORD = 0x1;
-              const MOVEFILE_WRITE_THROUGH: DWORD = 0x8;
+            const MOVEFILE_REPLACE_EXISTING: DWORD = 0x1;
+            const MOVEFILE_WRITE_THROUGH: DWORD = 0x8;
 
-              unsafe extern "system" {
-                  fn MoveFileExW(
-                      lpExistingFileName: LPCWSTR,
-                      lpNewFileName: LPCWSTR,
-                      dwFlags: DWORD,
-                  ) -> BOOL;
-              }
+            unsafe extern "system" {
+                fn MoveFileExW(
+                    lpExistingFileName: LPCWSTR,
+                    lpNewFileName: LPCWSTR,
+                    dwFlags: DWORD,
+                ) -> BOOL;
+            }
 
-              let src_wide: Vec<u16> = OsStr::new(src_local.as_os_str())
-                  .encode_wide()
-                  .chain(std::iter::once(0))
-                  .collect();
-              let dst_wide: Vec<u16> = OsStr::new(dst_local.as_os_str())
-                  .encode_wide()
-                  .chain(std::iter::once(0))
-                  .collect();
+            let src_wide: Vec<u16> = OsStr::new(src_local.as_os_str())
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
+            let dst_wide: Vec<u16> = OsStr::new(dst_local.as_os_str())
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
 
-              let replaced = unsafe {
-                  MoveFileExW(
-                      src_wide.as_ptr(),
-                      dst_wide.as_ptr(),
-                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-                  )
-              };
-              if replaced == 0 {
-                  return Err(Error::plugin(format!(
-                      "failed to replace: {}",
-                      io::Error::last_os_error()
-                  )));
-              }
-          }
+            let replaced = unsafe {
+                MoveFileExW(
+                    src_wide.as_ptr(),
+                    dst_wide.as_ptr(),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+                )
+            };
+            if replaced == 0 {
+                return Err(Error::plugin(format!(
+                    "failed to replace: {}",
+                    io::Error::last_os_error()
+                )));
+            }
+        }
 
-          #[cfg(not(windows))]
-          {
-              fs::rename(&src_local, &dst_local)
-                  .map_err(|e| Error::plugin(format!("failed to replace: {}", e)))?;
-          }
+        #[cfg(not(windows))]
+        {
+            fs::rename(&src_local, &dst_local)
+                .map_err(|e| Error::plugin(format!("failed to replace: {}", e)))?;
+        }
 
         Ok(())
     }
@@ -1781,7 +1799,10 @@ mod tests {
         let (dir, fs) = fallback_localfs();
         std::fs::create_dir_all(dir.path().join("folder")).unwrap();
 
-        let out = fs.glob_directory("/", "**/*", false, None, None, None).await.unwrap();
+        let out = fs
+            .glob_directory("/", "**/*", false, None, None, None)
+            .await
+            .unwrap();
         assert_eq!(
             out.entries
                 .iter()
@@ -1847,7 +1868,10 @@ mod tests {
         write_file(dir.path(), ".hidden.md", "");
         write_file(dir.path(), ".hidden_dir/nested.md", "");
 
-        let out = fs.glob_directory("/", "**/*.md", false, None, None, None).await.unwrap();
+        let out = fs
+            .glob_directory("/", "**/*.md", false, None, None, None)
+            .await
+            .unwrap();
         assert_eq!(
             out.entries
                 .iter()
@@ -1870,12 +1894,17 @@ mod tests {
         write_file(dir.path(), "z_blocked/late.md", "");
 
         let blocked_dir = dir.path().join("z_blocked");
-        let old_mode = std::fs::metadata(&blocked_dir).unwrap().permissions().mode();
+        let old_mode = std::fs::metadata(&blocked_dir)
+            .unwrap()
+            .permissions()
+            .mode();
         let mut perms = std::fs::metadata(&blocked_dir).unwrap().permissions();
         perms.set_mode(0);
         std::fs::set_permissions(&blocked_dir, perms).unwrap();
 
-        let first = fs.glob_directory("/", "**/*.md", false, Some(2), None, None).await;
+        let first = fs
+            .glob_directory("/", "**/*.md", false, Some(2), None, None)
+            .await;
         assert!(first.is_ok());
         let first = first.unwrap();
         assert_eq!(

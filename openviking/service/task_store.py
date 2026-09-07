@@ -46,6 +46,7 @@ class PersistentTaskStore:
 
     def __init__(self, agfs: Any) -> None:
         self._agfs = agfs if isinstance(agfs, AsyncAGFSClient) else AsyncAGFSClient(agfs)
+        self._ensured_task_dirs: set[tuple[str, str]] = set()
 
     async def create(self, task: Any) -> None:
         await self._write_task(task)
@@ -92,7 +93,11 @@ class PersistentTaskStore:
     async def delete(self, task_id: str, *, account_id: str, user_id: Optional[str] = None) -> None:
         if not user_id:
             return
-        await self._agfs.rm(self._task_path(account_id, user_id, task_id), force=True)
+        await self._agfs.rm(
+            self._task_path(account_id, user_id, task_id),
+            force=True,
+            auto_pathlock=False,
+        )
 
     async def _write_task(self, task: Any) -> None:
         account_id = getattr(task, "account_id", None)
@@ -100,16 +105,43 @@ class PersistentTaskStore:
         if not account_id or not user_id:
             raise ValueError("PersistentTaskStore requires account_id and user_id")
         await self._ensure_task_dir(account_id, user_id)
-        await self._agfs.write(
-            self._task_path(account_id, user_id, task.task_id),
-            json.dumps(_task_to_payload(task), ensure_ascii=False).encode("utf-8"),
-        )
+        path = self._task_path(account_id, user_id, task.task_id)
+        payload = json.dumps(_task_to_payload(task), ensure_ascii=False).encode("utf-8")
+        try:
+            await self._write_task_payload(path, payload)
+        except (AGFSNotFoundError, FileNotFoundError):
+            self._ensured_task_dirs.discard((account_id, user_id))
+            await self._ensure_task_dir(account_id, user_id)
+            await self._write_task_payload(path, payload)
 
     async def _ensure_task_dir(self, account_id: str, user_id: str) -> None:
-        await self._mkdir_if_missing(self._account_dir(account_id))
-        await self._mkdir_if_missing(self._system_dir(account_id))
-        await self._mkdir_if_missing(self._task_root_dir(account_id))
-        await self._mkdir_if_missing(self._task_dir(account_id, user_id))
+        cache_key = (account_id, user_id)
+        if cache_key in self._ensured_task_dirs:
+            return
+
+        seen_paths: set[str] = set()
+        for path in self._task_dir_chain(account_id, user_id):
+            if path in seen_paths:
+                continue
+            seen_paths.add(path)
+            await self._mkdir_if_missing(path)
+        self._ensured_task_dirs.add(cache_key)
+
+    def _task_dir_chain(self, account_id: str, user_id: str) -> tuple[str, ...]:
+        return (
+            self._account_dir(account_id),
+            self._system_dir(account_id),
+            self._task_root_dir(account_id),
+            self._task_dir(account_id, user_id),
+        )
+
+    async def _write_task_payload(self, path: str, payload: bytes) -> None:
+        # TaskTracker is the owner of task mutations and serializes updates per
+        # task. PersistentTaskStore does not implement store-level revision/CAS,
+        # so AGFS pathlock cannot make multiple independent writers correct; it
+        # only adds one storage lock around every task lifecycle write. Avoid
+        # that extra PathLock overhead on this internal task file.
+        await self._agfs.write(path, payload, auto_pathlock=False)
 
     async def _mkdir_if_missing(self, path: str) -> None:
         try:

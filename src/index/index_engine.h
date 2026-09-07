@@ -23,6 +23,10 @@ class IndexEngine {
 
   int delete_data(const std::vector<DeleteDataRequest>& data_list);
 
+  int rebuild_scalar_index(
+      const std::string& scalar_index_json,
+      const std::vector<AddDataRequest>& data_list);
+
   SearchResult search(const SearchRequest& req);
 
   std::optional<SearchResult> search_with_filter_token(

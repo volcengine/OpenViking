@@ -3,7 +3,7 @@
 """Shared constants, helpers, and singleton management for VikingFS."""
 
 import os
-from typing import TYPE_CHECKING, Any, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Dict, Optional, TypeVar
 
 from openviking_cli.exceptions import (
     InvalidArgumentError,
@@ -89,6 +89,56 @@ def _prepare_snapshot_diff(
 def _ensure_non_empty_search_query(query: str, image_url: Optional[str] = None) -> None:
     if not query.strip() and not image_url:
         raise InvalidArgumentError("Search query or image_url must not be empty.")
+
+
+def is_filter_only_query(query: str, image_url: Optional[str] = None) -> bool:
+    """Return True when the caller supplied no query and no image."""
+    return not query.strip() and not image_url
+
+
+def _ensure_filter_present(filter: Optional[Dict[str, Any]]) -> None:
+    """Reject a query-less request that also carries no filter.
+
+    Without either one there is nothing to narrow the search by, and returning
+    an arbitrary slice of the whole store would be worse than an error.
+    """
+    if not filter:
+        raise InvalidArgumentError(
+            "Search query or image_url must not be empty unless a filter is provided."
+        )
+
+
+def build_matched_context_from_record(record: Dict[str, Any]) -> Any:
+    """Turn a raw vector-store record into a MatchedContext.
+
+    ``score`` is left at 0: a filter-only lookup has no similarity ranking, and
+    fabricating a score would let callers sort on a meaningless number.
+    """
+    from openviking.utils.tags import normalize_search_tags
+    from openviking_cli.retrieve import ContextType, MatchedContext
+
+    uri = record.get("uri")
+    if not uri or not isinstance(uri, str):
+        return None
+    raw_type = record.get("context_type")
+    try:
+        context_type = ContextType(raw_type) if raw_type else ContextType.RESOURCE
+    except ValueError:
+        context_type = ContextType.RESOURCE
+    raw_level = record.get("level")
+    # Not `or 2`: level 0 is a valid value (a directory abstract record) and
+    # would otherwise be silently reported as 2.
+    level = int(raw_level) if raw_level is not None else 2
+    return MatchedContext(
+        uri=uri,
+        context_type=context_type,
+        level=level,
+        abstract=record.get("abstract", "") or "",
+        category=record.get("category", "") or "",
+        score=0.0,
+        match_reason="filter",
+        search_tags=normalize_search_tags(record.get("search_tags"), discard_invalid=True),
+    )
 
 
 def _is_directory_not_empty_error(message: str) -> bool:

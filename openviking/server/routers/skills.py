@@ -159,7 +159,7 @@ async def _entry_looks_like_skill(service, ctx: RequestContext, entry: Dict[str,
     # directory actually contains a SKILL.md file before listing it.  Any
     # error (including NotFound) means we cannot confirm it is a skill.
     try:
-        skill_md_stat = await service.fs.stat(_skill_md_uri(entry_uri), ctx=ctx)
+        skill_md_stat = await service.fs.stat(_skill_md_uri(entry_uri), ctx=ctx, skip_count=True)
     except Exception:
         return False
     if not skill_md_stat or skill_md_stat.get("isDir", False):
@@ -266,7 +266,7 @@ async def _require_skill(
     if target_uri:
         root_uri = _skill_root_uri(ctx, skill_name, target_uri)
         try:
-            stat = await service.fs.stat(root_uri, ctx=ctx)
+            stat = await service.fs.stat(root_uri, ctx=ctx, skip_count=True)
             if stat and stat.get("isDir", False):
                 return root_uri
         except NotFoundError:
@@ -276,7 +276,7 @@ async def _require_skill(
 
     user_root_uri = _skill_root_uri(ctx, skill_name)
     try:
-        stat = await service.fs.stat(user_root_uri, ctx=ctx)
+        stat = await service.fs.stat(user_root_uri, ctx=ctx, skip_count=True)
         if stat and stat.get("isDir", False):
             return user_root_uri
     except NotFoundError:
@@ -286,7 +286,7 @@ async def _require_skill(
 
     agent_root_uri = _skill_root_uri(ctx, skill_name, "viking://agent/skills")
     try:
-        stat = await service.fs.stat(agent_root_uri, ctx=ctx)
+        stat = await service.fs.stat(agent_root_uri, ctx=ctx, skip_count=True)
         if stat and stat.get("isDir", False):
             return agent_root_uri
     except NotFoundError:

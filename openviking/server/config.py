@@ -459,7 +459,7 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
     if server_data is None:
         server_data = {}
     if not isinstance(server_data, dict):
-        raise ValueError("Invalid server config: 'server' section must be an object")
+        raise ValueError(f"Invalid server config in {path}: 'server' section must be an object")
 
     # Convert auth_mode string — built-in enums are converted to their string
     # value; custom modes are kept as-is for plugin extensibility.

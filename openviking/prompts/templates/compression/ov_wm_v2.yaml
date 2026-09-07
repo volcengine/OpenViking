@@ -11,6 +11,10 @@ variables:
     type: "string"
     description: "Session content to summarize into the new Working Memory"
     required: true
+  - name: "output_language"
+    type: "string"
+    description: "Language for generated Working Memory section content"
+    required: true
   - name: "latest_archive_overview"
     type: "string"
     description: "Optional prior Working Memory. When provided, still-valid info should be carried forward."
@@ -47,6 +51,7 @@ template: |
   Output a complete Working Memory using the 7-section structure below.
 
   RULES:
+  - Write all section content in {{ output_language }}. Keep the 7 canonical English section headers and italic descriptions unchanged so existing Working Memory archives remain machine-detectable.
   - All 7 section headers and italic descriptions must appear unchanged.
   - Write INFO-DENSE content: names, numbers, dates, locations, exact values.
   - For temporal facts, record the EVENT date, not the conversation date.

@@ -264,8 +264,18 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       clearTimeout(saveTimer)
       saveTimer = null
     }
+    // Do not abort the whole dispose flush when one session fails (e.g. server
+    // already GC'd a stale session). Continue so later sessions still commit.
+    // See https://github.com/volcengine/OpenViking/issues/4490
     for (const sessionId of sessions.keys()) {
-      await flushSession(sessionId, { commit, reason: "flushAll" })
+      try {
+        await flushSession(sessionId, { commit, reason: "flushAll" })
+      } catch (err) {
+        console.warn(
+          `[opencode-plugin] flushAll skipped session ${sessionId}:`,
+          err?.message || err,
+        )
+      }
     }
     await enqueueSave()
   }

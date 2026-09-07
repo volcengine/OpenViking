@@ -10,6 +10,10 @@ from test_fakes import fake_request_context
 
 from openviking.session.memory.dataclass import MemoryFile, StoredLink
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.session.skill.session_skill_context_provider import (
+    SESSION_SKILL_MEMORY_TYPE,
+    load_skill_extract_registry,
+)
 from openviking.session.train import (
     ContentHashPolicySnapshotter,
     DryRunPolicyUpdater,
@@ -718,7 +722,10 @@ async def test_patch_merge_policy_optimizer_runs_patch_merge_extract_loop(monkey
                 [],
             )
 
-    monkeypatch.setattr("openviking.session.train.components.policy_optimizer.ExtractLoop", FakeExtractLoop)
+    monkeypatch.setattr(
+        "openviking.session.train.components.policy_optimizer.ExtractLoop",
+        FakeExtractLoop,
+    )
 
     plan = await PatchMergePolicyOptimizer(viking_fs=FakeVikingFS({}), vlm=object()).plan(
         [gradient],
@@ -1074,3 +1081,79 @@ async def test_patch_merge_policy_optimizer_runs_llm_for_single_patch(monkeypatc
     assert captured["constructed"] is True
     assert plan.metadata["patch_gradient_count"] == 1
     assert plan.items[0].after_content == "merged update"
+
+
+@pytest.mark.asyncio
+async def test_patch_merge_policy_optimizer_uses_session_skill_registry(monkeypatch):
+    from openviking.session.memory.dataclass import (
+        ResolvedOperation,
+        ResolvedOperations,
+    )
+
+    skill_uri = "viking://user/u/skills/code-review/SKILL.md"
+    policy_set = ExperienceSet(root_uri="viking://user/u/skills", policies=[])
+    gradient = PatchSemanticGradient(
+        before_file=None,
+        after_file=MemoryFile(
+            uri=skill_uri,
+            content="Use this skill to review code changes.",
+            memory_type=SESSION_SKILL_MEMORY_TYPE,
+            extra_fields={
+                "memory_type": SESSION_SKILL_MEMORY_TYPE,
+                "skill_name": "code-review",
+            },
+        ),
+        base_version=None,
+        rationale="test",
+        links=[],
+        confidence=0.9,
+        metadata={},
+    )
+    captured = {}
+
+    class FakeExtractLoop:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def run(self):
+            return (
+                ResolvedOperations(
+                    upsert_operations=[
+                        ResolvedOperation(
+                            old_memory_file_content=None,
+                            memory_fields={
+                                "skill_name": "code-review",
+                                "content": "Merged skill content.",
+                            },
+                            memory_type=SESSION_SKILL_MEMORY_TYPE,
+                            uris=[skill_uri],
+                        )
+                    ],
+                    delete_file_contents=[],
+                    errors=[],
+                ),
+                [],
+            )
+
+    monkeypatch.setattr(
+        "openviking.session.train.components.policy_optimizer.ExtractLoop",
+        FakeExtractLoop,
+    )
+
+    plan = await PatchMergePolicyOptimizer(
+        viking_fs=FakeVikingFS({}),
+        vlm=object(),
+        memory_type=SESSION_SKILL_MEMORY_TYPE,
+        memory_registry=load_skill_extract_registry(),
+    ).plan(
+        [gradient],
+        policy_set,
+        PatchMergePolicyOptimizerContext(request_context=fake_request_context()),
+    )
+
+    assert captured["isolation_handler"].allowed_memory_types == {SESSION_SKILL_MEMORY_TYPE}
+    assert len(plan.items) == 1
+    assert plan.items[0].memory_type == SESSION_SKILL_MEMORY_TYPE
+    assert plan.items[0].target_name == "code-review"
+    assert plan.items[0].target_uri == skill_uri
+    assert plan.items[0].after_content == "Merged skill content."

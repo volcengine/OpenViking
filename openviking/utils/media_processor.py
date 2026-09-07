@@ -24,7 +24,7 @@ from openviking.server.local_input_guard import (
     is_remote_resource_source,
     looks_like_local_path,
 )
-from openviking_cli.exceptions import PermissionDeniedError
+from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.utils.logger import get_logger
 
 # All known valid extensions - only these should be stripped when getting stem
@@ -201,8 +201,51 @@ class UnifiedResourceProcessor:
             )
 
         resource = await self._get_accessor_registry().access(source, **kwargs)
-        self._set_resolved_identity(resource, kwargs.get("source_name"))
+        try:
+            self._set_resolved_identity(resource, kwargs.get("source_name"))
+            self._reject_empty_resource(resource, kwargs.get("source_name"))
+        except Exception:
+            # Ownership transfers to the caller only after prepare succeeds.
+            # Until then, release temporary accessor results on every error.
+            resource.cleanup()
+            raise
         return resource
+
+    @staticmethod
+    def _reject_empty_resource(resource: LocalResource, source_name: Optional[str]) -> None:
+        """Refuse a source with no content, wherever it was fetched from.
+
+        Every ingestion path reaches this method: prepare_durable_source
+        freezes a source here before the request touches the tree, and
+        process() calls it for anything that was not frozen earlier. An empty
+        file is refused once, at the point the bytes are first in hand, rather
+        than being parsed and indexed as an empty resource.
+
+        Directories are skipped: their size is not meaningful, and
+        directory_scan already drops zero-byte members. content/write is a
+        different path and still allows an empty file, because creating one
+        there is an explicit user action.
+        """
+        try:
+            if not resource.path.is_file() or resource.path.stat().st_size:
+                return
+        except OSError:
+            # An unreadable source is not this check's business; let the normal
+            # ingestion path report it.
+            return
+
+        meta = resource.meta
+        name = (
+            source_name
+            or meta.get("resolved_name")
+            or meta.get("original_filename")
+            or resource.path.name
+        )
+        raise InvalidArgumentError(
+            f"'{name}' is empty (0 bytes), so there is nothing to extract or index. "
+            "Add a resource with content, or use content/write if an empty file is "
+            "what you want."
+        )
 
     async def process(
         self,

@@ -623,6 +623,59 @@ int IndexManagerImpl::delete_data(
   return 0;
 }
 
+int IndexManagerImpl::rebuild_scalar_index(
+    const std::string& scalar_index_json,
+    const std::vector<AddDataRequest>& data_list) {
+  JsonDoc scalar_index_doc;
+  scalar_index_doc.Parse(scalar_index_json.c_str());
+  if (scalar_index_doc.HasParseError() || !scalar_index_doc.IsArray()) {
+    throw std::invalid_argument("Invalid scalar index metadata");
+  }
+
+  auto next_meta = std::make_shared<ScalarIndexMeta>();
+  if (next_meta->init_from_json(scalar_index_doc) != 0) {
+    throw std::invalid_argument("Invalid scalar index metadata");
+  }
+
+  std::vector<FieldsDict> parsed_fields(data_list.size());
+  for (size_t i = 0; i < data_list.size(); ++i) {
+    if (parsed_fields[i].parse_from_json(data_list[i].fields_str) != 0) {
+      throw std::runtime_error(
+          "Failed to parse scalar fields for label=" +
+          std::to_string(data_list[i].label));
+    }
+  }
+
+  auto next_scalar_index = std::make_shared<ScalarIndex>(next_meta);
+  std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+  for (size_t i = 0; i < data_list.size(); ++i) {
+    const int offset = vector_index_->get_offset_by_label(data_list[i].label);
+    if (offset < 0) {
+      SPDLOG_WARN("IndexManagerImpl::rebuild_scalar_index label={} not found",
+                  data_list[i].label);
+      continue;
+    }
+    if (next_scalar_index->add_row_data(offset, parsed_fields[i],
+                                        FieldsDict{}) != 0) {
+      throw std::runtime_error(
+          "Failed to rebuild scalar fields for label=" +
+          std::to_string(data_list[i].label));
+    }
+  }
+
+  scalar_index_ = std::move(next_scalar_index);
+  manager_meta_->scalar_index_meta = std::move(next_meta);
+  register_label_offset_converter_();
+  clear_filter_layout_();
+  clear_filter_token_cache_();
+  const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                       std::chrono::system_clock::now().time_since_epoch())
+                       .count();
+  manager_meta_->update_timestamp = std::max(
+      manager_meta_->update_timestamp + 1, static_cast<uint64_t>(now));
+  return 0;
+}
+
 int64_t IndexManagerImpl::dump(const std::string& dir) {
   std::filesystem::path dir_path(dir);
   std::shared_lock<std::shared_mutex> lock(rw_mutex_);

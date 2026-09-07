@@ -17,6 +17,19 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { resolveWorkspaceSettings } from "./plugin-config.mjs";
+import { peerScopeMemoPath } from "./recall-core.mjs";
+import { CONFIG_DIR_NAME, LOCAL_FILE, TEAM_FILE, workspaceConfigPaths } from "./workspace-config.mjs";
+import { findWorkspaceRoot, resolveWorkspaceIdentity } from "./workspace-identity.mjs";
+import { entryPath } from "./workspace-registry.mjs";
+
+/**
+ * The snippet every surface quotes verbatim — this report, the docs and the
+ * skills an agent reads — so whoever follows any of them writes the same file.
+ * One line so it fits a table cell and a report line unchanged.
+ */
+export const WORKSPACE_PEER_HINT = '{"version": 1, "peer": {"id": "my-project"}}';
+
 // ---------------------------------------------------------------------------
 // Formatting helpers
 // ---------------------------------------------------------------------------
@@ -290,6 +303,73 @@ const KNOWN_OVCLI_KEYS = new Set([
 export function unknownOvcliKeys(data) {
   if (!data || typeof data !== "object") return [];
   return Object.keys(data).filter((k) => !KNOWN_OVCLI_KEYS.has(k));
+}
+
+/**
+ * Every knob a harness loader reads out of `ovcli.conf`'s `plugin` section.
+ *
+ * `plugin` is on the allowlist above, which used to mean everything inside it
+ * went unchecked — so `peerSorce` sat there doing nothing with no complaint.
+ * `plugin-known-keys.test.mjs` derives this set from the two loaders and fails
+ * when they diverge, so it cannot rot into a list that rejects a real knob.
+ */
+export const KNOWN_PLUGIN_KEYS = new Set([
+  "apiKey", "accountId", "userId", "auth_mode", "authMode", "enabled", "debug", "timeoutMs",
+  "peerId", "peer_id", "peerSource", "workspacePeer",
+  "autoRecall", "autoCapture", "noAutoInject", "writePathAsync", "minQueryLength",
+  "bypassSessionPatterns",
+  "recallLimit", "recallMaxTokens", "recallMaxContentChars", "recallTokenBudget",
+  "recallPeerScope", "recallDedupTurns", "recallQueryExpansion", "recallPreferAbstract",
+  "recallRewrite", "recallContextTimeoutMs", "recallTimeoutMs", "scoreThreshold",
+  "recallCompress", "recallCompressMaxBullets", "recallCompressMaxInputChars",
+  "recallCompressMinInputChars", "recallCompressBaseUrl", "recallCompressModel",
+  "recallCompressThinking", "recallCompressReasoningEffort", "recallCompressTimeoutMs",
+  "recallCompressDetectOnStartup", "recallCompressDetectTimeoutMs", "recallCompressDetectTtlMs",
+  "captureMode", "captureMaxLength", "captureTimeoutMs", "captureToolMaxChars",
+  "captureAssistantTurns", "captureLastAssistantOnStop", "logRankingDetails",
+  "commitTokenThreshold", "commitKeepRecentCount", "autoCommitOnCompact",
+  "profileTokenBudget", "resumeContextBudget", "resumeArchiveInject",
+  "resumeArchiveMaxChars", "resumeArchiveTokenBudget",
+  "skillExperience", "skillExperienceLimit",
+]);
+
+/** Nested objects in `plugin` are per-harness overrides, not knobs. */
+const PLUGIN_HARNESS_KEYS = new Set(["claude_code", "codex"]);
+
+function nearestKnownKey(key) {
+  // Levenshtein would be overkill; a typo that matters is almost always one
+  // edit away, and case-folding alone catches the most common one.
+  const folded = key.toLowerCase();
+  for (const known of KNOWN_PLUGIN_KEYS) {
+    if (known.toLowerCase() === folded) return known;
+  }
+  for (const known of KNOWN_PLUGIN_KEYS) {
+    if (known.length >= 4 && (known.toLowerCase().startsWith(folded.slice(0, 5)) || folded.startsWith(known.toLowerCase().slice(0, 5)))) {
+      return known;
+    }
+  }
+  return "";
+}
+
+/**
+ * Misspelled knobs inside `plugin`, and inside each per-harness override.
+ * Each result carries the closest real key so the fix is one glance away.
+ */
+export function unknownPluginKeys(plugin) {
+  if (!plugin || typeof plugin !== "object" || Array.isArray(plugin)) return [];
+  const found = [];
+  const walk = (object, prefix) => {
+    for (const [key, value] of Object.entries(object)) {
+      if (!prefix && PLUGIN_HARNESS_KEYS.has(key)) {
+        if (value && typeof value === "object" && !Array.isArray(value)) walk(value, `${key}.`);
+        continue;
+      }
+      if (KNOWN_PLUGIN_KEYS.has(key)) continue;
+      found.push({ key: `plugin.${prefix}${key}`, suggestion: nearestKnownKey(key) });
+    }
+  };
+  walk(plugin, "");
+  return found;
 }
 
 const SECRET_ENV = /KEY|TOKEN|SECRET|PASSWORD/i;
@@ -644,6 +724,120 @@ export function readStateFiles(stateDir, names) {
     out[name] = entry;
   }
   return out;
+}
+
+/**
+ * `peer_scope: "actor"` narrows recall to this workspace's own peer. A server
+ * that predates the field rejects it, and the plugin retries without it — so
+ * recall quietly runs against every peer under the user instead. `postRecall`
+ * records that in a state file; without this the widening is invisible.
+ */
+export function lintPeerScopeDowngrade(path = peerScopeMemoPath(), now = Date.now()) {
+  let data;
+  try {
+    data = JSON.parse(readFileSync(path, "utf-8"));
+  } catch {
+    return [];
+  }
+  if (!data?.legacyUntil || Number(data.legacyUntil) <= now) return [];
+  return [{
+    level: "warn",
+    message: `recall peer_scope "${str(data.scope, "actor")}" was rejected by the server (HTTP ${Number(data.status) || 0})`,
+    detail: "recall runs against every peer under this user, not just this workspace's",
+    fix: 'upgrade the OpenViking server, or set recallPeerScope to "all" so the wider search is deliberate',
+  }];
+}
+
+/**
+ * `.openviking/` is also the parser's scratch directory, and the reflex is to
+ * ignore the whole thing — which silently stops a team's `config.json` from
+ * ever being committed. Catch the bare rule; narrower ones are fine.
+ */
+export function gitignoreHidesWorkspaceConfig(root) {
+  for (const name of [".gitignore", join(".git", "info", "exclude")]) {
+    let text;
+    try {
+      text = readFileSync(join(root, name), "utf-8");
+    } catch {
+      continue;
+    }
+    for (const line of text.split("\n")) {
+      const rule = line.trim().replace(/\/$/, "");
+      if (rule === CONFIG_DIR_NAME || rule === `/${CONFIG_DIR_NAME}` || rule === `**/${CONFIG_DIR_NAME}`) {
+        return name;
+      }
+    }
+  }
+  return "";
+}
+
+/**
+ * Where every workspace-scoped setting came from, and what it covered up.
+ *
+ * Three languages read this configuration and each could drift; per-key
+ * provenance is how a user finds out which layer actually won, the way
+ * `git config --show-origin --show-scope` does.
+ */
+export function checkWorkspace(report, { cwd = process.cwd(), env = process.env } = {}) {
+  report.section("Workspace");
+
+  const { root, rootKind, git } = findWorkspaceRoot(cwd, env);
+  const summary = { root, rootKind, kind: git?.kind || "", files: [], settings: {}, provenance: {} };
+  if (!root) {
+    report.info(`not a workspace: ${homeShort(cwd)} is in no git repository and has no ${CONFIG_DIR_NAME}/${TEAM_FILE} above it`);
+    report.info("memories here carry no workspace peer and go to your user-level space; ovcli.conf and env still apply");
+    report.info(`to give this directory its own memory, create ${CONFIG_DIR_NAME}/${TEAM_FILE} here with ${WORKSPACE_PEER_HINT}`);
+    return summary;
+  }
+  const foundBy = rootKind === "git" ? git.kind : `${TEAM_FILE}${git ? ` inside ${git.kind}` : ""}`;
+  report.ok(`workspace  ${homeShort(root)}  ← ${foundBy}`);
+
+  const resolved = resolveWorkspaceSettings(cwd, env);
+  summary.settings = resolved.settings;
+  summary.provenance = resolved.provenance;
+  const identity = resolveWorkspaceIdentity({ cwd, env });
+  const registryPath = entryPath(root, env, identity);
+
+  for (const { layer, path } of [
+    ...workspaceConfigPaths(root),
+    { layer: "registry", path: registryPath },
+  ]) {
+    const info = fileInfo(path);
+    summary.files.push({ layer, path, exists: info.exists });
+    report.info(`${layer.padEnd(26)} ${homeShort(path)}${info.exists ? "" : "  (absent)"}`);
+  }
+
+  const keys = Object.keys(resolved.provenance || {}).sort();
+  if (!keys.length) {
+    report.info("no workspace layer sets anything — every value comes from ovcli.conf, ov.conf or the environment");
+  }
+  for (const key of keys) {
+    const entry = resolved.provenance[key];
+    const shadowed = entry.shadowed.map((s) => `${JSON.stringify(s.value)} from ${s.source}`).join(", ");
+    report.info(
+      `${key} = ${JSON.stringify(entry.value)}  ← ${entry.source}`,
+      shadowed ? `shadows ${shadowed}` : "",
+    );
+  }
+
+  for (const warning of resolved.warnings || []) report.warn(warning);
+  for (const { key, value, source } of resolved.announced || []) {
+    report.warn(
+      `${source} sets ${key} = ${JSON.stringify(value)}`,
+      "a committed workspace file is trusted without a prompt, so what it changes is announced",
+      `override it in ${LOCAL_FILE} or in ${homeShort(registryPath)}`,
+    );
+  }
+
+  const ignoredBy = gitignoreHidesWorkspaceConfig(root);
+  if (ignoredBy) {
+    report.warn(
+      `${ignoredBy} ignores all of ${CONFIG_DIR_NAME}/`,
+      `${TEAM_FILE} is meant to be committed; the blanket rule stops it from ever being added`,
+      `narrow the rule to ${CONFIG_DIR_NAME}/media/ and ${CONFIG_DIR_NAME}/downloads/, and ignore ${CONFIG_DIR_NAME}/${LOCAL_FILE}`,
+    );
+  }
+  return summary;
 }
 
 export function countDirEntries(dir, filter = () => true) {

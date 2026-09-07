@@ -66,7 +66,7 @@ openviking-server
 | Provider | 适用场景 | 备注 |
 |----------|----------|------|
 | `redis` | 默认交付、普通网络环境 | 内置于 RAGFS，支持 standalone、Cluster 和 Sentinel |
-| `dynamic` | YuanRong、Mooncake 或闭源缓存系统 | 本期未实现，配置后返回 UnsupportedProvider |
+| `dynamic` | YuanRong、Mooncake 或闭源缓存系统 | 通过版本化 C ABI 从外部动态库加载 |
 
 `MemoryMockProvider` 只用于单元测试和 smoke test，不是生产配置项。
 
@@ -85,9 +85,9 @@ openviking-server
 
 OpenViking 会对已删除字段直接返回迁移错误，不再静默转换。
 
-## 后续 DynamicProvider
+## DynamicProvider
 
-本期标准 OpenViking wheel 只内置 RedisProvider。DynamicProvider、`.so` 加载器和版本化 C ABI 放在后续阶段实现；当前配置 `provider=dynamic` 会在启动阶段返回 UnsupportedProvider。
+OpenViking 已内置 DynamicProvider 加载器和版本化 C ABI。默认 wheel 不携带第三方 SDK 或 Provider 动态库；需要接入外部缓存系统时，独立部署 Provider 动态库并配置 `provider=dynamic`。
 
 动态库必须导出以下版本化入口：
 
@@ -95,7 +95,9 @@ OpenViking 会对已删除字段直接返回迁移错误，不再静默转换。
 openviking_cache_provider_v1
 ```
 
-Provider 发布物应注明 ABI 版本、目标 OS/CPU、最低 glibc 版本、外部 SDK 版本、动态依赖和 SHA256。依赖外部原生库时，由 Provider 发布方通过 RPATH、`LD_LIBRARY_PATH` 或部署说明保证动态链接器能够找到依赖。
+C 接口契约定义在 `crates/ragfs/include/openviking_cache_provider_v1.h`。Provider 返回的数据必须使用 Host allocator 分配，遵守文档中的内存所有权和关闭语义，禁止异常穿过 C ABI，并保证 handle 可以安全并发调用。
+
+Provider 发布物应注明 ABI 版本、目标 OS/CPU、最低运行时版本、外部 SDK 版本、动态依赖和 SHA256。依赖外部原生库时，由 Provider 发布方通过 RPATH、`LD_LIBRARY_PATH` 或部署说明保证动态链接器能够找到依赖。
 
 外部 Provider 可以独立升级，不需要重新构建默认 OpenViking wheel；只有 DynamicProvider ABI 不兼容时，才需要同步升级 OpenViking。
 
@@ -105,7 +107,7 @@ Provider 发布物应注明 ABI 版本、目标 OS/CPU、最低 glibc 版本、�
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `provider` | str | 无 | Provider 名称，本期支持 `redis` |
+| `provider` | str | 无 | Provider 名称，支持 `redis` 和 `dynamic` |
 | `params` | object | `{}` | Provider 自有参数 |
 
 `storage.agfs.cachefs` 支持以下业务配置：
@@ -134,9 +136,9 @@ Redis 配置：
 
 所有 Redis 读命令均发送到主节点，避免 QueueFS 读取到延迟的队列状态。需要传输加密时使用 Redis TLS，CacheRuntime 不额外增加应用层数据加密格式。
 
-未来 DynamicProvider 配置结构：
+DynamicProvider 配置：
 
-`cache.params` 完全由外部 Provider 定义，下面的字段只用于说明配置传递方式，实际配置以 Provider 发布说明为准。
+`cache.params.library` 由 OpenViking 用于加载动态库，其余字段由外部 Provider 定义并作为 JSON 传入 `create`。实际参数以 Provider 发布说明为准。
 
 ```json
 {
@@ -156,7 +158,7 @@ Redis 配置：
 RAGFS 将缓存拆成两层：
 
 - `CachedFileSystem`：实现文件系统语义，包括 cache hit/miss、backend 回源、回填、失效、generation 校验和指标。
-- `CacheRuntime`：向业务层提供统一基础操作，本期在启动时绑定内置 RedisProvider；DynamicProvider 为后续扩展。
+- `CacheRuntime`：向业务层提供统一基础操作，启动时绑定内置 RedisProvider 或外部 DynamicProvider。
 
 调用关系：
 
@@ -165,7 +167,7 @@ OpenViking
   -> RAGFS / MountableFS
   -> CachedFileSystem
        |-> CacheRuntime -> RedisProvider
-       |               `-> DynamicProvider（后续）
+       |               `-> DynamicProvider -> 外部动态库
        `-> Backend FileSystem
 ```
 

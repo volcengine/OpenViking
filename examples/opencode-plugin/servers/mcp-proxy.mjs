@@ -13,9 +13,8 @@ import { join, resolve as resolvePath } from "node:path"
 import { fileURLToPath } from "node:url"
 import { loadConfig } from "../lib/config.mjs"
 import { createLogger } from "../lib/shared/debug-log.mjs"
-import { buildMcpProxyConfig } from "../lib/shared/mcp-proxy-config.mjs"
+import { buildMcpProxyConfig, resolveMcpActorPeerId } from "../lib/shared/mcp-proxy-config.mjs"
 import { createOpenVikingMcpProxy } from "../lib/shared/mcp-proxy-core.mjs"
-import { resolveEffectivePeerId } from "../lib/shared/workspace-peer.mjs"
 
 export { createOpenVikingMcpProxy } from "../lib/shared/mcp-proxy-core.mjs"
 
@@ -27,7 +26,7 @@ function readProxyConfig() {
     apiKey: cfg.apiKey,
     account: cfg.account,
     user: cfg.user,
-    peerId: resolveEffectivePeerId({ cfg, cwd: process.cwd() }).peerId,
+    peerId: resolveMcpActorPeerId(cfg),
     userAgent: cfg.userAgent,
     timeoutMs: cfg.timeoutMs,
     debug: cfg.debug,

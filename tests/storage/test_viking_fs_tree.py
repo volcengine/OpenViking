@@ -258,13 +258,13 @@ def test_is_tree_entry_visible_default_ctx(monkeypatch, fs):
 
 
 @pytest.mark.asyncio
-async def test_iter_visible_tree_entries_node_limit_amplified_to_rust(monkeypatch, fs):
-    """PY-ITER-001: node_limit is amplified (× overfetch factor) when pushed to
-    Rust, keeping memory bounded while preserving the ACL-after-filter semantic."""
+async def test_iter_visible_tree_entries_uses_minimum_backend_page_size(monkeypatch, fs):
+    """PY-ITER-001: bounded tree reads use the minimum backend page size."""
     captured = {}
 
     async def fake_tree_directory(_path, **kwargs):
         captured["node_limit"] = kwargs.get("node_limit")
+        captured["offset"] = kwargs.get("offset")
         return []
 
     patch_tree_env(monkeypatch, fs, fake_tree_directory)
@@ -274,7 +274,7 @@ async def test_iter_visible_tree_entries_node_limit_amplified_to_rust(monkeypatc
     ):
         pass
 
-    assert captured["node_limit"] == 10 * fs._TREE_OVERFETCH_FACTOR
+    assert captured == {"node_limit": 256, "offset": 0}
 
 
 @pytest.mark.asyncio
@@ -318,8 +318,8 @@ async def test_iter_visible_tree_entries_level_limit_passed_to_rust(monkeypatch,
 
 
 @pytest.mark.asyncio
-async def test_iter_visible_tree_entries_node_limit_after_acl(monkeypatch, fs):
-    """PY-ITER-002: node_limit applied AFTER ACL filtering."""
+async def test_iter_visible_tree_entries_offset_and_node_limit_after_acl(monkeypatch, fs):
+    """PY-ITER-002: offset and node_limit apply after ACL filtering."""
     visible_count = 0
 
     entries = [
@@ -336,41 +336,33 @@ async def test_iter_visible_tree_entries_node_limit_after_acl(monkeypatch, fs):
 
     results = []
     async for entry, _entry_uri in fs._iter_visible_tree_entries(
-        "viking://resources", node_limit=3, ctx=_default_ctx()
+        "viking://resources", offset=1, node_limit=2, ctx=_default_ctx()
     ):
         results.append(entry)
 
-    assert len(results) == 3
-    assert visible_count == 3, "only 3 entries should have ACL checked before limit hit"
+    assert [entry["info"]["name"] for entry in results] == ["b", "c"]
+    assert visible_count == 3, "only skipped and returned entries should be ACL checked"
 
 
 @pytest.mark.asyncio
-async def test_iter_visible_tree_entries_refetch_when_under_limit(monkeypatch, fs):
-    """PY-ITER-004: when ACL filtering leaves too few visible entries and Rust
-    returned a full page, the raw limit is doubled and re-fetched (zero-regression
-    bounded over-fetch)."""
-    factor = fs._TREE_OVERFETCH_FACTOR
+async def test_iter_visible_tree_entries_reads_next_page_when_filtering_is_sparse(monkeypatch, fs):
+    """PY-ITER-004: sparse visible results advance the RagFS offset."""
     node_limit = 2
-    # First page (size == raw_limit) is entirely invisible; second page after
-    # doubling contains the visible entries.
     invisible = [
-        make_entry(f"/local/test_account/resources/h{i}/x", "x", is_dir=False)
-        for i in range(node_limit * factor)
+        make_entry(f"/local/test_account/resources/h{i}/x", "x", is_dir=False) for i in range(256)
     ]
     visible = [
         make_entry(f"/local/test_account/resources/v{i}", f"v{i}", is_dir=False)
         for i in range(node_limit)
     ]
-    captured_limits = []
+    entries = invisible + visible
+    captured_pages = []
 
     async def fake_tree_directory(_path, **kwargs):
+        raw_offset = kwargs.get("offset")
         raw_limit = kwargs.get("node_limit")
-        captured_limits.append(raw_limit)
-        # First call returns a full page of invisible entries; subsequent call
-        # (doubled limit) returns invisible + visible.
-        if len(captured_limits) == 1:
-            return invisible[:raw_limit]
-        return invisible + visible
+        captured_pages.append((raw_offset, raw_limit))
+        return entries[raw_offset : raw_offset + raw_limit]
 
     def fake_is_accessible(uri, _ctx):
         # Entries under an "hN" directory are invisible (ACL denied).
@@ -385,9 +377,7 @@ async def test_iter_visible_tree_entries_refetch_when_under_limit(monkeypatch, f
         results.append(entry)
 
     assert len(results) == node_limit
-    # Re-fetch happened: first raw_limit = node_limit*factor, then doubled.
-    assert captured_limits[0] == node_limit * factor
-    assert captured_limits[1] == node_limit * factor * 2
+    assert captured_pages == [(0, 256), (256, 256)]
 
 
 @pytest.mark.asyncio
@@ -657,6 +647,14 @@ async def test_ls_agent_modtime_is_raw_utc_iso(monkeypatch, fs):
         "isDir": True,
         "access": "denied",
     }
+    tied = [
+        ({"name": name, "isDir": False, "modTime": "2026-01-01T00:00:00Z"}, name)
+        for name in ["b.md", "a.md"]
+    ]
+    assert [entry["name"] for entry, _ in fs._sort_ls_entry_items(tied, "mtime", "desc")] == [
+        "a.md",
+        "b.md",
+    ]
 
 
 @pytest.mark.asyncio

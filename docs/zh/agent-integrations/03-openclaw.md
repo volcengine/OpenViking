@@ -53,11 +53,34 @@ ov-install --base-url http://your-server:1933
 | `--plugin-version=VER` | 插件版本：npm 版本、dist-tag 或 Git ref |
 | `--base-url URL` | OpenViking 服务地址 |
 | `--api-key KEY` | OpenViking API Key |
+| `--peer-role ROLE` | 记忆归属：`none`、`assistant` 或 `sender`（`person` 是旧别名） |
 | `--uninstall` | 卸载插件 |
 
 完整参数列表见 [安装指南](https://github.com/volcengine/OpenViking/blob/main/examples/openclaw-plugin/INSTALL.md)。
 
 </details>
+
+## 选择记忆归属
+
+`peer_role` 决定长期记忆是在 OpenViking user 层共享，还是归属到具体 peer：
+
+| 值 | 记忆路径 | 适用场景 |
+| --- | --- | --- |
+| `none`（默认） | 共享记忆位于 `viking://user/<user_id>/memories/...`；不使用具体 peer 的记忆子树 | 通用场景：该 OpenViking 用户下的所有对话共享 user-level 记忆 |
+| `assistant` | assistant 归因的 peer 记忆位于 `viking://user/<user_id>/peers/<assistant_id>/memories/...` | **人是 OpenViking user**：让 `main`、`research` 等不同助手的 peer 记忆分开 |
+| `sender` | sender 归因的 peer 记忆位于 `viking://user/<user_id>/peers/<sender_id>/memories/...` | **Agent 是 OpenViking user**：让 `customer-42`、`customer-99` 等不同发送者的 peer 记忆分开 |
+
+例如：
+
+```bash
+# Alice 是 OpenViking user；按 OpenClaw 助手分开 peer 记忆。
+openclaw openviking setup --base-url http://your-server:1933 --api-key sk-xxx --peer-role assistant --json
+
+# support-agent 是 OpenViking user；按给它发消息的人分开 peer 记忆。
+openclaw openviking setup --base-url http://your-server:1933 --api-key sk-xxx --peer-role sender --json
+```
+
+新配置请使用 `sender`；已有的 `peer_role=person` 配置仍兼容，并按 `sender` 处理。OpenViking 会为每个用户初始化受管的 `peers/` 容器，因此 `none` 的含义是不使用具体的 `peers/<peer_id>/memories` 子树。Actor-peer 召回同时包含用户共享记忆和当前 peer 记忆；切换 scope 不会搬迁已有记忆。
 
 ## 验证
 
@@ -96,6 +119,7 @@ python examples/openclaw-plugin/health_check_tools/ov-healthcheck.py
 | --- | --- | --- |
 | `baseUrl` | `http://127.0.0.1:1933` | OpenViking 服务端点 |
 | `apiKey` | 空 | OpenViking API Key |
+| `peer_role` | `none` | `none`、`assistant` 或 `sender`；旧值 `person` 作为 `sender` 的别名兼容 |
 | `peer_prefix` | 空 | `peer_role=assistant` 时 assistant peer 身份的可选前缀 |
 | `autoRecallTimeoutMs` | `5000` | 整个 auto-recall 流程的外层超时（毫秒）；本地嵌入硬件较慢时可调大（取值范围 1000–300000） |
 

@@ -27,7 +27,7 @@ if (!isPluginEnabled()) {
   process.exit(0);
 }
 
-const cfg = loadConfig();
+let cfg = loadConfig();
 const { log, logError } = createLogger("auto-recall");
 const fetchJSON = makeFetchJSON(cfg);
 
@@ -299,15 +299,26 @@ async function buildInjectionBlock(items, actorPeerId = "") {
   return { block: lines.join("\n"), contentCount, hintCount, budgetUsed };
 }
 
-async function recallViaServerAssembly(query, actorPeerId = "", sessionId = "") {
+async function recallViaServerAssembly(query, actorPeerId = "", sessionId = "", legacyPeerId = "") {
   const runCompressor = await createHostCompressor(cfg, log);
-  return buildServerAssembledBlock(fetchJSON, cfg, query, {
-    actorPeerId,
+  const assemble = (peerId) => buildServerAssembledBlock(fetchJSON, cfg, query, {
+    actorPeerId: peerId,
     sessionId,
     log,
     runCompressor,
     localCompressorAvailable: Boolean(runCompressor),
   });
+
+  const block = await assemble(actorPeerId);
+  // `peer_scope: "all"` already sweeps every peer under this user, so the peer
+  // this workspace used before the identity rule changed needs asking only
+  // when that sweep is off.
+  if (cfg.recallPeerScope !== "actor" || !legacyPeerId || legacyPeerId === actorPeerId) return block;
+
+  const legacy = await assemble(legacyPeerId);
+  if (!legacy) return block;
+  log("recall_legacy_peer_hit", { legacyPeerId });
+  return block ? `${block}\n${legacy}` : legacy;
 }
 
 // ---------------------------------------------------------------------------
@@ -325,13 +336,6 @@ async function main() {
     ...extra,
   });
 
-  if (!cfg.autoRecall) {
-    log("skip", { reason: "autoRecall disabled" });
-    writeRecallState({ count: 0, reason: "disabled" });
-    approve();
-    return;
-  }
-
   let input;
   try {
     const chunks = [];
@@ -347,6 +351,18 @@ async function main() {
   const userPrompt = (input.prompt || "").trim();
   const sessionId = input.session_id;
   const cwd = input.cwd;
+  // The workspace layer belongs to the session's directory, which only the
+  // payload knows; see loadConfig for why re-resolving this late is safe.
+  // Everything gated below — recall.enabled included — reads the reload.
+  cfg = loadConfig(cwd);
+
+  if (!cfg.autoRecall) {
+    log("skip", { reason: "autoRecall disabled" });
+    writeRecallState({ count: 0, reason: "disabled" });
+    approve();
+    return;
+  }
+
   const effectivePeer = getEffectivePeerId(cfg, { sessionId, cwd });
   log("start", {
     query: userPrompt.slice(0, 200),
@@ -390,6 +406,7 @@ async function main() {
     userPrompt,
     effectivePeer.peerId,
     ovSessionId,
+    effectivePeer.legacyPeerId,
   );
   if (endpointBlock !== null) {
     if (!endpointBlock) {

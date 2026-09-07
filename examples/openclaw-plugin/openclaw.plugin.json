@@ -80,14 +80,14 @@
       "help": "HTTP URL when mode is remote (or ${OPENVIKING_BASE_URL})"
     },
     "peer_role": {
-      "label": "Peer Role",
-      "placeholder": "assistant",
-      "help": "Controls which messages include peer_id: none, assistant, or person. New installs default to assistant."
+      "label": "Memory Scope (peer_role)",
+      "placeholder": "none",
+      "help": "Where peer-scoped memories are stored. none (default): viking://user/<user_id>/memories. assistant: viking://user/<user_id>/peers/<assistant_id>/memories. sender: viking://user/<user_id>/peers/<sender_id>/memories. Legacy person is accepted as sender."
     },
     "peer_prefix": {
       "label": "Peer Prefix",
       "placeholder": "optional-prefix",
-      "help": "Optional prefix for assistant peer_id values derived from OpenClaw runtime agent IDs."
+      "help": "Only used when Memory Scope is assistant. Prefix added to the peer id derived from the OpenClaw agent id."
     },
     "apiKey": {
       "label": "OpenViking API Key",
@@ -144,9 +144,9 @@
     },
     "autoRecallTimeoutMs": {
       "label": "Auto-Recall Timeout (ms)",
-      "placeholder": "5000",
+      "placeholder": "15000",
       "advanced": true,
-      "help": "Outer time budget for the whole auto-recall flow, including search, ranking, and memory reads."
+      "help": "Outer time budget for the server-assembled context search, including session-aware query expansion."
     },
     "recallResources": {
       "label": "Recall Resources",
@@ -195,7 +195,7 @@
     "bypassSessionPatterns": {
       "label": "Bypass Session Patterns",
       "placeholder": "agent:*:cron:**",
-      "help": "Completely bypass OpenViking for matching session keys. Use * within one segment and ** across segments.",
+      "help": "Completely bypass OpenViking for matching session keys (no capture, recall, or commit; compaction falls back to OpenClaw's native compactor). Use * within one segment and ** across segments.",
       "advanced": true
     },
     "commitTokenThresholdRatio": {
@@ -279,10 +279,11 @@
         "enum": [
           "none",
           "assistant",
+          "sender",
           "person"
         ],
-        "default": "assistant",
-        "description": "Controls which session messages include peer_id."
+        "default": "none",
+        "description": "Memory scope. none: shared user memory. assistant: peer memory keyed by OpenClaw assistant id. sender: peer memory keyed by sender id. person is a legacy alias for sender. Also controls which session messages include peer_id."
       },
       "peer_prefix": {
         "type": "string",

@@ -312,6 +312,7 @@ export OPENVIKING_CONFIG_FILE=/path/to/ov.conf
 | `bot.agents.max_tool_iterations` | `50` | 单轮最大工具迭代数 |
 | `bot.agents.memory_window` | `50` | 本地历史窗口和会话提交消息阈值 |
 | `bot.agents.subagent_enabled` | `true` | 是否提供 `spawn` 工具 |
+| `bot.agents.subagent_max_concurrency` | `4` | 同时运行的后台子 Agent 数量上限 |
 | `bot.gateway.host` | `127.0.0.1` | Gateway 监听地址 |
 | `bot.gateway.port` | `18790` | Gateway 监听端口 |
 | `bot.sandbox.backend` | `direct` | 执行后端 |

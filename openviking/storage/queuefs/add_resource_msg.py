@@ -50,6 +50,8 @@ class AddResourceMsg:
     source_name: Optional[str] = None
     to_is_directory: Optional[bool] = None
     watch_interval: float = 0
+    is_active: Optional[bool] = None
+    watch_task_id: Optional[str] = None
     skip_watch_management: bool = True
     defer_target_resolution: bool = False
     cleanup_empty_target_on_failure: bool = False
@@ -184,6 +186,12 @@ class AddResourceMsg:
             staged_source=staged_source,
             job_phase=job_phase,
             watch_interval=float(data.get("watch_interval", 0) or 0),
+            is_active=(data.get("is_active") if isinstance(data.get("is_active"), bool) else None),
+            watch_task_id=(
+                str(data["watch_task_id"])
+                if isinstance(data.get("watch_task_id"), str) and data["watch_task_id"]
+                else None
+            ),
             skip_watch_management=bool(data.get("skip_watch_management", True)),
             defer_target_resolution=bool(data.get("defer_target_resolution", False)),
             cleanup_empty_target_on_failure=bool(

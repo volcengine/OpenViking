@@ -36,6 +36,9 @@ pub enum CacheError {
     /// The selected provider does not implement a named script.
     #[error("unsupported cache script: {0}")]
     UnsupportedScript(String),
+    /// The selected provider does not implement a cache operation.
+    #[error("unsupported cache operation: {0}")]
+    UnsupportedOperation(String),
     /// A dynamic provider uses an incompatible ABI.
     #[error("cache provider ABI mismatch: {0}")]
     AbiMismatch(String),

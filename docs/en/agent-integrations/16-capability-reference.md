@@ -110,10 +110,10 @@ Supporting mechanisms:
 
 ## 2.2 The memory-plugin-shared layer
 
-The `examples/memory-plugin-shared/lib/` directory contains 18 `.mjs` modules and serves as the single source of truth for all JS-based harnesses. These are consumed in two ways:
+The `examples/memory-plugin-shared/lib/` directory contains 23 `.mjs` modules and serves as the single source of truth for all JS-based harnesses. These are consumed in two ways:
 
-1. **Vendoring (copying)**: The `sync.mjs` script distributes these modules to 7 targets, prefixing every file with `// GENERATED FROM ... DO NOT EDIT.`. Because of this added line, a vendored copy's line number will be exactly one line greater than the library source (keep this in mind when cross-referencing line numbers). The distribution breakdown is as follows: 17 modules each for claude-code, codex, and opencode (the "HARNESS 13" + `mcp-proxy-core` + `mcp-proxy-config` + `async-writer` + `batch-send`); 15 for dsh (the "HARNESS 13" + the two `mcp-proxy-*` modules it needs for the stdio proxy); 13 for pi; all 19 for zcode; and 5 for agent-plugins. At the current HEAD, every target has zero drift from the original library source.
-2. **Direct import via relative path (no copying)**: Integrations like cursor, trae, and trae-cn directly `import "../../memory-plugin-shared/lib/..."`. To ensure this works, the installer copies the package alongside the shared library into `~/.openviking/agent-integrations/{<client>,memory-plugin-shared}/`, preserving the relative folder layout. At runtime, these harnesses share this directory, meaning reinstalling any one of them will overwrite the shared directory wholesale.
+1. **Vendoring (copying)**: The `sync.mjs` script distributes these modules to 7 targets, prefixing every file with `// GENERATED FROM ... DO NOT EDIT.`. Because of this added line, a vendored copy's line number will be exactly one line greater than the library source (keep this in mind when cross-referencing line numbers). Every target ships exactly the modules it imports, so the breakdown follows the import graph rather than the harness. Over the 12-module hook set (`HOOK_SHARED_FILES` in `sync.mjs`) that every hook-driven plugin takes: pi adds `setup-wizard` (13); dsh adds the two `mcp-proxy-*` modules it needs for the stdio proxy (14); opencode adds `setup-wizard`, the two `mcp-proxy-*`, and `batch-send` (16); zcode adds the two `mcp-proxy-*`, `batch-send`, `async-writer`, `agent-hook-runtime`, and `agent-uri-guard` (18); claude-code and codex add `setup-wizard`, the two `mcp-proxy-*`, `batch-send`, `async-writer`, `plugin-config`, `workspace-config`, `workspace-registry`, and `doctor-core` (21 each). agent-plugins takes none of the hook set — it has no hooks — only `credentials`, `debug-log`, and the two `mcp-proxy-*` (4). At the current HEAD, every target has zero drift from the original library source.
+2. **Direct import via relative path (no copying)**: Integrations like cursor, trae, and trae-cn directly `import "../../memory-plugin-shared/lib/..."`. To ensure this works, the installer copies the package alongside the 15 shared modules those hooks transitively import into `~/.openviking/agent-integrations/{<client>,memory-plugin-shared}/`, preserving the relative folder layout. That installed set is closed under imports and excludes the workspace configuration layer, which no hook runtime reaches. At runtime, these harnesses share this directory, meaning reinstalling any one of them will overwrite the shared directory wholesale.
 
 Core modules at a glance (detailed further in the per-dimension sections):
 
@@ -126,11 +126,14 @@ Core modules at a glance (detailed further in the per-dimension sections):
 | `batch-send.mjs` | Executes writes in batches of 100, handles per-message degradation on 404/405 errors, and queues the leading contiguous prefix | cc / codex / opencode + the agent-hook family |
 | `profile-inject.mjs` | Injects the profile and available-memory index at session start | 9 harnesses (all but openclaw / hermes) |
 | `recall-compress-core.mjs` | Manages the recall compression prompt, URI edit-distance repair, and caching | claude-code |
-| `capture-utils.mjs` | Handles message normalization, injection back-flow guarding, and capture filtering | codex / opencode / dsh / pi |
+| `capture-utils.mjs` | Handles message normalization, injection back-flow guarding, and capture filtering | codex / opencode / dsh / pi / zcode |
 | `credentials.mjs` | Credential resolution chain (see [§3.1.3](#_3-1-3-credential-systems)) | All JS-based |
 | `session-model.mjs` | Session ID prefix derivation and bypass globbing | All JS-based |
 | `async-writer.mjs` | Detaches the write path (drains stdin → spawn → approve → write → unref). Falls back to synchronous writing if spawn fails | cc / codex / zcode |
-| `workspace-peer.mjs` | Converts the `cwd` into an actor peer (replacing every non-alphanumeric character with `-`) | All JS-based |
+| `workspace-peer.mjs` | Resolves the actor peer from `peer.source` — presets, templates, and the pre-git id kept for dual-read ([§3.1.3](#_3-1-3-credential-systems)) | All JS-based |
+| `workspace-identity.mjs` | Workspace root + git identity (normalized `origin`, root path, worktree/submodule kind), derived by walking the filesystem with no `git` subprocess and cached per cwd | All JS-based |
+| `workspace-config.mjs` | The layered workspace config: reads `<root>/.openviking/config.json` and `config.local.json`, merges layers with provenance, strips connection and credential keys | claude-code / codex |
+| `workspace-registry.mjs` | The per-machine registry `~/.openviking/workspaces/<slot>.json` — one file per workspace, hand-created and read-only for the plugins, the layer that outranks any committed file | claude-code / codex |
 | `uri-guard.mjs` / `agent-uri-guard.mjs` | Intercepts cases where `viking://` is incorrectly treated as a local path | Used in each harness's `PreToolUse` or `tool.execute.before`-style hooks |
 | `plugin-config.mjs` | Reads the `plugin` section of `ovcli.conf` | claude-code / codex |
 | `setup-wizard.mjs` | Interactively writes to `ovcli.conf` | cc, codex, opencode, and pi expose an entry point for this |
@@ -203,13 +206,37 @@ Family A resolves credentials in the following order (refer to individual profil
 5. **mcpUrl**: Resolves via `OPENVIKING_MCP_URL` (when outside CLI mode) → `${baseUrl}/mcp`.
 6. **Common request headers**: `Authorization: Bearer` + `X-OpenViking-Account/User/Actor-Peer` + `User-Agent: openviking-memory-<harness>/<version>`.
 
-**Workspace peer** (applies to all of Family A + agent-plugins): If no explicit `peerId` is provided and `OPENVIKING_WORKSPACE_PEER≠0`, the peer is derived from the current working directory (cwd). Every non-alphanumeric character in the path is replaced with a hyphen (`-`) (e.g., `/Users/x/Dev/OpenViking` becomes `-Users-x-Dev-OpenViking`), and this value is sent as the `X-OpenViking-Actor-Peer`. The server validates this header and returns a `400` error if it contains `/` or `\`. For `openclaw`, the peer is derived from `peer_role`/`peer_prefix` (note that if `peer_role=person`, sender information must be available, otherwise tool calls will fail). The `hermes` peer defaults to `OPENVIKING_AGENT` (defaulting to `hermes`).
+**Workspace peer** (applies to every Family A harness; the agent-plugins package derives nothing and sends only an explicit `OPENVIKING_PEER_ID`): If no explicit `peerId` is provided and `OPENVIKING_WORKSPACE_PEER≠0`, the peer is derived from the workspace and sent as the `X-OpenViking-Actor-Peer` (the server validates this header and returns a `400` error if it contains `/` or `\`). The derivation rule is `peer.source`, which **defaults to `git`**: the normalized `origin` URL first, falling back to the repository root. Outside a repository nothing is sent, and what is remembered there goes to the user-level space `viking://user/<you>/memories` instead. In `/Users/x/Dev/OpenViking/examples/codex-memory-plugin` with an origin of `git@github.com:volcengine/OpenViking.git`, the peer is `github.com-volcengine-openviking` — the same value from any subdirectory, any worktree, any machine, and any clone. `peer.source` is read from the env var `OPENVIKING_PEER_SOURCE`, the ovcli.conf `plugin.peerSource` / `plugin.<harness>.peerSource` keys, and the workspace file's `peer.source`; only claude-code and codex read those layers, so every other Family A harness always runs on the default.
+
+| `peer.source` | Expands to | Resulting peer |
+|---|---|---|
+| `git` (the default) | `["{git_remote}", "{git_root}"]` | The normalized origin, else the repository root. Outside a repository nothing is sent. No preset adds a prefix. |
+| `cwd` | `["{cwd}"]` | The previous behavior, byte for byte: every non-alphanumeric character in the path becomes a hyphen (`/Users/x/Dev/OpenViking` → `-Users-x-Dev-OpenViking`). |
+| `none` | `[]` | No peer is sent at all. `OPENVIKING_WORKSPACE_PEER=0` still means the same thing. |
+| A template (e.g. `"git-{git_remote}"`, `"team-{dir}"`) | Itself | Free-form. A list of templates (e.g. `["team-{dir}", "{cwd}"]`) is tried in order, and a template whose variables are empty falls through to the next one. |
+
+| Variable | Value | Empty when |
+|---|---|---|
+| `{git_remote}` | The normalized `origin` URL as `github.com-org-repo`. Host and path are lowercased and `.git` plus any userinfo is dropped, so the ssh and https spellings of one repo agree and an embedded token can never reach the peer id. | Not a git repository, or `origin` is unset |
+| `{git_root}` | The repository root path, under the legacy sanitation above | Outside a git repository. A marker file inside a repository still leaves this the repository's own root, so marking a subdirectory does not split the default peer |
+| `{cwd}` | The working directory, under the legacy sanitation above | Never — and it is in no default chain, so a bare path becomes a peer only when you ask for one |
+| `{dir}` | The workspace root's directory name: the repository root, or the directory holding `.openviking/config.json` | The directory is not a workspace |
+| `{harness}` | The name of the agent running, the same one the User-Agent carries | Never — but the MCP proxy takes no part in derivation (its cwd is not a reliable identity), so a read path that goes only through it cannot resolve it |
+
+To give a directory that is not a repository its own peer under claude-code or codex, create `.openviking/config.json` there holding `{"version": 1, "peer": {"id": "my-project"}}`; every other harness needs an explicit `OPENVIKING_PEER_ID` instead.
+
+**Identity semantics**: Every clone of one repository shares one peer, so project memory follows the project rather than the checkout. A fork carries a different `origin` and is therefore a separate peer by default; reviewing an external PR via `gh pr checkout` does not change `origin`, so it does not change identity either. Derivation is pure filesystem work (`workspace-identity.mjs`) with no `git` subprocess, which keeps it inside the tightest hook budget and keeps it working where `git` is absent from `PATH` or would refuse the repo over dubious ownership. Worktrees converge onto the main repository via `commondir`, a submodule keeps its own identity, and `$HOME` and `/` are never treated as workspace roots.
+
+**Migration** (no user action required): The pre-git peer id is a pure function of the cwd, so the client can always recompute it locally and recall still reaches memories written under it. Under the default `peer_scope: "all"`, the server's existing cross-peer sweep already covers it at zero cost; under `peer_scope: "actor"`, the plugin asks that peer separately and appends whatever it returns. There is no deadline on this.
+
+For `openclaw`, the peer is derived from `peer_role`/`peer_prefix` (note that if `peer_role=sender`, sender information must be available, otherwise tool calls will fail; legacy `person` is accepted as an alias). The `hermes` peer defaults to `OPENVIKING_AGENT` (defaulting to `hermes`).
 
 ### 3.1.4 Configuration layers
 
 | Config Layer | Applies To | Notes |
 |---|---|---|
 | env `OPENVIKING_*` | Per family, see above; behavior knobs are listed on each profile card | The only layer that spans every JS-based integration. |
+| Workspace layers: the per-machine registry `~/.openviking/workspaces/<slot>.json` > `<repo-root>/.openviking/config.local.json` (private, gitignored) > `<repo-root>/.openviking/config.json` (committed, shared by the team) | claude-code / codex | Schema v1; `version: 1` is required and a file declaring another version is skipped with a warning. Keys: `peer.source`, `peer.id`, `recall.{enabled,peer_scope,dedup_turns,max_items,score_threshold}`, `capture.{enabled,commit_token_threshold}`, `bypass.session_patterns`, `labels`. Lists union across layers, and a leading `"!reset"` clears what was inherited; unknown keys are kept and ignored. These files are trusted without a prompt because a hook is non-interactive, so the refusals are structural instead: connection and credential keys (`url`, `api_key`, `account`, `user`, `extra_headers`, …) are stripped with a warning and `${VAR}` is never expanded. Nothing writes the registry today: an entry is created by hand, and `ov-memory-doctor` prints the slot path to put it at. What a committed file switches off is announced in `ov-memory-doctor` rather than blocked. |
 | ovcli.conf `plugin` section (`plugin.claude_code` / `plugin.codex` / shared scalars) | claude-code / codex | `plugin.<x>` entries named after any other harness are ignored. Note: `ov config add/edit` rewrites the entire file from the Rust Config struct, thereby dropping any `plugin` sections it does not recognize; however, `ov config switch` simply copies bytes and remains unaffected. |
 | ov.conf harness sections (`claude_code.*` / `codex.*`) | claude-code / codex (legacy fallback) | |
 | The harness's own config file | opencode `openviking-config.json`, pi `config.json`, dsh cordis patch, openclaw `openclaw.json`, hermes `config.yaml`+`.env` | |
@@ -220,6 +247,7 @@ Family A resolves credentials in the following order (refer to individual profil
 - `OPENVIKING_WRITE_PATH_ASYNC`: claude-code / codex / zcode.
 - Recall digest settings (`OPENVIKING_RECALL_COMPRESS`, `OPENVIKING_RECALL_REWRITE`, and their companions): claude-code / codex (note that the server-side `rewrite` parameter is available to all callers, see [§3.2.5](#_3-2-5-recall-digest)).
 - `OPENVIKING_RECALL_DEDUP_TURNS`, `OPENVIKING_RECALL_QUERY_EXPANSION`: claude-code / codex.
+- `OPENVIKING_PEER_SOURCE` and the workspace config files: claude-code / codex (every other Family A harness derives its peer with the default `git` rule and still honors `OPENVIKING_PEER_ID` and `OPENVIKING_WORKSPACE_PEER`).
 - ovcli.conf `plugin` section: claude-code / codex.
 ## 3.2 Automatic recall and injection
 
@@ -533,7 +561,7 @@ Each card serves as a quick-reference entry point. It records only the facts and
 ## zcode
 
 - **Integration docs**: [Community Integrations → ZCode](./08-community-plugins.md)
-- **Form**: Config-driven (merged into `~/.zcode/cli/config.json`, forcing `hooks.enabled=true`) utilizing an MCP proxy. It features 4 hooks: SessionStart(30s) / UserPromptSubmit(20s) / PreToolUse:Read\|Glob\|Grep(5s) / Stop(30s). This is the only harness that fully vendors all 18 shared files. Version 0.1.1.
+- **Form**: Config-driven (merged into `~/.zcode/cli/config.json`, forcing `hooks.enabled=true`) utilizing an MCP proxy. It features 4 hooks: SessionStart(30s) / UserPromptSubmit(20s) / PreToolUse:Read\|Glob\|Grep(5s) / Stop(30s). It vendors 18 shared modules, and is the only harness that vendors the `agent-hook-runtime` pair instead of importing it by relative path. Version 0.1.2.
 - **Capability highlights**: The rollout file `~/.zcode/cli/rollout/model-io-<sid>.jsonl` serves as the source of truth for increments (a `lastTurnId` diff backfills any missed Stop events). Stop detaches by default, meaning Ctrl+C does not result in lost writes.
 - **Behavior notes**: Commits on every Stop (keep 0). The capture path only strips the three types of injection blocks without performing any further text cleanup ([§3.2.6](#_3-2-6-injection-backflow-protection)). The initial capture reads the entire rollout at once, meaning that installing it into a long-running session will produce a single large push.
 - **Configuration**: Environment variables only; `OPENVIKING_WRITE_PATH_ASYNC` takes effect for zcode.

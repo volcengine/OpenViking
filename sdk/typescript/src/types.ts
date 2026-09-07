@@ -96,6 +96,8 @@ export interface AddResourceOptions extends WaitOptions {
 export interface WriteOptions extends WaitOptions {
   mode?: string;
   processingMode?: ProcessingMode;
+  tags?: string[];
+  tagMode?: "replace" | "append";
   extra?: JsonObject;
 }
 /** One file write in a batch. */
@@ -183,6 +185,14 @@ export interface GrepOptions {
   nodeLimit?: number;
   levelLimit?: number;
   excludeUri?: string;
+  tags?: string[];
+  includeTags?: boolean;
+}
+/** File glob options. */
+export interface GlobOptions {
+  nodeLimit?: number;
+  tags?: string[];
+  includeTags?: boolean;
 }
 /** Directory listing options. */
 export interface ListOptions {
@@ -192,8 +202,12 @@ export interface ListOptions {
   absLimit?: number;
   showAllHidden?: boolean;
   nodeLimit?: number;
+  offset?: number;
+  limit?: number;
   sortBy?: "name" | "mtime";
   sortOrder?: "asc" | "desc";
+  tags?: string[];
+  includeTags?: boolean;
 }
 /** Directory tree options. */
 export interface TreeOptions {
@@ -202,6 +216,10 @@ export interface TreeOptions {
   showAllHidden?: boolean;
   nodeLimit?: number;
   levelLimit?: number;
+  offset?: number;
+  limit?: number;
+  tags?: string[];
+  includeTags?: boolean;
 }
 /** Session message payload. */
 export interface Message {

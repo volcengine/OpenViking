@@ -22,8 +22,8 @@ class _FakeSDK:
             raise NotFoundError(sid, "session")
         return {"session_id": sid, "pending_tokens": 0, "message_count": 0}
 
-    async def create_session(self, session_id=None, memory_policy=None):
-        self.created.append(session_id)
+    async def create_session(self, session_id=None, options=None):
+        self.created.append((session_id, options))
         self.existing.add(session_id)
         return {"session_id": session_id}
 
@@ -40,9 +40,12 @@ async def test_ensure_session_get_or_create():
     sdk = _FakeSDK()
     client = ConversationReplayClient(sdk)
     await client.ensure_session("s1")  # not present -> create
-    assert sdk.created == ["s1"]
+    assert sdk.created == [("s1", None)]
     await client.ensure_session("s1")  # now present -> no second create
-    assert sdk.created == ["s1"]
+    assert sdk.created == [("s1", None)]
+    # a memory policy travels inside CreateSessionOptions, not as a keyword
+    await client.ensure_session("s2", {"working_memory": {"enabled": False}})
+    assert sdk.created[-1] == ("s2", {"memory_policy": {"working_memory": {"enabled": False}}})
 
 
 async def test_append_chunks_at_100():

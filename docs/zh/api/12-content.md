@@ -222,6 +222,8 @@ openviking read viking://resources/docs/api.md
 | mode | str | 否 | `replace` | `replace` 覆盖已有文件、缺失时创建；`append` 追加已有文件、缺失时创建；`create` 仅创建缺失文件，目标已存在时返回 `409 Conflict` |
 | wait | bool | 否 | `false` | 是否等待后台语义/向量刷新完成 |
 | timeout | float | 否 | `null` | 当 `wait=true` 时的超时时间（秒） |
+| tags | string[] | 否 | 未设置 | 写入文件的显式检索标签，例如 `["team=search", "env=prod"]` |
+| tag_mode | string | 否 | `replace` | 提供 `tags` 时的更新方式：`replace` 覆盖标签，`append` 按 key 合并标签 |
 
 **说明**
 
@@ -230,6 +232,7 @@ openviking read viking://resources/docs/api.md
 - 已存在的 `.abstract.md` / `.overview.md` 可以修改正文，但不能通过公共 API 创建；只提交正文时会保留现有 OKF metadata，提交完整 OKF 时 metadata 必须与存量值一致。未知 metadata 字段会静默丢弃。sidecar 正文写入只重建该目录实际存在的 L0/L1 向量，不触发语义重新生成。
 - 文件内容会在 API 返回前完成更新；`wait` 只控制是否等待语义/向量刷新完成。
 - 公共 API 已不再接受 `regenerate_semantics` 或 `revectorize`；写入后一定会自动刷新相关语义与向量。
+- 提供 `tags` 时，标签会在该文件首次向量 upsert 时写入，而非在处理完成后再单独更新。省略 `tags` 不改变已有标签；显式 `tags: []` 配合 `tag_mode: "replace"` 可清空标签。
 
 
 **Python SDK**
@@ -240,6 +243,7 @@ result = client.write(
     content="# Updated API\n\nFresh content.",
     mode="replace",
     wait=True,
+    options={"tags": ["team=search", "env=prod"], "tag_mode": "replace"},
 )
 print(result["root_uri"])
 ```
@@ -247,7 +251,11 @@ print(result["root_uri"])
 **TypeScript SDK**
 
 ```typescript
-await client.write("viking://resources/docs/new.md", "# New document\n", { wait: true });
+await client.write("viking://resources/docs/new.md", "# New document\n", {
+  wait: true,
+  tags: ["team=search", "env=prod"],
+  tagMode: "replace",
+});
 ```
 
 **Go SDK**
@@ -260,6 +268,8 @@ result, err := client.Write(
     &openviking.WriteOptions{
         Mode: "replace",
         Wait: true,
+        Tags: []string{"team=search", "env=prod"},
+        TagMode: "replace",
     },
 )
 if err != nil {
@@ -282,7 +292,9 @@ curl -X POST "http://localhost:1933/api/v1/content/write" \
     "uri": "viking://resources/docs/api.md",
     "content": "# Updated API\n\nFresh content.",
     "mode": "replace",
-    "wait": true
+    "wait": true,
+    "tags": ["team=search", "env=prod"],
+    "tag_mode": "replace"
   }'
 ```
 
@@ -291,6 +303,8 @@ curl -X POST "http://localhost:1933/api/v1/content/write" \
 ```bash
 openviking write viking://resources/docs/api.md \
   --content "# Updated API\n\nFresh content." \
+  --tags team=search,env=prod \
+  --tag-mode replace \
   --wait
 ```
 
@@ -726,10 +740,10 @@ curl -X POST http://localhost:1933/api/v1/content/reindex \
 
 ```bash
 openviking reindex viking://resources --mode vectors_only \
-  --tag team=search --tag env=prod --tag-mode replace
+  --tags team=search,env=prod --tag-mode replace
 ```
 
-CLI 仅在至少传入一个 `--tag` 时发送标签字段；如需用 `tags: []` 清空标签，请使用 HTTP 或 SDK。
+CLI 仅在 `--tags` 非空时发送标签字段；如需用 `tags: []` 清空标签，请使用 HTTP 或 SDK。
 
 ```bash
 openviking reindex viking://user/default/skills --mode semantic_and_vectors --wait false

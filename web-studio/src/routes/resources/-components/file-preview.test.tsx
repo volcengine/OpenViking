@@ -82,17 +82,18 @@ function renderPreview(
   entry: VikingFsEntry,
   onNavigate: (uri: string) => void,
   directoryOverview?: string,
+  directoryAbstract?: string,
 ) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
   if (entry.isDir) {
     queryClient.setQueryData(
-      ['viking-directory-level', entry.uri, 'abstract'],
-      '',
+      ['viking-directory-sidecar', entry.uri, 'abstract'],
+      directoryAbstract ?? '',
     )
     queryClient.setQueryData(
-      ['viking-directory-level', entry.uri, 'overview'],
+      ['viking-directory-sidecar', entry.uri, 'overview'],
       directoryOverview,
     )
   }
@@ -203,6 +204,229 @@ describe('FilePreview Markdown links', () => {
     expect(screen.queryByRole('link', { name: 'Data' })).toBeNull()
     expect(screen.queryByRole('link', { name: 'Blob' })).toBeNull()
     expect(onNavigate).not.toHaveBeenCalled()
+  })
+
+  it('renders directory L0 and L1 frontmatter as independent metadata panels', () => {
+    const sidecar = (
+      filename: '.abstract.md' | '.overview.md',
+      trigger: string,
+      body: string,
+    ) =>
+      [
+        '---',
+        `directory: viking://resources/wiki/`,
+        'generated_by:',
+        '  component: SemanticProcessor',
+        `  trigger: ${trigger}`,
+        'freshness:',
+        '  total_entries: 2',
+        '  sampled_entries: 2',
+        '  unsampled_entries: 0',
+        '  pending_child_changes: 0',
+        'extensions:',
+        `  sidecar: ${filename}`,
+        '---',
+        '',
+        body,
+      ].join('\n')
+
+    const { container } = renderPreview(
+      directory,
+      vi.fn(),
+      sidecar('.overview.md', 'overview_refresh', 'L1 body'),
+      sidecar('.abstract.md', 'abstract_refresh', 'L0 body'),
+    )
+
+    expect(
+      screen.getAllByRole('region', {
+        name: 'filePreview.yamlMetadata.ariaLabel',
+      }),
+    ).toHaveLength(2)
+    expect(screen.getByText('abstract_refresh')).toBeDefined()
+    expect(screen.getByText('overview_refresh')).toBeDefined()
+    expect(screen.getByText('L0 body')).toBeDefined()
+    expect(screen.getByText('L1 body')).toBeDefined()
+
+    const articles = [
+      screen.getByText('L0 body').closest('article'),
+      screen.getByText('L1 body').closest('article'),
+    ]
+    expect(articles.every(Boolean)).toBe(true)
+    for (const article of articles) {
+      expect(article?.textContent).not.toContain('generated_by:')
+      expect(article?.textContent).not.toContain('extensions:')
+    }
+
+    const details = [...container.querySelectorAll('details')]
+    expect(details).toHaveLength(2)
+    expect(details.every((item) => !item.open)).toBe(true)
+    fireEvent.click(details[0].querySelector('summary')!)
+    expect(details[0].textContent).toContain('sidecar: .abstract.md')
+    expect(details[1].textContent).toContain('sidecar: .overview.md')
+  })
+})
+
+describe('FilePreview OKF semantic sidecars', () => {
+  beforeEach(() => {
+    cleanup()
+  })
+
+  afterEach(() => {
+    previewState.override = null
+  })
+
+  it.each(['.abstract.md', '.overview.md'])(
+    'renders %s frontmatter as metadata and keeps the body as Markdown',
+    (name) => {
+      previewState.override = {
+        content: [
+          '---',
+          'directory: viking://resources/openviking-contribute/',
+          'generated_by:',
+          '  component: SemanticProcessor',
+          '  trigger: parent_refresh',
+          'freshness:',
+          '  total_entries: 4',
+          '  sampled_entries: 4',
+          '  unsampled_entries: 0',
+          '  pending_child_changes: 0',
+          'extensions:',
+          '  ranking:',
+          '    strategy: semantic',
+          '---',
+          '',
+          '**这是 OpenViking 相关项目的 PR 贡献规范集合。**',
+        ].join('\n'),
+        fileType: 'markdown',
+      }
+
+      const { container } = renderPreview(
+        {
+          ...file,
+          name,
+          uri: `viking://resources/openviking-contribute/${name}`,
+        },
+        vi.fn(),
+      )
+
+      expect(
+        screen.getByRole('region', {
+          name: 'filePreview.yamlMetadata.ariaLabel',
+        }),
+      ).toBeDefined()
+      expect(screen.getByText('SemanticProcessor')).toBeDefined()
+      expect(screen.getByText('parent_refresh')).toBeDefined()
+      expect(
+        screen.getByText('这是 OpenViking 相关项目的 PR 贡献规范集合。'),
+      ).toBeDefined()
+      const article = container.querySelector('article')
+      expect(article?.textContent).not.toContain('generated_by:')
+      expect(article?.textContent).not.toContain('total_entries:')
+
+      const region = screen.getByRole('region', {
+        name: 'filePreview.yamlMetadata.ariaLabel',
+      })
+      const details = region.querySelector('details')
+      expect(details?.open).toBe(false)
+      expect(region.getAttribute('aria-label')).not.toMatch(/okf/i)
+
+      const summary = screen.getByText('filePreview.yamlMetadata.rawYaml')
+      expect(summary.textContent).not.toMatch(/okf/i)
+      fireEvent.click(summary)
+
+      expect(details?.open).toBe(true)
+      expect(details?.textContent).toContain('extensions:')
+      expect(details?.textContent).toContain('  ranking:')
+      expect(details?.textContent).toContain('    strategy: semantic')
+
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: 'filePreview.markdownSource',
+        }),
+      )
+      expect(container.textContent).toContain('extensions:')
+      expect(container.textContent).toContain('strategy: semantic')
+    },
+  )
+
+  it('leaves ordinary Markdown frontmatter in the document', () => {
+    previewState.override = {
+      content: ['---', 'title: User document', '---', '', 'Body'].join('\n'),
+      fileType: 'markdown',
+    }
+
+    renderPreview(file, vi.fn())
+
+    expect(
+      screen.queryByRole('region', {
+        name: 'filePreview.yamlMetadata.ariaLabel',
+      }),
+    ).toBeNull()
+    expect(screen.getByText(/title: User document/)).toBeDefined()
+  })
+
+  it('warns when the sidecar reports pending child changes', () => {
+    previewState.override = {
+      content: [
+        '---',
+        'directory: viking://resources/openviking-contribute/',
+        'freshness:',
+        '  total_entries: 4',
+        '  sampled_entries: 4',
+        '  unsampled_entries: 0',
+        '  pending_child_changes: 2',
+        '---',
+        '',
+        'Body',
+      ].join('\n'),
+      fileType: 'markdown',
+    }
+
+    const { container } = renderPreview(
+      {
+        ...file,
+        name: '.overview.md',
+        uri: 'viking://resources/openviking-contribute/.overview.md',
+      },
+      vi.fn(),
+    )
+
+    const pending = container.querySelector('[data-pending="true"]')
+    expect(pending).not.toBeNull()
+    expect(pending?.classList.contains('text-amber-700')).toBe(true)
+  })
+
+  it('shows the empty state instead of leaking frontmatter for an empty body', () => {
+    previewState.override = {
+      content: [
+        '---',
+        'directory: viking://resources/openviking-contribute/',
+        '---',
+        '',
+      ].join('\n'),
+      fileType: 'markdown',
+    }
+
+    const { container } = renderPreview(
+      {
+        ...file,
+        name: '.abstract.md',
+        uri: 'viking://resources/openviking-contribute/.abstract.md',
+      },
+      vi.fn(),
+    )
+
+    expect(screen.getByText('filePreview.emptyFile')).toBeDefined()
+    expect(container.querySelector('article')?.textContent).not.toContain(
+      'directory:',
+    )
+    expect(
+      screen
+        .getByRole('region', {
+          name: 'filePreview.yamlMetadata.ariaLabel',
+        })
+        .querySelector('details')?.open,
+    ).toBe(false)
   })
 })
 

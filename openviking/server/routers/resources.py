@@ -24,9 +24,6 @@ from openviking_cli.exceptions import InvalidArgumentError
 
 router = APIRouter(prefix="/api/v1", tags=["resources"])
 
-_CONNECTOR_TASK_ORIGIN_HEADER = "X-OpenViking-Task-Origin"
-_CONNECTOR_TASK_ORIGIN = "connector_import"
-
 
 class AddResourceRequest(BaseModel):
     """Request model for add_resource.
@@ -56,6 +53,7 @@ class AddResourceRequest(BaseModel):
             Default is False (async processing).
         timeout: Timeout in seconds when wait=True. None means no timeout.
         strict: Whether to use strict mode for processing. Default is True.
+        internal_task: Whether to hide this task from the default task list.
         ignore_dirs: Comma-separated list of directory names to ignore during parsing.
         include: Glob pattern for files to include during parsing.
         exclude: Glob pattern for files to exclude during parsing.
@@ -68,20 +66,14 @@ class AddResourceRequest(BaseModel):
             pass {"feishu_access_token": "..."}. For Feishu user-token watches,
             also pass "feishu_refresh_token". The optional "feishu_app_id" and
             "feishu_app_secret" pair overrides the server app for that watch.
-        watch_interval: Watch interval in minutes for automatic resource monitoring.
-            - watch_interval > 0: Creates or updates a watch task. The resource will be
-              automatically re-processed at the specified interval.
-            - watch_interval = 0: No watch task is created. If a watch task exists for
-              this resource, it will be cancelled (deactivated).
-            - watch_interval < 0: Same as watch_interval = 0, cancels any existing watch task.
-            Default is 0 (no monitoring).
-
-            Note: Re-adding the same source to the same target updates its active watch task.
-            A different source targeting an active watch raises ConflictError; cancel that
-            watch first with watch_interval <= 0. For Connector imports this check is
-            eventually consistent: the Watch is created only after the background import
-            succeeds, so overlapping imports may both write before Watch finalization
-            reports the conflict.
+        watch_interval: Interval in minutes (default: 0). Positive values create a new
+            Watch using explicit ``to`` or the imported ``root_uri``. Nonpositive values
+            create no Watch: native imports with explicit ``to`` pause a single accessible
+            Watch (409 if ambiguous); Connector imports leave Watches untouched.
+            See the endpoint's Watch ownership rules.
+        is_active: Initial Watch state for Connector and native Feishu imports. When false,
+            requires watch_interval > 0 and an explicit to or parent target and creates the Watch
+            paused; it stays paused until updated, regardless of the import result.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -97,6 +89,7 @@ class AddResourceRequest(BaseModel):
     wait: bool = False
     timeout: Optional[float] = None
     strict: bool = False
+    internal_task: bool = False
     source_name: Optional[str] = None
     ignore_dirs: Optional[str] = None
     include: Optional[str] = None
@@ -106,6 +99,7 @@ class AddResourceRequest(BaseModel):
     args: Dict[str, Any] = Field(default_factory=dict)
     telemetry: TelemetryRequest = False
     watch_interval: float = 0
+    is_active: bool = True
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
     tags: Optional[list[str]] = None
     tag_mode: str = "replace"
@@ -128,6 +122,15 @@ class AddResourceRequest(BaseModel):
             raise ValueError("'add_type' cannot be combined with 'parent'")
         if self.add_type and not self.to:
             raise ValueError("'add_type' requires an exact 'to' target")
+        return self
+
+    @model_validator(mode="after")
+    def check_paused_watch(self):
+        has_target = bool((self.to or "").strip() or (self.parent or "").strip())
+        if self.is_active is False and (self.watch_interval <= 0 or not has_target):
+            raise ValueError(
+                "is_active=false requires watch_interval > 0 and either 'to' or 'parent'"
+            )
         return self
 
 
@@ -190,6 +193,7 @@ async def temp_upload(
             temp_file_id,
             _ctx,
             to=signed.to,
+            parent=signed.parent,
             reason=signed.reason,
             processing_mode=signed.processing_mode,
             tags=signed.tags,
@@ -221,7 +225,16 @@ async def add_resource(
     request: AddResourceRequest,
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Add resource to OpenViking."""
+    """Add resource to OpenViking.
+
+    Native Watches require an unoccupied resolved target and keep it while paused.
+    Connector Watches may share targets only with other Connector Watches; repeating
+    a source and target creates another independent task. Re-importing never updates
+    or resumes a Watch: use PATCH /api/v1/watches/{task_id}, or delete it first.
+    URI lookups return 409 for multiple accessible Watches; address them by task_id.
+    Connector Watches are visible before the initial import and held by the scheduler
+    until that import records its result.
+    """
     service = get_service()
     to_uri = resolve_path_variables(request.to).strip() if request.to else ""
     if to_uri:
@@ -300,10 +313,8 @@ async def add_resource(
                 tag_mode=request.tag_mode,
                 allow_local_path_resolution=allow_local_path_resolution,
                 enforce_public_remote_targets=True,
-                internal_task=(
-                    http_request.headers.get(_CONNECTOR_TASK_ORIGIN_HEADER, "").strip().lower()
-                    == _CONNECTOR_TASK_ORIGIN
-                ),
+                internal_task=request.internal_task,
+                is_active=request.is_active,
                 args=request.args,
                 **kwargs,
             )
@@ -363,6 +374,7 @@ async def add_skill(
             source_metadata["original_filename"] = resolved.original_filename
 
     source_path_hint = resolved.original_filename if resolved else None
+
     async def _add() -> dict[str, Any]:
         try:
             result = await service.resources.add_skill(

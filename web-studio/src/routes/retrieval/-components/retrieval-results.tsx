@@ -14,6 +14,7 @@ import type { TFunction } from 'i18next'
 
 import { Button } from '#/components/ui/button'
 import { cn } from '#/lib/utils'
+import { retrievalResultNameFromUri } from '#/lib/viking-uri'
 import type {
   FindContextType,
   FindQueryPlanItem,
@@ -23,7 +24,7 @@ import type {
 import { LoadingHint } from './loading-hint'
 import { RetrievalDetailSheet } from './retrieval-detail-sheet'
 import type { RetrievalDetail } from './retrieval-detail-sheet'
-import { displayName, flattenResults, memoryTypeFromUri } from '../-lib/results'
+import { flattenResults, memoryTypeFromUri } from '../-lib/results'
 import type { FlatRetrievalItem } from '../-types/retrieval'
 
 const TYPE_META: Record<
@@ -360,7 +361,7 @@ function ResultRowContent({
   item: FlatRetrievalItem
   t: TFunction<'retrieval'>
 }) {
-  const { name } = displayName(item.item.uri)
+  const name = retrievalResultNameFromUri(item.item.uri)
   const meta = TYPE_META[item.type]
   const Icon = meta.icon
   const memoryType =

@@ -211,7 +211,7 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `max_concurrent` | int | Maximum concurrent embedding requests (`embedding.max_concurrent`, default: `10`) |
+| `max_concurrent` | int | Maximum concurrent embedding requests (`embedding.max_concurrent`, default: `10`; must be `>= 1`) |
 | `max_retries` | int | Maximum retry attempts for transient embedding provider errors (`embedding.max_retries`, default: `3`; `0` disables retry) |
 | `text_source` | str | Text used for vectorizing text files. `content_only` reads raw content, `summary_first` uses summary when available and falls back to content, `summary_only` uses only summary. Default: `content_only` |
 | `max_input_tokens` | int | Maximum estimated raw text tokens sent to the embedding model when content is used. Default: `4096` |
@@ -639,14 +639,13 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `thinking` | bool | Enable thinking mode for VolcEngine models (default: `false`) |
 | `max_concurrent` | int | Maximum concurrent semantic LLM calls (default: `32`) |
 | `max_retries` | int | Maximum retry attempts for transient VLM provider errors (default: `3`; `0` disables retry) |
-| `credentials` | array | Ordered VLM credential/model list, with index 0 having the highest priority. Each item can override `provider`, `model`, `api_key`, `api_base`, `api_version`, `extra_headers`, `extra_request_body`, `stream`, and `reasoning_effort` |
+| `credentials` | array | Ordered VLM credential/model list, with index 0 having the highest priority. Each item can override `provider`, `model`, `api_key`, `api_base`, `api_version`, `extra_headers`, `extra_request_body`, and `reasoning_effort` |
 | `failback_timeout_seconds` | float | Time threshold for attempting a step back toward a higher-priority credential after failover (default: `600`) |
 | `failback_request_count` | int | Successful requests on a lower-priority credential before attempting a step back (default: `50`) |
 | `backup` | object | Optional backup VLM configuration (same shape as `vlm`) for automatic failover when the primary fails with retryable errors such as rate limits, `5xx` responses, or connection/timeout failures. Only one level of failover is supported &mdash; the backup itself cannot define a nested `backup` |
 | `timeout` | float | Per-request HTTP timeout in seconds passed to the underlying OpenAI/LiteLLM client. Increase for slow endpoints (e.g., DashScope, local inference). Must be `> 0` (default: `600.0`) |
 | `extra_headers` | object | Custom HTTP headers for compatible HTTP providers. `kimi` also accepts header overrides, but already injects the required subscription headers by default |
 | `extra_request_body` | object | Extra JSON body fields for OpenAI-compatible completion requests, useful for provider-specific options such as Ollama `{"think": false}` |
-| `stream` | bool | Enable streaming mode (for OpenAI-compatible providers, default: `false`) |
 | `reasoning_effort` | str | Reasoning effort for OpenAI Codex Responses requests. Leave unset to use the model default |
 | `media` | object | Audio/video runtime controls. Media understanding reuses this VLM's provider, model, credentials, client, timeout, retry, headers, output-token limit, failover, and token accounting |
 | `media.enabled` | bool | Enable audio/video understanding (default: `false`) |
@@ -729,24 +728,6 @@ For OpenAI-compatible providers that accept provider-specific JSON body fields, 
   }
 }
 ```
-
-**Streaming Mode**
-
-For OpenAI-compatible providers that return SSE (Server-Sent Events) format responses, enable `stream` mode:
-
-```json
-{
-  "vlm": {
-    "provider": "openai",
-    "api_key": "your-api-key",
-    "model": "gpt-4o",
-    "api_base": "https://api.example.com/v1",
-    "stream": true
-  }
-}
-```
-
-> **Note**: The OpenAI SDK requires `stream=true` to properly parse SSE responses. When using providers that force SSE format, you must set this option to `true`.
 
 **Audio/video understanding**
 
@@ -1489,7 +1470,7 @@ Supports cloud-deployed VikingDB on Volcengine
 
 ##### ACL schema
 
-ACL data exists only in the context collection. In addition to `acl_enabled: bool`, add these scalar-indexed `list<string>` fields:
+ACL data exists only in the context collection. In addition to `acl_mode: string` (`none` or `inherit`), add these scalar-indexed `list<string>` fields:
 
 ```text
 acl_direct_grants
@@ -1498,7 +1479,7 @@ acl_inherited_grants
 
 Each element uses `{mask}:{principal}`: `1` means `read`, `3` means `write`, and `7` means `manage`.
 
-Local backends add the fields to an existing collection and rebuild the scalar index during startup. Existing records are not rewritten; missing ACL fields read as `acl_enabled=false` and empty lists.
+Local backends add the fields to an existing collection and rebuild the scalar index during startup. Existing records are not rewritten; missing ACL fields read as `acl_mode=none` and empty lists.
 
 For existing remote collections, including Volcengine VikingDB, provision these fields and scalar indexes before startup; OpenViking validates but does not alter the remote schema. Volcengine API-key data-plane mode also requires the context collection and configured index to exist. See [Resource Access Control (ACL)](../concepts/15-acl.md) for permission semantics.
 
@@ -1934,8 +1915,7 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
     "max_concurrent": 32,
     "max_retries": 3,
     "extra_headers": {},
-    "extra_request_body": {},
-    "stream": false
+    "extra_request_body": {}
   },
   "rerank": {
     "provider": "volcengine|openai",

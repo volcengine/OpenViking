@@ -413,6 +413,18 @@ const resources = {
       save: '保存',
       selectDirectoryContext: '选择一个标签查看目录上下文。',
       unsupportedBinary: '二进制文件不支持文本预览。',
+      yamlMetadata: {
+        ariaLabel: '目录元数据',
+        directory: '所属目录',
+        generatedBy: '生成组件',
+        trigger: '触发方式',
+        source: '来源',
+        freshness: '新鲜度',
+        coverage: '已采样 {{sampled}} / {{total}}',
+        unsampled: '{{count}} 条未采样',
+        pendingChanges: '待处理变更：{{count}}',
+        rawYaml: 'YAML 元数据',
+      },
       jsonl: {
         collapse: '收起',
         dialogMode: '对话模式',

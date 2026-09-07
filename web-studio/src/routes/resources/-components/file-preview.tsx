@@ -14,12 +14,17 @@ import { Button } from '#/components/ui/button'
 import { ScrollArea } from '#/components/ui/scroll-area'
 import { client } from '#/gen/ov-client/client.gen'
 import { getContentDownload, ovClient } from '#/lib/ov-client'
+import { parseOkfSidecarMarkdown } from '#/lib/okf-markdown'
 import { fileNameFromUri } from '#/lib/viking-uri'
 import type { GetContentDownloadData } from '#/gen/ov-client/types.gen'
 import type { ContentDownloadQuery } from '@ov-server/api/v1/content'
 
-import { formatSize, normalizeReadContent } from '../-lib/normalize'
-import { fetchDirectoryLevelContent, saveFileContent } from '../-lib/api'
+import {
+  formatSize,
+  normalizeDirUri,
+  normalizeReadContent,
+} from '../-lib/normalize'
+import { fetchDirectorySidecarContent, saveFileContent } from '../-lib/api'
 import {
   useVikingFilePreview,
   useVikingFsStat,
@@ -28,6 +33,7 @@ import {
 import { useJsonFormat } from '../-hooks/use-json-format'
 import type { VikingFsEntry } from '../-types/viking-fm'
 import type { CodeEditorHandle } from './code-editor'
+import { OkfMetadataPanel } from './okf-metadata-panel'
 
 const LazyCodeEditor = lazy(() =>
   import('./code-editor').then((m) => ({ default: m.CodeEditor })),
@@ -201,52 +207,78 @@ function cleanSummaryContent(value: unknown): string {
   return text
 }
 
+function directoryLevelPreview(
+  directoryUri: string,
+  level: DirectoryLevelId,
+  ...values: unknown[]
+) {
+  const rawContent =
+    values.map(cleanSummaryContent).find((content) => content.length > 0) ?? ''
+  const document = rawContent
+    ? parseOkfSidecarMarkdown(
+        `${normalizeDirUri(directoryUri)}.${level}.md`,
+        rawContent,
+      )
+    : null
+
+  return {
+    content: document?.body ?? rawContent,
+    document,
+  }
+}
+
 function useDirectoryPreview(file: VikingFsEntry | null) {
   const enabled = Boolean(file?.isDir)
   const abstractQuery = useQuery({
     enabled,
-    queryKey: ['viking-directory-level', file?.uri, 'abstract'],
-    queryFn: () => fetchDirectoryLevelContent(file!.uri, 'abstract'),
+    queryKey: ['viking-directory-sidecar', file?.uri, 'abstract'],
+    queryFn: () => fetchDirectorySidecarContent(file!.uri, 'abstract'),
     staleTime: 30_000,
   })
   const overviewQuery = useQuery({
     enabled,
-    queryKey: ['viking-directory-level', file?.uri, 'overview'],
-    queryFn: () => fetchDirectoryLevelContent(file!.uri, 'overview'),
+    queryKey: ['viking-directory-sidecar', file?.uri, 'overview'],
+    queryFn: () => fetchDirectorySidecarContent(file!.uri, 'overview'),
     staleTime: 30_000,
   })
 
-  return useMemo(
-    () => ({
+  return useMemo(() => {
+    const directoryUri = file?.uri ?? ''
+    return {
       isLoading: abstractQuery.isLoading || overviewQuery.isLoading,
       levels: [
         {
           ...DIRECTORY_LEVEL_META[0],
-          content:
-            cleanSummaryContent(abstractQuery.data) ||
-            cleanSummaryContent(file?.abstract),
+          ...directoryLevelPreview(
+            directoryUri,
+            'abstract',
+            abstractQuery.data,
+            file?.abstract,
+          ),
           error: abstractQuery.error,
         },
         {
           ...DIRECTORY_LEVEL_META[1],
-          content:
-            cleanSummaryContent(overviewQuery.data) ||
-            cleanSummaryContent(file?.overview),
+          ...directoryLevelPreview(
+            directoryUri,
+            'overview',
+            overviewQuery.data,
+            file?.overview,
+          ),
           error: overviewQuery.error,
         },
       ],
-    }),
-    [
-      abstractQuery.data,
-      abstractQuery.error,
-      abstractQuery.isLoading,
-      file?.abstract,
-      file?.overview,
-      overviewQuery.data,
-      overviewQuery.error,
-      overviewQuery.isLoading,
-    ],
-  )
+    }
+  }, [
+    abstractQuery.data,
+    abstractQuery.error,
+    abstractQuery.isLoading,
+    file?.abstract,
+    file?.overview,
+    overviewQuery.data,
+    overviewQuery.error,
+    overviewQuery.isLoading,
+  ])
 }
 
 function dirnameVikingUri(fileUri: string): string {
@@ -1331,6 +1363,13 @@ export function FilePreview({
     () => memoryFieldsDisplayContent(preview?.content || ''),
     [preview?.content],
   )
+  const okfDocument = useMemo(
+    () =>
+      file && preview?.fileType === 'markdown'
+        ? parseOkfSidecarMarkdown(file.uri, displayContent)
+        : null,
+    [displayContent, file, preview?.fileType],
+  )
   const jsonFormat = useJsonFormat(
     displayContent,
     isJsonFile && hasPreviewContent,
@@ -1499,8 +1538,8 @@ export function FilePreview({
   const isMarkdown = preview?.fileType === 'markdown'
   const isDark = document.documentElement.classList.contains('dark')
   const emptyFileText = t('filePreview.emptyFile')
-  const availableDirectoryLevels = directoryPreview.levels.filter((level) =>
-    level.content.trim(),
+  const availableDirectoryLevels = directoryPreview.levels.filter(
+    (level) => level.document !== null || level.content.trim(),
   )
   const visibleDirectoryLevels = availableDirectoryLevels.filter((level) =>
     activeDirectoryLevels.has(level.id),
@@ -1758,26 +1797,35 @@ export function FilePreview({
                             {level.title}
                           </span>
                         </header>
-                        <article className="prose prose-sm max-w-none break-words rounded-md border bg-muted/20 p-3 dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
-                          <ReactMarkdown
-                            remarkPlugins={[remarkGfm]}
-                            urlTransform={transformDirectoryMarkdownUrl}
-                            components={{
-                              ...markdownComponents,
-                              a: ({ href, children }) => (
-                                <DirectoryMarkdownLink
-                                  href={href}
-                                  fileUri={file.uri}
-                                  onNavigate={onNavigate}
-                                >
-                                  {children}
-                                </DirectoryMarkdownLink>
-                              ),
-                            }}
-                          >
-                            {level.content}
-                          </ReactMarkdown>
-                        </article>
+                        {level.document ? (
+                          <OkfMetadataPanel
+                            metadata={level.document.metadata}
+                            onNavigate={onNavigate}
+                            rawFrontmatter={level.document.rawFrontmatter}
+                          />
+                        ) : null}
+                        {level.content.trim() ? (
+                          <article className="prose prose-sm max-w-none break-words rounded-md border bg-muted/20 p-3 dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
+                            <ReactMarkdown
+                              remarkPlugins={[remarkGfm]}
+                              urlTransform={transformDirectoryMarkdownUrl}
+                              components={{
+                                ...markdownComponents,
+                                a: ({ href, children }) => (
+                                  <DirectoryMarkdownLink
+                                    href={href}
+                                    fileUri={file.uri}
+                                    onNavigate={onNavigate}
+                                  >
+                                    {children}
+                                  </DirectoryMarkdownLink>
+                                ),
+                              }}
+                            >
+                              {level.content}
+                            </ReactMarkdown>
+                          </article>
+                        ) : null}
                       </section>
                     ))}
                   </div>
@@ -1857,34 +1905,45 @@ export function FilePreview({
             preview?.fileType === 'markdown' &&
             hasPreviewContent &&
             markdownMode === 'preview' ? (
-              <article className="prose prose-sm max-w-none break-words dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  rehypePlugins={[rehypeRaw, rehypeSanitize]}
-                  urlTransform={(url) => url}
-                  components={{
-                    ...markdownComponents,
-                    img: ({ src, alt }) => (
-                      <MarkdownImage
-                        src={src ? String(src) : undefined}
-                        alt={alt}
-                        fileUri={file.uri}
-                      />
-                    ),
-                    a: ({ href, children }) => (
-                      <MarkdownLink
-                        href={href}
-                        fileUri={file.uri}
-                        onNavigate={onNavigate}
-                      >
-                        {children}
-                      </MarkdownLink>
-                    ),
-                  }}
-                >
-                  {displayContent || emptyFileText}
-                </ReactMarkdown>
-              </article>
+              <div className="space-y-5">
+                {okfDocument ? (
+                  <OkfMetadataPanel
+                    metadata={okfDocument.metadata}
+                    onNavigate={onNavigate}
+                    rawFrontmatter={okfDocument.rawFrontmatter}
+                  />
+                ) : null}
+                <article className="prose prose-sm max-w-none break-words dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    rehypePlugins={[rehypeRaw, rehypeSanitize]}
+                    urlTransform={(url) => url}
+                    components={{
+                      ...markdownComponents,
+                      img: ({ src, alt }) => (
+                        <MarkdownImage
+                          src={src ? String(src) : undefined}
+                          alt={alt}
+                          fileUri={file.uri}
+                        />
+                      ),
+                      a: ({ href, children }) => (
+                        <MarkdownLink
+                          href={href}
+                          fileUri={file.uri}
+                          onNavigate={onNavigate}
+                        >
+                          {children}
+                        </MarkdownLink>
+                      ),
+                    }}
+                  >
+                    {okfDocument
+                      ? okfDocument.body || emptyFileText
+                      : displayContent || emptyFileText}
+                  </ReactMarkdown>
+                </article>
+              </div>
             ) : null}
 
             {!previewLoading &&

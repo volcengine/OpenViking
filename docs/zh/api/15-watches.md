@@ -151,6 +151,9 @@ ov task watch rm viking://resources/guide.md
         "processor_kwargs": {},
         "created_at": "2026-07-24T10:00:00",
         "last_execution_time": null,
+        "last_task_id": null,
+        "last_status": null,
+        "last_error": null,
         "next_execution_time": "2026-07-24T10:30:00",
         "is_active": true,
         "account_id": "default",
@@ -166,6 +169,11 @@ ov task watch rm viking://resources/guide.md
 `source_type` 是可选的来源元数据。显式 Connector `add_type` 优先（例如 `tos` 或
 `feishu_project`）；原生导入返回 `feishu`、`git`、`url` 或 `local`。历史任务或
 无法分类的任务返回 `null`。
+
+首次执行前，`last_task_id`、`last_status` 和 `last_error` 均为 `null`。执行后，
+`last_task_id` 指向对应的普通导入任务（预检查失败时可能为 `null`），`last_status`
+为 `completed`、`failed` 或 `cancelled`；失败时 `last_error` 返回经过凭证脱敏且最多
+500 字符的错误信息。可用 `ov task status <last_task_id>` 查看对应导入任务详情。
 
 查看单个任务以及成功更新时，`result` 直接是同一结构的任务对象。删除和触发分别返回：
 
@@ -191,7 +199,8 @@ ov task watch rm viking://resources/guide.md
 }
 ```
 
-`scheduled=true` 只表示后台执行已调度，不表示重新摄取已经完成；应再次查看任务的 `last_execution_time`。
+`scheduled=true` 只表示后台执行已调度，不表示重新摄取已经完成；应再次查看任务，直到
+`last_execution_time` 更新，并检查 `last_status` 和 `last_error`。
 
 **MCP**（Agent 控制面——仅最小闭包）
 

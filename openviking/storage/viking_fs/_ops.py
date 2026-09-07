@@ -3,20 +3,29 @@
 """Core filesystem operations mixin for VikingFS."""
 
 import asyncio
+import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
+from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
+    is_hidden_by_actor_peer_view,
     may_include_hidden_actor_peers,
+    uri_parts,
 )
 from openviking.pyagfs.exceptions import (
     AGFSClientError,
     AGFSDirectoryNotEmptyError,
     AGFSHTTPError,
 )
+from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
+from openviking.storage.abstract_overview import (
+    ABSTRACT_OVERVIEW_FILENAMES,
+    rewrite_abstract_overview_for_transfer,
+)
 from openviking.storage.acl import AclAction, is_acl_uri
 from openviking.storage.expr import PathScope
 from openviking.storage.internal_names import STORAGE_INTERNAL_ENTRY_NAMES
@@ -33,6 +42,7 @@ from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
     NotFoundError,
+    PermissionDeniedError,
 )
 from openviking_cli.utils.uri import VikingURI
 
@@ -298,6 +308,305 @@ class _OpsMixin:
             auto_pathlock=auto_pathlock,
         )
 
+    async def cp(
+        self,
+        old_uri: str,
+        new_uri: str,
+        recursive: bool = False,
+        ctx: Optional[RequestContext] = None,
+        lease_ref: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        """Copy a file or directory together with its vector records."""
+        old_uri = self._normalize_transfer_uri(old_uri)
+        new_uri = self._normalize_transfer_uri(new_uri)
+        await self._ensure_copy_source_access(old_uri, recursive=recursive, ctx=ctx)
+        await self._ensure_access(new_uri, ctx, action=AclAction.WRITE)
+        old_scope = old_uri.rstrip("/")
+        new_scope = new_uri.rstrip("/")
+        if old_scope == new_scope:
+            raise InvalidArgumentError("cp source and target must be different")
+        if new_scope.startswith(old_scope + "/") or old_scope.startswith(new_scope + "/"):
+            raise InvalidArgumentError("cp source and target subtrees must not overlap")
+
+        old_path = self._uri_to_path(old_uri, ctx=ctx)
+        new_path = self._uri_to_path(new_uri, ctx=ctx)
+        self._validate_transfer_paths(old_path, new_path)
+        try:
+            stat = await self._async_agfs.stat(old_path)
+        except Exception as exc:
+            if is_not_found_error(exc):
+                raise FileNotFoundError(f"cp source not found: {old_uri}") from exc
+            mapped = map_exception(exc, resource=old_uri)
+            if mapped is not None:
+                raise mapped from exc
+            raise
+        is_dir = stat.get("isDir", False) if isinstance(stat, dict) else False
+        if is_dir and not recursive:
+            raise FailedPreconditionError(
+                f"Cannot copy directory without --recursive: {old_uri}",
+                details={"resource": old_uri, "expected_flag": "recursive"},
+            )
+        if not is_dir and new_uri.rstrip("/") != new_uri:
+            raise InvalidArgumentError(
+                f"cp destination for a file must include the target file name: {new_uri}"
+            )
+
+        await self._ensure_transfer_parent_directory(new_path, new_uri, operation="cp")
+        await self._ensure_transfer_target_type(new_path, new_uri, is_dir=is_dir)
+        lock_requests = (
+            self._directory_transfer_lock_requests(old_path, new_path)
+            if is_dir
+            else [
+                {"path": old_path, "kind": "exact"},
+                {"path": new_path, "kind": "exact"},
+            ]
+        )
+        lease = await self._async_agfs.pathlock_acquire_batch(
+            lock_requests,
+            owner_lease_ref=lease_ref,
+        )
+        operation_id = uuid.uuid4().hex
+        try:
+            source_uris = await self._prepare_transfer_entries(
+                old_uri, new_uri, is_dir=is_dir, move=False, ctx=ctx
+            )
+            files_created = await self._copy_agfs_entry(
+                old_path,
+                new_path,
+                old_uri=old_uri,
+                new_uri=new_uri,
+                is_dir=is_dir,
+                ctx=ctx,
+                lease_ref=lease,
+            )
+            try:
+                vector_result = await self._copy_vector_store_uris(
+                    old_uri,
+                    new_uri,
+                    recursive=is_dir,
+                    ctx=ctx,
+                    **({"source_uris": source_uris} if is_dir else {}),
+                )
+            except Exception:
+                try:
+                    await self._cleanup_transfer_target(
+                        new_path, is_dir=is_dir, ctx=ctx, lease_ref=lease
+                    )
+                except Exception:
+                    logger.warning("Failed to clean copy target %s", new_uri, exc_info=True)
+                raise
+            result: Dict[str, Any] = {
+                "operation_id": operation_id,
+                "operation": "copy",
+                "from": old_uri,
+                "to": new_uri,
+                "recursive": is_dir,
+                "phase": "completed",
+                "files_created": files_created,
+            }
+            if vector_result is not None:
+                result["vectors"] = {
+                    "scanned": vector_result.scanned,
+                    "written": vector_result.written,
+                    "deleted": vector_result.deleted,
+                    "restored": vector_result.restored,
+                    "batches": vector_result.batches,
+                }
+            logger.info(
+                "Filesystem transfer completed: operation_id=%s operation=copy "
+                "object_type=%s recursive=%s result=success",
+                operation_id,
+                "directory" if is_dir else "file",
+                is_dir,
+            )
+            return result
+        finally:
+            await self._async_agfs.pathlock_release(lease)
+
+    async def _ensure_transfer_target_type(self, path: str, uri: str, *, is_dir: bool) -> None:
+        """Allow overwrite/merge, but never replace a file with a directory or vice versa."""
+        try:
+            stat = await self._async_agfs.stat(path)
+        except Exception as exc:
+            if is_not_found_error(exc):
+                return
+            mapped = map_exception(exc, resource=uri)
+            if mapped is not None:
+                raise mapped from exc
+            raise
+        if bool(stat.get("isDir", False)) != is_dir:
+            raise InvalidArgumentError(f"transfer source and target types differ: {uri}")
+
+    async def _prepare_transfer_entries(
+        self,
+        old_uri: str,
+        new_uri: str,
+        *,
+        is_dir: bool,
+        move: bool,
+        ctx: Optional[RequestContext],
+    ) -> List[str]:
+        """Validate all affected entries under the lease before the first content write."""
+        source_uris: List[str] = []
+
+        async def visit(source: str, target: str, directory: bool) -> None:
+            source_path = self._uri_to_path(source, ctx=ctx)
+            stat = await self._async_agfs.stat(source_path)
+            if bool(stat.get("isDir", False)) != directory:
+                raise InvalidArgumentError(f"transfer source type changed: {source}")
+            if move:
+                if directory or source != old_uri:
+                    await self._ensure_access(source, ctx, action=AclAction.MANAGE)
+            else:
+                await self._ensure_copy_source_access(source, recursive=directory, ctx=ctx)
+            await self._ensure_access(target, ctx, action=AclAction.WRITE)
+            await self._ensure_transfer_target_type(
+                self._uri_to_path(target, ctx=ctx), target, is_dir=directory
+            )
+            source_uris.append(source)
+            if directory:
+                # Match the copy traversal exactly; user content can use names
+                # that the namespace listing API hides, such as tasks/_system.
+                for entry in await self._async_agfs.ls(source_path):
+                    name = entry.get("name", "")
+                    if not name or name in (".", ".."):
+                        continue
+                    await visit(
+                        f"{source.rstrip('/')}/{name}",
+                        f"{target.rstrip('/')}/{name}",
+                        bool(entry.get("isDir", False)),
+                    )
+
+        await visit(old_uri, new_uri, is_dir)
+        return source_uris
+
+    async def _ensure_copy_source_access(
+        self,
+        uri: str,
+        *,
+        recursive: bool,
+        ctx: Optional[RequestContext],
+    ) -> None:
+        """Require a copy source to stay inside the caller's visible data view."""
+        await self._ensure_access(uri, ctx)
+        real_ctx = self._ctx_or_default(ctx)
+        canonical_uri = uri
+        if is_watch_task_control_uri(canonical_uri):
+            raise PermissionDeniedError(
+                "Copying watch-task control state is not allowed",
+                resource=canonical_uri,
+            )
+        if recursive and (
+            is_hidden_by_actor_peer_view(canonical_uri, real_ctx)
+            or may_include_hidden_actor_peers(canonical_uri, real_ctx)
+        ):
+            raise PermissionDeniedError(
+                "Copy source may include hidden peer data",
+                resource=canonical_uri,
+            )
+        if real_ctx.role != Role.ROOT and uri_parts(canonical_uri) in (
+            [],
+            ["user"],
+            ["resources"],
+            ["temp"],
+        ):
+            raise PermissionDeniedError(
+                "Copying a namespace container root requires root access",
+                resource=canonical_uri,
+            )
+
+    async def _ensure_transfer_parent_directory(
+        self, path: str, uri: str, *, operation: str
+    ) -> None:
+        parent_path = self._transfer_parent_path(path)
+        try:
+            parent_stat = await self._async_agfs.stat(parent_path)
+        except Exception as exc:
+            if is_not_found_error(exc):
+                parent_uri = VikingURI(uri).parent
+                raise NotFoundError(
+                    parent_uri.uri if parent_uri is not None else "",
+                    "directory",
+                ) from exc
+            mapped = map_exception(exc, resource=uri)
+            if mapped is not None:
+                raise mapped from exc
+            raise
+        if not isinstance(parent_stat, dict) or not parent_stat.get("isDir", False):
+            raise InvalidArgumentError(f"{operation} target parent is not a directory: {uri}")
+
+    @classmethod
+    def _normalize_transfer_uri(cls, uri: str) -> str:
+        """Use the same path segments for permissions, filesystem I/O and vector URIs."""
+        # VikingFS supplies this validator through _AccessMixin.
+        parts = cls._safe_uri_parts(uri)  # type: ignore[attr-defined]
+        normalized = "viking://" + "/".join(parts)
+        return normalized + "/" if parts and uri.endswith("/") else normalized
+
+    @staticmethod
+    def _validate_transfer_paths(old_path: str, new_path: str) -> None:
+        """Reject aliases for the same or overlapping physical transfer scope."""
+        source, target = old_path.rstrip("/"), new_path.rstrip("/")
+        if source == target or target.startswith(source + "/") or source.startswith(target + "/"):
+            raise InvalidArgumentError("transfer source and target paths must not overlap")
+
+    @staticmethod
+    def _transfer_parent_path(path: str) -> str:
+        return path.rstrip("/").rsplit("/", 1)[0] or "/"
+
+    @classmethod
+    def _directory_transfer_lock_requests(
+        cls, old_path: str, new_path: str
+    ) -> List[Dict[str, str]]:
+        """Cover both transfer subtrees without blocking unrelated siblings."""
+        return [
+            {"path": old_path, "kind": "tree"},
+            {"path": new_path, "kind": "tree"},
+        ]
+
+    async def _copy_agfs_entry(
+        self,
+        old_path: str,
+        new_path: str,
+        *,
+        old_uri: str,
+        new_uri: str,
+        is_dir: bool,
+        ctx: Optional[RequestContext],
+        lease_ref: Dict[str, Any],
+    ) -> int:
+        if is_dir:
+            return await self._copy_directory_under_tree_locks(
+                old_path,
+                new_path,
+                old_uri=old_uri,
+                new_uri=new_uri,
+                ctx=ctx,
+                lease_ref=lease_ref,
+            )
+
+        await self._async_agfs.cp(
+            old_path,
+            new_path,
+            recursive=False,
+            fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
+        )
+        return 1
+
+    async def _cleanup_transfer_target(
+        self,
+        path: str,
+        *,
+        is_dir: bool,
+        ctx: Optional[RequestContext],
+        lease_ref: Dict[str, Any],
+    ) -> None:
+        await self._async_agfs.rm(
+            path,
+            recursive=is_dir,
+            fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
+        )
+
     async def mv(
         self,
         old_uri: str,
@@ -311,15 +620,23 @@ class _OpsMixin:
         On VectorDB update failure the copy is cleaned up so the source stays intact.
         """
 
+        old_uri = self._normalize_transfer_uri(old_uri)
+        new_uri = self._normalize_transfer_uri(new_uri)
         acl_manager = self.acl_manager
         acl_enabled = self._acl_enabled(ctx)
         guard_ctx = replace(self._ctx_or_default(ctx), bypass_acl=True)
         await self._ensure_access(old_uri, guard_ctx, action=AclAction.MANAGE)
         await self._ensure_access(old_uri, ctx, action=AclAction.WRITE)
         await self._ensure_access(new_uri, ctx, action=AclAction.WRITE)
+        old_scope = old_uri.rstrip("/")
+        new_scope = new_uri.rstrip("/")
+        if old_scope == new_scope:
+            raise InvalidArgumentError("mv source and target must be different")
+        if new_scope.startswith(old_scope + "/") or old_scope.startswith(new_scope + "/"):
+            raise InvalidArgumentError("mv source and target subtrees must not overlap")
         old_path = self._uri_to_path(old_uri, ctx=ctx)
         new_path = self._uri_to_path(new_uri, ctx=ctx)
-        target_uri = self._path_to_uri(old_path, ctx=ctx)
+        self._validate_transfer_paths(old_path, new_path)
         new_acl_scope = acl_enabled and is_acl_uri(new_uri)
 
         # Verify source exists and determine type before locking.
@@ -336,6 +653,8 @@ class _OpsMixin:
 
         if is_dir:
             await self._ensure_access(old_uri, ctx, action=AclAction.MANAGE)
+        await self._ensure_transfer_parent_directory(new_path, new_uri, operation="mv")
+        await self._ensure_transfer_target_type(new_path, new_uri, is_dir=is_dir)
 
         if not is_dir:
             if new_uri.rstrip("/") != new_uri:
@@ -360,10 +679,7 @@ class _OpsMixin:
 
         if is_dir:
             lease = await self._async_agfs.pathlock_acquire_batch(
-                [
-                    {"path": old_path, "kind": "tree"},
-                    {"path": new_path, "kind": "exact"},
-                ],
+                self._directory_transfer_lock_requests(old_path, new_path),
                 owner_lease_ref=lease_ref,
             )
         else:
@@ -375,43 +691,38 @@ class _OpsMixin:
                 owner_lease_ref=lease_ref,
             )
 
+        operation_id = uuid.uuid4().hex
         try:
-            uris_to_move = (
-                await self._collect_uris(
-                    old_path,
-                    recursive=True,
-                    ctx=ctx,
-                    strict=is_dir and acl_enabled,
-                )
-                if is_dir
-                else []
+            uris_to_move = await self._prepare_transfer_entries(
+                old_uri, new_uri, is_dir=is_dir, move=True, ctx=ctx
             )
-            uris_to_move.append(target_uri)
-            if is_dir:
-                await self._ensure_access_many(uris_to_move, ctx, action=AclAction.MANAGE)
 
             # Check if it's temp directory (files already encrypted)
             is_temp = old_uri.startswith("viking://temp/")
 
             # Copy source to destination. Source must stay intact until vector updates succeed.
             try:
-                await self._copy_for_mv(
-                    old_uri=old_uri,
-                    new_uri=new_uri,
-                    old_path=old_path,
-                    new_path=new_path,
-                    is_dir=is_dir,
-                    is_temp=is_temp,
-                    ctx=ctx,
-                    lease_ref=lease,
+                files_created = (
+                    await self._copy_for_mv(
+                        old_uri=old_uri,
+                        new_uri=new_uri,
+                        old_path=old_path,
+                        new_path=new_path,
+                        is_dir=is_dir,
+                        is_temp=is_temp,
+                        ctx=ctx,
+                        lease_ref=lease,
+                    )
+                    or 0
                 )
-            except Exception as e:
-                if "not found" in str(e).lower():
+            except Exception as transfer_error:
+                if is_not_found_error(transfer_error):
                     try:
                         await self._delete_from_vector_store(uris_to_move, ctx=ctx)
                     except Exception:
-                        # Orphan cleanup is best effort here; preserve the copy error.
-                        pass
+                        logger.warning(
+                            "Failed to clean orphan move vectors for %s", old_uri, exc_info=True
+                        )
                     else:
                         logger.info(
                             f"[VikingFS] mv source not found, cleaned orphan index: {old_uri}"
@@ -419,49 +730,76 @@ class _OpsMixin:
                 raise
 
             # Update VectorDB URIs (on failure, clean up the copy)
-            vector_mappings: List[tuple[str, str]] = []
+            vector_transfer_completed = False
             try:
-                vector_mappings = await self._update_vector_store_uris(
-                    uris_to_move, old_uri, new_uri, ctx=ctx
+                vector_result = await self._update_vector_store_uris(
+                    old_uri,
+                    new_uri,
+                    recursive=is_dir,
+                    ctx=ctx,
+                    **({"source_uris": uris_to_move} if is_dir else {}),
                 )
+                vector_transfer_completed = True
                 if acl_manager is not None and new_acl_scope:
                     await acl_manager.refresh_context_subtree(
                         new_uri,
                         self._ctx_or_default(ctx),
                     )
             except Exception:
-                if vector_mappings:
-                    await self._restore_vector_store_uris(vector_mappings, ctx=ctx)
+                if vector_transfer_completed:
+                    try:
+                        moved_uris = [
+                            new_scope + uri.rstrip("/")[len(old_scope) :] for uri in uris_to_move
+                        ]
+                        await self._update_vector_store_uris(
+                            new_uri,
+                            old_uri,
+                            recursive=is_dir,
+                            ctx=ctx,
+                            **({"source_uris": moved_uris} if is_dir else {}),
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Failed to restore move vectors for %s", old_uri, exc_info=True
+                        )
                 try:
-                    if is_dir:
-                        cleanup_lease = await self._async_agfs.pathlock_acquire_tree(
-                            new_path,
-                            owner_lease_ref=lease,
-                        )
-                        try:
-                            await self._async_agfs.rm(
-                                new_path,
-                                recursive=True,
-                                fs_ctx=self._pathlock_fs_ctx(ctx, cleanup_lease),
-                            )
-                        finally:
-                            await self._async_agfs.pathlock_release(cleanup_lease)
-                    else:
-                        await self._async_agfs.rm(
-                            new_path,
-                            fs_ctx=self._pathlock_fs_ctx(ctx, lease),
-                        )
+                    await self._cleanup_transfer_target(
+                        new_path, is_dir=is_dir, ctx=ctx, lease_ref=lease
+                    )
                 except Exception:
-                    pass
+                    logger.warning("Failed to clean move target %s", new_uri, exc_info=True)
                 raise
 
-            # Delete source
+            # Old mv semantics: source deletion is the last step, with no copy-back on failure.
             await self._async_agfs.rm(
-                old_path,
-                recursive=is_dir,
-                fs_ctx=self._pathlock_fs_ctx(ctx, lease),
+                old_path, recursive=is_dir, fs_ctx=self._pathlock_fs_ctx(ctx, lease)
             )
-            return {}
+            result: Dict[str, Any] = {
+                "operation_id": operation_id,
+                "operation": "move",
+                "from": old_uri,
+                "to": new_uri,
+                "recursive": is_dir,
+                "phase": "completed",
+                "files_created": files_created,
+                "files_deleted": files_created,
+            }
+            if vector_result is not None:
+                result["vectors"] = {
+                    "scanned": vector_result.scanned,
+                    "written": vector_result.written,
+                    "deleted": vector_result.deleted,
+                    "restored": vector_result.restored,
+                    "batches": vector_result.batches,
+                }
+            logger.info(
+                "Filesystem transfer completed: operation_id=%s operation=move "
+                "object_type=%s recursive=%s result=success",
+                operation_id,
+                "directory" if is_dir else "file",
+                is_dir,
+            )
+            return result
         finally:
             await self._async_agfs.pathlock_release(lease)
 
@@ -475,52 +813,59 @@ class _OpsMixin:
         is_temp: bool,
         ctx: Optional[RequestContext] = None,
         lease_ref: Dict[str, Any] | None = None,
-    ) -> None:
+    ) -> int:
         """Copy source to destination for mv without deleting source."""
-        if is_temp:
-            if is_dir:
-                await self._copy_temp_dir_with_exact_locks(
-                    old_path,
-                    new_path,
-                    ctx=ctx,
-                    lease_ref=lease_ref,
-                )
-            else:
-                await self._async_agfs.cp(
-                    old_path,
-                    new_path,
-                    recursive=False,
-                    fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
-                )
-            return
+        del is_temp
+        if lease_ref is None:
+            raise ValueError("mv copy requires a pathlock lease")
+        return await self._copy_agfs_entry(
+            old_path,
+            new_path,
+            old_uri=old_uri,
+            new_uri=new_uri,
+            is_dir=is_dir,
+            ctx=ctx,
+            lease_ref=lease_ref,
+        )
 
-        if is_dir:
-            await self._copy_dir_through_vikingfs(old_uri, new_uri, ctx=ctx, lease_ref=lease_ref)
-        else:
-            await self._copy_file_through_vikingfs(old_uri, new_uri, ctx=ctx, lease_ref=lease_ref)
-
-    async def _copy_temp_dir_with_exact_locks(
+    async def _copy_directory_under_tree_locks(
         self,
         old_path: str,
         new_path: str,
+        old_uri: str,
+        new_uri: str,
         ctx: Optional[RequestContext],
         lease_ref: Dict[str, Any] | None,
-    ) -> None:
-        """Copy an encrypted temp directory while locking every destination entry.
+        transfer_source_uri: str | None = None,
+        transfer_target_uri: str | None = None,
+    ) -> int:
+        """Copy a directory under the operation's source and target Tree leases.
 
         Args:
             old_path: Source backend directory path.
             new_path: Destination backend directory path.
             ctx: Request context used for filesystem operations.
-            lease_ref: Exact lease covering the current destination directory.
+            lease_ref: Batch lease covering the source and destination subtrees.
 
         Returns:
-            None.
+            Number of created directories and files.
         """
         if lease_ref is None:
-            raise ValueError("temp directory copy requires a pathlock lease")
+            raise ValueError("directory copy requires a pathlock lease")
+        transfer_source_uri = transfer_source_uri or old_uri
+        transfer_target_uri = transfer_target_uri or new_uri
         fs_ctx = self._pathlock_fs_ctx(ctx, lease_ref)
-        await self._async_agfs.mkdir(new_path, fs_ctx=fs_ctx)
+        # Tree acquisition may already have created the target to hold its lock.
+        try:
+            stat = await self._async_agfs.stat(new_path)
+        except Exception as exc:
+            if not is_not_found_error(exc):
+                raise
+            await self._async_agfs.mkdir(new_path, fs_ctx=fs_ctx)
+        else:
+            if not stat.get("isDir", False):
+                raise InvalidArgumentError(f"transfer target is not a directory: {new_uri}")
+        copied = 1
         entries = await self._async_agfs.ls(old_path, fs_ctx=fs_ctx)
         for entry in entries:
             name = entry.get("name", "")
@@ -528,27 +873,52 @@ class _OpsMixin:
                 continue
             old_child = f"{old_path.rstrip('/')}/{name}"
             new_child = f"{new_path.rstrip('/')}/{name}"
-            child_lease = await self._async_agfs.pathlock_acquire_exact(
-                new_child,
-                owner_lease_ref=lease_ref,
+            old_child_uri = f"{old_uri.rstrip('/')}/{name}"
+            new_child_uri = f"{new_uri.rstrip('/')}/{name}"
+            await self._ensure_copy_source_access(
+                old_child_uri,
+                recursive=bool(entry.get("isDir", False)),
+                ctx=ctx,
             )
-            try:
-                if entry.get("isDir", False):
-                    await self._copy_temp_dir_with_exact_locks(
-                        old_child,
+            if entry.get("isDir", False):
+                copied += await self._copy_directory_under_tree_locks(
+                    old_child,
+                    new_child,
+                    old_uri=old_child_uri,
+                    new_uri=new_child_uri,
+                    ctx=ctx,
+                    lease_ref=lease_ref,
+                    transfer_source_uri=transfer_source_uri,
+                    transfer_target_uri=transfer_target_uri,
+                )
+            else:
+                if name in ABSTRACT_OVERVIEW_FILENAMES:
+                    raw = await self._async_agfs.cat(old_child, fs_ctx=fs_ctx)
+                    level = (
+                        ContextLevel.ABSTRACT if name == ".abstract.md" else ContextLevel.OVERVIEW
+                    )
+                    rewritten = rewrite_abstract_overview_for_transfer(
+                        raw,
+                        level=level,
+                        source_dir_uri=old_uri,
+                        target_dir_uri=new_uri,
+                        source_scope_uri=transfer_source_uri,
+                        target_scope_uri=transfer_target_uri,
+                    )
+                    await self._async_agfs.write(
                         new_child,
-                        ctx=ctx,
-                        lease_ref=child_lease,
+                        rewritten.encode("utf-8"),
+                        fs_ctx=fs_ctx,
                     )
                 else:
                     await self._async_agfs.cp(
                         old_child,
                         new_child,
                         recursive=False,
-                        fs_ctx=self._pathlock_fs_ctx(ctx, child_lease),
+                        fs_ctx=fs_ctx,
                     )
-            finally:
-                await self._async_agfs.pathlock_release(child_lease)
+                copied += 1
+        return copied
 
     async def _copy_dir_through_vikingfs(
         self,
@@ -887,6 +1257,80 @@ class _OpsMixin:
                 abstract = abstract[: abs_limit - 3] + "..."
             entries[index]["abstract"] = abstract
 
+    async def _finalize_listing_entries(
+        self,
+        entries: List[Dict[str, Any]],
+        output: str,
+        abs_limit: int,
+        extra_fields: Optional[List[str]],
+        recursive: bool,
+        ctx: Optional[RequestContext] = None,
+    ) -> List[Dict[str, Any]]:
+        """Format and enrich entries after visible-page selection.
+
+        Args:
+            entries: Selected entries in original format.
+            output: Requested output format.
+            abs_limit: Maximum abstract length.
+            extra_fields: Optional original-output fields.
+            recursive: Whether entries came from a tree traversal.
+            ctx: Request identity used for enrichment.
+
+        Returns:
+            Entries in the requested output format.
+        """
+        if output == "original":
+            if extra_fields:
+                await self._augment_entries_extra_fields(entries, extra_fields, ctx=ctx)
+            return entries
+        if output != "agent":
+            raise ValueError(f"Invalid output format: {output}")
+
+        fallback_time = datetime.now(timezone.utc)
+        result: List[Dict[str, Any]] = []
+        for entry in entries:
+            is_dir = bool(entry.get("isDir", False))
+            if entry.get("access") == "denied":
+                item = {
+                    "uri": entry.get("uri", ""),
+                    "isDir": is_dir,
+                    "access": "denied",
+                }
+                if recursive:
+                    item["rel_path"] = entry.get("rel_path", "")
+                else:
+                    item["name"] = entry.get("name", "")
+            else:
+                raw_time = entry.get("modTime", "")
+                parsed_time = fallback_time
+                if isinstance(raw_time, (int, float)):
+                    parsed_time = datetime.fromtimestamp(raw_time, tz=timezone.utc)
+                elif raw_time:
+                    if len(raw_time) > 26 and "+" in raw_time:
+                        parts = raw_time.split("+")
+                        raw_time = parts[0][:26] + "+" + parts[1]
+                    parsed_time = parse_iso_datetime(raw_time)
+                elif isinstance(entry.get("mtime"), (int, float)):
+                    parsed_time = datetime.fromtimestamp(entry["mtime"], tz=timezone.utc)
+                item = {
+                    "uri": entry.get("uri", ""),
+                    "size": 0 if is_dir else entry.get("size", 0),
+                    "isDir": is_dir,
+                    "modTime": format_iso8601(parsed_time),
+                }
+                if recursive:
+                    item["rel_path"] = entry.get("rel_path", "")
+            if "tags" in entry:
+                item["tags"] = entry["tags"]
+            result.append(item)
+
+        await self._batch_fetch_abstracts(
+            [entry for entry in result if entry.get("access") != "denied"],
+            abs_limit,
+            ctx=ctx,
+        )
+        return result
+
     async def tree(
         self,
         uri: str = "viking://",
@@ -897,6 +1341,9 @@ class _OpsMixin:
         level_limit: Optional[int] = 3,
         ctx: Optional[RequestContext] = None,
         extra_fields: Optional[List[str]] = None,
+        offset: int = 0,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
     ) -> List[Dict[str, Any]]:
         """
         Recursively list all contents (includes rel_path).
@@ -916,13 +1363,32 @@ class _OpsMixin:
         output="agent"
         [{'uri': 'viking://resources...', 'size': 100, 'isDir': False, 'modTime': '2026-02-11T08:52:16.256Z', 'rel_path': '.abstract.md', 'abstract': "..."}]
         """
+        if offset < 0:
+            raise ValueError("offset must be non-negative")
         await self._ensure_access(uri, ctx)
         extra_fields = extra_fields or []
         if output == "original":
-            entries = await self._tree_original(uri, show_all_hidden, node_limit, level_limit, ctx=ctx)
+            entries = await self._tree_original(
+                uri,
+                show_all_hidden,
+                node_limit,
+                level_limit,
+                offset=offset,
+                sort_by=sort_by,
+                sort_order=sort_order,
+                ctx=ctx,
+            )
         elif output == "agent":
             entries = await self._tree_agent(
-                uri, abs_limit, show_all_hidden, node_limit, level_limit, ctx=ctx
+                uri,
+                abs_limit,
+                show_all_hidden,
+                node_limit,
+                level_limit,
+                offset=offset,
+                sort_by=sort_by,
+                sort_order=sort_order,
+                ctx=ctx,
             )
         else:
             raise ValueError(f"Invalid output format: {output}")
@@ -936,6 +1402,9 @@ class _OpsMixin:
         show_all_hidden: bool = False,
         node_limit: Optional[int] = 1000,
         level_limit: Optional[int] = 3,
+        offset: int = 0,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """Recursively list all contents (original format)."""
@@ -945,6 +1414,9 @@ class _OpsMixin:
             show_all_hidden=show_all_hidden,
             node_limit=node_limit,
             level_limit=level_limit,
+            offset=offset,
+            sort_by=sort_by,
+            sort_order=sort_order,
             ctx=ctx,
         ):
             info = entry["info"]
@@ -960,15 +1432,17 @@ class _OpsMixin:
                 )
                 continue
             new_entry = dict(entry.get("extra", {}))
-            new_entry.update({
-                "name": info["name"],
-                "size": info["size"],
-                "mode": info["mode"],
-                "modTime": info["modTime"],
-                "isDir": info["isDir"],
-                "rel_path": entry["rel_path"],
-                "uri": entry_uri,
-            })
+            new_entry.update(
+                {
+                    "name": info["name"],
+                    "size": info["size"],
+                    "mode": info["mode"],
+                    "modTime": info["modTime"],
+                    "isDir": info["isDir"],
+                    "rel_path": entry["rel_path"],
+                    "uri": entry_uri,
+                }
+            )
             result.append(new_entry)
         return result
 
@@ -979,45 +1453,30 @@ class _OpsMixin:
         show_all_hidden: bool = False,
         node_limit: Optional[int] = 1000,
         level_limit: Optional[int] = 3,
+        offset: int = 0,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """Recursively list all contents (agent format with abstracts)."""
-        result = []
-
-        async for entry, entry_uri in self._iter_visible_tree_entries(
+        entries = await self._tree_original(
             uri,
-            show_all_hidden=show_all_hidden,
-            node_limit=node_limit,
-            level_limit=level_limit,
-            ctx=ctx,
-        ):
-            info = entry["info"]
-            is_dir = info["isDir"]
-            if entry.get("access") == "denied":
-                result.append(
-                    {
-                        "uri": entry_uri,
-                        "isDir": is_dir,
-                        "rel_path": entry["rel_path"],
-                        "access": "denied",
-                    }
-                )
-                continue
-            result.append({
-                "uri": entry_uri,
-                "size": 0 if is_dir else info["size"],
-                "isDir": is_dir,
-                "modTime": format_iso8601(parse_iso_datetime(info["modTime"])),
-                "rel_path": entry["rel_path"],
-            })
-
-        await self._batch_fetch_abstracts(
-            [entry for entry in result if entry.get("access") != "denied"],
-            abs_limit,
+            show_all_hidden,
+            node_limit,
+            level_limit,
+            offset=offset,
+            sort_by=sort_by,
+            sort_order=sort_order,
             ctx=ctx,
         )
-
-        return result
+        return await self._finalize_listing_entries(
+            entries,
+            "agent",
+            abs_limit,
+            None,
+            True,
+            ctx=ctx,
+        )
 
     # ========== Vector Sync Helper Methods ==========
 
@@ -1198,8 +1657,10 @@ class _OpsMixin:
                 raw = b""
 
             text = self._decode_bytes(raw)
-        except Exception:
-            raise NotFoundError(uri, "file")
+        except Exception as exc:
+            if is_not_found_error(exc):
+                raise NotFoundError(uri, "file") from exc
+            raise
 
         if offset == 0 and limit == -1:
             return text
@@ -1239,8 +1700,10 @@ class _OpsMixin:
         try:
             raw = self._handle_agfs_read(await self._async_agfs.read(path))
             return raw
-        except Exception:
-            raise NotFoundError(uri, "file")
+        except Exception as exc:
+            if is_not_found_error(exc):
+                raise NotFoundError(uri, "file") from exc
+            raise
 
     async def write_file_bytes(
         self,
@@ -1327,6 +1790,7 @@ class _OpsMixin:
         sort_order: str = "asc",
         ctx: Optional[RequestContext] = None,
         extra_fields: Optional[List[str]] = None,
+        offset: int = 0,
     ) -> List[Dict[str, Any]]:
         """
         List directory contents (URI version).
@@ -1358,6 +1822,7 @@ class _OpsMixin:
                 uri,
                 show_all_hidden,
                 node_limit,
+                offset=offset,
                 sort_by=sort_by,
                 sort_order=sort_order,
                 ctx=ctx,
@@ -1368,6 +1833,7 @@ class _OpsMixin:
                 abs_limit,
                 show_all_hidden,
                 node_limit,
+                offset=offset,
                 sort_by=sort_by,
                 sort_order=sort_order,
                 ctx=ctx,
@@ -1408,12 +1874,12 @@ class _OpsMixin:
         directories = [item for item in entry_items if item[0].get("isDir", False)]
         files = [item for item in entry_items if not item[0].get("isDir", False)]
 
+        def name_key(item: tuple[Dict[str, Any], str]) -> tuple[str, str]:
+            """Return the case-insensitive and original entry name."""
+            name = str(item[0].get("name", ""))
+            return name.lower(), name
+
         if sort_by == "name":
-
-            def name_key(item: tuple[Dict[str, Any], str]) -> tuple[str, str]:
-                name = str(item[0].get("name", ""))
-                return name.lower(), name
-
             directories.sort(key=name_key, reverse=descending)
             files.sort(key=name_key, reverse=descending)
             return directories + files
@@ -1429,10 +1895,12 @@ class _OpsMixin:
                     missing.append(item)
                 else:
                     timestamped.append((timestamp, item))
+            timestamped.sort(key=lambda pair: name_key(pair[1]))
             timestamped.sort(
                 key=lambda pair: pair[0],
                 reverse=descending,
             )
+            missing.sort(key=name_key)
             return [item for _, item in timestamped] + missing
 
         return sort_by_mtime(directories) + sort_by_mtime(files)
@@ -1443,73 +1911,50 @@ class _OpsMixin:
         abs_limit: int,
         show_all_hidden: bool,
         node_limit: int = 1000,
+        offset: int = 0,
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """List directory contents (URI version)."""
-        entry_items = await self._ls_browsable_items(uri, ctx=ctx)
-        entry_items = self._sort_ls_entry_items(entry_items, sort_by, sort_order)
-        # basic info
-        fallback_time = datetime.now(timezone.utc)
-        all_entries = []
-        for entry, entry_uri in entry_items:
-            name = entry.get("name", "")
-            if entry.get("access") == "denied":
-                if entry.get("isDir") or not name.startswith(".") or show_all_hidden:
-                    all_entries.append(
-                        {
-                            "name": name,
-                            "uri": entry_uri,
-                            "isDir": bool(entry.get("isDir", False)),
-                            "access": "denied",
-                        }
-                    )
-                continue
-            raw_time = entry.get("modTime", "")
-            parsed_time = fallback_time
-            if isinstance(raw_time, (int, float)):
-                parsed_time = datetime.fromtimestamp(raw_time, tz=timezone.utc)
-            elif raw_time:
-                if len(raw_time) > 26 and "+" in raw_time:
-                    parts = raw_time.split("+")
-                    raw_time = parts[0][:26] + "+" + parts[1]
-                parsed_time = parse_iso_datetime(raw_time)
-            elif isinstance(entry.get("mtime"), (int, float)):
-                parsed_time = datetime.fromtimestamp(entry["mtime"], tz=timezone.utc)
-            is_dir = entry.get("isDir", False)
-            new_entry = {
-                "uri": entry_uri,
-                "size": 0 if is_dir else entry.get("size", 0),
-                "isDir": is_dir,
-                "modTime": format_iso8601(parsed_time),
-            }
-            if is_dir:
-                all_entries.append(new_entry)
-            elif not name.startswith("."):
-                all_entries.append(new_entry)
-            elif show_all_hidden:
-                all_entries.append(new_entry)
-        all_entries = all_entries[:node_limit]
-        await self._batch_fetch_abstracts(
-            [entry for entry in all_entries if entry.get("access") != "denied"],
-            abs_limit,
+        entries = await self._ls_original(
+            uri,
+            show_all_hidden=show_all_hidden,
+            offset=offset,
+            node_limit=node_limit,
+            sort_by=sort_by,
+            sort_order=sort_order,
             ctx=ctx,
         )
-        return all_entries
+        return await self._finalize_listing_entries(
+            entries,
+            "agent",
+            abs_limit,
+            None,
+            False,
+            ctx=ctx,
+        )
 
     async def _ls_original(
         self,
         uri: str,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
+        offset: int = 0,
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """List directory contents (URI version)."""
-        entry_items = await self._ls_browsable_items(uri, ctx=ctx)
-        entry_items = self._sort_ls_entry_items(entry_items, sort_by, sort_order)
+        entry_items = await self._ls_browsable_items(
+            uri,
+            show_all_hidden=show_all_hidden,
+            offset=offset,
+            node_limit=node_limit,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            ctx=ctx,
+        )
         # AGFS returns read-only structure, need to create new dict
         all_entries = []
         for entry, entry_uri in entry_items:
@@ -1530,25 +1975,55 @@ class _OpsMixin:
                 all_entries.append(new_entry)
             elif show_all_hidden:
                 all_entries.append(new_entry)
-        return all_entries[:node_limit]
+        return all_entries
 
     async def _ls_browsable_items(
         self,
         uri: str,
+        show_all_hidden: bool = False,
+        offset: int = 0,
+        node_limit: Optional[int] = None,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
         ctx: Optional[RequestContext] = None,
     ) -> List[tuple[Dict[str, Any], str]]:
-        """Return list entries according to namespace-enumeration semantics."""
-        entry_items = await self._list_read_path_items(uri, ctx=ctx)
-        access = await self._can_access_many([entry_uri for _, entry_uri in entry_items], ctx)
+        """Return one visible page while preserving RagFS ordering."""
+        if offset < 0:
+            raise ValueError("offset must be non-negative")
+        if node_limit == 0:
+            return []
+
+        raw_offset = 0
+        raw_limit = None if node_limit is None else max(node_limit, 256)
+        remaining_offset = offset
+        merge_paths = self._legacy_session_alias(uri) is not None
+        browsable: List[tuple[Dict[str, Any], str]] = []
         expose_resource_names = self._acl_enabled(ctx) and is_acl_uri(uri)
 
-        browsable = []
-        for entry, entry_uri in entry_items:
-            if access.get(entry_uri, False):
-                browsable.append((entry, entry_uri))
-            elif expose_resource_names:
-                browsable.append(
-                    (
+        while True:
+            entry_items, consumed, exhausted = await self._list_read_path_items(
+                uri,
+                raw_offset=raw_offset,
+                raw_limit=raw_limit,
+                sort_by=sort_by,
+                sort_order=sort_order,
+                ctx=ctx,
+            )
+            if merge_paths:
+                entry_items = self._sort_ls_entry_items(entry_items, sort_by, sort_order)
+            entry_items = [
+                item
+                for item in entry_items
+                if item[0].get("isDir")
+                or not str(item[0].get("name", "")).startswith(".")
+                or show_all_hidden
+            ]
+            access = await self._can_access_many([entry_uri for _, entry_uri in entry_items], ctx)
+            for entry, entry_uri in entry_items:
+                if access.get(entry_uri, False):
+                    item = (entry, entry_uri)
+                elif expose_resource_names:
+                    item = (
                         {
                             "name": entry.get("name", ""),
                             "isDir": bool(entry.get("isDir", False)),
@@ -1556,7 +2031,19 @@ class _OpsMixin:
                         },
                         entry_uri,
                     )
-                )
+                else:
+                    continue
+
+                if remaining_offset:
+                    remaining_offset -= 1
+                    continue
+                browsable.append(item)
+                if node_limit is not None and len(browsable) >= node_limit:
+                    return browsable
+            if exhausted:
+                break
+            raw_offset += consumed
+
         return browsable
 
     async def _augment_entries_extra_fields(
@@ -1591,12 +2078,11 @@ class _OpsMixin:
                     if not may_include_hidden_actor_peers(entry_uri, real_ctx):
                         filter_expr = PathScope("uri", entry_uri, depth=-1)
                         entry["count"] = await vector_store.count(
-                            filter=filter_expr, ctx=real_ctx,
+                            filter=filter_expr,
+                            ctx=real_ctx,
                         )
                 except Exception as e:
-                    logger.warning(
-                        f"[VikingFS] Failed to count nodes for {entry_uri}: {e}"
-                    )
+                    logger.warning(f"[VikingFS] Failed to count nodes for {entry_uri}: {e}")
 
         if need_locked and lock_paths:
             for i, path in lock_paths:
@@ -1605,9 +2091,7 @@ class _OpsMixin:
                 except Exception:
                     entries[i]["isLocked"] = False
 
-    def _try_uri_to_path(
-        self, uri: str, ctx: Optional[RequestContext] = None
-    ) -> Optional[str]:
+    def _try_uri_to_path(self, uri: str, ctx: Optional[RequestContext] = None) -> Optional[str]:
         """Best-effort URI to path conversion; returns None on failure."""
         try:
             return self._uri_to_path(uri, ctx=ctx)
@@ -1660,6 +2144,7 @@ class _OpsMixin:
             dst_path,
             recursive=True,
             fs_ctx=fs_ctx or {"account_id": self._ctx_or_default(ctx).account_id},
+            allow_same_mount_fast_path=True,
         )
 
     async def delete_temp(
@@ -1677,16 +2162,34 @@ class _OpsMixin:
         except Exception as e:
             logger.warning(f"[VikingFS] Failed to delete temp {temp_uri}: {e}")
 
+    @staticmethod
+    def _filter_ls_entries(path: str, entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Return entries visible at the given storage path."""
+        parts = [p for p in path.strip("/").split("/") if p]
+        if len(parts) == 2 and parts[0] == "local":
+            return [e for e in entries if e.get("name") in VikingURI.LISTABLE_SCOPES]
+        return [e for e in entries if e.get("name") not in STORAGE_INTERNAL_ENTRY_NAMES]
+
     async def _ls_entries(
-        self, path: str, ctx: Optional[RequestContext] = None
+        self,
+        path: str,
+        offset: int = 0,
+        limit: Optional[int] = None,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
+        filter_internal: bool = True,
+        ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """List directory entries, filtering out internal directories.
 
         At account root (/local/{account}), uses LISTABLE_SCOPES whitelist.
         At other levels, uses the shared storage internal-name blacklist.
         """
-        entries = await self._async_agfs.ls(path)
-        parts = [p for p in path.strip("/").split("/") if p]
-        if len(parts) == 2 and parts[0] == "local":
-            return [e for e in entries if e.get("name") in VikingURI.LISTABLE_SCOPES]
-        return [e for e in entries if e.get("name") not in STORAGE_INTERNAL_ENTRY_NAMES]
+        entries = await self._async_agfs.ls(
+            path,
+            offset=offset,
+            limit=limit,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+        return self._filter_ls_entries(path, entries) if filter_internal else entries

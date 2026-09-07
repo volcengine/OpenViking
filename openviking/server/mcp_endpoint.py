@@ -65,6 +65,7 @@ from openviking.server.local_input_guard import (
 from openviking.server.resource_ingest import ingest_temp_upload
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.server.upload_token_store import upload_token_store
+from openviking.utils.media_limits import MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
 from openviking.utils.search_filters import SearchContextTypeInput, merge_search_filter
 from openviking_cli.exceptions import (
     InvalidArgumentError,
@@ -425,9 +426,7 @@ async def _format_search_result(result, *, service, ctx, read_content: bool = Fa
 _MCP_IMAGE_EXTENSIONS = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
 _MCP_AUDIO_EXTENSIONS = {".flac", ".m4a", ".mp3", ".oga", ".ogg", ".wav"}
 _MCP_VIDEO_EXTENSIONS = {".avi", ".m4v", ".mkv", ".mov", ".mp4", ".webm"}
-# Common clients cap an inline result at 5 MiB base64, or 3.75 MiB raw.
-# Apply the same limit to one file and to the aggregate media in one tool call.
-_MCP_MEDIA_MAX_BYTES = 3_932_160
+_MCP_MEDIA_MAX_BYTES = MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
 
 
 def _mcp_uri_suffix(uri: str) -> str:
@@ -519,7 +518,7 @@ async def read(uris: str | list[str]) -> str | list[ContentBlock]:
                 return resolved_uri, None, None
 
             async with semaphore:
-                stat = await service.fs.stat(resolved_uri, ctx=ctx)
+                stat = await service.fs.stat(resolved_uri, ctx=ctx, skip_count=True)
             if stat.get("isDir"):
                 return (
                     resolved_uri,
@@ -631,13 +630,49 @@ async def read(uris: str | list[str]) -> str | list[ContentBlock]:
 
 
 @mcp.tool(name="list")
-async def ls(uri: str, recursive: bool = False) -> str:
-    """List files and subdirectories under a viking:// directory URI. Use recursive=true for deep listing."""
+async def ls(
+    uri: str,
+    recursive: bool = False,
+    offset: int = 0,
+    limit: int | None = None,
+    sort_by: Literal["name", "mtime"] | None = None,
+    sort_order: Literal["asc", "desc"] = "asc",
+) -> str:
+    """List one sorted page under a viking:// directory URI.
+
+    Args:
+        uri: Directory URI to list.
+        recursive: Whether to recursively list descendants.
+        offset: Number of visible entries to skip.
+        limit: Optional maximum number of entries.
+        sort_by: Optional name or modification-time ordering.
+        sort_order: Ascending or descending order.
+
+    Returns:
+        A line-oriented directory listing.
+    """
+    if offset < 0:
+        raise InvalidArgumentError("offset must be greater than or equal to 0")
+    if limit is not None and limit <= 0:
+        raise InvalidArgumentError("limit must be greater than 0")
+
     service = get_service()
     ctx = _get_ctx()
     resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
 
-    entries = await service.fs.ls(resolved_uri, ctx=ctx, recursive=recursive, output="original")
+    options: dict[str, Any] = {
+        "ctx": ctx,
+        "recursive": recursive,
+        "output": "original",
+    }
+    if offset:
+        options["offset"] = offset
+    if limit is not None:
+        options["node_limit"] = limit
+    if sort_by is not None:
+        options["sort_by"] = sort_by
+        options["sort_order"] = sort_order
+    entries = await service.fs.ls(resolved_uri, **options)
     if not entries:
         return f"(no entries under {uri})"
 
@@ -662,19 +697,40 @@ async def tree(
     level_limit: int = 3,
     node_limit: int = 1000,
     include_abstract: bool = False,
+    offset: int = 0,
+    limit: int | None = None,
 ) -> str:
-    """Show the recursive directory tree under a viking:// URI, indented by depth, so you can understand the whole layout at a glance. Use this when you need a full picture of the file tree; use list for a single directory level, glob for filename patterns, and grep for content. level_limit caps the depth (default 3); node_limit caps the total entries. Set include_abstract=true to also see each file's summary (slower, but useful for orientation in unfamiliar directories)."""
+    """Show one visible page from a recursive directory tree.
+
+    Args:
+        uri: Directory URI to traverse.
+        level_limit: Maximum traversal depth.
+        node_limit: Existing default result limit.
+        include_abstract: Whether to include file summaries.
+        offset: Number of visible nodes to skip.
+        limit: Optional result limit that overrides node_limit.
+
+    Returns:
+        An indented directory tree.
+    """
+    if offset < 0:
+        raise InvalidArgumentError("offset must be greater than or equal to 0")
+    if limit is not None and limit <= 0:
+        raise InvalidArgumentError("limit must be greater than 0")
+
     service = get_service()
     ctx = _get_ctx()
     resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
     output = "agent" if include_abstract else "original"
+    effective_limit = limit if limit is not None else node_limit
     try:
         entries = await service.fs.tree(
             resolved_uri,
             ctx=ctx,
             output=output,
-            node_limit=node_limit,
+            node_limit=effective_limit,
             level_limit=level_limit,
+            offset=offset,
         )
     except NotFoundError:
         entries = []
@@ -696,9 +752,9 @@ async def tree(
         abstract = (e.get("abstract") or "").strip().replace("\n", " ")
         if include_abstract and abstract:
             lines.append(f"{indent}  - {abstract}")
-    if len(entries) >= node_limit:
+    if len(entries) >= effective_limit:
         lines.append(
-            f"(truncated at node_limit={node_limit}; narrow the uri or raise node_limit to see more)"
+            f"(truncated at node_limit={effective_limit}; narrow the uri or raise node_limit to see more)"
         )
     return "\n".join(lines)
 
@@ -969,11 +1025,16 @@ async def add_resource(
             Only applies to remote-URL invocations.
         processing_mode: "semantic_and_vectors" for normal semantic processing, or
             "vectors_only" to skip semantic understanding and only build vector indexes.
-        to: Target URI under viking://resources/ (e.g. "viking://resources/volcengine/OpenViking").
-            Required when ``add_type`` is set; otherwise leave empty to derive a URI
-            from the source.
-        parent: Parent URI under viking://resources/ for remote imports. Mutually exclusive
-            with ``to`` and not supported when ``add_type`` is set.
+        to: Exact final URI including the leaf name (e.g.
+            "viking://resources/volcengine/OpenViking"). Written verbatim; an existing
+            target is synced to match the new source, so visible entries it does not
+            contain are deleted. Required when ``add_type`` is set.
+        parent: Existing directory to store the resource under, for remote or
+            local-file imports; the leaf name comes from the source. Never overwrites
+            — a collision reserves the next free name ("name_1", "name_2", ...) and
+            returns a warning. Mutually exclusive with ``to``; not supported when
+            ``add_type`` is set. Leaving both empty derives the directory and the name
+            from the source and handles collisions like ``parent``.
         tags: Optional explicit k=v retrieval tags to apply after ingestion.
         tag_mode: Tag update mode, "replace" or "append". Defaults to "replace".
         args: Parser-specific options, e.g. {"auth_config": {"token": "..."}}
@@ -1021,6 +1082,8 @@ async def add_resource(
         return "Error: add_type cannot be combined with parent."
     if add_type and not to:
         return "Error: add_type requires an exact 'to' target."
+    if to and parent:
+        return "Error: Cannot specify both 'to' and 'parent' at the same time."
 
     # Branch 1: ingest by temp_file_id. Kept for backward compat / REST-style use — the
     # signed upload now auto-ingests server-side, so agents no longer need this second leg.
@@ -1035,6 +1098,7 @@ async def add_resource(
                 temp_file_id,
                 ctx,
                 to=to,
+                parent=parent,
                 reason=description,
                 args=args,
                 processing_mode=processing_mode,
@@ -1133,6 +1197,7 @@ async def add_resource(
         ctx.user.user_id,
         ttl_seconds=ttl_seconds,
         to=to,
+        parent=parent,
         reason=description,
         actor_peer_id=ctx.actor_peer_id or "",
         processing_mode=processing_mode,

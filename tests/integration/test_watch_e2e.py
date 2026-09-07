@@ -135,18 +135,30 @@ class TestWatchE2EBasicFlow:
         assert task.watch_interval == 30.0
         task_id = task.task_id
 
+        # The target already has a watch, so re-adding (even the same source, even
+        # after pausing it) conflicts; the interval is changed through the watch itself.
         await service.resources.add_resource(
             ctx=ctx,
             path=str(watch_test_file),
             to=to_uri,
             watch_interval=0,
         )
+        with pytest.raises(ConflictError, match="already being monitored"):
+            await service.resources.add_resource(
+                ctx=ctx,
+                path=str(watch_test_file),
+                to=to_uri,
+                watch_interval=120.0,
+            )
 
-        await service.resources.add_resource(
-            ctx=ctx,
-            path=str(watch_test_file),
-            to=to_uri,
+        watch_manager = service.resources._watch_scheduler.watch_manager
+        await watch_manager.update_task(
+            task_id=task_id,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+            role=str(ctx.role),
             watch_interval=120.0,
+            is_active=True,
         )
 
         task = await get_watch_task(service, ctx, to_uri)
@@ -189,7 +201,9 @@ class TestWatchE2EConflictDetection:
     """End-to-end tests for conflict detection."""
 
     @pytest.mark.asyncio
-    async def test_conflict_when_active_watch_exists(self, e2e_service, watch_test_file: Path):
+    async def test_conflict_when_active_watch_exists(
+        self, e2e_service, watch_test_file: Path, tmp_path: Path
+    ):
         """Test that conflict is raised when trying to watch an already watched URI."""
         service, ctx = e2e_service
 
@@ -202,10 +216,12 @@ class TestWatchE2EConflictDetection:
             watch_interval=30.0,
         )
 
+        conflicting_file = tmp_path / "watch_conflict.md"
+        conflicting_file.write_text(watch_test_file.read_text())
         with pytest.raises(ConflictError) as exc_info:
             await service.resources.add_resource(
                 ctx=ctx,
-                path=str(watch_test_file),
+                path=str(conflicting_file),
                 to=to_uri,
                 watch_interval=60.0,
             )
@@ -243,18 +259,33 @@ class TestWatchE2EConflictDetection:
         assert task is not None
         assert task.is_active is False
 
-        await service.resources.add_resource(
-            ctx=ctx,
-            path=str(watch_test_file),
-            to=to_uri,
+        # A paused watch still owns the target: re-adding conflicts, reactivation
+        # goes through the watch itself.
+        with pytest.raises(ConflictError, match="already being monitored"):
+            await service.resources.add_resource(
+                ctx=ctx,
+                path=str(watch_test_file),
+                to=to_uri,
+                reason="Reactivated reason",
+                watch_interval=45.0,
+            )
+
+        watch_manager = service.resources._watch_scheduler.watch_manager
+        await watch_manager.update_task(
+            task_id=task_id,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+            role=str(ctx.role),
             reason="Reactivated reason",
             watch_interval=45.0,
+            is_active=True,
         )
 
         task = await get_watch_task(service, ctx, to_uri)
         assert task is not None
         assert task.is_active is True
         assert task.watch_interval == 45.0
+        assert task.reason == "Reactivated reason"
         assert task.task_id == task_id
 
 
@@ -357,7 +388,11 @@ class TestWatchE2EErrorHandling:
 
         class MockResourceProcessor:
             async def process_resource(self, **kwargs):
-                return {"root_uri": kwargs.get("to", "viking://resources/test")}
+                root_uri = kwargs.get("to", "viking://resources/test")
+                return {"root_uri": root_uri, "_post_process": {"root_uri": root_uri}}
+
+            async def finish_prepared_resource(self, *_args, **_kwargs):
+                return {}
 
         class MockSkillProcessor:
             async def process_skill(self, **kwargs):

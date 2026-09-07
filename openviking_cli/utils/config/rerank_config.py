@@ -88,6 +88,12 @@ class RerankConfig(BaseModel):
         if provider == "litellm":
             if not self.model:
                 raise ValueError("LiteLLM rerank provider requires 'model'")
+        if provider == "cohere":
+            if not self.api_key:
+                raise ValueError("Cohere rerank provider requires 'api_key'")
+        if provider == "vikingdb":
+            if not self.ak or not self.sk:
+                raise ValueError("VikingDB rerank provider requires 'ak' and 'sk'")
         return self
 
     def is_available(self) -> bool:

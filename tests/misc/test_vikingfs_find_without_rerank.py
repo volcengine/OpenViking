@@ -1,12 +1,13 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Regression test for VikingFS.find without rerank configuration."""
+"""Regression tests for VikingFS.find retrieval behavior."""
 
 import contextvars
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from openviking.retrieve.hierarchical_retriever import RetrieverMode
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.retrieve.types import ContextType, MatchedContext, QueryResult
@@ -51,6 +52,7 @@ async def test_find_works_without_rerank_config(monkeypatch) -> None:
             typed_query,
             ctx,
             limit,
+            mode,
             score_threshold,
             scope_dsl,
             level,
@@ -58,6 +60,7 @@ async def test_find_works_without_rerank_config(monkeypatch) -> None:
             captured["typed_query"] = typed_query
             captured["ctx"] = ctx
             captured["limit"] = limit
+            captured["mode"] = mode
             captured["score_threshold"] = score_threshold
             captured["scope_dsl"] = scope_dsl
             captured["level"] = level
@@ -98,6 +101,7 @@ async def test_find_works_without_rerank_config(monkeypatch) -> None:
     assert captured["typed_query"].target_directories == ["viking://resources/docs"]
     assert captured["ctx"] == fs._ctx_or_default.return_value
     assert captured["limit"] == 3
+    assert captured["mode"] == RetrieverMode.QUICK
     assert captured["score_threshold"] == 0.2
     assert captured["scope_dsl"] == {"category": "doc"}
     assert captured["level"] is None
@@ -118,11 +122,13 @@ async def test_find_accepts_image_url_without_text_query(monkeypatch) -> None:
             typed_query,
             ctx,
             limit,
+            mode,
             score_threshold,
             scope_dsl,
             level,
         ):
             captured["typed_query"] = typed_query
+            captured["mode"] = mode
             return QueryResult(
                 query=typed_query,
                 matched_contexts=[
@@ -153,3 +159,37 @@ async def test_find_accepts_image_url_without_text_query(monkeypatch) -> None:
     assert typed_query.embedding_input == [
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
     ]
+    assert captured["mode"] == RetrieverMode.QUICK
+
+
+@pytest.mark.asyncio
+async def test_find_uses_quick_mode_with_rerank_config(monkeypatch) -> None:
+    fs = _make_viking_fs()
+    fs.rerank_config = MagicMock(name="rerank_config")
+    captured = {}
+
+    class FakeRetriever:
+        def __init__(self, storage, embedder, rerank_config, retrieval_config):
+            captured["rerank_config"] = rerank_config
+
+        async def retrieve(self, typed_query, **kwargs):
+            captured["mode"] = kwargs.get("mode")
+            return QueryResult(
+                query=typed_query,
+                matched_contexts=[],
+                searched_directories=["viking://resources/docs"],
+            )
+
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.HierarchicalRetriever",
+        FakeRetriever,
+    )
+
+    result = await fs.find(
+        "guide",
+        target_uri="viking://resources/docs",
+    )
+
+    assert result.total == 0
+    assert captured["rerank_config"] is fs.rerank_config
+    assert captured["mode"] == RetrieverMode.QUICK

@@ -5,10 +5,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
-from openviking.core.namespace import context_type_for_uri, owner_fields_for_uri
+from openviking.core.namespace import (
+    context_type_for_uri,
+    owner_fields_for_uri,
+    owner_space_for_uri,
+)
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.abstract_overview import (
+    rewrite_abstract_overview_for_transfer,
+    rewrite_viking_uri_references,
+)
 from openviking.storage.expr import And, Contains, Eq, Or, PathScope
 from openviking.storage.vector_ids import vector_record_id
 from openviking.utils.time_utils import get_current_timestamp
@@ -58,6 +66,10 @@ def _root_ctx(account_id: str) -> RequestContext:
     return RequestContext(user=UserIdentifier(account_id, "default"), role=Role.ROOT)
 
 
+def _normalize_uri(uri: str) -> str:
+    return VikingURI(uri).uri.rstrip("/")
+
+
 def _vector_record_id(account_id: str, uri: str, level: Any) -> str:
     return vector_record_id(account_id, uri, level)
 
@@ -70,7 +82,9 @@ def _has_vector_payload(record: dict[str, Any]) -> bool:
     return False
 
 
-def _uri_in_scope(uri: str, scope_uri: str, *, recursive: bool) -> bool:
+def uri_in_transfer_scope(uri: str, scope_uri: str, *, recursive: bool) -> bool:
+    """Return whether *uri* belongs to a file or recursive directory transfer."""
+    scope_uri = _normalize_uri(scope_uri)
     return (
         uri == scope_uri
         or uri.startswith(scope_uri + "#")
@@ -78,12 +92,77 @@ def _uri_in_scope(uri: str, scope_uri: str, *, recursive: bool) -> bool:
     )
 
 
-def _rewrite_uri(uri: str, source_uri: str, target_uri: str) -> str:
+def rewrite_transfer_uri(uri: str, source_uri: str, target_uri: str) -> str:
+    """Rewrite a URI from one transfer scope to another without prefix leakage."""
+    source_uri = _normalize_uri(source_uri)
+    target_uri = _normalize_uri(target_uri)
     if uri == source_uri:
         return target_uri
     if uri.startswith(source_uri + "/") or uri.startswith(source_uri + "#"):
         return target_uri + uri[len(source_uri) :]
     return uri
+
+
+def rewrite_vector_record(
+    record: dict[str, Any],
+    *,
+    source_uri: str,
+    target_uri: str,
+    ctx: RequestContext,
+    mode: Literal["copy", "move"],
+    timestamp: Any,
+) -> dict[str, Any]:
+    """Build a target vector record while retaining its existing vector payload."""
+    if mode not in {"copy", "move"}:
+        raise ValueError(f"Unsupported vector transfer mode: {mode}")
+    record_uri = record.get("uri")
+    if not isinstance(record_uri, str):
+        raise ValueError("Vector record is missing a string URI")
+
+    rewritten_uri = rewrite_transfer_uri(record_uri, source_uri, target_uri)
+    payload = {key: value for key, value in record.items() if key != "_score"}
+    owner_fields = owner_fields_for_uri(rewritten_uri)
+    payload.update(
+        {
+            "id": _vector_record_id(ctx.account_id, rewritten_uri, record.get("level", 2)),
+            "uri": rewritten_uri,
+            "account_id": ctx.account_id,
+            "owner_user_id": owner_fields.get("owner_user_id"),
+            "owner_space": owner_space_for_uri(rewritten_uri),
+            "context_type": context_type_for_uri(rewritten_uri),
+        }
+    )
+    if mode == "copy":
+        payload.update(
+            {
+                "created_at": timestamp,
+                "updated_at": timestamp,
+                "active_count": 0,
+            }
+        )
+    try:
+        level = int(record.get("level", 2))
+    except (TypeError, ValueError):
+        level = 2
+    if level in {0, 1}:
+        abstract = payload.get("abstract")
+        if isinstance(abstract, str):
+            payload["abstract"] = rewrite_viking_uri_references(
+                abstract,
+                source_uri,
+                target_uri,
+            )
+        content = payload.get("content")
+        if isinstance(content, (str, bytes)):
+            payload["content"] = rewrite_abstract_overview_for_transfer(
+                content,
+                level=level,
+                source_dir_uri=record_uri,
+                target_dir_uri=rewritten_uri,
+                source_scope_uri=source_uri,
+                target_scope_uri=target_uri,
+            )
+    return payload
 
 
 async def _records_in_scope(
@@ -114,7 +193,7 @@ async def _records_in_scope(
         record
         for record in records
         if isinstance(record.get("uri"), str)
-        and _uri_in_scope(record["uri"], uri, recursive=recursive)
+        and uri_in_transfer_scope(record["uri"], uri, recursive=recursive)
     ]
 
 
@@ -164,27 +243,13 @@ async def copy_vector_records(
             result.skipped += 1
             continue
 
-        rewritten_uri = _rewrite_uri(source_record_uri, source_uri, target_uri)
-        owner_fields = owner_fields_for_uri(rewritten_uri)
-        level = record.get("level", 2)
-        payload = {
-            key: value
-            for key, value in record.items()
-            if key not in {"id", "uri", "account_id", "owner_user_id", "owner_space", "_score"}
-            and value is not None
-        }
-        payload.update(
-            {
-                "id": _vector_record_id(account_id, rewritten_uri, level),
-                "uri": rewritten_uri,
-                "account_id": account_id,
-                "owner_user_id": owner_fields.get("owner_user_id"),
-                "owner_space": owner_fields.get("owner_user_id") or "",
-                "context_type": context_type_for_uri(rewritten_uri),
-                "created_at": timestamp,
-                "updated_at": timestamp,
-                "active_count": 0,
-            }
+        payload = rewrite_vector_record(
+            record,
+            source_uri=source_uri,
+            target_uri=target_uri,
+            ctx=ctx,
+            mode="copy",
+            timestamp=timestamp,
         )
         try:
             await vector_store.upsert(payload, ctx=ctx)
@@ -192,7 +257,7 @@ async def copy_vector_records(
         except Exception as exc:
             result.failed += 1
             result.warnings.append(
-                f"Failed to copy vector {source_record_uri} to {rewritten_uri}: {exc}"
+                f"Failed to copy vector {source_record_uri} to {payload['uri']}: {exc}"
             )
     return result
 

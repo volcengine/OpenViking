@@ -1,5 +1,5 @@
 import type { OpenVikingClient } from "./client.js";
-import type { MemoryOpenVikingConfig } from "./config.js";
+import type { ParsedMemoryOpenVikingConfig } from "./config.js";
 import type { RuntimeQueryConfigStore } from "./query-config.js";
 import {
   AUTO_RECALL_SOURCE_MARKER,
@@ -19,6 +19,7 @@ import {
   compactOpenVikingSession,
   commitOpenVikingSession,
 } from "./services/context-lifecycle-service.js";
+import { loadRuntimeCompactionDelegate } from "./plugin/openclaw-runtime-compaction.js";
 
 type ContextEngineInfo = {
   id: string;
@@ -248,7 +249,7 @@ export function createMemoryOpenVikingContextEngine(params: {
   id: string;
   name: string;
   version?: string;
-  cfg: Required<MemoryOpenVikingConfig>;
+  cfg: ParsedMemoryOpenVikingConfig;
   logger: Logger;
   getClient: () => Promise<OpenVikingClient>;
   /** Extra args help match hook-populated routing when OpenClaw provides sessionKey / OV session id. */
@@ -437,6 +438,10 @@ export function createMemoryOpenVikingContextEngine(params: {
         logger,
         resolveAgentId,
         isBypassedSession,
+        runtimeCompact: async () => {
+          const delegate = await loadRuntimeCompactionDelegate();
+          return delegate ? delegate(compactParams) : undefined;
+        },
         diag,
       });
     },

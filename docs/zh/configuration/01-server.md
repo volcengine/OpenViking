@@ -147,6 +147,8 @@ API 型 `embedding`、`vlm`、`query_planner` 和 `rerank` 配置会复用部分
 
 Rerank 没有单独的 `enabled` 字段；配置了对应 provider 所需的凭证后才会启用。
 
+显式指定 `provider` 时必须提供该 provider 所需的凭证：`vikingdb` 需要 `ak` 和 `sk`，`cohere` 需要 `api_key`，`openai` 需要 `api_key` 和 `api_base`，`litellm` 需要 `model`。凭证不全的配置在加载时即被拒绝。
+
 ## 检索配置
 
 ```json

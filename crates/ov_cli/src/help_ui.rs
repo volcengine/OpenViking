@@ -72,7 +72,7 @@ const CORE_WORKFLOW: &[HelpCommand] = help_commands![
 ];
 
 const FILESYSTEM: &[HelpCommand] = help_commands![
-    "ls", "tree", "mkdir", "rm", "mv", "stat", "attrs", "acl", "get"
+    "ls", "tree", "mkdir", "rm", "cp", "mv", "stat", "attrs", "acl", "get"
 ];
 
 const SEARCH_CONTEXT: &[HelpCommand] = help_commands![
@@ -287,6 +287,30 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov tree <parent-uri>",
                 description: "Review remaining resources.",
+            },
+        ],
+    },
+    CommandHelpSpec {
+        path: &["cp"],
+        purpose: "Copy a file or directory without reparsing or regenerating vectors.",
+        examples: &[
+            HelpItem {
+                label: "ov cp viking://resources/notes/draft.md viking://resources/notes/draft-copy.md",
+                description: "Copy one file and its vector records.",
+            },
+            HelpItem {
+                label: "ov cp -r viking://resources/projects/source viking://resources/projects/backup",
+                description: "Recursively copy a directory and all vector records.",
+            },
+        ],
+        next_steps: &[
+            HelpItem {
+                label: "ov stat <target-uri>",
+                description: "Confirm the copied resource metadata.",
+            },
+            HelpItem {
+                label: "ov read <target-uri>",
+                description: "Read the copied resource.",
             },
         ],
     },
@@ -2734,6 +2758,13 @@ mod tests {
         assert!(rendered.contains("experimental"));
         assert!(rendered.contains("ov <command> --help"));
         assert!(!rendered.contains("Commands:\n  add-resource"));
+        assert!(rendered.contains("cp"));
+        let cp = command_spec(&["cp".to_string()]).expect("cp command help");
+        assert!(
+            cp.examples
+                .iter()
+                .any(|item| item.label.contains("ov cp -r"))
+        );
     }
 
     #[test]

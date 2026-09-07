@@ -62,12 +62,32 @@ class _FakeAgfs:
         self.files = {}
         self.dirs = {"/", "/local"}
         self.fail_rm = False
+        self.mkdir_calls = []
+        self.write_calls = []
+        self.rm_calls = []
 
     def mkdir(self, path: str, mode: str = "755"):
+        self.mkdir_calls.append({"path": path, "mode": mode})
         self.dirs.add(path.rstrip("/") or "/")
         return {"message": "created", "mode": mode}
 
-    def write(self, path: str, data):
+    def write(
+        self,
+        path: str,
+        data,
+        max_retries: int = 3,
+        *,
+        fs_ctx=None,
+        auto_pathlock: bool = True,
+    ):
+        self.write_calls.append(
+            {
+                "path": path,
+                "max_retries": max_retries,
+                "fs_ctx": fs_ctx,
+                "auto_pathlock": auto_pathlock,
+            }
+        )
         if isinstance(data, str):
             data = data.encode("utf-8")
         self.files[path] = data
@@ -102,7 +122,24 @@ class _FakeAgfs:
                     children[name] = {"name": name, "path": f"{prefix}/{name}", "is_dir": False}
         return list(children.values())
 
-    def rm(self, path: str, recursive: bool = False, force: bool = False):
+    def rm(
+        self,
+        path: str,
+        recursive: bool = False,
+        force: bool = False,
+        *,
+        fs_ctx=None,
+        auto_pathlock: bool = True,
+    ):
+        self.rm_calls.append(
+            {
+                "path": path,
+                "recursive": recursive,
+                "force": force,
+                "fs_ctx": fs_ctx,
+                "auto_pathlock": auto_pathlock,
+            }
+        )
         if self.fail_rm:
             raise OSError("simulated delete failure")
         self.files.pop(path, None)
@@ -111,6 +148,7 @@ class _FakeAgfs:
 
 class _FakeAgfsExistingDir(_FakeAgfs):
     def mkdir(self, path: str, mode: str = "755"):
+        self.mkdir_calls.append({"path": path, "mode": mode})
         normalized = path.rstrip("/") or "/"
         if normalized in self.dirs:
             raise AGFSAlreadyExistsError(f"already exists: {path}")
@@ -202,6 +240,23 @@ async def test_fail_task(tracker: TaskTracker):
     assert retrieved.status == TaskStatus.FAILED
     assert retrieved.stage == "failed"
     assert "LLM timeout" in retrieved.error
+
+
+async def test_mark_externally_cancelled_task_without_enabling_active_cancel(
+    tracker: TaskTracker,
+):
+    task = await tracker.create("connector_import", **_owner_kwargs())
+    await tracker.start(task.task_id)
+
+    with pytest.raises(ValueError, match="does not support cancellation"):
+        await tracker.cancel(task.task_id, **_owner_kwargs())
+
+    await tracker.mark_cancelled(task.task_id, **_owner_kwargs())
+
+    retrieved = await tracker.get(task.task_id)
+    assert retrieved is not None
+    assert retrieved.status == TaskStatus.CANCELLED
+    assert retrieved.stage == "cancelled"
 
 
 async def test_get_nonexistent_returns_none(tracker: TaskTracker):
@@ -450,6 +505,7 @@ async def test_evict_keeps_cached_task_when_persistent_delete_fails():
 
     assert await tracker.get(t.task_id) is None
     assert await tracker._store.get(t.task_id, **_owner_kwargs()) is None
+    assert all(call["auto_pathlock"] is False for call in agfs.rm_calls)
 
 
 async def test_evict_keeps_recent_completed(tracker: TaskTracker):
@@ -527,6 +583,7 @@ async def test_persistent_store_writes_task_record_json():
     raw = agfs.files[f"/local/acme/_system/tasks/alice/{task.task_id}.json"]
     payload = json.loads(raw.decode("utf-8"))
 
+    assert agfs.write_calls[-1]["auto_pathlock"] is False
     assert payload["task_id"] == task.task_id
     assert payload["task_type"] == "add_resource"
     assert payload["account_id"] == "acme"
@@ -543,6 +600,7 @@ async def test_persistent_store_writes_task_record_json():
         agfs.files[f"/local/acme/_system/tasks/alice/{task.task_id}.json"].decode("utf-8")
     )
     assert terminal_payload["auth"] == {}
+    assert all(call["auto_pathlock"] is False for call in agfs.write_calls)
 
 
 async def test_persistent_store_keeps_tasktracker_tasks_dict():
@@ -579,11 +637,20 @@ async def test_persistent_store_ignores_existing_task_dirs():
     tracker = TaskTracker(store=PersistentTaskStore(agfs))
 
     first = await tracker.create("session_commit", resource_id="sess-1", **_owner_kwargs())
+    first_mkdir_calls = list(agfs.mkdir_calls)
     second = await tracker.create("session_commit", resource_id="sess-2", **_owner_kwargs())
 
     assert first.task_id != second.task_id
     assert agfs.files[f"/local/acme/_system/tasks/alice/{first.task_id}.json"]
     assert agfs.files[f"/local/acme/_system/tasks/alice/{second.task_id}.json"]
+    assert [call["path"] for call in first_mkdir_calls] == [
+        "/local/acme",
+        "/local/acme/_system",
+        "/local/acme/_system/tasks",
+        "/local/acme/_system/tasks/alice",
+    ]
+    assert agfs.mkdir_calls == first_mkdir_calls
+    assert all(call["auto_pathlock"] is False for call in agfs.write_calls)
 
 
 async def test_create_requires_owner(tracker: TaskTracker):

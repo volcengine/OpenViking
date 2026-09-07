@@ -4,6 +4,7 @@ import {
   filterResourceSearchEntries,
   getResourceSearchSpec,
   normalizeGlobPattern,
+  resourceEntryAbstractForDisplay,
   retrievalItemsToEntries,
 } from './find-search'
 import type { FindResultItem } from '#/lib/retrieval'
@@ -126,7 +127,99 @@ describe('retrievalItemsToEntries', () => {
     expect(entries[1].size).toBe('')
   })
 
+  it('adds parent context to L0/L1 semantic sidecar names only', () => {
+    const entries = retrievalItemsToEntries({
+      memories: [],
+      resources: [
+        item({
+          level: 0,
+          uri: 'viking://resources/openviking-release/.abstract.md',
+        }),
+        item({
+          level: 1,
+          uri: 'viking://resources/openviking-release/.overview.md',
+        }),
+        item({
+          level: 2,
+          uri: 'viking://resources/openviking-release/README.md',
+        }),
+      ],
+      skills: [],
+      total: 3,
+    })
+
+    expect(entries.map((resultEntry) => resultEntry.name)).toEqual([
+      'openviking-release/.abstract.md',
+      'openviking-release/.overview.md',
+      'README.md',
+    ])
+  })
+
   it('returns nothing without a result', () => {
     expect(retrievalItemsToEntries(undefined)).toEqual([])
+  })
+})
+
+describe('resourceEntryAbstractForDisplay', () => {
+  it('shows only the body for a directory with sidecar frontmatter', () => {
+    expect(
+      resourceEntryAbstractForDisplay({
+        ...entry(
+          'viking://resources/openviking-contribute/pr-review-axiom/',
+          true,
+        ),
+        abstract: [
+          '---',
+          'directory: viking://resources/openviking-contribute/pr-review-axiom/',
+          'generated_by:',
+          '  component: SemanticProcessor',
+          '  trigger: parent_refresh',
+          '---',
+          '',
+          'PR review guidance',
+        ].join('\n'),
+      }),
+    ).toBe('PR review guidance')
+  })
+
+  it('hides clipped directory frontmatter when the list payload has no body', () => {
+    expect(
+      resourceEntryAbstractForDisplay({
+        ...entry(
+          'viking://resources/openviking-contribute/pr-review-axiom/',
+          true,
+        ),
+        abstract:
+          '---\ndirectory: viking://resources/openviking-contribute/pr-review-axiom/\ngenerated_by: ...',
+      }),
+    ).toBe('')
+  })
+
+  it('keeps legacy directory summaries and file abstracts unchanged', () => {
+    expect(
+      resourceEntryAbstractForDisplay({
+        ...entry('viking://resources/legacy/', true),
+        abstract: 'Legacy summary',
+      }),
+    ).toBe('Legacy summary')
+    expect(
+      resourceEntryAbstractForDisplay({
+        ...entry('viking://resources/user.md'),
+        abstract: '---\ntitle: user content\n---',
+      }),
+    ).toBe('---\ntitle: user content\n---')
+    expect(
+      resourceEntryAbstractForDisplay({
+        ...entry('viking://resources/legacy/', true),
+        abstract: '---\n\nLegacy summary',
+      }),
+    ).toBe('---\n\nLegacy summary')
+    expect(
+      resourceEntryAbstractForDisplay({
+        ...entry('viking://resources/manual/', true),
+        abstract:
+          '---\ndirectory: viking://resources/manual/\n---\nManual summary',
+      }),
+    ).toBe('---\ndirectory: viking://resources/manual/\n---\nManual summary')
   })
 })

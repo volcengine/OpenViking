@@ -11,7 +11,7 @@ from vikingbot.agent.loop import (
     AgentLoop,
     render_budget_reminder,
 )
-from vikingbot.agent.tools.base import Tool, ToolContext
+from vikingbot.agent.tools.base import MultimodalToolResult, Tool, ToolContext
 from vikingbot.agent.tools.compile import (
     CompileScopedTool,
     SubmitTargetCheckoutTool,
@@ -1364,6 +1364,146 @@ async def test_multi_read_hints_on_large_files_and_supports_offset_limit(monkeyp
     )
     assert "window:10:20" in window
     assert fake.calls == [("viking://resources/big.jsonl", 10, 20)]
+
+
+@pytest.mark.asyncio
+async def test_multi_read_returns_images_as_tool_result_content(monkeypatch):
+    image_uri = "viking://resources/example/image.png"
+    image_bytes = b"\x89PNG\r\n\x1a\nimage-data"
+
+    class FakeClient:
+        async def stat(self, uri):
+            assert uri == image_uri
+            return {"size": len(image_bytes), "isDir": False}
+
+        async def download_bytes(self, uri):
+            assert uri == image_uri
+            return image_bytes
+
+        async def read_content(self, *args, **kwargs):
+            raise AssertionError("image reads must not use the text endpoint")
+
+    tool = VikingMultiReadTool()
+
+    async def fake_get_client(ctx):
+        return FakeClient()
+
+    async def no_release(ctx, client):
+        return None
+
+    monkeypatch.setattr(tool, "_get_client", fake_get_client)
+    monkeypatch.setattr(tool, "_release_client", no_release)
+
+    result = await tool.execute(ToolContext(), uris=[image_uri])
+
+    assert isinstance(result, MultimodalToolResult)
+    assert f"START OF {image_uri}" in str(result)
+    assert "Image resource (image/png" in str(result)
+    assert result.content[2] == {
+        "type": "image_url",
+        "image_url": {
+            "url": f"data:image/png;base64,{base64.b64encode(image_bytes).decode('ascii')}"
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_multi_read_treats_typescript_as_text_and_preserves_window(monkeypatch):
+    typescript_uri = "viking://resources/web/index.ts"
+
+    class FakeClient:
+        async def read_content(self, uri, level="abstract", offset=0, limit=-1, **kwargs):
+            assert uri == typescript_uri
+            assert level == "read"
+            assert (offset, limit) == (4, 2)
+            return "export const answer = 42;"
+
+        async def download_bytes(self, uri):
+            raise AssertionError("TypeScript reads must not use the media download path")
+
+    tool = VikingMultiReadTool()
+
+    async def fake_get_client(ctx):
+        return FakeClient()
+
+    async def no_release(ctx, client):
+        return None
+
+    monkeypatch.setattr(tool, "_get_client", fake_get_client)
+    monkeypatch.setattr(tool, "_release_client", no_release)
+
+    result = await tool.execute(ToolContext(), uris=[typescript_uri], offset=4, limit=2)
+
+    assert isinstance(result, str)
+    assert "export const answer = 42;" in result
+
+
+@pytest.mark.asyncio
+async def test_multi_read_limits_aggregate_inline_image_bytes(monkeypatch):
+    first_uri = "viking://resources/first.png"
+    second_uri = "viking://resources/second.png"
+    first_image = b"\x89PNG\r\n\x1a\nfirst"
+    second_image = b"\x89PNG\r\n\x1a\nother"
+    images = {first_uri: first_image, second_uri: second_image}
+
+    class FakeClient:
+        async def stat(self, uri):
+            return {"size": len(images[uri]), "isDir": False}
+
+        async def download_bytes(self, uri):
+            return images[uri]
+
+        async def read_content(self, *args, **kwargs):
+            raise AssertionError("image reads must not use the text endpoint")
+
+    tool = VikingMultiReadTool()
+    monkeypatch.setattr(tool, "_MAX_INLINE_MEDIA_BYTES", len(first_image))
+
+    async def fake_get_client(ctx):
+        return FakeClient()
+
+    async def no_release(ctx, client):
+        return None
+
+    monkeypatch.setattr(tool, "_get_client", fake_get_client)
+    monkeypatch.setattr(tool, "_release_client", no_release)
+
+    result = await tool.execute(ToolContext(), uris=[first_uri, second_uri])
+
+    assert isinstance(result, MultimodalToolResult)
+    assert sum(part.get("type") == "image_url" for part in result.content) == 1
+    assert "combined inline media size" in str(result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("extension", ["mp3", "mp4"])
+async def test_multi_read_uses_openviking_overview_for_audio_and_video(monkeypatch, extension):
+    media_uri = f"viking://resources/interview/interview.{extension}"
+
+    class FakeClient:
+        async def read_content(self, uri, level="abstract", **kwargs):
+            assert uri == media_uri
+            assert level == "overview"
+            return "Speaker: hello"
+
+        async def download_bytes(self, uri):
+            raise AssertionError("media reads must not create a second transcription path")
+
+    tool = VikingMultiReadTool()
+
+    async def fake_get_client(ctx):
+        return FakeClient()
+
+    async def no_release(ctx, client):
+        return None
+
+    monkeypatch.setattr(tool, "_get_client", fake_get_client)
+    monkeypatch.setattr(tool, "_release_client", no_release)
+
+    result = await tool.execute(ToolContext(), uris=[media_uri])
+
+    assert isinstance(result, str)
+    assert "Speaker: hello" in result
 
 
 class _RecordingSandbox:

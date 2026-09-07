@@ -4,8 +4,10 @@ import asyncio
 import json
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Coroutine
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from loguru import logger
 
@@ -19,6 +21,15 @@ def _now_ms() -> int:
 
 def _dict_or_empty(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _validate_schedule_timezone(schedule: CronSchedule) -> None:
+    if schedule.kind != "cron" or not schedule.tz:
+        return
+    try:
+        ZoneInfo(schedule.tz)
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError(f"Invalid cron timezone: {schedule.tz}") from exc
 
 
 def _compute_next_run(schedule: CronSchedule, now_ms: int) -> int | None:
@@ -36,9 +47,16 @@ def _compute_next_run(schedule: CronSchedule, now_ms: int) -> int | None:
         try:
             from croniter import croniter
 
-            cron = croniter(schedule.expr, time.time())
-            next_time = cron.get_next()
-            return int(next_time * 1000)
+            if schedule.tz:
+                cron_timezone = ZoneInfo(schedule.tz)
+                base_time = datetime.fromtimestamp(now_ms / 1000, tz=cron_timezone)
+            else:
+                base_time = datetime.fromtimestamp(now_ms / 1000).astimezone()
+            cron = croniter(schedule.expr, base_time)
+            next_time = cron.get_next(datetime)
+            return int(next_time.timestamp() * 1000)
+        except ZoneInfoNotFoundError:
+            return None
         except Exception:
             return None
 
@@ -278,6 +296,7 @@ class CronService:
         delete_after_run: bool = False,
     ) -> CronJob:
         """Add a new job."""
+        _validate_schedule_timezone(schedule)
         now = _now_ms()
         next_run_at_ms = _compute_next_run(schedule, now)
         if next_run_at_ms is None:
@@ -330,6 +349,7 @@ class CronService:
             if job.id == job_id:
                 next_run_at_ms = None
                 if enabled:
+                    _validate_schedule_timezone(job.schedule)
                     next_run_at_ms = _compute_next_run(job.schedule, _now_ms())
                     if next_run_at_ms is None:
                         raise ValueError("Schedule does not have a future run time")

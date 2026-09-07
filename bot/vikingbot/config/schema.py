@@ -108,6 +108,7 @@ class TelegramChannelConfig(BaseChannelConfig):
 
     type: ChannelType = ChannelType.TELEGRAM
     token: str = ""
+    groq_api_key: str = Field(default="", description="Groq API key for voice transcription")
     allow_from: list[str] = Field(default_factory=list)
     proxy: str | None = None
 
@@ -469,6 +470,11 @@ class AgentsConfig(BaseModel):
         default=True,
         description="Enable the spawn tool so the main agent can start background subagents.",
     )
+    subagent_max_concurrency: int = Field(
+        default=4,
+        ge=1,
+        description="Maximum number of background subagents running at once.",
+    )
     session_context_enabled: bool = True
     session_context_token_budget: int = 3000
     commit_token_threshold: int = 200000
@@ -534,26 +540,6 @@ class ProviderConfig(BaseModel):
     extra_headers: Optional[dict[str, str]] = Field(
         default_factory=dict
     )  # Custom headers (e.g. APP-Code for AiHubMix)
-
-
-class ProvidersConfig(BaseModel):
-    """Configuration for LLM providers."""
-
-    anthropic: ProviderConfig = Field(default_factory=ProviderConfig)
-    openai: ProviderConfig = Field(default_factory=ProviderConfig)
-    openrouter: ProviderConfig = Field(default_factory=ProviderConfig)
-    deepseek: ProviderConfig = Field(default_factory=ProviderConfig)
-    groq: ProviderConfig = Field(default_factory=ProviderConfig)
-    zhipu: ProviderConfig = Field(default_factory=ProviderConfig)
-    dashscope: ProviderConfig = Field(default_factory=ProviderConfig)  # 阿里云通义千问
-    vllm: ProviderConfig = Field(default_factory=ProviderConfig)
-    gemini: ProviderConfig = Field(default_factory=ProviderConfig)
-    moonshot: ProviderConfig = Field(default_factory=ProviderConfig)
-    minimax: ProviderConfig = Field(default_factory=ProviderConfig)
-    volcengine: ProviderConfig = Field(
-        default_factory=ProviderConfig
-    )  # VolcEngine (火山引擎) API gateway
-    aihubmix: ProviderConfig = Field(default_factory=ProviderConfig)  # AiHubMix API gateway
 
 
 class HeartbeatConfig(BaseModel):
@@ -868,9 +854,6 @@ class Config(BaseSettings):
     inherits_root_vlm_state: SkipJsonSchema[bool] = Field(default=False, repr=False)
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     channels: list[Any] = Field(default_factory=list)
-    providers: ProvidersConfig = Field(
-        default_factory=ProvidersConfig, deprecated=True
-    )  # Deprecated: Use ov.conf vlm config instead
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     ov_server: OpenVikingConfig = Field(default_factory=OpenVikingConfig)

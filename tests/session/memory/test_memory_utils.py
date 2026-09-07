@@ -14,7 +14,6 @@ from openviking.session.memory.dataclass import (
 from openviking.session.memory.merge_op.base import FieldType, MergeOp
 from openviking.session.memory.utils import (
     generate_uri,
-    is_uri_allowed,
     parse_memory_file_with_fields,
     validate_uri_template,
 )
@@ -141,30 +140,22 @@ class TestUriGeneration:
         with pytest.raises(ValueError, match="has None value"):
             generate_uri(memory_type, {"topic": None})
 
-    def test_generate_uri_makes_windows_unsafe_directory_segment_collision_resistant(self):
-        """The exact #4308 shape is portable without changing the LLM field."""
+    def test_generate_uri_normalizes_dynamic_slash_without_new_hierarchy(self):
         memory_type = MemoryTypeSchema(
             memory_type="events",
-            description="Event memory",
             directory="viking://user/{{ user_space }}/memories/events",
             filename_template="2026/07/30/{{ event_name }}.md",
-            fields=[
-                MemoryField(
-                    name="event_name",
-                    field_type=FieldType.STRING,
-                    merge_op=MergeOp.IMMUTABLE,
-                )
-            ],
         )
-        fields = {"event_name": "Desktop /new report"}
+        fields = {"event_name": "alpha/beta"}
 
         uri = generate_uri(memory_type, fields, user_space="default")
 
-        assert uri == (
-            "viking://user/default/memories/events/2026/07/30/"
-            "Desktop~ov~02970756851a43cf/new report.md"
+        assert (
+            uri
+            == generate_uri(memory_type, {"event_name": "alpha_beta"}, user_space="default")
+            == "viking://user/default/memories/events/2026/07/30/alpha_beta.md"
         )
-        assert fields == {"event_name": "Desktop /new report"}
+        assert fields == {"event_name": "alpha/beta"}
 
     def test_generate_uri_keeps_colliding_windows_names_distinct(self):
         memory_type = MemoryTypeSchema(
@@ -302,86 +293,6 @@ class TestUriGeneration:
         )
 
         assert validate_uri_template(memory_type) is False
-
-
-class TestUriValidation:
-    """Tests for URI validation."""
-
-    def test_is_uri_allowed_by_directory(self):
-        """Test URI allowed by matching directory prefix."""
-        allowed_dirs = {
-            "viking://user/default/memories/preferences",
-            "viking://user/default/memories/tools",
-        }
-        allowed_patterns = set()
-
-        assert (
-            is_uri_allowed(
-                "viking://user/default/memories/preferences/test.md",
-                allowed_dirs,
-                allowed_patterns,
-            )
-            is True
-        )
-
-        assert (
-            is_uri_allowed(
-                "viking://user/default/memories/preferences",
-                allowed_dirs,
-                allowed_patterns,
-            )
-            is True
-        )
-
-        assert (
-            is_uri_allowed(
-                "viking://user/default/memories/preferences/subdir/test.md",
-                allowed_dirs,
-                allowed_patterns,
-            )
-            is True
-        )
-
-    def test_is_uri_allowed_by_pattern(self):
-        """Test URI allowed by matching pattern."""
-        allowed_dirs = set()
-        allowed_patterns = {
-            "viking://user/default/memories/preferences/{{ topic }}.md",
-        }
-
-        assert (
-            is_uri_allowed(
-                "viking://user/default/memories/preferences/Python code style.md",
-                allowed_dirs,
-                allowed_patterns,
-            )
-            is True
-        )
-
-    def test_is_uri_disallowed(self):
-        """Test URI not allowed."""
-        allowed_dirs = {
-            "viking://user/default/memories/preferences",
-        }
-        allowed_patterns = set()
-
-        assert (
-            is_uri_allowed(
-                "viking://user/default/memories/other/test.md",
-                allowed_dirs,
-                allowed_patterns,
-            )
-            is False
-        )
-
-        assert (
-            is_uri_allowed(
-                "viking://user/other/memories/preferences/test.md",
-                allowed_dirs,
-                allowed_patterns,
-            )
-            is False
-        )
 
 
 class TestParseMemoryFileWithFields:

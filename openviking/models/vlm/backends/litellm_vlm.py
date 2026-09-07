@@ -211,6 +211,13 @@ class LiteLLMVLMProvider(VLMBase):
 
         return model
 
+    def resolved_provider(self, model: str | None = None) -> str | None:
+        """Return the provider LiteLLM will route this model to."""
+        resolved_model = self._resolve_model(model or self.model or "")
+        if "/" in resolved_model:
+            return resolved_model.split("/", 1)[0].lower()
+        return self._detected_provider or detect_provider_by_model(resolved_model) or self.provider
+
     def _should_forward_api_key(self, model: str) -> bool:
         if not self.api_key:
             return False

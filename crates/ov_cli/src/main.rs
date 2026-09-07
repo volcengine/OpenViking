@@ -449,10 +449,10 @@ enum Commands {
         /// locally, e.g. --args dry_run:true (supported keys: catalog, dry_run, skip_failed)
         #[arg(long = "args")]
         resource_args: Option<String>,
-        /// Explicit k=v retrieval tag to apply after import. Can be repeated.
-        #[arg(long = "tag", value_name = "k=v", help_heading = "Common options")]
+        /// Comma-separated k=v retrieval tags to apply after import
+        #[arg(long = "tags", value_delimiter = ',', value_name = "k=v", help_heading = "Common options")]
         tags: Vec<String>,
-        /// Tag update mode when --tag is provided
+        /// Tag update mode when --tags is provided
         #[arg(
             long = "tag-mode",
             default_value = "replace",
@@ -523,16 +523,47 @@ enum Commands {
         #[arg(
             long = "node-limit",
             short = 'n',
-            alias = "limit",
             default_value = "256",
             value_parser = clap::value_parser!(i32).range(0..),
             value_name = "n",
             help_heading = "Common options"
         )]
         node_limit: i32,
-        /// Comma-separated fields to display (name,uri,path,type,size,mode,mtime,locked,id,count,abstract)
+        /// Number of visible entries to skip
+        #[arg(
+            long,
+            default_value = "0",
+            value_parser = clap::value_parser!(i32).range(0..),
+            value_name = "n",
+            help_heading = "Common options"
+        )]
+        offset: i32,
+        /// Maximum number of visible entries to return
+        #[arg(
+            long,
+            value_parser = clap::value_parser!(i32).range(1..),
+            value_name = "n",
+            help_heading = "Common options"
+        )]
+        limit: Option<i32>,
+        /// Sort entries by name or modification time
+        #[arg(long, value_parser = ["name", "mtime"], value_name = "field", help_heading = "Common options")]
+        sort_by: Option<String>,
+        /// Sort direction
+        #[arg(
+            long,
+            requires = "sort_by",
+            value_parser = ["asc", "desc"],
+            value_name = "order",
+            help_heading = "Common options"
+        )]
+        sort_order: Option<String>,
+        /// Comma-separated fields to display (name,uri,path,type,size,mode,mtime,locked,id,count,tags,abstract)
         #[arg(short = 'f', long = "fields", value_delimiter = ',', value_name = "FIELDS", help_heading = "Output options")]
         fields: Option<Vec<String>>,
+        /// Comma-separated k=v retrieval tags; all tags must match
+        #[arg(long = "tags", value_delimiter = ',', value_name = "k=v", help_heading = "Common options")]
+        tags: Vec<String>,
     },
     /// [Data] Get directory tree
     Tree {
@@ -555,13 +586,29 @@ enum Commands {
         #[arg(
             long = "node-limit",
             short = 'n',
-            alias = "limit",
             default_value = "256",
             value_parser = clap::value_parser!(i32).range(0..),
             value_name = "n",
             help_heading = "Common options"
         )]
         node_limit: i32,
+        /// Number of visible entries to skip
+        #[arg(
+            long,
+            default_value = "0",
+            value_parser = clap::value_parser!(i32).range(0..),
+            value_name = "n",
+            help_heading = "Common options"
+        )]
+        offset: i32,
+        /// Maximum number of visible entries to return
+        #[arg(
+            long,
+            value_parser = clap::value_parser!(i32).range(1..),
+            value_name = "n",
+            help_heading = "Common options"
+        )]
+        limit: Option<i32>,
         /// Maximum depth level to traverse (default: 3)
         #[arg(
             short = 'L',
@@ -574,9 +621,12 @@ enum Commands {
         /// Simple path output (just paths, no tree formatting)
         #[arg(short, long, help_heading = "Common options")]
         simple: bool,
-        /// Comma-separated fields to display (name,uri,path,type,size,mode,mtime,locked,id,count)
+        /// Comma-separated fields to display (name,uri,path,type,size,mode,mtime,locked,id,count,tags)
         #[arg(short = 'f', long = "fields", value_delimiter = ',', value_name = "FIELDS", help_heading = "Output options")]
         fields: Option<Vec<String>>,
+        /// Comma-separated k=v retrieval tags; all tags must match
+        #[arg(long = "tags", value_delimiter = ',', value_name = "k=v", help_heading = "Common options")]
+        tags: Vec<String>,
     },
     /// [Data] Create directory
     Mkdir {
@@ -607,6 +657,18 @@ enum Commands {
             help_heading = "Common options"
         )]
         timeout: Option<f64>,
+    },
+    /// [Data] Copy a file or directory
+    Cp {
+        /// Source URI
+        #[arg(value_name = "source")]
+        from_uri: String,
+        /// Target URI
+        #[arg(value_name = "target")]
+        to_uri: String,
+        /// Copy a directory recursively
+        #[arg(short, long, help_heading = "Common options")]
+        recursive: bool,
     },
     /// [Data] Move or rename resource
     #[command(alias = "rename")]
@@ -703,6 +765,12 @@ enum Commands {
             help_heading = "Common options"
         )]
         timeout: Option<f64>,
+        /// Comma-separated k=v retrieval tags to write with the content
+        #[arg(long = "tags", value_delimiter = ',')]
+        tags: Vec<String>,
+        /// Tag update mode when --tags is provided
+        #[arg(long = "tag-mode", default_value = "replace", value_parser = ["replace", "append"])]
+        tag_mode: String,
     },
     /// [Data] Update explicit retrieval tags metadata for a file or directory
     #[command(hide = true)]
@@ -914,6 +982,12 @@ enum Commands {
             help_heading = "Advanced options"
         )]
         level_limit: i32,
+        /// Comma-separated k=v retrieval tags; all tags must match
+        #[arg(long = "tags", value_delimiter = ',', value_name = "k=v", help_heading = "Common options")]
+        tags: Vec<String>,
+        /// Fields to include in output (currently: tags)
+        #[arg(short = 'f', long = "fields", value_delimiter = ',', value_name = "FIELDS", help_heading = "Output options")]
+        fields: Option<Vec<String>>,
     },
     /// [Data] Run file glob pattern search
     Glob {
@@ -943,7 +1017,10 @@ enum Commands {
         /// Simple output (one entry per line)
         #[arg(short, long, help_heading = "Common options")]
         simple: bool,
-        /// Comma-separated fields to display (name,uri,path,type,size,mode,mtime,locked,id)
+        /// Comma-separated k=v retrieval tags; all tags must match
+        #[arg(long = "tags", value_delimiter = ',', value_name = "k=v", help_heading = "Common options")]
+        tags: Vec<String>,
+        /// Comma-separated fields to display (name,uri,path,type,size,mode,mtime,locked,id,tags)
         #[arg(short = 'f', long = "fields", value_delimiter = ',', value_name = "FIELDS", help_heading = "Output options")]
         fields: Option<Vec<String>>,
     },
@@ -1197,10 +1274,10 @@ enum Commands {
         /// Preview prune_orphans deletions without mutating vectors
         #[arg(long, help_heading = "Common options")]
         dry_run: bool,
-        /// Explicit k=v retrieval tag for rebuilt vector records. Can be repeated.
-        #[arg(long = "tag", value_name = "k=v", help_heading = "Common options")]
+        /// Comma-separated k=v retrieval tags for rebuilt vector records
+        #[arg(long = "tags", value_delimiter = ',', value_name = "k=v", help_heading = "Common options")]
         tags: Vec<String>,
-        /// Tag update mode when --tag is provided
+        /// Tag update mode when --tags is provided
         #[arg(
             long = "tag-mode",
             default_value = "replace",
@@ -3165,6 +3242,8 @@ async fn main() {
             instruction,
             wait,
             timeout,
+            tags,
+            tag_mode,
             strict_mode,
             ignore_dirs,
             include,
@@ -3173,8 +3252,6 @@ async fn main() {
             watch_interval,
             processing_mode,
             resource_args,
-            tags,
-            tag_mode,
             upload_options,
         } => {
             let ctx =
@@ -3485,17 +3562,57 @@ async fn main() {
             abs_limit,
             all,
             node_limit,
+            offset,
+            limit,
+            sort_by,
+            sort_order,
             fields,
-        } => handlers::handle_ls(uri, simple, recursive, abs_limit, all, node_limit, fields, ctx).await,
+            tags,
+        } => {
+            handlers::handle_ls(
+                uri,
+                simple,
+                recursive,
+                abs_limit,
+                all,
+                node_limit,
+                offset,
+                limit,
+                sort_by,
+                sort_order,
+                fields,
+                tags,
+                ctx,
+            )
+            .await
+        }
         Commands::Tree {
             uri,
             abs_limit,
             all,
             node_limit,
+            offset,
+            limit,
             level_limit,
             simple,
             fields,
-        } => handlers::handle_tree(uri, abs_limit, all, node_limit, level_limit, simple, fields, ctx).await,
+            tags,
+        } => {
+            handlers::handle_tree(
+                uri,
+                abs_limit,
+                all,
+                node_limit,
+                offset,
+                limit,
+                level_limit,
+                simple,
+                fields,
+                tags,
+                ctx,
+            )
+            .await
+        }
         Commands::Mkdir { uri, description } => handlers::handle_mkdir(uri, description, ctx).await,
         Commands::Rm {
             uri,
@@ -3503,6 +3620,11 @@ async fn main() {
             wait,
             timeout,
         } => handlers::handle_rm(uri, recursive, wait, timeout, ctx).await,
+        Commands::Cp {
+            from_uri,
+            to_uri,
+            recursive,
+        } => handlers::handle_cp(from_uri, to_uri, recursive, ctx).await,
         Commands::Mv { from_uri, to_uri } => handlers::handle_mv(from_uri, to_uri, ctx).await,
         Commands::Stat { uri } => handlers::handle_stat(uri, ctx).await,
         Commands::Attrs { action } => match action {
@@ -3612,6 +3734,8 @@ async fn main() {
             wait,
             processing_mode,
             timeout,
+            tags,
+            tag_mode,
         } => {
             let effective_mode = if let Some(m) = mode {
                 m
@@ -3628,6 +3752,8 @@ async fn main() {
                 wait,
                 timeout,
                 processing_mode,
+                tags,
+                tag_mode,
                 ctx,
             )
             .await
@@ -3717,6 +3843,8 @@ async fn main() {
             ignore_case,
             node_limit,
             level_limit,
+            tags,
+            fields,
         } => {
             handlers::handle_grep(
                 uri,
@@ -3725,6 +3853,8 @@ async fn main() {
                 ignore_case,
                 node_limit,
                 level_limit,
+                tags,
+                fields,
                 ctx,
             )
             .await
@@ -3736,7 +3866,8 @@ async fn main() {
             node_limit,
             simple,
             fields,
-        } => handlers::handle_glob(pattern, uri, node_limit, simple, fields, ctx).await,
+            tags,
+        } => handlers::handle_glob(pattern, uri, node_limit, simple, fields, tags, ctx).await,
     };
 
     if let Err(e) = result {
@@ -3791,6 +3922,42 @@ mod tests {
         assert_eq!(cli.account.as_deref(), Some("acme"));
         assert_eq!(cli.user.as_deref(), Some("alice"));
         assert_eq!(cli.actor_peer_id.as_deref(), Some("peer-a"));
+    }
+
+    #[test]
+    fn cli_parses_copy_recursive_flag() {
+        let file = Cli::try_parse_from([
+            "ov",
+            "cp",
+            "viking://resources/a.md",
+            "viking://resources/b.md",
+        ])
+        .expect("file copy should parse");
+        match file.command {
+            Commands::Cp {
+                from_uri,
+                to_uri,
+                recursive,
+            } => {
+                assert_eq!(from_uri, "viking://resources/a.md");
+                assert_eq!(to_uri, "viking://resources/b.md");
+                assert!(!recursive);
+            }
+            _ => panic!("expected cp command"),
+        }
+
+        let directory = Cli::try_parse_from([
+            "ov",
+            "cp",
+            "-r",
+            "viking://resources/src",
+            "viking://resources/dst",
+        ])
+        .expect("recursive directory copy should parse");
+        match directory.command {
+            Commands::Cp { recursive, .. } => assert!(recursive),
+            _ => panic!("expected cp command"),
+        }
     }
 
     #[test]
@@ -4039,8 +4206,61 @@ mod tests {
     #[test]
     fn server_commands_require_existing_cli_config() {
         let cli = Cli::try_parse_from(["ov", "ls"]).expect("ls should parse");
+        let paged_ls = Cli::try_parse_from([
+            "ov",
+            "ls",
+            "--offset",
+            "4",
+            "--limit",
+            "5",
+            "--sort-by",
+            "mtime",
+            "--sort-order",
+            "desc",
+        ])
+        .expect("paged ls should parse");
+        let paged_tree = Cli::try_parse_from([
+            "ov",
+            "tree",
+            "viking://resources",
+            "--offset",
+            "6",
+            "--limit",
+            "7",
+        ])
+        .expect("paged tree should parse");
         let health = Cli::try_parse_from(["ov", "health"]).expect("health should parse");
 
+        match paged_ls.command {
+            Commands::Ls {
+                offset,
+                limit,
+                sort_by,
+                sort_order,
+                node_limit,
+                ..
+            } => {
+                assert_eq!(offset, 4);
+                assert_eq!(limit, Some(5));
+                assert_eq!(sort_by.as_deref(), Some("mtime"));
+                assert_eq!(sort_order.as_deref(), Some("desc"));
+                assert_eq!(node_limit, 256);
+            }
+            _ => panic!("expected ls command"),
+        }
+        match paged_tree.command {
+            Commands::Tree {
+                offset,
+                limit,
+                node_limit,
+                ..
+            } => {
+                assert_eq!(offset, 6);
+                assert_eq!(limit, Some(7));
+                assert_eq!(node_limit, 256);
+            }
+            _ => panic!("expected tree command"),
+        }
         assert!(cli.command.requires_cli_config_file());
         assert!(health.command.requires_cli_config_file());
     }
@@ -4536,10 +4756,8 @@ mod tests {
             "ov",
             "add-resource",
             "./README.md",
-            "--tag",
-            "team=search",
-            "--tag",
-            "env=test",
+            "--tags",
+            "team=search,env=test",
             "--tag-mode",
             "append",
         ])
@@ -4912,6 +5130,32 @@ mod tests {
                 Cli::try_parse_from(&args).is_ok(),
                 "{args:?} should accept a positive node limit"
             );
+        }
+
+        for prefix in [
+            vec!["ov", "ls", "--limit"],
+            vec!["ov", "tree", "viking://resources", "--limit"],
+        ] {
+            let mut zero_args = prefix.clone();
+            zero_args.push("0");
+            assert!(Cli::try_parse_from(&zero_args).is_err());
+
+            let mut positive_args = prefix;
+            positive_args.push("1");
+            assert!(Cli::try_parse_from(&positive_args).is_ok());
+        }
+
+        for prefix in [
+            vec!["ov", "ls", "--offset"],
+            vec!["ov", "tree", "viking://resources", "--offset"],
+        ] {
+            let mut negative_args = prefix.clone();
+            negative_args.push("-1");
+            assert!(Cli::try_parse_from(&negative_args).is_err());
+
+            let mut zero_args = prefix;
+            zero_args.push("0");
+            assert!(Cli::try_parse_from(&zero_args).is_ok());
         }
     }
 
@@ -5511,7 +5755,7 @@ mod tests {
             "prune_orphans",
             "--wait=false",
             "--dry-run",
-            "--tag",
+            "--tags",
             "team=search",
             "--tag-mode",
             "append",

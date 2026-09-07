@@ -808,6 +808,12 @@ The `grep()` method performs regex pattern matching search in the file system, u
 | exclude_uri | str | No | None | URI prefix to exclude from search |
 | node_limit | int | No | 256 | Maximum number of results. Omitted requests default to 256; pass a larger integer when you need more results |
 | level_limit | int | No | Python SDK: 5; HTTP API / CLI / Go SDK: 10 | Maximum directory depth to traverse. The Go SDK currently uses the HTTP API default. |
+| tags | string[] | No | Unset | Search only files matching every supplied `k=v` retrieval tag |
+| include_tags | bool | No | `false` | Include each matched file's retrieval tags without filtering |
+
+`tags` uses AND semantics and filters candidate files before content matching and `node_limit` truncation. For example, `["team=search", "env=prod"]` matches only files carrying both tags.
+
+Entries in `matches` include `tags` when `tags` filtering is used or `include_tags=true` is requested; files without retrieval tags then return an empty array (`[]`). Plain grep omits `tags` to avoid an unnecessary VectorDB read.
 
 #### 3. Usage Examples
 
@@ -824,7 +830,8 @@ curl -X POST http://localhost:1933/api/v1/search/grep \
     -d '{
         "uri": "viking://resources",
         "pattern": "authentication",
-        "case_insensitive": true
+        "case_insensitive": true,
+        "tags": ["team=search", "env=prod"]
     }'
 ```
 
@@ -841,6 +848,7 @@ results = client.grep(
     pattern="authentication",
     case_insensitive=True,
     node_limit=1024,
+    tags=["team=search", "env=prod"],
 )
 
 print(f"Found {results['count']} matches")
@@ -852,7 +860,9 @@ for match in results['matches']:
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.grep("viking://resources/docs/", "authentication"));
+console.log(await client.grep("viking://resources/docs/", "authentication", {
+  tags: ["team=search", "env=prod"],
+}));
 ```
 
 **Go SDK**
@@ -862,6 +872,7 @@ nodeLimit := 1024
 result, err := client.Grep(ctx, "viking://resources", "authentication", &openviking.GrepOptions{
     CaseInsensitive: true,
     NodeLimit:       &nodeLimit,
+    Tags:            []string{"team=search", "env=prod"},
 })
 if err != nil {
     return err
@@ -880,7 +891,15 @@ openviking grep "authentication" --uri viking://resources --ignore-case
 
 # Specify depth limit
 openviking grep "TODO" --uri viking://resources --level-limit 3
+
+# Search only files carrying every tag
+openviking grep "TODO" --uri viking://resources --tags team=search,env=prod
+
+# Include tags in human-readable results without filtering
+openviking grep "TODO" --uri viking://resources --fields tags
 ```
+
+For HTTP `POST /api/v1/search/grep`, set `include_tags: true` to include tags without filtering. A request with `tags` always returns tags for the matched files.
 
 **Response Example**
 
@@ -892,7 +911,8 @@ openviking grep "TODO" --uri viking://resources --level-limit 3
             {
                 "uri": "viking://resources/docs/auth.md",
                 "line": 15,
-                "content": "User authentication is handled by..."
+                "content": "User authentication is handled by...",
+                "tags": ["team=search", "env=prod"]
             }
         ],
         "count": 1
@@ -932,6 +952,10 @@ The `glob()` method uses file wildcard pattern matching URIs, similar to Unix sh
 | uri | str | No | "viking://" | Starting URI |
 | node_limit | int | No | 256 | Maximum number of matches to return. Omitted requests default to 256; pass a larger integer when you need more results |
 | extra_fields | list[str] | No | None | Extra fields to include per match. Recognized names: `name`, `uri`, `path`, `type`, `size`, `mode`, `mtime`, `locked`, `id`. When omitted, the response contains URI strings only; when provided, `result.matches` becomes a list of entry objects |
+| tags | string[] | No | Unset | Retain only matches that have every supplied `k=v` retrieval tag |
+| include_tags | bool | No | `false` | Return retrieval tags for each match without filtering |
+
+`tags` uses AND semantics and is applied before `node_limit`. A tagged or `include_tags=true` request returns entry objects with a `tags` array; ordinary glob requests retain URI-string results and do not read tags from VectorDB.
 
 #### 3. Usage Examples
 
@@ -948,7 +972,8 @@ curl -X POST http://localhost:1933/api/v1/search/glob \
     -d '{
         "pattern": "**/*.md",
         "uri": "viking://resources",
-        "extra_fields": ["name", "size", "mtime"]
+        "tags": ["team=search", "env=prod"],
+        "include_tags": true
     }'
 ```
 
@@ -968,20 +993,21 @@ for uri in results['matches']:
 
 # Find all Python files with extra stat fields
 results = client.glob(
-    pattern="**/*.py",
+    pattern="**/*.md",
     uri="viking://resources",
-    node_limit=1024,
-    extra_fields=["name", "size", "mtime", "mode"],
+    tags=["team=search", "env=prod"],
 )
-print(f"Found {results['count']} Python files")
+print(f"Found {results['count']} tagged markdown files")
 for entry in results['matches']:
-    print(f"  {entry['name']}  {entry['size']}  {entry['mtime']}")
+    print(f"  {entry['uri']}  {entry['tags']}")
 ```
 
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.glob("**/*.md", "viking://resources/docs/"));
+console.log(await client.glob("**/*.md", "viking://resources/docs/", {
+  tags: ["team=search", "env=prod"],
+}));
 ```
 
 **Go SDK**
@@ -989,6 +1015,7 @@ console.log(await client.glob("**/*.md", "viking://resources/docs/"));
 ```go
 result, err := client.Glob(ctx, "**/*.md", "viking://resources", &openviking.GlobOptions{
     NodeLimit: openviking.Int(1024),
+    Tags:      []string{"team=search", "env=prod"},
 })
 if err != nil {
     return err
@@ -1004,6 +1031,10 @@ openviking glob "**/*.md" --uri viking://resources
 
 # Find all Python files
 openviking glob "**/*.py"
+
+# Filter by all tags, or project tags without filtering
+openviking glob "**/*.md" --tags team=search,env=prod
+openviking glob "**/*.md" -f tags
 
 # Table output with extra fields (ps -o style -f)
 openviking glob "**/*.py" -f name,size,mtime,mode

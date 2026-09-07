@@ -483,17 +483,19 @@ def test_add_resource_message_round_trips_processing_mode():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("source", "preflight_name"),
+    ("source", "preflight_name", "internal_task"),
     [
-        ("https://example.larkoffice.com/docx/doxcnToken", None),
-        ("https://example.larkoffice.com/sheets/shtcnToken", "Sheet Title"),
-        ("https://example.larkoffice.com/base/appToken?table=tblSales", "tblSales"),
+        ("https://example.larkoffice.com/docx/doxcnToken", None, False),
+        ("https://example.larkoffice.com/sheets/shtcnToken", "Sheet Title", False),
+        ("https://example.larkoffice.com/base/appToken?table=tblSales", "tblSales", False),
+        ("https://example.larkoffice.com/docx/doxcnToken", None, True),
     ],
 )
 async def test_uat_producer_payload_reaches_worker_without_persisting_token(
     monkeypatch,
     source,
     preflight_name,
+    internal_task,
 ):
     root_uri = "viking://resources/lark/doxcnToken"
     submit_understanding = AsyncMock(return_value="response-1")
@@ -564,16 +566,18 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(
         wait=False,
         allow_local_path_resolution=False,
         args={"feishu_access_token": "u-secret", "custom_option": "forwarded"},
+        internal_task=internal_task,
     )
 
-    expected_initial = {"status": "success", "task_id": "task-1"}
+    expected_initial = {"status": "success", "task_id": "task-1", "source_path": source}
     if preflight_name:
         expected_initial["root_uri"] = root_uri
     assert initial_result == expected_initial
     assert task_tracker.create.await_args.kwargs["resource_id"] == (
         None if preflight_name is None else root_uri
     )
-    assert task_tracker.create.await_args.kwargs["meta"] == {"source_path": source}
+    expected_meta = {"internal": True} if internal_task else {"source_path": source}
+    assert task_tracker.create.await_args.kwargs["meta"] == expected_meta
     submit_understanding.assert_awaited_once_with(
         source,
         feishu_access_token="u-secret",
@@ -1021,6 +1025,7 @@ async def test_add_resource_processor_persists_final_uri_and_cleans_staged_sourc
     msg = AddResourceMsg(
         task_id="task-1",
         path="https://example.larkoffice.com/docx/doxcnToken",
+        source_path="https://storage.example/document.md?X-Signature=secret",
         root_uri="viking://resources/lark/doxcnToken",
         account_id="account-1",
         user_id="user-1",
@@ -1055,7 +1060,7 @@ async def test_add_resource_processor_persists_final_uri_and_cleans_staged_sourc
         account_id="account-1",
         user_id="user-1",
         task_id="task-1",
-        meta={"source_path": "", "internal": True},
+        meta={"internal": True},
     )
     assert task_tracker.complete.await_count == 2
     first_complete = task_tracker.complete.await_args_list[0]

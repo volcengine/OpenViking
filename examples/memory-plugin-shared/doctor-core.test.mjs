@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   assessProbes,
   assessReady,
+  checkWorkspace,
   classifyFetchError,
   createReport,
   describeApiKey,
@@ -16,6 +17,7 @@ import {
   readyCheckState,
   scanDebugLog,
   unknownOvcliKeys,
+  WORKSPACE_PEER_HINT,
 } from "./lib/doctor-core.mjs";
 
 const b64 = (s) => Buffer.from(s).toString("base64url");
@@ -190,4 +192,31 @@ test("assessProbes recognises the docker pending-config stub", () => {
   const problem = report.problems()[0];
   assert.match(problem.title, /docker container is up but has no ov\.conf/);
   assert.match(problem.detail, /mount ~\/\.openviking on the host/);
+});
+
+test("checkWorkspace tells a directory that is no workspace what to create", () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "ov-doctor-ws-")));
+  const env = { HOME: "/nonexistent-home", OPENVIKING_STATE_DIR: join(dir, ".state") };
+
+  const report = createReport();
+  const summary = checkWorkspace(report, { cwd: dir, env });
+  assert.equal(summary.root, "");
+  const text = report.render();
+  assert.match(text, /not a workspace:/);
+  assert.match(text, /user-level space/);
+  assert.ok(text.includes(WORKSPACE_PEER_HINT), "the report carries the same snippet the docs do");
+  assert.ok(!text.includes("ov workspace"), "there is no such command to point at");
+
+  // A marker file makes it one, without a repository underneath — and the walk
+  // finds it from a subdirectory, which is what used to crash on `git.kind`.
+  mkdirSync(join(dir, ".openviking"), { recursive: true });
+  writeFileSync(join(dir, ".openviking", "config.json"), '{"version":1,"peer":{"id":"demo"}}');
+  const deep = join(dir, "src");
+  mkdirSync(deep, { recursive: true });
+
+  const marked = createReport();
+  const found = checkWorkspace(marked, { cwd: deep, env });
+  assert.equal(found.root, dir);
+  assert.equal(found.rootKind, "config");
+  assert.match(marked.render(), /workspace {2}/);
 });

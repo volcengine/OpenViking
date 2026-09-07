@@ -94,20 +94,44 @@ function normalizeAuthMode(val) {
   return ["trusted", "api_key"].includes(mode) ? mode : "";
 }
 
-export function loadConfig() {
+/**
+ * `cwd` selects the workspace layer (`.openviking/config.json` and the registry
+ * entry for that directory). It defaults to this process's directory, which is
+ * all a hook knows at module load; a hook whose payload names the session's
+ * directory calls this again with it. Re-resolving that late is safe because a
+ * workspace file may not carry connection or credential keys, so baseUrl/apiKey
+ * cannot move — loggers and fetch helpers built from the first load stay valid.
+ */
+export function loadConfig(cwd = process.cwd()) {
   const creds = resolveOpenVikingCredentials();
   const { cliPath, ovFile, ovPath } = creds;
   const configPath = cliPath || ovPath || null;
 
   // ovcli.conf plugin.<harness> overrides plugin.* which overrides ov.conf's
   // codex section, so client-side tuning no longer needs a server config.
-  const cx = { ...(ovFile.codex || {}), ...loadPluginSettings(HARNESS_KEYS.codex) };
+  const workspaceCwd = str(cwd, "") || process.cwd();
+  const pluginSettings = loadPluginSettings(HARNESS_KEYS.codex, process.env, { cwd: workspaceCwd });
+  const cx = { ...(ovFile.codex || {}), ...pluginSettings };
   const server = ovFile.server || {};
   const explicitAuthMode = normalizeAuthMode(process.env.OPENVIKING_AUTH_MODE)
     || normalizeAuthMode(cx.authMode)
     || normalizeAuthMode(cx.auth_mode)
     || normalizeAuthMode(server.auth_mode);
   const authMode = explicitAuthMode || ((creds.account || creds.user) ? "trusted" : "api_key");
+
+  // A workspace file's `peer.id` (and ovcli.conf's plugin.codex.peerId) is
+  // projected into pluginSettings; reading only the credential chain dropped it.
+  // A repository's pin is the more specific answer, so it outranks the file peer
+  // that chain ends in — but not OPENVIKING_PEER_ID, and not a credential source
+  // pinned to ovcli.conf, where env peers are meant not to apply. ov.conf's
+  // codex.peerId stays where it was, behind ovcli.conf, inside creds.peerId.
+  const envPeerId = creds.credentialSource === "ovcli"
+    ? null
+    : str(process.env.OPENVIKING_PEER_ID, null);
+  const peerId = envPeerId
+    || str(pluginSettings.peerId, null)
+    || str(pluginSettings.peer_id, null)
+    || creds.peerId;
 
   const debug = envBool("OPENVIKING_DEBUG") ?? (cx.debug === true);
   const defaultLogPath = join(homedir(), ".openviking", "logs", "codex-hooks.log");
@@ -166,8 +190,10 @@ export function loadConfig() {
     apiKey: creds.apiKey,
     account: creds.account,
     user: creds.user,
-    peerId: creds.peerId,
+    peerId,
     workspacePeer,
+    peerSource: str(process.env.OPENVIKING_PEER_SOURCE, null) ?? cx.peerSource,
+    harness: "codex",
     userAgent: USER_AGENT,
     timeoutMs,
     recallTimeoutMs,

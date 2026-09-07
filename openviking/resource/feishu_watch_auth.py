@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
+import httpx
+
 FEISHU_AUTH_PROVIDER = "feishu"
 FEISHU_ACCESS_TOKEN_ARG = "feishu_access_token"
 FEISHU_REFRESH_TOKEN_ARG = "feishu_refresh_token"
@@ -17,6 +19,8 @@ FEISHU_APP_ID_ARG = "feishu_app_id"
 FEISHU_APP_SECRET_ARG = "feishu_app_secret"
 FEISHU_REFRESH_GRANT_TYPE = "refresh_token"
 FEISHU_REFRESH_SKEW = timedelta(minutes=5)
+FEISHU_OAUTH_TOKEN_URL = "https://accounts.feishu.cn/oauth/v3/token"
+LARK_OAUTH_TOKEN_URL = "https://accounts.larksuite.com/oauth/v3/token"
 
 
 @dataclass(frozen=True)
@@ -135,7 +139,7 @@ def apply_feishu_refreshed_token(
 
 
 class FeishuOAuthClient:
-    """Small wrapper around lark-oapi user and tenant token operations."""
+    """Small wrapper around Feishu/Lark user and tenant token operations."""
 
     def __init__(self, credentials: FeishuAppCredentials):
         self._credentials = credentials
@@ -195,6 +199,70 @@ class FeishuOAuthClient:
         return await asyncio.to_thread(self._refresh_user_access_token_sync, refresh_token.strip())
 
     def _refresh_user_access_token_sync(self, refresh_token: str) -> FeishuRefreshedToken:
+        if refresh_token.count(".") != 2:
+            return self._refresh_legacy_user_access_token_sync(refresh_token)
+
+        try:
+            response = httpx.post(
+                (
+                    LARK_OAUTH_TOKEN_URL
+                    if "larksuite.com" in self._credentials.domain.lower()
+                    else FEISHU_OAUTH_TOKEN_URL
+                ),
+                data={
+                    "grant_type": FEISHU_REFRESH_GRANT_TYPE,
+                    "client_id": self._credentials.app_id,
+                    "client_secret": self._credentials.app_secret,
+                    "refresh_token": refresh_token,
+                },
+                timeout=self._credentials.request_timeout,
+            )
+            payload = response.json()
+        except Exception as exc:
+            raise FeishuTokenRefreshError(
+                f"Failed to refresh Feishu user token: {exc}",
+                permanent=False,
+            ) from exc
+
+        if not isinstance(payload, dict):
+            raise FeishuTokenRefreshError(
+                "Feishu user token refresh response is not an object.",
+                permanent=False,
+            )
+
+        code = payload.get("code")
+        if response.status_code >= 400 or payload.get("error") or code not in (None, 0):
+            msg = str(
+                payload.get("error_description")
+                or payload.get("msg")
+                or payload.get("message")
+                or payload.get("error")
+                or f"HTTP {response.status_code}"
+            )
+            raise FeishuTokenRefreshError(
+                f"Feishu user token refresh failed: code={code}, msg={msg}",
+                permanent=_is_permanent_refresh_error(code, msg),
+            )
+
+        access_token = payload.get("access_token")
+        new_refresh_token = payload.get("refresh_token")
+        expires_in = payload.get("expires_in")
+        access_token = access_token.strip() if isinstance(access_token, str) else ""
+        new_refresh_token = new_refresh_token.strip() if isinstance(new_refresh_token, str) else ""
+        if not access_token or not new_refresh_token or not isinstance(expires_in, int):
+            raise FeishuTokenRefreshError(
+                "Feishu user token refresh response is missing access_token, "
+                "refresh_token, or expires_in.",
+                permanent=False,
+            )
+
+        return FeishuRefreshedToken(
+            access_token=access_token,
+            refresh_token=new_refresh_token,
+            expires_in=expires_in,
+        )
+
+    def _refresh_legacy_user_access_token_sync(self, refresh_token: str) -> FeishuRefreshedToken:
         try:
             from lark_oapi.api.authen.v1 import (
                 CreateRefreshAccessTokenRequest,
@@ -202,7 +270,7 @@ class FeishuOAuthClient:
             )
         except ImportError as exc:
             raise FeishuTokenRefreshError(
-                "lark-oapi is required to refresh Feishu user tokens. "
+                "lark-oapi is required to refresh legacy Feishu user tokens. "
                 "Install it with: pip install lark-oapi>=1.0.0",
                 permanent=True,
             ) from exc
@@ -217,7 +285,6 @@ class FeishuOAuthClient:
             )
             .build()
         )
-
         try:
             response = self._get_client().authen.v1.refresh_access_token.create(request)
         except FeishuTokenRefreshError:
@@ -238,7 +305,7 @@ class FeishuOAuthClient:
 
         data = getattr(response, "data", None)
         access_token = (getattr(data, "access_token", None) or "").strip()
-        new_refresh_token = (getattr(data, "refresh_token", None) or refresh_token).strip()
+        new_refresh_token = (getattr(data, "refresh_token", None) or "").strip()
         expires_in = getattr(data, "expires_in", None)
         if not access_token or not new_refresh_token or not isinstance(expires_in, int):
             raise FeishuTokenRefreshError(
@@ -259,7 +326,7 @@ class FeishuOAuthClient:
                 import lark_oapi as lark
             except ImportError as exc:
                 raise FeishuTokenRefreshError(
-                    "lark-oapi is required to refresh Feishu user tokens. "
+                    "lark-oapi is required to refresh legacy Feishu user tokens. "
                     "Install it with: pip install lark-oapi>=1.0.0",
                     permanent=True,
                 ) from exc

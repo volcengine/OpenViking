@@ -7,8 +7,67 @@ use super::{
 use async_trait::async_trait;
 use bytes::Bytes;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CacheOperation {
+    Get,
+    Set,
+    Del,
+    Mget,
+    Mset,
+    IncrBy,
+    Sismember,
+    Smembers,
+    Scard,
+    Lpush,
+    Rpush,
+    Lpop,
+    Rpop,
+    Llen,
+    Lrange,
+    Lindex,
+    Lset,
+    Ltrim,
+    Lrem,
+    Linsert,
+    Lmove,
+    ExecuteScript,
+}
+
+impl CacheOperation {
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Get => "get",
+            Self::Set => "set",
+            Self::Del => "del",
+            Self::Mget => "mget",
+            Self::Mset => "mset",
+            Self::IncrBy => "incrby",
+            Self::Sismember => "sismember",
+            Self::Smembers => "smembers",
+            Self::Scard => "scard",
+            Self::Lpush => "lpush",
+            Self::Rpush => "rpush",
+            Self::Lpop => "lpop",
+            Self::Rpop => "rpop",
+            Self::Llen => "llen",
+            Self::Lrange => "lrange",
+            Self::Lindex => "lindex",
+            Self::Lset => "lset",
+            Self::Ltrim => "ltrim",
+            Self::Lrem => "lrem",
+            Self::Linsert => "linsert",
+            Self::Lmove => "lmove",
+            Self::ExecuteScript => "execute_script",
+        }
+    }
+}
+
 #[async_trait]
 pub(crate) trait CacheProvider: Send + Sync {
+    fn validate_operations(&self, _operations: &[CacheOperation]) -> CacheResult<()> {
+        Ok(())
+    }
+
     async fn get(&self, key: &str) -> CacheResult<Option<Bytes>>;
     async fn set(&self, key: &str, value: Bytes, options: SetOptions) -> CacheResult<SetResult>;
     async fn del(&self, keys: &[String]) -> CacheResult<u64>;

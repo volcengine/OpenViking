@@ -25,6 +25,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.session.auto_commit_policy import AutoCommitPolicy
 from openviking.session.memory.constants import AGENT_EVOLUTION_MEMORY_TYPES
 from openviking.session.memory_policy import MemoryPolicy
+from openviking.session.memory.utils.language import resolve_output_language_from_conversation
 from openviking.session.retention import (
     RETENTION_MODE_TURN_BUDGET,
     RetentionPlan,
@@ -78,6 +79,39 @@ _AGENT_TRAINING_REQUIRED_MEMORY_TYPES = frozenset({"experiences"})
 _SESSION_PHASE1_LOCK_TIMEOUT_SECONDS = 30.0
 _MEMORY_STEP_NAMES = ("long_term",)
 _CUMULATIVE_CHECKPOINT_VERSION = 2
+# Match inline image transports emitted inside coding-agent tool output.
+_INLINE_IMAGE_DATA_URL_RE = re.compile(
+    r"data:(image/[a-z0-9.+-]+)(?:;[^;,\s\"'\\]+)*;base64,([a-z0-9+/_=-]+)",
+    re.IGNORECASE,
+)
+_B64_JSON_RE = re.compile(
+    r"(([\"'])b64_json\2\s*:\s*)([\"'])([a-z0-9+/_=-]+)\3",
+    re.IGNORECASE,
+)
+
+
+def _inline_image_placeholder(mime: str, base64_chars: int) -> str:
+    return f"[OpenViking inline image omitted: mime={mime}, base64_chars={base64_chars}]"
+
+
+def _redact_inline_images(text: str) -> str:
+    def replace_data_url(match: re.Match[str]) -> str:
+        return _inline_image_placeholder(match.group(1), len(match.group(2)))
+
+    def replace_b64_json(match: re.Match[str]) -> str:
+        quote = match.group(3)
+        placeholder = _inline_image_placeholder("image/*", len(match.group(4)))
+        return f"{match.group(1)}{quote}{placeholder}{quote}"
+
+    return _B64_JSON_RE.sub(replace_b64_json, _INLINE_IMAGE_DATA_URL_RE.sub(replace_data_url, text))
+
+
+def _redact_inline_images_from_tool_outputs(messages: List[Message]) -> List[Message]:
+    for message in messages:
+        for part in message.parts:
+            if isinstance(part, ToolPart):
+                part.tool_output = _redact_inline_images(part.tool_output or "")
+    return messages
 
 
 def _publish_telemetry_summary_best_effort(snapshot: Any) -> None:
@@ -728,16 +762,21 @@ class Session:
         # counter stays consistent across restarts and is also backfilled for
         # legacy sessions whose .meta.json predates these fields. O(n) once,
         # subsequent add_message() maintains it in O(1).
-        self._rebuild_pending_tokens()
+        await self._rebuild_pending_tokens()
 
         self._loaded = True
 
-    def _rebuild_pending_tokens(self) -> None:
+    async def _rebuild_pending_tokens(self) -> None:
         """Recompute ``pending_tokens`` from the current message list.
 
-        Used on load and as a safety net after rollbacks. Respects the
-        currently remembered ``keep_recent_count`` from meta.
+        Used on load, turn-budget appends, and recovery. Respects the current
+        retention settings from meta.
         """
+        pending_tokens = await asyncio.to_thread(self._calculate_pending_tokens)
+        self._meta.pending_tokens = max(0, pending_tokens)
+
+    def _calculate_pending_tokens(self) -> int:
+        """Calculate pending tokens without mutating session state."""
         if (
             self._meta.retention_mode == RETENTION_MODE_TURN_BUDGET
             and self._meta.keep_recent_turn_count > 0
@@ -750,30 +789,24 @@ class Session:
                 min_raw_tail_steps=self._meta.min_raw_tail_steps,
             )
             retained_ids = {message.id for message in plan.retained_messages}
-            self._meta.pending_tokens = sum(
+            return sum(
                 int(message.estimated_tokens or 0)
                 for message in plan.archive_messages
                 if message.id not in retained_ids
             )
-            self._meta.pending_tokens = max(0, self._meta.pending_tokens)
-            return
 
         keep = max(0, int(self._meta.keep_recent_count or 0))
         total = len(self._messages)
         if keep <= 0:
-            self._meta.pending_tokens = sum(int(m.estimated_tokens or 0) for m in self._messages)
-        elif total > keep:
-            self._meta.pending_tokens = sum(
-                int(m.estimated_tokens or 0) for m in self._messages[: total - keep]
-            )
-        else:
-            self._meta.pending_tokens = 0
-        self._meta.pending_tokens = max(0, self._meta.pending_tokens)
+            return sum(int(m.estimated_tokens or 0) for m in self._messages)
+        if total > keep:
+            return sum(int(m.estimated_tokens or 0) for m in self._messages[: total - keep])
+        return 0
 
     async def exists(self) -> bool:
         """Check whether this session already exists in storage."""
         try:
-            await self._viking_fs.stat(self._session_uri, ctx=self.ctx)
+            await self._viking_fs.stat(self._session_uri, ctx=self.ctx, skip_count=True)
             return True
         except Exception as exc:
             if not _is_storage_not_found(exc):
@@ -922,11 +955,11 @@ class Session:
         self,
         messages: List[Message],
     ) -> List[Message]:
-        """Return a memory-only copy with externalized tool outputs restored."""
+        """Return a sanitized memory-only copy with externalized tool outputs restored."""
         hydrated = [Message.from_dict(m.to_dict()) for m in messages]
         store = self._tool_result_store()
         if not store:
-            return hydrated
+            return _redact_inline_images_from_tool_outputs(hydrated)
 
         for msg in hydrated:
             for part in msg.parts:
@@ -967,7 +1000,7 @@ class Session:
                     continue
                 part.tool_output = result.get("content", "")
 
-        return hydrated
+        return _redact_inline_images_from_tool_outputs(hydrated)
 
     def _effective_tool_preview_chars(
         self,
@@ -1262,7 +1295,7 @@ class Session:
         if not messages:
             return
         if not self._viking_fs:
-            self._apply_appended_messages_to_state(messages)
+            await self._apply_appended_messages_to_state(messages)
             return
 
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
@@ -1290,7 +1323,7 @@ class Session:
                 # append. Message correctness remains rooted in messages.jsonl.
                 self._meta = in_memory_meta
 
-            self._apply_appended_messages_to_state(messages)
+            await self._apply_appended_messages_to_state(messages)
             batch_content = "".join(message.to_jsonl() + "\n" for message in messages)
             if live_messages_missing:
                 await self._viking_fs.write_file(
@@ -1308,7 +1341,7 @@ class Session:
         finally:
             await self._viking_fs._async_agfs.pathlock_release(lease)
 
-    def _apply_appended_messages_to_state(self, messages: List[Message]) -> None:
+    async def _apply_appended_messages_to_state(self, messages: List[Message]) -> None:
         """Update in-memory counters after an authoritative root reload."""
         for msg in messages:
             self._messages.append(msg)
@@ -1327,7 +1360,7 @@ class Session:
                     self._meta.pending_tokens += int(pushed_out.estimated_tokens or 0)
 
         if self._meta.retention_mode == RETENTION_MODE_TURN_BUDGET:
-            self._rebuild_pending_tokens()
+            await self._rebuild_pending_tokens()
 
         self._meta.message_count = len(self._messages)
         if self._meta.total_message_count is not None:
@@ -1771,7 +1804,7 @@ class Session:
                 self._archive_index_from_uri(archive_uri),
             )
             self._meta.last_commit_at = get_current_timestamp()
-            self._rebuild_pending_tokens()
+            await self._rebuild_pending_tokens()
             await self._save_meta()
             await self._write_phase1_ready_marker(archive_uri)
             logger.warning("Recovered interrupted Session Phase 1: %s", archive_uri)
@@ -2074,42 +2107,50 @@ class Session:
             )
             phase1_stage = "phase1_persist"
             try:
-                await self._write_phase1_marker(
-                    archive_uri,
-                    queue_message=queue_msg.to_dict(),
-                    original_messages=original_messages,
-                    archived_messages=messages_to_archive,
-                    retained_messages=retained_messages,
-                    keep_recent_count=keep_recent_count,
-                    retention_mode=retention_mode,
-                    keep_recent_turn_count=effective_keep_turns if turn_mode else 0,
-                    retained_message_token_budget=effective_token_budget if turn_mode else 0,
-                    min_raw_tail_steps=effective_min_tail,
-                    agent_evolution_enabled=agent_evolution_enabled,
-                    agent_memory_skip_reason=agent_memory_skip_reason,
-                )
-
-                # Archive raw remains durable and recoverable before any live
-                # conversation history is removed from the root JSONL.
+                archive_persist_tasks = [
+                    self._write_phase1_marker(
+                        archive_uri,
+                        queue_message=queue_msg.to_dict(),
+                        original_messages=original_messages,
+                        archived_messages=messages_to_archive,
+                        retained_messages=retained_messages,
+                        keep_recent_count=keep_recent_count,
+                        retention_mode=retention_mode,
+                        keep_recent_turn_count=effective_keep_turns if turn_mode else 0,
+                        retained_message_token_budget=effective_token_budget if turn_mode else 0,
+                        min_raw_tail_steps=effective_min_tail,
+                        agent_evolution_enabled=agent_evolution_enabled,
+                        agent_memory_skip_reason=agent_memory_skip_reason,
+                    )
+                ]
                 if self._viking_fs:
                     lines = [m.to_jsonl() for m in messages_to_archive]
-                    await self._viking_fs.write_file(
-                        uri=f"{archive_uri}/messages.jsonl",
-                        content="\n".join(lines) + "\n",
-                        ctx=self.ctx,
-                    )
-                    if retention_plan is not None:
-                        await self._merge_archive_meta(
-                            archive_uri,
-                            {
-                                "retention_plan": self._retention_plan_meta(
-                                    retention_plan,
-                                    keep_recent_turn_count=effective_keep_turns,
-                                    retained_message_token_budget=effective_token_budget,
-                                    min_raw_tail_steps=effective_min_tail,
-                                )
-                            },
+                    archive_persist_tasks.append(
+                        self._viking_fs.write_file(
+                            uri=f"{archive_uri}/messages.jsonl",
+                            content="\n".join(lines) + "\n",
+                            ctx=self.ctx,
                         )
+                    )
+                archive_persist_results = await asyncio.gather(
+                    *archive_persist_tasks,
+                    return_exceptions=True,
+                )
+                for result in archive_persist_results:
+                    if isinstance(result, BaseException):
+                        raise result
+                if retention_plan is not None:
+                    await self._merge_archive_meta(
+                        archive_uri,
+                        {
+                            "retention_plan": self._retention_plan_meta(
+                                retention_plan,
+                                keep_recent_turn_count=effective_keep_turns,
+                                retained_message_token_budget=effective_token_budget,
+                                min_raw_tail_steps=effective_min_tail,
+                            )
+                        },
+                    )
 
                 phase1_stage = "queue_enqueue"
                 await get_queue_manager().enqueue(
@@ -4088,7 +4129,7 @@ class Session:
                 lines.append(p.text)
             elif isinstance(p, ToolPart) and p.tool_name:
                 status = p.tool_status or "completed"
-                output = p.tool_output or ""
+                output = _redact_inline_images(p.tool_output or "")
                 lines.append(f"[tool:{p.tool_name} ({status})] {output}")
             elif isinstance(p, ContextPart) and p.abstract:
                 lines.append(f"[context] {p.abstract}")
@@ -4198,6 +4239,17 @@ class Session:
             return ""
 
         formatted = self._format_messages_for_wm(messages, checkpoint_requests)
+        language_conversation = "\n".join(
+            f"[{message.role}]: {line}"
+            for message in messages
+            for part in message.parts
+            if isinstance(part, TextPart)
+            for line in part.text.splitlines()
+            if line.strip()
+        )
+        output_language = resolve_output_language_from_conversation(
+            language_conversation, config=get_openviking_config()
+        )
         checkpoint_instructions = self._checkpoint_prompt_instructions(len(checkpoint_requests))
 
         vlm = get_openviking_config().vlm
@@ -4238,6 +4290,7 @@ class Session:
                         "messages": formatted,
                         "latest_archive_overview": latest_archive_overview or "",
                         "checkpoint_instructions": checkpoint_instructions,
+                        "output_language": output_language,
                     },
                 )
                 if checkpoint_requests:
@@ -4296,6 +4349,7 @@ class Session:
                     "latest_archive_overview": latest_archive_overview,
                     "wm_section_reminders": reminders,
                     "checkpoint_instructions": checkpoint_instructions,
+                    "output_language": output_language,
                 },
             )
             resp = await vlm.get_completion_async(
@@ -4314,7 +4368,7 @@ class Session:
                 raise
             logger.warning("WM update tool_call failed (%s); falling back to creation prompt", e)
             return await self._fallback_generate_wm_creation(
-                formatted, messages, latest_archive_overview
+                formatted, messages, latest_archive_overview, output_language
             )
 
         has_tc = bool(getattr(resp, "has_tool_calls", False) and getattr(resp, "tool_calls", None))
@@ -4331,7 +4385,7 @@ class Session:
                 raise ValueError("Working Memory update returned no tool call for checkpoints")
             logger.warning("WM update: LLM returned no tool_call; falling back to creation prompt")
             return await self._fallback_generate_wm_creation(
-                formatted, messages, latest_archive_overview
+                formatted, messages, latest_archive_overview, output_language
             )
 
         checkpoint_summaries: tuple[str, ...] = ()
@@ -4432,7 +4486,7 @@ class Session:
                 e,
             )
             return await self._fallback_generate_wm_creation(
-                formatted, messages, latest_archive_overview
+                formatted, messages, latest_archive_overview, output_language
             )
 
         _wm_debug(
@@ -4452,6 +4506,7 @@ class Session:
         formatted_messages: str,
         messages: List[Message],
         prior_overview: str = "",
+        output_language: str = "en",
     ) -> str:
         """Re-run WM creation prompt when the update tool_call path fails.
 
@@ -4471,6 +4526,7 @@ class Session:
                     "messages": formatted_messages,
                     "latest_archive_overview": prior_overview,
                     "checkpoint_instructions": "",
+                    "output_language": output_language,
                 },
             )
             return await get_openviking_config().vlm.get_completion_async(prompt)
@@ -5246,45 +5302,53 @@ class Session:
 
         lines = [m.to_jsonl() for m in messages]
         content = "\n".join(lines) + "\n" if lines else ""
+        abstract_content = render_abstract_overview(
+            ContextLevel.ABSTRACT,
+            self._session_uri,
+            abstract,
+            {
+                "generated_by": {
+                    "component": "Session",
+                    "trigger": "session_update",
+                }
+            },
+        )
+        overview_content = render_abstract_overview(
+            ContextLevel.OVERVIEW,
+            self._session_uri,
+            overview,
+            {
+                "generated_by": {
+                    "component": "Session",
+                    "trigger": "session_update",
+                }
+            },
+        )
 
-        await viking_fs.write_file(
-            uri=f"{self._session_uri}/messages.jsonl",
-            content=content,
-            ctx=self.ctx,
-            lease_ref=lease_ref,
-        )
-        await viking_fs.write_file(
-            uri=f"{self._session_uri}/.abstract.md",
-            content=render_abstract_overview(
-                ContextLevel.ABSTRACT,
-                self._session_uri,
-                abstract,
-                {
-                    "generated_by": {
-                        "component": "Session",
-                        "trigger": "session_update",
-                    }
-                },
+        root_write_results = await asyncio.gather(
+            viking_fs.write_file(
+                uri=f"{self._session_uri}/messages.jsonl",
+                content=content,
+                ctx=self.ctx,
+                lease_ref=lease_ref,
             ),
-            ctx=self.ctx,
-            lease_ref=lease_ref,
-        )
-        await viking_fs.write_file(
-            uri=f"{self._session_uri}/.overview.md",
-            content=render_abstract_overview(
-                ContextLevel.OVERVIEW,
-                self._session_uri,
-                overview,
-                {
-                    "generated_by": {
-                        "component": "Session",
-                        "trigger": "session_update",
-                    }
-                },
+            viking_fs.write_file(
+                uri=f"{self._session_uri}/.abstract.md",
+                content=abstract_content,
+                ctx=self.ctx,
+                lease_ref=lease_ref,
             ),
-            ctx=self.ctx,
-            lease_ref=lease_ref,
+            viking_fs.write_file(
+                uri=f"{self._session_uri}/.overview.md",
+                content=overview_content,
+                ctx=self.ctx,
+                lease_ref=lease_ref,
+            ),
+            return_exceptions=True,
         )
+        for result in root_write_results:
+            if isinstance(result, BaseException):
+                raise result
 
     def _generate_abstract(self) -> str:
         """Generate one-sentence summary for session."""

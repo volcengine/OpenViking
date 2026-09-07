@@ -409,12 +409,13 @@ class OpenVikingPostCallHook(Hook):
         )
         if is_skill_read:
             if result and not isinstance(result, Exception):
-                match = re.search(r"^---\s*\nname:\s*(.+?)\s*\n", result, re.MULTILINE)
+                result_text = str(result)
+                match = re.search(r"^---\s*\nname:\s*(.+?)\s*\n", result_text, re.MULTILINE)
                 if match:
                     skill_name = match.group(1).strip()
                     if skill_name == "experience_loader":
                         return {"tool_name": tool_name, "params": params, "result": result}
-                    desc_match = re.search(r"^description:\s*(.+)$", result, re.MULTILINE)
+                    desc_match = re.search(r"^description:\s*(.+)$", result_text, re.MULTILINE)
                     skill_query = desc_match.group(1).strip() if desc_match else skill_name
 
                     exp_memory = await self._search_skill_experiences(
@@ -424,7 +425,7 @@ class OpenVikingPostCallHook(Hook):
                         openviking_connection=context.openviking_connection,
                     )
                     if exp_memory:
-                        result = f"{result}\n\n---\n## Related Experiences\n{exp_memory}"
+                        result = f"{result_text}\n\n---\n## Related Experiences\n{exp_memory}"
 
         return {"tool_name": tool_name, "params": params, "result": result}
 
