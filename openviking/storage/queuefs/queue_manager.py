@@ -247,11 +247,17 @@ class QueueManager:
             loop.close()
 
     async def _worker_async_concurrent(
-        self, queue: NamedQueue, stop_event: threading.Event, max_concurrent: int
+        self,
+        queue: NamedQueue,
+        stop_event: threading.Event,
+        max_concurrent: int,
+        drain_timeout: float = 5.0,
     ) -> None:
         """Concurrent worker: drains the queue and processes items in parallel.
 
-        A Semaphore caps inflight tasks at max_concurrent.
+        A Semaphore caps inflight tasks at max_concurrent. On stop, in-flight
+        tasks are drained for up to ``drain_timeout`` seconds before being
+        cancelled.
         """
         poll_interval = (
             self._SESSION_COMMIT_POLL_INTERVAL
@@ -262,17 +268,27 @@ class QueueManager:
         active_tasks: Set[asyncio.Task] = set()
 
         async def process_one(data: Dict[str, Any]) -> None:
-            async with sem:
-                msg_id = data.get("id", "") if isinstance(data, dict) else ""
-                try:
-                    await queue.process_dequeued(data)
-                    # Ack after successful processing (delete from persistent storage).
-                    await queue.ack(msg_id, data)
-                except Exception as e:
-                    # Handler did not call report_error; decrement in_progress manually.
-                    # Do NOT ack — let RecoverStale re-queue on next startup.
-                    queue._on_process_error(str(e), data)
-                    logger.error(f"[QueueManager] Concurrent worker error for {queue.name}: {e}")
+            try:
+                async with sem:
+                    msg_id = data.get("id", "") if isinstance(data, dict) else ""
+                    try:
+                        await queue.process_dequeued(data)
+                        # Ack after successful processing (delete from persistent storage).
+                        await queue.ack(msg_id, data)
+                    except Exception as e:
+                        # Handler did not call report_error; decrement in_progress manually.
+                        # Do NOT ack — let RecoverStale re-queue on next startup.
+                        queue._on_process_error(str(e), data)
+                        logger.error(
+                            f"[QueueManager] Concurrent worker error for {queue.name}: {e}"
+                        )
+            except asyncio.CancelledError:
+                # Shutdown drain cancels in-flight tasks. Release the
+                # in_progress slot claimed at dispatch without recording an
+                # error (this is not a processing failure); the message stays
+                # un-acked so RecoverStale re-queues it on next startup.
+                queue._on_process_abandoned()
+                raise
 
         while not stop_event.is_set():
             # Prune completed tasks
@@ -306,7 +322,7 @@ class QueueManager:
             try:
                 await asyncio.wait_for(
                     asyncio.gather(*active_tasks, return_exceptions=True),
-                    timeout=5.0,
+                    timeout=drain_timeout,
                 )
             except asyncio.TimeoutError:
                 logger.warning(
@@ -446,10 +462,13 @@ class QueueManager:
         poll_interval: float = 0.5,
     ) -> Dict[str, QueueStatus]:
         """Wait for completion and return final status."""
-        start = time.time()
+        # Monotonic clock: a wall-clock jump (NTP correction, VM snapshot
+        # restore) must not turn an in-flight wait into a false TimeoutError
+        # or make the deadline unreachable.
+        start = time.monotonic()
         while True:
             if await self.is_all_complete(queue_name):
                 return await self.check_status(queue_name)
-            if timeout and (time.time() - start) > timeout:
+            if timeout and (time.monotonic() - start) > timeout:
                 raise TimeoutError(f"Queue processing not complete after {timeout}s")
             await asyncio.sleep(poll_interval)

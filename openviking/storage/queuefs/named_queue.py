@@ -189,6 +189,18 @@ class NamedQueue:
             if len(self._errors) > self.MAX_ERRORS:
                 self._errors = self._errors[-self.MAX_ERRORS :]
 
+    def _on_process_abandoned(self) -> None:
+        """Release an in_progress slot for work abandoned without a terminal result.
+
+        Used when the concurrent worker cancels an in-flight task during the
+        shutdown drain: the message is deliberately left un-acked so
+        RecoverStale re-queues it on next startup, but the runtime
+        in_progress counter must still return to zero so
+        is_complete()/wait_complete() can observe an idle queue.
+        """
+        with self._lock:
+            self._in_progress -= 1
+
     async def get_status(self) -> QueueStatus:
         """Get queue status."""
         pending = await self.size()
