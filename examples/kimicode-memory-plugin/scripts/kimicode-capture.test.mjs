@@ -1,0 +1,181 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  applyKimicodeCaptureResult,
+  buildKimicodeCapturePlan,
+} from "./kimicode-capture.mjs";
+
+const turns = [
+  { role: "user", content: "question", turnId: "turn-001" },
+  { role: "assistant", content: "answer", turnId: "turn-001" },
+];
+
+test("capture plan maps host identity to the OpenViking turn_id contract", () => {
+  const plan = buildKimicodeCapturePlan(turns, {});
+  assert.deepEqual(plan.payloads, [
+    { role: "user", content: "question", turn_id: "turn-001" },
+    { role: "assistant", content: "answer", turn_id: "turn-001" },
+  ]);
+  assert.equal(plan.payloads[0].turnId, undefined);
+});
+
+test("acknowledgements and slash commands never reach the server", () => {
+  const plan = buildKimicodeCapturePlan([
+    { role: "user", content: "/compact", turnId: "turn-001" },
+    { role: "assistant", content: "好的", turnId: "turn-001" },
+    { role: "user", content: "real question", turnId: "turn-002" },
+    { role: "assistant", content: "real answer", turnId: "turn-002" },
+  ], {});
+  assert.deepEqual(plan.payloads, [
+    { role: "user", content: "real question", turn_id: "turn-002" },
+    { role: "assistant", content: "real answer", turn_id: "turn-002" },
+  ]);
+});
+
+test("injected blocks cleanKimicodeText does not know are stripped before sending", () => {
+  const plan = buildKimicodeCapturePlan([{
+    role: "assistant",
+    content: "answer body <relevant-memory score=\"0.9\">recalled</relevant-memory>",
+    turnId: "turn-001",
+  }], {});
+  assert.ok(!plan.payloads[0].content.includes("recalled"));
+  assert.ok(plan.payloads[0].content.startsWith("answer body"));
+});
+
+test("a fully filtered turn still lets the cursor advance past it", () => {
+  const turnsWithNoise = [
+    { role: "user", content: "ok", turnId: "turn-001" },
+    { role: "user", content: "real question", turnId: "turn-002" },
+    { role: "assistant", content: "real answer", turnId: "turn-002" },
+  ];
+  const plan = buildKimicodeCapturePlan(turnsWithNoise, {});
+  const next = applyKimicodeCaptureResult({}, plan, { sent: 2, queued: 0, failed: 0 });
+  assert.equal(next.lastTurnId, "turn-002");
+});
+
+test("oversized turns are truncated to captureMaxLength before they are sent", () => {
+  const long = "a question that repeats. ".repeat(100);
+  const plan = buildKimicodeCapturePlan(
+    [{ role: "user", content: long, turnId: "turn-001" }],
+    {},
+    { captureMaxLength: 200 },
+  );
+  assert.equal(plan.payloads.length, 1);
+  assert.ok(plan.payloads[0].content.length <= 200);
+  assert.ok(plan.payloads[0].content.endsWith("[truncated]"));
+  // Without a host turn id the key is hashed from the turn itself, so it must
+  // follow the raw text: a later captureMaxLength cannot make the turn look new.
+  const hashed = [{ role: "user", content: long }];
+  const narrow = buildKimicodeCapturePlan(hashed, {}, { captureMaxLength: 200 });
+  const wider = buildKimicodeCapturePlan(hashed, {}, { captureMaxLength: 24000 });
+  assert.equal(wider.candidates[0].dedupKey, narrow.candidates[0].dedupKey);
+  assert.equal(wider.payloads[0].content, long.trim());
+});
+
+test("non-retryable failure keeps cursor, dedup, and pending prompt unchanged", () => {
+  const state = {
+    lastTurnId: "turn-000",
+    capturedTurnIds: [],
+    pendingPrompt: { prompt: "question", hash: "prompt-hash" },
+  };
+  const plan = buildKimicodeCapturePlan(turns, state);
+  const next = applyKimicodeCaptureResult(state, plan, {
+    sent: 0,
+    queued: 0,
+    failed: 2,
+  });
+
+  assert.equal(next.lastTurnId, "turn-000");
+  assert.deepEqual(next.capturedTurnIds, []);
+  assert.deepEqual(next.pendingPrompt, state.pendingPrompt);
+  assert.equal(next.captured, 0);
+});
+
+test("only the acknowledged contiguous prefix updates dedup and cursor state", () => {
+  const state = {
+    lastTurnId: "turn-000",
+    capturedTurnIds: [],
+    pendingPrompt: { prompt: "question" },
+  };
+  const plan = buildKimicodeCapturePlan(turns, state);
+  const next = applyKimicodeCaptureResult(state, plan, {
+    sent: 1,
+    queued: 0,
+    failed: 1,
+  });
+
+  assert.deepEqual(next.capturedTurnIds, ["turn-001:user"]);
+  assert.equal(next.lastTurnId, "turn-000");
+  assert.equal(next.pendingPrompt, null);
+});
+
+test("successful capture records every dedup key and suppresses repeated Stop", () => {
+  const state = {
+    capturedTurnIds: [],
+    pendingPrompt: { prompt: "question" },
+  };
+  const firstPlan = buildKimicodeCapturePlan(turns, state);
+  const next = applyKimicodeCaptureResult(state, firstPlan, {
+    sent: 2,
+    queued: 0,
+    failed: 0,
+  });
+
+  assert.deepEqual(next.capturedTurnIds, [
+    "turn-001:user",
+    "turn-001:assistant",
+  ]);
+  assert.equal(next.lastTurnId, "turn-001");
+  assert.equal(next.pendingPrompt, null);
+
+  const repeatedPlan = buildKimicodeCapturePlan(turns, next);
+  assert.equal(repeatedPlan.toSend.length, 0);
+  assert.equal(repeatedPlan.payloads.length, 0);
+});
+
+test("queued messages are acknowledged like sent messages", () => {
+  const plan = buildKimicodeCapturePlan(turns, {});
+  const next = applyKimicodeCaptureResult({}, plan, {
+    sent: 0,
+    queued: 2,
+    failed: 0,
+  });
+
+  assert.equal(next.lastTurnId, "turn-001");
+  assert.deepEqual(next.capturedTurnIds, [
+    "turn-001:user",
+    "turn-001:assistant",
+  ]);
+});
+
+test("repeated prompt text clears only after the latest matching user is acknowledged", () => {
+  const repeatedTurns = [
+    { role: "user", content: "same question", turnId: "turn-001" },
+    { role: "assistant", content: "first answer", turnId: "turn-001" },
+    { role: "user", content: "same question", turnId: "turn-002" },
+    { role: "assistant", content: "second answer", turnId: "turn-002" },
+  ];
+  const state = {
+    capturedTurnIds: [],
+    pendingPrompt: { prompt: "same question" },
+  };
+  const plan = buildKimicodeCapturePlan(repeatedTurns, state);
+  const partial = applyKimicodeCaptureResult(state, plan, {
+    sent: 2,
+    queued: 0,
+    failed: 2,
+  });
+
+  assert.equal(partial.lastTurnId, "turn-001");
+  assert.deepEqual(partial.pendingPrompt, state.pendingPrompt);
+
+  const retryPlan = buildKimicodeCapturePlan(repeatedTurns.slice(2), partial);
+  const complete = applyKimicodeCaptureResult(partial, retryPlan, {
+    sent: 2,
+    queued: 0,
+    failed: 0,
+  });
+  assert.equal(complete.lastTurnId, "turn-002");
+  assert.equal(complete.pendingPrompt, null);
+});

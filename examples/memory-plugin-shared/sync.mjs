@@ -64,6 +64,7 @@ export const TARGETS = [
   { dir: join(ROOT, "examples", "dsh-memory-plugin", "shared"), files: DSH_SHARED_FILES },
   { dir: join(ROOT, "examples", "pi-coding-agent-extension", "shared"), files: PI_SHARED_FILES },
   { dir: join(ROOT, "examples", "zcode-memory-plugin", "scripts", "shared") , files: ZCODE_SHARED_FILES },
+  { dir: join(ROOT, "examples", "kimicode-memory-plugin", "scripts", "shared"), files: ZCODE_SHARED_FILES },
   { dir: join(ROOT, "agent-plugins", "servers", "shared"), files: AGENT_PLUGINS_SHARED_FILES },
   { dir: join(ROOT, "examples", "openclaw-plugin", "shared"), files: OPENCLAW_SHARED_FILES },
 ];
