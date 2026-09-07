@@ -48,22 +48,21 @@ def test_search_tag_allows_dot_dash_underscore():
     "tag",
     [
         "team=search platform",  # internal space
-        "team=with/slash",  # unsupported char
+        "team=with/slash",
         "team=值",  # non-ascii
-        "-team=search",  # must start with letter/digit
+        "-team=search",
         "team=-search",
-        "te=am=search",  # more than one '='
-        "viking://resources/example.md=1",  # not an Experience lineage tag
-        "viking://user/alice/memories/events/example.md=1",
-        "viking://user/alice/memories/experiences/example.md=2",
-        "viking://user/alice/memories/experiences/example.md=1=2",
-        "viking://user/alice/memories/experiences/example.md?query=1",
-        "viking://user/alice/memories/experiences/example.md#fragment=1",
-        "viking://user//memories/experiences/example.md=1",
-        "viking://user/alice/memories/experiences/=1",
+        "工作 流程=发布检查",
+        "viking://user/default/memories/experiences/cfg_streaming.md=1",
+        "viking://user/%41lice/memories/experiences/%41%3d%42.md=1",
     ],
 )
-def test_search_tag_rejects_disallowed_characters(tag):
+def test_search_tag_allows_free_form_characters(tag):
+    assert normalize_search_tag(tag) == tag
+
+
+@pytest.mark.parametrize("tag", ["", "team", "=search", "team=", "te=am=search"])
+def test_search_tag_rejects_invalid_format(tag):
     with pytest.raises(InvalidArgumentError):
         normalize_search_tag(tag)
 
@@ -72,6 +71,12 @@ def test_search_tag_rejects_over_length_key():
     over_key = "k" * (MAX_TAG_KEY_LENGTH + 1)
     with pytest.raises(InvalidArgumentError):
         normalize_search_tag(f"{over_key}=v")
+
+
+def test_experience_uri_tag_still_obeys_key_length_limit():
+    uri = "viking://user/default/memories/experiences/vikingdb_fe_repo_workflows.md"
+    with pytest.raises(InvalidArgumentError, match="key exceeds max length 64"):
+        normalize_search_tag(f"{uri}=1")
 
 
 def test_search_tag_rejects_over_length_value():
