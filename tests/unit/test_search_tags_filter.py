@@ -53,6 +53,14 @@ def test_search_tag_allows_dot_dash_underscore():
         "-team=search",  # must start with letter/digit
         "team=-search",
         "te=am=search",  # more than one '='
+        "viking://resources/example.md=1",  # not an Experience lineage tag
+        "viking://user/alice/memories/events/example.md=1",
+        "viking://user/alice/memories/experiences/example.md=2",
+        "viking://user/alice/memories/experiences/example.md=1=2",
+        "viking://user/alice/memories/experiences/example.md?query=1",
+        "viking://user/alice/memories/experiences/example.md#fragment=1",
+        "viking://user//memories/experiences/example.md=1",
+        "viking://user/alice/memories/experiences/=1",
     ],
 )
 def test_search_tag_rejects_disallowed_characters(tag):

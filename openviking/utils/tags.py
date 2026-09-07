@@ -21,6 +21,9 @@ MAX_TAG_KEY_LENGTH = 64
 MAX_TAG_VALUE_LENGTH = 128
 MAX_TAG_LENGTH = MAX_TAG_KEY_LENGTH + 1 + MAX_TAG_VALUE_LENGTH
 _TAG_TOKEN_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
+_EXPERIENCE_LINEAGE_TAG_RE = re.compile(
+    r"viking://user/[^/?#=\s]+/memories/experiences/[^/?#=]+(?:/[^/?#=]+)*=1"
+)
 
 
 def normalize_search_tag(tag: str) -> str:
@@ -28,6 +31,10 @@ def normalize_search_tag(tag: str) -> str:
     value = str(tag).strip().lower()
     if not value:
         raise InvalidArgumentError("search tag must be a non-empty k=v string")
+    # Persisted Agent Evolution lineage tags use the escaped Experience URI as
+    # their key. Preserve this internal format before validating business tags.
+    if _EXPERIENCE_LINEAGE_TAG_RE.fullmatch(value):
+        return value
     if len(value) > MAX_TAG_LENGTH:
         raise InvalidArgumentError(
             f"invalid search tag '{tag}': exceeds max length {MAX_TAG_LENGTH}"
