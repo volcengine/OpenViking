@@ -2,6 +2,7 @@ import * as React from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   Building2Icon,
+  CheckIcon,
   ChevronDownIcon,
   LoaderCircleIcon,
   UserRoundIcon,
@@ -14,17 +15,9 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '#/components/ui/popover'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '#/components/ui/select'
 import { useAppConnection } from '#/hooks/use-app-connection'
 import { fetchAdminUsers } from '#/lib/admin'
 import type { AdminConnection } from '#/lib/admin'
-import { resolveStudioManagementCapabilities } from '#/lib/studio-permissions'
 
 export function getUserInitial(userId: string): string {
   const normalizedUserId = userId.trim()
@@ -33,28 +26,15 @@ export function getUserInitial(userId: string): string {
 
 export function CurrentUserMenu() {
   const { t } = useTranslation('appShell')
-  const {
-    connection,
-    connectionRole,
-    isConnectionRoleLoading,
-    serverMode,
-    switchIdentity,
-  } = useAppConnection()
+  const { connection, serverMode, switchIdentity } = useAppConnection()
   const [open, setOpen] = React.useState(false)
   const [manualUserId, setManualUserId] = React.useState('')
   const [switchingUserId, setSwitchingUserId] = React.useState('')
   const { accountId, userId } = connection
   const accountLabel = accountId || t('header.currentUser.unset')
   const userLabel = userId || t('header.currentUser.unset')
-  const { canManageUsers } = resolveStudioManagementCapabilities({
-    hasControlCredential: Boolean(connection.adminApiKey.trim()),
-    isRoleLoading: isConnectionRoleLoading,
-    role: connectionRole,
-    serverMode,
-  })
-  const canSwitchUser =
-    Boolean(accountId) && (serverMode === 'trusted' || canManageUsers)
-  const canListUsers = canManageUsers
+  const canSwitchUser = serverMode === 'trusted' && Boolean(accountId)
+  const canListUsers = Boolean(connection.adminApiKey)
   const manualTargetUserId = manualUserId.trim()
   const adminConnection = React.useMemo<AdminConnection>(
     () => ({
@@ -77,10 +57,7 @@ export function CurrentUserMenu() {
     retry: false,
   })
 
-  async function selectUser(
-    nextUserId: string,
-    nextApiKey = '',
-  ): Promise<void> {
+  async function selectUser(nextUserId: string): Promise<void> {
     const normalizedUserId = nextUserId.trim()
     if (!normalizedUserId || normalizedUserId === userId) {
       return
@@ -91,7 +68,7 @@ export function CurrentUserMenu() {
       await switchIdentity({
         accountId,
         allowLegacyIdentityFallback: true,
-        apiKey: serverMode === 'trusted' ? '' : nextApiKey,
+        apiKey: '',
         userId: normalizedUserId,
       })
       setManualUserId('')
@@ -225,49 +202,33 @@ export function CurrentUserMenu() {
                   </button>
                 </div>
               ) : usersQuery.data?.length ? (
-                <div className="px-2.5 pb-2">
-                  <Select
-                    value={userId}
-                    onValueChange={(nextUserId) => {
-                      const user = usersQuery.data.find(
-                        (item) => item.userId === nextUserId,
-                      )
-                      if (user) void selectUser(user.userId, user.apiKey)
-                    }}
-                  >
-                    <SelectTrigger
-                      aria-label={t('header.currentUser.switchUser')}
-                      className="w-full"
-                      disabled={Boolean(switchingUserId)}
+                usersQuery.data.map((user) => {
+                  const current = user.userId === userId
+                  const switching = switchingUserId === user.userId
+                  return (
+                    <button
+                      key={user.userId}
+                      type="button"
+                      aria-current={current ? 'true' : undefined}
+                      aria-label={user.userId}
+                      disabled={current || Boolean(switchingUserId)}
+                      className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-accent disabled:cursor-default disabled:opacity-70"
+                      onClick={() => void selectUser(user.userId)}
                     >
-                      {switchingUserId ? (
+                      <span className="flex size-7 shrink-0 items-center justify-center rounded-md border bg-background text-xs font-semibold">
+                        {getUserInitial(user.userId)}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                        {user.userId}
+                      </span>
+                      {switching ? (
                         <LoaderCircleIcon className="size-3.5 animate-spin" />
+                      ) : current ? (
+                        <CheckIcon className="size-3.5 text-primary" />
                       ) : null}
-                      <SelectValue>{userLabel}</SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      {usersQuery.data.map((user) => {
-                        const canUseIdentity =
-                          serverMode === 'trusted' || Boolean(user.apiKey)
-                        return (
-                          <SelectItem
-                            key={user.userId}
-                            value={user.userId}
-                            aria-label={user.userId}
-                            disabled={!canUseIdentity}
-                          >
-                            {user.userId}
-                            {!canUseIdentity ? (
-                              <span className="text-[10px] text-muted-foreground">
-                                {t('header.currentUser.keyUnavailable')}
-                              </span>
-                            ) : null}
-                          </SelectItem>
-                        )
-                      })}
-                    </SelectContent>
-                  </Select>
-                </div>
+                    </button>
+                  )
+                })
               ) : (
                 <p className="px-2.5 py-4 text-center text-xs text-muted-foreground">
                   {t('header.currentUser.noUsers')}

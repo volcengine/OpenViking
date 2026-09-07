@@ -8,7 +8,6 @@ import {
   screen,
   waitFor,
 } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { CurrentUserMenu } from './current-user-menu'
@@ -25,8 +24,6 @@ const connectionMocks = vi.hoisted(() => ({
     baseUrl: 'http://localhost:1933',
     userId: 'alice',
   },
-  connectionRole: 'root',
-  isConnectionRoleLoading: false,
   serverMode: 'trusted',
   switchIdentity: vi.fn(),
 }))
@@ -67,8 +64,6 @@ function renderMenu() {
 
 beforeEach(() => {
   connectionMocks.connection.adminApiKey = 'root-key'
-  connectionMocks.connectionRole = 'root'
-  connectionMocks.isConnectionRoleLoading = false
   connectionMocks.serverMode = 'trusted'
   connectionMocks.switchIdentity.mockResolvedValue(undefined)
   adminMocks.fetchAdminUsers.mockResolvedValue([
@@ -98,13 +93,8 @@ describe('CurrentUserMenu', () => {
       screen.getByRole('button', { name: 'header.currentUser.openMenu' }),
     )
 
-    const selector = await screen.findByRole('combobox', {
-      name: 'header.currentUser.switchUser',
-    })
-    expect(screen.queryByRole('option', { name: 'bob' })).toBeNull()
-    await userEvent.click(selector)
-    const bob = await screen.findByRole('option', { name: 'bob' })
-    await userEvent.click(bob)
+    const bob = await screen.findByRole('button', { name: 'bob' })
+    fireEvent.click(bob)
 
     await waitFor(() => {
       expect(connectionMocks.switchIdentity).toHaveBeenCalledWith({
@@ -119,49 +109,8 @@ describe('CurrentUserMenu', () => {
     )
   })
 
-  it('switches API-key identities when management access exposes a user key', async () => {
+  it('keeps non-trusted user menus read-only', () => {
     connectionMocks.serverMode = 'api_key'
-    adminMocks.fetchAdminUsers.mockResolvedValue([
-      {
-        accountId: 'account-a',
-        apiKey: 'alice-key',
-        role: 'admin',
-        userId: 'alice',
-      },
-      {
-        accountId: 'account-a',
-        apiKey: 'bob-key',
-        role: 'user',
-        userId: 'bob',
-      },
-    ])
-    renderMenu()
-
-    fireEvent.click(
-      screen.getByRole('button', { name: 'header.currentUser.openMenu' }),
-    )
-
-    const selector = await screen.findByRole('combobox', {
-      name: 'header.currentUser.switchUser',
-    })
-    expect(screen.queryByRole('option', { name: 'bob' })).toBeNull()
-    await userEvent.click(selector)
-    const bob = await screen.findByRole('option', { name: 'bob' })
-    await userEvent.click(bob)
-
-    await waitFor(() => {
-      expect(connectionMocks.switchIdentity).toHaveBeenCalledWith({
-        accountId: 'account-a',
-        allowLegacyIdentityFallback: true,
-        apiKey: 'bob-key',
-        userId: 'bob',
-      })
-    })
-  })
-
-  it('keeps ordinary API-key user menus read-only', () => {
-    connectionMocks.serverMode = 'api_key'
-    connectionMocks.connectionRole = 'user'
     renderMenu()
 
     fireEvent.click(
@@ -170,38 +119,6 @@ describe('CurrentUserMenu', () => {
 
     expect(screen.queryByText('header.currentUser.switchUser')).toBeNull()
     expect(adminMocks.fetchAdminUsers).not.toHaveBeenCalled()
-  })
-
-  it('disables API-key identities whose secret is unavailable', async () => {
-    connectionMocks.serverMode = 'api_key'
-    adminMocks.fetchAdminUsers.mockResolvedValue([
-      {
-        accountId: 'account-a',
-        apiKey: 'alice-key',
-        role: 'admin',
-        userId: 'alice',
-      },
-      {
-        accountId: 'account-a',
-        keyPrefix: 'ovk_bob',
-        role: 'user',
-        userId: 'bob',
-      },
-    ])
-    renderMenu()
-
-    fireEvent.click(
-      screen.getByRole('button', { name: 'header.currentUser.openMenu' }),
-    )
-
-    const selector = await screen.findByRole('combobox', {
-      name: 'header.currentUser.switchUser',
-    })
-    expect(screen.queryByRole('option', { name: 'bob' })).toBeNull()
-    await userEvent.click(selector)
-    const bob = await screen.findByRole('option', { name: 'bob' })
-    expect(bob.getAttribute('aria-disabled')).toBe('true')
-    expect(screen.getByText('header.currentUser.keyUnavailable')).toBeTruthy()
   })
 
   it('accepts a user ID when trusted mode has no user directory', async () => {
