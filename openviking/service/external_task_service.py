@@ -48,7 +48,7 @@ class ExternalTaskProvider(Protocol):
 
     task_type: str
     task_id_prefix: str
-    poll_max_attempts: int | None
+    poll_max_attempts: int
     runtime_timeout_seconds: float
 
     @property
@@ -324,13 +324,24 @@ class ExternalTaskService:
     ) -> bool:
         tracker = get_task_tracker()
         if snapshot.stage is not None or snapshot.meta:
-            await tracker.update_stage(
+            task = await tracker.get(
                 task_id,
-                snapshot.stage or snapshot.status,
                 account_id=account_id,
                 user_id=user_id,
-                meta=snapshot.meta,
             )
+            stage = snapshot.stage or snapshot.status
+            meta = snapshot.meta or {}
+            if task is not None and (
+                task.stage != stage
+                or any(key not in task.meta or task.meta[key] != value for key, value in meta.items())
+            ):
+                await tracker.update_stage(
+                    task_id,
+                    stage,
+                    account_id=account_id,
+                    user_id=user_id,
+                    meta=meta,
+                )
         if snapshot.status in _ACTIVE_STATUSES:
             return False
         if snapshot.status == "completed":
@@ -378,57 +389,80 @@ class ExternalTaskService:
         user_id: str,
         timed_out: bool = False,
     ) -> None:
-        if external_task_id is None:
-            external_task_id = await self._retry(
-                lambda: provider.submit(ov_task_id, payload, private_payload, connection),
-                task_id=ov_task_id,
-                operation_name="recover before cancel",
-                poll_interval=provider.poll_interval_seconds,
-            )
-            await get_task_tracker().update_task_auth(
-                ov_task_id,
-                {"external_task_id": external_task_id},
-                account_id=account_id,
-                user_id=user_id,
-            )
-        snapshot = await self._retry(
-            lambda: provider.cancel(external_task_id, connection),
-            task_id=ov_task_id,
-            operation_name="cancel",
-            poll_interval=provider.poll_interval_seconds,
-        )
-        while True:
-            if timed_out and snapshot.status in _TERMINAL_STATUSES:
-                tracker = get_task_tracker()
-                await tracker.update_stage(
+        max_attempts = provider.poll_max_attempts
+        try:
+            if external_task_id is None:
+                # Submission may have reached the provider before local cancellation
+                # interrupted its response. Idempotency makes this bounded recovery safe.
+                external_task_id = await self._retry(
+                    lambda: provider.submit(ov_task_id, payload, private_payload, connection),
+                    task_id=ov_task_id,
+                    operation_name="recover before cancel",
+                    poll_interval=provider.poll_interval_seconds,
+                    max_attempts=max_attempts,
+                )
+                await get_task_tracker().update_task_auth(
                     ov_task_id,
-                    "timed_out",
+                    {"external_task_id": external_task_id},
                     account_id=account_id,
                     user_id=user_id,
                 )
-                await tracker.fail(
-                    ov_task_id,
-                    self._format_error(
-                        "DEADLINE_EXCEEDED",
-                        "External task exceeded its runtime limit.",
-                    ),
-                    account_id=account_id,
-                    user_id=user_id,
-                )
-                return
-            if await self._apply_snapshot(
-                snapshot,
-                task_id=ov_task_id,
-                account_id=account_id,
-                user_id=user_id,
-            ):
-                return
-            await asyncio.sleep(provider.poll_interval_seconds)
             snapshot = await self._retry(
-                lambda: provider.get(external_task_id, connection),
+                lambda: provider.cancel(external_task_id, connection),
                 task_id=ov_task_id,
-                operation_name="poll cancellation",
+                operation_name="cancel",
                 poll_interval=provider.poll_interval_seconds,
+                max_attempts=max_attempts,
+            )
+            for attempt in range(max_attempts):
+                if timed_out and snapshot.status in _TERMINAL_STATUSES:
+                    break
+                if await self._apply_snapshot(
+                    snapshot,
+                    task_id=ov_task_id,
+                    account_id=account_id,
+                    user_id=user_id,
+                ):
+                    return
+                if attempt + 1 == max_attempts:
+                    logger.warning(
+                        "External task cancellation did not converge task=%s attempts=%s",
+                        ov_task_id,
+                        max_attempts,
+                    )
+                    break
+                await asyncio.sleep(provider.poll_interval_seconds)
+                snapshot = await self._retry(
+                    lambda: provider.get(external_task_id, connection),
+                    task_id=ov_task_id,
+                    operation_name="poll cancellation",
+                    poll_interval=provider.poll_interval_seconds,
+                    max_attempts=max_attempts,
+                )
+        except ExternalTaskError as exc:
+            logger.warning(
+                "External task cancellation stopped task=%s code=%s: %s",
+                ov_task_id,
+                exc.code,
+                exc,
+            )
+
+        if timed_out:
+            tracker = get_task_tracker()
+            await tracker.update_stage(
+                ov_task_id,
+                "timed_out",
+                account_id=account_id,
+                user_id=user_id,
+            )
+            await tracker.fail(
+                ov_task_id,
+                self._format_error(
+                    "DEADLINE_EXCEEDED",
+                    "External task exceeded its runtime limit.",
+                ),
+                account_id=account_id,
+                user_id=user_id,
             )
 
     @staticmethod
@@ -438,7 +472,7 @@ class ExternalTaskService:
         task_id: str,
         operation_name: str,
         poll_interval: float,
-        max_attempts: int | None = None,
+        max_attempts: int,
     ) -> Any:
         delay = max(poll_interval, 0.2)
         attempts = 0
@@ -449,7 +483,7 @@ class ExternalTaskService:
                 if not exc.transient:
                     raise
                 attempts += 1
-                if max_attempts is not None and attempts >= max_attempts:
+                if attempts >= max_attempts:
                     raise
                 logger.warning(
                     "External task %s will retry task=%s code=%s: %s",
