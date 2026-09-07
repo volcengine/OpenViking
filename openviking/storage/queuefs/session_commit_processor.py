@@ -24,6 +24,16 @@ if TYPE_CHECKING:
 
 
 class SessionCommitProcessor(DequeueHandlerBase):
+    # A commit whose predecessor is still running is put back on the queue. With
+    # no delay that is a hot loop: the same messages are dequeued, found blocked,
+    # and re-enqueued as fast as the consumer can turn, which is how a queue of
+    # 33 waiters reached a requeue count in the hundreds of thousands without
+    # draining. The wait is paced instead, doubling from 50ms and holding at 2s
+    # so a long Phase 2 costs at most one poll every two seconds per waiter.
+    _DEPENDENCY_WAIT_BASE_DELAY = 0.05
+    _DEPENDENCY_WAIT_MAX_DELAY = 2.0
+    _DEPENDENCY_WAIT_MAX_DOUBLING = 8
+
     def __init__(
         self,
         session_service: "SessionService",
@@ -88,14 +98,27 @@ class SessionCommitProcessor(DequeueHandlerBase):
             if not processed:
                 from openviking.storage.queuefs import QueueManager, get_queue_manager
 
+                await asyncio.sleep(self._dependency_wait_delay(msg.dependency_wait_count))
+                payload = msg.to_dict()
+                payload["dependency_wait_count"] = msg.dependency_wait_count + 1
                 await get_queue_manager().enqueue(
                     QueueManager.SESSION_COMMIT,
-                    msg.to_dict(),
+                    payload,
                 )
                 self.report_requeue()
             return processed
         finally:
             reset_root_observability_context(root_context_token)
+
+    @classmethod
+    def _dependency_wait_delay(cls, wait_count: int) -> float:
+        """Seconds to wait before putting a dependency-blocked commit back.
+
+        Doubles per attempt and then holds flat, so an unusually long Phase 2
+        cannot turn into an unbounded wait for the commits queued behind it.
+        """
+        doublings = min(max(wait_count, 0), cls._DEPENDENCY_WAIT_MAX_DOUBLING)
+        return min(cls._DEPENDENCY_WAIT_BASE_DELAY * (2**doublings), cls._DEPENDENCY_WAIT_MAX_DELAY)
 
     async def _finalize_cancelled(self, msg: SessionCommitMsg, ctx: RequestContext) -> None:
         session = self._session_service.session(
