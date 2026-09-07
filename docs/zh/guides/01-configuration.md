@@ -1160,7 +1160,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 | `mode` | str | QueueFS 命名空间模式：`"shared"` 使用 `/queue`；`"worker"` 为每个 worker 隔离到 `/queue/worker-<index\|pid>` | `"shared"` |
 | `backend` | str | QueueFS 后端：`"memory"`、`"sqlite"`、`"sqlite3"` 或 `"cache"` | `"sqlite"` |
 | `db_path` | str（可选） | 当 backend 为 `"sqlite"` 或 `"sqlite3"` 时使用的 QueueFS sqlite 数据库路径 | `null` |
-| `recover_stale_sec` | int | 启动时恢复超过该秒数的 `processing` 队列消息；`0` 表示恢复全部 stale processing 消息 | `0` |
+| `recover_stale_sec` | int | 挂载时及挂载期间每 `recover_stale_sec` 秒恢复超过该秒数的 `processing` 队列消息（仅 sqlite 后端）；`0` 表示仅在挂载时一次性恢复全部 `processing` 消息 | `0` |
 | `busy_timeout_ms` | int | QueueFS sqlite 的 busy timeout，单位毫秒 | `5000` |
 | `cache_key_prefix` | str | 当 backend 为 `"cache"` 时使用的 QueueFS key 命名空间 | `"default"` |
 
@@ -1176,7 +1176,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 - `username` 和 `password` 用于 Redis 数据节点；`sentinel_username` 和 `sentinel_password` 仅用于 Sentinel 节点。
 - Cache backend 使用 `{cache_key_prefix}:ov:*` key；连接同一 Redis 集群的不同环境或租户必须配置不同的 `cache_key_prefix`。
 - Cache backend 的实例心跳 TTL 为 30 秒，每 10 秒续约一次。
-- Cache backend 会在独立的 startup recovery 任务中按实例心跳状态执行三次有界 `recover_stale` 扫描，时间点分别为启动后立即、30 秒和 60 秒，用于覆盖容器异常退出后旧实例心跳尚未过期的恢复窗口；正常关闭会先删除 heartbeat，使新实例可以立即恢复 processing 消息。
+- Cache backend 会在独立的 recovery 任务中按实例心跳状态执行 `recover_stale` 扫描：启动后立即执行一次，之后每 30 秒（一个心跳 TTL）持续执行。每轮扫描只会重投所属实例心跳已过期的消息，既覆盖容器异常退出后旧实例心跳尚未过期的恢复窗口，也覆盖进程存活但已卡死（wedged）的场景（#4303）；正常关闭会先删除 heartbeat，使新实例可以立即恢复 processing 消息。
 - 所有 Redis 读命令都发送到主节点，不提供副本读配置。
 - `tls_insecure_skip_verify=true` 时 endpoint 必须使用 `rediss://`。
 - 如果同时设置了 `storage.agfs.queuefs.db_path` 和旧字段 `storage.agfs.queue_db_path`，以前者为准。

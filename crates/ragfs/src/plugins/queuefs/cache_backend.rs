@@ -4,7 +4,6 @@ use super::cache_protocol::{
     queue_names_key, unix_secs, QueueKeys, ACK_SCRIPT, CLEAR_SCRIPT, CREATE_QUEUE_SCRIPT,
     DEQUEUE_SCRIPT, ENQUEUE_SCRIPT, HEARTBEAT_INTERVAL_SECS, HEARTBEAT_TTL_SECS,
     LIST_UNACKED_SCRIPT, PEEK_SCRIPT, RECOVER_STALE_SCRIPT, REMOVE_QUEUE_SCRIPT,
-    STARTUP_RECOVERY_SWEEPS,
 };
 use crate::cache_runtime::{
     CacheError, CacheOperation, CacheRuntime, Expiration, ScriptDefinition, ScriptRequest,
@@ -110,7 +109,7 @@ impl CacheQueueStorage {
             heartbeat_receiver,
         ));
         let (recovery_stop, recovery_receiver) = watch::channel(false);
-        let recovery_task = tokio::spawn(run_startup_recovery(
+        let recovery_task = tokio::spawn(run_recovery_loop(
             Arc::clone(&runtime),
             key_prefix.clone(),
             recovery_receiver,
@@ -492,13 +491,14 @@ async fn refresh_heartbeat(runtime: &CacheRuntime, key: &str) -> Result<()> {
         .map_err(|error| cache_error("heartbeat", error))
 }
 
-async fn run_startup_recovery(
+async fn run_recovery_loop(
     runtime: Arc<CacheRuntime>,
     key_prefix: String,
     mut stop: watch::Receiver<bool>,
 ) {
     let started_at = Instant::now();
-    for sweep_index in 0..STARTUP_RECOVERY_SWEEPS {
+    let mut sweep_index = 0usize;
+    loop {
         let deadline = started_at + startup_recovery_delay_before_sweep(sweep_index);
         if deadline > Instant::now() {
             tokio::select! {
@@ -511,13 +511,14 @@ async fn run_startup_recovery(
             }
         }
         if let Err(error) = recover_stale(&runtime, &key_prefix).await {
-            tracing::warn!("queuefs cache startup recover_stale failed: {error}");
+            tracing::warn!("queuefs cache periodic recover_stale failed: {error}");
         }
+        sweep_index = sweep_index.saturating_add(1);
     }
 }
 
 fn startup_recovery_delay_before_sweep(sweep_index: usize) -> Duration {
-    Duration::from_secs(HEARTBEAT_TTL_SECS * sweep_index as u64)
+    Duration::from_secs(HEARTBEAT_TTL_SECS.saturating_mul(sweep_index as u64))
 }
 
 async fn recover_stale(runtime: &CacheRuntime, key_prefix: &str) -> Result<usize> {
@@ -643,6 +644,81 @@ mod tests {
             startup_recovery_delay_before_sweep(2),
             Duration::from_secs(60)
         );
+    }
+
+    #[test]
+    fn recovery_loop_offsets_never_overflow_at_large_sweep_indexes() {
+        // The recovery loop now runs for the lifetime of the storage, so the
+        // per-sweep offset must saturate instead of panicking (or wrapping)
+        // once the sweep counter grows unboundedly.
+        assert_eq!(
+            startup_recovery_delay_before_sweep(usize::MAX),
+            Duration::from_secs(u64::MAX)
+        );
+        assert_eq!(
+            startup_recovery_delay_before_sweep(3),
+            Duration::from_secs(90)
+        );
+    }
+
+    #[tokio::test]
+    async fn periodic_recovery_returns_message_from_dead_instance_without_reopen() {
+        // Regression for issue #4303: after the startup sweeps are exhausted,
+        // a message owned by an instance whose heartbeat disappeared must
+        // still be re-queued by the long-running recovery loop of another
+        // live instance — without reopening any storage.
+        let Ok(endpoint) = std::env::var("REDIS_URL") else {
+            return;
+        };
+        let runtime = CacheRuntime::redis(crate::cache_runtime::RedisProviderConfig {
+            endpoints: vec![endpoint],
+            connect_timeout_ms: 5_000,
+            command_timeout_ms: 1_000,
+            default_ttl_seconds: 60,
+            ..crate::cache_runtime::RedisProviderConfig::default()
+        })
+        .await
+        .unwrap();
+        let prefix = format!("queuefs-periodic-test:{}", Uuid::new_v4());
+        let first = CacheQueueStorage::open(Arc::clone(&runtime), prefix.clone())
+            .await
+            .unwrap();
+        first.create_queue("jobs").await.unwrap();
+        let message = Message::new(b"payload".to_vec());
+        let message_id = message.id.clone();
+        first.enqueue("jobs", message).await.unwrap();
+        assert_eq!(first.dequeue("jobs").await.unwrap().unwrap().id, message_id);
+
+        // A second, healthy instance keeps its recovery loop running.
+        let second = CacheQueueStorage::open(Arc::clone(&runtime), prefix.clone())
+            .await
+            .unwrap();
+
+        // Wait past the three legacy startup sweeps (0s/30s/60s) so that any
+        // recovery observed afterwards is attributable to the new long-running
+        // sweep loop, not to the pre-existing startup behavior.
+        tokio::time::sleep(Duration::from_secs(65)).await;
+
+        // Kill the first instance: dropping it removes its heartbeat key, so
+        // the periodic recovery loop of `second` re-queues the orphaned
+        // message on a later sweep.
+        drop(first);
+
+        let recovered = tokio::time::timeout(Duration::from_secs(45), async {
+            loop {
+                if let Some(message) = second.dequeue("jobs").await.unwrap() {
+                    break message;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("periodic recovery loop should re-queue the orphaned message");
+
+        assert_eq!(recovered.id, message_id);
+        second.shutdown().await.unwrap();
+        runtime.del(&[queue_names_key(&prefix)]).await.unwrap();
+        runtime.close().await.unwrap();
     }
 
     #[test]

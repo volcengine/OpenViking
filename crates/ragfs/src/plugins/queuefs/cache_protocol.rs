@@ -4,7 +4,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(super) const HEARTBEAT_TTL_SECS: u64 = 30;
 pub(super) const HEARTBEAT_INTERVAL_SECS: u64 = 10;
-pub(super) const STARTUP_RECOVERY_SWEEPS: usize = 3;
 
 pub(super) const CREATE_QUEUE_SCRIPT: &str = r#"
 if redis.call('SADD', KEYS[1], ARGV[1]) == 0 then

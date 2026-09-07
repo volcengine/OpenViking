@@ -128,7 +128,7 @@ class QueueFSConfig(BaseModel):
 
     recover_stale_sec: int = Field(
         default=0,
-        description="Recover processing messages older than this many seconds on startup (0 = recover all).",
+        description="Recover processing messages older than this many seconds on mount and every recover_stale_sec seconds while mounted (sqlite backend; 0 = recover all once on mount).",
     )
 
     busy_timeout_ms: int = Field(

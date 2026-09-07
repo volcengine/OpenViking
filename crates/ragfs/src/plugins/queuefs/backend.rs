@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::{params, types::ValueRef, Connection, Row};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{HashMap, VecDeque};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, Weak};
 use std::time::SystemTime;
 use std::time::{Duration, UNIX_EPOCH};
 use uuid::Uuid;
@@ -334,7 +334,7 @@ impl QueueBackend for MemoryBackend {
 
 /// SQLite queue backend with at-least-once delivery semantics.
 pub struct SQLiteQueueBackend {
-    conn: Mutex<Connection>,
+    conn: Arc<Mutex<Connection>>,
 }
 
 impl SQLiteQueueBackend {
@@ -389,10 +389,13 @@ impl SQLiteQueueBackend {
         .map_err(|e| Error::internal(format!("sqlite schema init error: {}", e)))?;
 
         let backend = Self {
-            conn: Mutex::new(conn),
+            conn: Arc::new(Mutex::new(conn)),
         };
         backend.run_migrations()?;
         backend.recover_stale(options.recover_stale_sec)?;
+        if options.recover_stale_sec > 0 {
+            spawn_periodic_stale_sweep(Arc::downgrade(&backend.conn), options.recover_stale_sec);
+        }
         Ok(backend)
     }
 
@@ -449,11 +452,15 @@ impl SQLiteQueueBackend {
     }
 
     fn recover_stale(&self, stale_sec: i64) -> Result<usize> {
-        let cutoff = Utc::now().timestamp() - stale_sec.max(0);
         let conn = self
             .conn
             .lock()
             .map_err(|e| Error::internal(format!("sqlite mutex poisoned: {}", e)))?;
+        Self::recover_stale_conn(&conn, stale_sec)
+    }
+
+    fn recover_stale_conn(conn: &Connection, stale_sec: i64) -> Result<usize> {
+        let cutoff = Utc::now().timestamp() - stale_sec.max(0);
 
         let changed = if stale_sec <= 0 {
             conn.execute(
@@ -790,6 +797,46 @@ impl QueueBackend for SQLiteQueueBackend {
     }
 }
 
+/// Periodically re-run the stale-recovery sweep while the backend is alive.
+///
+/// The mount-time recovery in [`SQLiteQueueBackend::open`] only heals orphaned
+/// messages once per process start, so a worker that wedges *after* mounting
+/// (alive but no longer processing) leaves its in-flight messages stuck until
+/// every process restarts (issue #4303). When `stale_sec > 0`, this background
+/// sweep re-runs the exact same atomic recovery UPDATE every `stale_sec`
+/// seconds, so wedged in-flight messages become visible to healthy workers
+/// again without a restart.
+///
+/// The sweep thread holds only a [`Weak`] handle: it exits as soon as the
+/// backend is dropped. A failed sweep (e.g. transient SQLite busy) is logged
+/// and retried on the next tick. `stale_sec <= 0` never starts a sweep loop
+/// because the recover-all-on-mount semantics of that mode would reset rows
+/// still owned by live workers.
+fn spawn_periodic_stale_sweep(conn: Weak<Mutex<Connection>>, stale_sec: i64) {
+    let spawn_result = std::thread::Builder::new()
+        .name("queuefs-stale-sweep".to_string())
+        .spawn(move || {
+            let interval = Duration::from_secs(stale_sec.max(1) as u64);
+            loop {
+                std::thread::sleep(interval);
+                // The backend (and therefore the database handle) is gone: stop sweeping.
+                let Some(conn) = conn.upgrade() else { break };
+                let guard = match conn.lock() {
+                    Ok(guard) => guard,
+                    Err(_) => continue,
+                };
+                if let Err(error) = SQLiteQueueBackend::recover_stale_conn(&guard, stale_sec) {
+                    tracing::warn!("queuefs periodic stale sweep failed: {error}");
+                }
+            }
+        });
+    if spawn_result.is_err() {
+        // The mount-time recovery already ran; a missing periodic sweeper only
+        // degrades back to the pre-existing restart-based behavior.
+        tracing::warn!("queuefs failed to spawn periodic stale sweep thread");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1006,6 +1053,66 @@ mod tests {
         let recovered = reopened.dequeue("test").unwrap().unwrap();
         assert_eq!(recovered.id, msg_id);
         assert_eq!(recovered.data, b"recover me");
+    }
+
+    #[test]
+    fn test_sqlite_backend_periodic_recovery_recovers_stale_in_flight_message() {
+        // A worker that dequeued a message and then wedged (never acks, never
+        // restarts) must have its in-flight message returned to `pending` by
+        // the periodic sweep once the message crosses the stale threshold —
+        // without reopening the database (issue #4303).
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("queue.db");
+        let db_path_str = db_path.to_str().unwrap().to_string();
+
+        let mut backend = SQLiteQueueBackend::open(
+            &db_path_str,
+            SQLiteQueueOptions {
+                recover_stale_sec: 2,
+                busy_timeout_ms: 5_000,
+            },
+        )
+        .unwrap();
+        backend.create_queue("test").unwrap();
+        let msg = Message::new(b"wedged worker payload".to_vec());
+        let msg_id = msg.id.clone();
+        backend.enqueue("test", msg).unwrap();
+
+        let dequeued = backend.dequeue("test").unwrap().unwrap();
+        assert_eq!(dequeued.id, msg_id);
+
+        // Below the 2s stale threshold the sweep must leave the in-flight
+        // message alone (fresh messages are not re-queued).
+        std::thread::sleep(Duration::from_millis(1_200));
+        assert!(backend.peek("test").unwrap().is_none());
+
+        // Sweeps run every 2s with the same cutoff as the mount-time
+        // recovery, so by t=5s the message has crossed the threshold and a
+        // sweep tick has re-queued it.
+        std::thread::sleep(Duration::from_millis(3_800));
+        let recovered = backend.dequeue("test").unwrap().unwrap();
+        assert_eq!(recovered.id, msg_id);
+        assert_eq!(recovered.data, b"wedged worker payload".to_vec());
+    }
+
+    #[test]
+    fn test_sqlite_backend_no_periodic_recovery_when_recover_stale_disabled() {
+        // recover_stale_sec = 0 (current default) keeps the historical
+        // behavior: no background sweep, an in-flight message stays
+        // `processing` until some process reopens the database.
+        let (_dir, _db_path_str, mut backend) = sqlite_backend();
+        backend.create_queue("test").unwrap();
+        let msg = Message::new(b"no sweep payload".to_vec());
+        backend.enqueue("test", msg).unwrap();
+
+        let dequeued = backend.dequeue("test").unwrap().unwrap();
+        assert!(dequeued.id.len() > 0);
+
+        std::thread::sleep(Duration::from_millis(1_500));
+        assert!(
+            backend.peek("test").unwrap().is_none(),
+            "no periodic sweep should run when recover_stale_sec <= 0"
+        );
     }
 
     #[test]

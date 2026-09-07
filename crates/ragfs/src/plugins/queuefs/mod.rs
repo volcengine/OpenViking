@@ -645,7 +645,7 @@ impl QueueFSPlugin {
                     "recover_stale_sec",
                     "int",
                     "0",
-                    "Recover processing messages older than this many seconds on startup (0 = recover all)",
+                    "Recover processing messages older than this many seconds on startup and periodically while mounted; 0 recovers all processing messages once on mount only",
                 ),
                 ConfigParameter::optional(
                     "busy_timeout_ms",

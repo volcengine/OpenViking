@@ -1191,7 +1191,7 @@ This is a breaking configuration change. `storage.agfs.cache`, `storage.agfs.que
 | `mode` | str | QueueFS namespace mode: `"shared"` uses `/queue`; `"worker"` isolates each worker under `/queue/worker-<index\|pid>` | `"shared"` |
 | `backend` | str | QueueFS backend: `"memory"`, `"sqlite"`, `"sqlite3"`, or `"cache"` | `"sqlite"` |
 | `db_path` | str (optional) | SQLite database path for QueueFS when backend is `"sqlite"` or `"sqlite3"` | `null` |
-| `recover_stale_sec` | int | Recover `processing` queue messages older than this many seconds on startup. `0` means recover all stale processing messages | `0` |
+| `recover_stale_sec` | int | Recover `processing` queue messages older than this many seconds on mount and every `recover_stale_sec` seconds while mounted (sqlite backend). `0` means recover all `processing` messages once on mount only | `0` |
 | `busy_timeout_ms` | int | SQLite busy timeout for QueueFS in milliseconds | `5000` |
 | `cache_key_prefix` | str | QueueFS key namespace when backend is `"cache"` | `"default"` |
 
@@ -1203,7 +1203,7 @@ Notes:
 - `backend=cache` automatically binds the global `cache.provider + cache.params` configuration.
 - Redis Cluster slot routing, topology refresh, Sentinel discovery, and reconnects are handled by the Fred RedisProvider.
 - QueueFS cache keys use `{cache_key_prefix}:ov:*`; use different prefixes for deployments or tenants sharing one Redis cluster.
-- Redis backend runs three bounded `recover_stale` sweeps in a dedicated startup recovery thread at startup, 30 seconds, and 60 seconds to cover the heartbeat-expiry window after a container restart; it does not run long-lived periodic recovery.
+- Redis backend runs `recover_stale` sweeps in a dedicated recovery task: immediately at startup and then every 30 seconds (one heartbeat TTL) for the lifetime of the storage. Each sweep only re-queues messages whose owning instance heartbeat has expired, covering both the restart window of a container that died with live heartbeats and workers that stay alive but wedged (#4303).
 - If both `storage.agfs.queuefs.db_path` and legacy `storage.agfs.queue_db_path` are set, `storage.agfs.queuefs.db_path` wins.
 - If QueueFS backend is `memory`, any `db_path` or legacy `queue_db_path` is ignored.
 
