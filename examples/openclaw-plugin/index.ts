@@ -52,12 +52,12 @@ import {
   createMemoryOpenVikingContextEngine,
 } from "./context-engine.js";
 import {
+  buildMemoryLinesWithBudget,
+} from "./auto-recall.js";
+import {
   openClawSessionRefToOvStorageId,
   openClawSessionToOvStorageId,
 } from "./routing/identity-routing.js";
-import {
-  buildMemoryLinesWithBudget,
-} from "./auto-recall.js";
 import {
   normalizeRecallResourceTypes as normalizeResourceTypes,
   resolveRecallSearchPlan,

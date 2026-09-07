@@ -234,6 +234,7 @@ describe("context-engine assemble()", () => {
         queryExpansion: "auto",
         dedupTurns: 5,
       });
+      expect(client.searchContext.mock.calls[0]?.[1]).not.toHaveProperty("limit");
       const recorded = traces.query({ turn: "latest", sessionId: "session-transform-resource-default", limit: 10 }).entries[0]!;
       expect(recorded.resourceTypes).toEqual(["user", "agent"]);
   });
@@ -247,10 +248,8 @@ describe("context-engine assemble()", () => {
       const queryConfigStore = RuntimeQueryConfigStore.createInMemory(localCfg);
       await queryConfigStore.set(
         "session",
-        { agentId: "agent:session-dynamic-query", sessionId: "session-dynamic-query" },
+        { peerId: "agent:session-dynamic-query", sessionId: "session-dynamic-query" },
         {
-          recallLimit: 1,
-          candidateLimit: 3,
           scoreThreshold: 0.5,
           resourceTypes: ["user"],
           maxInjectedChars: 1000,
@@ -291,12 +290,55 @@ describe("context-engine assemble()", () => {
       expect(client.searchContext).toHaveBeenCalledTimes(1);
       expect(client.searchContext.mock.calls[0]?.[1]).toMatchObject({
         contextType: "memory",
-        limit: 1,
         scoreThreshold: 0.5,
         maxTokens: 250,
       });
+      expect(client.searchContext.mock.calls[0]?.[1]).not.toHaveProperty("limit");
       expect(String(result.messages[0]?.content)).toContain("High-confidence dynamic query memory.");
       expect(String(result.messages[0]?.content)).not.toContain("Low-confidence memory should be filtered.");
+  });
+
+  it("applies claw-level query config to transformContext auto-recall", async () => {
+      const localCfg = memoryOpenVikingConfigSchema.parse({
+        ...cfg,
+        autoRecall: true,
+        recallPreferAbstract: true,
+      });
+      const queryConfigStore = RuntimeQueryConfigStore.createInMemory(localCfg);
+      await queryConfigStore.set(
+        "claw",
+        { peerId: "agent:session-claw-query" },
+        { scoreThreshold: 0.42 },
+      );
+      const { engine, client } = makeEngine(
+        {
+          latest_archive_overview: "unused",
+          pre_archive_abstracts: [],
+          messages: [],
+          estimatedTokens: 0,
+          stats: makeStats(),
+        },
+        {
+          cfgOverrides: {
+            autoRecall: true,
+            recallPreferAbstract: true,
+          },
+          queryConfigStore,
+        },
+      );
+      client.searchContext.mockResolvedValueOnce({
+        entries: [],
+        rendered: "",
+        stats: { candidates: 0, used_tokens: 0 },
+      });
+
+      await engine.assemble({
+        sessionId: "session-claw-query",
+        messages: [{ role: "user", content: "which claw-level recall setting applies?" }],
+      });
+
+      expect(client.searchContext.mock.calls[0]?.[1]).toMatchObject({ scoreThreshold: 0.42 });
+      expect(client.searchContext.mock.calls[0]?.[1]).not.toHaveProperty("limit");
   });
 
   it("passes through transformContext messages when the latest message is not user", async () => {

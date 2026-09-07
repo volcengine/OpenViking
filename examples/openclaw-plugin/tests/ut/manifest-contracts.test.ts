@@ -179,8 +179,8 @@ describe("OpenClaw 5.5 package runtime contract", () => {
     expect(installManifest.compatibility).toMatchObject({
       minOpenclawVersion: "2026.5.27",
       recommendedOpenclawVersion: "2026.6.6",
-      minOpenvikingVersion: "0.4.1",
-      recommendedOpenvikingVersion: "0.4.1",
+      minOpenvikingVersion: "0.4.13",
+      recommendedOpenvikingVersion: "0.4.13",
     });
     // OpenClaw installers read these package fields as host-version floor metadata.
     expect(packageJson.engines?.openclaw).toBe(">=2026.5.27");

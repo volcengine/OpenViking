@@ -95,13 +95,13 @@ $OPENCLAW_STATE_DIR/openclaw.json
 | --- | --- | --- | --- | --- |
 | `autoRecall` | boolean | `true` | — | 是否在 assemble 阶段自动召回并注入上下文。 |
 | `autoRecallTimeoutMs` | number | `15000` | — | 服务端组装 context search 的总超时，范围 `1000` 到 `300000` ms。 |
-| `targetUri` | string | `viking://user/memories` | — | `memory_recall` / `memory_forget` 默认搜索范围。 |
+| `targetUri` | string | `viking://user/memories` | — | `ov_search` / `memory_forget` 的默认精确搜索范围；`memory_recall` 默认使用 context search，只有显式工具参数 `targetUri` 才走兼容的精确检索。 |
 | `recallTargetTypes` | string[] | `["user", "agent"]` | — | 自动召回和默认 `memory_recall` 的搜索类型。允许 `resource`、`user`、`agent`。 |
 | `recallResources` | boolean | `false` | `OPENVIKING_RECALL_RESOURCES` | 旧兼容开关；仅在未显式配置 `recallTargetTypes` 时追加 `resource`。 |
-| `recallLimit` | number | `6` | — | 自动召回按共享 context-search 契约映射为 coding quotas；显式 `memory_recall` 保留本地候选扩展。 |
-| `recallScoreThreshold` | number | `0.15` | — | 自动召回交给服务端过滤；显式 `memory_recall` 保留本地后处理。范围 `0` 到 `1`。 |
-| `recallMaxInjectedChars` | number | `4000` | — | 自动召回按 4 字符/token 换算为服务端 `max_tokens`；显式召回仍使用字符预算。范围 `100` 到 `50000`。 |
-| `recallPreferAbstract` | boolean | `false` | — | 自动召回为 true 时请求服务端 abstract detail；否则由服务端按类别选择层级。 |
+| `recallLimit` | number | 未配置（服务端当前默认 `10`） | — | auto-recall 与 `memory_recall` 的可选结果目标。未配置时省略 `quotas` 并使用服务端默认；显式值沿用标准 coding quota 映射。 |
+| `recallScoreThreshold` | number | `0.15` | — | auto-recall 与 `memory_recall` 都交给服务端过滤。范围 `0` 到 `1`。 |
+| `recallMaxInjectedChars` | number | `4000` | — | auto-recall 与 `memory_recall` 均按 4 字符/token 换算为服务端 `max_tokens`。范围 `100` 到 `50000`。 |
+| `recallPreferAbstract` | boolean | `false` | — | 为 true 时请求服务端 abstract detail；否则不指定 detail，由服务端按类别选择默认层级。 |
 | `recallMaxContentChars` | number | `5000` | — | 已废弃兼容项。 |
 | `recallTokenBudget` | number | 跟随 `recallMaxInjectedChars` | — | 已废弃别名；未配置 `recallMaxInjectedChars` 时可作为 fallback。 |
 
@@ -436,7 +436,7 @@ Manifest 中声明了 runtime slash alias：
 | `ov_read` | `uri` | 读取精确 `viking://...` OpenViking URI 的完整内容。 |
 | `ov_multi_read` | `uris` | 一次读取多个精确 `viking://...` URI，适合 overview + 同级切片。 |
 | `ov_list` | `uri`、`recursive?`、`simple?`、`limit?` | 列出 OpenViking 目录，用于补齐同级切片和 `.overview.md`。 |
-| `memory_recall` | `query`、`limit?`、`scoreThreshold?`、`targetUri?`、`resourceTypes?` | 显式召回长期记忆或资源；session 历史请用 archive 工具。 |
+| `memory_recall` | `query`、`limit?`、`scoreThreshold?`、`targetUri?`、`resourceTypes?` | 默认通过 session-aware context/coding search 召回；显式 `targetUri` 保留原来的精确 `/find` + read 路径。session 历史请用 archive 工具。 |
 | `ov_recall_trace` | `turn?`、`traceId?`、`sessionId?`、`sessionKey?`、`ovSessionId?`、`source?`、`resourceTypes?`、`since?`、`until?`、`includeContent?`、`limit?` | 查询 recall trace。 |
 | `memory_store` | `text`、`role?`、`sessionId?` | 将文本写入 session 并触发记忆抽取。 |
 | `memory_forget` | `uri?`、`query?`、`targetUri?`、`limit?`、`scoreThreshold?` | 删除记忆 URI，或先搜索后删除唯一高置信候选。 |

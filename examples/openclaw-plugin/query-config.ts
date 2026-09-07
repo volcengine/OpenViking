@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
-import type { MemoryOpenVikingConfig } from "./config.js";
+import type { MemoryOpenVikingConfig, ParsedMemoryOpenVikingConfig } from "./config.js";
 import { normalizeRecallResourceTypes, type RecallResourceType } from "./registries/recall-resource-types.js";
 
 export type RuntimeQueryParams = {
@@ -180,7 +180,10 @@ export class RuntimeQueryConfigStore {
     return new RuntimeQueryConfigStore({ staticConfig });
   }
 
-  constructor(private readonly options: { staticConfig: Required<MemoryOpenVikingConfig>; path?: string }) {}
+  constructor(private readonly options: {
+    staticConfig: Required<MemoryOpenVikingConfig> & Partial<Pick<ParsedMemoryOpenVikingConfig, "recallLimitConfigured">>;
+    path?: string;
+  }) {}
 
   async load(): Promise<void> {
     if (!this.options.path) return;
@@ -283,7 +286,7 @@ export class RuntimeQueryConfigStore {
       resourceTypeWeights: {},
       categoryWeights: {},
       sources: {
-        recallLimit: "static",
+        recallLimit: cfg.recallLimitConfigured === false ? "default" : "static",
         candidateMultiplier: "default",
         candidateLimit: "default",
         scoreThreshold: "static",

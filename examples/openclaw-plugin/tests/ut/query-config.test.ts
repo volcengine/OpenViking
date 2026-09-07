@@ -49,6 +49,18 @@ describe("resolveSessionQueryConfigKey", () => {
 });
 
 describe("RuntimeQueryConfigStore", () => {
+  it("distinguishes the server default from an explicit static recallLimit", async () => {
+    const defaultStore = RuntimeQueryConfigStore.createInMemory(
+      memoryOpenVikingConfigSchema.parse({}),
+    );
+    const explicitStore = RuntimeQueryConfigStore.createInMemory(
+      memoryOpenVikingConfigSchema.parse({ recallLimit: 10 }),
+    );
+
+    expect((await defaultStore.getEffective({ peerId: "assistant-a" })).sources.recallLimit).toBe("default");
+    expect((await explicitStore.getEffective({ peerId: "assistant-a" })).sources.recallLimit).toBe("static");
+  });
+
   it("merges default, static, claw, session, and request layers with field sources", async () => {
     const cfg = memoryOpenVikingConfigSchema.parse({
       recallLimit: 6,
@@ -63,14 +75,14 @@ describe("RuntimeQueryConfigStore", () => {
 
     const effective = await store.getEffective(
       { peerId: "assistant-a", ovSessionId: "ov-session" },
-      { scoreThreshold: 0.05 },
+      { recallLimit: 2, scoreThreshold: 0.05 },
     );
 
-    expect(effective.recallLimit).toBe(3);
+    expect(effective.recallLimit).toBe(2);
     expect(effective.scoreThreshold).toBe(0.05);
     expect(effective.resourceTypes).toEqual(["resource"]);
     expect(effective.candidateLimit).toBe(20);
-    expect(effective.sources.recallLimit).toBe("session");
+    expect(effective.sources.recallLimit).toBe("request");
     expect(effective.sources.scoreThreshold).toBe("request");
     expect(effective.sources.resourceTypes).toBe("claw");
   });

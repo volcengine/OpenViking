@@ -139,8 +139,8 @@ Trace 会记录实际召回范围，但召回范围本身由 `recallTargetTypes`
 | `resourceType` | `resource` \| `user` \| `agent` \| `archive` | 当前子搜索类型。 |
 | `targetUriInput` | string? | 输入或计划中的目标 URI。 |
 | `targetUriResolved` | string? | 解析后的目标 URI。 |
-| `limit` | number | 请求 limit。自动召回直接使用 `recallLimit`；显式 `memory_recall` 可先扩大候选数。 |
-| `scoreThreshold` | number? | 分数阈值。自动召回由服务端应用；显式 `memory_recall` 仍可在本地后处理。 |
+| `limit` | number | 插件侧诊断值。未显式设置 `recallLimit` 时，两条 recall 路径都省略 quotas 并使用服务端默认；显式值采用标准 coding quota 映射。 |
+| `scoreThreshold` | number? | 发送给服务端 context search 的分数阈值。 |
 | `durationMs` | number | 子搜索耗时，毫秒。 |
 | `total` | number | OpenViking 返回或插件统计的候选总数。 |
 | `results` | array | 候选结果摘要，最多 `traceRecallMaxResultsPerSearch` 条。 |
@@ -539,7 +539,7 @@ curl 'http://127.0.0.1:<gateway-port>/api/openviking/recall-traces/ov_search-178
 /ov-recall-trace --turn all --source memory_recall --limit 5
 ```
 
-重点查看 `resourceTypes` 和 `searches[].targetUriResolved`，确认是否默认查了 `viking://user/memories` 与 `agent recall target`，或是否按请求 `resourceTypes` 改变范围。
+重点查看 `resourceTypes` 和 context search trace，确认服务端是否按请求类型检索 `user`、`agent`、`resource`。显式传入 `targetUri` 时，`memory_recall` 会保留原来的精确 `/find` + read 路径，并在 trace 中记录该 URI。
 
 ### 9.3 排查 `/ov-search` 或 `ov_search` 为什么结果不符合预期
 

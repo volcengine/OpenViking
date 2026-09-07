@@ -18,7 +18,7 @@
 | claw / session 粒度 | claw 以 `agentId` 为 key；session 优先 `ovSessionId`，其次 `sessionId`，再次 `sessionKey` | `query-config.ts:158`、`query-config.ts:367` |
 | 自动召回接入 | assemble 阶段获取有效查询配置，传入自动召回链路 | `context-engine.ts:891` |
 | 显式工具接入 | `memory_recall`、`ov_search` 使用运行期有效配置作为默认值，请求参数仍可覆盖 | `index.ts:1218` |
-| 排序权重参数化 | `rankingWeights`、`categoryWeights`、`resourceTypeWeights` 参与客户端侧排序 | `memory-ranking.ts` |
+| 旧排序权重兼容 | `rankingWeights`、`categoryWeights`、`resourceTypeWeights` 仍可解析和持久化，但 context-based recall 不再客户端重排 | `query-config.ts` |
 | CLI 管理入口 | 新增 `/ov-query-config` get/set/unset/reset | `index.ts:1225`、`index.ts:1748` |
 | Gateway URI 详情 | 新增只读详情接口，不重新触发搜索 | `index.ts:945`、`index.ts:1132` |
 | Gateway 最近 ov_search 清单 | 从 recall trace 中扁平化最近一次 `ov_search` 结果 | `index.ts:1019`、`index.ts:1133` |
@@ -46,8 +46,8 @@
 request 覆盖参数
   > session 运行期配置
   > claw 运行期配置
-  > plugins.entries.openviking.config 静态配置
-  > 代码默认值
+  > plugins.entries.openviking.config 显式静态配置
+  > OpenViking 服务端默认值
 ```
 
 说明：
@@ -64,7 +64,7 @@ request 覆盖参数
 | 标量字段 | 高优先级覆盖低优先级，如 `recallLimit`、`scoreThreshold` |
 | 数组字段 | 整体覆盖，不拼接，如 `resourceTypes` |
 | 对象字段 | 浅合并，如 `rankingWeights`、`categoryWeights`、`resourceTypeWeights` |
-| `candidateLimit` | 显式设置优先于 `recallLimit * candidateMultiplier` 派生值；且最终保证 `candidateLimit >= recallLimit` |
+| `candidateLimit` | 旧兼容字段，仅影响显式 `memory_recall.targetUri` 的精确检索路径 |
 | 非法数值 | 归一化时 clamp 到允许范围；非法 `targetUri` 会报错 |
 | 持久化文件损坏 | 保留 last known-good 内存配置，不阻断查询链路 |
 
@@ -72,14 +72,14 @@ request 覆盖参数
 
 | 字段 | 语义 | 范围/约束 | 默认来源 |
 |---|---|---|---|
-| `recallLimit` | 最终注入或展示结果数 | 1-50 | 静态 `recallLimit` |
-| `candidateLimit` | 每个 target URI 的候选检索数 | 1-200 | 派生值 |
-| `candidateMultiplier` | 候选数倍数，候选数 = `recallLimit * candidateMultiplier` | 1-20 | 4 |
-| `scoreThreshold` | 客户端后处理分数阈值 | 0-1 | 静态 `recallScoreThreshold` |
-| `maxInjectedChars` | 自动召回注入字符预算 | 100-50000 | 静态 `recallMaxInjectedChars` |
-| `recallPreferAbstract` | 是否优先使用 abstract 注入 | boolean | 静态 `recallPreferAbstract` |
+| `recallLimit` | auto-recall 与 `memory_recall` 的结果目标；显式值使用标准 coding quota 映射 | 1-50 | 未显式设置时省略 quotas，由服务端默认（当前 10） |
+| `candidateLimit` | 仅影响显式 `memory_recall.targetUri` 兼容路径 | 1-200 | 派生值 |
+| `candidateMultiplier` | 仅用于派生该兼容路径的候选数 | 1-20 | 4 |
+| `scoreThreshold` | 发送给服务端 context search 的分数阈值 | 0-1 | 静态 `recallScoreThreshold` |
+| `maxInjectedChars` | 两种 recall 均换算为服务端 `max_tokens` | 100-50000 | 静态 `recallMaxInjectedChars` |
+| `recallPreferAbstract` | true 时请求 abstract，false 时使用服务端默认 detail | boolean | 静态 `recallPreferAbstract` |
 | `resourceTypes` | 默认搜索范围 | `resource` / `user` / `agent` | 静态 `recallTargetTypes` |
-| `targetUri` | 强制搜索单一 URI | 必须以 `viking://` 开头 | 无 |
+| `targetUri` | `ov_search` / `memory_forget` 的单一 URI 范围；作为显式工具参数时也启用 `memory_recall` 兼容路径 | 必须以 `viking://` 开头 | 无 |
 | `ovSearchLimit` | `ov_search` 默认返回数 | 1-100 | 10 |
 | `rankingWeights.baseScore` | 语义分权重 | 0-2 | 1 |
 | `rankingWeights.leaf` | 叶子节点加权 | 0-2 | 0.12 |
@@ -331,9 +331,9 @@ curl --get 'http://127.0.0.1:<gateway-port>/api/openviking/recall-traces/latest-
 |---|---|
 | 单元测试 | 参数归一化、clamp、分层合并、字段来源、持久化、热加载、unset/reset、session alias 匹配 |
 | 命令测试 | `/ov-query-config` set/get/unset/reset、权重参数、空 patch 拒绝 |
-| 工具链路测试 | session 配置影响后续 `memory_recall`、`ov_search` 默认 limit/targetUri |
+| 工具链路测试 | session 配置影响后续 `memory_recall` coding quotas 与 `ov_search` 的 limit/targetUri |
 | 自动召回场景测试 | context engine assemble 阶段使用 session 有效配置 |
-| 排序测试 | rankingWeights、categoryWeights、resourceTypeWeights 对入选排序生效 |
+| 排序测试 | 旧 rankingWeights、categoryWeights、resourceTypeWeights 配置仍可归一化，并用于显式 `memory_recall.targetUri` 兼容路径 |
 | Gateway API 测试 | URI detail route、latest ov_search list route、skill 过滤、detailUrl 生成 |
 | 安装脚本契约测试 | standalone package contract、resource-only recall 配置、JSON 传参、env 单引号转义 |
 | 类型检查 | `tsc -p tsconfig.json` |
@@ -384,7 +384,7 @@ production-style runtime config stability check passed: in-flight load serializa
 ### 7.1 已关闭风险
 
 - 动态配置优先级已通过单测与场景测试验证。
-- `candidateLimit` 显式配置优先级已修复并回归。
+- `candidateLimit` 显式配置优先级仍保留兼容；context-based recall 已不再消费该字段。
 - 权重参数 CLI 设置已补齐。
 - 空 patch 不再覆盖已有配置。
 - 持久化写入采用临时文件 + rename，写队列失败后可恢复。

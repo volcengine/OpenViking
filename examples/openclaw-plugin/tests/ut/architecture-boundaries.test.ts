@@ -538,22 +538,22 @@ describe("architecture boundaries", () => {
     expect(addSessionMessageBlock).toMatch(/new OpenVikingClient\([\s\S]*\{\s*transport\s*\}/);
   });
 
-  it("keeps memory_recall L2 content tests on the plugin-injected transport seam", () => {
+  it("keeps memory_recall context search tests on the plugin-injected transport seam", () => {
     const toolsTestSource = readFileSync(join(rootDir, "tests/ut/tools.test.ts"), "utf8");
-    const start = toolsTestSource.indexOf('it("fills L2 content and filters explicit recall results like auto-recall"');
-    const end = toolsTestSource.indexOf('  it("applies recallMaxInjectedChars to explicit memory_recall output"', start);
+    const start = toolsTestSource.indexOf('it("sends an explicit tool limit to context search and returns the server digest"');
+    const end = toolsTestSource.indexOf('  it("converts recallMaxInjectedChars to max_tokens without client-side filtering"', start);
 
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
 
-    const recallL2Block = toolsTestSource.slice(start, end);
-    expect(recallL2Block).not.toMatch(/vi\.stubGlobal\("fetch"/);
-    expect(recallL2Block).toContain("openVikingTransport");
+    const recallContextBlock = toolsTestSource.slice(start, end);
+    expect(recallContextBlock).not.toMatch(/vi\.stubGlobal\("fetch"/);
+    expect(recallContextBlock).toContain("openVikingTransport");
   });
 
-  it("keeps memory_recall injected char budget tests on the plugin-injected transport seam", () => {
+  it("keeps memory_recall token budget tests on the plugin-injected transport seam", () => {
     const toolsTestSource = readFileSync(join(rootDir, "tests/ut/tools.test.ts"), "utf8");
-    const start = toolsTestSource.indexOf('it("applies recallMaxInjectedChars to explicit memory_recall output"');
+    const start = toolsTestSource.indexOf('it("converts recallMaxInjectedChars to max_tokens without client-side filtering"');
     const end = toolsTestSource.indexOf('  it("applies /ov-query-config session settings to subsequent memory_recall"', start);
 
     expect(start).toBeGreaterThanOrEqual(0);

@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 
-import type { FindResult, FindResultItem } from "../client.js";
+import type { FindResult, FindResultItem, SearchContextEntry, SearchContextResult } from "../client.js";
 import type { BuildMemoryLinesWithBudgetOptions } from "../auto-recall.js";
 import type { RankingOptions } from "../memory-ranking.js";
 import type { EffectiveQueryConfig, QueryConfigContext, RuntimeQueryParams } from "../query-config.js";
@@ -37,6 +37,20 @@ export type OpenVikingMemoryRecallClient = {
       actorPeerId?: string;
     },
   ) => Promise<FindResult>;
+  searchContext: (
+    query: string,
+    options: {
+      sessionId?: string;
+      limit?: number;
+      scoreThreshold?: number;
+      contextType?: string | string[];
+      queryExpansion?: "off" | "auto";
+      maxTokens?: number;
+      detail?: "abstract" | "overview" | "full";
+      peerScope?: "actor" | "all";
+      actorPeerId?: string;
+    },
+  ) => Promise<SearchContextResult>;
   read: (uri: string, agentId?: string) => Promise<string>;
   getDefaultAgentId: () => string;
 };
@@ -61,7 +75,7 @@ export type OpenVikingMemoryRecallToolsDeps = {
     ctx: { ovSessionId?: string; agentId?: string },
   ) => {
     resourceTypes: RecallResourceType[];
-    searches: Array<{ resourceType: RecallResourceType; targetUri?: string; contextType: "memory" | "resource" }>;
+    searches: Array<{ resourceType: RecallResourceType; contextType: "memory" | "resource" }>;
     skipped: Array<{ resourceType: RecallResourceType; reason: "missing_session" }>;
   };
   postProcessMemories: (
@@ -98,6 +112,21 @@ export type OpenVikingMemoryRecallToolsDeps = {
 };
 
 function toTraceResult(
+  item: SearchContextEntry,
+  deps: OpenVikingMemoryRecallToolsDeps,
+): RecallTraceResult {
+  const resourceType = deps.inferRecallResourceType(item.uri);
+  return {
+    uri: item.uri,
+    resourceType,
+    category: item.category,
+    score: item.score,
+    abstractPreview: deps.previewText(item.text, deps.cfg.traceRecallPreviewChars),
+    resultType: resourceType === "resource" ? "resource" : "memory",
+  };
+}
+
+function toLegacyTraceResult(
   item: FindResultItem,
   resultType: RecallTraceResult["resultType"],
   deps: OpenVikingMemoryRecallToolsDeps,
@@ -113,6 +142,8 @@ function toTraceResult(
   };
 }
 
+const CHARS_PER_TOKEN = 4;
+
 export function registerOpenVikingMemoryRecallTools(
   deps: OpenVikingMemoryRecallToolsDeps,
 ): void {
@@ -125,16 +156,16 @@ export function registerOpenVikingMemoryRecallTools(
       parameters: Type.Object({
         query: Type.String({ description: "Search query" }),
         limit: Type.Optional(
-          Type.Number({ description: "Max results (default: plugin config)" }),
+          Type.Number({ description: "Recall result target (tool/config value, otherwise server default)" }),
         ),
         scoreThreshold: Type.Optional(
           Type.Number({ description: "Minimum score (0-1, default: plugin config)" }),
         ),
         targetUri: Type.Optional(
-          Type.String({ description: "Search scope URI (default: plugin config)" }),
+          Type.String({ description: "Exact search scope URI; preserves the legacy targeted recall path" }),
         ),
         resourceTypes: Type.Optional(
-          Type.Array(Type.String({ description: "resource, user, or agent; used when targetUri is omitted" })),
+          Type.Array(Type.String({ description: "resource, user, or agent" })),
         ),
       }),
       async execute(_toolCallId: string, params: Record<string, unknown>) {
@@ -143,24 +174,31 @@ export function registerOpenVikingMemoryRecallTools(
         }
         const session = deps.resolvePluginSessionRouting(ctx);
         const { query } = params as { query: string };
+        const hasTargetUri = typeof (params as { targetUri?: unknown }).targetUri === "string";
         const queryConfig = await deps.queryConfigStore.getEffective(deps.toQueryConfigContext(session), {
           recallLimit: typeof (params as { limit?: number }).limit === "number" ? (params as { limit: number }).limit : undefined,
           scoreThreshold: typeof (params as { scoreThreshold?: number }).scoreThreshold === "number" ? (params as { scoreThreshold: number }).scoreThreshold : undefined,
-          targetUri: typeof (params as { targetUri?: string }).targetUri === "string" ? (params as { targetUri: string }).targetUri : undefined,
+          targetUri: hasTargetUri ? (params as { targetUri: string }).targetUri : undefined,
           resourceTypes: Object.prototype.hasOwnProperty.call(params, "resourceTypes")
             ? (params as { resourceTypes?: unknown }).resourceTypes as RuntimeQueryParams["resourceTypes"]
             : undefined,
         });
         const limit = queryConfig.recallLimit;
+        const limitSource = queryConfig.sources?.recallLimit ?? "static";
+        const limitConfigured = limitSource !== "default";
         const scoreThreshold = queryConfig.scoreThreshold;
-        const targetUri =
-          typeof (params as { targetUri?: string }).targetUri === "string"
-            ? (params as { targetUri: string }).targetUri
-            : queryConfig.targetUri;
         const requestedResourceTypes = Object.prototype.hasOwnProperty.call(params, "resourceTypes")
           ? (params as { resourceTypes?: unknown }).resourceTypes
           : queryConfig.resourceTypes;
-        const requestLimit = queryConfig.candidateLimit;
+        const searchPlan = deps.resolveRecallSearchPlan(requestedResourceTypes ?? deps.cfg.recallTargetTypes, {
+          ovSessionId: session.ovSessionId,
+          agentId: session.agentId,
+        });
+        const contextTypes = [...new Set(searchPlan.searches.map((search) => search.contextType))];
+        const maxTokens = Math.min(
+          32_000,
+          Math.max(64, Math.round(queryConfig.maxInjectedChars / CHARS_PER_TOKEN)),
+        );
 
         const recallClient = await deps.getClient();
         if (deps.cfg.logFindRequests) {
@@ -170,109 +208,171 @@ export function registerOpenVikingMemoryRecallTools(
           );
         }
 
-        let result: FindResult;
-        let memoryRecallSearches: RecallTraceEntry["searches"] = [];
-        if (targetUri) {
-          result = await recallClient.find(
-            query,
-          {
+        if (hasTargetUri) {
+          const targetUri = queryConfig.targetUri;
+          if (!targetUri) {
+            throw new Error("targetUri must be a non-empty viking:// URI");
+          }
+          const requestLimit = queryConfig.candidateLimit;
+          const startedAt = Date.now();
+          const result = await recallClient.find(query, {
             targetUri,
             limit: requestLimit,
             scoreThreshold: 0,
             actorPeerId: session.actorPeerId,
-          },
-        );
-          const traceResults = [
-            ...(result.memories ?? []).map((item) => toTraceResult(item, "memory", deps)),
-            ...(result.resources ?? []).map((item) => toTraceResult(item, "resource", deps)),
-          ].slice(0, deps.cfg.traceRecallMaxResultsPerSearch);
-          memoryRecallSearches = [{
-            resourceType: deps.inferRecallResourceType(targetUri) ?? "resource",
-            targetUriInput: targetUri,
-            targetUriResolved: targetUri,
+          });
+          const durationMs = Date.now() - startedAt;
+          const leafOnly = (result.memories ?? []).filter((item) => !item.level || item.level === 2);
+          const processed = deps.postProcessMemories(leafOnly, {
             limit: requestLimit,
             scoreThreshold,
-            durationMs: 0,
-            total: result.total ?? traceResults.length,
-            results: traceResults,
-          }];
-        } else {
-          const searchPlan = deps.resolveRecallSearchPlan(requestedResourceTypes ?? deps.cfg.recallTargetTypes, {
-            ovSessionId: session.ovSessionId,
-            agentId: session.agentId,
           });
-          const settled = await Promise.allSettled(searchPlan.searches.map((search) =>
-            recallClient.find(
-              query,
-              {
-                targetUri: search.targetUri,
+          const memories = deps.pickMemoriesForInjection(processed, limit, query, scoreThreshold, {
+            weights: queryConfig.rankingWeights,
+            categoryWeights: queryConfig.categoryWeights,
+            resourceTypeWeights: queryConfig.resourceTypeWeights,
+          });
+          const traceResults = [
+            ...(result.memories ?? []).map((item) => toLegacyTraceResult(item, "memory", deps)),
+            ...(result.resources ?? []).map((item) => toLegacyTraceResult(item, "resource", deps)),
+          ].slice(0, deps.cfg.traceRecallMaxResultsPerSearch);
+          const recordTargetedTrace = async (injectedUris: Set<string>) => {
+            await deps.traceRecorder?.recordAndFlush?.({
+              schemaVersion: "1.0",
+              traceId: deps.createTraceId("memory_recall"),
+              ts: Date.now(),
+              sessionId: session.sessionId,
+              sessionKey: session.sessionKey,
+              ovSessionId: session.ovSessionId,
+              agentId: session.agentId,
+              source: "memory_recall",
+              operationType: "semantic_find",
+              resourceTypes: [deps.inferRecallResourceType(targetUri) ?? "resource"],
+              trigger: deps.boundTraceQuery(query, deps.cfg.traceRecallQueryMaxChars),
+              searches: [{
+                resourceType: deps.inferRecallResourceType(targetUri) ?? "resource",
+                targetUriInput: targetUri,
+                targetUriResolved: targetUri,
                 limit: requestLimit,
-                scoreThreshold: 0,
-                contextType: search.contextType,
-                actorPeerId: session.actorPeerId,
+                scoreThreshold,
+                durationMs,
+                total: result.total ?? traceResults.length,
+                results: traceResults,
+              }],
+              selected: memories.map((item) => ({
+                uri: item.uri,
+                resourceType: deps.inferRecallResourceType(item.uri),
+                category: item.category,
+                score: item.score,
+                abstractPreview: deps.previewText(item.abstract || item.overview, deps.cfg.traceRecallPreviewChars),
+                injected: injectedUris.has(item.uri),
+                displayed: injectedUris.has(item.uri),
+              })),
+              stats: {
+                candidateCount: leafOnly.length,
+                selectedCount: memories.length,
+                injectedCount: injectedUris.size,
               },
-            ),
-          ));
-          const allMemories: FindResultItem[] = [];
-          for (let index = 0; index < settled.length; index += 1) {
-            const s = settled[index]!;
-            const search = searchPlan.searches[index]!;
-            if (s.status === "fulfilled") {
-              allMemories.push(...(s.value.memories ?? []), ...(s.value.resources ?? []));
-              memoryRecallSearches.push({
-                resourceType: search.resourceType,
-                targetUriInput: search.targetUri,
-                targetUriResolved: search.targetUri,
-                limit: requestLimit,
-                scoreThreshold,
-                durationMs: 0,
-                total: s.value.total ?? ((s.value.memories ?? []).length + (s.value.resources ?? []).length),
-                results: [
-                  ...(s.value.memories ?? []).map((item) => toTraceResult(item, "memory", deps)),
-                  ...(s.value.resources ?? []).map((item) => toTraceResult(item, "resource", deps)),
-                ].slice(0, deps.cfg.traceRecallMaxResultsPerSearch),
-              });
-            } else {
-              memoryRecallSearches.push({
-                resourceType: search.resourceType,
-                targetUriInput: search.targetUri,
-                targetUriResolved: search.targetUri,
-                limit: requestLimit,
-                scoreThreshold,
-                durationMs: 0,
-                total: 0,
-                results: [],
-                error: s.reason instanceof Error ? s.reason.message : String(s.reason),
-              });
-            }
+            });
+          };
+          if (memories.length === 0) {
+            await recordTargetedTrace(new Set());
+            return {
+              content: [{ type: "text", text: "No relevant OpenViking memories found." }],
+              details: { count: 0, total: result.total ?? 0, scoreThreshold, targetUri },
+            };
           }
-          const uniqueMemories = allMemories.filter((memory, index, self) =>
-            index === self.findIndex((m) => m.uri === memory.uri)
+          const { lines: memoryLines } = await deps.buildMemoryLinesWithBudget(
+            memories,
+            (uri) => recallClient.read(uri, session.actorPeerId),
+            {
+              recallPreferAbstract: false,
+              recallMaxInjectedChars: queryConfig.maxInjectedChars,
+            },
           );
-          const leafOnly = uniqueMemories.filter((m) => !m.level || m.level === 2);
-          result = {
-            memories: leafOnly,
-            total: leafOnly.length,
+          if (memoryLines.length === 0) {
+            await recordTargetedTrace(new Set());
+            return {
+              content: [{
+                type: "text",
+                text: `No complete OpenViking memories fit recallMaxInjectedChars=${queryConfig.maxInjectedChars}.`,
+              }],
+              details: {
+                count: 0,
+                memories,
+                total: result.total ?? memories.length,
+                scoreThreshold,
+                requestLimit,
+                targetUri,
+                recallMaxInjectedChars: queryConfig.maxInjectedChars,
+              },
+            };
+          }
+          await recordTargetedTrace(new Set(memories.slice(0, memoryLines.length).map((item) => item.uri)));
+          return {
+            content: [{
+              type: "text",
+              text: `Found ${memoryLines.length} memories:\n\n${memoryLines.join("\n")}`,
+            }],
+            details: {
+              count: memoryLines.length,
+              memories,
+              total: result.total ?? memories.length,
+              scoreThreshold,
+              requestLimit,
+              targetUri,
+              recallMaxInjectedChars: queryConfig.maxInjectedChars,
+            },
           };
         }
 
-        const leafOnly = (result.memories ?? []).filter((m) => !m.level || m.level === 2);
-        const processed = deps.postProcessMemories(leafOnly, {
-          limit: requestLimit,
+        const startedAt = Date.now();
+        const result = await recallClient.searchContext(query, {
+          sessionId: session.ovSessionId,
+          ...(limitConfigured ? { limit } : {}),
           scoreThreshold,
+          contextType: contextTypes.length === 1 ? contextTypes[0] : contextTypes,
+          queryExpansion: "auto",
+          maxTokens,
+          detail: queryConfig.recallPreferAbstract ? "abstract" : undefined,
+          peerScope: "actor",
+          actorPeerId: session.actorPeerId,
         });
-        const memories = deps.pickMemoriesForInjection(processed, limit, query, scoreThreshold, {
-          weights: queryConfig.rankingWeights,
-          categoryWeights: queryConfig.categoryWeights,
-          resourceTypeWeights: queryConfig.resourceTypeWeights,
+        const durationMs = Date.now() - startedAt;
+        const entries = (result.entries ?? []).filter((entry) => Boolean(entry.uri));
+        const candidateCount = typeof result.stats?.candidates === "number"
+          ? result.stats.candidates
+          : entries.length;
+        const rawRetrievalErrors = result.stats?.retrieval_errors;
+        const retrievalErrors = Array.isArray(rawRetrievalErrors)
+          ? rawRetrievalErrors.map((error) => String(error))
+          : [];
+        const memoryRecallSearches: RecallTraceEntry["searches"] = searchPlan.searches.map((search) => {
+          const matching = entries.filter((entry) => {
+            const isResource = deps.inferRecallResourceType(entry.uri) === "resource";
+            return search.contextType === "resource" ? isResource : !isResource;
+          });
+          return {
+            resourceType: search.resourceType,
+            contextType: search.contextType,
+            limit,
+            scoreThreshold,
+            durationMs,
+            total: matching.length,
+            results: matching
+              .map((entry) => toTraceResult(entry, deps))
+              .slice(0, deps.cfg.traceRecallMaxResultsPerSearch),
+            error: retrievalErrors.length > 0 ? retrievalErrors.join("; ") : undefined,
+          };
         });
-        const candidateTraceResults = leafOnly
-          .map((item) => toTraceResult(item, deps.inferRecallResourceType(item.uri) === "resource" ? "resource" : "memory", deps))
-          .slice(0, deps.cfg.traceRecallMaxResultsPerSearch);
-        const traceResourceTypes = [...new Set(
-          (targetUri ? [deps.inferRecallResourceType(targetUri)] : memoryRecallSearches.map((search) => search.resourceType))
-            .filter((resourceType): resourceType is RecallResourceType => Boolean(resourceType)),
-        )];
+        const rendered = result.digest?.trim() || result.rendered?.trim() || "";
+        const displayedUris = new Set(rendered ? entries.map((entry) => entry.uri) : []);
+        const memories = entries.map((entry) => ({
+          uri: entry.uri,
+          category: entry.category,
+          score: entry.score,
+          abstract: entry.text,
+        }));
         const recordMemoryRecallTrace = async (injectedUris: Set<string>) => {
           await deps.traceRecorder?.recordAndFlush?.({
             schemaVersion: "1.0",
@@ -284,82 +384,45 @@ export function registerOpenVikingMemoryRecallTools(
             agentId: session.agentId,
             source: "memory_recall",
             operationType: "semantic_find",
-            resourceTypes: traceResourceTypes.length > 0 ? traceResourceTypes : ["resource"],
+            resourceTypes: searchPlan.resourceTypes,
             trigger: deps.boundTraceQuery(query, deps.cfg.traceRecallQueryMaxChars),
-            searches: memoryRecallSearches.length > 0 ? memoryRecallSearches : [{
-              resourceType: "resource",
-              targetUriInput: targetUri,
-              targetUriResolved: targetUri ?? "viking://resources",
-              limit: requestLimit,
-              scoreThreshold,
-              durationMs: 0,
-              total: result.total ?? leafOnly.length,
-              results: candidateTraceResults,
-            }],
-            selected: memories.map((item) => ({
-              uri: item.uri,
-              resourceType: deps.inferRecallResourceType(item.uri),
-              category: item.category,
-              score: item.score,
-              abstractPreview: deps.previewText(item.abstract || item.overview, deps.cfg.traceRecallPreviewChars),
-              injected: injectedUris.has(item.uri),
-              displayed: injectedUris.has(item.uri),
+            searches: memoryRecallSearches,
+            selected: entries.map((entry) => ({
+              uri: entry.uri,
+              resourceType: deps.inferRecallResourceType(entry.uri),
+              category: entry.category,
+              score: entry.score,
+              abstractPreview: deps.previewText(entry.text, deps.cfg.traceRecallPreviewChars),
+              injected: injectedUris.has(entry.uri),
+              displayed: injectedUris.has(entry.uri),
             })),
             stats: {
-              candidateCount: leafOnly.length,
-              selectedCount: memories.length,
+              candidateCount,
+              selectedCount: entries.length,
               injectedCount: injectedUris.size,
+              estimatedTokens: typeof result.stats?.used_tokens === "number"
+                ? result.stats.used_tokens
+                : undefined,
             },
           });
         };
-        if (memories.length === 0) {
+        if (entries.length === 0 || !rendered) {
           await recordMemoryRecallTrace(new Set());
           return {
             content: [{ type: "text", text: "No relevant OpenViking memories found." }],
-            details: { count: 0, total: result.total ?? 0, scoreThreshold },
+            details: { count: 0, total: candidateCount, scoreThreshold, limitSource },
           };
         }
-        const { lines: memoryLines } = await deps.buildMemoryLinesWithBudget(
-          memories,
-          (uri) => recallClient.read(uri, session.actorPeerId),
-          {
-            recallPreferAbstract: false,
-            recallMaxInjectedChars: queryConfig.maxInjectedChars,
-          },
-        );
-        if (memoryLines.length === 0) {
-          await recordMemoryRecallTrace(new Set());
-          return {
-            content: [
-              {
-                type: "text",
-                text: `No complete OpenViking memories fit recallMaxInjectedChars=${queryConfig.maxInjectedChars}.`,
-              },
-            ],
-            details: {
-              count: 0,
-              memories,
-              total: result.total ?? memories.length,
-              scoreThreshold,
-              requestLimit,
-              recallMaxInjectedChars: queryConfig.maxInjectedChars,
-            },
-          };
-        }
-        await recordMemoryRecallTrace(new Set(memories.slice(0, memoryLines.length).map((item) => item.uri)));
+        await recordMemoryRecallTrace(displayedUris);
         return {
-          content: [
-            {
-              type: "text",
-              text: `Found ${memoryLines.length} memories:\n\n${memoryLines.join("\n")}`,
-            },
-          ],
+          content: [{ type: "text", text: rendered }],
           details: {
-            count: memoryLines.length,
+            count: entries.length,
             memories,
-            total: result.total ?? memories.length,
+            total: candidateCount,
             scoreThreshold,
-            requestLimit,
+            requestLimit: limitConfigured ? limit : undefined,
+            limitSource,
             recallMaxInjectedChars: queryConfig.maxInjectedChars,
           },
         };
