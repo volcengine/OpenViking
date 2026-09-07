@@ -46,6 +46,7 @@ from openviking.utils.git_auth import (
     raise_git_auth_error,
 )
 from openviking.utils.network_guard import RequestValidator
+from openviking.utils.zip_safe import ZipExtractionLimit
 from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.utils.logger import get_logger
 
@@ -738,6 +739,9 @@ class GitAccessor(DataAccessor):
                 ) as resp,
                 open(zip_path, "wb") as f,
             ):
+                content_length = resp.headers.get("Content-Length")
+                if content_length and int(content_length) > ZipExtractionLimit().max_total_bytes:
+                    raise ValueError(f"GitHub ZIP too large to download: {content_length} bytes")
                 shutil.copyfileobj(resp, f)
 
         try:
@@ -837,6 +841,9 @@ class GitAccessor(DataAccessor):
                 ) as resp,
                 open(zip_path, "wb") as f,
             ):
+                content_length = resp.headers.get("Content-Length")
+                if content_length and int(content_length) > ZipExtractionLimit().max_total_bytes:
+                    raise ValueError(f"GitLab ZIP too large to download: {content_length} bytes")
                 shutil.copyfileobj(resp, f)
 
         try:

@@ -7,6 +7,7 @@ import re
 import shutil
 import zipfile
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 _UTF8_FLAG = 0x800
@@ -89,7 +90,39 @@ def iter_safe_zip_members(zipf: zipfile.ZipFile) -> Iterator[tuple[Path, zipfile
         yield _safe_zip_member_path(member.filename), member
 
 
-def safe_extract_zip(zipf: zipfile.ZipFile, dest_dir: Path) -> None:
+@dataclass(frozen=True)
+class ZipExtractionLimit:
+    """Caps that reject decompression bombs before and during extraction."""
+
+    max_total_bytes: int = 2 * 1024**3  # 2 GiB uncompressed aggregate
+    max_per_file_bytes: int = 512 * 1024**2  # 512 MiB per member
+    max_member_count: int = 10_000
+    max_compression_ratio: int = 1_000  # uncompressed : compressed
+
+
+def _check_zip_extraction_limits(zipf: zipfile.ZipFile, limits: ZipExtractionLimit) -> None:
+    """Reject archives whose infolist metadata signals a decompression bomb.
+
+    Inspects member count, aggregate uncompressed size, and overall
+    compression ratio before any byte is written to disk.
+    """
+    infos = zipf.infolist()
+    if len(infos) > limits.max_member_count:
+        raise ValueError(f"Zip member count {len(infos)} exceeds limit {limits.max_member_count}")
+    total_uncompressed = sum(i.file_size for i in infos)
+    if total_uncompressed > limits.max_total_bytes:
+        raise ValueError(
+            f"Zip total uncompressed size {total_uncompressed} exceeds limit "
+            f"{limits.max_total_bytes}"
+        )
+    total_compressed = sum(i.compress_size for i in infos)
+    if total_compressed and total_uncompressed / total_compressed > limits.max_compression_ratio:
+        raise ValueError(f"Zip compression ratio exceeds limit {limits.max_compression_ratio}")
+
+
+def safe_extract_zip(
+    zipf: zipfile.ZipFile, dest_dir: Path, limits: ZipExtractionLimit | None = None
+) -> None:
     """Extract ZIP archive with Zip Slip protection.
 
     Validates every member path stays within dest_dir before extraction.
@@ -97,7 +130,10 @@ def safe_extract_zip(zipf: zipfile.ZipFile, dest_dir: Path) -> None:
     traversal (..). Windows-style backslash separators are normalized to
     forward slash semantics before extraction.
     """
+    if limits is None:
+        limits = ZipExtractionLimit()
     dest_dir = Path(dest_dir).resolve()
+    _check_zip_extraction_limits(zipf, limits)
     for safe_rel_path, member in iter_safe_zip_members(zipf):
         member_path = (dest_dir / safe_rel_path).resolve()
         # Ensure the resolved path is inside dest_dir
@@ -107,6 +143,11 @@ def safe_extract_zip(zipf: zipfile.ZipFile, dest_dir: Path) -> None:
             member_path.mkdir(parents=True, exist_ok=True)
             continue
 
+        if member.file_size > limits.max_per_file_bytes:
+            raise ValueError(
+                f"Zip member {member.filename!r} size {member.file_size} exceeds "
+                f"per-file limit {limits.max_per_file_bytes}"
+            )
         member_path.parent.mkdir(parents=True, exist_ok=True)
         with zipf.open(member) as source, member_path.open("wb") as target:
             shutil.copyfileobj(source, target)
