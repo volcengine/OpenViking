@@ -1,6 +1,6 @@
 # Debug
 
-Diagnostic endpoints for inspecting the vector index maintained by OpenViking. They are intended for troubleshooting and operational verification — for example, confirming that a URI actually has vector records, or what metadata (such as tags) is attached to them. They are not part of the stable retrieval surface and the record shape may vary by vector backend.
+Diagnostic endpoints for inspecting the vector index maintained by OpenViking. They are intended for troubleshooting and operational verification — for example, confirming that a URI actually has vector records, or what metadata (such as tags) is attached to them. On the reference self-hosted deployment (v0.4.17.dev7 with Qwen3-Embedding-8B) these endpoints were used to verify tag propagation and record state after ingestion and reindexing. They are not part of the stable retrieval surface and the record shape may vary by vector backend.
 
 All endpoints are read-only and apply the same tenant isolation as regular requests: records are filtered to the account/user (and peer, when `X-OpenViking-Actor-Peer` is set) of the calling context.
 

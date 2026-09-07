@@ -96,7 +96,7 @@ class FindResult:
 
 **Result Buckets**
 
-`FindResult` partitions hits into three independent buckets — `memories`, `resources`, and `skills`. A hit appears in exactly one bucket, so reading only a single bucket (for example, only `result["memories"]`) silently misses every hit in the other buckets, including knowledge-layer hits in `resources` and `skills`. Observed on v0.4.17.dev7: consumers that iterate only one bucket reported "no results" while matching content sat in another bucket. Iterate all three buckets, or use `context_type` / `target_uri` to scope the query intentionally, and do not infer "no results" from one empty bucket.
+`FindResult` partitions hits into three independent buckets — `memories`, `resources`, and `skills`. A hit appears in exactly one bucket, so reading only a single bucket (for example, only `result["memories"]`) silently misses every hit in the other buckets, including knowledge-layer hits in `resources` and `skills`. Observed on a self-hosted v0.4.17.dev7 deployment with Qwen3-Embedding-8B: consumers that iterate only one bucket reported "no results" while matching content sat in another bucket. Iterate all three buckets, or use `context_type` / `target_uri` to scope the query intentionally, and do not infer "no results" from one empty bucket.
 
 **MatchedContext Structure**
 
@@ -1133,7 +1133,7 @@ curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://resources/do
 
 ## Behavioral Notes
 
-The behaviors in this section were observed on v0.4.17.dev7 and are deliberately worded as observations rather than contractual guarantees.
+The behaviors in this section were observed on a self-hosted v0.4.17.dev7 deployment with Qwen3-Embedding-8B and are deliberately worded as observations rather than contractual guarantees.
 
 ### Tag Filtering and `set_tags` Propagation
 

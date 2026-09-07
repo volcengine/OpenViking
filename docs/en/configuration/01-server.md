@@ -144,7 +144,7 @@ Changing the model or `dimension` can make existing vector collections incompati
 |---|---|---|---|
 | `max_input_tokens` | integer; `0` disables | `4096` | Maximum estimated raw-text tokens per embedding input; oversized inputs are truncated before the request is sent |
 
-**Truncation semantics (observed on v0.4.17.dev7)**
+**Truncation semantics (observed on a self-hosted v0.4.17.dev7 deployment with Qwen3-Embedding-8B)**
 
 - The token estimate is character-based: CJK characters count as one token each and other characters as roughly four characters per token (`openviking/utils/embedding_input.py:estimate_embedding_input_tokens()`).
 - When the estimate exceeds the limit, the input is truncated from the head — the beginning of the text is kept — and a `\n...(truncated for embedding)` suffix is appended (`openviking/utils/embedding_input.py:truncate_embedding_input()`).
