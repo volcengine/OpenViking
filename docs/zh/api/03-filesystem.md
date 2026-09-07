@@ -23,12 +23,13 @@ OpenViking 提供类 Unix 的文件系统操作来管理上下文。
 | abs_limit | int | 否 | 256 | `agent` 输出中的摘要长度限制 |
 | show_all_hidden | bool | 否 | False | 像 `-a` 一样包含隐藏文件 |
 | node_limit | int | 否 | 1000 | 最大返回节点数 |
+| offset | int | 否 | 0 | 跳过的可见节点数 |
 | limit | int | 否 | None | `node_limit` 的别名 |
-| sort_by | str | 否 | None | 在应用 `node_limit` 前，分别按 `name` 或 `mtime` 排序目录组和文件组；目录仍优先 |
+| sort_by | str | 否 | None | 在分页前，分别按 `name` 或 `mtime` 排序目录组和文件组；目录仍优先 |
 | sort_order | str | 否 | `asc` | 排序方向：`asc` 或 `desc` |
 | tags | string[] | 否 | 未设置 | 仅返回同时匹配全部 `k=v` 检索标签的条目 |
 
-`tags` 使用 AND 语义，并在 `node_limit` 前应用。带 tags 过滤的响应会返回 `tags`；未过滤时需传 `include_tags=true`（CLI：`-f tags`）才返回它们。`simple=true` 保持仅返回路径。
+`tags` 使用 AND 语义，并在 `offset` 和 `limit` 前应用。带 tags 过滤的响应会返回 `tags`；未过滤时需传 `include_tags=true`（CLI：`-f tags`）才返回它们。`simple=true` 保持仅返回路径。
 
 **条目结构**
 
@@ -68,7 +69,8 @@ OpenViking 提供类 Unix 的文件系统操作来管理上下文。
 ```python
 entries = client.ls(
     uri="viking://resources/",
-    node_limit=200,
+    offset=100,
+    limit=100,
     sort_by="mtime",
     sort_order="desc",
     tags=["team=search", "env=prod"],
@@ -104,7 +106,7 @@ for _, entry := range entries {
 **HTTP API**
 
 ```
-GET /api/v1/fs/ls?uri={uri}&simple={bool}&recursive={bool}&tags={k=v}&include_tags={bool}
+GET /api/v1/fs/ls?uri={uri}&offset={int}&limit={int}
 ```
 
 ```bash
@@ -180,16 +182,23 @@ openviking ls viking://resources/ --fields tags
 | abs_limit | int | 否 | HTTP：256；SDK：128 | `agent` 输出中的摘要长度限制 |
 | show_all_hidden | bool | 否 | False | 像 `-a` 一样包含隐藏文件 |
 | node_limit | int | 否 | 1000 | 最大返回节点数 |
+| offset | int | 否 | 0 | 跳过的可见节点数 |
+| limit | int | 否 | None | `node_limit` 的别名 |
 | level_limit | int | 否 | 3 | 最大目录遍历深度 |
 | tags | string[] | 否 | 未设置 | 仅保留同时匹配全部 `k=v` 检索标签的节点 |
 
-`tags` 使用 AND 语义，并在 `node_limit` 前应用。带 tags 过滤的响应会返回 `tags`；未过滤时需传 `include_tags=true` 才返回它们，否则会省略 tags 以避免额外的向量库读取。
+`tags` 使用 AND 语义，并在 `offset` 和 `limit` 前应用。带 tags 过滤的响应会返回 `tags`；未过滤时需传 `include_tags=true` 才返回它们，否则会省略 tags 以避免额外的向量库读取。
 
 
 **Python HTTP SDK**
 
 ```python
-entries = client.tree(uri="viking://resources/", tags=["team=search", "env=prod"])
+entries = client.tree(
+    uri="viking://resources/",
+    offset=100,
+    limit=100,
+    tags=["team=search", "env=prod"],
+)
 for entry in entries:
     type_str = "dir" if entry['isDir'] else "file"
     print(f"{entry['rel_path']} - {type_str}")
@@ -222,7 +231,7 @@ for _, entry := range entries {
 **HTTP API**
 
 ```
-GET /api/v1/fs/tree?uri={uri}&tags={k=v}&include_tags={bool}
+GET /api/v1/fs/tree?uri={uri}&offset={int}&limit={int}
 ```
 
 ```bash

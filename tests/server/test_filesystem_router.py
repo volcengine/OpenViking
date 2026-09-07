@@ -369,23 +369,39 @@ async def test_ls_user_container_lists_only_caller_space(app, client, service):
 
 
 @pytest.mark.asyncio
-async def test_ls_forwards_tags_to_filesystem_service(monkeypatch):
-    seen = {}
+async def test_ls_and_tree_forward_pagination_to_filesystem_service(monkeypatch):
+    seen = {"ls": {}, "tree": {}}
 
     async def fake_ls(uri, **kwargs):
-        seen.update(uri=uri, **kwargs)
+        seen["ls"].update(uri=uri, **kwargs)
+        return []
+
+    async def fake_tree(uri, **kwargs):
+        seen["tree"].update(uri=uri, **kwargs)
         return []
 
     monkeypatch.setattr(
         filesystem,
         "get_service",
-        lambda: SimpleNamespace(fs=SimpleNamespace(ls=fake_ls)),
+        lambda: SimpleNamespace(fs=SimpleNamespace(ls=fake_ls, tree=fake_tree)),
     )
 
     await filesystem.ls(
         uri="viking://resources",
         tags=["team=search", "env=prod"],
+        offset=4,
+        limit=9,
+        _ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER),
+    )
+    await filesystem.tree(
+        uri="viking://resources",
+        offset=3,
+        limit=5,
         _ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER),
     )
 
-    assert seen["tags"] == ["team=search", "env=prod"]
+    assert seen["ls"]["tags"] == ["team=search", "env=prod"]
+    assert seen["ls"]["offset"] == 4
+    assert seen["ls"]["node_limit"] == 9
+    assert seen["tree"]["offset"] == 3
+    assert seen["tree"]["node_limit"] == 5

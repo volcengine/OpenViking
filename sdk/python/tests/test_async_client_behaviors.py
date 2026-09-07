@@ -265,9 +265,7 @@ async def test_async_http_client_sends_event_memory_tag_configuration():
     client._handle_response_data = lambda _response: {"result": {"status": "ok"}}
     config = {"events": {"tags": ["team=search", "channel=web"]}}
 
-    await client.create_session(
-        "tagged-session", options={"memory_extraction_config": config}
-    )
+    await client.create_session("tagged-session", options={"memory_extraction_config": config})
     await client.update_session_config(
         "tagged-session",
         {
@@ -1322,10 +1320,12 @@ async def test_ls_and_tree_pass_query_params():
         abs_limit=32,
         show_all_hidden=True,
         node_limit=44,
+        offset=5,
+        limit=7,
         sort_by="mtime",
         sort_order="desc",
     )
-    await client.tree("viking://resources/", level_limit=2)
+    await client.tree("viking://resources/", level_limit=2, offset=4, limit=6)
     await client.tree("viking://resources/", level_limit=0)
     await client.tree("viking://resources/")
 
@@ -1340,13 +1340,16 @@ async def test_ls_and_tree_pass_query_params():
             "abs_limit": 32,
             "show_all_hidden": True,
             "node_limit": 44,
+            "offset": 5,
+            "limit": 7,
             "sort_by": "mtime",
             "sort_order": "desc",
         },
     }
+    assert fake_http.get.await_args_list[1].kwargs["params"]["offset"] == 4
+    assert fake_http.get.await_args_list[1].kwargs["params"]["limit"] == 6
     assert [
-        tree_call.kwargs["params"]["level_limit"]
-        for tree_call in fake_http.get.await_args_list[1:]
+        tree_call.kwargs["params"]["level_limit"] for tree_call in fake_http.get.await_args_list[1:]
     ] == [2, 0, 3]
 
 

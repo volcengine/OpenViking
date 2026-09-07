@@ -23,12 +23,14 @@ List directory contents.
 | abs_limit | int | No | 256 | Abstract length limit for `agent` output |
 | show_all_hidden | bool | No | False | Include hidden files like `-a` |
 | node_limit | int | No | 1000 | Maximum number of results |
-| sort_by | str | No | None | Sort directories and files within their groups by `name` or `mtime` before applying `node_limit`; directories remain first |
+| offset | int | No | 0 | Number of visible results to skip |
+| limit | int | No | None | Alias for `node_limit` |
+| sort_by | str | No | None | Sort directories and files within their groups by `name` or `mtime` before pagination; directories remain first |
 | sort_order | str | No | `asc` | Sort direction: `asc` or `desc` |
 | extra_fields | list[str] | No | None | Extra fields to include: `locked`, `id`, `count` |
 | tags | string[] | No | Unset | Return only entries matching every supplied `k=v` retrieval tag |
 
-`tags` uses AND semantics and is applied before `node_limit`. Tags are included for filtered responses; for an unfiltered response, request `include_tags=true` (CLI: `-f tags`).
+`tags` uses AND semantics and is applied before `offset` and `limit`. Tags are included for filtered responses; for an unfiltered response, request `include_tags=true` (CLI: `-f tags`).
 
 **Entry Structure**
 
@@ -70,7 +72,8 @@ existing hiding rules.
 ```python
 entries = client.ls(
     uri="viking://resources/",
-    node_limit=200,
+    offset=100,
+    limit=100,
     sort_by="mtime",
     sort_order="desc",
 )
@@ -101,7 +104,7 @@ for _, entry := range entries {
 **HTTP API**
 
 ```
-GET /api/v1/fs/ls?uri={uri}&simple={bool}&recursive={bool}&tags={k=v}&include_tags={bool}
+GET /api/v1/fs/ls?uri={uri}&offset={int}&limit={int}
 ```
 
 ```bash
@@ -163,17 +166,19 @@ Get directory tree structure.
 | abs_limit | int | No | HTTP: 256; SDKs: 128 | Abstract length limit for `agent` output |
 | show_all_hidden | bool | No | False | Include hidden files like `-a` |
 | node_limit | int | No | 1000 | Maximum number of results |
+| offset | int | No | 0 | Number of visible results to skip |
+| limit | int | No | None | Alias for `node_limit` |
 | level_limit | int | No | 3 | Maximum directory depth to traverse |
 | extra_fields | list[str] | No | None | Extra fields to include: `locked`, `id`, `count` |
 | tags | string[] | No | Unset | Retain only nodes matching every supplied `k=v` retrieval tag |
 
-`tags` uses AND semantics and is applied before `node_limit`. Tags are included for filtered responses; for an unfiltered response, request `include_tags=true` (CLI: `-f tags`).
+`tags` uses AND semantics and is applied before `offset` and `limit`. Tags are included for filtered responses; for an unfiltered response, request `include_tags=true` (CLI: `-f tags`).
 
 
 **Python HTTP SDK**
 
 ```python
-entries = client.tree(uri="viking://resources/")
+entries = client.tree(uri="viking://resources/", offset=100, limit=100)
 for entry in entries:
     type_str = "dir" if entry['isDir'] else "file"
     print(f"{entry['rel_path']} - {type_str}")
@@ -201,7 +206,7 @@ for _, entry := range entries {
 **HTTP API**
 
 ```
-GET /api/v1/fs/tree?uri={uri}&tags={k=v}&include_tags={bool}
+GET /api/v1/fs/tree?uri={uri}&offset={int}&limit={int}
 ```
 
 ```bash

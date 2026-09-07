@@ -105,9 +105,25 @@ class AsyncAGFSClient:
             )
 
     async def ls(
-        self, path: str = "/", *, fs_ctx: Dict[str, str] | None = None
+        self,
+        path: str = "/",
+        *,
+        offset: int = 0,
+        limit: int | None = None,
+        sort_by: str | None = None,
+        sort_order: str = "asc",
+        fs_ctx: Dict[str, str] | None = None,
     ) -> List[Dict[str, Any]]:
-        return await self.run("ls", path, ctx=_fs_ctx_or_default(path, fs_ctx))
+        """Return a sorted directory range."""
+        kwargs: Dict[str, Any] = {}
+        if offset:
+            kwargs["offset"] = offset
+        if limit is not None:
+            kwargs["limit"] = limit
+        if sort_by is not None:
+            kwargs["sort_by"] = sort_by
+            kwargs["sort_order"] = sort_order
+        return await self.run("ls", path, **kwargs, ctx=_fs_ctx_or_default(path, fs_ctx))
 
     async def read(
         self,
@@ -279,14 +295,26 @@ class AsyncAGFSClient:
         node_limit: int | None = None,
         level_limit: int | None = None,
         *,
+        offset: int = 0,
+        sort_by: str | None = None,
+        sort_order: str = "asc",
         fs_ctx: Dict[str, str] | None = None,
     ) -> list[Dict[str, Any]]:
+        """Return a sorted range from a recursive directory traversal."""
+        kwargs: Dict[str, Any] = {
+            "show_hidden": show_hidden,
+            "node_limit": node_limit,
+            "level_limit": level_limit,
+        }
+        if offset:
+            kwargs["offset"] = offset
+        if sort_by is not None:
+            kwargs["sort_by"] = sort_by
+            kwargs["sort_order"] = sort_order
         return await self.run(
             "tree_directory",
             path,
-            show_hidden=show_hidden,
-            node_limit=node_limit,
-            level_limit=level_limit,
+            **kwargs,
             ctx=_fs_ctx_or_default(path, fs_ctx),
         )
 

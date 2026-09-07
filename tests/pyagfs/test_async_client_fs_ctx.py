@@ -13,6 +13,7 @@ class _RecordingClient:
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, dict[str, str] | None]] = []
+        self.list_options: dict[str, Any] = {}
 
     def write(self, path: str, data: bytes, *, ctx: dict[str, str] | None = None) -> str:
         """Record write ctx and return a stable fake backend id."""
@@ -24,6 +25,18 @@ class _RecordingClient:
         self.calls.append(("read", path, ctx))
         return b"payload"
 
+    def ls(
+        self,
+        path: str,
+        *,
+        ctx: dict[str, str] | None = None,
+        **options: Any,
+    ) -> list[dict[str, Any]]:
+        """Record listing options and return an empty result."""
+        self.calls.append(("ls", path, ctx))
+        self.list_options = options
+        return []
+
 
 @pytest.mark.asyncio
 async def test_async_client_derives_account_ctx_from_local_agfs_path() -> None:
@@ -31,8 +44,24 @@ async def test_async_client_derives_account_ctx_from_local_agfs_path() -> None:
     agfs = AsyncAGFSClient(client)
 
     await agfs.write("/local/acct-1/data/file.txt", b"x")
+    await agfs.ls(
+        "/local/acct-1/data",
+        offset=2,
+        limit=3,
+        sort_by="mtime",
+        sort_order="desc",
+    )
 
-    assert client.calls == [("write", "/local/acct-1/data/file.txt", {"account_id": "acct-1"})]
+    assert client.calls == [
+        ("write", "/local/acct-1/data/file.txt", {"account_id": "acct-1"}),
+        ("ls", "/local/acct-1/data", {"account_id": "acct-1"}),
+    ]
+    assert client.list_options == {
+        "offset": 2,
+        "limit": 3,
+        "sort_by": "mtime",
+        "sort_order": "desc",
+    }
 
 
 @pytest.mark.asyncio
