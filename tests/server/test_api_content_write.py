@@ -31,7 +31,7 @@ async def test_set_tags_endpoint_registered(client):
     assert resp.status_code == 405
 
 
-async def test_fs_attrs_preserves_legacy_free_form_search_tags(monkeypatch):
+async def test_fs_attrs_filters_legacy_non_kv_search_tags(monkeypatch):
     class FakeVikingDBManagerProxy:
         def __init__(self, *_args):
             pass
@@ -53,7 +53,7 @@ async def test_fs_attrs_preserves_legacy_free_form_search_tags(monkeypatch):
         is_dir=False,
     )
 
-    assert tags == ["default", "team=search", "bad=", "channel=app"]
+    assert tags == ["team=search", "channel=app"]
 
 
 async def test_write_rejects_directory_uri(client_with_resource):
@@ -359,7 +359,7 @@ async def test_set_tags_rejects_wait_and_timeout_fields(client_with_resource):
     assert body["status"] == "error"
 
 
-async def test_set_tags_preserves_plain_tag(client_with_resource):
+async def test_set_tags_discards_invalid_kv_tag(client_with_resource):
     client, uri = client_with_resource
     file_uri = await _first_file_uri(client, uri)
     resp = await client.post(
@@ -369,4 +369,4 @@ async def test_set_tags_preserves_plain_tag(client_with_resource):
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
-    assert body["result"]["tags"] == ["project-a", "team=search"]
+    assert body["result"]["tags"] == ["team=search"]

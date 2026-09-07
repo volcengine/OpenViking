@@ -169,7 +169,7 @@ async def test_search_context_rejects_read_content(client: httpx.AsyncClient):
         ("/api/v1/search/search", "search"),
     ],
 )
-async def test_search_endpoints_preserve_free_form_result_tags(
+async def test_search_endpoints_filter_invalid_result_tags(
     client: httpx.AsyncClient, service, monkeypatch, endpoint: str, service_method: str
 ):
     async def fake_search(**kwargs):
@@ -192,9 +192,7 @@ async def test_search_endpoints_preserve_free_form_result_tags(
 
     assert response.status_code == 200
     assert response.json()["result"]["resources"][0]["tags"] == [
-        "default",
         "team=infra",
-        "bad=",
         "project=viking",
     ]
 
@@ -798,29 +796,16 @@ async def test_find_with_invalid_context_type_returns_invalid_argument(client: h
     assert "context_type" in body["error"]["message"]
 
 
-@pytest.mark.parametrize("endpoint", ["find", "search"])
-async def test_search_accepts_free_form_tags(
-    client: httpx.AsyncClient, service, monkeypatch, endpoint
-):
-    captured = {}
-
-    async def fake_search(*, filter=None, **kwargs):
-        captured["filter"] = filter
-        return {"items": []}
-
-    monkeypatch.setattr(service.search, endpoint, fake_search)
-    tags = ["team-search", "", "=search", "team=", "te=am=search", "k" * 256 + "=" + "v" * 512]
+async def test_search_rejects_invalid_kv_tags(client: httpx.AsyncClient):
     resp = await client.post(
-        f"/api/v1/search/{endpoint}",
-        json={"query": "sample", "tags": tags},
+        "/api/v1/search/search",
+        json={"query": "sample", "tags": ["team-search"]},
     )
 
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
-    assert captured["filter"] == {
-        "op": "and",
-        "conds": [{"op": "must", "field": "search_tags", "conds": [tag]} for tag in tags],
-    }
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
 
 
 async def test_find_with_invalid_time_returns_invalid_argument(client: httpx.AsyncClient):

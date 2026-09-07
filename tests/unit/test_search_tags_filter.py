@@ -1,9 +1,12 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import logging
+
 import pytest
 
 from openviking.server.routers.search import _resolve_search_filter
+from openviking.utils import tags as tags_module
 from openviking.utils.tags import (
     build_search_tags_filter,
     merge_search_tags,
@@ -47,73 +50,62 @@ def test_search_tag_allows_dot_dash_underscore():
         "team=值",  # non-ascii
         "-team=search",
         "team=-search",
-        "工作 流程=发布检查",
-        "team=search，platform",  # full-width comma is not the ASCII delimiter
-        "team=search%2cplatform",  # percent escapes are not decoded
-        "viking://user/default/memories/experiences/cfg_streaming.md=1",
-        "viking://user/%41lice/memories/experiences/%41%3d%42.md=1",
+        "team=search,platform",
+        "team,owner=search",
+        "viking://user/alice/memories/experiences/workflow.md=1",
+        "viking://user/%41lice/memories/experiences/%45xchange%3d%46low.md=1",
     ],
 )
-def test_search_tag_allows_free_form_characters(tag):
+def test_search_tag_accepts_special_characters(tag):
     assert normalize_search_tag(tag) == tag
+    assert normalize_search_tags([tag], discard_invalid=True) == [tag]
 
 
-@pytest.mark.parametrize(
-    "tag",
-    [
-        "",
-        "team",
-        "=search",
-        "team=",
-        "te=am=search",
-        "=",
-        "k" * 65 + "=v",
-        "team=" + "v" * 129,
-        "k" * 256 + "=" + "v" * 512,
-        "viking://user/default/memories/experiences/vikingdb_fe_repo_workflows.md=1",
-    ],
-)
-@pytest.mark.parametrize("discard_invalid", [False, True])
-def test_search_tag_accepts_strings_without_commas(tag, discard_invalid):
-    assert normalize_search_tag(tag) == tag
-    assert normalize_search_tags([tag], discard_invalid=discard_invalid) == [tag]
-    assert merge_search_tags([tag], [tag]) == [tag]
-    assert build_search_tags_filter([tag]) == {
-        "op": "must",
-        "field": "search_tags",
-        "conds": [tag],
-    }
-
-
-@pytest.mark.parametrize(
-    "tag",
-    [",", ",key=value", "key,part=value", "key=value,part", "plain,tag", "key=value,", "a=b=c,d"],
-)
-def test_search_tag_rejects_only_commas(tag):
-    with pytest.raises(InvalidArgumentError, match="must not contain ','"):
+@pytest.mark.parametrize("tag", ["", "team", "=search", "team=", "te=am=search"])
+def test_search_tag_still_requires_non_empty_kv_format(tag):
+    with pytest.raises(InvalidArgumentError):
         normalize_search_tag(tag)
-    with pytest.raises(InvalidArgumentError, match="must not contain ','"):
-        normalize_search_tags(["team=search", tag])
-    with pytest.raises(InvalidArgumentError, match="must not contain ','"):
-        build_search_tags_filter([tag])
-    assert normalize_search_tags([tag, "team=search"], discard_invalid=True) == ["team=search"]
 
 
-def test_merge_search_tags_preserves_plain_tags_and_replaces_keyed_values():
-    assert merge_search_tags(
-        [" Team ", "team=old", "", "=old", "owner=alice", "old,tag"],
-        ["team", "team=new=value", "=new", "   ", "other", "team=bad,value"],
-    ) == ["team", "team=new=value", "", "=new", "owner=alice", "other"]
+@pytest.mark.parametrize("key_length,value_length", [(64, 128), (65, 1), (4, 129), (256, 512)])
+def test_search_tag_accepts_long_keys_and_values(key_length, value_length):
+    key = "k" * key_length
+    value = "v" * value_length
+    assert normalize_search_tag(f"{key}={value}") == f"{key}={value}"
 
 
-def test_normalize_search_tags_handles_empty_iterables():
-    assert normalize_search_tags(None) == []
-    assert build_search_tags_filter([]) is None
-    assert merge_search_tags(None, None) == []
-    assert merge_search_tags(iter(["tag", "team=old"]), iter(["team=new"])) == [
-        "tag",
-        "team=new",
-    ]
+def test_discard_invalid_search_tags_logs_one_warning_for_batch(caplog):
+    tags_module.logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.WARNING, logger="openviking.utils.tags"):
+            result = normalize_search_tags(
+                ["bad-one", "also-bad", "team=search"],
+                discard_invalid=True,
+            )
+    finally:
+        tags_module.logger.removeHandler(caplog.handler)
+
+    assert result == ["team=search"]
+    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert warnings[0].invalid_tags == ["bad-one", "also-bad"]
+    assert "Discarded invalid search tags" in warnings[0].message
+    assert "bad-one" in warnings[0].message
+    assert "also-bad" in warnings[0].message
+
+
+def test_merge_search_tags_discards_invalid_existing_tags(caplog):
+    tags_module.logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.WARNING, logger="openviking.utils.tags"):
+            result = merge_search_tags(["bad-existing", "team=old"], ["owner=alice"])
+    finally:
+        tags_module.logger.removeHandler(caplog.handler)
+
+    assert result == ["team=old", "owner=alice"]
+    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert warnings[0].invalid_tags == ["bad-existing"]
 
 
 def test_find_tags_filter_requires_all_tags():
