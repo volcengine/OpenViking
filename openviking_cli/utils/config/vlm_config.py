@@ -137,6 +137,18 @@ class VLMConfig(BaseModel):
             "high-latency endpoints (e.g., DashScope, local inference servers)."
         ),
     )
+    keepalive_expiry: float = Field(
+        default=0.0,
+        ge=0.0,
+        description=(
+            "httpx keep-alive expiry in seconds for pooled VLM HTTP connections. "
+            "The default 0 disables connection reuse so requests never land on a "
+            "keep-alive connection the server may have already closed (fixes "
+            "intermittent httpcore.ReadTimeout on reused connections). Set to a "
+            "positive value (e.g. 60) to re-enable pooling against endpoints "
+            "whose idle timeout is known to be longer."
+        ),
+    )
 
     provider: Optional[str] = Field(default=None, description="Provider type")
     backend: Optional[str] = Field(
@@ -638,6 +650,8 @@ class VLMConfig(BaseModel):
             "temperature": self.temperature,
             "max_retries": self.max_retries,
             "timeout": self.timeout,
+            "keepalive_expiry": self.keepalive_expiry,
+            "max_concurrent": self.max_concurrent,
             "provider": credential.provider,
             "thinking": self.thinking,
             "max_tokens": (
@@ -671,6 +685,8 @@ class VLMConfig(BaseModel):
             "temperature": self.temperature,
             "max_retries": self.max_retries,
             "timeout": self.timeout,
+            "keepalive_expiry": self.keepalive_expiry,
+            "max_concurrent": self.max_concurrent,
             "provider": name,
             "thinking": self.thinking,
             "max_tokens": self.max_tokens,
