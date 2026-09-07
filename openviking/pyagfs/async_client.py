@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from typing import Any, BinaryIO, Dict, List, Union
 
 from .protocols import AGFSSyncClientProtocol
+from .request_cache import request_cache_fs_ctx, request_cache_scope
 
 _SYSTEM_ACCOUNT_ID = "_system"
 
@@ -90,10 +91,33 @@ class AsyncAGFSClient:
     def __init__(self, client: AGFSSyncClientProtocol):
         self._client = client
 
+    async def _to_thread(self, func, /, *args, **kwargs):
+        ctx = kwargs.get("ctx") or kwargs.get("fs_ctx") or {}
+        if ctx.get("cache_id"):
+            from openviking.service.task_tracker_concurrency import run_to_completion
+
+            scope = request_cache_scope.get()
+            if scope is not None and ctx["cache_id"] == scope.cache_id:
+                if not scope.active:
+                    context_key = "ctx" if kwargs.get("ctx") else "fs_ctx"
+                    kwargs[context_key] = {
+                        key: value for key, value in ctx.items() if key != "cache_id"
+                    }
+                    return await asyncio.to_thread(func, *args, **kwargs)
+                operation = asyncio.create_task(asyncio.to_thread(func, *args, **kwargs))
+                scope.operations.add(operation)
+                operation.add_done_callback(scope.operations.discard)
+                return await run_to_completion(lambda: operation)
+            return await run_to_completion(lambda: asyncio.to_thread(func, *args, **kwargs))
+        return await asyncio.to_thread(func, *args, **kwargs)
+
     async def run(self, method_name: str, /, *args: Any, **kwargs: Any) -> Any:
         """Run a sync client method in a worker thread, preserving ctx when supported."""
+        if "ctx" in kwargs and not method_name.startswith("pathlock_"):
+            path = args[0] if args else kwargs.get("path")
+            kwargs["ctx"] = request_cache_fs_ctx(self._client, kwargs["ctx"], path)
         try:
-            return await asyncio.to_thread(getattr(self._client, method_name), *args, **kwargs)
+            return await self._to_thread(getattr(self._client, method_name), *args, **kwargs)
         except TypeError as exc:
             message = str(exc)
             if "ctx" not in kwargs or "unexpected keyword argument 'ctx'" not in message:
@@ -270,14 +294,16 @@ class AsyncAGFSClient:
         """
         from .helpers import cp
 
-        return await asyncio.to_thread(
+        return await self._to_thread(
             cp,
             self._client,
             src_path,
             dst_path,
             recursive=recursive,
             stream=True,
-            fs_ctx=_fs_ctx_with_auto_pathlock(src_path, fs_ctx, auto_pathlock),
+            fs_ctx=request_cache_fs_ctx(
+                self._client, _fs_ctx_with_auto_pathlock(src_path, fs_ctx, auto_pathlock), src_path
+            ),
             allow_same_mount_fast_path=allow_same_mount_fast_path,
         )
 

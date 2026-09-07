@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.core.namespace import canonical_session_uri
+from openviking.pyagfs.request_cache import without_request_cache
 from openviking.server.agent_evolution_config import AgentEvolutionConfigProvider
 from openviking.server.config import AgentEvolutionConfig, ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext
@@ -567,6 +568,7 @@ class SessionService:
         task.add_done_callback(self._auto_commit_tasks.discard)
         return True
 
+    @without_request_cache
     async def run_auto_commit(self, session_id: str, ctx: RequestContext, *, reason: str) -> None:
         """Run one best-effort automatic commit and release the in-flight claim."""
         claim = (ctx.account_id, ctx.user.user_id, session_id)

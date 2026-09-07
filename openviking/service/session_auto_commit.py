@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from openviking.pyagfs import AsyncAGFSClient
+from openviking.pyagfs.request_cache import without_request_cache
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext, Role
 from openviking.session.auto_commit_policy import AutoCommitPolicy
@@ -71,6 +72,7 @@ class SessionAutoCommitScheduler:
                 pass
             self._task = None
 
+    @without_request_cache
     async def _run_loop(self) -> None:
         while self._running:
             try:

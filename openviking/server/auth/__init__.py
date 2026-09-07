@@ -143,7 +143,9 @@ def _build_request_context(
         account_id=identity.account_id,
         user_id=identity.user_id,
     )
-    return ctx
+    from openviking.pyagfs.request_cache import bind_request_cache
+
+    return bind_request_cache(ctx)
 
 
 async def resolve_identity(
@@ -241,7 +243,9 @@ async def get_upload_request_context(
             account_id=consumed.account_id,
             user_id=consumed.user_id,
         )
-        return ctx
+        from openviking.pyagfs.request_cache import bind_request_cache
+
+        return bind_request_cache(ctx)
 
     identity = await resolve_identity(
         request, x_api_key, authorization, x_openviking_account, x_openviking_user

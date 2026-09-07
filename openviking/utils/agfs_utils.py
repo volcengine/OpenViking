@@ -77,8 +77,12 @@ class RagfsBindingConfig:
 
 
 def _disabled_cache_config(cachefs_model: Any) -> Dict[str, Any]:
+    from openviking_cli.utils.config.agfs_config import AGFSRequestCacheConfig
+
     traversal_mode = getattr(cachefs_model, "traversal_mode", "backend")
+    request_cache = getattr(cachefs_model, "request_cache", None) or AGFSRequestCacheConfig()
     return {
+        "request_cache": request_cache.model_dump(mode="json"),
         "enabled": False,
         "runtime_enabled": False,
         "provider": "redis",

@@ -70,6 +70,38 @@ openviking-server
 
 `MemoryMockProvider` 只用于单元测试和 smoke test，不是生产配置项。
 
+## 请求级 L0 Stat 缓存
+
+HTTP 业务请求可以独立开启进程内 L0，复用同一请求内的 `stat` 元数据和明确的 `NotFound` 结果。默认关闭；仅开启 L0 不需要配置 Redis 或其他 Provider：
+
+```json
+{
+  "storage": {
+    "agfs": {
+      "cachefs": {
+        "backend": "local",
+        "request_cache": {
+          "enabled": true,
+          "max_active_request_caches": 1024
+        }
+      }
+    }
+  }
+}
+```
+
+`request_cache.enabled` 默认 `false`；`max_active_request_caches` 默认 `1024`，必须为正整数。达到上限时，新请求跳过 L0，不影响请求可用性，也不会淘汰正在使用的请求缓存。
+
+L0 与现有 L1 文件内容、目录缓存独立：`cachefs.backend="cache"` 仍需顶层 `cache` Provider 配置。**当前没有 L1 stat 缓存，L0 stat miss 始终直接访问 Backend**，无论 L1 是否开启。
+
+L0 miss 使用现有 `bypass_cache` 上下文读取新鲜的后端元数据，避免插件本地 stat 缓存的旧结果进入新 epoch；原请求的身份、租约和上下文保持不变。L0 关闭或没有请求缓存标识时，仍走原有 stat 路径。
+
+写操作只在影响当前请求中有效的缓存项或进行中的 stat 时推进全局 epoch。文件结构变化保守匹配目标、祖先目录及受影响子树，以覆盖 S3 隐式目录；匹配只访问内存，不额外调用 `ls`、Provider 或 Backend。缓存状态锁不跨后端 IO，旧 epoch 的并发读取不能回填到新版本。
+
+同一 HTTP 请求内的 `create_task` / `gather` 子任务共享 `cache_id`。普通后台处理（如迁移、reindex、快照重建）也允许在继承的父请求 scope 仍有效时共享 L0，不单独创建后台 `cache_id`。响应结束、异常或取消时关闭 scope，等待已准入的 AGFS 调用完成后释放缓存；后台任务后续调用不再使用 L0，响应发送完成后的后台回调也不使用 L0。
+
+状态轮询及必须观察跨请求更新的处理仍通过 `without_request_cache` 隔离，包括队列消费者/requeue、共享语义任务 worker、watch 调度、session 自动提交和任务清理循环。QueueFS 队列状态及 PathLock 协调状态也不使用 L0。不能仅因任务在后台运行就排除 L0，但新增依赖外部更新的读取路径必须显式绕过 L0。L0 不缓存文件内容或目录列表，也不提供跨请求的一致性保证。
+
 ## 配置破坏性变更
 
 旧缓存配置不再兼容，升级前需要完成迁移：

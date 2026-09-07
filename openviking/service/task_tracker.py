@@ -30,6 +30,7 @@ from openviking.service.task_events import (
     TaskEventHistory,
     append_task_event,
 )
+from openviking.pyagfs.request_cache import without_request_cache
 from openviking.service.task_store import TaskStore
 from openviking.service.task_tracker_concurrency import (
     KeyedAsyncLockPool,
@@ -267,6 +268,7 @@ class TaskTracker:
             self._cleanup_task.cancel()
             logger.debug("[TaskTracker] Cleanup loop stopped")
 
+    @without_request_cache
     async def _cleanup_loop(self) -> None:
         while True:
             try:
