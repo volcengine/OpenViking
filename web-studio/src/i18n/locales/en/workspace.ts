@@ -12,6 +12,7 @@ const workspace = {
       currentUser: {
         account: 'Account',
         accountSummary: 'Account · {{account}}',
+        keyUnavailable: 'User key unavailable',
         loadingUsers: 'Loading users',
         loadUsersFailed: 'Failed to load users',
         noUsers: 'No users in this account',

@@ -12,6 +12,7 @@ const workspace = {
       currentUser: {
         account: '账号',
         accountSummary: '账号 · {{account}}',
+        keyUnavailable: '用户凭证不可用',
         loadingUsers: '正在加载用户',
         loadUsersFailed: '用户列表加载失败',
         noUsers: '当前账号暂无用户',
