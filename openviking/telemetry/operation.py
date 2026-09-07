@@ -389,6 +389,22 @@ class TelemetrySummaryBuilder:
                         for public_key, metric_key in cls._MEMORY_EXTRACT_STAGE_KEYS.items()
                     },
                 }
+                if cls._has_metric_prefix("memory.extract.parse", counters, gauges):
+                    failure_kind = None
+                    failure_prefix = "memory.extract.parse.failure."
+                    for key, value in gauges.items():
+                        if key.startswith(failure_prefix) and cls._i(value, 0) > 0:
+                            failure_kind = key[len(failure_prefix):]
+                    memory_summary["extract"]["parse"] = {
+                        "failure_kind": failure_kind,
+                        "format_retries_used": cls._i(
+                            gauges.get("memory.extract.parse.format_retries_used"), 0
+                        ),
+                        "iterations_used": cls._i(
+                            gauges.get("memory.extract.parse.iterations_used"), 0
+                        ),
+                        "exhausted": cls._i(gauges.get("memory.extract.parse.exhausted"), 0),
+                    }
             summary["memory"] = memory_summary
 
         if cls._has_metric_prefix("resource", counters, gauges):

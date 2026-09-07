@@ -150,8 +150,27 @@ def _memory_type_by_uri(operations: ResolvedOperations) -> dict[str, str]:
     return types_by_uri
 
 
-def _report_extraction_telemetry(result: Any, operations: ResolvedOperations) -> None:
+def _report_extraction_telemetry(
+    result: Any,
+    operations: ResolvedOperations,
+    parse_stats: Optional[dict[str, Any]] = None,
+) -> None:
     telemetry = get_current_telemetry()
+    # RFC #4243 first slice: surface the parse outcome itself so zero-extraction
+    # sessions are answerable from metrics (failure kind, retry usage,
+    # iteration exhaustion) even when no memory candidate ever existed.
+    if parse_stats:
+        failure_kind = parse_stats.get("failure_kind")
+        if failure_kind:
+            telemetry.set(f"memory.extract.parse.failure.{failure_kind}", 1)
+        telemetry.set(
+            "memory.extract.parse.format_retries_used",
+            parse_stats.get("format_retries_used", 0),
+        )
+        telemetry.set("memory.extract.parse.iterations_used", parse_stats.get("iterations_used", 0))
+        telemetry.set(
+            "memory.extract.parse.exhausted", 1 if parse_stats.get("exhausted") else 0
+        )
     telemetry.set(
         "memory.extract.candidates.total",
         len(result.written_uris) + len(result.edited_uris),
@@ -756,7 +775,9 @@ class SessionCompressorV3:
 
         result = update_result.apply_result
         patch_operations = update_result.operations
-        _report_extraction_telemetry(result, patch_operations)
+        _report_extraction_telemetry(
+            result, patch_operations, getattr(orchestrator, "parse_stats", None)
+        )
 
         memory_diff = None
         if archive_uri and viking_fs and result is not None:

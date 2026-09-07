@@ -148,6 +148,38 @@ class ExtractLoop:
         self._format_retry_count = 0
         self._last_llm_failure_kind: Optional[str] = None
         self._last_llm_failure_content: str = ""
+        # Structured parse-failure stats surfaced to extraction telemetry
+        # (RFC #4243 first slice): zero-extraction sessions fail before any
+        # memory candidate exists, so their diagnosable signal is the parse
+        # outcome itself — failure kind, retry usage, iteration exhaustion.
+        self.parse_stats: Dict[str, Any] = {
+            "failure_kind": None,
+            "format_retries_used": 0,
+            "iterations_used": 0,
+            "max_iterations": 0,
+            "exhausted": False,
+        }
+
+    def _record_parse_attempt(self, iteration: int, max_iterations: int) -> None:
+        self.parse_stats["iterations_used"] = iteration + 1
+        self.parse_stats["max_iterations"] = max_iterations
+
+    def _record_parse_failure(self, failure_kind: str) -> None:
+        self.parse_stats["failure_kind"] = failure_kind
+
+    def _record_format_retry(self) -> None:
+        self.parse_stats["format_retries_used"] = self._format_retry_count
+
+    def _record_parse_exhausted(self) -> None:
+        self.parse_stats["exhausted"] = True
+
+    def _record_parse_recovery(self) -> None:
+        """Clear attempt-level failure once a parse finally succeeds.
+
+        parse_stats["failure_kind"] must mean "the FINAL response was
+        unparseable" (per the PR contract), not "some attempt failed".
+        """
+        self.parse_stats["failure_kind"] = None
 
         # Schema 生成器（在 run() 中初始化）
         self.schema_model_generator = None
@@ -273,6 +305,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
             self._extract_context.page_id_map.get_page_id(uri)
 
         while iteration < max_iterations:
+            self._record_parse_attempt(iteration, max_iterations)
             iteration += 1
             tracer.info(f"ReAct iteration {iteration}/{max_iterations}")
 
@@ -371,9 +404,11 @@ The final output of the model must strictly follow the JSON Schema format shown 
                         console=True,
                     )
                     continue
+                self._record_parse_recovery()
                 break
             # If no tool calls either, continue to next iteration (don't break!)
             failure_kind = self._last_llm_failure_kind or "unknown"
+            self._record_parse_failure(failure_kind)
             failure_preview = _preview_text(self._last_llm_failure_content)
             tracer.error(
                 "LLM returned neither tool calls nor operations "
@@ -383,6 +418,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
             # Add format error message if parse failed (max 1 retry)
             if self._format_retry_count == 0:
                 self._format_retry_count += 1
+                self._record_format_retry()
                 max_iterations += 1
                 retry_reason = (
                     "refusal_text" if failure_kind == "refusal_text" else "format_retry"
@@ -401,12 +437,14 @@ The final output of the model must strictly follow the JSON Schema format shown 
                         "keeping the first-pass operations",
                         console=True,
                     )
+                    self._record_parse_recovery()
                     break
                 tracer.info(
                     "Memory extraction final response could not be parsed as JSON operations "
                     f"after {max_iterations} iterations — treating as no operations "
                     f"failure_kind={failure_kind} response_preview={failure_preview!r}"
                 )
+                self._record_parse_exhausted()
                 final_operations = ResolvedOperations(
                     upsert_operations=[],
                     delete_file_contents=[],
