@@ -33,10 +33,10 @@ class CircuitBreakerOpen(Exception):
 class CircuitBreaker:
     """Thread-safe circuit breaker for API call protection.
 
-    Trips after ``failure_threshold`` consecutive failures (or immediately for
-    permanent errors like 403/401). After ``reset_timeout`` seconds, allows one
-    probe request (HALF_OPEN). If the probe succeeds, the breaker closes; if it
-    fails, the breaker reopens.
+    Trips after ``failure_threshold`` consecutive failures, or immediately for
+    request, credential, and quota errors. After ``reset_timeout`` seconds,
+    allows one probe request (HALF_OPEN). If the probe succeeds, the breaker
+    closes; if it fails, the breaker reopens.
     """
 
     def __init__(

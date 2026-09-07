@@ -142,14 +142,8 @@ async def test_memory_ls_error_reports_error():
 
 
 @pytest.mark.asyncio
-async def test_memory_ls_transient_error_requeues():
-    """Transient errors during ls() re-enqueue the msg and increment requeue count.
-
-    A 500-class error wrapped by the processor's `raise RuntimeError(...) from e`
-    is classified as `transient`. The outer on_dequeue() path must call
-    _reenqueue_semantic_msg(), bump requeue_count, and fire both report_requeue()
-    and report_success() — not report_error().
-    """
+async def test_memory_ls_transient_error_fails_without_requeue():
+    """A handled processing failure is terminal; QueueFS should ACK it, not replay it."""
     processor = SemanticProcessor()
 
     fake_fs = MagicMock()
@@ -191,10 +185,10 @@ async def test_memory_ls_transient_error_requeues():
     ):
         await processor.on_dequeue(data)
 
-    assert requeue_called, "report_requeue() must fire for transient errors"
-    assert success_called, "report_success() must fire after successful re-enqueue"
-    assert not error_called, "report_error() must NOT fire for transient errors"
-    reenqueue_mock.assert_awaited_once()
+    assert error_called, "report_error() must fire for handled processing failures"
+    assert not requeue_called, "handled processing failures must not be re-enqueued"
+    assert not success_called, "failed processing must not be reported as successful"
+    reenqueue_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -210,9 +204,7 @@ async def test_memory_write_error_reports_error():
     fake_fs.ls = AsyncMock(return_value=[{"name": "file1.md", "isDir": False}])
     fake_fs.read_file = AsyncMock(return_value="some content")
     fake_fs.write_file = AsyncMock(side_effect=PermissionError("Permission denied"))
-    fake_fs._async_agfs.pathlock_acquire_exact_batch = AsyncMock(
-        return_value={"lease_ref": "test"}
-    )
+    fake_fs._async_agfs.pathlock_acquire_exact_batch = AsyncMock(return_value={"lease_ref": "test"})
     fake_fs._async_agfs.pathlock_release = AsyncMock()
     fake_fs._uri_to_path = MagicMock(
         side_effect=lambda uri, ctx=None: f"/local/acc1/{uri.removeprefix('viking://')}"

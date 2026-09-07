@@ -8,13 +8,6 @@ from google import genai
 from google.genai import types
 from google.genai.errors import APIError, ClientError
 
-try:
-    from google.genai.types import HttpOptions, HttpRetryOptions
-
-    _HTTP_RETRY_AVAILABLE = True
-except ImportError:
-    _HTTP_RETRY_AVAILABLE = False
-
 from openviking.models.embedder.base import (
     DenseEmbedderBase,
     EmbedResult,
@@ -136,20 +129,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
             )
         if dimension is not None and not (1 <= dimension <= 3072):
             raise ValueError(f"dimension must be between 1 and 3072, got {dimension}")
-        if _HTTP_RETRY_AVAILABLE:
-            self.client = genai.Client(
-                api_key=api_key,
-                http_options=HttpOptions(
-                    retry_options=HttpRetryOptions(
-                        attempts=max(self.max_retries + 1, 1),
-                        initial_delay=0.5,
-                        max_delay=8.0,
-                        exp_base=2.0,
-                    )
-                ),
-            )
-        else:
-            self.client = genai.Client(api_key=api_key)
+        self.client = genai.Client(api_key=api_key)
         self.task_type = task_type
         self.query_param = query_param
         self.document_param = document_param
@@ -216,14 +196,10 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
             return EmbedResult(dense_vector=vector)
 
         try:
-            result = (
-                _call()
-                if _HTTP_RETRY_AVAILABLE
-                else self._run_with_retry(
-                    _call,
-                    logger=logger,
-                    operation_name="Gemini embedding",
-                )
+            result = self._run_with_retry(
+                _call,
+                logger=logger,
+                operation_name="Gemini embedding",
             )
             # Estimate token usage
             estimated_tokens = self._estimate_tokens(text)

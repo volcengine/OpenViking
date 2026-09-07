@@ -22,6 +22,10 @@ _MULTIMODAL_INPUT = [
 def test_sparse_embedder_downgrades_multimodal_input_to_text(_mock_ark):
     embedder = VolcengineSparseEmbedder(model_name="test", api_key="test-key")
 
+    _mock_ark.assert_called_once_with(
+        api_key="test-key",
+        max_retries=0,
+    )
     assert embedder.supports_multimodal is False
     assert embedder.prepare_embedding_input(_MULTIMODAL_INPUT) == "diagram of a heat exchanger"
 
@@ -35,8 +39,7 @@ def test_hybrid_embedder_downgrades_multimodal_input_to_text(_mock_ark):
 
 
 @patch("openviking.models.embedder.volcengine_embedders.volcenginesdkarkruntime.Ark")
-@patch("openviking.models.embedder.volcengine_embedders.time.perf_counter")
-def test_dense_embedder_passes_local_provider_duration_to_metrics(mock_perf_counter, mock_ark):
+def test_dense_embedder_passes_local_provider_duration_to_metrics(mock_ark):
     """Embedding call duration must come from this SDK request, not shared embedder state."""
     response = SimpleNamespace(
         usage=SimpleNamespace(prompt_tokens=3, total_tokens=3),
@@ -45,13 +48,17 @@ def test_dense_embedder_passes_local_provider_duration_to_metrics(mock_perf_coun
     client = MagicMock()
     client.embeddings.create.return_value = response
     mock_ark.return_value = client
-    mock_perf_counter.side_effect = [100.0, 100.25]
+    clock = MagicMock(side_effect=[100.0, 100.25])
 
     embedder = VolcengineDenseEmbedder(
         model_name="test", api_key="test-key", input_type="text", dimension=2
     )
     embedder.update_token_usage = MagicMock()
 
-    embedder.embed("hello")
+    with patch(
+        "openviking.models.embedder.volcengine_embedders.time",
+        SimpleNamespace(perf_counter=clock),
+    ):
+        embedder.embed("hello")
 
     assert embedder.update_token_usage.call_args.kwargs["duration_seconds"] == 0.25

@@ -33,10 +33,13 @@ class _ProviderError(RuntimeError):
 
 
 def test_extract_metric_error_code_prefers_structured_provider_code():
-    assert extract_metric_error_code(_ProviderError(status_code=429, code="RateLimitExceeded")) == "429"
-    assert extract_metric_error_code(_ProviderError(body={"error": {"code": "InvalidParameter"}})) == (
-        "InvalidParameter"
+    assert (
+        extract_metric_error_code(_ProviderError(status_code=429, code="RateLimitExceeded"))
+        == "429"
     )
+    assert extract_metric_error_code(
+        _ProviderError(body={"error": {"code": "InvalidParameter"}})
+    ) == ("InvalidParameter")
 
 
 def test_extract_metric_error_code_uses_safe_fallbacks_only():
@@ -114,15 +117,22 @@ def test_classify_usage_quota():
 
 def test_quota_exceeded_takes_precedence_over_transient():
     """A 429 with AccountQuotaExceeded is quota_exceeded, not transient."""
-    error = RuntimeError(
-        '429 {"error":{"code":"AccountQuotaExceeded","message":"TooManyRequests"}}'
+    error = _ProviderError(
+        status_code=429,
+        body={"error": {"code": "AccountQuotaExceeded"}},
     )
     assert classify_api_error(error) == ERROR_CLASS_QUOTA_EXCEEDED
 
 
 def test_auth_takes_precedence_over_quota():
     """Auth errors (e.g. 403) take precedence over the quota substring."""
-    assert classify_api_error(RuntimeError("403 AccountQuotaExceeded")) == ERROR_CLASS_AUTH
+    error = _ProviderError(status_code=403, code="AccountQuotaExceeded")
+    assert classify_api_error(error) == ERROR_CLASS_AUTH
+
+
+def test_structured_auth_code_takes_precedence_over_generic_400():
+    error = _ProviderError(status_code=400, code="AccountOverdue")
+    assert classify_api_error(error) == ERROR_CLASS_AUTH
 
 
 # --- permanent vs auth split (400 vs 401/403) ---
@@ -130,7 +140,7 @@ def test_auth_takes_precedence_over_quota():
 
 def test_classify_400_is_permanent():
     """A 400 parameter error is request-level permanent (fail-fast)."""
-    error = RuntimeError("Error code: 400 - invalid parameter `model`")
+    error = _ProviderError(status_code=400, code="InvalidParameter")
     assert classify_api_error(error) == ERROR_CLASS_PERMANENT
 
 
@@ -161,6 +171,9 @@ def test_classify_content_filter_is_content_safety():
     assert classify_api_error(RuntimeError("content_filter triggered")) == (
         ERROR_CLASS_CONTENT_SAFETY
     )
+    assert classify_api_error(RuntimeError("SensitiveContentDetected")) == (
+        ERROR_CLASS_CONTENT_SAFETY
+    )
 
 
 def test_classify_content_policy_is_content_safety():
@@ -170,7 +183,7 @@ def test_classify_content_policy_is_content_safety():
 
 def test_content_safety_takes_precedence_over_400():
     """A moderation rejection containing '400' is content_safety, not permanent."""
-    error = RuntimeError("Error code: 400 - content_filter: sensitive content detected")
+    error = _ProviderError(status_code=400, code="ContentFilter")
     assert classify_api_error(error) == ERROR_CLASS_CONTENT_SAFETY
 
 

@@ -101,7 +101,7 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
 
     def _build_kwargs(self, is_query: bool = False) -> Dict[str, Any]:
         """Build kwargs dict for litellm.embedding() call."""
-        kwargs: Dict[str, Any] = {"model": self.model_name}
+        kwargs: Dict[str, Any] = {"model": self.model_name, "max_retries": 0}
 
         if self.api_key:
             kwargs["api_key"] = self.api_key

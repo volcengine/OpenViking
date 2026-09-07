@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """VolcEngine VLM backend implementation."""
 
-import asyncio
 import base64
 import json
 import time
@@ -11,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from openviking.telemetry import tracer
+from openviking.utils.model_retry import retry_async, retry_sync
 from openviking.utils.multimodal import redact_image_data_urls
 from openviking_cli.utils import get_logger
 
@@ -135,6 +135,58 @@ class VolcEngineVLM(OpenAIVLM):
             max_retries=0,
         )
 
+    def _create_completion(
+        self,
+        client,
+        kwargs: Dict[str, Any],
+        *,
+        has_tools: bool,
+    ) -> Union[str, VLMResponse]:
+        def _call() -> Union[str, VLMResponse]:
+            t0 = time.perf_counter()
+            try:
+                response = client.chat.completions.create(**kwargs)
+            except Exception as error:
+                self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
+                raise
+            elapsed = time.perf_counter() - t0
+            self._update_token_usage_from_response(response, duration_seconds=elapsed)
+            result = self._build_vlm_response(response, has_tools=has_tools)
+            return result if has_tools else self._clean_response(str(result))
+
+        return retry_sync(
+            _call,
+            max_retries=self.max_retries,
+            logger=logger,
+            operation_name="VolcEngine VLM completion",
+        )
+
+    async def _create_completion_async(
+        self,
+        client,
+        kwargs: Dict[str, Any],
+        *,
+        has_tools: bool,
+    ) -> Union[str, VLMResponse]:
+        async def _call() -> Union[str, VLMResponse]:
+            t0 = time.perf_counter()
+            try:
+                response = await client.chat.completions.create(**kwargs)
+            except Exception as error:
+                self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
+                raise
+            elapsed = time.perf_counter() - t0
+            self._update_token_usage_from_response(response, duration_seconds=elapsed)
+            result = self._build_vlm_response(response, has_tools=has_tools)
+            return result if has_tools else self._clean_response(str(result))
+
+        return await retry_async(
+            _call,
+            max_retries=self.max_retries,
+            logger=logger,
+            operation_name="VolcEngine VLM async completion",
+        )
+
     def supports_media(
         self,
         *,
@@ -192,19 +244,11 @@ class VolcEngineVLM(OpenAIVLM):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
 
-        client = self.get_client()
-        t0 = time.perf_counter()
-        try:
-            response = client.chat.completions.create(**kwargs)
-        except Exception as error:
-            self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
-            raise
-        elapsed = time.perf_counter() - t0
-        self._update_token_usage_from_response(response, duration_seconds=elapsed)
-        result = self._build_vlm_response(response, has_tools=bool(tools))
-        if tools:
-            return result
-        return self._clean_response(str(result))
+        return self._create_completion(
+            self.get_client(),
+            kwargs,
+            has_tools=bool(tools),
+        )
 
     @tracer("volcengine.vlm.call", ignore_result=True, ignore_args=["messages"])
     async def get_completion_async(
@@ -241,32 +285,14 @@ class VolcEngineVLM(OpenAIVLM):
                 f"tools: {json.dumps([t['function']['name'] for t in tools], ensure_ascii=False)}"
             )
 
-        client = self.get_async_client()
-
-        last_error = None
-        for attempt in range(self.max_retries + 1):
-            try:
-                t0 = time.perf_counter()
-                response = await client.chat.completions.create(**kwargs)
-                elapsed = time.perf_counter() - t0
-                self._update_token_usage_from_response(response, duration_seconds=elapsed)
-                result = self._build_vlm_response(response, has_tools=bool(tools))
-                if tools:
-                    return result
-                content = self._clean_response(str(result))
-                if content:
-                    tracer.info(f"message.content={content}")
-                return content
-            except Exception as e:
-                self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=e)
-                last_error = e
-                if attempt < self.max_retries:
-                    await asyncio.sleep(2**attempt)
-
-        if last_error:
-            raise last_error
-        else:
-            raise RuntimeError("Unknown error in async completion")
+        result = await self._create_completion_async(
+            self.get_async_client(),
+            kwargs,
+            has_tools=bool(tools),
+        )
+        if not tools and result:
+            tracer.info(f"message.content={result}")
+        return result
 
     def _detect_image_format(self, data: bytes) -> str:
         """Detect image format from magic bytes.
@@ -416,19 +442,11 @@ class VolcEngineVLM(OpenAIVLM):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
 
-        client = self.get_client()
-        t0 = time.perf_counter()
-        try:
-            response = client.chat.completions.create(**kwargs)
-        except Exception as error:
-            self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
-            raise
-        elapsed = time.perf_counter() - t0
-        self._update_token_usage_from_response(response, duration_seconds=elapsed)
-        result = self._build_vlm_response(response, has_tools=bool(tools))
-        if tools:
-            return result
-        return self._clean_response(str(result))
+        return self._create_completion(
+            self.get_client(),
+            kwargs,
+            has_tools=bool(tools),
+        )
 
     async def get_vision_completion_async(
         self,
@@ -464,16 +482,8 @@ class VolcEngineVLM(OpenAIVLM):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
 
-        client = self.get_async_client()
-        t0 = time.perf_counter()
-        try:
-            response = await client.chat.completions.create(**kwargs)
-        except Exception as error:
-            self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
-            raise
-        elapsed = time.perf_counter() - t0
-        self._update_token_usage_from_response(response, duration_seconds=elapsed)
-        result = self._build_vlm_response(response, has_tools=bool(tools))
-        if tools:
-            return result
-        return self._clean_response(str(result))
+        return await self._create_completion_async(
+            self.get_async_client(),
+            kwargs,
+            has_tools=bool(tools),
+        )

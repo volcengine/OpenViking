@@ -58,10 +58,8 @@ from openviking.telemetry.span_models import create_root_span_attributes
 from openviking.utils.circuit_breaker import (
     CircuitBreaker,
     CircuitBreakerOpen,
-    classify_api_error,
 )
 from openviking.utils.ingest_options import IngestOptions
-from openviking.utils.model_retry import ERROR_CLASS_INPUT_TOO_LARGE, ERROR_CLASS_PERMANENT
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.config import get_openviking_config
@@ -204,19 +202,8 @@ class SemanticProcessor(DequeueHandlerBase):
         return FILE_TYPE_OTHER
 
     async def _reenqueue_semantic_msg(self, msg: SemanticMsg) -> None:
-        """Re-enqueue a semantic message for later processing.
-
-        Throttles with a sleep when the circuit breaker is open to prevent
-        re-enqueue storms (messages cycling at 5/sec during OPEN window).
-        """
-        import asyncio
-
+        """Re-enqueue a semantic message whose lock is currently unavailable."""
         from openviking.storage.queuefs import get_queue_manager
-
-        # Throttle to prevent re-enqueue storm during OPEN window
-        wait = self._circuit_breaker.retry_after
-        if wait > 0:
-            await asyncio.sleep(wait)
 
         queue_manager = get_queue_manager()
         if queue_manager is not None:
@@ -226,7 +213,7 @@ class SemanticProcessor(DequeueHandlerBase):
         else:
             logger.warning(f"No queue manager available, cannot re-enqueue: {msg.uri}")
 
-    async def _requeue_semantic_msg_after_error(
+    async def _requeue_semantic_msg_after_lock_error(
         self,
         msg: SemanticMsg,
         data: Optional[Dict[str, Any]],
@@ -380,19 +367,7 @@ class SemanticProcessor(DequeueHandlerBase):
                         get_request_wait_tracker().mark_semantic_done(msg.telemetry_id, msg.id)
                     self.report_success()
                     return None
-            # Circuit breaker: if API is known-broken, re-enqueue and wait
-            try:
-                self._circuit_breaker.check()
-            except CircuitBreakerOpen:
-                logger.warning(
-                    f"Circuit breaker is open, re-enqueueing semantic message: {msg.uri}"
-                )
-                await self._reenqueue_semantic_msg(msg)
-                self._merge_request_stats(msg.telemetry_id, requeue_count=1)
-                get_request_wait_tracker().record_semantic_requeue(msg.telemetry_id)
-                self.report_requeue()
-                self.report_success()
-                return None
+            self._circuit_breaker.check()
             collector = resolve_telemetry(msg.telemetry_id)
             telemetry_ctx = bind_telemetry(collector) if collector is not None else nullcontext()
             with telemetry_ctx:
@@ -535,46 +510,26 @@ class SemanticProcessor(DequeueHandlerBase):
                     exc_info=True,
                 )
                 if msg is not None:
-                    await self._requeue_semantic_msg_after_error(msg, data, e)
+                    await self._requeue_semantic_msg_after_lock_error(msg, data, e)
                 else:
                     self.report_error(str(e), data)
                 return None
 
-            error_class = classify_api_error(e)
-            if error_class == ERROR_CLASS_INPUT_TOO_LARGE:
-                logger.error(
-                    f"Input too large processing semantic message, dropping: {e}",
-                    exc_info=True,
-                )
-                if msg is not None:
-                    self._merge_request_stats(msg.telemetry_id, error_count=1)
-                    get_request_wait_tracker().mark_semantic_failed(
-                        msg.telemetry_id, msg.id, str(e)
-                    )
-                self.report_error(str(e), data)
-            elif error_class == ERROR_CLASS_PERMANENT:
-                logger.critical(
-                    f"Permanent API error processing semantic message, dropping: {e}",
-                    exc_info=True,
-                )
+            logger.error(
+                "Failed to process semantic message; marking it failed: %s",
+                e,
+                exc_info=True,
+            )
+            if not isinstance(e, CircuitBreakerOpen):
                 self._circuit_breaker.record_failure(e)
-                if msg is not None:
-                    self._merge_request_stats(msg.telemetry_id, error_count=1)
-                    get_request_wait_tracker().mark_semantic_failed(
-                        msg.telemetry_id, msg.id, str(e)
-                    )
-                self.report_error(str(e), data)
-            else:
-                # Transient or unknown — re-enqueue for retry
-                logger.warning(
-                    f"Transient API error processing semantic message, re-enqueueing: {e}",
-                    exc_info=True,
+            if msg is not None:
+                self._merge_request_stats(msg.telemetry_id, error_count=1)
+                get_request_wait_tracker().mark_semantic_failed(
+                    msg.telemetry_id,
+                    msg.id,
+                    str(e),
                 )
-                self._circuit_breaker.record_failure(e)
-                if msg is not None:
-                    await self._requeue_semantic_msg_after_error(msg, data, e)
-                else:
-                    self.report_error(str(e), data)
+            self.report_error(str(e), data)
             return None
 
     async def on_cancelled(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:

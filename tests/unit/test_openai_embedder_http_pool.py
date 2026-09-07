@@ -107,6 +107,7 @@ async def test_openai_embedder_bounds_sync_and_async_connection_pools(provider: 
             assert pool._max_keepalive_connections == 3
             assert pool._keepalive_expiry == 5.0
             assert client._client.timeout == openai.DEFAULT_TIMEOUT
+            assert client.max_retries == 0
     finally:
         embedder.client.close()
         await async_client.close()

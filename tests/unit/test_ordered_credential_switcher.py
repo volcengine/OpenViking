@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Unit tests for OrderedCredentialSwitcher"""
 
-
 import pytest
 
 from openviking.utils.model_retry import (
@@ -41,14 +40,14 @@ class TestOrderedCredentialSwitcher:
             OrderedCredentialSwitcher(n=-1)
 
     def test_is_fail_fast_classification(self):
-        """Request-level errors are fail-fast; credential/quota/transient are not."""
+        """Request-level and unknown errors fail fast."""
         assert OrderedCredentialSwitcher.is_fail_fast(ERROR_CLASS_PERMANENT) is True
         assert OrderedCredentialSwitcher.is_fail_fast(ERROR_CLASS_INPUT_TOO_LARGE) is True
         assert OrderedCredentialSwitcher.is_fail_fast(ERROR_CLASS_CONTENT_SAFETY) is True
         assert OrderedCredentialSwitcher.is_fail_fast(ERROR_CLASS_AUTH) is False
         assert OrderedCredentialSwitcher.is_fail_fast(ERROR_CLASS_QUOTA_EXCEEDED) is False
         assert OrderedCredentialSwitcher.is_fail_fast(ERROR_CLASS_TRANSIENT) is False
-        assert OrderedCredentialSwitcher.is_fail_fast(ERROR_CLASS_UNKNOWN) is False
+        assert OrderedCredentialSwitcher.is_fail_fast(ERROR_CLASS_UNKNOWN) is True
 
     def test_commit_success_different_index_fast_failover(self):
         """commit_success on a different index commits it as the new active one."""

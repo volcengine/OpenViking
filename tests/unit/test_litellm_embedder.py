@@ -42,6 +42,7 @@ class TestLiteLLMDenseEmbedder:
         call_kwargs = mock_litellm.embedding.call_args[1]
         assert call_kwargs["model"] == "openai/text-embedding-3-small"
         assert call_kwargs["api_key"] == "test-key"
+        assert call_kwargs["max_retries"] == 0
 
     @patch("openviking.models.embedder.litellm_embedders.litellm")
     async def test_embed_async_truncates_vector_to_configured_dimension(self, mock_litellm):

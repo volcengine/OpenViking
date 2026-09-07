@@ -119,6 +119,7 @@ async def test_vlm_adapter_streams_with_credential_failover_before_first_delta()
             "provider": "volcengine",
             "model": "primary-model",
             "api_key": "primary-key",
+            "max_retries": 0,
         }
     )
     backup = VolcEngineVLM(

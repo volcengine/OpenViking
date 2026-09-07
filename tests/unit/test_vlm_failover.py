@@ -430,8 +430,8 @@ class TestFailoverVLM:
         backup.get_completion.assert_not_called()
         assert failover.is_using_backup is False
 
-    def test_primary_fails_rate_limit_does_not_failover(self):
-        """Test that rate limit errors do not trigger failover to backup."""
+    def test_primary_fails_rate_limit_fails_over_after_provider_retries(self):
+        """A provider-exhausted rate limit error triggers credential failover."""
         primary = Mock()
         primary.model = "primary-model"
         primary.provider = "volcengine"
@@ -444,12 +444,12 @@ class TestFailoverVLM:
 
         failover = FailoverVLM(primary, backup)
 
-        with pytest.raises(Exception, match="rate limit exceeded"):
-            failover.get_completion(prompt="test")
+        result = failover.get_completion(prompt="test")
 
+        assert result == "backup response"
         primary.get_completion.assert_called_once()
-        backup.get_completion.assert_not_called()
-        assert failover.is_using_backup is False
+        backup.get_completion.assert_called_once()
+        assert failover.is_using_backup is True
 
     def test_primary_fails_quota_exceeded_fails_to_backup(self):
         """Test that AccountQuotaExceeded triggers immediate failover."""
@@ -476,8 +476,8 @@ class TestFailoverVLM:
         backup.get_completion.assert_called_once()
         assert failover.is_using_backup is True
 
-    def test_primary_fails_timeout_does_not_failover(self):
-        """Test that timeout errors do not trigger failover to backup."""
+    def test_primary_fails_timeout_fails_over_after_provider_retries(self):
+        """A provider-exhausted timeout triggers credential failover."""
         primary = Mock()
         primary.model = "primary-model"
         primary.provider = "volcengine"
@@ -490,13 +490,14 @@ class TestFailoverVLM:
 
         failover = FailoverVLM(primary, backup)
 
-        with pytest.raises(Exception, match="request timeout"):
-            failover.get_completion(prompt="test")
+        result = failover.get_completion(prompt="test")
 
-        assert failover.is_using_backup is False
+        assert result == "backup response"
+        backup.get_completion.assert_called_once()
+        assert failover.is_using_backup is True
 
-    def test_primary_fails_server_error_does_not_failover(self):
-        """Test that server errors do not trigger failover to backup."""
+    def test_primary_fails_server_error_fails_over_after_provider_retries(self):
+        """A provider-exhausted server error triggers credential failover."""
         primary = Mock()
         primary.model = "primary-model"
         primary.provider = "volcengine"
@@ -509,10 +510,11 @@ class TestFailoverVLM:
 
         failover = FailoverVLM(primary, backup)
 
-        with pytest.raises(Exception, match="server error 503"):
-            failover.get_completion(prompt="test")
+        result = failover.get_completion(prompt="test")
 
-        assert failover.is_using_backup is False
+        assert result == "backup response"
+        backup.get_completion.assert_called_once()
+        assert failover.is_using_backup is True
 
     def test_both_fail_raises_last_error(self):
         """Test that if both primary and backup fail, the last error is raised."""
@@ -695,8 +697,8 @@ class TestPrimaryBackupSwitcher:
         switcher.record_primary_success()
         assert switcher.is_using_backup is False
 
-    def test_switch_to_backup_on_permanent_error(self):
-        """Test permanent error triggers switch to backup."""
+    def test_switch_to_backup_on_auth_error(self):
+        """Test a credential-level auth error triggers switch to backup."""
         switcher = PrimaryBackupSwitcher()
         error = Exception("403 forbidden")
         switched = switcher.record_primary_failure(error)

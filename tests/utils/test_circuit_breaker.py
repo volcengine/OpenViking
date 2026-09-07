@@ -161,7 +161,7 @@ def test_thread_safety():
 
 def test_classify_filesystem_errors_as_permanent():
     from openviking.utils.circuit_breaker import classify_api_error
-    from openviking.utils.model_retry import ERROR_CLASS_PERMANENT, ERROR_CLASS_TRANSIENT, ERROR_CLASS_UNKNOWN
+    from openviking.utils.model_retry import ERROR_CLASS_PERMANENT
 
     assert classify_api_error(FileNotFoundError("/path/not/found")) == ERROR_CLASS_PERMANENT
     assert classify_api_error(PermissionError("Permission denied")) == ERROR_CLASS_PERMANENT
@@ -171,7 +171,7 @@ def test_classify_filesystem_errors_as_permanent():
 
 def test_classify_chained_filesystem_error_as_permanent():
     from openviking.utils.circuit_breaker import classify_api_error
-    from openviking.utils.model_retry import ERROR_CLASS_PERMANENT, ERROR_CLASS_TRANSIENT, ERROR_CLASS_UNKNOWN
+    from openviking.utils.model_retry import ERROR_CLASS_PERMANENT
 
     cause = FileNotFoundError("/missing")
     wrapper = RuntimeError("storage layer failed")
@@ -179,19 +179,19 @@ def test_classify_chained_filesystem_error_as_permanent():
     assert classify_api_error(wrapper) == ERROR_CLASS_PERMANENT
 
 
-def test_classify_permanent_errors():
+def test_classify_auth_errors():
     from openviking.utils.circuit_breaker import classify_api_error
-    from openviking.utils.model_retry import ERROR_CLASS_PERMANENT, ERROR_CLASS_TRANSIENT, ERROR_CLASS_UNKNOWN
+    from openviking.utils.model_retry import ERROR_CLASS_AUTH
 
-    assert classify_api_error(RuntimeError("403 Forbidden")) == ERROR_CLASS_PERMANENT
-    assert classify_api_error(RuntimeError("AccountOverdueError: 403")) == ERROR_CLASS_PERMANENT
-    assert classify_api_error(RuntimeError("401 Unauthorized")) == ERROR_CLASS_PERMANENT
-    assert classify_api_error(RuntimeError("Forbidden")) == ERROR_CLASS_PERMANENT
+    assert classify_api_error(RuntimeError("403 Forbidden")) == ERROR_CLASS_AUTH
+    assert classify_api_error(RuntimeError("AccountOverdueError: 403")) == ERROR_CLASS_AUTH
+    assert classify_api_error(RuntimeError("401 Unauthorized")) == ERROR_CLASS_AUTH
+    assert classify_api_error(RuntimeError("Forbidden")) == ERROR_CLASS_AUTH
 
 
 def test_classify_transient_errors():
     from openviking.utils.circuit_breaker import classify_api_error
-    from openviking.utils.model_retry import ERROR_CLASS_PERMANENT, ERROR_CLASS_TRANSIENT, ERROR_CLASS_UNKNOWN
+    from openviking.utils.model_retry import ERROR_CLASS_TRANSIENT
 
     assert classify_api_error(RuntimeError("429 TooManyRequests")) == ERROR_CLASS_TRANSIENT
     assert classify_api_error(RuntimeError("RateLimitError")) == ERROR_CLASS_TRANSIENT
@@ -204,7 +204,7 @@ def test_classify_transient_errors():
 
 def test_classify_unknown_errors():
     from openviking.utils.circuit_breaker import classify_api_error
-    from openviking.utils.model_retry import ERROR_CLASS_PERMANENT, ERROR_CLASS_TRANSIENT, ERROR_CLASS_UNKNOWN
+    from openviking.utils.model_retry import ERROR_CLASS_UNKNOWN
 
     assert classify_api_error(RuntimeError("something unexpected")) == ERROR_CLASS_UNKNOWN
     assert classify_api_error(ValueError("bad value")) == ERROR_CLASS_UNKNOWN
@@ -212,9 +212,9 @@ def test_classify_unknown_errors():
 
 def test_classify_chained_exception():
     from openviking.utils.circuit_breaker import classify_api_error
-    from openviking.utils.model_retry import ERROR_CLASS_PERMANENT, ERROR_CLASS_TRANSIENT, ERROR_CLASS_UNKNOWN
+    from openviking.utils.model_retry import ERROR_CLASS_AUTH
 
     cause = RuntimeError("403 Forbidden")
     wrapper = RuntimeError("API call failed")
     wrapper.__cause__ = cause
-    assert classify_api_error(wrapper) == ERROR_CLASS_PERMANENT
+    assert classify_api_error(wrapper) == ERROR_CLASS_AUTH

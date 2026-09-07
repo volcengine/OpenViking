@@ -24,8 +24,8 @@ from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext, Role
 from openviking.session.auto_commit_policy import AutoCommitPolicy
 from openviking.session.memory.constants import AGENT_EVOLUTION_MEMORY_TYPES
-from openviking.session.memory_policy import MemoryPolicy
 from openviking.session.memory.utils.language import resolve_output_language_from_conversation
+from openviking.session.memory_policy import MemoryPolicy
 from openviking.session.retention import (
     RETENTION_MODE_TURN_BUDGET,
     RetentionPlan,
@@ -48,7 +48,6 @@ from openviking.session.tool_result_synopsis import (
 from openviking.storage.abstract_overview import body_for_preview, render_abstract_overview
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
-from openviking.utils.model_retry import is_retryable_api_error, retry_async
 from openviking.utils.time_utils import get_current_timestamp
 from openviking.utils.token_estimation import estimate_text_tokens, truncate_text_to_token_budget
 from openviking_cli.exceptions import (
@@ -72,9 +71,6 @@ MemoryPolicyProvider = Callable[[], Awaitable[MemoryPolicyData]]
 logger = get_logger(__name__)
 
 _PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS = 1800.0
-_MEMORY_EXTRACTION_MAX_RETRIES = 3
-_MEMORY_EXTRACTION_RETRY_BASE_DELAY_SECONDS = 1.0
-_MEMORY_EXTRACTION_RETRY_MAX_DELAY_SECONDS = 8.0
 _AGENT_TRAINING_REQUIRED_MEMORY_TYPES = frozenset({"experiences"})
 _SESSION_PHASE1_LOCK_TIMEOUT_SECONDS = 30.0
 _MEMORY_STEP_NAMES = ("long_term",)
@@ -2556,32 +2552,12 @@ class Session:
                                 },
                             )
 
-                    async def _run_retryable_phase2_step(
-                        operation_name: str,
-                        fn: Callable[[], Awaitable[Any]],
-                    ) -> Any:
-                        # Secondary safety net on top of the per-call retry that the
-                        # VLM/embedding layer already performs. Reuses the shared
-                        # transient-error classifier so permanent failures (auth,
-                        # quota, content-safety, 400, oversized input) fail fast
-                        # instead of being retried pointlessly.
-                        return await retry_async(
-                            fn,
-                            max_retries=_MEMORY_EXTRACTION_MAX_RETRIES,
-                            base_delay=_MEMORY_EXTRACTION_RETRY_BASE_DELAY_SECONDS,
-                            max_delay=_MEMORY_EXTRACTION_RETRY_MAX_DELAY_SECONDS,
-                            is_retryable=is_retryable_api_error,
-                            logger=logger,
-                            operation_name=operation_name,
-                        )
-
                     async def _run_recorded_memory_step(
-                        operation_name: str,
                         step: str,
                         step_messages: List[Message],
                         fn: Callable[[], Awaitable[Any]],
                     ) -> Any:
-                        result = await _run_retryable_phase2_step(operation_name, fn)
+                        result = await fn()
                         completed_memory_steps.setdefault(step, set()).update(
                             message.id for message in step_messages
                         )
@@ -2637,18 +2613,14 @@ class Session:
                         extraction_tasks: List[Any] = []
                         extraction_labels: List[str] = []
                         if working_memory_enabled:
-                            extraction_tasks.append(
-                                _run_retryable_phase2_step("archive_summary", _run_archive_summary)
-                            )
+                            extraction_tasks.append(_run_archive_summary())
                             extraction_labels.append("archive_summary")
 
                         if self._session_compressor and long_term_has_work:
 
                             async def _run_long_term_memory_extraction() -> Any:
-                                # strict_extract_errors=True lets transient failures
-                                # surface so _run_retryable_phase2_step can retry them
-                                # (and so a final failure is recorded as a skipped
-                                # archive instead of silently dropping the memory).
+                                # Surface extraction failures so the archive is marked
+                                # failed instead of silently dropping the memory.
                                 return await self._session_compressor.extract_long_term_memories(
                                     messages=long_term_messages,
                                     user=self.user,
@@ -2667,7 +2639,6 @@ class Session:
 
                             extraction_tasks.append(
                                 _run_recorded_memory_step(
-                                    "long_term_memory_extraction",
                                     "long_term",
                                     long_term_messages,
                                     _run_long_term_memory_extraction,
@@ -2679,10 +2650,10 @@ class Session:
                             *extraction_tasks,
                             return_exceptions=True,
                         )
-                        # The archive outcome is binary: if any Phase 2 step
-                        # still fails after retries, no .done marker is
-                        # published. Successful steps retain message IDs so the
-                        # same archive can resume without repeating them.
+                        # The archive outcome is binary: if any Phase 2 step fails,
+                        # no .done marker is published. Successful steps retain
+                        # message IDs so the same archive can resume without
+                        # repeating them.
                         extraction_error: Optional[BaseException] = None
                         for label, result in zip(extraction_labels, _results, strict=True):
                             if isinstance(result, Exception):
@@ -2734,12 +2705,7 @@ class Session:
                                 "Memory and session skill extraction skipped "
                                 "(disabled by config or memory_policy)"
                             )
-                        if working_memory_enabled:
-                            await _run_retryable_phase2_step(
-                                "archive_summary", _run_archive_summary
-                            )
-                        else:
-                            await _run_archive_summary()
+                        await _run_archive_summary()
 
                     # A recovered Phase 2 run may have already completed the
                     # long-term step before a sibling step failed. Reuse its
