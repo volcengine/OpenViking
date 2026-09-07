@@ -233,7 +233,6 @@ class CompileService:
     task_type = "compile"
     task_id_prefix = "cmp_"
     poll_max_attempts = 3
-    runtime_timeout_seconds = 60 * 60
 
     def __init__(
         self,

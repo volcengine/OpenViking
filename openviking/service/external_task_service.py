@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Mapping, Protocol
 from uuid import uuid4
@@ -19,7 +18,6 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 _ACTIVE_STATUSES = frozenset({"pending", "running", "cancelling"})
-_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
 
 class ExternalTaskError(RuntimeError):
@@ -49,7 +47,6 @@ class ExternalTaskProvider(Protocol):
     task_type: str
     task_id_prefix: str
     poll_max_attempts: int
-    runtime_timeout_seconds: float
 
     @property
     def poll_interval_seconds(self) -> float: ...
@@ -184,16 +181,6 @@ class ExternalTaskService:
         connection = self._mapping(auth.get("openviking_connection"))
         private_payload = self._mapping(auth.get("external_request_private"))
         external_task_id = str(auth.get("external_task_id") or "").strip() or None
-        runtime_started_at = auth.get("external_runtime_started_at")
-        if runtime_started_at is None:
-            runtime_started_at = time.time()
-            await tracker.update_task_auth(
-                task_id,
-                {"external_runtime_started_at": runtime_started_at},
-                account_id=account_id,
-                user_id=user_id,
-            )
-        runtime_deadline = float(runtime_started_at) + provider.runtime_timeout_seconds
         try:
             await tracker.start(
                 task_id,
@@ -202,11 +189,12 @@ class ExternalTaskService:
                 stage="polling" if external_task_id else "submitting",
             )
             if external_task_id is None:
-                external_task_id = await provider.submit(
-                    task_id,
-                    payload,
-                    private_payload,
-                    connection,
+                external_task_id = await self._retry(
+                    lambda: provider.submit(task_id, payload, private_payload, connection),
+                    task_id=task_id,
+                    operation_name="submit",
+                    poll_interval=provider.poll_interval_seconds,
+                    max_attempts=provider.poll_max_attempts,
                 )
                 await tracker.update_task_auth(
                     task_id,
@@ -215,35 +203,13 @@ class ExternalTaskService:
                     user_id=user_id,
                 )
             while True:
-                remaining = runtime_deadline - time.time()
-                try:
-                    if remaining <= 0:
-                        raise asyncio.TimeoutError
-                    snapshot = await asyncio.wait_for(
-                        self._retry(
-                            lambda: provider.get(external_task_id, connection),
-                            task_id=task_id,
-                            operation_name="poll",
-                            poll_interval=provider.poll_interval_seconds,
-                            max_attempts=provider.poll_max_attempts,
-                        ),
-                        timeout=remaining,
-                    )
-                except asyncio.TimeoutError:
-                    await run_to_completion(
-                        lambda: self._cancel_external(
-                            provider,
-                            ov_task_id=task_id,
-                            payload=payload,
-                            private_payload=private_payload,
-                            connection=connection,
-                            external_task_id=external_task_id,
-                            account_id=account_id,
-                            user_id=user_id,
-                            timed_out=True,
-                        )
-                    )
-                    return
+                snapshot = await self._retry(
+                    lambda: provider.get(external_task_id, connection),
+                    task_id=task_id,
+                    operation_name="poll",
+                    poll_interval=provider.poll_interval_seconds,
+                    max_attempts=provider.poll_max_attempts,
+                )
                 if await self._apply_snapshot(
                     snapshot,
                     task_id=task_id,
@@ -251,9 +217,7 @@ class ExternalTaskService:
                     user_id=user_id,
                 ):
                     return
-                await asyncio.sleep(
-                    min(provider.poll_interval_seconds, max(0.0, runtime_deadline - time.time()))
-                )
+                await asyncio.sleep(provider.poll_interval_seconds)
         except ExternalTaskError as exc:
             await tracker.fail(
                 task_id,
@@ -387,7 +351,6 @@ class ExternalTaskService:
         external_task_id: str | None,
         account_id: str,
         user_id: str,
-        timed_out: bool = False,
     ) -> None:
         max_attempts = provider.poll_max_attempts
         try:
@@ -415,8 +378,6 @@ class ExternalTaskService:
                 max_attempts=max_attempts,
             )
             for attempt in range(max_attempts):
-                if timed_out and snapshot.status in _TERMINAL_STATUSES:
-                    break
                 if await self._apply_snapshot(
                     snapshot,
                     task_id=ov_task_id,
@@ -445,24 +406,6 @@ class ExternalTaskService:
                 ov_task_id,
                 exc.code,
                 exc,
-            )
-
-        if timed_out:
-            tracker = get_task_tracker()
-            await tracker.update_stage(
-                ov_task_id,
-                "timed_out",
-                account_id=account_id,
-                user_id=user_id,
-            )
-            await tracker.fail(
-                ov_task_id,
-                self._format_error(
-                    "DEADLINE_EXCEEDED",
-                    "External task exceeded its runtime limit.",
-                ),
-                account_id=account_id,
-                user_id=user_id,
             )
 
     @staticmethod

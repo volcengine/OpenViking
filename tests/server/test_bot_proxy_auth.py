@@ -286,16 +286,15 @@ async def test_compile_route_uses_ov_owned_task_and_rejects_legacy_routes(monkey
 
 
 @pytest.mark.asyncio
-async def test_compile_api_client_session_protocol_and_runtime_timeout(monkeypatch):
+async def test_compile_api_client_session_protocol_retry_and_cancellation(monkeypatch):
     forwarded = []
-    response_status = {"cancel": "cancelled"}
+    response_status = {"cancel": "cancelled", "submit_failures": 0, "poll": []}
 
     class FakeResponse:
-        status_code = 202
-        is_success = True
-
-        def __init__(self, body):
+        def __init__(self, body, status_code=202):
             self._body = body
+            self.status_code = status_code
+            self.is_success = status_code < 400
 
         def json(self):
             return self._body
@@ -313,6 +312,9 @@ async def test_compile_api_client_session_protocol_and_runtime_timeout(monkeypat
         async def request(self, method, url, headers, json):
             forwarded.append({"method": method, "url": url, "body": json, "headers": headers})
             if url.endswith("/bot/v1/compile"):
+                if response_status["submit_failures"]:
+                    response_status["submit_failures"] -= 1
+                    return FakeResponse({"detail": "temporarily unavailable"}, status_code=503)
                 return FakeResponse({"session_id": "ma-session-1"})
             if url.endswith("/compile/cancel"):
                 status = response_status["cancel"]
@@ -324,12 +326,14 @@ async def test_compile_api_client_session_protocol_and_runtime_timeout(monkeypat
                         "meta": {},
                     }
                 )
+            status = response_status["poll"].pop(0) if response_status["poll"] else "running"
             return FakeResponse(
                 {
-                    "status": "running",
-                    "stage": "compile: running",
+                    "status": status,
+                    "stage": f"compile: {status}",
                     "error": None,
                     "meta": {"token_usage": {"total_tokens": 12}},
+                    "result": {"output": "wiki"} if status == "completed" else None,
                 }
             )
 
@@ -343,7 +347,6 @@ async def test_compile_api_client_session_protocol_and_runtime_timeout(monkeypat
         SimpleNamespace(),
     )
     tasks.register(service)
-    assert service.runtime_timeout_seconds == 60 * 60
     public_payload, private_payload = service._split_payload(
         compile_service_module.CompileRequest.model_validate(
             {
@@ -419,12 +422,6 @@ async def test_compile_api_client_session_protocol_and_runtime_timeout(monkeypat
             self.auth = {
                 "openviking_connection": {"api_key": "active-user-key"},
                 "external_request_private": {},
-                "external_task_id": "ma-session-1",
-                "external_runtime_started_at": (
-                    external_task_service_module.time.time()
-                    - service.runtime_timeout_seconds
-                    + 0.1
-                ),
             }
             self.stage = None
             self.stage_updates = []
@@ -439,6 +436,9 @@ async def test_compile_api_client_session_protocol_and_runtime_timeout(monkeypat
         async def start(self, *args, **kwargs):
             return None
 
+        async def update_task_auth(self, _task_id, values, **kwargs):
+            self.auth.update(values)
+
         async def update_stage(self, _task_id, stage, **kwargs):
             self.stage = stage
             self.stage_updates.append(stage)
@@ -448,28 +448,37 @@ async def test_compile_api_client_session_protocol_and_runtime_timeout(monkeypat
             self.error = error
             self.task.status = TaskStatus.FAILED
 
+        async def complete(self, _task_id, result, **kwargs):
+            self.task.result = result
+            self.task.status = TaskStatus.COMPLETED
+
         def is_cancellation_requested(self, _task_id):
             return False
-
-    tracker = Tracker()
-    monkeypatch.setattr(external_task_service_module, "get_task_tracker", lambda: tracker)
-    forwarded.clear()
-
-    await tasks.execute("cmp_ov_1", "acct", "alice")
-
-    assert [request["url"] for request in forwarded] == [
-        "https://compile.example.com/compile/status",
-        "https://compile.example.com/compile/cancel",
-    ]
-    assert tracker.stage == "timed_out"
-    assert tracker.stage_updates == ["timed_out"]
-    assert tracker.task.status == TaskStatus.FAILED
-    assert tracker.error == "DEADLINE_EXCEEDED: External task exceeded its runtime limit."
 
     async def no_sleep(_delay):
         return None
 
     monkeypatch.setattr(external_task_service_module.asyncio, "sleep", no_sleep)
+    tracker = Tracker()
+    monkeypatch.setattr(external_task_service_module, "get_task_tracker", lambda: tracker)
+    forwarded.clear()
+    response_status["submit_failures"] = 1
+    response_status["poll"] = ["running", "completed"]
+
+    await tasks.execute("cmp_ov_1", "acct", "alice")
+
+    assert [request["url"] for request in forwarded] == [
+        "https://compile.example.com/bot/v1/compile",
+        "https://compile.example.com/bot/v1/compile",
+        "https://compile.example.com/compile/status",
+        "https://compile.example.com/compile/status",
+    ]
+    assert forwarded[0]["headers"]["Idempotency-Key"] == "cmp_ov_1"
+    assert forwarded[1]["headers"]["Idempotency-Key"] == "cmp_ov_1"
+    assert tracker.stage_updates == ["compile: completed"]
+    assert tracker.task.status == TaskStatus.COMPLETED
+    assert tracker.task.result == {"output": "wiki"}
+
     forwarded.clear()
     response_status["cancel"] = "running"
     tracker.task.status = TaskStatus.CANCELLING
