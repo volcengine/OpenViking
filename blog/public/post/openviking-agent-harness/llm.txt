@@ -1,0 +1,85 @@
+# Memory That Follows You: OpenViking × Agent Harness
+
+Published: 2026-09-07
+Canonical human page: https://blog.openviking.ai/post/openviking-agent-harness/
+
+Cover image:
+/assets/covers/openviking-agent-harness.webp
+
+Article images:
+/post/openviking-agent-harness/images/figure-01-codex-with-and-without-openviking.webp
+/post/openviking-agent-harness/images/figure-02-helper-preference-memory.webp
+/post/openviking-agent-harness/images/figure-03-mcp-client-recall.webp
+/post/openviking-agent-harness/images/figure-04-shared-installer.webp
+/post/openviking-agent-harness/images/figure-05-memory-doctor.webp
+
+You have already told Claude Code how you like to work. Do you have to explain it all again when you switch to Codex or start another project?
+
+In our OpenViking × Agent Harness session on August 28, we started with a local installation and connected OpenViking to everyday AI coding tools, showing how preferences and experience from conversations can carry over between them. The written guide and recording are ready for developers who want to get started or check whether memory is actually working.
+
+[Read the guide and FAQ (Chinese)](https://bytedance.sg.larkoffice.com/docx/ICr3d48hGosGSIxwHUNlWUCRgVf)
+
+[Watch the recording · about one hour (Chinese)](https://bytedance.sg.larkoffice.com/minutes/obsgoz7yxk44c5e63gcf85l1)
+
+## Tell Claude Code once, then pick up in Codex
+
+We used two Python projects with different purposes. In project A, we told Claude Code a few development preferences: a line length of 120, pytest for tests, test files named `*_spec.py` under `tests/`, and commit messages in Chinese.
+
+After completing the task, archiving the conversation, and extracting its memories, we switched to Codex in project B and asked:
+
+> Add linting and test configuration to this Python project, following my usual preferences.
+
+![Codex output side by side with OpenViking disabled and enabled](/post/openviking-agent-harness/images/figure-01-codex-with-and-without-openviking.webp)
+
+*The same request in Codex. Left: OpenViking temporarily disabled, so line length 88 and test_*.py. Right: OpenViking enabled, so line length 120 and *_spec.py, matching what Claude Code was told earlier.*
+
+The development preferences appeared in Codex’s automatic recall record, and its Ruff and pytest configuration followed them. OpenViking Helper also let us trace which memory file was retrieved and inspect the content injected into the conversation.
+
+![The Python project tooling memory file under preferences in OpenViking Helper](/post/openviking-agent-harness/images/figure-02-helper-preference-memory.webp)
+
+*The memory tree in OpenViking Helper. This file under preferences is what Codex recalled: line length 120, *_spec.py, and Chinese commit messages.*
+
+Two details surfaced during the demo. Uploaded conversations still needed archival and background extraction before their memories became available. Codex without OpenViking also found the preferences by reading a neighboring project. The recording includes both moments and shows how to inspect memory files and recall records to establish where the information came from.
+
+The memory loop after the plugin is installed:
+
+1. You start talking. It checks for related memories and attaches any it finds to the prompt.
+2. You finish a turn. The exchange is recorded automatically.
+3. The conversation ends. It is archived, and useful content is distilled into memory files in the background.
+4. Next time, in any tool, it is back to step one, recalling the same memory.
+
+Every turn runs this loop in the background; it does not depend on the model calling a tool.
+
+## What else is in the session?
+
+Dedicated integrations use hooks to recall and capture content at key points in a conversation. Clients connected only through MCP (Model Context Protocol) can access the same memory, but the model or calling application must invoke the tools. We demonstrated both approaches, along with remote access and multiple users on a self-hosted server.
+
+![An MCP client where the model looks up OpenViking tools step by step and reads the Python development preferences](/post/openviking-agent-harness/images/figure-03-mcp-client-recall.webp)
+
+*A client connected only through MCP. The model has to find the OpenViking retrieval tools itself before it reads the same preference file.*
+
+Use these timestamps to find the parts you want to watch:
+
+| Starts at | Topic |
+| --- | --- |
+| 06:30 | Install OpenViking, configure models, start the server, and open Studio |
+| 13:30 | Connect Claude Code and Codex with the shared installer, then check plugin status |
+| 15:55 | Try memory across two Python projects and inspect extraction and recall |
+| 30:05 | Retrieve the same development preferences through an MCP client |
+| 37:10 | Set up remote access, create users, and work with personal memory and shared resources |
+
+![The shared installer listing detected tools such as Claude Code, Codex, and Cursor](/post/openviking-agent-harness/images/figure-04-shared-installer.webp)
+
+*From 13:30: the shared installer detects the coding tools on the machine, and you pick which ones to connect.*
+
+Questions throughout the demo covered when long conversations are archived, how memory can be shared within a team, how to correct a mistaken memory, and how to temporarily turn off automatic memory. The accompanying guide includes installation commands, configuration details, and frequently asked questions.
+
+## Start with one development preference
+
+For a first try, use line length and test naming. Explain your preferences in one tool, check that memory extraction has finished, then switch tools and projects and ask it to follow your usual conventions. A few lines of configuration are enough to see how memory is saved and used again.
+
+![The report after asking the OpenViking plugin to check itself in Claude Code](/post/openviking-agent-harness/images/figure-05-memory-doctor.webp)
+
+*If you are not sure memory is working, ask Claude Code or Codex to check the OpenViking memory plugin. It reports on the plugin, the server connection, and recent recalls and captures.*
+
+[Follow the guide to connect OpenViking](https://bytedance.sg.larkoffice.com/docx/ICr3d48hGosGSIxwHUNlWUCRgVf), or [watch the full recording](https://bytedance.sg.larkoffice.com/minutes/obsgoz7yxk44c5e63gcf85l1), starting with the demo across tools at 15:55. Both resources are in Chinese.
