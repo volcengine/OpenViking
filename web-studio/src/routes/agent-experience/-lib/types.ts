@@ -11,7 +11,7 @@ export type ExperienceFileItem = {
 
 export type ExperiencePage = {
   items: ExperienceFileItem[]
-  total: number
+  hasMore: boolean
   page: number
   pageSize: number
 }

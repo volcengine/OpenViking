@@ -10,24 +10,26 @@ import {
 import type { SourceTrajectoryLink } from './experience'
 import type {
   AgentEvolutionStatus,
-  ExperienceFileItem,
   ExperiencePage,
   OutcomeDistribution,
   TimeRange,
   TrajectoryPage,
 } from './types'
 
-const EXPERIENCE_LIST_LIMIT = 1000
-
-async function fetchExperienceFiles(
-  experiencesUri: string,
-  signal?: AbortSignal,
-): Promise<ExperienceFileItem[]> {
+/** Fetch one page; the extra raw entry determines whether another page exists. */
+export async function fetchExperiences(options: {
+  experiencesUri: string
+  page: number
+  pageSize: number
+  signal?: AbortSignal
+}): Promise<ExperiencePage> {
+  const { experiencesUri, page, pageSize, signal } = options
   try {
     const result = await getOvResult<unknown>(
       ovClient.client.get({
         query: {
-          node_limit: EXPERIENCE_LIST_LIMIT,
+          limit: pageSize + 1,
+          offset: (page - 1) * pageSize,
           output: 'original',
           sort_by: 'mtime',
           sort_order: 'desc',
@@ -37,37 +39,18 @@ async function fetchExperienceFiles(
         url: '/api/v1/fs/ls',
       }),
     )
-    return normalizeExperienceFiles(result)
+    if (!Array.isArray(result)) throw new Error('Invalid fs/ls response')
+    return {
+      items: normalizeExperienceFiles(result.slice(0, pageSize)),
+      hasMore: result.length > pageSize,
+      page,
+      pageSize,
+    }
   } catch (error) {
-    if (isOvClientError(error) && error.statusCode === 404) return []
+    if (isOvClientError(error) && error.statusCode === 404) {
+      return { items: [], hasMore: false, page, pageSize }
+    }
     throw error
-  }
-}
-
-/** List and page Experience files from a self-hosted OpenViking server. */
-export async function fetchExperiences(options: {
-  experiencesUri: string
-  keyword: string
-  page: number
-  pageSize: number
-  signal?: AbortSignal
-}): Promise<ExperiencePage> {
-  const { experiencesUri, keyword, page, pageSize, signal } = options
-  const allItems = await fetchExperienceFiles(experiencesUri, signal)
-  const normalizedKeyword = keyword.trim().toLocaleLowerCase()
-  const filteredItems = normalizedKeyword
-    ? allItems.filter(
-        (item) =>
-          item.name.toLocaleLowerCase().includes(normalizedKeyword) ||
-          item.uri.toLocaleLowerCase().includes(normalizedKeyword),
-      )
-    : allItems
-  const offset = (page - 1) * pageSize
-  return {
-    items: filteredItems.slice(offset, offset + pageSize),
-    total: filteredItems.length,
-    page,
-    pageSize,
   }
 }
 

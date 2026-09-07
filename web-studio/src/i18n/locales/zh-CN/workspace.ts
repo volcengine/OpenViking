@@ -210,10 +210,10 @@ const workspace = {
     description:
       '跟踪从会话提交中沉淀的经验资产，以及经验被应用后的执行轨迹与结果分布。',
     refresh: '刷新',
-    searchPlaceholder: '搜索经验名称或 URI',
+    searchPlaceholder: '搜索当前页的经验名称或 URI',
     searchClear: '清除',
-    searchNoResults: '未找到相关经验',
-    searchNoResultsDescription: '换个关键词试试，或清除搜索条件查看全部经验。',
+    searchNoResults: '当前页没有匹配的经验',
+    searchNoResultsDescription: '可清除搜索条件，或切换页面继续查看。',
     loading: '正在加载经验列表...',
     loadFailed: '经验列表加载失败',
     networkError: '无法连接 OpenViking 服务，请检查服务地址和连接状态。',
@@ -231,7 +231,7 @@ const workspace = {
     viewAnalysis: '应用效果',
     openDetail: '查看 {{name}} 的应用效果',
     pagination: {
-      summary: '共 {{total}} 条，第 {{page}} / {{pageCount}} 页',
+      summary: '第 {{page}} 页',
       pageSize: '每页条数',
       pageSizeValue: '{{count}} 条/页',
       previous: '上一页',

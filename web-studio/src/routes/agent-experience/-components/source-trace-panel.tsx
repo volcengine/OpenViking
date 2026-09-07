@@ -30,9 +30,6 @@ export function SourceTracePanel({
 
   return (
     <section className="grid gap-3">
-      <p className="text-sm text-muted-foreground">
-        {t('detail.sourceDescription')}
-      </p>
       {sourceQuery.isLoading ? (
         <div className="flex min-h-24 items-center gap-2 text-sm text-muted-foreground">
           <LoaderCircleIcon className="size-4 animate-spin" />
@@ -67,7 +64,7 @@ export function SourceTracePanel({
                 <button
                   type="button"
                   aria-label={t('detail.trajectoryView', { name })}
-                  className="grid w-full gap-1 rounded-lg border px-3 py-2.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                  className="grid w-full gap-2 rounded-lg border border-border/60 px-4 py-3.5 text-left transition-colors hover:border-primary/30 hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
                   onClick={() =>
                     onSelect({
                       description: link.reason,

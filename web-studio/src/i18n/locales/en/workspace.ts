@@ -211,11 +211,11 @@ const workspace = {
     description:
       'Track experiences distilled from committed sessions, along with the trajectories and outcomes produced after they are applied.',
     refresh: 'Refresh',
-    searchPlaceholder: 'Search experience name or URI',
+    searchPlaceholder: 'Search this page by name or URI',
     searchClear: 'Clear',
-    searchNoResults: 'No matching experiences',
+    searchNoResults: 'No matching experiences on this page',
     searchNoResultsDescription:
-      'Try a different keyword, or clear the search to see all experiences.',
+      'Clear the search or switch pages to continue browsing.',
     loading: 'Loading experiences...',
     loadFailed: 'Could not load experiences',
     networkError:
@@ -234,7 +234,7 @@ const workspace = {
     viewAnalysis: 'Impact',
     openDetail: 'View impact for {{name}}',
     pagination: {
-      summary: '{{total}} total, page {{page}} of {{pageCount}}',
+      summary: 'Page {{page}}',
       pageSize: 'Rows per page',
       pageSizeValue: '{{count}} / page',
       previous: 'Previous',

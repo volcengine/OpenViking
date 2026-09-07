@@ -3,7 +3,8 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, createFileRoute } from '@tanstack/react-router'
 import {
   BrainCircuitIcon,
-  EyeIcon,
+  FileTextIcon,
+  ArrowUpRightIcon,
   LoaderCircleIcon,
   MessageSquareTextIcon,
   RefreshCwIcon,
@@ -20,7 +21,6 @@ import {
   Pagination,
   PaginationContent,
   PaginationItem,
-  PaginationLink,
   PaginationNext,
   PaginationPrevious,
 } from '#/components/ui/pagination'
@@ -121,38 +121,33 @@ function EmptyHelpChecklist() {
   )
 }
 
-const EXPERIENCE_PAGE_SIZE_OPTIONS = [20, 50, 100] as const
+const EXPERIENCE_PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const
 
 function ExperiencePagination({
   onPageChange,
   onPageSizeChange,
   page,
-  pageCount,
+  hasMore,
+  disabled,
   pageSize,
-  total,
 }: {
   onPageChange: (page: number) => void
   onPageSizeChange: (pageSize: number) => void
   page: number
-  pageCount: number
+  hasMore: boolean
+  disabled: boolean
   pageSize: number
-  total: number
 }) {
   const { t } = useTranslation('agentExperiencePage')
-  const start = Math.max(1, Math.min(page - 2, pageCount - 4))
-  const end = Math.min(pageCount, start + 4)
-  const pages = Array.from(
-    { length: Math.max(0, end - start + 1) },
-    (_, index) => start + index,
-  )
 
   return (
-    <div className="flex flex-col gap-3 border-t px-5 py-3 sm:flex-row sm:items-center sm:justify-between">
+    <div className="flex flex-col gap-3 border-t border-border/60 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex flex-wrap items-center justify-center gap-3 sm:justify-start">
         <p className="text-sm text-muted-foreground">
-          {t('pagination.summary', { page, pageCount, total })}
+          {t('pagination.summary', { page })}
         </p>
         <Select
+          disabled={disabled}
           value={String(pageSize)}
           onValueChange={(value) => onPageSizeChange(Number(value))}
         >
@@ -176,39 +171,27 @@ function ExperiencePagination({
             <PaginationPrevious
               href="#"
               text={t('pagination.previous')}
-              aria-disabled={page <= 1}
-              className={cn(page <= 1 && 'pointer-events-none opacity-50')}
+              aria-disabled={disabled || page <= 1}
+              className={cn(
+                (disabled || page <= 1) && 'pointer-events-none opacity-50',
+              )}
               onClick={(event) => {
                 event.preventDefault()
-                if (page > 1) onPageChange(page - 1)
+                if (!disabled && page > 1) onPageChange(page - 1)
               }}
             />
           </PaginationItem>
-          {pages.map((item) => (
-            <PaginationItem key={item}>
-              <PaginationLink
-                href="#"
-                isActive={item === page}
-                onClick={(event) => {
-                  event.preventDefault()
-                  onPageChange(item)
-                }}
-              >
-                {item}
-              </PaginationLink>
-            </PaginationItem>
-          ))}
           <PaginationItem>
             <PaginationNext
               href="#"
               text={t('pagination.next')}
-              aria-disabled={page >= pageCount}
+              aria-disabled={disabled || !hasMore}
               className={cn(
-                page >= pageCount && 'pointer-events-none opacity-50',
+                (disabled || !hasMore) && 'pointer-events-none opacity-50',
               )}
               onClick={(event) => {
                 event.preventDefault()
-                if (page < pageCount) onPageChange(page + 1)
+                if (!disabled && hasMore) onPageChange(page + 1)
               }}
             />
           </PaginationItem>
@@ -223,17 +206,15 @@ function AgentExperienceRoute() {
   const { connection, identityScopeKey } = useAppConnection()
   const [keyword, setKeyword] = React.useState('')
   const [page, setPage] = React.useState(1)
-  const [pageSize, setPageSize] = React.useState(50)
+  const [pageSize, setPageSize] = React.useState(10)
   const [previewExperience, setPreviewExperience] =
     React.useState<ExperienceFileItem | null>(null)
 
   const experiencesUri = buildExperiencesUri(connection.userId)
   const experiencesQuery = useQuery({
-    placeholderData: (previousData) => previousData,
     queryFn: ({ signal }) =>
       fetchExperiences({
         experiencesUri,
-        keyword: keyword.trim(),
         page,
         pageSize,
         signal,
@@ -242,21 +223,21 @@ function AgentExperienceRoute() {
       'agent-experience-list',
       identityScopeKey,
       experiencesUri,
-      keyword.trim(),
       page,
       pageSize,
     ],
     staleTime: 30_000,
   })
 
-  const experiences = experiencesQuery.data?.items ?? []
-  const total = experiencesQuery.data?.total ?? 0
-  const pageCount = Math.max(1, Math.ceil(total / pageSize))
+  const pageItems = experiencesQuery.data?.items ?? []
+  const hasMore = experiencesQuery.data?.hasMore ?? false
   const normalizedKeyword = keyword.trim().toLocaleLowerCase()
-
-  React.useEffect(() => {
-    if (page > pageCount) setPage(pageCount)
-  }, [page, pageCount])
+  const experiences = pageItems.filter(
+    (item) =>
+      !normalizedKeyword ||
+      item.name.toLocaleLowerCase().includes(normalizedKeyword) ||
+      item.uri.toLocaleLowerCase().includes(normalizedKeyword),
+  )
 
   // Snapshot "updated since last visit" badges when the list settles, then
   // mark the whole list as seen. Comparing against the pre-visit snapshot
@@ -297,20 +278,15 @@ function AgentExperienceRoute() {
   }
 
   return (
-    <div className="flex w-full min-w-0 flex-col gap-5">
-      <header className="flex flex-wrap items-start justify-between gap-3">
+    <div className="flex w-full min-w-0 flex-col gap-6">
+      <header className="flex flex-wrap items-start justify-between gap-4">
         <div className="grid gap-1.5">
           <div className="flex items-center gap-2.5">
-            <h1 className="text-2xl font-semibold tracking-tight">
+            <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
               {t('title')}
             </h1>
-            {total > 0 ? (
-              <Badge variant="outline" className="font-normal">
-                {total}
-              </Badge>
-            ) : null}
           </div>
-          <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
+          <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
             {t('description')}
           </p>
         </div>
@@ -378,7 +354,10 @@ function AgentExperienceRoute() {
             )}
           </div>
         </Card>
-      ) : experiences.length === 0 && !keyword.trim() ? (
+      ) : pageItems.length === 0 &&
+        page === 1 &&
+        !hasMore &&
+        !keyword.trim() ? (
         <Card className="min-h-56 items-center justify-center px-6 text-center">
           <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
             <BrainCircuitIcon className="size-5" />
@@ -404,20 +383,22 @@ function AgentExperienceRoute() {
           </div>
         </Card>
       ) : (
-        <>
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="relative w-full max-w-sm">
+        <Card
+          size="sm"
+          className="rounded-xl bg-background shadow-none ring-border/70 data-[size=sm]:gap-0 data-[size=sm]:py-0"
+        >
+          <div className="flex flex-wrap items-center justify-end gap-3 border-b border-border/60 px-5 py-4">
+            <div className="relative w-full sm:max-w-sm">
               <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 aria-label={t('searchPlaceholder')}
                 autoComplete="off"
-                className="pl-8"
+                className="h-9 bg-transparent pr-9 pl-8 shadow-none dark:bg-transparent"
                 name="agent-experience-search"
                 placeholder={t('searchPlaceholder')}
                 value={keyword}
                 onChange={(event) => {
                   setKeyword(event.target.value)
-                  setPage(1)
                 }}
               />
               {keyword ? (
@@ -427,55 +408,58 @@ function AgentExperienceRoute() {
                   className="absolute top-1/2 right-2 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                   onClick={() => {
                     setKeyword('')
-                    setPage(1)
                   }}
                 >
                   <XIcon className="size-3.5" />
                 </button>
               ) : null}
             </div>
-            <Badge variant="outline" className="gap-1 font-normal">
-              {t('directoryHint')}
-            </Badge>
           </div>
 
-          <Card size="sm" className="px-0">
-            {experiences.length === 0 ? (
-              <div className="grid min-h-40 place-items-center px-6 py-8 text-center">
-                <div className="grid max-w-md gap-1">
-                  <p className="font-medium">{t('searchNoResults')}</p>
-                  <p className="text-sm text-muted-foreground">
-                    {t('searchNoResultsDescription')}
-                  </p>
-                </div>
+          {experiences.length === 0 ? (
+            <div className="grid min-h-40 place-items-center px-6 py-8 text-center">
+              <div className="grid max-w-md gap-1">
+                <p className="font-medium">{t('searchNoResults')}</p>
+                <p className="text-sm text-muted-foreground">
+                  {t('searchNoResultsDescription')}
+                </p>
               </div>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="pl-5">{t('columnFile')}</TableHead>
-                    <TableHead className="w-44">{t('columnUpdated')}</TableHead>
-                    <TableHead className="w-28 pr-5 text-right">
-                      {t('columnActions')}
-                    </TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {experiences.map((experience) => {
-                    const updated = formatTimestamp(
-                      experience.modTime,
-                      i18n.language,
-                    )
-                    const isUpdated = updatedUris.has(experience.uri)
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-muted/20 hover:bg-muted/20">
+                  <TableHead className="h-10 pl-5 text-xs font-normal text-muted-foreground">
+                    {t('columnFile')}
+                  </TableHead>
+                  <TableHead className="h-10 w-44 text-xs font-normal text-muted-foreground">
+                    {t('columnUpdated')}
+                  </TableHead>
+                  <TableHead className="h-10 w-28 pr-5 text-right text-xs font-normal text-muted-foreground">
+                    {t('columnActions')}
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {experiences.map((experience) => {
+                  const updated = formatTimestamp(
+                    experience.modTime,
+                    i18n.language,
+                  )
+                  const isUpdated = updatedUris.has(experience.uri)
 
-                    return (
-                      <TableRow
-                        key={experience.uri}
-                        className="cursor-pointer"
-                        onClick={() => handleOpenPreview(experience)}
-                      >
-                        <TableCell className="max-w-0 pl-5">
-                          <div className="grid min-w-0 gap-0.5">
+                  return (
+                    <TableRow
+                      key={experience.uri}
+                      className="group cursor-pointer border-border/50 transition-colors hover:bg-muted/30"
+                      onClick={() => handleOpenPreview(experience)}
+                    >
+                      <TableCell className="max-w-0 py-2.5 pl-5">
+                        <div className="flex min-w-0 items-center gap-3">
+                          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border/70 text-muted-foreground transition-colors group-hover:border-primary/30 group-hover:text-primary">
+                            <FileTextIcon className="size-4" />
+                          </span>
+                          <div className="grid min-w-0 gap-1">
                             <div className="flex min-w-0 items-center gap-1.5">
                               <button
                                 type="button"
@@ -499,60 +483,62 @@ function AgentExperienceRoute() {
                                 </Badge>
                               ) : null}
                             </div>
-                            <span className="truncate font-mono text-xs text-muted-foreground">
+                            <span
+                              className="truncate font-mono text-[11px] text-muted-foreground/80"
+                              title={experience.uri}
+                            >
                               <HighlightedText
                                 keyword={normalizedKeyword}
                                 text={experience.uri}
                               />
                             </span>
                           </div>
-                        </TableCell>
-                        <TableCell className="w-44 text-sm text-muted-foreground">
-                          {updated ? t('updated', { time: updated }) : '-'}
-                        </TableCell>
-                        <TableCell
-                          className="w-28 pr-5 text-right"
-                          onClick={(event) => event.stopPropagation()}
+                        </div>
+                      </TableCell>
+                      <TableCell className="w-44 text-xs text-muted-foreground">
+                        {updated ?? '-'}
+                      </TableCell>
+                      <TableCell
+                        className="w-28 pr-5 text-right"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <Button
+                          render={
+                            <Link
+                              params={{ experienceUri: experience.uri }}
+                              to="/agent-experience/$experienceUri"
+                            />
+                          }
+                          nativeButton={false}
+                          size="xs"
+                          variant="ghost"
+                          className="gap-1 text-muted-foreground hover:text-foreground"
+                          aria-label={t('openDetail', {
+                            name: experience.name,
+                          })}
                         >
-                          <Button
-                            render={
-                              <Link
-                                params={{ experienceUri: experience.uri }}
-                                to="/agent-experience/$experienceUri"
-                              />
-                            }
-                            nativeButton={false}
-                            size="xs"
-                            variant="outline"
-                            aria-label={t('openDetail', {
-                              name: experience.name,
-                            })}
-                          >
-                            <EyeIcon className="size-3.5" />
-                            {t('viewAnalysis')}
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    )
-                  })}
-                </TableBody>
-              </Table>
-            )}
-            {total > 0 ? (
-              <ExperiencePagination
-                page={page}
-                pageCount={pageCount}
-                pageSize={pageSize}
-                total={total}
-                onPageChange={setPage}
-                onPageSizeChange={(nextPageSize) => {
-                  setPageSize(nextPageSize)
-                  setPage(1)
-                }}
-              />
-            ) : null}
-          </Card>
-        </>
+                          {t('viewAnalysis')}
+                          <ArrowUpRightIcon className="size-3.5" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          )}
+          <ExperiencePagination
+            page={page}
+            hasMore={hasMore}
+            disabled={experiencesQuery.isFetching}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={(nextPageSize) => {
+              setPageSize(nextPageSize)
+              setPage(1)
+            }}
+          />
+        </Card>
       )}
 
       <ExperiencePreviewSheet

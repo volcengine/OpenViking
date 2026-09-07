@@ -163,7 +163,7 @@ function ExperienceDetailRoute() {
   }
 
   return (
-    <div className="flex w-full min-w-0 flex-col gap-5">
+    <div className="flex w-full min-w-0 flex-col gap-6">
       <header className="grid gap-3">
         <div>
           <Button
@@ -226,9 +226,12 @@ function ExperienceDetailRoute() {
         </div>
       </header>
 
-      <div className="grid min-w-0 items-start gap-4 xl:grid-cols-[minmax(0,5fr)_minmax(0,4fr)]">
-        <Card size="sm">
-          <CardHeader>
+      <div className="grid min-w-0 items-start gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(360px,2fr)]">
+        <Card
+          size="sm"
+          className="gap-0 bg-background shadow-none ring-border/70"
+        >
+          <CardHeader className="border-b border-border/60">
             <div className="flex items-center justify-between gap-3">
               <div className="flex min-w-0 items-center gap-2">
                 <FileTextIcon className="size-4 shrink-0 text-muted-foreground" />
@@ -274,8 +277,8 @@ function ExperienceDetailRoute() {
                 </Button>
               </div>
             ) : (
-              <div className="max-h-[70vh] overflow-y-auto px-5 pb-5">
-                <div className="prose prose-sm max-w-none break-words dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
+              <div className="max-h-[75vh] overflow-y-auto px-6 py-6 sm:px-8">
+                <div className="prose prose-sm max-w-none break-words prose-headings:font-semibold prose-headings:tracking-tight prose-h2:text-lg prose-p:leading-7 prose-li:leading-7 prose-hr:border-border dark:prose-invert dark:prose-pre:bg-muted/40">
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>
                     {contentQuery.data || ''}
                   </ReactMarkdown>
@@ -285,7 +288,7 @@ function ExperienceDetailRoute() {
           </CardContent>
         </Card>
 
-        <Card size="sm">
+        <Card size="sm" className="bg-background shadow-none ring-border/70">
           <CardHeader>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="grid min-w-0 gap-1">
@@ -308,7 +311,7 @@ function ExperienceDetailRoute() {
                 />
               ) : null}
             </div>
-            <div className="flex w-fit gap-1 rounded-[min(var(--radius-md),10px)] bg-muted p-0.5">
+            <div className="mt-4 flex gap-5 border-b border-border/60">
               {DETAIL_TABS.map((tab) => (
                 <button
                   key={tab}
@@ -316,8 +319,8 @@ function ExperienceDetailRoute() {
                   aria-pressed={activeTab === tab}
                   className={
                     activeTab === tab
-                      ? 'flex items-center gap-1.5 rounded-md bg-background px-2.5 py-1 text-xs font-medium shadow-xs'
-                      : 'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground'
+                      ? 'flex items-center gap-2 border-b-2 border-primary px-1 pb-3 text-sm font-medium text-foreground'
+                      : 'flex items-center gap-2 border-b-2 border-transparent px-1 pb-3 text-sm text-muted-foreground transition-colors hover:text-foreground'
                   }
                   onClick={() => setActiveTab(tab)}
                 >
