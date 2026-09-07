@@ -1084,7 +1084,7 @@ impl FileSystem for LocalFileSystem {
             }
 
             if !local_path.is_dir() {
-                return Err(Error::plugin(format!("not a directory: {}", path)));
+                return Err(Error::NotADirectory(path));
             }
 
             // Read directory
@@ -1473,11 +1473,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_localfs_mount_rejects_absolute_remainder() {
+    async fn test_localfs_mount_preserves_path_errors() {
         let dir = TempDir::new().unwrap();
         let mount = dir.path().join("mount");
         std::fs::create_dir(&mount).unwrap();
         write_file(dir.path(), "secret.txt", "secret");
+        write_file(&mount, "note.md", "note");
 
         let fs = MountableFS::new();
         fs.register_plugin(LocalFSPlugin::new()).await;
@@ -1492,6 +1493,9 @@ mod tests {
         let escape_path = format!("/local/{}", dir.path().join("secret.txt").display());
         let err = fs.read(&escape_path, 0, 0).await.unwrap_err();
         assert!(matches!(err, Error::InvalidPath(_)));
+
+        let err = fs.read_internal_dir("/local/note.md").await.unwrap_err();
+        assert!(matches!(err, Error::NotADirectory(_)));
     }
 
     #[tokio::test]
