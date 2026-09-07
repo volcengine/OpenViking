@@ -326,7 +326,21 @@ class NamedQueue:
             raw_data = data
             if self._dequeue_handler:
                 self._on_dequeue_start()
-                data = await self.process_dequeued(data)
+                try:
+                    data = await self.process_dequeued(data)
+                except Exception as e:
+                    # Handler did not call report_error; decrement in_progress
+                    # manually (mirrors the concurrent worker in QueueManager).
+                    # Without this, a handler that raises without reporting leaks
+                    # the in_progress counter, so is_complete()/wait_complete()
+                    # never observe an idle queue again.
+                    # Do NOT ack — let RecoverStale re-queue on next startup.
+                    self._on_process_error(str(e), raw_data)
+                    logger.error(
+                        f"[NamedQueue] Handler failed for {self.name} msg_id={msg_id}: {e}",
+                        exc_info=True,
+                    )
+                    raise
             # Ack unconditionally after handler returns (success or handled error).
             # If on_dequeue raises, the exception propagates and ack is skipped —
             # the message will be recovered on next startup.
