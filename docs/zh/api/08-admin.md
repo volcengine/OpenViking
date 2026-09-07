@@ -154,6 +154,96 @@ ov --sudo admin set-account-settings acme --acl-enabled true
 覆盖已有配置前，内核会先备份到
 `/local/{account_id}/_system/setting.backup.json`。
 
+### account_memory_templates
+
+ROOT 可管理任意 Account；ADMIN 仅可管理自己 Account 的模板；普通 User 无权调用。
+权限按管理员角色判断，不按 User 是否叫 `default` 判断。
+
+| 方法 | 路径 | 用途 |
+|------|------|------|
+| GET | `/api/v1/admin/accounts/{account_id}/memory-templates` | 列出六类开放模板、完整默认值及生效值 |
+| GET | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | 查询单个模板 |
+| PUT | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | 补齐并发布单个模板 |
+| DELETE | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | 删除该模板覆盖，恢复部署默认值 |
+
+内核接收原有 Memory YAML 结构对应的 JSON 对象，并在接口层强制校验以下白名单。
+仅开放下列六类模板；Experience、Cases、Trajectories 等其他类型不开放查询或编辑，
+不支持通过接口新增、删除或重命名 Memory Type。DELETE 仅移除自定义覆盖，不删除模板类型。
+
+| 模板 | 可编辑项 | 用途 |
+|------|----------|------|
+| `profile` | `description`；`fields.content.description` | 稳定身份、背景和工作方式的抽取说明；正文内容、语言、Markdown 结构、长度和更新时间要求 |
+| `events` | `description`；`fields.event_name.description`、`fields.summary.description`；`content_template` | 事件范围、原子性与排除项；名称语言、粒度和格式；摘要事实、日期和语言；Summary、时间、ChatLog 的标题、顺序和展示方式 |
+| `preferences` | `description`；`fields.topic.description`、`fields.content.description` | 偏好、习惯、反感及与 Profile/Event 的边界；主题粒度、语言和命名；正文语义、条目和 Markdown 要求 |
+| `entities` | `description`；`fields.category.description`、`fields.name.description`、`fields.content.description` | 实体与关系范围；分类法、语言和粒度；实体命名；卡片事实、章节、语言和长度 |
+| `soul` | `description`；`fields.core_truths.description`、`fields.boundaries.description`、`fields.vibe.description`、`fields.continuity.description`；`content_template` | 核心原则、边界、气质和连续性的抽取表达；四个字段的标题、顺序和固定文案 |
+| `identity` | `description`；`fields.creature.description`、`fields.name.description`、`fields.vibe.description`、`fields.avatar.description`、`fields.emoji.description`、`fields.introduction.description`；`content_template` | 身份信息范围；身份、名称、气质、头像、Emoji、自我介绍的字段要求；正文标签、顺序和固定文案 |
+
+表中 `fields.<name>.description` 表示在 `fields` 数组中按 `name` 定位并修改
+`description`，不是替换整个字段。JSON 属性名统一小写（`description`，不是
+`Description`）。Profile 的 `fields.content` 仅开放其 description，不开放字段本身。
+
+除白名单说明文字和三个正文模板外，所有配置均锁定为部署默认值，包括：
+`memory_type`、`enabled`、`operation_mode`、`stage`、`peer_enabled`、
+`directory`、`filename_template`、所有字段的名称/类型/`merge_op`/`init_value`、
+`embedding_template` 和 `overview_template`，以及未开放的字段说明。
+例如 Profile 保留 `profile.md` 和 content 的 `merge_op=patch`；Events 保留
+`add_only` 以及 `goal/ranges` 的说明；Identity 的 Name immutable 规则不变。
+Profile、Preferences、Entities 不开放 `content_template`。
+改写 topic/category/name/event_name 的生成说明仍可能间接影响未来的目录或文件名，
+但不允许修改目录/文件名模板本身。
+
+例如，仅修改类型说明：
+
+```bash
+curl -X PUT "$OV_ENDPOINT/api/v1/admin/accounts/acme/memory-templates/profile" \
+  -H "X-API-Key: $OV_ADMIN_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"description":"只记住业务相关事实，使用 {{ language }}。"}'
+```
+
+PUT 从**部署默认模板**补齐未传入的配置，不从上一次 Account 自定义值补齐，最终保存
+**完整 YAML 模板**。`fields` 按已有字段名合并，只覆盖白名单允许的说明文字，
+未传入的字段和属性全部保留默认值；不能新增、删除或重命名字段，提交空列表不会删除字段。
+完整 GET `effective` 对象可以回传：锁定字段值与默认值相同则接受，任何锁定值变更、
+未知配置项、未知字段或重复字段名均返回 `INVALID_ARGUMENT`，当前生效文件不变。
+若仅调整一个 description 且需保留其他自定义内容，应先 GET，修改 `effective` 对象后
+整体 PUT。空对象会发布一份完整默认配置，状态仍为自定义；恢复系统默认应调用 DELETE。
+DELETE 幂等。
+
+返回包含 `memory_type`、`status`（`system_default` / `custom`）、
+`updated_at`（UTC 发布时间，默认状态为 null），以及完整的 `defaults` / `effective`。
+对象使用 YAML 字段名，例如 `fields[].type`。列表接口返回 `result.account_id` 和
+`result.templates`；单模板操作返回 `result.account_id` 及上述模板结果。
+
+按 Account、按模板独立存储：
+
+```text
+/local/{account_id}/_system/memory_templates/
+  profile.yaml
+  preferences.yaml
+  events.yaml
+  ...
+```
+
+仅发布自定义时创建对应文件。文件包含完整 Schema 和内部 `_updated_at` 时间戳，
+不再使用集中式 `memory_templates.json`。更新前备份至 `{type}.yaml.backup`。
+读写经过 AGFS，沿用当前部署的加密和存储配置，不能直接编辑加密后的底层文件。
+不修改 Account 的 `setting.json` 或 User 的 `user_config.json`。
+个人版使用默认 Account；企业版使用指定 Account，内核不区分两套文件结构。
+
+普通 Session 记忆抽取在筛选 Schema 和初始化记忆文件之前读取 Account 模板。
+同一份 Registry 快照贯穿模型抽取、补丁合并和记忆文件更新；发布新模板不改变已开始
+抽取的快照，不同快照的请求不会合并进同一批流式更新。排队任务按**抽取开始时**取值，
+不是按 HTTP Commit 受理时间取值。同一 Account 下符合记忆策略的 User/Peer 共用模板，
+不同 Account 不串用，也不修改共享的部署 Registry。发布或恢复默认不会主动重写历史
+记忆，后续 Commit 可按生效规则更新已有记忆。
+
+白名单内提交的说明和正文模板必须是非空字符串，并通过 Jinja 语法校验；单文件序列化后不超过 1 MiB。
+发布不调用 LLM，也不限制模板变量、方法调用或过滤器。这是**受信任管理员的配置接口**，
+不是供不可信模板执行的沙箱；现有 `content_template` 渲染逻辑不变。存储错误或文件损坏
+明确报错，不伪装成系统默认。本次不增加公共文件浏览目录、SDK/CLI 命令、草稿或历史版本 UI。
+
 ### user_settings
 
 ROOT 可管理任意 User，ADMIN 仅可管理所属 account 内的 User。User 配置接口当前

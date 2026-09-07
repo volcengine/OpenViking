@@ -64,11 +64,12 @@ class SessionExtractContextProvider(ExtractContextProvider):
         ctx: RequestContext = None,
         viking_fs: VikingFS = None,
         transaction_handle=None,
+        memory_registry: MemoryTypeRegistry | None = None,
     ):
         self.messages = list(messages) if isinstance(messages, list) else messages
         self.latest_archive_overview = latest_archive_overview
         self._output_language = self._detect_language()
-        self._registry = None  # 延迟加载
+        self._registry = memory_registry  # Lazy defaults if no account snapshot was supplied.
         self._schema_directories = None
         self._extract_context = None  # 缓存 ExtractContext 实例
         self._isolation_handler = isolation_handler
