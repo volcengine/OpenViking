@@ -33,6 +33,11 @@ export const TARGETS = [
     committed: true,
   },
   {
+    root: join(ROOT, "examples", "kimicode-memory-plugin"),
+    dir: join(ROOT, "examples", "kimicode-memory-plugin", "scripts", "shared"),
+    committed: true,
+  },
+  {
     root: join(ROOT, "agent-plugins"),
     dir: join(ROOT, "agent-plugins", "servers", "shared"),
     committed: true,
