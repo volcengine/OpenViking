@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -77,6 +77,36 @@ test("a delayed stale claimant cannot overwrite the next owner generation", asyn
 
   assert.equal(claimed, false);
   assert.equal(await readFile(ownerFile, "utf-8"), "live-owner");
+  assert.deepEqual(await readdir(dir), ["owner"], "the losing claim is cleaned up");
+  await rm(dir, { recursive: true, force: true });
+});
+
+test("a replaced owner inode prevents takeover with the same token and mtime", async () => {
+  const dir = join(STATE_DIR, "replaced-inode.lock");
+  const ownerFile = join(dir, "owner");
+  const replacement = join(dir, "replacement");
+  await mkdir(dir, { recursive: true });
+  const seen = "same-owner";
+  const old = new Date(Math.floor(Date.now() / 1000) * 1000 - 600_000);
+  await writeFile(ownerFile, seen);
+  await utimes(ownerFile, old, old);
+  const observed = await stat(ownerFile);
+
+  // Allocate the replacement while the old inode still exists to avoid reuse.
+  await writeFile(replacement, seen);
+  await utimes(replacement, old, old);
+  await rename(replacement, ownerFile);
+  const current = await stat(ownerFile);
+  assert.equal(current.dev, observed.dev);
+  assert.notEqual(current.ino, observed.ino);
+  assert.equal(current.mtimeMs, observed.mtimeMs);
+
+  const claimed = await claimStaleLock(
+    dir, ownerFile, "delayed-owner", seen, 300_000, observed,
+  );
+
+  assert.equal(claimed, false);
+  assert.equal(await readFile(ownerFile, "utf-8"), seen);
   assert.deepEqual(await readdir(dir), ["owner"], "the losing claim is cleaned up");
   await rm(dir, { recursive: true, force: true });
 });
