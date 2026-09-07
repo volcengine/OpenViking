@@ -2184,7 +2184,7 @@ def test_compile_prompt_describes_editable_target_checkout():
     assert "update existing files in place" in system
     assert "submit_wiki_bundle with no arguments" in system
     assert "complete UTF-8 OKF Markdown file" in system
-    assert "commits only validated changes" in system
+    assert "scans and validates the complete tree" in system
     assert "Inspect the editable target checkout" in user
 
 

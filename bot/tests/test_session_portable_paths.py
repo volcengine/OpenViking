@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import unicodedata
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -310,12 +311,15 @@ def test_sandbox_and_heartbeat_reuse_existing_legacy_workspace(tmp_path):
     assert sandbox_manager.to_workspace_id(key) == legacy_name
     assert sandbox_manager.get_workspace_path(key) == legacy_path
 
+    # Recent timestamps so the session never crosses the heartbeat staleness
+    # window (STALE_SESSION_THRESHOLD) no matter when the suite runs.
+    last_active = datetime.now(timezone.utc) - timedelta(minutes=5)
     session_manager = SimpleNamespace(
         list_sessions=lambda: [
             {
                 "key": key,
-                "created_at": "2026-08-20T00:00:00",
-                "updated_at": "2026-08-20T00:00:01",
+                "created_at": last_active.isoformat(),
+                "updated_at": last_active.isoformat(),
                 "metadata": {},
             }
         ]

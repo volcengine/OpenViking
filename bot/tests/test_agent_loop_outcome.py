@@ -616,7 +616,12 @@ async def test_agent_loop_makes_final_no_tool_call_when_iteration_limit_reached(
         "tool result: useful context",
         "tool result: useful context",
     ]
-    assert token_usage == {"prompt_tokens": 17, "completion_tokens": 7, "total_tokens": 24}
+    assert token_usage == {
+        "prompt_tokens": 17,
+        "completion_tokens": 7,
+        "total_tokens": 24,
+        "cache_read_input_tokens": 0,
+    }
 
 
 @pytest.mark.asyncio
@@ -643,7 +648,7 @@ async def test_agent_loop_evaluates_previous_response_outcome_before_openviking_
         agents={
             "session_context_enabled": True,
             "commit_token_threshold": 1,
-            "commit_keep_recent_count": 0,
+            "commit_keep_recent_turn_count": 0,
         },
     )
     loop = AgentLoop(
@@ -1031,7 +1036,7 @@ async def test_agent_loop_commits_openviking_before_model_when_pending_tokens_re
             (
                 "hook",
                 kwargs["force_commit"],
-                kwargs.get("keep_recent_count"),
+                kwargs.get("keep_recent_turn_count"),
                 kwargs.get("commit_message_threshold"),
             )
         )
@@ -1078,7 +1083,7 @@ async def test_agent_loop_commits_openviking_before_model_when_pending_tokens_re
             "session_context_enabled": True,
             "session_context_token_budget": 321,
             "commit_token_threshold": 100,
-            "commit_keep_recent_count": 2,
+            "commit_keep_recent_turn_count": 2,
         },
     )
     loop = AgentLoop(
@@ -1137,7 +1142,7 @@ async def test_agent_loop_commits_openviking_before_model_when_memory_window_rea
             (
                 "hook",
                 kwargs["force_commit"],
-                kwargs.get("keep_recent_count"),
+                kwargs.get("keep_recent_turn_count"),
                 kwargs.get("commit_message_threshold"),
             )
         )
@@ -1182,7 +1187,7 @@ async def test_agent_loop_commits_openviking_before_model_when_memory_window_rea
             "session_context_enabled": True,
             "session_context_token_budget": 321,
             "commit_token_threshold": 1000,
-            "commit_keep_recent_count": 2,
+            "commit_keep_recent_turn_count": 2,
         },
     )
     loop = AgentLoop(
@@ -1249,7 +1254,7 @@ async def test_agent_loop_does_not_precommit_again_after_memory_window_commit(
         agents={
             "session_context_enabled": True,
             "commit_token_threshold": 1000,
-            "commit_keep_recent_count": 2,
+            "commit_keep_recent_turn_count": 2,
         },
     )
     loop = AgentLoop(
