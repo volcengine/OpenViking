@@ -1293,6 +1293,39 @@ Notes:
   - It does not perform a dedicated startup recovery sweep; idle detection happens only on periodic scans
 - Token- and message-count auto commit run inline after message writes, do not depend on the scheduler, and are unaffected by this switch.
 
+##### Session Disk GC Configuration
+
+`memory.session_gc` controls opt-in disk retention (garbage collection) for session directories and commit archives. It is disabled by default: when `enabled=false` (the default), no GC scheduler is registered and no retention action ever runs.
+
+```json
+{
+  "memory": {
+    "session_gc": {
+      "enabled": false,
+      "max_idle_days": 0.0,
+      "archive_max_age_days": 0.0,
+      "dry_run": false,
+      "interval_secs": 3600.0
+    }
+  }
+}
+```
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `enabled` | bool | Master switch. When `false`, the disk-GC scheduler is not started and nothing is ever deleted | `false` |
+| `max_idle_days` | float | Delete a whole session after this many days without any write (session `.meta.json`, session directory, or archive mtimes). `0` disables whole-session deletion | `0.0` |
+| `archive_max_age_days` | float | Delete `history/archive_NNN` directories older than this many days. `0` disables archive deletion. The highest-numbered archive of each session is always kept | `0.0` |
+| `dry_run` | bool | Log planned deletions without executing them. Useful to validate thresholds before enabling real deletion | `false` |
+| `interval_secs` | float | Interval between GC scans in seconds. Must be greater than `0` | `3600.0` |
+
+Notes:
+
+- All deletions go through `VikingFS.rm(recursive=True)`, so vector index entries are removed in lockstep with the filesystem. GC never deletes storage directly.
+- Sessions with a running server-side commit task are skipped entirely for that scan.
+- Archives with unparsable or missing mtimes are conservatively kept.
+- Each run logs the scan/deletion counts before and after execution, both in dry-run and real mode.
+
 ###### Per-session Auto Commit Policy
 
 When a session carries an `auto_commit_policy`, any field you omit falls back to the recommended default below. Sessions without a stored policy keep auto commit disabled. Values are clamped into `[0, max]`, and unknown keys are rejected with `InvalidArgumentError`. See [Sessions API](../api/05-sessions.md#create_session) for how to set and view it.
@@ -1581,6 +1614,7 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 | `session_skill_extraction_enabled` | Whether session commit also extracts reusable skills into the current user's skill directory. | `false` |
 | `link_enabled` | Whether memory extraction writes and resolves memory links. | `false` |
 | `session_auto_commit` | Server-wide automatic session commit controls. This belongs under `memory`, not under `server`; see [Session Auto Commit Configuration](#session-auto-commit-configuration). | See section above |
+| `session_gc` | Opt-in disk retention (GC) controls for session directories and commit archives. Disabled by default; see [Session Disk GC Configuration](#session-disk-gc-configuration). | See section above |
 
 ### ovcli.conf
 

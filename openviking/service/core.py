@@ -28,6 +28,7 @@ from openviking.service.resource_memory_link_service import ResourceMemoryLinkSe
 from openviking.service.resource_service import ResourceService
 from openviking.service.search_service import SearchService
 from openviking.service.session_auto_commit import SessionAutoCommitScheduler
+from openviking.service.session_disk_gc import SessionDiskGcScheduler
 from openviking.service.session_service import SessionService
 from openviking.service.task_tracker import get_task_tracker, set_task_tracker
 from openviking.session import create_session_compressor
@@ -50,7 +51,7 @@ from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import OPENVIKING_ENABLE_RECORDER_ENV, get_openviking_config
 from openviking_cli.utils.config.git_config import GitConfig
-from openviking_cli.utils.config.memory_config import SessionAutoCommitConfig
+from openviking_cli.utils.config.memory_config import SessionAutoCommitConfig, SessionDiskGcConfig
 from openviking_cli.utils.config.open_viking_config import initialize_openviking_config
 from openviking_cli.utils.config.storage_config import StorageConfig
 
@@ -99,6 +100,7 @@ class OpenVikingService:
         self._uri_mutation_coordinator = UriMutationCoordinator()
         self._watch_scheduler: Optional[WatchScheduler] = None
         self._session_auto_commit_scheduler: Optional[SessionAutoCommitScheduler] = None
+        self._session_disk_gc_scheduler: Optional[SessionDiskGcScheduler] = None
         self._encryptor: Optional[Any] = None
         self._privacy_config_service: Optional[UserPrivacyConfigService] = None
         self._data_dir_lock_acquired = False
@@ -457,6 +459,19 @@ class OpenVikingService:
             await self._session_auto_commit_scheduler.start()
         else:
             self._session_auto_commit_scheduler = None
+        try:
+            session_gc_config = get_openviking_config().memory.session_gc
+        except Exception:
+            session_gc_config = SessionDiskGcConfig()
+        if session_gc_config.enabled:
+            self._session_disk_gc_scheduler = SessionDiskGcScheduler(
+                self._session_service,
+                session_gc_config,
+                interval_secs=session_gc_config.interval_secs,
+            )
+            await self._session_disk_gc_scheduler.start()
+        else:
+            self._session_disk_gc_scheduler = None
         self._debug_service.set_dependencies(
             vikingdb=self._vikingdb_manager,
             config=self._config,
@@ -544,6 +559,11 @@ class OpenVikingService:
             await self._session_auto_commit_scheduler.stop()
             self._session_auto_commit_scheduler = None
             logger.info("SessionAutoCommitScheduler stopped")
+
+        if self._session_disk_gc_scheduler:
+            await self._session_disk_gc_scheduler.stop()
+            self._session_disk_gc_scheduler = None
+            logger.info("SessionDiskGcScheduler stopped")
 
         if self._queue_manager:
             await asyncio.to_thread(self._queue_manager.stop)

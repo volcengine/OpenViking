@@ -1268,6 +1268,39 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
   - 不会做单独的启动恢复扫描，idle 检查只发生在周期扫描时
 - token 和 message-count 自动触发在消息写入后内联执行，不依赖 scheduler，也不受这个开关影响。
 
+##### Session 磁盘 GC 配置
+
+`memory.session_gc` 控制 opt-in 的 session 目录与 commit archives 磁盘保留策略（GC）。默认关闭：`enabled=false`（默认值）时不注册 GC 调度器，也不会发生任何保留/删除行为。
+
+```json
+{
+  "memory": {
+    "session_gc": {
+      "enabled": false,
+      "max_idle_days": 0.0,
+      "archive_max_age_days": 0.0,
+      "dry_run": false,
+      "interval_secs": 3600.0
+    }
+  }
+}
+```
+
+| 参数 | 类型 | 说明 | 默认值 |
+|------|------|------|--------|
+| `enabled` | bool | 总开关。为 `false` 时不启动磁盘 GC 调度器，任何内容都不会被删除 | `false` |
+| `max_idle_days` | float | session 超过该天数没有任何写入（session `.meta.json`、session 目录或 archive 的 mtime）后整体删除。`0` 表示禁用整 session 删除 | `0.0` |
+| `archive_max_age_days` | float | 删除超过该天数的 `history/archive_NNN` 目录。`0` 表示禁用 archive 删除。每个 session 编号最大的 archive 始终保留 | `0.0` |
+| `dry_run` | bool | 只记录计划删除的日志、不实际执行。适合在真正开启删除前验证阈值 | `false` |
+| `interval_secs` | float | GC 扫描间隔，单位秒，必须大于 `0` | `3600.0` |
+
+说明：
+
+- 所有删除均通过 `VikingFS.rm(recursive=True)` 执行，向量索引会与文件系统同步清理，GC 不会绕过存储层直接删除。
+- 当次扫描中存在进行中服务端 commit 任务的 session 会被整体跳过。
+- mtime 缺失或无法解析的 archive 会保守保留。
+- 每次运行（dry-run 与真实模式）都会在删除前后记录扫描/删除计数日志。
+
 ###### 单 session 自动 commit 策略
 
 当 session 带有 `auto_commit_policy` 时，未传的字段会回退到下方推荐默认值。没有存储 policy 的 session 保持 auto commit 关闭。取值会被 clamp 到 `[0, 上限]`，未知字段会以 `InvalidArgumentError` 拒绝。设置和查看方式见 [Sessions API](../api/05-sessions.md#create_session)。
@@ -1553,6 +1586,7 @@ openviking-server --config /path/to/ov.conf
 | `session_skill_extraction_enabled` | session commit 时是否同时抽取可复用 skill 到当前用户的 skill 目录。 | `false` |
 | `link_enabled` | 记忆抽取是否写入和解析 memory links。 | `false` |
 | `session_auto_commit` | 服务端 session 自动 commit 的全局控制项。该配置属于 `memory` 段，不属于 `server` 段；详见 [Session Auto Commit 配置](#session-auto-commit-配置)。 | 见上文 |
+| `session_gc` | opt-in 的 session 目录与 commit archives 磁盘保留策略（GC）。默认关闭；详见 [Session 磁盘 GC 配置](#session-磁盘-gc-配置)。 | 见上文 |
 
 ### ovcli.conf
 
