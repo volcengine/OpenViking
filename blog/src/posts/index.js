@@ -12,5 +12,6 @@ import vikingbotMemoryGame from './vikingbot-memory-game/index.jsx';
 import openvikingAgentMemoryDesign from './openviking-agent-memory-design/index.jsx';
 import agentAsAColleague from './agent-as-a-colleague/index.jsx';
 import openvikingAgentPlugins from './openviking-agent-plugins/index.jsx';
+import openvikingAgentHarness from './openviking-agent-harness/index.jsx';
 
-[openvikingAgentPlugins, agentAsAColleague, agentSwarmMemory, openvikingAgentMemoryDesign, openvikingUserPeerModel, openvikingBenchmarkResults, openvikingTooManyAgents, vikingbotMemoryGame, openvikingCodingAgent, agentRuntime, openvikingContextDatabaseArchitecture, openvikingContextDatabase].forEach(registerPost);
+[openvikingAgentHarness, openvikingAgentPlugins, agentAsAColleague, agentSwarmMemory, openvikingAgentMemoryDesign, openvikingUserPeerModel, openvikingBenchmarkResults, openvikingTooManyAgents, vikingbotMemoryGame, openvikingCodingAgent, agentRuntime, openvikingContextDatabaseArchitecture, openvikingContextDatabase].forEach(registerPost);
