@@ -141,9 +141,7 @@ function ExperienceDetailRoute() {
   const trajectories =
     trajectoriesQuery.data?.pages.flatMap((page) => page.items) ?? []
   const trajectoryTotal = trajectoriesQuery.data?.pages[0]?.total ?? 0
-  const hasMoreTrajectories = Boolean(
-    trajectoriesQuery.hasNextPage && !trajectoriesQuery.isFetchingNextPage,
-  )
+  const hasMoreTrajectories = Boolean(trajectoriesQuery.hasNextPage)
   const experienceName = getExperienceDisplayName(experienceUri)
   const outcomeErrorMessage = outcomeQuery.error
     ? getErrorMessage(outcomeQuery.error)

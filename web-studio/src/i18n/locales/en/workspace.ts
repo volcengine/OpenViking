@@ -250,7 +250,11 @@ const workspace = {
     settings: {
       title: 'Experience settings',
       description:
-        'Deployment Agent Evolution switch. When off, new session commits stop extracting experiences and trajectories.',
+        'Agent Evolution switch for the target account. When off, new session commits in that account stop extracting experiences and trajectories.',
+      targetAccount: 'Target account: {{account}}',
+      unknownAccount: 'Unconfirmed',
+      scopeMismatch:
+        'The API target account differs from the current account or cannot be confirmed. Changes are disabled. Use an administrator credential for the current account.',
       loading: 'Reading switch status...',
       loadFailed: 'Could not read switch status',
       statusEnabled: 'Enabled',

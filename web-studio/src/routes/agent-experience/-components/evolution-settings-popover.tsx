@@ -30,8 +30,12 @@ import {
  */
 export function EvolutionSettingsPopover() {
   const { t } = useTranslation('agentExperiencePage')
-  const { connectionRole, identityScopeKey, isConnectionRoleLoading } =
-    useAppConnection()
+  const {
+    connection,
+    connectionRole,
+    identityScopeKey,
+    isConnectionRoleLoading,
+  } = useAppConnection()
   const queryClient = useQueryClient()
 
   const canManage =
@@ -45,8 +49,17 @@ export function EvolutionSettingsPopover() {
     staleTime: 30_000,
   })
 
+  const targetAccountId = statusQuery.data?.accountId
+  const matchesCurrentAccount =
+    Boolean(targetAccountId) && targetAccountId === connection.accountId
+
   const toggleMutation = useMutation({
-    mutationFn: (enabled: boolean) => setAgentEvolutionEnabled(enabled),
+    mutationFn: (enabled: boolean) => {
+      if (!matchesCurrentAccount) {
+        throw new Error(t('settings.scopeMismatch'))
+      }
+      return setAgentEvolutionEnabled(enabled)
+    },
     onSuccess: (status) => {
       queryClient.setQueryData(
         ['agent-evolution-status', identityScopeKey],
@@ -107,6 +120,11 @@ export function EvolutionSettingsPopover() {
           ) : statusQuery.data ? (
             <div className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5">
               <div className="grid gap-0.5">
+                <span className="break-all text-xs text-muted-foreground">
+                  {t('settings.targetAccount', {
+                    account: targetAccountId || t('settings.unknownAccount'),
+                  })}
+                </span>
                 <span className="text-sm font-medium">
                   {statusQuery.data.enabled
                     ? t('settings.statusEnabled')
@@ -121,10 +139,15 @@ export function EvolutionSettingsPopover() {
               <Switch
                 aria-label={t('settings.title')}
                 checked={statusQuery.data.enabled}
-                disabled={toggleMutation.isPending}
+                disabled={toggleMutation.isPending || !matchesCurrentAccount}
                 onCheckedChange={(checked) => toggleMutation.mutate(checked)}
               />
             </div>
+          ) : null}
+          {statusQuery.data && !matchesCurrentAccount ? (
+            <p className="text-xs text-destructive" role="status">
+              {t('settings.scopeMismatch')}
+            </p>
           ) : null}
           {toggleMutation.isPending ? (
             <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
