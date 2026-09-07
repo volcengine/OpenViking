@@ -149,7 +149,7 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl():
             "uri": "viking://resources/direct.md",
             "account_id": "acct",
             "context_type": "resource",
-            "acl_enabled": True,
+            "acl_mode": "inherit",
             "acl_direct_grants": ["1:user:alice"],
         },
         {
@@ -157,7 +157,7 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl():
             "uri": "viking://resources/inherited.md",
             "account_id": "acct",
             "context_type": "resource",
-            "acl_enabled": True,
+            "acl_mode": "inherit",
             "acl_inherited_grants": ["3:user:*"],
         },
         {
@@ -165,7 +165,7 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl():
             "uri": "viking://resources/denied.md",
             "account_id": "acct",
             "context_type": "resource",
-            "acl_enabled": True,
+            "acl_mode": "inherit",
             "acl_direct_grants": ["7:user:bob"],
         },
         {

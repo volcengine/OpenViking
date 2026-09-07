@@ -148,7 +148,7 @@ class _TransferAclManager:
         return [
             {
                 **record,
-                "acl_enabled": True,
+                "acl_mode": "inherit",
                 "acl_direct_grants": [],
                 "acl_inherited_grants": ["1:group:target-readers"],
             }
@@ -158,7 +158,7 @@ class _TransferAclManager:
     async def materialize_moved_record(self, record, new_uri, ctx):
         del new_uri, ctx
         return {
-            "acl_enabled": True,
+            "acl_mode": "inherit",
             "acl_direct_grants": list(record.get("acl_direct_grants") or []),
             "acl_inherited_grants": ["1:group:target-readers"],
         }
@@ -660,7 +660,7 @@ async def test_copy_over_private_target_preserves_target_acl_for_new_chunks():
             _record(
                 "target-file",
                 target,
-                acl_enabled=True,
+                acl_mode="inherit",
                 acl_direct_grants=["7:user:bob"],
                 acl_inherited_grants=[],
             ),
@@ -690,14 +690,14 @@ async def test_copy_target_without_direct_acl_keeps_parent_inheritance():
             _record(
                 "parent",
                 parent,
-                acl_enabled=True,
+                acl_mode="inherit",
                 acl_direct_grants=inherited,
                 acl_inherited_grants=[],
             ),
             _record(
                 "target-file",
                 target,
-                acl_enabled=True,
+                acl_mode="inherit",
                 acl_direct_grants=[],
                 acl_inherited_grants=inherited,
             ),
@@ -728,7 +728,7 @@ async def test_unindexed_source_preserves_target_records_and_acl(
                 target,
                 level=level,
                 abstract="old abstract",
-                acl_enabled=private,
+                acl_mode="inherit" if private else "none",
                 acl_direct_grants=["7:user:bob"] if private else [],
                 acl_inherited_grants=[],
             ),
@@ -747,7 +747,7 @@ async def test_unindexed_source_preserves_target_records_and_acl(
     assert backend.acl_manager is not None
     effective = await backend.acl_manager.resolve(target, _ctx())
     assert effective.context_fields() == {
-        "acl_enabled": private,
+        "acl_mode": "inherit" if private else "none",
         "acl_direct_grants": ["7:user:bob"] if private else [],
         "acl_inherited_grants": [],
     }
@@ -790,14 +790,14 @@ async def test_copy_directory_preserves_root_acl_and_inherits_it_to_new_entries(
                 "target-root",
                 target,
                 level=0,
-                acl_enabled=True,
+                acl_mode="inherit",
                 acl_direct_grants=root_acl,
                 acl_inherited_grants=[],
             ),
             _record(
                 "unique-target",
                 unique_target,
-                acl_enabled=True,
+                acl_mode="inherit",
                 acl_direct_grants=["3:user:carol"],
                 acl_inherited_grants=root_acl,
             ),
@@ -964,7 +964,7 @@ async def test_update_uri_mapping_preserves_source_direct_acl_on_target():
             _record(
                 "source",
                 source,
-                acl_enabled=True,
+                acl_mode="inherit",
                 acl_direct_grants=["7:user:alice"],
                 acl_inherited_grants=["1:group:source-readers"],
             )
@@ -1008,14 +1008,14 @@ async def test_update_uri_mapping_rollback_restores_source_direct_acl():
             _record(
                 "source-root",
                 source,
-                acl_enabled=True,
+                acl_mode="inherit",
                 acl_direct_grants=["7:user:alice"],
                 acl_inherited_grants=["1:group:source-readers"],
             ),
             _record(
                 "source-child",
                 f"{source}/child.md",
-                acl_enabled=True,
+                acl_mode="inherit",
                 acl_direct_grants=["3:user:bob"],
                 acl_inherited_grants=["7:user:alice"],
             ),

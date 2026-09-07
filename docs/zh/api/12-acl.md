@@ -45,7 +45,7 @@ ACL API 管理 `viking://resources/...` 共享资源的直接授权，并返回�
 ```json
 {
   "uri": "viking://resources/project-a",
-  "acl_enabled": true,
+  "acl_mode": "inherit",
   "direct_entries": [
     {"principal": "user:bob", "level": "read"}
   ],
@@ -64,7 +64,7 @@ ACL API 管理 `viking://resources/...` 共享资源的直接授权，并返回�
 | `direct_entries` | 只包含当前节点直接设置的条目 |
 | `inherited_entries` | 所有祖先目录直接 ACL 的合并结果 |
 | `effective_entries` | `direct_entries` 与 `inherited_entries` 的合并结果 |
-| `acl_enabled` | 当前节点或任一祖先存在直接 ACL 时为 `true`；只读派生字段 |
+| `acl_mode` | `none` 表示不受 ACL 控制，`inherit` 表示 direct 与 inherited ACL 均生效；只读派生字段 |
 
 account `ADMIN` 的隐式 `manage` 权限不出现在这些列表中。
 
@@ -257,7 +257,7 @@ ov acl rm viking://resources/project-a
 | 修改 ACL 时 URI 尚无 context 记录 | `INVALID_ARGUMENT`，需先完成索引 |
 | `principal` 格式非法，或使用 `group:*` | `INVALID_ARGUMENT` |
 | level 不是 `read/write/manage` | `INVALID_ARGUMENT` |
-| 请求包含 `acl_enabled` 等未知字段 | `INVALID_ARGUMENT` |
+| 请求包含 `acl_mode` 等只读字段 | `INVALID_ARGUMENT` |
 
 ACL 的 direct 和 inherited 字段都保存在 context。更新会在同一子树批处理中修改目标 direct 并重算后代 inherited；写入失败时恢复原 context ACL 字段。
 

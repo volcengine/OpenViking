@@ -61,7 +61,7 @@ The effective permissions on `report.md` are:
 
 Removing the group's direct ACL from `A/B` does not remove entries from `A` or `report.md`. Descendants only lose the permissions contributed by that entry.
 
-## Default Behavior and `acl_enabled`
+## Default Behavior and `acl_mode`
 
 The account-level `acl.enabled` setting is disabled by default. While disabled,
 shared resources keep the existing URI namespace visibility and write rules.
@@ -80,10 +80,10 @@ does not change its direct ACL.
 When the node or any ancestor has a direct ACL, the node enters the ACL-controlled domain:
 
 ```text
-acl_enabled = true
+acl_mode = "inherit"
 ```
 
-`acl_enabled` is derived by the system and cannot be set by an API caller. It returns to `false` automatically after the last applicable direct ACL is removed.
+`acl_mode` is derived by the system and cannot be set by an API caller. The base modes are `none` and `inherit`: `none` means ACL does not control the node, while `inherit` means both direct and inherited ACLs apply. It returns to `none` automatically after the last applicable direct ACL is removed.
 
 ## File Operations
 
@@ -117,14 +117,14 @@ For a directory, `stat.count` uses the same path and ACL scalar filter and repor
 ACL data exists only in the context collection. Each context record stores direct and inherited permissions in native scalar fields:
 
 ```text
-acl_enabled
+acl_mode
 acl_direct_grants
 acl_inherited_grants
 ```
 
 `acl_direct_grants` is the ACL assigned to the current node. `acl_inherited_grants` is the union of all ancestor direct ACLs. Each principal stores only its highest level as `{mask}:{principal}`: `1` means `read`, `3` means `write`, and `7` means `manage`. For example, `3:group:dev` gives `group:dev` `write` and therefore also `read`. Effective permission is the union of the two fields; there is no separate ACL collection.
 
-The request principals are `user:{ctx.user_id}`, `user:*`, and one `group:{group_id}` for each ID in `ctx.group_ids`. For reads, `find/search` matches the `1`, `3`, and `7` tokens for each principal against both native `list<string>` grant fields within the `viking://resources` scope; private resources remain isolated by URI owner. Legacy records without ACL fields are treated as `acl_enabled=false`, so they do not require a full data backfill.
+The request principals are `user:{ctx.user_id}`, `user:*`, and one `group:{group_id}` for each ID in `ctx.group_ids`. For reads, `find/search` matches the `1`, `3`, and `7` tokens for each principal against both native `list<string>` grant fields within the `viking://resources` scope; private resources remain isolated by URI owner. Legacy records without ACL fields are treated as `acl_mode=none`, so they do not require a full data backfill.
 
 A retrieval target URI is only a search scope; the caller does not need to read the target node itself. A user can discover a deeply shared file even when intermediate directories are not readable.
 

@@ -725,11 +725,20 @@ async def test_embedding_handler_settles_request_wait_by_message_id(monkeypatch)
     assert completed == [("request-1", queue_data["id"], {"vector_written": True})]
 
 
-def test_context_collection_excludes_parent_uri():
+def test_context_collection_uses_acl_mode_and_excludes_parent_uri():
     schema = CollectionSchemas.context_collection("ctx", 8)
 
     field_names = [field["FieldName"] for field in schema["Fields"]]
+    acl_mode = next(field for field in schema["Fields"] if field["FieldName"] == "acl_mode")
 
+    assert acl_mode == {
+        "FieldName": "acl_mode",
+        "FieldType": "string",
+        "DefaultValue": "none",
+    }
+    assert "acl_mode" in schema["ScalarIndex"]
+    assert "acl_enabled" not in field_names
+    assert "acl_enabled" not in schema["ScalarIndex"]
     assert "parent_uri" not in field_names
     assert "parent_uri" not in schema["ScalarIndex"]
 

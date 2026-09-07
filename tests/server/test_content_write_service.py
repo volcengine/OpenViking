@@ -158,7 +158,8 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
         },
         ctx=admin,
     )
-    await service.fs.set_acl(
+    assert (await service.fs.get_acl(parent_uri, ctx=admin))["acl_mode"] == "none"
+    parent_acl = await service.fs.set_acl(
         parent_uri,
         [
             {"principal": "group:readers", "level": "read"},
@@ -166,6 +167,7 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
         ],
         ctx=admin,
     )
+    assert parent_acl["acl_mode"] == "inherit"
 
     await service.fs.write(uri, content="line1\n", ctx=creator, mode="create", wait=True)
     inherited_entries = [

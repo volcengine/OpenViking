@@ -61,7 +61,7 @@ read user:carol on viking://resources/A/B/C/report.md
 
 删除 `A/B` 上用户组的直接 ACL 不会删除 `A` 或 `report.md` 上的条目。子节点只会失去由该条目提供的权限。
 
-## 默认行为与 `acl_enabled`
+## 默认行为与 `acl_mode`
 
 账号级 `acl.enabled` 默认关闭。关闭时，共享资源继续使用原有 URI namespace
 可见性和写入规则，不解析或校验 ACL，也不为新建内容写入 ACL。
@@ -75,10 +75,10 @@ read user:carol on viking://resources/A/B/C/report.md
 只要节点或任一祖先存在直接 ACL，该节点就进入 ACL 控制域：
 
 ```text
-acl_enabled = true
+acl_mode = "inherit"
 ```
 
-`acl_enabled` 是系统派生字段，不能由 API 调用者设置。删除最后一个相关直接 ACL 后，它会自动恢复为 `false`。
+`acl_mode` 是系统派生字段，不能由 API 调用者设置。当前基础模式只有 `none` 和 `inherit`：`none` 表示节点不受 ACL 控制，`inherit` 表示 direct 与 inherited ACL 均生效。删除最后一个相关直接 ACL 后，它会自动恢复为 `none`。
 
 ## 文件操作
 
@@ -111,14 +111,14 @@ bootstrap，后续 ACL 修改要求有效 `manage` 能力。
 ACL 只保存在 context collection。每条 context 记录维护当前节点和继承权限两组原生标量字段：
 
 ```text
-acl_enabled
+acl_mode
 acl_direct_grants
 acl_inherited_grants
 ```
 
 `acl_direct_grants` 是当前节点直接 ACL，`acl_inherited_grants` 是所有祖先直接 ACL 的并集。每个 principal 只保存最高 level，编码为 `{mask}:{principal}`：`1` 表示 `read`、`3` 表示 `write`、`7` 表示 `manage`。例如 `3:group:dev` 表示 `group:dev` 拥有 `write`，同时也具备 `read`。有效权限是两组列表的并集，不维护独立 ACL collection。
 
-请求的可用 principal 为 `user:{ctx.user_id}`、`user:*`，以及 `ctx.group_ids` 中每个 ID 对应的 `group:{group_id}`。`find/search` 读取时为每个 principal 匹配 `1`、`3`、`7` 三种 token，并在 `viking://resources` scope 内对 direct 和 inherited 两个原生 `list<string>` 字段做过滤；个人资源始终按 URI owner 隔离。旧记录缺少 ACL 字段时按 `acl_enabled=false` 处理，无需全量回填。
+请求的可用 principal 为 `user:{ctx.user_id}`、`user:*`，以及 `ctx.group_ids` 中每个 ID 对应的 `group:{group_id}`。`find/search` 读取时为每个 principal 匹配 `1`、`3`、`7` 三种 token，并在 `viking://resources` scope 内对 direct 和 inherited 两个原生 `list<string>` 字段做过滤；个人资源始终按 URI owner 隔离。旧记录缺少 ACL 字段时按 `acl_mode=none` 处理，无需全量回填。
 
 检索 target URI 只是搜索范围，不要求调用者能够读取 target 节点本身。用户即使不能读取中间目录，也可以检索到深层单独授权给自己的文件。
 

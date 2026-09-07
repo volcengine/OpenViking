@@ -19,8 +19,10 @@ from openviking.core.namespace import (
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.acl import (
     ACL_CONTEXT_FIELDS,
+    ACL_MODE_FIELD,
     AclAction,
     AclManager,
+    AclMode,
     acl_grant_tokens,
     acl_principals,
     is_acl_uri,
@@ -2275,9 +2277,15 @@ class VikingVectorIndexBackend:
                 ]
             )
 
-        legacy_filter = And(
+        uncontrolled_filter = And(
             [
-                RawDSL({"op": "must_not", "field": "acl_enabled", "conds": [True]}),
+                RawDSL(
+                    {
+                        "op": "must_not",
+                        "field": ACL_MODE_FIELD,
+                        "conds": [AclMode.INHERIT.value],
+                    }
+                ),
                 Or([PathScope("uri", root, depth=-1) for root in visible_roots(ctx)]),
             ]
         )
@@ -2294,7 +2302,7 @@ class VikingVectorIndexBackend:
             ]
         )
         access_filters: List[FilterExpr] = [
-            legacy_filter,
+            uncontrolled_filter,
             shared_acl_filter,
             PathScope("uri", f"{canonical_user_root(ctx)}/resources", depth=-1),
         ]

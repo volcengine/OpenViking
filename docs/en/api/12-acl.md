@@ -47,7 +47,7 @@ The caller supplies the account-unique, stable `group_id` through the [Admin API
 ```json
 {
   "uri": "viking://resources/project-a",
-  "acl_enabled": true,
+  "acl_mode": "inherit",
   "direct_entries": [
     {"principal": "user:bob", "level": "read"}
   ],
@@ -66,7 +66,7 @@ The caller supplies the account-unique, stable `group_id` through the [Admin API
 | `direct_entries` | Entries set directly on this node |
 | `inherited_entries` | Merged direct ACLs from all ancestors |
 | `effective_entries` | The merged direct and inherited entries |
-| `acl_enabled` | `true` when this node or an ancestor has a direct ACL; read-only and derived |
+| `acl_mode` | `none` when ACL does not control the node; `inherit` when direct and inherited ACLs apply; read-only and derived |
 
 The account `ADMIN` implicit `manage` permission is not included in these lists.
 
@@ -259,7 +259,7 @@ The API checks manage permission before confirming existence to an authorized ca
 | ACL mutation targets a URI without a context record | `INVALID_ARGUMENT`; index it first |
 | Invalid `principal` syntax or `group:*` | `INVALID_ARGUMENT` |
 | Level is not `read/write/manage` | `INVALID_ARGUMENT` |
-| Request includes unknown fields such as `acl_enabled` | `INVALID_ARGUMENT` |
+| Request includes read-only fields such as `acl_mode` | `INVALID_ARGUMENT` |
 
 Direct and inherited ACL fields are both stored in context records. An update changes the target direct ACL and recalculates descendant inherited ACLs in one subtree batch; a failed write restores the previous context ACL fields.
 
