@@ -995,15 +995,20 @@ class _OpsMixin:
         return resolved
 
     async def stat(
-        self, uri: str, ctx: Optional[RequestContext] = None, skip_count: bool = False
+        self,
+        uri: str,
+        ctx: Optional[RequestContext] = None,
+        skip_count: bool = False,
+        include_lock_status: bool = False,
     ) -> Dict[str, Any]:
         """
         File/directory information.
 
-        example: {'name': 'resources', 'size': 128, 'mode': 2147484141, 'modTime': '2026-02-10T21:26:02.934376379+08:00', 'isDir': True, 'isLocked': False, 'count': 42, 'meta': {'Name': 'localfs', 'Type': 'local', 'Content': {'local_path': '...'}}}
+        example: {'name': 'resources', 'size': 128, 'mode': 2147484141, 'modTime': '2026-02-10T21:26:02.934376379+08:00', 'isDir': True, 'count': 42, 'meta': {'Name': 'localfs', 'Type': 'local', 'Content': {'local_path': '...'}}}
 
         Extra fields:
-            isLocked (bool): Whether the path is currently held by a path lock
+            isLocked (bool): When ``include_lock_status`` is True, whether the
+                path is currently held by a path lock
                 (either the path itself or any ancestor directory). Returns
                 False when the pathlock system is not enabled or the lookup
                 fails.
@@ -1023,6 +1028,9 @@ class _OpsMixin:
             skip_count: If True, skip the vector_store.count() call for directories.
                 Use this when the count field is not needed (e.g. in grep) to avoid
                 an extra VikingDB API call.
+            include_lock_status: If True, include ``isLocked`` in the result.
+                Leave disabled for internal metadata checks to avoid the extra
+                PathLock filesystem lookup.
         """
         real_ctx = self._ctx_or_default(ctx)
         uri = await self.resolve_uri(uri, real_ctx)
@@ -1045,18 +1053,21 @@ class _OpsMixin:
         else:
             if self._is_session_root_uri(uri):
                 now = datetime.now(timezone.utc).isoformat()
-                return {
+                result = {
                     "name": "session",
                     "size": 0,
                     "mode": 0o755,
                     "modTime": now,
                     "isDir": True,
-                    "isLocked": False,
                 }
+                if include_lock_status:
+                    result["isLocked"] = False
+                return result
             raise NotFoundError(uri, "file") from last_not_found
         if isinstance(result, dict):
             result["uri"] = uri
-            result["isLocked"] = await self._is_path_locked_async(path)
+            if include_lock_status:
+                result["isLocked"] = await self._is_path_locked_async(path)
             # Add deterministic vector record id for files (level 2).
             # This matches the ID used in VikingDB so callers can cross-reference
             # vector records without an extra lookup.

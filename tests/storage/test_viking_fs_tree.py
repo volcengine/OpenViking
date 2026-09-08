@@ -28,6 +28,50 @@ def _default_ctx() -> RequestContext:
     return RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
 
 
+@pytest.mark.asyncio
+async def test_stat_queries_lock_status_only_when_requested(monkeypatch, fs):
+    path = "/local/default/resources/example.md"
+    lock_queries = []
+
+    async def resolve_uri(uri, _ctx):
+        return uri
+
+    async def ensure_access(_uri, _ctx):
+        return None
+
+    async def read_path_visible(_uri, _path, _primary_path, _ctx):
+        return True
+
+    async def stat_path(_path):
+        return {"name": "example.md", "isDir": False}
+
+    async def is_path_locked(queried_path):
+        lock_queries.append(queried_path)
+        return True
+
+    monkeypatch.setattr(fs, "resolve_uri", resolve_uri)
+    monkeypatch.setattr(fs, "_ensure_access", ensure_access)
+    monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: path)
+    monkeypatch.setattr(fs, "_read_paths", lambda _uri, **_kwargs: [path])
+    monkeypatch.setattr(fs, "_read_path_visible", read_path_visible)
+    monkeypatch.setattr(fs._async_agfs, "stat", stat_path)
+    monkeypatch.setattr(fs, "_is_path_locked_async", is_path_locked)
+
+    result = await fs.stat("viking://resources/example.md", ctx=_default_ctx())
+
+    assert "isLocked" not in result
+    assert lock_queries == []
+
+    result = await fs.stat(
+        "viking://resources/example.md",
+        ctx=_default_ctx(),
+        include_lock_status=True,
+    )
+
+    assert result["isLocked"] is True
+    assert lock_queries == [path]
+
+
 def test_viking_fs_no_longer_exposes_python_encryption_api(fs: VikingFS):
     """VikingFS should not expose Python-side encryption helpers after ragfs migration."""
     assert not hasattr(fs, "_encrypt_content")

@@ -928,10 +928,21 @@ class FSService:
             result, ctx, None, include_tags or "tags" in (extra_fields or [])
         )
 
-    async def stat(self, uri: str, ctx: RequestContext, skip_count: bool = False) -> Dict[str, Any]:
+    async def stat(
+        self,
+        uri: str,
+        ctx: RequestContext,
+        skip_count: bool = False,
+        include_lock_status: bool = False,
+    ) -> Dict[str, Any]:
         """Get resource status."""
         viking_fs = self._ensure_initialized()
-        return await viking_fs.stat(uri, ctx=ctx, skip_count=skip_count)
+        return await viking_fs.stat(
+            uri,
+            ctx=ctx,
+            skip_count=skip_count,
+            include_lock_status=include_lock_status,
+        )
 
     async def ensure_write_access(self, uri: str, ctx: RequestContext) -> None:
         """Validate write access without mutating the target."""

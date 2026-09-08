@@ -180,7 +180,7 @@ async def stat(
     else:
         resolved = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
-        result = await service.fs.stat(resolved, ctx=_ctx)
+        result = await service.fs.stat(resolved, ctx=_ctx, include_lock_status=True)
         # URI requests use the canonical validated URI. ID requests are resolved
         # inside VikingFS, which returns the corresponding canonical URI.
         response_uri = result.get("uri", resolved)
