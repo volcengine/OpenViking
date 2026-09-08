@@ -353,60 +353,57 @@ class ExternalTaskService:
         user_id: str,
     ) -> None:
         max_attempts = provider.poll_max_attempts
-        try:
-            if external_task_id is None:
-                # Submission may have reached the provider before local cancellation
-                # interrupted its response. Idempotency makes this bounded recovery safe.
-                external_task_id = await self._retry(
-                    lambda: provider.submit(ov_task_id, payload, private_payload, connection),
-                    task_id=ov_task_id,
-                    operation_name="recover before cancel",
-                    poll_interval=provider.poll_interval_seconds,
-                    max_attempts=max_attempts,
-                )
-                await get_task_tracker().update_task_auth(
-                    ov_task_id,
-                    {"external_task_id": external_task_id},
-                    account_id=account_id,
-                    user_id=user_id,
-                )
-            snapshot = await self._retry(
-                lambda: provider.cancel(external_task_id, connection),
-                task_id=ov_task_id,
-                operation_name="cancel",
-                poll_interval=provider.poll_interval_seconds,
-                max_attempts=max_attempts,
-            )
-            for attempt in range(max_attempts):
-                if await self._apply_snapshot(
-                    snapshot,
-                    task_id=ov_task_id,
-                    account_id=account_id,
-                    user_id=user_id,
-                ):
-                    return
-                if attempt + 1 == max_attempts:
-                    logger.warning(
-                        "External task cancellation did not converge task=%s attempts=%s",
-                        ov_task_id,
-                        max_attempts,
+        # Returning allows QueueFS to ACK the work and finalize cancellation.
+        # Keep ownership until the provider confirms a terminal state.
+        while True:
+            try:
+                if external_task_id is None:
+                    # Submission may have reached the provider before local cancellation
+                    # interrupted its response. Recover it with the same idempotency key.
+                    external_task_id = await self._retry(
+                        lambda: provider.submit(ov_task_id, payload, private_payload, connection),
+                        task_id=ov_task_id,
+                        operation_name="recover before cancel",
+                        poll_interval=provider.poll_interval_seconds,
+                        max_attempts=max_attempts,
                     )
-                    break
-                await asyncio.sleep(provider.poll_interval_seconds)
+                    await get_task_tracker().update_task_auth(
+                        ov_task_id,
+                        {"external_task_id": external_task_id},
+                        account_id=account_id,
+                        user_id=user_id,
+                    )
                 snapshot = await self._retry(
-                    lambda: provider.get(external_task_id, connection),
+                    lambda task_id=external_task_id: provider.cancel(task_id, connection),
                     task_id=ov_task_id,
-                    operation_name="poll cancellation",
+                    operation_name="cancel",
                     poll_interval=provider.poll_interval_seconds,
                     max_attempts=max_attempts,
                 )
-        except ExternalTaskError as exc:
-            logger.warning(
-                "External task cancellation stopped task=%s code=%s: %s",
-                ov_task_id,
-                exc.code,
-                exc,
-            )
+                while True:
+                    if await self._apply_snapshot(
+                        snapshot,
+                        task_id=ov_task_id,
+                        account_id=account_id,
+                        user_id=user_id,
+                    ):
+                        return
+                    await asyncio.sleep(provider.poll_interval_seconds)
+                    snapshot = await self._retry(
+                        lambda task_id=external_task_id: provider.get(task_id, connection),
+                        task_id=ov_task_id,
+                        operation_name="poll cancellation",
+                        poll_interval=provider.poll_interval_seconds,
+                        max_attempts=max_attempts,
+                    )
+            except ExternalTaskError as exc:
+                logger.warning(
+                    "External task cancellation will retry task=%s code=%s: %s",
+                    ov_task_id,
+                    exc.code,
+                    exc,
+                )
+                await asyncio.sleep(provider.poll_interval_seconds)
 
     @staticmethod
     async def _retry(

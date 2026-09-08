@@ -287,7 +287,12 @@ async def test_compile_route_uses_ov_owned_task_and_rejects_legacy_routes(monkey
 @pytest.mark.asyncio
 async def test_compile_api_client_session_protocol_retry_and_cancellation(monkeypatch):
     forwarded = []
-    response_status = {"cancel": "cancelled", "submit_failures": 0, "poll": []}
+    response_status = {
+        "cancel": "cancelled",
+        "submit_failures": 0,
+        "cancel_failures": 0,
+        "poll": [],
+    }
 
     class FakeResponse:
         def __init__(self, body, status_code=202):
@@ -316,6 +321,9 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(monkey
                     return FakeResponse({"detail": "temporarily unavailable"}, status_code=503)
                 return FakeResponse({"session_id": "ma-session-1"})
             if url.endswith("/runtime/v1/tasks/cancel"):
+                if response_status["cancel_failures"]:
+                    response_status["cancel_failures"] -= 1
+                    return FakeResponse({"detail": "temporarily unavailable"}, status_code=503)
                 status = response_status["cancel"]
                 return FakeResponse(
                     {
@@ -453,6 +461,9 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(monkey
             self.task.result = result
             self.task.status = TaskStatus.COMPLETED
 
+        async def record_cancelled(self, _task_id, **kwargs):
+            self.task.status = TaskStatus.CANCELLED
+
         def is_cancellation_requested(self, _task_id):
             return False
 
@@ -481,19 +492,18 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(monkey
     assert tracker.task.result == {"output": "wiki"}
 
     forwarded.clear()
-    response_status["cancel"] = "running"
+    response_status["cancel"] = "cancelling"
+    response_status["cancel_failures"] = 3
+    response_status["poll"] = ["cancelling"] * 4 + ["cancelled"]
     tracker.task.status = TaskStatus.CANCELLING
     tracker.task.stage = "compile: running"
     tracker.stage_updates.clear()
 
     await tasks.cancel_recovered("cmp_ov_1", "acct", "alice")
 
-    assert [request["url"] for request in forwarded] == [
-        "https://compile.example.com/runtime/v1/tasks/cancel",
-        "https://compile.example.com/runtime/v1/tasks/status",
-        "https://compile.example.com/runtime/v1/tasks/status",
-    ]
-    assert tracker.stage_updates == []
+    assert tracker.task.status == TaskStatus.CANCELLED
+    assert response_status["cancel_failures"] == 0
+    assert response_status["poll"] == []
 
 
 @pytest.mark.asyncio
