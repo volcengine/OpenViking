@@ -35,6 +35,7 @@ jobs:
           node --test \
             examples/codex-memory-plugin/servers/mcp-proxy.test.mjs \
             examples/codex-memory-plugin/scripts/auto-capture.test.mjs \
+            examples/codex-memory-plugin/scripts/config.test.mjs \
             examples/codex-memory-plugin/scripts/capture-utils.test.mjs \
             examples/codex-memory-plugin/scripts/marketplace.test.mjs \
             examples/codex-memory-plugin/scripts/ov-credentials.test.mjs \

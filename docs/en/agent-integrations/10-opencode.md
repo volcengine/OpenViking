@@ -120,6 +120,8 @@ node examples/opencode-plugin/scripts/setup.mjs
 }
 ```
 
+`autoRecall.scoreThreshold` follows the reranker's native score scale. Cosine-like rerankers commonly use `0.0` to `1.0`; logit-scale rerankers may require negative values.
+
 Environment variables override `ovcli.conf`:
 
 ```bash

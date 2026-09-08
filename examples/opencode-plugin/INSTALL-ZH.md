@@ -111,6 +111,8 @@ export { OpenVikingPlugin, default } from "./openviking/index.mjs"
 }
 ```
 
+`autoRecall.scoreThreshold` 按 reranker 原始分数尺度解释；余弦类 reranker 通常是 `0.0` 到 `1.0`，logit-scale reranker 可能需要负值。
+
 `autoRecall.limit` 是遗留的配额缩放输入，不是最终结果上限。显式设置为
 1 到 5 时，有效总配额仍为 6，因为六个 coding 分类会各保留一个检索槽位。
 

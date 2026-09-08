@@ -89,10 +89,11 @@ function skillNameFromContent(path) {
   return basename(path.replace(/\/SKILL\.md$/, ""));
 }
 
-function clampScore(value) {
+function formatScore(value) {
   const num = Number(value);
-  if (!Number.isFinite(num)) return 0;
-  return Math.max(0, Math.min(1, num));
+  if (!Number.isFinite(num)) return "0%";
+  if (num >= 0 && num <= 1) return `${Math.round(num * 100)}%`;
+  return num.toFixed(2);
 }
 
 async function findExperiences(query) {
@@ -119,9 +120,9 @@ function buildContext(skillName, items) {
     `Relevant prior experience for skill: ${skillName}`,
   ];
   for (const item of items) {
-    const score = Math.round(clampScore(item.score) * 100);
+    const score = formatScore(item.score);
     const text = String(item.abstract || item.overview || item.uri || "").replace(/\s+/g, " ").trim();
-    lines.push(`- [experience ${score}%] ${text} (${item.uri})`);
+    lines.push(`- [experience ${score}] ${text} (${item.uri})`);
   }
   lines.push("Use these as operational guidance, not user facts.");
   lines.push("</openviking-context>");

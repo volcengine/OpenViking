@@ -99,6 +99,8 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
             commitTokenThreshold: 20000
 ```
 
+`scoreThreshold` 按 reranker 原始分数尺度解释；余弦类 reranker 通常是 `0.0` 到 `1.0`，logit-scale reranker 可能需要负值。
+
 同一个 `config` 块里的 `syncTurns: false` 让该集成变成只读：画像注入和记忆召回照常，但什么都不再写回——不捕获对话、不 commit，也不重放此前会话排入队列的写入，那些写入会一直留在队列里，直到某个仍在写入的会话把它们排空。
 
 同一个 `config` 块里的 `peerSource` 决定工作区 peer 的派生方式。默认的 `"git"` 取仓库归一化后的 `origin` URL（`git@github.com:volcengine/OpenViking.git` 得到 `github.com-volcengine-openviking`），其次是仓库根路径，因此同一个仓库的每个 clone、worktree 和子目录共用同一个 peer；不在仓库中则完全不发送 peer，在那里记下的内容进入用户级空间 `viking://user/<you>/memories`。`"cwd"` 恢复此前的行为——把工作目录路径中的非字母数字字符全部替换成 `-`；`"none"` 则完全不发送 peer。要让仓库之外的目录拥有独立记忆，请为它设置 `OPENVIKING_PEER_ID`（见[让一个目录拥有独立记忆](../configuration/02-client.md#让一个目录拥有独立记忆)）。

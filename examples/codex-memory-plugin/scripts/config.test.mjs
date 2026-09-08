@@ -15,6 +15,7 @@ const OVERRIDES = [
   "OPENVIKING_PEER_ID",
   "OPENVIKING_PEER_SOURCE",
   "OPENVIKING_AUTO_CAPTURE",
+  "OPENVIKING_SCORE_THRESHOLD",
   "OPENVIKING_URL",
   "OPENVIKING_BASE_URL",
   "OPENVIKING_API_KEY",
@@ -138,5 +139,21 @@ test("an omitted cwd falls back to this process's directory", () => {
     } finally {
       process.chdir(origin);
     }
+  });
+});
+
+test("score threshold accepts negative reranker logits from the environment", () => {
+  withConfigs({
+    env: { OPENVIKING_SCORE_THRESHOLD: "-8" },
+  }, ({ otherDir }) => {
+    assert.equal(loadConfig(otherDir).scoreThreshold, -8);
+  });
+});
+
+test("score threshold accepts positive reranker logits above one from the environment", () => {
+  withConfigs({
+    env: { OPENVIKING_SCORE_THRESHOLD: "4.5" },
+  }, ({ otherDir }) => {
+    assert.equal(loadConfig(otherDir).scoreThreshold, 4.5);
   });
 });
