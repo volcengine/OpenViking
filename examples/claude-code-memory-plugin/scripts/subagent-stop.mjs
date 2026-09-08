@@ -32,6 +32,7 @@ import {
 import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
 import { sendSessionMessages } from "./shared/batch-send.mjs";
+import { capTextParts } from "./lib/text-part-cap.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -240,8 +241,11 @@ async function pushTurns(ovSessionId, turns, { peerId = null, enqueueOnly = fals
   for (const turn of turns) {
     // Send structured parts: tool calls/results are dedicated `tool` parts, not
     // inlined into content, so the server can process them separately.
-    const parts = (turn.parts || []).filter(
-      (p) => p.type !== "text" || (p.text && p.text.trim()),
+    // A subagent's first user turn is the parent's Task prompt, which is
+    // routinely large (skill expansions, injected context) -- cap text parts
+    // for the same reason auto-capture does (see lib/text-part-cap.mjs).
+    const parts = capTextParts(
+      (turn.parts || []).filter((p) => p.type !== "text" || (p.text && p.text.trim())),
     );
     if (parts.length === 0) continue;
     const payload = { role: turn.role, parts };

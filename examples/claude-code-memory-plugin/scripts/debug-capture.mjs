@@ -16,6 +16,7 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { loadConfig } from "./config.mjs";
+import { capTextPartBytes } from "./lib/text-part-cap.mjs";
 
 // ---------------------------------------------------------------------------
 // ANSI helpers
@@ -239,7 +240,9 @@ async function captureToOpenViking(text) {
   try {
     // Step 2: Add message
     console.log("\nStep 2: Adding message...");
-    const body = { role: "user", content: text };
+    // Same cap as the capture hooks -- debugging a session whose last user
+    // turn is oversized must not poison the very server being debugged.
+    const body = { role: "user", content: capTextPartBytes(text) };
     if (cfg.peerId) body.peer_id = cfg.peerId;
     const addResult = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: "POST",
