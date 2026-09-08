@@ -23,12 +23,14 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 from weakref import WeakKeyDictionary
 
+from openviking.parse.backend import ParserBackend, normalize_parser_backend
 from openviking.parse.base import (
     NodeType,
     ParseResult,
     ResourceNode,
     create_parse_result,
 )
+from openviking.parse.gitignore import GitignoreMatcher
 from openviking.parse.image_rewrite import IMAGE_MAPPINGS_FILENAME
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.media.constants import MEDIA_EXTENSIONS
@@ -142,6 +144,9 @@ class DirectoryParser(BaseParser):
 
         dir_name = kwargs.get("source_name") or source_path.name
         warnings: List[str] = []
+        temp_uri: Optional[str] = None
+        keep_temp = False
+        pending_temp_uris: set[str] = set()
 
         try:
             # ── Phase 1: scan directory ───────────────────────────────
@@ -157,11 +162,22 @@ class DirectoryParser(BaseParser):
             directory_config = getattr(ov_config, "directory", None) or DirectoryConfig()
 
             split_content = kwargs.get("split_content", True)
+            plan = kwargs.get("_feishu_import_plan")
+            # Ordinary source jobs use INTERNAL for directory orchestration;
+            # their files still select a parser independently by extension.
+            backend = normalize_parser_backend(kwargs.get("parser_backend")) if plan else None
             parser_api_config = getattr(ov_config, "parser_api", None)
             understanding_limits_enabled = bool(
                 split_content
-                and parser_router.understanding_api_enabled()
-                and getattr(parser_api_config, "extensions", None)
+                and backend is not ParserBackend.INTERNAL
+                and (
+                    (plan and plan.use_understanding)
+                    or backend is ParserBackend.UNDERSTANDING
+                    or (
+                        parser_router.understanding_api_enabled()
+                        and getattr(parser_api_config, "extensions", None)
+                    )
+                )
             )
 
             scan_result = scan_directory(
@@ -172,14 +188,37 @@ class DirectoryParser(BaseParser):
                 include=kwargs.get("include"),
                 exclude=kwargs.get("exclude"),
                 additional_can_process=parser_router.should_use_understanding_api,
-                max_files=directory_config.max_files if understanding_limits_enabled else None,
+                max_files=directory_config.max_files
+                if plan or understanding_limits_enabled
+                else None,
                 max_depth=directory_config.max_depth if understanding_limits_enabled else None,
             )
             directly_upload_media = kwargs.get("directly_upload_media", True)
             preserve_structure = kwargs.get("preserve_structure")
             if preserve_structure is None:
                 preserve_structure = directory_config.preserve_structure
-            processable_files = scan_result.all_processable_files()
+            processable_files = list(scan_result.all_processable_files())
+            entry_map = {entry.path.resolve(): entry for entry in plan.entries} if plan else {}
+            feishu_gitignore = GitignoreMatcher(source_path) if plan else None
+            if plan:
+                from openviking.parse.directory_scan import CLASS_PROCESSABLE, ClassifiedFile
+
+                for entry in plan.entries:
+                    if entry.kind != "url":
+                        continue
+                    entry_path = entry.path.resolve()
+                    relative = entry_path.relative_to(source_path).as_posix()
+                    if not self._include_feishu_path(
+                        entry_path, source_path, kwargs, gitignore=feishu_gitignore
+                    ):
+                        scan_result.skipped.append(f"{relative} (excluded by source filter)")
+                        continue
+                    processable_files.append(
+                        ClassifiedFile(entry_path, relative, CLASS_PROCESSABLE)
+                    )
+                if len(processable_files) > directory_config.max_files:
+                    raise InvalidArgumentError("Feishu directory file limit exceeded")
+                processable_files.sort(key=lambda item: item.rel_path)
             warnings.extend(scan_result.warnings)
             source_skipped_items = self._source_skipped_items(
                 kwargs.get("_source_meta"),
@@ -193,15 +232,23 @@ class DirectoryParser(BaseParser):
             file_jobs: List[Dict[str, Any]] = []
             understanding_jobs: List[Dict[str, Any]] = []
             for index, cf in enumerate(processable_files):
-                configured_for_understanding = parser_router.should_use_understanding_api(cf.path)
+                entry = entry_map.get(cf.path)
+                remote = entry is not None and entry.kind == "url"
+                normalized = entry is not None and entry.kind == "markdown"
+                configured_for_understanding = bool(
+                    backend is not ParserBackend.INTERNAL
+                    and not normalized
+                    and (
+                        remote
+                        or backend is ParserBackend.UNDERSTANDING
+                        or parser_router.should_use_understanding_api(cf.path)
+                    )
+                )
                 use_understanding = bool(split_content and configured_for_understanding)
                 native_parser = None if use_understanding else self._assign_parser(cf, registry)
                 file_parser = parser_router if use_understanding else native_parser
                 native_parser_unavailable = bool(
-                    not split_content
-                    and configured_for_understanding
-                    and native_parser is None
-                    and not is_text_file(cf.path)
+                    not split_content and native_parser is None and not is_text_file(cf.path)
                 )
                 parser_name = (
                     "UnderstandingAPI"
@@ -233,6 +280,28 @@ class DirectoryParser(BaseParser):
                         and is_media_file
                     ),
                 }
+                if use_understanding:
+                    parse_options = {"parser_backend": ParserBackend.UNDERSTANDING}
+                    if remote:
+                        parse_options.update(
+                            _source=entry.url,
+                            resource_name=cf.path.name,
+                            feishu_access_token=kwargs.get("feishu_access_token"),
+                        )
+                        if kwargs.get("lark_file"):
+                            parse_options["lark_file"] = kwargs["lark_file"]
+                    checkpoint = kwargs.get("_feishu_checkpoint")
+                    if plan and checkpoint is not None:
+                        saved, save = checkpoint
+                        key = entry.checkpoint_key(plan.root) if entry else cf.rel_path
+                        if key in saved:
+                            parse_options["understanding_response_id"] = saved[key]
+
+                        async def record(response_id, key=key, save=save):
+                            await save(key, response_id)
+
+                        parse_options["_response_checkpoint"] = record
+                    job["parse_options"] = parse_options
                 file_jobs.append(job)
                 if use_understanding:
                     understanding_jobs.append(job)
@@ -265,6 +334,7 @@ class DirectoryParser(BaseParser):
                 result.meta["failed_files"] = source_skipped_items
                 result.meta["unsupported_files"] = []
                 result.meta["skipped_files"] = self._parse_skipped(scan_result.skipped)
+                keep_temp = True
                 return result
 
             # ── Phase 2: process each file ────────────────────────────
@@ -291,6 +361,11 @@ class DirectoryParser(BaseParser):
                     max_concurrent=directory_config.max_concurrent,
                     job_timeout=job_timeout,
                 )
+                pending_temp_uris.update(
+                    parsed["result"].temp_dir_path
+                    for parsed in understanding_results.values()
+                    if parsed.get("result") and parsed["result"].temp_dir_path
+                )
 
             for job in file_jobs:
                 cf = job["classified_file"]
@@ -312,6 +387,8 @@ class DirectoryParser(BaseParser):
                         }
                     else:
                         try:
+                            # The merge helper owns this artifact once merging starts.
+                            pending_temp_uris.discard(sub_result.temp_dir_path)
                             await self._merge_parser_result(
                                 cf,
                                 sub_result,
@@ -361,6 +438,14 @@ class DirectoryParser(BaseParser):
                     )
 
                 file_entry = self._file_status_entry(cf, parser_name, detail)
+                entry = entry_map.get(cf.path)
+                if entry:
+                    file_entry["source_url"] = entry.url
+                    file_entry["source_token"] = entry.token
+                if plan and not detail["ok"] and kwargs.get("strict", False):
+                    raise InvalidArgumentError(
+                        f"Failed to import {cf.rel_path}: {detail.get('error')}"
+                    )
                 if detail["ok"]:
                     file_count += 1
                     processed_files.append(file_entry)
@@ -408,6 +493,7 @@ class DirectoryParser(BaseParser):
             result.meta["unsupported_files"] = unsupported_files
             result.meta["skipped_files"] = skipped_files
 
+            keep_temp = True
             return result
 
         except InvalidArgumentError:
@@ -425,6 +511,56 @@ class DirectoryParser(BaseParser):
                 parse_time=time.time() - start_time,
                 warnings=[f"Failed to parse directory: {exc}"],
             )
+        finally:
+            if temp_uri and not keep_temp:
+                pending_temp_uris.add(temp_uri)
+            for pending_uri in pending_temp_uris:
+                try:
+                    await viking_fs.delete_temp(pending_uri)
+                except Exception as exc:
+                    logger.warning(
+                        "[DirectoryParser] Failed to clean temporary artifact %s: %s",
+                        pending_uri,
+                        exc,
+                    )
+
+    @staticmethod
+    def _include_feishu_path(
+        path: Path,
+        root: Path,
+        options: Dict[str, Any],
+        *,
+        gitignore: Optional[GitignoreMatcher] = None,
+    ) -> bool:
+        from openviking.parse.directory_scan import (
+            _matches_exclude,
+            _matches_include,
+            _parse_patterns,
+            _should_skip_directory,
+        )
+
+        relative = path.relative_to(root).as_posix()
+        ignored = options.get("ignore_dirs") or set()
+        if isinstance(ignored, str):
+            ignored = set(_parse_patterns(ignored))
+        for parent in path.parents:
+            if parent == root:
+                break
+            if _should_skip_directory(parent, root, ignored)[0]:
+                return False
+            if gitignore and gitignore.is_ignored_dir(
+                parent, gitignore.spec_for_dir(parent.parent)
+            ):
+                return False
+        if path.name.startswith("."):
+            return False
+        if gitignore and gitignore.is_ignored_file(path, gitignore.spec_for_dir(path.parent)):
+            return False
+        includes = _parse_patterns(options.get("include"))
+        excludes = _parse_patterns(options.get("exclude"))
+        return (not includes or _matches_include(path.name, includes)) and not _matches_exclude(
+            relative, path.name, excludes
+        )
 
     # ------------------------------------------------------------------
     # parse_content – not applicable for directories
@@ -630,6 +766,7 @@ class DirectoryParser(BaseParser):
                             preserve_structure=preserve_structure,
                             import_root=import_root,
                             split_content=split_content,
+                            parse_options=job.get("parse_options"),
                         )
                         sub_result = await asyncio.wait_for(parse_coro, timeout=job_timeout)
                     results[job["index"]] = {"result": sub_result, "error": None}
@@ -665,16 +802,19 @@ class DirectoryParser(BaseParser):
         preserve_structure: bool,
         import_root: Optional[str],
         split_content: bool,
+        parse_options: Optional[Dict[str, Any]] = None,
     ) -> ParseResult:
         """Run one parser without mutating the directory destination tree."""
-        return await parser.parse(
-            str(classified_file.path),
+        options = dict(parse_options or {})
+        source = options.pop("_source", str(classified_file.path))
+        options.update(
             enable_link_rewrite=preserve_structure,
             link_rewrite_root=import_root,
             allowed_media_dirs=[Path(import_root)] if import_root else None,
             split_content=split_content,
             flatten_single_output=bool(not split_content and preserve_structure),
         )
+        return await parser.parse(source, **options)
 
     @staticmethod
     async def _merge_parser_result(
@@ -698,12 +838,23 @@ class DirectoryParser(BaseParser):
             dest = f"{target_uri}/{parent}" if parent != "." else target_uri
         else:
             dest = target_uri
-        merged = await DirectoryParser._merge_temp(
-            viking_fs,
-            sub_result.temp_dir_path,
-            dest,
-            flatten_single_output=bool(not split_content and preserve_structure),
-        )
+        try:
+            merged = await DirectoryParser._merge_temp(
+                viking_fs,
+                sub_result.temp_dir_path,
+                dest,
+                flatten_single_output=bool(not split_content and preserve_structure),
+            )
+        except BaseException:
+            try:
+                await viking_fs.delete_temp(sub_result.temp_dir_path)
+            except Exception as exc:
+                logger.warning(
+                    "[DirectoryParser] Failed to clean temporary artifact %s: %s",
+                    sub_result.temp_dir_path,
+                    exc,
+                )
+            raise
         if not merged:
             raise ValueError(no_content_error)
 

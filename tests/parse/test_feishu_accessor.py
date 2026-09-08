@@ -546,7 +546,33 @@ def test_access_downloads_json_drive_file_as_raw_bytes(monkeypatch):
         resource.cleanup()
 
 
-def test_access_rejects_raw_feishu_error_envelope(monkeypatch):
+@pytest.mark.parametrize(
+    "disposition",
+    ['attachment; filename="record.json"', 'inline; filename="record.json"', "attachment"],
+)
+def test_access_downloads_json_attachment_with_business_error_fields(monkeypatch, disposition):
+    _install_fake_lark_modules(monkeypatch)
+    payload = b'{"code":404,"message":"Example application record"}'
+    _FakeTransport.response = _FakeRawResponse(
+        payload,
+        headers={"content-type": "application/json", "content-disposition": disposition},
+    )
+    accessor = FeishuAccessor()
+    accessor._user_token_client = SimpleNamespace(_config=SimpleNamespace())
+    resource = asyncio.run(
+        accessor.access("https://example.feishu.cn/file/json_file", feishu_access_token="u-test")
+    )
+    try:
+        assert resource.path.read_bytes() == payload
+    finally:
+        resource.cleanup()
+
+
+@pytest.mark.parametrize(
+    "status_code,disposition",
+    [(200, ""), (403, 'attachment; filename="error.json"')],
+)
+def test_access_rejects_raw_feishu_error_envelope(monkeypatch, status_code, disposition):
     _install_fake_lark_modules(monkeypatch)
     _FakeTransport.response = _FakeRawResponse(
         json.dumps(
@@ -556,7 +582,11 @@ def test_access_rejects_raw_feishu_error_envelope(monkeypatch):
                 "data": {},
             }
         ).encode("utf-8"),
-        headers={"content-type": "application/json; charset=utf-8"},
+        status_code=status_code,
+        headers={
+            "content-type": "application/json; charset=utf-8",
+            "content-disposition": disposition,
+        },
     )
     accessor = FeishuAccessor()
     accessor._user_token_client = SimpleNamespace(_config=SimpleNamespace())
@@ -756,6 +786,37 @@ def test_access_wiki_without_recursive_keeps_single_document_behavior(monkeypatc
         assert resource.path.read_text(encoding="utf-8") == "# single"
         assert resource.meta["original_filename"] == "Single Wiki"
         recursive_root.assert_not_called()
+    finally:
+        resource.cleanup()
+
+
+def test_access_wiki_keeps_existing_single_document_behavior(monkeypatch):
+    from openviking.parse.accessors.feishu_accessor import FeishuDocument
+
+    accessor = FeishuAccessor()
+    monkeypatch.setattr(accessor, "_resolve_wiki_node", lambda *_args: ("docx", "doc", "Wiki"))
+
+    async def fake_fetch_document(*_args, **_kwargs):
+        return FeishuDocument(
+            doc_type="docx",
+            token="doc_token",
+            markdown_content="# single",
+            title="Single Wiki",
+            meta={"wiki_resolved": True},
+        )
+
+    monkeypatch.setattr(accessor, "_fetch_document", fake_fetch_document)
+    monkeypatch.setattr(
+        accessor,
+        "_resolve_image_refs",
+        lambda markdown, **_kwargs: (markdown, {}),
+    )
+
+    resource = asyncio.run(accessor.access("https://example.feishu.cn/wiki/wiki_token"))
+    try:
+        assert resource.path.is_file()
+        assert resource.path.read_text(encoding="utf-8") == "# single"
+        assert resource.meta["original_filename"] == "Single Wiki"
     finally:
         resource.cleanup()
 
@@ -974,9 +1035,7 @@ def test_fetch_document_dispatches_all_supported_types(monkeypatch):
 
     legacy_identity = asyncio.run(accessor.preflight_source("https://example.feishu.cn/doc/doccn"))
     docx_identity = asyncio.run(accessor.preflight_source("https://example.feishu.cn/docx/doc"))
-    sheets_identity = asyncio.run(
-        accessor.preflight_source("https://example.feishu.cn/sheets/sht")
-    )
+    sheets_identity = asyncio.run(accessor.preflight_source("https://example.feishu.cn/sheets/sht"))
     base_identity = asyncio.run(accessor.preflight_source("https://example.feishu.cn/base/app"))
     table_identity = asyncio.run(
         accessor.preflight_source("https://example.feishu.cn/base/app?table=tbl_one")

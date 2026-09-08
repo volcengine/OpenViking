@@ -53,7 +53,11 @@ class ParserRouter:
         Decide whether to use UnderstandingAPI.
         """
         # FeishuAccessor has already normalized proprietary content to Markdown.
-        if isinstance(source, LocalResource) and source.source_type == SourceType.FEISHU:
+        if (
+            isinstance(source, LocalResource)
+            and source.source_type == SourceType.FEISHU
+            and source.meta.get("feishu_content_kind") != "file"
+        ):
             return False
 
         try:
@@ -110,7 +114,9 @@ class ParserRouter:
         parser_backend = normalize_parser_backend(kwargs.pop("parser_backend", None))
 
         normalized_feishu = (
-            isinstance(source, LocalResource) and source.source_type == SourceType.FEISHU
+            isinstance(source, LocalResource)
+            and source.source_type == SourceType.FEISHU
+            and source.meta.get("feishu_content_kind") != "file"
         )
         use_understanding = not normalized_feishu and (
             parser_backend is ParserBackend.UNDERSTANDING
