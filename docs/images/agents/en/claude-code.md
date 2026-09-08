@@ -1,18 +1,50 @@
 ## Step 1: Install
 
-```bash
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness claude --dist tos
-```
+Because Claude Code may block installation scripts from unknown sources, automatic setup may not complete. We recommend running the manual terminal steps below.
 
-Select **Volcengine OpenViking Cloud**. Paste the API key:
+1. Run the installer in your terminal:
+
+   ```bash
+   bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness claude --dist tos
+   ```
+
+2. The installer will ask for language (English / Chinese), OpenViking credentials, and whether to enable the Statusline.
+3. In the OpenViking credential step, choose **VolcEngine OpenViking Cloud Service [api.vikingdb.cn-beijing.volces.com]** and enter the API KEY:
+
+   ```text
+   {{OPENVIKING_API_KEY}}
+   ```
+
+4. OpenViking StatusLine is the status strip under the input box. It shows the memory plugin runtime status in real time. Enable or skip it based on your preference. Example:
+
+   ```text
+   OV ✓ │ Fable 5 · ctx 42% │ ↪ 6 mem (0.92) · 50ms │ ✎ 573/20k · 2 arch
+   ```
 
 ## Step 2: Verify
 
-Restart Claude Code, then:
+1. Restart Claude Code.
+2. Run `/plugins` and confirm the installed list shows `openviking-memory`, and the `openviking` MCP is connected:
 
-- `/plugins` → **openviking-memory** is installed, **openviking** MCP is connected
-- `/mcp` → shows the cloud URL and valid auth
-- `/openviking-memory:ov` → server is healthy
+   ```text
+   User
+     ❯ openviking-memory Plugin · openviking · ✔ enabled
+       └ openviking MCP · ✔ connected
+   ```
+
+3. Run `/mcp` and confirm it shows:
+
+   ```text
+   Built-in MCPs (always available)
+     ❯ plugin:openviking-memory:openviking · ✔ connected · 10 tools
+   ```
+
+4. Run `/openviking-memory:ov` and confirm the service status is healthy:
+
+   ```text
+   OpenViking Memory Status
+     ✅ Status: OpenViking server is healthy and running
+   ```
 
 ## Troubleshoot
 

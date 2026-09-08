@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from vikingbot.agent import memory as memory_module
@@ -914,23 +915,21 @@ def test_memory_user_cli_option_warns_at_runtime(capsys):
 
 
 @pytest.mark.asyncio
-async def test_user_key_mode_skips_admin_namespace_policy_lookup(monkeypatch):
-    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("user"))
+@pytest.mark.parametrize("api_key_type", ["root", "user"])
+async def test_viking_client_initializes_without_admin_account_lookup(monkeypatch, api_key_type):
+    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config(api_key_type))
 
-    client = VikingClient()
+    lookup = AsyncMock(return_value=[])
+    monkeypatch.setattr(_DummyHTTPClient, "admin_list_accounts", lookup)
+    initialize = AsyncMock()
+    monkeypatch.setattr(_DummyHTTPClient, "initialize", initialize)
 
-    async def _must_not_call_admin_api():
-        raise AssertionError("user key mode must not call admin namespace policy API")
+    client = await VikingClient.create(agent_id="workspace")
 
-    monkeypatch.setattr(client.client, "admin_list_accounts", _must_not_call_admin_api)
-
-    await client._load_namespace_policy()
-
-    assert client._namespace_policy_loaded is True
-    assert client._namespace_policy == {
-        "isolate_user_scope_by_agent": False,
-        "isolate_agent_scope_by_user": False,
-    }
+    initialize.assert_awaited_once()
+    lookup.assert_not_called()
+    expected = "viking://user/alice/memories/" if api_key_type == "root" else "viking://~/memories/"
+    assert client._memory_target_uri("alice") == expected
 
 
 def test_viking_client_request_connection_uses_active_identity(monkeypatch):
@@ -958,7 +957,7 @@ def test_viking_client_request_connection_uses_active_identity(monkeypatch):
     assert client.account_id == "acct"
     assert client.admin_user_id == "anonymous"
     assert client.agent_id == "web-playground"
-    assert client._namespace_policy_loaded is True
+    assert "namespace_policy" not in client._request_connection
     assert client.should_sender_fanout() is False
     assert client._memory_target_uri(None) == "viking://~/memories/"
     assert first.kwargs == {
@@ -1093,10 +1092,6 @@ async def test_request_connection_search_memory_uses_request_client_only(monkeyp
             "agent_id": "web-playground",
             "role": "user",
             "api_key_type": "user",
-            "namespace_policy": {
-                "isolate_user_scope_by_agent": False,
-                "isolate_agent_scope_by_user": False,
-            },
         },
     )
 

@@ -8,7 +8,6 @@ from openviking.models.vlm.backends.litellm_vlm import (
     LiteLLMVLMProvider as OpenVikingLiteLLMVLMProvider,
 )
 from vikingbot.config.schema import AgentsConfig
-from vikingbot.providers.litellm_provider import LiteLLMProvider
 from vikingbot.providers.vlm_adapter import VLMProviderAdapter
 
 
@@ -65,21 +64,6 @@ def test_vlm_adapter_exposes_only_native_tool_result_media_backends():
         langfuse_client=langfuse,
     )
     assert mixed_failover.supports_tool_result_media() is False
-
-
-def test_litellm_provider_exposes_anthropic_tool_result_media_only():
-    langfuse = SimpleNamespace()
-    anthropic = LiteLLMProvider(
-        default_model="claude-sonnet-4-5",
-        langfuse_client=langfuse,
-    )
-    openai = LiteLLMProvider(
-        default_model="gpt-4o",
-        langfuse_client=langfuse,
-    )
-
-    assert anthropic.supports_tool_result_media() is True
-    assert openai.supports_tool_result_media() is False
 
 
 def test_vlm_adapter_uses_litellm_resolved_provider_for_tool_result_media():
@@ -162,61 +146,19 @@ def test_make_provider_passes_default_thinking_to_vlm_adapter(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_litellm_bot_provider_enables_volcengine_thinking(monkeypatch):
-    captured = {}
-
-    async def fake_acompletion(**kwargs):
-        captured.update(kwargs)
-        return SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(content="ok", tool_calls=None),
-                    finish_reason="stop",
-                )
-            ],
-            usage=None,
-        )
-
-    monkeypatch.setattr("vikingbot.providers.litellm_provider.acompletion", fake_acompletion)
-
-    provider = LiteLLMProvider(
-        api_key="ak-test",
-        default_model="volcengine/ep-test",
-    )
-    await provider.chat(messages=[{"role": "user", "content": "hi"}])
-
-    assert captured["thinking"] == {"type": "enabled"}
-
-
-@pytest.mark.asyncio
-async def test_litellm_bot_provider_enables_dashscope_thinking(monkeypatch):
-    captured = {}
-
-    async def fake_acompletion(**kwargs):
-        captured.update(kwargs)
-        return SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(content="ok", tool_calls=None),
-                    finish_reason="stop",
-                )
-            ],
-            usage=None,
-        )
-
-    monkeypatch.setattr("vikingbot.providers.litellm_provider.acompletion", fake_acompletion)
-
-    provider = LiteLLMProvider(
-        api_key="sk-test",
-        default_model="qwen-plus",
-    )
-    await provider.chat(messages=[{"role": "user", "content": "hi"}])
-
-    assert captured["extra_body"] == {"enable_thinking": True}
-
-
-@pytest.mark.asyncio
-async def test_vlm_adapter_preserves_dashscope_thinking(monkeypatch):
+@pytest.mark.parametrize("thinking", [True, False])
+@pytest.mark.parametrize(
+    ("backend", "model", "resolved_model"),
+    [
+        ("dashscope", "qwen-plus", "dashscope/qwen-plus"),
+        ("openai", "gpt-4o", "gpt-4o"),
+        ("gemini", "gemini/gemini-2.5-pro", "gemini/gemini-2.5-pro"),
+        ("zhipu", "glm-4", "zhipu/glm-4"),
+    ],
+)
+async def test_vlm_adapter_routes_litellm_thinking_parameters(
+    monkeypatch, thinking, backend, model, resolved_model
+):
     from openviking.models.vlm.backends.litellm_vlm import LiteLLMVLMProvider
 
     captured = {}
@@ -240,48 +182,24 @@ async def test_vlm_adapter_preserves_dashscope_thinking(monkeypatch):
 
     vlm = LiteLLMVLMProvider(
         {
-            "provider": "dashscope",
-            "model": "qwen-plus",
+            "provider": backend,
+            "model": model,
             "api_key": "sk-test",
-            "thinking": True,
+            "thinking": thinking,
         }
     )
-    provider = VLMProviderAdapter(vlm, default_model="qwen-plus")
+    provider = VLMProviderAdapter(vlm, default_model=model)
 
     response = await provider.chat(messages=[{"role": "user", "content": "hi"}])
 
     assert response.content == "ok"
-    assert captured["model"] == "dashscope/qwen-plus"
-    assert captured["extra_body"] == {"enable_thinking": True}
-
-
-@pytest.mark.asyncio
-async def test_litellm_bot_provider_does_not_send_thinking_to_generic_openai(monkeypatch):
-    captured = {}
-
-    async def fake_acompletion(**kwargs):
-        captured.update(kwargs)
-        return SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(content="ok", tool_calls=None),
-                    finish_reason="stop",
-                )
-            ],
-            usage=None,
-        )
-
-    monkeypatch.setattr("vikingbot.providers.litellm_provider.acompletion", fake_acompletion)
-
-    provider = LiteLLMProvider(
-        api_key="sk-test",
-        default_model="gpt-4o",
-    )
-    await provider.chat(messages=[{"role": "user", "content": "hi"}])
-
+    assert captured["model"] == resolved_model
+    if backend == "dashscope":
+        assert captured["extra_body"] == {"enable_thinking": thinking}
+    else:
+        assert "extra_body" not in captured
     assert "thinking" not in captured
-    assert "extra_body" not in captured
-    assert "max_tokens" not in captured
+    assert "reasoning_effort" not in captured
 
 
 @pytest.mark.asyncio
@@ -289,7 +207,9 @@ async def test_litellm_bot_provider_does_not_send_thinking_to_generic_openai(mon
     ("configured_max_tokens", "expected_max_tokens"),
     [(None, None), (8192, 8192)],
 )
+@pytest.mark.parametrize("thinking", [True, False])
 async def test_vlm_adapter_volcengine_stream_respects_optional_max_tokens(
+    thinking,
     configured_max_tokens,
     expected_max_tokens,
 ):
@@ -321,7 +241,7 @@ async def test_vlm_adapter_volcengine_stream_respects_optional_max_tokens(
         model="ep-test",
         temperature=0.0,
         max_tokens=configured_max_tokens,
-        thinking=False,
+        thinking=thinking,
         extra_headers=None,
         get_async_client=lambda: SimpleNamespace(
             chat=SimpleNamespace(completions=FakeCompletions())
@@ -341,120 +261,8 @@ async def test_vlm_adapter_volcengine_stream_respects_optional_max_tokens(
     ]
 
     assert events[-1].response.content == "ok"
+    assert captured["thinking"] == {"type": "enabled" if thinking else "disabled"}
     if expected_max_tokens is None:
         assert "max_tokens" not in captured
     else:
         assert captured["max_tokens"] == expected_max_tokens
-
-
-@pytest.mark.asyncio
-async def test_litellm_bot_provider_enables_openai_reasoning_model(monkeypatch):
-    captured = {}
-
-    async def fake_acompletion(**kwargs):
-        captured.update(kwargs)
-        return SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(content="ok", tool_calls=None),
-                    finish_reason="stop",
-                )
-            ],
-            usage=None,
-        )
-
-    monkeypatch.setattr("vikingbot.providers.litellm_provider.acompletion", fake_acompletion)
-
-    provider = LiteLLMProvider(
-        api_key="sk-test",
-        default_model="gpt-5",
-    )
-    await provider.chat(messages=[{"role": "user", "content": "hi"}])
-
-    assert captured["reasoning_effort"] == "low"
-
-
-@pytest.mark.asyncio
-async def test_litellm_bot_provider_respects_thinking_disabled(monkeypatch):
-    captured = {}
-
-    async def fake_acompletion(**kwargs):
-        captured.update(kwargs)
-        return SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(content="ok", tool_calls=None),
-                    finish_reason="stop",
-                )
-            ],
-            usage=None,
-        )
-
-    monkeypatch.setattr("vikingbot.providers.litellm_provider.acompletion", fake_acompletion)
-
-    provider = LiteLLMProvider(
-        api_key="ak-test",
-        default_model="volcengine/ep-test",
-        thinking=False,
-    )
-    await provider.chat(messages=[{"role": "user", "content": "hi"}])
-
-    assert "thinking" not in captured
-
-
-@pytest.mark.asyncio
-async def test_litellm_bot_provider_does_not_send_dashscope_param_to_gemini(monkeypatch):
-    captured = {}
-
-    async def fake_acompletion(**kwargs):
-        captured.update(kwargs)
-        return SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(content="ok", tool_calls=None),
-                    finish_reason="stop",
-                )
-            ],
-            usage=None,
-        )
-
-    monkeypatch.setattr("vikingbot.providers.litellm_provider.acompletion", fake_acompletion)
-
-    provider = LiteLLMProvider(
-        api_key="sk-test",
-        default_model="gemini/gemini-2.5-pro",
-    )
-    await provider.chat(messages=[{"role": "user", "content": "hi"}])
-
-    assert "thinking" not in captured
-    assert "extra_body" not in captured
-    assert "reasoning_effort" not in captured
-
-
-@pytest.mark.asyncio
-async def test_litellm_bot_provider_does_not_send_dashscope_param_to_zhipu(monkeypatch):
-    captured = {}
-
-    async def fake_acompletion(**kwargs):
-        captured.update(kwargs)
-        return SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(content="ok", tool_calls=None),
-                    finish_reason="stop",
-                )
-            ],
-            usage=None,
-        )
-
-    monkeypatch.setattr("vikingbot.providers.litellm_provider.acompletion", fake_acompletion)
-
-    provider = LiteLLMProvider(
-        api_key="sk-test",
-        default_model="glm-4",
-    )
-    await provider.chat(messages=[{"role": "user", "content": "hi"}])
-
-    assert "thinking" not in captured
-    assert "extra_body" not in captured
-    assert "reasoning_effort" not in captured

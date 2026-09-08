@@ -30,6 +30,18 @@ class TestProviderInstruction:
             in instruction
         )
 
+    def test_instruction_includes_extraction_and_maintenance_objective(self):
+        provider = SessionExtractContextProvider(messages=[])
+
+        instruction = provider.instruction()
+
+        assert (
+            "You are a memory extraction and maintenance agent. Analyze the conversation "
+            "together with the pre-fetched existing memories, then produce a single atomic "
+            "plan to create, update, delete, or reorganize memories so that the final memory "
+            "collection conforms to all enabled memory schemas." in instruction
+        )
+
     def test_instruction_contains_output_language(self):
         """Test that instruction includes the output language setting."""
         mock_messages = []
@@ -47,8 +59,20 @@ class TestProviderInstruction:
         instruction = provider.instruction()
 
         assert "Peer Memory" in instruction
-        assert "profile/preferences/entities/events" in instruction
-        assert "cases/patterns/tools/skills" in instruction
+        assert "Message role is authoritative for newly extracted facts" in instruction
+        assert "attribute each fact to the speaker whose" in instruction
+        assert "follow each enabled memory type's own schema rules" in instruction
+        assert "Do not infer ownership from neighboring messages" in instruction
+        assert "Facts already stored in pre-fetched or explicitly read memories" in instruction
+        assert "remain valid sources for" in instruction
+        assert "maintenance and may be preserved" in instruction
+        assert "or moved between enabled memory" in instruction
+        assert "types when required by their schemas" in instruction
+        assert "same identity under the active memory schema" in instruction
+        assert "shared category, or an overlapping topic" in instruction
+        assert "If identity is uncertain" in instruction
+        assert "compact" in instruction.lower()
+        assert "only duplicate wording" in instruction.lower()
 
     def test_instruction_omits_resource_uri_handling_without_resource_uri(self):
         provider = SessionExtractContextProvider(
@@ -232,8 +256,6 @@ class TestSessionConversationToolFiltering:
 
         assert provider._detect_language() == "zh-CN"
 
-
-
     async def test_prepare_extraction_messages_replaces_image_part_with_vlm_description(self):
         class FakeVisionVLM:
             def __init__(self):
@@ -340,6 +362,7 @@ class TestSessionConversationToolFiltering:
         assert len(messages) == 1
         assert any(isinstance(part, ImagePart) for part in messages[0].parts)
         assert provider.messages is not messages
+
 
 def test_session_provider_empty_messages_still_uses_environment_fallback(monkeypatch):
     monkeypatch.setenv("TZ", "Asia/Shanghai")

@@ -97,6 +97,11 @@ class BatchWriteOptions(_ExtraOptions, total=False):
     telemetry: Any
 
 
+class CompileOptions(_ExtraOptions, total=False):
+    reason: str
+    args: Dict[str, Any]
+
+
 class SetTagsOptions(_ExtraOptions, total=False):
     telemetry: Any
 

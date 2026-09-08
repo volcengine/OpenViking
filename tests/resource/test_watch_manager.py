@@ -604,6 +604,41 @@ class TestWatchManager:
         assert tasks[0].is_active is True
 
     @pytest.mark.asyncio
+    async def test_get_all_tasks_admin_scoped_to_own_tasks(
+        self, watch_manager: WatchManager
+    ):
+        """ADMIN is scoped to its own tasks; ROOT still sees the whole account."""
+        await watch_manager.create_task(path="/test/alice1", user_id="alice")
+        await watch_manager.create_task(path="/test/bob1", user_id="bob")
+        await watch_manager.create_task(path="/test/alice2", user_id="alice")
+
+        # ROOT keeps the system-wide view.
+        all_tasks = await watch_manager.get_all_tasks(
+            account_id=TEST_ACCOUNT_ID, user_id="root", role="root"
+        )
+        assert len(all_tasks) == 3
+
+        # ADMIN no longer sees the whole account — only its own tasks.
+        alice_tasks = await watch_manager.get_all_tasks(
+            account_id=TEST_ACCOUNT_ID, user_id="alice", role="admin"
+        )
+        assert {task.user_id for task in alice_tasks} == {"alice"}
+        assert len(alice_tasks) == 2
+
+    @pytest.mark.asyncio
+    async def test_get_all_tasks_isolates_same_account_users(
+        self, watch_manager: WatchManager
+    ):
+        """Same account, different user_id → each caller sees only its own tasks."""
+        await watch_manager.create_task(path="/test/alice1", user_id="alice")
+        await watch_manager.create_task(path="/test/bob1", user_id="bob")
+
+        bob_tasks = await watch_manager.get_all_tasks(
+            account_id=TEST_ACCOUNT_ID, user_id="bob", role="user"
+        )
+        assert {task.user_id for task in bob_tasks} == {"bob"}
+
+    @pytest.mark.asyncio
     async def test_get_task_by_uri(self, watch_manager: WatchManager):
         """Test getting a task by URI."""
         task = await watch_manager.create_task(
@@ -933,7 +968,7 @@ class TestSharedConnectorTargets:
             ("carol", "user", ()),
             ("bob", "user", (2,)),
             ("alice", "user", (0, 1)),
-            ("bob", "admin", (0, 1, 2)),
+            ("bob", "admin", (2,)),
             ("bob", "root", (0, 1, 2)),
         ],
     )

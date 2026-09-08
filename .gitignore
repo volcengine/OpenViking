@@ -67,6 +67,10 @@ test-reports/
 report.html
 temp/
 
+# codex
+diagrams/
+doc-fetch-resources/
+
 # Virtual environments
 .env
 .venv

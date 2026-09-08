@@ -1,14 +1,36 @@
 ## Step 1: Install
 
-```bash
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness codex --dist tos
-```
+1. Run the installer in your terminal:
 
-Select **Volcengine OpenViking Cloud**. Paste the API key:
+   ```bash
+   bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness codex --dist tos
+   ```
+
+2. The installer will ask for language (English / Chinese) and OpenViking credentials. In the OpenViking credential step, choose **VolcEngine OpenViking Cloud Service [api.vikingdb.cn-beijing.volces.com]** and enter the API KEY:
+
+   ```text
+   {{OPENVIKING_API_KEY}}
+   ```
 
 ## Step 2: Verify
 
-Launch `codex`. Approve hooks once with `/hooks`. The first prompt should load your profile.
+1. Start Codex.
+2. Approve Hooks: enter `/hooks`. Codex should show a prompt similar to `4 hooks need review`; approve them one by one. The four OpenViking hooks are:
+
+   ```text
+   SessionStart
+   UserPromptSubmit
+   Stop
+   PreCompact
+   ```
+
+3. Verify Profile loading: after approval, submit your first Prompt. Any prompt is fine. The plugin should load your Profile automatically. If the beginning of the conversation contains recalled memory context, the integration is working:
+
+   ```text
+   • UserPromptSubmit hook (completed)
+     hook context: <openviking-context source="auto-recall" format="digest">
+       OpenViking memory digest:
+   ```
 
 ## Troubleshoot
 

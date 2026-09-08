@@ -79,6 +79,34 @@ test("preserves DSH tool call identity in captured tool results", () => {
   assert.equal(names.size, 0);
 });
 
+test("marks DSH tool-result errors with the error status", () => {
+  const names = new Map();
+  captureEvent({
+    type: "tool/call",
+    data: { callId: "call-err", name: "bash", arguments: "{\"command\":\"df\"}" },
+  }, CONFIG, names);
+
+  const captured = captureEvent({
+    type: "tool/result",
+    data: {
+      message: {
+        role: "user",
+        content: [{
+          type: "tool-result",
+          toolCallId: "call-err",
+          content: [{ type: "text", text: "bash: df: command not found" }],
+          isError: true,
+        }],
+        source: { kind: "tool", callId: "call-err" },
+      },
+    },
+  }, CONFIG, names);
+
+  assert.equal(captured.role, "user");
+  assert.equal(captured.parts[0].type, "tool");
+  assert.equal(captured.parts[0].tool_status, "error");
+});
+
 test("does not retain tool call names when tool-result capture is disabled", () => {
   const names = new Map();
   const config = { ...CONFIG, captureToolResults: false };

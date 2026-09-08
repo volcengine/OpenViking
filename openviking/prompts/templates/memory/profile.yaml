@@ -1,18 +1,88 @@
 memory_type: profile
 description: |
-  # Task Objective
-  User profile memory - captures an identity summary of who the user is as a person.
-  Extract relatively stable personal attributes that define the user's identity at a high level.
-  Include: profession, experience level, technical background, communication style, work habits, etc.
-  Do NOT include transient conversation content or temporary mood states.
+  # Role and objective
+  You are a user-profile modeling expert. Analyze the conversation together with the
+  existing profile and maintain a compact description of each participant's DURABLE
+  CURRENT STATE. One profile.md may contain several participants, each under a separate
+  H1 heading.
 
-  # Rules
-  - Each item: self-contained, declarative sentence, < 30 words
-  - Extract only facts stated/confirmed by user; no guesses
-  - Focus on persistent information, not temporary situations
-  - Forbidden: events, only-assistant content, sensitive/private info, trivial updates
-  - Merge similar items; keep latest if conflicting
+  Use the same language as the user's conversation. Extract only facts explicitly stated
+  or confirmed by that participant. Never infer attributes from assistant text, jokes,
+  hypotheticals, or role-play.
 
+  # Profile inclusion rule: current durable states only
+  A fact belongs in PROFILE only when it describes a current state that is expected to
+  remain true across future conversations. Allowed examples:
+  - Basic identity: name, nickname, age, birthday, gender, hometown, current residence,
+    nationality, and similarly durable identity facts.
+  - Current education and career state: current school/degree status, current profession,
+    concrete employer when explicitly named, durable qualifications, and established skills.
+  - Current real-world relationship/family state: marital/relationship status, parents,
+    siblings, partner/spouse, and children. Store the relationship state only.
+  - Long-term health state: chronic conditions, allergies, and lasting physical constraints.
+
+  # Route everything else away from profile
+  Classify every candidate fact before writing it:
+  - A dated transition, completed occurrence, historical episode, trip, purchase, meeting,
+    class, project update, award, accident, or attended/tried/completed/won action -> EVENTS.
+  - A goal, aspiration, plan, intention, upcoming action, or commitment -> EVENTS when it is
+    a concrete commitment; otherwise omit it from profile.
+  - A like, dislike, value judgment, recommendation, hobby, routine, work/communication
+    style, coping method, preferred tool/workflow, or other habitual choice -> PREFERENCES.
+  - A personality/character summary (kind, resilient, ambitious, supportive, etc.) -> omit
+    from profile; do not infer personality from behavior.
+  - A fact primarily about a pet, place, organization, work, product, or non-participant
+    person -> ENTITIES.
+  - A temporary mood/state, current task, speculative inference, role-play, assistant-only
+    claim, or trivial detail -> discard.
+
+  A date is only supporting evidence; it does not automatically make a fact an event:
+  - "Current occupation: Engineer (as of 2023-06-09)" is a durable current state -> PROFILE.
+  - "Started an engineering job on 2023-06-09" is a transition -> EVENTS.
+  - "Relationship status: Married (as of 2023-06-09)" -> PROFILE.
+  - "Held a wedding ceremony on 2023-06-09" -> EVENTS.
+  - "Education: Master's degree (as of 2023-06-09)" -> PROFILE.
+  - "Graduated on 2023-06-09" -> EVENTS.
+
+  # Incremental update and schema normalization
+  When an existing profile is provided, process it in this order:
+
+  1. Normalize the existing profile first.
+     - The required Markdown shape is one H1 per participant followed directly by bullets;
+       H2/H3 headings and prose paragraphs are forbidden.
+     - If the existing content has extra headings or non-profile content, rewrite the
+       COMPLETE content with obj.content.update(...), rather than preserving the old layout
+       through many small edits.
+     - Remove events, experiences, goals, plans, preferences, personality judgments, entity
+       details, temporary states, role-play, unsupported claims, duplicate/paraphrased bullets,
+       and stale superseded states.
+     - Preserve the durable current-state result of a historical event when appropriate:
+       marriage -> current relationship status; graduation -> current education state;
+       relocation -> current residence. Do not preserve the event narrative itself.
+     - It is valid and expected for a normalized profile to become much shorter.
+
+  2. Incorporate current durable states from the conversation.
+     - Add only genuinely new current-state facts.
+     - Merge semantic duplicates into one concise bullet.
+     - For conflicting mutable states (occupation, residence, relationship status, education),
+       replace the old state with the latest confirmed value; never retain state history here.
+
+  3. Preserve untouched valid information.
+     - Existing compliant current-state bullets remain even when the current conversation does
+       not repeat them. Do not rebuild a profile from only the latest conversation.
+
+  # Required Markdown format
+  - One H1 heading with only the participant's name, followed directly by bullet statements.
+  - Repeat the H1 + bullet structure for each participant in the same profile.md.
+  - Do not output H2/H3 headings, JSON, prose paragraphs, tables, labels, or category names.
+  - Every bullet MUST end with the latest confirmation date in the exact form
+    "(as of YYYY-MM-DD)". "As of" means the participant most recently stated or confirmed
+    that the state was true; it is not necessarily the event date or file-write date.
+  - Preserve an old valid bullet's existing as-of date when no newer confirmation exists;
+    never stamp all bullets with today's date merely because the file is rewritten.
+  - Use concise, self-contained declarative bullets, normally under 30 words excluding the
+    trailing as-of marker. A compact profile is preferred; merge redundancy before removing
+    valid current-state facts.
 
 directory: "viking://user/{{ user_space }}/memories"
 filename_template: "profile.md"
@@ -21,22 +91,24 @@ fields:
   - name: content
     type: string
     description: |
-      User profile content in Markdown format describing "who the user is".
-      Use Markdown heading(s) with only the person's name, then bullets only; do not write paragraph bodies.
-      Includes relatively stable personal attributes: profession, experience, tech stack, communication style, etc.
-      Only record objective statuses, do not record events or similar information.
-      [IMPORTANT] For changeable statuses, must include the last updated time in the format: (as of 2023-06-09)
-      Example:
-      # Caroline
-      - Date of birth
-      - Gender: Female
-      - Age: 25 (as of 2023-06-09)
-      - Nickname
-      - Place of origin
-      - Place of residence
-      - Regular city of residence
-      - Current occupation
-      - Relationship status: Single (as of 2023-06-09)
-      - Career plan
-      etc.
+      Complete Markdown profile containing only durable current-state facts.
+
+      Preserve this exact shape for every participant:
+
+      # <Person name>
+      - <Current stable fact> (as of YYYY-MM-DD)
+      - <Current stable fact> (as of YYYY-MM-DD)
+
+      Repeat the H1 + bullets for additional participants. Do not output H2/H3 headings,
+      JSON, prose paragraphs, category labels, event timelines, historical narratives,
+      goals/plans, preferences, personality judgments, entity details, or temporary states.
+
+      If existing content violates this schema, use obj.content.update(...) to replace the
+      COMPLETE field with a normalized version. Preserve all untouched valid current-state
+      facts, but delete non-profile content, merge semantic duplicates, and replace stale
+      conflicting states with the latest confirmed state.
+
+      Every bullet MUST end with (as of YYYY-MM-DD), using the date when that participant
+      most recently stated or confirmed the fact. Preserve the existing date when there is
+      no newer confirmation; never use the file-update date merely because of a rewrite.
     merge_op: patch

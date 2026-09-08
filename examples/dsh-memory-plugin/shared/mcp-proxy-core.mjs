@@ -292,6 +292,18 @@ export function createOpenVikingMcpProxy({
       );
     }
     const msg = err instanceof Error ? err.message : String(err);
+    if (err && err.name === "AbortError") {
+      // Client-side timeout, not an outage: the server may be healthy and
+      // still computing (rerank-inclusive find/search can legitimately take
+      // longer than the default budget). Keep -32001 for genuine
+      // connection failures so the two are not misdiagnosed as each other.
+      return errorResponse(
+        id,
+        -32004,
+        `OpenViking MCP request timed out after ${proxyConfig.timeoutMs}ms (${proxyConfig.mcpUrl}). The server may still be processing (rerank can be slow) — check /health or raise OPENVIKING_TIMEOUT_MS.`,
+        { timeoutMs: proxyConfig.timeoutMs, mcpUrl: proxyConfig.mcpUrl, cause: msg },
+      );
+    }
     return errorResponse(
       id,
       -32001,

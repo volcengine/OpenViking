@@ -41,6 +41,22 @@
   ],
   "agents": [
     {
+      "id": "openclaw",
+      "name": "OpenClaw",
+      "tags": ["Plugin"],
+      "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/OpenClaw.png",
+      "summary": "Plugin 接入，作为 OpenClaw 的 context engine，支持多 Agent 跨会话记忆与自迭代，通过 npm 安装助手工具一键完成配置",
+      "detailPath": "https://docs.openviking.net/agents/zh/openclaw.md"
+    },
+    {
+      "id": "hermes",
+      "name": "Hermes Agent",
+      "tags": ["Provider"],
+      "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Hermes-Agent.png",
+      "summary": "Hermes 官方内置 OpenViking。跑 hermes memory setup openviking，默认选火山云，再贴上 API Key 即可",
+      "detailPath": "https://docs.openviking.net/agents/zh/hermes.md"
+    },
+    {
       "id": "claude-code",
       "name": "Claude Code",
       "tags": ["Plugin"],

@@ -110,6 +110,13 @@
             "file_vectorization_concurrency": 8
         },
         "session_commit": {"max_concurrent": 8},
+        "external_task": {"max_concurrent": 10},
+    },
+    "compile_api": {
+        "base_url": "",
+        "gateway_token": "",
+        "http_timeout_seconds": 10,
+        "poll_interval_ms": 3000,
     },
     "reindex": {
         "file_vectorization_concurrency": 8
@@ -156,6 +163,7 @@
         "max_retries": 2,
         "provider": "volcengine",
         "thinking": false,
+        "_max_tokens_comment": "Optional output cap. Memory extraction needs ~32768 output tokens to avoid truncating a full memory-file rewrite; that default suits Doubao. If your model's max output is lower (e.g. gpt-4o-mini at 16384), set max_tokens to its limit here to override the extraction default.",
         "media": {
             "enabled": false,
             "file_processing_timeout": 1800,
@@ -233,6 +241,8 @@
     "memory": {
         "version": "v2",
         "extraction_enabled": true,
+        "extraction_output_format": "python",
+        "maintenance_review_tokens": 1000,
         "session_skill_extraction_enabled": false,
     },
     "ingest": {

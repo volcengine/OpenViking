@@ -5,6 +5,7 @@
 import asyncio
 import json
 import sys
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -13,7 +14,9 @@ import pytest
 from openviking.parse.accessors.feishu_accessor import (
     _MAX_MEDIA_DOWNLOAD_CONTEXTS,
     FeishuAccessor,
+    _FeishuWikiTreeNode,
 )
+from openviking_cli.exceptions import OpenVikingError
 
 
 class _SuccessResponse:
@@ -46,6 +49,16 @@ class _FakeRequestOptionBuilder:
 
     def build(self):
         return self._option
+
+
+class _FakeBaseResponse:
+    def __init__(self):
+        self.code = None
+        self.msg = ""
+        self.raw = None
+
+    def success(self):
+        return self.code == 0
 
 
 class _FakeBaseRequest:
@@ -102,6 +115,20 @@ class _FakeMediaResponse:
         return self._success
 
 
+class _FakeTransport:
+    response = None
+    calls = []
+
+    @classmethod
+    def execute(cls, config, request, option):
+        cls.calls.append((config, request, option))
+        return cls.response
+
+
+def _fake_verify(config, request, option):
+    return None
+
+
 class _FakeListDocumentBlockRequest:
     @staticmethod
     def builder():
@@ -148,6 +175,8 @@ class _FakeTypedRequestBuilder:
 
 
 def _install_fake_lark_modules(monkeypatch):
+    _FakeTransport.response = None
+    _FakeTransport.calls = []
     lark = ModuleType("lark_oapi")
     lark.BaseRequest = _FakeBaseRequest
     lark.HttpMethod = SimpleNamespace(GET="GET")
@@ -161,12 +190,19 @@ def _install_fake_lark_modules(monkeypatch):
     bitable_v1.ListAppTableFieldRequest = _FakeTypedRequest
     bitable_v1.ListAppTableRecordRequest = _FakeTypedRequest
     core_model = ModuleType("lark_oapi.core.model")
+    core_model.BaseResponse = _FakeBaseResponse
     core_model.RequestOption = _FakeRequestOption
+    core_http = ModuleType("lark_oapi.core.http")
+    core_http.Transport = _FakeTransport
+    core_token = ModuleType("lark_oapi.core.token")
+    core_token.verify = _fake_verify
     monkeypatch.setitem(sys.modules, "lark_oapi", lark)
     monkeypatch.setitem(sys.modules, "lark_oapi.api.docx.v1", docx_v1)
     monkeypatch.setitem(sys.modules, "lark_oapi.api.wiki.v2", wiki_v2)
     monkeypatch.setitem(sys.modules, "lark_oapi.api.bitable.v1", bitable_v1)
     monkeypatch.setitem(sys.modules, "lark_oapi.core.model", core_model)
+    monkeypatch.setitem(sys.modules, "lark_oapi.core.http", core_http)
+    monkeypatch.setitem(sys.modules, "lark_oapi.core.token", core_token)
 
 
 def test_feishu_api_lists_paginated_content_with_user_token(monkeypatch):
@@ -213,6 +249,64 @@ def test_feishu_api_lists_paginated_content_with_user_token(monkeypatch):
     assert option.user_access_token == "u-test"
     assert list_drive.call_args_list[1].args[0].queries["page_token"] == "page-2"
     assert all(call.args[1].user_access_token == "u-test" for call in list_drive.call_args_list)
+
+
+def test_feishu_api_lists_paginated_wiki_children_with_user_token(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    list_wiki_children = MagicMock(
+        side_effect=[
+            _SuccessResponse(
+                SimpleNamespace(
+                    items=[
+                        SimpleNamespace(
+                            space_id="space",
+                            node_token="child-doc",
+                            title="Child Doc",
+                            obj_type="docx",
+                            obj_token="doc_token",
+                        )
+                    ],
+                    has_more=True,
+                    page_token="page-2",
+                )
+            ),
+            _SuccessResponse(
+                SimpleNamespace(
+                    items=[
+                        SimpleNamespace(
+                            space_id="space",
+                            node_token="child-file",
+                            title="Attachment.pdf",
+                            obj_type="file",
+                            obj_token="file_token",
+                        )
+                    ],
+                    has_more=False,
+                    page_token=None,
+                )
+            ),
+        ]
+    )
+    accessor = FeishuAccessor()
+    accessor._user_token_client = SimpleNamespace(request=list_wiki_children)
+
+    children = accessor._list_wiki_node_children(
+        "space",
+        "parent",
+        feishu_access_token="u-test",
+    )
+
+    assert [child.wiki_node_token for child in children] == ["child-doc", "child-file"]
+    assert [child.obj_type for child in children] == ["docx", "file"]
+    assert list_wiki_children.call_args_list[0].args[0].uri == (
+        "/open-apis/wiki/v2/spaces/space/nodes"
+    )
+    assert list_wiki_children.call_args_list[0].args[0].queries["parent_node_token"] == "parent"
+    assert list_wiki_children.call_args_list[1].args[0].queries["page_token"] == "page-2"
+    assert all(
+        call.args[1].user_access_token == "u-test"
+        for call in list_wiki_children.call_args_list
+    )
 
 
 def test_resolve_image_refs_respects_download_images_disabled():
@@ -405,14 +499,12 @@ def test_download_image_advertises_user_token_when_provided(monkeypatch):
 
 def test_access_downloads_drive_file_with_user_token(monkeypatch):
     _install_fake_lark_modules(monkeypatch)
-    request = MagicMock(
-        return_value=_FakeMediaResponse(
-            b"%PDF-1.7",
-            headers={"content-type": "application/pdf"},
-        )
+    _FakeTransport.response = _FakeRawResponse(
+        b"%PDF-1.7",
+        headers={"content-type": "application/pdf"},
     )
     accessor = FeishuAccessor()
-    accessor._user_token_client = SimpleNamespace(request=request)
+    accessor._user_token_client = SimpleNamespace(_config=SimpleNamespace())
     url = "https://bytedance.larkoffice.com/file/file_token"
 
     assert accessor.can_handle(url)
@@ -422,11 +514,64 @@ def test_access_downloads_drive_file_with_user_token(monkeypatch):
         assert resource.path.name == "file_token.pdf"
         assert resource.meta["feishu_doc_type"] == "file"
         assert resource.meta["feishu_token"] == "file_token"
-        raw_request, option = request.call_args.args
+        _, raw_request, option = _FakeTransport.calls[-1]
         assert raw_request.uri == "/open-apis/drive/v1/files/file_token/download"
         assert option.user_access_token == "u-test"
     finally:
         resource.cleanup()
+
+
+def test_access_downloads_json_drive_file_as_raw_bytes(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    _FakeTransport.response = _FakeRawResponse(
+        b'[{"question":"q","answer":"a"}]',
+        headers={"content-type": "application/json"},
+    )
+    accessor = FeishuAccessor()
+    accessor._user_token_client = SimpleNamespace(_config=SimpleNamespace())
+
+    resource = asyncio.run(
+        accessor.access(
+            "https://bytedance.larkoffice.com/file/json_file_token",
+            feishu_access_token="u-test",
+        )
+    )
+    try:
+        assert resource.path.read_bytes() == b'[{"question":"q","answer":"a"}]'
+        assert resource.path.name == "json_file_token.json"
+        _, raw_request, option = _FakeTransport.calls[-1]
+        assert raw_request.uri == "/open-apis/drive/v1/files/json_file_token/download"
+        assert option.user_access_token == "u-test"
+    finally:
+        resource.cleanup()
+
+
+def test_access_rejects_raw_feishu_error_envelope(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    _FakeTransport.response = _FakeRawResponse(
+        json.dumps(
+            {
+                "code": 131006,
+                "msg": "permission denied",
+                "data": {},
+            }
+        ).encode("utf-8"),
+        headers={"content-type": "application/json; charset=utf-8"},
+    )
+    accessor = FeishuAccessor()
+    accessor._user_token_client = SimpleNamespace(_config=SimpleNamespace())
+
+    with pytest.raises(OpenVikingError) as exc_info:
+        asyncio.run(
+            accessor.access(
+                "https://bytedance.larkoffice.com/file/json_error_token",
+                feishu_access_token="u-test",
+            )
+        )
+
+    assert exc_info.value.code == "PERMISSION_DENIED"
+    assert exc_info.value.details["feishu_code"] == 131006
+    assert "permission denied" in str(exc_info.value)
 
 
 def test_access_materializes_drive_folder_contract(monkeypatch):
@@ -495,6 +640,122 @@ def test_access_materializes_drive_folder_contract(monkeypatch):
         assert [(item["name"], item["token"], item["reason"]) for item in skipped] == [
             ("Blocked.pptx", "blocked", "HTTP 403")
         ]
+    finally:
+        resource.cleanup()
+
+
+def test_access_wiki_recursive_materializes_mixed_tree(monkeypatch):
+    from openviking.parse.accessors.feishu_accessor import FeishuDocument
+
+    accessor = FeishuAccessor()
+    nodes = {
+        "wiki_root": _FeishuWikiTreeNode("wiki_root", "space", "飞书文档", "docx", "doc_root"),
+        "wiki_pdf": _FeishuWikiTreeNode("wiki_pdf", "space", "非飞书文档.pdf", "file", "file_pdf"),
+        "wiki_doc": _FeishuWikiTreeNode("wiki_doc", "space", "飞书文档", "docx", "doc_child"),
+        "wiki_leaf_doc": _FeishuWikiTreeNode("wiki_leaf_doc", "space", "子文档1", "docx", "doc_leaf"),
+        "wiki_bin": _FeishuWikiTreeNode("wiki_bin", "space", "非飞书文档.bin", "file", "file_bin"),
+    }
+    children = {
+        "wiki_root": [nodes["wiki_leaf_doc"], nodes["wiki_pdf"]],
+        "wiki_pdf": [nodes["wiki_doc"]],
+        "wiki_doc": [nodes["wiki_bin"]],
+        "wiki_leaf_doc": [],
+        "wiki_bin": [],
+    }
+
+    async def fake_fetch_document(url, **_kwargs):
+        doc_type, token = accessor._parse_feishu_url(url)
+        return FeishuDocument(
+            doc_type=doc_type,
+            token=token,
+            markdown_content=f"# {token}",
+            title=token,
+            meta={},
+        )
+
+    def fake_download(file_token, **_kwargs):
+        if file_token == "file_pdf":
+            return b"%PDF-1.7", "application/pdf", "非飞书文档.pdf"
+        return b"binary", "application/octet-stream", "非飞书文档.bin"
+
+    monkeypatch.setattr(
+        accessor,
+        "_resolve_wiki_tree_root",
+        lambda *_args, **_kwargs: nodes["wiki_root"],
+    )
+    monkeypatch.setattr(
+        accessor,
+        "_list_wiki_node_children",
+        lambda _space_id, node_token, **_kwargs: children[node_token],
+    )
+    monkeypatch.setattr(accessor, "_fetch_document", fake_fetch_document)
+    monkeypatch.setattr(accessor, "_download_drive_file", fake_download)
+    monkeypatch.setattr(
+        accessor,
+        "_resolve_image_refs",
+        lambda markdown, **_kwargs: (markdown, {}),
+    )
+
+    resource = asyncio.run(
+        accessor.access(
+            "https://example.feishu.cn/wiki/wiki_root",
+            feishu_access_token="u-test",
+            feishu_recursive=True,
+        )
+    )
+    cleanup_path = Path(resource.meta["_cleanup_path"])
+    try:
+        assert resource.path.name == "飞书文档"
+        assert (resource.path / "飞书文档.md").read_text(encoding="utf-8") == "# doc_root"
+        assert (resource.path / "子文档1.md").read_text(encoding="utf-8") == "# doc_leaf"
+        assert not (resource.path / "子文档1" / "子文档1.md").exists()
+        assert (
+            resource.path / "非飞书文档" / "非飞书文档.pdf"
+        ).read_bytes() == b"%PDF-1.7"
+        assert (
+            resource.path / "非飞书文档" / "飞书文档" / "飞书文档.md"
+        ).read_text(encoding="utf-8") == "# doc_child"
+        assert (
+            resource.path / "非飞书文档" / "飞书文档" / "非飞书文档.bin"
+        ).read_bytes() == b"binary"
+        assert resource.meta["original_filename"] == "飞书文档"
+        assert not (resource.path / "飞书文档" / "飞书文档.md").exists()
+        assert cleanup_path.exists()
+        assert resource.meta["feishu_folder_skipped_items"] == []
+    finally:
+        resource.cleanup()
+        assert not cleanup_path.exists()
+
+
+def test_access_wiki_without_recursive_keeps_single_document_behavior(monkeypatch):
+    from openviking.parse.accessors.feishu_accessor import FeishuDocument
+
+    accessor = FeishuAccessor()
+    recursive_root = MagicMock()
+
+    async def fake_fetch_document(*_args, **_kwargs):
+        return FeishuDocument(
+            doc_type="docx",
+            token="doc_token",
+            markdown_content="# single",
+            title="Single Wiki",
+            meta={"wiki_resolved": True},
+        )
+
+    monkeypatch.setattr(accessor, "_resolve_wiki_tree_root", recursive_root)
+    monkeypatch.setattr(accessor, "_fetch_document", fake_fetch_document)
+    monkeypatch.setattr(
+        accessor,
+        "_resolve_image_refs",
+        lambda markdown, **_kwargs: (markdown, {}),
+    )
+
+    resource = asyncio.run(accessor.access("https://example.feishu.cn/wiki/wiki_token"))
+    try:
+        assert resource.path.is_file()
+        assert resource.path.read_text(encoding="utf-8") == "# single"
+        assert resource.meta["original_filename"] == "Single Wiki"
+        recursive_root.assert_not_called()
     finally:
         resource.cleanup()
 

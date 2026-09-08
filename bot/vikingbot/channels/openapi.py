@@ -46,10 +46,6 @@ from vikingbot.observability.outcome import evaluate_response_outcome, should_up
 from vikingbot.session.manager import SessionManager
 
 DEFAULT_OPENVIKING_AGENT_ID = "web-playground"
-DEFAULT_NAMESPACE_POLICY = {
-    "isolate_user_scope_by_agent": False,
-    "isolate_agent_scope_by_user": False,
-}
 OPENVIKING_AUTH_TIMEOUT_SECONDS = 5.0
 OPENVIKING_PROXY_TIMEOUT_SECONDS = 300.0
 OPENVIKING_UPSTREAM_NOT_CONFIGURED_DETAIL = (
@@ -576,6 +572,16 @@ class OpenAPIChannel(BaseChannel):
         ) -> GatewayRequestAuth:
             return await channel._verify_gateway_request(http_request, x_gateway_token)
 
+        if channel._compile_service is not None:
+            from vikingbot.compile.router import register_runtime_task_routes
+
+            register_runtime_task_routes(
+                router,
+                channel=channel,
+                verify_gateway_request=verify_gateway_request,
+                service=channel._compile_service,
+            )
+
         @router.get("/health")
         async def gateway_health(
             http_request: Request,
@@ -859,7 +865,6 @@ class OpenAPIChannel(BaseChannel):
             "role": role,
             "api_key_type": api_key_type,
             "server_url": self._ov_server_url(),
-            "namespace_policy": dict(DEFAULT_NAMESPACE_POLICY),
         }
         if api_key:
             connection["api_key"] = api_key
@@ -1761,52 +1766,3 @@ class OpenAPIChannel(BaseChannel):
         outcome_payload = evaluation.to_dict()
         outcomes[response_id] = outcome_payload
         return outcome_payload
-
-
-def get_openapi_router(bus: MessageBus, config: Config) -> APIRouter:
-    """
-    Create and return the OpenAPI router for mounting in FastAPI.
-
-    This factory function creates an OpenAPIChannel and returns its router.
-    The router should be mounted in the main FastAPI app.
-    """
-    # Find OpenAPI config from channels
-    openapi_config = None
-
-    for ch_config in config.channels:
-        # Check for OpenAPI config
-        if isinstance(ch_config, dict) and ch_config.get("type") == "openapi":
-            openapi_config = OpenAPIChannelConfig(**ch_config)
-            break
-        elif hasattr(ch_config, "type") and getattr(ch_config, "type", None) == "openapi":
-            openapi_config = ch_config
-            break
-
-    if openapi_config is None:
-        # Create default config
-        openapi_config = OpenAPIChannelConfig()
-
-    # Create channel and get router - pass global config for BotChannel loading
-    channel = OpenAPIChannel(
-        config=openapi_config,
-        bus=bus,
-        workspace_path=config.workspace_path,
-        global_config=config,
-    )
-
-    # Register channel's send method as subscriber for outbound messages
-    # Subscribe to cli type
-    bus.subscribe_outbound(
-        f"cli__{openapi_config.channel_id()}",
-        channel.send,
-    )
-
-    # Subscribe to all bot_api channels that were loaded
-    for channel_id in channel._bot_configs.keys():
-        bus.subscribe_outbound(
-            f"bot_api__{channel_id}",
-            channel.send,
-        )
-        logger.info(f"Subscribed to bot_api channel: {channel_id}")
-
-    return channel.get_router()

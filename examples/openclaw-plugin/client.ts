@@ -1,12 +1,3 @@
-import { randomUUID } from "node:crypto";
-import { once } from "node:events";
-import { createWriteStream } from "node:fs";
-import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { basename, dirname, join, relative } from "node:path";
-
-import { Zip, ZipDeflate } from "fflate";
-
 import { defaultHttpTransport, type HttpTransport } from "./adapters/http-transport.js";
 import {
   defaultResourcePackager,
@@ -255,37 +246,12 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-const MEMORY_URI_PATTERNS = [
-  /^viking:\/\/user\/(?:[^/]+\/)?memories(?:\/|$)/,
-];
-const REMOTE_RESOURCE_PREFIXES = ["http://", "https://", "git@", "ssh://", "git://"];
-
-export function isMemoryUri(uri: string): boolean {
-  return MEMORY_URI_PATTERNS.some((pattern) => pattern.test(uri));
-}
-
-function isRemoteResourceSource(source: string): boolean {
-  return REMOTE_RESOURCE_PREFIXES.some((prefix) => source.startsWith(prefix));
-}
-
-function toBlobPart(value: Buffer): ArrayBuffer {
-  return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength) as ArrayBuffer;
-}
-
 function resolveWaitRequestTimeoutMs(defaultTimeoutMs: number, waitTimeoutSeconds?: number): number {
   const requestedMs =
     typeof waitTimeoutSeconds === "number" && Number.isFinite(waitTimeoutSeconds) && waitTimeoutSeconds > 0
       ? Math.ceil(waitTimeoutSeconds * 1000) + WAIT_REQUEST_TIMEOUT_BUFFER_MS
       : DEFAULT_WAIT_REQUEST_TIMEOUT_MS;
   return Math.max(defaultTimeoutMs, requestedMs);
-}
-
-async function cleanupUploadTempPath(path?: string): Promise<void> {
-  if (!path) {
-    return;
-  }
-  await rm(path, { force: true }).catch(() => undefined);
-  await rm(dirname(path), { recursive: true, force: true }).catch(() => undefined);
 }
 
 export class OpenVikingClient {
@@ -683,63 +649,6 @@ export class OpenVikingClient {
       throw new Error("OpenViking temp upload did not return temp_file_id");
     }
     return result.temp_file_id;
-  }
-
-  async zipDirectoryForUpload(dirPath: string): Promise<string> {
-    const rootStats = await stat(dirPath);
-    if (!rootStats.isDirectory()) {
-      throw new Error(`Not a directory: ${dirPath}`);
-    }
-
-    const zipDir = await mkdtemp(join(tmpdir(), "openviking-openclaw-upload-"));
-    const zipPath = join(zipDir, `${basename(dirPath).replace(/[^a-zA-Z0-9._-]/g, "_")}-${randomUUID()}.zip`);
-    const output = createWriteStream(zipPath);
-    const outputClosed = once(output, "close");
-    const outputErrored = once(output, "error").then(([err]) => Promise.reject(err));
-    const zip = new Zip((err, chunk, final) => {
-      if (err) {
-        output.destroy(err);
-        return;
-      }
-      if (chunk?.length) {
-        output.write(Buffer.from(chunk));
-      }
-      if (final) {
-        output.end();
-      }
-    });
-
-    const walk = async (currentDir: string) => {
-      const entries = await readdir(currentDir, { withFileTypes: true });
-      for (const entry of entries) {
-        const fullPath = join(currentDir, entry.name);
-        if (entry.isDirectory()) {
-          await walk(fullPath);
-          continue;
-        }
-        if (!entry.isFile()) {
-          continue;
-        }
-        const relPath = relative(dirPath, fullPath).replace(/\\/g, "/");
-        if (!relPath || relPath.startsWith("../") || relPath.includes("/../")) {
-          throw new Error(`Unsafe relative path while zipping: ${relPath}`);
-        }
-        const file = new ZipDeflate(relPath);
-        zip.add(file);
-        file.push(new Uint8Array(await readFile(fullPath)), true);
-      }
-    };
-    try {
-      await walk(dirPath);
-      zip.end();
-      await Promise.race([outputClosed, outputErrored]);
-    } catch (err) {
-      zip.terminate();
-      output.destroy(err as Error);
-      await cleanupUploadTempPath(zipPath);
-      throw err;
-    }
-    return zipPath;
   }
 
   async addResource(input: AddResourceInput, actorPeerId?: string): Promise<AddResourceResult> {

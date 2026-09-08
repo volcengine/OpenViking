@@ -30,8 +30,7 @@ ov compile \
   --from viking://resources/work-logs \
   --to viking://resources/daily-report \
   --skill viking://agent/skills/daily-report \
-  --reason "Daily report for 2026-08-20, focused on my outcomes and decisions" \
-  --wait
+  --reason "Daily report for 2026-08-20, focused on my outcomes and decisions"
 ```
 
 For several days at once, put the date range in `--reason` (each day is still its own page):
@@ -41,11 +40,10 @@ ov compile \
   --from viking://resources/work-logs \
   --to viking://resources/daily-report \
   --skill viking://agent/skills/daily-report \
-  --reason "One daily report per day for 2026-08-18 to 2026-08-20" \
-  --wait
+  --reason "One daily report per day for 2026-08-18 to 2026-08-20"
 ```
 
-Drop `--wait` to get a `task_id` back immediately:
+The command returns a `task_id` immediately:
 
 ```bash
 ov task status cmp_01abc      # progress and final result
@@ -66,4 +64,4 @@ ov read viking://resources/daily-report/2026-08-20.md
 
 - [Context Compilation Overview](./01-overview.md)
 - [Knowledge Distillation example](./05-knowledge-distillation.md)
-- [VikingBot API → compile()](../api/24-vikingbot.md#compile)
+- [Agent Runtime API](../api/23-agent-runtime.md)

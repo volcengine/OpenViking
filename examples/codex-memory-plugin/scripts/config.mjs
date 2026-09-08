@@ -35,6 +35,7 @@
  *   OPENVIKING_RECALL_TIMEOUT_MS, OPENVIKING_RECALL_COMPRESS_TIMEOUT_MS
  *   OPENVIKING_RECALL_COMPRESS_MODEL, OPENVIKING_RECALL_COMPRESS_THINKING
  *   OPENVIKING_RECALL_COMPRESS_BASE_URL
+ *   OPENVIKING_RECALL_COMPRESS_MIN_INPUT_CHARS
  *   OPENVIKING_RECALL_LIMIT, OPENVIKING_SCORE_THRESHOLD
  *   OPENVIKING_WORKSPACE_PEER, OPENVIKING_RECALL_PEER_SCOPE
  *   OPENVIKING_NO_AUTO_INJECT, OPENVIKING_PROFILE_TOKEN_BUDGET
@@ -229,6 +230,10 @@ export function loadConfig(cwd = process.cwd()) {
     recallCompressDetectTtlMs: Math.max(0, Math.floor(num(
       process.env.OPENVIKING_RECALL_COMPRESS_DETECT_TTL_MS,
       num(cx.recallCompressDetectTtlMs, 604800000),
+    ))),
+    recallCompressMinInputChars: Math.max(0, Math.floor(num(
+      process.env.OPENVIKING_RECALL_COMPRESS_MIN_INPUT_CHARS,
+      num(cx.recallCompressMinInputChars, 1500),
     ))),
     recallCompressMaxInputChars: Math.max(1000, Math.floor(num(
       process.env.OPENVIKING_RECALL_COMPRESS_MAX_INPUT_CHARS,

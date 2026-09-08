@@ -781,9 +781,10 @@ describe("OpenVikingClient", () => {
     });
   });
 
-  it("uses Go SDK defaults for skill details and returns null for missing tasks", async () => {
+  it("uses public Compile and task routes with SDK-compatible options", async () => {
     const fetcher = vi
       .fn<typeof fetch>()
+      .mockResolvedValueOnce(ok({ task_id: "cmp_1" }))
       .mockResolvedValueOnce(ok({ name: "demo" }))
       .mockResolvedValueOnce(
         new Response(
@@ -799,10 +800,27 @@ describe("OpenVikingClient", () => {
       fetch: fetcher,
     });
 
+    await expect(
+      client.compile(
+        ["viking://resources/source"],
+        "viking://resources/output",
+        "viking://agent/skills/wiki",
+        { args: { model_name: "endpoint-1" } },
+      ),
+    ).resolves.toEqual({ task_id: "cmp_1" });
     await client.getSkill("demo");
     await expect(client.getTask("missing")).resolves.toBeNull();
 
-    const skillUrl = new URL(String(fetcher.mock.calls[0]![0]));
+    expect(String(fetcher.mock.calls[0]![0])).toBe(
+      "https://example.com/api/v1/compile",
+    );
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
+      from: ["viking://resources/source"],
+      to: "viking://resources/output",
+      skill: "viking://agent/skills/wiki",
+      args: { model_name: "endpoint-1" },
+    });
+    const skillUrl = new URL(String(fetcher.mock.calls[1]![0]));
     expect(skillUrl.searchParams.get("include_files")).toBe("true");
     expect(skillUrl.searchParams.get("include_source")).toBe("false");
   });

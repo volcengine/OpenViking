@@ -111,6 +111,12 @@ export interface BatchWriteOperation {
 export interface BatchWriteOptions extends WaitOptions {
   extra?: JsonObject;
 }
+/** Compile request options. */
+export interface CompileOptions {
+  reason?: string;
+  args?: JsonObject;
+  extra?: JsonObject;
+}
 /** Retrieval tag update options. */
 export interface SetTagsOptions {
   mode?: "replace" | "append";

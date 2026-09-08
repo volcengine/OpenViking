@@ -1,0 +1,67 @@
+[
+  {
+    "case_id": "oversized_split_engineering_domains",
+    "category": "oversized_split",
+    "max_fact_lines_per_file": 6,
+    "canonical_topics": ["frontend", "backend", "database", "reliability"],
+    "initial_files": {
+      "engineering_notes": "[F01] Uses semantic HTML for page structure.\n[F02] Keeps client state close to its owner.\n[F03] Tests keyboard navigation for dialogs.\n[F04] Avoids layout shifts during loading.\n[F05] Measures bundle size before releases.\n[F06] Uses design tokens for shared colors.\n[F07] Validates API inputs at service boundaries.\n[F08] Uses idempotency keys for retried writes.\n[F09] Keeps domain logic outside transport handlers.\n[F10] Applies timeouts to outbound requests.\n[F11] Uses structured errors for API failures.\n[F12] Runs focused contract tests before deployment.\n[F13] Adds indexes for measured query patterns.\n[F14] Uses transactions for multi-row invariants.\n[F15] Reviews query plans for slow endpoints.\n[F16] Keeps schema migrations backward compatible during rollout.\n[F17] Enforces foreign keys for ownership relations.\n[F18] Archives old partitions after retention windows.\n[F19] Defines service-level objectives for critical paths.\n[F20] Uses bounded retries with exponential backoff.\n[F21] Alerts on sustained user-visible error rates.\n[F22] Practices recovery procedures with failure drills.\n[F23] Caps queues to prevent unbounded memory growth.\n[F24] Tracks tail latency separately from averages."
+    },
+    "expected_files": {
+      "frontend": ["F01", "F02", "F03", "F04", "F05", "F06"],
+      "backend": ["F07", "F08", "F09", "F10", "F11", "F12"],
+      "database": ["F13", "F14", "F15", "F16", "F17", "F18"],
+      "reliability": ["F19", "F20", "F21", "F22", "F23", "F24"]
+    },
+    "expected_replacements": {}
+  },
+  {
+    "case_id": "oversized_merge_many_aliases",
+    "category": "oversized_merge",
+    "canonical_topics": ["workflow"],
+    "initial_files": {
+      "workflow": "[F01] Keeps pull requests small.\n[F02] Requests review before merging.\n[F03] Links changes to their issue.",
+      "review_habits": "[F04] Explains non-obvious tradeoffs.\n[F05] Responds to review comments directly.\n[F06] Resolves discussions after changes land.",
+      "testing_process": "[F07] Runs unit tests before integration tests.\n[F08] Adds regression tests for fixed bugs.\n[F09] Records flaky tests instead of ignoring them.",
+      "release_process": "[F10] Uses staged rollouts for risky changes.\n[F11] Documents rollback steps.\n[F12] Watches error rates after release.",
+      "coding_habits": "[F13] Prefers straightforward implementations.\n[F14] Reuses existing utilities.\n[F15] Avoids speculative abstractions.",
+      "debugging_process": "[F16] Reproduces failures before editing.\n[F17] Traces the full data path.\n[F18] Verifies the root cause with a focused test.",
+      "documentation_process": "[F19] Updates examples when interfaces change.\n[F20] Notes behavioral changes in release summaries.\n[F21] Keeps commands copy-pasteable.",
+      "delivery_habits": "[F22] Checks the final diff for unrelated edits.\n[F23] Runs formatting checks before handoff.\n[F24] Reports known limitations explicitly."
+    },
+    "expected_files": {
+      "workflow": ["F01", "F02", "F03", "F04", "F05", "F06", "F07", "F08", "F09", "F10", "F11", "F12", "F13", "F14", "F15", "F16", "F17", "F18", "F19", "F20", "F21", "F22", "F23", "F24"]
+    },
+    "expected_replacements": {
+      "workflow": "workflow",
+      "review_habits": "workflow",
+      "testing_process": "workflow",
+      "release_process": "workflow",
+      "coding_habits": "workflow",
+      "debugging_process": "workflow",
+      "documentation_process": "workflow",
+      "delivery_habits": "workflow"
+    }
+  },
+  {
+    "case_id": "oversized_mixed_reorganization",
+    "category": "oversized_mixed",
+    "max_fact_lines_per_file": 8,
+    "canonical_topics": ["travel", "food", "games", "workflow", "wellbeing", "books"],
+    "initial_files": {
+      "travel": "[F01] Prefers direct flights.\n[F02] Likes coastal cities.\n[F03] Packs light for short trips.\n[F04] Avoids red-eye flights.",
+      "trip_notes": "[F05] Uses rail for regional travel.\n[F06] Books refundable hotels.\n[F07] Visits museums early.\n[F08] Keeps digital copies of tickets.",
+      "preferences_a": "[F09] Loves spicy noodles.\n[F10] Avoids shellfish.\n[F11] Makes coffee at home.\n[F12] Likes seasonal fruit.\n[F13] Plays cooperative puzzle games.\n[F14] Enjoys turn-based strategy games.\n[F15] Avoids competitive shooters.\n[F16] Likes story-rich role-playing games.\n[F17] Uses squash merges.\n[F18] Runs focused tests first.\n[F19] Writes concise review comments.\n[F20] Documents rollout risks.",
+      "preferences_b": "[F21] Walks after dinner to decompress.\n[F22] Practices meditation each morning.\n[F23] Protects weekends from work.\n[F24] Keeps a consistent sleep schedule.\n[F25] Reads historical fiction.\n[F26] Enjoys short science essays.\n[F27] Borrows books from the library.\n[F28] Keeps notes on finished books.\n[F29] Prefers dumplings with vinegar.\n[F30] Plays local co-op games with friends.\n[F31] Rebases branches before merging.\n[F32] Uses breathing exercises during stressful days."
+    },
+    "expected_files": {
+      "travel": ["F01", "F02", "F03", "F04", "F05", "F06", "F07", "F08"],
+      "food": ["F09", "F10", "F11", "F12", "F29"],
+      "games": ["F13", "F14", "F15", "F16", "F30"],
+      "workflow": ["F17", "F18", "F19", "F20", "F31"],
+      "wellbeing": ["F21", "F22", "F23", "F24", "F32"],
+      "books": ["F25", "F26", "F27", "F28"]
+    },
+    "expected_replacements": {"travel": "travel", "trip_notes": "travel"}
+  }
+]

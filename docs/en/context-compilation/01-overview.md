@@ -23,11 +23,10 @@ ov compile \
   --from viking://resources/research \
   --to viking://resources/research-wiki \
   --skill viking://agent/skills/llm-wiki \
-  --reason "Organize the research into a knowledge base the team can search" \
-  --wait
+  --reason "Organize the research into a knowledge base the team can search"
 ```
 
-`--wait` polls until the task reaches a terminal state; drop it to get a `cmp_...` task ID back immediately, then use `ov task status <id>` to check progress and `ov task cancel <id>` to stop it. Full field reference, task lifecycle, and HTTP API are in [VikingBot API → compile()](../api/24-vikingbot.md#compile).
+The command returns a `cmp_...` task ID immediately. Use `ov task status <id>` to check progress and `ov task cancel <id>` to stop it. The full field reference, task lifecycle, and HTTP API are in the [Agent Runtime API](../api/23-agent-runtime.md).
 
 ## Swap the Skill, get a different output
 
@@ -51,5 +50,5 @@ The first two examples also give the complete `ov` commands from **importing sou
 ## Related docs
 
 - [VikingBot concepts](../concepts/15-vikingbot.md) — the runtime behind Compile
-- [VikingBot API](../api/24-vikingbot.md) — full reference for `compile()` / `compile_status()` / `compile_cancel()`
+- [Agent Runtime API](../api/23-agent-runtime.md) — full reference for creating, inspecting, and cancelling Compile tasks
 - [Skills API](../api/04-skills.md) — managing and customizing Skills
