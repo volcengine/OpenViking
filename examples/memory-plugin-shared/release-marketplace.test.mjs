@@ -70,6 +70,56 @@ test("release marketplace archive supports a ZCode TOS install", () => {
   }
 });
 
+test("release marketplace archive supports a Kimi Code TOS install", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "openviking-kimicode-release-"));
+  try {
+    const stage = join(tmp, "memory-plugin-marketplace");
+    const staged = run("bash", [stageScript, stage]);
+    assert.equal(staged.status, 0, `${staged.stdout}\n${staged.stderr}`);
+
+    const zipped = run("zip", ["-rq", join(tmp, "memory-plugin-marketplace.zip"), "memory-plugin-marketplace"], {
+      cwd: tmp,
+    });
+    assert.equal(zipped.status, 0, `${zipped.stdout}\n${zipped.stderr}`);
+
+    const home = join(tmp, "home");
+    mkdirSync(home, { recursive: true });
+    const installed = run("bash", [
+      installer,
+      "--harness", "kimicode",
+      "--dist", "tos",
+      "--source", "archive",
+      "--lang", "en",
+      "--url", "http://127.0.0.1:1933",
+      "--api-key", "",
+      "--yes",
+    ], {
+      env: {
+        ...process.env,
+        HOME: home,
+        OPENVIKING_HOME: join(home, ".openviking"),
+        OPENVIKING_MARKETPLACE_ARCHIVE_URL: `file://${join(tmp, "memory-plugin-marketplace.zip")}`,
+      },
+    });
+    assert.equal(installed.status, 0, `${installed.stdout}\n${installed.stderr}`);
+
+    const integrationRoot = join(home, ".openviking", "agent-integrations", "kimicode");
+    assert.ok(existsSync(join(integrationRoot, "scripts", "kimicode-hook.mjs")));
+    assert.ok(existsSync(join(integrationRoot, "scripts", "kimicode-capture.mjs")));
+    assert.ok(existsSync(join(integrationRoot, "scripts", "shared", "async-writer.mjs")));
+
+    const config = readFileSync(join(home, ".kimi-code", "config.toml"), "utf8");
+    assert.match(config, /openviking kimicode integration/);
+    assert.match(config, /kimicode-hook\.mjs/);
+    assert.match(config, /event = "Interrupt"/);
+
+    const mcp = JSON.parse(readFileSync(join(home, ".kimi-code", "mcp.json"), "utf8"));
+    assert.ok(mcp.mcpServers.openviking);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("release marketplace archive retains the deprecated TRAE CLI integration for cleanup compatibility", () => {
   const tmp = mkdtempSync(join(tmpdir(), "openviking-trae-cli-release-"));
   try {

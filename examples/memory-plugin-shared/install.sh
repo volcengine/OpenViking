@@ -3573,7 +3573,7 @@ if contains_harness cursor; then install_cursor; fi
 if contains_harness trae; then install_trae_variant trae; fi
 if contains_harness trae-cn; then install_trae_variant trae-cn; fi
 if contains_harness zcode; then install_zcode; fi
-  if contains_harness kimicode; then install_kimicode; fi
+if contains_harness kimicode; then install_kimicode; fi
 if contains_harness opencode; then install_opencode; fi
 if contains_harness pi; then install_pi; fi
 if contains_harness dsh; then install_dsh; fi
@@ -3595,7 +3595,7 @@ if contains_harness cursor; then info "Cursor: Hooks + MCP + Rule + Skill"; fi
 if contains_harness trae; then info "TRAE: ~/.trae/hooks.json + MCP"; fi
 if contains_harness trae-cn; then info "TRAE CN: ~/.trae-cn/hooks.json + MCP"; fi
 if contains_harness zcode; then info "ZCode: ~/.zcode/cli/config.json (hooks + MCP)"; fi
-  if contains_harness kimicode; then info "Kimi Code: ~/.kimi-code/config.toml (hooks) + ~/.kimi-code/mcp.json"; fi
+if contains_harness kimicode; then info "Kimi Code: ~/.kimi-code/config.toml (hooks) + ~/.kimi-code/mcp.json"; fi
 if contains_harness opencode; then info "OpenCode: @openviking/opencode-plugin"; fi
 if contains_harness pi; then info "pi: ~/.pi/agent/extensions/openviking"; fi
 if contains_harness dsh; then info "DeepSeek Harness: $DSH_PACKAGE ($(t 'profile' '配置档') ${DSH_PROFILE:-$DSH_PROFILE_DEFAULT})"; fi

@@ -60,6 +60,10 @@ jobs:
             examples/zcode-memory-plugin/scripts/zcode-capture.test.mjs \
             examples/zcode-memory-plugin/scripts/zcode-hooks.test.mjs \
             examples/zcode-memory-plugin/scripts/zcode-turns.test.mjs \
+            examples/kimicode-memory-plugin/scripts/kimicode-async.test.mjs \
+            examples/kimicode-memory-plugin/scripts/kimicode-capture.test.mjs \
+            examples/kimicode-memory-plugin/scripts/kimicode-hooks.test.mjs \
+            examples/kimicode-memory-plugin/scripts/kimicode-turns.test.mjs \
             examples/memory-plugin-shared/agent-hook-runtime.test.mjs \
             examples/memory-plugin-shared/batch-send.test.mjs \
             examples/memory-plugin-shared/doctor-core.test.mjs \

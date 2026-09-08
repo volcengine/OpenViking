@@ -5,6 +5,7 @@ examples/opencode-plugin/lib/shared/*.mjs linguist-generated=true
 examples/dsh-memory-plugin/shared/*.mjs linguist-generated=true
 examples/pi-coding-agent-extension/shared/*.mjs linguist-generated=true
 examples/zcode-memory-plugin/scripts/shared/*.mjs linguist-generated=true
+examples/kimicode-memory-plugin/scripts/shared/*.mjs linguist-generated=true
 agent-plugins/servers/shared/*.mjs linguist-generated=true
 
 # Pi owns this module; sync.mjs does not generate it.

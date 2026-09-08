@@ -154,6 +154,41 @@ test("turn.prompt plus append_message is a single user turn", () => {
   ]);
 });
 
+test("extractUnseenWireTurns closes a cancelled turn on turn.ended", () => {
+  const dir = mkdtempSync(join(tmpdir(), "kc-wire-"));
+  const wire = join(dir, "wire.jsonl");
+  writeFileSync(
+    wire,
+    [
+      JSON.stringify({
+        type: "turn.prompt",
+        input: [{ type: "text", text: "first question" }],
+        origin: { kind: "user" },
+      }),
+      JSON.stringify({ type: "turn.ended", turnId: "0", reason: "cancelled" }),
+      JSON.stringify({
+        type: "turn.prompt",
+        input: [{ type: "text", text: "second question" }],
+        origin: { kind: "user" },
+      }),
+      JSON.stringify({
+        type: "context.append_loop_event",
+        event: {
+          type: "content.part",
+          turnId: "1",
+          part: { type: "text", text: "answer" },
+        },
+      }),
+    ].join("\n") + "\n",
+  );
+  const { turns } = extractUnseenWireTurns(wire, null);
+  assert.deepEqual(turns, [
+    { role: "user", content: "first question", turnId: "0" },
+    { role: "user", content: "second question", turnId: "1" },
+    { role: "assistant", content: "answer", turnId: "1" },
+  ]);
+});
+
 test("buildKimicodeTurns falls back to stdin when wire is missing", () => {
   const original = process.env.KIMI_CODE_HOME;
   process.env.KIMI_CODE_HOME = mkdtempSync(join(tmpdir(), "kc-empty-"));

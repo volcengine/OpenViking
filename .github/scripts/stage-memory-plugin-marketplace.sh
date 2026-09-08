@@ -16,6 +16,7 @@ cp -R \
   "${ROOT}/examples/trae-memory-hooks" \
   "${ROOT}/examples/trae-cli-memory-hooks" \
   "${ROOT}/examples/zcode-memory-plugin" \
+  "${ROOT}/examples/kimicode-memory-plugin" \
   "${ROOT}/examples/opencode-plugin" \
   "${ROOT}/examples/pi-coding-agent-extension" \
   "${ROOT}/examples/memory-plugin-shared" \
@@ -77,6 +78,19 @@ for required in \
   zcode-memory-plugin/scripts/shared/batch-send.mjs \
   zcode-memory-plugin/scripts/shared/retryable.mjs \
   zcode-memory-plugin/servers/mcp-proxy.mjs \
+  kimicode-memory-plugin/kimi.plugin.json \
+  kimicode-memory-plugin/.mcp.json \
+  kimicode-memory-plugin/openviking.integration.json \
+  kimicode-memory-plugin/scripts/kimicode-hook.mjs \
+  kimicode-memory-plugin/scripts/kimicode-capture.mjs \
+  kimicode-memory-plugin/scripts/kimicode-turns.mjs \
+  kimicode-memory-plugin/scripts/uri-guard.mjs \
+  kimicode-memory-plugin/scripts/merge-config.mjs \
+  kimicode-memory-plugin/scripts/shared/async-writer.mjs \
+  kimicode-memory-plugin/scripts/shared/agent-hook-runtime.mjs \
+  kimicode-memory-plugin/scripts/shared/batch-send.mjs \
+  kimicode-memory-plugin/scripts/shared/retryable.mjs \
+  kimicode-memory-plugin/servers/mcp-proxy.mjs \
   memory-plugin-shared/lib/agent-hook-runtime.mjs \
   memory-plugin-shared/lib/agent-uri-guard.mjs \
   memory-plugin-shared/lib/async-writer.mjs \
