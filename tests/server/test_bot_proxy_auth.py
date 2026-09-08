@@ -280,12 +280,18 @@ async def test_compile_route_uses_ov_owned_task_and_rejects_legacy_routes(monkey
     assert "GET /api/v1/tasks/{task_id}" in legacy_status.json()["detail"]
     assert legacy_cancel.status_code == 400
     assert "POST /api/v1/tasks/{task_id}/cancel" in legacy_cancel.json()["detail"]
-    assert calls["connection"] == {"api_key": "active-user-key"}
+    assert calls["connection"] == {
+        "api_key": "active-user-key",
+        "account_id": "acct",
+        "user_id": "alice",
+    }
     assert calls["owner"] == ("acct", "alice")
 
 
 @pytest.mark.asyncio
-async def test_compile_api_client_session_protocol_retry_and_cancellation(monkeypatch):
+@pytest.mark.parametrize("identity", [{}, {"account_id": "acct", "user_id": "alice"}])
+async def test_compile_api_client_session_protocol_retry_and_cancellation(monkeypatch, identity):
+    connection = {"api_key": "active-user-key", **identity}
     forwarded = []
     response_status = {
         "cancel": "cancelled",
@@ -376,15 +382,15 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(monkey
         {
             "args": {"user_key": "model-user-key"},
         },
-        {"api_key": "active-user-key"},
+        connection,
     )
     status_snapshot = await service.get(
         external_task_id,
-        {"api_key": "active-user-key"},
+        connection,
     )
     cancel_snapshot = await service.cancel(
         external_task_id,
-        {"api_key": "active-user-key"},
+        connection,
     )
 
     assert external_task_id == "ma-session-1"
@@ -397,6 +403,9 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(monkey
     assert "X-Gateway-Token" not in forwarded[0]["headers"]
     assert forwarded[0]["headers"]["Idempotency-Key"] == "cmp_ov_1"
     assert forwarded[0]["headers"]["X-API-Key"] == "active-user-key"
+    for request in forwarded:
+        assert request["headers"].get("X-OpenViking-Account") == identity.get("account_id")
+        assert request["headers"].get("X-OpenViking-User") == identity.get("user_id")
     assert forwarded[0]["body"] == {
         "task_type": "compile",
         "payload": {
@@ -429,7 +438,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(monkey
                 },
             )
             self.auth = {
-                "openviking_connection": {"api_key": "active-user-key"},
+                "openviking_connection": connection,
                 "external_request_private": {},
             }
             self.stage = None
@@ -490,6 +499,9 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(monkey
     assert tracker.stage_updates == ["compile: completed"]
     assert tracker.task.status == TaskStatus.COMPLETED
     assert tracker.task.result == {"output": "wiki"}
+    for request in forwarded:
+        assert request["headers"].get("X-OpenViking-Account") == identity.get("account_id")
+        assert request["headers"].get("X-OpenViking-User") == identity.get("user_id")
 
     forwarded.clear()
     response_status["cancel"] = "cancelling"
@@ -504,6 +516,9 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(monkey
     assert tracker.task.status == TaskStatus.CANCELLED
     assert response_status["cancel_failures"] == 0
     assert response_status["poll"] == []
+    for request in forwarded:
+        assert request["headers"].get("X-OpenViking-Account") == identity.get("account_id")
+        assert request["headers"].get("X-OpenViking-User") == identity.get("user_id")
 
 
 @pytest.mark.asyncio
