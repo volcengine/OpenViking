@@ -491,12 +491,24 @@ int IndexManagerImpl::handle_sorter_query(const SearchContext& ctx,
   auto sorter_res =
       ctx.sorter_op->calc_topk_result(scalar_index_->get_field_sets(), bitmap);
   if (sorter_res) {
+    std::vector<uint64_t> labels_u64;
+    labels_u64.reserve(sorter_res->offsets.size());
     for (size_t i = 0; i < sorter_res->offsets.size(); ++i) {
-      auto label = vector_index_->get_label_by_offset(sorter_res->offsets[i]);
-      sorter_res->labels_u64.push_back(label);
+      const auto offset = sorter_res->offsets[i];
+      const auto label = vector_index_->get_label_by_offset(offset);
+      if (label == std::numeric_limits<uint64_t>::max()) {
+        SPDLOG_ERROR(
+            "IndexManagerImpl::handle_sorter_query missing label for offset {}",
+            offset);
+        result.labels.clear();
+        result.scores.clear();
+        result.extra_json.clear();
+        return -1;
+      }
+      labels_u64.push_back(label);
     }
     std::swap(result.scores, sorter_res->scores);
-    std::swap(result.labels, sorter_res->labels_u64);
+    result.labels = std::move(labels_u64);
     if (sorter_res->dsl_op_extra_json) {
       result.extra_json = json_stringify(*sorter_res->dsl_op_extra_json);
     }
