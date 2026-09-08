@@ -57,6 +57,13 @@ type AddSkillOptions struct {
 	TargetURI any
 }
 
+// CompileOptions controls Compile.
+type CompileOptions struct {
+	Reason string
+	Args   map[string]any
+	Extra  map[string]any
+}
+
 // AdminCreateAccountOptions controls AdminCreateAccountWithOptions.
 type AdminCreateAccountOptions struct {
 	UserConfig map[string]any

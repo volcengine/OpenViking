@@ -1,20 +1,28 @@
 ## Step 1: Install
 
-```bash
-# TRAE
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness trae --dist tos
+1. Run the command that matches your TRAE version:
 
-# TRAE CN
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness trae-cn --dist tos
-```
+   **Trae International**
 
-Select **Volcengine OpenViking Cloud**. Paste the API key:
+   ```bash
+   bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness trae --dist tos
+   ```
 
-{{OPENVIKING_API_KEY_BLOCK}}
+   **Trae China**
+
+   ```bash
+   bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness trae-cn --dist tos
+   ```
+
+2. The installer will ask for language (English / Chinese) and OpenViking credentials. In the OpenViking credential step, choose **VolcEngine OpenViking Cloud Service [api.vikingdb.cn-beijing.volces.com]** and enter the API KEY:
+
+   ```text
+   {{OPENVIKING_API_KEY}}
+   ```
 
 ## Step 2: Verify
 
-Restart TRAE. Confirm `openviking` is connected in settings.
+Open **Settings → MCP → Configured MCP Servers** and confirm that the `openviking` entry is visible.
 
 ## Troubleshoot
 

@@ -44,8 +44,7 @@ ov compile \
   --from viking://resources/finance-reports \
   --to viking://resources/finance-insights \
   --skill viking://agent/skills/knowledge-distillation \
-  --reason "Compare the last three years of reports; obtain changes and drivers in revenue quality, profitability, and risk" \
-  --wait
+  --reason "Compare the last three years of reports; obtain changes and drivers in revenue quality, profitability, and risk"
 ```
 
 `--from` accepts multiple sources for cross-knowledge-base comparison:
@@ -55,11 +54,10 @@ ov compile \
   --from viking://resources/finance-2024,viking://resources/finance-2025 \
   --to viking://resources/finance-insights \
   --skill viking://agent/skills/knowledge-distillation \
-  --reason "Compare the two yearly knowledge bases; surface changes and structural differences in key metrics" \
-  --wait
+  --reason "Compare the two yearly knowledge bases; surface changes and structural differences in key metrics"
 ```
 
-Drop `--wait` to get a `task_id` back immediately:
+The command returns a `task_id` immediately:
 
 ```bash
 ov task status cmp_01abc      # progress and final result
@@ -81,4 +79,4 @@ By default **no `index.md` is created** — a distillation is itself a set of co
 
 - [Context Compilation Overview](./01-overview.md)
 - [Daily Report example](./04-daily-report.md)
-- [VikingBot API → compile()](../api/24-vikingbot.md#compile)
+- [Agent Runtime API](../api/23-agent-runtime.md)

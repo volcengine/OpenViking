@@ -30,8 +30,7 @@ ov compile \
   --from viking://resources/work-logs \
   --to viking://resources/daily-report \
   --skill viking://agent/skills/daily-report \
-  --reason "生成 2026-08-20 的日报，聚焦我的工作产出与决策" \
-  --wait
+  --reason "生成 2026-08-20 的日报，聚焦我的工作产出与决策"
 ```
 
 一次生成多天，把日期范围写进 `--reason` 即可（每天仍是独立一页）：
@@ -41,11 +40,10 @@ ov compile \
   --from viking://resources/work-logs \
   --to viking://resources/daily-report \
   --skill viking://agent/skills/daily-report \
-  --reason "生成 2026-08-18 至 2026-08-20 每天一份日报" \
-  --wait
+  --reason "生成 2026-08-18 至 2026-08-20 每天一份日报"
 ```
 
-去掉 `--wait` 会立刻返回 `task_id`：
+命令会立刻返回 `task_id`：
 
 ```bash
 ov task status cmp_01abc      # 查看进度与最终结果
@@ -66,4 +64,4 @@ ov read viking://resources/daily-report/2026-08-20.md
 
 - [上下文编译概览](./01-overview.md)
 - [知识蒸馏示例](./05-knowledge-distillation.md)
-- [VikingBot API → compile()](../api/24-vikingbot.md#compile)
+- [Agent Runtime API](../api/23-agent-runtime.md)

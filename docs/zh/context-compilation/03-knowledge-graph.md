@@ -40,11 +40,10 @@ ov compile \
   --from viking://resources/journal \
   --to viking://resources/journal-kg \
   --skill viking://agent/skills/knowledge-graph \
-  --reason "抽取人物、地点、法宝及其关系，构建可遍历的知识图谱" \
-  --wait
+  --reason "抽取人物、地点、法宝及其关系，构建可遍历的知识图谱"
 ```
 
-去掉 `--wait` 会立刻返回 `task_id`，之后：
+命令会立刻返回 `task_id`，之后：
 
 ```bash
 ov task status cmp_01abc      # 查看进度与最终结果
@@ -103,4 +102,4 @@ python examples/compile/graph-show/knowledge-graph/knowledge_graph.py \
 
 - [上下文编译概览](./01-overview.md)
 - [LLM Wiki 示例](./02-llm-wiki.md)
-- [VikingBot API → compile()](../api/24-vikingbot.md#compile)
+- [Agent Runtime API](../api/23-agent-runtime.md)

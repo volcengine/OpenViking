@@ -1,14 +1,22 @@
 ## Step 1: Install
 
-```bash
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness opencode --dist tos
-```
+1. Run the installer in your terminal:
 
-Select **Volcengine OpenViking Cloud**. Paste the API key:
+   ```bash
+   bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness opencode --dist tos
+   ```
+
+2. The installer will ask for language (English / Chinese) and OpenViking credentials. In the OpenViking credential step, choose **VolcEngine OpenViking Cloud Service [api.vikingdb.cn-beijing.volces.com]** and enter the API KEY:
+
+   ```text
+   {{OPENVIKING_API_KEY}}
+   ```
 
 ## Step 2: Verify
 
-Restart OpenCode. Ask it to search OpenViking memory. Tools look like `openviking_search`, `openviking_read`, `openviking_remember`.
+1. Restart OpenCode.
+2. Run `/mcps` and confirm the list shows `openviking connected`.
+3. Ask OpenCode to recall related memories in a conversation, and verify that it can automatically call tools such as `openviking_search`, `openviking_read`, and `openviking_remember`.
 
 ## Troubleshoot
 

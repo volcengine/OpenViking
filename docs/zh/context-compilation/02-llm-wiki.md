@@ -59,13 +59,12 @@ ov compile \
   --from viking://resources/research \
   --to viking://resources/research-wiki \
   --skill viking://agent/skills/llm-wiki \
-  --reason "面向团队检索整理成 Wiki，保留每条结论的出处" \
-  --wait
+  --reason "面向团队检索整理成 Wiki，保留每条结论的出处"
 ```
 
 - `--from` 可以重复或用逗号分隔，一次传多个来源。
 - `--to` 目录不存在时会自动创建。
-- 想要机器可读结果加 `-o json`；不想阻塞终端就去掉 `--wait`，用返回的 `task_id` 轮询：
+- 想要机器可读结果加 `-o json`；命令会立即返回 `task_id`，用它查询或取消任务：
 
 ```bash
 ov task status cmp_01abc      # 查看进度与最终结果
@@ -128,4 +127,4 @@ python examples/compile/graph-show/llm-wiki/wiki_graph.py \
 
 - [上下文编译概览](./01-overview.md)
 - [Knowledge Graph 示例](./03-knowledge-graph.md)
-- [VikingBot API → compile()](../api/24-vikingbot.md#compile)
+- [Agent Runtime API](../api/23-agent-runtime.md)

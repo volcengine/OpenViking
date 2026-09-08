@@ -362,9 +362,10 @@ class WatchManager:
             True if has permission, False otherwise
 
         Notes:
-            - ROOT can access all tasks.
-            - ADMIN can access tasks within the same account.
-            - USER can only access tasks they created within the same account.
+            - ROOT can access all tasks (system/scheduler bypass).
+            - Every other role (including ADMIN) is scoped to tasks they own
+              within the same account, so callers sharing an account but using
+              different user_ids never see each other's tasks.
         """
         role_value = (role or "").lower()
         if role_value == "root":
@@ -372,9 +373,6 @@ class WatchManager:
 
         if task.account_id != account_id:
             return False
-
-        if role_value == "admin":
-            return True
 
         return task.user_id == user_id
 

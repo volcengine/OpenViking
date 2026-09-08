@@ -77,15 +77,13 @@ class _FakeAgfs:
         data,
         max_retries: int = 3,
         *,
-        fs_ctx=None,
-        auto_pathlock: bool = True,
+        ctx=None,
     ):
         self.write_calls.append(
             {
                 "path": path,
                 "max_retries": max_retries,
-                "fs_ctx": fs_ctx,
-                "auto_pathlock": auto_pathlock,
+                "ctx": ctx,
             }
         )
         if isinstance(data, str):
@@ -128,16 +126,14 @@ class _FakeAgfs:
         recursive: bool = False,
         force: bool = False,
         *,
-        fs_ctx=None,
-        auto_pathlock: bool = True,
+        ctx=None,
     ):
         self.rm_calls.append(
             {
                 "path": path,
                 "recursive": recursive,
                 "force": force,
-                "fs_ctx": fs_ctx,
-                "auto_pathlock": auto_pathlock,
+                "ctx": ctx,
             }
         )
         if self.fail_rm:
@@ -175,7 +171,7 @@ async def test_start_task(tracker: TaskTracker):
     assert retrieved.status == TaskStatus.RUNNING
 
 
-async def test_update_stage(tracker: TaskTracker):
+async def test_update_stage_and_record_owner_cancelled(tracker: TaskTracker):
     task = await tracker.create("add_resource", **_owner_kwargs())
     await tracker.start(task.task_id, stage="queued")
     await tracker.update_stage(task.task_id, "parsing")
@@ -183,6 +179,12 @@ async def test_update_stage(tracker: TaskTracker):
     assert retrieved is not None
     assert retrieved.status == TaskStatus.RUNNING
     assert retrieved.stage == "parsing"
+
+    await tracker.record_cancelled(task.task_id)
+    cancelled = await tracker.get(task.task_id)
+    assert cancelled is not None
+    assert cancelled.status == TaskStatus.CANCELLED
+    assert cancelled.stage == "cancelled"
 
 
 async def test_complete_task(tracker: TaskTracker):
@@ -351,10 +353,9 @@ async def test_list_can_hide_internal_tasks_before_limit(tracker: TaskTracker):
     internal = await tracker.create("add_resource", meta={"internal": True}, **_owner_kwargs())
 
     assert [task.task_id for task in await tracker.list_tasks(limit=1)] == [internal.task_id]
-    assert [
-        task.task_id
-        for task in await tracker.list_tasks(limit=1, include_internal=False)
-    ] == [visible.task_id]
+    assert [task.task_id for task in await tracker.list_tasks(limit=1, include_internal=False)] == [
+        visible.task_id
+    ]
 
 
 async def test_list_order_most_recent_first(tracker: TaskTracker):
@@ -440,6 +441,16 @@ async def test_to_dict(tracker: TaskTracker):
         "provider": "git_http_basic",
         "password": "secret",
     }
+    await tracker.update_task_auth(
+        task.task_id,
+        {"external_task_id": "session-1"},
+        **_owner_kwargs(),
+    )
+    assert await tracker.get_task_auth(task.task_id, **_owner_kwargs()) == {
+        "provider": "git_http_basic",
+        "password": "secret",
+        "external_task_id": "session-1",
+    }
     assert (await tracker.get(task.task_id, **_owner_kwargs())).auth == {}
     assert (await tracker.list_tasks(**_owner_kwargs()))[0].auth == {}
 
@@ -505,7 +516,7 @@ async def test_evict_keeps_cached_task_when_persistent_delete_fails():
 
     assert await tracker.get(t.task_id) is None
     assert await tracker._store.get(t.task_id, **_owner_kwargs()) is None
-    assert all(call["auto_pathlock"] is False for call in agfs.rm_calls)
+    assert all(call["ctx"]["disable_auto_pathlock"] == "true" for call in agfs.rm_calls)
 
 
 async def test_evict_keeps_recent_completed(tracker: TaskTracker):
@@ -583,7 +594,7 @@ async def test_persistent_store_writes_task_record_json():
     raw = agfs.files[f"/local/acme/_system/tasks/alice/{task.task_id}.json"]
     payload = json.loads(raw.decode("utf-8"))
 
-    assert agfs.write_calls[-1]["auto_pathlock"] is False
+    assert agfs.write_calls[-1]["ctx"]["disable_auto_pathlock"] == "true"
     assert payload["task_id"] == task.task_id
     assert payload["task_type"] == "add_resource"
     assert payload["account_id"] == "acme"
@@ -600,7 +611,7 @@ async def test_persistent_store_writes_task_record_json():
         agfs.files[f"/local/acme/_system/tasks/alice/{task.task_id}.json"].decode("utf-8")
     )
     assert terminal_payload["auth"] == {}
-    assert all(call["auto_pathlock"] is False for call in agfs.write_calls)
+    assert all(call["ctx"]["disable_auto_pathlock"] == "true" for call in agfs.write_calls)
 
 
 async def test_persistent_store_keeps_tasktracker_tasks_dict():
@@ -650,7 +661,7 @@ async def test_persistent_store_ignores_existing_task_dirs():
         "/local/acme/_system/tasks/alice",
     ]
     assert agfs.mkdir_calls == first_mkdir_calls
-    assert all(call["auto_pathlock"] is False for call in agfs.write_calls)
+    assert all(call["ctx"]["disable_auto_pathlock"] == "true" for call in agfs.write_calls)
 
 
 async def test_create_requires_owner(tracker: TaskTracker):

@@ -1,18 +1,21 @@
 ## Step 1: Install
 
-```bash
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness cursor --dist tos
-```
+1. Run the installer in your terminal:
 
-Select **Volcengine OpenViking Cloud**. Paste the API key:
+   ```bash
+   bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh)
+   ```
 
-{{OPENVIKING_API_KEY_BLOCK}}
+2. The installer will ask for language (English / Chinese) and OpenViking credentials. In the OpenViking credential step, choose **VolcEngine OpenViking Cloud Service [api.vikingdb.cn-beijing.volces.com]** and enter the API KEY:
+
+   ```text
+   {{OPENVIKING_API_KEY}}
+   ```
 
 ## Step 2: Verify
 
-1. Restart Cursor and start a new Agent session.
-2. **Cursor Settings → Hooks**: lifecycle hooks run `cursor-hook.mjs`.
-3. **Cursor Settings → Tools & MCPs**: `openviking` is connected.
+1. Open **Customize → MCPs** and confirm both **openviking User** and **openviking Plugin** are visible.
+2. Open **Customize → Hooks** and confirm the **openviking-memory** entry is visible.
 
 ## Troubleshoot
 
