@@ -231,6 +231,13 @@ model turn. Transcript capture may later see that injected context
 adjacent to the prompt, so plugin-generated recall and resume context are
 wrapped in a deterministic boundary:
 
+Before the health check or any search request, strict control-only prompts are
+short-circuited to `{}`. This covers bare acknowledgements, continuations,
+status checks, and fingerprinted approvals. The classifier is
+deliberately exact: prompts with task nouns, constraints, or implementation
+details continue through normal recall. Set
+`OPENVIKING_RECALL_CONTROL_PROMPT_SHORT_CIRCUIT=0` to disable it.
+
 ```text
 <openviking-context source="auto-recall" format="digest">
 OpenViking memory digest:
@@ -384,6 +391,7 @@ Env var overrides for tuning without rebuilding:
 | `OPENVIKING_CODEX_LOCK_WAIT_MS` | `120000` (`SessionEnd` worker), `40000` (`PreCompact`) | how long a writer waits for the session lock |
 | `OPENVIKING_CODEX_COMMITTED_TTL_MS` | `2592000000` (30 days) | how long a committed cursor is kept for resume |
 | `OPENVIKING_RECALL_TIMEOUT_MS` | `120000` (2 min) | whole UserPromptSubmit auto-recall deadline |
+| `OPENVIKING_RECALL_CONTROL_PROMPT_SHORT_CIRCUIT` | `1` | skip external recall for strict control-only prompts; set `0` to disable |
 | `OPENVIKING_RECALL_COMPRESS` | `1` | set `0` / `off` to skip `codex exec` compression |
 | `OPENVIKING_RECALL_COMPRESS_MODEL` | unset | custom first-choice compressor model; `off` disables compression |
 | `OPENVIKING_RECALL_COMPRESS_THINKING` | unset | custom `model_reasoning_effort`; `default` means omit override; alias `OPENVIKING_RECALL_COMPRESS_REASONING_EFFORT` |
