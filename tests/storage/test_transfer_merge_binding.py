@@ -12,8 +12,11 @@ import pytest_asyncio
 from openviking.pyagfs import get_binding_client
 from openviking.resource.watch_manager import WatchManager
 from openviking.server.identity import RequestContext, Role
+from openviking.service.fs_service import FSService
+from openviking.storage.abstract_overview import freshness_metadata, write_abstract_overview
 from openviking.storage.acl import AclAction, AclManager
 from openviking.storage.collection_schemas import CollectionSchemas
+from openviking.storage.errors import ResourceBusyError
 from openviking.storage.vector_ids import vector_record_id
 from openviking.storage.vectordb import engine as vectordb_engine
 from openviking.storage.viking_fs import VikingFS
@@ -538,3 +541,75 @@ async def test_watch_persistence_overwrites_after_backup_removal_failure(binding
     backup = json.loads(await fs.read_file(manager.STORAGE_BAK_URI, ctx=ctx))
     assert backup["tasks"] == []
     assert not await fs.exists(manager.STORAGE_TMP_URI, ctx=ctx)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wait", [False, True])
+async def test_rm_preserves_committed_result_when_parent_refresh_is_locked(
+    binding_fs, monkeypatch, wait
+):
+    ctx = root_ctx()
+    parent = "viking://resources/delete-refresh"
+    source = f"{parent}/source.md"
+    await binding_fs.mkdir(parent, ctx=ctx)
+    await binding_fs.write_file(source, "delete me", ctx=ctx)
+    await write_abstract_overview(
+        viking_fs=binding_fs,
+        dir_uri=parent,
+        overview="overview",
+        abstract="abstract",
+        ctx=ctx,
+        is_stale=lambda: False,
+        metadata={"freshness": freshness_metadata(1, 1)},
+    )
+    monkeypatch.setattr(
+        "openviking.service.fs_service.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace()),
+    )
+    cleanup = AsyncMock()
+    cleanup.before_resource_delete.return_value = None
+    service = FSService(viking_fs=binding_fs, resource_memory_link_service=cleanup)
+    wait_for_refresh = AsyncMock()
+    monkeypatch.setattr(service, "_wait_for_refresh", wait_for_refresh)
+    lease = await binding_fs._async_agfs.pathlock_acquire_exact_batch(
+        [
+            binding_fs._uri_to_path(f"{parent}/{name}", ctx=ctx)
+            for name in (".overview.md", ".abstract.md")
+        ]
+    )
+    try:
+        result = await service.rm(source, ctx=ctx, wait=wait)
+    finally:
+        await binding_fs._async_agfs.pathlock_release(lease)
+
+    assert isinstance(result, dict)
+    assert result["estimated_deleted_count"] == 0
+    assert result["semantic_status"] == "failed"
+    assert result["semantic_root_uri"] == parent
+    assert "lock acquire timed out" in result["semantic_error"]
+    assert "queue_status" not in result
+    assert not await binding_fs.exists(source, ctx=ctx)
+    wait_for_refresh.assert_not_awaited()
+    cleanup.before_resource_delete.assert_awaited_once_with(
+        ctx=ctx, resource_uri=source, recursive=False
+    )
+
+
+@pytest.mark.asyncio
+async def test_rm_still_rejects_a_locked_source(binding_fs, monkeypatch):
+    ctx = root_ctx()
+    source = "viking://resources/locked-source.md"
+    await binding_fs.write_file(source, "keep me", ctx=ctx)
+    service = FSService(viking_fs=binding_fs)
+    enqueue_delete_refresh = AsyncMock()
+    monkeypatch.setattr(service, "_enqueue_delete_refresh", enqueue_delete_refresh)
+    lease = await binding_fs._async_agfs.pathlock_acquire_exact(
+        binding_fs._uri_to_path(source, ctx=ctx)
+    )
+    try:
+        with pytest.raises(ResourceBusyError):
+            await service.rm(source, ctx=ctx)
+        assert await binding_fs.read_file(source, ctx=ctx) == "keep me"
+        enqueue_delete_refresh.assert_not_awaited()
+    finally:
+        await binding_fs._async_agfs.pathlock_release(lease)
