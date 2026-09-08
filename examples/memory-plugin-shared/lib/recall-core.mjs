@@ -39,7 +39,10 @@ function scaleQuotas(limit, weights) {
   const order = Object.keys(weights);
   const quotas = Object.fromEntries(order.map((key) => [key, 0]));
   if (slots < order.length) {
-    for (const key of order) quotas[key] = 1;
+    const selected = [...order]
+      .sort((a, b) => weights[b] - weights[a])
+      .slice(0, slots);
+    for (const key of selected) quotas[key] = 1;
     return quotas;
   }
 
@@ -95,15 +98,18 @@ export function buildContextSearchBody(cfg = {}, options = {}) {
     64,
     Math.floor(Number(cfg.recallMaxTokens || DEFAULT_CONTEXT_MAX_TOKENS)),
   );
+  const recallPurpose = cfg.recallPurpose === null
+    ? null
+    : (cfg.recallPurpose === "chat" ? "chat" : "coding");
   const body = {
     query: "",
     mode: "context",
-    purpose: "coding",
     score_threshold: Number.isFinite(Number(cfg.scoreThreshold)) ? Number(cfg.scoreThreshold) : 0.35,
   };
+  if (recallPurpose) body.purpose = recallPurpose;
   const limitConfigured = cfg.recallLimitConfigured === true;
   const maxTokensConfigured = cfg.recallMaxTokensConfigured === true;
-  if (limitConfigured) body.quotas = codingQuotas(limit);
+  if (limitConfigured && recallPurpose === "coding") body.quotas = codingQuotas(limit);
   if (maxTokensConfigured) body.max_tokens = maxTokens;
   if (cfg.recallPeerScope === "actor") body.peer_scope = "actor";
 
