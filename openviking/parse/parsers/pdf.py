@@ -43,7 +43,7 @@ class PDFParser(BaseParser):
     """
     PDF parser with dual conversion strategy.
 
-    Converts PDF → Markdown → ParseResult using MarkdownParser.
+    Converts PDF 鈫?Markdown 鈫?ParseResult using MarkdownParser.
     When available, extracts PDF bookmarks/outlines and injects them as
     markdown headings so MarkdownParser can build a hierarchical directory
     structure instead of flat numbered files.
@@ -199,6 +199,15 @@ class PDFParser(BaseParser):
         elif self.config.strategy == "mineru":
             return await self._convert_mineru(pdf_path, resource_name=resource_name)
 
+        elif self.config.strategy == "mineru-first":
+            # Try MinerU API first; fall back to local pdfplumber on failure
+            try:
+                return await self._convert_mineru(pdf_path, resource_name=resource_name)
+            except Exception as e:
+                logger.warning(f"MinerU API failed: {e}")
+                logger.info("Falling back to local pdfplumber")
+                return await self._convert_local(pdf_path, resource_name=resource_name)
+
         elif self.config.strategy == "auto":
             # Try local first
             try:
@@ -221,17 +230,13 @@ class PDFParser(BaseParser):
     async def _convert_local(
         self, pdf_path: Path, storage=None, resource_name: Optional[str] = None
     ) -> tuple[str, Dict[str, Any]]:
-        # pdfplumber / pdfminer 的解析与图片/表格提取通常是 CPU/IO 密集且为同步实现，
-        # 放到线程池中执行，避免阻塞事件循环。
-        return await asyncio.to_thread(self._convert_local_sync, pdf_path, storage, resource_name)
+        # pdfplumber / pdfminer 鐨勮В鏋愪笌鍥剧墖/琛ㄦ牸鎻愬彇閫氬父鏄?CPU/IO 瀵嗛泦涓斾负鍚屾瀹炵幇锛?        # 鏀惧埌绾跨▼姹犱腑鎵ц锛岄伩鍏嶉樆濉炰簨浠跺惊鐜€?        return await asyncio.to_thread(self._convert_local_sync, pdf_path, storage, resource_name)
 
     def _convert_local_sync(
         self, pdf_path: Path, storage=None, resource_name: Optional[str] = None
     ) -> tuple[str, Dict[str, Any]]:
-        """同步版：用 pdfplumber 将 PDF 转 Markdown。
-
-        该方法会在 :meth:`_convert_local` 中通过 asyncio.to_thread 调用。
-        """
+        """鍚屾鐗堬細鐢?pdfplumber 灏?PDF 杞?Markdown銆?
+        璇ユ柟娉曚細鍦?:meth:`_convert_local` 涓€氳繃 asyncio.to_thread 璋冪敤銆?        """
         pdfplumber = lazy_import("pdfplumber")
 
         # Import storage utilities
@@ -262,7 +267,7 @@ class PDFParser(BaseParser):
             with pdfplumber.open(str(pdf_path)) as pdf:
                 meta["total_pages"] = len(pdf.pages)
 
-                # Extract structure (bookmarks → font fallback)
+                # Extract structure (bookmarks 鈫?font fallback)
                 detection_mode = self.config.heading_detection
                 bookmarks = []
                 raw_bookmarks = []
@@ -338,7 +343,7 @@ class PDFParser(BaseParser):
                         # Extract images.
                         #
                         # A page can stack several image XObjects on the exact same
-                        # spot — print-to-PDF producers routinely emit a background
+                        # spot 鈥?print-to-PDF producers routinely emit a background
                         # layer plus a content layer. Since extraction rasterises the
                         # page *region* rather than the XObject itself, every one of
                         # them renders to identical bytes. Skip the repeats: bbox
@@ -365,7 +370,7 @@ class PDFParser(BaseParser):
                                 # Extract image using underlying PDF object
                                 image_obj = self._extract_image_from_page(page, img)
                                 if image_obj:
-                                    # Dedup only — md5 keeps this cheap, and the
+                                    # Dedup only 鈥?md5 keeps this cheap, and the
                                     # flag keeps it working on FIPS-locked hosts.
                                     digest = hashlib.md5(image_obj, usedforsecurity=False).digest()
                                     if digest in seen_digests:
@@ -405,7 +410,7 @@ class PDFParser(BaseParser):
                 f"resolved={meta['bookmarks_resolved']}), "
                 f"{meta['images_extracted']} images "
                 f"({meta['images_deduplicated']} duplicates skipped), "
-                f"{meta['tables_extracted']} tables → "
+                f"{meta['tables_extracted']} tables 鈫?"
                 f"{len(markdown_content)} chars"
             )
 
@@ -582,7 +587,7 @@ class PDFParser(BaseParser):
                     return
                 if title.isdigit():
                     return
-                if re.match(r"^[\d\s.·…]+$", title):
+                if re.match(r"^[\d\s.路鈥+$", title):
                     return
 
                 headings.append(
@@ -754,16 +759,16 @@ class PDFParser(BaseParser):
         Three protocol flavors are supported, selected by
         ``PDFConfig.mineru_api_mode``:
 
-        - ``"sync"``: the legacy self-hosted single-shot contract — one
+        - ``"sync"``: the legacy self-hosted single-shot contract 鈥?one
           ``POST <endpoint>/file_parse`` answering inline with
           ``{"status": "completed", "results": ...}``.
-        - ``"async"``: the task-based contracts — the current self-hosted
+        - ``"async"``: the task-based contracts 鈥?the current self-hosted
           ``POST <endpoint>/tasks`` API (202 + ``status_url``/``result_url``)
           and the online batch API (``/extract/task/batch`` + polling
           ``/extract-results/batch/{id}``, Bearer-token auth). Both deliver
           the markdown inside a zip archive. The self-hosted endpoint is
           probed first; a 404 falls through to the online endpoint.
-        - ``"auto"`` (default): the flavor is detected — the inline POST is
+        - ``"auto"`` (default): the flavor is detected 鈥?the inline POST is
           attempted first and a 404 (or a task-shaped response) switches to
           the task flow, so existing v1 deployments keep working unchanged.
 
