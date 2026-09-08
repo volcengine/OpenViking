@@ -902,12 +902,12 @@ class TaskTracker:
         task_type: Optional[str] = None,
         status: Optional[str] = None,
         resource_id: Optional[str] = None,
-        limit: int = 50,
+        limit: Optional[int] = 50,
         account_id: Optional[str] = None,
         user_id: Optional[str] = None,
         include_internal: bool = True,
     ) -> List[TaskRecord]:
-        """List tasks with optional filters. Most-recent first. Returns snapshot copies."""
+        """List snapshot copies, most-recent first. ``limit=None`` returns all matches."""
         return await self._dispatcher.run(
             lambda: self._list_tasks_on_owner(
                 task_type,
@@ -925,7 +925,7 @@ class TaskTracker:
         task_type: Optional[str],
         status: Optional[str],
         resource_id: Optional[str],
-        limit: int,
+        limit: Optional[int],
         account_id: Optional[str],
         user_id: Optional[str],
         include_internal: bool,

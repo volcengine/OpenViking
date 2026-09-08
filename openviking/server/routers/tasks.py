@@ -7,7 +7,8 @@ with ``wait=false``).  Callers receive a ``task_id`` and can poll these
 endpoints to check completion, results, or errors.
 """
 
-from typing import Optional
+import time
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query
 
@@ -15,7 +16,7 @@ from openviking.server.auth import get_request_context
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
 from openviking.service.task_store import SYSTEM_TASK_ACCOUNT_ID, SYSTEM_TASK_USER_ID
-from openviking.service.task_tracker import get_task_tracker
+from openviking.service.task_tracker import TaskRecord, TaskStatus, TaskTracker, get_task_tracker
 from openviking_cli.exceptions import (
     FailedPreconditionError,
     OpenVikingError,
@@ -23,6 +24,39 @@ from openviking_cli.exceptions import (
 )
 
 router = APIRouter(prefix="/api/v1", tags=["tasks"])
+
+
+@router.get("/tasks/summary")
+async def summarize_tasks(
+    task_type: Optional[str] = Query(None, description="Filter by task type"),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Summarize completed and failed attempts in the trailing 24 hours.
+
+    Uses the completed-task retention window, independently of list limits,
+    resource folding and status filters. Internal tasks are excluded.
+    """
+    tasks = await _list_visible_tasks(_ctx, task_type=task_type)
+    until = time.time()
+    since = until - TaskTracker.TTL_COMPLETED
+    completed = failed = 0
+    for task in tasks:
+        if since <= task.updated_at <= until:
+            completed += task.status == TaskStatus.COMPLETED
+            failed += task.status == TaskStatus.FAILED
+    total = completed + failed
+    return Response(
+        status="ok",
+        result={
+            "window_seconds": TaskTracker.TTL_COMPLETED,
+            "since": since,
+            "until": until,
+            "completed": completed,
+            "failed": failed,
+            "total": total,
+            "success_rate": completed / total * 100 if total else None,
+        },
+    )
 
 
 @router.get("/tasks/{task_id}")
@@ -94,6 +128,18 @@ async def list_tasks(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """List background tasks with optional filters."""
+    tasks = await _list_visible_tasks(_ctx, task_type, status, resource_id, include_internal, limit)
+    return Response(status="ok", result=[t.to_dict() for t in tasks])
+
+
+async def _list_visible_tasks(
+    _ctx: RequestContext,
+    task_type: Optional[str] = None,
+    status: Optional[str] = None,
+    resource_id: Optional[str] = None,
+    include_internal: bool = False,
+    limit: Optional[int] = None,
+) -> List[TaskRecord]:
     tracker = get_task_tracker()
     if _ctx.role == Role.ROOT:
         system_tasks = await tracker.list_tasks(
@@ -125,4 +171,4 @@ async def list_tasks(
             user_id=_ctx.user.user_id,
             include_internal=include_internal,
         )
-    return Response(status="ok", result=[t.to_dict() for t in tasks])
+    return tasks

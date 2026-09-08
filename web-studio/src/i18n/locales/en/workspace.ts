@@ -372,6 +372,14 @@ const workspace = {
     },
   },
   tasksPage: {
+    summary: {
+      successRate: 'Success rate (last 24h)',
+      loading: 'Loading summary...',
+      loadFailed: 'Could not load summary',
+      counts: '{{completed}} completed / {{failed}} failed attempts',
+      listEntries: 'List entries',
+      listHint: 'After filters and resource folding; up to 200 recent tasks',
+    },
     title: 'Task Center',
     description:
       'Track background work such as resource processing, session commits, and reindexing.',

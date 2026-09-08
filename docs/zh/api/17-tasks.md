@@ -349,3 +349,11 @@ ov task list --task-type session_commit --status running
 - [会话](05-sessions.md) - 会话提交任务
 - [资源](02-resources.md) - 资源导入任务
 - [内容](12-content.md) - 异步 reindex 任务
+
+### 任务统计
+
+`GET /api/v1/tasks/summary` 返回最近 24 小时内可见的非内部任务执行统计。可选查询参数 `task_type` 用于选择任务类型。鉴权和任务可见范围与任务列表接口一致。
+
+响应的 `result` 包含 `window_seconds`（86400）、`since` 和 `until`（Unix 秒）、`completed`、`failed`、`total`（成功与失败之和），以及 `success_rate`（百分比；总数为零时为 `null`）。终态的 `updated_at` 位于 `[since, until]` 内的每次执行分别计数；等待中、运行中、取消中和已取消任务不计入。
+
+Studio 的成功率独立于列表分页、状态筛选和资源折叠。列表仍然最多获取最近创建的 200 条任务，再进行筛选和折叠。成功记录保留 24 小时，失败记录保留 7 天；统计对两者统一使用 24 小时窗口。结果受现有任务可见范围和存储限制影响，并非历史累计统计。

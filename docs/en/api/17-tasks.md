@@ -351,3 +351,11 @@ ov task list --task-type session_commit --status running
 - [Sessions](05-sessions.md) - session commit tasks
 - [Resources](02-resources.md) - resource ingestion tasks
 - [Content](12-content.md) - asynchronous reindex tasks
+
+### Task summary
+
+`GET /api/v1/tasks/summary` returns statistics for visible, non-internal task attempts in the trailing 24 hours. The optional `task_type` query parameter selects a task type. Authentication and task visibility follow the task list endpoint.
+
+The response `result` contains `window_seconds` (86400), `since` and `until` (Unix seconds), `completed`, `failed`, `total` (completed + failed), and `success_rate` (percentage, or `null` when total is zero). An attempt is counted when its terminal `updated_at` lies within `[since, until]`. Pending, running, cancelling, and cancelled tasks are excluded.
+
+Studio uses this summary independently of list pagination, status filters, and resource folding. List entries still represent at most 200 recently created tasks before filtering/folding. Completed records are retained for 24 hours and failures for 7 days; summary statistics use the same 24-hour window for both. They describe retained records under the existing visibility and storage limits, not lifetime analytics.
