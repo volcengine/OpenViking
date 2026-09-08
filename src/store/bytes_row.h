@@ -13,6 +13,30 @@ namespace vectordb {
 
 constexpr uint32_t STRING_MAX_UINT16_LENGTH = 0xFFFF;
 
+inline uint16_t checked_uint16_length(size_t len, const std::string& field_name,
+                                      const std::string& kind) {
+  if (len > STRING_MAX_UINT16_LENGTH) {
+    if (kind == "string") {
+      throw std::invalid_argument("string field " + field_name +
+                                  " exceeds 65535 bytes");
+    }
+    throw std::invalid_argument("list field " + field_name +
+                                " exceeds 65535 entries");
+  }
+  return static_cast<uint16_t>(len);
+}
+
+inline void check_list_string_lengths(const std::vector<std::string>& vec,
+                                      const std::string& field_name) {
+  for (const auto& s : vec) {
+    if (s.length() > STRING_MAX_UINT16_LENGTH) {
+      throw std::invalid_argument(
+          "string element in list field " + field_name +
+          " exceeds 65535 bytes");
+    }
+  }
+}
+
 enum class FieldType {
   INT64 = 0,
   UINT64 = 1,
@@ -232,6 +256,7 @@ class BytesRow {
                          get_default_list_int64(meta.default_value)) {
             len = static_cast<int>(def->size());
           }
+          len = checked_uint16_length(len, meta.name, "list");
           var_infos[i] = {variable_region_offset, len};
           variable_region_offset += 2 + len * 8;  // UINT16 + INT64_SIZE
           break;
@@ -244,6 +269,7 @@ class BytesRow {
                          get_default_list_float32(meta.default_value)) {
             len = static_cast<int>(def->size());
           }
+          len = checked_uint16_length(len, meta.name, "list");
           var_infos[i] = {variable_region_offset, len};
           variable_region_offset += 2 + len * 4;  // UINT16 + FLOAT32_SIZE
           break;
@@ -257,8 +283,10 @@ class BytesRow {
           } else if (const auto* def =
                          get_default_list_string(meta.default_value)) {
             list_len = static_cast<int>(def->size());
+            check_list_string_lengths(*def, meta.name);
             content_len = get_list_string_content_len(*def);
           }
+          list_len = checked_uint16_length(list_len, meta.name, "list");
           var_infos[i] = {variable_region_offset, list_len};
           // list_len(2) + (elem_len(2) + content) * N
           // Actually content_len should include the 2 bytes for each string

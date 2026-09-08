@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 #include "index/index_engine.h"
+#include "store/bytes_row.h"
 #include "store/persist_store.h"
 #include "store/volatile_store.h"
 #include <iostream>
@@ -33,6 +34,51 @@ void expect_filter_projection(IndexEngine& engine, const std::string& dsl,
         first_word, expected_first_word);
     exit(1);
   }
+}
+
+void test_bytes_row_oversized_lists_rejected() {
+  SPDLOG_INFO("[Running] test_bytes_row_oversized_lists_rejected...");
+
+  {
+    auto schema = std::make_shared<Schema>(std::vector<FieldDef>{{"tags", FieldType::LIST_INT64, 0, std::vector<int64_t>{}}});
+    BytesRow row(schema);
+    std::vector<Value> data;
+    data.emplace_back(std::vector<int64_t>(65536, 7));
+    try {
+      (void)row.serialize(data);
+      SPDLOG_ERROR("LIST_INT64 accepted an oversized list");
+      exit(1);
+    } catch (const std::invalid_argument&) {
+    }
+  }
+
+  {
+    auto schema = std::make_shared<Schema>(std::vector<FieldDef>{{"scores", FieldType::LIST_FLOAT32, 0, std::vector<float>{}}});
+    BytesRow row(schema);
+    std::vector<Value> data;
+    data.emplace_back(std::vector<float>(65536, 1.0f));
+    try {
+      (void)row.serialize(data);
+      SPDLOG_ERROR("LIST_FLOAT32 accepted an oversized list");
+      exit(1);
+    } catch (const std::invalid_argument&) {
+    }
+  }
+
+  {
+    auto schema = std::make_shared<Schema>(std::vector<FieldDef>{{"tags", FieldType::LIST_STRING, 0, std::vector<std::string>{}}});
+    BytesRow row(schema);
+    std::vector<Value> data;
+    data.emplace_back(std::vector<std::string>{std::string(65536, 120)});
+    try {
+      (void)row.serialize(data);
+      SPDLOG_ERROR("LIST_STRING accepted an oversized string element");
+      exit(1);
+    } catch (const std::invalid_argument&) {
+    }
+  }
+
+  SPDLOG_INFO("[Passed] test_bytes_row_oversized_lists_rejected");
 }
 
 void test_basic_workflow() {
@@ -585,6 +631,7 @@ void test_paged_store_scan() {
 
 int main() {
   init_logging("INFO", "stdout", "[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
+  test_bytes_row_oversized_lists_rejected();
   test_basic_workflow();
   test_routed_filter_projection_edge_cases();
   test_path_bitmap_lifecycle_and_reload();
