@@ -644,6 +644,7 @@ class VLMConfig(BaseModel):
                 credential.max_tokens if credential.max_tokens is not None else self.max_tokens
             ),
             "api_version": credential.api_version,
+            "max_concurrent": self.max_concurrent,
             "media": self.media.model_dump(),
         }
 
@@ -675,6 +676,7 @@ class VLMConfig(BaseModel):
             "thinking": self.thinking,
             "max_tokens": self.max_tokens,
             "api_version": self.api_version,
+            "max_concurrent": self.max_concurrent,
             "media": self.media.model_dump(),
         }
 
