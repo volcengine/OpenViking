@@ -233,6 +233,17 @@ class FeishuDocument:
     media_download_extras: _MediaDownloadExtras = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class _FeishuWikiTreeNode:
+    """Wiki node tree identity plus its backing content object."""
+
+    wiki_node_token: str
+    space_id: str
+    title: str
+    obj_type: Optional[str] = None
+    obj_token: Optional[str] = None
+
+
 class FeishuAccessor(DataAccessor):
     """
     Accessor for Feishu/Lark cloud documents.
@@ -437,6 +448,52 @@ class FeishuAccessor(DataAccessor):
                         "feishu_doc_type": doc_type,
                         "feishu_token": token,
                         "original_filename": _safe_path_segment(folder_name, fallback=token),
+                        "feishu_folder_skipped_items": skipped_items,
+                    },
+                    is_temporary=True,
+                )
+
+            if doc_type == "wiki" and bool(kwargs.get("feishu_recursive", False)):
+                temp_dir = Path(tempfile.mkdtemp(prefix="ov_feishu_wiki_"))
+                skipped_items: list[dict[str, Any]] = []
+                try:
+                    root = await asyncio.to_thread(
+                        self._resolve_wiki_tree_root,
+                        source_str,
+                        feishu_access_token=feishu_access_token,
+                    )
+                    root_dir = await self._materialize_wiki_tree_node(
+                        root,
+                        temp_dir,
+                        feishu_access_token=feishu_access_token,
+                        skipped_items=skipped_items,
+                        strict=bool(kwargs.get("strict", False)),
+                        visited=set(),
+                        depth=0,
+                        max_depth=self._positive_int_option(
+                            kwargs.get("feishu_max_depth"),
+                            default=20,
+                        ),
+                        max_nodes_state=[0],
+                        max_nodes=self._positive_int_option(
+                            kwargs.get("feishu_max_nodes"),
+                            default=5000,
+                        ),
+                    )
+                except Exception:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    raise
+                return LocalResource(
+                    path=root_dir,
+                    source_type=SourceType.FEISHU,
+                    original_source=source_str,
+                    meta={
+                        "feishu_doc_type": "wiki",
+                        "feishu_token": token,
+                        "feishu_title": root.title,
+                        "original_filename": _title_as_filename(root.title),
+                        "_cleanup_path": str(temp_dir),
+                        "wiki_resolved": True,
                         "feishu_folder_skipped_items": skipped_items,
                     },
                     is_temporary=True,
@@ -897,6 +954,205 @@ class FeishuAccessor(DataAccessor):
         finally:
             seen.discard(folder_token)
 
+    async def _materialize_wiki_tree_node(
+        self,
+        node: _FeishuWikiTreeNode,
+        target_dir: Path,
+        *,
+        feishu_access_token: Optional[str] = None,
+        skipped_items: Optional[list[dict[str, Any]]] = None,
+        strict: bool = False,
+        visited: Optional[set[str]] = None,
+        depth: int = 0,
+        max_depth: int = 20,
+        max_nodes_state: Optional[list[int]] = None,
+        max_nodes: int = 5000,
+    ) -> Path:
+        """Expand a Feishu Wiki node tree into a local directory tree."""
+        target_dir.mkdir(parents=True, exist_ok=True)
+        seen = visited if visited is not None else set()
+        if node.wiki_node_token in seen:
+            logger.warning(
+                "[FeishuAccessor] Skipping recursive Wiki node %s",
+                node.wiki_node_token,
+            )
+            return target_dir
+        seen.add(node.wiki_node_token)
+        try:
+            state = max_nodes_state if max_nodes_state is not None else [0]
+            state[0] += 1
+            if state[0] > max_nodes:
+                error = RuntimeError(f"Feishu Wiki node limit exceeded: {max_nodes}")
+                self._record_skipped_wiki_node(
+                    skipped_items,
+                    node=node,
+                    target_dir=target_dir,
+                    error=error,
+                )
+                if strict:
+                    raise error
+                return target_dir
+
+            children: List[_FeishuWikiTreeNode] = []
+            children_known = False
+            if depth < max_depth:
+                try:
+                    children = await asyncio.to_thread(
+                        self._list_wiki_node_children,
+                        node.space_id,
+                        node.wiki_node_token,
+                        feishu_access_token=feishu_access_token,
+                    )
+                    children_known = True
+                except Exception as exc:
+                    self._record_skipped_wiki_node(
+                        skipped_items,
+                        node=node,
+                        target_dir=target_dir,
+                        error=exc,
+                    )
+                    if strict:
+                        raise
+
+            content_dir = target_dir
+            if children or not children_known:
+                content_dir = self._unique_child_path(
+                    target_dir,
+                    self._wiki_node_dir_name(node),
+                )
+                content_dir.mkdir(parents=True, exist_ok=True)
+
+            try:
+                content_path = await self._write_wiki_node_content(
+                    node,
+                    content_dir,
+                    feishu_access_token=feishu_access_token,
+                )
+            except Exception as exc:
+                self._record_skipped_wiki_node(
+                    skipped_items,
+                    node=node,
+                    target_dir=content_dir,
+                    error=exc,
+                )
+                if strict:
+                    raise
+                content_path = None
+
+            for child in children:
+                await self._materialize_wiki_tree_node(
+                    child,
+                    content_dir,
+                    feishu_access_token=feishu_access_token,
+                    skipped_items=skipped_items,
+                    strict=strict,
+                    visited=seen,
+                    depth=depth + 1,
+                    max_depth=max_depth,
+                    max_nodes_state=state,
+                    max_nodes=max_nodes,
+                )
+            return content_dir if children or not children_known else content_path or target_dir
+        finally:
+            seen.discard(node.wiki_node_token)
+
+    async def _write_wiki_node_content(
+        self,
+        node: _FeishuWikiTreeNode,
+        target_dir: Path,
+        *,
+        feishu_access_token: Optional[str] = None,
+    ) -> Optional[Path]:
+        doc_type = self._normalize_wiki_obj_type(node.obj_type)
+        if not doc_type or not node.obj_token:
+            return None
+
+        if doc_type == "file":
+            content, content_type, downloaded_name = await asyncio.to_thread(
+                self._download_drive_file,
+                node.obj_token,
+                feishu_access_token=feishu_access_token,
+                filename_hint=node.title,
+            )
+            file_path = self._unique_child_path(
+                target_dir,
+                self._drive_file_name(
+                    node.obj_token,
+                    content,
+                    content_type,
+                    filename_hint=downloaded_name or node.title,
+                ),
+            )
+            file_path.write_bytes(content)
+            return file_path
+
+        if doc_type not in self._DOC_TYPE_HANDLERS:
+            raise ValueError(f"Unsupported Feishu Wiki node object type: {node.obj_type}")
+
+        doc = await self._fetch_document(
+            self._build_feishu_doc_url(doc_type, node.obj_token),
+            feishu_access_token=feishu_access_token,
+        )
+        markdown_content, downloaded_images = await asyncio.to_thread(
+            self._resolve_image_refs,
+            doc.markdown_content,
+            feishu_access_token=feishu_access_token,
+            media_download_extras=doc.media_download_extras,
+        )
+        markdown_path = self._unique_child_path(
+            target_dir,
+            self._markdown_file_name(node.title),
+        )
+        markdown_path.write_text(markdown_content, encoding="utf-8")
+        for rel_path, image_bytes in downloaded_images.items():
+            image_path = markdown_path.parent / rel_path
+            image_path.parent.mkdir(parents=True, exist_ok=True)
+            image_path.write_bytes(image_bytes)
+        return markdown_path
+
+    @staticmethod
+    def _record_skipped_wiki_node(
+        skipped_items: Optional[list[dict[str, Any]]],
+        *,
+        node: _FeishuWikiTreeNode,
+        target_dir: Path,
+        error: Exception,
+    ) -> None:
+        message = str(error).replace("\n", " ")
+        logger.warning(
+            "[FeishuAccessor] Skipping Wiki node %s under %s: %s",
+            node.wiki_node_token,
+            target_dir,
+            message,
+        )
+        if skipped_items is None:
+            return
+        token = node.obj_token or node.wiki_node_token
+        skipped_items.append(
+            {
+                "path": str(target_dir / _safe_path_segment(node.title or token, fallback=token)),
+                "name": node.title or token,
+                "type": node.obj_type or "wiki_node",
+                "token": token,
+                "wiki_node_token": node.wiki_node_token,
+                "reason": message,
+            }
+        )
+
+    @staticmethod
+    def _wiki_node_dir_name(node: _FeishuWikiTreeNode) -> str:
+        if node.obj_type == "file" and Path(node.title).suffix:
+            return Path(node.title).stem
+        return node.title
+
+    @staticmethod
+    def _positive_int_option(value: Any, *, default: int) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return default
+        return parsed if parsed > 0 else default
+
     @staticmethod
     def _record_skipped_drive_item(
         skipped_items: Optional[list[dict[str, Any]]],
@@ -1085,7 +1341,7 @@ class FeishuAccessor(DataAccessor):
             .token_types({token_type})
             .build()
         )
-        response = self._call_api(client.request, raw_req, feishu_access_token)
+        response = self._call_raw_api(client, raw_req, feishu_access_token)
         if not response.success():
             _raise_from_lark_response(
                 response,
@@ -1291,19 +1547,65 @@ class FeishuAccessor(DataAccessor):
         option = self._user_request_option(feishu_access_token)
         return method(request) if option is None else method(request, option)
 
+    @classmethod
+    def _raw_feishu_error(cls, raw_resp: Any) -> Optional[Tuple[int, str]]:
+        content_type = cls._response_content_type(raw_resp)
+        if not content_type or "application/json" not in content_type.lower():
+            return None
+        content = getattr(raw_resp, "content", None)
+        if not content:
+            return None
+        if isinstance(content, bytes):
+            try:
+                content = content.decode("utf-8")
+            except UnicodeDecodeError:
+                return None
+        if not isinstance(content, str):
+            return None
+        try:
+            payload = json.loads(content)
+        except (TypeError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        code = payload.get("code")
+        if not isinstance(code, int) or code == 0:
+            return None
+        msg = payload.get("msg") or payload.get("message") or "Feishu API request failed"
+        return code, str(msg)
+
+    def _call_raw_api(self, client, request, feishu_access_token: Optional[str] = None):
+        """Execute a raw Lark request without JSON-decoding successful file bodies."""
+        from lark_oapi.core.http import Transport
+        from lark_oapi.core.model import BaseResponse, RequestOption
+        from lark_oapi.core.token import verify
+
+        option = self._user_request_option(feishu_access_token) or RequestOption()
+        verify(client._config, request, option)
+        raw_resp = Transport.execute(client._config, request, option)
+
+        response = BaseResponse()
+        feishu_error = self._raw_feishu_error(raw_resp)
+        if feishu_error:
+            response.code, response.msg = feishu_error
+        elif 200 <= raw_resp.status_code < 300:
+            response.code = 0
+        else:
+            response.code = raw_resp.status_code
+            content = getattr(raw_resp, "content", b"")
+            if isinstance(content, bytes):
+                content = content.decode("utf-8", errors="replace")
+            response.msg = str(content)
+        response.raw = raw_resp
+        return response
+
     # ========== Wiki Resolution ==========
 
-    def _resolve_wiki_node(
+    def _fetch_wiki_node(
         self,
         token: str,
         feishu_access_token: Optional[str] = None,
-    ) -> Tuple[str, str, Optional[str]]:
-        """
-        Resolve wiki token to actual document type, token, and title.
-
-        Returns:
-            (doc_type, obj_token, title)
-        """
+    ) -> Any:
         from lark_oapi.api.wiki.v2 import GetNodeSpaceRequest
 
         client = self._get_client(use_user_token=bool(feishu_access_token))
@@ -1319,15 +1621,154 @@ class FeishuAccessor(DataAccessor):
                 operation=f"resolve wiki node {token}",
                 resource=token,
             )
-        node = response.data.node
-        obj_type = node.obj_type or ""
-        obj_token = node.obj_token or ""
-        title = node.title
+        return response.data.node
+
+    def _resolve_wiki_node(
+        self,
+        token: str,
+        feishu_access_token: Optional[str] = None,
+    ) -> Tuple[str, str, Optional[str]]:
+        """
+        Resolve wiki token to actual document type, token, and title.
+
+        Returns:
+            (doc_type, obj_token, title)
+        """
+        node = self._fetch_wiki_node(token, feishu_access_token)
+        obj_type = _getattr_safe(node, "obj_type", "") or ""
+        obj_token = _getattr_safe(node, "obj_token", "") or ""
+        title = _getattr_safe(node, "title", None)
 
         # Normalize type names
-        doc_type = self._WIKI_TYPE_MAP.get(obj_type, obj_type)
+        doc_type = self._normalize_wiki_obj_type(obj_type) or ""
 
         return doc_type, obj_token, title
+
+    def _resolve_wiki_tree_root(
+        self,
+        url: str,
+        *,
+        feishu_access_token: Optional[str] = None,
+    ) -> _FeishuWikiTreeNode:
+        doc_type, token = self._parse_feishu_url(url)
+        if doc_type != "wiki":
+            raise ValueError(f"Feishu recursive import only supports wiki URLs, got: {doc_type}")
+        node = self._fetch_wiki_node(token, feishu_access_token)
+        return self._wiki_tree_node_from_api_node(node, fallback_token=token)
+
+    def _fetch_wiki_node_children_page(
+        self,
+        space_id: str,
+        parent_node_token: str,
+        *,
+        feishu_access_token: Optional[str] = None,
+        page_token: Optional[str] = None,
+        page_size: int = 50,
+    ) -> tuple[List[Any], bool, Optional[str]]:
+        import lark_oapi as lark
+
+        if not space_id:
+            raise ValueError(f"Feishu Wiki node {parent_node_token} has no space_id")
+
+        client = self._get_client(use_user_token=bool(feishu_access_token))
+        token_type = (
+            lark.AccessTokenType.USER if feishu_access_token else lark.AccessTokenType.TENANT
+        )
+        raw_req = (
+            lark.BaseRequest.builder()
+            .http_method(lark.HttpMethod.GET)
+            .uri(f"/open-apis/wiki/v2/spaces/{space_id}/nodes")
+            .token_types({token_type})
+            .build()
+        )
+        raw_req.add_query("parent_node_token", parent_node_token)
+        raw_req.add_query("page_size", page_size)
+        if page_token:
+            raw_req.add_query("page_token", page_token)
+
+        response = self._call_api(client.request, raw_req, feishu_access_token)
+        if not response.success():
+            _raise_from_lark_response(
+                response,
+                operation=f"list Wiki node children {parent_node_token}",
+                resource=parent_node_token,
+            )
+
+        data = self._raw_response_data(response)
+        items = _getattr_safe(data, "items", None) or _getattr_safe(data, "nodes", None) or []
+        has_more = bool(_getattr_safe(data, "has_more", False))
+        next_page_token = _getattr_safe(data, "page_token", None) or _getattr_safe(
+            data,
+            "next_page_token",
+            None,
+        )
+        return list(items), has_more, next_page_token
+
+    def _list_wiki_node_children(
+        self,
+        space_id: str,
+        wiki_node_token: str,
+        *,
+        feishu_access_token: Optional[str] = None,
+    ) -> List[_FeishuWikiTreeNode]:
+        children: List[_FeishuWikiTreeNode] = []
+        page_token = None
+        while True:
+            items, has_more, page_token = self._fetch_wiki_node_children_page(
+                space_id,
+                wiki_node_token,
+                feishu_access_token=feishu_access_token,
+                page_token=page_token,
+            )
+            for item in items:
+                children.append(
+                    self._wiki_tree_node_from_api_node(
+                        item,
+                        fallback_token=wiki_node_token,
+                        fallback_space_id=space_id,
+                    )
+                )
+            if not has_more:
+                break
+            if not page_token:
+                raise RuntimeError(
+                    f"Feishu returned more Wiki children for {wiki_node_token} "
+                    "without a page token"
+                )
+        return children
+
+    @classmethod
+    def _wiki_tree_node_from_api_node(
+        cls,
+        node: Any,
+        *,
+        fallback_token: str,
+        fallback_space_id: Optional[str] = None,
+    ) -> _FeishuWikiTreeNode:
+        node_token = str(
+            _getattr_safe(node, "node_token", None)
+            or _getattr_safe(node, "token", None)
+            or fallback_token
+        )
+        space_id = str(_getattr_safe(node, "space_id", None) or fallback_space_id or "")
+        title = str(_getattr_safe(node, "title", None) or node_token)
+        raw_obj_type = _getattr_safe(node, "obj_type", None)
+        obj_type = cls._normalize_wiki_obj_type(str(raw_obj_type)) if raw_obj_type else None
+        obj_token = _getattr_safe(node, "obj_token", None)
+        return _FeishuWikiTreeNode(
+            wiki_node_token=node_token,
+            space_id=space_id,
+            title=title,
+            obj_type=obj_type,
+            obj_token=str(obj_token) if obj_token else None,
+        )
+
+    @classmethod
+    def _normalize_wiki_obj_type(cls, obj_type: Optional[str]) -> Optional[str]:
+        if not obj_type:
+            return None
+        value = str(obj_type).lower()
+        return cls._WIKI_TYPE_MAP.get(value, value)
 
     # ========== Legacy Doc Parsing ==========
 
@@ -1760,18 +2201,10 @@ class FeishuAccessor(DataAccessor):
             return None
         return content, self._response_content_type(raw)
 
-    @staticmethod
-    def _response_content_type(raw) -> Optional[str]:
+    @classmethod
+    def _response_content_type(cls, raw) -> Optional[str]:
         """Best-effort extraction of the Content-Type header from a lark raw response."""
-        headers = getattr(raw, "headers", None)
-        if not headers:
-            return None
-        # lark's raw.headers may be a plain dict or a case-insensitive mapping.
-        try:
-            get = headers.get
-        except AttributeError:
-            return None
-        return get("Content-Type") or get("content-type")
+        return cls._response_header(raw, "content-type")
 
     def _resolve_image_refs(
         self,
