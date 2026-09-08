@@ -298,6 +298,8 @@ ov import ./exports/my-project.ovpack viking://resources/imported/ --vector-mode
 
 备份是在线逐文件读取，不保证同一时刻的原子快照。需要严格一致性时，调用方应在备份窗口暂停写入。
 
+Watch 任务调度是实例本地的，不会随备份迁移：备份会排除其控制文件，restore 时若旧备份包中含有也会跳过。
+
 ```
 POST /api/v1/pack/backup
 ```

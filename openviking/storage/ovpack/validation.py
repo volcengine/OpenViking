@@ -8,6 +8,7 @@ import json
 import zipfile
 from typing import Any
 
+from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.storage.ovpack.format import (
     OVPACK_DENSE_PATH,
     OVPACK_INDEX_RECORDS_PATH,
@@ -30,6 +31,9 @@ from openviking.storage.ovpack.manifest import (
 )
 from openviking.storage.ovpack.policy import validate_import_target_uri
 from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def base_name_from_entries(infolist: list[zipfile.ZipInfo]) -> str:
@@ -484,8 +488,20 @@ def validate_manifest_content(
 
 
 def validated_import_members(
-    infolist: list[zipfile.ZipInfo], base_name: str, root_uri: str
+    infolist: list[zipfile.ZipInfo],
+    base_name: str,
+    root_uri: str,
+    *,
+    skip_watch_control_files: bool = False,
 ) -> list[tuple[zipfile.ZipInfo, str, str, str]]:
+    """Validate and classify every zip member for import/restore.
+
+    ``skip_watch_control_files`` is used by backup restore: backup packs
+    produced by older versions may carry ``viking://resources/.watch_tasks.json``
+    and friends, which are instance-local scheduling state and cannot be
+    imported. Skipping them (instead of rejecting the whole pack) lets those
+    packs round-trip.
+    """
     members: list[tuple[zipfile.ZipInfo, str, str, str]] = []
     for info in infolist:
         zip_path = info.filename
@@ -516,6 +532,9 @@ def validated_import_members(
             members.append((info, safe_zip_path, kind, rel_path))
             continue
         target_uri = join_uri(root_uri, rel_path)
+        if skip_watch_control_files and is_watch_task_control_uri(target_uri):
+            logger.warning(f"[ovpack] Skipping watch task control file: {target_uri}")
+            continue
         validate_import_target_uri(target_uri)
         members.append((info, safe_zip_path, kind, rel_path))
 
