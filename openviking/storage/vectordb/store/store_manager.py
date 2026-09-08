@@ -227,6 +227,14 @@ class StoreManager:
         """
         return list(self.iter_all_cands_data())
 
+    def iter_all_cands_fields(self) -> Iterator[Tuple[int, str]]:
+        """Scan labels and scalar fields without decoding stored vectors."""
+        for _, bytes_data in self.storage.iter_all(StoreManager.CandsTable):
+            yield (
+                CandidateData.bytes_row.deserialize_field(bytes_data, "label"),
+                CandidateData.bytes_row.deserialize_field(bytes_data, "fields"),
+            )
+
     def iter_all_cands_data(self) -> Iterator[CandidateData]:
         """Iterate candidates without retaining deserialized full tables.
 
