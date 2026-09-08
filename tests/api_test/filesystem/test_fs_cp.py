@@ -69,10 +69,10 @@ class TestFsCp:
             api_client.fs_rm(source, recursive=True)
             api_client.fs_rm(target, recursive=True)
 
-    def test_cp_rejects_existing_target_without_changing_either_file(self, api_client):
+    def test_cp_overwrites_existing_target_and_preserves_source(self, api_client):
         suffix = uuid.uuid4().hex[:8]
-        source = f"viking://resources/cp-conflict-source-{suffix}.md"
-        target = f"viking://resources/cp-conflict-target-{suffix}.md"
+        source = f"viking://resources/cp-overwrite-source-{suffix}.md"
+        target = f"viking://resources/cp-overwrite-target-{suffix}.md"
         try:
             assert (
                 api_client.fs_write(source, "source remains", mode="create", wait=True).status_code
@@ -84,9 +84,9 @@ class TestFsCp:
             )
 
             copied = api_client.fs_cp(source, target)
-            assert copied.status_code == 409, copied.text
+            assert copied.status_code == 200, copied.text
             assert "source remains" in api_client.fs_read(source).json().get("result", "")
-            assert "target remains" in api_client.fs_read(target).json().get("result", "")
+            assert "source remains" in api_client.fs_read(target).json().get("result", "")
         finally:
             api_client.fs_rm(source)
             api_client.fs_rm(target)

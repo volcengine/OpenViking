@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
+from openviking.models.embedder.base import query_embed_cache_var
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
 from openviking.retrieve.context_assembler import (
     CATEGORY_KEYS,
@@ -430,6 +431,10 @@ async def search(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Semantic search with optional session context."""
+    # Install the request-scoped query embedding cache before any search work
+    # spawns tasks: every find fanned out below shares this dict and reuses the
+    # first embed of a given query text.
+    query_embed_cache_var.set({})
     service = get_service()
     actual_limit = _resolve_search_limit(request.limit, request.node_limit)
     effective_filter = _resolve_search_filter(

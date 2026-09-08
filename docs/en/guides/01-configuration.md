@@ -1470,7 +1470,7 @@ Supports cloud-deployed VikingDB on Volcengine
 
 ##### ACL schema
 
-ACL data exists only in the context collection. In addition to `acl_mode: string` (`none` or `inherit`), add these scalar-indexed `list<string>` fields:
+ACL data exists only in the context collection. In addition to `acl_mode: string` (`none`, `inherit`, or `restricted`), add these scalar-indexed `list<string>` fields:
 
 ```text
 acl_direct_grants

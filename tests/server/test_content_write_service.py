@@ -17,6 +17,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils import MemoryFileUtils
 from openviking.session.memory.utils.content_visibility import visible_content
+from openviking.storage.acl import AclMode
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
@@ -128,6 +129,10 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
         user=UserIdentifier(admin.account_id, "outsider"),
         role=Role.USER,
     )
+    late_reader = RequestContext(
+        user=UserIdentifier(admin.account_id, "late_reader"),
+        role=Role.USER,
+    )
     parent_uri = "viking://resources/append_plain"
     auto_protected_dir = "viking://resources/auto_protected"
     uri = "viking://resources/append_plain/journal.md"
@@ -193,6 +198,70 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
     child_acl = await service.fs.get_acl(children[0], ctx=creator)
     assert child_acl["direct_entries"] == []
     assert child_acl["inherited_entries"] == [*inherited_entries, creator_entry]
+
+    restricted_acl = await service.fs.set_acl(
+        import_root,
+        None,
+        ctx=creator,
+        acl_mode=AclMode.RESTRICTED,
+    )
+    assert restricted_acl["acl_mode"] == "restricted"
+    assert restricted_acl["inherited_entries"] == inherited_entries
+    assert restricted_acl["effective_entries"] == [creator_entry]
+    child_acl = await service.fs.get_acl(children[0], ctx=creator)
+    assert child_acl["inherited_entries"] == [creator_entry]
+    with pytest.raises(PermissionDeniedError):
+        await service.fs.ls(import_root, ctx=reader, simple=True)
+
+    refreshed_inherited_entries = [
+        *inherited_entries,
+        {"principal": "user:late_reader", "level": "read"},
+    ]
+    await service.fs.set_acl(
+        parent_uri,
+        [
+            {"principal": "group:readers", "level": "read"},
+            {"principal": "group:writers", "level": "write"},
+            {"principal": "user:late_reader", "level": "read"},
+        ],
+        ctx=admin,
+    )
+    restricted_acl = await service.fs.get_acl(import_root, ctx=creator)
+    assert restricted_acl["inherited_entries"] == refreshed_inherited_entries
+    assert restricted_acl["effective_entries"] == [creator_entry]
+    child_acl = await service.fs.get_acl(children[0], ctx=creator)
+    assert child_acl["inherited_entries"] == [creator_entry]
+    with pytest.raises(PermissionDeniedError):
+        await service.fs.ls(import_root, ctx=late_reader, simple=True)
+
+    inherited_acl = await service.fs.set_acl(
+        import_root,
+        None,
+        ctx=creator,
+        acl_mode=AclMode.INHERIT,
+    )
+    assert inherited_acl["acl_mode"] == "inherit"
+    assert inherited_acl["inherited_entries"] == refreshed_inherited_entries
+    assert await service.fs.ls(import_root, ctx=late_reader, simple=True) == children
+
+    await service.fs.set_acl(import_root, [], acl_mode=AclMode.RESTRICTED, ctx=creator)
+    child_acl = await service.fs.get_acl(children[0], ctx=admin)
+    assert child_acl["acl_mode"] == "inherit"
+    assert child_acl["effective_entries"] == []
+    with pytest.raises(PermissionDeniedError):
+        await service.fs.ls(import_root, ctx=late_reader, simple=True)
+    with pytest.raises(PermissionDeniedError):
+        await service.viking_fs.read_file(children[0], ctx=late_reader)
+
+    removed_acl = await service.fs.delete_acl(import_root, ctx=admin)
+    assert removed_acl["acl_mode"] == "inherit"
+    assert removed_acl["direct_entries"] == []
+    assert removed_acl["inherited_entries"] == refreshed_inherited_entries
+    with pytest.raises(PermissionDeniedError):
+        await service.fs.get_acl(import_root, ctx=creator)
+    assert (await service.fs.get_acl(import_root, ctx=admin))["effective_entries"] == (
+        refreshed_inherited_entries
+    )
 
     await service.fs.write(uri, content="line2\n", ctx=creator, mode="append", wait=True)
 

@@ -9,7 +9,7 @@ import uuid
 import zipfile
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Type, Union
+from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Type, Union
 from urllib.parse import quote
 
 import httpx
@@ -1314,10 +1314,23 @@ class AsyncHTTPClient:
         response = await self._http.get("/api/v1/acl", params={"uri": VikingURI.normalize(uri)})
         return self._handle_response_data(response).get("result", {})
 
-    async def acl_set(self, uri: str, entries: List[Dict[str, str]]) -> Dict[str, Any]:
+    async def acl_set(
+        self,
+        uri: str,
+        entries: Optional[List[Dict[str, str]]] = None,
+        *,
+        acl_mode: Optional[Literal["inherit", "restricted"]] = None,
+    ) -> Dict[str, Any]:
+        if entries is None and acl_mode is None:
+            raise ValueError("Either entries or acl_mode must be provided")
+        payload: Dict[str, Any] = {"uri": VikingURI.normalize(uri)}
+        if entries is not None:
+            payload["entries"] = entries
+        if acl_mode is not None:
+            payload["acl_mode"] = acl_mode
         response = await self._http.put(
             "/api/v1/acl",
-            json={"uri": VikingURI.normalize(uri), "entries": entries},
+            json=payload,
         )
         return self._handle_response_data(response).get("result", {})
 
@@ -2536,8 +2549,14 @@ class SyncHTTPClient:
     def acl_get(self, uri: str) -> Dict[str, Any]:
         return run_async(self._async_client.acl_get(uri))
 
-    def acl_set(self, uri: str, entries: List[Dict[str, str]]) -> Dict[str, Any]:
-        return run_async(self._async_client.acl_set(uri, entries))
+    def acl_set(
+        self,
+        uri: str,
+        entries: Optional[List[Dict[str, str]]] = None,
+        *,
+        acl_mode: Optional[Literal["inherit", "restricted"]] = None,
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.acl_set(uri, entries, acl_mode=acl_mode))
 
     def acl_grant(self, uri: str, principal: str, level: str) -> Dict[str, Any]:
         return run_async(self._async_client.acl_grant(uri, principal, level))

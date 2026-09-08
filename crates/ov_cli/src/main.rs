@@ -296,8 +296,11 @@ enum AclCommands {
     },
     Set {
         uri: String,
-        #[arg(long = "entry", required = true)]
+        #[arg(long = "entry")]
         entries: Vec<String>,
+        /// Whether this node uses inherited grants or direct grants only
+        #[arg(long, value_parser = ["inherit", "restricted"])]
+        acl_mode: Option<String>,
     },
     Grant {
         uri: String,

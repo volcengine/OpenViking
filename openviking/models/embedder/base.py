@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 import asyncio
+import contextvars
 import logging
 import random
 import time
@@ -26,6 +27,26 @@ from openviking_cli.utils import get_logger
 
 T = TypeVar("T")
 logger = get_logger(__name__)
+
+# Request-scoped cache for query embeddings. A request handler installs the
+# scope once by setting a fresh dict; every task spawned inside that request
+# (the context assembler fans finds out via asyncio.gather) then shares the
+# same dict object by reference, so repeated embeddings of the same query text
+# within one request are served from the first in-flight embed.
+# The dedup relies on the synchronous check-create-store block below running on
+# a single event loop; if an embed path ever moves into a thread pool, that
+# invariant breaks and the cache would need a lock.
+query_embed_cache_var: contextvars.ContextVar[Optional[Dict[Any, "asyncio.Task"]]] = (
+    contextvars.ContextVar("ov_query_embed_cache", default=None)
+)
+
+
+def _query_cache_key(embedder: "EmbedderBase", embedding_input: "EmbeddingInput") -> tuple:
+    """Stable cache key for a prepared embedding input and its embedder."""
+    if isinstance(embedding_input, str):
+        return (embedder.model_name, embedding_input)
+    return (embedder.model_name, repr(embedding_input))
+
 
 # A multimodal embedding input is a list of content parts, e.g.
 # [{"type": "text", "text": "..."}, {"type": "image_url", "image_url": {"url": "..."}}]
@@ -90,8 +111,42 @@ async def embed_compat(
 
     stage = "embed_query" if is_query else "embed_resource"
     embedding_input = embedder.prepare_embedding_input(content)
+    if is_query:
+        cached = await _embed_from_request_cache(embedder, embedding_input, stage)
+        if cached is not None:
+            return cached
     with bind_telemetry_stage(stage):
         return await embedder.embed_async(embedding_input, is_query=is_query)
+
+
+async def _embed_from_request_cache(
+    embedder: "EmbedderBase", embedding_input: "EmbeddingInput", stage: str
+) -> Optional["EmbedResult"]:
+    """Serve a query embed from the request-scoped cache, deduplicating in-flight embeds.
+
+    Returns None when the request scope is not installed, so the caller falls back
+    to the plain embed path.
+    """
+    from openviking.telemetry import bind_telemetry_stage
+
+    cache = query_embed_cache_var.get()
+    if cache is None:
+        return None
+    key = _query_cache_key(embedder, embedding_input)
+    pending = cache.get(key)
+    if pending is None:
+        # Create the task synchronously and store it before the first await:
+        # sibling tasks of the same request then see this entry and await the
+        # same in-flight embed instead of starting their own.
+        with bind_telemetry_stage(stage):
+            pending = asyncio.create_task(embedder.embed_async(embedding_input, is_query=True))
+        cache[key] = pending
+    try:
+        return await pending
+    except Exception:
+        # A failed embed must not poison the rest of the request.
+        cache.pop(key, None)
+        raise
 
 
 def truncate_and_normalize(embedding: List[float], dimension: Optional[int]) -> List[float]:

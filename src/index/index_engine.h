@@ -25,7 +25,7 @@ class IndexEngine {
 
   int rebuild_scalar_index(
       const std::string& scalar_index_json,
-      const std::vector<AddDataRequest>& data_list);
+      const std::function<bool(std::vector<AddDataRequest>&)>& read_batch);
 
   SearchResult search(const SearchRequest& req);
 

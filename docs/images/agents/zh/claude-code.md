@@ -52,7 +52,7 @@
 |---|---|
 | 插件未激活 | 重跑安装，或检查 `~/.openviking/ovcli.conf` |
 | 召回为空 | `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
-| 401 / 403 | 重新粘贴 API Key |
+| 401 / 403 | 检查鉴权凭据 |
 | 需要日志 | `OPENVIKING_DEBUG=1`，看 `~/.openviking/logs/cc-hooks.log` |
 
 ## 参考

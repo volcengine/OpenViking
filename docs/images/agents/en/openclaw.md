@@ -54,7 +54,7 @@
 | Problem | Fix |
 |---|---|
 | Plugin not active | Re-run Install, then `openclaw gateway restart` |
-| 401 / 403 | Paste the API key again |
+| 401 / 403 | Refresh credentials |
 
 ## Reference
 

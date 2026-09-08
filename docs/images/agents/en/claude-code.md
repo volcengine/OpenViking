@@ -52,7 +52,7 @@ Because Claude Code may block installation scripts from unknown sources, automat
 |---|---|
 | Plugin is not active | Re-run Install, or check `~/.openviking/ovcli.conf` |
 | Recall is empty | `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
-| 401 / 403 | Paste the API key again |
+| 401 / 403 | Refresh credentials |
 | Need logs | `OPENVIKING_DEBUG=1` and `~/.openviking/logs/cc-hooks.log` |
 
 ## Reference
