@@ -35,6 +35,64 @@ void expect_filter_projection(IndexEngine& engine, const std::string& dsl,
   }
 }
 
+void test_label_in_missing_label_rejected() {
+  SPDLOG_INFO("[Running] test_label_in_missing_label_rejected...");
+
+  const std::string config = R"({
+        "CollectionName": "label_in_missing_label_rejected",
+        "IndexName": "default",
+        "VectorIndex": {
+            "IndexType": "flat",
+            "ElementCount": 0,
+            "MaxElementCount": 8,
+            "Dimension": 1,
+            "Distance": "l2",
+            "Quant": "float"
+        },
+        "ScalarIndex": [
+            {"FieldName": "tag", "FieldType": "int64"}
+        ]
+    })";
+
+  IndexEngine engine(config);
+  if (!engine.is_valid()) {
+    SPDLOG_ERROR("LabelIn engine initialization failed");
+    exit(1);
+  }
+
+  AddDataRequest first;
+  first.label = 101;
+  first.vector = {0.1f};
+  AddDataRequest second;
+  second.label = 102;
+  second.vector = {0.2f};
+  if (engine.add_data({first, second}) != 0) {
+    SPDLOG_ERROR("LabelIn test data add failed");
+    exit(1);
+  }
+
+  if (engine.set_filter_layout({101, 102}) != 0) {
+    SPDLOG_ERROR("LabelIn filter layout registration failed");
+    exit(1);
+  }
+
+  const auto valid = engine.evaluate_filter(R"({"op":"label_in","labels":[101]})");
+  if (valid.eligible_count != 1 || valid.bitset_words.size() != 1 ||
+      valid.bitset_words[0] != 1U) {
+    SPDLOG_ERROR("LabelIn valid case was incorrect");
+    exit(1);
+  }
+
+  try {
+    (void)engine.evaluate_filter(R"({"op":"label_in","labels":[101,999]})");
+    SPDLOG_ERROR("LabelIn accepted a missing label");
+    exit(1);
+  } catch (const std::runtime_error&) {
+  }
+
+  SPDLOG_INFO("[Passed] test_label_in_missing_label_rejected");
+}
+
 void test_basic_workflow() {
   SPDLOG_INFO("[Running] test_basic_workflow...");
 
@@ -585,6 +643,7 @@ void test_paged_store_scan() {
 
 int main() {
   init_logging("INFO", "stdout", "[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
+  test_label_in_missing_label_rejected();
   test_basic_workflow();
   test_routed_filter_projection_edge_cases();
   test_path_bitmap_lifecycle_and_reload();

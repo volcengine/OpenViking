@@ -720,18 +720,13 @@ BitmapPtr RangeOp::calc_bitmap(FieldBitmapGroupSetPtr field_group_set_ptr,
     return calc_self_bitmap(field_group_set_ptr);
   } else {
     // has pres
+    BitmapPtr temp = calc_self_bitmap(field_group_set_ptr);
+    if (!temp) {
+      return nullptr;
+    }
     if (on_res_op == "and") {
-      BitmapPtr temp = calc_self_bitmap(field_group_set_ptr);
-      if (!temp) {
-        return nullptr;
-      }
       pres->Intersect(temp.get());
     } else if (on_res_op == "or") {
-      BitmapPtr temp = calc_self_bitmap(field_group_set_ptr);
-      if (!temp) {
-        // OR with empty condition returns original result
-        return pres;
-      }
       pres->Union(temp.get());
     } else {
       return nullptr;
@@ -914,55 +909,50 @@ int LabelInOp::load_json_doc(const JsonValue& json_doc) {
 
 BitmapPtr LabelInOp::calc_self_bitmap(
     FieldBitmapGroupSetPtr field_group_set_ptr) {
-  BitmapPtr pres = std::make_shared<Bitmap>();
+  if (label_u64_.empty()) {
+    return std::make_shared<Bitmap>();
+  }
   std::vector<uint32_t> offsets;
-  if (!label_u64_.empty()) {
-    try {
-      if (!field_group_set_ptr->convert_label_u64_to_offset(label_u64_,
-                                                            offsets)) {
-        return nullptr;
-      }
-    } catch (const std::exception& e) {
-      SPDLOG_ERROR("LabelInOp: convert_label_u64_to_offset exception: {}",
-                   e.what());
-      return nullptr;
-    } catch (...) {
-      SPDLOG_ERROR("LabelInOp: convert_label_u64_to_offset unknown exception");
+  try {
+    if (!field_group_set_ptr->convert_label_u64_to_offset(label_u64_,
+                                                          offsets)) {
       return nullptr;
     }
+  } catch (const std::exception& e) {
+    SPDLOG_ERROR("LabelInOp: convert_label_u64_to_offset exception: {}",
+                 e.what());
+    return nullptr;
+  } catch (...) {
+    SPDLOG_ERROR("LabelInOp: convert_label_u64_to_offset unknown exception");
+    return nullptr;
   }
   if (offsets.empty()) {
     return nullptr;
   }
+  auto pres = std::make_shared<Bitmap>();
   pres->SetMany(offsets);
   return pres;
 }
 
 BitmapPtr LabelInOp::calc_bitmap(FieldBitmapGroupSetPtr field_group_set_ptr,
                                  BitmapPtr pres, const std::string on_res_op) {
-  if (label_u64_.size() <= 0) {
-    return nullptr;
+  if (label_u64_.empty()) {
+    return std::make_shared<Bitmap>();
   }
   if (!pres) {
     return calc_self_bitmap(field_group_set_ptr);
+  }
+
+  BitmapPtr temp = calc_self_bitmap(field_group_set_ptr);
+  if (!temp) {
+    return nullptr;
+  }
+  if (on_res_op == "and") {
+    pres->Intersect(temp.get());
+  } else if (on_res_op == "or") {
+    pres->Union(temp.get());
   } else {
-    // has pres
-    if (on_res_op == "and") {
-      BitmapPtr temp = calc_self_bitmap(field_group_set_ptr);
-      if (!temp) {
-        return nullptr;
-      }
-      pres->Intersect(temp.get());
-    } else if (on_res_op == "or") {
-      BitmapPtr temp = calc_self_bitmap(field_group_set_ptr);
-      if (!temp) {
-        // OR with empty condition returns original result
-        return pres;
-      }
-      pres->Union(temp.get());
-    } else {
-      return nullptr;
-    }
+    return nullptr;
   }
   return pres;
 }
