@@ -71,11 +71,17 @@ def _normalize_host(host: str) -> str:
     return host.rstrip(".").lower()
 
 
-def _resolve_host_addresses(host: str) -> set[str]:
+def _resolve_host_addresses(host: str) -> Optional[set[str]]:
+    """Addresses for ``host``, or ``None`` when resolution itself failed.
+
+    The distinction matters: an empty set means the host resolved to nothing this
+    guard can judge, while ``None`` means the guard never got an answer at all
+    and therefore knows nothing about where the request would go.
+    """
     try:
         infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
     except (socket.gaierror, UnicodeError, OSError):
-        return set()
+        return None
 
     addresses: set[str] = set()
     for family, _, _, _, sockaddr in infos:
@@ -126,6 +132,18 @@ def ensure_public_remote_target(source: str) -> None:
         return
 
     resolved_addresses = _resolve_host_addresses(host)
+    if resolved_addresses is None:
+        # Refuse rather than permit. A control that cannot evaluate its input
+        # must not approve it, and nothing is lost by saying so here: the fetch
+        # resolves the same name through the same resolver moments later, so a
+        # host this call cannot resolve is not a host the request could reach.
+        raise PermissionDeniedError(
+            f"HTTP server could not resolve remote resource host '{host}', so it cannot be "
+            "confirmed to be a public destination. Check the hostname, or retry if this was a "
+            "temporary DNS failure. To allow non-public destinations, add the domain to its "
+            "code.<platform>_domains list or code.code_hosting_domains "
+            "or set allow_private_networks=true in your ov.conf."
+        )
     if not resolved_addresses:
         return
 
