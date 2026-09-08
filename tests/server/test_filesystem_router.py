@@ -271,8 +271,8 @@ async def test_http_stat_returns_canonical_request_uri(monkeypatch):
     seen = {}
     request_context = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
 
-    async def fake_stat(uri, ctx=None):
-        seen.update(uri=uri, ctx=ctx)
+    async def fake_stat(uri, ctx=None, include_lock_status=False):
+        seen.update(uri=uri, ctx=ctx, include_lock_status=include_lock_status)
         return {
             "name": "notes.md",
             "size": 12,
@@ -302,6 +302,7 @@ async def test_http_stat_returns_canonical_request_uri(monkeypatch):
     assert response.json()["result"]["uri"] == "viking://user/alice/resources/notes.md"
     assert seen["uri"] == "viking://user/alice/resources/notes.md"
     assert seen["ctx"].user.user_id == "alice"
+    assert seen["include_lock_status"] is True
 
 
 @pytest.mark.asyncio
@@ -310,8 +311,8 @@ async def test_http_stat_by_record_id_returns_resolved_uri(monkeypatch):
     resolved_uri = "viking://user/alice/resources/notes.md"
     seen = {}
 
-    async def fake_stat(uri, ctx=None):
-        seen.update(uri=uri, ctx=ctx)
+    async def fake_stat(uri, ctx=None, include_lock_status=False):
+        seen.update(uri=uri, ctx=ctx, include_lock_status=include_lock_status)
         return {
             "uri": resolved_uri,
             "name": "notes.md",
@@ -341,6 +342,7 @@ async def test_http_stat_by_record_id_returns_resolved_uri(monkeypatch):
     assert response.status_code == 200, response.text
     assert response.json()["result"]["uri"] == resolved_uri
     assert seen["uri"] == record_id
+    assert seen["include_lock_status"] is True
 
 
 @pytest.mark.asyncio
