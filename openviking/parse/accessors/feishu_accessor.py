@@ -992,14 +992,6 @@ class FeishuAccessor(DataAccessor):
         plan.add(path, url, token, "markdown")
         return path
 
-    @staticmethod
-    def _positive_int_option(value: Any, *, default: int) -> int:
-        try:
-            parsed = int(value)
-        except (TypeError, ValueError):
-            return default
-        return parsed if parsed > 0 else default
-
     async def _materialize_wiki_tree_node(
         self,
         node: _FeishuWikiTreeNode,
