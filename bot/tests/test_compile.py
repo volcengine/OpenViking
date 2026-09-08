@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,8 +14,7 @@ from vikingbot.agent.loop import (
 )
 from vikingbot.agent.tools.base import MultimodalToolResult, Tool, ToolContext
 from vikingbot.agent.tools.compile import (
-    CompileScopedTool,
-    SubmitTargetCheckoutTool,
+    SubmitCompileOutputTool,
     SubmitWikiBundleTool,
 )
 from vikingbot.agent.tools.ov_file import (
@@ -23,6 +23,7 @@ from vikingbot.agent.tools.ov_file import (
     local_path_for_viking_uri,
 )
 from vikingbot.agent.tools.registry import ToolRegistry
+from vikingbot.agent.tools.shell import ExecTool
 from vikingbot.compile.models import (
     DEFAULT_COMPILE_INSTRUCTION,
     CompileFailure,
@@ -34,11 +35,6 @@ from vikingbot.compile.models import (
     WikiBundleDraft,
     utc_now,
 )
-from vikingbot.compile.readlist import (
-    READLIST_PATH,
-    ReadlistTracker,
-    ReadTrackingTool,
-)
 from vikingbot.compile.renderer import (
     WikiRenderer,
     wiki_page_path_from_title,
@@ -46,6 +42,7 @@ from vikingbot.compile.renderer import (
 from vikingbot.compile.service import BotCompileService, CompileCapabilities
 from vikingbot.compile.store import CompileTaskStore
 from vikingbot.config.schema import (
+    Config,
     DirectBackendConfig,
     SandboxBackend,
     SandboxConfig,
@@ -127,10 +124,7 @@ def test_compile_bundle_schema_distinguishes_wiki_pages_and_artifact_files():
     assert (
         "editable UTF-8 Markdown Wiki page" in page_properties["body_workspace_path"]["description"]
     )
-    assert (
-        "__compile_staging__/target_checkout/"
-        in page_properties["body_workspace_path"]["description"]
-    )
+    assert "__compile_staging__/output/" in page_properties["body_workspace_path"]["description"]
     assert "filename derives from title" in page_properties["path_hint"]["description"]
     assert "supplied source roots" in page_properties["source_ids"]["description"]
     assert "preserve every required path and format" in properties["files"]["description"]
@@ -143,17 +137,14 @@ def test_compile_limit_defaults_match_the_resource_envelope():
     assert limits.accepted_tasks == 40
     assert limits.accepted_tasks_per_principal == 10
     assert limits.agent_iterations == 60
-    assert limits.source_files == 5000
-    assert limits.source_total_bytes == 1024 * 1024 * 1024
-    assert limits.target_total_bytes == 1024 * 1024 * 1024
     assert limits.salvage_grace_seconds == 120
     assert limits.cleanup_grace_seconds == 40
     assert limits.target_inventory_entries == 2000
-    assert limits.target_catalog_pages == 10
     assert limits.output_pages == 128
     assert limits.output_files == 128
     assert limits.output_operations == 256
     assert DirectBackendConfig().allow_compile_exec is True
+
 
 def test_wiki_page_requires_exactly_one_body_source():
     body = _page(1, "One")
@@ -206,7 +197,7 @@ def test_submit_tool_schema_requires_workspace_page_bodies_when_available():
 
 
 def test_submit_tool_checkout_schema_takes_no_file_manifest():
-    tool = SubmitTargetCheckoutTool(
+    tool = SubmitCompileOutputTool(
         target_uri="viking://resources/wiki",
         source_roots={"src_1": "viking://resources/source"},
         limits=CompileLimits(),
@@ -918,88 +909,6 @@ def test_renderer_uses_compile_language_for_sources_without_related_pages_sectio
     assert "## 相关页面" not in content
     assert "## Related pages" not in content
     assert "## Sources" not in content
-
-
-@pytest.mark.asyncio
-async def test_wiki_language_classifier_uses_real_instruction_and_one_model_call():
-    class Provider:
-        def __init__(self):
-            self.calls = []
-
-        async def chat(self, **kwargs):
-            self.calls.append(kwargs)
-            return SimpleNamespace(
-                content="zh-CN",
-                usage={"prompt_tokens": 12, "completion_tokens": 1},
-            )
-
-    provider = Provider()
-    service = object.__new__(BotCompileService)
-    service.agent_loop = SimpleNamespace(provider=provider, model="test-model")
-    request = SanitizedCompileRequest.model_validate(
-        {
-            "from": ["viking://resources/source"],
-            "to": "viking://resources/wiki",
-            "skill": "viking://agent/skills/wiki",
-            "instruction": "请用中文输出",
-            "instruction_provided": True,
-        }
-    )
-
-    language, usage = await service._classify_wiki_language(
-        request=request,
-        sources=[{"overview": "source overview"}],
-        source_sample="source sample",
-        session_key=_FakeCompileSessionKey(),
-    )
-
-    assert language == "zh-CN"
-    assert usage == {"prompt_tokens": 12, "completion_tokens": 1}
-    assert len(provider.calls) == 1
-    call = provider.calls[0]
-    assert call["max_tokens"] == 64
-    assert call["temperature"] == 0.0
-    assert call["session_id"] == "cmp:wiki-language"
-    assert "input_kind=user_instruction" in call["messages"][1]["content"]
-    assert "请用中文输出" in call["messages"][1]["content"]
-    assert "source sample" not in call["messages"][1]["content"]
-
-
-@pytest.mark.asyncio
-async def test_wiki_language_classifier_ignores_default_instruction_and_defaults_non_chinese_to_en():
-    class Provider:
-        def __init__(self):
-            self.message = ""
-
-        async def chat(self, **kwargs):
-            self.message = kwargs["messages"][1]["content"]
-            return SimpleNamespace(content="ja", usage={})
-
-    provider = Provider()
-    service = object.__new__(BotCompileService)
-    service.agent_loop = SimpleNamespace(provider=provider, model="test-model")
-    request = SanitizedCompileRequest.model_validate(
-        {
-            "from": ["viking://resources/source"],
-            "to": "viking://resources/wiki",
-            "skill": "viking://agent/skills/wiki",
-            "instruction": DEFAULT_COMPILE_INSTRUCTION,
-            "instruction_provided": False,
-        }
-    )
-
-    language, usage = await service._classify_wiki_language(
-        request=request,
-        sources=[{"overview": "fallback source overview"}],
-        source_sample="这是实际的资源文本。",
-        session_key=_FakeCompileSessionKey(),
-    )
-
-    assert language == "en"
-    assert usage == {}
-    assert "input_kind=source_content" in provider.message
-    assert "这是实际的资源文本。" in provider.message
-    assert DEFAULT_COMPILE_INSTRUCTION not in provider.message
 
 
 def test_memory_renderer_round_trips_fields_and_only_bumps_changed_version():
@@ -1859,309 +1768,6 @@ def test_local_path_for_viking_uri_drops_namespace_prefix():
 
 
 @pytest.mark.asyncio
-async def test_materialize_sources_exports_full_tree_and_writes_manifest():
-    service = object.__new__(BotCompileService)
-    service.limits = CompileLimits()
-
-    class Client:
-        async def download_bytes(self, uri):
-            if uri.endswith("a.jsonl"):
-                return b'{"type":"event_msg","payload":{"message":"hi"}}\n'
-            if uri.endswith("b.bin"):
-                return b"\xff\xfe\x00"
-            return b"# guide\n"
-
-    class Sandbox:
-        def __init__(self):
-            self.writes = {}
-
-        async def write_file(self, path, content):
-            self.writes[path] = content
-
-    sources = [
-        {
-            "source_id": "src_1",
-            "directory_uri": "viking://resources/dream-sessions",
-            "entries": [
-                {
-                    "uri": "viking://resources/dream-sessions/08/05/a.jsonl",
-                    "is_dir": False,
-                    "size": 40,
-                },
-                {
-                    "uri": "viking://resources/dream-sessions/08/05/b.bin",
-                    "is_dir": False,
-                    "size": 3,
-                },
-                {"uri": "viking://resources/dream-sessions/08/05", "is_dir": True},
-            ],
-        },
-        {
-            "source_id": "src_2",
-            "directory_uri": "viking://resources/dream-memory-store",
-            "entries": [
-                {
-                    "uri": "viking://resources/dream-memory-store/guide.md",
-                    "is_dir": False,
-                    "size": 9,
-                }
-            ],
-        },
-    ]
-    sandbox = Sandbox()
-    warnings, manifest_path, language_sample = await service._materialize_sources(
-        client=Client(),
-        sources=sources,
-        sandbox=sandbox,
-    )
-
-    assert warnings == []
-    assert manifest_path == "compile_resources/_manifest.tsv"
-    assert sandbox.writes["compile_resources/src_1/dream-sessions/08/05/a.jsonl"] == (
-        '{"type":"event_msg","payload":{"message":"hi"}}\n'
-    )
-    assert sandbox.writes["compile_resources/src_2/dream-memory-store/guide.md"] == "# guide\n"
-    assert "b.bin" not in sandbox.writes
-    manifest = sandbox.writes["compile_resources/_manifest.tsv"]
-    assert "source_id\turi\tworkspace_path\tsize\tstatus" in manifest
-    assert "skipped:binary" in manifest
-    assert "materialized" in manifest
-    assert "# guide" in language_sample
-    assert '"message":"hi"' in language_sample
-
-
-@pytest.mark.asyncio
-async def test_materialize_sources_records_download_failures_without_crashing():
-    service = object.__new__(BotCompileService)
-    service.limits = CompileLimits()
-
-    class Client:
-        async def download_bytes(self, uri):
-            raise OpenVikingError("offline", code="UNAVAILABLE")
-
-    class Sandbox:
-        def __init__(self):
-            self.writes = {}
-
-        async def write_file(self, path, content):
-            self.writes[path] = content
-
-    sources = [
-        {
-            "source_id": "src_1",
-            "directory_uri": "viking://resources/s",
-            "entries": [{"uri": "viking://resources/s/a.jsonl", "is_dir": False, "size": 1}],
-        }
-    ]
-    sandbox = Sandbox()
-    warnings, manifest_path, language_sample = await service._materialize_sources(
-        client=Client(),
-        sources=sources,
-        sandbox=sandbox,
-    )
-
-    assert manifest_path == "compile_resources/_manifest.tsv"
-    assert language_sample == ""
-    assert any("failed to materialize" in warning for warning in warnings)
-    assert "skipped:download-error" in sandbox.writes["compile_resources/_manifest.tsv"]
-
-
-@pytest.mark.asyncio
-async def test_materialize_sources_enforces_limits_before_download():
-    class Client:
-        def __init__(self):
-            self.downloads = []
-
-        async def download_bytes(self, uri):
-            self.downloads.append(uri)
-            return b"x"
-
-    service = object.__new__(BotCompileService)
-    service.limits = CompileLimits(source_files=1)
-    client = Client()
-    sources = [
-        {
-            "source_id": "src_1",
-            "entries": [
-                {"uri": "viking://resources/s/a.txt", "is_dir": False, "size": 1},
-                {"uri": "viking://resources/s/b.txt", "is_dir": False, "size": 1},
-            ],
-        }
-    ]
-
-    with pytest.raises(CompileFailure) as raised:
-        await service._materialize_sources(
-            client=client, sources=sources, sandbox=SimpleNamespace()
-        )
-
-    assert raised.value.code == "RESOURCE_EXHAUSTED"
-    assert client.downloads == []
-
-
-@pytest.mark.asyncio
-async def test_materialize_sources_enforces_actual_total_size():
-    class Client:
-        async def download_bytes(self, uri):
-            del uri
-            return b"xx"
-
-    service = object.__new__(BotCompileService)
-    service.limits = CompileLimits(source_total_bytes=1)
-    sources = [
-        {
-            "source_id": "src_1",
-            "entries": [{"uri": "viking://resources/s/a.txt", "is_dir": False, "size": 0}],
-        }
-    ]
-
-    with pytest.raises(CompileFailure) as raised:
-        await service._materialize_sources(
-            client=Client(), sources=sources, sandbox=SimpleNamespace()
-        )
-
-    assert raised.value.code == "RESOURCE_EXHAUSTED"
-
-
-@pytest.mark.asyncio
-async def test_materialize_sources_bounds_downloaded_payloads(monkeypatch):
-    state = {"pending": 0, "peak": 0}
-
-    class Client:
-        async def download_bytes(self, uri):
-            del uri
-            state["pending"] += 1
-            state["peak"] = max(state["peak"], state["pending"])
-            return b"x"
-
-    class Sandbox:
-        async def write_file(self, path, content):
-            del path, content
-            await asyncio.sleep(0.01)
-            state["pending"] -= 1
-
-    monkeypatch.setattr("vikingbot.compile.service._MATERIALIZE_CONCURRENCY", 2)
-    service = object.__new__(BotCompileService)
-    service.limits = CompileLimits()
-    sources = [
-        {
-            "source_id": "src_1",
-            "entries": [
-                {
-                    "uri": f"viking://resources/s/{index}.txt",
-                    "is_dir": False,
-                    "size": 1,
-                }
-                for index in range(5)
-            ],
-        }
-    ]
-
-    await service._materialize_sources(client=Client(), sources=sources, sandbox=Sandbox())
-
-    assert state["peak"] <= 2
-
-
-@pytest.mark.asyncio
-async def test_materialize_target_checkout_preserves_paths_and_bytes():
-    service = object.__new__(BotCompileService)
-    service.limits = CompileLimits()
-    payloads = {
-        "viking://resources/output/entities/callie.md": b"---\ntype: entity\n---\nCallie",
-        "viking://resources/output/relations.jsonl": b'{"from":"callie"}\n',
-        "viking://resources/output/data.bin": b"\xff\x00",
-    }
-
-    class Client:
-        async def download_bytes(self, uri):
-            return payloads[uri]
-
-    class Sandbox:
-        def __init__(self):
-            self.writes = {}
-
-        async def write_file_bytes(self, path, content):
-            self.writes[path] = content
-
-    inventory = {uri: {"uri": uri, "size": len(payload)} for uri, payload in payloads.items()}
-    sandbox = Sandbox()
-
-    warnings = await service._materialize_target_checkout(
-        client=Client(),
-        target_uri="viking://resources/output",
-        inventory=inventory,
-        sandbox=sandbox,
-    )
-
-    assert warnings == []
-    assert sandbox.writes == {
-        "__compile_staging__/target_checkout/entities/callie.md": payloads[
-            "viking://resources/output/entities/callie.md"
-        ],
-        "__compile_staging__/target_checkout/relations.jsonl": payloads[
-            "viking://resources/output/relations.jsonl"
-        ],
-        "__compile_staging__/target_checkout/data.bin": payloads[
-            "viking://resources/output/data.bin"
-        ],
-    }
-
-
-def test_compile_prompt_mentions_materialized_manifest_when_available():
-    request = SanitizedCompileRequest.model_validate(
-        {
-            "from": ["viking://resources/source"],
-            "to": "viking://resources/wiki",
-            "skill": "viking://agent/skills/wiki",
-            "instruction": "Compile the research",
-        }
-    )
-
-    system, _user = BotCompileService._build_prompts(
-        request=request,
-        skill_name="wiki",
-        skill_content="Write Wiki pages.",
-        catalog=[],
-        capabilities=CompileCapabilities(exec_enabled=True),
-        materialized_manifest="compile_resources/_manifest.tsv",
-        materialize_warnings=["failed to materialize viking://resources/source/b.bin: bad"],
-    )
-
-    assert "Source files are already materialized locally" in system
-    assert "compile_resources/_manifest.tsv" in system
-    assert "Do NOT" in system
-    assert "could NOT be materialized" in system
-    assert "viking://resources/source/b.bin" in system
-
-
-def test_compile_prompt_describes_editable_target_checkout():
-    request = SanitizedCompileRequest.model_validate(
-        {
-            "from": ["viking://resources/source"],
-            "to": "viking://resources/output",
-            "skill": "viking://agent/skills/compiler",
-            "instruction": "Refresh the output",
-        }
-    )
-
-    system, user = BotCompileService._build_prompts(
-        request=request,
-        skill_name="compiler",
-        skill_content="Produce the required files.",
-        catalog=[],
-        capabilities=CompileCapabilities(exec_enabled=True),
-        target_checkout_enabled=True,
-    )
-
-    assert "`__compile_staging__/target_checkout/`" in system
-    assert "editable output working tree" in system
-    assert "update existing files in place" in system
-    assert "submit_wiki_bundle with no arguments" in system
-    assert "complete UTF-8 OKF Markdown file" in system
-    assert "commits only validated changes" in system
-    assert "Inspect the editable target checkout" in user
-
-
-@pytest.mark.asyncio
 async def test_submit_tool_requires_workspace_paths_for_artifacts():
     tool = SubmitWikiBundleTool(
         source_ids={"src_1"},
@@ -2370,13 +1976,12 @@ async def test_submit_tool_checkout_writes_complete_tree_with_upsert():
         "schema.json": b'{"version":1}\n',
     }
     files = {
-        f"__compile_staging__/target_checkout/{path}": payload
-        for path, payload in relative_files.items()
+        f"__compile_staging__/output/{path}": payload for path, payload in relative_files.items()
     }
 
     class Sandbox:
         async def list_files(self, path, *, max_entries):
-            assert path == "__compile_staging__/target_checkout"
+            assert path == "__compile_staging__/output"
             assert len(files) <= max_entries
             return [
                 SandboxFileInfo(path=file_path, size=len(payload))
@@ -2397,7 +2002,7 @@ async def test_submit_tool_checkout_writes_complete_tree_with_upsert():
         sandbox_manager=Manager(),
     )
     existing_page_uri = "viking://resources/wiki/entity/existing.md"
-    tool = SubmitTargetCheckoutTool(
+    tool = SubmitCompileOutputTool(
         target_uri="viking://resources/wiki",
         source_roots={"src_1": "viking://resources/source"},
         limits=CompileLimits(),
@@ -2406,8 +2011,8 @@ async def test_submit_tool_checkout_writes_complete_tree_with_upsert():
     accepted = await tool.execute(context)
 
     assert accepted == (
-        "Target checkout accepted with 4 changed file(s) and "
-        "2 Wiki page(s) in the preserved final tree."
+        "Resource output accepted with 4 changed file(s) and "
+        "2 Wiki page(s) in the submitted output."
     )
     assert tool.bundle is not None
     operations = {operation["uri"]: operation for operation in tool.bundle.operations}
@@ -2424,12 +2029,12 @@ async def test_submit_tool_checkout_writes_complete_tree_with_upsert():
 @pytest.mark.asyncio
 async def test_submit_tool_checkout_writes_every_checkout_file_without_deleting_omitted_files():
     page = b"---\ntype: entity\ntitle: Existing\ndescription: Existing page.\n---\n\nBody."
-    workspace_path = "__compile_staging__/target_checkout/entity/existing.md"
+    workspace_path = "__compile_staging__/output/entity/existing.md"
 
     class Sandbox:
         async def list_files(self, path, *, max_entries):
             del max_entries
-            assert path == "__compile_staging__/target_checkout"
+            assert path == "__compile_staging__/output"
             return [SandboxFileInfo(path=workspace_path, size=len(page))]
 
         async def read_file_bytes(self, path, *, max_bytes=None):
@@ -2444,7 +2049,7 @@ async def test_submit_tool_checkout_writes_every_checkout_file_without_deleting_
 
     page_uri = "viking://resources/wiki/entity/existing.md"
     omitted_uri = "viking://resources/wiki/data.jsonl"
-    tool = SubmitTargetCheckoutTool(
+    tool = SubmitCompileOutputTool(
         target_uri="viking://resources/wiki",
         source_roots={},
         limits=CompileLimits(),
@@ -2457,7 +2062,7 @@ async def test_submit_tool_checkout_writes_every_checkout_file_without_deleting_
         )
     )
 
-    assert accepted.startswith("Target checkout accepted with 1 changed file(s)")
+    assert accepted.startswith("Resource output accepted with 1 changed file(s)")
     assert tool.bundle is not None
     assert tool.bundle.operations[0]["uri"] == page_uri
     assert tool.bundle.operations[0]["mode"] == "upsert"
@@ -2468,7 +2073,7 @@ async def test_submit_tool_checkout_writes_every_checkout_file_without_deleting_
 
 @pytest.mark.asyncio
 async def test_submit_tool_checkout_rejects_incomplete_wiki_frontmatter():
-    workspace_path = "__compile_staging__/target_checkout/entity/existing.md"
+    workspace_path = "__compile_staging__/output/entity/existing.md"
 
     class Sandbox:
         payload = b"---\ntype: concept\n---\n\n# New"
@@ -2486,7 +2091,7 @@ async def test_submit_tool_checkout_rejects_incomplete_wiki_frontmatter():
             del session_key
             return Sandbox()
 
-    tool = SubmitTargetCheckoutTool(
+    tool = SubmitCompileOutputTool(
         target_uri="viking://resources/wiki",
         source_roots={},
         limits=CompileLimits(),
@@ -2503,7 +2108,7 @@ async def test_submit_tool_checkout_rejects_incomplete_wiki_frontmatter():
 
 @pytest.mark.asyncio
 async def test_submit_tool_checkout_rejects_manifest_arguments():
-    tool = SubmitTargetCheckoutTool(
+    tool = SubmitCompileOutputTool(
         target_uri="viking://resources/wiki",
         source_roots={},
         limits=CompileLimits(),
@@ -2511,7 +2116,7 @@ async def test_submit_tool_checkout_rejects_manifest_arguments():
 
     result = await tool.execute(ToolContext(), pages=[], files=[])
 
-    assert result == "Error: submit_wiki_bundle takes no arguments for a Resource checkout."
+    assert result == "Error: submit_wiki_bundle takes no arguments for a Resource output."
     assert tool.bundle is None
 
 
@@ -2644,45 +2249,6 @@ class _EchoTool(Tool):
 
 
 @pytest.mark.asyncio
-async def test_scoped_tool_requires_and_bounds_openviking_uri():
-    wrapped = CompileScopedTool(
-        _EchoTool(),
-        roots=("viking://resources/source",),
-        limits=CompileLimits(),
-        result_budget={"bytes": 0},
-        budget_lock=__import__("asyncio").Lock(),
-    )
-    context = ToolContext()
-    assert (await wrapped.execute(context)).startswith("Error:")
-    assert (await wrapped.execute(context, uri="viking://resources/other")).startswith("Error:")
-    assert (
-        await wrapped.execute(
-            context,
-            uri="viking://resources/source/../../other",
-        )
-    ).startswith("Error:")
-    accepted = await wrapped.execute(context, uri="viking://resources/source/child", recursive=True)
-    assert '"node_limit": 2000' in accepted
-
-
-@pytest.mark.asyncio
-async def test_scoped_tool_enforces_per_call_and_total_result_budgets():
-    limits = CompileLimits(tool_result_bytes=8, tool_total_result_bytes=12)
-    budget = {"bytes": 0}
-    wrapped = CompileScopedTool(
-        _EchoTool(),
-        roots=("viking://resources/source",),
-        limits=limits,
-        result_budget=budget,
-        budget_lock=__import__("asyncio").Lock(),
-    )
-    context = ToolContext()
-    oversized = await wrapped.execute(context, uri="viking://resources/source/child")
-    assert oversized.startswith("Error:")
-    assert budget["bytes"] == 0
-
-
-@pytest.mark.asyncio
 async def test_structured_wrapper_delegates_to_only_existing_loop_without_fallback():
     registry = ToolRegistry()
     submit = SubmitWikiBundleTool(
@@ -2783,156 +2349,11 @@ def test_budget_reminder_text_escalates_with_remaining_rounds():
 
 
 @pytest.mark.asyncio
-async def test_readlist_tracker_records_and_summarizes_without_duplicates():
-    class Sandbox:
-        def __init__(self):
-            self.files = {}
-
-        async def list_files(self, max_entries=None):
-            del max_entries
-            return [
-                SandboxFileInfo(path="compile_resources/src_1/a.md", size=1),
-                SandboxFileInfo(path="compile_resources/src_1/b.jsonl", size=1),
-                SandboxFileInfo(path="compile_resources/_manifest.tsv", size=1),
-                SandboxFileInfo(path="skills/wiki/SKILL.md", size=1),
-            ]
-
-        async def read_file(self, path):
-            return self.files.get(path, "")
-
-        async def write_file(self, path, content):
-            self.files[path] = content
-
-    sandbox = Sandbox()
-    tracker = ReadlistTracker(sandbox=sandbox)
-    await tracker.initialize()
-
-    assert tracker.universe == {
-        "compile_resources/src_1/a.md",
-        "compile_resources/src_1/b.jsonl",
-    }
-    assert await tracker.summary() == "源文件共 2 个，尚未读取任何源文件；优先去读未读文件。"
-
-    await tracker.record(["compile_resources/src_1/a.md"])
-    await tracker.record(["compile_resources/src_1/a.md"])  # duplicate is a no-op
-    assert tracker.read_paths == {"compile_resources/src_1/a.md"}
-
-    summary = await tracker.summary()
-    assert "已读 1/2 个源文件" in summary
-    assert "未读 1 个" in summary
-    assert "compile_resources/src_1/a.md" in summary
-    assert "compile_resources/src_1/b.jsonl" in summary
-    assert "不必再读" in summary
-    # Persisted to the sandbox readlist so it survives context compaction.
-    assert "compile_resources/src_1/a.md" in sandbox.files[READLIST_PATH]
-
-
-@pytest.mark.asyncio
-async def test_readlist_tracker_reloads_externally_appended_paths():
-    class Sandbox:
-        def __init__(self):
-            self.files = {
-                READLIST_PATH: "compile_resources/src_1/a.md\n",
-            }
-
-        async def list_files(self, max_entries=None):
-            del max_entries
-            return [SandboxFileInfo(path="compile_resources/src_1/a.md", size=1)]
-
-        async def read_file(self, path):
-            return self.files.get(path, "")
-
-        async def write_file(self, path, content):
-            self.files[path] = content
-
-    tracker = ReadlistTracker(sandbox=Sandbox())
-    await tracker.initialize()
-    summary = await tracker.summary()
-    assert "已读 1/1 个源文件" in summary
-    assert "不必再读" in summary
-
-
-class _ReadTrackingFake(Tool):
-    def __init__(self, name, *, result="ok"):
-        self._name = name
-        self._result = result
-
-    @property
-    def name(self):
-        return self._name
-
-    @property
-    def description(self):
-        return "fake"
-
-    @property
-    def parameters(self):
-        return {"type": "object", "properties": {}}
-
-    async def execute(self, tool_context, **kwargs):
-        del tool_context, kwargs
-        return self._result
-
-
-@pytest.mark.asyncio
-async def test_read_tracking_tool_records_read_file_edit_and_explicit_exec():
-    class Sandbox:
-        def __init__(self):
-            self.files = {}
-
-        async def list_files(self, max_entries=None):
-            del max_entries
-            return [
-                SandboxFileInfo(path="compile_resources/src_1/a.md", size=1),
-                SandboxFileInfo(path="compile_resources/src_1/b.jsonl", size=1),
-                SandboxFileInfo(path="compile_resources/src_1/c.md", size=1),
-            ]
-
-        async def read_file(self, path):
-            return self.files.get(path, "")
-
-        async def write_file(self, path, content):
-            self.files[path] = content
-
-    tracker = ReadlistTracker(sandbox=Sandbox())
-    await tracker.initialize()
-
-    read_tool = ReadTrackingTool(_ReadTrackingFake("read_file"), tracker=tracker)
-    await read_tool.execute(ToolContext(), path="compile_resources/src_1/a.md")
-    edit_tool = ReadTrackingTool(_ReadTrackingFake("edit_file"), tracker=tracker)
-    await edit_tool.execute(
-        ToolContext(), path="compile_resources/src_1/c.md", old_text="x", new_text="y"
-    )
-    exec_tool = ReadTrackingTool(_ReadTrackingFake("exec"), tracker=tracker)
-    await exec_tool.execute(
-        ToolContext(), command="python3 scan.py compile_resources/src_1/b.jsonl | head"
-    )
-
-    assert tracker.read_paths == {
-        "compile_resources/src_1/a.md",
-        "compile_resources/src_1/c.md",
-        "compile_resources/src_1/b.jsonl",
-    }
-
-    # A failed read is not recorded; a directory token in exec is ignored.
-    failing = ReadTrackingTool(
-        _ReadTrackingFake("read_file", result="Error: missing"), tracker=tracker
-    )
-    await failing.execute(ToolContext(), path="compile_resources/src_1/a.md")
-    await exec_tool.execute(ToolContext(), command="find compile_resources/src_1 -name '*.md'")
-    assert tracker.read_paths == {
-        "compile_resources/src_1/a.md",
-        "compile_resources/src_1/c.md",
-        "compile_resources/src_1/b.jsonl",
-    }
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("iteration", "with_note"),
     [
         (42, True),  # max_iterations=50, remaining == 8 -> budget reminder fires
-        (1, False),  # no thresholds/readlist -> provider stays quiet by default
+        (1, False),  # no thresholds -> provider stays quiet by default
     ],
 )
 async def test_structured_task_injects_status_note_provider(iteration, with_note):
@@ -2944,10 +2365,6 @@ async def test_structured_task_injects_status_note_provider(iteration, with_note
         limits=CompileLimits(),
     )
     registry.register(submit)
-
-    class FakeReadlist:
-        async def summary(self):
-            return "已读 1/2 个源文件，未读 1 个。"
 
     captured: dict = {}
 
@@ -2971,7 +2388,6 @@ async def test_structured_task_injects_status_note_provider(iteration, with_note
     }
     if with_note:
         kwargs["budget_reminder_thresholds"] = (15, 8, 3)
-        kwargs["readlist_provider"] = FakeReadlist()
 
     await AgentLoop.run_structured_task(FakeLoop(), **kwargs)
 
@@ -2980,15 +2396,12 @@ async def test_structured_task_injects_status_note_provider(iteration, with_note
         assert note is None
         return
     assert "必须开始提交" in note
-    assert "已读 1/2 个源文件" in note
-    assert note.index("必须开始提交") < note.index("已读 1/2")  # budget reminder first
 
 
 @pytest.mark.asyncio
-async def test_request_normalization_uses_default_instruction_and_canonical_skill(monkeypatch):
+async def test_request_normalization_uses_default_reason_and_canonical_skill(monkeypatch):
     class Client:
         created = set()
-        skill_content = "---\nname: wiki\ndescription: Wiki\n---\nCompile it"
 
         async def attrs(self, uri):
             if uri == "viking://resources/wiki" and uri not in self.created:
@@ -3001,14 +2414,10 @@ async def test_request_normalization_uses_default_instruction_and_canonical_skil
         async def mkdir(self, uri):
             self.created.add(uri)
 
-        async def get_skill(self, name, *, target_uri, include_integrity=False):
-            assert name == "wiki"
-            assert target_uri == "viking://agent/skills"
-            assert include_integrity is False
-            return {
-                "root_uri": "viking://agent/skills/wiki",
-                "content": self.skill_content,
-            }
+        async def get_skill(self, *args, **kwargs):
+            raise AssertionError(
+                "The agent reads the Skill through ov; normalization only checks URIs"
+            )
 
         async def close(self):
             return None
@@ -3039,20 +2448,20 @@ async def test_request_normalization_uses_default_instruction_and_canonical_skil
     assert normalized.instruction_provided is False
 
     Client.created.clear()
-    Client.skill_content = "---\nname: wiki\n---\nCompile it"
     with pytest.raises(CompileFailure) as raised:
         await service._normalize_request(
             CompileRequest.model_validate(
                 {
                     "from": ["viking://resources/source"],
                     "to": "viking://resources/wiki",
-                    "skill": "viking://agent/skills/wiki",
+                    "skill": "viking://resources/not-a-skill",
                 }
             ),
             connection={"api_key": "secret"},
         )
     assert raised.value.code == "SKILL_INVALID"
     assert Client.created == set()
+
 
 def test_compile_target_accepts_only_exact_skill_namespaces():
     directory = {"isDir": True}
@@ -3183,7 +2592,9 @@ async def test_execute_skill_target_skips_recursive_catalog_and_completes(
             self.workspace_path = tmp_path / "host-workspace"
             self.skills = []
             self.sandbox = SimpleNamespace(
-                mode=None, model_copy=lambda *, deep: SimpleNamespace(mode=None)
+                backend=SandboxBackend.DIRECT,
+                mode=None,
+                model_copy=lambda *, deep: SimpleNamespace(mode=None),
             )
 
         def model_copy(self, *, update):
@@ -3216,18 +2627,6 @@ async def test_execute_skill_target_skips_recursive_catalog_and_completes(
 
         async def cleanup_session(self, session_key):
             del session_key
-
-    class FakeSkillsLoader:
-        def __init__(self, workspace, *, builtin_skills_dir):
-            del workspace, builtin_skills_dir
-
-        def load_skills_for_context(self, names):
-            assert names == ["skill-creator"]
-            return "Create a standards-compliant Skill."
-
-        def _get_skill_meta(self, name):
-            assert name == "skill-creator"
-            return {}
 
     class FakeRequestLoop:
         def __init__(self, **kwargs):
@@ -3301,50 +2700,20 @@ async def test_execute_skill_target_skips_recursive_catalog_and_completes(
     async def no_op(*args, **kwargs):
         del args, kwargs
 
-    async def build_sources(client, roots):
-        del client, roots
-        return []
-
-    def build_registry(
-        request_loop,
-        *,
-        roots,
-        target_uri,
-        source_ids,
-        catalog_uris,
-        file_catalog_uris,
-        workspace_baseline,
-        wiki_uri_resolver,
-        target_checkout_enabled,
-        source_roots,
-        capabilities,
-        materialized=False,
-        source_fallback=False,
-        readlist=None,
-    ):
-        del request_loop, roots, source_ids, materialized, source_fallback, readlist
-        assert capabilities == CompileCapabilities(exec_enabled=False)
-        assert catalog_uris == set()
-        assert file_catalog_uris == set()
-        assert workspace_baseline == set()
-        assert callable(wiki_uri_resolver)
-        assert target_checkout_enabled is False
-        assert source_roots == {}
+    def build_registry(request_loop, *, target_uri, source_roots, **kwargs):
+        assert source_roots == {"src_1": "viking://resources/weekly"}
         registry = ToolRegistry()
         registry.register(
             SubmitWikiBundleTool(
-                source_ids=set(),
+                source_ids=set(source_roots),
                 catalog_uris=set(),
-                file_catalog_uris=set(),
                 target_uri=target_uri,
                 limits=CompileLimits(),
-                exec_enabled=capabilities.exec_enabled,
             )
         )
-        return registry, set()
+        return registry
 
     monkeypatch.setattr("vikingbot.compile.service.SandboxManager", FakeSandboxManager)
-    monkeypatch.setattr("vikingbot.compile.service.SkillsLoader", FakeSkillsLoader)
     monkeypatch.setattr("vikingbot.compile.service.AgentLoop", FakeRequestLoop)
     monkeypatch.setattr("vikingbot.compile.service.VikingClient.create", create_client)
 
@@ -3383,9 +2752,6 @@ async def test_execute_skill_target_skips_recursive_catalog_and_completes(
     )
     client = Client()
     service.store = Store(task)
-    monkeypatch.setattr(service, "_materialize_skill", no_op)
-    monkeypatch.setattr(service, "_check_requirements", no_op)
-    monkeypatch.setattr(service, "_build_sources", build_sources)
     monkeypatch.setattr(service, "_build_compile_registry", build_registry)
 
     await service._execute_task(task.task_id, request, {"api_key": "secret"})
@@ -3398,345 +2764,6 @@ async def test_execute_skill_target_skips_recursive_catalog_and_completes(
     assert client.added == f"{target_uri}/weekly-report"
 
 
-@pytest.mark.asyncio
-async def test_source_context_builds_bounded_compact_recursive_catalog():
-    class Client:
-        client = None
-
-        def __init__(self):
-            self.client = self
-
-        async def overview(self, uri):
-            assert uri == "viking://resources/source"
-            return "Source overview"
-
-        async def stat(self, uri):
-            return {"isDir": True}
-
-        async def list_resources(self, *, path, recursive, node_limit):
-            assert path == "viking://resources/source"
-            assert recursive is True
-            assert node_limit == 5000
-            return [
-                {
-                    "name": "guide.md",
-                    "title": "Readable Guide",
-                    "uri": f"{path}/docs/guide.md",
-                    "isDir": False,
-                    "abstract": "A" * 600,
-                },
-                {
-                    "uri": f"{path}/docs",
-                    "isDir": True,
-                    "summary": "Documentation",
-                },
-                {
-                    "name": ".overview.md",
-                    "uri": f"{path}/.overview.md",
-                    "isDir": False,
-                },
-            ]
-
-    service = object.__new__(BotCompileService)
-    service.limits = CompileLimits(source_catalog_entries=3)
-    sources = await service._build_sources(Client(), ["viking://resources/source"])
-
-    assert sources == [
-        {
-            "source_id": "src_1",
-            "directory_uri": "viking://resources/source",
-            "overview": "Source overview",
-            "file_count": 1,
-            "total_bytes": 0,
-            "entries": [
-                {
-                    "name": "guide.md",
-                    "title": "Readable Guide",
-                    "uri": "viking://resources/source/docs/guide.md",
-                    "is_dir": False,
-                    "size": 0,
-                    "summary": "A" * 500,
-                },
-                {
-                    "name": "docs",
-                    "title": "docs",
-                    "uri": "viking://resources/source/docs",
-                    "is_dir": True,
-                    "size": 0,
-                    "summary": "Documentation",
-                },
-            ],
-            "catalog_truncated": False,
-        }
-    ]
-
-
-@pytest.mark.asyncio
-async def test_source_file_synthesizes_single_entry_without_listing():
-    class Client:
-        def __init__(self):
-            self.client = self
-            self.listed = False
-
-        async def overview(self, uri):
-            return "Parent overview"
-
-        async def stat(self, uri):
-            return {"name": "2024.md", "size": 512, "isDir": False}
-
-        async def list_resources(self, *, path, recursive, node_limit):
-            self.listed = True
-            raise AssertionError("file sources must not be listed")
-
-    client = Client()
-    service = object.__new__(BotCompileService)
-    service.limits = CompileLimits()
-    sources = await service._build_sources(client, ["viking://resources/weekly/2024.md"])
-
-    assert client.listed is False
-    assert sources == [
-        {
-            "source_id": "src_1",
-            "directory_uri": "viking://resources/weekly/2024.md",
-            "overview": "Parent overview",
-            "file_count": 1,
-            "total_bytes": 512,
-            "entries": [
-                {
-                    "name": "2024.md",
-                    "title": "2024",
-                    "uri": "viking://resources/weekly/2024.md",
-                    "is_dir": False,
-                    "size": 512,
-                    "summary": "",
-                },
-            ],
-            "catalog_truncated": False,
-        }
-    ]
-
-
-@pytest.mark.asyncio
-async def test_target_catalog_includes_raw_files_and_marks_wiki_pages():
-    class Client:
-        def __init__(self):
-            self.reads = []
-            self.find_call = None
-
-        async def tree(self, uri, *, node_limit):
-            assert uri == "viking://resources/ara"
-            assert node_limit == CompileLimits().target_inventory_entries + 1
-            return [
-                {"uri": f"{uri}/Overview.md", "isDir": False, "abstract": "Overview"},
-                {"uri": f"{uri}/PAPER.md", "isDir": False},
-                {"uri": f"{uri}/broken.md", "isDir": False},
-                {"uri": f"{uri}/Long.md", "isDir": False, "size": 2048},
-                {"uri": f"{uri}/trace/tree.yaml", "isDir": False},
-                {"uri": f"{uri}/figures/chart.png", "isDir": False},
-                {"uri": f"{uri}/.overview.md", "isDir": False},
-            ]
-
-        async def find(self, query, **kwargs):
-            self.find_call = (query, kwargs)
-            return {
-                "resources": [
-                    {
-                        "uri": "viking://resources/ara/Overview.md",
-                        "abstract": "Relevant overview",
-                    },
-                    {"uri": "viking://resources/ara/PAPER.md"},
-                    {"uri": "viking://resources/ara/Long.md"},
-                    {"uri": "viking://resources/ara/trace/tree.yaml"},
-                    {"uri": "viking://resources/outside.md"},
-                ]
-            }
-
-        async def read_raw(self, uri, *, offset=0, limit=-1):
-            assert offset == 0
-            self.reads.append((uri, limit))
-            content = {
-                "viking://resources/ara/Overview.md": (
-                    "---\ntype: overview\ncustom: kept\n---\n\n# Overview"
-                ),
-                "viking://resources/ara/PAPER.md": (
-                    "---\ntitle: ARA Paper\nauthors: [Ada]\n---\n\n# Paper"
-                ),
-                "viking://resources/ara/broken.md": "---\ntype:\n---\n",
-                "viking://resources/ara/Long.md": (
-                    "---\n"
-                    + "".join(f"custom_{index}: value\n" for index in range(130))
-                    + "type: long_form\n---\n\n# Long"
-                ),
-            }[uri]
-            if limit == -1:
-                return content
-            return "".join(content.splitlines(keepends=True)[:limit])
-
-    service = object.__new__(BotCompileService)
-    service.limits = CompileLimits()
-    client = Client()
-    catalog, inventory = await service._build_catalog(
-        client,
-        "viking://resources/ara",
-        query="compile ResNet\nsource overview",
-    )
-
-    assert catalog == [
-        {
-            "uri": "viking://resources/ara/Overview.md",
-            "kind": "wiki_page",
-            "title": "Overview",
-            "type": "overview",
-            "summary": "Relevant overview",
-            "page_id": 1,
-        },
-        {
-            "uri": "viking://resources/ara/PAPER.md",
-            "kind": "file",
-            "title": "PAPER.md",
-            "type": "",
-            "summary": "",
-        },
-        {
-            "uri": "viking://resources/ara/Long.md",
-            "kind": "wiki_page",
-            "title": "Long",
-            "type": "long_form",
-            "summary": "",
-            "page_id": 2,
-        },
-        {
-            "uri": "viking://resources/ara/trace/tree.yaml",
-            "kind": "file",
-            "title": "tree.yaml",
-            "type": "",
-            "summary": "",
-        },
-    ]
-    assert set(inventory) == {
-        "viking://resources/ara/Overview.md",
-        "viking://resources/ara/PAPER.md",
-        "viking://resources/ara/broken.md",
-        "viking://resources/ara/Long.md",
-        "viking://resources/ara/trace/tree.yaml",
-        "viking://resources/ara/figures/chart.png",
-    }
-    assert client.find_call == (
-        "compile ResNet\nsource overview",
-        {
-            "target_uri": "viking://resources/ara",
-            "context_type": "resource",
-            "limit": CompileLimits().target_catalog_pages,
-        },
-    )
-    assert client.reads.count(("viking://resources/ara/Long.md", 128)) == 1
-    assert client.reads.count(("viking://resources/ara/Long.md", -1)) == 1
-    assert {uri for uri, _ in client.reads} == {
-        "viking://resources/ara/Overview.md",
-        "viking://resources/ara/PAPER.md",
-        "viking://resources/ara/Long.md",
-    }
-
-
-@pytest.mark.asyncio
-async def test_target_catalog_search_failure_keeps_collision_inventory():
-    class Client:
-        async def tree(self, uri, *, node_limit):
-            return [{"uri": f"{uri}/existing.md", "isDir": False, "size": 10}]
-
-        async def find(self, query, **kwargs):
-            raise RuntimeError("index unavailable")
-
-        async def read_raw(self, uri, *, offset=0, limit=-1):
-            raise AssertionError(f"unexpected content read: {uri}")
-
-    service = object.__new__(BotCompileService)
-    service.limits = CompileLimits()
-    catalog, inventory = await service._build_catalog(
-        Client(),
-        "viking://resources/wiki",
-        query="relevant",
-    )
-
-    assert catalog == []
-    assert set(inventory) == {"viking://resources/wiki/existing.md"}
-
-
-@pytest.mark.asyncio
-async def test_load_target_wiki_raw_reads_every_okf_page_but_skips_markdown_artifacts():
-    wiki_uri = "viking://resources/wiki/entity/topic.md"
-    artifact_uri = "viking://resources/wiki/README.md"
-    contents = {
-        wiki_uri: "---\ntype: entity\ntitle: Topic\n---\n\n# Topic\n",
-        artifact_uri: "# README\n",
-    }
-
-    class Client:
-        async def read_raw(self, uri, *, offset=0, limit=-1):
-            assert offset == 0
-            content = contents[uri]
-            if limit == -1:
-                return content
-            return "".join(content.splitlines(keepends=True)[:limit])
-
-    service = object.__new__(BotCompileService)
-    service.limits = CompileLimits()
-    loaded = await service._load_target_wiki_raw(
-        Client(),
-        {
-            wiki_uri: {"size": len(contents[wiki_uri])},
-            artifact_uri: {"size": len(contents[artifact_uri])},
-            "viking://resources/wiki/image.png": {"size": 10},
-        },
-    )
-
-    assert loaded == {wiki_uri: contents[wiki_uri]}
-
-
-@pytest.mark.asyncio
-async def test_memory_target_catalog_uses_memory_search_results():
-    target = "viking://user/alice/memories/preferences/wiki"
-    existing = f"{target}/topic.md"
-
-    class Client:
-        async def tree(self, uri, *, node_limit):
-            assert uri == target
-            return [{"uri": existing, "isDir": False, "abstract": "Existing topic"}]
-
-        async def find(self, query, **kwargs):
-            assert query == "topic"
-            assert kwargs == {
-                "target_uri": target,
-                "context_type": "memory",
-                "limit": CompileLimits().target_catalog_pages,
-            }
-            return {"memories": [{"uri": existing, "abstract": "Relevant topic"}]}
-
-        async def read_raw(self, uri, *, offset=0, limit=-1):
-            assert uri == existing
-            return "---\ntype: concept\n---\n\n# Topic"
-
-    service = object.__new__(BotCompileService)
-    service.limits = CompileLimits()
-    catalog, inventory = await service._build_catalog(
-        Client(),
-        target,
-        query="topic",
-    )
-
-    assert set(inventory) == {existing}
-    assert catalog == [
-        {
-            "uri": existing,
-            "kind": "wiki_page",
-            "title": "topic",
-            "type": "concept",
-            "summary": "Relevant topic",
-            "page_id": 1,
-        }
-    ]
-
-
 class _NamedTool(_EchoTool):
     def __init__(self, name):
         self._name = name
@@ -3744,381 +2771,6 @@ class _NamedTool(_EchoTool):
     @property
     def name(self):
         return self._name
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("uri", "expected_path"),
-    [
-        ("skills/wiki/references/guide.md", "skills/wiki/references/guide.md"),
-        ("viking://skills/wiki/references/guide.md", "skills/wiki/references/guide.md"),
-    ],
-)
-async def test_scoped_tool_redirects_skill_workspace_reads(uri, expected_path):
-    wrapped = CompileScopedTool(
-        _NamedTool("openviking_multi_read"),
-        roots=("viking://resources/source",),
-        limits=CompileLimits(),
-        result_budget={"bytes": 0},
-        budget_lock=asyncio.Lock(),
-    )
-
-    result = await wrapped.execute(ToolContext(), uris=[uri])
-
-    assert "read_file" in result
-    assert expected_path in result
-
-
-@pytest.mark.asyncio
-async def test_scoped_tool_keeps_normal_scope_errors_and_valid_reads():
-    wrapped = CompileScopedTool(
-        _NamedTool("openviking_multi_read"),
-        roots=("viking://resources/source",),
-        limits=CompileLimits(),
-        result_budget={"bytes": 0},
-        budget_lock=asyncio.Lock(),
-    )
-
-    rejected = await wrapped.execute(ToolContext(), uris=["viking://resources/other/file.md"])
-    accepted = await wrapped.execute(ToolContext(), uris=["viking://resources/source/file.md"])
-
-    assert "outside the Compile task scope" in rejected
-    assert "read_file" not in rejected
-    assert "viking://resources/source/file.md" in accepted
-
-
-@pytest.mark.parametrize("exec_enabled", [True, False])
-def test_compile_registry_has_a_fixed_ara_compatible_tool_set(exec_enabled):
-    available = ToolRegistry()
-    for name in (
-        "read_file",
-        "write_file",
-        "edit_file",
-        "exec",
-        "web_search",
-        "message",
-        "cron",
-        "spawn",
-        "openviking_list",
-        "openviking_search",
-        "openviking_grep",
-        "openviking_glob",
-        "openviking_multi_read",
-        "openviking_add_resource",
-        "openviking_memory_commit",
-    ):
-        available.register(_NamedTool(name))
-    request_loop = SimpleNamespace(tools=available, config=None)
-    service = object.__new__(BotCompileService)
-    service.limits = CompileLimits()
-    common = {
-        "request_loop": request_loop,
-        "roots": ("viking://resources/source", "viking://resources/wiki"),
-        "target_uri": "viking://resources/wiki",
-        "source_ids": {"src_1"},
-        "catalog_uris": set(),
-    }
-
-    registry, ov_names = service._build_compile_registry(
-        **common,
-        capabilities=CompileCapabilities(exec_enabled=exec_enabled),
-    )
-    expected_tools = {
-        "read_file",
-        "write_file",
-        "edit_file",
-        "openviking_list",
-        "openviking_search",
-        "openviking_grep",
-        "openviking_glob",
-        "openviking_multi_read",
-        "submit_wiki_bundle",
-    }
-    if exec_enabled:
-        expected_tools.add("exec")
-    assert set(registry.tool_names) == expected_tools
-    assert ov_names == {
-        "openviking_list",
-        "openviking_search",
-        "openviking_grep",
-        "openviking_glob",
-        "openviking_multi_read",
-    }
-    assert registry.tool_names[-1] == "submit_wiki_bundle"
-    assert all(isinstance(registry.get(name), CompileScopedTool) for name in ov_names)
-    submit = registry.get("submit_wiki_bundle")
-    assert submit.require_workspace_files is False
-    assert submit.require_workspace_pages is False
-    assert submit.exec_enabled is exec_enabled
-
-    checkout_registry, _ = service._build_compile_registry(
-        **common,
-        capabilities=CompileCapabilities(exec_enabled=exec_enabled),
-        target_checkout_enabled=True,
-        source_roots={"src_1": "viking://resources/source"},
-    )
-    checkout_submit = checkout_registry.get("submit_wiki_bundle")
-    assert isinstance(checkout_submit, SubmitTargetCheckoutTool)
-    assert checkout_submit.parameters["properties"] == {}
-
-
-def test_compile_registry_keeps_source_fallback_tools_only_when_needed():
-    available = ToolRegistry()
-    for name in (
-        "read_file",
-        "openviking_export",
-        "openviking_list",
-        "openviking_glob",
-        "openviking_multi_read",
-    ):
-        available.register(_NamedTool(name))
-    request_loop = SimpleNamespace(tools=available, config=None)
-    service = object.__new__(BotCompileService)
-    service.limits = CompileLimits()
-    common = {
-        "request_loop": request_loop,
-        "roots": ("viking://resources/source",),
-        "target_uri": "viking://resources/wiki",
-        "source_ids": {"src_1"},
-        "catalog_uris": set(),
-    }
-
-    materialized_registry, materialized_ov = service._build_compile_registry(
-        **common,
-        capabilities=CompileCapabilities(exec_enabled=False),
-        materialized=True,
-    )
-    assert "openviking_export" not in materialized_registry.tool_names
-    assert not {
-        "openviking_list",
-        "openviking_glob",
-        "openviking_multi_read",
-    } & set(materialized_registry.tool_names)
-
-    fallback_registry, fallback_ov = service._build_compile_registry(
-        **common,
-        capabilities=CompileCapabilities(exec_enabled=False),
-        materialized=True,
-        source_fallback=True,
-    )
-    assert "openviking_export" not in fallback_registry.tool_names
-    assert {
-        "openviking_list",
-        "openviking_glob",
-        "openviking_multi_read",
-    } <= set(fallback_registry.tool_names)
-    assert fallback_ov == {
-        "openviking_list",
-        "openviking_glob",
-        "openviking_multi_read",
-    }
-
-    eager_registry, eager_ov = service._build_compile_registry(
-        **common,
-        capabilities=CompileCapabilities(exec_enabled=False),
-    )
-    assert "openviking_export" in eager_registry.tool_names
-    assert "openviking_export" in eager_ov
-
-
-def test_compile_prompt_uses_materialized_workflow_when_manifest_available():
-    request = SanitizedCompileRequest.model_validate(
-        {
-            "from": ["viking://resources/source"],
-            "to": "viking://resources/wiki",
-            "skill": "viking://agent/skills/wiki",
-            "instruction": "Compile the research",
-        }
-    )
-    common = {
-        "request": request,
-        "skill_name": "wiki",
-        "skill_content": "Write Wiki pages.",
-        "catalog": [],
-        "capabilities": CompileCapabilities(exec_enabled=True),
-    }
-
-    materialized_system, _ = BotCompileService._build_prompts(
-        **common,
-        materialized_manifest="compile_resources/_manifest.tsv",
-    )
-    assert "read `compile_resources/_manifest.tsv`" in materialized_system
-    assert "Do NOT use openviking_list" in materialized_system
-
-    truncated_system, _ = BotCompileService._build_prompts(
-        **common,
-        materialized_manifest="compile_resources/_manifest.tsv",
-        catalog_truncated=True,
-    )
-    assert "source catalog was truncated" in truncated_system
-    assert "openviking_list/openviking_glob/openviking_multi_read" in truncated_system
-
-    eager_system, _ = BotCompileService._build_prompts(**common)
-    assert "Map the corpus first: run openviking_list" in eager_system
-    assert "Do NOT use openviking_list" not in eager_system
-
-
-def test_compile_prompt_includes_per_source_inventory():
-    request = SanitizedCompileRequest.model_validate(
-        {
-            "from": [
-                "viking://resources/dream-memory-store",
-                "viking://resources/dream-sessions",
-            ],
-            "to": "viking://resources/wiki",
-            "skill": "viking://agent/skills/wiki",
-            "instruction": "Compile",
-        }
-    )
-    sources = [
-        {
-            "source_id": "src_1",
-            "directory_uri": "viking://resources/dream-memory-store",
-            "file_count": 46,
-            "total_bytes": 180_000,
-            "entries": [
-                {"name": "a.md", "is_dir": False},
-                {"name": "b.md", "is_dir": False},
-                {"name": "MEMORY", "is_dir": True},
-            ],
-        },
-        {
-            "source_id": "src_2",
-            "directory_uri": "viking://resources/dream-sessions",
-            "file_count": 480,
-            "total_bytes": 22_000_000,
-            "entries": [{"name": "rollout.jsonl", "is_dir": False}],
-        },
-    ]
-
-    _system, user = BotCompileService._build_prompts(
-        request=request,
-        skill_name="wiki",
-        skill_content="Write pages.",
-        catalog=[],
-        capabilities=CompileCapabilities(exec_enabled=True),
-        sources=sources,
-    )
-
-    assert "Source inventory (data):" in user
-    assert "src_1" in user and "src_2" in user
-    assert "46 files" in user
-    assert "480 files" in user
-    assert "md:2" in user
-    assert "jsonl:1" in user
-
-    # Without sources (e.g. older callers), the inventory section is omitted entirely.
-    _system, user_without = BotCompileService._build_prompts(
-        request=request,
-        skill_name="wiki",
-        skill_content="Write pages.",
-        catalog=[],
-        capabilities=CompileCapabilities(exec_enabled=True),
-    )
-    assert "Source inventory (data):" not in user_without
-
-
-def test_compile_prompt_routes_skill_cli_commands_through_exec():
-    request = SanitizedCompileRequest.model_validate(
-        {
-            "from": ["viking://resources/source"],
-            "to": "viking://resources/wiki",
-            "skill": "viking://agent/skills/ara",
-            "instruction": "Compile the research",
-        }
-    )
-
-    system, user = BotCompileService._build_prompts(
-        request=request,
-        skill_name="ara",
-        skill_content="Follow the ARA method.",
-        catalog=[],
-        capabilities=CompileCapabilities(exec_enabled=True),
-    )
-
-    assert "When the Skill asks to run Bash, shell commands, or a CLI, use the exec tool." in system
-    assert "`skills/ara/`" in system
-    assert "resolve its relative paths there and use read_file" in system
-    assert (
-        "Submit Wiki page bodies and artifact file content inline in submit_wiki_bundle" in system
-    )
-    assert "workspace_path (files) or body_workspace_path (pages)" in system
-    assert "Compile host capability notice" not in system
-    assert "Preserve every required output type, path, and format" in system
-    assert "preserve Skill-prescribed artifact file trees as exact files" in system
-    assert "bundle.links" not in system
-    assert "match_text" not in system
-    assert "pages=[]" not in system
-    assert "body_workspace_path" in system
-    assert "use its URI as an ordinary Markdown link" in system
-    assert "unavailable" not in user
-    assert "verify every output path and format explicitly required by the Skill" in user
-    assert "Inspect the source directories" in system
-    for implementation_name in (
-        "submit_wiki_bundle",
-        "source_id",
-        "update_uri",
-        "workspace_path",
-    ):
-        assert implementation_name not in user
-
-
-def test_compile_prompt_omits_exec_when_capability_is_disabled():
-    request = SanitizedCompileRequest.model_validate(
-        {
-            "from": ["viking://resources/source"],
-            "to": "viking://resources/wiki",
-            "skill": "viking://agent/skills/wiki",
-            "instruction": "Compile the research",
-        }
-    )
-
-    system, _user = BotCompileService._build_prompts(
-        request=request,
-        skill_name="wiki",
-        skill_content="Write two Wiki pages.",
-        catalog=[],
-        capabilities=CompileCapabilities(exec_enabled=False),
-    )
-
-    assert "Command execution is unavailable." in system
-    assert "Do not attempt Bash, shell commands, or CLI commands" in system
-    assert "use write_file or edit_file" in system
-    assert (
-        "Submit Wiki page bodies and artifact file content inline in submit_wiki_bundle" in system
-    )
-    assert "write_file or exec" not in system
-    assert "use the exec tool" not in system
-
-
-def test_compile_prompt_requires_one_complete_skill_package_without_exec():
-    request = SanitizedCompileRequest.model_validate(
-        {
-            "from": ["viking://resources/weekly"],
-            "to": "viking://agent/skills",
-            "skill": "viking://agent/skills/skill-creator",
-            "instruction": "Create a weekly report Skill",
-        }
-    )
-
-    system, user = BotCompileService._build_prompts(
-        request=request,
-        skill_name="skill-creator",
-        skill_content="Create a standards-compliant Skill.",
-        catalog=[],
-        capabilities=CompileCapabilities(exec_enabled=False),
-    )
-
-    assert "Command execution is unavailable." in system
-    assert "write_file or exec" not in system
-    assert "workspace_path (files) or body_workspace_path (pages)" in system
-    assert "exactly one complete Skill package as artifact files" in system
-    assert "<skill-name>/SKILL.md" in system
-    assert "Do not produce Wiki pages, links" in system
-    assert "one complete Skill package" in user
-    assert "on demand" in user
-    assert "existing auxiliary files not included in the submission are preserved" in user
-    assert "Existing target files" not in user
 
 
 def _compile_service(
@@ -4238,70 +2890,6 @@ def test_compile_exec_capability_fails_closed_for_unknown_backend(tmp_path: Path
     service.config.sandbox.backend = "future-backend"
 
     assert service._compile_capabilities() == CompileCapabilities(exec_enabled=False)
-
-
-@pytest.mark.asyncio
-async def test_compile_without_exec_rejects_cli_skill_before_sandbox_access(
-    tmp_path: Path,
-):
-    service = object.__new__(BotCompileService)
-
-    class SandboxManager:
-        async def get_sandbox(self, session_key):
-            raise AssertionError(f"sandbox must not be accessed: {session_key}")
-
-    with pytest.raises(CompileFailure) as raised:
-        await service._check_requirements(
-            {"requires": {"bins": ["python3"], "env": ["API_TOKEN"]}},
-            capabilities=CompileCapabilities(exec_enabled=False),
-            sandbox_manager=SandboxManager(),
-            session_key=SessionKey(type="compile", channel_id="task", chat_id="task"),
-            workspace=tmp_path,
-            skill_name="cli-skill",
-        )
-
-    assert raised.value.code == "SKILL_CAPABILITY_UNAVAILABLE"
-    assert "bin:python3" in str(raised.value)
-    assert "env:API_TOKEN" in str(raised.value)
-    assert "allow_compile_exec=true" in str(raised.value)
-
-
-@pytest.mark.asyncio
-async def test_compile_without_exec_syncs_ordinary_skill_without_running_commands(
-    tmp_path: Path,
-):
-    service = object.__new__(BotCompileService)
-    skill_dir = tmp_path / "skills" / "wiki"
-    skill_dir.mkdir(parents=True)
-    (skill_dir / "SKILL.md").write_text("Write Wiki pages.", encoding="utf-8")
-
-    class Sandbox:
-        def __init__(self):
-            self.files = {}
-
-        async def write_file(self, path, content):
-            self.files[path] = content
-
-        async def execute(self, command):
-            raise AssertionError(f"command must not run: {command}")
-
-    sandbox = Sandbox()
-
-    class SandboxManager:
-        async def get_sandbox(self, session_key):
-            assert session_key.type == "compile"
-            return sandbox
-
-    await service._check_requirements(
-        {},
-        capabilities=CompileCapabilities(exec_enabled=False),
-        sandbox_manager=SandboxManager(),
-        session_key=SessionKey(type="compile", channel_id="task", chat_id="task"),
-        workspace=tmp_path,
-        skill_name="wiki",
-    )
-
-    assert sandbox.files == {"skills/wiki/SKILL.md": "Write Wiki pages."}
 
 
 @pytest.mark.asyncio
@@ -4502,7 +3090,6 @@ async def test_salvage_copies_workspace_and_repairs_links(tmp_path: Path):
         "bad#name.txt": b"unsafe URI",
         "__compile_staging__/work/notes.txt": b"notes",
         "__compile_staging__/tmp/check.txt": b"check",
-        READLIST_PATH: b"compile_resources/src_1/a.md\n",
         "tmp_out/scratch.txt": b"scratch",
         "TmpCache/case.txt": b"case",
         "skills/wiki/SKILL.md": b"do not copy",
@@ -4564,7 +3151,6 @@ async def test_salvage_copies_workspace_and_repairs_links(tmp_path: Path):
     assert payloads["meta/events.jsonl"] == b""
     assert "__compile_staging__/work/notes.txt" not in payloads
     assert "__compile_staging__/tmp/check.txt" not in payloads
-    assert READLIST_PATH not in payloads
     assert "tmp_out/scratch.txt" not in payloads
     assert "TmpCache/case.txt" not in payloads
     assert "sandboxes/cmp-srt-settings.json" not in payloads
@@ -4727,9 +3313,7 @@ async def test_salvage_skips_oversized_file_before_reading(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_salvage_grace_returns_when_cancellation_is_suppressed(
-    monkeypatch, tmp_path: Path
-):
+async def test_salvage_grace_returns_when_cancellation_is_suppressed(monkeypatch, tmp_path: Path):
     service = _compile_service(
         tmp_path,
         auth_mode="api_key",
@@ -4786,9 +3370,7 @@ async def test_salvage_grace_returns_when_cancellation_is_suppressed(
 
 
 @pytest.mark.asyncio
-async def test_salvage_keeps_its_grace_period_when_parent_is_cancelled(
-    monkeypatch, tmp_path: Path
-):
+async def test_salvage_keeps_its_grace_period_when_parent_is_cancelled(monkeypatch, tmp_path: Path):
     service = _compile_service(
         tmp_path,
         auth_mode="api_key",
@@ -4955,7 +3537,9 @@ async def test_iteration_limit_salvages_before_workspace_cleanup(monkeypatch, tm
             self.workspace_path = tmp_path / "host-workspace"
             self.skills = []
             self.sandbox = SimpleNamespace(
-                mode=None, model_copy=lambda *, deep: SimpleNamespace(mode=None)
+                backend=SandboxBackend.DIRECT,
+                mode=None,
+                model_copy=lambda *, deep: SimpleNamespace(mode=None),
             )
 
         def model_copy(self, *, update):
@@ -4981,18 +3565,6 @@ async def test_iteration_limit_salvages_before_workspace_cleanup(monkeypatch, tm
         async def cleanup_session(self, session_key):
             del session_key
             observed.append("cleanup")
-
-    class FakeSkillsLoader:
-        def __init__(self, workspace, *, builtin_skills_dir):
-            del workspace, builtin_skills_dir
-
-        def load_skills_for_context(self, names):
-            assert names == ["wiki"]
-            return "Write Wiki pages."
-
-        def _get_skill_meta(self, name):
-            assert name == "wiki"
-            return {}
 
     class FakeRequestLoop:
         def __init__(self, **kwargs):
@@ -5023,14 +3595,6 @@ async def test_iteration_limit_salvages_before_workspace_cleanup(monkeypatch, tm
     async def no_op(*args, **kwargs):
         del args, kwargs
 
-    async def build_sources(*args, **kwargs):
-        del args, kwargs
-        return []
-
-    async def build_catalog(*args, **kwargs):
-        del args, kwargs
-        return [], {}
-
     async def salvage(*, client, request, sandbox, workspace_baseline, reason):
         del client
         assert workspace_baseline == set()
@@ -5050,7 +3614,6 @@ async def test_iteration_limit_salvages_before_workspace_cleanup(monkeypatch, tm
         )
 
     monkeypatch.setattr("vikingbot.compile.service.SandboxManager", FakeSandboxManager)
-    monkeypatch.setattr("vikingbot.compile.service.SkillsLoader", FakeSkillsLoader)
     monkeypatch.setattr("vikingbot.compile.service.AgentLoop", FakeRequestLoop)
     monkeypatch.setattr("vikingbot.compile.service.VikingClient.create", create_client)
 
@@ -5068,15 +3631,9 @@ async def test_iteration_limit_salvages_before_workspace_cleanup(monkeypatch, tm
         exec_config=None,
     )
     service = BotCompileService(agent_loop=host_loop)
-    monkeypatch.setattr(service, "_materialize_skill", no_op)
-    monkeypatch.setattr(service, "_check_requirements", no_op)
-    monkeypatch.setattr(service, "_build_sources", build_sources)
-    monkeypatch.setattr(service, "_build_catalog", build_catalog)
     submit_tool = SimpleNamespace(file_payloads=[], page_count=1, file_count=1)
     registry = SimpleNamespace(get=lambda name: submit_tool)
-    monkeypatch.setattr(
-        service, "_build_compile_registry", lambda *args, **kwargs: (registry, set())
-    )
+    monkeypatch.setattr(service, "_build_compile_registry", lambda *args, **kwargs: registry)
     monkeypatch.setattr(service, "_salvage_workspace", salvage)
 
     request = _sanitized_compile_request()
@@ -5217,7 +3774,7 @@ async def test_task_store_prunes_expired_and_excess_terminal_records(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_task_owner_isolation_and_skill_snapshot_sync(tmp_path: Path):
+async def test_task_owner_isolation(tmp_path: Path):
     store = CompileTaskStore(tmp_path)
     now = utc_now()
     task = CompileTask(
@@ -5244,27 +3801,128 @@ async def test_task_owner_isolation_and_skill_snapshot_sync(tmp_path: Path):
     assert await service.get_task("cmp_owner", principal_scope="other") is None
     assert (await service.get_task("cmp_owner", principal_scope="owner"))["task_id"] == "cmp_owner"
 
-    workspace = tmp_path / "workspace"
-    skill_dir = workspace / "skills" / "wiki" / "references"
-    skill_dir.mkdir(parents=True)
-    (workspace / "skills" / "wiki" / "SKILL.md").write_text("Skill", encoding="utf-8")
-    (skill_dir / "guide.md").write_text("Guide", encoding="utf-8")
-    (skill_dir / "asset.bin").write_bytes(b"\xff\x00")
 
-    class Sandbox:
-        def __init__(self):
-            self.files = {}
+@pytest.mark.asyncio
+async def test_compile_reads_with_existing_shell_cli_and_submits_without_preloading(
+    monkeypatch, tmp_path: Path
+):
+    """The first agent turn uses the environment CLI; only submission writes through the client."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    ov = bin_dir / "ov"
+    ov.write_text('#!/bin/sh\nprintf "runtime-skill %s" "$OPENVIKING_CLI_CONFIG_FILE"\n')
+    ov.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("OPENVIKING_CLI_CONFIG_FILE", "/existing/ovcli.conf")
+    writes = []
+    shell = ExecTool()
 
-        async def write_file(self, path, content):
-            self.files[path] = content
+    class Client:
+        async def batch_write(self, *, root_uri, operations, wait, timeout):
+            writes.extend(operations)
+            assert root_uri == "viking://resources/wiki"
+            assert all(op["mode"] == "upsert" for op in operations)
+            return {"created": [op["uri"] for op in operations]}
 
-    sandbox = Sandbox()
-    await BotCompileService._sync_skill_snapshot(
-        sandbox=sandbox,
-        workspace=workspace,
-        skill_name="wiki",
+        async def close(self):
+            pass
+
+    async def create_client(**kwargs):
+        return Client()
+
+    class RequestLoop:
+        def __init__(self, **kwargs):
+            self.config = kwargs["config"]
+            self.manager = kwargs["sandbox_manager"]
+            self.tools = ToolRegistry()
+            self.tools.register(shell)
+
+        async def run_structured_task(self, **kwargs):
+            assert not writes
+            assert len(kwargs["system_prompt"]) < 1100
+            assert "ov read <skill>/SKILL.md" in kwargs["system_prompt"]
+            assert set(json.loads(kwargs["user_prompt"])) == {"reason", "from", "to", "skill"}
+            assert kwargs["openviking_tool_names"] == set()
+            registry = kwargs["tool_registry"]
+            assert registry.get("exec") is shell
+            assert set(registry.tool_names) == {"exec", "submit_wiki_bundle"}
+            context = ToolContext(session_key=kwargs["session_key"], sandbox_manager=self.manager)
+            sandbox = await self.manager.get_sandbox(context.session_key)
+            assert await sandbox.list_files(max_entries=10) == []
+            read = await registry.get("exec").execute(
+                context, command="ov read 'viking://agent/skills/wiki/SKILL.md'"
+            )
+            assert read == "runtime-skill /existing/ovcli.conf"
+            await sandbox.write_file(
+                "__compile_staging__/output/topic.md",
+                "---\ntype: concept\ntitle: Topic\ndescription: Summary\n---\nBody.\n",
+            )
+            submit = registry.get("submit_wiki_bundle")
+            assert (await submit.execute(context)).startswith("Resource output accepted")
+            return submit.bundle, [], {}, 1
+
+    config = Config(storage_workspace=str(tmp_path), sandbox=SandboxConfig(backend="direct"))
+    host = SimpleNamespace(
+        config=config,
+        bus=None,
+        provider=None,
+        model=None,
+        temperature=0,
+        memory_window=1,
+        brave_api_key=None,
+        exa_api_key=None,
+        gen_image_model=None,
+        exec_config=None,
     )
-    assert sandbox.files == {
-        "skills/wiki/SKILL.md": "Skill",
-        "skills/wiki/references/guide.md": "Guide",
-    }
+    service = BotCompileService(agent_loop=host)
+    request = _sanitized_compile_request()
+    task = CompileTask(
+        task_id="cmp_cli",
+        principal_scope="owner",
+        sanitized_request=request,
+        status="accepted",
+        stage="queued",
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    await service.store.create(task)
+    monkeypatch.setattr("vikingbot.compile.service.AgentLoop", RequestLoop)
+    monkeypatch.setattr("vikingbot.compile.service.VikingClient.create", create_client)
+    await service._execute_task(task.task_id, request, {"api_key": "request-key"})
+    completed = await service.store.get(task.task_id)
+    assert completed.status == "completed"
+    assert completed.result.created == ["viking://resources/wiki/topic.md"]
+    assert len(writes) == 1
+    assert not (config.bot_data_path / "compile_workspaces" / task.task_id).exists()
+
+
+@pytest.mark.asyncio
+async def test_memory_update_resolves_only_submitted_target_without_inventory():
+    """Updates work without a startup catalog and reject paths outside the target."""
+    target = "viking://user/alice/memories/wiki"
+    uri = f"{target}/topic.md"
+    calls = []
+
+    async def resolve(value):
+        calls.append(value)
+        return value == uri
+
+    catalog = set()
+    tool = SubmitWikiBundleTool(
+        source_ids={"src_1"},
+        catalog_uris=catalog,
+        target_uri=target,
+        limits=CompileLimits(),
+        wiki_uri_resolver=resolve,
+    )
+    result = await tool.execute(
+        ToolContext(), pages=[_page(1, "Topic", update_uri=uri, path_hint=None)]
+    )
+    assert result.startswith("Wiki bundle accepted")
+    assert catalog == {uri}
+    result = await tool.execute(
+        ToolContext(),
+        pages=[_page(1, "Outside", update_uri="viking://resources/outside.md", path_hint=None)],
+    )
+    assert result.startswith("Error:")
+    assert calls == [uri]

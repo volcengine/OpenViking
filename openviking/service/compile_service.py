@@ -115,14 +115,20 @@ class CompileAPIClient:
         *,
         idempotency_key: str | None = None,
     ) -> dict[str, str]:
+        """Build Runtime headers from the task's saved caller identity and optional retry key."""
         headers = {
             "Content-Type": "application/json",
         }
         if self._endpoint.gateway_token:
             headers["X-Gateway-Token"] = self._endpoint.gateway_token
-        api_key = str(connection.get("api_key") or "").strip()
-        if api_key:
-            headers["X-API-Key"] = api_key
+        for field, header in (
+            ("api_key", "X-API-Key"),
+            ("account_id", "X-OpenViking-Account"),
+            ("user_id", "X-OpenViking-User"),
+        ):
+            value = str(connection.get(field) or "").strip()
+            if value:
+                headers[header] = value
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
         return headers
@@ -487,6 +493,7 @@ class CompileService:
             error_code=error_code,
             error_message=error_message,
         )
+
 
 __all__ = [
     "CompileAPIClient",

@@ -2,6 +2,8 @@
 
 Agent Runtime Server 负责执行 Agent 任务，当前支持 Compile。应用通过 OpenViking 的 Compile API 提交任务，OpenViking 负责校验请求、持久化任务和管理生命周期，再调用 Runtime 执行接口；内置 VikingBot 也实现了同一执行协议，可用于本地部署。
 
+内置 VikingBot 的 Compile 通过现有 `exec` 工具调用运行环境中的 `ov` CLI，按需读取 Skill、来源和已有目标内容。运行环境须启用命令执行、安装 `ov`，并配置好 CLI 的连接和身份；Compile 沿用该配置。任务启动时不下载输入文件、预加载目录摘要或注入 Skill 正文。Agent 生成结果后仍调用统一提交工具，由服务校验并写入目标；Resource 输出暂存于任务工作区的 `__compile_staging__/output/`，未提交的已有目标文件保持不变。
+
 **代码入口**：
 
 - `openviking/server/routers/compile.py` - 创建 Compile 任务
