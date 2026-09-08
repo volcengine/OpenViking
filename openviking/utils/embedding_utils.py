@@ -365,6 +365,7 @@ async def vectorize_directory_meta(
     ingest_options: IngestOptions | None = None,
     creator_acl_grant: CreatorAclGrant | None = None,
     include_abstract: bool = True,
+    telemetry_id: str | None = None,
 ) -> None:
     """
     Vectorize directory metadata (.abstract.md and .overview.md).
@@ -414,7 +415,7 @@ async def vectorize_directory_meta(
                 Vectorize(text=embedding_text_for_body(ContextLevel.ABSTRACT, uri, abstract))
             )
             msg_abstract = EmbeddingMsgConverter.from_context(
-                context_abstract, creator_acl_grant
+                context_abstract, creator_acl_grant, telemetry_id=telemetry_id
             )
             _apply_scalar_overrides(
                 msg_abstract,
@@ -461,7 +462,7 @@ async def vectorize_directory_meta(
                 Vectorize(text=embedding_text_for_body(ContextLevel.OVERVIEW, uri, overview))
             )
             msg_overview = EmbeddingMsgConverter.from_context(
-                context_overview, creator_acl_grant
+                context_overview, creator_acl_grant, telemetry_id=telemetry_id
             )
             _apply_scalar_overrides(
                 msg_overview,
@@ -508,6 +509,7 @@ async def vectorize_file(
     scalar_override: Optional[Dict[str, Any]] = None,
     ingest_options: IngestOptions | None = None,
     creator_acl_grant: CreatorAclGrant | None = None,
+    telemetry_id: str | None = None,
 ) -> bool:
     """
     Vectorize a single file.
@@ -623,7 +625,9 @@ async def vectorize_file(
             logger.debug(f"Skipping file {file_path} (no text content or summary)")
             return False
 
-        embedding_msg = EmbeddingMsgConverter.from_context(context, creator_acl_grant)
+        embedding_msg = EmbeddingMsgConverter.from_context(
+            context, creator_acl_grant, telemetry_id=telemetry_id
+        )
         if not embedding_msg:
             return False
 

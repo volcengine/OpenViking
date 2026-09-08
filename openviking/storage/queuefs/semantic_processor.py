@@ -495,6 +495,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                 generation_trigger=msg.generation_trigger,
                                 aggregate_directory=msg.aggregate_directory,
                                 copy_source_uri=msg.copy_source_uri,
+                                telemetry_id=msg.telemetry_id,
                             )
                             await executor.run(run_uri)
                             self._cache_dag_stats(
@@ -728,6 +729,7 @@ class SemanticProcessor(DequeueHandlerBase):
                         summary_dict=summary_dict,
                         ctx=ctx,
                         preserve_existing_created_at=True,
+                        telemetry_id=msg.telemetry_id,
                     )
                 file_summaries[idx] = {
                     "name": str(summary_dict.get("name") or file_name),
@@ -793,6 +795,7 @@ class SemanticProcessor(DequeueHandlerBase):
             abstract=abstract,
             overview=overview,
             ctx=ctx,
+            telemetry_id=msg.telemetry_id,
         )
         logger.info(f"Vectorized abstract.md and overview.md for {dir_uri}")
 
@@ -1556,6 +1559,7 @@ class SemanticProcessor(DequeueHandlerBase):
         ctx: Optional[RequestContext] = None,
         ingest_options: IngestOptions | None = None,
         creator_acl_grant: CreatorAclGrant | None = None,
+        telemetry_id: str = "",
     ) -> None:
         """Create directory Context and enqueue to EmbeddingQueue."""
 
@@ -1570,6 +1574,7 @@ class SemanticProcessor(DequeueHandlerBase):
             ctx=active_ctx,
             ingest_options=ingest_options,
             creator_acl_grant=creator_acl_grant,
+            telemetry_id=telemetry_id,
         )
 
     async def _load_transfer_file_summaries(
@@ -1598,6 +1603,7 @@ class SemanticProcessor(DequeueHandlerBase):
         preserve_existing_created_at: bool = False,
         ingest_options: IngestOptions | None = None,
         creator_acl_grant: CreatorAclGrant | None = None,
+        telemetry_id: str = "",
     ) -> None:
         """Vectorize a single file using its content or summary."""
         from openviking.utils.embedding_utils import vectorize_file
@@ -1613,4 +1619,5 @@ class SemanticProcessor(DequeueHandlerBase):
             preserve_existing_created_at=preserve_existing_created_at,
             ingest_options=ingest_options,
             creator_acl_grant=creator_acl_grant,
+            telemetry_id=telemetry_id,
         )
