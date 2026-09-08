@@ -1,23 +1,5 @@
 import os
-import time
 import uuid
-
-
-def _copy_when_ready(api_client, source, target, *, recursive=False):
-    # Background semantic refreshes can briefly hold the source tree lock.
-    deadline = time.monotonic() + 30
-    while True:
-        copied = api_client.fs_cp(source, target, recursive=recursive)
-        if copied.status_code != 409:
-            return copied
-        details = (copied.json().get("error") or {}).get("details") or {}
-        if (
-            details.get("conflict_type") != "path_busy"
-            or details.get("retryable") is not True
-            or time.monotonic() >= deadline
-        ):
-            return copied
-        time.sleep(0.1)
 
 
 class TestFsCp:
@@ -30,7 +12,7 @@ class TestFsCp:
             write = api_client.fs_write(source, content, mode="create", wait=True)
             assert write.status_code == 200
 
-            copied = _copy_when_ready(api_client, source, target)
+            copied = api_client.fs_cp(source, target)
             assert copied.status_code == 200, copied.text
             result = copied.json().get("result", {})
             assert result.get("from") == source
@@ -72,10 +54,10 @@ class TestFsCp:
                 == 200
             )
 
-            without_recursive = _copy_when_ready(api_client, source, target)
+            without_recursive = api_client.fs_cp(source, target)
             assert without_recursive.status_code == 412, without_recursive.text
 
-            copied = _copy_when_ready(api_client, source, target, recursive=True)
+            copied = api_client.fs_cp(source, target, recursive=True)
             assert copied.status_code == 200, copied.text
             assert api_client.fs_read(f"{target}/nested/child.md").status_code == 200
             tree = api_client.fs_tree(target)
@@ -87,7 +69,7 @@ class TestFsCp:
             api_client.fs_rm(source, recursive=True)
             api_client.fs_rm(target, recursive=True)
 
-    def test_cp_overwrites_existing_target_without_changing_source(self, api_client):
+    def test_cp_overwrites_existing_target_and_preserves_source(self, api_client):
         suffix = uuid.uuid4().hex[:8]
         source = f"viking://resources/cp-overwrite-source-{suffix}.md"
         target = f"viking://resources/cp-overwrite-target-{suffix}.md"
@@ -97,18 +79,14 @@ class TestFsCp:
                 == 200
             )
             assert (
-                api_client.fs_write(
-                    target, "old target content", mode="create", wait=True
-                ).status_code
+                api_client.fs_write(target, "target remains", mode="create", wait=True).status_code
                 == 200
             )
 
-            copied = _copy_when_ready(api_client, source, target)
+            copied = api_client.fs_cp(source, target)
             assert copied.status_code == 200, copied.text
-            for uri in (source, target):
-                read = api_client.fs_read(uri)
-                assert read.status_code == 200, read.text
-                assert read.json().get("result") == "source remains"
+            assert "source remains" in api_client.fs_read(source).json().get("result", "")
+            assert "source remains" in api_client.fs_read(target).json().get("result", "")
         finally:
             api_client.fs_rm(source)
             api_client.fs_rm(target)

@@ -18,7 +18,7 @@
    Options:
 
    - Reuse an existing Profile: read the OpenViking URL and secret from a local `ovcli.conf`, with no need to enter them again.
-   - Create a new Profile: manually enter the OpenViking service URL and API key. Use this for first-time setup or when connecting to a new instance.
+   - Create a new Profile: manually provide the OpenViking service endpoint and credentials. Use this for first-time setup or when connecting to a new instance.
 
 3. If you choose **Create new OpenViking profile**, select **OpenViking Service (VolcEngine Cloud)** when asked for the connection type:
 

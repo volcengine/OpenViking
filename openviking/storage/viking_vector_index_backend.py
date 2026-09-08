@@ -2259,13 +2259,15 @@ class VikingVectorIndexBackend:
                 ]
             )
 
+        controlled_modes = [AclMode.INHERIT.value, AclMode.RESTRICTED.value]
         uncontrolled_filter = And(
             [
                 RawDSL(
                     {
                         "op": "must_not",
                         "field": ACL_MODE_FIELD,
-                        "conds": [AclMode.INHERIT.value],
+                        # Exclude controlled modes so absent/null fields stay visible.
+                        "conds": controlled_modes,
                     }
                 ),
                 Or([PathScope("uri", root, depth=-1) for root in visible_roots(ctx)]),
@@ -2275,10 +2277,16 @@ class VikingVectorIndexBackend:
         shared_acl_filter = And(
             [
                 PathScope("uri", "viking://resources", depth=-1),
+                In(ACL_MODE_FIELD, controlled_modes),
                 Or(
                     [
                         In("acl_direct_grants", read_grants),
-                        In("acl_inherited_grants", read_grants),
+                        And(
+                            [
+                                Eq(ACL_MODE_FIELD, AclMode.INHERIT.value),
+                                In("acl_inherited_grants", read_grants),
+                            ]
+                        ),
                     ]
                 ),
             ]

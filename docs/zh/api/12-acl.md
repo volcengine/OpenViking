@@ -1,6 +1,6 @@
 # ACL API
 
-ACL API 管理 `viking://resources/...` 共享资源的直接授权，并返回节点继承后的有效权限。个人资源不接受 ACL，需要分享时应移动到共享区。
+ACL API 管理 `viking://resources/...` 共享资源的直接授权和 restricted 模式，并返回节点继承后的有效权限。个人资源不接受 ACL，需要分享时应移动到共享区。
 
 权限模型和继承规则请先阅读 [资源访问控制（ACL）](../concepts/15-acl.md)。
 
@@ -9,8 +9,8 @@ ACL API 管理 `viking://resources/...` 共享资源的直接授权，并返回�
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/v1/acl?uri={uri}` | 获取直接、继承和有效 ACL |
-| PUT | `/api/v1/acl` | 替换当前节点的直接 ACL |
-| DELETE | `/api/v1/acl?uri={uri}` | 清空当前节点的直接 ACL |
+| PUT | `/api/v1/acl` | 更新当前节点的直接 ACL 或 restricted 模式 |
+| DELETE | `/api/v1/acl?uri={uri}` | 清空直接 ACL 并退出 restricted 模式 |
 | POST | `/api/v1/acl/grant` | 设置一个 principal 的直接权限级别 |
 | POST | `/api/v1/acl/revoke` | 删除一个 principal 的直接授权 |
 
@@ -62,9 +62,9 @@ ACL API 管理 `viking://resources/...` 共享资源的直接授权，并返回�
 | 字段 | 说明 |
 |------|------|
 | `direct_entries` | 只包含当前节点直接设置的条目 |
-| `inherited_entries` | 所有祖先目录直接 ACL 的合并结果 |
-| `effective_entries` | `direct_entries` 与 `inherited_entries` 的合并结果 |
-| `acl_mode` | `none` 表示不受 ACL 控制，`inherit` 表示 direct 与 inherited ACL 均生效；只读派生字段 |
+| `inherited_entries` | 父节点当前的有效权限；restricted 期间也会继续更新 |
+| `effective_entries` | inherit 时合并 direct 与 inherited；restricted 时仅使用 direct |
+| `acl_mode` | `none`：不受 ACL 控制；`inherit`：直接与继承权限均生效；`restricted`：仅直接权限生效 |
 
 account `ADMIN` 的隐式 `manage` 权限不出现在这些列表中。
 
@@ -93,7 +93,7 @@ report = client.acl_get("viking://resources/project-a")
 report, err := client.ACL(ctx, "viking://resources/project-a")
 ```
 
-## 替换直接 ACL
+## 更新直接 ACL 或 restricted 模式
 
 ```
 PUT /api/v1/acl
@@ -107,11 +107,14 @@ PUT /api/v1/acl
   "entries": [
     {"principal": "user:bob", "level": "read"},
     {"principal": "group:engineering", "level": "write"}
-  ]
+  ],
+  "acl_mode": "restricted"
 }
 ```
 
-`entries` 会完整替换当前节点的直接 ACL，不影响祖先或后代节点自己的直接 ACL。重复 principal 会保留最高权限级别。传入空数组等价于删除当前节点的直接 ACL。
+`entries` 和 `acl_mode` 至少传一个。`entries` 完整替换直接权限；`acl_mode` 支持 `restricted`（只使用直接权限）和 `inherit`（恢复继承）。未传的字段保持不变。restricted 期间继承权限仍随父节点更新，恢复继承后立即使用最新值。重复 principal 保留最高权限级别。
+
+不能直接设置 `none` 来绕过父目录的 ACL。恢复继承或删除 ACL 后，如果当前节点没有任何直接权限，父目录也不受 ACL 控制，系统会自动返回 `none`。
 
 ```bash
 curl -X PUT http://localhost:1933/api/v1/acl \
@@ -122,7 +125,8 @@ curl -X PUT http://localhost:1933/api/v1/acl \
     "entries": [
       {"principal": "user:bob", "level": "read"},
       {"principal": "group:engineering", "level": "write"}
-    ]
+    ],
+    "acl_mode": "restricted"
   }'
 ```
 
@@ -135,13 +139,14 @@ report = client.acl_set(
         {"principal": "user:bob", "level": "read"},
         {"principal": "group:engineering", "level": "write"},
     ],
+    acl_mode="restricted",
 )
 ```
 
 异步客户端使用相同方法名：
 
 ```python
-report = await client.acl_set(uri, entries)
+report = await client.acl_set(uri, entries, acl_mode="restricted")
 ```
 
 **Go SDK**
@@ -150,15 +155,22 @@ report = await client.acl_set(uri, entries)
 report, err := client.SetACL(ctx, "viking://resources/project-a", []openviking.ACLEntry{
     {Principal: "user:bob", Level: "read"},
     {Principal: "group:engineering", Level: "write"},
-})
+}, openviking.SetACLOptions{ACLMode: "restricted"})
+
+// 只切换模式，不修改 direct ACL
+report, err = client.SetACLMode(ctx, "viking://resources/project-a", "restricted")
 ```
 
 **CLI**
 
 ```bash
 ov acl set viking://resources/project-a \
+  --acl-mode restricted \
   --entry user:bob=read \
   --entry group:engineering=write
+
+# 只退出 restricted 模式
+ov acl set viking://resources/project-a --acl-mode inherit
 ```
 
 ## 设置单个 principal 权限
@@ -229,7 +241,7 @@ ov acl revoke viking://resources/project-a --principal user:bob
 DELETE /api/v1/acl?uri={uri}
 ```
 
-该接口不删除后代节点的直接 ACL。清空后，当前节点从祖先 ACL 重新继承；每个后代继续由其祖先与自身的直接 ACL 计算有效权限。
+该接口清空当前节点的直接 ACL 并退出 restricted；不会删除已保存的 inherited，也不删除后代节点的直接 ACL。清空后立即使用最新继承权限；父目录也不受 ACL 控制时，`acl_mode` 恢复为 `none`。
 
 ```bash
 curl -X DELETE \
@@ -257,9 +269,9 @@ ov acl rm viking://resources/project-a
 | 修改 ACL 时 URI 尚无 context 记录 | `INVALID_ARGUMENT`，需先完成索引 |
 | `principal` 格式非法，或使用 `group:*` | `INVALID_ARGUMENT` |
 | level 不是 `read/write/manage` | `INVALID_ARGUMENT` |
-| 请求包含 `acl_mode` 等只读字段 | `INVALID_ARGUMENT` |
+| `acl_mode` 不是 `inherit/restricted`，或请求包含 inherited 等只读字段 | `INVALID_ARGUMENT` |
 
-ACL 的 direct 和 inherited 字段都保存在 context。更新会在同一子树批处理中修改目标 direct 并重算后代 inherited；写入失败时恢复原 context ACL 字段。
+ACL 的 mode、direct 和 inherited 字段都保存在 context。更新会在同一子树批处理中修改目标字段并重算后代 inherited；写入失败时恢复原 context ACL 字段。
 
 ## 相关文档
 

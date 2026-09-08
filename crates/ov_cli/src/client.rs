@@ -406,12 +406,20 @@ impl HttpClient {
             .await
     }
 
-    pub async fn acl_set(&self, uri: &str, entries: Vec<Value>) -> Result<Value> {
-        self.put(
-            "/api/v1/acl",
-            &serde_json::json!({"uri": uri, "entries": entries}),
-        )
-        .await
+    pub async fn acl_set(
+        &self,
+        uri: &str,
+        entries: Vec<Value>,
+        acl_mode: Option<String>,
+    ) -> Result<Value> {
+        let mut body = serde_json::json!({"uri": uri});
+        if !entries.is_empty() {
+            body["entries"] = serde_json::Value::Array(entries);
+        }
+        if let Some(acl_mode) = acl_mode {
+            body["acl_mode"] = serde_json::Value::String(acl_mode);
+        }
+        self.put("/api/v1/acl", &body).await
     }
 
     pub async fn acl_grant(&self, uri: &str, principal: &str, level: &str) -> Result<Value> {

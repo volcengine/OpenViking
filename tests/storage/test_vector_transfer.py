@@ -163,7 +163,7 @@ class _TransferAclManager:
     async def materialize_moved_record(self, record, new_uri, ctx):
         del new_uri, ctx
         return {
-            "acl_mode": "inherit",
+            "acl_mode": record.get("acl_mode", "inherit"),
             "acl_direct_grants": list(record.get("acl_direct_grants") or []),
             "acl_inherited_grants": ["1:group:target-readers"],
         }
@@ -1038,7 +1038,7 @@ async def test_update_uri_mapping_preserves_source_direct_acl_on_target():
             _record(
                 "source",
                 source,
-                acl_mode="inherit",
+                acl_mode="restricted",
                 acl_direct_grants=["7:user:alice"],
                 acl_inherited_grants=["1:group:source-readers"],
             )
@@ -1049,6 +1049,7 @@ async def test_update_uri_mapping_preserves_source_direct_acl_on_target():
 
     moved = _records_under(backend, target, recursive=False)
     assert len(moved) == 1
+    assert moved[0]["acl_mode"] == "restricted"
     assert moved[0]["acl_direct_grants"] == ["7:user:alice"]
     assert moved[0]["acl_inherited_grants"] == ["1:group:target-readers"]
 

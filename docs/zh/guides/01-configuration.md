@@ -1445,7 +1445,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 
 ##### ACL schema
 
-ACL 只维护在 context collection。除 `acl_mode: string`（`none` 或 `inherit`）外，需要以下 `list<string>` 标量索引字段：
+ACL 只维护在 context collection。除 `acl_mode: string`（`none`、`inherit` 或 `restricted`）外，需要以下 `list<string>` 标量索引字段：
 
 ```text
 acl_direct_grants

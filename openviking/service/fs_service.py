@@ -27,7 +27,7 @@ from openviking.storage.abstract_overview import (
     plan_abstract_overview_refresh,
     render_abstract_overview,
 )
-from openviking.storage.acl import AclAction, CreatorAclGrant
+from openviking.storage.acl import AclAction, AclMode, CreatorAclGrant
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.expr import And, Eq, In, Or
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
@@ -1151,9 +1151,15 @@ class FSService:
         return await self._ensure_initialized().get_acl(uri, ctx=ctx)
 
     async def set_acl(
-        self, uri: str, entries: List[Dict[str, str]], ctx: RequestContext
+        self,
+        uri: str,
+        entries: Optional[List[Dict[str, str]]],
+        ctx: RequestContext,
+        acl_mode: Optional[AclMode] = None,
     ) -> Dict[str, Any]:
-        return await self._ensure_initialized().set_acl(uri, entries, ctx=ctx)
+        return await self._ensure_initialized().set_acl(
+            uri, entries, ctx=ctx, acl_mode=acl_mode
+        )
 
     async def grant_acl(
         self, uri: str, principal: str, level: str, ctx: RequestContext

@@ -23,6 +23,7 @@ from openviking.storage.acl import (
     AclAction,
     AclEntry,
     AclLevel,
+    AclMode,
     acl_allows,
     acl_ancestors,
     has_implicit_manage,
@@ -297,8 +298,10 @@ class _AccessMixin:
     async def set_acl(
         self,
         uri: str,
-        entries: Sequence[AclEntry | Mapping[str, Any]],
+        entries: Sequence[AclEntry | Mapping[str, Any]] | None = None,
         ctx: Optional[RequestContext] = None,
+        *,
+        acl_mode: AclMode | None = None,
     ) -> Dict[str, Any]:
         real_ctx = await self._ensure_acl_manage(uri, ctx)
         path = self._uri_to_path(uri, ctx=real_ctx)
@@ -306,7 +309,7 @@ class _AccessMixin:
         try:
             await self._ensure_acl_manage(uri, real_ctx)
             await self._ensure_acl_target_exists(uri, real_ctx)
-            effective = await self.acl_manager.set_direct(uri, entries, real_ctx)
+            effective = await self.acl_manager.set_acl(uri, entries, real_ctx, acl_mode=acl_mode)
             return self.acl_manager.to_report(uri, effective)
         finally:
             await self._async_agfs.pathlock_release(lease)
@@ -349,13 +352,13 @@ class _AccessMixin:
                 entries.pop(principal, None)
             else:
                 entries[principal] = AclEntry(principal, normalized_level)
-            effective = await self.acl_manager.set_direct(uri, list(entries.values()), real_ctx)
+            effective = await self.acl_manager.set_acl(uri, list(entries.values()), real_ctx)
             return self.acl_manager.to_report(uri, effective)
         finally:
             await self._async_agfs.pathlock_release(lease)
 
     async def delete_acl(self, uri: str, ctx: Optional[RequestContext] = None) -> Dict[str, Any]:
-        return await self.set_acl(uri, [], ctx=ctx)
+        return await self.set_acl(uri, [], acl_mode=AclMode.INHERIT, ctx=ctx)
 
     def _ensure_user_not_deleting(self, ctx: RequestContext) -> None:
         guard = getattr(self, "_user_deletion_guard", None)
