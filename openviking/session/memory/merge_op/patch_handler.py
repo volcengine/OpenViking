@@ -18,10 +18,13 @@ Enhanced features from RooCode:
 - Levenshtein distance similarity calculation
 """
 
+import math
 import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+from rapidfuzz.distance import Levenshtein as _rf_levenshtein
 
 from openviking.session.memory.merge_op.base import DeleteBlock, StrPatch
 from openviking.session.memory.utils.line_numbers import (
@@ -49,25 +52,19 @@ class PatchParseError(Exception):
 # ============================================================================
 
 
-def levenshtein_distance(s1: str, s2: str) -> int:
-    """Calculate Levenshtein distance between two strings."""
-    if len(s1) < len(s2):
-        return levenshtein_distance(s2, s1)
+def levenshtein_distance(s1: str, s2: str, max_distance: Optional[int] = None) -> int:
+    """Calculate Levenshtein distance between two strings.
 
-    if len(s2) == 0:
-        return len(s1)
-
-    previous_row = list(range(len(s2) + 1))
-    for i, c1 in enumerate(s1):
-        current_row = [i + 1]
-        for j, c2 in enumerate(s2):
-            insertions = previous_row[j + 1] + 1
-            deletions = current_row[j] + 1
-            substitutions = previous_row[j] + (c1 != c2)
-            current_row.append(min(insertions, deletions, substitutions))
-        previous_row = current_row
-
-    return previous_row[-1]
+    With ``max_distance`` the exact value is returned only when it is <= max_distance;
+    anything larger comes back as ``max_distance + 1`` and the computation stops as soon
+    as the cutoff is provably exceeded. Callers that only need "is it close enough" pass
+    the cutoff and never pay for the full matrix on a hopeless pair. Backed by rapidfuzz
+    (C++ with bit-parallel algorithms); a pure-Python matrix over two long lines held the
+    GIL for hours in production.
+    """
+    if max_distance is None:
+        return _rf_levenshtein.distance(s1, s2)
+    return _rf_levenshtein.distance(s1, s2, score_cutoff=max_distance)
 
 
 def normalize_string(text: str) -> str:
@@ -90,8 +87,13 @@ def normalize_string(text: str) -> str:
     return text
 
 
-def get_similarity(original: str, search: str) -> float:
-    """Calculate similarity ratio between two strings (0 to 1)."""
+def get_similarity(original: str, search: str, min_score: float = 0.0) -> float:
+    """Calculate similarity ratio between two strings (0 to 1).
+
+    ``min_score`` is the lowest score the caller would act on. Pairs that cannot reach it
+    (proved by the length difference alone, or by the distance cutoff) return 0.0 without
+    computing the full distance. With the default of 0.0 the result is exact, as before.
+    """
     if search == "":
         return 0.0
 
@@ -101,19 +103,46 @@ def get_similarity(original: str, search: str) -> float:
     if normalized_original == normalized_search:
         return 1.0
 
-    dist = levenshtein_distance(normalized_original, normalized_search)
     max_length = max(len(normalized_original), len(normalized_search))
+    if max_length == 0:
+        return 1.0
 
-    return 1.0 - (dist / max_length) if max_length > 0 else 1.0
+    max_distance: Optional[int] = None
+    if min_score > 0.0:
+        # score >= min_score  <=>  distance <= max_length * (1 - min_score). Round in the
+        # caller's favour so a score that lands exactly on the threshold is still accepted
+        # (int((1 - 0.8) * 5) is 0, not 1, in floating point).
+        max_distance = math.floor(max_length * (1.0 - min_score) + 1e-9)
+        # distance >= |len difference|, so a large gap rules the pair out before any work
+        if abs(len(normalized_original) - len(normalized_search)) > max_distance:
+            return 0.0
+
+    dist = levenshtein_distance(normalized_original, normalized_search, max_distance)
+    if max_distance is not None and dist > max_distance:
+        return 0.0
+
+    score = 1.0 - (dist / max_length)
+    # The integer cutoff is rounded generously; the caller's own float comparison decides
+    # the boundary, so a score that lands numerically below min_score is reported as 0.0.
+    if min_score > 0.0 and score < min_score:
+        return 0.0
+    return score
 
 
 def fuzzy_search(
-    lines: List[str], search_chunk: str, start_index: int, end_index: int
+    lines: List[str],
+    search_chunk: str,
+    start_index: int,
+    end_index: int,
+    min_score: float = 0.0,
 ) -> Dict[str, Any]:
     """
     Perform a "middle-out" search to find the slice most similar to search_chunk.
 
     For single-line search, also checks for substring matches within each line.
+
+    ``min_score`` is the caller's acceptance threshold; candidates that cannot beat the
+    best score seen so far, or reach the threshold, are skipped cheaply.
 
     Returns dict with bestScore, bestMatchIndex, bestMatchContent
     """
@@ -144,7 +173,9 @@ def fuzzy_search(
                     left_index -= 1
                     continue
                 # If no exact match, try the best similarity with substrings
-                line_score, line_content = _find_best_substring_match(line, search_str)
+                line_score, line_content = _find_best_substring_match(
+                    line, search_str, max(best_score, min_score)
+                )
                 if line_score > best_score:
                     best_score = line_score
                     best_match_index = left_index
@@ -152,7 +183,9 @@ def fuzzy_search(
             else:
                 # Original multi-line logic
                 original_chunk = "\n".join(lines[left_index : left_index + search_len])
-                similarity = get_similarity(original_chunk, search_chunk)
+                similarity = get_similarity(
+                    original_chunk, search_chunk, max(best_score, min_score)
+                )
                 if similarity > best_score:
                     best_score = similarity
                     best_match_index = left_index
@@ -171,7 +204,9 @@ def fuzzy_search(
                     right_index += 1
                     continue
                 # If no exact match, try the best similarity with substrings
-                line_score, line_content = _find_best_substring_match(line, search_str)
+                line_score, line_content = _find_best_substring_match(
+                    line, search_str, max(best_score, min_score)
+                )
                 if line_score > best_score:
                     best_score = line_score
                     best_match_index = right_index
@@ -179,7 +214,9 @@ def fuzzy_search(
             else:
                 # Original multi-line logic
                 original_chunk = "\n".join(lines[right_index : right_index + search_len])
-                similarity = get_similarity(original_chunk, search_chunk)
+                similarity = get_similarity(
+                    original_chunk, search_chunk, max(best_score, min_score)
+                )
                 if similarity > best_score:
                     best_score = similarity
                     best_match_index = right_index
@@ -193,8 +230,14 @@ def fuzzy_search(
     }
 
 
-def _find_best_substring_match(line: str, search_str: str) -> tuple[float, str]:
-    """Find the best matching substring in a line."""
+def _find_best_substring_match(
+    line: str, search_str: str, min_score: float = 0.0
+) -> tuple[float, str]:
+    """Find the best matching substring in a line.
+
+    ``min_score`` is the lowest score worth reporting; comparisons that cannot reach it
+    are skipped (see ``get_similarity``).
+    """
     best_score = 0.0
     best_content = ""
     search_len = len(search_str)
@@ -202,7 +245,7 @@ def _find_best_substring_match(line: str, search_str: str) -> tuple[float, str]:
 
     # If search string is longer than line, just compare the whole line
     if search_len >= line_len:
-        return get_similarity(line, search_str), line
+        return get_similarity(line, search_str, min_score), line
 
     # Try sliding window for best match (limit to reasonable checks for performance)
     # First check at start, end, and a few positions in between
@@ -213,13 +256,13 @@ def _find_best_substring_match(line: str, search_str: str) -> tuple[float, str]:
     for i in positions_to_check:
         if 0 <= i <= line_len - search_len:
             substring = line[i : i + search_len]
-            score = get_similarity(substring, search_str)
+            score = get_similarity(substring, search_str, max(best_score, min_score))
             if score > best_score:
                 best_score = score
                 best_content = substring
 
     # Also compare with the whole line as fallback
-    whole_line_score = get_similarity(line, search_str)
+    whole_line_score = get_similarity(line, search_str, max(best_score, min_score))
     if whole_line_score > best_score:
         best_score = whole_line_score
         best_content = line
@@ -602,7 +645,7 @@ class MultiSearchReplaceDiffStrategy:
 
                 # Try exact match first
                 original_chunk = "\n".join(result_lines[exact_start_index : exact_end_index + 1])
-                similarity = get_similarity(original_chunk, search_chunk)
+                similarity = get_similarity(original_chunk, search_chunk, self.fuzzy_threshold)
                 if similarity >= self.fuzzy_threshold:
                     match_index = exact_start_index
                     best_match_score = similarity
@@ -617,7 +660,11 @@ class MultiSearchReplaceDiffStrategy:
             # If no match found yet, try middle-out search within bounds
             if match_index == -1:
                 fuzzy_result = fuzzy_search(
-                    result_lines, search_chunk, search_start_index, search_end_index
+                    result_lines,
+                    search_chunk,
+                    search_start_index,
+                    search_end_index,
+                    self.fuzzy_threshold,
                 )
                 match_index = fuzzy_result["bestMatchIndex"]
                 best_match_score = fuzzy_result["bestScore"]
@@ -635,7 +682,11 @@ class MultiSearchReplaceDiffStrategy:
 
                 # Try middle-out search again with aggressive stripped content
                 fuzzy_result = fuzzy_search(
-                    result_lines, aggressive_search_chunk, search_start_index, search_end_index
+                    result_lines,
+                    aggressive_search_chunk,
+                    search_start_index,
+                    search_end_index,
+                    self.fuzzy_threshold,
                 )
                 if (
                     fuzzy_result["bestMatchIndex"] != -1
@@ -1030,7 +1081,7 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
 
             # Try exact match first
             original_chunk = "\n".join(result_lines[exact_start_index : exact_end_index + 1])
-            similarity = get_similarity(original_chunk, search_chunk)
+            similarity = get_similarity(original_chunk, search_chunk, strategy.fuzzy_threshold)
             if similarity >= strategy.fuzzy_threshold:
                 match_index = exact_start_index
                 best_match_score = similarity
@@ -1045,7 +1096,11 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
         # If no match found yet, try middle-out search within bounds
         if match_index == -1:
             fuzzy_result = fuzzy_search(
-                result_lines, search_chunk, search_start_index, search_end_index
+                result_lines,
+                search_chunk,
+                search_start_index,
+                search_end_index,
+                strategy.fuzzy_threshold,
             )
             match_index = fuzzy_result["bestMatchIndex"]
             best_match_score = fuzzy_result["bestScore"]
@@ -1063,7 +1118,11 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
 
             # Try middle-out search again with aggressive stripped content
             fuzzy_result = fuzzy_search(
-                result_lines, aggressive_search_chunk, search_start_index, search_end_index
+                result_lines,
+                aggressive_search_chunk,
+                search_start_index,
+                search_end_index,
+                strategy.fuzzy_threshold,
             )
             if (
                 fuzzy_result["bestMatchIndex"] != -1
