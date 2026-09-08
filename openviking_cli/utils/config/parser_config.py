@@ -140,8 +140,8 @@ class PDFConfig(ParserConfig):
     Configuration for PDF parsing.
 
     Supports three strategies:
-    - "local": Use pdfplumber for local PDF→Markdown conversion
-    - "mineru": Use MinerU API for remote PDF→Markdown conversion
+    - "local": Use pdfplumber for local PDF鈫扢arkdown conversion
+    - "mineru": Use MinerU API for remote PDF鈫扢arkdown conversion
     - "auto": Try local first, fallback to MinerU if available
 
     Attributes:
@@ -149,7 +149,7 @@ class PDFConfig(ParserConfig):
         mineru_endpoint: MinerU API endpoint URL
         mineru_timeout: MinerU request timeout in seconds
         mineru_bodys: Additional MinerU API multipart form fields
-        mineru_api_mode: MinerU protocol flavor — "auto" (detect from the
+        mineru_api_mode: MinerU protocol flavor 鈥?"auto" (detect from the
             response shape), "sync" (self-hosted single-shot /file_parse) or
             "async" (online task API: create task, poll, download zip)
         mineru_token: Optional bearer token for the online MinerU API
@@ -187,9 +187,9 @@ class PDFConfig(ParserConfig):
         super().validate()
 
         # Validate PDF-specific fields
-        if self.strategy not in ("local", "mineru", "auto"):
+        if self.strategy not in ("local", "mineru", "auto", "mineru-first"):
             raise ValueError(
-                f"Invalid strategy '{self.strategy}'. Must be 'local', 'mineru', or 'auto'"
+                f"Invalid strategy '{self.strategy}'. Must be 'local', 'mineru', 'auto', or 'mineru-first'"
             )
 
         if self.strategy == "mineru":
