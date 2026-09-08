@@ -94,6 +94,8 @@ HTTP 业务请求可以独立开启进程内 L0，复用同一请求内的 `stat
 
 L0 与现有 L1 文件内容、目录缓存独立：`cachefs.backend="cache"` 仍需顶层 `cache` Provider 配置。**当前没有 L1 stat 缓存，L0 stat miss 始终直接访问 Backend**，无论 L1 是否开启。
 
+Rust API 源码兼容性：`CachedFileSystem::runtime()` 返回值由 `Arc<CacheRuntime>` 改为 `Option<Arc<CacheRuntime>>`，调用方必须处理 L0-only 实例没有共享 runtime 的情况。`CacheFsConfig` 新增 `request_cache_enabled` 字段，使用完整 struct literal 的调用方需补充该字段（保持原行为时设为 `false`），或使用 `..Default::default()`。请求缓存默认关闭不代表 Rust API 源码兼容，本次变更属于 Rust API breaking change。
+
 L0 miss 使用现有 `bypass_cache` 上下文读取新鲜的后端元数据，避免插件本地 stat 缓存的旧结果进入新 epoch；原请求的身份、租约和上下文保持不变。L0 关闭或没有请求缓存标识时，仍走原有 stat 路径。
 
 写操作只在影响当前请求中有效的缓存项或进行中的 stat 时推进全局 epoch。文件结构变化保守匹配目标、祖先目录及受影响子树，以覆盖 S3 隐式目录；匹配只访问内存，不额外调用 `ls`、Provider 或 Backend。缓存状态锁不跨后端 IO，旧 epoch 的并发读取不能回填到新版本。

@@ -1,4 +1,97 @@
 //! In-memory request-scoped stat state. No filesystem or provider IO occurs here.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn miss(cache: &Arc<RequestStatCache>, path: &str) -> RequestStatMiss {
+        match cache.begin("mount", path) {
+            RequestStatLookup::Miss(ticket) => ticket,
+            _ => panic!("expected miss"),
+        }
+    }
+
+    #[test]
+    fn registry_capacity_is_atomic_and_release_is_isolated() {
+        let registry = Arc::new(RequestCacheRegistry::new(1));
+        let handles: Vec<_> = (0..8)
+            .map(|i| {
+                let registry = registry.clone();
+                std::thread::spawn(move || registry.get_or_create("tenant", &i.to_string()))
+            })
+            .collect();
+        assert_eq!(
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .filter(Option::is_some)
+                .count(),
+            1
+        );
+        let registry = RequestCacheRegistry::new(2);
+        let first = registry.get_or_create("a", "id").unwrap();
+        assert!(Arc::ptr_eq(
+            &first,
+            &registry.get_or_create("a", "id").unwrap()
+        ));
+        let other = registry.get_or_create("b", "id").unwrap();
+        assert!(!Arc::ptr_eq(&first, &other));
+        assert!(registry.get_or_create("a", "full").is_none());
+        assert!(registry.release("a", "id"));
+        assert!(!registry.release("a", "id"));
+        assert!(registry.get_or_create("a", "new").is_some());
+        assert!(registry.get_or_create("a", "").is_none());
+    }
+
+    #[test]
+    fn epoch_rejects_concurrent_old_fills_and_unrelated_writes_preserve_it() {
+        let cache = Arc::new(RequestStatCache::default());
+        let first = miss(&cache, "/dir/file");
+        let second = miss(&cache, "/dir/file");
+        assert!(!cache.invalidate("mount", &["/other"], &[]));
+        assert!(!cache.invalidate("other-mount", &[], &["/"]));
+        assert_eq!(cache.state.read().unwrap().epoch, 0);
+        assert!(cache.invalidate("mount", &[], &["/dir"]));
+        let value = Err(Error::NotFound("/dir/file".into()));
+        assert!(!first.complete(&value));
+        assert!(!second.complete(&value));
+        assert!(miss(&cache, "/dir/file").complete(&value));
+        assert!(matches!(
+            cache.begin("mount", "/dir/file"),
+            RequestStatLookup::Hit(Err(Error::NotFound(_)))
+        ));
+        assert!(cache.state.read().unwrap().inflight_paths.is_empty());
+    }
+
+    #[test]
+    fn unrelated_write_preserves_cached_metadata_and_errors_are_not_cached() {
+        let cache = Arc::new(RequestStatCache::default());
+        let value = Ok(FileInfo::new_file("/file".into(), 3, 0o644));
+        assert!(miss(&cache, "/file").complete(&value));
+        assert!(!cache.invalidate("mount", &["/other"], &[]));
+        assert!(matches!(
+            cache.begin("mount", "/file"),
+            RequestStatLookup::Hit(Ok(_))
+        ));
+        assert!(cache.invalidate("mount", &["/file"], &[]));
+        assert!(!miss(&cache, "/file").complete(&Err(Error::internal("backend unavailable"))));
+        drop(miss(&cache, "/file"));
+    }
+
+    #[tokio::test]
+    async fn cancelled_miss_unregisters_without_filling() {
+        let cache = Arc::new(RequestStatCache::default());
+        let ticket = miss(&cache, "/file");
+        let task = tokio::spawn(async move {
+            let _ticket = ticket;
+            std::future::pending::<()>().await;
+        });
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        let state = cache.state.read().unwrap();
+        assert!(state.inflight_paths.is_empty());
+        assert!(state.entries.is_empty());
+    }
+}
 
 use crate::core::{Error, FileInfo, Result};
 use path_clean::PathClean;

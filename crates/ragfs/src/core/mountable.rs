@@ -625,7 +625,13 @@ impl MountableFS {
     pub async fn write_raw(&self, path: &str, data: &[u8], flags: WriteFlag) -> Result<u64> {
         let (mount_info, rel_path) = self.find_mount(path).await?;
         let raw = Self::raw_backend_for_mount(&mount_info, "write_raw")?;
-        raw.write(&rel_path, data, 0, flags).await
+        let result = raw.write(&rel_path, data, 0, flags).await;
+        // Errors may follow a partial write; invalidate request metadata in either case.
+        #[cfg(feature = "cache")]
+        if let Some(cache) = Self::as_cached(&mount_info.fs) {
+            cache.invalidate_request_external_write(&rel_path);
+        }
+        result
     }
 
     /// Copy one file within the same mounted filesystem while preserving raw bytes when possible.
@@ -1588,6 +1594,37 @@ mod tests {
         mfs.register_plugin(MemFSPlugin).await;
         mfs.mount(test_config("memfs", mount_path)).await.unwrap();
         mfs
+    }
+
+    #[cfg(feature = "cache")]
+    #[tokio::test]
+    async fn raw_write_invalidates_request_stat() {
+        use crate::cache::RequestStatCache;
+        use crate::core::{FsContextInner, FS_CTX};
+        let mfs = MountableFS::with_cache_layers(
+            None,
+            CacheNamespace::new("raw-l0"),
+            CachePolicy::default(),
+            true,
+        );
+        mfs.register_plugin(crate::plugins::MemFSPlugin).await;
+        mfs.mount(test_config("memfs", "/local")).await.unwrap();
+        mfs.write_raw("/local/file", b"old", WriteFlag::Create)
+            .await
+            .unwrap();
+        let ctx = Arc::new(
+            FsContextInner::new("tenant")
+                .with_request_stat_cache(Arc::new(RequestStatCache::default())),
+        );
+        FS_CTX
+            .scope(ctx, async {
+                assert_eq!(mfs.stat("/local/file").await.unwrap().size, 3);
+                mfs.write_raw("/local/file", b"new content", WriteFlag::Create)
+                    .await
+                    .unwrap();
+                assert_eq!(mfs.stat("/local/file").await.unwrap().size, 11);
+            })
+            .await;
     }
 
     /// Create a MountableFS with two mounted mock plugins.
