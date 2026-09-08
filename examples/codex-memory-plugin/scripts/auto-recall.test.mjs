@@ -192,7 +192,13 @@ async function runEndpointCompressionCase({
           OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
           OPENVIKING_CREDENTIAL_SOURCE: "env",
           OPENVIKING_RECALL_COMPRESS: "1",
-          OPENVIKING_RECALL_TIMEOUT_MS: "10000",
+          // With recallTimeoutMs=10000 the compressor child inherits only
+          // max(1000, recallTimeoutMs - 10000) = 1000ms, which a fresh
+          // `node` cold start intermittently exceeds (seen in CI as
+          // compress_timeout → SIGKILL → empty args log). Give the fake
+          // codex subprocess a budget that cannot race with process startup.
+          OPENVIKING_RECALL_TIMEOUT_MS: "60000",
+          OPENVIKING_RECALL_COMPRESS_TIMEOUT_MS: "30000",
           OPENVIKING_MIN_QUERY_LENGTH: "1",
           OPENVIKING_SCORE_THRESHOLD: "0",
           OPENVIKING_TIMEOUT_MS: "5000",

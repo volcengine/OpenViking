@@ -98,12 +98,43 @@ jobs:
           bash -n examples/codex-memory-plugin/setup-helper/install.sh
           bash -n examples/codex-memory-plugin/setup-helper/tos-install.sh
 
+  openclaw-tests:
+    needs: check-deps
+    if: ${{ needs.check-deps.outputs.openclaw_changed == 'true' }}
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: examples/openclaw-plugin
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install plugin dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Run the OpenClaw plugin Vitest suite
+        # The suite is otherwise never exercised by CI, so regressions in
+        # examples/openclaw-plugin only surface in user installs.
+        # tests/ut/architecture-boundaries.test.ts is excluded until its 4
+        # pre-existing main failures are resolved (see #4720 / #4731 / #4732);
+        # every other file passes on main (44 files / 690 tests).
+        # The node_modules exclude restores vitest's default filters, which a
+        # custom --exclude replaces.
+        run: >
+          npm test --
+          --exclude "tests/ut/architecture-boundaries.test.ts"
+          --exclude "**/node_modules/**"
+
   check-deps:
     runs-on: ubuntu-24.04
     outputs:
       deps_changed: ${{ steps.check.outputs.deps_changed }}
       cuvs_changed: ${{ steps.check.outputs.cuvs_changed }}
       langchain_changed: ${{ steps.check.outputs.langchain_changed }}
+      openclaw_changed: ${{ steps.check.outputs.openclaw_changed }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -153,6 +184,18 @@ jobs:
           else
             echo "No LangChain integration changes detected."
             echo "langchain_changed=false" >> $GITHUB_OUTPUT
+          fi
+
+          OPENCLAW_PATTERN="examples/openclaw-plugin/|\.github/workflows/pr\.yml"
+          OPENCLAW_CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep -E "$OPENCLAW_PATTERN" || true)
+
+          if [ -n "$OPENCLAW_CHANGED_FILES" ]; then
+            echo "OpenClaw plugin changes detected:"
+            echo "$OPENCLAW_CHANGED_FILES"
+            echo "openclaw_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "No OpenClaw plugin changes detected."
+            echo "openclaw_changed=false" >> $GITHUB_OUTPUT
           fi
 
   build:

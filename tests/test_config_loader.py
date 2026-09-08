@@ -347,6 +347,30 @@ def test_openviking_config_rejects_unknown_memory_field(monkeypatch):
     OpenVikingConfigSingleton.reset_instance()
 
 
+def test_memory_extraction_output_format_defaults_to_python_and_accepts_json(monkeypatch):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+
+    default_config = OpenVikingConfig.from_dict({})
+    json_config = OpenVikingConfig.from_dict({"memory": {"extraction_output_format": "json"}})
+
+    assert default_config.memory.extraction_output_format == "python"
+    assert json_config.memory.extraction_output_format == "json"
+    with pytest.raises(ValueError):
+        OpenVikingConfig.from_dict({"memory": {"extraction_output_format": "yaml"}})
+
+
+def test_memory_maintenance_review_tokens_defaults_and_validates(monkeypatch):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+
+    default_config = OpenVikingConfig.from_dict({})
+    custom_config = OpenVikingConfig.from_dict({"memory": {"maintenance_review_tokens": 4096}})
+
+    assert default_config.memory.maintenance_review_tokens == 1000
+    assert custom_config.memory.maintenance_review_tokens == 4096
+    with pytest.raises(ValueError):
+        OpenVikingConfig.from_dict({"memory": {"maintenance_review_tokens": 0}})
+
+
 def test_openviking_config_ignores_deprecated_memory_version(monkeypatch):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 

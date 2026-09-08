@@ -28,6 +28,7 @@ from openviking.session.memory.merge_op.base import (
     FieldType,
     MergeOp,
 )
+from openviking.session.memory.utils.template_utils import TemplateUtils
 
 T = TypeVar("T")
 
@@ -232,7 +233,7 @@ class MemoryTypeSchema(BaseModel):
     directory: str = Field("", description="Directory path")
     enabled: bool = Field(True, description="Whether this memory type is enabled")
     operation_mode: str = Field(
-        "upsert", description="Operation mode: 'upsert' (default), 'add_only', or 'update_only'"
+        "upsert", description="Operation mode: 'upsert' (default) or 'add_only'"
     )
     stage: str = Field(
         "user",
@@ -248,6 +249,14 @@ class MemoryTypeSchema(BaseModel):
 
     def filename_has_variables(self):
         return "{{" in self.filename_template and "}}" in self.filename_template
+
+    def identity_fields(self, *, include_peer_id: bool = True) -> tuple[str, ...]:
+        """Return fields whose values determine the memory object's URI identity."""
+        identity = ["peer_id"] if include_peer_id and self.peer_enabled else []
+        uri_template = f"{self.directory}/{self.filename_template}"
+        referenced = TemplateUtils.referenced_variables(uri_template)
+        identity.extend(field.name for field in self.fields if field.name in referenced)
+        return tuple(dict.fromkeys(identity))
 
 
 class MemoryData(BaseModel):
