@@ -742,7 +742,7 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 			if !ok || !reflect.DeepEqual(operation, map[string]any{
 				"uri":     "viking://resources/project/a.txt",
 				"content": "hello",
-				"mode":    "upsert",
+				"mode":    "replace",
 			}) {
 				t.Fatalf("operation = %#v", operations[0])
 			}
@@ -762,7 +762,7 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 		{
 			URI:     "resources/project/a.txt",
 			Content: String("hello"),
-			Mode:    "upsert",
+			Mode:    "replace",
 		},
 	}, &BatchWriteOptions{Extra: map[string]any{"future_flag": 0}}); err != nil {
 		t.Fatal(err)

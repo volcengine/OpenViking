@@ -1603,7 +1603,7 @@ class SemanticProcessor(DequeueHandlerBase):
         from openviking.utils.embedding_utils import vectorize_file
 
         active_ctx = ctx or self._default_ctx
-        await vectorize_file(
+        vector_enqueued = await vectorize_file(
             file_path=file_path,
             summary_dict=summary_dict,
             parent_uri=parent_uri,
@@ -1614,3 +1614,6 @@ class SemanticProcessor(DequeueHandlerBase):
             ingest_options=ingest_options,
             creator_acl_grant=creator_acl_grant,
         )
+        if not vector_enqueued:
+            viking_fs = get_viking_fs()
+            await viking_fs._delete_from_vector_store([file_path], ctx=active_ctx)

@@ -796,35 +796,23 @@ async def remember(messages: list[StoreMessage]) -> str:
 async def write(
     uri: str,
     content: str,
-    mode: Literal["replace", "append", "create"] = "replace",
+    mode: Literal["replace", "append"] = "replace",
     wait: bool = False,
     timeout: Optional[float] = None,
 ) -> str:
     """Write text to a viking:// file. Use this to save files (notes, profiles, knowledge, state) in OpenViking the same way you would use a working directory. To change part of an existing file, prefer the edit tool over a full rewrite.
 
-    - mode="replace" (default): overwrite the file; creates it and any missing parent directories if needed.
-    - mode="create": fail if the file already exists.
-    - Any new file (whether created by "replace" or "create") must end in one of: .md .txt .json .yaml .yml .toml .py .js .ts
-    - mode="append": append to the end of an existing file; fails if the file does not exist.
+    - mode="replace" (default): overwrite the file, or create it and any missing parent directories.
+    - mode="append": append to the file, or create it and any missing parent directories.
 
     Writable scopes: viking://resources/, viking://user/{user_id}/, viking://agent/. The viking://~ home alias expands to the caller's user root. The managed user subtrees skills/, peers/, privacy/ and sessions/ are read-only. After a write, semantic search indexes refresh in the background; pass wait=true to block until search reflects the change."""
     service = get_service()
     ctx = _get_ctx()
     uri = _resolve_mcp_workspace_uri(uri, ctx)
 
-    try:
-        result = await service.fs.write(
-            uri=uri, content=content, ctx=ctx, mode=mode, wait=wait, timeout=timeout
-        )
-    except NotFoundError:
-        if mode != "replace":
-            raise
-        # Replace doubles as create-or-overwrite so agents can save a new file
-        # without first checking whether it exists; strict creation stays
-        # available via mode="create".
-        result = await service.fs.write(
-            uri=uri, content=content, ctx=ctx, mode="create", wait=wait, timeout=timeout
-        )
+    result = await service.fs.write(
+        uri=uri, content=content, ctx=ctx, mode=mode, wait=wait, timeout=timeout
+    )
     written = result.get("written_bytes", 0)
     message = (
         f"Wrote {written} bytes to {result.get('uri', uri)} (mode={result.get('mode', mode)})."

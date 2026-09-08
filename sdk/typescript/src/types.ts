@@ -94,7 +94,8 @@ export interface AddResourceOptions extends WaitOptions {
 }
 /** Content write options. */
 export interface WriteOptions extends WaitOptions {
-  mode?: string;
+  /** Canonical modes: replace (default) or append. */
+  mode?: "replace" | "append";
   processingMode?: ProcessingMode;
   tags?: string[];
   tagMode?: "replace" | "append";
@@ -105,7 +106,8 @@ export interface BatchWriteOperation {
   uri: string;
   content?: string;
   contentBase64?: string;
-  mode?: "replace" | "append" | "create" | "upsert";
+  /** Canonical modes: replace (default) or append. */
+  mode?: "replace" | "append";
 }
 /** Batch-write request options. */
 export interface BatchWriteOptions extends WaitOptions {

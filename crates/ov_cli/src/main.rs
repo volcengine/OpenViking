@@ -714,7 +714,7 @@ enum Commands {
         #[arg(value_name = "directory-uri")]
         uri: String,
     },
-    /// [Data] Write text content to an existing file
+    /// [Data] Replace or append text content; missing targets are created
     Write {
         /// Viking URI
         #[arg(value_name = "uri")]
@@ -738,10 +738,10 @@ enum Commands {
         /// Append instead of replacing the file
         #[arg(long, help_heading = "Common options")]
         append: bool,
-        /// Write mode: replace, append, or create (default: replace)
+        /// Write mode: replace or append (default: replace)
         #[arg(
             long,
-            value_name = "replace|append|create",
+            value_name = "replace|append",
             conflicts_with = "append",
             help_heading = "Advanced options"
         )]

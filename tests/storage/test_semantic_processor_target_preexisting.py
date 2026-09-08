@@ -9,6 +9,9 @@ from openviking.storage.viking_fs import SyncDiff
 
 
 class _FakeVikingFS:
+    def __init__(self):
+        self._delete_from_vector_store = AsyncMock()
+
     async def exists(self, uri, ctx=None):
         return True
 
@@ -121,6 +124,33 @@ async def test_target_source_syncs_before_semantic_dag(monkeypatch):
         "deleted": [],
     }
     assert _FakeDagExecutor.runs == ["viking://resources/org/repo"]
+
+
+@pytest.mark.asyncio
+async def test_no_output_file_vectorization_clears_stale_vector(monkeypatch):
+    viking_fs = _FakeVikingFS()
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: viking_fs,
+    )
+    monkeypatch.setattr(
+        "openviking.utils.embedding_utils.vectorize_file",
+        AsyncMock(return_value=False),
+    )
+    processor = SemanticProcessor()
+    ctx = SimpleNamespace()
+
+    await processor._vectorize_single_file(
+        parent_uri="viking://resources/root",
+        context_type="resource",
+        file_path="viking://resources/root/empty.md",
+        summary_dict={"name": "empty.md", "summary": ""},
+        ctx=ctx,
+    )
+
+    viking_fs._delete_from_vector_store.assert_awaited_once_with(
+        ["viking://resources/root/empty.md"], ctx=ctx
+    )
 
 
 @pytest.mark.asyncio

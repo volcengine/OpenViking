@@ -87,6 +87,7 @@ class UpdateSkillOptions(AddSkillOptions, total=False):
 
 
 class WriteOptions(_ExtraOptions, total=False):
+    mode: Literal["replace", "append"]
     telemetry: Any
     processing_mode: ProcessingMode
     tags: List[str]

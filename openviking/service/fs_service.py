@@ -1093,7 +1093,7 @@ class FSService:
         tags: Optional[List[str]] = None,
         tag_mode: str = "replace",
     ) -> Dict[str, Any]:
-        """Write to an existing file and refresh semantics/vectors."""
+        """Replace or append file content, creating a missing target, then refresh indexes."""
         viking_fs = self._ensure_initialized()
         coordinator = ContentWriteCoordinator(viking_fs=viking_fs, vikingdb=self._vikingdb)
         return await coordinator.write(

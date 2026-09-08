@@ -75,6 +75,12 @@ class DummyFS:
         return []
 
 
+class ReadFailingFS(DummyFS):
+    async def read_file(self, _path, ctx=None):
+        self.read_file_calls += 1
+        raise OSError("read unavailable")
+
+
 class DummyUser:
     account_id = "default"
     user_id = "default"
@@ -416,6 +422,30 @@ async def test_vectorize_empty_content_skips_enqueue(monkeypatch):
     )
 
     assert enqueued is False
+    assert queue.items == []
+
+
+@pytest.mark.asyncio
+async def test_vectorize_read_failure_without_summary_is_not_treated_as_no_output(monkeypatch):
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: ReadFailingFS("unused"))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
+        ),
+    )
+
+    with pytest.raises(OSError, match="read unavailable"):
+        await embedding_utils.vectorize_file(
+            file_path="viking://user/default/resources/broken.md",
+            summary_dict={"name": "broken.md", "summary": ""},
+            parent_uri="viking://user/default/resources",
+            ctx=DummyReq(),
+        )
+
     assert queue.items == []
 
 

@@ -219,7 +219,7 @@ openviking read viking://resources/docs/api.md
 |------|------|------|--------|------|
 | uri | str | 是 | - | 要写入的文件 URI |
 | content | str | 是 | - | 要写入的新内容 |
-| mode | str | 否 | `replace` | `replace` 覆盖已有文件、缺失时创建；`append` 追加已有文件、缺失时创建；`create` 仅创建缺失文件，目标已存在时返回 `409 Conflict` |
+| mode | str | 否 | `replace` | `replace` 覆盖已有文件、缺失时创建；`append` 追加已有文件、缺失时创建。为兼容旧客户端，`create` 会按 `replace` 处理。 |
 | wait | bool | 否 | `false` | 是否等待后台语义/向量刷新完成 |
 | timeout | float | 否 | `null` | 当 `wait=true` 时的超时时间（秒） |
 | tags | string[] | 否 | 未设置 | 写入文件的显式检索标签，例如 `["team=search", "env=prod"]` |
@@ -227,8 +227,8 @@ openviking read viking://resources/docs/api.md
 
 **说明**
 
-- `replace` 和 `append` 在目标文件缺失时都会创建文件；其中 `append` 会以传入内容作为新文件的初始内容。`create` 仅用于创建缺失文件，目标路径已存在时返回 `409 Conflict`。目录始终会被拒绝。
-- 显式 `create` 只允许以下文本类扩展名：`.md`、`.txt`、`.json`、`.yaml`、`.yml`、`.toml`、`.py`、`.js`、`.ts`。所有写入模式都会自动创建父目录。
+- `replace` 和 `append` 在目标文件缺失时都会创建文件；其中 `append` 会以传入内容作为新文件的初始内容。为兼容旧客户端，`create` 会按 `replace` 处理。目录始终会被拒绝。
+- 所有写入模式都会自动创建父目录。
 - 已存在的 `.abstract.md` / `.overview.md` 可以修改正文，但不能通过公共 API 创建；只提交正文时会保留现有 OKF metadata，提交完整 OKF 时 metadata 必须与存量值一致。未知 metadata 字段会静默丢弃。sidecar 正文写入只重建该目录实际存在的 L0/L1 向量，不触发语义重新生成。
 - 文件内容会在 API 返回前完成更新；`wait` 只控制是否等待语义/向量刷新完成。
 - 公共 API 已不再接受 `regenerate_semantics` 或 `revectorize`；写入后一定会自动刷新相关语义与向量。
@@ -362,14 +362,14 @@ openviking write viking://resources/docs/api.md \
 | `uri` | string | 是 | 位于 `root_uri` 下的目标文件 URI |
 | `content` | string | 条件必填 | UTF-8 文本；与 `content_base64` 必须且只能提供一个 |
 | `content_base64` | string | 条件必填 | Base64 编码的字节；Memory 目标不支持 |
-| `mode` | string | 否 | `replace`（默认）、`append`、`create` 或 `upsert` |
+| `mode` | string | 否 | `replace`（默认）或 `append` |
 
 **说明**
 
 - 单次请求最多包含 256 个 operation，单文件不超过 8 MiB，总内容不超过 16 MiB。
 - 所有目标必须是 `root_uri` 下的文件、属于同一 context type，且 canonical URI 不能重复。
-- Resource 目标允许任意安全文件扩展名；Memory 目标仍使用文本扩展名白名单，且不接受二进制内容。
-- `replace`、`append`、`create` 与 `write()` 语义一致；`upsert` 会覆盖已有文件或创建缺失文件。
+- Resource 目标允许任意安全文件扩展名；Memory 目标不接受二进制内容。
+- `replace` 与 `append` 和 `write()` 语义一致；为兼容旧客户端，`create` 与 `upsert` 都按 `replace` 处理。
 - 写入期间整批共用一个目标 tree lock。所有文件写完并释放锁后才启动语义处理，因此 `.overview.md` / `.abstract.md` 每批只统一刷新一次。
 - 底层 I/O 中途失败时，本批次较早完成的写入仍可能已经可见。
 - 已存在的 `.abstract.md` / `.overview.md` 可以 replace 或 append；系统会保留并校验受保护的 OKF metadata，并只重建对应目录实际存在的 L0/L1 向量。
@@ -384,12 +384,12 @@ result = client.batch_write(
         {
             "uri": "viking://resources/wiki/new.md",
             "content": "# 新页面\n",
-            "mode": "upsert",
+            "mode": "replace",
         },
         {
             "uri": "viking://resources/wiki/existing.md",
             "content": "# 更新后的页面\n",
-            "mode": "upsert",
+            "mode": "replace",
         },
     ],
     wait=True,
@@ -412,7 +412,7 @@ curl -X POST http://localhost:1933/api/v1/content/batch-write \
       {
         "uri": "viking://resources/wiki/new.md",
         "content": "# 新页面\n",
-        "mode": "upsert"
+        "mode": "replace"
       }
     ],
     "wait": true

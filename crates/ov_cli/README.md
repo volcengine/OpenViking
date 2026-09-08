@@ -147,7 +147,7 @@ ov cp -r viking://resources/docs viking://resources/docs-backup
 - `read` - Read L2 full content.
 - `abstract` - Read L0 abstract content.
 - `overview` - Read L1 overview content.
-- `write` - Replace, append, or create text content.
+- `write` - Replace or append text content; missing targets are created.
 
 ### Search
 

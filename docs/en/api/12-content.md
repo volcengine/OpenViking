@@ -219,7 +219,7 @@ Write a file and automatically refresh related semantics and vectors.
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | File URI to write |
 | content | str | Yes | - | New content to write |
-| mode | str | No | `replace` | `replace` overwrites an existing file or creates a missing file; `append` appends to an existing file or creates a missing file; `create` creates only a missing file and returns `409 Conflict` if it already exists |
+| mode | str | No | `replace` | `replace` overwrites an existing file or creates a missing file; `append` appends to an existing file or creates a missing file. Legacy `create` is accepted as an alias for `replace`. |
 | wait | bool | No | `false` | Wait for background semantic/vector refresh |
 | timeout | float | No | `null` | Timeout in seconds when `wait=true` |
 | tags | string[] | No | Unset | Explicit retrieval tags for the written file, for example `["team=search", "env=prod"]` |
@@ -227,8 +227,8 @@ Write a file and automatically refresh related semantics and vectors.
 
 **Notes**
 
-- `replace` and `append` create a missing target file. `append` uses the supplied content as the initial file content in that case. `create` targets only a missing file and returns `409 Conflict` when the path already exists. Directories are always rejected.
-- Explicit `create` only accepts text-writable extensions: `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.toml`, `.py`, `.js`, `.ts`. Parent directories are created automatically for every write mode.
+- `replace` and `append` create a missing target file. `append` uses the supplied content as the initial file content in that case. Legacy `create` is normalized to `replace`. Directories are always rejected.
+- Parent directories are created automatically for every write mode.
 - Existing `.abstract.md` and `.overview.md` bodies may be updated, but public APIs cannot create them. A body-only request preserves stored OKF metadata; a full-OKF request must match the stored metadata. Unknown metadata fields are silently dropped. A sidecar body write rebuilds only the directory's existing L0/L1 vectors and does not regenerate semantics.
 - File content is updated before the API returns. `wait` only controls whether the call waits for semantic/vector refresh to finish.
 - The public API no longer accepts `regenerate_semantics` or `revectorize`; write always refreshes related semantics and vectors.
@@ -362,14 +362,14 @@ Each operation contains:
 | `uri` | string | Yes | Target file URI below `root_uri` |
 | `content` | string | Conditional | UTF-8 text; exactly one of `content` and `content_base64` is required |
 | `content_base64` | string | Conditional | Base64-encoded bytes; not supported for Memory targets |
-| `mode` | string | No | `replace` (default), `append`, `create`, or `upsert` |
+| `mode` | string | No | `replace` (default) or `append` |
 
 **Notes**
 
 - A request supports at most 256 operations, 8 MiB per file, and 16 MiB total.
 - All targets must be files below `root_uri`, use the same context type, and have unique canonical URIs.
-- Resource targets may use any safe file extension; Memory targets retain the text extension allowlist and do not accept binary content.
-- `replace`, `append`, and `create` match `write()` semantics. `upsert` replaces an existing file or creates a missing file.
+- Resource targets may use any safe file extension; Memory targets do not accept binary content.
+- `replace` and `append` match `write()` semantics. Legacy `create` and `upsert` are accepted as aliases for `replace`.
 - The batch holds one target tree lock while writing. Semantic processing starts only after every file is written and the lock is released, so `.overview.md` and `.abstract.md` are refreshed once for the batch.
 - An underlying I/O failure can still leave writes completed earlier in the batch visible.
 - Existing `.abstract.md` and `.overview.md` bodies may be replaced or appended. OpenViking preserves and validates protected OKF metadata and rebuilds only the directory's existing L0/L1 vectors for these operations.
@@ -384,12 +384,12 @@ result = client.batch_write(
         {
             "uri": "viking://resources/wiki/new.md",
             "content": "# New page\n",
-            "mode": "upsert",
+            "mode": "replace",
         },
         {
             "uri": "viking://resources/wiki/existing.md",
             "content": "# Updated page\n",
-            "mode": "upsert",
+            "mode": "replace",
         },
     ],
     wait=True,
@@ -412,7 +412,7 @@ curl -X POST http://localhost:1933/api/v1/content/batch-write \
       {
         "uri": "viking://resources/wiki/new.md",
         "content": "# New page\n",
-        "mode": "upsert"
+        "mode": "replace"
       }
     ],
     "wait": true

@@ -475,7 +475,7 @@ describe("OpenVikingClient", () => {
         {
           uri: "resources/project/a.txt",
           content: "hello",
-          mode: "upsert",
+          mode: "replace",
         },
       ],
       { extra: { future_flag: 0 } },
@@ -497,7 +497,7 @@ describe("OpenVikingClient", () => {
       {
         uri: "viking://resources/project/a.txt",
         content: "hello",
-        mode: "upsert",
+        mode: "replace",
       },
     ]);
     expect(

@@ -212,7 +212,7 @@ type RemoveOptions struct {
 	Timeout   *float64
 }
 
-// WriteOptions controls Write.
+// WriteOptions controls Write. Mode is "replace" (default) or "append".
 type WriteOptions struct {
 	Mode           string
 	Wait           bool
@@ -224,7 +224,7 @@ type WriteOptions struct {
 	Extra          map[string]any
 }
 
-// BatchWriteOperation is one file write in a batch.
+// BatchWriteOperation is one file write in a batch. Mode is "replace" or "append".
 type BatchWriteOperation struct {
 	URI           string  `json:"uri"`
 	Content       *string `json:"content,omitempty"`

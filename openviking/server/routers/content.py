@@ -36,13 +36,14 @@ logger = get_logger(__name__)
 
 
 class WriteContentRequest(BaseModel):
-    """Request to write, append, or create text content to a file."""
+    """Request to replace or append text content to a file."""
 
     model_config = ConfigDict(extra="forbid")
 
     uri: str
     content: str
-    mode: str = "replace"
+    # ``create`` remains accepted by the coordinator as a legacy alias.
+    mode: Literal["replace", "append", "create"] = "replace"
     wait: bool = False
     timeout: float | None = None
     telemetry: TelemetryRequest = False
@@ -57,6 +58,7 @@ class BatchWriteOperation(BaseModel):
     uri: str
     content: str | None = None
     content_base64: str | None = None
+    # Legacy ``create`` / ``upsert`` map to ``replace`` server-side.
     mode: Literal["replace", "append", "create", "upsert"] = "replace"
 
     @model_validator(mode="after")
@@ -233,7 +235,7 @@ async def write(
     request: WriteContentRequest = Body(...),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Write text content to a file (replace, append, or create) and refresh semantics/vectors."""
+    """Write text content to a file (replace or append) and refresh semantics/vectors."""
     service = get_service()
     uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
     execution = await run_operation(

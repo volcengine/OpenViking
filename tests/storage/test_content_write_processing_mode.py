@@ -38,6 +38,7 @@ class _FakeVikingFS:
     def __init__(self):
         self.write_file = AsyncMock()
         self.read_file = AsyncMock(return_value="previous")
+        self._delete_from_vector_store = AsyncMock()
         self._async_agfs = _FakePathLock()
 
     def _uri_to_path(self, uri, ctx=None):
@@ -239,6 +240,80 @@ async def test_vectors_only_write_wait_reports_skipped_when_nothing_enqueued(mon
 
     assert result["semantic_status"] == "skipped"
     assert result["vector_status"] == "skipped"
+    fake_fs._delete_from_vector_store.assert_awaited_once_with(
+        ["viking://resources/obsolete.md"], ctx=ctx
+    )
+
+
+@pytest.mark.asyncio
+async def test_vectors_only_enqueue_failure_does_not_clear_stale_vector(monkeypatch, ctx):
+    fake_fs = _FakeVikingFS()
+    monkeypatch.setattr(
+        content_write_module,
+        "vectorize_file",
+        AsyncMock(side_effect=RuntimeError("embedding queue unavailable")),
+        raising=False,
+    )
+    coordinator = ContentWriteCoordinator(viking_fs=fake_fs)
+
+    with pytest.raises(RuntimeError, match="embedding queue unavailable"):
+        await coordinator._write_direct_with_refresh(
+            uri="viking://resources/obsolete.md",
+            root_uri="viking://resources",
+            content="updated",
+            mode="replace",
+            context_type="resource",
+            wait=False,
+            timeout=None,
+            ctx=ctx,
+            written_bytes=7,
+            telemetry_id="",
+            processing_mode="vectors_only",
+        )
+
+    fake_fs._delete_from_vector_store.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_direct_replace_does_not_read_content_only_for_rollback(monkeypatch, ctx):
+    fake_fs = _FakeVikingFS()
+    coordinator = ContentWriteCoordinator(viking_fs=fake_fs)
+    coordinator._enqueue_semantic_refresh = AsyncMock(return_value=FreshnessAction.REFRESH_NOW)
+
+    await coordinator._write_direct_with_refresh(
+        uri="viking://resources/demo.md",
+        root_uri="viking://resources",
+        content="updated",
+        mode="replace",
+        context_type="resource",
+        wait=False,
+        timeout=None,
+        ctx=ctx,
+        written_bytes=7,
+        telemetry_id="",
+    )
+
+    fake_fs.read_file.assert_not_awaited()
+    fake_fs.write_file.assert_awaited_once()
+    assert fake_fs._async_agfs.release_calls == ["lock-1"]
+
+
+@pytest.mark.asyncio
+async def test_legacy_create_is_normalized_to_replace_before_direct_write(ctx):
+    coordinator = ContentWriteCoordinator(viking_fs=_FakeVikingFS())
+    coordinator._safe_stat = AsyncMock(return_value={"isDir": False})
+    coordinator._resolve_root_uri = AsyncMock(return_value="viking://resources")
+    coordinator._write_direct_with_refresh = AsyncMock(return_value={"mode": "replace"})
+
+    result = await coordinator.write(
+        uri="viking://resources/demo.md",
+        content="updated",
+        mode="create",
+        ctx=ctx,
+    )
+
+    assert result["mode"] == "replace"
+    assert coordinator._write_direct_with_refresh.await_args.kwargs["mode"] == "replace"
 
 
 @pytest.mark.asyncio

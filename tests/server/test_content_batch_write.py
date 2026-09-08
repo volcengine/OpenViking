@@ -9,7 +9,6 @@ from openviking.session.memory.utils import MemoryFileUtils
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
 from openviking_cli.exceptions import (
-    AlreadyExistsError,
     InvalidArgumentError,
     NotFoundError,
     OpenVikingError,
@@ -22,9 +21,11 @@ class _PathLockClient:
     def __init__(self):
         self.held = False
         self.releases = 0
+        self.acquires = 0
 
     async def pathlock_acquire_tree(self, path):
         del path
+        self.acquires += 1
         self.held = True
         return {"lease_ref": "lock-1"}
 
@@ -40,6 +41,8 @@ class _VFS:
         self.files = dict(files or {})
         self.fail_uri = fail_uri
         self.writes = []
+        self.stats = []
+        self.reads = []
         self._async_agfs = _PathLockClient()
 
     async def _ensure_access(self, uri, ctx, *, action):
@@ -52,6 +55,7 @@ class _VFS:
     async def stat(self, uri, ctx=None, skip_count=False):
         del ctx
         assert skip_count is True
+        self.stats.append(uri)
         if uri == self.root:
             return {"uri": uri, "isDir": True}
         if uri in self.files:
@@ -60,6 +64,7 @@ class _VFS:
 
     async def read_file(self, uri, ctx=None):
         del ctx
+        self.reads.append(uri)
         if uri not in self.files:
             raise NotFoundError(uri, "file")
         return self.files[uri]
@@ -118,7 +123,7 @@ async def test_batch_accepts_256_operations_and_rejects_257(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_batch_validates_all_modes_before_any_write(monkeypatch):
+async def test_batch_normalizes_legacy_modes_before_any_write(monkeypatch):
     root = "viking://resources/wiki"
     existing = f"{root}/existing.md"
     created = f"{root}/new.md"
@@ -132,26 +137,27 @@ async def test_batch_validates_all_modes_before_any_write(monkeypatch):
 
     monkeypatch.setattr(coordinator, "_refresh_batch", refresh)
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
-    with pytest.raises(AlreadyExistsError):
-        await coordinator.batch_write(
-            root_uri=root,
-            operations=[
-                {
-                    "uri": existing,
-                    "content": "replacement",
-                    "mode": "create",
-                },
-                {
-                    "uri": created,
-                    "content": "created",
-                    "mode": "upsert",
-                },
-            ],
-            ctx=ctx,
-            wait=False,
-        )
-    assert vfs.writes == []
-    assert refreshed == []
+    result = await coordinator.batch_write(
+        root_uri=root,
+        operations=[
+            {
+                "uri": existing,
+                "content": "replacement",
+                "mode": "create",
+            },
+            {
+                "uri": created,
+                "content": "created",
+                "mode": "upsert",
+            },
+        ],
+        ctx=ctx,
+        wait=False,
+    )
+    assert vfs.writes == [existing, created]
+    assert result["updated"] == [existing]
+    assert result["created"] == [created]
+    assert refreshed == [{existing: "modified", created: "added"}]
     assert locks.held is False
 
 
@@ -185,6 +191,60 @@ async def test_batch_releases_tree_lock_before_one_aggregated_refresh(monkeypatc
     assert result["created"] == [a, b]
     assert calls == [{a: "added", b: "added"}]
     assert locks.releases == 1
+
+
+@pytest.mark.asyncio
+async def test_batch_uses_one_root_stat_one_item_stat_and_only_required_reads(monkeypatch):
+    root = "viking://resources/wiki"
+    replace_target = f"{root}/replace.md"
+    append_target = f"{root}/append.md"
+    missing_append_target = f"{root}/missing.md"
+    vfs = _VFS(
+        root,
+        {
+            replace_target: "before",
+            append_target: "before",
+        },
+    )
+    coordinator = ContentWriteCoordinator(vfs)
+    refresh_calls = []
+
+    async def refresh(**kwargs):
+        refresh_calls.append(kwargs["refresh_kinds"])
+
+    monkeypatch.setattr(coordinator, "_refresh_batch", refresh)
+    monkeypatch.setattr(
+        coordinator,
+        "_resolve_root_uri",
+        pytest.fail,
+    )
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+
+    result = await coordinator.batch_write(
+        root_uri=root,
+        operations=[
+            {"uri": replace_target, "content": "replacement", "mode": "replace"},
+            {"uri": append_target, "content": "+append", "mode": "append"},
+            {"uri": missing_append_target, "content": "new", "mode": "append"},
+        ],
+        ctx=ctx,
+        wait=False,
+    )
+
+    assert vfs.stats == [root, append_target, missing_append_target, replace_target]
+    assert vfs.reads == [append_target]
+    assert vfs.writes == [append_target, missing_append_target, replace_target]
+    assert vfs._async_agfs.acquires == 1
+    assert vfs._async_agfs.releases == 1
+    assert refresh_calls == [
+        {
+            append_target: "modified",
+            missing_append_target: "added",
+            replace_target: "modified",
+        }
+    ]
+    assert result["updated"] == [append_target, replace_target]
+    assert result["created"] == [missing_append_target]
 
 
 @pytest.mark.asyncio
@@ -235,15 +295,10 @@ async def test_batch_reports_deferred_directory_and_queued_file_vectors(monkeypa
     page = f"{root}/page.md"
     coordinator = ContentWriteCoordinator(_VFS(root))
 
-    async def resolve_root(uri, **kwargs):
-        del uri, kwargs
-        return root
-
     async def enqueue(**kwargs):
         del kwargs
         return FreshnessAction.MARK_PENDING
 
-    monkeypatch.setattr(coordinator, "_resolve_root_uri", resolve_root)
     monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh_changes", enqueue)
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
 
@@ -412,10 +467,6 @@ async def test_batch_refresh_groups_resource_and_memory_work(monkeypatch):
     overview_calls = []
     embedding_calls = []
 
-    async def resolve_root(uri, **kwargs):
-        del uri, kwargs
-        return "viking://resources/wiki"
-
     async def enqueue(**kwargs):
         semantic_calls.append(kwargs)
         return FreshnessAction.MARK_PENDING
@@ -427,7 +478,6 @@ async def test_batch_refresh_groups_resource_and_memory_work(monkeypatch):
         embedding_calls.append(kwargs)
         return False
 
-    monkeypatch.setattr(coordinator, "_resolve_root_uri", resolve_root)
     monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh_changes", enqueue)
     monkeypatch.setattr(content_write_module.MemoryUpdater, "refresh_schema_overview", overview)
     monkeypatch.setattr(content_write_module.MemoryUpdater, "refresh_file_embedding", embedding)
@@ -526,14 +576,14 @@ async def test_batch_write_api_creates_binary_file(client_with_resource, filenam
 
 
 @pytest.mark.asyncio
-async def test_batch_write_api_mode_error_does_not_apply_other_operations(client_with_resource):
+async def test_batch_write_api_legacy_modes_are_compatible(client_with_resource):
     client, root = client_with_resource
     listing = await client.get(
         "/api/v1/fs/ls",
         params={"uri": root, "simple": True, "recursive": True},
     )
     existing = listing.json()["result"][0]
-    should_not_exist = f"{root}/compile-conflict-no-partial.md"
+    created = f"{root}/compile-legacy-create.md"
     response = await client.post(
         "/api/v1/content/batch-write",
         json={
@@ -542,23 +592,25 @@ async def test_batch_write_api_mode_error_does_not_apply_other_operations(client
             "operations": [
                 {
                     "uri": existing,
-                    "content": "conflicting update",
+                    "content": "legacy replacement",
                     "mode": "create",
                 },
                 {
-                    "uri": should_not_exist,
-                    "content": "must not be written",
+                    "uri": created,
+                    "content": "legacy created",
                     "mode": "upsert",
                 },
             ],
         },
     )
-    assert response.status_code == 409
-    assert response.json()["error"]["code"] == "ALREADY_EXISTS"
-    missing = await client.get(
-        "/api/v1/content/read", params={"uri": should_not_exist, "raw": True}
+    assert response.status_code == 200
+    assert response.json()["result"]["updated"] == [existing]
+    assert response.json()["result"]["created"] == [created]
+    read = await client.get(
+        "/api/v1/content/read", params={"uri": created, "raw": True}
     )
-    assert missing.status_code == 404
+    assert read.status_code == 200
+    assert read.json()["result"] == "legacy created"
 
 
 @pytest.mark.asyncio

@@ -594,9 +594,9 @@ async def vectorize_file(
                         context.set_vectorize(Vectorize(text=summary))
                     else:
                         logger.warning(
-                            f"No summary available for {file_path}, skipping vectorization"
+                            f"No summary available for {file_path}; propagating read failure"
                         )
-                        return False
+                        raise
                 else:
                     embedding_text = truncate_embedding_input(
                         content,
@@ -635,12 +635,12 @@ async def vectorize_file(
             failure_message=f"Failed to enqueue file vector for {file_path}",
         )
         if not enqueued:
-            return False
+            raise RuntimeError(f"Failed to enqueue file vector for {file_path}")
         logger.debug(f"Enqueued file for vectorization: {file_path}")
 
     except TaskWorkRejected:
-        logger.debug("Skipped file vectorization for cancelling task: %s", file_path)
-        return False
+        logger.debug("File vectorization cancelled for task: %s", file_path)
+        raise
     except Exception as e:
         logger.error(f"Failed to vectorize file {file_path}: {e}", exc_info=True)
         raise

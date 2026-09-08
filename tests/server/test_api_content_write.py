@@ -181,8 +181,8 @@ async def test_write_rejects_removed_semantic_flags(client_with_resource):
     assert resp.status_code == 400
 
 
-async def test_api_create_mode_new_file_success(client):
-    """Test create mode with a new file."""
+async def test_api_legacy_create_mode_new_file_returns_replace(client):
+    """Legacy create is accepted and normalized to replace."""
     resp = await client.post(
         "/api/v1/content/write",
         json={
@@ -195,7 +195,7 @@ async def test_api_create_mode_new_file_success(client):
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
-    assert body["result"]["mode"] == "create"
+    assert body["result"]["mode"] == "replace"
 
 
 async def test_api_create_mode_write_then_read(client):
@@ -218,8 +218,8 @@ async def test_api_create_mode_write_then_read(client):
     assert read_resp.json()["result"] == "# Hello\n\nWrite-then-read verification."
 
 
-async def test_api_create_mode_existing_file_409(client_with_resource):
-    """Test create mode on an existing file should return 409."""
+async def test_api_legacy_create_mode_replaces_existing_file(client_with_resource):
+    """Legacy create overwrites an existing file as replace."""
     client, uri = client_with_resource
     file_uri = await _first_file_uri(client, uri)
 
@@ -232,14 +232,14 @@ async def test_api_create_mode_existing_file_409(client_with_resource):
             "wait": True,
         },
     )
-    assert resp.status_code == 409
+    assert resp.status_code == 200
     body = resp.json()
-    assert body["status"] == "error"
-    assert body["error"]["code"] == "ALREADY_EXISTS"
+    assert body["status"] == "ok"
+    assert body["result"]["mode"] == "replace"
 
 
-async def test_api_create_mode_invalid_extension_400(client):
-    """Test create mode with .exe extension should return 400."""
+async def test_api_legacy_create_mode_allows_non_whitelisted_extension(client):
+    """Legacy create no longer has a create-only extension whitelist."""
     resp = await client.post(
         "/api/v1/content/write",
         json={
@@ -249,10 +249,10 @@ async def test_api_create_mode_invalid_extension_400(client):
             "wait": True,
         },
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 200
     body = resp.json()
-    assert body["status"] == "error"
-    assert "extension" in body["error"]["message"].lower()
+    assert body["status"] == "ok"
+    assert body["result"]["mode"] == "replace"
 
 
 async def test_api_create_mode_empty_content_success(client):
@@ -269,7 +269,7 @@ async def test_api_create_mode_empty_content_success(client):
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
-    assert body["result"]["mode"] == "create"
+    assert body["result"]["mode"] == "replace"
 
 
 async def test_api_create_mode_regression_replace_unchanged(client_with_resource):
