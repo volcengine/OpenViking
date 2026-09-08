@@ -267,13 +267,18 @@ class _GymTau2BenchEnv:
 
         def get_fixed_first_user():
             user = original_get_user()
+            # Older tau2 releases (including ov_test_v0) have no persona config
+            # and do not accept that constructor argument.
+            optional_args = {}
+            if hasattr(user, "persona_config"):
+                optional_args["persona_config"] = user.persona_config
             return FixedFirstUserSimulator(
                 fixed_first_message=message,
                 llm=user.llm,
                 llm_args=user.llm_args,
                 instructions=user.instructions,
                 tools=user.tools,
-                persona_config=user.persona_config,
+                **optional_args,
             )
 
         self.env._get_user = get_fixed_first_user

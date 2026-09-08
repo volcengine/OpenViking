@@ -23,7 +23,7 @@ def _append_incoming_context(message: Any, state: Any) -> None:
     elif isinstance(message, ToolMessage):
         state.messages.append(message)
     elif isinstance(message, AssistantMessage) and (
-        message.has_content() or message.is_tool_call()
+        bool(message.content) or message.is_tool_call()
     ):
         state.messages.append(message)
 
@@ -38,8 +38,13 @@ class FixedFirstUserSimulator(UserSimulator):
         super().__init__(**kwargs)
         self.fixed_first_message = message
 
-    def _generate_next_message(self, message: Any, state: Any) -> UserMessage:
+    def generate_next_message(self, message: Any, state: Any) -> tuple[UserMessage, Any]:
+        # The public API returns (message, state) across tau2 releases. The
+        # private helper changed from returning a tuple to a message, so replay
+        # the first turn at the stable public boundary instead.
         if _has_user_message(state):
-            return super()._generate_next_message(message, state)
+            return super().generate_next_message(message, state)
         _append_incoming_context(message, state)
-        return UserMessage(role="user", content=self.fixed_first_message)
+        response = UserMessage(role="user", content=self.fixed_first_message)
+        state.messages.append(response)
+        return response, state

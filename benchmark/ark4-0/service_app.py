@@ -4,9 +4,9 @@
 from __future__ import annotations
 
 import asyncio
-from copy import deepcopy
 import hmac
 import json
+from copy import deepcopy
 from dataclasses import dataclass, field
 from hashlib import sha256
 from typing import Any
@@ -22,6 +22,7 @@ from memory_proxy import MemoryProxyConfig, install_memory_proxy
 from platform_client import PlatformAPIError, TrainingPlatformClient
 from pydantic import BaseModel, Field
 from rollout_executor import ArkRolloutExecutor, RolloutBatchCoordinator
+from task_request import build_viking_task_request
 
 from openviking.session.train.components.dataset_service import create_dataset_service_app
 
@@ -33,6 +34,11 @@ class ArkAdapterServiceConfig:
     task_name: str = "openviking_ark4_external_training"
     workflow_id: str = "ov_external_training"
     task_body: dict[str, Any] = field(default_factory=dict)
+    viking_experiment_sets: list[dict[str, Any]] = field(default_factory=list)
+    lane_key: str = ""
+    model_ep: str = ""
+    experiment_id: str = ""
+    request_source: str = ""
     existing_task_id: str = ""
     agent_id: str = "ark"
     agent_lane_key: str = ""
@@ -66,11 +72,18 @@ class CaseHubRunSelection(BaseModel):
     task_dataset_ids: list[str] = Field(default_factory=list)
 
 
+class TrainingPlan(BaseModel):
+    train_epochs: int = Field(ge=0, strict=True)
+    train_trials: int = Field(ge=1, strict=True)
+    eval_trials: int = Field(ge=1, strict=True)
+
+
 class StartRunRequest(BaseModel):
     run_id: str
     dataset: str
     domain: str
     concurrency: int | None = Field(default=None, ge=1)
+    training_plan: TrainingPlan | None = None
     casehub: CaseHubRunSelection = Field(default_factory=CaseHubRunSelection)
 
 
@@ -86,6 +99,8 @@ class ArkRun:
     case_count: int
     concurrency: int
     repository: ArkCaseRepository | VikingCaseRepository | None = field(repr=False)
+    training_plan: dict[str, int] | None = None
+    resolved_task_request: dict[str, Any] = field(default_factory=dict, repr=False)
     completion: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -100,6 +115,8 @@ class ArkRun:
             "concurrency": self.concurrency,
             "task": self.task,
             "completion": self.completion,
+            "training_plan": self.training_plan,
+            "resolved_task_request": self.resolved_task_request,
         }
 
 
@@ -127,6 +144,7 @@ class ArkRunRegistry:
             label="task_dataset_ids",
         )
         is_viking_external = self._config.workflow_id == "ark_viking_external_training"
+        training_plan = request.training_plan.model_dump() if request.training_plan else None
         if not dataset_ids and not is_viking_external:
             raise ValueError("casehub.dataset_ids is required")
         unknown_task_dataset_ids = [
@@ -146,17 +164,19 @@ class ArkRunRegistry:
                     or existing.task_casehub_dataset_ids != task_dataset_ids
                     or existing.concurrency
                     != (request.concurrency or self._config.rollout_concurrency)
+                    or existing.training_plan != training_plan
                 ):
                     raise ValueError(
-                        f"benchmark run {run_id} already exists with a different CaseHub selection"
+                        f"benchmark run {run_id} already exists with a different CaseHub selection, "
+                        "concurrency or training plan"
                     )
                 return existing
             if is_viking_external:
                 body = deepcopy(self._config.task_body)
                 existing_task_id = str(self._config.existing_task_id or "").strip()
-                if not body and not existing_task_id:
+                if not body and not existing_task_id and not self._config.viking_experiment_sets:
                     raise ValueError(
-                        "training_task.task_body or training_task.existing_task_id is required "
+                        "training_task.viking_experiment_sets or training_task.existing_task_id is required "
                         "for ark_viking_external_training"
                     )
                 if existing_task_id:
@@ -164,6 +184,28 @@ class ArkRunRegistry:
                         raise ValueError(
                             "training_task.existing_task_id can only be attached to one run"
                         )
+                elif self._config.viking_experiment_sets:
+                    if training_plan is None:
+                        raise ValueError(
+                            "runner must send training_plan; use the updated run_batch_train_eval"
+                        )
+                    body = await build_viking_task_request(
+                        self._client,
+                        name=f"{self._config.task_name}_{run_id}",
+                        lane_key=self._config.lane_key,
+                        experiment_sets=self._config.viking_experiment_sets,
+                        concurrency=request.concurrency or self._config.rollout_concurrency,
+                        training_plan=training_plan,
+                        request_source=self._config.request_source,
+                        case_timeout_seconds=self._config.runtime_params.get("task_timeout", 3600),
+                        model_ep=self._config.model_ep,
+                        experiment_id=self._config.experiment_id,
+                    )
+                    print(
+                        "[ark4-adapter] resolved execution: "
+                        + json.dumps(body["agent"]["execution"], ensure_ascii=False),
+                        flush=True,
+                    )
                 else:
                     name_key = "name" if str(body.get("schema_version") or "") else "task_name"
                     base_name = str(body.get(name_key) or self._config.task_name).strip()
@@ -238,6 +280,8 @@ class ArkRunRegistry:
                 case_count=len(cases),
                 concurrency=request.concurrency or self._config.rollout_concurrency,
                 repository=repository,
+                training_plan=training_plan,
+                resolved_task_request=body if is_viking_external and not existing_task_id else {},
             )
             self._runs[run_id] = run
             ready = await self._client.wait_for_ov_wait(
@@ -273,9 +317,7 @@ class ArkRunRegistry:
                 return run
             completion = await self._client.complete_external_training(
                 run.task_id,
-                idempotency_key=(
-                    f"{self._config.idempotency_namespace}:{run.task_id}:complete"
-                ),
+                idempotency_key=(f"{self._config.idempotency_namespace}:{run.task_id}:complete"),
             )
             run.completion = completion
             run.status = "completed"
@@ -318,10 +360,15 @@ def create_app(
             )
         if run.status != "ov_wait":
             raise ValueError(f"benchmark run {run_id} is not active: {run.status}")
-        unknown_dataset_ids = [] if is_viking_external else [
-            dataset_id for dataset_id in requested_dataset_ids
-            if dataset_id not in run.casehub_dataset_ids
-        ]
+        unknown_dataset_ids = (
+            []
+            if is_viking_external
+            else [
+                dataset_id
+                for dataset_id in requested_dataset_ids
+                if dataset_id not in run.casehub_dataset_ids
+            ]
+        )
         if unknown_dataset_ids:
             raise ValueError(
                 "case query dataset(s) are outside the active benchmark run: "
@@ -338,18 +385,12 @@ def create_app(
         if not cases:
             return
         case_ids = [
-            str(
-                case.metadata.get("platform_case_id")
-                or case.input.get("task_id")
-                or ""
-            ).strip()
+            str(case.metadata.get("platform_case_id") or case.input.get("task_id") or "").strip()
             for case in cases
         ]
         if any(not case_id for case_id in case_ids):
             raise ValueError("Ark batch case is missing platform_case_id")
-        run_id = str(
-            (request.filters or {}).get("_openviking_benchmark_run_id") or ""
-        ).strip()
+        run_id = str((request.filters or {}).get("_openviking_benchmark_run_id") or "").strip()
         payload = {
             "run_id": run_id,
             "split": request.split,
@@ -390,7 +431,7 @@ def create_app(
             timeout_seconds=config.rollout_timeout_seconds,
             idempotency_namespace=config.idempotency_namespace,
             require_messages_for_training=config.require_messages_for_training,
-            concurrency=config.rollout_concurrency,
+            concurrency=run.concurrency,
             batch_coordinator=batch_coordinator,
         )
 
@@ -399,7 +440,7 @@ def create_app(
         make_case_loader=make_case_loader,
         make_rollout_executor=make_rollout_executor,
         on_cases_queried=annotate_case_batch,
-        max_rollout_concurrency=config.rollout_concurrency,
+        max_rollout_concurrency=None,
         rollout_thread_workers=None,
     )
     app.state.run_registry = run_registry

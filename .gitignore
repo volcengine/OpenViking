@@ -212,6 +212,7 @@ openviking/_version.py
 specs/
 .trae/
 .codex/
+.local/
 .ttadk/
 tests/integration/.tmp_*/
 doc-fetch-resources/

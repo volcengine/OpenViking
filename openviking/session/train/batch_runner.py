@@ -465,6 +465,11 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             dataset=config.dataset,
             domain=config.domain,
             concurrency=config.concurrency,
+            training_plan={
+                "train_epochs": config.epochs,
+                "train_trials": config.train_trials,
+                "eval_trials": config.trials,
+            },
             casehub_dataset_ids=_lifecycle_casehub_dataset_ids(config),
             casehub_case_ids=config.casehub_case_ids,
             task_casehub_dataset_ids=config.casehub_dataset_ids,

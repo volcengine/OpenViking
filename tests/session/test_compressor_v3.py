@@ -1962,6 +1962,7 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
                         extra_fields={
                             "memory_type": "experiences",
                             "experience_name": "booking_duplicate_handling",
+                            "status": "promoted",
                         },
                     )
                 ),
@@ -2116,7 +2117,9 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
 
     assert result["submitted"] == 1
     acquire_lock.assert_awaited()
-    release_lock.assert_awaited_once_with(no_op_lease)
+    # Link synchronization separately locks all historical source Cases.
+    assert release_lock.await_count == 2
+    assert all(call.args == (no_op_lease,) for call in release_lock.await_args_list)
     case_file = MemoryFileUtils.read(fs.files[case_uri], uri=case_uri)
     assert any(
         link["to_uri"] == traj_uri
@@ -2160,7 +2163,8 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
 
 
 @pytest.mark.asyncio
-async def test_case_link_writer_rechecks_archived_experience_under_endpoint_lock():
+@pytest.mark.parametrize("stored_status", ["archived", "draft", "degraded"])
+async def test_case_link_writer_rechecks_non_promoted_experience_under_endpoint_lock(stored_status):
     case_uri = "viking://user/u/memories/cases/duplicate_booking.md"
     trajectory_uri = "viking://user/u/memories/trajectories/duplicate_booking.md"
     experience_uri = "viking://user/u/memories/experiences/retired_rule.md"
@@ -2171,7 +2175,8 @@ async def test_case_link_writer_rechecks_archived_experience_under_endpoint_lock
             self.acquired = []
             self.released = []
 
-        async def pathlock_acquire_exact_batch(self, paths):
+        async def pathlock_acquire_exact_batch(self, paths, timeout_secs=0.0):
+            assert timeout_secs > 0
             self.acquired.append(list(paths))
             return lease
 
@@ -2213,7 +2218,7 @@ async def test_case_link_writer_rechecks_archived_experience_under_endpoint_lock
                         extra_fields={
                             "memory_type": "experiences",
                             "experience_name": "retired_rule",
-                            "status": "archived",
+                            "status": stored_status,
                             "version": 8,
                         },
                     )
@@ -2308,9 +2313,9 @@ async def test_case_link_writer_rechecks_archived_experience_under_endpoint_lock
     assert archived_file.backlinks == []
     trajectory_file = MemoryFileUtils.read(fs.files[trajectory_uri], uri=trajectory_uri)
     assert [link["from_uri"] for link in trajectory_file.backlinks] == [case_uri]
-    assert fs.read_counts == {experience_uri: 1, case_uri: 1, trajectory_uri: 1}
+    assert fs.read_counts == {experience_uri: 3, case_uri: 2, trajectory_uri: 1}
     assert fs.write_order == [trajectory_uri, case_uri]
-    assert fs._async_agfs.released == [lease]
+    assert fs._async_agfs.released == [lease, lease]
 
 
 def test_training_messages_after_case_spec_preserves_all_remaining_messages_in_order():

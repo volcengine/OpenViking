@@ -78,15 +78,25 @@ class CompletedPlatformClient:
         page_size: int,
     ) -> dict[str, Any]:
         assert task_id.startswith("task-")
-        rows = [
-            {
-                "case_id": "101",
-                "input": {"prompt": "viking train prompt"},
-                "expected_answer": "viking train answer",
-                "metadata": {"viking_row_id": 101},
-            }
-        ] if phase == "train" else []
-        return {"phase": phase, "page": page, "page_size": page_size, "total": len(rows), "cases": rows}
+        rows = (
+            [
+                {
+                    "case_id": "101",
+                    "input": {"prompt": "viking train prompt"},
+                    "expected_answer": "viking train answer",
+                    "metadata": {"viking_row_id": 101},
+                }
+            ]
+            if phase == "train"
+            else []
+        )
+        return {
+            "phase": phase,
+            "page": page,
+            "page_size": page_size,
+            "total": len(rows),
+            "cases": rows,
+        }
 
     async def wait_for_ov_wait(
         self,
@@ -228,9 +238,9 @@ async def test_generic_service_contract_executes_platform_rollout() -> None:
         )
         assert case_response.status_code == 200
         assert len(case_response.json()["cases"]) == 1
-        assert case_response.json()["cases"][0]["metadata"][
-            "_ark_rollout_batch"
-        ]["case_ids"] == ["case-1"]
+        assert case_response.json()["cases"][0]["metadata"]["_ark_rollout_batch"]["case_ids"] == [
+            "case-1"
+        ]
 
         execute_response = await client.post(
             "/v1/rollouts/execute",
@@ -403,6 +413,74 @@ async def test_viking_external_run_can_attach_existing_task() -> None:
 
 
 @pytest.mark.asyncio
+async def test_compact_viking_resolves_per_run_and_receives_runner_plan(monkeypatch) -> None:
+    platform_client = CompletedPlatformClient()
+    resolved: list[dict[str, Any]] = []
+
+    async def build(client, **kwargs):
+        assert client is platform_client
+        resolved.append(kwargs)
+        return {
+            "name": kwargs["name"],
+            "agent": {"execution": {"contract_version": str(len(resolved))}},
+        }
+
+    monkeypatch.setattr("service_app.build_viking_task_request", build)
+    app = create_app(
+        client=platform_client,
+        config=ArkAdapterServiceConfig(
+            dataset="ark4-0",
+            domain="ark",
+            workflow_id="ark_viking_external_training",
+            viking_experiment_sets=[
+                {"experiment_set_id": 371, "version": "V1", "role": "train"},
+                {"experiment_set_id": 372, "version": "V1", "role": "eval"},
+            ],
+            lane_key="agentmemory",
+            request_source="agentmemory",
+            runtime_params={"task_timeout": 4800},
+            rollout_concurrency=1,
+        ),
+    )
+    body = {
+        "run_id": "auto-run",
+        "dataset": "ark4-0",
+        "domain": "ark",
+        "concurrency": 30,
+        "training_plan": {"train_epochs": 5, "train_trials": 1, "eval_trials": 10},
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://adapter.test"
+    ) as client:
+        response = await client.post("/v1/runs/start", json=body)
+        assert response.status_code == 200, response.text
+        assert response.json()["resolved_task_request"] == platform_client.created_bodies[0]
+        assert response.json()["training_plan"] == body["training_plan"]
+        assert resolved[0]["training_plan"] == body["training_plan"]
+        assert resolved[0]["concurrency"] == 30
+        assert resolved[0]["case_timeout_seconds"] == 4800
+        assert resolved[0]["request_source"] == "agentmemory"
+        eval_response = await client.post("/v1/runs/start", json=body)
+        assert eval_response.status_code == 200
+        assert eval_response.json()["training_plan"] == body["training_plan"]
+        assert len(resolved) == 1
+        body["training_plan"]["train_epochs"] = 0
+        assert (await client.post("/v1/runs/start", json=body)).status_code == 400
+        body["run_id"] = "auto-run-2"
+        eval_response = await client.post("/v1/runs/start", json=body)
+        assert eval_response.status_code == 200
+        assert eval_response.json()["training_plan"]["train_epochs"] == 0
+        assert len(resolved) == 2
+        assert resolved[1]["training_plan"]["train_epochs"] == 0
+        body["run_id"] = "old-runner"
+        del body["training_plan"]
+        response = await client.post("/v1/runs/start", json=body)
+        assert response.status_code == 400
+        assert "training_plan" in response.text
+        assert platform_client.created_count == 2
+
+
+@pytest.mark.asyncio
 async def test_case_query_records_exact_requested_batch_page() -> None:
     class ThreeCasePlatformClient(CompletedPlatformClient):
         async def list_rollout_source_cases(
@@ -413,15 +491,19 @@ async def test_case_query_records_exact_requested_batch_page() -> None:
             page: int,
             page_size: int,
         ) -> dict[str, Any]:
-            rows = [
-                {
-                    "case_id": str(row_id),
-                    "input": {"prompt": f"prompt {row_id}"},
-                    "expected_answer": f"answer {row_id}",
-                    "metadata": {"viking_row_id": row_id},
-                }
-                for row_id in (101, 102, 103)
-            ] if phase == "train" else []
+            rows = (
+                [
+                    {
+                        "case_id": str(row_id),
+                        "input": {"prompt": f"prompt {row_id}"},
+                        "expected_answer": f"answer {row_id}",
+                        "metadata": {"viking_row_id": row_id},
+                    }
+                    for row_id in (101, 102, 103)
+                ]
+                if phase == "train"
+                else []
+            )
             start = max(0, page - 1) * page_size
             selected = rows[start : start + page_size]
             return {
@@ -470,9 +552,7 @@ async def test_case_query_records_exact_requested_batch_page() -> None:
     assert response.status_code == 200
     cases = response.json()["cases"]
     assert len(cases) == 2
-    descriptors = [
-        case["metadata"]["_ark_rollout_batch"] for case in cases
-    ]
+    descriptors = [case["metadata"]["_ark_rollout_batch"] for case in cases]
     assert descriptors[0] == descriptors[1]
     assert descriptors[0]["case_ids"] == ["101", "102"]
 
@@ -547,3 +627,102 @@ async def test_case_query_can_select_one_dataset_from_multi_dataset_run() -> Non
 
     assert cases.status_code == 200
     assert [item["input"]["task_id"] for item in cases.json()["cases"]] == ["case-2"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("run_concurrency", [2, 30])
+async def test_viking_rollout_post_uses_runner_concurrency_not_service_default(
+    run_concurrency: int,
+) -> None:
+    import json
+
+    from platform_client import PlatformClientConfig, TrainingPlatformClient
+
+    submitted_bodies: list[dict[str, Any]] = []
+    case_ids = [str(index) for index in range(1, 32)]
+
+    def gateway_handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        task_path = "/inspect/training/tasks/task-existing"
+        if request.method == "GET" and path == task_path:
+            return httpx.Response(200, json={"data": {
+                "task_id": "task-existing", "status": "running", "current_step": "OV_WAIT",
+            }})
+        if request.method == "GET" and path.endswith("/rollout-source-cases"):
+            rows = [{
+                "case_id": case_id,
+                "input": {"prompt": f"question {case_id}"},
+                "metadata": {"viking_row_id": int(case_id)},
+            } for case_id in case_ids] if request.url.params["phase"] == "train" else []
+            return httpx.Response(200, json={"data": {
+                "cases": rows, "total": len(rows), "page": 1,
+                "page_size": int(request.url.params["page_size"]),
+            }})
+        if request.method == "POST" and path.endswith("/rollout-eval"):
+            body = json.loads(request.content)
+            submitted_bodies.append(body)
+            return httpx.Response(200, json={"data": {
+                "batch_rollout_id": "batch-test",
+                "case_rollouts": [{
+                    "case_id": case_id, "case_rollout_id": f"cr-{case_id}",
+                } for case_id in body["case_ids"]],
+            }})
+        if request.method == "GET" and "/rollout-eval/cr-" in path:
+            return httpx.Response(200, json={"data": {
+                "status": "completed",
+                "result": {
+                    "final_answer": "done",
+                    "messages": [{"role": "assistant", "content": "done"}],
+                    "evaluation": {"passed": True, "score": 1.0},
+                    "evaluator_status": "succeeded",
+                },
+            }})
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    async with TrainingPlatformClient(
+        PlatformClientConfig(gateway_base_url="https://platform.test"),
+        transport=httpx.MockTransport(gateway_handler),
+    ) as platform_client:
+        app = create_app(
+            client=platform_client,
+            config=ArkAdapterServiceConfig(
+                dataset="ark4-0", domain="ark",
+                workflow_id="ark_viking_external_training", existing_task_id="task-existing",
+                rollout_concurrency=1, rollout_poll_interval_seconds=0.001,
+            ),
+        )
+        assert app.state.rollout_semaphore is None
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://adapter.test",
+        ) as client:
+            started = await client.post("/v1/runs/start", json={
+                "run_id": "concurrency-run", "dataset": "ark4-0", "domain": "ark",
+                "concurrency": run_concurrency,
+            })
+            assert started.status_code == 200
+            queried = await client.post("/v1/cases/query", json={
+                "dataset": "ark4-0", "domain": "ark", "split": "train", "limit": 31,
+                "filters": {"_openviking_benchmark_run_id": "concurrency-run"},
+            })
+            assert queried.status_code == 200
+            executed = await client.post("/v1/rollouts/execute", json={
+                "case": queried.json()["cases"][0],
+                "policy_set": policy_set_to_dict(ExperienceSet(
+                    root_uri="viking://user/memories/experiences", policies=[],
+                )),
+                "execution_context": {"policy_snapshot_id": "snapshot-test", "metadata": {}},
+                "options": {"_openviking_benchmark_run_id": "concurrency-run"},
+            })
+            assert executed.status_code == 200
+            execution_id = executed.json()["execution_id"]
+            for _ in range(100):
+                response = await client.get(f"/v1/rollouts/executions/{execution_id}")
+                if response.json()["status"] == "completed":
+                    break
+                await asyncio.sleep(0.001)
+            else:
+                raise AssertionError("rollout did not complete")
+
+    assert len(submitted_bodies) == 1
+    assert submitted_bodies[0]["workers"] == run_concurrency
+    assert submitted_bodies[0]["case_ids"] == case_ids

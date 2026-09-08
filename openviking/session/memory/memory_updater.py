@@ -41,6 +41,7 @@ from openviking.session.memory.dataclass import (
 from openviking.session.memory.experience_lifecycle import (
     experience_case_link_uris,
     experience_file_is_archived,
+    experience_is_case_linkable,
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.merge_op import MergeOpFactory
@@ -1908,26 +1909,32 @@ class MemoryUpdater:
         updated_replacement_uris: set[str] = set()
         if replacement_links:
             replacement_files: dict[str, MemoryFile] = {}
-            replacement_errors: set[str] = set()
+            excluded_replacement_uris: set[str] = set()
             for replacement_uri in {link.to_uri for link in replacement_links if link.to_uri}:
                 try:
                     replacement_file = result.files_by_uri.get(replacement_uri)
                     if replacement_file is None:
                         raw = await viking_fs.read_file(replacement_uri, ctx=ctx)
-                        replacement_file = MemoryFileUtils.read(raw or "", uri=replacement_uri)
-                    if experience_file_is_archived(
-                        replacement_file,
-                        uri=replacement_uri,
-                    ):
-                        raise ValueError("archive replacement Experience is archived")
+                        if not raw:
+                            raise FileNotFoundError(
+                                f"archive replacement Experience does not exist: {replacement_uri}"
+                            )
+                        replacement_file = MemoryFileUtils.read(raw, uri=replacement_uri)
+                    if not experience_is_case_linkable(replacement_file.extra_fields.get("status")):
+                        # A valid draft/degraded replacement may be written in
+                        # this batch. It simply has no public Case link yet;
+                        # reporting a write error would invalidate its applied
+                        # policy snapshot despite the successful file writes.
+                        excluded_replacement_uris.add(replacement_uri)
+                        continue
                     replacement_files[replacement_uri] = replacement_file
                 except Exception as exc:
-                    replacement_errors.add(replacement_uri)
+                    excluded_replacement_uris.add(replacement_uri)
                     result.add_error(replacement_uri, exc)
             valid_replacement_links = [
                 link
                 for link in replacement_links
-                if link.to_uri and link.to_uri not in replacement_errors
+                if link.to_uri and link.to_uri not in excluded_replacement_uris
             ]
             updated_uris = await write_stored_links(
                 valid_replacement_links,

@@ -31,6 +31,15 @@ def experience_is_agent_visible(value: Any) -> bool:
     return normalize_experience_status(value) == "promoted"
 
 
+def experience_is_case_linkable(value: Any) -> bool:
+    """Require explicit promotion for Case links; fail closed on missing status.
+
+    This does not change the legacy search/read visibility policy.
+    """
+
+    return normalize_experience_status(value, default="draft") == "promoted"
+
+
 def is_experience_memory_uri(uri: Any) -> bool:
     """Return whether ``uri`` identifies a concrete Experience memory file."""
 

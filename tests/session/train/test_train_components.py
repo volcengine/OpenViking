@@ -998,6 +998,153 @@ async def test_memory_file_policy_updater_archives_and_unlinks_case_under_stable
     )
 
 
+@pytest.mark.parametrize("replacement_status", ["draft", "degraded", "archived", "promoted"])
+async def test_archive_replacement_visibility_preserves_applied_snapshot(
+    replacement_status,
+):
+    from openviking.session.train import PolicyPlanItem
+
+    root = "viking://user/u/memories/experiences"
+    old_uri = f"{root}/booking_duplicate_handling.md"
+    new_uri = f"{root}/replacement.md"
+    case_uri = "viking://user/u/memories/cases/duplicate_booking.md"
+    link = StoredLink(
+        from_uri=case_uri, to_uri=old_uri, link_type="related_to", weight=1.0
+    ).model_dump()
+    old_file = _memory_file(
+        name="booking_duplicate_handling", uri=old_uri, content="content", status="promoted"
+    )
+    old_file.backlinks = [link]
+    fs = LockedFakeVikingFS(
+        {
+            old_uri: MemoryFileUtils.write(old_file),
+            case_uri: MemoryFileUtils.write(
+                MemoryFile(
+                    uri=case_uri,
+                    memory_type="cases",
+                    content="case body",
+                    links=[link],
+                    extra_fields={"case_name": "duplicate_booking", "version": 1},
+                )
+            ),
+        }
+    )
+    policy_set = ExperienceSet(
+        root_uri=root,
+        policies=[
+            Experience(
+                name="booking_duplicate_handling",
+                uri=old_uri,
+                version=1,
+                status="promoted",
+                content="content",
+                metadata=dict(old_file.extra_fields),
+                backlinks=[link],
+            )
+        ],
+    )
+    plan = _delete_plan(uri=old_uri)
+    plan.items[0].metadata["superseded_by"] = [new_uri]
+    plan.items.insert(
+        0,
+        PolicyPlanItem(
+            kind="upsert",
+            memory_type="experiences",
+            target_name="replacement",
+            target_uri=new_uri,
+            before_content=None,
+            after_content="replacement content",
+            metadata={
+                "merge_memory_fields": {
+                    **_experience_fields("replacement"),
+                    "status": replacement_status,
+                }
+            },
+        ),
+    )
+
+    result = await MemoryFilePolicyUpdater(viking_fs=fs).apply(
+        plan, policy_set, fake_request_context()
+    )
+
+    assert not result.errors
+    assert {policy.uri: policy.status for policy in result.updated_policy_set.policies} == {
+        old_uri: "archived",
+        new_uri: replacement_status,
+    }
+    assert MemoryFileUtils.read(fs.files[old_uri], uri=old_uri).extra_fields["status"] == "archived"
+    assert MemoryFileUtils.read(fs.files[new_uri], uri=new_uri).extra_fields["status"] == (
+        replacement_status
+    )
+    expected_links = [{**link, "to_uri": new_uri}] if replacement_status == "promoted" else []
+    assert MemoryFileUtils.read(fs.files[case_uri], uri=case_uri).links == expected_links
+    assert MemoryFileUtils.read(fs.files[new_uri], uri=new_uri).backlinks == expected_links
+    assert set(result.written_uris) >= {old_uri, new_uri, case_uri}
+    assert len(fs._async_agfs.acquired_paths) == len(fs._async_agfs.released)
+
+
+@pytest.mark.parametrize("missing_result", ["empty", "error"])
+async def test_archive_replacement_read_failure_is_still_reported(missing_result):
+    from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations
+    from openviking.session.memory.memory_type_registry import create_default_registry
+    from openviking.session.memory.memory_updater import MemoryUpdater, MemoryUpdateResult
+
+    old_uri = "viking://user/u/memories/experiences/old.md"
+    replacement_uri = "viking://user/u/memories/experiences/replacement.md"
+    case_uri = "viking://user/u/memories/cases/case.md"
+    old_link = StoredLink(
+        from_uri=case_uri, to_uri=old_uri, link_type="related_to", weight=1.0
+    ).model_dump()
+    fs = FakeVikingFS(
+        {
+            case_uri: MemoryFileUtils.write(
+                MemoryFile(
+                    uri=case_uri,
+                    memory_type="cases",
+                    links=[old_link],
+                    extra_fields={"case_name": "case", "version": 1},
+                )
+            )
+        }
+    )
+    original_read = fs.read_file
+
+    async def read_file(uri, ctx=None):
+        if uri == replacement_uri:
+            if missing_result == "error":
+                raise OSError("replacement read unavailable")
+            return ""
+        return await original_read(uri, ctx=ctx)
+
+    fs.read_file = read_file
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                memory_type="experiences",
+                memory_fields={},
+                uris=[old_uri],
+                lifecycle_action="archive",
+                archive_replacement_uri=replacement_uri,
+                archive_case_uris_by_uri={old_uri: [case_uri]},
+            )
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+    result = MemoryUpdateResult()
+    result.add_archived(old_uri)
+    updater = MemoryUpdater(registry=create_default_registry())
+    updater._viking_fs = fs
+
+    await updater._unlink_archived_experience_cases(operations, result, fake_request_context())
+
+    assert len(result.errors) == 1
+    assert result.errors[0][0] == replacement_uri
+    assert isinstance(result.errors[0][1], OSError)
+    assert not MemoryFileUtils.read(fs.files[case_uri], uri=case_uri).links
+    assert replacement_uri not in fs.files
+
+
 @pytest.mark.asyncio
 async def test_memory_file_policy_updater_rejects_stale_version_before_any_write():
     uri = "viking://user/u/memories/experiences/booking_duplicate_handling.md"

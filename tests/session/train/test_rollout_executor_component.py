@@ -543,6 +543,31 @@ def test_tau2_gym_env_passes_seed_to_user_llm_before_reset(monkeypatch):
     assert calls["reset_seed"] == 1234
 
 
+@pytest.mark.parametrize("with_persona", [False, True])
+def test_tau2_fixed_first_user_adapter_preserves_optional_persona(monkeypatch, with_persona):
+    import benchmark.tau2.common.fixed_first_user as fixed_first_user
+    import benchmark.tau2.common.tau2_env.tau2_environment as tau2_environment
+
+    user = SimpleNamespace(llm="test", llm_args={}, instructions="scenario", tools=[])
+    if with_persona:
+        user.persona_config = {"name": "test persona"}
+    captured = {}
+
+    def make_simulator(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(**kwargs)
+
+    monkeypatch.setattr(fixed_first_user, "FixedFirstUserSimulator", make_simulator)
+    env = object.__new__(tau2_environment._GymTau2BenchEnv)
+    env.env = SimpleNamespace(_get_user=lambda: user)
+    env._install_fixed_first_user("cached first")
+    result = env.env._get_user()
+    assert result.fixed_first_message == "cached first"
+    assert ("persona_config" in captured) == with_persona
+    if with_persona:
+        assert captured["persona_config"] == user.persona_config
+
+
 def test_tau2_fixed_first_user_simulator_uses_fixture_only_for_first_turn(monkeypatch):
     from tau2.data_model.message import AssistantMessage, UserMessage
     from tau2.user.user_simulator import UserSimulator
@@ -552,11 +577,11 @@ def test_tau2_fixed_first_user_simulator_uses_fixture_only_for_first_turn(monkey
     generated = []
 
     def fake_generate(self, message, state):
-        del self, message, state
+        del self, message
         generated.append(True)
-        return UserMessage(role="user", content="generated later")
+        return UserMessage(role="user", content="generated later"), state
 
-    monkeypatch.setattr(UserSimulator, "_generate_next_message", fake_generate)
+    monkeypatch.setattr(UserSimulator, "generate_next_message", fake_generate)
     simulator = FixedFirstUserSimulator(
         fixed_first_message="cached first",
         llm="openai/test-user",

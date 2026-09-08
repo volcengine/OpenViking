@@ -40,9 +40,13 @@ from openviking.session.memory.dataclass import (
     ResolvedOperations,
     StoredLink,
 )
+from openviking.session.memory.experience_case_links import (
+    acquire_case_link_lease,
+    release_case_link_lease,
+    sync_experience_case_links,
+)
 from openviking.session.memory.experience_lifecycle import (
-    experience_file_is_archived,
-    normalize_experience_status,
+    experience_is_case_linkable,
 )
 from openviking.session.memory.experience_validation import (
     build_memory_extraction_post_validation,
@@ -1266,8 +1270,8 @@ class SessionCompressorV3:
         pathlock_client = getattr(viking_fs, "_async_agfs", None)
         uri_to_path = getattr(viking_fs, "_uri_to_path", None)
         if pathlock_client is not None and uri_to_path is not None:
-            lease = await pathlock_client.pathlock_acquire_exact_batch(
-                sorted(uri_to_path(uri, ctx=ctx) for uri in endpoint_uris)
+            lease = await acquire_case_link_lease(
+                pathlock_client, [uri_to_path(uri, ctx=ctx) for uri in endpoint_uris]
             )
         try:
             # Archive may win after policy apply but before Case provenance is
@@ -1292,7 +1296,7 @@ class SessionCompressorV3:
                         )
                         continue
                     prefetched_experiences[target_uri] = memory_file
-                if not experience_file_is_archived(memory_file, uri=target_uri):
+                if experience_is_case_linkable(memory_file.extra_fields.get("status")):
                     visible_links.append(link)
 
             if not visible_links:
@@ -1333,7 +1337,23 @@ class SessionCompressorV3:
             )
         finally:
             if lease is not None:
-                await pathlock_client.pathlock_release(lease)
+                await release_case_link_lease(pathlock_client, lease)
+
+        # Source trajectory backlinks were persisted above even for draft EXPs.
+        # Reconcile all source Cases after releasing the current Case's lease;
+        # promotion may need to attach an EXP to Cases from earlier commits.
+        touched = set(apply_result.written_uris) | set(getattr(apply_result, "edited_uris", []))
+        root_uri = apply_result.updated_policy_set.root_uri
+        trajectory_uris = {trajectory.uri for trajectory in analysis.trajectories}
+        for item in plan.items:
+            if item.memory_type != "experiences" or item.kind != "upsert":
+                continue
+            uri = _experience_plan_item_uri(item, root_uri)
+            if uri not in touched or not _plan_item_has_source_trajectory(item, trajectory_uris):
+                continue
+            await sync_experience_case_links(
+                uri, viking_fs=viking_fs, ctx=ctx, candidate_case_uris={case_uri}
+            )
 
     async def _write_final_memory_diff(
         self,
@@ -2075,7 +2095,7 @@ def _case_experience_links_via_trajectories(
         uri = _experience_plan_item_uri(item, root_uri)
         if uri not in touched:
             continue
-        if _applied_experience_is_archived(apply_result, uri):
+        if not _applied_experience_is_promoted(apply_result, uri):
             continue
         if uri in seen:
             continue
@@ -2091,14 +2111,14 @@ def _case_experience_links_via_trajectories(
     return result
 
 
-def _applied_experience_is_archived(
+def _applied_experience_is_promoted(
     apply_result: PolicyApplyResult,
     uri: str,
 ) -> bool:
     policy_set = getattr(apply_result, "updated_policy_set", None)
     for policy in getattr(policy_set, "policies", []) or []:
         if str(getattr(policy, "uri", "") or "") == uri:
-            return normalize_experience_status(getattr(policy, "status", None)) == "archived"
+            return experience_is_case_linkable(getattr(policy, "status", None))
     return False
 
 
@@ -2252,7 +2272,7 @@ async def _render_case_links_from_template(
     owns_lease = False
     if lock_lease is None:
         lock_path = viking_fs._uri_to_path(case_uri, ctx=ctx)
-        lock_lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch([lock_path])
+        lock_lease = await acquire_case_link_lease(viking_fs._async_agfs, [lock_path])
         owns_lease = True
     try:
         try:
@@ -2280,7 +2300,7 @@ async def _render_case_links_from_template(
         )
     finally:
         if owns_lease:
-            await viking_fs._async_agfs.pathlock_release(lock_lease)
+            await release_case_link_lease(viking_fs._async_agfs, lock_lease)
 
 
 def _retain_case_links(links: list[dict[str, Any]]) -> list[dict[str, Any]]:

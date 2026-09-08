@@ -54,10 +54,13 @@ from openviking.session.memory.dataclass import (
     SkippedMemoryOperation,
     StoredLink,
 )
+from openviking.session.memory.experience_case_links import (
+    acquire_case_link_lease,
+    release_case_link_lease,
+)
 from openviking.session.memory.experience_lifecycle import (
     experience_case_link_uris,
-    experience_file_is_archived,
-    normalize_experience_status,
+    experience_is_case_linkable,
 )
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_type_registry import (
@@ -75,6 +78,7 @@ from openviking.session.memory.memory_updater import (
 )
 from openviking.session.memory.merge_op import MergeOp, MergeOpFactory
 from openviking.session.memory.merge_op.base import get_python_type_for_field
+from openviking.session.memory.merge_op.link_merge import merge_links
 from openviking.session.memory.patch_merge_context_provider import (
     PatchMergeContextProvider,
     PatchMergePatch,
@@ -82,7 +86,7 @@ from openviking.session.memory.patch_merge_context_provider import (
 )
 from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
 from openviking.session.memory.utils.json_parser import parse_json_strict
-from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils, bump_memory_version
 from openviking.session.memory.utils.streaming_batcher import (
     StreamingBatcher,
     StreamingBatcherConfig,
@@ -268,12 +272,33 @@ class StreamingMemoryUpdater:
         if request.ctx is None:
             raise ValueError("MemoryUpdateRequest.ctx is required")
         attach_source_to_request_operations(request)
+        # Collect embedded relations before splitting memory types. Otherwise
+        # the Case group can finish before a same-request EXP exists and lose
+        # the only copy of its deferred link.
+        _extract_case_experience_links(request.operations)
         append_only_request, merge_request = self._split_append_only_request(request)
         append_result = (
             await self._apply_append_only_request_now(append_only_request)
             if append_only_request is not None
             else None
         )
+        if (
+            append_only_request is not None
+            and append_result is not None
+            and merge_request is not None
+        ):
+            allocated_uris = {}
+            for before, after in zip(
+                append_only_request.operations.upsert_operations,
+                append_result.operations.upsert_operations,
+                strict=True,
+            ):
+                for previous_uri, allocated_uri in zip(before.uris, after.uris, strict=True):
+                    allocated_uris.setdefault(previous_uri, allocated_uri)
+            merge_request.operations.resolved_links = _remap_allocated_links_once(
+                merge_request.operations.resolved_links,
+                allocated_uris,
+            )
         merge_result = (
             await self._submit_grouped_merge_request(merge_request)
             if merge_request is not None
@@ -346,14 +371,17 @@ class StreamingMemoryUpdater:
         async with self._apply_lock:
             lease = None
             if lock_paths:
-                lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(
+                lease = await acquire_case_link_lease(
+                    viking_fs._async_agfs,
                     lock_paths,
-                    timeout_secs=_MEMORY_APPLY_LOCK_TIMEOUT_SECONDS,
                 )
             try:
                 valid_links = await filter_valid_links(
                     links,
-                    upsert_operations=result.operations.upsert_operations,
+                    # Group writes have finished. Their operation previews may
+                    # be stale (or may have failed to persist); only the current
+                    # endpoint files read under this lease can authorize links.
+                    upsert_operations=[],
                     delete_file_contents=result.operations.delete_file_contents,
                     ctx=request.ctx,
                     trace_console=self.config.trace_console,
@@ -361,6 +389,10 @@ class StreamingMemoryUpdater:
                 if not valid_links:
                     return
                 if viking_fs is not None:
+                    case_links = [link for link in valid_links if _is_case_experience_link(link)]
+                    valid_links = [
+                        link for link in valid_links if not _is_case_experience_link(link)
+                    ]
                     updated_uris = await write_stored_links(
                         valid_links,
                         request.ctx,
@@ -369,13 +401,76 @@ class StreamingMemoryUpdater:
                     )
                     for uri in dict.fromkeys(updated_uris):
                         result.apply_result.add_edited(uri)
+                    valid_links.extend(
+                        await self._write_case_experience_links(
+                            case_links, request.ctx, viking_fs, lease, result.apply_result
+                        )
+                    )
                 result.operations.resolved_links = merge_link_lists(
                     list(getattr(result.operations, "resolved_links", []) or []),
                     valid_links,
                 )
             finally:
                 if lease is not None:
-                    await viking_fs._async_agfs.pathlock_release(lease)
+                    await release_case_link_lease(viking_fs._async_agfs, lease)
+
+    async def _write_case_experience_links(
+        self,
+        links: list[StoredLink],
+        ctx: RequestContext,
+        viking_fs: Any,
+        lease: Any,
+        result: MemoryUpdateResult,
+    ) -> list[StoredLink]:
+        """Publish validated links under their endpoint lease, backlink first.
+
+        A failed EXP write must not expose a forward link. A failed Case write
+        may leave a backlink, which retains the information needed for repair.
+        """
+        if not links:
+            return []
+        case_uris = {link.from_uri for link in links}
+        updated_experiences = set(
+            await write_stored_links(links, ctx, viking_fs, skip_uris=case_uris, lease_ref=lease)
+        )
+        for uri in {link.to_uri for link in links} - updated_experiences:
+            result.add_error(uri, RuntimeError("Failed to persist Case/Experience backlink"))
+        for uri in sorted(updated_experiences):
+            if uri not in result.written_uris and uri not in result.edited_uris:
+                result.add_edited(uri)
+            # The operation cache predates the link-only write.
+            result.files_by_uri.pop(uri, None)
+
+        schema = (self.registry or create_default_registry()).get(CASE_MEMORY_TYPE)
+        published: list[StoredLink] = []
+        for case_uri in sorted(case_uris):
+            case_links = [
+                link
+                for link in links
+                if link.from_uri == case_uri and link.to_uri in updated_experiences
+            ]
+            if not case_links:
+                continue
+            try:
+                raw = await viking_fs.read_file(case_uri, ctx=ctx)
+                case = MemoryFileUtils.read(raw, uri=case_uri)
+                case.links = merge_links(case.links, [link.model_dump() for link in case_links])
+                trace_id = get_trace_id()
+                if trace_id:
+                    case.extra_fields["last_update_trace_id"] = trace_id
+                bump_memory_version(case)
+                rendered = MemoryFileUtils.write(
+                    case, content_template=getattr(schema, "content_template", None)
+                )
+                await viking_fs.write_file(case_uri, rendered, ctx=ctx, lease_ref=lease)
+                result.cache_file(case_uri, MemoryFileUtils.read(rendered, uri=case_uri))
+                if case_uri not in result.written_uris and case_uri not in result.edited_uris:
+                    result.add_edited(case_uri)
+                published.extend(case_links)
+            except Exception as exc:
+                result.add_error(case_uri, exc)
+                tracer.error(f"Failed to publish Case/Experience links to {case_uri}: {exc}")
+        return published
 
     async def _get_group_batcher(
         self,
@@ -484,6 +579,7 @@ class StreamingMemoryUpdater:
             delete_file_contents=operations.delete_file_contents,
             ctx=request.ctx,
             trace_console=self.config.trace_console,
+            defer_case_experience_links=True,
         )
         apply_result = await self._apply_operations(
             operations=operations,
@@ -711,6 +807,12 @@ class StreamingMemoryUpdater:
     ) -> MemoryUpdateResult:
         extract_context = ExtractContext(messages)
         isolation_handler = _make_isolation_handler(request, extract_context)
+        # Links embedded in upsert fields must follow the same publication rule
+        # as resolved_links, never bypass it through field merging.
+        deferred_links = _extract_case_experience_links(operations)
+        original_uris = [
+            (operation, list(operation.uris)) for operation in operations.upsert_operations
+        ]
         async with self._apply_lock:
             viking_fs = safe_get_viking_fs()
             MemoryUpdater._convert_experience_deletes_to_archives(operations)
@@ -726,6 +828,9 @@ class StreamingMemoryUpdater:
                 defer_archived_vector_cleanup=True,
             )
             try:
+                operations.resolved_links = [
+                    link for link in operations.resolved_links if not _is_case_experience_link(link)
+                ]
                 apply_result = await updater.apply_operations(
                     operations,
                     request.ctx,
@@ -736,7 +841,29 @@ class StreamingMemoryUpdater:
                 if lease is not None:
                     await viking_fs._async_agfs.pathlock_release(lease)
             await updater._remove_archived_vectors(apply_result, request.ctx)
-            return apply_result
+        if deferred_links and not operations.has_errors():
+            # Acquire a fresh endpoint lease for the actual files; never reuse
+            # the old URI's lease or publish from an operation preview.
+            allocated_uris = {}
+            for operation, previous_uris in original_uris:
+                for previous_uri, allocated_uri in zip(previous_uris, operation.uris, strict=True):
+                    allocated_uris.setdefault(previous_uri, allocated_uri)
+            await self._apply_post_group_links(
+                clone_memory_update_request(
+                    request,
+                    operations=operations.model_copy(
+                        update={
+                            "resolved_links": _remap_allocated_links_once(
+                                deferred_links, allocated_uris
+                            )
+                        }
+                    ),
+                ),
+                StreamingMemoryUpdateResult(
+                    operations=operations, apply_result=apply_result, request_count=1
+                ),
+            )
+        return apply_result
 
     async def _merge_requests(self, requests: list[MemoryUpdateRequest]) -> ResolvedOperations:
         all_ops = _combine_resolved_operations(request.operations for request in requests)
@@ -1139,6 +1266,7 @@ async def merge_memory_operations(
         delete_file_contents=merged_deletes,
         ctx=ctx,
         trace_console=trace_console,
+        defer_case_experience_links=True,
     )
     return ResolvedOperations(
         upsert_operations=merged_upserts,
@@ -2931,6 +3059,58 @@ def merge_link_lists(*link_lists: list[StoredLink]) -> list[StoredLink]:
     return list(merged.values())
 
 
+def _is_case_experience_link(link: StoredLink) -> bool:
+    return "/memories/cases/" in str(link.from_uri or "") and "/memories/experiences/" in str(
+        link.to_uri or ""
+    )
+
+
+def _remap_allocated_links_once(
+    links: list[StoredLink], uri_remap: dict[str, str]
+) -> list[StoredLink]:
+    """Allocation renames are simultaneous, not transitive logical aliases.
+
+    If A -> A_2 and A_2 -> A_3, a link to the first proposal must end at A_2,
+    not follow the second proposal's rename to A_3.
+    """
+    return merge_link_lists(
+        [
+            link.model_copy(
+                update={
+                    "from_uri": uri_remap.get(link.from_uri, link.from_uri),
+                    "to_uri": uri_remap.get(link.to_uri, link.to_uri),
+                }
+            )
+            for link in links
+        ]
+    )
+
+
+def _extract_case_experience_links(operations: ResolvedOperations) -> list[StoredLink]:
+    """Collect deferred links and remove copies embedded in incoming fields."""
+    links = [link for link in operations.resolved_links if _is_case_experience_link(link)]
+    for operation in operations.upsert_operations:
+        for field_name in ("links", "backlinks"):
+            values = operation.memory_fields.get(field_name)
+            if not isinstance(values, list):
+                continue
+            retained = []
+            for value in values:
+                try:
+                    link = StoredLink.model_validate(value)
+                except (ValueError, TypeError):
+                    retained.append(value)
+                    continue
+                if _is_case_experience_link(link):
+                    links.append(link)
+                else:
+                    retained.append(value)
+            operation.memory_fields[field_name] = retained
+    # Include embedded links in the pre-apply lock coverage as well.
+    operations.resolved_links = merge_link_lists(operations.resolved_links, links)
+    return merge_link_lists(links)
+
+
 async def filter_valid_links(
     links: list[StoredLink],
     *,
@@ -2938,8 +3118,14 @@ async def filter_valid_links(
     delete_file_contents: list[MemoryFile],
     ctx: RequestContext,
     trace_console: bool = False,
+    defer_case_experience_links: bool = False,
 ) -> list[StoredLink]:
-    """Drop links whose endpoints are deleted or missing from storage."""
+    """Check endpoints, using pending upserts only for pre-apply validation.
+
+    Mutation callers preserve Case/EXP candidates for post-apply validation.
+    Post-apply callers must pass no upserts so existence and EXP visibility come
+    from storage, not a stale operation preview.
+    """
 
     if not links:
         return []
@@ -2966,38 +3152,35 @@ async def filter_valid_links(
             endpoint_content_cache[uri] = None
         return endpoint_content_cache[uri] is not None
 
-    async def _case_experience_link_targets_archive(link: StoredLink) -> bool:
-        if "/memories/cases/" not in str(
-            link.from_uri or ""
-        ) or "/memories/experiences/" not in str(link.to_uri or ""):
+    async def _case_experience_link_is_hidden(link: StoredLink) -> bool:
+        if not _is_case_experience_link(link):
             return False
         operation = upsert_by_uri.get(link.to_uri)
         if operation is not None:
             if operation.lifecycle_action == "archive":
                 return True
-            return (
-                normalize_experience_status(
-                    operation.memory_fields.get("status"),
-                    default="promoted",
-                )
-                == "archived"
-            )
+            fields = dict(getattr(operation.old_memory_file_content, "extra_fields", {}) or {})
+            fields.update(operation.memory_fields)
+            return not experience_is_case_linkable(fields.get("status"))
         if not await _endpoint_exists(link.to_uri):
             return False
         raw = endpoint_content_cache.get(link.to_uri)
         try:
             memory_file = MemoryFileUtils.read(raw or "", uri=link.to_uri)
         except Exception:
-            return False
-        return experience_file_is_archived(memory_file, uri=link.to_uri)
+            return True
+        return not experience_is_case_linkable(memory_file.extra_fields.get("status"))
 
     valid_links: list[StoredLink] = []
     dropped = 0
     for link in merge_link_lists(links):
+        if defer_case_experience_links and _is_case_experience_link(link):
+            valid_links.append(link)
+            continue
         if (
             await _endpoint_exists(link.from_uri)
             and await _endpoint_exists(link.to_uri)
-            and not await _case_experience_link_targets_archive(link)
+            and not await _case_experience_link_is_hidden(link)
         ):
             valid_links.append(link)
         else:

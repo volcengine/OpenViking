@@ -89,6 +89,34 @@ class TrainingPlatformClient:
             raise PlatformAPIError("create training task response has no task_id")
         return dict(data)
 
+    async def get_execution_contract(self, agent_id: str) -> dict[str, Any]:
+        return await self._get_metadata(f"/inspect/training/agents/{agent_id}/execution-contract")
+
+    async def list_experiments(self, agent_id: str) -> dict[str, Any]:
+        return await self._get_metadata(f"/inspect/training/agents/{agent_id}/experiments")
+
+    async def get_experiment_targets(self, agent_id: str, experiment_id: str) -> dict[str, Any]:
+        return await self._get_metadata(
+            f"/inspect/training/agents/{agent_id}/experiments/{experiment_id}/targets"
+        )
+
+    async def list_resources(self, agent_id: str) -> dict[str, Any]:
+        return await self._get_metadata(
+            "/inspect/resources/resources",
+            params={"applicable_agent_id": agent_id, "include_disabled": "false"},
+        )
+
+    async def _get_metadata(
+        self, path: str, *, params: dict[str, str] | None = None
+    ) -> dict[str, Any]:
+        try:
+            response = await self._gateway.get(path, params=params)
+        except httpx.TransportError as exc:
+            raise PlatformAPIError(
+                f"could not query platform metadata {path}: {type(exc).__name__}"
+            ) from exc
+        return dict(_unwrap_data(_response_payload(response, operation=f"get {path}")))
+
     async def resolve_rollout_lane_resource(
         self,
         *,
@@ -102,9 +130,7 @@ class TrainingPlatformClient:
                 "include_disabled": "false",
             },
         )
-        data = _unwrap_data(
-            _response_payload(response, operation=f"resolve agent lane {lane_key}")
-        )
+        data = _unwrap_data(_response_payload(response, operation=f"resolve agent lane {lane_key}"))
         resources = data.get("resources")
         if not isinstance(resources, list):
             raise PlatformAPIError("resource response must contain resources")

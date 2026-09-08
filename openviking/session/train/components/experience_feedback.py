@@ -8,6 +8,11 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from openviking.session.memory.experience_case_links import (
+    acquire_case_link_lease,
+    release_case_link_lease,
+    sync_experience_case_links,
+)
 from openviking.session.memory.experience_lifecycle import normalize_experience_status
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.train.domain import Trajectory
@@ -62,23 +67,38 @@ async def record_experience_feedback_stats(
         if not uri:
             continue
         try:
-            raw = await viking_fs.read_file(uri, ctx=ctx)
-            mf = MemoryFileUtils.read(raw or "", uri=uri)
-            before = dict(mf.extra_fields or {})
-            stats, changed = _merge_feedback_stats(
-                before.get("feedback_stats"),
-                uri_observations,
-            )
-            lifecycle_changed = _apply_negative_feedback_lifecycle(
-                mf.extra_fields,
-                uri_observations,
-            )
-            if not changed and not lifecycle_changed:
-                result.skipped_uris.append(uri)
-                continue
-            mf.extra_fields["feedback_stats"] = stats
-            await viking_fs.write_file(uri, MemoryFileUtils.write(mf), ctx=ctx)
+            # Serialize status changes with Case-link publication. Release this
+            # lease before synchronization acquires the complete endpoint set.
+            lock_client = getattr(viking_fs, "_async_agfs", None)
+            lease = None
+            if lock_client is not None and callable(getattr(viking_fs, "_uri_to_path", None)):
+                lease = await acquire_case_link_lease(
+                    lock_client, [viking_fs._uri_to_path(uri, ctx=ctx)]
+                )
+            try:
+                raw = await viking_fs.read_file(uri, ctx=ctx)
+                mf = MemoryFileUtils.read(raw or "", uri=uri)
+                before = dict(mf.extra_fields or {})
+                stats, changed = _merge_feedback_stats(
+                    before.get("feedback_stats"),
+                    uri_observations,
+                )
+                lifecycle_changed = _apply_negative_feedback_lifecycle(
+                    mf.extra_fields,
+                    uri_observations,
+                )
+                if not changed and not lifecycle_changed:
+                    result.skipped_uris.append(uri)
+                    continue
+                mf.extra_fields["feedback_stats"] = stats
+                kwargs = {"lease_ref": lease} if lease is not None else {}
+                await viking_fs.write_file(uri, MemoryFileUtils.write(mf), ctx=ctx, **kwargs)
+            finally:
+                if lease is not None:
+                    await release_case_link_lease(lock_client, lease)
             result.updated_uris.append(uri)
+            if normalize_experience_status(mf.extra_fields.get("status")) != "promoted":
+                await sync_experience_case_links(uri, viking_fs=viking_fs, ctx=ctx)
         except Exception as exc:  # pragma: no cover - defensive; caller must not fail training
             logger.warning("Failed to update experience feedback stats for %s: %s", uri, exc)
             result.errors.append(f"{uri}: {exc}")
@@ -147,15 +167,12 @@ def _apply_negative_feedback_lifecycle(
     """
 
     existing_uris = {
-        str(uri).strip()
-        for uri in fields.get("negative_trajectory_uris", [])
-        if str(uri).strip()
+        str(uri).strip() for uri in fields.get("negative_trajectory_uris", []) if str(uri).strip()
     }
     negative_uris = {
         str(item.get("trajectory_uri") or "").strip()
         for item in observations
-        if item.get("effect") == "negative"
-        and str(item.get("trajectory_uri") or "").strip()
+        if item.get("effect") == "negative" and str(item.get("trajectory_uri") or "").strip()
     }
     merged_uris = existing_uris | negative_uris
     if merged_uris == existing_uris:

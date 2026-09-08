@@ -1,48 +1,45 @@
 {
-  "platform": {
-    "gateway_base_url": "https://replace-with-inspect-gateway",
-    "api_key": "replace-with-platform-api-key",
-    "project_id": "replace-with-project-id",
-    "vaka_request_source": "ark-lx"
+  "service": {
+    "port": 8765
   },
   "training_task": {
-    "agent_lane_key": "evolving",
-    "agent_execution": {
-      "contract_id": "ark.viking-rollout",
-      "contract_version": "3",
-      "schema_digest": "sha256:replace-with-current-contract-digest",
-      "values": {
-        "model_ep": "default",
-        "openviking_version": "v0.4.12.dev3",
-        "memory_account_id": "replace-with-memory-account-id",
-        "memory_user_id": "replace-with-memory-user-id",
-        "memory_current_set": "team_set",
-        "memory_openviking_target": "evolving-dutao",
-        "memory_namespace": "replace-with-memory-namespace"
-      }
-    }
+    "workflow_id": "ark_viking_external_training",
+    "lane_key": "agentmemory",
+    "viking_experiment_sets": [
+      {"experiment_set_id": 371, "version": "V1", "role": "train"},
+      {"experiment_set_id": 372, "version": "V1", "role": "eval"}
+    ]
   },
   "rollout": {
+    "timeout_seconds": 7200,
+    "poll_interval_seconds": 3,
     "runtime_params": {
+      "task_timeout": 4800,
       "memory": {
         "enabled": true,
         "mode": "read_only",
-        "account_id": "replace-with-memory-account-id",
-        "user_id": "replace-with-memory-user-id",
-        "current_set": "team_set",
+        "general_recall_enabled": true,
         "openviking_target": "evolving-dutao"
       }
+    },
+    "extra_header": {
+      "x-tt-sandbox": "{\"multi-agents-md-id\":\"stg-default-agentmd-20260901\"}"
     }
   },
   "memory_proxy": {
     "enabled": true,
+    "openviking_url": "http://127.0.0.1:1934",
     "openviking_config_file": "/absolute/path/to/openviking.conf",
-    "openviking_api_key_json_path": "server.root_api_key",
-    "openviking_account_id": "default",
-    "openviking_user_id": "default"
+    "openviking_api_key_json_path": "server.root_api_key"
   },
   "kubevpn": {
-    "kubeconfig": "../../../evolution/.kube/config_stg",
+    "kubeconfig": "/Users/bytedance/work/space/OV-train/evolution/.kube/config_stg",
     "namespace": "ai-search-rec"
+  },
+  "platform": {
+    "gateway_base_url": "https://replace-with-inspect-gateway",
+    "api_key": "replace-with-platform-api-key",
+    "project_id": "00000000000000000000000000000001",
+    "vaka_request_source": "agentmemory"
   }
 }

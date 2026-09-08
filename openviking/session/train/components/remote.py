@@ -50,6 +50,7 @@ class RemoteBenchmarkLifecycle:
         dataset: str,
         domain: str,
         concurrency: int | None = None,
+        training_plan: dict[str, int] | None = None,
         casehub_dataset_ids: list[str] | None = None,
         casehub_case_ids: list[str] | None = None,
         task_casehub_dataset_ids: list[str] | None = None,
@@ -59,6 +60,17 @@ class RemoteBenchmarkLifecycle:
             if concurrency <= 0:
                 raise ValueError("concurrency must be > 0")
             body["concurrency"] = concurrency
+        if training_plan is not None:
+            minimums = {"train_epochs": 0, "train_trials": 1, "eval_trials": 1}
+            if training_plan.keys() != minimums.keys():
+                raise ValueError(
+                    "training_plan must contain train_epochs, train_trials and eval_trials"
+                )
+            for key, minimum in minimums.items():
+                value = training_plan[key]
+                if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+                    raise ValueError(f"training_plan.{key} must be an integer >= {minimum}")
+            body["training_plan"] = dict(training_plan)
         if casehub_dataset_ids or casehub_case_ids:
             body["casehub"] = {
                 "dataset_ids": list(casehub_dataset_ids or []),

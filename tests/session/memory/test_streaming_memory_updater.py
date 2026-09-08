@@ -869,9 +869,9 @@ async def test_streaming_memory_updater_fast_path_filters_links(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("status", "expected_link_count"),
-    [("archived", 0), ("draft", 1), ("degraded", 1)],
+    [("archived", 0), ("draft", 0), ("degraded", 0), ("promoted", 1)],
 )
-async def test_filter_valid_links_drops_case_reference_to_archived_experience_with_cached_reads(
+async def test_filter_valid_links_only_keeps_promoted_experiences_with_cached_reads(
     monkeypatch,
     status,
     expected_link_count,
@@ -932,6 +932,675 @@ async def test_filter_valid_links_drops_case_reference_to_archived_experience_wi
 
     assert len(valid_links) == expected_link_count
     assert fs.read_counts == {case_uri: 1, experience_uri: 1}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stored_status", "pending_status", "expected_link_count"),
+    [
+        (None, "promoted", 1),
+        (None, "draft", 0),
+        ("draft", "promoted", 1),
+        ("degraded", "promoted", 1),
+        ("promoted", "draft", 0),
+        ("promoted", "archived", 0),
+    ],
+)
+async def test_filter_valid_links_pre_apply_still_uses_pending_upserts(
+    monkeypatch, stored_status, pending_status, expected_link_count
+):
+    case_uri = "viking://user/u/memories/cases/report.md"
+    experience_uri = "viking://user/u/memories/experiences/rule.md"
+    stored_experience = (
+        MemoryFile(
+            uri=experience_uri,
+            memory_type="experiences",
+            content="experience",
+            extra_fields={"status": stored_status},
+        )
+        if stored_status is not None
+        else None
+    )
+    fs = InMemoryVikingFS(
+        {experience_uri: MemoryFileUtils.write(stored_experience)}
+        if stored_experience is not None
+        else {}
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.get_viking_fs", lambda: fs
+    )
+    link = StoredLink(from_uri=case_uri, to_uri=experience_uri, link_type="related_to")
+    pending_operations = [
+        ResolvedOperation(memory_type="cases", uris=[case_uri], memory_fields={}),
+        ResolvedOperation(
+            memory_type="experiences",
+            uris=[experience_uri],
+            memory_fields={"status": pending_status},
+            old_memory_file_content=stored_experience,
+        ),
+    ]
+
+    valid_links = await filter_valid_links(
+        [link],
+        upsert_operations=pending_operations,
+        delete_file_contents=[],
+        ctx=_ctx(),
+    )
+
+    assert len(valid_links) == expected_link_count
+    assert case_uri not in fs.files  # The same-batch Case is not written yet.
+    assert fs.writes == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("operation_status", "persisted_status", "expected_link_count"),
+    [
+        ("promoted", "draft", 0),
+        ("promoted", "degraded", 0),
+        ("promoted", "archived", 0),
+        ("promoted", None, 0),
+        ("promoted", "unknown", 0),
+        ("draft", "promoted", 1),
+        ("degraded", "promoted", 1),
+        ("archived", "promoted", 1),
+        ("promoted", "promoted", 1),
+    ],
+)
+async def test_post_group_links_recheck_persisted_experience_status_under_endpoint_lease(
+    monkeypatch, operation_status, persisted_status, expected_link_count
+):
+    case_uri = "viking://user/u/memories/cases/report.md"
+    experience_uri = "viking://user/u/memories/experiences/rule.md"
+    case = MemoryFile(uri=case_uri, memory_type="cases", content="case")
+    experience = MemoryFile(
+        uri=experience_uri,
+        memory_type="experiences",
+        content="experience",
+        extra_fields={"status": operation_status},
+    )
+
+    class LeaseCheckedFS(PathlockedInMemoryVikingFS):
+        async def read_file(self, uri, ctx=None):
+            assert self.events[0][0] == "acquire"
+            assert not any(event[0] == "release" for event in self.events)
+            self.events.append(("read", uri))
+            return await super().read_file(uri, ctx=ctx)
+
+    fs = LeaseCheckedFS(
+        {
+            case_uri: MemoryFileUtils.write(case),
+            experience_uri: MemoryFileUtils.write(experience),
+        }
+    )
+    acquire = fs._async_agfs.pathlock_acquire_exact_batch
+
+    async def acquire_after_concurrent_status_update(paths, timeout_secs=0.0):
+        # Feedback wins the lock after group application and before link repair.
+        current = experience.model_copy(deep=True)
+        if persisted_status is None:
+            current.extra_fields.pop("status", None)
+        else:
+            current.extra_fields["status"] = persisted_status
+        fs.files[experience_uri] = MemoryFileUtils.write(current)
+        return await acquire(paths, timeout_secs=timeout_secs)
+
+    fs._async_agfs.pathlock_acquire_exact_batch = acquire_after_concurrent_status_update
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.get_viking_fs", lambda: fs
+    )
+    link = StoredLink(from_uri=case_uri, to_uri=experience_uri, link_type="related_to")
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(memory_type="cases", uris=[case_uri], memory_fields={}),
+            ResolvedOperation(
+                memory_type="experiences",
+                uris=[experience_uri],
+                old_memory_file_content=experience,
+                memory_fields={"status": operation_status},
+            ),
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+    result = StreamingMemoryUpdateResult(
+        operations=operations, apply_result=MemoryUpdateResult(), request_count=1
+    )
+    updater = StreamingMemoryUpdater()
+    await updater._apply_post_group_links(
+        MemoryUpdateRequest(
+            operations=operations.model_copy(update={"resolved_links": [link]}),
+            messages=[],
+            ctx=_ctx(),
+        ),
+        result,
+    )
+
+    persisted_case = MemoryFileUtils.read(fs.files[case_uri], uri=case_uri)
+    persisted_experience = MemoryFileUtils.read(fs.files[experience_uri], uri=experience_uri)
+    assert len(persisted_case.links) == expected_link_count
+    assert len(persisted_experience.backlinks) == expected_link_count
+    assert persisted_experience.extra_fields.get("status") == persisted_status
+    assert len(result.operations.resolved_links) == expected_link_count
+    assert fs.events[0][1] == tuple(
+        sorted(fs._uri_to_path(uri) for uri in (case_uri, experience_uri))
+    )
+    assert fs.events[-1][0] == "release"
+    writes = [event for event in fs.events if event[0] == "write"]
+    assert len(writes) == 2 * expected_link_count
+    assert all(event[2] == fs.events[-1][1] for event in writes)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unavailable_endpoint", ["case", "experience"])
+@pytest.mark.parametrize("failure", ["missing", "read_error", "empty"])
+async def test_post_group_links_do_not_trust_upserts_for_unavailable_endpoints(
+    monkeypatch, unavailable_endpoint, failure
+):
+    case_uri = "viking://user/u/memories/cases/report.md"
+    experience_uri = "viking://user/u/memories/experiences/rule.md"
+    unavailable_uri = case_uri if unavailable_endpoint == "case" else experience_uri
+    files = [
+        MemoryFile(uri=case_uri, memory_type="cases", content="case"),
+        MemoryFile(
+            uri=experience_uri,
+            memory_type="experiences",
+            content="experience",
+            extra_fields={"status": "promoted"},
+        ),
+    ]
+
+    class UnavailableEndpointFS(PathlockedInMemoryVikingFS):
+        async def read_file(self, uri, ctx=None):
+            assert self.events[0][0] == "acquire"
+            assert self.events[-1][0] != "release"
+            if uri == unavailable_uri and failure == "read_error":
+                raise OSError("endpoint temporarily unavailable")
+            return await super().read_file(uri, ctx=ctx)
+
+    fs = UnavailableEndpointFS({file.uri: MemoryFileUtils.write(file) for file in files})
+    if failure == "missing":
+        del fs.files[unavailable_uri]
+    elif failure == "empty":
+        fs.files[unavailable_uri] = ""
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.get_viking_fs", lambda: fs
+    )
+    link = StoredLink(from_uri=case_uri, to_uri=experience_uri, link_type="related_to")
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                memory_type=file.memory_type,
+                uris=[file.uri],
+                memory_fields=dict(file.extra_fields),
+            )
+            for file in files
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+    apply_result = MemoryUpdateResult()
+    apply_result.add_error(unavailable_uri, OSError("group endpoint write failed"))
+    result = StreamingMemoryUpdateResult(
+        operations=operations, apply_result=apply_result, request_count=1
+    )
+
+    await StreamingMemoryUpdater()._apply_post_group_links(
+        MemoryUpdateRequest(
+            operations=operations.model_copy(update={"resolved_links": [link]}),
+            messages=[],
+            ctx=_ctx(),
+        ),
+        result,
+    )
+
+    assert fs.writes == []
+    assert result.operations.resolved_links == []
+    assert result.apply_result.edited_uris == []
+    assert fs.events[-1][0] == "release"
+
+
+def _case_experience_registry() -> MemoryTypeRegistry:
+    registry = _registry()
+    registry.get(
+        "cases"
+    ).content_template = (
+        "{{ task_signature }}\n{% for link in links %}{{ link.to_uri }}\n{% endfor %}"
+    )
+    registry.register(
+        MemoryTypeSchema(
+            memory_type="experiences",
+            description="experience memory",
+            directory="viking://user/{{ user_space }}/memories/experiences",
+            filename_template="{{ name }}.md",
+            operation_mode="upsert",
+            fields=[
+                MemoryField(name="name", field_type=FieldType.STRING, merge_op=MergeOp.IMMUTABLE),
+                MemoryField(name="status", field_type=FieldType.STRING, merge_op=MergeOp.REPLACE),
+            ],
+        )
+    )
+    return registry
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entry", ["append_only", "direct_apply"])
+@pytest.mark.parametrize("link_source", ["resolved_links", "memory_fields"])
+@pytest.mark.parametrize("persisted_status", ["degraded", "archived", "draft", "promoted"])
+async def test_case_links_use_persisted_status_after_upserts(
+    monkeypatch, entry, link_source, persisted_status
+):
+    case_op = _case_op("status_race")
+    case_uri = case_op.uris[0]
+    experience_uri = "viking://user/u/memories/experiences/status_race.md"
+    experience = MemoryFile(
+        uri=experience_uri,
+        memory_type="experiences",
+        content="experience",
+        extra_fields={"status": "promoted"},
+    )
+    fs = PathlockedInMemoryVikingFS({experience_uri: MemoryFileUtils.write(experience)})
+    acquire = fs._async_agfs.pathlock_acquire_exact_batch
+
+    async def change_status_before_publication(paths, timeout_secs=0.0):
+        if any(event[0] == "release" for event in fs.events):
+            current = MemoryFileUtils.read(fs.files[experience_uri], uri=experience_uri)
+            current.extra_fields["status"] = persisted_status
+            fs.files[experience_uri] = MemoryFileUtils.write(current)
+        return await acquire(paths, timeout_secs=timeout_secs)
+
+    fs._async_agfs.pathlock_acquire_exact_batch = change_status_before_publication
+    for module in ("memory_updater", "streaming_memory_updater"):
+        monkeypatch.setattr(f"openviking.session.memory.{module}.get_viking_fs", lambda: fs)
+    link = StoredLink(from_uri=case_uri, to_uri=experience_uri, link_type="related_to")
+    if link_source == "memory_fields":
+        case_op.memory_fields["links"] = [link.model_dump()]
+    operations = ResolvedOperations(
+        upsert_operations=[case_op],
+        delete_file_contents=[],
+        errors=[],
+        resolved_links=[link] if link_source == "resolved_links" else [],
+    )
+    request = MemoryUpdateRequest(operations=operations, messages=[], ctx=_ctx())
+    updater = StreamingMemoryUpdater(registry=_case_experience_registry())
+    if entry == "append_only":
+        outcome = await updater.submit(request)
+        operations = outcome.operations
+        result = outcome.apply_result
+    else:
+        result = await updater._apply_operations(
+            operations=operations, request=request, messages=[]
+        )
+
+    expected = int(persisted_status == "promoted")
+    assert result.errors == []
+    assert result.written_uris == [case_uri]
+    case = MemoryFileUtils.read(fs.files[case_uri], uri=case_uri)
+    current = MemoryFileUtils.read(fs.files[experience_uri], uri=experience_uri)
+    assert len(case.links) == len(current.backlinks) == len(operations.resolved_links) == expected
+    assert (experience_uri in case.content) is bool(expected)
+    # The first Case write must not publish from the stale operation preview.
+    first_case_write = next(content for uri, content, _ in fs.writes if uri == case_uri)
+    assert MemoryFileUtils.read(first_case_write, uri=case_uri).links == []
+    assert fs.events[-1][0] == "release"
+    assert len([event for event in fs.events if event[0] == "acquire"]) == 2
+    if expected and entry == "direct_apply":
+        assert result.files_by_uri[case_uri].links == case.links
+        assert experience_uri not in result.files_by_uri
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("initial_status", [None, "draft", "promoted"])
+@pytest.mark.parametrize("fail_experience_write", [False, True])
+async def test_same_batch_case_links_follow_successful_experience_write(
+    monkeypatch, initial_status, fail_experience_write
+):
+    case_op = _case_op("same_batch")
+    case_uri = case_op.uris[0]
+    experience_uri = "viking://user/u/memories/experiences/same_batch.md"
+    old_experience = (
+        MemoryFile(
+            uri=experience_uri,
+            memory_type="experiences",
+            content="experience",
+            extra_fields={"name": "same_batch", "status": initial_status},
+        )
+        if initial_status is not None
+        else None
+    )
+
+    class FailingExperienceFS(PathlockedInMemoryVikingFS):
+        async def write_file(self, uri, content, ctx=None, lease_ref=None):
+            if uri == experience_uri and fail_experience_write:
+                raise OSError("experience write failed")
+            return await super().write_file(uri, content, ctx=ctx, lease_ref=lease_ref)
+
+    fs = FailingExperienceFS(
+        {experience_uri: MemoryFileUtils.write(old_experience)} if old_experience else {}
+    )
+    for module in ("memory_updater", "streaming_memory_updater"):
+        monkeypatch.setattr(f"openviking.session.memory.{module}.get_viking_fs", lambda: fs)
+    link = StoredLink(from_uri=case_uri, to_uri=experience_uri, link_type="related_to")
+    operations = ResolvedOperations(
+        upsert_operations=[
+            case_op,  # Case runs first: do not publish before the EXP write succeeds.
+            ResolvedOperation(
+                memory_type="experiences",
+                uris=[experience_uri],
+                old_memory_file_content=old_experience,
+                memory_fields={
+                    "name": "same_batch",
+                    "status": "promoted",
+                    "backlinks": [link.model_dump()],
+                },
+            ),
+        ],
+        delete_file_contents=[],
+        errors=[],
+        resolved_links=[link],
+    )
+    request = MemoryUpdateRequest(operations=operations, messages=[], ctx=_ctx())
+    result = await StreamingMemoryUpdater(registry=_case_experience_registry())._apply_operations(
+        operations=operations, request=request, messages=[]
+    )
+
+    expected = int(not fail_experience_write)
+    case = MemoryFileUtils.read(fs.files[case_uri], uri=case_uri)
+    assert len(case.links) == len(operations.resolved_links) == expected
+    assert bool(result.errors) == fail_experience_write
+    if experience_uri in fs.files:
+        current = MemoryFileUtils.read(fs.files[experience_uri], uri=experience_uri)
+        assert len(current.backlinks) == expected
+    assert (experience_uri in case.content) is bool(expected)
+    assert fs.events[-1][0] == "release"
+
+
+@pytest.mark.asyncio
+async def test_deferred_case_links_use_allocated_add_only_uri(monkeypatch):
+    case_op = _case_op("numbered")
+    original_uri = case_op.uris[0]
+    experience_uri = "viking://user/u/memories/experiences/numbered.md"
+    original_case = MemoryFile(uri=original_uri, memory_type="cases", content="do not change")
+    experience = MemoryFile(
+        uri=experience_uri,
+        memory_type="experiences",
+        content="experience",
+        extra_fields={"status": "promoted"},
+    )
+    fs = PathlockedInMemoryVikingFS(
+        {item.uri: MemoryFileUtils.write(item) for item in (original_case, experience)}
+    )
+    for module in ("memory_updater", "streaming_memory_updater"):
+        monkeypatch.setattr(f"openviking.session.memory.{module}.get_viking_fs", lambda: fs)
+    result = await StreamingMemoryUpdater(registry=_case_experience_registry()).submit(
+        MemoryUpdateRequest(
+            operations=ResolvedOperations(
+                upsert_operations=[case_op],
+                delete_file_contents=[],
+                errors=[],
+                resolved_links=[StoredLink(from_uri=original_uri, to_uri=experience_uri)],
+            ),
+            messages=[],
+            ctx=_ctx(),
+            metadata={"source_extraction_id": "numbered-case-extraction"},
+        )
+    )
+    allocated_uri = result.apply_result.written_uris[0]
+    assert allocated_uri != original_uri
+    assert fs.files[original_uri] == MemoryFileUtils.write(original_case)
+    assert result.operations.resolved_links[0].from_uri == allocated_uri
+    assert MemoryFileUtils.read(fs.files[allocated_uri], uri=allocated_uri).links
+    current = MemoryFileUtils.read(fs.files[experience_uri], uri=experience_uri)
+    assert current.backlinks[0]["from_uri"] == allocated_uri
+    publication_acquire = [event for event in fs.events if event[0] == "acquire"][-1]
+    assert publication_acquire[1] == tuple(
+        sorted(fs._uri_to_path(uri) for uri in (allocated_uri, experience_uri))
+    )
+    assert result.apply_result.errors == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case_mode", "preallocated"), [("add_only", False), ("add_only", True), ("upsert", False)]
+)
+@pytest.mark.parametrize("link_source", ["resolved_links", "memory_fields"])
+async def test_submit_preserves_case_experience_links_across_apply_groups(
+    monkeypatch, case_mode, preallocated, link_source
+):
+    case_op = _case_op("mixed_group")
+    canonical_uri = case_op.uris[0]
+    if preallocated:
+        case_op.uris = [canonical_uri.removesuffix(".md") + "_2.md"]
+        case_op.add_only_uri_bases = {case_op.uris[0]: canonical_uri}
+    original_uri = case_op.uris[0]
+    experience_uri = "viking://user/u/memories/experiences/mixed_group.md"
+    old_case = MemoryFile(uri=original_uri, memory_type="cases", content="existing case")
+    fs = PathlockedInMemoryVikingFS(
+        {original_uri: MemoryFileUtils.write(old_case)} if case_mode == "add_only" else {}
+    )
+    if preallocated:
+        fs.files[canonical_uri] = MemoryFileUtils.write(
+            old_case.model_copy(update={"uri": canonical_uri})
+        )
+    for module in ("memory_updater", "streaming_memory_updater"):
+        monkeypatch.setattr(f"openviking.session.memory.{module}.get_viking_fs", lambda: fs)
+    registry = _case_experience_registry()
+    registry.get("cases").operation_mode = case_mode
+    updater = StreamingMemoryUpdater(
+        registry=registry,
+        config=StreamingMemoryUpdaterConfig(
+            max_wait_seconds=0.01, timer_check_interval_seconds=0.01
+        ),
+    )
+
+    async def merge_without_model(self, requests):
+        # Exercise the real group scheduling, apply, and post-group publication
+        # without involving a model in this ordering regression.
+        return ResolvedOperations(
+            upsert_operations=[
+                op for request in requests for op in request.operations.upsert_operations
+            ],
+            delete_file_contents=[],
+            errors=[],
+            resolved_links=[],
+        )
+
+    monkeypatch.setattr(StreamingMemoryUpdater, "_merge_requests", merge_without_model)
+    link = StoredLink(from_uri=original_uri, to_uri=experience_uri)
+    if link_source == "memory_fields":
+        case_op.memory_fields["links"] = [link.model_dump()]
+    result = await updater.submit(
+        MemoryUpdateRequest(
+            operations=ResolvedOperations(
+                upsert_operations=[
+                    case_op,
+                    ResolvedOperation(
+                        memory_type="experiences",
+                        uris=[experience_uri],
+                        memory_fields={"name": "mixed_group", "status": "promoted"},
+                    ),
+                ],
+                delete_file_contents=[],
+                errors=[],
+                resolved_links=[link] if link_source == "resolved_links" else [],
+            ),
+            messages=[],
+            ctx=_ctx(),
+            metadata={"source_extraction_id": "mixed-group-extraction"},
+        )
+    )
+    await updater.close()
+    case_uri = next(uri for uri in result.apply_result.written_uris if "/cases/" in uri)
+    if case_mode == "add_only":
+        assert case_uri != original_uri
+        assert fs.files[original_uri] == MemoryFileUtils.write(old_case)
+    case = MemoryFileUtils.read(fs.files[case_uri], uri=case_uri)
+    experience = MemoryFileUtils.read(fs.files[experience_uri], uri=experience_uri)
+    assert case.links[0]["to_uri"] == experience_uri
+    assert experience.backlinks[0]["from_uri"] == case_uri
+    assert result.operations.resolved_links[0].from_uri == case_uri
+    assert experience_uri in case.content
+    assert result.apply_result.errors == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entry", ["direct_apply", "mixed_submit"])
+@pytest.mark.parametrize(("occupied", "proposal_count"), [(1, 2), (2, 3)])
+async def test_allocation_remaps_each_case_once_without_following_other_proposal_names(
+    monkeypatch, entry, occupied, proposal_count
+):
+    canonical_uri = "viking://user/u/memories/cases/overlapping.md"
+    experience_uris = [
+        f"viking://user/u/memories/experiences/overlapping_{ordinal}.md"
+        for ordinal in range(1, proposal_count + 1)
+    ]
+
+    def numbered_uri(ordinal):
+        return (
+            canonical_uri if ordinal == 1 else canonical_uri.removesuffix(".md") + f"_{ordinal}.md"
+        )
+
+    files = {
+        numbered_uri(ordinal): MemoryFileUtils.write(
+            MemoryFile(
+                uri=numbered_uri(ordinal), memory_type="cases", content=f"old case {ordinal}"
+            )
+        )
+        for ordinal in range(1, occupied + 1)
+    }
+    fs = PathlockedInMemoryVikingFS(files)
+    for module in ("memory_updater", "streaming_memory_updater"):
+        monkeypatch.setattr(f"openviking.session.memory.{module}.get_viking_fs", lambda: fs)
+    case_ops = []
+    for ordinal in range(1, proposal_count + 1):
+        op = _case_op(f"overlapping_{ordinal}")
+        op.uris = [numbered_uri(ordinal)]
+        op.add_only_uri_bases = {op.uris[0]: canonical_uri}
+        case_ops.append(op)
+    operations = ResolvedOperations(
+        upsert_operations=case_ops
+        + [
+            ResolvedOperation(
+                memory_type="experiences",
+                uris=[experience_uri],
+                memory_fields={"name": f"overlapping_{ordinal}", "status": "promoted"},
+            )
+            for ordinal, experience_uri in enumerate(experience_uris, start=1)
+        ],
+        delete_file_contents=[],
+        errors=[],
+        resolved_links=[
+            StoredLink(from_uri=op.uris[0], to_uri=experience_uri)
+            for op, experience_uri in zip(case_ops, experience_uris, strict=True)
+        ],
+    )
+    request = MemoryUpdateRequest(
+        operations=operations,
+        messages=[],
+        ctx=_ctx(),
+        metadata={"source_extraction_id": "overlapping-allocation"},
+    )
+    updater = StreamingMemoryUpdater(
+        registry=_case_experience_registry(),
+        config=StreamingMemoryUpdaterConfig(
+            max_wait_seconds=0.01, timer_check_interval_seconds=0.01
+        ),
+    )
+    if entry == "mixed_submit":
+
+        async def merge_without_model(self, requests):
+            return ResolvedOperations(
+                upsert_operations=[
+                    op for item in requests for op in item.operations.upsert_operations
+                ],
+                delete_file_contents=[],
+                errors=[],
+            )
+
+        monkeypatch.setattr(StreamingMemoryUpdater, "_merge_requests", merge_without_model)
+        outcome = await updater.submit(request)
+        operations = outcome.operations
+        result = outcome.apply_result
+        await updater.close()
+    else:
+        result = await updater._apply_operations(
+            operations=operations, request=request, messages=[]
+        )
+
+    expected_case_uris = {
+        numbered_uri(ordinal) for ordinal in range(occupied + 1, occupied + proposal_count + 1)
+    }
+    assert set(result.written_uris) == expected_case_uris | set(experience_uris)
+    expected_relations = {
+        (numbered_uri(occupied + ordinal), experience_uri)
+        for ordinal, experience_uri in enumerate(experience_uris, start=1)
+    }
+    assert {
+        (link.from_uri, link.to_uri) for link in operations.resolved_links
+    } == expected_relations
+    for case_uri, experience_uri in expected_relations:
+        experience = MemoryFileUtils.read(fs.files[experience_uri], uri=experience_uri)
+        assert [link["from_uri"] for link in experience.backlinks] == [case_uri]
+        case = MemoryFileUtils.read(fs.files[case_uri], uri=case_uri)
+        assert [link["to_uri"] for link in case.links] == [experience_uri]
+    for uri, content in files.items():
+        assert fs.files[uri] == content
+    assert result.errors == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failing_endpoint", ["case", "experience"])
+async def test_case_link_publication_reports_partial_failure_without_dangling_forward_link(
+    monkeypatch, failing_endpoint
+):
+    case_uri = "viking://user/u/memories/cases/publication.md"
+    experience_uri = "viking://user/u/memories/experiences/publication.md"
+    failing_uri = case_uri if failing_endpoint == "case" else experience_uri
+
+    class FailingLinkFS(PathlockedInMemoryVikingFS):
+        async def write_file(self, uri, content, ctx=None, lease_ref=None):
+            if uri == failing_uri:
+                raise OSError("link publication failed")
+            return await super().write_file(uri, content, ctx=ctx, lease_ref=lease_ref)
+
+    fs = FailingLinkFS(
+        {
+            item.uri: MemoryFileUtils.write(item)
+            for item in (
+                MemoryFile(uri=case_uri, memory_type="cases", content="case"),
+                MemoryFile(
+                    uri=experience_uri,
+                    memory_type="experiences",
+                    content="experience",
+                    extra_fields={"status": "promoted"},
+                ),
+            )
+        }
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.get_viking_fs", lambda: fs
+    )
+    result = StreamingMemoryUpdateResult(
+        operations=ResolvedOperations(upsert_operations=[], delete_file_contents=[], errors=[]),
+        apply_result=MemoryUpdateResult(),
+        request_count=1,
+    )
+    await StreamingMemoryUpdater(registry=_case_experience_registry())._apply_post_group_links(
+        MemoryUpdateRequest(
+            operations=result.operations.model_copy(
+                update={"resolved_links": [StoredLink(from_uri=case_uri, to_uri=experience_uri)]}
+            ),
+            messages=[],
+            ctx=_ctx(),
+        ),
+        result,
+    )
+    assert MemoryFileUtils.read(fs.files[case_uri], uri=case_uri).links == []
+    experience = MemoryFileUtils.read(fs.files[experience_uri], uri=experience_uri)
+    assert len(experience.backlinks) == int(failing_endpoint == "case")
+    assert result.operations.resolved_links == []
+    assert result.apply_result.errors[0][0] == failing_uri
+    assert fs.events[-1][0] == "release"
 
 
 @pytest.mark.asyncio
