@@ -19,7 +19,7 @@ import re
 import threading
 import time
 from copy import deepcopy
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import dataclass, field, fields
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -88,17 +88,20 @@ class TaskRecord:
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize for JSON response."""
-        d = asdict(self)
-        d.pop("_extra_fields", None)
-        d["status"] = self.status.value
-        d["created_at_iso"] = datetime.fromtimestamp(self.created_at, tz=timezone.utc).isoformat()
-        d["updated_at_iso"] = datetime.fromtimestamp(self.updated_at, tz=timezone.utc).isoformat()
-        d["result"] = _sanitize_task_result(d.get("result"))
-        d["meta"] = _sanitize_task_result(d.get("meta"))
-        d.pop("auth", None)
-        d.pop("account_id", None)
-        d.pop("user_id", None)
-        return d
+        return {
+            "task_id": self.task_id,
+            "task_type": self.task_type,
+            "status": self.status.value,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "resource_id": self.resource_id,
+            "meta": _sanitize_task_result(deepcopy(self.meta)),
+            "stage": self.stage,
+            "result": _sanitize_task_result(deepcopy(self.result)),
+            "error": self.error,
+            "created_at_iso": datetime.fromtimestamp(self.created_at, tz=timezone.utc).isoformat(),
+            "updated_at_iso": datetime.fromtimestamp(self.updated_at, tz=timezone.utc).isoformat(),
+        }
 
 
 # ── Singleton ──

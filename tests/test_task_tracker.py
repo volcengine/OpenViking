@@ -456,6 +456,43 @@ async def test_to_dict(tracker: TaskTracker):
     assert (await tracker.list_tasks(**_owner_kwargs()))[0].auth == {}
 
 
+async def test_public_serialization_skips_private_payloads(tracker: TaskTracker):
+    class PrivatePayload(dict):
+        def items(self):
+            raise AssertionError("Private payload was traversed")
+
+        def __deepcopy__(self, memo):
+            raise AssertionError("Private payload was copied")
+
+    task = await tracker.create("session_commit", **_owner_kwargs())
+    task.auth = PrivatePayload()
+    task._extra_fields = PrivatePayload()
+    task.meta = {"nested": [{"user_key": "secret", "values": [1]}]}
+    task.result = {"nested": [{"user_key": "secret", "values": [2]}]}
+
+    public = task.to_dict()
+    assert set(public) == {
+        "task_id",
+        "task_type",
+        "status",
+        "created_at",
+        "updated_at",
+        "resource_id",
+        "meta",
+        "stage",
+        "result",
+        "error",
+        "created_at_iso",
+        "updated_at_iso",
+    }
+    assert public["meta"] == {"nested": [{"values": [1]}]}
+    assert public["result"] == {"nested": [{"values": [2]}]}
+    public["meta"]["nested"][0]["values"].append(3)
+    public["result"]["nested"][0]["values"].append(4)
+    assert task.meta["nested"][0]["values"] == [1]
+    assert task.result["nested"][0]["values"] == [2]
+
+
 # ── Sanitization ──
 
 
