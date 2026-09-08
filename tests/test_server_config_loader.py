@@ -228,6 +228,8 @@ def test_load_server_config_preserves_otlp_headers_fields(tmp_path):
                     "observability": {
                         "traces": {
                             "enabled": True,
+                            "capture_content": True,
+                            "content_max_length": 1234,
                             "headers": {
                                 "X-ByteAPM-AppKey": "trace-appkey",
                             },
@@ -260,6 +262,8 @@ def test_load_server_config_preserves_otlp_headers_fields(tmp_path):
     assert config.observability.traces.headers == {
         "X-ByteAPM-AppKey": "trace-appkey",
     }
+    assert config.observability.traces.capture_content is True
+    assert config.observability.traces.content_max_length == 1234
     assert config.observability.logs.headers == {
         "X-ByteAPM-AppKey": "log-appkey",
     }
@@ -293,3 +297,5 @@ def test_load_server_config_trace_local_defaults(tmp_path):
     assert traces.local_path == "~/.openviking/logs/traces.jsonl"
     assert traces.local_rotation_mb == 40
     assert traces.local_backup_count == 2
+    assert traces.capture_content is False
+    assert traces.content_max_length == 4096

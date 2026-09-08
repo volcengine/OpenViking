@@ -7,7 +7,9 @@ import inspect
 import json
 import logging
 import os
+import re
 import threading
+from collections.abc import Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -67,10 +69,87 @@ except ImportError:
 _otel_tracer: Any = None
 _propagator: Any = None
 _trace_id_filter_added: bool = False
+_trace_capture_content: bool = False
+_trace_content_max_length: int = 4096
+
+_TRACE_CONTENT_MAX_LENGTH_LIMIT = 65_536
+_TRACE_CONTENT_TRUNCATED_SUFFIX = "...[truncated]"
+_TRACE_SENSITIVE_KEY = (
+    r"[a-z0-9_.-]*(?:api[_-]?key|app[_-]?key|authorization|access[_-]?token|"
+    r"refresh[_-]?token|token|secret|password)"
+)
+_TRACE_SENSITIVE_QUOTED_VALUE_RE = re.compile(
+    rf"""(?ix)
+    (?P<prefix>
+        ["']?{_TRACE_SENSITIVE_KEY}["']?\s*[:=]\s*["']
+    )
+    (?P<value>[^"']*)
+    (?P<suffix>["'])
+    """
+)
+_TRACE_SENSITIVE_UNQUOTED_VALUE_RE = re.compile(
+    rf"(?i)(\b{_TRACE_SENSITIVE_KEY}\b\s*[:=]\s*)((?:Bearer\s+)?[^\s,}}\]]+)"
+)
+_TRACE_BEARER_TOKEN_RE = re.compile(r"""(?i)(\bBearer\s+)([^\s,}\]'\"]+)""")
+_TRACE_IMAGE_DATA_URL_RE = re.compile(r"(?i)(data:image/[^,\s'\"]+;base64,)([a-z0-9+/=_-]+)")
 
 
 def _log_trace_internal_failure(message: str) -> None:
     logger.debug(message, exc_info=True)
+
+
+def _validate_trace_content_max_length(content_max_length: int) -> int:
+    if not 1 <= content_max_length <= _TRACE_CONTENT_MAX_LENGTH_LIMIT:
+        raise ValueError(
+            f"content_max_length must be between 1 and {_TRACE_CONTENT_MAX_LENGTH_LIMIT}"
+        )
+    return content_max_length
+
+
+def _configure_trace_content(capture_content: bool, content_max_length: int) -> None:
+    global _trace_capture_content, _trace_content_max_length
+
+    _trace_capture_content = bool(capture_content)
+    _trace_content_max_length = _validate_trace_content_max_length(content_max_length)
+
+
+def _redact_trace_content(value: str) -> str:
+    value = _TRACE_IMAGE_DATA_URL_RE.sub(r"\1[redacted]", value)
+    value = _TRACE_SENSITIVE_QUOTED_VALUE_RE.sub(
+        lambda match: f"{match.group('prefix')}[redacted]{match.group('suffix')}",
+        value,
+    )
+    value = _TRACE_SENSITIVE_UNQUOTED_VALUE_RE.sub(r"\1[redacted]", value)
+    return _TRACE_BEARER_TOKEN_RE.sub(r"\1[redacted]", value)
+
+
+def _truncate_trace_content(value: str, max_length: int) -> str:
+    if len(value) <= max_length:
+        return value
+    if max_length <= len(_TRACE_CONTENT_TRUNCATED_SUFFIX):
+        return _TRACE_CONTENT_TRUNCATED_SUFFIX[:max_length]
+    return value[: max_length - len(_TRACE_CONTENT_TRUNCATED_SUFFIX)] + (
+        _TRACE_CONTENT_TRUNCATED_SUFFIX
+    )
+
+
+def _prepare_trace_content(value: Any) -> str:
+    return _truncate_trace_content(
+        _redact_trace_content(str(value)),
+        _trace_content_max_length,
+    )
+
+
+def _source_attributes(frame: Any) -> dict[str, Any]:
+    if frame is None:
+        return {}
+    namespace = str(frame.f_globals.get("__name__", "unknown"))
+    function_name = getattr(frame.f_code, "co_qualname", frame.f_code.co_name)
+    return {
+        "code.namespace": namespace,
+        "code.function.name": f"{namespace}.{function_name}",
+        "code.line.number": frame.f_lineno,
+    }
 
 
 _SpanExporterBase = SpanExporter if SpanExporter is not None else object
@@ -230,10 +309,12 @@ def init_tracer_from_server_config(server_config: Any) -> Any:
     try:
         trace_cfg = server_config.observability.traces
         if not trace_cfg.enabled:
+            _configure_trace_content(False, 4096)
             logger.info("[TRACER] disabled in server.observability.traces")
             return None
 
         if trace_cfg.protocol.lower() != "local" and not trace_cfg.endpoint:
+            _configure_trace_content(False, 4096)
             logger.warning("[TRACER] server.observability.traces.endpoint not configured")
             return None
 
@@ -247,8 +328,11 @@ def init_tracer_from_server_config(server_config: Any) -> Any:
             local_path=trace_cfg.local_path,
             local_rotation_mb=trace_cfg.local_rotation_mb,
             local_backup_count=trace_cfg.local_backup_count,
+            capture_content=getattr(trace_cfg, "capture_content", False),
+            content_max_length=getattr(trace_cfg, "content_max_length", 4096),
         )
     except Exception as e:
+        _configure_trace_content(False, 4096)
         logger.warning(f"[TRACER] init from server config failed: {e}")
         return None
 
@@ -276,6 +360,8 @@ def init_tracer(
     local_path: str = "~/.openviking/logs/traces.jsonl",
     local_rotation_mb: int = 40,
     local_backup_count: int = 2,
+    capture_content: bool = False,
+    content_max_length: int = 4096,
 ) -> Any:
     """Initialize the OpenTelemetry tracer.
 
@@ -289,6 +375,8 @@ def init_tracer(
         local_path: JSONL file path when protocol is "local".
         local_rotation_mb: Maximum size in MB before rotating local JSONL file.
         local_backup_count: Number of rotated local JSONL files to keep.
+        capture_content: Whether diagnostic message content may be exported.
+        content_max_length: Maximum characters exported for one diagnostic message.
 
     Returns:
         The initialized tracer, or None if initialization failed
@@ -296,10 +384,12 @@ def init_tracer(
     global _otel_tracer, _propagator
 
     if not enabled:
+        _configure_trace_content(False, 4096)
         logger.info("[TRACER] disabled by config")
         return None
 
     if otel_trace is None or TracerProvider is None or Resource is None:
+        _configure_trace_content(False, 4096)
         logger.warning(
             "OpenTelemetry not installed. Install with: uv pip install opentelemetry-api "
             "opentelemetry-sdk opentelemetry-exporter-otlpprotogrpc"
@@ -307,6 +397,7 @@ def init_tracer(
         return None
 
     try:
+        validated_content_max_length = _validate_trace_content_max_length(content_max_length)
         normalized_headers = {str(key): str(value) for key, value in (headers or {}).items()}
         resource_attributes = {
             "service.name": service_name,
@@ -361,6 +452,7 @@ def init_tracer(
 
         _otel_tracer = otel_trace.get_tracer(service_name)
         _propagator = TraceContextTextMapPropagator()
+        _configure_trace_content(capture_content, validated_content_max_length)
 
         # Setup logging with trace_id
         _setup_logging()
@@ -377,6 +469,7 @@ def init_tracer(
         return _otel_tracer
 
     except Exception as e:
+        _configure_trace_content(False, 4096)
         logger.warning(f"[TRACER] initialized failed: {type(e).__name__}: {e}")
         return None
 
@@ -474,9 +567,9 @@ def set_attribute(key: str, value: Any) -> None:
     tracer.set(key, value)
 
 
-def add_event(name: str) -> None:
-    """Add an event to the current span."""
-    tracer.info(name)
+def add_event(name: str, attributes: Optional[Mapping[str, Any]] = None) -> None:
+    """Add a named event with optional typed attributes to the current span."""
+    tracer.add_event(name, attributes)
 
 
 def record_exception(exception: Exception) -> None:
@@ -546,11 +639,11 @@ class tracer:
                 with self.start_as_current_span(name=span_name, context=context) as span:
                     try:
                         # 记录输入参数
-                        if not self.ignore_args and args:
-                            self.set("func_args", str(args))
+                        if _trace_capture_content and not self.ignore_args and args:
+                            self.set("func_args", _prepare_trace_content(args))
                         func_kwargs = {k: v for k, v in kwargs.items() if self.arg_trace_checker(k)}
-                        if len(func_kwargs) > 0:
-                            self.set("func_kwargs", str(func_kwargs))
+                        if _trace_capture_content and func_kwargs:
+                            self.set("func_kwargs", _prepare_trace_content(func_kwargs))
 
                         result = await func(*args, **kwargs)
 
@@ -576,11 +669,11 @@ class tracer:
                 with self.start_as_current_span(name=span_name, context=context) as span:
                     try:
                         # 记录输入参数
-                        if not self.ignore_args and args:
-                            self.set("func_args", str(args))
+                        if _trace_capture_content and not self.ignore_args and args:
+                            self.set("func_args", _prepare_trace_content(args))
                         func_kwargs = {k: v for k, v in kwargs.items() if self.arg_trace_checker(k)}
-                        if len(func_kwargs) > 0:
-                            self.set("func_kwargs", str(func_kwargs))
+                        if _trace_capture_content and func_kwargs:
+                            self.set("func_kwargs", _prepare_trace_content(func_kwargs))
 
                         result = func(*args, **kwargs)
 
@@ -643,24 +736,46 @@ class tracer:
             _log_trace_internal_failure(f"[TRACER] failed to set span attribute key={key}")
 
     @staticmethod
-    def info(line: str, console: bool = False) -> None:
-        """Add an event to the current span."""
-        if console:
-            logger.opt(depth=1).info(line)
+    def add_event(name: str, attributes: Optional[Mapping[str, Any]] = None) -> None:
+        """Add a named event while preserving supported attribute value types."""
         if _otel_tracer is None:
             return
 
         try:
             current_span = otel_trace.get_current_span()
             if current_span:
-                # 检查 span 是否已结束
                 if hasattr(current_span, "end_time") and current_span.end_time:
-                    return  # span 已结束，不添加 event
-                current_span.add_event(line)
+                    return
+                if attributes is None:
+                    current_span.add_event(name)
+                else:
+                    current_span.add_event(name, attributes=dict(attributes))
         except Exception:
-            import traceback
+            _log_trace_internal_failure(f"[TRACER] failed to add span event name={name}")
 
-            traceback.print_stack()
+    @staticmethod
+    def info(line: str, console: bool = False) -> None:
+        """Record a diagnostic under a stable event name.
+
+        Diagnostic text is treated as potentially sensitive and is exported only
+        when trace content capture is explicitly enabled.
+        """
+        if console:
+            logger.opt(depth=1).info(line)
+        if _otel_tracer is None:
+            return
+
+        frame = inspect.currentframe()
+        caller = frame.f_back if frame is not None else None
+        try:
+            attributes = _source_attributes(caller)
+            if _trace_capture_content:
+                attributes["openviking.log.message"] = _prepare_trace_content(line)
+            tracer.add_event("openviking.log", attributes)
+        except Exception:
+            _log_trace_internal_failure("[TRACER] failed to record diagnostic event")
+        finally:
+            del frame
 
     @staticmethod
     def info_span(line: str, console: bool = False) -> None:
@@ -717,7 +832,7 @@ class _DummySpanContext:
     def set_attribute(self, key: str, value: Any):
         pass
 
-    def add_event(self, name: str):
+    def add_event(self, name: str, attributes: Optional[Mapping[str, Any]] = None):
         pass
 
     def record_exception(self, exception: Exception):
