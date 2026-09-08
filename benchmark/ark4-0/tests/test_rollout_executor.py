@@ -371,13 +371,9 @@ async def test_executor_can_synthesize_messages_when_explicitly_enabled() -> Non
 
 
 @pytest.mark.asyncio
-async def test_executor_forwards_memory_runtime_and_allowed_source_header() -> None:
-    client = FakeRolloutClient(
-        messages=[
-            {"id": "m1", "role": "user", "content": "please do it"},
-            {"id": "m2", "role": "assistant", "content": "done"},
-        ]
-    )
+@pytest.mark.parametrize("batch", [False, True], ids=["single", "batch"])
+async def test_executor_forwards_memory_runtime_and_allowed_headers(batch: bool) -> None:
+    client = FakeBatchClient()
     executor = ArkRolloutExecutor(
         client=client,  # type: ignore[arg-type]
         platform_task_id="task-1",
@@ -388,18 +384,22 @@ async def test_executor_forwards_memory_runtime_and_allowed_source_header() -> N
                 "openviking_target": "ov-ark-test",
             }
         },
-        extra_header={"x-vaka-request-source": "vaka-agentmemory"},
+        extra_header={
+            "x-vaka-request-source": "ark-lx",
+        },
         poll_interval_seconds=0.001,
         timeout_seconds=1,
     )
 
     await executor.execute(
-        [make_case()],
+        [make_viking_case(), make_second_viking_case()] if batch else [make_case()],
         ExperienceSet(root_uri="viking://user/memories/experiences", policies=[]),
         ExecutionContext(policy_snapshot_id="snapshot-1", metadata={"training": True}),
     )
 
+    assert len(client.submitted_bodies) == 1
     body = client.submitted_bodies[0]
+    assert body["case_ids"] == (["case-1", "case-2"] if batch else ["case-1"])
     assert body["runtime_params"] == {
         "memory": {
             "enabled": True,
@@ -407,4 +407,7 @@ async def test_executor_forwards_memory_runtime_and_allowed_source_header() -> N
             "openviking_target": "ov-ark-test",
         }
     }
-    assert body["extra_header"] == {"x-vaka-request-source": "vaka-agentmemory"}
+    assert body["extra_header"] == {
+        "x-vaka-request-source": "ark-lx",
+    }
+    assert "x-tt-backend" not in body["extra_header"]

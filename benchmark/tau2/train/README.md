@@ -249,7 +249,7 @@ Service options:
 | `--config` | `~/.openviking/ov.conf` | ov.conf for VikingBot / OpenViking access |
 | `--rollout-language` | `default` | Rollout response language. Use `zh` for Chinese user-facing replies. |
 | `--rollout-backend` | `vikingbot` | Rollout implementation backend. `native` for fast Python executor, `vikingbot` for full VikingBot AgentLoop. |
-| `--loader-mode` | `skill` | How experiences reach the agent: `skill`, `selector`, `constraint`, or `direct_experience`. See below. |
+| `--loader-mode` | `skill` | How experiences reach the agent: `skill`, `selector`, `constraint`, `direct_experience`, or `auto_experience`. See below. |
 | `--experience-recall-mode` | `case_ann` | Experience recall strategy: `case_ann`, `exp_ann`, or `hybrid_ann`. Applies to `--loader-mode skill` only. |
 | `--native-thread-workers` | `128` | Thread pool size for native rollout executor. |
 | `--rollout-thread-workers` | `200` | Worker threads used to host rollout executions off the uvicorn event loop. Use `0` to disable threaded hosting. |
@@ -267,6 +267,39 @@ reach the rollout agent:
 | `selector` | `load_relevant_experience` | Recall, full reads, and applicability filtering all run **outside** the main context. One isolated LLM call judges the candidates and at most 2 applicable experiences come back — rejected candidates never enter the rollout context. |
 | `constraint` | none | Experience constraints are injected automatically as reminder messages before tool calls. |
 | `direct_experience` | none | A fixed experience supplied via `direct_experience_content` is injected as an Experience Reminder before the task. Used for A/B testing one specific experience. |
+| `auto_experience` | none | Search Experiences directly with the original first user query (`limit=2`), read their bodies, strip reserved `MEMORY_FIELDS` trailers, and inject before the first agent step. No skill, Case lookup, query rewrite, or LLM selector. |
+| `none` | Tau2 business tools only | Pure-Agent baseline: no SKILL, no memory tools, no initial or later experience injection, and no experience workflow instructions. Retains domain policy and normal Tau2 communication logic. Pass this mode to both the service and batch CLI. |
+
+#### Automatic first-query Experience injection
+
+```bash
+bash benchmark/tau2/train/restart_vikingbot_train_eval.sh \
+  --loader-mode auto_experience \
+  --domain airline --epochs 5 --train-trials 1 --trials 10 \
+  --concurrency 80 --commit-concurrency 80 --no-eval-each-epoch
+```
+
+In manual service mode, pass `--loader-mode auto_experience` to both `run_service.sh`
+and the batch runner: batch request options override the service default. The restart
+launcher forwards this option to both automatically. This mode requires the VikingBot backend.
+`--experience-recall-mode` does not affect it: it always searches the current
+user's `experiences` namespace directly, preserving OpenViking's search order
+and server-side lifecycle visibility rules. The query is `provider.user_query`
+after environment reset (including fixed-first-user cache replay), not hidden
+task instructions or an agent-generated summary.
+
+At most two distinct returned Experiences are injected in full; fewer matches
+or empty visible bodies mean fewer injections. No URI, search score, or reserved
+metadata trailer is added to the injected text. No later write-triggered or
+constraint-triggered retrieval runs in this mode. Search errors and unreadable
+matched files fail the rollout instead of silently producing a no-memory score.
+
+Rollout metadata records `auto_experience` (query, target namespace, retrieved
+URIs, injected URIs, status); `metadata.memory` and runtime messages retain the
+injected visible text, so the existing memory coverage metric still works.
+The default remains `skill`. Baseline uses the same loader against the configured
+store: use a fresh empty OpenViking directory for a no-memory baseline, and force
+baseline recomputation when changing loader/service settings.
 
 `selector` exists because `skill` mode has a priming channel: candidate names and
 Situation snippets the agent never reads still bias it toward past outcomes —

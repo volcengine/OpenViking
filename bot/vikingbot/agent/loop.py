@@ -1376,6 +1376,7 @@ class AgentLoop:
         context_compact_budget: int | None = None,
         status_note_provider: Any | None = None,
         skill_runtime: Any | None = None,
+        inject_constraint_experience: bool = True,
     ) -> AgentLoopRunResult:
         """
         Run the core agent loop: call LLM, execute tools, repeat until done.
@@ -1412,6 +1413,8 @@ class AgentLoop:
                 tool-use iteration limit is reached.
             inject_write_experience: Whether to retrieve and inject relevant agent experience
                 before executing configured write tools.
+            inject_constraint_experience: Whether to run conditional experience recall before
+                tool calls. Disable for first-query-only evaluation injection.
             status_note_provider: Optional async callback ``(iteration) -> str | None``.
                 When set, its result is appended to the model-facing messages right before
                 every model call. Compile uses this to inject the per-iteration budget
@@ -1543,7 +1546,7 @@ class AgentLoop:
                             logger.warning(f"[WRITE_EXP]: failed to load experience: {_e}")
 
                 reminder_hook = getattr(self, "_maybe_apply_experience_constraint_reminder", None)
-                if callable(reminder_hook):
+                if inject_constraint_experience and callable(reminder_hook):
                     reminder_messages = await reminder_hook(
                         messages=messages,
                         response=response,

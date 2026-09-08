@@ -120,8 +120,17 @@ class BatchTrainEvalConfig:
         if self.concurrency <= 0:
             raise ValueError("concurrency must be > 0")
         self.loader_mode = str(self.loader_mode or "skill").strip().lower()
-        if self.loader_mode not in {"skill", "constraint", "direct_experience"}:
-            raise ValueError("loader_mode must be skill, constraint, or direct_experience")
+        if self.loader_mode not in {
+            "skill",
+            "selector",
+            "constraint",
+            "direct_experience",
+            "auto_experience",
+            "none",
+        }:
+            raise ValueError(
+                "loader_mode must be skill, selector, constraint, direct_experience, auto_experience, or none"
+            )
         if self.direct_experience_content is not None:
             self.direct_experience_content = str(self.direct_experience_content).strip()
             if not self.direct_experience_content:
@@ -476,9 +485,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
         )
         benchmark_run_id = policy_trainer.run_id if benchmark_run is not None else None
         benchmark_task_id = (
-            str(benchmark_run.get("task_id") or "") or None
-            if benchmark_run is not None
-            else None
+            str(benchmark_run.get("task_id") or "") or None if benchmark_run is not None else None
         )
         casehub_case_count = (
             int(benchmark_run["case_count"])
@@ -535,9 +542,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
                 split=config.eval_split,
                 sample_index=effective_eval_index,
                 benchmark_run_id=benchmark_run_id,
-                casehub_dataset_ids=(
-                    config.casehub_eval_dataset_ids or config.casehub_dataset_ids
-                ),
+                casehub_dataset_ids=(config.casehub_eval_dataset_ids or config.casehub_dataset_ids),
             )
         )
         if (
@@ -1166,9 +1171,7 @@ def _case_loader(
 
 
 def _lifecycle_casehub_dataset_ids(config: BatchTrainEvalConfig) -> list[str]:
-    return list(
-        dict.fromkeys(config.casehub_dataset_ids + config.casehub_eval_dataset_ids)
-    )
+    return list(dict.fromkeys(config.casehub_dataset_ids + config.casehub_eval_dataset_ids))
 
 
 @dataclass(slots=True)
@@ -1202,9 +1205,7 @@ class CachedEpochZeroTrainRolloutExecutor:
                 payload = json.loads(path.read_text(encoding="utf-8"))
                 messages_path = path.with_name("messages.json")
                 if messages_path.exists():
-                    payload["messages"] = json.loads(
-                        messages_path.read_text(encoding="utf-8")
-                    )
+                    payload["messages"] = json.loads(messages_path.read_text(encoding="utf-8"))
                 rollout = rollout_from_dict(payload)
             except (json.JSONDecodeError, OSError, TypeError, ValueError):
                 continue
@@ -1329,9 +1330,7 @@ class CachedEpochZeroTrainRolloutExecutor:
 
 def _train_rollout_artifact_key(case: Case) -> tuple[str, int]:
     case_id = str(
-        case.metadata.get("platform_case_id")
-        or case.input.get("task_id")
-        or case.task_signature
+        case.metadata.get("platform_case_id") or case.input.get("task_id") or case.task_signature
     )
     trial_value = case.input.get("train_trial", case.metadata.get("train_trial", 0))
     return case_id, int(trial_value or 0)
@@ -1383,9 +1382,7 @@ class ResumedFinalEvalRolloutExecutor:
         results: list[Rollout | None] = [None] * len(case_list)
         misses: list[tuple[int, Case]] = []
         for index, case in enumerate(case_list):
-            cached_entry = self._cache.get(
-                _final_eval_resume_key(case, self.trial_index_key)
-            )
+            cached_entry = self._cache.get(_final_eval_resume_key(case, self.trial_index_key))
             if cached_entry is None:
                 misses.append((index, case))
                 continue
@@ -1445,9 +1442,7 @@ class ResumedFinalEvalRolloutExecutor:
 
 def _final_eval_resume_key(case: Case, trial_index_key: str) -> tuple[str, int]:
     case_id = str(
-        case.metadata.get("platform_case_id")
-        or case.input.get("task_id")
-        or case.task_signature
+        case.metadata.get("platform_case_id") or case.input.get("task_id") or case.task_signature
     )
     trial_value = case.input.get(
         trial_index_key,

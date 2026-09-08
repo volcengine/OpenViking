@@ -1,8 +1,33 @@
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 from platform_client import PlatformClientConfig, TrainingPlatformClient
+
+
+@pytest.mark.asyncio
+async def test_list_lanes_reads_independent_enabled_routes() -> None:
+    lanes = [
+        {"lane_id": "independent-lane", "lane_key": "evolving", "agent_id": "ark", "enabled": True}
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/inspect/resources/lanes"
+        assert dict(request.url.params) == {"agent_id": "ark", "include_disabled": "false"}
+        assert request.headers["x-vaka-request-source"] == "ark-lx"
+        assert "x-tt-backend" not in request.headers
+        return httpx.Response(200, json={"data": {"lanes": lanes}})
+
+    async with TrainingPlatformClient(
+        PlatformClientConfig(
+            gateway_base_url="https://platform.test", vaka_request_source="ark-lx"
+        ),
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        assert await client.list_lanes("ark") == {"lanes": lanes}
 
 
 @pytest.mark.asyncio
@@ -12,6 +37,7 @@ async def test_platform_client_runs_task_rollout_and_completion_flow() -> None:
     def gateway_handler(request: httpx.Request) -> httpx.Response:
         nonlocal task_reads
         assert request.headers["x-vaka-request-source"] == "ark-lx"
+        assert "x-tt-backend" not in request.headers
         if request.method == "GET" and request.url.path == "/inspect/resources/resources":
             assert request.url.params["applicable_agent_id"] == "ark"
             return httpx.Response(
@@ -25,7 +51,6 @@ async def test_platform_client_runs_task_rollout_and_completion_flow() -> None:
                                 "resource_type": "rollout_concurrency",
                                 "scope": "lane",
                                 "agent_id": "ark",
-                                "lane_key": "evolving",
                                 "enabled": True,
                             }
                         ]
@@ -33,6 +58,19 @@ async def test_platform_client_runs_task_rollout_and_completion_flow() -> None:
                 },
             )
         if request.method == "POST" and request.url.path == "/inspect/training/tasks":
+            body = json.loads(request.content)
+            assert body["schema_version"] == "training-task-request.v2"
+            assert body["agent"] == {"agent_id": "ark"}
+            assert body["scheduling"] == {
+                "lane_key": "evolving",
+                "resource_requests": [
+                    {"resource_id": "rm-lane-evolving", "amount": 30},
+                    {"resource_id": "openviking_memory_identities", "amount": 1},
+                ],
+            }
+            assert "agent_lane_key" not in body
+            assert "lane_key" not in body
+            assert "x-tt-backend" not in request.content.decode()
             return httpx.Response(
                 200,
                 json={"ts": 1, "data": {"task_id": "task-1", "status": "pending"}},
@@ -127,17 +165,29 @@ async def test_platform_client_runs_task_rollout_and_completion_flow() -> None:
             api_key="secret",
             project_id="project-1",
             vaka_request_source="ark-lx",
-            headers={"X-Vaka-Request-Source": "must-be-overridden"},
+            headers={
+                "X-Vaka-Request-Source": "must-be-overridden",
+            },
         ),
         transport=httpx.MockTransport(gateway_handler),
     )
     try:
-        lane = await client.resolve_rollout_lane_resource(
-            agent_id="ark",
-            lane_key="evolving",
+        resources = await client.list_resources("ark")
+        assert resources["resources"][0]["resource_id"] == "rm-lane-evolving"
+        created = await client.create_training_task(
+            {
+                "schema_version": "training-task-request.v2",
+                "name": "single-eval",
+                "agent": {"agent_id": "ark"},
+                "scheduling": {
+                    "lane_key": "evolving",
+                    "resource_requests": [
+                        {"resource_id": "rm-lane-evolving", "amount": 30},
+                        {"resource_id": "openviking_memory_identities", "amount": 1},
+                    ],
+                },
+            }
         )
-        assert lane["resource_id"] == "rm-lane-evolving"
-        created = await client.create_training_task({"workflow_id": "ov_external_training"})
         assert created["task_id"] == "task-1"
         ready = await client.wait_for_ov_wait(
             "task-1",

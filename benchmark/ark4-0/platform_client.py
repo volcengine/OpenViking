@@ -106,6 +106,12 @@ class TrainingPlatformClient:
             params={"applicable_agent_id": agent_id, "include_disabled": "false"},
         )
 
+    async def list_lanes(self, agent_id: str) -> dict[str, Any]:
+        return await self._get_metadata(
+            "/inspect/resources/lanes",
+            params={"agent_id": agent_id, "include_disabled": "false"},
+        )
+
     async def _get_metadata(
         self, path: str, *, params: dict[str, str] | None = None
     ) -> dict[str, Any]:
@@ -116,40 +122,6 @@ class TrainingPlatformClient:
                 f"could not query platform metadata {path}: {type(exc).__name__}"
             ) from exc
         return dict(_unwrap_data(_response_payload(response, operation=f"get {path}")))
-
-    async def resolve_rollout_lane_resource(
-        self,
-        *,
-        agent_id: str,
-        lane_key: str,
-    ) -> dict[str, Any]:
-        response = await self._gateway.get(
-            "/inspect/resources/resources",
-            params={
-                "applicable_agent_id": agent_id,
-                "include_disabled": "false",
-            },
-        )
-        data = _unwrap_data(_response_payload(response, operation=f"resolve agent lane {lane_key}"))
-        resources = data.get("resources")
-        if not isinstance(resources, list):
-            raise PlatformAPIError("resource response must contain resources")
-        matches = [
-            dict(resource)
-            for resource in resources
-            if isinstance(resource, dict)
-            and resource.get("enabled", True)
-            and str(resource.get("resource_type") or "") == "rollout_concurrency"
-            and str(resource.get("scope") or "") == "lane"
-            and str(resource.get("agent_id") or "") == agent_id
-            and str(resource.get("lane_key") or "") == lane_key
-        ]
-        if len(matches) != 1:
-            raise PlatformAPIError(
-                f"expected exactly one rollout_concurrency resource for "
-                f"agent={agent_id!r} lane={lane_key!r}, found {len(matches)}"
-            )
-        return matches[0]
 
     async def get_training_task(self, task_id: str) -> dict[str, Any]:
         response = await self._gateway.get(f"/inspect/training/tasks/{task_id}")

@@ -39,7 +39,6 @@ _PROTECTED_ROLLOUT_HEADERS = frozenset(
         "x-admin-token",
         "x-homepage-api-key",
         "x-user-id",
-        "x-tt-backend",
         "x-tt-env",
     }
 )
@@ -72,12 +71,12 @@ class TrainingTaskSettings:
     task_name: str = "openviking_ark4_external_training"
     workflow_id: str = "ov_external_training"
     agent_id: str = "ark"
-    agent_lane_key: str = ""
+    lane_key: str = ""
+    rollout_resource_id: str = ""
     agent_execution: dict[str, Any] = field(default_factory=dict)
     evaluator_id: str = "rollout_builtin@v1"
     task_body: dict[str, Any] = field(default_factory=dict)
     viking_experiment_sets: list[dict[str, Any]] = field(default_factory=list)
-    lane_key: str = ""
     model_ep: str = ""
     experiment_id: str = ""
     existing_task_id: str = ""
@@ -140,8 +139,26 @@ def load_config(path: str | Path) -> AdapterFileConfig:
     task_raw = _object(raw, "training_task")
     rollout_raw = _object(raw, "rollout")
     memory_raw = _object(raw, "memory_proxy")
+    platform_headers = _any_dict(platform_raw.get("headers"), "platform.headers")
+    extra_header = _any_dict(rollout_raw.get("extra_header"), "rollout.extra_header")
+    for label, headers in (
+        ("platform.headers", platform_headers),
+        ("rollout.extra_header", extra_header),
+    ):
+        if any(str(key).strip().lower() == "x-tt-backend" for key in headers):
+            raise ValueError(
+                f"{label}.x-tt-backend is removed; use training_task.lane_key "
+                "for scheduling.lane_key when creating a Task"
+            )
+    removed_lane_fields = {"agent_lane_id", "agent_lane_key"} & task_raw.keys()
+    if removed_lane_fields:
+        raise ValueError(
+            "training_task fields removed: "
+            + ", ".join(sorted(removed_lane_fields))
+            + "; use training_task.lane_key and rollout_resource_id"
+        )
     if task_raw.get("workflow_id") == "ark_viking_external_training":
-        unused = {"agent_execution", "agent_lane_key", "agent_id", "evaluator_id"} & task_raw.keys()
+        unused = {"agent_execution", "evaluator_id"} & task_raw.keys()
         if unused:
             raise ValueError(
                 "Viking workflow uses training_task.task_body; remove ignored fields: "
@@ -180,7 +197,7 @@ def load_config(path: str | Path) -> AdapterFileConfig:
             default="ark-lx",
         ),
         headers=_string_dict(
-            platform_raw.get("headers"),
+            platform_headers,
             "platform.headers",
         ),
         request_timeout_seconds=_number(
@@ -191,21 +208,27 @@ def load_config(path: str | Path) -> AdapterFileConfig:
         ),
     )
     task_body = _any_dict(task_raw.get("task_body"), "training_task.task_body")
+    agent_id = _identifier(task_raw, "agent_id", default="ark")
+    lane_key = _identifier(task_raw, "lane_key")
+    rollout_resource_id = _identifier(task_raw, "rollout_resource_id")
+    if bool(lane_key) != bool(rollout_resource_id):
+        raise ValueError("training_task.lane_key and rollout_resource_id must be configured together")
     experiment_sets = (
         validate_sets(task_raw["viking_experiment_sets"])
         if "viking_experiment_sets" in task_raw
         else []
     )
-    lane_key = _optional_text(task_raw.get("lane_key"))
     if experiment_sets:
         if task_raw.get("workflow_id") != "ark_viking_external_training":
             raise ValueError("viking_experiment_sets requires ark_viking_external_training")
         if not lane_key:
-            raise ValueError("training_task.lane_key is required")
+            raise ValueError("training_task.lane_key and rollout_resource_id are required")
         unknown = task_raw.keys() - {
             "workflow_id",
             "task_name",
+            "agent_id",
             "lane_key",
+            "rollout_resource_id",
             "viking_experiment_sets",
             "model_ep",
             "experiment_id",
@@ -235,13 +258,25 @@ def load_config(path: str | Path) -> AdapterFileConfig:
                 "task_body and existing_task_id"
             )
         if task_body:
-            agent = _any_dict(task_body.get("agent"), "task_body.agent")
-            execution = _any_dict(agent.get("execution"), "task_body.agent.execution")
-            values = _any_dict(execution.get("values"), "task_body.agent.execution.values")
+            is_v2 = bool(str(task_body.get("schema_version") or ""))
+            if not is_v2 and "agent" in task_body:
+                raise ValueError(
+                    "task_body.agent requires schema_version=training-task-request.v2; "
+                    "or use flat task_body.agent_execution without an agent object"
+                )
+            if is_v2:
+                agent = _any_dict(task_body.get("agent"), "task_body.agent")
+                execution = _any_dict(agent.get("execution"), "task_body.agent.execution")
+            else:
+                execution = _any_dict(task_body.get("agent_execution"), "task_body.agent_execution")
+            values = _any_dict(execution.get("values"), "task_body execution.values")
             _set_request_source(values, "request_source", platform.vaka_request_source, "task_body")
             execution["values"] = values
-            agent["execution"] = execution
-            task_body["agent"] = agent
+            if is_v2:
+                agent["execution"] = execution
+                task_body["agent"] = agent
+            else:
+                task_body["agent_execution"] = execution
     training_task = TrainingTaskSettings(
         task_name=_text(
             task_raw.get("task_name"),
@@ -253,8 +288,9 @@ def load_config(path: str | Path) -> AdapterFileConfig:
             "training_task.workflow_id",
             default="ov_external_training",
         ),
-        agent_id=_text(task_raw.get("agent_id"), "training_task.agent_id", default="ark"),
-        agent_lane_key=_optional_text(task_raw.get("agent_lane_key")),
+        agent_id=agent_id,
+        lane_key=lane_key,
+        rollout_resource_id=rollout_resource_id,
         agent_execution=_any_dict(
             task_raw.get("agent_execution"),
             "training_task.agent_execution",
@@ -266,7 +302,6 @@ def load_config(path: str | Path) -> AdapterFileConfig:
         ),
         task_body=task_body,
         viking_experiment_sets=experiment_sets,
-        lane_key=lane_key,
         model_ep=_optional_text(task_raw.get("model_ep")),
         experiment_id=_optional_text(task_raw.get("experiment_id")),
         existing_task_id=_optional_text(task_raw.get("existing_task_id")),
@@ -283,7 +318,6 @@ def load_config(path: str | Path) -> AdapterFileConfig:
             minimum=0.001,
         ),
     )
-    extra_header = _any_dict(rollout_raw.get("extra_header"), "rollout.extra_header")
     _validate_extra_header(extra_header)
     vaka_header_keys = [key for key in extra_header if str(key).lower() == "x-vaka-request-source"]
     for key in vaka_header_keys:
@@ -432,12 +466,12 @@ async def run(config: AdapterFileConfig) -> None:
                 task_name=config.training_task.task_name,
                 workflow_id=config.training_task.workflow_id,
                 agent_id=config.training_task.agent_id,
-                agent_lane_key=config.training_task.agent_lane_key,
+                lane_key=config.training_task.lane_key,
+                rollout_resource_id=config.training_task.rollout_resource_id,
                 agent_execution=config.training_task.agent_execution,
                 evaluator_id=config.training_task.evaluator_id,
                 task_body=config.training_task.task_body,
                 viking_experiment_sets=config.training_task.viking_experiment_sets,
-                lane_key=config.training_task.lane_key,
                 model_ep=config.training_task.model_ep,
                 experiment_id=config.training_task.experiment_id,
                 request_source=config.platform.vaka_request_source,
@@ -496,6 +530,17 @@ def _set_request_source(values: dict[str, Any], key: str, source: str, label: st
     if key in values and str(values[key]).strip() != source:
         raise ValueError(f"{label}.{key} must match platform.vaka_request_source")
     values[key] = source
+
+
+def _identifier(task: dict[str, Any], key: str, *, default: str = "") -> str:
+    if key not in task:
+        return default
+    value = task[key]
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"training_task.{key} must be a non-empty string")
+    if any(character.isspace() for character in value.strip()):
+        raise ValueError(f"training_task.{key} must not contain whitespace")
+    return value.strip()
 
 
 def _object(parent: dict[str, Any], key: str) -> dict[str, Any]:

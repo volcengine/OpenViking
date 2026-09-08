@@ -7,7 +7,12 @@ from typing import Any
 import httpx
 import pytest
 from platform_client import PlatformAPIError, PlatformClientConfig, TrainingPlatformClient
-from task_request import VIKING_WORKFLOW, build_viking_task_request, validate_sets
+from task_request import (
+    VIKING_WORKFLOW,
+    build_task_scheduling,
+    build_viking_task_request,
+    validate_sets,
+)
 
 
 @pytest.mark.asyncio
@@ -27,12 +32,15 @@ async def test_metadata_connection_failure_is_clear_and_never_creates_task(choic
 
 
 @pytest.mark.asyncio
-async def test_required_other_lane_fails_instead_of_requesting_two_lanes(metadata, choices) -> None:
+async def test_other_required_rollout_resource_cannot_add_second_capacity_request(
+    metadata, choices
+) -> None:
     other = deepcopy(metadata["resources"]["resources"][0])
     other.update(resource_id="other-lane", required_for_task=True, default_amount=2)
     other["config"]["lane_key"] = "main"
+    other["config"]["legacy_agent_lane_id"] = "lane-main"
     metadata["resources"]["resources"].append(other)
-    with pytest.raises(PlatformAPIError, match="conflicts with selected lane"):
+    with pytest.raises(PlatformAPIError, match="required rollout resource.*exactly one"):
         await resolve(metadata, choices)
 
 
@@ -53,12 +61,13 @@ async def test_null_contract_metadata_has_clear_error(metadata, choices, locatio
 @pytest.mark.asyncio
 async def test_null_optional_resource_config_is_supported(metadata, choices) -> None:
     lane = metadata["resources"]["resources"][0]
-    lane["lane_key"] = "agentmemory"
     lane["config"] = None
     executor = metadata["resources"]["resources"][2]
     executor["config"]["automatic_request"] = None
     executor["default_amount"] = 1
-    assert (await resolve(metadata, choices))["scheduling"]["resource_requests"][0]["amount"] == 30
+    body = await resolve(metadata, choices)
+    assert body["scheduling"]["resource_requests"][0]["amount"] == 30
+    assert body["scheduling"]["resource_requests"][2]["amount"] == 1
 
 
 @pytest.fixture
@@ -95,6 +104,22 @@ def metadata() -> dict[str, Any]:
             ]
         },
         "targets": {"targets": [{"component_type": "memory", "target": "openviking_experiences"}]},
+        "lanes": {
+            "lanes": [
+                {
+                    "lane_id": "lane-independent-evolving",
+                    "lane_key": "evolving",
+                    "agent_id": "ark",
+                    "enabled": True,
+                },
+                {
+                    "lane_id": "lane-independent-main",
+                    "lane_key": "main",
+                    "agent_id": "ark",
+                    "enabled": True,
+                },
+            ]
+        },
         "resources": {
             "resources": [
                 {
@@ -103,7 +128,10 @@ def metadata() -> dict[str, Any]:
                     "agent_id": "ark",
                     "scope": "agent",
                     "lane_key": None,
-                    "config": {"lane_key": "agentmemory"},
+                    "config": {
+                        "lane_key": "evolving",
+                        "legacy_agent_lane_id": "lane_057cf57ea34b4e6bb110",
+                    },
                     "enabled": True,
                 },
                 {
@@ -128,7 +156,9 @@ def metadata() -> dict[str, Any]:
 def choices() -> dict[str, Any]:
     return {
         "name": "test-run-id",
-        "lane_key": "agentmemory",
+        "agent_id": "ark",
+        "lane_key": "evolving",
+        "rollout_resource_id": "rm-current-agentmemory-lane",
         "experiment_sets": [
             {"experiment_set_id": 371, "version": "V1", "role": "train"},
             {"experiment_set_id": 372, "version": "V2", "role": "eval"},
@@ -150,6 +180,7 @@ async def resolve(metadata: dict[str, Any], choices: dict[str, Any]) -> dict[str
         assert request.headers["X-API-Key"] == "test-key"
         assert request.headers["X-Project-Id"] == "test-project"
         assert request.headers["x-vaka-request-source"] == "agentmemory"
+        assert "x-tt-backend" not in request.headers
         path = request.url.path
         if path == "/inspect/training/agents/ark/execution-contract":
             response = metadata["contract"]
@@ -161,6 +192,9 @@ async def resolve(metadata: dict[str, Any], choices: dict[str, Any]) -> dict[str
                 "include_disabled": "false",
             }
             response = metadata["resources"]
+        elif path == "/inspect/resources/lanes":
+            assert dict(request.url.params) == {"agent_id": "ark", "include_disabled": "false"}
+            response = metadata["lanes"]
         elif path.startswith("/inspect/training/agents/ark/experiments/") and path.endswith(
             "/targets"
         ):
@@ -179,7 +213,7 @@ async def resolve(metadata: dict[str, Any], choices: dict[str, Any]) -> dict[str
         transport=httpx.MockTransport(handler),
     ) as client:
         result = await build_viking_task_request(client, **choices)
-    assert len(requests) == 4
+    assert len(requests) == 5
     return result
 
 
@@ -190,30 +224,38 @@ async def test_resolves_current_metadata_and_runner_settings(metadata, choices) 
 
     assert body["schema_version"] == "training-task-request.v2"
     assert body["name"] == "test-run-id"
-    assert body["agent"] == {
-        "agent_id": "ark",
-        "execution": {
-            "contract_id": "ark.viking-rollout",
-            "contract_version": "current-contract-version",
-            "schema_digest": "sha256:current-contract",
-            "values": {
-                "model_ep": "default",
-                "openviking_version": "v-platform-default",
-                "request_source": "agentmemory",
-            },
+    assert "agent_lane_id" not in body
+    assert "agent_lane_concurrency" not in body
+    assert body["agent"]["agent_id"] == "ark"
+    assert "lane_id" not in body["agent"]
+    assert "lane_concurrency" not in body["agent"]
+    assert body["agent"]["execution"] == {
+        "contract_id": "ark.viking-rollout",
+        "contract_version": "current-contract-version",
+        "schema_digest": "sha256:current-contract",
+        "values": {
+            "model_ep": "default",
+            "openviking_version": "v-platform-default",
+            "request_source": "agentmemory",
         },
     }
     assert body["experiment_id"] == "exp-current"
     assert body["target"] == {"component_type": "memory", "target": "openviking_experiences"}
     assert body["evaluator"] == {"evaluator_id": "viking_experiment_suite@v1", "workers": 30}
     assert body["execution"] == {"rollout_workers": 30, "case_timeout_seconds": 4800}
+    assert body["scheduling"]["priority"] == 100
     assert body["memory"] == {"train_epochs": 1, "train_trials": 1, "eval_trials": 1}
     assert body["viking_experiment_sets"] == choices["experiment_sets"]
-    assert body["scheduling"]["resource_requests"] == [
-        {"resource_id": "rm-current-agentmemory-lane", "amount": 30},
-        {"resource_id": "openviking_memory_identities", "amount": 1},
-        {"resource_id": "task_manager_executor", "amount": 1},
-    ]
+    assert body["scheduling"] == {
+        "priority": 100,
+        "lane_key": "evolving",
+        "resource_requests": [
+            {"resource_id": "rm-current-agentmemory-lane", "amount": 30},
+            {"resource_id": "openviking_memory_identities", "amount": 1},
+            {"resource_id": "task_manager_executor", "amount": 1},
+        ],
+    }
+    assert "resources" not in body["agent"]
     assert metadata == original_metadata
     assert choices == original_choices
     body["viking_experiment_sets"][0]["version"] = "V-mutated"
@@ -349,16 +391,95 @@ async def test_agent_scoped_experiment_response_need_not_repeat_agent_id(metadat
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scope", ["agent", "lane"])
-async def test_lane_supports_both_resource_metadata_formats(metadata, choices, scope) -> None:
+async def test_capacity_resolution_uses_resource_id_not_legacy_lane_metadata(
+    metadata, choices, scope
+) -> None:
     lane = metadata["resources"]["resources"][0]
     lane["scope"] = scope
-    if scope == "lane":
-        lane["lane_key"] = lane["config"].pop("lane_key")
+    lane.pop("config")
     body = await resolve(metadata, choices)
+    assert body["scheduling"]["lane_key"] == "evolving"
+    assert (
+        body["scheduling"]["resource_requests"][0]["resource_id"] == choices["rollout_resource_id"]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("concurrency", [1, 2, 30])
+async def test_independent_route_and_slots_follow_explicit_choices(
+    metadata, choices, concurrency
+) -> None:
+    lane = deepcopy(metadata["resources"]["resources"][0])
+    lane["resource_id"] = "rm-evolving-lane"
+    lane["config"]["legacy_agent_lane_id"] = "lane-second-evolving"
+    metadata["resources"]["resources"].append(lane)
+    choices["rollout_resource_id"] = "rm-evolving-lane"
+    choices["lane_key"] = "main"
+    choices["concurrency"] = concurrency
+
+    body = await resolve(metadata, choices)
+
+    assert body["scheduling"]["lane_key"] == "main"
     assert body["scheduling"]["resource_requests"][0] == {
-        "resource_id": "rm-current-agentmemory-lane",
-        "amount": 30,
+        "resource_id": "rm-evolving-lane",
+        "amount": concurrency,
     }
+    assert body["execution"]["rollout_workers"] == concurrency
+    assert body["evaluator"]["workers"] == concurrency
+    assert body["agent"]["execution"]["values"]["request_source"] == "agentmemory"
+    assert "lane_key" not in body
+
+
+@pytest.mark.asyncio
+async def test_missing_rollout_resource_never_falls_back_or_creates_task(metadata, choices) -> None:
+    choices["rollout_resource_id"] = "resource-missing"
+
+    with pytest.raises(PlatformAPIError, match="resource-missing.*found 0"):
+        await resolve(metadata, choices)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["agent_id", "lane_key", "rollout_resource_id"])
+@pytest.mark.parametrize("value", ["", " ", "\t", None, 1])
+async def test_invalid_agent_binding_is_rejected_before_any_platform_request(
+    choices, field, value
+) -> None:
+    choices[field] = value
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        raise AssertionError("an invalid lane ID must not query metadata or create a task")
+
+    async with TrainingPlatformClient(
+        PlatformClientConfig(gateway_base_url="https://platform.test"),
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        with pytest.raises(ValueError, match=rf"training_task\.{field} is required"):
+            await build_viking_task_request(client, **choices)
+
+    assert requests == []
+
+
+@pytest.mark.asyncio
+async def test_resource_lane_key_cannot_replace_missing_independent_lane(metadata, choices) -> None:
+    lane = metadata["resources"]["resources"][0]
+    lane["lane_key"] = "evolving"
+    lane["config"].pop("legacy_agent_lane_id")
+    metadata["lanes"]["lanes"] = []
+    with pytest.raises(PlatformAPIError, match="enabled lane.*found 0"):
+        await resolve(metadata, choices)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["concurrency", "case_timeout_seconds"])
+@pytest.mark.parametrize("value", [0, -1, True, "1", None])
+async def test_invalid_execution_counts_fail_before_metadata(
+    metadata, choices, field, value
+) -> None:
+    choices[field] = value
+    with pytest.raises(ValueError, match="concurrency and case timeout must be positive"):
+        await resolve(metadata, choices)
 
 
 @pytest.mark.asyncio
@@ -391,11 +512,12 @@ async def test_resources_ignore_other_agents_workflows_disabled_and_optional_ent
         }
     )
     body = await resolve(metadata, choices)
-    assert [row["resource_id"] for row in body["scheduling"]["resource_requests"]] == [
+    assert body["scheduling"]["lane_key"] == choices["lane_key"]
+    assert {item["resource_id"] for item in body["scheduling"]["resource_requests"]} == {
         "rm-current-agentmemory-lane",
         "openviking_memory_identities",
         "task_manager_executor",
-    ]
+    }
 
 
 @pytest.mark.asyncio
@@ -408,20 +530,21 @@ async def test_lane_resolution_never_guesses(metadata, choices, row_count) -> No
 
 
 @pytest.mark.asyncio
-async def test_required_resources_use_declared_amounts_before_fallbacks(metadata, choices) -> None:
+async def test_identity_is_fixed_to_one_and_other_required_resource_uses_positive_default(
+    metadata, choices
+) -> None:
     resources = metadata["resources"]["resources"]
     resources[1]["default_amount"] = 2
     resources[2]["default_amount"] = 3
     body = await resolve(metadata, choices)
-    assert body["scheduling"]["resource_requests"][1:] == [
-        {"resource_id": "openviking_memory_identities", "amount": 2},
-        {"resource_id": "task_manager_executor", "amount": 3},
-    ]
+    assert body["scheduling"]["resource_requests"][1]["amount"] == 1
+    assert body["scheduling"]["resource_requests"][2]["amount"] == 3
+    assert "resources" not in body["agent"]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("amount", [None, 0, -1, "1", True, 1.5])
-async def test_required_unknown_resource_without_safe_amount_fails_closed(
+async def test_unknown_required_resource_amounts_fail_before_task_creation(
     metadata, choices, amount
 ) -> None:
     metadata["resources"]["resources"].append(
@@ -432,8 +555,164 @@ async def test_required_unknown_resource_without_safe_amount_fails_closed(
             "default_amount": amount,
         }
     )
-    with pytest.raises(PlatformAPIError, match="new-required-resource has no safe amount"):
+    with pytest.raises(PlatformAPIError, match="new-required-resource.*no positive"):
         await resolve(metadata, choices)
+
+
+@pytest.mark.asyncio
+async def test_required_memory_pool_wins_over_optional_identity_resources(
+    metadata, choices
+) -> None:
+    metadata["resources"]["resources"].append(
+        {
+            "resource_id": "optional-memory-identity",
+            "resource_type": "memory_identity",
+            "required_for_task": False,
+            "default_amount": 0,
+            "enabled": True,
+        }
+    )
+    body = await resolve(metadata, choices)
+    assert body["scheduling"]["resource_requests"][1] == {
+        "resource_id": "openviking_memory_identities",
+        "amount": 1,
+    }
+    assert "optional-memory-identity" not in str(body)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("required", [False, True])
+@pytest.mark.parametrize("count", [0, 2])
+async def test_memory_identity_selection_never_guesses(metadata, choices, required, count) -> None:
+    resources = metadata["resources"]["resources"]
+    identity = resources.pop(1)
+    identity["required_for_task"] = required
+    resources.extend([{**identity, "resource_id": f"identity-{i}"} for i in range(count)])
+    with pytest.raises(PlatformAPIError, match=f"memory_identity resource, found {count}"):
+        await resolve(metadata, choices)
+
+
+@pytest.mark.asyncio
+async def test_unique_optional_memory_pool_is_selected_for_viking(metadata, choices) -> None:
+    metadata["resources"]["resources"][1]["required_for_task"] = False
+    body = await resolve(metadata, choices)
+    assert body["scheduling"]["resource_requests"][1]["amount"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "overrides", [{"enabled": False}, {"agent_id": "other"}, {"lane_key": "other"}]
+)
+async def test_lane_route_must_exist_and_be_enabled_for_selected_agent(
+    metadata, choices, overrides
+) -> None:
+    metadata["lanes"]["lanes"][0].update(overrides)
+    with pytest.raises(PlatformAPIError, match="enabled lane.*found 0"):
+        await resolve(metadata, choices)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"enabled": False},
+        {"agent_id": "other"},
+        {"scope": "global"},
+        {"resource_type": "memory_identity"},
+    ],
+)
+async def test_selected_rollout_capacity_must_be_enabled_agent_resource(
+    metadata, choices, overrides
+) -> None:
+    metadata["resources"]["resources"][0].update(overrides)
+    with pytest.raises(PlatformAPIError, match="Ark rollout resource.*found 0"):
+        await resolve(metadata, choices)
+
+
+@pytest.mark.asyncio
+async def test_non_viking_scheduling_does_not_require_optional_memory_pool(
+    metadata, choices
+) -> None:
+    class Client:
+        async def list_resources(self, agent_id):
+            assert agent_id == "ark"
+            data = deepcopy(metadata["resources"])
+            data["resources"][1]["required_for_task"] = False
+            return data
+
+        async def list_lanes(self, agent_id):
+            assert agent_id == "ark"
+            return metadata["lanes"]
+
+    scheduling = await build_task_scheduling(
+        Client(),
+        agent_id="ark",
+        lane_key="evolving",
+        rollout_resource_id=choices["rollout_resource_id"],
+        concurrency=2,
+        workflow_id="ov_external_training",
+    )
+    assert scheduling["resource_requests"] == [
+        {"resource_id": choices["rollout_resource_id"], "amount": 2},
+        {"resource_id": "task_manager_executor", "amount": 1},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_unified_request_satisfies_both_platform_constraints(metadata, choices) -> None:
+    body = await resolve(metadata, choices)
+    submitted_bodies: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/inspect/training/tasks"
+        submitted = json.loads(request.content)
+        submitted_bodies.append(submitted)
+        agent = submitted["agent"]
+        scheduling = submitted.get("scheduling", {})
+        requests = scheduling.get("resource_requests", [])
+        if any(agent.get(key) for key in ("lane_id", "lane_concurrency", "resources")) and requests:
+            return httpx.Response(
+                400,
+                json={
+                    "detail": "agent.resources and agent lane fields cannot be combined "
+                    "with unified resource requests"
+                },
+            )
+        assert agent["agent_id"] == choices["agent_id"]
+        if not any(item["resource_id"] == "openviking_memory_identities" for item in requests):
+            return httpx.Response(
+                400,
+                json={
+                    "detail": "required resource openviking_memory_identities must be requested explicitly"
+                },
+            )
+        assert scheduling["lane_key"] == "evolving"
+        assert all(key not in agent for key in ("lane_id", "lane_concurrency", "resources"))
+        assert requests[0]["amount"] == choices["concurrency"]
+        return httpx.Response(200, json={"data": {"task_id": "task-unified-regression"}})
+
+    async with TrainingPlatformClient(
+        PlatformClientConfig(gateway_base_url="https://platform.test"),
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        # Reproduce the observed conflict with a mock; this is not a real Task.
+        conflicting_body = deepcopy(body)
+        conflicting_body["agent"]["lane_id"] = "lane-old-binding"
+        conflicting_body["agent"]["lane_concurrency"] = choices["concurrency"]
+        with pytest.raises(PlatformAPIError, match="cannot be combined") as error:
+            await client.create_training_task(conflicting_body)
+        assert error.value.status_code == 400
+        missing_identity = deepcopy(body)
+        missing_identity["scheduling"]["resource_requests"] = [
+            body["scheduling"]["resource_requests"][0]
+        ]
+        with pytest.raises(PlatformAPIError, match="must be requested explicitly"):
+            await client.create_training_task(missing_identity)
+        created = await client.create_training_task(body)
+
+    assert created["task_id"] == "task-unified-regression"
+    assert submitted_bodies[2] == body
 
 
 @pytest.mark.asyncio

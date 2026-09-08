@@ -4,9 +4,10 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
-from start_adapter import SCRIPT_DIR, load_config, parse_args
+from start_adapter import SCRIPT_DIR, load_config, parse_args, run
 
 
 def test_config_loader_does_not_import_openviking_before_config_selection() -> None:
@@ -34,9 +35,12 @@ def write_config(path: Path) -> None:
                     "api_key": "platform-secret",
                     "project_id": "00000000000000000000000000000001",
                     "vaka_request_source": "ark-lx",
+                    "headers": {"x-platform-custom": "keep"},
                 },
                 "training_task": {
-                    "agent_lane_key": "evolving",
+                    "agent_id": "ark",
+                    "lane_key": "evolving",
+                    "rollout_resource_id": "rm_lane_lane_057cf57ea34b4e6",
                     "agent_execution": {
                         "contract_id": "ark.viking-rollout",
                         "contract_version": "3",
@@ -62,9 +66,16 @@ def test_load_config_uses_only_file(tmp_path: Path) -> None:
     assert config.platform.gateway_base_url == "https://gateway.test"
     assert config.platform.api_key == "platform-secret"
     assert config.platform.vaka_request_source == "ark-lx"
-    assert config.training_task.agent_lane_key == "evolving"
+    assert config.platform.headers == {"x-platform-custom": "keep"}
+    assert config.training_task.agent_id == "ark"
+    assert config.training_task.lane_key == "evolving"
+    assert config.training_task.rollout_resource_id == "rm_lane_lane_057cf57ea34b4e6"
+    assert not hasattr(config.training_task, "agent_lane_id")
+    assert not hasattr(config.training_task, "agent_lane_key")
     assert config.training_task.agent_execution["contract_id"] == "ark.viking-rollout"
-    assert config.rollout.extra_header == {"x-vaka-request-source": "ark-lx"}
+    assert config.rollout.extra_header == {
+        "x-vaka-request-source": "ark-lx",
+    }
     assert config.rollout.idempotency_namespace == "openviking-ark4"
     assert config.service.dataset == "ark4-0"
 
@@ -77,15 +88,74 @@ def test_config_argument_defaults_next_to_start_script(monkeypatch: pytest.Monke
     assert Path(args.config) == SCRIPT_DIR / "adapter_config.local.json"
 
 
-def test_load_config_rejects_protected_rollout_header(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "header",
+    [
+        "Authorization",
+        "Cookie",
+        "Host",
+        "Content-Length",
+        "Content-Type",
+        "Connection",
+        "Proxy-Connection",
+        "Keep-Alive",
+        "Transfer-Encoding",
+        "Upgrade",
+        "X-Admin-Token",
+        "X-Homepage-Api-Key",
+        "X-User-Id",
+        "X-TT-Env",
+    ],
+)
+def test_load_config_rejects_protected_rollout_header(tmp_path: Path, header: str) -> None:
     path = tmp_path / "adapter.local.json"
     write_config(path)
     raw = json.loads(path.read_text(encoding="utf-8"))
-    raw["rollout"]["extra_header"] = {"x-tt-backend": "evolution"}
+    raw["rollout"]["extra_header"] = {header: "must-not-override"}
     path.write_text(json.dumps(raw), encoding="utf-8")
 
     with pytest.raises(ValueError, match="protected header"):
         load_config(path)
+
+
+def test_load_config_keeps_other_headers_separate(tmp_path: Path) -> None:
+    path = tmp_path / "adapter.local.json"
+    write_config(path)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw["platform"]["headers"] = {"x-platform-custom": "keep"}
+    raw["rollout"]["extra_header"] = {"x-agent-custom": "keep"}
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    config = load_config(path)
+
+    assert config.platform.headers == {
+        "x-platform-custom": "keep",
+    }
+    assert config.rollout.extra_header == {
+        "x-agent-custom": "keep",
+        "x-vaka-request-source": "ark-lx",
+    }
+    assert json.loads(path.read_text(encoding="utf-8")) == raw
+
+
+@pytest.mark.parametrize("location", ["platform", "rollout"])
+@pytest.mark.parametrize("header", ["x-tt-backend", "X-TT-Backend", " x-tt-backend "])
+@pytest.mark.parametrize("value", ["evolving", "", None])
+def test_load_config_rejects_removed_backend_header(
+    tmp_path: Path, location: str, header: str, value: str | None
+) -> None:
+    path = tmp_path / "adapter.local.json"
+    write_config(path)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    field = "headers" if location == "platform" else "extra_header"
+    raw[location][field] = {header: value}
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="removed") as exc_info:
+        load_config(path)
+
+    assert "x-tt-backend" in str(exc_info.value)
+    assert "training_task.lane_key" in str(exc_info.value)
 
 
 def test_load_config_rejects_mismatched_rollout_vaka_source(tmp_path: Path) -> None:
@@ -190,7 +260,13 @@ def write_viking_config(path: Path) -> dict:
     raw["platform"]["vaka_request_source"] = "agentmemory"
     raw["training_task"] = {
         "workflow_id": "ark_viking_external_training",
-        "task_body": {"agent": {"execution": {"values": {"model_ep": "default"}}}},
+        "agent_id": "ark",
+        "lane_key": "evolving",
+        "rollout_resource_id": "rm_lane_lane_057cf57ea34b4e6",
+        "task_body": {
+            "schema_version": "training-task-request.v2",
+            "agent": {"execution": {"values": {"model_ep": "default"}}},
+        },
     }
     raw["rollout"]["extra_header"] = {
         "x-tt-sandbox": json.dumps({"multi-agents-md-id": "test-md", "env": {"KEEP": "yes"}})
@@ -220,6 +296,48 @@ def test_viking_config_has_one_source_and_no_dummy_execution(tmp_path: Path) -> 
     assert json.loads(path.read_text()) == original
 
 
+def test_viking_flat_task_body_uses_flat_execution_source(tmp_path: Path) -> None:
+    path = tmp_path / "adapter.json"
+    raw = write_viking_config(path)
+    raw["training_task"]["task_body"] = {
+        "task_name": "flat-manual-task",
+        "agent_id": "ark",
+        "agent_execution": {"values": {"model_ep": "default"}},
+    }
+    path.write_text(json.dumps(raw))
+    config = load_config(path)
+    body = config.training_task.task_body
+    assert "agent" not in body
+    assert body["agent_execution"]["values"] == {
+        "model_ep": "default",
+        "request_source": "agentmemory",
+    }
+    assert json.loads(path.read_text()) == raw
+
+    raw["training_task"]["task_body"]["agent_execution"]["values"]["request_source"] = "old"
+    path.write_text(json.dumps(raw))
+    with pytest.raises(ValueError, match="must match platform.vaka_request_source"):
+        load_config(path)
+
+
+@pytest.mark.parametrize("schema_version", [None, "", False])
+def test_viking_rejects_nested_agent_without_explicit_v2(
+    tmp_path: Path, schema_version: object
+) -> None:
+    path = tmp_path / "adapter.json"
+    raw = write_viking_config(path)
+    raw["training_task"]["task_body"]["schema_version"] = schema_version
+    path.write_text(json.dumps(raw))
+    with pytest.raises(ValueError, match="requires schema_version=training-task-request.v2") as error:
+        load_config(path)
+    assert "flat task_body.agent_execution" in str(error.value)
+
+    del raw["training_task"]["task_body"]["schema_version"]
+    path.write_text(json.dumps(raw))
+    with pytest.raises(ValueError, match="requires schema_version=training-task-request.v2"):
+        load_config(path)
+
+
 @pytest.mark.parametrize("location", ["task", "sandbox"])
 def test_viking_rejects_conflicting_request_source(tmp_path: Path, location: str) -> None:
     path = tmp_path / "adapter.json"
@@ -235,13 +353,54 @@ def test_viking_rejects_conflicting_request_source(tmp_path: Path, location: str
         load_config(path)
 
 
-@pytest.mark.parametrize("field", ["agent_execution", "agent_lane_key", "agent_id", "evaluator_id"])
+@pytest.mark.parametrize("field", ["agent_execution", "evaluator_id"])
 def test_viking_rejects_ignored_legacy_fields(tmp_path: Path, field: str) -> None:
     path = tmp_path / "adapter.json"
     raw = write_viking_config(path)
     raw["training_task"][field] = "unused"
     path.write_text(json.dumps(raw))
     with pytest.raises(ValueError, match="remove ignored fields"):
+        load_config(path)
+
+
+@pytest.mark.parametrize("field", ["agent_lane_id", "agent_lane_key"])
+@pytest.mark.parametrize("value", ["evolving", "", None])
+@pytest.mark.parametrize("workflow", ["casehub", "viking"])
+def test_load_config_rejects_removed_lane_fields(
+    tmp_path: Path, field: str, value: str | None, workflow: str
+) -> None:
+    path = tmp_path / "adapter.json"
+    if workflow == "viking":
+        raw = write_viking_config(path)
+    else:
+        write_config(path)
+        raw = json.loads(path.read_text())
+    raw["training_task"][field] = value
+    path.write_text(json.dumps(raw))
+
+    with pytest.raises(ValueError, match="removed") as exc_info:
+        load_config(path)
+
+    assert field in str(exc_info.value)
+    assert "training_task.lane_key" in str(exc_info.value)
+    assert "rollout_resource_id" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("missing", ["lane_key", "rollout_resource_id"])
+@pytest.mark.parametrize("workflow", ["casehub", "viking"])
+def test_load_config_requires_lane_and_resource_together(
+    tmp_path: Path, missing: str, workflow: str
+) -> None:
+    path = tmp_path / "adapter.json"
+    if workflow == "viking":
+        raw = write_viking_config(path)
+    else:
+        write_config(path)
+        raw = json.loads(path.read_text())
+    del raw["training_task"][missing]
+    path.write_text(json.dumps(raw))
+
+    with pytest.raises(ValueError, match="lane_key and rollout_resource_id must be configured together"):
         load_config(path)
 
 
@@ -253,8 +412,14 @@ def test_viking_existing_task_without_task_body(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="exactly one"):
         load_config(path)
     del raw["training_task"]["task_body"]
+    del raw["training_task"]["agent_id"]
+    del raw["training_task"]["lane_key"]
+    del raw["training_task"]["rollout_resource_id"]
     path.write_text(json.dumps(raw))
-    assert load_config(path).training_task.existing_task_id == "task-existing"
+    config = load_config(path)
+    assert config.training_task.existing_task_id == "task-existing"
+    assert config.training_task.lane_key == ""
+    assert config.training_task.rollout_resource_id == ""
 
 
 @pytest.mark.parametrize("sandbox", ["bad-json", "[]", '{"env":[]}'])
@@ -272,7 +437,9 @@ def test_compact_viking_config_has_no_platform_metadata(tmp_path: Path) -> None:
     raw = write_viking_config(path)
     raw["training_task"] = {
         "workflow_id": "ark_viking_external_training",
-        "lane_key": "agentmemory",
+        "agent_id": "ark",
+        "lane_key": "evolving",
+        "rollout_resource_id": "rm_lane_lane_057cf57ea34b4e6",
         "viking_experiment_sets": [
             {"experiment_set_id": 371, "version": "V1", "role": "train"},
             {"experiment_set_id": 372, "version": "V1", "role": "eval"},
@@ -281,7 +448,13 @@ def test_compact_viking_config_has_no_platform_metadata(tmp_path: Path) -> None:
     path.write_text(json.dumps(raw))
     config = load_config(path)
     assert config.training_task.task_body == {}
-    assert config.training_task.lane_key == "agentmemory"
+    assert config.training_task.agent_id == "ark"
+    assert config.training_task.lane_key == "evolving"
+    assert config.training_task.rollout_resource_id == "rm_lane_lane_057cf57ea34b4e6"
+    assert "x-tt-backend" not in config.platform.headers
+    assert "x-tt-backend" not in config.rollout.extra_header
+    assert not hasattr(config.training_task, "agent_lane_id")
+    assert not hasattr(config.training_task, "agent_lane_key")
     assert len(config.training_task.viking_experiment_sets) == 2
     assert config.training_task.model_ep == ""
     assert config.training_task.experiment_id == ""
@@ -299,7 +472,7 @@ def test_compact_viking_config_has_no_platform_metadata(tmp_path: Path) -> None:
         load_config(path)
 
 
-def test_compact_viking_requires_explicit_lane_and_set_version(tmp_path: Path) -> None:
+def test_compact_viking_requires_lane_and_resource_and_explicit_set_version(tmp_path: Path) -> None:
     path = tmp_path / "adapter.json"
     raw = write_viking_config(path)
     raw["training_task"] = {
@@ -310,10 +483,96 @@ def test_compact_viking_requires_explicit_lane_and_set_version(tmp_path: Path) -
         ],
     }
     path.write_text(json.dumps(raw))
-    with pytest.raises(ValueError, match="lane_key is required"):
+    with pytest.raises(ValueError, match="training_task.lane_key and rollout_resource_id are required"):
         load_config(path)
-    raw["training_task"]["lane_key"] = "agentmemory"
+    raw["training_task"]["lane_key"] = "evolving"
+    raw["training_task"]["rollout_resource_id"] = "rm_lane_lane_057cf57ea34b4e6"
     raw["training_task"]["viking_experiment_sets"][0]["version"] = ""
     path.write_text(json.dumps(raw))
     with pytest.raises(ValueError, match="version must be explicitly selected"):
         load_config(path)
+
+
+def test_compact_viking_accepts_agent_id_and_defaults_to_ark(tmp_path: Path) -> None:
+    path = tmp_path / "adapter.json"
+    raw = write_viking_config(path)
+    raw["training_task"] = {
+        "workflow_id": "ark_viking_external_training",
+        "lane_key": "evolving",
+        "rollout_resource_id": "rm_lane_lane_057cf57ea34b4e6",
+        "viking_experiment_sets": [
+            {"experiment_set_id": 371, "version": "V1", "role": "train"},
+            {"experiment_set_id": 372, "version": "V1", "role": "eval"},
+        ],
+    }
+    path.write_text(json.dumps(raw))
+    config = load_config(path)
+    assert config.training_task.agent_id == "ark"
+    assert "x-tt-backend" not in config.platform.headers
+    assert "x-tt-backend" not in config.rollout.extra_header
+    assert json.loads(path.read_text()) == raw
+
+    raw["training_task"]["agent_id"] = "other-agent"
+    path.write_text(json.dumps(raw))
+    assert load_config(path).training_task.agent_id == "other-agent"
+
+
+@pytest.mark.parametrize("field", ["agent_id", "lane_key", "rollout_resource_id"])
+@pytest.mark.parametrize("value", [None, "", "   ", False, 1, [], {}, "invalid id", "a\nb"])
+def test_config_rejects_invalid_agent_lane_and_resource_identifiers(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    path = tmp_path / "adapter.json"
+    raw = write_viking_config(path)
+    raw["training_task"][field] = value
+    path.write_text(json.dumps(raw))
+    with pytest.raises(ValueError, match=f"training_task.{field}"):
+        load_config(path)
+
+
+@pytest.mark.asyncio
+async def test_run_passes_lane_and_resource_to_service_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "adapter.json"
+    write_config(path)
+    config = load_config(path)
+    captured: dict = {}
+
+    class FakeClient:
+        def __init__(self, client_config):
+            captured["client_config"] = client_config
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class FakeServer:
+        def __init__(self, server_config):
+            captured["server_config"] = server_config
+
+        async def serve(self):
+            return None
+
+    def create_app(**kwargs):
+        captured.update(kwargs)
+        return "fake-app"
+
+    monkeypatch.setitem(
+        sys.modules,
+        "service_app",
+        SimpleNamespace(ArkAdapterServiceConfig=SimpleNamespace, create_app=create_app),
+    )
+    monkeypatch.setattr("start_adapter.TrainingPlatformClient", FakeClient)
+    monkeypatch.setattr("start_adapter.uvicorn.Server", FakeServer)
+    await run(config)
+    service = captured["config"]
+    assert service.agent_id == "ark"
+    assert service.lane_key == "evolving"
+    assert service.rollout_resource_id == "rm_lane_lane_057cf57ea34b4e6"
+    assert not hasattr(service, "agent_lane_id")
+    assert service.request_source == "ark-lx"
+    assert "x-tt-backend" not in service.extra_header
+    assert "x-tt-backend" not in captured["client_config"].headers

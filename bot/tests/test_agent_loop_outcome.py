@@ -2,6 +2,7 @@ import json
 import sys
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -189,8 +190,9 @@ async def test_agent_loop_passes_configured_temperature_to_provider(temp_dir: Pa
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("inject_constraints", [True, False])
 async def test_agent_loop_makes_final_no_tool_call_when_iteration_limit_reached(
-    temp_dir: Path, monkeypatch
+    temp_dir: Path, monkeypatch, inject_constraints
 ):
     monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
     monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
@@ -274,6 +276,8 @@ async def test_agent_loop_makes_final_no_tool_call_when_iteration_limit_reached(
         max_iterations=1,
     )
     loop.tools = tools
+    reminder_hook = AsyncMock(return_value=None)
+    monkeypatch.setattr(loop, "_maybe_apply_experience_constraint_reminder", reminder_hook)
 
     session_key = SessionKey(type="cli", channel_id="default", chat_id="session-limit")
     captured_turns = []
@@ -282,8 +286,10 @@ async def test_agent_loop_makes_final_no_tool_call_when_iteration_limit_reached(
         session_key=session_key,
         publish_events=False,
         captured_turns=captured_turns,
+        inject_constraint_experience=inject_constraints,
     )
 
+    assert reminder_hook.await_count == int(inject_constraints)
     assert final_content == "final answer from gathered tool results"
     assert iteration == 1
     assert len(provider.calls) == 2
@@ -315,7 +321,12 @@ async def test_agent_loop_makes_final_no_tool_call_when_iteration_limit_reached(
         "tool result: useful context",
         "tool result: useful context",
     ]
-    assert token_usage == {"prompt_tokens": 17, "completion_tokens": 7, "total_tokens": 24}
+    assert token_usage == {
+        "prompt_tokens": 17,
+        "completion_tokens": 7,
+        "total_tokens": 24,
+        "cache_read_input_tokens": 0,
+    }
 
 
 @pytest.mark.asyncio

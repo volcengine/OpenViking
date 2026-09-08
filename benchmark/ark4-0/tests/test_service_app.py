@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 from typing import Any
 
 import httpx
@@ -37,23 +38,33 @@ class CompletedPlatformClient:
         self.completed = False
         self.created_count = 0
         self.created_bodies: list[dict[str, Any]] = []
+        self.submitted_rollouts: list[dict[str, Any]] = []
 
-    async def resolve_rollout_lane_resource(
-        self,
-        *,
-        agent_id: str,
-        lane_key: str,
-    ) -> dict[str, Any]:
+    async def list_lanes(self, agent_id: str) -> dict[str, Any]:
         assert agent_id == "ark"
-        assert lane_key == "evolving"
-        return {
-            "resource_id": "rm-lane-evolving",
-            "resource_type": "rollout_concurrency",
-            "scope": "lane",
-            "agent_id": agent_id,
-            "lane_key": lane_key,
+        return {"lanes": [{
+            "lane_id": "lane-independent", "lane_key": "evolving", "agent_id": agent_id,
             "enabled": True,
-        }
+        }]}
+
+    async def list_resources(self, agent_id: str) -> dict[str, Any]:
+        assert agent_id == "ark"
+        return {"resources": [
+            {
+                "resource_id": "rm-lane-evolving", "resource_type": "rollout_concurrency",
+                "scope": "agent", "agent_id": agent_id, "enabled": True,
+            },
+            {
+                "resource_id": "openviking_memory_identities", "resource_type": "memory_identity",
+                "scope": "global", "enabled": True, "required_for_task": True,
+                "default_amount": 0, "applicable_workflow_ids": ["ark_viking_external_training"],
+            },
+            {
+                "resource_id": "task_manager_executor", "resource_type": "workflow_concurrency",
+                "scope": "global", "enabled": True, "required_for_task": True,
+                "default_amount": 0, "config": {"automatic_request": {"amount": 1}},
+            },
+        ]}
 
     async def create_training_task(self, body: dict[str, Any]) -> dict[str, Any]:
         self.created_bodies.append(body)
@@ -107,7 +118,10 @@ class CompletedPlatformClient:
     ) -> dict[str, Any]:
         assert poll_interval_seconds > 0
         assert timeout_seconds > 0
-        return {"task_id": task_id, "status": "running", "current_step": "OV_WAIT"}
+        return {
+            "task_id": task_id, "status": "running", "current_step": "OV_WAIT",
+            "params": {"agent_lane_key": "evolving"},
+        }
 
     async def get_training_task(self, task_id: str) -> dict[str, Any]:
         assert task_id in {"task-1", "task-existing"}
@@ -134,6 +148,7 @@ class CompletedPlatformClient:
         assert task_id == "task-1"
         assert body["case_ids"] == ["case-1"]
         assert idempotency_key
+        self.submitted_rollouts.append(body)
         return {
             "batch_rollout_id": "batch-1",
             "case_rollouts": [{"case_id": "case-1", "case_rollout_id": "case-rollout-1"}],
@@ -162,7 +177,9 @@ async def test_generic_service_contract_executes_platform_rollout() -> None:
         config=ArkAdapterServiceConfig(
             dataset="ark4-0",
             domain="ark",
-            agent_lane_key="evolving",
+            lane_key="evolving",
+            rollout_resource_id="rm-lane-evolving",
+            extra_header={"x-vaka-request-source": "ark-lx"},
             agent_execution={
                 "contract_id": "ark.viking-rollout",
                 "contract_version": "3",
@@ -194,14 +211,14 @@ async def test_generic_service_contract_executes_platform_rollout() -> None:
         assert platform_client.created_count == 1
         assert platform_client.created_bodies[0]["casehub_dataset_ids"] == ["dataset-1"]
         assert platform_client.created_bodies[0]["workers"] == 30
-        assert platform_client.created_bodies[0]["scheduling"] == {
-            "resource_requests": [
-                {
-                    "resource_id": "rm-lane-evolving",
-                    "amount": 30,
-                    "metadata": {},
-                }
-            ]
+        assert platform_client.created_bodies[0]["agent_id"] == "ark"
+        assert "agent_lane_id" not in platform_client.created_bodies[0]
+        assert "agent_lane_concurrency" not in platform_client.created_bodies[0]
+        assert "agent_lane_key" not in platform_client.created_bodies[0]
+        assert platform_client.created_bodies[0]["scheduling"]["lane_key"] == "evolving"
+        requests = platform_client.created_bodies[0]["scheduling"]["resource_requests"]
+        assert {item["resource_id"]: item["amount"] for item in requests} == {
+            "rm-lane-evolving": 30, "task_manager_executor": 1,
         }
         assert platform_client.created_bodies[0]["agent_execution"] == {
             "contract_id": "ark.viking-rollout",
@@ -276,6 +293,9 @@ async def test_generic_service_contract_executes_platform_rollout() -> None:
             "user",
             "assistant",
         ]
+        assert platform_client.submitted_rollouts[0]["extra_header"] == {
+            "x-vaka-request-source": "ark-lx"
+        }
 
         unauthorized = await client.get("/admin/platform-runs")
         assert unauthorized.status_code == 401
@@ -382,6 +402,155 @@ async def test_viking_external_run_uses_v2_task_body_and_phase_source() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("v2", [False, True], ids=["flat", "v2-compat"])
+async def test_custom_task_body_routes_and_requests_runner_concurrency(v2: bool) -> None:
+    platform_client = CompletedPlatformClient()
+    task_body = (
+        {"schema_version": "training-task-request.v2", "name": "custom"}
+        if v2 else {"task_name": "custom", "workflow_id": "ark_viking_external_training"}
+    )
+    original = deepcopy(task_body)
+    config = ArkAdapterServiceConfig(
+        dataset="ark4-0", domain="ark", workflow_id="ark_viking_external_training",
+        task_body=task_body, agent_id="ark", lane_key="evolving",
+        rollout_resource_id="rm-lane-evolving",
+    )
+    app = create_app(client=platform_client, config=config)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://adapter.test",
+    ) as client:
+        response = await client.post("/v1/runs/start", json={
+            "run_id": "custom-lane", "dataset": "ark4-0", "domain": "ark", "concurrency": 30,
+        })
+    assert response.status_code == 200, response.text
+    body = platform_client.created_bodies[0]
+    binding = body["agent"] if v2 else body
+    assert binding["agent_id"] == "ark"
+    assert "lane_id" not in binding
+    assert "agent_lane_id" not in binding
+    assert body["scheduling"]["lane_key"] == "evolving"
+    assert {item["resource_id"]: item["amount"] for item in body["scheduling"]["resource_requests"]} == {
+        "rm-lane-evolving": 30, "openviking_memory_identities": 1, "task_manager_executor": 1,
+    }
+    assert "agent_lane_key" not in body
+    assert "lane_key" not in binding
+    assert config.task_body == original  # per-run binding must not mutate the template
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("v2", [False, True], ids=["flat", "v2-compat"])
+async def test_custom_task_body_cannot_silently_override_configured_lane(v2: bool) -> None:
+    platform_client = CompletedPlatformClient()
+    task_body = {"scheduling": {"lane_key": "other-lane"}}
+    if v2:
+        task_body["schema_version"] = "training-task-request.v2"
+    app = create_app(client=platform_client, config=ArkAdapterServiceConfig(
+        dataset="ark4-0", domain="ark", workflow_id="ark_viking_external_training",
+        task_body=task_body, lane_key="evolving", rollout_resource_id="rm-lane-evolving",
+    ))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://adapter.test",
+    ) as client:
+        response = await client.post("/v1/runs/start", json={
+            "run_id": "conflicting-lane", "dataset": "ark4-0", "domain": "ark",
+        })
+    assert response.status_code == 400
+    assert "conflicts with training_task.lane_key" in response.json()["detail"]
+    assert platform_client.created_bodies == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("v2", [False, True], ids=["flat", "v2-compat"])
+@pytest.mark.parametrize("configured", [False, True])
+async def test_custom_task_body_cannot_mix_lane_and_unified_resources(v2: bool, configured: bool) -> None:
+    platform_client = CompletedPlatformClient()
+    resources = [{"resource_id": "openviking_memory_identities", "amount": 1}]
+    task_body = (
+        {"schema_version": "training-task-request.v2", "agent": {"lane_id": "old-lane"}}
+        if v2 else {"agent_lane_id": "old-lane"}
+    )
+    if not configured:
+        task_body["scheduling"] = {"resource_requests": resources}
+    app = create_app(client=platform_client, config=ArkAdapterServiceConfig(
+        dataset="ark4-0", domain="ark", workflow_id="ark_viking_external_training",
+        task_body=task_body, lane_key="evolving" if configured else "",
+        rollout_resource_id="rm-lane-evolving" if configured else "",
+    ))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://adapter.test",
+    ) as client:
+        response = await client.post("/v1/runs/start", json={
+            "run_id": "mixed-resource-modes", "dataset": "ark4-0", "domain": "ark",
+        })
+    assert response.status_code == 400
+    assert "cannot be combined with unified resource requests" in response.json()["detail"]
+    assert platform_client.created_bodies == []
+
+
+@pytest.mark.asyncio
+async def test_custom_task_scheduling_preserves_template_priority_and_extra_requests() -> None:
+    platform_client = CompletedPlatformClient()
+    task_body = {
+        "schema_version": "training-task-request.v2",
+        "scheduling": {
+            "priority": 42, "depends_on_task_ids": ["task-upstream"],
+            "resource_requests": [{"resource_id": "extra-resource", "amount": 2}],
+        },
+    }
+    original = deepcopy(task_body)
+    app = create_app(client=platform_client, config=ArkAdapterServiceConfig(
+        dataset="ark4-0", domain="ark", workflow_id="ark_viking_external_training",
+        task_body=task_body, lane_key="evolving", rollout_resource_id="rm-lane-evolving",
+    ))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://adapter.test",
+    ) as client:
+        response = await client.post("/v1/runs/start", json={
+            "run_id": "custom-scheduling", "dataset": "ark4-0", "domain": "ark", "concurrency": 30,
+        })
+    assert response.status_code == 200, response.text
+    scheduling = platform_client.created_bodies[0]["scheduling"]
+    assert scheduling["priority"] == 42
+    assert scheduling["depends_on_task_ids"] == ["task-upstream"]
+    assert scheduling["lane_key"] == "evolving"
+    assert {item["resource_id"]: item["amount"] for item in scheduling["resource_requests"]} == {
+        "extra-resource": 2, "rm-lane-evolving": 30, "openviking_memory_identities": 1,
+        "task_manager_executor": 1,
+    }
+    assert task_body == original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("actual_lane", [None, "main"])
+async def test_task_with_wrong_frozen_lane_cannot_start_rollouts(actual_lane) -> None:
+    class WrongLaneClient(CompletedPlatformClient):
+        async def wait_for_ov_wait(self, task_id, **kwargs):
+            return {
+                "task_id": task_id, "status": "running", "current_step": "VIKING_OV_WAIT",
+                "params": {"agent_lane_key": actual_lane},
+            }
+
+    platform_client = WrongLaneClient()
+    app = create_app(client=platform_client, config=ArkAdapterServiceConfig(
+        dataset="ark4-0", domain="ark", workflow_id="ark_viking_external_training",
+        task_body={"schema_version": "training-task-request.v2"},
+        lane_key="evolving", rollout_resource_id="rm-lane-evolving",
+    ))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://adapter.test",
+    ) as client:
+        body = {"run_id": "wrong-lane", "dataset": "ark4-0", "domain": "ark", "concurrency": 1}
+        response = await client.post("/v1/runs/start", json=body)
+        assert response.status_code == 502
+        assert "task-1" in response.json()["detail"]
+        assert "expected 'evolving'; no rollout submitted" in response.json()["detail"]
+        assert (await client.post("/v1/runs/start", json=body)).status_code == 502
+    assert app.state.run_registry.get("wrong-lane").status == "routing_mismatch"
+    assert platform_client.created_count == 1
+    assert platform_client.submitted_rollouts == []
+
+
+@pytest.mark.asyncio
 async def test_viking_external_run_can_attach_existing_task() -> None:
     platform_client = CompletedPlatformClient()
     app = create_app(
@@ -421,8 +590,18 @@ async def test_compact_viking_resolves_per_run_and_receives_runner_plan(monkeypa
         assert client is platform_client
         resolved.append(kwargs)
         return {
+            "schema_version": "training-task-request.v2",
             "name": kwargs["name"],
-            "agent": {"execution": {"contract_version": str(len(resolved))}},
+            "agent": {
+                "execution": {"contract_version": str(len(resolved))},
+                "agent_id": kwargs["agent_id"],
+            },
+            "scheduling": {
+                "lane_key": kwargs["lane_key"],
+                "resource_requests": [{
+                    "resource_id": kwargs["rollout_resource_id"], "amount": kwargs["concurrency"],
+                }],
+            },
         }
 
     monkeypatch.setattr("service_app.build_viking_task_request", build)
@@ -436,7 +615,8 @@ async def test_compact_viking_resolves_per_run_and_receives_runner_plan(monkeypa
                 {"experiment_set_id": 371, "version": "V1", "role": "train"},
                 {"experiment_set_id": 372, "version": "V1", "role": "eval"},
             ],
-            lane_key="agentmemory",
+            lane_key="evolving",
+            rollout_resource_id="rm-lane-evolving",
             request_source="agentmemory",
             runtime_params={"task_timeout": 4800},
             rollout_concurrency=1,
@@ -460,6 +640,11 @@ async def test_compact_viking_resolves_per_run_and_receives_runner_plan(monkeypa
         assert resolved[0]["concurrency"] == 30
         assert resolved[0]["case_timeout_seconds"] == 4800
         assert resolved[0]["request_source"] == "agentmemory"
+        assert resolved[0]["agent_id"] == "ark"
+        assert resolved[0]["lane_key"] == "evolving"
+        assert resolved[0]["rollout_resource_id"] == "rm-lane-evolving"
+        assert "backend" not in resolved[0]
+        assert "agent_lane_id" not in resolved[0]
         eval_response = await client.post("/v1/runs/start", json=body)
         assert eval_response.status_code == 200
         assert eval_response.json()["training_plan"] == body["training_plan"]
@@ -478,6 +663,52 @@ async def test_compact_viking_resolves_per_run_and_receives_runner_plan(monkeypa
         assert response.status_code == 400
         assert "training_plan" in response.text
         assert platform_client.created_count == 2
+
+
+@pytest.mark.parametrize("field", ["agent_lane_id", "agent_lane_key"])
+def test_service_config_does_not_accept_legacy_lane_fields(field: str) -> None:
+    with pytest.raises(TypeError, match=field):
+        ArkAdapterServiceConfig(dataset="ark4-0", domain="ark", **{field: "evolving"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["lane_key", "rollout_resource_id"])
+@pytest.mark.parametrize("value", [None, "", " "])
+async def test_compact_viking_without_scheduling_choice_never_creates_task(field, value) -> None:
+    platform_client = CompletedPlatformClient()
+    choices = {"lane_key": "evolving", "rollout_resource_id": "rm-lane-evolving", field: value}
+    app = create_app(
+        client=platform_client,  # type: ignore[arg-type]
+        config=ArkAdapterServiceConfig(
+            dataset="ark4-0",
+            domain="ark",
+            workflow_id="ark_viking_external_training",
+            viking_experiment_sets=[
+                {"experiment_set_id": 371, "version": "V1", "role": "train"},
+                {"experiment_set_id": 372, "version": "V1", "role": "eval"},
+            ],
+            request_source="agentmemory",
+            **choices,
+        ),
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://adapter.test"
+    ) as client:
+        response = await client.post(
+            "/v1/runs/start",
+            json={
+                "run_id": "missing-scheduling-choice",
+                "dataset": "ark4-0",
+                "domain": "ark",
+                "concurrency": 30,
+                "training_plan": {"train_epochs": 5, "train_trials": 1, "eval_trials": 10},
+            },
+        )
+
+    assert response.status_code == 400
+    assert f"training_task.{field} is required" in response.json()["detail"]
+    assert platform_client.created_count == 0
+    assert platform_client.created_bodies == []
 
 
 @pytest.mark.asyncio
@@ -642,6 +873,8 @@ async def test_viking_rollout_post_uses_runner_concurrency_not_service_default(
     case_ids = [str(index) for index in range(1, 32)]
 
     def gateway_handler(request: httpx.Request) -> httpx.Response:
+        assert "x-tt-backend" not in request.headers
+        assert request.headers["x-vaka-request-source"] == "ark-lx"
         path = request.url.path
         task_path = "/inspect/training/tasks/task-existing"
         if request.method == "GET" and path == task_path:
@@ -680,7 +913,9 @@ async def test_viking_rollout_post_uses_runner_concurrency_not_service_default(
         raise AssertionError(f"unexpected request: {request.method} {request.url}")
 
     async with TrainingPlatformClient(
-        PlatformClientConfig(gateway_base_url="https://platform.test"),
+        PlatformClientConfig(
+            gateway_base_url="https://platform.test", vaka_request_source="ark-lx"
+        ),
         transport=httpx.MockTransport(gateway_handler),
     ) as platform_client:
         app = create_app(
@@ -689,6 +924,7 @@ async def test_viking_rollout_post_uses_runner_concurrency_not_service_default(
                 dataset="ark4-0", domain="ark",
                 workflow_id="ark_viking_external_training", existing_task_id="task-existing",
                 rollout_concurrency=1, rollout_poll_interval_seconds=0.001,
+                extra_header={"x-vaka-request-source": "ark-lx"},
             ),
         )
         assert app.state.rollout_semaphore is None
@@ -726,3 +962,4 @@ async def test_viking_rollout_post_uses_runner_concurrency_not_service_default(
     assert len(submitted_bodies) == 1
     assert submitted_bodies[0]["workers"] == run_concurrency
     assert submitted_bodies[0]["case_ids"] == case_ids
+    assert submitted_bodies[0]["extra_header"] == {"x-vaka-request-source": "ark-lx"}

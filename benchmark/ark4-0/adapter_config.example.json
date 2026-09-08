@@ -4,7 +4,9 @@
   },
   "training_task": {
     "workflow_id": "ark_viking_external_training",
-    "lane_key": "agentmemory",
+    "agent_id": "ark",
+    "lane_key": "evolving",
+    "rollout_resource_id": "rm_lane_lane_057cf57ea34b4e6",
     "viking_experiment_sets": [
       {"experiment_set_id": 371, "version": "V1", "role": "train"},
       {"experiment_set_id": 372, "version": "V1", "role": "eval"}
@@ -40,6 +42,6 @@
     "gateway_base_url": "https://replace-with-inspect-gateway",
     "api_key": "replace-with-platform-api-key",
     "project_id": "00000000000000000000000000000001",
-    "vaka_request_source": "agentmemory"
+    "vaka_request_source": "ark-lx"
   }
 }

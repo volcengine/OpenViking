@@ -2328,6 +2328,7 @@ async def test_tau2_run_agent_force_loads_experience_loader_skill_before_task_ac
             self.tools = ToolRegistry()
             self.tools.register(ReadFileTool())
             self.tools.register(_DoneTool())
+            self.config = SimpleNamespace(ov_server=SimpleNamespace(exp_write_tools=[]))
             self.provider = FakeProvider()
             self.model = "fake"
             self.temperature = None
@@ -2497,6 +2498,7 @@ async def test_tau2_run_agent_constraint_mode_does_not_force_load_experience_loa
             self.context = FakeContextBuilder(Path("/tmp/fake-workspace"))
             self.tools = ToolRegistry()
             self.tools.register(_DoneTool())
+            self.config = SimpleNamespace(ov_server=SimpleNamespace(exp_write_tools=[]))
             self.provider = FakeProvider()
             self.model = "fake"
             self.temperature = None

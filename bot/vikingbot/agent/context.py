@@ -56,12 +56,14 @@ class ContextBuilder:
         remote_skills_summary: str = "",
         enable_subagents: bool = True,
         config: "Config | None" = None,
+        skills_enable: bool = True,
     ):
         self.workspace = workspace
         self._templates_ensured = False
         self.sandbox_manager = sandbox_manager
         self._memory = None
         self._skills = None
+        self.skills_enable = skills_enable
         self._sender_id = sender_id
         self._actor_peer_id = actor_peer_id or sender_id
         self._sender_name = sender_name
@@ -163,15 +165,15 @@ class ContextBuilder:
 
         # Skills - progressive loading
         # 1. Always-loaded skills: include full content
-        always_skills = self.skills.get_always_skills()
+        always_skills = self.skills.get_always_skills() if self.skills_enable else []
         if always_skills:
             always_content = self.skills.load_skills_for_context(always_skills)
             if always_content:
                 parts.append(f"# Active Skills\n\n{always_content}")
 
         # 2. Available skills: only show summary (agent uses read_file to load)
-        skills_summary = self.skills.build_skills_summary()
-        if skills_summary or self._remote_skills_summary:
+        skills_summary = self.skills.build_skills_summary() if self.skills_enable else ""
+        if self.skills_enable and (skills_summary or self._remote_skills_summary):
             required_skill_note = ""
             required_skill_candidates = [
                 "skills/experience_loader/SKILL.md",

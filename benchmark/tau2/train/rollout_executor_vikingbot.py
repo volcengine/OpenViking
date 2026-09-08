@@ -28,6 +28,7 @@ from benchmark.tau2.train._rollout_helpers import (
 )
 from benchmark.tau2.train.first_user_cache import FirstUserMessageCache
 from openviking.message import Message, TextPart, ToolPart
+from openviking.session.memory.utils.memory_fields import strip_memory_fields_trailer
 from openviking.session.train import (
     Case,
     ExecutionContext,
@@ -40,7 +41,9 @@ from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
-Tau2ExperienceLoaderMode = Literal["skill", "selector", "constraint", "direct_experience"]
+Tau2ExperienceLoaderMode = Literal[
+    "skill", "selector", "constraint", "direct_experience", "auto_experience", "none"
+]
 Tau2ExperienceRecallMode = Literal["case_ann", "exp_ann", "hybrid_ann"]
 VikingBotSystemPromptProfile = Literal["full", "minimal"]
 DEFAULT_TAU2_EXPERIENCE_LOADER_MODE: Tau2ExperienceLoaderMode = "skill"
@@ -77,9 +80,10 @@ def normalize_system_prompt_profile(value: Any) -> VikingBotSystemPromptProfile:
 
 def normalize_tau2_experience_loader_mode(value: Any) -> Tau2ExperienceLoaderMode:
     mode = str(value or DEFAULT_TAU2_EXPERIENCE_LOADER_MODE).strip().lower()
-    if mode not in {"skill", "selector", "constraint", "direct_experience"}:
+    if mode not in {"skill", "selector", "constraint", "direct_experience", "auto_experience", "none"}:
         raise ValueError(
-            "loader_mode must be 'skill', 'selector', 'constraint', or 'direct_experience'"
+            "loader_mode must be 'skill', 'selector', 'constraint', 'direct_experience', "
+            "'auto_experience', or 'none'"
         )
     return mode  # type: ignore[return-value]
 
@@ -1384,6 +1388,7 @@ class VikingBotTau2RolloutExecutor:
         )
         timings.record("prepare_prompt", stage_started_at)
 
+        auto_experience_trace: dict[str, Any] = {}
         (
             final_content,
             final_reasoning_content,
@@ -1408,6 +1413,7 @@ class VikingBotTau2RolloutExecutor:
             direct_experience_uri=self.direct_experience_uri,
             timings=timings,
             case_lookup=case_lookup,
+            auto_experience_trace=auto_experience_trace,
         )
 
         reward = None
@@ -1480,9 +1486,17 @@ class VikingBotTau2RolloutExecutor:
                 "final_reasoning_content": final_reasoning_content,
                 "keep_default_tools": self.keep_default_tools,
                 "ov_tools_enable": False,
-                "experience_recall_enable": self.keep_default_tools,
+                "experience_recall_enable": (
+                    self.loader_mode != "none"
+                    and (self.loader_mode == "auto_experience" or self.keep_default_tools)
+                ),
                 "experience_loader_mode": self.loader_mode,
-                "experience_recall_mode": self.experience_recall_mode,
+                "experience_recall_mode": (
+                    "exp_ann"
+                    if self.loader_mode == "auto_experience"
+                    else (None if self.loader_mode == "none" else self.experience_recall_mode)
+                ),
+                "auto_experience": auto_experience_trace or None,
                 "system_prompt_profile": self.system_prompt_profile,
                 "experience_loader_skill": experience_loader_skill,
                 "direct_experience": _direct_experience_metadata(
@@ -1755,7 +1769,10 @@ def _configure_tools(
     loader_mode = normalize_tau2_experience_loader_mode(loader_mode)
     experience_recall_mode = normalize_tau2_experience_recall_mode(experience_recall_mode)
     for tool_name in list(agent.tools.tool_names):
-        if str(tool_name).startswith("openviking_"):
+        if loader_mode == "none" or str(tool_name).startswith("openviking_") or (
+            loader_mode == "auto_experience"
+            and tool_name in {"search_experience", "read_experience", "load_relevant_experience"}
+        ):
             agent.tools.unregister(tool_name)
     if loader_mode == "skill":
         agent.tools.register(
@@ -1900,13 +1917,20 @@ def _build_system_prompt(
                 "isolated context and returns only experiences judged applicable."
             )
         instructions.append(_EXPERIENCE_PRECEDENCE_CAVEAT)
+    elif loader_mode == "auto_experience":
+        instructions.append(
+            "Relevant past experiences, when found, are automatically provided in an "
+            "Experience Reminder before the task. No experience search skill or memory "
+            "retrieval tools are needed."
+        )
+        instructions.append(_EXPERIENCE_PRECEDENCE_CAVEAT)
     elif loader_mode == "direct_experience":
         instructions.append(
             "A direct experimental experience will be injected as an Experience Reminder before "
             "the task. Treat it as prior-run guidance only when it matches the current situation; "
             "current policy, current tool results, and current user facts override it."
         )
-    else:
+    elif loader_mode != "none":
         instructions.append(
             "Experience constraints may be injected automatically as reminder messages before "
             "tool calls. Treat those reminders as prior-run guidance, but current policy, "
@@ -2140,12 +2164,17 @@ async def _run_agent(
     direct_experience_uri: str | None = None,
     timings: "_RolloutTiming | None" = None,
     case_lookup: dict[str, Any] | None = None,
+    auto_experience_trace: dict[str, Any] | None = None,
 ):
     stage_started_at = time.perf_counter()
     loader_mode = normalize_tau2_experience_loader_mode(loader_mode)
     system_prompt_profile = normalize_system_prompt_profile(system_prompt_profile)
     message_context = agent.context
     experience_loader_skill = None
+    if loader_mode in {"auto_experience", "none"}:
+        # Even a full-profile workspace reused from skill mode must not advertise
+        # or auto-load a stale experience_loader skill. Agents are per-rollout.
+        message_context.skills_enable = False
     if loader_mode in {"skill", "selector"}:
         if loader_mode == "skill":
             # Selector mode has no `search_experience` tool to pass a task_signature to.
@@ -2175,6 +2204,10 @@ async def _run_agent(
         timings.record("build_messages", stage_started_at)
     if system_prompt:
         messages.insert(1, {"role": "system", "content": system_prompt})
+    if loader_mode == "auto_experience":
+        reminder = await _load_auto_experience_reminder(user_prompt, trace=auto_experience_trace)
+        if reminder:
+            _insert_experience_reminder_message(messages, reminder)
     direct_experience_reminder = None
     if loader_mode == "direct_experience":
         direct_experience_reminder = _build_direct_experience_reminder(
@@ -2220,6 +2253,12 @@ async def _run_agent(
         bus=getattr(agent, "bus", None),
         session_key=session_key,
     )
+    # These modes must not mix in later write/constraint recall.
+    auto_loop_options = (
+        {"inject_write_experience": False, "inject_constraint_experience": False}
+        if loader_mode in {"auto_experience", "none"}
+        else {}
+    )
     result = await agent._run_agent_loop(
         messages=messages,
         session_key=session_key,
@@ -2228,6 +2267,7 @@ async def _run_agent(
         ov_tools_enable=False,
         stop_tool_names=["done"],
         on_plain_text=plain_text_router,
+        **auto_loop_options,
     )
     if timings is not None:
         timings.record("agent_loop", stage_started_at)
@@ -2251,6 +2291,63 @@ async def _run_agent(
         experience_loader_skill,
         runtime_messages,
     )
+
+
+async def _load_auto_experience_reminder(
+    query: str, *, trace: dict[str, Any] | None = None
+) -> str | None:
+    """Retrieve the first query's top two Experiences and inject only their visible bodies.
+
+    Search ranking and lifecycle visibility belong to OpenViking. There is no Case
+    lookup, model-generated query, or LLM relevance gate on this path. Fail on search
+    or unreadable-result errors instead of silently scoring a no-memory evaluation.
+    """
+    from vikingbot.openviking_mount.ov_server import VikingClient
+
+    audit = trace if trace is not None else {}
+    audit.update(query=query, top_k=2, retrieved_uris=[], injected_uris=[], status="pending")
+    if not query.strip():
+        audit["status"] = "empty_query"
+        return None
+    client = None
+    try:
+        client = await VikingClient.create()
+        target_uri = _current_experiences_uri(client)
+        audit["target_uri"] = target_uri
+        result = await client.search(query, target_uri=target_uri, limit=2)
+        uris: list[str] = []
+        for item in result.get("memories", [])[:2]:
+            uri = str(item.get("uri") or "").strip()
+            in_scope = uri.startswith(target_uri.rstrip("/") + "/") or (
+                target_uri.startswith("viking://~/")
+                and uri.startswith("viking://user/")
+                and "/memories/experiences/" in uri
+            )
+            if in_scope and uri not in uris:
+                uris.append(uri)
+        audit["retrieved_uris"] = uris
+        contents = await asyncio.gather(*(client.read_content(uri, level="read") for uri in uris))
+        bodies: list[str] = []
+        for uri, content in zip(uris, contents, strict=True):
+            if not content or not content.strip():
+                raise RuntimeError(f"Auto experience retrieval returned unreadable content: {uri}")
+            body = strip_memory_fields_trailer(content).strip()
+            if body:
+                bodies.append(body)
+                audit["injected_uris"].append(uri)
+        audit["status"] = "injected" if bodies else "no_experience"
+        if not bodies:
+            return None
+        # URI, score, and MEMORY_FIELDS remain outside the agent's experience text.
+        return "[Experience Reminder]\n## Relevant Agent Experience\n\n" + "\n\n---\n\n".join(
+            bodies
+        )
+    except Exception as exc:
+        audit.update(status="error", error_type=type(exc).__name__)
+        raise
+    finally:
+        if client is not None:
+            await client.close()
 
 
 def _build_direct_experience_reminder(
