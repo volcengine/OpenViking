@@ -123,7 +123,7 @@ class HTMLParser(BaseParser):
         """Convert HTML to Markdown using trafilatura."""
         html = self._preprocess_html(html)
         content = self._extract_markdown(html, base_url or "")
-        title = self._extract_title(html, base_url or "")
+        title = self._extract_title(html, base_url or "") if self.config.extract_metadata else ""
         content = self._clean_markdown(content)
         if not content:
             content = self._extract_noscript_notice(html)
