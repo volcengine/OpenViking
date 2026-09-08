@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -110,6 +111,38 @@ class FakeVikingDB:
     async def enqueue_embedding_msg(self, embedding_msg):
         self.embedding_messages.append(embedding_msg)
         return True
+
+
+@pytest.fixture(autouse=True)
+def _test_openviking_config(monkeypatch):
+    config = SimpleNamespace(
+        output_language_override="",
+        vlm=SimpleNamespace(get_vlm_instance=lambda: object()),
+        memory=SimpleNamespace(
+            custom_templates_dir="",
+            eager_prefetch=False,
+            experimental_memory_switch=False,
+            link_enabled=False,
+            prefetch_search_topn=5,
+        ),
+    )
+    monkeypatch.setattr(
+        "openviking.session.train.components.policy_optimizer.get_openviking_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.session_extract_context_provider.get_openviking_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.utils.language.get_openviking_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: config,
+    )
+    return config
 
 
 def _experience_set() -> ExperienceSet:
