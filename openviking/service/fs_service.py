@@ -396,6 +396,7 @@ class FSService:
         await self._sync_watch_after_rm(uri, account_id=ctx.account_id, context_type=context_type)
         queue_status = None
         refresh_action: Optional[FreshnessAction] = None
+        refresh_error: Optional[str] = None
         request_registered = False
         telemetry_id = get_current_telemetry().telemetry_id
         try:
@@ -403,13 +404,21 @@ class FSService:
                 if wait and telemetry_id:
                     get_request_wait_tracker().register_request(telemetry_id)
                     request_registered = True
-                refresh_action = await self._enqueue_delete_refresh(
-                    root_uri=refresh_parent_uri,
-                    deleted_uri=uri,
-                    context_type=context_type,
-                    ctx=ctx,
-                    force_refresh=wait,
-                )
+                try:
+                    refresh_action = await self._enqueue_delete_refresh(
+                        root_uri=refresh_parent_uri,
+                        deleted_uri=uri,
+                        context_type=context_type,
+                        ctx=ctx,
+                        force_refresh=wait,
+                    )
+                except Exception as exc:
+                    refresh_error = str(exc)
+                    logger.warning(
+                        "Delete committed but parent semantic refresh failed for %s: %s",
+                        uri,
+                        exc,
+                    )
             if self._resource_memory_link_service and context_type == "resource":
                 cleanup_result = await self._resource_memory_link_service.before_resource_delete(
                     ctx=ctx,
@@ -430,7 +439,12 @@ class FSService:
                     directory_uri=cleanup_overview_uri,
                     ctx=ctx,
                 )
-            if refresh_parent_uri and wait and refresh_action is not FreshnessAction.MARK_PENDING:
+            if (
+                refresh_parent_uri
+                and wait
+                and refresh_error is None
+                and refresh_action is not FreshnessAction.MARK_PENDING
+            ):
                 queue_status = await self._wait_for_refresh(timeout=timeout)
         finally:
             if request_registered:
@@ -446,6 +460,9 @@ class FSService:
             )
             if queue_status is not None:
                 result["queue_status"] = queue_status
+            if refresh_error is not None:
+                result["semantic_status"] = "failed"
+                result["semantic_error"] = refresh_error
         return result
 
     @staticmethod
