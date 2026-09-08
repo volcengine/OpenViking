@@ -12,7 +12,6 @@ agent-plugins/
 ├── mcp.json                             # one stdio MCP server: "openviking"
 ├── servers/
 │   ├── mcp-proxy.mjs                    # stdio -> streamable-HTTP proxy to the server's /mcp
-│   ├── config.mjs, debug-log.mjs        # credential / config resolution
 │   └── shared/                          # generated from examples/memory-plugin-shared/lib
 ├── skills/openviking-memory/SKILL.md    # teaches the model the recall + persist loop
 └── plugin.test.mjs                      # node --test conformance checks
@@ -36,10 +35,15 @@ OpenViking already speaks streamable HTTP at `/mcp`, but a `streamable-http` ent
 
 Highest to lowest priority — the same chain as the `ov` CLI and the other OpenViking plugins:
 
-1. Environment variables: `OPENVIKING_URL` (or `OPENVIKING_BASE_URL`), `OPENVIKING_API_KEY` (or `OPENVIKING_BEARER_TOKEN`), `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, `OPENVIKING_PEER_ID`
-2. `~/.openviking/ovcli.conf` (`url`, `api_key`, `account`, `user`) — override the path with `OPENVIKING_CLI_CONFIG_FILE`
-3. `~/.openviking/ov.conf`, `server` section (`url`, or `host` / `port`, and `root_api_key`) — override the path with `OPENVIKING_CONFIG_FILE`
-4. Defaults: `http://127.0.0.1:1933`, no auth (local mode)
+1. Environment variables: `OPENVIKING_URL` (or `OPENVIKING_BASE_URL`), `OPENVIKING_MCP_URL`, `OPENVIKING_API_KEY` (or `OPENVIKING_BEARER_TOKEN`), `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, `OPENVIKING_PEER_ID`
+2. `~/.openviking/ovcli.conf` (`url`, `api_key`, `account` / `account_id`, `user` / `user_id`, `actor_peer_id` / `peer_id`) — override the path with `OPENVIKING_CLI_CONFIG_FILE`
+3. `~/.openviking/ov.conf`, `agent_plugins` section (`apiKey`, `accountId`, `userId`, `peerId`) — override the path with `OPENVIKING_CONFIG_FILE`
+4. `~/.openviking/ov.conf`, `server` section (`url`, or `host` / `port`, and `root_api_key`)
+5. Defaults: `http://127.0.0.1:1933`, no auth (local mode)
+
+`OPENVIKING_MCP_URL` replaces the derived `<url>/mcp` endpoint, not the base URL.
+
+`OPENVIKING_CREDENTIAL_SOURCE` (or `OPENVIKING_CREDENTIALS_SOURCE`) pins the chain to one end: `env` for the environment, `cli` (also `ovcli` / `file` / `config`) for ovcli.conf. The default `auto` pins it to ovcli.conf when that file carries credentials and none of the variables above is set, and runs the whole chain otherwise. While the chain is pinned to ovcli.conf, the environment, `OPENVIKING_MCP_URL` and the `agent_plugins` section are all skipped; `server.root_api_key` still answers when ovcli.conf carries no key of its own, so an install that names only a `url` there keeps the key it has always used.
 
 ```json
 // ~/.openviking/ovcli.conf

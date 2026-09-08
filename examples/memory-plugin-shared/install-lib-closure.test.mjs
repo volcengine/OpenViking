@@ -1,59 +1,51 @@
 /**
  * What the installer ships must equal what the shipped code imports.
  *
- * cursor, trae and trae-cli have no vendored copy of the shared runtime: the
- * installer assembles one by copying a hand-written list into
- * `$OV_HOME/agent-integrations/memory-plugin-shared/lib`. A module that list
- * forgets is an ERR_MODULE_NOT_FOUND on the first hook of a fresh install, and
- * one it carries that nothing imports is dead weight nobody notices. Both sides
- * are derived here so neither can drift.
+ * cursor, trae and zcode have no vendored copy of the shared runtime: the
+ * installer assembles one in `$OV_HOME/agent-integrations/memory-plugin-shared/lib`
+ * by copying the modules `lib/MANIFEST` names. A module the manifest forgets is
+ * an ERR_MODULE_NOT_FOUND on the first hook of a fresh install, and one it
+ * carries that nothing imports is dead weight nobody notices. The manifest is
+ * generated from those sources by the same code that decides what the vendoring
+ * targets ship, so it can only drift by not being regenerated — which is what
+ * this asserts.
  */
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const LIB = join(HERE, "lib");
+import { MANIFEST_PATH, ROOT, assembledClosure, resolveTargets } from "./sync.mjs";
 
-/** The entrypoints cursor, trae and trae-cli import from the assembled lib. */
-const ENTRYPOINTS = ["agent-hook-runtime.mjs", "agent-uri-guard.mjs", "mcp-proxy-core.mjs"];
+test("lib/MANIFEST holds the closure of what cursor, trae and zcode import", async () => {
+  const manifest = readFileSync(MANIFEST_PATH, "utf8");
+  assert.ok(manifest.endsWith("\n"), "the installer reads the manifest a line at a time");
+  assert.deepEqual(
+    manifest.split("\n").filter(Boolean),
+    await assembledClosure(),
+    "lib/MANIFEST is stale; run node examples/memory-plugin-shared/sync.mjs",
+  );
+});
 
-const RELATIVE_IMPORT_RE = /(?:^|[\s;(])(?:import|export)\s[^;]*?from\s*["'](\.\/[^"']+)["']/g;
-const DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*["'](\.\/[^"']+)["']\s*\)/g;
+// `lib/install/` is the installer's own code — the JSONC editor and the
+// hooks/mcp merge — and no hook imports it. One `./install/...` import from a
+// module that hooks do import would put it in the closure, and from there into
+// the manifest and into every vendored copy: installer-time JavaScript shipped
+// to every harness, out of reach of a reviewer who reads the diff as runtime.
+test("the installer's own modules stay out of what the plugins ship", async () => {
+  const installerOnly = readdirSync(join(dirname(MANIFEST_PATH), "install"))
+    .filter((file) => file.endsWith(".mjs"));
+  assert.ok(installerOnly.length > 0, "expected installer-only modules under lib/install");
 
-function installedFiles() {
-  const script = readFileSync(join(HERE, "install.sh"), "utf8");
-  const block = /shared_dest\.tmp[\s\S]*?\n\s*for file in\s*((?:[^\n]*\\\n)*[^\n]*?);\s*do/.exec(script);
-  assert.ok(block, "install.sh no longer has the `for file in ...; do` list of shared modules");
-  return new Set(block[1].replace(/\\\n/g, " ").trim().split(/\s+/).filter(Boolean));
-}
-
-function importedFiles() {
-  const seen = new Set();
-  const pending = [...ENTRYPOINTS];
-  while (pending.length) {
-    const file = pending.pop();
-    if (seen.has(file)) continue;
-    seen.add(file);
-    const source = readFileSync(join(LIB, file), "utf8");
-    for (const re of [RELATIVE_IMPORT_RE, DYNAMIC_IMPORT_RE]) {
-      for (const match of source.matchAll(re)) pending.push(match[1].slice(2));
-    }
-  }
-  return seen;
-}
-
-test("the installer ships exactly the closure of what cursor and trae import", () => {
-  const installed = installedFiles();
-  const imported = importedFiles();
-
-  for (const file of [...installed].sort()) {
-    assert.ok(imported.has(file), `install.sh ships ${file}, which no assembled entrypoint imports`);
-  }
-  for (const file of [...imported].sort()) {
-    assert.ok(installed.has(file), `${file} is imported but install.sh never copies it`);
-  }
+  const shipped = [
+    ...(await assembledClosure()).map((file) => ({ file, where: "lib/MANIFEST" })),
+    ...(await resolveTargets()).flatMap((target) =>
+      target.files.map((file) => ({ file, where: relative(ROOT, target.dir) }))),
+  ];
+  assert.deepEqual(
+    shipped.filter((entry) => entry.file.startsWith("install/")),
+    [],
+    "a shipped module imports lib/install; the installer-only code must not be part of the runtime",
+  );
 });

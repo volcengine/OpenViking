@@ -30,6 +30,8 @@ share/python-wheels/
 *.egg
 .ttadk
 MANIFEST
+# The shared memory-plugin installer's module list — not a Python sdist manifest.
+!examples/memory-plugin-shared/lib/MANIFEST
 openviking.egg-info/
 data/
 
@@ -238,3 +240,12 @@ node_modules/
 
 # Local scratch / working notes
 .scratch/
+
+# Shared runtime copies built at pack time by examples/memory-plugin-shared/sync.mjs.
+# The plugins that publish as an npm package or as a tarball generate these on
+# the way out; only the plugins a host installs by pointing at a directory in
+# this repository keep their copies in git.
+examples/opencode-plugin/lib/shared/
+examples/dsh-memory-plugin/shared/
+examples/pi-coding-agent-extension/shared/
+examples/openclaw-plugin/shared/

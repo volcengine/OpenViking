@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "openviking-memory",
+  "version": "0.3.0",
+  "clients": [
+    "cursor"
+  ],
+  "capabilities": [
+    "hooks",
+    "mcp",
+    "rules",
+    "skills"
+  ]
+}

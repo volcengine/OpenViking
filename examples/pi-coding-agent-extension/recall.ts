@@ -1,7 +1,7 @@
 import type { OVClient } from "./client.js";
 import type { OVConfig } from "./config.js";
-import { buildRecallBlock } from "./shared/recall-core.mjs";
-import { RecallLedger, ledgerKey } from "./shared/recall-ledger.mjs";
+import { buildRecallBlock, isRecallEnabled } from "./shared/recall-core.mjs";
+import { RecallLedger, ledgerKey } from "./lib/recall-ledger.mjs";
 
 export interface RecallCache {
   block: string | null;
@@ -44,6 +44,10 @@ export class RecallManager {
 
     const userQuery = this.pendingPrompt;
     this.pendingPrompt = "";
+    if (!isRecallEnabled(this.config as any)) {
+      this.cache = { block: null, promptText: userQuery };
+      return null;
+    }
     if (userQuery.trim().length < this.config.minQueryLength) {
       this.cache = { block: null, promptText: userQuery };
       return null;
@@ -59,6 +63,9 @@ export class RecallManager {
       userQuery,
       {
         actorPeerId: this.config.peerId,
+        // Under `actor` scope the effective peer is the only one asked, so a
+        // workspace whose id changed would lose everything written before it.
+        legacyPeerId: this.config.legacyPeerId,
         // Passing the OV session id is what turns on server-side query
         // expansion and the cross-turn dedup ledger.
         sessionId: this.sessionId() ?? "",

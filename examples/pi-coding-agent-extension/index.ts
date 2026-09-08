@@ -10,20 +10,22 @@
  * (most mature, production-hardened), Hermes (anti-pattern: stale prefetch).
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { isCaptureEnabled } from "./shared/capture-utils.mjs";
 import { createLogger } from "./shared/debug-log.mjs";
-import { loadConfigFromModuleUrl, type OVConfig } from "./config.js";
+import { loadConfig, type OVConfig } from "./config.js";
 import { OVClient } from "./client.js";
 import { RecallManager } from "./recall.js";
-import { RecallLedger } from "./shared/recall-ledger.mjs";
+import { RecallLedger } from "./lib/recall-ledger.mjs";
 import { SyncManager } from "./sync.js";
 import { buildProfileBlock } from "./shared/profile-inject.mjs";
+import { isBypassed } from "./shared/session-model.mjs";
 import { guardVikingUriToolCall } from "./lib/uri-guard-adapter.mjs";
 import { registerTools } from "./tools.js";
 import { createTakeoverManager } from "./takeover.js";
 
 export default async function (pi: ExtensionAPI) {
   // --- Load config ---
-  const config = loadConfigFromModuleUrl(import.meta.url);
+  const config = loadConfig();
   if (!config.enabled) return;
 
   // Env overrides
@@ -68,13 +70,10 @@ export default async function (pi: ExtensionAPI) {
 
     startPromise = (async () => {
       // Bypass check
-      const cwd = process.cwd();
-      for (const pattern of config.bypassPatterns) {
-        if (matchBypass(cwd, pattern)) {
-          bypassed = true;
-          started = true;
-          return;
-        }
+      if (isBypassed(config, { cwd: process.cwd() })) {
+        bypassed = true;
+        started = true;
+        return;
       }
 
       // Health check
@@ -228,7 +227,7 @@ export default async function (pi: ExtensionAPI) {
 
   // --- turn_end ---
   pi.on("turn_end", async (event, ctx) => {
-    if (!connected || bypassed || !config.syncTurns) return;
+    if (!connected || bypassed || !isCaptureEnabled(config)) return;
 
     const branch = ctx.sessionManager.getBranch();
     const result = await sync.syncBranch(branch);
@@ -325,17 +324,6 @@ export default async function (pi: ExtensionAPI) {
 // ================================================================
 // Helper Functions
 // ================================================================
-
-/** Simple bypass pattern matching (prefix and glob). */
-function matchBypass(cwd: string, pattern: string): boolean {
-  if (pattern.startsWith("*")) {
-    return cwd.endsWith(pattern.slice(1));
-  }
-  if (pattern.endsWith("*")) {
-    return cwd.startsWith(pattern.slice(0, -1));
-  }
-  return cwd === pattern || cwd.startsWith(pattern + "/");
-}
 
 /** Build the <openviking-context> profile block. */
 async function buildSessionProfileBlock(

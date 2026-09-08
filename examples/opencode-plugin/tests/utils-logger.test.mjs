@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { fetchJSON, initLogger, log } from "../lib/utils.mjs"
+import { fetchJSON, initLogger, log, makeRequest } from "../lib/utils.mjs"
 
 test("initLogger creates the OpenViking log file path and log writes JSONL", async () => {
   const dir = await mkdtemp(join(tmpdir(), "ov-oc-log-"))
@@ -53,4 +53,16 @@ test("fetchJSON preserves commit trace_id on success and error", async (t) => {
   assert.equal(failure.ok, false)
   assert.equal(failure.traceId, "trace-opencode-error")
   assert.equal(failure.error.trace_id, "trace-opencode-error")
+})
+
+test("makeRequest reads the timeout off the envelope, not off the error text", async (t) => {
+  t.mock.method(globalThis, "fetch", (_url, init) => new Promise((_resolve, reject) => {
+    // What the runtime throws on abort says nothing about a timeout.
+    init.signal.addEventListener("abort", () => reject(new Error("terminated")))
+  }))
+
+  await assert.rejects(
+    makeRequest({ endpoint: "http://127.0.0.1:1933", timeoutMs: 1000 }, { endpoint: "/health" }),
+    /^Error: Request timeout after 1000ms$/,
+  )
 })

@@ -33,7 +33,7 @@ OpenViking 可以作为多种 Agent 运行时的长期记忆与上下文后端�
 
 查询扩展和召回结果压缩是两个独立的可选模型调用。需要优先保证响应速度时，可以在 Agent 插件端同时关闭它们；语义检索、预算控制、档位降级和跨轮去重仍会正常工作。
 
-下面这组环境变量同时适用于 Claude Code 和 Codex。查询扩展在 OpenCode 和 pi 上同样可以关闭；压缩只有 Claude Code 和 Codex 支持。
+下面这组环境变量同时适用于 Claude Code 和 Codex。查询扩展在所有经共享加载器解析配置的记忆插件上都可以关闭；压缩只有 Claude Code 和 Codex 支持。
 
 ```bash
 export OPENVIKING_RECALL_QUERY_EXPANSION=off
@@ -62,6 +62,6 @@ export OPENVIKING_RECALL_COMPRESS=off
 
 环境变量优先于 `ovcli.conf`。修改后重启对应的 Agent，让 hook 进程重新加载配置。上述设置属于插件客户端，不需要修改服务端的 `ov.conf`。
 
-`plugin` 段目前由 Claude Code 和 Codex 插件读取，因此以其他 harness 命名的 `plugin` 条目当前不生效。OpenCode 和 pi 支持用环境变量 `OPENVIKING_RECALL_QUERY_EXPANSION`（或各自配置文件里的 `recallQueryExpansion`）关闭查询扩展，但不支持 `OPENVIKING_RECALL_COMPRESS`——这两个 harness 不会请求服务端 digest。
+`plugin` 段由每个记忆插件读取——claude-code、codex、cursor、trae、trae-cn、zcode、opencode、dsh 和 pi；`plugin.<harness>` 对象只覆盖其中某一个 harness 的共享键，两种写法都认（`claude_code` 或 `claude-code`、`trae_cn` 或 `trae-cn`）。压缩是例外：其余 harness 认 `recallQueryExpansion`，但忽略 `recallCompress` 及其配套项——它们都不会请求服务端 digest。
 
 context 请求的等待时间比普通请求更长，因为客户端提前中断会丢掉整个响应，而不只是超时的那一段。服务端流水线是串行的，每个可选阶段各有保险丝：先是查询扩展（`retrieval.recall_intent_timeout_s`，5 秒），然后是检索、正文读取和预算规划，最后才是 digest 重写（`retrieval.recall_rewrite_timeout_s`，30 秒）。因此这个上限按请求实际启用的阶段决定——带 session、会走查询扩展时取 15 秒，同时还要 digest 时取 45 秒，两者都不涉及时沿用插件自身的普通超时。可以用 `OPENVIKING_RECALL_CONTEXT_TIMEOUT_MS`（或 `plugin.recallContextTimeoutMs`）指定这个上限，取值应高于该请求会用到的保险丝、低于 Agent 自身的 hook 超时。

@@ -33,7 +33,7 @@ Every integration on this page connects to a running OpenViking server. If you d
 
 Query expansion and recall-result compression are two independent, optional model calls. Disable both in the Agent plugin when response latency matters most; semantic retrieval, budgeting, tier degradation, and cross-turn dedup continue to work.
 
-The same environment variables apply to both the Claude Code and Codex memory plugins. Query expansion is also switchable in OpenCode and pi; compression is Claude Code and Codex only.
+The same environment variables apply to both the Claude Code and Codex memory plugins. Query expansion is switchable in every memory plugin that resolves its settings through the shared loader; compression is Claude Code and Codex only.
 
 ```bash
 export OPENVIKING_RECALL_QUERY_EXPANSION=off
@@ -62,6 +62,6 @@ The same settings can live in `~/.openviking/ovcli.conf`:
 
 Environment variables take precedence over `ovcli.conf`. Restart the Agent after changing these settings so its hook processes reload the configuration. These are plugin-client settings; the server's `ov.conf` does not need to change.
 
-The `plugin` section is read by the Claude Code and Codex plugins, so a `plugin` entry named after another harness is currently inert. OpenCode and pi read `OPENVIKING_RECALL_QUERY_EXPANSION` from the environment (or `recallQueryExpansion` in their own config file) but not `OPENVIKING_RECALL_COMPRESS`, since neither requests a server digest.
+The `plugin` section is read by every memory plugin — claude-code, codex, cursor, trae, trae-cn, zcode, opencode, dsh and pi — and a `plugin.<harness>` object overrides the shared keys for one of them, under either spelling (`claude_code` or `claude-code`, `trae_cn` or `trae-cn`). Compression is the exception: the other harnesses honour `recallQueryExpansion` but ignore `recallCompress` and its companions, since none of them requests a server digest.
 
 A context request waits longer than an ordinary request, because aborting it client-side discards the whole response rather than just the stage that ran long. The server pipeline is serial and each optional stage has its own fuse: query expansion (`retrieval.recall_intent_timeout_s`, 5s) runs first, then retrieval, body reads and budgeting, and only then the digest rewrite (`retrieval.recall_rewrite_timeout_s`, 30s). The deadline therefore follows what the request actually asks for — 15s once it carries a session and can spend the expansion fuse, 45s when it also asks for a digest, and the plugin's ordinary timeout when it asks for neither. Set `OPENVIKING_RECALL_CONTEXT_TIMEOUT_MS` (or `plugin.recallContextTimeoutMs`) to pin it — keep it above the fuses the request will spend and below the Agent's own hook timeout.

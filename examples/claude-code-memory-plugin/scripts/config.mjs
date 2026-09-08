@@ -1,75 +1,38 @@
 /**
- * Shared configuration loader for the Claude Code OpenViking memory plugin.
+ * Configuration for the Claude Code OpenViking memory plugin.
  *
- * Resolution priority (highest → lowest):
- *   1. Environment variables (OPENVIKING_*)
- *   2. ovcli.conf (CLI client config: url, api_key, account, user) — connection only
- *   3. ov.conf fields (server section + claude_code section) — legacy; new deployments should
- *      prefer env vars. Tuning fields under claude_code.* are still honored for backward compat.
- *   4. Built-in defaults
+ * Every knob is declared once in `shared/config-schema.mjs` and the whole
+ * configuration is assembled by `buildPluginConfig()`, which reads the layers
+ * in this order:
+ *
+ *   env (OPENVIKING_*) → workspace `.openviking/config*.json` and the machine
+ *   registry → ovcli.conf `plugin.claude_code` → ovcli.conf `plugin` →
+ *   ov.conf's `claude_code` section (legacy) → the schema's defaults
+ *
+ * What stays here is what only this harness knows: whether the plugin is
+ * enabled at all, the file `configPath` has always named, and the tri-state
+ * digest mode.
  *
  * Enable/disable:
  *   - OPENVIKING_MEMORY_ENABLED env var (0/false/no = off, 1/true/yes = on)
  *   - claude_code.enabled field in ov.conf (false = off)
  *   - Fallback: enabled when ov.conf or ovcli.conf exists, disabled otherwise
  *
- * Env vars covered (full list):
- *   Connection / identity:
- *     OPENVIKING_URL / OPENVIKING_BASE_URL, OPENVIKING_API_KEY / OPENVIKING_BEARER_TOKEN,
- *     OPENVIKING_ACCOUNT, OPENVIKING_USER, OPENVIKING_PEER_ID
- *   Recall tuning:
- *     OPENVIKING_AUTO_RECALL, OPENVIKING_RECALL_LIMIT, OPENVIKING_RECALL_TOKEN_BUDGET,
- *     OPENVIKING_RECALL_MAX_CONTENT_CHARS, OPENVIKING_RECALL_PREFER_ABSTRACT,
- *     OPENVIKING_SCORE_THRESHOLD, OPENVIKING_MIN_QUERY_LENGTH, OPENVIKING_LOG_RANKING_DETAILS,
- *     OPENVIKING_RECALL_PEER_SCOPE, OPENVIKING_RECALL_COMPRESS
- *   Capture tuning:
- *     OPENVIKING_AUTO_CAPTURE, OPENVIKING_CAPTURE_MODE, OPENVIKING_CAPTURE_MAX_LENGTH,
- *     OPENVIKING_CAPTURE_ASSISTANT_TURNS, OPENVIKING_COMMIT_TOKEN_THRESHOLD,
- *     OPENVIKING_RESUME_CONTEXT_BUDGET
- *   Lifecycle / behavior:
- *     OPENVIKING_TIMEOUT_MS, OPENVIKING_CAPTURE_TIMEOUT_MS, OPENVIKING_WRITE_PATH_ASYNC,
- *     OPENVIKING_BYPASS_SESSION, OPENVIKING_BYPASS_SESSION_PATTERNS (CSV),
- *     OPENVIKING_WORKSPACE_PEER
- *   Profile injection (session_start):
- *     OPENVIKING_NO_AUTO_INJECT, OPENVIKING_PROFILE_TOKEN_BUDGET
- *   Skill experience injection (PostToolUse Read):
- *     OPENVIKING_SKILL_EXPERIENCE, OPENVIKING_SKILL_EXPERIENCE_LIMIT
- *   Misc:
- *     OPENVIKING_MEMORY_ENABLED, OPENVIKING_DEBUG, OPENVIKING_DEBUG_LOG,
- *     OPENVIKING_CONFIG_FILE, OPENVIKING_CLI_CONFIG_FILE
+ * Connection and credentials are not knobs and never come from a workspace
+ * file: OPENVIKING_URL / OPENVIKING_BASE_URL, OPENVIKING_API_KEY /
+ * OPENVIKING_BEARER_TOKEN, OPENVIKING_ACCOUNT, OPENVIKING_USER, then
+ * ovcli.conf, then ov.conf's server section.
  */
 
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 
-import { buildUserAgent, readManifestVersion } from "./shared/credentials.mjs";
-import { HARNESS_KEYS, loadPluginSettings, normalizeRewriteMode } from "./shared/plugin-config.mjs";
+import { buildPluginConfig, normalizeRewriteMode } from "./shared/plugin-config.mjs";
 
 const DEFAULT_OV_CONF_PATH = join(homedir(), ".openviking", "ov.conf");
 const DEFAULT_OVCLI_CONF_PATH = join(homedir(), ".openviking", "ovcli.conf");
-const USER_AGENT = buildUserAgent(
-  "claude-code",
-  readManifestVersion(new URL("../.claude-plugin/plugin.json", import.meta.url)),
-);
-
-function num(val, fallback) {
-  if (typeof val === "number" && Number.isFinite(val)) return val;
-  if (typeof val === "string" && val.trim()) {
-    const n = Number(val);
-    if (Number.isFinite(n)) return n;
-  }
-  return fallback;
-}
-
-function str(val, fallback) {
-  if (typeof val === "string" && val.trim()) return val.trim();
-  return fallback;
-}
-
-function hasOwn(obj, key) {
-  return Object.prototype.hasOwnProperty.call(obj || {}, key);
-}
+const MANIFEST_URL = new URL("../.claude-plugin/plugin.json", import.meta.url);
 
 function envBool(name) {
   const v = process.env[name];
@@ -134,8 +97,6 @@ export function isPluginEnabled() {
 /**
  * Load the full plugin configuration.
  *
- * Resolution: env vars → ovcli.conf → ov.conf → defaults.
- *
  * `cwd` selects the workspace layer (`.openviking/config.json` and the
  * registry entry for that directory). It defaults to this process's directory,
  * which is all a hook knows at module load; a hook whose payload names the
@@ -145,278 +106,31 @@ export function isPluginEnabled() {
  * load stay valid.
  */
 export function loadConfig(cwd = process.cwd()) {
-  const workspaceCwd = str(cwd, "") || process.cwd();
-  const ovConf = tryLoadJsonFile("OPENVIKING_CONFIG_FILE", DEFAULT_OV_CONF_PATH);
-  const cliConf = tryLoadJsonFile("OPENVIKING_CLI_CONFIG_FILE", DEFAULT_OVCLI_CONF_PATH);
-
-  const ovFile = ovConf?.file || {};
-  const cliFile = cliConf?.file || {};
-  const configPath = ovConf?.configPath || cliConf?.configPath || null;
-
-  const server = ovFile.server || {};
-  // ovcli.conf plugin.<harness> overrides plugin.* which overrides ov.conf's
-  // claude_code section, so client-side tuning no longer needs a server config.
-  const pluginSettings = loadPluginSettings(HARNESS_KEYS.claudeCode, process.env, { cwd: workspaceCwd });
-  const cc = { ...(ovFile.claude_code || {}), ...pluginSettings };
-
-  // baseUrl: env → ovcli.url → ov.server.url → http://{host}:{port}
-  const envUrl = str(process.env.OPENVIKING_URL, null) || str(process.env.OPENVIKING_BASE_URL, null);
-  let baseUrl;
-  if (envUrl) {
-    baseUrl = envUrl.replace(/\/+$/, "");
-  } else if (cliFile.url) {
-    baseUrl = str(cliFile.url, "").replace(/\/+$/, "");
-  } else if (server.url) {
-    baseUrl = str(server.url, "").replace(/\/+$/, "");
-  } else {
-    const host = str(server.host, "127.0.0.1").replace("0.0.0.0", "127.0.0.1");
-    const port = Math.floor(num(server.port, 1933));
-    baseUrl = `http://${host}:${port}`;
-  }
-
-  // apiKey: env → ovcli.api_key → cc.apiKey → server.root_api_key
-  // Accepts OPENVIKING_BEARER_TOKEN or OPENVIKING_API_KEY (sent as Bearer either way).
-  const envApiKey = str(process.env.OPENVIKING_BEARER_TOKEN, null)
-    || str(process.env.OPENVIKING_API_KEY, null);
-  const apiKey = envApiKey
-    || str(cliFile.api_key, null)
-    || str(cc.apiKey, null)
-    || str(server.root_api_key, "");
-
-  // Which source actually supplied the api_key. `configPath` only reports the
-  // file that parsed, so debug logs and 401 hints pointed at the wrong file
-  // whenever both configs existed.
-  const ccApiKeyFromCli = hasOwn(pluginSettings, "apiKey");
-  let credentialSource = "none";
-  let credentialPath = null;
-  if (envApiKey) {
-    credentialSource = "env";
-  } else if (str(cliFile.api_key, null)) {
-    credentialSource = "ovcli";
-    credentialPath = cliConf?.configPath || null;
-  } else if (str(cc.apiKey, null)) {
-    credentialSource = ccApiKeyFromCli ? "ovcli" : "ov";
-    credentialPath = (ccApiKeyFromCli ? cliConf?.configPath : ovConf?.configPath) || null;
-  } else if (str(server.root_api_key, null)) {
-    credentialSource = "ov";
-    credentialPath = ovConf?.configPath || null;
-  }
-
-  // accountId: env → ovcli.account → cc.accountId → ""
-  const accountId = str(process.env.OPENVIKING_ACCOUNT, null)
-    || str(cliFile.account, null)
-    || str(cc.accountId, "");
-
-  // userId: env → ovcli.user → cc.userId → ""
-  const userId = str(process.env.OPENVIKING_USER, null)
-    || str(cliFile.user, null)
-    || str(cc.userId, "");
-
-  const peerId = str(process.env.OPENVIKING_PEER_ID, null)
-    || str(cc.peerId, null)
-    || str(cc.peer_id, "");
-  const workspacePeer = envBool("OPENVIKING_WORKSPACE_PEER") ?? (cc.workspacePeer !== false);
-  const recallPeerScopeRaw = str(
-    process.env.OPENVIKING_RECALL_PEER_SCOPE,
-    str(cc.recallPeerScope, "all"),
-  );
-  const recallPeerScope = recallPeerScopeRaw === "actor" ? "actor" : "all";
-
-  // Each tuning field follows env > ovcli.conf is N/A (CLI doesn't carry tuning) >
-  // ov.conf cc.* > built-in default. Env var names are flat OPENVIKING_* (no CC
-  // namespace) to match the existing connection-field convention; they are only
-  // read by this plugin's hooks.
-
-  const debug = envBool("OPENVIKING_DEBUG") ?? (cc.debug === true);
-  const defaultLogPath = join(homedir(), ".openviking", "logs", "cc-hooks.log");
-  const debugLogPath = str(process.env.OPENVIKING_DEBUG_LOG, defaultLogPath);
-
-  const timeoutMs = Math.max(1000, Math.floor(num(
-    process.env.OPENVIKING_TIMEOUT_MS,
-    num(cc.timeoutMs, 15000),
-  )));
-  const captureTimeoutMs = Math.max(1000, Math.floor(num(
-    process.env.OPENVIKING_CAPTURE_TIMEOUT_MS,
-    num(cc.captureTimeoutMs, Math.max(timeoutMs * 2, 30000)),
-  )));
-
-  // captureMode whitelist: env or cc, only "keyword" flips it; anything else → "semantic"
-  const captureModeRaw = str(process.env.OPENVIKING_CAPTURE_MODE, str(cc.captureMode, "semantic"));
-  const captureMode = captureModeRaw === "keyword" ? "keyword" : "semantic";
-
-  // bypassSessionPatterns: env CSV overrides ov.conf array entirely
-  const envPatterns = str(process.env.OPENVIKING_BYPASS_SESSION_PATTERNS, null);
-  const bypassSessionPatterns = envPatterns
-    ? envPatterns.split(",").map((s) => s.trim()).filter(Boolean)
-    : (Array.isArray(cc.bypassSessionPatterns)
-        ? cc.bypassSessionPatterns.filter((p) => typeof p === "string" && p.trim())
-        : []);
+  const config = buildPluginConfig("claude-code", {
+    cwd,
+    manifestUrl: MANIFEST_URL,
+    logFile: "cc-hooks.log",
+    rootKeyFallback: true,
+  });
 
   return {
-    configPath,
-    credentialSource,
-    credentialPath,
-    baseUrl,
-    apiKey,
-    accountId,
-    userId,
-    peerId,
-    workspacePeer,
-    peerSource: str(process.env.OPENVIKING_PEER_SOURCE, null) ?? cc.peerSource,
-    harness: "claude-code",
-    timeoutMs,
-    userAgent: USER_AGENT,
+    ...config,
+    // `configPath` reports whichever file parsed, ov.conf first, and predates
+    // the pair of paths beside it.
+    configPath: config.ovPath || config.cliPath || null,
+    credentialPath: config.credentialPath || null,
 
-    // Recall
-    autoRecall: envBool("OPENVIKING_AUTO_RECALL") ?? (cc.autoRecall !== false),
-    recallLimit: Math.max(1, Math.floor(num(
-      process.env.OPENVIKING_RECALL_LIMIT,
-      num(cc.recallLimit, 10),
-    ))),
-    recallLimitConfigured: Boolean(process.env.OPENVIKING_RECALL_LIMIT) ||
-      hasOwn(cc, "recallLimit"),
-    scoreThreshold: Math.min(1, Math.max(0, num(
-      process.env.OPENVIKING_SCORE_THRESHOLD,
-      num(cc.scoreThreshold, 0.35),
-    ))),
-    minQueryLength: Math.max(1, Math.floor(num(
-      process.env.OPENVIKING_MIN_QUERY_LENGTH,
-      num(cc.minQueryLength, 3),
-    ))),
-    logRankingDetails: envBool("OPENVIKING_LOG_RANKING_DETAILS") ?? (cc.logRankingDetails === true),
-    // Ported from openclaw DEFAULT_RECALL_MAX_CONTENT_CHARS / DEFAULT_RECALL_TOKEN_BUDGET /
-    // DEFAULT_RECALL_PREFER_ABSTRACT (openclaw-plugin/config.ts:44-47).
-    recallMaxContentChars: Math.max(50, Math.floor(num(
-      process.env.OPENVIKING_RECALL_MAX_CONTENT_CHARS,
-      num(cc.recallMaxContentChars, 500),
-    ))),
-    recallTokenBudget: Math.max(200, Math.floor(num(
-      process.env.OPENVIKING_RECALL_TOKEN_BUDGET,
-      num(cc.recallTokenBudget, 2000),
-    ))),
-    recallPreferAbstract: envBool("OPENVIKING_RECALL_PREFER_ABSTRACT") ?? (cc.recallPreferAbstract !== false),
-    recallPeerScope,
-
-    // Server-side context assembly (/search mode="context").
-    recallMaxTokens: Math.max(64, Math.floor(num(
-      process.env.OPENVIKING_RECALL_MAX_TOKENS,
-      num(cc.recallMaxTokens, 1600),
-    ))),
-    recallMaxTokensConfigured: Boolean(process.env.OPENVIKING_RECALL_MAX_TOKENS) ||
-      hasOwn(cc, "recallMaxTokens"),
-    recallDedupTurns: Math.max(0, Math.floor(num(
-      process.env.OPENVIKING_RECALL_DEDUP_TURNS,
-      num(cc.recallDedupTurns, 5),
-    ))),
-    recallQueryExpansion: str(
-      process.env.OPENVIKING_RECALL_QUERY_EXPANSION,
-      str(cc.recallQueryExpansion, "auto"),
-    ) === "off" ? "off" : "auto",
-    recallQueryExpansionConfigured: Boolean(process.env.OPENVIKING_RECALL_QUERY_EXPANSION) ||
-      hasOwn(cc, "recallQueryExpansion"),
     // Digest compression defaults to auto: prefer the local host CLI and fall
     // back to the server when it is unavailable. A failed digest still falls
-    // back to the uncompressed context block.
-    // OPENVIKING_RECALL_REWRITE / recallRewrite are legacy aliases. Keep the
+    // back to the uncompressed context block. `recallRewrite` keeps the
     // internal field name because the shared core maps this mode to the
-    // server's `rewrite` request field.
+    // server's `rewrite` request field; OPENVIKING_RECALL_REWRITE is the older
+    // env spelling and still works.
     recallRewrite: normalizeRewriteMode(
       process.env.OPENVIKING_RECALL_COMPRESS
         ?? process.env.OPENVIKING_RECALL_REWRITE
-        ?? cc.recallCompress
-        ?? cc.recallRewrite,
+        ?? config.recallCompress,
       "auto",
     ),
-    // 0 keeps the built-in default, which outlasts the server's rewrite fuse.
-    recallContextTimeoutMs: Math.max(0, Math.floor(num(
-      process.env.OPENVIKING_RECALL_CONTEXT_TIMEOUT_MS,
-      num(cc.recallContextTimeoutMs, 0),
-    ))),
-    recallCompressMinInputChars: Math.max(0, Math.floor(num(
-      process.env.OPENVIKING_RECALL_COMPRESS_MIN_INPUT_CHARS,
-      num(cc.recallCompressMinInputChars, 1500),
-    ))),
-    recallCompressMaxInputChars: Math.max(1000, Math.floor(num(
-      process.env.OPENVIKING_RECALL_COMPRESS_MAX_INPUT_CHARS,
-      num(cc.recallCompressMaxInputChars, 18000),
-    ))),
-    recallCompressMaxBullets: Math.max(1, Math.floor(num(
-      process.env.OPENVIKING_RECALL_COMPRESS_MAX_BULLETS,
-      num(cc.recallCompressMaxBullets, 6),
-    ))),
-    recallCompressMaxBulletsConfigured:
-      Boolean(process.env.OPENVIKING_RECALL_COMPRESS_MAX_BULLETS) ||
-      hasOwn(cc, "recallCompressMaxBullets"),
-
-    // Capture
-    autoCapture: envBool("OPENVIKING_AUTO_CAPTURE") ?? (cc.autoCapture !== false),
-    captureMode,
-    captureMaxLength: Math.max(200, Math.floor(num(
-      process.env.OPENVIKING_CAPTURE_MAX_LENGTH,
-      num(cc.captureMaxLength, 24000),
-    ))),
-    // Tool output is reported verbatim; the server owns truncation via
-    // tool_output_externalization (threshold_chars, default 20000). This cap only
-    // guards against pathological payloads.
-    captureToolMaxChars: Math.max(200, Math.floor(num(
-      process.env.OPENVIKING_CAPTURE_TOOL_MAX_CHARS,
-      num(cc.captureToolMaxChars, 1000000),
-    ))),
-    captureTimeoutMs,
-    // Default true: a "memory plugin" without assistant-side capture only sees half the
-    // conversation, which makes extraction noticeably worse. Subagent capture has always
-    // pushed both sides (subagent-stop.mjs); this aligns the main-session path with that
-    // behavior. Operators who want the old user-only behavior can still set
-    // OPENVIKING_CAPTURE_ASSISTANT_TURNS=0 or claude_code.captureAssistantTurns=false.
-    captureAssistantTurns: envBool("OPENVIKING_CAPTURE_ASSISTANT_TURNS") ?? (cc.captureAssistantTurns !== false),
-    // P0-2: client-driven commit threshold (ported from openclaw afterTurn).
-    // Default 20000 aligns with openclaw; lower values produce archives faster.
-    commitTokenThreshold: Math.max(1000, Math.floor(num(
-      process.env.OPENVIKING_COMMIT_TOKEN_THRESHOLD,
-      num(cc.commitTokenThreshold, 20000),
-    ))),
-    commitKeepRecentCount: Math.max(0, Math.floor(num(
-      process.env.OPENVIKING_COMMIT_KEEP_RECENT_COUNT,
-      num(cc.commitKeepRecentCount, 10),
-    ))),
-
-    // P0-3b: token budget for session-start archive-overview fetch
-    resumeContextBudget: Math.max(1024, Math.floor(num(
-      process.env.OPENVIKING_RESUME_CONTEXT_BUDGET,
-      num(cc.resumeContextBudget, 32000),
-    ))),
-
-    // Session-start profile injection: pull profile.md + ls of preferences/
-    // and entities/ on every session_start (startup/clear/resume/compact),
-    // independent of UserPromptSubmit auto-recall. Subagents skip entirely
-    // (handled by subagent-start.mjs not invoking buildProfileBlock).
-    noAutoInject: envBool("OPENVIKING_NO_AUTO_INJECT") ?? (cc.noAutoInject === true),
-    profileTokenBudget: Math.max(500, Math.floor(num(
-      process.env.OPENVIKING_PROFILE_TOKEN_BUDGET,
-      num(cc.profileTokenBudget, 10000),
-    ))),
-
-    skillExperience: envBool("OPENVIKING_SKILL_EXPERIENCE") ?? (cc.skillExperience === true),
-    skillExperienceLimit: Math.max(1, Math.floor(num(
-      process.env.OPENVIKING_SKILL_EXPERIENCE_LIMIT,
-      num(cc.skillExperienceLimit, 3),
-    ))),
-
-    // P1-15: bypass patterns (glob) — when the CC session_id or cwd matches,
-    // skip capture/recall entirely. Useful for one-off scratch sessions that
-    // should not contaminate OV.
-    bypassSessionPatterns,
-    bypassSession: envBool("OPENVIKING_BYPASS_SESSION") ?? false,
-
-    // Write-path async: auto-capture / session-end / subagent-stop fire-and-
-    // forget via a detached child process, so the hook returns to CC instantly.
-    // pre-compact stays sync regardless (CC rewrites transcript right after).
-    // Default on — OV commit is already half-async server-side, so eventual
-    // consistency matches the sync path.
-    writePathAsync: envBool("OPENVIKING_WRITE_PATH_ASYNC") ?? (cc.writePathAsync !== false),
-
-    // Debug
-    debug,
-    debugLogPath,
   };
 }

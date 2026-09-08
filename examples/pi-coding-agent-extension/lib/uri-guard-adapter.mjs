@@ -1,4 +1,4 @@
-import { buildGuardMessage, findVikingUri, normalizeToolName } from "../shared/uri-guard.mjs";
+import { evaluateUriGuard } from "../shared/uri-guard.mjs";
 
 const VIKING_URI_TOOL_HINTS = {
   read: {
@@ -24,19 +24,8 @@ const VIKING_URI_TOOL_HINTS = {
 };
 
 export function guardVikingUriToolCall(event) {
-  const toolName = normalizeToolName(event?.toolName ?? event?.tool_name ?? event?.name);
-  const hint = VIKING_URI_TOOL_HINTS[toolName];
-  if (!hint) return null;
-
+  const toolName = event?.toolName ?? event?.tool_name ?? event?.name;
   const input = event?.input ?? event?.args ?? event?.params ?? {};
-  const uri = findVikingUri(input);
-  if (!uri) return null;
-
-  return {
-    block: true,
-    reason: buildGuardMessage(uri, {
-      tool: hint.tool,
-      example: hint.example(uri, input),
-    }),
-  };
+  const decision = evaluateUriGuard(toolName, input, { hints: VIKING_URI_TOOL_HINTS });
+  return decision ? { block: true, reason: decision.reason } : null;
 }

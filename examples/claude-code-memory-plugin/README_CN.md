@@ -295,7 +295,6 @@ OV ✓ │ 🔗 resumed │ +3 today               session 已恢复上下文；
 
 - `auto-recall` 默认输出关键阶段 + 紧凑的 `ranking_summary`
 - 仅在排查每候选打分时才把 `claude_code.logRankingDetails` 设为 `true`，否则非常啰嗦
-- 深度排查请用 `scripts/debug-recall.mjs` / `scripts/debug-capture.mjs` 单跑示例输入，不要长期开 hook 日志
 
 ## 故障排除
 
@@ -316,7 +315,7 @@ node "$(jq -r '.plugins["openviking-memory@openviking"][0].installPath' ~/.claud
 | 远程鉴权 401 / 403                            | API key / account / user 头错配                      | 核对 `OPENVIKING_API_KEY`、`OPENVIKING_ACCOUNT`、`OPENVIKING_USER`（或 `ov.conf` 对应字段）    |
 | `Stop` hook 超时                              | 服务器慢 + 同步写路径                                 | 保持 `writePathAsync: true`（默认），或调大 `hooks/hooks.json` 里的 `Stop` 超时               |
 | 旧上下文反复出现在 OV 里                      | 早期版本把召回块当成用户消息回写了                    | 升级到当前版本——`auto-capture` 现在推送前会剥离 `<openviking-context>`                      |
-| 日志太吵                                      | `logRankingDetails: true` 没关                        | 设为 `false`；按需用 `debug-recall.mjs` / `debug-capture.mjs`                                  |
+| 日志太吵                                      | `logRankingDetails: true` 没关                        | 设为 `false`；日志里仍保留紧凑的 `ranking_summary`                                             |
 
 ## 与 Claude Code 内置记忆的对比
 
@@ -417,8 +416,6 @@ claude-code-memory-plugin/
 │   ├── pre-compact.mjs      # PreCompact
 │   ├── subagent-start.mjs   # SubagentStart
 │   ├── subagent-stop.mjs    # SubagentStop
-│   ├── debug-recall.mjs     # 召回独立诊断
-│   ├── debug-capture.mjs    # 捕获独立诊断
 │   ├── ov-status.mjs        # /ov 状态报告
 │   ├── ov-memory-doctor.mjs # 体检脚本（ov-memory-doctor skill）
 │   └── lib/

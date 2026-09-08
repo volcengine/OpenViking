@@ -6,7 +6,7 @@ Long-term semantic memory and context takeover for [pi](https://github.com/earen
 > caller's own context space through `viking://~/memories` and `viking://~/skills`; the uid-less
 > `viking://user/memories` shorthand is rejected by newer servers.
 
-> Design informed by lessons from all three OpenViking agent plugins: synchronous recall from OpenClaw, production-hardened capture/ranking from Claude Code, and anti-patterns dodged from Hermes's stale prefetch approach. See [DESIGN.md](./DESIGN.md) for the base design and [TAKEOVER.md](./TAKEOVER.md) for the context-takeover layer.
+> Design informed by lessons from all three OpenViking agent plugins: synchronous recall from OpenClaw, production-hardened capture/ranking from Claude Code, and anti-patterns dodged from Hermes's stale prefetch approach. See [DESIGN.md](./DESIGN.md) for the module-by-module design, including the context-takeover layer.
 
 ## Quick Start
 
@@ -44,31 +44,38 @@ Credentials are resolved from `OPENVIKING_*` environment variables, `~/.openviki
 node ~/.pi/agent/extensions/openviking/scripts/setup.mjs
 ```
 
-`~/.pi/agent/extensions/openviking/config.json` is for behavior and peer-scoping knobs. Connection and authentication credentials still come from the shared sources above:
+Behaviour and peer-scoping knobs live in `~/.openviking/ovcli.conf` beside the credentials, in the shared `plugin` section or in the `plugin.pi` override. The extension has no configuration file of its own:
 
 ```json
 {
-  "enabled": true,
-  "syncTurns": true,
-  "peerId": "",
-  "workspacePeer": true,
-  "recallPeerScope": "all",
-  "recallTokenBudget": 2000,
-  "scoreThreshold": 0.35,
-  "minQueryLength": 3,
-  "profileTokenBudget": 10000,
-  "resumeContextBudget": 32000,
-  "commitTokenThreshold": 20000,
-  "takeover": {
-    "enabled": true,
-    "tokenThreshold": 30000,
-    "keepRecentTurns": 3,
-    "overviewBudget": 3000,
-    "overviewPollMs": 2000,
-    "overviewPollMax": 15
+  "url": "http://127.0.0.1:1933",
+  "api_key": "your-api-key-here",
+  "plugin": {
+    "recallLimit": 6,
+    "pi": {
+      "enabled": true,
+      "autoCapture": true,
+      "peerId": "",
+      "workspacePeer": true,
+      "recallPeerScope": "all",
+      "recallTokenBudget": 2000,
+      "scoreThreshold": 0.35,
+      "minQueryLength": 3,
+      "profileTokenBudget": 10000,
+      "resumeContextBudget": 32000,
+      "commitTokenThreshold": 20000,
+      "takeoverEnabled": true,
+      "takeoverTokenThreshold": 30000,
+      "takeoverKeepRecentTurns": 3,
+      "takeoverOverviewBudget": 3000,
+      "takeoverOverviewPollMs": 2000,
+      "takeoverOverviewPollMax": 15
+    }
   }
 }
 ```
+
+Keys in `plugin` apply to every harness; keys in `plugin.pi` apply to this extension and override them. Resolution is `OPENVIKING_*` environment variables → the workspace's `.openviking/config.json`, `.openviking/config.local.json` and machine registry entry → `plugin.pi` → `plugin` → built-in defaults. Every knob, with its type, default, range, environment variable and accepted older spellings, is declared in [`examples/memory-plugin-shared/lib/config-schema.mjs`](../memory-plugin-shared/lib/config-schema.mjs); `syncTurns` still works wherever `autoCapture` is written above.
 
 Credential environment variables:
 
@@ -89,7 +96,7 @@ tiers and cross-turn dedup are shared with every other harness. Deployments
 without that endpoint fall back to `/api/v1/search/recall`, and that outcome is
 cached so only the first turn pays for the probe.
 
-API keys are sent as `Authorization: Bearer ...`. By default the extension derives a peer from the git identity of the process workspace path: the normalized `origin` URL of the repository the workspace sits in, else that repository's root path. Outside a git repository no peer is sent at all, and what is remembered there goes to the user-level space `viking://user/<you>/memories`. `git@github.com:volcengine/OpenViking.git` becomes `github.com-volcengine-openviking`; the path fallback keeps the older naming rule where every non-letter-or-digit character becomes `-`, so `/Users/x/Dev/OpenViking` becomes `-Users-x-Dev-OpenViking`. One repository therefore keeps one peer across subdirectories, worktrees, clones and machines, while a fork's different origin keeps it separate. The extension does not read workspace `.openviking/config.json` files, so a `peer.id` written there has no effect. The effective peer is sent as `X-OpenViking-Actor-Peer` and stored as `peer_id` on captured session messages. An explicit peer from the shared credential sources (`OPENVIKING_PEER_ID`, `ovcli.conf`, or `ov.conf`) takes precedence over `config.json`'s `peerId`; the local `peerId` in turn takes precedence over workspace derivation. Memories written under the older path-derived peer stay reachable under the default broad recall, which sweeps every peer under the user.
+API keys are sent as `Authorization: Bearer ...`. By default the extension derives a peer from the git identity of the process workspace path: the normalized `origin` URL of the repository the workspace sits in, else that repository's root path. Outside a git repository no peer is sent at all, and what is remembered there goes to the user-level space `viking://user/<you>/memories`. `git@github.com:volcengine/OpenViking.git` becomes `github.com-volcengine-openviking`; the path fallback keeps the older naming rule where every non-letter-or-digit character becomes `-`, so `/Users/x/Dev/OpenViking` becomes `-Users-x-Dev-OpenViking`. One repository therefore keeps one peer across subdirectories, worktrees, clones and machines, while a fork's different origin keeps it separate. The extension reads the workspace's `.openviking/config.json`, so a `peer.id` or `peer.source` written there applies. The effective peer is sent as `X-OpenViking-Actor-Peer` and stored as `peer_id` on captured session messages. `OPENVIKING_PEER_ID` takes precedence over every file; below it, a workspace `peer.id` or the `plugin` section's `peerId` takes precedence over `ovcli.conf`'s `actor_peer_id` and `ov.conf`'s `pi.peerId`; and a peer from any of those takes precedence over workspace derivation. Memories written under the older path-derived peer stay reachable under the default broad recall, which sweeps every peer under the user.
 
 Recall defaults to the broad mode: global memory, the current workspace, and other workspace memories can all be recalled, with other workspaces penalized and rendered later. Set `OPENVIKING_RECALL_PEER_SCOPE=actor` for the isolation mode, which only sees global memory plus the current workspace. In deployments where one bot serves multiple real people, such as zouk, vikingbot, or AstrBot, use the isolation mode with an explicit actor peer so one person's memories are not recalled into another person's session.
 
@@ -105,12 +112,12 @@ The extension shows an `[OpenViking]` status line on startup. Tools (`viking_sea
 
 ### Tuning fields
 
-All fields below live in `config.json`. Defaults are shown.
+All fields below live in `ovcli.conf`'s `plugin` section, or in the `plugin.pi` override. Defaults are shown.
 
 | Field                    | Default    | Description                                                              |
 |--------------------------|------------|--------------------------------------------------------------------------|
 | `enabled`                | `true`     | Set `false` to disable the extension entirely                            |
-| `syncTurns`              | `true`     | Enable auto-capture of conversation turns                                |
+| `autoCapture`            | `true`     | Enable auto-capture of conversation turns. `syncTurns` is the older name and still works |
 
 ### Peer scoping
 
@@ -174,12 +181,12 @@ recent live tail.
 
 | Field                    | Default    | Description                                                              |
 |--------------------------|------------|--------------------------------------------------------------------------|
-| `takeover.enabled`       | `true`     | Let OpenViking own long-term context through the `context` hook           |
-| `takeover.tokenThreshold`| `30000`    | Synced-token pressure that triggers commit and boundary advance           |
-| `takeover.keepRecentTurns`| `3`       | Recent user turns retained in full fidelity                              |
-| `takeover.overviewBudget`| `3000`    | Token budget for the injected archive overview                           |
-| `takeover.overviewPollMs`| `2000`    | Delay between overview polling attempts after commit                     |
-| `takeover.overviewPollMax`| `15`     | Max overview polling attempts before fail-open                           |
+| `takeoverEnabled`        | `true`     | Let OpenViking own long-term context through the `context` hook. Env: `OPENVIKING_TAKEOVER` |
+| `takeoverTokenThreshold` | `30000`    | Synced-token pressure that triggers commit and boundary advance           |
+| `takeoverKeepRecentTurns`| `3`        | Recent user turns retained in full fidelity                              |
+| `takeoverOverviewBudget` | `3000`     | Token budget for the injected archive overview                           |
+| `takeoverOverviewPollMs` | `2000`     | Delay between overview polling attempts after commit                     |
+| `takeoverOverviewPollMax`| `15`       | Max overview polling attempts before fail-open                           |
 
 ### Injection tuning
 
@@ -192,9 +199,11 @@ recent live tail.
 
 | Field                    | Default    | Description                                                              |
 |--------------------------|------------|--------------------------------------------------------------------------|
-| `bypassPatterns`         | `[]`       | Glob patterns to skip extension processing                               |
+| `bypassSessionPatterns`  | `[]`       | Glob patterns matched against the cwd; a hit skips all OpenViking work for the session. `bypassPatterns` is the older name and still works. Env: `OPENVIKING_BYPASS_SESSION_PATTERNS` (CSV), `OPENVIKING_BYPASS_SESSION=1` |
 | `logLevel`               | `"error"`  | `"silent"`, `"error"`, or `"info"`                                      |
 | `debugLogPath`           | `""`       | Write JSON Lines debug records to this path; empty disables the log      |
+
+Bypass now runs through the same matcher every other OpenViking harness uses, so the patterns are real globs: `*` stops at a path separator and `**` crosses them. A bare path used to match its subdirectories as a prefix, and no longer does — write `"/tmp/scratch**"` where `"/tmp/scratch"` used to be enough.
 
 ## Architecture
 
@@ -296,20 +305,21 @@ Both plugins share the same core design (informed by each other):
 
 ## Extension Structure
 
-See [DESIGN.md](./DESIGN.md) for the full design specification — comparison of all three OV plugins, detailed event flow, design rationale, and implementation guidance useful for building OV extensions for any agent harness.
+See [DESIGN.md](./DESIGN.md) for what each module is responsible for, how the modules meet pi's events, and the design ancestry shared with the other OpenViking plugins.
 
 ```
 pi-coding-agent-extension/
-├── config.json          # Default configuration (edit to customize)
-├── config.ts            # Config loader (defaults + config.json merge)
+├── config.ts            # Config loader (shared schema + ovcli.conf layers)
 ├── client.ts            # OpenViking HTTP client (fetch + response envelope)
 ├── sync.ts              # Turn capture, write queue, session lifecycle
 ├── recall.ts            # Synchronous recall with ranking + budget
 ├── takeover.ts          # Thin pi binding around lib/takeover-core.mjs
 ├── tools.ts             # 7 registered LLM tools + /viking command
 ├── lib/takeover-core.mjs # Pure context-takeover state machine
+├── lib/recall-ledger.mjs # Injected recall blocks, replayed to keep prompt caches warm
 ├── index.ts             # Extension entry point (event handlers)
-├── TAKEOVER.md          # Context-takeover design
+├── package.json         # Name and version (the User-Agent's, and the release gate's)
+├── DESIGN.md            # Module-by-module design, including context takeover
 └── README.md
 ```
 
@@ -319,7 +329,7 @@ All TypeScript files are loaded directly by pi's built-in `jiti` transpiler — 
 
 | Symptom                                 | Cause                                                | Fix                                                         |
 |-----------------------------------------|------------------------------------------------------|-------------------------------------------------------------|
-| Extension not loading                   | `enabled: false` in config.json                      | Set `"enabled": true`                                       |
+| Extension not loading                   | `enabled: false` in `ovcli.conf`'s `plugin` section  | Set `"enabled": true`                                       |
 | No recall on first prompt               | OpenViking server not running or wrong URL           | `curl http://localhost:1933/health`                         |
 | Tools not showing after `pi -c` resume  | Known pi issue (tools not re-registered on resume)   | Workaround built in — tools register in `before_agent_start`|
 | Extension crashes on load               | Wrong OV server URL or network issue                 | Check `logLevel` and server accessibility                   |

@@ -97,28 +97,31 @@ Credentials are shared with the Claude Code and Codex memory plugins. Run the se
 node examples/opencode-plugin/scripts/setup.mjs
 ```
 
-`~/.config/opencode/openviking-config.json` is now for behavior knobs only:
+Behavior knobs live in the `plugin` section of `~/.openviking/ovcli.conf`, beside the connection fields the wizard writes. Shared keys apply to every memory plugin; keys under `plugin.opencode` apply to this one and override them:
 
 ```json
 {
-  "enabled": true,
-  "timeoutMs": 30000,
-  "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
-  "autoRecall": {
-    "enabled": true,
-    "limit": 6,
+  "plugin": {
+    "recallLimit": 6,
     "scoreThreshold": 0.35,
-    "maxContentChars": 500,
-    "preferAbstract": true,
-    "tokenBudget": 2000,
-    "minQueryLength": 3
-  },
-  "commitTokenThreshold": 20000,
-  "commitKeepRecentCount": 10,
-  "profileTokenBudget": 10000,
-  "resumeContextBudget": 32000
+    "recallMaxContentChars": 500,
+    "recallPreferAbstract": true,
+    "recallTokenBudget": 2000,
+    "minQueryLength": 3,
+    "commitTokenThreshold": 20000,
+    "commitKeepRecentCount": 10,
+    "profileTokenBudget": 10000,
+    "resumeContextBudget": 32000,
+    "opencode": {
+      "timeoutMs": 30000,
+      "repoContext": true,
+      "repoContextCacheTtlMs": 60000
+    }
+  }
 }
 ```
+
+Settings resolve highest priority first: `OPENVIKING_*` environment variables, the workspace's `.openviking/config.json` and `config.local.json`, `plugin.opencode`, `plugin`, then the built-in defaults. `autoRecall: false` turns automatic recall off, and `autoCapture: false` stops the plugin sending turns back.
 
 Environment variables override `ovcli.conf`:
 
@@ -129,7 +132,7 @@ export OPENVIKING_USER="opencode"     # optional, trusted-mode deployments only
 export OPENVIKING_PEER_ID="opencode"  # optional, peer-scoped memory routing
 ```
 
-API keys are sent as `Authorization: Bearer ...` by both hooks and the MCP proxy. `account` and `user` are trusted-mode headers; `peerId` is sent as `X-OpenViking-Actor-Peer` and as `peer_id` on captured session messages. Existing `openviking-config.json` credential fields are still read as a migration fallback, but new installs should use `ovcli.conf` or env vars.
+API keys are sent as `Authorization: Bearer ...` by both hooks and the MCP proxy. `account` and `user` are trusted-mode headers; `peerId` is sent as `X-OpenViking-Actor-Peer` and as `peer_id` on captured session messages.
 
 ## Verify
 
@@ -152,9 +155,9 @@ Ask OpenCode to search or browse OpenViking memory. Runtime state and errors are
 | Issue | What to check |
 |-------|---------------|
 | Plugin does not load | Confirm `~/.config/opencode/opencode.json` references `@openviking/opencode-plugin`, or that `~/.config/opencode/plugins/openviking.js` exists for source installs |
-| MCP tools call the wrong server | Check `~/.openviking/ovcli.conf`, or set `OPENVIKING_*` env vars / `OPENVIKING_PLUGIN_CONFIG` to the intended config path |
+| MCP tools call the wrong server | Check `~/.openviking/ovcli.conf`, or set `OPENVIKING_*` env vars; `OPENVIKING_CLI_CONFIG_FILE` points the plugin at a different ovcli.conf |
 | 401 / 403 from OpenViking | Verify `OPENVIKING_API_KEY`; for trusted-mode deployments, also verify `OPENVIKING_ACCOUNT` and `OPENVIKING_USER` |
-| Recall is empty | Confirm the OpenViking server has indexed memories/resources and that `autoRecall.enabled` is `true` |
+| Recall is empty | Confirm the OpenViking server has indexed memories/resources and that `autoRecall` is not set to `false` |
 | Local `openviking_add_resource` fails | Pass a file path, not a directory; local directories are not uploaded automatically yet |
 
 For all available tools, configuration fields, and runtime file details, see the [plugin README](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-plugin).

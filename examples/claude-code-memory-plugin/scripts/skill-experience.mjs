@@ -13,15 +13,15 @@ import { basename, normalize, sep } from "node:path";
 import { isPluginEnabled, loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { makeFetchJSON } from "./lib/ov-session.mjs";
+import { runHookStage } from "./shared/agent-hook-runtime.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
   process.exit(0);
 }
 
-const cfg = loadConfig();
 const { log, logError } = createLogger("skill-experience");
-const fetchJSON = makeFetchJSON(cfg);
+const fetchJSON = makeFetchJSON(loadConfig());
 
 function output(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
@@ -36,16 +36,6 @@ function approve(additionalContext) {
     };
   }
   output(out);
-}
-
-async function readStdinJson() {
-  try {
-    const chunks = [];
-    for await (const chunk of process.stdin) chunks.push(chunk);
-    return JSON.parse(Buffer.concat(chunks).toString() || "{}");
-  } catch {
-    return {};
-  }
 }
 
 function toolName(input) {
@@ -95,7 +85,7 @@ function clampScore(value) {
   return Math.max(0, Math.min(1, num));
 }
 
-async function findExperiences(query) {
+async function findExperiences(cfg, query) {
   const res = await fetchJSON("/api/v1/search/find", {
     method: "POST",
     body: JSON.stringify({
@@ -128,36 +118,30 @@ function buildContext(skillName, items) {
   return lines.join("\n");
 }
 
-async function main() {
-  if (!cfg.skillExperience) {
-    log("skip", { reason: "disabled" });
-    approve();
-    return;
-  }
-
-  const input = await readStdinJson();
+runHookStage({
+  loadConfig,
+  input: { tolerant: true },
+  // No bypass gate: this optional per-read hint has never consulted the
+  // session patterns, only its own switch.
+  gates: { enabled: (cfg) => cfg.skillExperience, bypass: () => false },
+  envelope: approve,
+  onSkip: (reason) => log("skip", { reason }),
+}, async ({ cfg, input }) => {
   const name = toolName(input);
   const path = readPath(input);
   if (name && name !== "Read") {
     log("skip", { reason: "not_read", toolName: name });
-    approve();
     return;
   }
   if (!isSkillFile(path)) {
     log("skip", { reason: "not_skill_file", path });
-    approve();
     return;
   }
 
   const skillName = skillNameFromContent(path);
   const query = `skill ${skillName} usage experience`;
-  const items = await findExperiences(query);
+  const items = await findExperiences(cfg, query);
   const context = buildContext(skillName, items);
   log("done", { skillName, count: items.length });
-  approve(context);
-}
-
-main().catch((err) => {
-  logError("uncaught", err);
-  approve();
-});
+  return context;
+}).catch((err) => { logError("uncaught", err); approve(); });

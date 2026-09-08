@@ -1,7 +1,7 @@
-import { buildUserAgent, resolveOpenVikingCredentials } from "./shared/credentials.mjs";
-import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
+import { buildPluginConfig } from "./shared/plugin-config.mjs";
+import { loadCredentialFiles } from "./shared/credentials.mjs";
 
-export const PLUGIN_VERSION = "0.3.0";
+export const PLUGIN_VERSION = "0.4.0";
 
 /**
  * Namespace for the bridged OpenViking MCP tools. DSH publishes every MCP tool
@@ -10,172 +10,35 @@ export const PLUGIN_VERSION = "0.3.0";
  */
 export const MCP_SERVER_NAME = "openviking";
 
-const DEFAULT_CONFIG = Object.freeze({
-  endpoint: "http://127.0.0.1:1933",
-  apiKey: "",
-  account: "",
-  user: "",
-  peerId: "",
-  userAgent: "",
-  workspacePeer: true,
-  peerSource: "",
-  recallPeerScope: "all",
-  recallQueryExpansion: "auto",
-  recallQueryExpansionConfigured: false,
-  syncTurns: true,
-  recallTokenBudget: 2000,
-  recallMaxContentChars: 500,
-  recallPreferAbstract: true,
-  recallLimit: 10,
-  recallLimitConfigured: false,
-  scoreThreshold: 0.35,
-  minQueryLength: 3,
-  profileTokenBudget: 10000,
-  commitTokenThreshold: 20000,
-  commitKeepRecentCount: 10,
-  captureToolResults: false,
-  captureMode: "semantic",
-  captureMaxLength: 24000,
-  captureToolMaxChars: 1000000,
-  captureAssistantTurns: true,
-  skipSubagentSessions: false,
-  requestTimeoutMs: 10000,
-  mcpToolCallTimeoutMs: 60000,
-});
-
+/**
+ * Resolve the plugin's configuration.
+ *
+ * `input` is what the cordis host hands the plugin — this harness has no config
+ * file of its own. Every knob is declared in `shared/config-schema.mjs`, and
+ * `ovcli.conf`'s `plugin` section outranks the host's input so one file
+ * configures every harness and `ov config switch` moves them together.
+ * Connection fields are the exception: an endpoint or key named by the host is
+ * the more specific answer and stays ahead of the credential chain.
+ */
 export function resolveConfig(input = {}, env = process.env, cwd = process.cwd()) {
-  const credentials = resolveOpenVikingCredentials(env);
-  const explicitPeerId = input.peerId || credentials.peerId;
-  const config = {
-    ...DEFAULT_CONFIG,
-    ...input,
-    endpoint: input.endpoint || credentials.baseUrl || DEFAULT_CONFIG.endpoint,
-    apiKey: input.apiKey || credentials.apiKey,
-    account: input.account || credentials.account,
-    user: input.user || credentials.user,
-    peerId: explicitPeerId,
-    explicitPeerId,
-    userAgent: buildUserAgent("dsh", PLUGIN_VERSION),
-    harness: "dsh",
-    recallLimitConfigured: Object.prototype.hasOwnProperty.call(input, "recallLimit"),
-    recallQueryExpansionConfigured: Object.prototype.hasOwnProperty.call(input, "recallQueryExpansion"),
-  };
+  // ov.conf's `dsh` section is the legacy layer here as everywhere else, but
+  // the cordis patch shares that slot; the host named this process's settings,
+  // so it wins the overlap.
+  const ovSection = loadCredentialFiles(env).ovFile.dsh;
+  const config = buildPluginConfig("dsh", {
+    env,
+    cwd,
+    legacy: { ...(ovSection && typeof ovSection === "object" ? ovSection : {}), ...input },
+    version: PLUGIN_VERSION,
+    hostInput: {
+      peerId: input.peerId,
+      account: input.account,
+      user: input.user,
+      apiKey: input.apiKey,
+      baseUrl: input.endpoint,
+    },
+    deriveEffectivePeer: true,
+  });
 
-  if (env.OPENVIKING_WORKSPACE_PEER !== undefined) {
-    config.workspacePeer = environmentBoolean(
-      env.OPENVIKING_WORKSPACE_PEER,
-      config.workspacePeer,
-    );
-  }
-  if (env.OPENVIKING_RECALL_PEER_SCOPE) {
-    config.recallPeerScope = env.OPENVIKING_RECALL_PEER_SCOPE;
-  }
-  if (env.OPENVIKING_RECALL_QUERY_EXPANSION) {
-    config.recallQueryExpansion = env.OPENVIKING_RECALL_QUERY_EXPANSION;
-    config.recallQueryExpansionConfigured = true;
-  }
-  if (env.OPENVIKING_RECALL_LIMIT) {
-    config.recallLimit = env.OPENVIKING_RECALL_LIMIT;
-    config.recallLimitConfigured = true;
-  }
-
-  config.endpoint = String(config.endpoint || DEFAULT_CONFIG.endpoint).replace(/\/+$/, "");
-  config.workspacePeer = config.workspacePeer !== false;
-  const effectivePeer = resolveEffectivePeerId({ cfg: config, cwd });
-  config.peerId = effectivePeer.peerId;
-  config.legacyPeerId = effectivePeer.legacyPeerId;
-  config.recallPeerScope = config.recallPeerScope === "actor" ? "actor" : "all";
-  config.recallQueryExpansion = config.recallQueryExpansion === "off" ? "off" : "auto";
-  config.recallLimit = clampInteger(config.recallLimit, 1, 50, DEFAULT_CONFIG.recallLimit);
-  config.recallMaxContentChars = clampInteger(
-    config.recallMaxContentChars,
-    100,
-    5000,
-    DEFAULT_CONFIG.recallMaxContentChars,
-  );
-  config.recallTokenBudget = clampInteger(
-    config.recallTokenBudget,
-    200,
-    50000,
-    DEFAULT_CONFIG.recallTokenBudget,
-  );
-  config.scoreThreshold = clampNumber(
-    config.scoreThreshold,
-    0,
-    1,
-    DEFAULT_CONFIG.scoreThreshold,
-  );
-  config.minQueryLength = clampInteger(
-    config.minQueryLength,
-    1,
-    64,
-    DEFAULT_CONFIG.minQueryLength,
-  );
-  config.profileTokenBudget = clampInteger(
-    config.profileTokenBudget,
-    500,
-    50000,
-    DEFAULT_CONFIG.profileTokenBudget,
-  );
-  config.commitTokenThreshold = clampInteger(
-    config.commitTokenThreshold,
-    1000,
-    1000000,
-    DEFAULT_CONFIG.commitTokenThreshold,
-  );
-  config.commitKeepRecentCount = clampInteger(
-    config.commitKeepRecentCount,
-    0,
-    1000,
-    DEFAULT_CONFIG.commitKeepRecentCount,
-  );
-  config.captureMaxLength = clampInteger(
-    config.captureMaxLength,
-    200,
-    100000,
-    DEFAULT_CONFIG.captureMaxLength,
-  );
-  config.captureToolMaxChars = clampInteger(
-    config.captureToolMaxChars,
-    200,
-    1000000,
-    DEFAULT_CONFIG.captureToolMaxChars,
-  );
-  config.requestTimeoutMs = clampInteger(
-    config.requestTimeoutMs,
-    1000,
-    120000,
-    DEFAULT_CONFIG.requestTimeoutMs,
-  );
-  config.mcpToolCallTimeoutMs = clampInteger(
-    config.mcpToolCallTimeoutMs,
-    1000,
-    600000,
-    DEFAULT_CONFIG.mcpToolCallTimeoutMs,
-  );
-  config.captureMode = config.captureMode === "keyword" ? "keyword" : "semantic";
-  config.syncTurns = config.syncTurns !== false;
-  config.captureAssistantTurns = config.captureAssistantTurns !== false;
-  config.captureToolResults = config.captureToolResults === true;
-  config.skipSubagentSessions = config.skipSubagentSessions === true;
-  return config;
-}
-
-function environmentBoolean(value, fallback) {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (["0", "false", "no", "off"].includes(normalized)) return false;
-  if (["1", "true", "yes", "on"].includes(normalized)) return true;
-  return fallback;
-}
-
-function clampInteger(value, minimum, maximum, fallback) {
-  const number = Math.round(Number(value));
-  if (!Number.isFinite(number)) return fallback;
-  return Math.max(minimum, Math.min(maximum, number));
-}
-
-function clampNumber(value, minimum, maximum, fallback) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return fallback;
-  return Math.max(minimum, Math.min(maximum, number));
+  return { ...config, peerId: config.effectivePeer.peerId };
 }

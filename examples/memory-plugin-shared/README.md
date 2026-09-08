@@ -1,7 +1,10 @@
 # Memory Plugin Shared Library
 
-This directory contains shared JavaScript modules that are vendored into the
-Claude Code, Codex, OpenCode, and pi memory plugins by `sync.mjs`.
+This directory contains shared JavaScript modules. `sync.mjs` vendors each module into the plugins whose code imports it — Claude Code, Codex, OpenCode, dsh, pi, openclaw and the bundled `agent-plugins` servers — together with the matching `lib/*.d.mts` declaration for the targets written in TypeScript. cursor, trae, trae-cn and zcode vendor nothing: the installer copies the modules `lib/MANIFEST` names — the same sync writes it — to `$OV_HOME/agent-integrations/memory-plugin-shared/lib`, and they import it from there.
+
+`lib/install/` is the exception: it holds the installer's own JavaScript — the JSONC editor OpenCode's config needs and the hooks/mcp merge cursor, trae, trae-cn and zcode install through — which runs from `install.sh` and never from a hook. No shared module imports it, so it stays out of every closure and out of `lib/MANIFEST`.
+
+When the copies are made follows how the plugin is delivered. Claude Code, Codex and `agent-plugins` are installed by pointing a host at a directory in this repository, so their copies are committed and a push to main regenerates them. OpenCode, dsh and openclaw publish as npm packages and pi is tarred by the installer, so those build their copies at pack time and keep none in git — run `node examples/memory-plugin-shared/sync.mjs` once in a fresh checkout before running their tests.
 
 > **Requires an OpenViking server with `viking://~` home-alias support.** Recall targets the
 > caller's own context space through `viking://~/memories` and `viking://~/skills`; the uid-less
@@ -36,7 +39,7 @@ Every clone of one repository therefore shares one peer: project memory follows 
 
 Resolution order is:
 
-1. Explicit peer: `OPENVIKING_PEER_ID`, `peer.id` in a workspace layer, `actor_peer_id` / `peer_id` in `ovcli.conf`, or the harness-specific legacy peer config.
+1. Explicit peer: `OPENVIKING_PEER_ID`, then `peer.id` in a workspace layer or `peerId` in `ovcli.conf`'s `plugin` section, then `actor_peer_id` / `peer_id` in `ovcli.conf`, then the harness's own section of `ov.conf`.
 2. The peer derived by `peer.source`, when `workspacePeer` is not `false`.
 3. No peer.
 
@@ -68,8 +71,12 @@ mode so one person's memories are not recalled into another person's session.
 4. `.openviking/config.json`
 5. `ovcli.conf` `plugin.<harness>`
 6. `ovcli.conf` `plugin`
-7. the harness block in `ov.conf` (legacy)
+7. the block in `ov.conf` named after the harness (legacy). Both its credential fields and its tuning knobs reach every harness, and for dsh it sits under the settings the cordis host hands the plugin
 8. built-in defaults
+
+Every harness resolves every knob through that order: claude-code, codex, cursor, trae, trae-cn, zcode, opencode, dsh and pi. One `plugin` section therefore configures all of them, and `ov config switch` moves behaviour along with credentials. Inside `plugin`, a per-harness override is found under either spelling of the harness name, so `claude_code` and `claude-code`, `trae_cn` and `trae-cn` both reach the same object.
+
+The knobs themselves are declared once in `lib/config-schema.mjs`, with each one's type, default, range, `OPENVIKING_*` variable and older spellings. An older spelling keeps working: `syncTurns` sets `autoCapture`, `bypassPatterns` sets `bypassSessionPatterns`, `recallRewrite` sets `recallCompress`, `requestTimeoutMs` sets `timeoutMs`, `recallBudget` sets `recallTokenBudget`, `recallScoreThreshold` sets `scoreThreshold`, `recallMinQueryLength` sets `minQueryLength`, `profileBudget` sets `profileTokenBudget`, `recallCompressReasoningEffort` sets `recallCompressThinking`, `auth_mode` sets `authMode`, and `peer_id` sets `peerId`.
 
 Every file declares `version: 1`; one declaring another version is skipped with a warning. Schema v1 is `peer.source`, `peer.id`, `recall.enabled`, `recall.peer_scope`, `recall.dedup_turns`, `recall.max_items`, `recall.score_threshold`, `capture.enabled`, `capture.commit_token_threshold`, `bypass.session_patterns`, and `labels`. Lists union across layers, and a leading `"!reset"` clears what was inherited. Unknown keys are kept and ignored.
 

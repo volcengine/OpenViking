@@ -1,5 +1,5 @@
 import { log } from "./utils.mjs"
-import { buildGuardMessage, findVikingUri, normalizeToolName } from "./shared/uri-guard.mjs"
+import { evaluateUriGuard, findVikingUri, normalizeToolName } from "./shared/uri-guard.mjs"
 
 const FILESYSTEM_TOOL_HINTS = {
   read: {
@@ -19,18 +19,15 @@ const FILESYSTEM_TOOL_HINTS = {
 export function createVikingUriGuard() {
   return async (input, output) => {
     const toolName = normalizeToolName(input?.tool ?? input?.name)
-    const hint = FILESYSTEM_TOOL_HINTS[toolName]
-    if (!hint) return
-
     const args = output?.args ?? input?.args ?? {}
-    const uri = findVikingUri(args)
-    if (!uri) return
+    const decision = evaluateUriGuard(toolName, args, { hints: FILESYSTEM_TOOL_HINTS })
+    if (!decision) return
 
     log("INFO", "viking-uri-guard", "Blocked filesystem tool for viking URI", {
       tool: toolName,
-      uri,
+      uri: decision.uri,
     })
-    throw new Error(buildGuardMessage(uri, { ...hint, example: hint.example(uri, args) }))
+    throw new Error(decision.reason)
   }
 }
 

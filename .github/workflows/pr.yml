@@ -20,6 +20,13 @@ on:
 jobs:
   plugin-tests:
     runs-on: ubuntu-24.04
+    env:
+      # The tests that fork whole installs, named once: the step below runs
+      # exactly what the parallel run subtracts, so renaming one cannot leave
+      # it in both.
+      INSTALLER_TESTS: >-
+        examples/memory-plugin-shared/install-agent-hooks.test.mjs
+        examples/memory-plugin-shared/release-marketplace.test.mjs
     steps:
       - uses: actions/checkout@v6
 
@@ -30,64 +37,42 @@ jobs:
 
       - run: npm ci --prefix examples/dsh-memory-plugin
 
+      # The plugins published as packages keep no shared copies in git; they are
+      # built on the way out, and the tests import them like the package would.
+      - name: Generate the shared runtime copies
+        run: node examples/memory-plugin-shared/sync.mjs
+
+      - name: Committed generator output must be up to date
+        run: |
+          # A module the closure grew reaches the committed lanes as an
+          # untracked file, which `git diff` does not see at all.
+          status=$(git status --porcelain --untracked-files=normal -- examples agent-plugins)
+          if [ -n "$status" ]; then
+            printf '%s\n' "$status"
+            exit 1
+          fi
+          git diff --exit-code
+
       - name: Run memory plugin tests
         run: |
-          node --test \
-            examples/codex-memory-plugin/servers/mcp-proxy.test.mjs \
-            examples/codex-memory-plugin/scripts/auto-capture.test.mjs \
-            examples/codex-memory-plugin/scripts/capture-utils.test.mjs \
-            examples/codex-memory-plugin/scripts/marketplace.test.mjs \
-            examples/codex-memory-plugin/scripts/ov-credentials.test.mjs \
-            examples/codex-memory-plugin/scripts/ov-memory-doctor.test.mjs \
-            examples/codex-memory-plugin/scripts/recall-compressor-profile.test.mjs \
-            examples/codex-memory-plugin/scripts/auto-recall.test.mjs \
-            examples/codex-memory-plugin/scripts/session-start-commit.test.mjs \
-            examples/codex-memory-plugin/scripts/session-end.test.mjs \
-            examples/codex-memory-plugin/scripts/pre-compact-capture.test.mjs \
-            examples/codex-memory-plugin/scripts/session-state.test.mjs \
-            examples/codex-memory-plugin/scripts/config.test.mjs \
-            examples/claude-code-memory-plugin/scripts/auto-capture.test.mjs \
-            examples/claude-code-memory-plugin/scripts/config.test.mjs \
-            examples/claude-code-memory-plugin/scripts/marketplace.test.mjs \
-            examples/claude-code-memory-plugin/scripts/skill-experience.test.mjs \
-            examples/claude-code-memory-plugin/scripts/uri-guard.test.mjs \
-            examples/claude-code-memory-plugin/scripts/lib/pending-queue.test.mjs \
-            examples/claude-code-memory-plugin/scripts/lib/recall-core-timeout.test.mjs \
-            examples/cursor-memory-plugin/scripts/cursor-plugin.test.mjs \
-            examples/trae-memory-hooks/scripts/trae-hooks.test.mjs \
-            examples/trae-cli-memory-hooks/scripts/trae-cli-hooks.test.mjs \
-            examples/zcode-memory-plugin/scripts/zcode-async.test.mjs \
-            examples/zcode-memory-plugin/scripts/zcode-capture.test.mjs \
-            examples/zcode-memory-plugin/scripts/zcode-hooks.test.mjs \
-            examples/zcode-memory-plugin/scripts/zcode-turns.test.mjs \
-            examples/memory-plugin-shared/agent-hook-runtime.test.mjs \
-            examples/memory-plugin-shared/batch-send.test.mjs \
-            examples/memory-plugin-shared/doctor-core.test.mjs \
-            examples/memory-plugin-shared/install-agent-hooks.test.mjs \
-            examples/memory-plugin-shared/install-lib-closure.test.mjs \
-            examples/memory-plugin-shared/install-opencode-jsonc.test.mjs \
-            examples/memory-plugin-shared/install-tui.test.mjs \
-            examples/memory-plugin-shared/release-marketplace.test.mjs \
-            examples/memory-plugin-shared/setup-wizard.test.mjs \
-            examples/memory-plugin-shared/sync.test.mjs \
-            examples/memory-plugin-shared/mcp-proxy-config.test.mjs \
-            examples/memory-plugin-shared/mcp-proxy-core.test.mjs \
-            examples/memory-plugin-shared/recall-compress-core.test.mjs \
-            examples/memory-plugin-shared/recall-core.test.mjs \
-            examples/memory-plugin-shared/recall-session-wiring.test.mjs \
-            examples/memory-plugin-shared/workspace-peer.test.mjs \
-            examples/memory-plugin-shared/peer-guidance.test.mjs \
-            examples/memory-plugin-shared/workspace-identity.test.mjs \
-            examples/memory-plugin-shared/workspace-config.test.mjs \
-            examples/memory-plugin-shared/workspace-registry.test.mjs \
-            examples/memory-plugin-shared/plugin-known-keys.test.mjs \
-            examples/memory-plugin-shared/uri-guard.test.mjs \
-            examples/memory-plugin-shared/capture-utils.test.mjs \
-            examples/dsh-memory-plugin/*.test.mjs \
-            examples/opencode-plugin/tests/*.test.mjs \
-            examples/opencode-plugin/servers/mcp-proxy.test.mjs \
-            examples/pi-coding-agent-extension/tests/*.test.mjs \
-            agent-plugins/plugin.test.mjs
+          # A pattern no plugin matches yet contributes nothing rather than
+          # reaching node as a literal.
+          shopt -s nullglob
+          files=$(printf '%s\n' \
+            examples/*/scripts/*.test.mjs \
+            examples/*/scripts/lib/*.test.mjs \
+            examples/*/servers/*.test.mjs \
+            examples/*/tests/*.test.mjs \
+            examples/*-plugin/*.test.mjs \
+            examples/memory-plugin-shared/*.test.mjs \
+            agent-plugins/*.test.mjs \
+            | grep -vFxf <(printf '%s\n' $INSTALLER_TESTS))
+          node --test $files
+
+      # Staging the marketplace regenerates the shared copies the rest of the
+      # suite imports, and both tests fork whole installs, so they run alone.
+      - name: Run the installer tests
+        run: node --test --test-concurrency=1 $INSTALLER_TESTS
 
       - name: Check installer scripts parse
         run: |
@@ -118,15 +103,32 @@ jobs:
       - name: Run the OpenClaw plugin Vitest suite
         # The suite is otherwise never exercised by CI, so regressions in
         # examples/openclaw-plugin only surface in user installs.
-        # tests/ut/architecture-boundaries.test.ts is excluded until its 4
-        # pre-existing main failures are resolved (see #4720 / #4731 / #4732);
-        # every other file passes on main (44 files / 690 tests).
+        # tests/ut/architecture-boundaries.test.ts is excluded until its 2
+        # pre-existing failures are resolved (see #4720 / #4731 / #4732);
+        # every other file passes (42 files / 675 tests).
         # The node_modules exclude restores vitest's default filters, which a
         # custom --exclude replaces.
         run: >
           npm test --
           --exclude "tests/ut/architecture-boundaries.test.ts"
           --exclude "**/node_modules/**"
+
+  plugin-versions:
+    runs-on: ubuntu-24.04
+    if: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Plugins that changed must move their version string
+        run: |
+          git fetch --quiet origin ${{ github.base_ref }}
+          bash .github/scripts/check-plugin-version-bumps.sh "origin/${{ github.base_ref }}"
 
   check-deps:
     runs-on: ubuntu-24.04

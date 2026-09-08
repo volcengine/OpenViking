@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
-import http from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+
+import { readRequestBody, withMockOpenViking, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
+import { enqueue } from "./shared/pending-queue.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -24,28 +26,6 @@ async function endedMarkerExists(dir, id) {
 
 function writeEndedMarker(dir, id, ts) {
   return writeFile(join(dir, `${id}.ended.${ts}`), String(ts));
-}
-
-
-function writeJson(res, value) {
-  res.writeHead(200, { "Content-Type": "application/json" });
-  res.end(JSON.stringify(value));
-}
-
-async function withMockOpenViking(handler, fn) {
-  const server = http.createServer((req, res) => {
-    Promise.resolve(handler(req, res)).catch((error) => {
-      res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "error", error: String(error?.stack || error) }));
-    });
-  });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  try {
-    const { port } = server.address();
-    return await fn(`http://127.0.0.1:${port}`);
-  } finally {
-    await new Promise((resolve) => server.close(resolve));
-  }
 }
 
 function runSessionStart(input, env) {
@@ -472,18 +452,6 @@ test("resume clears a stale SessionEnd marker for the resumed session", async ()
   }
 });
 
-function readRequestBody(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    req.on("data", (chunk) => chunks.push(chunk));
-    req.on("end", () => {
-      const raw = Buffer.concat(chunks).toString("utf-8");
-      try { resolve(raw ? JSON.parse(raw) : null); } catch (error) { reject(error); }
-    });
-    req.on("error", reject);
-  });
-}
-
 function turn(role, content) {
   return JSON.stringify({ payload: { message: { role, content } } });
 }
@@ -716,6 +684,53 @@ test("a marker that disappears under the lock falls back to the idle rule", asyn
     ));
     assert.equal(live.filter(Boolean).length, 1, "the other twin stays live for a later sweep");
   } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("a turn queued during an outage is replayed at the next SessionStart", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-session-start-replay-"));
+  const pendingDir = join(stateDir, "pending");
+  const posted = [];
+
+  const savedPendingDir = process.env.OPENVIKING_PENDING_DIR;
+  try {
+    process.env.OPENVIKING_PENDING_DIR = pendingDir;
+    const queued = await enqueue("addMessage", "cx-outage", {
+      role: "user",
+      content: "this turn outlived the outage",
+    });
+    assert.ok(queued.ok, `could not seed the queue: ${JSON.stringify(queued)}`);
+
+    await withMockOpenViking(async (req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      if (req.method === "GET" && url.pathname === "/health") {
+        writeJson(res, { status: "ok", result: { healthy: true } });
+        return;
+      }
+      if (req.method === "POST" && url.pathname.endsWith("/messages")) {
+        posted.push({ path: url.pathname, body: await readRequestBody(req) });
+        writeJson(res, { status: "ok", result: { ok: true } });
+        return;
+      }
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "error", error: "not found" }));
+    }, async (baseUrl) => {
+      await runSessionStart({ source: "startup", session_id: "cx-new", cwd: stateDir }, {
+        ...baseEnv(baseUrl, stateDir),
+        OPENVIKING_PENDING_DIR: pendingDir,
+        OPENVIKING_HOME: join(stateDir, "home"),
+        OPENVIKING_NO_AUTO_INJECT: "1",
+      });
+    });
+
+    assert.equal(posted.length, 1, `expected the queued turn to be replayed; got ${JSON.stringify(posted)}`);
+    assert.match(posted[0].path, /\/cx-outage\/messages$/u);
+    assert.equal(posted[0].body.content, "this turn outlived the outage");
+    assert.deepEqual(await readdir(pendingDir), [], "a replayed entry must be removed from the queue");
+  } finally {
+    if (savedPendingDir === undefined) delete process.env.OPENVIKING_PENDING_DIR;
+    else process.env.OPENVIKING_PENDING_DIR = savedPendingDir;
     await rm(stateDir, { recursive: true, force: true });
   }
 });

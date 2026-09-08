@@ -1,6 +1,8 @@
 import fs from "fs"
 import path from "path"
 
+import { createOvHttp } from "./shared/ov-http.mjs"
+
 let logFilePath = null
 
 export function initLogger(dataDir) {
@@ -68,198 +70,53 @@ export function effectivePeerId(config) {
   return String(config.effectivePeer?.peerId || config.peerId || "").trim() || null
 }
 
-function responseTraceId(payload) {
-  return payload?.result?.trace_id || payload?.error?.trace_id || payload?.trace_id || undefined
+// The config travels with every call here, so the client is built per call —
+// a closure next to a network round-trip costs nothing.
+function ovHttp(config) {
+  return createOvHttp(
+    { ...config, baseUrl: normalizeEndpoint(config.endpoint) },
+    { defaultTimeoutMs: config.timeoutMs },
+  )
 }
 
 export async function fetchJSON(config, endpoint, init = {}, options = {}) {
-  const url = `${normalizeEndpoint(config.endpoint)}${endpoint}`
-  const headers = makeAuthHeaders(
-    config,
-    { "Content-Type": "application/json", ...(init.headers ?? {}) },
-    options.actorPeerId,
-  )
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? config.timeoutMs)
-  try {
-    const response = await fetch(url, {
-      ...init,
-      headers,
-      signal: controller.signal,
-    })
-    const text = await response.text()
-    const payload = text ? parseJsonOrText(text) : {}
-    const traceId = responseTraceId(payload)
-    if (!response.ok || payload?.status === "error") {
-      return {
-        ok: false,
-        status: response.status,
-        error: payload?.error || payload?.message || { message: `HTTP ${response.status}` },
-        traceId,
-      }
-    }
-    return { ok: true, status: response.status, result: payload?.result ?? payload, traceId }
-  } catch (error) {
-    return { ok: false, status: 0, error: { message: error?.message ?? String(error) } }
-  } finally {
-    clearTimeout(timeout)
-  }
+  return ovHttp(config)(endpoint, init, options)
 }
 
+/**
+ * `fetchJSON` for the callers that would rather catch than branch: it resolves
+ * to the unwrapped result and turns every failure into an Error whose message
+ * is what the user can act on.
+ */
 export async function makeRequest(config, options) {
-  const url = `${normalizeEndpoint(config.endpoint)}${options.endpoint}`
-  const headers = makeAuthHeaders(
-    config,
-    { "Content-Type": "application/json", ...(options.headers ?? {}) },
-    options.actorPeerId,
-  )
+  const timeoutMs = options.timeoutMs ?? config.timeoutMs
+  const response = await fetchJSON(config, options.endpoint, {
+    method: options.method,
+    headers: options.headers,
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+  }, { timeoutMs, actorPeerId: options.actorPeerId })
+  if (response.ok) return response.result
 
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? config.timeoutMs)
-  let onAbort = null
-
-  if (options.abortSignal) {
-    if (options.abortSignal.aborted) controller.abort()
-    onAbort = () => controller.abort()
-    options.abortSignal.addEventListener("abort", onAbort, { once: true })
-  }
-
-  try {
-    const response = await fetch(url, {
-      method: options.method,
-      headers,
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
-      signal: controller.signal,
-    })
-
-    const text = await response.text()
-    const payload = text ? parseJsonOrText(text) : {}
-
-    if (!response.ok) {
-      const rawError = typeof payload === "object" ? payload.error ?? payload.message : payload
-      const errorMessage = typeof rawError === "string" ? rawError : JSON.stringify(rawError)
-      if (response.status === 401 || response.status === 403) {
-        throw new Error("Authentication failed. Please check apiKey/account/user in openviking-config.json or OPENVIKING_* environment variables.")
-      }
-      throw new Error(`Request failed (${response.status}): ${errorMessage}`)
+  const message = getResponseErrorMessage(response.error)
+  // Status 0 is the transport: nothing answered, so the message is ours, not
+  // the server's, and it says what the user has to go fix.
+  if (response.status === 0) {
+    if (response.error?.aborted) {
+      throw new Error(`Request timeout after ${timeoutMs}ms`)
     }
-
-    return payload
-  } catch (error) {
-    if (error?.name === "AbortError") {
-      throw new Error(`Request timeout after ${options.timeoutMs ?? config.timeoutMs}ms`)
-    }
-    if (error?.message?.includes("fetch failed") || error?.code === "ECONNREFUSED") {
+    if (message.includes("fetch failed") || message.includes("ECONNREFUSED")) {
       throw new Error(`OpenViking service unavailable at ${config.endpoint}. Start it with: openviking-server --config ~/.openviking/ov.conf`)
     }
-    throw error
-  } finally {
-    clearTimeout(timeout)
-    if (options.abortSignal && onAbort) {
-      options.abortSignal.removeEventListener("abort", onAbort)
-    }
+    throw new Error(message)
   }
-}
-
-export async function makeMultipartRequest(config, options) {
-  const url = `${normalizeEndpoint(config.endpoint)}${options.endpoint}`
-  const headers = makeAuthHeaders(config, options.headers ?? {}, options.actorPeerId)
-
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? config.timeoutMs)
-  let onAbort = null
-
-  if (options.abortSignal) {
-    if (options.abortSignal.aborted) controller.abort()
-    onAbort = () => controller.abort()
-    options.abortSignal.addEventListener("abort", onAbort, { once: true })
+  if (response.status === 401 || response.status === 403) {
+    throw new Error("Authentication failed. Check api_key/account/user in ~/.openviking/ovcli.conf, or the OPENVIKING_* environment variables.")
   }
-
-  try {
-    const response = await fetch(url, {
-      method: options.method,
-      headers,
-      body: options.body,
-      signal: controller.signal,
-    })
-
-    const text = await response.text()
-    const payload = text ? parseJsonOrText(text) : {}
-
-    if (!response.ok) {
-      const rawError = typeof payload === "object" ? payload.error ?? payload.message : payload
-      const errorMessage = typeof rawError === "string" ? rawError : JSON.stringify(rawError)
-      if (response.status === 401 || response.status === 403) {
-        throw new Error("Authentication failed. Please check apiKey/account/user in openviking-config.json or OPENVIKING_* environment variables.")
-      }
-      throw new Error(`Request failed (${response.status}): ${errorMessage}`)
-    }
-
-    return payload
-  } catch (error) {
-    if (error?.name === "AbortError") {
-      throw new Error(`Request timeout after ${options.timeoutMs ?? config.timeoutMs}ms`)
-    }
-    if (error?.message?.includes("fetch failed") || error?.code === "ECONNREFUSED") {
-      throw new Error(`OpenViking service unavailable at ${config.endpoint}. Start it with: openviking-server --config ~/.openviking/ov.conf`)
-    }
-    throw error
-  } finally {
-    clearTimeout(timeout)
-    if (options.abortSignal && onAbort) {
-      options.abortSignal.removeEventListener("abort", onAbort)
-    }
-  }
-}
-
-function makeAuthHeaders(config, headers = {}, actorPeerId = "") {
-  const result = { ...headers }
-  if (config.apiKey) result["Authorization"] = `Bearer ${config.apiKey}`
-  if (config.account) result["X-OpenViking-Account"] = config.account
-  if (config.user) result["X-OpenViking-User"] = config.user
-  const peerId = String(actorPeerId || "").trim()
-  if (peerId) result["X-OpenViking-Actor-Peer"] = peerId
-  if (config.userAgent) result["User-Agent"] = config.userAgent
-  return result
-}
-
-function parseJsonOrText(text) {
-  try {
-    return JSON.parse(text)
-  } catch {
-    return text
-  }
+  throw new Error(`Request failed (${response.status}): ${message}`)
 }
 
 export function getResponseErrorMessage(error) {
   if (!error) return "Unknown OpenViking error"
   if (typeof error === "string") return error
   return error.message || error.code || "Unknown OpenViking error"
-}
-
-export function unwrapResponse(response) {
-  if (!response || typeof response !== "object") {
-    throw new Error("OpenViking returned an invalid response")
-  }
-  if (response.status && response.status !== "ok") {
-    throw new Error(getResponseErrorMessage(response.error))
-  }
-  return response.result
-}
-
-export function validateVikingUri(uri, toolName = "tool") {
-  if (typeof uri !== "string" || !uri.startsWith("viking://")) {
-    log("ERROR", toolName, "Invalid Viking URI", { uri })
-    return 'Error: Invalid URI format. Must start with "viking://".'
-  }
-  return null
-}
-
-export function ensureRemoteUrl(value) {
-  try {
-    const url = new URL(value)
-    return url.protocol === "http:" || url.protocol === "https:"
-  } catch {
-    return false
-  }
 }

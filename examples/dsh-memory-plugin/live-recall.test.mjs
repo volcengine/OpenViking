@@ -18,11 +18,11 @@ test("live recall returns a hit for a memory stored by this test", { skip: !enab
   // its whole tail verbatim and extraction has nothing to mine.
   const config = resolveConfig({ workspacePeer: false, scoreThreshold: 0.1, commitKeepRecentCount: 0 });
   const client = new OpenVikingClient(config);
-  assert.equal(await client.health(), true, "OpenViking server must be reachable");
+  assert.equal((await client.healthResult()).ok, true, "OpenViking server must be reachable");
 
   const sentinel = `live-e2e-${randomUUID()}`;
   const sessionId = `dsh-live-e2e-${Date.now()}`;
-  assert.equal(await client.ensureSession(sessionId), true);
+  assert.equal((await client.ensureSessionResult(sessionId)).ok, true, "session creation must succeed");
   const added = await client.addMessage(sessionId, {
     role: "user",
     content: `Remember this fact: the deployment codename is ${sentinel}. It unlocks the staging cluster.`,

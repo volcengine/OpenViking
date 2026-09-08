@@ -42,7 +42,7 @@
   ],
   "scripts": {
     "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.build.json",
-    "prepack": "npm run build",
+    "prepack": "node ../memory-plugin-shared/sync.mjs && npm run build",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json",
     "test:watch": "vitest"

@@ -2,7 +2,10 @@ import {
   extractCaptureTurns as extractSharedCaptureTurns,
 } from "./shared/capture-utils.mjs";
 
-export * from "./shared/capture-utils.mjs";
+// Named one by one rather than re-exported wholesale: this module has an
+// `extractCaptureTurns` of its own, and `export *` would let the shared one
+// through under the same name with nothing to say which a caller holds.
+export { findLastHumanTurnIndex } from "./shared/capture-utils.mjs";
 
 function mcpResultText(result) {
   const ok = result?.Ok;
@@ -175,22 +178,4 @@ export function extractCaptureTurns(rolloutEntries, cfg = {}) {
   const deduplicated = deduplicateMcpFunctionEvents(rolloutEntries);
   const normalized = normalizeCodexNativeToolEvents(deduplicated);
   return extractSharedCaptureTurns(normalizeCodexMcpToolEvents(normalized), cfg);
-}
-
-/**
- * Index of the last turn that came from a human prompt, or -1.
- *
- * `role === "user"` alone is not enough: normalizeCaptureRole() maps tool
- * results onto the user role too, and those carry `tool` parts rather than
- * `text` parts. Used by the post-compact shrink path to find where the current
- * interaction starts.
- */
-export function findLastHumanTurnIndex(turns) {
-  const list = Array.isArray(turns) ? turns : [];
-  for (let i = list.length - 1; i >= 0; i -= 1) {
-    const turn = list[i];
-    if (turn?.role !== "user") continue;
-    if (turn.parts?.some((part) => part?.type === "text")) return i;
-  }
-  return -1;
 }

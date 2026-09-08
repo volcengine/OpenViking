@@ -1,10 +1,10 @@
-import { buildRecallBlock } from "./shared/recall-core.mjs"
+import { buildRecallBlock, isRecallEnabled } from "./shared/recall-core.mjs"
 import { isBypassed } from "./shared/session-model.mjs"
 import { effectivePeerId, fetchJSON, log } from "./utils.mjs"
 
 export function createMemoryRecall({ config, sessionManager }) {
   async function injectRelevantMemories(input, output) {
-    if (!config.autoRecall?.enabled) return
+    if (!isRecallEnabled(config)) return
     const query = extractCurrentUserText(output.parts ?? [])
     if (!query) return
     if (query.length < config.minQueryLength) return

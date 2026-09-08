@@ -85,7 +85,9 @@ function uniq(values) {
  * `mcpUrl` wins over `baseUrl` when both are given, so a harness that lets the
  * user pin an explicit MCP URL keeps that behavior. `watchedPaths` are the
  * harness's own extra files; the shared defaults are appended and the result
- * deduplicated.
+ * deduplicated. `sendIdentityHeaders` carries the harness's resolved auth mode
+ * so an `api_key` server, which reads the identity out of the key and ignores
+ * the headers, never sees the operator's account and user on the wire.
  */
 export function buildMcpProxyConfig({
   baseUrl = "",
@@ -93,6 +95,7 @@ export function buildMcpProxyConfig({
   apiKey = "",
   account = "",
   user = "",
+  sendIdentityHeaders = false,
   peerId = "",
   userAgent = "",
   timeoutMs,
@@ -108,6 +111,7 @@ export function buildMcpProxyConfig({
     apiKey: apiKey || "",
     account: account || "",
     user: user || "",
+    sendIdentityHeaders: sendIdentityHeaders === true,
     peerId: peerId || "",
     userAgent: userAgent || "",
     timeoutMs: Math.max(

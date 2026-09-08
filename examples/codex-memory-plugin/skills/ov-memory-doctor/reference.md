@@ -33,8 +33,8 @@ doctor prints the effective mode as `credential source`.
 | Field | Order (auto mode) |
 |---|---|
 | url | `OPENVIKING_URL` → `OPENVIKING_BASE_URL` → `ovcli.conf url` → `ov.conf server.url` → `http://{server.host\|127.0.0.1}:{server.port\|1933}` |
-| api_key | `OPENVIKING_BEARER_TOKEN` → `OPENVIKING_API_KEY` → `ovcli.conf api_key` → `ov.conf codex.apiKey` → `ov.conf server.root_api_key` |
-| account / user | `OPENVIKING_ACCOUNT` / `OPENVIKING_USER` → `ovcli.conf account/account_id`, `user/user_id` → `ov.conf codex.accountId/userId` |
+| api_key | `OPENVIKING_BEARER_TOKEN` → `OPENVIKING_API_KEY` → `ovcli.conf api_key` → `ovcli.conf plugin.codex.apiKey` → `ovcli.conf plugin.apiKey` → `ov.conf codex.apiKey` → `ov.conf server.root_api_key` |
+| account / user | `OPENVIKING_ACCOUNT` / `OPENVIKING_USER` → `ovcli.conf account/account_id`, `user/user_id` → `ovcli.conf plugin.codex.accountId/userId` → `ovcli.conf plugin.accountId/userId` → `ov.conf codex.accountId/userId` |
 | peer | `OPENVIKING_PEER_ID` → registry → `config.local.json` → `config.json` (`peer.id`) → `ovcli.conf plugin.codex.peerId` → `ovcli.conf plugin.peerId` → `ovcli.conf actor_peer_id/peer_id` → `ov.conf codex.peerId` → derived per `peer.source` unless `OPENVIKING_WORKSPACE_PEER=0` |
 | peer.source | `OPENVIKING_PEER_SOURCE` → registry → `config.local.json` → `config.json` → `ovcli.conf plugin.codex.peerSource` → `ovcli.conf plugin.peerSource` → `ov.conf codex.peerSource` → `git` |
 | auth mode | `OPENVIKING_AUTH_MODE` → `codex.authMode` → `server.auth_mode` → `trusted` when account/user are set, else `api_key` |
@@ -56,8 +56,9 @@ PreCompact 60s. `recallTimeoutMs` (default 120000) must stay below
 
 Sent headers: `Authorization: Bearer <key>`, `X-OpenViking-Account/User` (trusted
 mode only), `X-OpenViking-Actor-Peer`, `User-Agent: openviking-memory-codex/<version>`.
-The open-source server also accepts `X-API-Key` (and prefers it when both are
-sent); the Volcengine-hosted OpenViking Service (`https://api.vikingdb.cn-beijing.volces.com/openviking`) accepts Bearer only.
+The plugin never sends `X-API-Key`. The open-source server still accepts it (and
+prefers it when both are sent), so a gateway that injects one shadows the key
+here; the Volcengine-hosted OpenViking Service (`https://api.vikingdb.cn-beijing.volces.com/openviking`) accepts Bearer only.
 
 The doctor checks explicit `features.hooks` first, then the live `hooks` entry
 from `codex features list`. Legacy `plugin_hooks` only decides the result when
@@ -160,7 +161,7 @@ Startup failures (printed by the server; exit 1 unless noted):
 | Text | Cause |
 |---|---|
 | `OpenViking configuration file not found.` | No ov.conf at any resolved path |
-| `Unknown config field '…' in OpenVikingConfig` / `Extra inputs are not permitted` | Unknown key — including `claude_code`, `codex` and `server.url`, which only the plugins read |
+| `Unknown config field '…' in OpenVikingConfig` / `Extra inputs are not permitted` | Unknown key — including a top-level block named after any harness (`claude_code`, `codex`, `cursor`, `trae`, `trae_cn`, `zcode`, `opencode`, `dsh`, `pi`) and `server.url`, which only the plugins read |
 | `SECURITY: server.auth_mode='dev' requires server.host to be localhost` | Dev mode (no `auth_mode`, no `root_api_key`) on a non-loopback bind |
 | `Invalid server.root_api_key: empty string is not allowed` | `""` instead of `null` |
 | `Another OpenViking process (PID n) is already using the data directory` | Two servers on one workspace (exit 3, `Application startup failed. Exiting.`) |

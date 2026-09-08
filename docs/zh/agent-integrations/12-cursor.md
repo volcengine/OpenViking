@@ -31,7 +31,7 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 ## 验证
 
 1. 重启 Cursor 并新建 Agent 会话。
-2. 打开 **Cursor Settings → Hooks**，确认 OpenViking 生命周期 Hook 执行了 `cursor-hook.mjs`，URI 保护 Hook 执行了 `uri-guard.mjs`。
+2. 打开 **Cursor Settings → Hooks**，确认 OpenViking 生命周期 Hook 执行了 `scripts/hook.mjs`，URI 保护 Hook 执行了 `scripts/uri-guard.mjs`。
 3. 查看 `beforeSubmitPrompt` 输出，确认存在 `additional_context`；这表示当前问题的召回结果已直接交给 Agent，无需先调用 MCP。
 4. 打开 **Cursor Settings → Tools & MCPs**，确认 `openviking` 已连接。
 5. 告诉 Cursor 一个临时偏好，等待本轮回复完成；新建会话后询问该偏好，确认捕获和跨会话召回均生效。

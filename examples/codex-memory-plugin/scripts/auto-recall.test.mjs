@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import http from "node:http";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+
+import { readRequestBody, withMockOpenViking, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
 import { resolveCodexLaunch, trySpawnCodex } from "./codex-launch.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -37,46 +38,9 @@ test("Codex launch converts a synchronous spawn failure into a fallback signal",
   assert.equal(result.error, failure);
 });
 
-function readRequestBody(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    req.on("data", (chunk) => chunks.push(chunk));
-    req.on("end", () => {
-      const raw = Buffer.concat(chunks).toString("utf-8");
-      try {
-        resolve(raw ? JSON.parse(raw) : null);
-      } catch (err) {
-        reject(err);
-      }
-    });
-    req.on("error", reject);
-  });
-}
-
-function writeJson(res, value) {
-  res.writeHead(200, { "Content-Type": "application/json" });
-  res.end(JSON.stringify(value));
-}
-
 function writeStatusJson(res, status, value) {
   res.writeHead(status, { "Content-Type": "application/json" });
   res.end(JSON.stringify(value));
-}
-
-async function withMockOpenViking(handler, fn) {
-  const server = http.createServer((req, res) => {
-    handler(req, res).catch((err) => {
-      res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "error", error: String(err?.stack || err) }));
-    });
-  });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  try {
-    const { port } = server.address();
-    return await fn(`http://127.0.0.1:${port}`);
-  } finally {
-    await new Promise((resolve) => server.close(resolve));
-  }
 }
 
 function runAutoRecall(input, env) {
@@ -522,6 +486,31 @@ test("auto-recall gives the compressor full content from the raw-search fallback
   }
 });
 
+test("auto-recall repairs a mangled viking:// URI in the compressed digest", async () => {
+  const uri = "viking://user/zeus/memories/preferences/editor.md";
+  const result = await runEndpointCompressionCase({
+    prompt: "Which editor do I prefer?",
+    entry: {
+      uri,
+      score: 0.91,
+      type: "preferences",
+      mode: "summary",
+      summary: "Use Vim",
+    },
+    rendered: "<memory_group>Use Vim</memory_group>",
+    compressorOutput: [
+      "OpenViking memory digest:",
+      "- [preferences] Use Vim (viking://user/zeus/memories/preference/edtior.md)",
+    ].join("\n"),
+    extraEnv: { OPENVIKING_RECALL_COMPRESS_MIN_INPUT_CHARS: "0" },
+  });
+
+  const injected = result.output.hookSpecificOutput.additionalContext;
+  assert.ok(injected.includes(`(${uri})`), injected);
+  assert.ok(!injected.includes("edtior"), injected);
+  assert.equal(result.compressorCalls, 1);
+});
+
 test("auto-recall passes the configured compressor base URL to Codex", async () => {
   const result = await runEndpointCompressionCase({
     prompt: "Explain HTTP 429",
@@ -830,6 +819,150 @@ test("the actor peer comes from the workspace named by the payload's cwd", async
     });
 
     assert.deepEqual(peers, ["team-a"]);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("a bypassed directory gets no injected memory and makes no request", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-bypass-"));
+  const scratchDir = join(stateDir, "scratch");
+  const keepDir = join(stateDir, "keep");
+
+  try {
+    await mkdir(scratchDir, { recursive: true });
+    await mkdir(keepDir, { recursive: true });
+
+    const env = (baseUrl) => ({
+      OPENVIKING_AUTO_RECALL: "1",
+      OPENVIKING_CODEX_STATE_DIR: stateDir,
+      OPENVIKING_STATE_DIR: stateDir,
+      OPENVIKING_HOME: join(stateDir, "home"),
+      OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
+      OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
+      OPENVIKING_CREDENTIAL_SOURCE: "env",
+      OPENVIKING_RECALL_COMPRESS: "0",
+      OPENVIKING_RECALL_LIMIT: "1",
+      OPENVIKING_RECALL_TIMEOUT_MS: "10000",
+      OPENVIKING_MIN_QUERY_LENGTH: "1",
+      OPENVIKING_SCORE_THRESHOLD: "0",
+      OPENVIKING_TIMEOUT_MS: "5000",
+      OPENVIKING_BYPASS_SESSION_PATTERNS: "**/scratch",
+      OPENVIKING_URL: baseUrl,
+    });
+
+    await withMockOpenViking(async (req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      if (req.method === "GET" && url.pathname === "/health") {
+        writeJson(res, { status: "ok", result: { ok: true } });
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/v1/search/search") {
+        await readRequestBody(req);
+        writeJson(res, {
+          status: "ok",
+          result: {
+            entries: [{
+              uri: "viking://user/zeus/memories/events/leak.md",
+              category: "events",
+              detail: "full",
+              score: 0.9,
+              text: "memory that must not reach a bypassed session",
+            }],
+            rendered: "memory that must not reach a bypassed session",
+            digest: "",
+            stats: { returned: 1, used_tokens: 40 },
+          },
+        });
+        return;
+      }
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "error", error: "not found" }));
+    }, async (baseUrl, requests) => {
+      const off = await runAutoRecall(
+        { prompt: "please use prior context", session_id: "cx-bypassed", cwd: scratchDir },
+        env(baseUrl),
+      );
+      assert.deepEqual(JSON.parse(off.stdout.trim()), {});
+      assert.deepEqual(requests, [], "a bypassed directory must not reach the server at all");
+
+      const on = await runAutoRecall(
+        { prompt: "please use prior context", session_id: "cx-kept", cwd: keepDir },
+        env(baseUrl),
+      );
+      assert.match(
+        JSON.parse(on.stdout.trim()).hookSpecificOutput.additionalContext,
+        /must not reach a bypassed session/,
+        "the same env must still recall outside the pattern",
+      );
+    });
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("auto-recall authenticates with Bearer alone and gates the identity headers", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-headers-"));
+  const seen = [];
+
+  const env = (baseUrl, identity) => ({
+    OPENVIKING_AUTO_RECALL: "1",
+    OPENVIKING_CODEX_STATE_DIR: stateDir,
+    OPENVIKING_STATE_DIR: stateDir,
+    OPENVIKING_HOME: join(stateDir, "home"),
+    OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
+    OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
+    OPENVIKING_CREDENTIAL_SOURCE: "env",
+    OPENVIKING_RECALL_COMPRESS: "0",
+    OPENVIKING_RECALL_LIMIT: "1",
+    OPENVIKING_RECALL_TIMEOUT_MS: "10000",
+    OPENVIKING_MIN_QUERY_LENGTH: "1",
+    OPENVIKING_SCORE_THRESHOLD: "0",
+    OPENVIKING_TIMEOUT_MS: "5000",
+    OPENVIKING_API_KEY: "recall-key",
+    OPENVIKING_URL: baseUrl,
+    ...identity,
+  });
+
+  try {
+    await withMockOpenViking(async (req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      if (req.method === "GET" && url.pathname === "/health") {
+        writeJson(res, { status: "ok", result: { ok: true } });
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/v1/search/search") {
+        seen.push(req.headers);
+        await readRequestBody(req);
+        writeJson(res, {
+          status: "ok",
+          result: { entries: [], rendered: "", digest: "", stats: { returned: 0 } },
+        });
+        return;
+      }
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "error", error: "not found" }));
+    }, async (baseUrl) => {
+      await runAutoRecall(
+        { prompt: "please use prior context", session_id: "cx-trusted" },
+        env(baseUrl, { OPENVIKING_ACCOUNT: "acct-a", OPENVIKING_USER: "user-a" }),
+      );
+      await runAutoRecall(
+        { prompt: "please use prior context", session_id: "cx-api-key" },
+        env(baseUrl, {}),
+      );
+    });
+
+    assert.equal(seen.length, 2);
+    const [trusted, apiKey] = seen;
+    assert.equal(trusted.authorization, "Bearer recall-key");
+    assert.equal(trusted["x-api-key"], undefined);
+    assert.equal(trusted["x-openviking-account"], "acct-a");
+    assert.equal(trusted["x-openviking-user"], "user-a");
+    assert.equal(apiKey.authorization, "Bearer recall-key");
+    assert.equal(apiKey["x-api-key"], undefined);
+    assert.equal(apiKey["x-openviking-account"], undefined);
+    assert.equal(apiKey["x-openviking-user"], undefined);
   } finally {
     await rm(stateDir, { recursive: true, force: true });
   }

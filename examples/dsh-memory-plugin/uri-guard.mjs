@@ -1,5 +1,5 @@
 import { MCP_SERVER_NAME } from "./config.mjs";
-import { buildGuardMessage, findVikingUri } from "./shared/uri-guard.mjs";
+import { evaluateUriGuard } from "./shared/uri-guard.mjs";
 
 /** Model-facing name of a bridged OpenViking MCP tool. */
 const mcp = rawName => `mcp__${MCP_SERVER_NAME}__${rawName}`;
@@ -37,17 +37,9 @@ const GUARDED_TOOLS = {
 };
 
 export async function guardVikingUri(exec, next) {
-  const hint = GUARDED_TOOLS[exec.name];
-  if (!hint) return next();
-  const uri = findVikingUri(exec.arguments);
-  if (!uri) return next();
-  return {
-    kind: "deny",
-    reason: buildGuardMessage(uri, {
-      tool: hint.tool,
-      example: hint.example(uri, exec.arguments),
-    }),
-  };
+  const decision = evaluateUriGuard(exec.name, exec.arguments, { hints: GUARDED_TOOLS });
+  if (!decision) return next();
+  return { kind: "deny", reason: decision.reason };
 }
 
 function escapeText(value) {

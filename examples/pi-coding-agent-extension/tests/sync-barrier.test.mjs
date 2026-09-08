@@ -21,7 +21,6 @@ function config(overrides = {}) {
 function client(overrides = {}) {
   return {
     connected: true,
-    addMessagePayload: async () => true,
     getSession: async () => ({ pending_tokens: 0 }),
     commitSession: async () => ({ task_id: "t-1", archive_uri: "viking://archive/1" }),
     commitSessionResponse: async () => ({
@@ -120,7 +119,6 @@ test("queued addMessage makes takeover flush barrier false until replay succeeds
   await withPendingDir(async () => {
     let replayOk = false;
     const c = client({
-      addMessagePayload: async () => false,
       fetchJSON: async () => ({ ok: replayOk, status: replayOk ? 200 : 500, result: {} }),
     });
     const sync = new SyncManager(c, config());
@@ -144,7 +142,6 @@ test("queued addMessage makes takeover flush barrier false until replay succeeds
 test("current-session addMessage 500 remains queued and keeps barrier closed", async () => {
   await withPendingDir(async () => {
     const c = client({
-      addMessagePayload: async () => false,
       fetchJSON: async () => ({ ok: false, status: 500 }),
     });
     const sync = new SyncManager(c, config());

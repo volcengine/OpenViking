@@ -263,7 +263,13 @@ export function extractTextFromPayload(payload, options = {}) {
   return chunks.join("\n\n");
 }
 
-function collectToolNamesByIdFromEntries(entries) {
+/**
+ * Map every tool call id in a transcript to the name of the tool it invoked.
+ *
+ * A result block names the call by id only, so the name has to come from the
+ * call that preceded it. Pass the map as `toolNameById` to the extractors.
+ */
+export function collectToolNamesByIdFromEntries(entries) {
   const map = {};
   for (const entry of entries || []) {
     const payload = entry?.payload && typeof entry.payload === "object" ? entry.payload : entry;
@@ -378,6 +384,24 @@ export function extractCaptureTurns(rolloutEntries, cfg = {}) {
   return turns;
 }
 
+/**
+ * Index of the last turn that came from a human prompt, or -1.
+ *
+ * `role === "user"` alone is not enough: normalizeCaptureRole() maps tool
+ * results onto the user role too, and those carry `tool` parts rather than
+ * `text` parts. Used by the post-compact shrink path to find where the current
+ * interaction starts.
+ */
+export function findLastHumanTurnIndex(turns) {
+  const list = Array.isArray(turns) ? turns : [];
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const turn = list[i];
+    if (turn?.role !== "user") continue;
+    if (turn.parts?.some((part) => part?.type === "text")) return i;
+  }
+  return -1;
+}
+
 export function normalizeCaptureRole(role) {
   const value = normalizeType(role);
   if (value === "user") return "user";
@@ -456,12 +480,24 @@ function stripInjectedDigestBlocks(text) {
   return out.join("\n");
 }
 
+/**
+ * Drop everything in a turn that the conversation did not put there.
+ *
+ * Recall injects a context block into the prompt, and the host adds notes of
+ * its own; captured back unchanged, this turn's injection becomes next turn's
+ * memory and the loop feeds on itself. Formatting the conversation did author
+ * — newlines, code fences — survives.
+ */
 export function sanitizeCapturedText(text) {
   let value = String(text || "");
   value = value
     .replace(/\u0000/g, "")
     .replace(/<openviking-context\b[^>]*>[\s\S]*?<\/openviking-context>/gi, " ")
     .replace(/<relevant-memor(?:y|ies)\b[^>]*>[\s\S]*?<\/relevant-memor(?:y|ies)>/gi, " ")
+    // Claude Code wraps its own out-of-band notes to the model in these two
+    // shapes. They are the host talking to itself, not the conversation.
+    .replace(/<system-reminder\b[^>]*>[\s\S]*?<\/system-reminder>/gi, " ")
+    .replace(/^[ \t]*\[Subagent Context\][^\n]*$/gim, " ")
     .replace(/^\s*Sender\s*\([^)]+\)\s*```[\s\S]*?```\s*/gim, " ")
     .replace(/^\s*Conversation (?:metadata|info):\s*```[\s\S]*?```\s*/gim, " ")
     .replace(/^\s*\[?\d{4}-\d{2}-\d{2}[T ][^\]\n]{3,80}\]?\s*/gm, "")
@@ -483,6 +519,23 @@ function hasEnoughSignal(text) {
 
 function isPunctuationOnly(text) {
   return !/[a-z0-9\u3400-\u9fff]/i.test(text);
+}
+
+/**
+ * Is capture on for this config?
+ *
+ * The switch has four spellings in the wild: a boolean `autoCapture`, opencode's
+ * `{ enabled }` object, dsh and pi's `syncTurns`, and the global `enabled`
+ * that turns the whole plugin off. Reading it here rather than in each loader
+ * is what keeps it from drifting a fifth time — and any spelling that says off
+ * wins, so a config that disables capture under an older name still disables it.
+ */
+export function isCaptureEnabled(cfg = {}) {
+  for (const value of [cfg.enabled, cfg.autoCapture, cfg.capture, cfg.syncTurns]) {
+    if (value === false) return false;
+    if (value && typeof value === "object" && !Array.isArray(value) && value.enabled === false) return false;
+  }
+  return true;
 }
 
 export function shouldCaptureText(text, role, cfg = {}) {
@@ -511,4 +564,27 @@ export function shouldCaptureText(text, role, cfg = {}) {
   }
 
   return { shouldCapture: true, reason: "ok", text: capped };
+}
+
+/**
+ * Apply the capture filter to a list of `{ role, content }` turns.
+ *
+ * The harnesses that compose `agent-hook-runtime` used to send whatever their
+ * transcript parser produced: an acknowledgement, a slash command, a stray
+ * `ok`, or a turn far past `captureMaxLength` all reached the extractor
+ * verbatim. This is the same decision every other harness makes, in one place,
+ * so a thin harness gets it by calling rather than by reimplementing it.
+ *
+ * Returns the surviving turns with `content` replaced by the sanitized and
+ * capped text, and the dropped ones with the reason, for the debug log.
+ */
+export function filterCaptureTurns(turns, cfg = {}) {
+  const kept = [];
+  const dropped = [];
+  for (const turn of Array.isArray(turns) ? turns : []) {
+    const decision = shouldCaptureText(turn?.content, turn?.role, cfg);
+    if (decision.shouldCapture) kept.push({ ...turn, content: decision.text });
+    else dropped.push({ role: turn?.role, reason: decision.reason });
+  }
+  return { kept, dropped };
 }

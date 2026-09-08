@@ -15,7 +15,6 @@
     "dist",
     "node_modules",
     "tests",
-    "__tests__",
     "vitest.config.ts"
   ]
 }

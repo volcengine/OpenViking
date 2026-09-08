@@ -1617,5 +1617,4 @@ openclaw gateway restart
 - `INSTALL-ZH.md`：安装、升级、卸载指南。
 - `INSTALL-AGENT.md`：Agent 自动安装说明。
 - `docs/workmemory-v2-design.md`：Working Memory v2 设计。
-- `docs/workmemory-v2-test-report.md`：Working Memory v2 测试报告。
 - `health_check_tools/HEALTHCHECK-ZH.md`：健康检查脚本说明。

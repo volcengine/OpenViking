@@ -35,4 +35,4 @@ Open **Settings → MCP → Configured MCP Servers** and confirm that the `openv
 ## Reference
 
 - Docs on Manual Settings: [TRAE](https://docs.openviking.net/en/agent-integrations/13-trae)
-- Code: [examples/trae-memory-hooks](https://github.com/volcengine/OpenViking/tree/main/examples/trae-memory-hooks)
+- Code: [examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)

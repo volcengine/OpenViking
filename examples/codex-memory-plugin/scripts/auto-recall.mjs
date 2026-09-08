@@ -32,6 +32,8 @@ import {
   normalizeContextEntry,
   postRecall,
 } from "./shared/recall-core.mjs";
+import { runHookStage } from "./shared/agent-hook-runtime.mjs";
+import { createOvHttp } from "./shared/ov-http.mjs";
 import { compressRecallContext } from "./shared/recall-compress-core.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
@@ -94,35 +96,16 @@ recallDeadline = setTimeout(() => {
 }, cfg.recallTimeoutMs);
 recallDeadline.unref?.();
 
-async function fetchJSON(path, init = {}, options = {}) {
-  const controller = new AbortController();
-  const timer = setTimeout(
-    () => controller.abort(),
-    Math.max(1000, Number(options.timeoutMs) || cfg.timeoutMs),
-  );
-  try {
-    const headers = { "Content-Type": "application/json" };
-    if (cfg.apiKey) {
-      headers["Authorization"] = `Bearer ${cfg.apiKey}`;
-      headers["X-API-Key"] = cfg.apiKey;
-    }
-    if (cfg.sendIdentityHeaders && cfg.account) headers["X-OpenViking-Account"] = cfg.account;
-    if (cfg.sendIdentityHeaders && cfg.user) headers["X-OpenViking-User"] = cfg.user;
-    if (effectivePeer.peerId) headers["X-OpenViking-Actor-Peer"] = effectivePeer.peerId;
-    if (cfg.userAgent) headers["User-Agent"] = cfg.userAgent;
-    const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
-    const body = await res.json().catch(() => null);
-    if (!body) return { ok: false, status: res.status };
-    if (!res.ok || body.status === "error") {
-      return { ok: false, status: res.status, error: body.error || body };
-    }
-    return { ok: true, result: body.result ?? body };
-  } catch {
-    return { ok: false, status: 0 };
-  } finally {
-    clearTimeout(timer);
-  }
+// Rebuilt after the hook reloads config for the payload's directory.
+function makeFetchJSON() {
+  return createOvHttp(cfg, {
+    defaultTimeoutMs: cfg.timeoutMs,
+    resolveActorPeerId: () => effectivePeer.peerId,
+    requireJsonBody: true,
+  });
 }
+
+let fetchJSON = makeFetchJSON();
 
 // ---------------------------------------------------------------------------
 // Ranking
@@ -552,29 +535,16 @@ async function compressMemoryContext(userPrompt, rendered, items, shortContext =
   }
 }
 
-async function main() {
-  let input;
-  try {
-    const chunks = [];
-    for await (const chunk of process.stdin) chunks.push(chunk);
-    input = JSON.parse(Buffer.concat(chunks).toString());
-  } catch {
-    log("skip", { stage: "stdin_parse", reason: "invalid input" });
-    emit();
-    return;
-  }
-
-  // The workspace layer belongs to the session's directory, which only the
-  // payload knows; see loadConfig for why re-resolving this late is safe.
-  const cwd = typeof input.cwd === "string" && input.cwd.trim() ? input.cwd : process.cwd();
-  cfg = loadConfig(cwd);
+runHookStage({
+  loadConfig,
+  gates: { enabled: (reloaded) => reloaded.autoRecall },
+  envelope: emit,
+  onSkip: (reason) => log("skip", { stage: "init", reason }),
+}, async (stage) => {
+  const { input, cwd } = stage;
+  cfg = stage.cfg;
   effectivePeer = resolveEffectivePeerId({ cfg, cwd });
-
-  if (!cfg.autoRecall) {
-    log("skip", { stage: "init", reason: "autoRecall disabled" });
-    emit();
-    return;
-  }
+  fetchJSON = makeFetchJSON();
 
   const userPrompt = (input.prompt || "").trim();
   const codexSessionId = typeof input.session_id === "string" ? input.session_id.trim() : "";
@@ -594,14 +564,12 @@ async function main() {
 
   if (!userPrompt || userPrompt.length < cfg.minQueryLength) {
     log("skip", { stage: "query_check", reason: "query too short or empty" });
-    emit();
     return;
   }
 
   const health = await fetchJSON("/health");
   if (!health.ok) {
     logError("health_check", "server unreachable or unhealthy");
-    emit();
     return;
   }
 
@@ -609,7 +577,6 @@ async function main() {
   if (endpointRecall !== null) {
     if (!endpointRecall.context && endpointRecall.items.length === 0) {
       log("skip", { stage: "recall_endpoint", reason: "no results" });
-      emit();
       return;
     }
     const compressedContext = endpointRecall.items.length > 0
@@ -623,7 +590,6 @@ async function main() {
       : compressedContext;
     if (!memoryContext) {
       log("skip", { stage: "recall_endpoint", reason: "compressor found no relevant memory" });
-      emit();
       return;
     }
     log("recall_endpoint", {
@@ -631,15 +597,13 @@ async function main() {
       compressed: compressedContext !== null,
       entryCount: endpointRecall.items.length,
     });
-    emit(memoryContext);
-    return;
+    return memoryContext;
   }
 
   const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
   const allMemories = await searchAll(userPrompt, candidateLimit, recallSessionId);
   if (allMemories.length === 0) {
     log("skip", { stage: "search", reason: "no results" });
-    emit();
     return;
   }
 
@@ -665,7 +629,6 @@ async function main() {
   const memories = pickMemories(processed, cfg.recallLimit, userPrompt);
   if (memories.length === 0) {
     log("skip", { stage: "pick", reason: "no memories survived ranking" });
-    emit();
     return;
   }
 
@@ -694,9 +657,5 @@ async function main() {
     memoryItems,
     fallbackContext,
   );
-  const memoryContext = compressedContext === null ? fallbackContext : compressedContext;
-
-  emit(memoryContext);
-}
-
-main().catch((err) => { logError("uncaught", err); emit(); });
+  return compressedContext === null ? fallbackContext : compressedContext;
+}).catch((err) => { logError("uncaught", err); emit(); });

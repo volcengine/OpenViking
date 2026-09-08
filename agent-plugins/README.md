@@ -10,7 +10,6 @@ Agent Plugins 1.0 is a vendor-neutral packaging format for extending AI coding a
 plugin.json                          # Agent Plugins 1.0 manifest
 mcp.json                             # stdio MCP server: "openviking"
 servers/mcp-proxy.mjs                # stdio -> streamable-HTTP proxy to the OV server's /mcp
-servers/config.mjs, debug-log.mjs    # credential/config resolution (adapted from claude-code-memory-plugin)
 servers/shared/                      # generated from examples/memory-plugin-shared/lib (do not edit)
 skills/openviking-memory/SKILL.md    # teaches the model the recall + persist loop
 plugin.test.mjs                      # node --test conformance checks
@@ -56,7 +55,7 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 - [claude-code-memory-plugin](../examples/claude-code-memory-plugin/) (Claude Code)
 - [codex-memory-plugin](../examples/codex-memory-plugin/) (Codex)
 - [opencode-plugin](../examples/opencode-plugin/) (OpenCode)
-- [cursor-memory-plugin](../examples/cursor-memory-plugin/), [trae-memory-hooks](../examples/trae-memory-hooks/), [zcode-memory-plugin](../examples/zcode-memory-plugin/), ...
+- [agent-hook-plugin](../examples/agent-hook-plugin/) (Cursor, TRAE, TRAE CN, ZCode), ...
 
 Use this Agent Plugins package for harnesses with no hooks, or when you want one package that loads across many clients.
 
@@ -74,6 +73,6 @@ node --test agent-plugins/plugin.test.mjs
 node examples/memory-plugin-shared/sync.mjs
 ```
 
-`examples/memory-plugin-shared/sync.test.mjs` fails if they drift. `servers/config.mjs`, `servers/debug-log.mjs`, and `servers/mcp-proxy.mjs` are adapted from `examples/claude-code-memory-plugin` (connection fields only — the hook-tuning knobs are dropped, since this spec has no hooks); when changing proxy behavior there, mirror it here.
+`examples/memory-plugin-shared/sync.test.mjs` fails if they drift, and pins this package to the connection half of the shared runtime: `servers/mcp-proxy.mjs` resolves everything through `buildProxyConnection()` in `shared/credentials.mjs`, so the hook-tuning knobs — which this spec has no hooks to run — never enter the bundle.
 
 Both test files run in CI via `.github/workflows/pr.yml`.

@@ -26,6 +26,7 @@ import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { catchUpTurns, hasCaptureKeyword, makeFetchJSON } from "./ov-session.mjs";
 import { clearEnded, loadState, saveState, withSessionLock } from "./session-state.mjs";
+import { runHookStage } from "./shared/agent-hook-runtime.mjs";
 import { maybeDetach, readHookStdin } from "./shared/async-writer.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
@@ -135,9 +136,32 @@ async function capture(sessionId, transcriptPath, cwd, heartbeat) {
       : "");
 }
 
-async function main() {
+async function main(stage) {
+  cfg = stage.cfg;
+  const sessionId = stage.input.session_id || "unknown";
+  const transcriptPath = stage.input.transcript_path || null;
+
+  // A turn ended for this session, so it is alive again after any resume — but
+  // only for markers older than this hook run.
+  await clearEnded(sessionId, { before: HOOK_STARTED_AT });
+
+  const outcome = await withSessionLock(
+    sessionId,
+    ({ heartbeat }) => capture(sessionId, transcriptPath, stage.cwd, heartbeat),
+    { waitMs: LOCK_WAIT_MS },
+  );
+  if (outcome.skipped) {
+    logError("lock_timeout", `another writer holds ${sessionId}; leaving state untouched`);
+    return;
+  }
+  return outcome.value;
+}
+
+async function start() {
+  // Write-path hook: gated by autoCapture against this process's directory,
+  // before the payload names the session's.
   if (!cfg.autoCapture) {
-    log("skip", { stage: "init", reason: "autoCapture disabled" });
+    log("skip", { stage: "init", reason: "disabled" });
     noop();
     return;
   }
@@ -147,43 +171,13 @@ async function main() {
   process.env.OPENVIKING_HOOK_STARTED_AT = String(HOOK_STARTED_AT);
   if (await maybeDetach(cfg, { approve: () => output({}) })) return;
 
-  let input;
-  try {
-    input = JSON.parse(await readHookStdin());
-  } catch {
-    log("skip", { stage: "stdin_parse", reason: "invalid input" });
-    noop();
-    return;
-  }
-
-  const sessionId = input.session_id || "unknown";
-  const transcriptPath = input.transcript_path || null;
-  // The workspace layer belongs to the session's directory, which only the
-  // payload knows; see loadConfig for why re-resolving this late is safe.
-  const cwd = typeof input.cwd === "string" && input.cwd.trim() ? input.cwd : process.cwd();
-  cfg = loadConfig(cwd);
-  if (!cfg.autoCapture) {
-    // The gate above ran against this process's directory, not the session's.
-    log("skip", { stage: "init", reason: "autoCapture disabled" });
-    noop();
-    return;
-  }
-
-  // A turn ended for this session, so it is alive again after any resume — but
-  // only for markers older than this hook run.
-  await clearEnded(sessionId, { before: HOOK_STARTED_AT });
-
-  const outcome = await withSessionLock(
-    sessionId,
-    ({ heartbeat }) => capture(sessionId, transcriptPath, cwd, heartbeat),
-    { waitMs: LOCK_WAIT_MS },
-  );
-  if (outcome.skipped) {
-    logError("lock_timeout", `another writer holds ${sessionId}; leaving state untouched`);
-    noop();
-    return;
-  }
-  noop(outcome.value);
+  await runHookStage({
+    loadConfig,
+    input: { read: readHookStdin },
+    gates: { enabled: (reloaded) => reloaded.autoCapture },
+    envelope: noop,
+    onSkip: (reason) => log("skip", { stage: "init", reason }),
+  }, main);
 }
 
-main().catch((err) => { logError("uncaught", err); noop(); });
+start().catch((err) => { logError("uncaught", err); noop(); });

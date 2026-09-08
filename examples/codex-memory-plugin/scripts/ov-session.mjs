@@ -13,11 +13,8 @@
 import { readFile } from "node:fs/promises";
 import { extractCaptureTurns, findLastHumanTurnIndex } from "./capture-utils.mjs";
 import { resolveOvSessionId, saveState } from "./session-state.mjs";
+import { makeAgentFetchJSON } from "./shared/agent-hook-runtime.mjs";
 import { sendSessionMessages } from "./shared/batch-send.mjs";
-
-function responseTraceId(body) {
-  return body?.result?.trace_id || body?.error?.trace_id || body?.trace_id || undefined;
-}
 
 /**
  * Build the `{ fetchJSONRes, fetchJSON }` pair used by every capture hook.
@@ -25,42 +22,13 @@ function responseTraceId(body) {
  * loading state (which happens under the session lock).
  */
 export function makeFetchJSON(cfg, { getActorPeerId = () => "" } = {}) {
-  function makeHeaders() {
-    const headers = { "Content-Type": "application/json" };
-    if (cfg.apiKey) {
-      headers["Authorization"] = `Bearer ${cfg.apiKey}`;
-      headers["X-API-Key"] = cfg.apiKey;
-    }
-    if (cfg.sendIdentityHeaders && cfg.account) headers["X-OpenViking-Account"] = cfg.account;
-    if (cfg.sendIdentityHeaders && cfg.user) headers["X-OpenViking-User"] = cfg.user;
-    const actorPeerId = getActorPeerId();
-    if (actorPeerId) headers["X-OpenViking-Actor-Peer"] = actorPeerId;
-    if (cfg.userAgent) headers["User-Agent"] = cfg.userAgent;
-    return headers;
-  }
-
-  async function fetchJSONRes(path, init = {}) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), cfg.captureTimeoutMs);
-    try {
-      const res = await fetch(`${cfg.baseUrl}${path}`, {
-        ...init,
-        headers: makeHeaders(),
-        signal: controller.signal,
-      });
-      const body = await res.json().catch(() => null);
-      if (!body) return { ok: false, status: res.status, error: { message: "empty or invalid JSON response" } };
-      const traceId = responseTraceId(body);
-      if (!res.ok || body.status === "error") {
-        return { ok: false, status: res.status, error: body.error || body, traceId };
-      }
-      return { ok: true, status: res.status, result: body.result ?? body, traceId };
-    } catch (err) {
-      return { ok: false, status: 0, error: { message: err?.message || String(err) } };
-    } finally {
-      clearTimeout(timer);
-    }
-  }
+  const { fetchJSON: fetchJSONRes } = makeAgentFetchJSON(cfg, process.cwd(), {
+    defaultTimeoutMs: cfg.captureTimeoutMs,
+    getActorPeerId,
+    // A capture hook would rather retry a body it cannot parse than record the
+    // turn as sent.
+    requireJsonBody: true,
+  });
 
   async function fetchJSON(path, init = {}) {
     const r = await fetchJSONRes(path, init);
@@ -199,6 +167,10 @@ export async function catchUpTurns({
   });
 
   const r = await sendSessionMessages(fetchJSONRes, ovSessionId, payloads, {
+    // Codex hooks are short-lived subprocesses with no retry of their own, so
+    // a retryable failure has to survive on disk until the next SessionStart
+    // replays it. Without this the turns were simply dropped.
+    enqueueOnRetryable: true,
     onSent: async (n) => {
       state.capturedTurnCount += n;
       await saveState(state);

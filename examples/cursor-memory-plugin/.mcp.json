@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "openviking": {
-      "command": "node",
-      "args": ["${CURSOR_PLUGIN_ROOT}/servers/mcp-proxy.mjs"]
-    }
-  }
-}

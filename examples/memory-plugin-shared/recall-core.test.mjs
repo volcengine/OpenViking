@@ -7,7 +7,9 @@ import {
   buildContextSearchBody,
   buildRecallEndpointBody,
   buildRecallBlock,
+  buildRecallBlockDetailed,
   contextRequestTimeoutMs,
+  estimateTokens,
   isContextFaceLegacy,
   postRecall,
   readPeerScopeDowngrade,
@@ -135,6 +137,15 @@ test("the deadline follows the stages the request actually asks for", async () =
   // A digest costs the rewrite fuse on top of everything above it.
   const withRewrite = contextRequestTimeoutMs(cfg, { session_id: "s", rewrite: true });
   assert.ok(withRewrite > withSession, "a digest must outlast a plain expanded request");
+});
+
+test("explicit recall context timeout applies without rewrite or expansion", () => {
+  const timeout = contextRequestTimeoutMs(
+    { recallContextTimeoutMs: 25000, timeoutMs: 15000 },
+    { session_id: "s1", query_expansion: "off" },
+  );
+
+  assert.equal(timeout, 25000);
 });
 
 test("buildRecallBlock prefers a cited server digest", async () => {
@@ -407,4 +418,54 @@ test("a legacy id equal to the effective one is not asked twice", async () => {
   });
 
   assert.deepEqual(asked, ["same"]);
+});
+
+function fallbackFetch(memories) {
+  return async (path) => {
+    if (path === "/api/v1/search/search") return { ok: false, status: 503 };
+    if (path === "/api/v1/search/recall") return { ok: false, status: 404 };
+    if (path === "/api/v1/search/find") return { ok: true, result: { memories, skills: [] } };
+    return { ok: false, status: 404 };
+  };
+}
+
+test("a server-assembled block reports itself as one budgeted unit", async () => {
+  const detailed = await buildRecallBlockDetailed(async () => ({
+    ok: true,
+    result: { rendered: "- viking://a/b.md — body", entries: [{ uri: "viking://a/b.md" }], stats: {} },
+  }), {}, "hello", { legacyCachePath: await tempPath("context-face.json") });
+
+  assert.equal(detailed.stage, "server_assembled");
+  assert.equal(detailed.contentCount, 1);
+  assert.equal(detailed.hintCount, 0);
+  assert.equal(detailed.budgetUsed, estimateTokens(detailed.block));
+});
+
+test("the ranked fallback reports what fitted the budget and what degraded", async () => {
+  const detailed = await buildRecallBlockDetailed(fallbackFetch([
+    { uri: "viking://user/default/memories/entities/a.md", score: 0.9, abstract: "x".repeat(500), level: 1 },
+    { uri: "viking://user/default/memories/entities/b.md", score: 0.9, abstract: "y".repeat(500), level: 1 },
+  ]), {
+    recallTokenBudget: 200,
+    recallMaxContentChars: 500,
+    recallPreferAbstract: true,
+  }, "what happened", { legacyCachePath: await tempPath("context-face.json") });
+
+  assert.equal(detailed.stage, "ranked");
+  assert.equal(detailed.contentCount, 1);
+  assert.equal(detailed.hintCount, 1);
+  assert.equal(detailed.budgetUsed, estimateTokens(`- [memory 90%] ${"x".repeat(500)}`));
+});
+
+test("an empty recall says whether the server had nothing or the threshold took it", async () => {
+  const legacyCachePath = await tempPath("context-face.json");
+  const nothing = await buildRecallBlockDetailed(fallbackFetch([]), {}, "hello", { legacyCachePath });
+  const belowThreshold = await buildRecallBlockDetailed(fallbackFetch([
+    { uri: "viking://user/default/memories/entities/a.md", score: 0.1, abstract: "barely related", level: 1 },
+  ]), {}, "hello", { legacyCachePath: await tempPath("context-face.json") });
+
+  assert.equal(nothing.stage, "no_results");
+  assert.equal(nothing.block, "");
+  assert.equal(belowThreshold.stage, "filtered_out");
+  assert.equal(await buildRecallBlock(fallbackFetch([]), {}, "hello", { legacyCachePath }), null);
 });

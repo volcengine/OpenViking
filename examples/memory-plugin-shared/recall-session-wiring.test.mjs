@@ -14,8 +14,8 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 // wiring so a harness cannot silently fall back to stateless recall again.
 const CALL_SITES = [
   {
-    name: "ZCode hook forwards its derived session id",
-    file: join(ROOT, "examples", "zcode-memory-plugin", "scripts", "zcode-hook.mjs"),
+    name: "the thin-harness hook forwards its derived session id",
+    file: join(ROOT, "examples", "agent-hook-plugin", "scripts", "hook.mjs"),
     pattern: /recallForPrompt\([^)]*\{[^}]*\bsessionId\b/s,
   },
   {
@@ -27,6 +27,13 @@ const CALL_SITES = [
     name: "pi recall forwards the sync manager's session id",
     file: join(ROOT, "examples", "pi-coding-agent-extension", "recall.ts"),
     pattern: /sessionId:\s*this\.sessionId\(\)/,
+  },
+  // Under `actor` scope the effective peer is the only one asked, so dropping
+  // the pre-git id here makes every memory written before it unreachable.
+  {
+    name: "pi recall forwards the pre-git peer for the actor-scope dual read",
+    file: join(ROOT, "examples", "pi-coding-agent-extension", "recall.ts"),
+    pattern: /legacyPeerId:\s*this\.config\.legacyPeerId/,
   },
 ];
 
@@ -78,23 +85,17 @@ for (const { name, file, pattern } of TIMEOUT_PASSTHROUGH) {
   });
 }
 
-const QUERY_EXPANSION_OPT_OUT = [
-  {
-    name: "OpenCode exposes the query-expansion opt-out",
-    file: join(ROOT, "examples", "opencode-plugin", "lib", "config.mjs"),
-  },
-  {
-    name: "pi exposes the query-expansion opt-out",
-    file: join(ROOT, "examples", "pi-coding-agent-extension", "config.ts"),
-  },
-];
+// The env var alone is not enough: buildContextSearchBody only emits
+// `query_expansion` when the harness also marks it as configured. Both halves
+// are declared once now — the knob in the schema, the flag in the one builder
+// every loader calls — and `plugin-config.test.mjs` checks each harness gets it.
+test("the query-expansion opt-out is declared once and reported for every harness", async () => {
+  const { KNOB_BY_NAME } = await import("./lib/config-schema.mjs");
+  const knob = KNOB_BY_NAME.get("recallQueryExpansion");
+  assert.equal(knob.env, "OPENVIKING_RECALL_QUERY_EXPANSION");
+  assert.deepEqual(knob.values, ["auto", "off"]);
+  assert.equal(knob.sendOnlyWhenConfigured, true);
 
-for (const { name, file } of QUERY_EXPANSION_OPT_OUT) {
-  test(name, async () => {
-    const source = await readFile(file, "utf-8");
-    // The env var alone is not enough: buildContextSearchBody only emits
-    // `query_expansion` when the harness also marks it as configured.
-    assert.match(source, /OPENVIKING_RECALL_QUERY_EXPANSION/);
-    assert.match(source, /recallQueryExpansionConfigured/);
-  });
-}
+  const builder = join(ROOT, "examples", "memory-plugin-shared", "lib", "plugin-config.mjs");
+  assert.match(await readFile(builder, "utf-8"), /`\$\{knob\.name\}Configured`/);
+});

@@ -46,7 +46,7 @@
 
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
-import { catchUpTurns, makeFetchJSON } from "./ov-session.mjs";
+import { catchUpTurns, commitOvSession, makeFetchJSON } from "./ov-session.mjs";
 import { detectRecallCompressorProfile } from "./recall-compressor-profile.mjs";
 import {
   clearEnded,
@@ -58,6 +58,8 @@ import {
   saveState,
   withSessionLock,
 } from "./session-state.mjs";
+import { runHookStage } from "./shared/agent-hook-runtime.mjs";
+import { replayPending } from "./shared/pending-queue.mjs";
 import { buildProfileBlock } from "./shared/profile-inject.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
@@ -74,7 +76,7 @@ const HOOK_STARTED_AT = Date.now();
 
 // The sweep catches up unsent turns before committing, so it needs the same
 // HTTP helper the capture hooks use.
-const { fetchJSONRes } = makeFetchJSON(cfg, { getActorPeerId: () => activePeerId });
+const { fetchJSONRes, fetchJSON } = makeFetchJSON(cfg, { getActorPeerId: () => activePeerId });
 
 const COMMITTED_TTL_MS = (() => {
   const v = Number(process.env.OPENVIKING_CODEX_COMMITTED_TTL_MS);
@@ -102,50 +104,21 @@ function emitSessionStartOutput({ contexts = [], systemMessage = "" } = {}) {
   output(response);
 }
 
-function responseTraceId(body) {
-  return body?.result?.trace_id || body?.error?.trace_id || body?.trace_id || undefined;
-}
-
-async function requestJSON(path, init = {}, options = {}) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), cfg.captureTimeoutMs);
+/**
+ * Drain writes that an earlier hook queued while the server was unreachable.
+ * SessionStart is the only codex hook that runs after a known-healthy check,
+ * so it is where the queue gets its chance; a bypassed directory still replays,
+ * because the entries were recorded by sessions that were not bypassed.
+ */
+async function replayPendingWrites() {
   try {
-    const headers = { "Content-Type": "application/json" };
-    if (cfg.apiKey) {
-      headers["Authorization"] = `Bearer ${cfg.apiKey}`;
-      headers["X-API-Key"] = cfg.apiKey;
+    const result = await replayPending(fetchJSONRes, log);
+    if (result.replayed > 0 || result.failed > 0 || result.deferred > 0) {
+      log("pending-replay", result);
     }
-    if (cfg.sendIdentityHeaders && cfg.account) headers["X-OpenViking-Account"] = cfg.account;
-    if (cfg.sendIdentityHeaders && cfg.user) headers["X-OpenViking-User"] = cfg.user;
-    const actorPeerId = options.actorPeerId ?? activePeerId;
-    if (actorPeerId) headers["X-OpenViking-Actor-Peer"] = actorPeerId;
-    if (cfg.userAgent) headers["User-Agent"] = cfg.userAgent;
-    const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
-    const body = await res.json().catch(() => null);
-    if (!body) return { ok: false, status: res.status };
-    const traceId = responseTraceId(body);
-    if (!res.ok || body.status === "error") {
-      return { ok: false, status: res.status, error: body.error || body, traceId };
-    }
-    return { ok: true, status: res.status, result: body.result ?? body, traceId };
-  } catch (error) {
-    return { ok: false, status: 0, error: { message: error?.message || String(error) } };
-  } finally {
-    clearTimeout(timer);
+  } catch (err) {
+    logError("pending-replay", err);
   }
-}
-
-async function fetchJSON(path, init = {}, options = {}) {
-  const response = await requestJSON(path, init, options);
-  return response.ok ? response.result : null;
-}
-
-async function commitOvSession(ovSessionId) {
-  if (!ovSessionId) return null;
-  return requestJSON(
-    `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`,
-    { method: "POST", body: JSON.stringify({}) },
-  );
 }
 
 function truncateText(text, maxChars) {
@@ -196,7 +169,7 @@ async function buildSessionProfileContext() {
   }
   try {
     const profile = await buildProfileBlock(
-      requestJSON,
+      fetchJSONRes,
       cfg.profileTokenBudget,
       activePeerId,
     );
@@ -263,7 +236,7 @@ async function buildResumeArchiveContext(newSessionId) {
  */
 async function commitAndRelease(state, reason, endToken) {
   const ovSessionId = state.ovSessionId;
-  const commit = await commitOvSession(ovSessionId);
+  const commit = await commitOvSession(fetchJSONRes, ovSessionId);
   if (!commit?.ok) {
     log("commit", {
       reason,
@@ -326,27 +299,24 @@ function describeCommittedSessions(commits) {
     (traceIds.length ? ` (trace_ids=${traceIds.join(",")})` : "");
 }
 
-async function main() {
-  let input;
-  try {
-    const chunks = [];
-    for await (const chunk of process.stdin) chunks.push(chunk);
-    input = JSON.parse(Buffer.concat(chunks).toString());
-  } catch {
-    log("skip", { stage: "stdin_parse", reason: "invalid input" });
-    noop();
-    return;
-  }
-
+// A bypassed directory suppresses this session's own memory work — no peer
+// registration, no injection. The sweep and the pending replay still run: they
+// finish sessions recorded elsewhere, and this hook is the only place codex
+// runs either, so skipping them would strand that data for as long as the user
+// keeps working in a bypassed repository.
+runHookStage({
+  loadConfig,
+  gates: { bypass: () => false },
+  envelope: (response) => emitSessionStartOutput(response || {}),
+  onSkip: (reason) => log("skip", { stage: "init", reason }),
+}, async (stage) => {
+  const { input, cwd, bypassed } = stage;
+  cfg = stage.cfg;
   const source = input.source || "unknown";
   const newSessionId = input.session_id || "unknown";
-  const cwd = typeof input.cwd === "string" && input.cwd.trim() ? input.cwd : process.cwd();
-  // The workspace layer belongs to the session's directory, which only the
-  // payload knows; see loadConfig for why re-resolving this late is safe.
-  cfg = loadConfig(cwd);
   const effectivePeer = resolveEffectivePeerId({ cfg, cwd });
   activePeerId = effectivePeer.peerId;
-  if (newSessionId !== "unknown") {
+  if (!bypassed && newSessionId !== "unknown") {
     const state = await loadState(newSessionId);
     await saveState({
       ...state,
@@ -358,6 +328,7 @@ async function main() {
     newSessionId,
     idleTtlMs: IDLE_TTL_MS,
     peerSource: effectivePeer.source,
+    bypassed,
   });
 
   try {
@@ -373,15 +344,18 @@ async function main() {
     const health = await fetchJSON("/health");
     if (!health) {
       logError("health_check", "server unreachable; skipping profile + archive injection");
-      noop();
+      return;
+    }
+    await replayPendingWrites();
+    if (bypassed) {
+      log("skip", { stage: "inject", reason: "bypass_session_pattern" });
       return;
     }
     const [profileContext, archiveContext] = await Promise.all([
       buildSessionProfileContext(),
       buildResumeArchiveContext(newSessionId),
     ]);
-    emitSessionStartOutput({ contexts: [profileContext, archiveContext] });
-    return;
+    return { contexts: [profileContext, archiveContext] };
   }
 
   // Other non-startup sources are hard no-ops. We don't sweep there, because
@@ -389,18 +363,18 @@ async function main() {
   // session boundary.
   if (source !== "startup" && source !== "clear") {
     log("skip", { stage: "source_check", reason: `source=${source} (only startup|clear act)` });
-    noop();
     return;
   }
 
   const health = await fetchJSON("/health");
   if (!health) {
     logError("health_check", "server unreachable; skipping profile injection + commit + sweep");
-    noop();
     return;
   }
 
-  const profileContext = await buildSessionProfileContext();
+  await replayPendingWrites();
+
+  const profileContext = bypassed ? null : await buildSessionProfileContext();
   const now = Date.now();
   const commits = [];
   let retired = 0;
@@ -518,14 +492,8 @@ async function main() {
     ovSessionIds,
   });
 
-  if (commits.length > 0) {
-    emitSessionStartOutput({
-      contexts: [profileContext],
-      systemMessage: describeCommittedSessions(commits),
-    });
-  } else {
-    emitSessionStartOutput({ contexts: [profileContext] });
-  }
-}
-
-main().catch((err) => { logError("uncaught", err); noop(); });
+  return {
+    contexts: [profileContext],
+    systemMessage: commits.length > 0 ? describeCommittedSessions(commits) : "",
+  };
+}).catch((err) => { logError("uncaught", err); noop(); });

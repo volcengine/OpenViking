@@ -4,32 +4,28 @@
  * Auto-Recall Hook Script for Claude Code (UserPromptSubmit).
  *
  * Searches OpenViking for relevant context and injects an
- * <openviking-context> block. High-score items within the token budget
- * include resolved content; remaining items degrade to URI + score.
- *
- * Ranking: ported from openclaw-plugin/memory-ranking.ts (query profile
- * + boosts). Content resolution + budget: ported from
- * openclaw-plugin/index.ts resolveMemoryContent / buildMemoryLinesWithBudget,
- * modified so items beyond the budget are degraded (URI-only) instead of
- * dropped.
+ * <openviking-context> block. Retrieval, ranking and the token budget are the
+ * shared recall core's; this hook owns the CC envelope and the statusline
+ * snapshot it leaves behind.
  */
 
 import { isPluginEnabled, loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
-import { deriveOvSessionId, isBypassed, makeFetchJSON } from "./lib/ov-session.mjs";
+import { deriveOvSessionId, makeFetchJSON } from "./lib/ov-session.mjs";
 import { writeJsonState } from "./lib/state.mjs";
 import { createHostCompressor } from "./lib/host-compressor.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
-import { buildServerAssembledBlock } from "./shared/recall-core.mjs";
+import { runHookStage } from "./shared/agent-hook-runtime.mjs";
+import { buildRecallBlockDetailed } from "./shared/recall-core.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
   process.exit(0);
 }
 
-let cfg = loadConfig();
+const baseCfg = loadConfig();
 const { log, logError } = createLogger("auto-recall");
-const fetchJSON = makeFetchJSON(cfg);
+const fetchJSON = makeFetchJSON(baseCfg);
 
 function output(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
@@ -41,328 +37,46 @@ function approve(msg) {
   output(out);
 }
 
-// ---------------------------------------------------------------------------
-// Ranking (ported from openclaw-plugin/memory-ranking.ts)
-// ---------------------------------------------------------------------------
+const URI_RE = /viking:\/\/[^\s<>"')\]]+/g;
 
-function clampScore(v) {
-  if (typeof v !== "number" || Number.isNaN(v)) return 0;
-  return Math.max(0, Math.min(1, v));
-}
-
-const PREFERENCE_QUERY_RE = /prefer|preference|favorite|favourite|like|偏好|喜欢|爱好|更倾向/i;
-const TEMPORAL_QUERY_RE = /when|what time|date|day|month|year|yesterday|today|tomorrow|last|next|什么时候|何时|哪天|几月|几年|昨天|今天|明天/i;
-const QUERY_TOKEN_RE = /[a-z0-9一-龥]{2,}/gi;
-const STOPWORDS = new Set([
-  "what","when","where","which","who","whom","whose","why","how","did","does",
-  "is","are","was","were","the","and","for","with","from","that","this","your","you",
-]);
-
-function buildQueryProfile(query) {
-  const text = query.trim();
-  const allTokens = text.toLowerCase().match(QUERY_TOKEN_RE) || [];
-  const tokens = allTokens.filter(t => !STOPWORDS.has(t));
-  return {
-    tokens,
-    wantsPreference: PREFERENCE_QUERY_RE.test(text),
-    wantsTemporal: TEMPORAL_QUERY_RE.test(text),
-  };
-}
-
-function lexicalOverlapBoost(tokens, text) {
-  if (tokens.length === 0 || !text) return 0;
-  const haystack = ` ${text.toLowerCase()} `;
-  let matched = 0;
-  for (const token of tokens.slice(0, 8)) {
-    if (haystack.includes(token)) matched += 1;
-  }
-  return Math.min(0.2, (matched / Math.min(tokens.length, 4)) * 0.2);
-}
-
-function rankItem(item, profile) {
-  const base = clampScore(item.score);
-  const abstract = (item.abstract || item.overview || "").trim();
-  const cat = (item.category || "").toLowerCase();
-  const uri = (item.uri || "").toLowerCase();
-  const leafBoost = (item.level === 2 || uri.endsWith(".md")) ? 0.12 : 0;
-  const eventBoost = profile.wantsTemporal && (cat === "events" || uri.includes("/events/")) ? 0.1 : 0;
-  const prefBoost = profile.wantsPreference && (cat === "preferences" || uri.includes("/preferences/")) ? 0.08 : 0;
-  const overlapBoost = lexicalOverlapBoost(profile.tokens, `${item.uri} ${abstract}`);
-  return base + leafBoost + eventBoost + prefBoost + overlapBoost;
-}
-
-/**
- * events/cases specialization (ported from openclaw-plugin/memory-ranking.ts
- * isEventOrCaseMemory): dedupe by URI instead of abstract.
- */
-function isEventOrCaseItem(item) {
-  const cat = (item.category || "").toLowerCase();
-  const uri = (item.uri || "").toLowerCase();
-  return cat === "events" || cat === "cases" || uri.includes("/events/") || uri.includes("/cases/");
-}
-
-function dedupeItems(items) {
-  const seen = new Set();
-  const out = [];
-  for (const item of items) {
-    const key = isEventOrCaseItem(item)
-      ? `uri:${item.uri}`
-      : ((item.abstract || item.overview || "").trim().toLowerCase() || `uri:${item.uri}`);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(item);
-  }
-  return out;
-}
-
-// ---------------------------------------------------------------------------
-// User URI space resolution
-// ---------------------------------------------------------------------------
-
-const USER_RESERVED_DIRS = new Set(["memories", "skills"]);
-let _userSpaceCache = "";
-
-async function resolveUserSpace(actorPeerId = "") {
-  if (_userSpaceCache) return _userSpaceCache;
-
-  let fallbackSpace = "default";
-  const status = await fetchJSON("/api/v1/system/status");
-  if (status.ok && typeof status.result?.user === "string" && status.result.user.trim()) {
-    fallbackSpace = status.result.user.trim();
-  }
-
-  const lsRes = await fetchJSON(
-    `/api/v1/fs/ls?uri=${encodeURIComponent("viking://user")}&output=original`,
-    {},
-    { actorPeerId },
-  );
-  if (lsRes.ok && Array.isArray(lsRes.result)) {
-    const spaces = lsRes.result
-      .filter(e => e?.isDir)
-      .map(e => (typeof e.name === "string" ? e.name.trim() : ""))
-      .filter(n => n && !n.startsWith(".") && !USER_RESERVED_DIRS.has(n));
-    if (spaces.length > 0) {
-      if (spaces.includes(fallbackSpace)) { _userSpaceCache = fallbackSpace; return fallbackSpace; }
-      if (spaces.includes("default")) { _userSpaceCache = "default"; return "default"; }
-      if (spaces.length === 1) { _userSpaceCache = spaces[0]; return spaces[0]; }
-    }
-  }
-  _userSpaceCache = fallbackSpace;
-  return fallbackSpace;
-}
-
-async function resolveTargetUri(targetUri, actorPeerId = "") {
-  const trimmed = targetUri.trim().replace(/\/+$/, "");
-  // viking://~ is the home alias: the server expands it to the caller's own user
-  // space, so it needs no client-side rewrite.
-  if (trimmed === "viking://~" || trimmed.startsWith("viking://~/")) return trimmed;
-  // Legacy compat: uid-less viking://user/<reserved> URIs may still sit in plugin
-  // configs. Newer servers reject them, so rewrite to an explicit-uid URI here.
-  const m = trimmed.match(/^viking:\/\/user(?:\/(.*))?$/);
-  if (!m) return trimmed;
-  const rawRest = (m[1] ?? "").trim();
-  if (!rawRest) return trimmed;
-  const parts = rawRest.split("/").filter(Boolean);
-  if (parts.length === 0) return trimmed;
-  if (!USER_RESERVED_DIRS.has(parts[0])) return trimmed;
-  const space = await resolveUserSpace(actorPeerId);
-  return `viking://user/${space}/${parts.join("/")}`;
-}
-
-// ---------------------------------------------------------------------------
-// Multi-source search (scoped sources only — resources excluded to prevent
-// cross-namespace leakage; use MCP search(scope="resources") explicitly)
-// ---------------------------------------------------------------------------
-
-const SOURCES = [
-  { type: "memory", uri: "viking://~/memories",  bucket: "memories" },
-  { type: "skill",  uri: "viking://~/skills",    bucket: "skills"   },
-];
-
-async function searchOneSource(query, source, limit, actorPeerId = "") {
-  const resolvedUri = await resolveTargetUri(source.uri, actorPeerId);
-  const body = { query, target_uri: resolvedUri, limit, score_threshold: 0 };
-  const res = await fetchJSON("/api/v1/search/find", {
-    method: "POST",
-    body: JSON.stringify(body),
-  }, { actorPeerId });
-  if (!res.ok) return [];
-  const items = res.result?.[source.bucket] || [];
-  return items.map(item => ({ ...item, _sourceType: source.type }));
-}
-
-async function searchAllSources(query, perSourceLimit, actorPeerId = "") {
-  const results = await Promise.all(SOURCES.map(src => searchOneSource(query, src, perSourceLimit, actorPeerId)));
-  const all = results.flat();
-  log("search_summary", {
-    counts: SOURCES.map((src, i) => ({ type: src.type, uri: src.uri, count: results[i].length })),
-    total: all.length,
-  });
-  return all;
-}
-
-// ---------------------------------------------------------------------------
-// Content resolution + budget formatting
-// Ported from openclaw-plugin/index.ts resolveMemoryContent (line 1822-1850)
-// and buildMemoryLinesWithBudget (line 1878-1907).
-// Key difference: items beyond token budget are degraded to URI+score
-// instead of being dropped entirely.
-// ---------------------------------------------------------------------------
-
-/** chars/4 heuristic (openclaw-plugin/index.ts:1812) */
-function estimateTokens(text) {
-  return text ? Math.ceil(text.length / 4) : 0;
-}
-
-/**
- * Resolve display content for a single item.
- * Ported from openclaw-plugin/index.ts:1822 resolveMemoryContent.
- */
-async function resolveItemContent(item, actorPeerId = "") {
-  let content;
-
-  if (cfg.recallPreferAbstract && (item.abstract || item.overview || "").trim()) {
-    content = (item.abstract || item.overview).trim();
-  } else if (item.level === 2) {
-    try {
-      const res = await fetchJSON(
-        `/api/v1/content/read?uri=${encodeURIComponent(item.uri)}`,
-        {},
-        { actorPeerId },
-      );
-      const body = res.ok && typeof res.result === "string" ? res.result.trim() : "";
-      content = body || (item.abstract || item.overview || "").trim() || item.uri;
-    } catch {
-      content = (item.abstract || item.overview || "").trim() || item.uri;
-    }
-  } else {
-    content = (item.abstract || item.overview || "").trim() || item.uri;
-  }
-
-  if (content.length > cfg.recallMaxContentChars) {
-    content = content.slice(0, cfg.recallMaxContentChars) + "...";
-  }
-
-  return content;
-}
-
-/**
- * Build the injection block with token budget.
- * Front items (within budget) get full content lines.
- * Remaining items (beyond budget) degrade to URI + score only.
- */
-async function buildInjectionBlock(items, actorPeerId = "") {
-  if (items.length === 0) return null;
-
-  let budgetRemaining = cfg.recallTokenBudget;
-  const lines = [
-    "<openviking-context>",
-    "Relevant context from OpenViking. Use the read MCP tool to expand URIs.",
-  ];
-  let contentCount = 0;
-  let hintCount = 0;
-
-  for (const item of items) {
-    const score = (clampScore(item.score) * 100).toFixed(0);
-    const uriLine = `- [${item._sourceType} ${score}%] ${item.uri}`;
-
-    if (budgetRemaining > 0) {
-      const content = await resolveItemContent(item, actorPeerId);
-      const contentLine = `- [${item._sourceType} ${score}%] ${content}`;
-      const lineTokens = estimateTokens(contentLine);
-
-      // First item always included even if over budget (openclaw spec §6.2)
-      if (lineTokens > budgetRemaining && contentCount > 0) {
-        lines.push(uriLine);
-        hintCount++;
-      } else {
-        lines.push(contentLine);
-        budgetRemaining -= lineTokens;
-        contentCount++;
-      }
-    } else {
-      lines.push(uriLine);
-      hintCount++;
-    }
-  }
-
-  lines.push("</openviking-context>");
-
-  const budgetUsed = cfg.recallTokenBudget - budgetRemaining;
-  log("injection_built", {
-    contentItems: contentCount,
-    hintItems: hintCount,
-    budgetUsed,
-    budgetTotal: cfg.recallTokenBudget,
-  });
-
-  return { block: lines.join("\n"), contentCount, hintCount, budgetUsed };
-}
-
-async function recallViaServerAssembly(query, actorPeerId = "", sessionId = "", legacyPeerId = "") {
+async function recall(cfg, query, peer, sessionId) {
   const runCompressor = await createHostCompressor(cfg, log);
-  const assemble = (peerId) => buildServerAssembledBlock(fetchJSON, cfg, query, {
-    actorPeerId: peerId,
+  return buildRecallBlockDetailed(fetchJSON, cfg, query, {
+    actorPeerId: peer.peerId,
+    legacyPeerId: peer.legacyPeerId,
     sessionId,
     log,
     runCompressor,
     localCompressorAvailable: Boolean(runCompressor),
   });
-
-  const block = await assemble(actorPeerId);
-  // `peer_scope: "all"` already sweeps every peer under this user, so the peer
-  // this workspace used before the identity rule changed needs asking only
-  // when that sweep is off.
-  if (cfg.recallPeerScope !== "actor" || !legacyPeerId || legacyPeerId === actorPeerId) return block;
-
-  const legacy = await assemble(legacyPeerId);
-  if (!legacy) return block;
-  log("recall_legacy_peer_hit", { legacyPeerId });
-  return block ? `${block}\n${legacy}` : legacy;
 }
 
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
-async function main() {
-  const t0 = Date.now();
-  // Snapshot state for the statusline. Always written, even on early-exit
-  // branches, so the indicator reflects the latest turn rather than stale
-  // data from the previous run.
-  const writeRecallState = (extra) => writeJsonState("last-recall.json", {
-    server_url: cfg.baseUrl,
+const t0 = Date.now();
+// Snapshot state for the statusline. Always written, even on early-exit
+// branches, so the indicator reflects the latest turn rather than stale
+// data from the previous run.
+function writeRecallState(extra) {
+  writeJsonState("last-recall.json", {
+    server_url: baseCfg.baseUrl,
     latency_ms: Date.now() - t0,
     ...extra,
   });
+}
 
-  let input;
-  try {
-    const chunks = [];
-    for await (const chunk of process.stdin) chunks.push(chunk);
-    input = JSON.parse(Buffer.concat(chunks).toString());
-  } catch {
-    log("skip", { reason: "invalid stdin" });
-    writeRecallState({ count: 0, reason: "bad_stdin" });
-    approve();
-    return;
-  }
-
+runHookStage({
+  loadConfig,
+  gates: { enabled: (cfg) => cfg.autoRecall },
+  envelope: approve,
+  onSkip: (reason, { sessionId }) => {
+    log("skip", { reason });
+    writeRecallState({ count: 0, reason, cc_session_id: sessionId });
+  },
+}, async ({ cfg, input, cwd, sessionId }) => {
   const userPrompt = (input.prompt || "").trim();
-  const sessionId = input.session_id;
-  const cwd = input.cwd;
-  // The workspace layer belongs to the session's directory, which only the
-  // payload knows; see loadConfig for why re-resolving this late is safe.
-  // Everything gated below — recall.enabled included — reads the reload.
-  cfg = loadConfig(cwd);
-
-  if (!cfg.autoRecall) {
-    log("skip", { reason: "autoRecall disabled" });
-    writeRecallState({ count: 0, reason: "disabled" });
-    approve();
-    return;
-  }
-
   const effectivePeer = getEffectivePeerId(cfg, { sessionId, cwd });
   log("start", {
     query: userPrompt.slice(0, 200),
@@ -377,17 +91,9 @@ async function main() {
     },
   });
 
-  if (isBypassed(cfg, { sessionId, cwd })) {
-    log("skip", { reason: "bypass_session_pattern" });
-    writeRecallState({ count: 0, reason: "bypass", cc_session_id: sessionId });
-    approve();
-    return;
-  }
-
   if (!userPrompt || userPrompt.length < cfg.minQueryLength) {
     log("skip", { reason: "query too short or empty" });
     writeRecallState({ count: 0, reason: "short_query", cc_session_id: sessionId });
-    approve();
     return;
   }
 
@@ -395,78 +101,31 @@ async function main() {
   if (!health.ok) {
     logError("health_check", "server unreachable");
     writeRecallState({ count: 0, reason: "offline", cc_session_id: sessionId });
-    approve();
     return;
   }
 
   // The OV session id is what unlocks server-side query expansion and the
   // cross-turn dedup ledger; it must match the id auto-capture writes to.
   const ovSessionId = sessionId && sessionId !== "unknown" ? deriveOvSessionId(sessionId) : "";
-  const endpointBlock = await recallViaServerAssembly(
-    userPrompt,
-    effectivePeer.peerId,
-    ovSessionId,
-    effectivePeer.legacyPeerId,
-  );
-  if (endpointBlock !== null) {
-    if (!endpointBlock) {
-      log("skip", { reason: "recall_endpoint_no_results" });
-      writeRecallState({ count: 0, reason: "no_results", cc_session_id: sessionId });
-      approve();
-      return;
-    }
-    writeRecallState({
-      count: new Set(endpointBlock.match(/viking:\/\/[^\s<>"')\]]+/g) || []).size,
-      content_items: 1,
-      hint_items: 0,
-      tokens_used: estimateTokens(endpointBlock),
-      tokens_budget: cfg.recallTokenBudget,
-      cc_session_id: sessionId,
-      reason: "ok",
-    });
-    approve(endpointBlock);
+  const recalled = await recall(cfg, userPrompt, effectivePeer, ovSessionId);
+  if (!recalled.block) {
+    log("skip", { reason: recalled.stage });
+    writeRecallState({ count: 0, reason: recalled.stage, cc_session_id: sessionId });
     return;
   }
 
-  const perSourceLimit = Math.max(cfg.recallLimit * 2, 8);
-  const raw = await searchAllSources(userPrompt, perSourceLimit, effectivePeer.peerId);
-  if (raw.length === 0) {
-    log("skip", { reason: "no results" });
-    writeRecallState({ count: 0, reason: "no_results", cc_session_id: sessionId });
-    approve();
-    return;
-  }
-
-  const profile = buildQueryProfile(userPrompt);
-  const filtered = raw.filter(it => clampScore(it.score) >= cfg.scoreThreshold);
-  filtered.sort((a, b) => rankItem(b, profile) - rankItem(a, profile));
-  const deduped = dedupeItems(filtered);
-  const picked = deduped.slice(0, cfg.recallLimit);
-  log("picked", {
-    rawCount: raw.length,
-    filteredCount: filtered.length,
-    dedupedCount: deduped.length,
-    pickedCount: picked.length,
-    items: picked.map(it => ({ type: it._sourceType, uri: it.uri, score: clampScore(it.score) })),
-  });
-
-  if (picked.length === 0) {
-    writeRecallState({ count: 0, reason: "filtered_out", cc_session_id: sessionId });
-    approve();
-    return;
-  }
-
-  const built = await buildInjectionBlock(picked, effectivePeer.peerId);
   writeRecallState({
-    count: picked.length,
-    content_items: built?.contentCount ?? 0,
-    hint_items: built?.hintCount ?? 0,
-    tokens_used: built?.budgetUsed ?? 0,
+    // A server-assembled block is one rendered unit whatever it holds, so the
+    // count the statusline shows comes from the URIs it cites.
+    count: recalled.stage === "server_assembled"
+      ? new Set(recalled.block.match(URI_RE) || []).size
+      : recalled.contentCount + recalled.hintCount,
+    content_items: recalled.contentCount,
+    hint_items: recalled.hintCount,
+    tokens_used: recalled.budgetUsed,
     tokens_budget: cfg.recallTokenBudget,
     cc_session_id: sessionId,
     reason: "ok",
   });
-  approve(built?.block);
-}
-
-main().catch((err) => { logError("uncaught", err); approve(); });
+  return recalled.block;
+}).catch((err) => { logError("uncaught", err); approve(); });

@@ -31,10 +31,11 @@ and `OPENVIKING_PENDING_DIR` relocate individual pieces.
 | Field | Order |
 |---|---|
 | url | `OPENVIKING_URL` → `OPENVIKING_BASE_URL` → `ovcli.conf url` → `ov.conf server.url` → `http://{server.host\|127.0.0.1}:{server.port\|1933}` |
-| api_key | `OPENVIKING_BEARER_TOKEN` → `OPENVIKING_API_KEY` → `ovcli.conf api_key` → `ov.conf claude_code.apiKey` → `ov.conf server.root_api_key` |
-| account / user | `OPENVIKING_ACCOUNT` / `OPENVIKING_USER` → `ovcli.conf account/user` → `ov.conf claude_code.accountId/userId` |
-| peer | `OPENVIKING_PEER_ID` → registry → `config.local.json` → `config.json` (`peer.id`) → `ovcli.conf plugin.claude_code.peerId` → `ovcli.conf plugin.peerId` → `ov.conf claude_code.peerId` → derived per `peer.source` unless `OPENVIKING_WORKSPACE_PEER=0` |
+| api_key | `OPENVIKING_BEARER_TOKEN` → `OPENVIKING_API_KEY` → `ovcli.conf api_key` → `ovcli.conf plugin.claude_code.apiKey` → `ovcli.conf plugin.apiKey` → `ov.conf claude_code.apiKey` → `ov.conf server.root_api_key` |
+| account / user | `OPENVIKING_ACCOUNT` / `OPENVIKING_USER` → `ovcli.conf account/user` → `ovcli.conf plugin.claude_code.accountId/userId` → `ovcli.conf plugin.accountId/userId` → `ov.conf claude_code.accountId/userId` |
+| peer | `OPENVIKING_PEER_ID` → registry → `config.local.json` → `config.json` (`peer.id`) → `ovcli.conf plugin.claude_code.peerId` → `ovcli.conf plugin.peerId` → `ovcli.conf actor_peer_id/peer_id` → `ov.conf claude_code.peerId` → derived per `peer.source` unless `OPENVIKING_WORKSPACE_PEER=0` |
 | peer.source | `OPENVIKING_PEER_SOURCE` → registry → `config.local.json` → `config.json` → `ovcli.conf plugin.claude_code.peerSource` → `ovcli.conf plugin.peerSource` → `ov.conf claude_code.peerSource` → `git` |
+| auth mode | `ovcli.conf plugin.claude_code.authMode` → `ovcli.conf plugin.authMode` → `ov.conf claude_code.authMode` → `ov.conf server.auth_mode` → `trusted` when account/user are set, else `api_key` |
 | enabled | `OPENVIKING_MEMORY_ENABLED` → `ov.conf claude_code.enabled === false` → "ov.conf or ovcli.conf exists and parses" |
 | tuning | env → registry → `config.local.json` → `config.json` → `ovcli.conf plugin.claude_code.*` → `ovcli.conf plugin.*` → `ov.conf claude_code.*` → defaults |
 
@@ -46,10 +47,13 @@ is a legitimate path prefix; `/api/v1` or `/mcp` suffixes are not.
 
 Peers minted before this need no migration: the old cwd-derived id is recomputed locally, `peer_scope: "all"` already sweeps it, and under `"actor"` recall asks it separately. Doctor prints it as `previous peer`. Across the workspace layers lists union rather than replace, with a leading `"!reset"` dropping what the lower layers contributed; unknown keys are kept and ignored, and a file declaring a version other than `1` is skipped with a warning.
 
-Sent headers: `Authorization: Bearer <key>`, `X-OpenViking-Account`,
-`X-OpenViking-User`, `X-OpenViking-Actor-Peer`, `User-Agent: openviking-memory-claude-code/<version>`.
-The open-source server also accepts `X-API-Key` (and prefers it when both are
-sent); the Volcengine-hosted OpenViking Service (`https://api.vikingdb.cn-beijing.volces.com/openviking`) accepts Bearer only.
+Hook budgets in `hooks/hooks.json`: SessionStart 120s, UserPromptSubmit 60s, Stop and SubagentStop 45s, PreCompact and SessionEnd 30s, SubagentStart 10s, PreToolUse and PostToolUse 5s. `timeoutMs` (default 15000) must stay below 60s and `captureTimeoutMs` (default 30000, derived as twice `timeoutMs` when it is not set) at or below 45s; doctor warns when either outgrows its hook.
+
+Sent headers: `Authorization: Bearer <key>`, `X-OpenViking-Account/User` (trusted
+mode only), `X-OpenViking-Actor-Peer`, `User-Agent: openviking-memory-claude-code/<version>`.
+The plugin never sends `X-API-Key`. The open-source server still accepts it (and
+prefers it when both are sent), so a gateway that injects one shadows the key
+here; the Volcengine-hosted OpenViking Service (`https://api.vikingdb.cn-beijing.volces.com/openviking`) accepts Bearer only.
 
 ## Peer: giving a directory its own memory
 
@@ -115,7 +119,7 @@ Plugin MCP proxy (what Claude Code shows for a failing tool call):
 
 Hook log (`cc-hooks.log`) stages worth grepping: `health_check`
 (connectivity), `push_turns` / `capture_write` / `pending_enqueue` (capture),
-`recall_context_assembled` / `search_summary` / `injection_built` (recall),
+`recall_context_assembled` / `recall_search_summary` / `recall_injection_built` (recall),
 `mcp-proxy` `start` (resolved `mcpUrl`, `hasApiKey` = present, not valid),
 `uncaught` (crash). Hooks: `session-start`, `auto-recall`, `auto-capture`,
 `session-end`, `pre-compact`, `subagent-start`, `subagent-stop`,
@@ -165,7 +169,7 @@ Startup failures (printed by the server; exit 1 unless noted):
 | Text | Cause |
 |---|---|
 | `OpenViking configuration file not found.` | No ov.conf at any resolved path |
-| `Unknown config field '…' in OpenVikingConfig` / `Extra inputs are not permitted` | Unknown key — including `claude_code`, `codex` and `server.url`, which only the plugins read |
+| `Unknown config field '…' in OpenVikingConfig` / `Extra inputs are not permitted` | Unknown key — including a top-level block named after any harness (`claude_code`, `codex`, `cursor`, `trae`, `trae_cn`, `zcode`, `opencode`, `dsh`, `pi`) and `server.url`, which only the plugins read |
 | `SECURITY: server.auth_mode='dev' requires server.host to be localhost` | Dev mode (no `auth_mode`, no `root_api_key`) on a non-loopback bind |
 | `Invalid server.root_api_key: empty string is not allowed` | `""` instead of `null` |
 | `Another OpenViking process (PID n) is already using the data directory` | Two servers on one workspace (exit 3, `Application startup failed. Exiting.`) |

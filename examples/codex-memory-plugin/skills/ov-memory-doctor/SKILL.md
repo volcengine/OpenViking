@@ -31,8 +31,10 @@ wrong on a user's machine, each silently:
 
 When the resolved url is loopback, the server runs on this machine and the
 doctor adds a **Server health** section: whether anything listens on the
-port, plugin-only keys in `ov.conf` (`claude_code`, `codex`, `server.url`)
-that make the server refuse to start, and `GET /ready` — the server's own
+port, plugin-only keys in `ov.conf` (a top-level block named after any
+harness: `claude_code`, `codex`, `cursor`, `trae`, `trae_cn`, `zcode`,
+`opencode`, `dsh`, `pi`, plus `server.url`) that make the server refuse to
+start, and `GET /ready` — the server's own
 per-subsystem verdict (agfs, vectordb, api keys, embedding, ollama). For a
 remote server only `/ready` is probed. Everything else on the server side —
 config validation, live embedding probe, native engine, disk — is
@@ -98,7 +100,7 @@ Work top-down; fix the first ✗ and rerun before chasing the next.
 | `proxy variables set` + curl works but hooks fail | Node's fetch ignores `HTTP(S)_PROXY`; no CA handling | `NODE_USE_ENV_PROXY=1` or `NODE_EXTRA_CA_CERTS=<ca.pem>` in the environment that launches Codex. |
 | `no session has ever captured a turn` / idle sessions piling up | Stop hook runs but writes fail, or commits fail | Fix the Connection findings; state files are kept and replay when the server is back. |
 | `MCP proxy last started against <other url>` | The proxy is a long-lived process; a changed url only takes effect after restart | Restart Codex. |
-| `ov.conf has a top-level 'claude_code' block` / `'codex' block` / `server.url is rejected` | Plugin-only keys in the server's own config; the server refuses to start at its next restart (`Unknown config field` / `Extra inputs are not permitted`) | Move them to ovcli.conf (`plugin.<harness>`, `url`) and delete them from ov.conf. Ignore only if this ov.conf never starts a server. |
+| `ov.conf has a top-level '<harness>' block` / `server.url is rejected` | Plugin-only keys in the server's own config — a top-level block named after any harness (`claude_code`, `codex`, `cursor`, `trae`, `trae_cn`, `zcode`, `opencode`, `dsh`, `pi`) plus `server.url`; the server refuses to start at its next restart (`Unknown config field` / `Extra inputs are not permitted`) | Move them to ovcli.conf (`plugin.<harness>`, `url`) and delete them from ov.conf. Ignore only if this ov.conf never starts a server. |
 | `nothing listens on port … — the server is not running` | Server down or never started; a stale `.openviking.pid` means it died | Start it (`openviking-server`; first time `openviking-server init`) in a terminal and read the startup output. Ask before restarting a server the user runs. |
 | `/ready: embedding → error …` | The running server cannot call its embedding provider: recall searches nothing, commits extract nothing | Fix `embedding.*` (api_key/api_base/model) in ov.conf and restart; `openviking-server doctor` prints the provider's reply. |
 | `/ready: vectordb → …` / `/ready: agfs → …` | Storage broken: disk full, two servers on one workspace, corrupted index | Server log; stop the duplicate; free disk. |

@@ -3,12 +3,13 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { buildUserAgent, resolveOpenVikingCredentials } from "./credentials.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { sendSessionMessages } from "./batch-send.mjs";
+import { createOvHttp } from "./ov-http.mjs";
 import { enqueue, replayPending } from "./pending-queue.mjs";
 import { buildProfileBlock } from "./profile-inject.mjs";
-import { buildRecallBlock } from "./recall-core.mjs";
+import { buildRecallBlock, isRecallEnabled } from "./recall-core.mjs";
+import { buildPluginConfig } from "./plugin-config.mjs";
 import { isRetryableFailure } from "./retryable.mjs";
 import { deriveHarnessSessionId, isBypassed } from "./session-model.mjs";
 import { resolveEffectivePeerId } from "./workspace-peer.mjs";
@@ -17,23 +18,8 @@ const STATE_VERSION = 1;
 const STATE_DIR_MODE = 0o700;
 const STATE_FILE_MODE = 0o600;
 
-function envBool(name, fallback) {
-  const value = process.env[name];
-  if (value == null || value === "") return fallback;
-  return !["0", "false", "no", "off"].includes(value.trim().toLowerCase());
-}
-
-function envNumber(name, fallback, minimum = 0) {
-  const value = Number(process.env[name]);
-  return Number.isFinite(value) ? Math.max(minimum, value) : fallback;
-}
-
 function safePart(value) {
   return String(value || "unknown").replace(/[^A-Za-z0-9._-]/g, "-");
-}
-
-function responseTraceId(body) {
-  return body?.result?.trace_id || body?.error?.trace_id || body?.trace_id || undefined;
 }
 
 export function stableHash(...values) {
@@ -42,34 +28,29 @@ export function stableHash(...values) {
     .digest("hex");
 }
 
-export function loadAgentHookConfig(clientId) {
-  const credentials = resolveOpenVikingCredentials();
-  const debugLogPath = process.env.OPENVIKING_DEBUG_LOG
-    || join(homedir(), ".openviking", "logs", `${clientId}-hooks.log`);
+/**
+ * The config for one of the thin hook harnesses.
+ *
+ * These four used to read the environment and nothing else, so `ov config
+ * switch` moved their credentials and left their behaviour behind, and an
+ * `ovcli.conf` `plugin` entry named after them was inert. They resolve through
+ * the same layers as every other harness now; only the client's own name for
+ * itself stays local.
+ *
+ * `cwd` selects the workspace layer. It defaults to this process's directory,
+ * which is all a hook knows before the payload on stdin names the session's
+ * own — the caller re-resolves once it has it. That is safe because a workspace
+ * file may not carry connection or credential keys, so the base URL and API key
+ * cannot move under a logger or fetch helper already built from the first load.
+ */
+export function loadAgentHookConfig(clientId, cwd = process.cwd()) {
   return {
-    ...credentials,
+    ...buildPluginConfig(clientId, {
+      cwd,
+      version: process.env.OPENVIKING_INTEGRATION_VERSION,
+      logFile: `${clientId}-hooks.log`,
+    }),
     clientId,
-    userAgent: buildUserAgent(clientId, process.env.OPENVIKING_INTEGRATION_VERSION),
-    enabled: envBool("OPENVIKING_MEMORY_ENABLED", true),
-    autoRecall: envBool("OPENVIKING_AUTO_RECALL", true),
-    autoCapture: envBool("OPENVIKING_AUTO_CAPTURE", true),
-    workspacePeer: envBool("OPENVIKING_WORKSPACE_PEER", true),
-    bypassSession: envBool("OPENVIKING_BYPASS_SESSION", false),
-    bypassSessionPatterns: String(process.env.OPENVIKING_BYPASS_SESSION_PATTERNS || "")
-      .split(",").map((item) => item.trim()).filter(Boolean),
-    recallLimit: envNumber("OPENVIKING_RECALL_LIMIT", 10, 1),
-    recallLimitConfigured: Boolean(process.env.OPENVIKING_RECALL_LIMIT),
-    recallTokenBudget: envNumber("OPENVIKING_RECALL_TOKEN_BUDGET", 2000, 200),
-    recallMaxContentChars: envNumber("OPENVIKING_RECALL_MAX_CONTENT_CHARS", 500, 50),
-    scoreThreshold: envNumber("OPENVIKING_SCORE_THRESHOLD", 0.35, 0),
-    recallPreferAbstract: envBool("OPENVIKING_RECALL_PREFER_ABSTRACT", true),
-    recallPeerScope: process.env.OPENVIKING_RECALL_PEER_SCOPE === "actor" ? "actor" : "all",
-    timeoutMs: envNumber("OPENVIKING_TIMEOUT_MS", 15000, 1000),
-    profileTokenBudget: envNumber("OPENVIKING_PROFILE_TOKEN_BUDGET", 6000, 500),
-    commitTurnThreshold: envNumber("OPENVIKING_COMMIT_TURN_THRESHOLD", 8, 1),
-    writePathAsync: envBool("OPENVIKING_WRITE_PATH_ASYNC", true),
-    debug: envBool("OPENVIKING_DEBUG", false),
-    debugLogPath,
   };
 }
 
@@ -77,10 +58,14 @@ export function createAgentLogger(clientId, hookName, cfg) {
   return createLogger(`${clientId}:${hookName}`, cfg);
 }
 
-export async function readHookInput() {
+export async function readRawHookInput() {
   const chunks = [];
   for await (const chunk of process.stdin) chunks.push(chunk);
-  const raw = Buffer.concat(chunks).toString();
+  return Buffer.concat(chunks).toString();
+}
+
+export async function readHookInput() {
+  const raw = await readRawHookInput();
   if (!raw.trim()) return {};
   try { return JSON.parse(raw); } catch { return {}; }
 }
@@ -171,34 +156,58 @@ export async function writeHookState(clientId, nativeSessionId, value) {
   await rename(tmp, file);
 }
 
-export function makeAgentFetchJSON(cfg, cwd = process.cwd()) {
-  const effectivePeer = resolveEffectivePeerId({ cfg, cwd });
-  const fetchJSON = async (path, init = {}, options = {}) => {
-    const controller = new AbortController();
-    const timeoutMs = Math.max(1000, Number(options.timeoutMs) || cfg.timeoutMs);
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const headers = { "Content-Type": "application/json", ...(init.headers || {}) };
-      if (cfg.apiKey) headers.Authorization = `Bearer ${cfg.apiKey}`;
-      if (cfg.account) headers["X-OpenViking-Account"] = cfg.account;
-      if (cfg.user) headers["X-OpenViking-User"] = cfg.user;
-      const peerId = options.actorPeerId ?? effectivePeer.peerId;
-      if (peerId) headers["X-OpenViking-Actor-Peer"] = peerId;
-      if (cfg.userAgent) headers["User-Agent"] = cfg.userAgent;
-      const response = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
-      const body = await response.json().catch(() => ({}));
-      const traceId = responseTraceId(body);
-      if (!response.ok || body.status === "error") {
-        return { ok: false, status: response.status, error: body.error || body, traceId };
-      }
-      return { ok: true, result: body.result ?? body, traceId };
-    } catch (error) {
-      return { ok: false, status: 0, error: { message: error?.message || String(error) } };
-    } finally {
-      clearTimeout(timer);
-    }
-  };
-  return { fetchJSON, effectivePeer };
+/**
+ * The `fetchJSON` a hook talks through.
+ *
+ * `getActorPeerId` is a getter rather than a value because Codex only knows its
+ * peer after loading session state under the session lock, and because a stack
+ * whose every call names its own peer answers with the empty string. The
+ * workspace peer behind the default is resolved on demand so those callers do
+ * not pay for a lookup they never read.
+ */
+export function makeAgentFetchJSON(cfg, cwd = process.cwd(), {
+  defaultTimeoutMs,
+  getActorPeerId,
+  requireJsonBody = false,
+} = {}) {
+  let resolved = null;
+  const workspacePeer = () => (resolved ??= resolveEffectivePeerId({ cfg, cwd }));
+  const fetchJSON = createOvHttp(cfg, {
+    defaultTimeoutMs: defaultTimeoutMs ?? cfg.timeoutMs,
+    resolveActorPeerId: getActorPeerId || (() => workspacePeer().peerId),
+    requireJsonBody,
+  });
+  return { fetchJSON, get effectivePeer() { return workspacePeer(); } };
+}
+
+/** Park a write for the next hook to replay. Never throws: the caller is a hook. */
+export async function enqueueAgentPending(type, sessionId, payload = {}) {
+  try {
+    return await enqueue(type, sessionId, payload);
+  } catch {
+    return { ok: false };
+  }
+}
+
+/**
+ * What became of a write that failed: parked for replay, or reported once on
+ * stderr when no retry can help. `pendingQueued` / `pendingEnqueueFailed` are
+ * what the capture hooks log and what decides whether a turn is lost.
+ */
+async function notePendingWrite(type, sessionId, payload, result) {
+  if (result.ok) return result;
+  if (!isRetryableFailure(result)) {
+    const detail = result.error?.message || result.error?.code || "";
+    process.stderr.write(
+      `[ov] ${type} failed with non-retryable status ${result.status || "unknown"};`
+        + ` not enqueuing pending retry${detail ? ` (${detail})` : ""}\n`,
+    );
+    return result;
+  }
+  const pending = await enqueueAgentPending(type, sessionId, payload);
+  if (pending.ok) result.pendingQueued = true;
+  else result.pendingEnqueueFailed = true;
+  return result;
 }
 
 export async function addAgentMessage(fetchJSON, sessionId, payload) {
@@ -206,33 +215,44 @@ export async function addAgentMessage(fetchJSON, sessionId, payload) {
     method: "POST",
     body: JSON.stringify(payload),
   });
-  if (!result.ok && isRetryableFailure(result)) await enqueue("addMessage", sessionId, payload);
-  return result;
+  return notePendingWrite("addMessage", sessionId, payload, result);
 }
 
 export async function addAgentMessages(fetchJSON, sessionId, payloads) {
   return sendSessionMessages(fetchJSON, sessionId, payloads, { enqueueOnRetryable: true });
 }
 
-export async function commitAgentSession(fetchJSON, sessionId, log = () => {}) {
+export async function commitAgentSession(fetchJSON, sessionId, log = () => {}, payload = {}) {
+  const body = payload || {};
   const result = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`, {
     method: "POST",
-    body: "{}",
+    body: JSON.stringify(body),
   });
-  let queued = false;
-  if (!result.ok && isRetryableFailure(result)) {
-    const pending = await enqueue("commitSession", sessionId, {});
-    queued = Boolean(pending.ok);
-  }
+  await notePendingWrite("commitSession", sessionId, body, result);
   log("commit", {
     sessionId,
     ok: result.ok,
     status: result.result?.status || result.status,
     trace_id: result.traceId || result.result?.trace_id,
-    queued,
+    queued: Boolean(result.pendingQueued),
     error: result.ok ? undefined : result.error?.message || result.error?.code,
   });
   return result;
+}
+
+/** Session meta, or null when the session does not exist and `autoCreate` is off. */
+export async function getAgentSession(fetchJSON, sessionId, { autoCreate = false } = {}) {
+  const query = autoCreate ? "?auto_create=true" : "";
+  const result = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}${query}`);
+  return result.ok ? result.result : null;
+}
+
+/** Assembled session context (includes latest_archive_overview), or null. */
+export async function getAgentSessionContext(fetchJSON, sessionId, tokenBudget = 128000) {
+  const result = await fetchJSON(
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/context?token_budget=${tokenBudget}`,
+  );
+  return result.ok ? result.result : null;
 }
 
 export async function replayAgentPending(fetchJSON, log = () => {}) {
@@ -240,7 +260,7 @@ export async function replayAgentPending(fetchJSON, log = () => {}) {
 }
 
 export async function recallForPrompt(fetchJSON, cfg, prompt, cwd, log = () => {}, options = {}) {
-  if (!cfg.autoRecall || !String(prompt || "").trim()) return null;
+  if (!isRecallEnabled(cfg) || !String(prompt || "").trim()) return null;
   const peer = resolveEffectivePeerId({ cfg, cwd });
   return buildRecallBlock(fetchJSON, cfg, prompt, {
     actorPeerId: peer.peerId,
@@ -260,4 +280,87 @@ export async function buildAgentProfile(fetchJSON, cfg, cwd) {
 
 export function shouldBypassAgent(cfg, input = {}) {
   return isBypassed(cfg, { sessionId: resolveNativeSessionId(input), cwd: resolveAgentCwd(input) });
+}
+
+/**
+ * The opening every hook entry shares: read the payload, re-resolve the config
+ * against the session's directory, answer the two gates, then run the hook's
+ * own work and emit one envelope.
+ *
+ * `run` receives the resolved stage and returns the envelope's payload — a
+ * systemMessage, a context block, or nothing. A closed gate calls
+ * `onSkip(reason, stage)` with `"bad_stdin"`, `"disabled"` or `"bypass"`, emits
+ * an empty envelope and never runs the callback. `run` may emit early through
+ * `stage.emit` (a detaching hook has to answer before its worker starts); the
+ * envelope is written once.
+ *
+ * Both gates are predicates over `(cfg, stage)`: `enabled` says whether this
+ * hook runs at all, `bypass` whether this session is one the plugin stays out
+ * of. `sessionId` reads the session out of the payload — the default is the key
+ * Claude Code and Codex send, and a host that spells it differently, or derives
+ * it, hands over its own resolver rather than turning the gate off.
+ *
+ * The write-path preamble — the enabled gate against this process's directory,
+ * then `maybeDetach` — stays in the entry. A worker has to be spawned before
+ * stdin is consumed, and its response is the host's own.
+ */
+export async function runHookStage({
+  clientId,
+  loadConfig = (cwd) => loadAgentHookConfig(clientId, cwd),
+  input: { read = readRawHookInput, tolerant = false } = {},
+  sessionId: resolveSessionId = (payload) => payload.session_id ?? payload.sessionId,
+  gates: { enabled = null, bypass = (cfg, stage) => stage.bypassed } = {},
+  envelope = () => {},
+  onSkip = () => {},
+} = {}, run = () => undefined) {
+  let emitted = false;
+  const emit = (value) => {
+    if (emitted) return;
+    emitted = true;
+    envelope(value);
+  };
+
+  let badStdin = false;
+  const raw = await read();
+  let payload;
+  try {
+    payload = JSON.parse(tolerant ? raw || "{}" : raw);
+  } catch {
+    badStdin = !tolerant;
+    payload = {};
+  }
+  if (!payload || typeof payload !== "object") payload = {};
+
+  const cwd = resolveAgentCwd(payload);
+  const cfg = loadConfig(cwd);
+  const sessionId = resolveSessionId(payload);
+  const stage = {
+    cfg,
+    input: payload,
+    raw,
+    cwd,
+    sessionId,
+    bypassed: isBypassed(cfg, { sessionId, cwd }),
+    emit,
+  };
+
+  if (badStdin) {
+    onSkip("bad_stdin", stage);
+    emit();
+    return undefined;
+  }
+  if (enabled && !enabled(cfg, stage)) {
+    onSkip("disabled", stage);
+    emit();
+    return undefined;
+  }
+  if (bypass && bypass(cfg, stage)) {
+    onSkip("bypass", stage);
+    emit();
+    return undefined;
+  }
+
+  const result = await run(stage);
+  emit(result);
+  return result;
 }

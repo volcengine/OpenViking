@@ -11,6 +11,7 @@ import {
   peerSourceTemplates,
   renderPeerTemplate,
   resolveEffectivePeerId,
+  resolvePluginPeerId,
 } from "./lib/workspace-peer.mjs";
 import { resolveWorkspaceIdentity } from "./lib/workspace-identity.mjs";
 
@@ -219,4 +220,106 @@ test("a fork keeps its own peer, and every clone of one repo shares one", async 
 
   assert.equal(resolve(upstream.root, upstream.env).peerId, resolve(secondClone.root, secondClone.env).peerId);
   assert.notEqual(resolve(fork.root, fork.env).peerId, resolve(upstream.root, upstream.env).peerId);
+});
+
+/**
+ * Every layer that can name a peer, most specific first. Each entry writes its
+ * own field into the same input, bottom-up — ov.conf's harness block and
+ * ovcli.conf's `plugin` section both arrive as `settings.peerId`, so the higher
+ * one overwrites the lower exactly as `resolveSettings()` does. An input built
+ * from entry `i` downwards must resolve to entry `i`'s peer: the walk pins the
+ * whole order at once.
+ */
+const PEER_ORDER = [
+  {
+    name: "the host's own input",
+    apply: (input) => { input.hostInput = "host-peer"; },
+    peerId: "host-peer",
+  },
+  {
+    name: "OPENVIKING_PEER_ID",
+    apply: (input) => { input.env = { OPENVIKING_PEER_ID: "env-peer" }; },
+    peerId: "env-peer",
+  },
+  {
+    name: "the workspace file, the registry and ovcli.conf's plugin section",
+    apply: (input) => {
+      input.settings = { peerId: "plugin-peer" };
+      input.configured = new Set(["peerId"]);
+      input.sources = { peerId: "ovcli.conf" };
+    },
+    peerId: "plugin-peer",
+  },
+  {
+    name: "the credential chain",
+    apply: (input) => { input.credentials = { peerId: "cli-peer", credentialSource: "auto" }; },
+    peerId: "cli-peer",
+  },
+  {
+    name: "ov.conf's harness block",
+    apply: (input) => {
+      input.settings = { peerId: "ov-peer" };
+      input.configured = new Set(["peerId"]);
+      input.sources = { peerId: "ov.conf" };
+    },
+    peerId: "ov-peer",
+  },
+];
+
+test("resolvePluginPeerId walks one order, whichever harness is asking", () => {
+  for (let i = 0; i < PEER_ORDER.length; i += 1) {
+    // Only the entry that tests the environment gets one, so the walk cannot
+    // pick up an OPENVIKING_PEER_ID the machine running it happens to export.
+    const input = { env: {} };
+    for (const layer of PEER_ORDER.slice(i).reverse()) layer.apply(input);
+    assert.equal(resolvePluginPeerId(input), PEER_ORDER[i].peerId, `${PEER_ORDER[i].name} must win`);
+  }
+  assert.equal(
+    resolvePluginPeerId({ env: {} }),
+    "",
+    "nothing named a peer, so one is derived instead",
+  );
+});
+
+test("ov.conf's harness block survives credentials pinned to ovcli.conf", () => {
+  // Pinning drops ov.conf out of the credential chain entirely, so this layer
+  // has to have a rank of its own or it disappears the moment ovcli.conf
+  // carries a url — which is every install that has run `ov login`.
+  assert.equal(
+    resolvePluginPeerId({
+      settings: { peerId: "ov-peer" },
+      configured: new Set(["peerId"]),
+      sources: { peerId: "ov.conf" },
+      credentials: { peerId: "", credentialSource: "ovcli" },
+      env: {},
+    }),
+    "ov-peer",
+  );
+});
+
+test("credentials pinned to ovcli.conf ignore the env peer but not a configured one", () => {
+  const env = { OPENVIKING_PEER_ID: "env-peer" };
+  const credentials = { peerId: "cli-peer", credentialSource: "ovcli" };
+  assert.equal(
+    resolvePluginPeerId({
+      // The env layer already won inside `settings`; suppressing the variable
+      // has to suppress it there too, or it comes back under another name.
+      settings: { peerId: "env-peer" },
+      configured: new Set(["peerId"]),
+      sources: { peerId: "env" },
+      credentials,
+      env,
+    }),
+    "cli-peer",
+  );
+  assert.equal(
+    resolvePluginPeerId({
+      settings: { peerId: "plugin-peer" },
+      configured: new Set(["peerId"]),
+      sources: { peerId: "ovcli.conf" },
+      credentials,
+      env,
+    }),
+    "plugin-peer",
+  );
 });
