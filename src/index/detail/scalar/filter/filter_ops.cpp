@@ -894,16 +894,16 @@ int LabelInOp::load_json_doc(const JsonValue& json_doc) {
   if (!conds_arr.IsArray() || conds_arr.Size() <= 0) {
     return -4;
   }
-  bool is_uint64 = false;
   for (rapidjson::SizeType i = 0; i < conds_arr.Size(); i++) {
     if (conds_arr[i].IsUint64()) {
       uint64_t temp_id = conds_arr[i].GetUint64();
       label_u64_.emplace_back(temp_id);
-      is_uint64 = true;
     } else if (conds_arr[i].IsInt64()) {
       int64_t temp_id = conds_arr[i].GetInt64();
+      if (temp_id < 0) {
+        return -8;
+      }
       label_u64_.emplace_back(static_cast<uint64_t>(temp_id));
-      is_uint64 = true;
     } else {
       return -8;
     }
