@@ -1,7 +1,7 @@
 /**
  * Pure transcript parser for Kimi Code CLI hook events.
  *
- * Verified against Kimi Code 0.29.2 docs and a live ~/.kimi-code install:
+ * Verified against Kimi Code 0.41.0 (2026-09-04) docs and a live ~/.kimi-code install:
  *   - Hook stdin is snake_case JSON (session_id, cwd, hook_event_name).
  *   - The authoritative incremental transcript is the session wire log:
  *     $KIMI_CODE_HOME/sessions/<wd>/session_<id>/agents/main/wire.jsonl
@@ -9,6 +9,8 @@
  *   - User turns: `turn.prompt` / `context.append_message` (role=user).
  *   - Assistant turns: `context.append_loop_event` → content.part type=text
  *     grouped by event.turnId. Think parts are ignored.
+ *   - `turn.ended` (turnId, reason) closes the pending user turn even when no
+ *     assistant text arrived (Interrupt / tool-only).
  *
  * Strategy:
  * 1. Prefer wire.jsonl and emit unseen turns after state.lastTurnId.
@@ -109,6 +111,15 @@ export function extractUnseenWireTurns(wirePath, lastTurnId = null) {
     return id;
   };
 
+  const attachPending = (rawTurnId) => {
+    const turnId = remember(rawTurnId ?? order.length);
+    if (pendingUser) {
+      users.set(turnId, (users.get(turnId) || "") + (users.has(turnId) ? "\n" : "") + pendingUser);
+      pendingUser = "";
+    }
+    return turnId;
+  };
+
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue;
     let obj;
@@ -126,14 +137,18 @@ export function extractUnseenWireTurns(wirePath, lastTurnId = null) {
       if (!pendingUser) pendingUser = textFromContent(obj.input);
       continue;
     }
+    if (obj.type === "turn.ended") {
+      attachPending(obj.turnId ?? obj.event?.turnId);
+      continue;
+    }
     if (obj.type !== "context.append_loop_event") continue;
     const event = obj.event || {};
+    if (event.type === "turn.ended") {
+      attachPending(event.turnId ?? obj.turnId);
+      continue;
+    }
     if (event.type === "content.part" && event.part?.type === "text") {
-      const turnId = remember(event.turnId ?? order.length);
-      if (pendingUser) {
-        users.set(turnId, (users.get(turnId) || "") + (users.has(turnId) ? "\n" : "") + pendingUser);
-        pendingUser = "";
-      }
+      const turnId = attachPending(event.turnId);
       const chunk = event.part.text || "";
       if (chunk) {
         assistants.set(

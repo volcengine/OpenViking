@@ -4,7 +4,7 @@ Template: [examples/zcode-memory-plugin](../zcode-memory-plugin) ([PR #3678](htt
 
 ## Verified Kimi Code extension surface
 
-Facts checked against Kimi Code CLI **0.29.2**, official docs (`hooks.html`, `mcp.html`, `plugins.html`, `config-files.html`), and a live `~/.kimi-code` install.
+Facts checked against Kimi Code CLI **0.41.0** (2026-09-04), official docs (`hooks.html`, `mcp.html`, `plugins.html`, `config-files.html`), and a live `~/.kimi-code` install.
 
 | Aspect | Kimi Code CLI | ZCode (do not copy) |
 |--------|---------------|---------------------|

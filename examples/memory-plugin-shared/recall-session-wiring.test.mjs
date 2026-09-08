@@ -19,6 +19,11 @@ const CALL_SITES = [
     pattern: /recallForPrompt\([^)]*\{[^}]*\bsessionId\b/s,
   },
   {
+    name: "Kimi Code hook forwards its derived session id",
+    file: join(ROOT, "examples", "kimicode-memory-plugin", "scripts", "kimicode-hook.mjs"),
+    pattern: /recallForPrompt\([^)]*\{[^}]*\bsessionId\b/s,
+  },
+  {
     name: "OpenCode recall forwards the mapped OV session id",
     file: join(ROOT, "examples", "opencode-plugin", "lib", "memory-recall.mjs"),
     pattern: /sessionId:\s*sessionID\s*\?\s*sessionManager\.getMappedSessionId\(sessionID\)/,
