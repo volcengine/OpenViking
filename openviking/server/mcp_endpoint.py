@@ -498,8 +498,12 @@ def _mcp_media_download_hint(uri: str) -> str:
 
 
 @mcp.tool(structured_output=False)
-async def read(uris: str | list[str]) -> str | list[ContentBlock]:
-    """Read one or more viking:// file URIs. Raster images and supported audio return native MCP content blocks. For directory listing, use the list tool instead."""
+async def read(
+    uris: str | list[str],
+    offset: int = 0,
+    limit: int = -1,
+) -> str | list[ContentBlock]:
+    """Read one or more viking:// file URIs. Text reads accept line-based offset/limit. Raster images and supported audio return native MCP content blocks. For directory listing, use the list tool instead."""
     import asyncio
 
     service = get_service()
@@ -596,7 +600,12 @@ async def read(uris: str | list[str]) -> str | list[ContentBlock]:
                     if is_image:
                         return _mcp_image_content(data, mime_type)
                     return _mcp_audio_content(data, mime_type)
-                content = await service.fs.read_visible(resolved_uri, ctx=ctx)
+                content = await service.fs.read_visible(
+                    resolved_uri,
+                    ctx=ctx,
+                    offset=offset,
+                    limit=limit,
+                )
                 return content
             except OpenVikingError as exc:
                 return str(exc)
