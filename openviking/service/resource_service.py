@@ -952,6 +952,11 @@ class ResourceService:
             source_name = source_name or source_info.source_name
             source_info.source_name = source_name
         elif feishu_source:
+            from openviking.parse.feishu_import import recursive_wiki
+
+            recursive = FeishuAccessor._parse_feishu_url(path)[0] == "wiki" and recursive_wiki(
+                processor_kwargs
+            )
             token = processor_kwargs.get(FEISHU_ACCESS_TOKEN_ARG)
             if isinstance(token, str) and token.strip():
                 task_auth = dict(
@@ -964,6 +969,7 @@ class ResourceService:
             preflight = await FeishuAccessor().preflight_source(
                 path,
                 feishu_access_token=token.strip() if isinstance(token, str) else None,
+                **({"feishu_recursive": True} if recursive else {}),
             )
             source_name = source_name or preflight.source_name
             source_info = _ResourceSourceInfo(
@@ -988,7 +994,7 @@ class ResourceService:
                     task_auth = {}
             else:
                 source_type, _ = FeishuAccessor._parse_feishu_url(path)
-                if source_type in {"folder", "file"}:
+                if source_type in {"folder", "file"} or recursive:
                     if processor_kwargs.get("lark_file") is not None:
                         raise InvalidArgumentError(
                             "Feishu sources requiring preparation use args.feishu_access_token "

@@ -336,9 +336,10 @@ class UnderstandingAPI(BaseParser):
         if not source.startswith(("http://", "https://")) or not self._is_feishu_url(source):
             return False
         from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+        from openviking.parse.feishu_import import recursive_wiki
 
         doc_type, _ = FeishuAccessor._parse_feishu_url(source)
-        if doc_type in {"folder", "file"}:
+        if doc_type in {"folder", "file"} or (doc_type == "wiki" and recursive_wiki(kwargs)):
             return False
         if self._normalize_lark_file(kwargs):
             return True

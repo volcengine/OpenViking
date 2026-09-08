@@ -22,7 +22,7 @@ from typing import Any, Dict, List, NoReturn, Optional, Tuple, Union
 from urllib.parse import parse_qs, unquote, urlparse, urlunparse
 
 from openviking.parse.base import format_table_to_markdown
-from openviking.parse.feishu_import import FeishuImportPlan
+from openviking.parse.feishu_import import FeishuImportPlan, recursive_wiki
 from openviking.utils.exceptions import error_code_from_http_status
 from openviking_cli.exceptions import InvalidArgumentError, OpenVikingError
 from openviking_cli.utils.logger import get_logger
@@ -402,7 +402,9 @@ class FeishuAccessor(DataAccessor):
         feishu_access_token = kwargs.get("feishu_access_token")
         try:
             doc_type, token = self._parse_feishu_url(source_str)
-            if doc_type in {"folder", "file"} and kwargs.get("lark_file") is not None:
+            if (
+                doc_type in {"folder", "file"} or (doc_type == "wiki" and recursive_wiki(kwargs))
+            ) and kwargs.get("lark_file") is not None:
                 raise InvalidArgumentError(
                     "Feishu source preparation requires feishu_access_token or configured "
                     "Feishu application credentials, not lark_file."
@@ -469,8 +471,10 @@ class FeishuAccessor(DataAccessor):
                     is_temporary=True,
                 )
 
-            if doc_type == "wiki" and bool(kwargs.get("feishu_recursive", False)):
+            if doc_type == "wiki" and recursive_wiki(kwargs):
                 temp_dir = Path(tempfile.mkdtemp(prefix="ov_feishu_wiki_"))
+                plan = self._new_import_plan(temp_dir, kwargs)
+                plan.source_url = source_str
                 skipped_items: list[dict[str, Any]] = []
                 try:
                     root = await asyncio.to_thread(
@@ -484,6 +488,7 @@ class FeishuAccessor(DataAccessor):
                         feishu_access_token=feishu_access_token,
                         skipped_items=skipped_items,
                         strict=bool(kwargs.get("strict", False)),
+                        plan=plan,
                         visited=set(),
                         depth=0,
                         max_depth=self._positive_int_option(
@@ -499,12 +504,19 @@ class FeishuAccessor(DataAccessor):
                 except Exception:
                     shutil.rmtree(temp_dir, ignore_errors=True)
                     raise
+                if not root_dir.exists():
+                    root_dir = temp_dir
+                plan.root = root_dir if root_dir.is_dir() else root_dir.parent
                 return LocalResource(
                     path=root_dir,
+                    feishu_plan=plan,
                     source_type=SourceType.FEISHU,
                     original_source=source_str,
                     meta={
                         "feishu_doc_type": "wiki",
+                        "feishu_content_kind": "file"
+                        if root.obj_type == "file" and root_dir.is_file()
+                        else "markdown",
                         "feishu_token": token,
                         "feishu_title": root.title,
                         "original_filename": _title_as_filename(root.title),
@@ -579,24 +591,35 @@ class FeishuAccessor(DataAccessor):
         source: Union[str, Path],
         *,
         feishu_access_token: Optional[str] = None,
+        feishu_recursive: bool = False,
     ) -> FeishuSourcePreflight:
         """Resolve lightweight source identity and root permission before enqueueing."""
         return await asyncio.to_thread(
             self._preflight_source_sync,
             str(source),
             feishu_access_token,
+            feishu_recursive,
         )
 
     def _preflight_source_sync(
         self,
         url: str,
         feishu_access_token: Optional[str] = None,
+        feishu_recursive: bool = False,
     ) -> FeishuSourcePreflight:
         doc_type, token = self._parse_feishu_url(url)
         query = parse_qs(urlparse(url).query)
         table_id = (query.get("table") or [None])[0]
         view_id = (query.get("view") or [None])[0]
 
+        if doc_type == "wiki" and recursive_wiki({"feishu_recursive": feishu_recursive}):
+            node = self._resolve_wiki_tree_root(url, feishu_access_token=feishu_access_token)
+            return FeishuSourcePreflight(
+                doc_type="wiki",
+                token=token,
+                source_name=_title_as_filename(node.title),
+                source_format="directory",
+            )
         if doc_type == "wiki":
             real_type, real_token, title = self._resolve_wiki_node(
                 token,
@@ -964,7 +987,7 @@ class FeishuAccessor(DataAccessor):
             plan.add(path, url, token, "file")
             return path
         if doc_type not in self._DOC_TYPE_HANDLERS:
-            raise ValueError(f"Unsupported Feishu Drive document type: {doc_type}")
+            raise ValueError(f"Unsupported Feishu document type: {doc_type}")
         name = self._markdown_file_name(_safe_path_segment(title or token, fallback=token))
         path = self._unique_child_path(target_dir, name, plan.reserved)
         if plan.use_understanding and doc_type in {"docx", "sheets", "base"}:
@@ -1005,15 +1028,23 @@ class FeishuAccessor(DataAccessor):
         max_depth: int = 20,
         max_nodes_state: Optional[list[int]] = None,
         max_nodes: int = 5000,
+        plan: Optional[FeishuImportPlan] = None,
     ) -> Path:
         """Expand a Feishu Wiki node tree into a local directory tree."""
+        plan = (
+            plan
+            if plan is not None
+            else FeishuImportPlan(target_dir, max_nodes=max_nodes, max_depth=max_depth)
+        )
         target_dir.mkdir(parents=True, exist_ok=True)
         seen = visited if visited is not None else set()
         if node.wiki_node_token in seen:
-            logger.warning(
-                "[FeishuAccessor] Skipping recursive Wiki node %s",
-                node.wiki_node_token,
+            error = ValueError("Cyclic Feishu Wiki reference")
+            self._record_skipped_wiki_node(
+                skipped_items, node=node, target_dir=target_dir, error=error
             )
+            if strict:
+                raise error
             return target_dir
         seen.add(node.wiki_node_token)
         try:
@@ -1033,30 +1064,42 @@ class FeishuAccessor(DataAccessor):
 
             children: List[_FeishuWikiTreeNode] = []
             children_known = False
-            if depth < max_depth:
-                try:
-                    children = await asyncio.to_thread(
-                        self._list_wiki_node_children,
-                        node.space_id,
-                        node.wiki_node_token,
-                        feishu_access_token=feishu_access_token,
-                    )
-                    children_known = True
-                except Exception as exc:
-                    self._record_skipped_wiki_node(
-                        skipped_items,
-                        node=node,
-                        target_dir=target_dir,
-                        error=exc,
-                    )
-                    if strict:
-                        raise
+            try:
+                children = await asyncio.to_thread(
+                    self._list_wiki_node_children,
+                    node.space_id,
+                    node.wiki_node_token,
+                    # At the boundary, probe for a child without enumerating its subtree.
+                    max_items=0 if depth >= max_depth else max(0, max_nodes - state[0]),
+                    feishu_access_token=feishu_access_token,
+                )
+                children_known = True
+            except Exception as exc:
+                self._record_skipped_wiki_node(
+                    skipped_items,
+                    node=node,
+                    target_dir=target_dir,
+                    error=exc,
+                )
+                if strict or depth == 0:
+                    raise
+
+            needs_directory = bool(children) or not children_known
+            if children and depth >= max_depth:
+                error = ValueError(f"Feishu Wiki depth limit reached: {max_depth}")
+                self._record_skipped_wiki_node(
+                    skipped_items, node=node, target_dir=target_dir, error=error
+                )
+                if strict:
+                    raise error
+                children = []
 
             content_dir = target_dir
-            if children or not children_known:
+            if needs_directory:
                 content_dir = self._unique_child_path(
                     target_dir,
                     self._wiki_node_dir_name(node),
+                    plan.reserved,
                 )
                 content_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1064,6 +1107,7 @@ class FeishuAccessor(DataAccessor):
                 content_path = await self._write_wiki_node_content(
                     node,
                     content_dir,
+                    plan=plan,
                     feishu_access_token=feishu_access_token,
                 )
             except Exception as exc:
@@ -1077,10 +1121,11 @@ class FeishuAccessor(DataAccessor):
                     raise
                 content_path = None
 
-            for child in children:
+            for child in sorted(children, key=lambda child: child.wiki_node_token):
                 await self._materialize_wiki_tree_node(
                     child,
                     content_dir,
+                    plan=plan,
                     feishu_access_token=feishu_access_token,
                     skipped_items=skipped_items,
                     strict=strict,
@@ -1090,7 +1135,9 @@ class FeishuAccessor(DataAccessor):
                     max_nodes_state=state,
                     max_nodes=max_nodes,
                 )
-            return content_dir if children or not children_known else content_path or target_dir
+                if state[0] > max_nodes:
+                    break
+            return content_dir if needs_directory else content_path or target_dir
         finally:
             seen.discard(node.wiki_node_token)
 
@@ -1100,53 +1147,20 @@ class FeishuAccessor(DataAccessor):
         target_dir: Path,
         *,
         feishu_access_token: Optional[str] = None,
+        plan: Optional[FeishuImportPlan] = None,
     ) -> Optional[Path]:
-        doc_type = self._normalize_wiki_obj_type(node.obj_type)
-        if not doc_type or not node.obj_token:
+        if not node.obj_type or not node.obj_token:
             return None
-
-        if doc_type == "file":
-            content, content_type, downloaded_name = await asyncio.to_thread(
-                self._download_drive_file,
-                node.obj_token,
-                feishu_access_token=feishu_access_token,
-                filename_hint=node.title,
-            )
-            file_path = self._unique_child_path(
-                target_dir,
-                self._drive_file_name(
-                    node.obj_token,
-                    content,
-                    content_type,
-                    filename_hint=downloaded_name or node.title,
-                ),
-            )
-            file_path.write_bytes(content)
-            return file_path
-
-        if doc_type not in self._DOC_TYPE_HANDLERS:
-            raise ValueError(f"Unsupported Feishu Wiki node object type: {node.obj_type}")
-
-        doc = await self._fetch_document(
-            self._build_feishu_doc_url(doc_type, node.obj_token),
-            feishu_access_token=feishu_access_token,
-        )
-        markdown_content, downloaded_images = await asyncio.to_thread(
-            self._resolve_image_refs,
-            doc.markdown_content,
-            feishu_access_token=feishu_access_token,
-            media_download_extras=doc.media_download_extras,
-        )
-        markdown_path = self._unique_child_path(
+        plan = plan if plan is not None else FeishuImportPlan(target_dir)
+        return await self._write_import_content(
+            self._normalize_wiki_obj_type(node.obj_type),
+            node.obj_token,
+            node.title,
+            self._import_doc_url(plan, "wiki", node.wiki_node_token),
             target_dir,
-            self._markdown_file_name(node.title),
+            plan,
+            feishu_access_token=feishu_access_token,
         )
-        markdown_path.write_text(markdown_content, encoding="utf-8")
-        for rel_path, image_bytes in downloaded_images.items():
-            image_path = markdown_path.parent / rel_path
-            image_path.parent.mkdir(parents=True, exist_ok=True)
-            image_path.write_bytes(image_bytes)
-        return markdown_path
 
     @staticmethod
     def _record_skipped_wiki_node(
@@ -1769,9 +1783,11 @@ class FeishuAccessor(DataAccessor):
         wiki_node_token: str,
         *,
         feishu_access_token: Optional[str] = None,
+        max_items: Optional[int] = None,
     ) -> List[_FeishuWikiTreeNode]:
         children: List[_FeishuWikiTreeNode] = []
         page_token = None
+        pages = set()
         while True:
             items, has_more, page_token = self._fetch_wiki_node_children_page(
                 space_id,
@@ -1783,16 +1799,20 @@ class FeishuAccessor(DataAccessor):
                 children.append(
                     self._wiki_tree_node_from_api_node(
                         item,
-                        fallback_token=wiki_node_token,
+                        fallback_token="",
                         fallback_space_id=space_id,
                     )
                 )
+            if max_items is not None and len(children) > max_items:
+                return children[: max_items + 1]
             if not has_more:
                 break
+            if page_token in pages:
+                raise RuntimeError("Feishu returned a repeated page token")
+            pages.add(page_token)
             if not page_token:
                 raise RuntimeError(
-                    f"Feishu returned more Wiki children for {wiki_node_token} "
-                    "without a page token"
+                    f"Feishu returned more Wiki children for {wiki_node_token} without a page token"
                 )
         return children
 

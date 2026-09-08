@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from openviking.parse.accessors.base import LocalResource, SourceType
-from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+from openviking.parse.accessors.feishu_accessor import FeishuAccessor, _FeishuWikiTreeNode
 from openviking.parse.base import NodeType, ResourceNode, create_parse_result
 from openviking.parse.feishu_import import FeishuImportPlan
 from openviking.parse.parser_router import ParserRouter
@@ -24,6 +24,7 @@ from tests.parse.test_directory_understanding_routing import _configure_understa
     [
         ("drive/folder/folder", {}),
         ("file/pdf", {}),
+        ("wiki/root", {"feishu_recursive": True}),
     ],
 )
 def test_unsupported_direct_sources_require_preparation(path, options):
@@ -226,8 +227,10 @@ async def test_media_prepare_enables_url_plan_only_for_correct_backend(monkeypat
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind", ["folder", "file"])
-async def test_async_source_plan_does_not_submit_collection_or_file_url(monkeypatch, kind):
+@pytest.mark.parametrize("kind,recursive", [("folder", False), ("wiki", True), ("file", False)])
+async def test_async_source_plan_does_not_submit_collection_or_file_url(
+    monkeypatch, kind, recursive
+):
     from openviking.parse.mode import ParseMode
     from openviking.server.identity import RequestContext, Role
     from openviking.service.resource_service import ResourceService
@@ -259,7 +262,7 @@ async def test_async_source_plan_does_not_submit_collection_or_file_url(monkeypa
         ctx=RequestContext(user=UserIdentifier("account", "user"), role=Role.USER),
         mode=ParseMode.DEFAULT,
         allow_local_path_resolution=False,
-        processor_kwargs={"feishu_access_token": "secret"},
+        processor_kwargs={"feishu_recursive": recursive, "feishu_access_token": "secret"},
         watch_auth_state=None,
     )
     submit.assert_not_awaited()
@@ -267,6 +270,8 @@ async def test_async_source_plan_does_not_submit_collection_or_file_url(monkeypa
     assert plan.processor_args["_feishu_prepared_source"]
     assert "secret" not in str(plan.processor_args)
     assert plan.task_auth["access_token"] == "secret"
+    if recursive:
+        assert preflight.await_args.kwargs["feishu_recursive"]
 
 
 @pytest.mark.asyncio
@@ -705,3 +710,305 @@ async def test_native_feishu_collection_keeps_binary_on_native_parser(monkeypatc
         }
     ]
     assert result.meta["failed_files"] == []
+
+
+def wiki_accessor(monkeypatch):
+    accessor = FeishuAccessor()
+    root = _FeishuWikiTreeNode("root", "space", "Root", "docx", "rootdoc")
+    pdf = _FeishuWikiTreeNode("pdf", "space", "Report.pdf", "file", "pdffile")
+    leaf = _FeishuWikiTreeNode("leaf", "space", "Leaf", "docx", "leafdoc")
+    nodes = {"root": [pdf], "pdf": [leaf], "leaf": []}
+    monkeypatch.setattr(accessor, "_resolve_wiki_tree_root", lambda *a, **k: root)
+    monkeypatch.setattr(
+        accessor, "_list_wiki_node_children", lambda space, token, **k: nodes[token]
+    )
+    monkeypatch.setattr(
+        accessor,
+        "_download_drive_file",
+        lambda *a, **k: (b"%PDF-1.7", "application/pdf", "Report.pdf"),
+    )
+    monkeypatch.setattr(
+        accessor,
+        "_fetch_document",
+        AsyncMock(side_effect=AssertionError("cloud docs must remain URLs")),
+    )
+    return accessor, nodes
+
+
+@pytest.mark.asyncio
+async def test_recursive_wiki_plan_keeps_body_and_pdf_children_without_placeholder_files(
+    monkeypatch,
+):
+    accessor, _ = wiki_accessor(monkeypatch)
+    resource = await accessor.access(
+        "https://example.feishu.cn/wiki/root", feishu_recursive=True, _feishu_use_understanding=True
+    )
+    try:
+        entries = resource.feishu_plan.entries
+        assert {e.path.relative_to(resource.path).as_posix(): e.kind for e in entries} == {
+            "Root.md": "url",
+            "Report/Report.pdf": "file",
+            "Report/Leaf.md": "url",
+        }
+        assert not list(resource.path.rglob("*.md"))
+        assert (resource.path / "Report/Report.pdf").read_bytes() == b"%PDF-1.7"
+        assert next(e for e in entries if e.token == "rootdoc").url.endswith("wiki/root")
+        assert resource.meta["feishu_folder_skipped_items"] == []
+    finally:
+        resource.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_wiki_content_failure_does_not_stop_children_and_strict_fails(monkeypatch):
+    accessor, _ = wiki_accessor(monkeypatch)
+    monkeypatch.setattr(accessor, "_download_drive_file", Mock(side_effect=ValueError("denied")))
+    resource = await accessor.access(
+        "https://example.feishu.cn/wiki/root", feishu_recursive=True, _feishu_use_understanding=True
+    )
+    try:
+        assert any(e.token == "leafdoc" for e in resource.feishu_plan.entries)
+        assert "denied" in resource.meta["feishu_folder_skipped_items"][0]["reason"]
+    finally:
+        resource.cleanup()
+    with pytest.raises(ValueError, match="denied"):
+        await accessor.access(
+            "https://example.feishu.cn/wiki/root",
+            feishu_recursive=True,
+            _feishu_use_understanding=True,
+            strict=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_wiki_unknown_root_type_still_imports_children(monkeypatch):
+    accessor, _ = wiki_accessor(monkeypatch)
+    monkeypatch.setattr(
+        accessor,
+        "_resolve_wiki_tree_root",
+        lambda *a, **k: _FeishuWikiTreeNode("root", "space", "Root", "unknown", "unknown"),
+    )
+    resource = await accessor.access(
+        "https://example.feishu.cn/wiki/root", feishu_recursive=True, _feishu_use_understanding=True
+    )
+    try:
+        assert any(entry.token == "leafdoc" for entry in resource.feishu_plan.entries)
+        assert resource.meta["feishu_folder_skipped_items"]
+    finally:
+        resource.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_wiki_failed_root_enumeration_is_not_an_empty_success(monkeypatch):
+    accessor, _ = wiki_accessor(monkeypatch)
+    monkeypatch.setattr(
+        accessor, "_list_wiki_node_children", Mock(side_effect=ValueError("list denied"))
+    )
+    with pytest.raises(ValueError, match="list denied"):
+        await accessor.access(
+            "https://example.feishu.cn/wiki/root",
+            feishu_recursive=True,
+            _feishu_use_understanding=True,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", [None, "understanding"])
+async def test_recursive_wiki_processor_routes_each_content_and_keeps_tree(monkeypatch, backend):
+    _configure_understanding(monkeypatch, ["pdf"])
+    from openviking_cli.utils.config.open_viking_config import get_openviking_config
+
+    get_openviking_config().parser_api.enable_feishu_url = True
+    accessor, _ = wiki_accessor(monkeypatch)
+    resources = []
+
+    async def access(source, **options):
+        resource = await accessor.access(source, **options)
+        resources.append(resource)
+        return resource
+
+    processor = UnifiedResourceProcessor(vlm_processor=object())
+    processor._accessor_registry = SimpleNamespace(access=access)
+    fs = FakeVikingFS()
+    monkeypatch.setattr(DirectoryParser, "_get_viking_fs", lambda self: fs)
+    monkeypatch.setattr(DirectoryParser, "_create_temp_uri", lambda self: "viking://temp/tree")
+    calls = []
+
+    async def parse_api(self, source, **options):
+        calls.append((source, options))
+        name = Path(options.get("resource_name") or source).stem
+        temporary = f"viking://temp/content_{len(calls)}"
+        await fs.mkdir(f"{temporary}/{name}", exist_ok=True)
+        await fs.write(f"{temporary}/{name}/0.md", "body")
+        result = create_parse_result(
+            root=ResourceNode(type=NodeType.ROOT, title=name),
+            source_path=source,
+            source_format="docx" if source.startswith("https:") else "pdf",
+            parser_name="UnderstandingAPI",
+        )
+        result.temp_dir_path = temporary
+        return result
+
+    monkeypatch.setattr(UnderstandingAPI, "parse", parse_api)
+    try:
+        result = await processor.process(
+            "https://example.larksuite.com/wiki/root?table=t&view=v",
+            feishu_recursive=True,
+            feishu_access_token="secret",
+            parser_backend=backend,
+        )
+        assert result.meta["failed_files"] == []
+        assert result.meta["file_count"] == 3
+        cloud_calls = [
+            (source, options) for source, options in calls if source.startswith("https:")
+        ]
+        assert {source for source, _ in cloud_calls} == {
+            "https://example.larksuite.com/wiki/root?table=t&view=v",
+            "https://example.larksuite.com/wiki/leaf",
+        }
+        assert all(options["feishu_access_token"] == "secret" for _, options in cloud_calls)
+        binary_options = next(
+            options for source, options in calls if not source.startswith("https:")
+        )
+        assert "feishu_access_token" not in binary_options
+        assert "lark_file" not in binary_options
+        assert "viking://temp/tree/Root/Root/0.md" in fs.files
+        assert "viking://temp/tree/Root/Report/Leaf/0.md" in fs.files
+        assert "viking://temp/tree/Root/Report/Report/0.md" in fs.files
+    finally:
+        for resource in resources:
+            resource.is_temporary = True
+            resource.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_wiki_cycle_is_reported_and_sibling_content_survives(monkeypatch):
+    accessor, nodes = wiki_accessor(monkeypatch)
+    nodes["leaf"] = [_FeishuWikiTreeNode("root", "space", "Root", "docx", "rootdoc")]
+    resource = await accessor.access(
+        "https://example.feishu.cn/wiki/root", feishu_recursive=True, _feishu_use_understanding=True
+    )
+    try:
+        assert len(resource.feishu_plan.entries) == 3
+        assert any(
+            "Cyclic" in item["reason"] for item in resource.meta["feishu_folder_skipped_items"]
+        )
+    finally:
+        resource.cleanup()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strict", [False, True])
+async def test_wiki_leaf_at_depth_limit_keeps_leaf_layout(monkeypatch, strict):
+    accessor, nodes = wiki_accessor(monkeypatch)
+    nodes["root"] = nodes["pdf"]
+    resource = await accessor.access(
+        "https://example.feishu.cn/wiki/root",
+        feishu_recursive=True,
+        _feishu_use_understanding=True,
+        feishu_max_depth=1,
+        strict=strict,
+    )
+    try:
+        assert {
+            entry.path.relative_to(resource.path).as_posix()
+            for entry in resource.feishu_plan.entries
+        } == {"Root.md", "Leaf.md"}
+        assert not resource.meta["feishu_folder_skipped_items"]
+    finally:
+        resource.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_wiki_depth_limit_reports_actual_truncation(monkeypatch):
+    accessor, _ = wiki_accessor(monkeypatch)
+    resource = await accessor.access(
+        "https://example.feishu.cn/wiki/root",
+        feishu_recursive=True,
+        _feishu_use_understanding=True,
+        feishu_max_depth=1,
+    )
+    try:
+        assert {
+            entry.path.relative_to(resource.path).as_posix()
+            for entry in resource.feishu_plan.entries
+        } == {"Root.md", "Report/Report.pdf"}
+        failures = resource.meta["feishu_folder_skipped_items"]
+        assert len(failures) == 1 and "depth" in failures[0]["reason"]
+    finally:
+        resource.cleanup()
+    with pytest.raises(ValueError, match="depth limit"):
+        await accessor.access(
+            "https://example.feishu.cn/wiki/root",
+            feishu_recursive=True,
+            _feishu_use_understanding=True,
+            feishu_max_depth=1,
+            strict=True,
+        )
+
+
+@pytest.mark.parametrize("value", ["false", "true", 1, None])
+def test_recursive_wiki_flag_requires_boolean(value):
+    api = UnderstandingAPI.__new__(UnderstandingAPI)
+    with pytest.raises(InvalidArgumentError, match="boolean"):
+        api.can_submit_url_directly(
+            "https://example.feishu.cn/wiki/root",
+            feishu_recursive=value,
+            feishu_access_token="user-token",
+        )
+
+
+@pytest.mark.asyncio
+async def test_recursive_wiki_preflight_keeps_unknown_root_as_directory(monkeypatch):
+    accessor, _ = wiki_accessor(monkeypatch)
+    monkeypatch.setattr(
+        accessor,
+        "_resolve_wiki_tree_root",
+        lambda *a, **k: _FeishuWikiTreeNode("root", "space", "Root", "unknown", "unknown"),
+    )
+    monkeypatch.setattr(accessor, "_probe_document_permission", Mock(side_effect=AssertionError))
+    result = await accessor.preflight_source(
+        "https://example.feishu.cn/wiki/root", feishu_recursive=True
+    )
+    assert result.source_format == "directory"
+    assert result.source_name == "Root"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content_kind", ["url", "file"])
+async def test_recursive_leaf_wiki_keeps_routable_resource(monkeypatch, content_kind):
+    accessor, nodes = wiki_accessor(monkeypatch)
+    node = (
+        _FeishuWikiTreeNode("leaf", "space", "Leaf", "docx", "leafdoc")
+        if content_kind == "url"
+        else _FeishuWikiTreeNode("leaf", "space", "Report.pdf", "file", "pdffile")
+    )
+    monkeypatch.setattr(accessor, "_resolve_wiki_tree_root", lambda *a, **k: node)
+    resource = await accessor.access(
+        "https://example.feishu.cn/wiki/leaf?table=t&view=v",
+        feishu_recursive=True,
+        _feishu_use_understanding=True,
+    )
+    try:
+        assert resource.path.exists()
+        assert len(resource.feishu_plan.entries) == 1
+        entry = resource.feishu_plan.entries[0]
+        assert entry.kind == content_kind
+        if content_kind == "url":
+            assert resource.path.is_dir()
+            assert not entry.path.exists()
+            assert entry.url.endswith("/wiki/leaf?table=t&view=v")
+        else:
+            assert resource.path.is_file()
+            assert resource.meta["feishu_content_kind"] == "file"
+    finally:
+        resource.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_recursive_wiki_rejects_direct_only_lark_auth():
+    with pytest.raises(InvalidArgumentError, match="not lark_file"):
+        await FeishuAccessor().access(
+            "https://example.feishu.cn/wiki/root",
+            feishu_recursive=True,
+            lark_file={"user_access_token": "secret"},
+        )

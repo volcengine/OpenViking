@@ -201,9 +201,14 @@ class UnifiedResourceProcessor:
             )
 
         from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+        from openviking.parse.feishu_import import recursive_wiki
 
         if FeishuAccessor._is_feishu_url(str(source)) and (
             FeishuAccessor._parse_feishu_url(str(source))[0] == "folder"
+            or (
+                FeishuAccessor._parse_feishu_url(str(source))[0] == "wiki"
+                and recursive_wiki(kwargs)
+            )
         ):
             backend = normalize_parser_backend(kwargs.get("parser_backend"))
             mode = normalize_parse_mode(kwargs.get("parse_mode", ParseMode.DEFAULT))

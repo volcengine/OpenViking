@@ -5,6 +5,16 @@
 import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
+
+from openviking_cli.exceptions import InvalidArgumentError
+
+
+def recursive_wiki(options: dict[str, Any]) -> bool:
+    value = options.get("feishu_recursive", False)
+    if not isinstance(value, bool):
+        raise InvalidArgumentError("feishu_recursive must be a boolean")
+    return value
 
 
 @dataclass(frozen=True)
