@@ -3,6 +3,7 @@
 """Semantic DAG executor with event-driven lazy dispatch."""
 
 import asyncio
+import hashlib
 import re
 import threading
 from contextlib import nullcontext
@@ -155,6 +156,8 @@ def get_semantic_node_scheduler(max_workers: int) -> SemanticNodeScheduler:
 class SemanticDagExecutor:
     """Execute semantic generation with DAG-style, event-driven lazy dispatch."""
 
+    _retry_progress_version = 1
+
     _active_lock: ClassVar[threading.Lock] = threading.Lock()
     _active_executors: ClassVar[Set["SemanticDagExecutor"]] = set()
 
@@ -179,6 +182,7 @@ class SemanticDagExecutor:
         generation_trigger: str = "semantic_refresh",
         aggregate_directory: bool = True,
         copy_source_uri: str = "",
+        retry_progress: Optional[Dict[str, Dict[str, Any]]] = None,
     ):
         self._processor = processor
         self._context_type = context_type
@@ -198,6 +202,11 @@ class SemanticDagExecutor:
         self._generation_trigger = generation_trigger
         self._aggregate_directory = aggregate_directory
         self._copy_source_uri = copy_source_uri
+        self._retry_progress: Dict[str, Dict[str, Any]] = {
+            str(path): dict(state)
+            for path, state in (retry_progress or {}).items()
+            if isinstance(state, dict)
+        }
         self._task_context = get_task_context()
         self._telemetry = get_current_telemetry()
         self._stale = False
@@ -223,6 +232,7 @@ class SemanticDagExecutor:
         self._dir_change_status: Dict[str, bool] = {}
         self._overview_cache: Dict[str, Dict[str, str]] = {}
         self._overview_cache_lock = asyncio.Lock()
+        self._retry_progress_lock = asyncio.Lock()
         self._root_write_result = AbstractOverviewWriteResult(wrote=False)
 
     def _creator_acl_grant(self, uri: str) -> CreatorAclGrant | None:
@@ -647,6 +657,45 @@ class SemanticDagExecutor:
         except Exception:
             return True
 
+    async def _file_content_hash(self, file_path: str) -> str:
+        read_file = getattr(self._viking_fs, "read_file", None)
+        if not callable(read_file):
+            # Lightweight storage doubles may not expose content reads. They
+            # cannot participate in retry checkpointing, but should retain the
+            # pre-checkpoint incremental behavior.
+            return ""
+        content = await read_file(file_path, ctx=self._ctx)
+        if isinstance(content, bytes):
+            payload = content
+        else:
+            payload = str(content).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
+    async def _update_retry_progress(
+        self,
+        file_path: str,
+        *,
+        content_hash: str,
+        summary_status: str,
+        vector_status: str,
+        summary: str = "",
+    ) -> None:
+        """Keep successful file phases available when the queue retries a task."""
+        async with self._retry_progress_lock:
+            previous = self._retry_progress.get(file_path, {})
+            self._retry_progress[file_path] = {
+                "version": self._retry_progress_version,
+                "content_hash": content_hash,
+                "summary": summary or str(previous.get("summary") or ""),
+                "summary_status": summary_status,
+                "vector_status": vector_status,
+            }
+
+    @property
+    def retry_progress(self) -> Dict[str, Dict[str, Any]]:
+        """Return queue-serializable progress accumulated by this executor."""
+        return {path: dict(state) for path, state in self._retry_progress.items()}
+
     async def _read_existing_summary(self, file_path: str) -> Optional[Dict[str, str]]:
         """Read existing summary from parent directory's .overview.md.
 
@@ -764,39 +813,82 @@ class SemanticDagExecutor:
 
         file_name = file_path.split("/")[-1]
         need_vectorize = True
+        content_hash = ""
         try:
             summary_dict = None
+            node = self._nodes.get(parent_uri)
+            regenerate_sampled_summary = bool(
+                self._aggregate_directory
+                and node is not None
+                and node.pending_snapshot > 0
+                and node.sampled_file_paths is not None
+                and file_path in node.sampled_file_paths
+            )
             if self._incremental_update:
-                content_changed = await self._check_file_content_changed(file_path)
-                self._file_change_status[file_path] = content_changed
-                node = self._nodes.get(parent_uri)
-                regenerate_sampled_summary = bool(
-                    self._aggregate_directory
-                    and node is not None
-                    and node.pending_snapshot > 0
-                    and node.sampled_file_paths is not None
-                    and file_path in node.sampled_file_paths
+                content_hash = await self._file_content_hash(file_path)
+                progress = self._retry_progress.get(file_path)
+                progress_hash = str(progress.get("content_hash") or "") if progress else ""
+                progress_summary_status = (
+                    str(progress.get("summary_status") or "") if progress else ""
                 )
-
-                if not content_changed and not regenerate_sampled_summary:
-                    summary_dict = await self._read_existing_summary(file_path)
-                    if summary_dict is not None:
+                progress_vector_status = (
+                    str(progress.get("vector_status") or "") if progress else ""
+                )
+                progress_version = progress.get("version") if progress else None
+                if (
+                    progress
+                    and progress_version == self._retry_progress_version
+                    and progress_hash == content_hash
+                    and progress_summary_status == "succeeded"
+                ):
+                    summary_dict = {
+                        "name": file_name,
+                        "summary": str(progress.get("summary") or ""),
+                    }
+                    need_vectorize = progress_vector_status not in {"succeeded", "skipped"}
+                    # The directory sidecars may not have been committed before
+                    # the previous attempt failed, so force aggregation while
+                    # still skipping this file's expensive work.
+                    self._file_change_status[file_path] = True
+                else:
+                    content_changed = await self._check_file_content_changed(file_path)
+                    self._file_change_status[file_path] = content_changed
+                    if progress and progress_hash != content_hash:
+                        self._retry_progress.pop(file_path, None)
+                    if not content_changed and not regenerate_sampled_summary:
+                        summary_dict = await self._read_existing_summary(file_path)
+                        if summary_dict is not None:
+                            need_vectorize = False
+                        else:
+                            self._file_change_status[file_path] = True
+                    elif not content_changed:
+                        # Pending freshness only records a count, not the changed
+                        # child URIs. Once that debt triggers aggregation, rebuild
+                        # every sampled input instead of trusting the old L1 body.
+                        # Deferred messages already maintained file vectors, so
+                        # this forced summary rebuild does not imply vector work.
                         need_vectorize = False
-                    else:
-                        self._file_change_status[file_path] = True
-                elif not content_changed:
-                    # Pending freshness only records a count, not the changed
-                    # child URIs. Once that debt triggers aggregation, rebuild
-                    # every sampled input instead of trusting the old L1 body.
-                    # Deferred messages already maintained file vectors, so
-                    # this forced summary rebuild does not imply vector work.
-                    need_vectorize = False
             else:
                 self._file_change_status[file_path] = True
+            if summary_dict is None and content_hash:
+                await self._update_retry_progress(
+                    file_path,
+                    content_hash=content_hash,
+                    summary_status="processing",
+                    vector_status="pending",
+                )
             if summary_dict is None:
                 summary_dict = await self._processor._generate_single_file_summary(
                     file_path, llm_sem=self._llm_sem, ctx=self._ctx
                 )
+                if content_hash:
+                    await self._update_retry_progress(
+                        file_path,
+                        content_hash=content_hash,
+                        summary_status="succeeded",
+                        vector_status="pending",
+                        summary=str(summary_dict.get("summary") or ""),
+                    )
         except AbstractOverviewFormatError:
             # A generated sidecar that opted into OKF must never be treated as
             # an empty file summary; doing so would silently feed metadata or
@@ -804,7 +896,14 @@ class SemanticDagExecutor:
             raise
         except Exception as e:
             logger.warning(f"Failed to generate summary for {file_path}: {e}")
-            summary_dict = {"name": file_name, "summary": ""}
+            if content_hash:
+                await self._update_retry_progress(
+                    file_path,
+                    content_hash=content_hash,
+                    summary_status="failed",
+                    vector_status="pending",
+                )
+            raise
         finally:
             self._stats.done_nodes += 1
             self._stats.in_progress_nodes = max(0, self._stats.in_progress_nodes - 1)
@@ -825,6 +924,14 @@ class SemanticDagExecutor:
                     creator_acl_grant=self._creator_acl_grant(file_path),
                 )
             except Exception as e:
+                if content_hash:
+                    await self._update_retry_progress(
+                        file_path,
+                        content_hash=content_hash,
+                        summary_status="succeeded",
+                        vector_status="failed",
+                        summary=str(summary_dict.get("summary") or ""),
+                    )
                 logger.error(
                     "Failed to schedule vectorization for %s: %s",
                     file_path,
@@ -832,6 +939,14 @@ class SemanticDagExecutor:
                     exc_info=True,
                 )
                 raise
+        if content_hash:
+            await self._update_retry_progress(
+                file_path,
+                content_hash=content_hash,
+                summary_status="succeeded",
+                vector_status="succeeded" if not self._skip_vectorization else "skipped",
+                summary=str(summary_dict.get("summary") or ""),
+            )
         await self._on_file_done(
             parent_uri,
             file_path,

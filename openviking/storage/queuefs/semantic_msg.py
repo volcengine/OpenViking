@@ -67,6 +67,7 @@ class SemanticMsg:
     changes: Optional[Dict[str, List[str]]] = (
         None  # {"added": [...], "modified": [...], "deleted": [...]}
     )
+    retry_progress: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     source: Optional[Dict[str, str]] = None
     generation_trigger: str = "semantic_refresh"
     aggregate_directory: bool = True
@@ -94,6 +95,7 @@ class SemanticMsg:
         coalesce_key: str = "",
         coalesce_version: int = 0,
         changes: Optional[Dict[str, List[str]]] = None,
+        retry_progress: Optional[Dict[str, Dict[str, Any]]] = None,
         source: Optional[Dict[str, str]] = None,
         generation_trigger: str = "semantic_refresh",
         aggregate_directory: bool = True,
@@ -120,6 +122,11 @@ class SemanticMsg:
         self.coalesce_key = coalesce_key
         self.coalesce_version = coalesce_version
         self.changes = changes
+        self.retry_progress = {
+            str(path): dict(state)
+            for path, state in (retry_progress or {}).items()
+            if isinstance(state, dict)
+        }
         self.source = dict(source) if source else None
         self.generation_trigger = generation_trigger
         self.aggregate_directory = bool(aggregate_directory)
@@ -179,6 +186,9 @@ class SemanticMsg:
             coalesce_key=data.get("coalesce_key", ""),
             coalesce_version=data.get("coalesce_version", 0),
             changes=data.get("changes"),
+            retry_progress=(
+                data.get("retry_progress") if isinstance(data.get("retry_progress"), dict) else None
+            ),
             source=data.get("source"),
             generation_trigger=data.get("generation_trigger", "semantic_refresh"),
             aggregate_directory=data.get("aggregate_directory", True),
