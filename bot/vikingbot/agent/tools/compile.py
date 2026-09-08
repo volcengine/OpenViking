@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
 from collections.abc import Awaitable, Callable
 from typing import Any, Mapping
@@ -22,15 +21,14 @@ from openviking.utils.skill_processor import validate_skill_name
 from openviking_cli.exceptions import OpenVikingError
 from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.compile.models import (
-    COMPILE_MATERIALIZED_ROOT,
+    COMPILE_OUTPUT_ROOT,
     COMPILE_STAGING_ROOT,
-    COMPILE_TARGET_CHECKOUT_ROOT,
     CompileLimits,
     WikiBundleDraft,
 )
 from vikingbot.compile.renderer import (
     RenderedBundle,
-    finalize_resource_checkout,
+    finalize_resource_output,
     is_reserved_wiki_page_uri,
     validate_declared_okf_markdown,
     validate_relative_file_path,
@@ -52,136 +50,8 @@ def _path_is_within(path: str, root: str) -> bool:
     return path == root or path.startswith(root + "/")
 
 
-def _uri_in_roots(uri: str, roots: tuple[str, ...]) -> bool:
-    normalized = str(uri or "").strip().rstrip("/")
-    if not normalized.startswith("viking://"):
-        return False
-    try:
-        normalized = validate_safe_viking_uri_path(normalized)
-    except ValueError:
-        return False
-    return any(
-        normalized == root.rstrip("/") or bool(relative_uri_path(root, normalized))
-        for root in roots
-    )
-
-
-def _skill_workspace_read_hint(uri: str) -> str | None:
-    value = str(uri or "").strip()
-    if value.startswith("viking://skills/"):
-        value = value[len("viking://") :]
-    if not value.startswith("skills/"):
-        return None
-    try:
-        return _normalize_workspace_path(value)
-    except ValueError:
-        return None
-
-
-class CompileScopedTool(Tool):
-    """Guard an existing OpenViking read tool without changing its implementation."""
-
-    def __init__(
-        self,
-        tool: Tool,
-        *,
-        roots: tuple[str, ...],
-        limits: CompileLimits,
-        result_budget: dict[str, int],
-        budget_lock: asyncio.Lock,
-    ):
-        self._tool = tool
-        self._roots = roots
-        self._limits = limits
-        self._result_budget = result_budget
-        self._budget_lock = budget_lock
-
-    @property
-    def name(self) -> str:
-        return self._tool.name
-
-    @property
-    def description(self) -> str:
-        return self._tool.description
-
-    @property
-    def parameters(self) -> dict[str, Any]:
-        return self._tool.parameters
-
-    async def execute(self, tool_context: ToolContext, **kwargs: Any) -> str:
-        uris: list[str] = []
-        if self.name == "openviking_search":
-            value = kwargs.get("target_uri")
-            if not value:
-                return "Error: Compile search requires target_uri within the task scope."
-            uris.append(str(value))
-        elif self.name in {
-            "openviking_list",
-            "openviking_grep",
-            "openviking_glob",
-            "openviking_export",
-        }:
-            value = kwargs.get("uri")
-            if not value or str(value).rstrip("/") in {"viking:", "viking://"}:
-                return f"Error: Compile {self.name} requires uri within the task scope."
-            uris.append(str(value))
-            if self.name == "openviking_list" and kwargs.get("recursive"):
-                kwargs["node_limit"] = min(
-                    int(kwargs.get("node_limit") or self._limits.target_inventory_entries),
-                    self._limits.target_inventory_entries,
-                )
-        elif self.name == "openviking_multi_read":
-            values = kwargs.get("uris")
-            if not isinstance(values, list) or not values:
-                return "Error: Compile multi-read requires at least one URI."
-            if len(values) > self._limits.tool_uri_count:
-                return "Error: Compile multi-read URI limit exceeded."
-            uris.extend(str(value) for value in values)
-
-        if len(uris) > self._limits.tool_uri_count:
-            return "Error: Compile tool URI limit exceeded."
-        for uri in uris:
-            if not _uri_in_roots(uri, self._roots):
-                workspace_path = _skill_workspace_read_hint(uri)
-                if workspace_path:
-                    return (
-                        "Error: Skill workspace files must be read with read_file using path "
-                        f'"{workspace_path}", not with an openviking_* tool.'
-                    )
-                return f"Error: URI is outside the Compile task scope: {uri}"
-
-        result = await self._tool.execute(tool_context, **kwargs)
-        if (
-            isinstance(result, str)
-            and result.startswith("Error")
-            and not result.startswith("Error:")
-        ):
-            result = "Error: " + result[len("Error") :].lstrip(" :")
-        rendered = str(result)
-        size = len(rendered.encode("utf-8"))
-        if size > self._limits.tool_result_bytes:
-            if self.name == "openviking_multi_read":
-                return (
-                    "Error: Compile tool result exceeds the per-call size limit. Read a "
-                    "smaller window with a smaller limit, or use openviking_grep first to "
-                    "locate the relevant lines."
-                )
-            if self.name == "openviking_grep":
-                return (
-                    "Error: Compile tool result exceeds the per-call size limit. Narrow the "
-                    "pattern or scope the uri to a smaller subtree."
-                )
-            return "Error: Compile tool result exceeds the per-call size limit."
-        async with self._budget_lock:
-            total = self._result_budget.get("bytes", 0) + size
-            if total > self._limits.tool_total_result_bytes:
-                return "Error: Compile task tool-result budget exceeded."
-            self._result_budget["bytes"] = total
-        return rendered
-
-
-class SubmitTargetCheckoutTool(Tool):
-    """Commit the Resource checkout without asking the agent to describe its diff."""
+class SubmitCompileOutputTool(Tool):
+    """Validate generated Resource files and prepare upserts without deleting omitted targets."""
 
     def __init__(
         self,
@@ -199,16 +69,14 @@ class SubmitTargetCheckoutTool(Tool):
 
     @property
     def name(self) -> str:
-        # Keep the established stop-tool name while Resource targets transition from
-        # structured page/file declarations to a checkout commit.
         return "submit_wiki_bundle"
 
     @property
     def description(self) -> str:
         return (
             f"Submit the complete Resource output already written under "
-            f"{COMPILE_TARGET_CHECKOUT_ROOT}/. Pass no pages, files, paths, or content; "
-            "Compile scans the checkout, preserves omitted existing files, and commits "
+            f"{COMPILE_OUTPUT_ROOT}/. Pass no pages, files, paths, or content; "
+            "Compile preserves omitted existing target files and commits "
             "only validated changes."
         )
 
@@ -225,46 +93,46 @@ class SubmitTargetCheckoutTool(Tool):
         self.page_count = 0
         self.file_count = 0
         if kwargs:
-            return "Error: submit_wiki_bundle takes no arguments for a Resource checkout."
+            return "Error: submit_wiki_bundle takes no arguments for a Resource output."
         if tool_context.sandbox_manager is None:
-            return "Error: Invalid target checkout: task sandbox is unavailable"
+            return "Error: Invalid output directory: task sandbox is unavailable"
         try:
             sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
             entries = await sandbox.list_files(
-                COMPILE_TARGET_CHECKOUT_ROOT,
+                COMPILE_OUTPUT_ROOT,
                 max_entries=self.limits.target_inventory_entries,
             )
-            checkout: dict[str, bytes] = {}
+            output_files: dict[str, bytes] = {}
             paths_by_case: dict[str, str] = {}
             declared_total = 0
             actual_total = 0
-            checkout_prefix = f"{COMPILE_TARGET_CHECKOUT_ROOT}/"
+            output_prefix = f"{COMPILE_OUTPUT_ROOT}/"
             for entry in entries:
                 workspace_path = _normalize_workspace_path(entry.path)
-                if not workspace_path.startswith(checkout_prefix):
+                if not workspace_path.startswith(output_prefix):
                     raise ValueError(
-                        f"checkout inventory returned an out-of-tree path: {workspace_path}"
+                        f"output inventory returned an out-of-tree path: {workspace_path}"
                     )
-                relative = validate_relative_file_path(workspace_path.removeprefix(checkout_prefix))
+                relative = validate_relative_file_path(workspace_path.removeprefix(output_prefix))
                 prior = paths_by_case.setdefault(relative.casefold(), relative)
                 if prior != relative:
                     raise ValueError(f"case-colliding output paths: {prior}, {relative}")
                 if entry.size < 0:
-                    raise ValueError(f"checkout file has an invalid size: {relative}")
+                    raise ValueError(f"output file has an invalid size: {relative}")
                 declared_total += entry.size
                 if declared_total > self.limits.target_total_bytes:
-                    raise ValueError("target checkout exceeds the materialization size limit")
+                    raise ValueError("output files exceed the output size limit")
                 payload = await sandbox.read_file_bytes(
                     workspace_path,
                     max_bytes=self.limits.target_total_bytes,
                 )
                 actual_total += len(payload)
                 if actual_total > self.limits.target_total_bytes:
-                    raise ValueError("target checkout exceeds the materialization size limit")
-                checkout[relative] = payload
+                    raise ValueError("output files exceed the output size limit")
+                output_files[relative] = payload
 
-            finalized = finalize_resource_checkout(
-                checkout,
+            finalized = finalize_resource_output(
+                output_files,
                 target_uri=self.target_uri,
                 source_roots=self.source_roots,
             )
@@ -292,12 +160,12 @@ class SubmitTargetCheckoutTool(Tool):
                     rendered.wiki_uris.append(uri)
             self.bundle = rendered
         except (OSError, ValueError) as exc:
-            return f"Error: Invalid target checkout: {exc}"
+            return f"Error: Invalid output directory: {exc}"
 
         changed = len(rendered.operations)
         return (
-            f"Target checkout accepted with {changed} changed file(s) and "
-            f"{self.page_count} Wiki page(s) in the preserved final tree."
+            f"Resource output accepted with {changed} changed file(s) and "
+            f"{self.page_count} Wiki page(s) in the submitted output."
         )
 
 
@@ -504,8 +372,6 @@ class SubmitWikiBundleTool(Tool):
                 if visited > self.limits.target_inventory_entries:
                     raise ValueError("task workspace inventory limit exceeded")
                 if _path_is_within(relative, COMPILE_STAGING_ROOT):
-                    continue
-                if _path_is_within(relative, COMPILE_MATERIALIZED_ROOT):
                     continue
                 if name in {".git", "__pycache__"}:
                     continue
@@ -796,9 +662,11 @@ class SubmitWikiBundleTool(Tool):
         return file_payloads, warnings
 
     async def _is_wiki_uri(self, uri: str) -> bool:
+        if not relative_uri_path(self.target_uri, validate_safe_viking_uri_path(uri)):
+            return False
         if uri in self.catalog_uris:
             return True
-        if uri not in self.file_catalog_uris or self.wiki_uri_resolver is None:
+        if self.wiki_uri_resolver is None:
             return False
         if await self.wiki_uri_resolver(uri):
             self.catalog_uris.add(uri)
@@ -856,7 +724,6 @@ class SubmitWikiBundleTool(Tool):
 
 
 __all__ = [
-    "CompileScopedTool",
-    "SubmitTargetCheckoutTool",
+    "SubmitCompileOutputTool",
     "SubmitWikiBundleTool",
 ]

@@ -52,7 +52,9 @@ class RenderedBundle:
 
 
 @dataclass(slots=True)
-class FinalizedCheckout:
+class FinalizedOutput:
+    """Submitted relative paths and bytes, with Wiki paths restricted to valid OKF pages."""
+
     files: dict[str, bytes] = field(default_factory=dict)
     wiki_paths: set[str] = field(default_factory=set)
     link_count: int = 0
@@ -263,15 +265,15 @@ def _link_wiki_mentions(
     return prefix + rendered, count
 
 
-def finalize_resource_checkout(
+def finalize_resource_output(
     files: Mapping[str, bytes],
     *,
     target_uri: str,
     source_roots: Mapping[str, str],
-) -> FinalizedCheckout:
-    """Validate and deterministically finalize one Resource checkout.
+) -> FinalizedOutput:
+    """Validate and deterministically finalize one Resource output.
 
-    The checkout already contains the final file layout. This pass only identifies
+    The files contain the submitted output layout. This pass only identifies
     self-declared OKF Wiki pages, makes supplied source URIs readable, and links the
     first body mention of another unambiguous Wiki filename. It does not decide create
     versus update.
@@ -326,7 +328,7 @@ def finalize_resource_checkout(
         finalized[path] = content.encode("utf-8")
         link_count += rendered_count
 
-    return FinalizedCheckout(
+    return FinalizedOutput(
         files=finalized,
         wiki_paths=wiki_paths,
         link_count=link_count,
@@ -709,10 +711,10 @@ class WikiRenderer:
 
 
 __all__ = [
-    "FinalizedCheckout",
+    "FinalizedOutput",
     "RenderedBundle",
     "WikiRenderer",
-    "finalize_resource_checkout",
+    "finalize_resource_output",
     "has_unclosed_frontmatter",
     "strip_okf_frontmatter",
     "is_reserved_wiki_page_uri",

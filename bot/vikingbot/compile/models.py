@@ -15,9 +15,7 @@ DEFAULT_COMPILE_INSTRUCTION = (
     "into the outputs required by the Skill."
 )
 COMPILE_STAGING_ROOT = "__compile_staging__"
-COMPILE_TARGET_CHECKOUT_ROOT = f"{COMPILE_STAGING_ROOT}/target_checkout"
-COMPILE_MATERIALIZED_ROOT = "compile_resources"
-COMPILE_MANIFEST_NAME = "_manifest.tsv"
+COMPILE_OUTPUT_ROOT = f"{COMPILE_STAGING_ROOT}/output"
 OKF_VERSION = "0.1"
 TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 WikiLanguage = Literal["en", "zh-CN"]
@@ -27,21 +25,14 @@ class CompileLimits(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     source_roots: int = 16
-    source_catalog_entries: int = 200
-    source_files: int = 5000
-    source_total_bytes: int = 1024 * 1024 * 1024
     target_total_bytes: int = 1024 * 1024 * 1024
     skill_files: int = 128
     skill_file_bytes: int = 8 * 1024 * 1024
     skill_total_bytes: int = 32 * 1024 * 1024
     target_inventory_entries: int = 2000
-    target_catalog_pages: int = 10
     initial_prompt_chars: int = 300_000
     agent_context_chars: int = 240_000
     agent_iterations: int = 60
-    tool_uri_count: int = 32
-    tool_result_bytes: int = 1024 * 1024
-    tool_total_result_bytes: int = 8 * 1024 * 1024
     output_pages: int = 128
     output_files: int = 128
     output_operations: int = 256
@@ -104,8 +95,8 @@ class WikiPageDraft(BaseModel):
     body_workspace_path: str | None = Field(
         default=None,
         description=(
-            f"Relative path under {COMPILE_TARGET_CHECKOUT_ROOT}/ for an editable "
-            "UTF-8 Markdown Wiki page in the target checkout."
+            f"Relative path under {COMPILE_OUTPUT_ROOT}/ for an editable "
+            "UTF-8 Markdown Wiki page in the output directory."
         ),
     )
     source_ids: list[str] = Field(

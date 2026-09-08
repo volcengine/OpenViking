@@ -2,6 +2,8 @@
 
 Agent Runtime Server executes Agent tasks and currently supports Compile. Applications submit tasks through OpenViking's Compile API. OpenViking validates requests, persists tasks, and manages their lifecycle while calling the Runtime execution API. The bundled VikingBot implements the same execution protocol for local deployments.
 
+The bundled VikingBot Compile agent uses the existing `exec` tool and the runtime's `ov` CLI to read the selected Skill, sources, and existing outputs on demand. The runtime must allow command execution and provide `ov` with a configured connection and identity; Compile uses that CLI configuration. Task startup does not download inputs, preload directory summaries, or inject the Skill body. Generated results still go through the submission tool for validation and server-side writes. Resource outputs are staged under `__compile_staging__/output/` in the task workspace; existing target files omitted from the submission are preserved.
+
 **Code entry points**:
 
 - `openviking/server/routers/compile.py` - Compile task creation

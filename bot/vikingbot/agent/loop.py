@@ -1893,14 +1893,11 @@ class AgentLoop:
         openviking_connection: dict[str, Any] | None,
         context_compact_budget: int | None = None,
         budget_reminder_thresholds: tuple[int, int, int] | None = None,
-        readlist_provider: Any | None = None,
     ) -> tuple[Any, list[dict], dict[str, int], int]:
         """Run a tool-terminated structured task through the existing agent loop.
 
-        ``budget_reminder_thresholds`` and ``readlist_provider`` enable the two Compile
-        efficiency optimizations (iteration budget countdown and the read/unread list).
-        Both default to ``None`` so this method's behavior is unchanged for callers that
-        do not opt in.
+        ``budget_reminder_thresholds`` optionally adds an iteration countdown before
+        model calls near the execution limit.
         """
 
         max_iterations = getattr(self, "max_iterations", 0)
@@ -1913,14 +1910,6 @@ class AgentLoop:
                 )
                 if reminder:
                     sections.append(reminder)
-            if readlist_provider is not None:
-                try:
-                    summary = await readlist_provider.summary()
-                except Exception as exc:
-                    logger.warning("[READLIST]: summary failed: {}", exc)
-                    summary = None
-                if summary:
-                    sections.append(summary)
             return "\n\n".join(sections) if sections else None
 
         async def require_submission(context: _PlainTextContext) -> _PlainTextDelivered:

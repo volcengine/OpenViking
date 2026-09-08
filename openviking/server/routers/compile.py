@@ -18,7 +18,9 @@ async def create_compile(
     body: CompileRequest,
     ctx: RequestContext = Depends(get_request_context),
 ):
+    """Queue a Compile task with the authenticated caller's forwarding identity."""
     connection = {"api_key": ctx.api_key} if ctx.api_key else {}
+    connection.update(account_id=ctx.account_id, user_id=ctx.user.user_id)
     task = await get_service().compile.create(body, connection=connection, ctx=ctx)
     return Response(status="ok", result=task.to_dict())
 
