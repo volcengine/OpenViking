@@ -22,6 +22,7 @@ The following platforms have been successfully integrated with OpenViking MCP:
 | **Trae** | Standard MCP config |
 | **Cursor** | Standard MCP config |
 | **ChatGPT & Codex** | Standard MCP config |
+| **GitHub Copilot** | Standard MCP config (VSCode `.vscode/mcp.json` uses `servers`; `gh copilot` CLI and GitHub.com repo-level use `mcpServers`) |
 | **OpenCode** | Native OpenCode `mcp` config |
 | **Manus** | Standard MCP config |
 | **Claude.ai / Claude Desktop** | Native OAuth 2.1 (see [11-oauth](11-oauth.md)) |

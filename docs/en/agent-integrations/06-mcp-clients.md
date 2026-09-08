@@ -1,6 +1,6 @@
 # MCP Clients
 
-Any [MCP](https://modelcontextprotocol.io/)-compatible client can connect to OpenViking's built-in `/mcp` endpoint — no plugin installation or extra processes needed. This covers Cursor, Trae, Manus, Claude Desktop, ChatGPT, and others.
+Any [MCP](https://modelcontextprotocol.io/)-compatible client can connect to OpenViking's built-in `/mcp` endpoint — no plugin installation or extra processes needed. This covers Cursor, Trae, Manus, Claude Desktop, ChatGPT, GitHub Copilot, and others.
 
 ## Quick setup
 
@@ -40,6 +40,16 @@ Add `--scope user` to make the config global across all projects.
 ### Trae / Cursor / ChatGPT
 
 Standard `mcpServers` config as shown above — all verified with API key auth.
+
+### GitHub Copilot
+
+GitHub Copilot supports MCP across VSCode Copilot Chat / agent mode, `gh copilot` CLI, and the GitHub.com Copilot cloud agent. The config shape differs by surface:
+
+- **VSCode** (`.vscode/mcp.json`): top-level `servers` (NOT `mcpServers`), entry `{ "type": "http", "url": "...", "headers": {...} }`.
+- **`gh copilot` CLI** (`~/.copilot/mcp-config.json`): top-level `mcpServers`, entry `{ "type": "http", "url": "...", "headers": {...}, "tools": ["*"] }`.
+- **GitHub.com repo-level** (Settings → Copilot → MCP servers): top-level `mcpServers`, required `type` and `tools`; API key referenced as `${COPILOT_MCP_*}` Agents secret. Public preview; tools only (no resources/prompts).
+
+Copilot has **no lifecycle hooks**, so memory is not auto-injected or auto-captured — the model calls the MCP tools itself. The [`examples/copilot-plugin`](../../examples/copilot-plugin/) bundle ships ready-to-use configs, an Agent Skill that supplies the recall/remember policy, and an installer: `bash examples/copilot-plugin/setup-helper/install.sh --cli`. See [DESIGN.md](../../examples/copilot-plugin/DESIGN.md) for the honest scope.
 
 ### Codex
 
