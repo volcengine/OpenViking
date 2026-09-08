@@ -13,6 +13,7 @@ import type {
   BatchWriteOptions,
   ClientConfig,
   CommitSessionOptions,
+  CompileOptions,
   CreateSessionOptions,
   ExperienceOutcomeOptions,
   ExperienceTrajectoryOptions,
@@ -937,6 +938,28 @@ export class OpenVikingClient {
     );
     return result.uri;
   }
+  /** Start an asynchronous Compile task. */
+  compile(
+    fromUris: string[],
+    to: string,
+    skill: string,
+    options: CompileOptions = {},
+  ): Promise<JsonObject> {
+    const body = compact({
+      from: fromUris,
+      to,
+      skill,
+      reason: options.reason,
+      args:
+        options.args && Object.keys(options.args).length
+          ? options.args
+          : undefined,
+    });
+    return this.request("POST", "/api/v1/compile", {
+      body: mergeExtra(body, options.extra, ["reason", "args"]),
+    });
+  }
+
   /** Get a background task. */
   async getTask(taskId: string): Promise<JsonObject | null> {
     try {

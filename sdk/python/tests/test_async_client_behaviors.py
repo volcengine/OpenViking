@@ -602,11 +602,34 @@ def test_sync_http_client_declares_common_sync_methods_explicitly():
         "get_skill",
         "update_skill",
         "delete_skill",
+        "compile",
         "get_task",
         "list_tasks",
         "admin_list_accounts",
     ]:
         assert method_name in explicit_methods, method_name
+
+    client = SyncHTTPClient(url="http://localhost:1933")
+    client._async_client._request = AsyncMock(return_value=object())
+    client._async_client._handle_response = lambda _response: {"task_id": "cmp_1"}
+    result = client.compile(
+        ["viking://resources/source"],
+        "viking://resources/output",
+        "viking://agent/skills/wiki",
+        options={"args": {"model_name": "endpoint-1"}},
+    )
+
+    assert result == {"task_id": "cmp_1"}
+    client._async_client._request.assert_awaited_once_with(
+        "POST",
+        "/api/v1/compile",
+        json={
+            "from": ["viking://resources/source"],
+            "to": "viking://resources/output",
+            "skill": "viking://agent/skills/wiki",
+            "args": {"model_name": "endpoint-1"},
+        },
+    )
 
 
 def test_sync_http_client_session_must_exist_checks_existence():

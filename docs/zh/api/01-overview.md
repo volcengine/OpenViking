@@ -460,6 +460,7 @@ JSON 输出 - 错误：
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| POST | `/api/v1/compile` | 创建由 OV 托管的 Compile 任务 |
 | GET | `/api/v1/tasks/{task_id}` | 获取后台任务 |
 | POST | `/api/v1/tasks/{task_id}/cancel` | 取消后台任务 |
 | GET | `/api/v1/tasks` | 列出后台任务 |
@@ -505,7 +506,7 @@ JSON 输出 - 错误：
 | POST | `/api/v1/privacy-configs/{category}/{target_key}` | 写入并激活新版本 |
 | POST | `/api/v1/privacy-configs/{category}/{target_key}/activate` | 激活指定版本 |
 
-### [OpenViking Assets](22-openviking-assets.md)、[WebDAV](20-webdav.md) 与 [VikingBot API](24-vikingbot.md)
+### [OpenViking Assets](22-openviking-assets.md)、[WebDAV](20-webdav.md)、[Agent Runtime API](23-agent-runtime.md) 与 [VikingBot API](24-vikingbot.md)
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -518,13 +519,14 @@ JSON 输出 - 错误：
 | DELETE | `/webdav/resources`、`/webdav/resources/{resource_path}` | 删除文件或目录 |
 | MKCOL | `/webdav/resources`、`/webdav/resources/{resource_path}` | 创建目录 |
 | MOVE | `/webdav/resources`、`/webdav/resources/{resource_path}` | 移动或重命名资源 |
+| POST | `/api/v1/compile` | 创建异步 Compile 任务 |
 | GET | `/bot/v1/health` | VikingBot 健康检查 |
 | POST | `/bot/v1/chat` | VikingBot 非流式对话 |
 | POST | `/bot/v1/chat/stream` | VikingBot 流式对话 |
 | POST | `/bot/v1/feedback` | 提交 VikingBot 回答反馈 |
-| POST | `/bot/v1/compile` | 启动 Skill 驱动的 Compile 任务 |
-| GET | `/bot/v1/compile/{task_id}` | 获取 Compile 任务状态 |
-| POST | `/bot/v1/compile/{task_id}/cancel` | 取消 Compile 任务 |
+| POST | `/bot/v1/compile` | 已停用；返回新接口迁移提示 |
+| GET | `/bot/v1/compile/{task_id}` | 已停用；返回 Task 接口迁移提示 |
+| POST | `/bot/v1/compile/{task_id}/cancel` | 已停用；返回 Task 取消接口迁移提示 |
 
 ---
 
@@ -539,4 +541,4 @@ JSON 输出 - 错误：
 | 数据生命周期 | Watch、快照、OVPack |
 | 运维与观测 | 系统、任务、Observer、Metrics |
 | 身份与治理 | 管理员、ACL、隐私配置 |
-| 协议与扩展 | OpenViking Assets、WebDAV、VikingBot API |
+| 协议与扩展 | OpenViking Assets、WebDAV、Agent Runtime API、VikingBot API |

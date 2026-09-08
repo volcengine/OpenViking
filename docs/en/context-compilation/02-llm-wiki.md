@@ -59,13 +59,12 @@ ov compile \
   --from viking://resources/research \
   --to viking://resources/research-wiki \
   --skill viking://agent/skills/llm-wiki \
-  --reason "Organize into a team-searchable Wiki, keeping the source of every claim" \
-  --wait
+  --reason "Organize into a team-searchable Wiki, keeping the source of every claim"
 ```
 
 - `--from` can be repeated or comma-separated to pass multiple sources at once.
 - The `--to` directory is created automatically if it does not exist.
-- Add `-o json` for machine-readable output; drop `--wait` to avoid blocking and poll with the returned `task_id`:
+- Add `-o json` for machine-readable output. The command returns a `task_id` immediately; use it to inspect or cancel the task:
 
 ```bash
 ov task status cmp_01abc      # progress and final result
@@ -128,4 +127,4 @@ python examples/compile/graph-show/llm-wiki/wiki_graph.py \
 
 - [Context Compilation Overview](./01-overview.md)
 - [Knowledge Graph example](./03-knowledge-graph.md)
-- [VikingBot API → compile()](../api/24-vikingbot.md#compile)
+- [Agent Runtime API](../api/23-agent-runtime.md)
