@@ -19,7 +19,7 @@ import re
 import threading
 import time
 from copy import deepcopy
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -82,10 +82,14 @@ class TaskRecord:
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     auth: Dict[str, Any] = field(default_factory=dict, repr=False)
+    _extra_fields: Dict[str, Any] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize for JSON response."""
         d = asdict(self)
+        d.pop("_extra_fields", None)
         d["status"] = self.status.value
         d["created_at_iso"] = datetime.fromtimestamp(self.created_at, tz=timezone.utc).isoformat()
         d["updated_at_iso"] = datetime.fromtimestamp(self.updated_at, tz=timezone.utc).isoformat()
@@ -1083,9 +1087,15 @@ class TaskTracker:
 
     @staticmethod
     def _record_from_payload(payload: Dict[str, Any]) -> TaskRecord:
-        data = dict(payload)
+        known_fields = {item.name for item in fields(TaskRecord) if item.init}
+        data = {key: deepcopy(value) for key, value in payload.items() if key in known_fields}
         data["status"] = TaskStatus(data["status"])
-        return TaskRecord(**data)
+        record = TaskRecord(**data)
+        # Keep fields from other writers for the next persistence update.
+        record._extra_fields = {
+            key: deepcopy(value) for key, value in payload.items() if key not in known_fields
+        }
+        return record
 
     async def _load_from_store(
         self,

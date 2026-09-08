@@ -5,13 +5,14 @@
 
 import json
 import time
+from copy import deepcopy
 
 import pytest
 
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError
 from openviking.server.identity import RequestContext, Role
 from openviking.service.session_service import SessionService
-from openviking.service.task_store import PersistentTaskStore
+from openviking.service.task_store import PersistentTaskStore, _task_to_payload
 from openviking.service.task_tracker import (
     TaskStatus,
     TaskTracker,
@@ -577,6 +578,78 @@ async def test_persistent_store_cross_tracker_visibility():
     assert loaded is not None
     assert loaded.status == TaskStatus.COMPLETED
     assert loaded.result == {"ok": True}
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {
+            "operation_id": "operation-1",
+            "parent_task_id": "parent-1",
+            "attempt_number": 2,
+            "error_info": {"category": "network", "retryable": True},
+        },
+        {"future_field": {"values": [1, 2]}, "_extra_fields": {"reserved": True}},
+    ],
+)
+async def test_persistent_task_extensions_survive_updates(extra):
+    agfs = _FakeAgfs()
+    store = PersistentTaskStore(agfs)
+    writer = TaskTracker(store=store)
+    task = await writer.create("session_commit", **_owner_kwargs())
+    path = f"/local/acme/_system/tasks/alice/{task.task_id}.json"
+    payload = json.loads(agfs.files[path])
+    payload.update(extra)
+    agfs.files[path] = json.dumps(payload).encode()
+    original = agfs.files[path]
+
+    reader = TaskTracker(store=store)
+    loaded = await reader.get(task.task_id, **_owner_kwargs())
+    assert loaded is not None
+    assert loaded.status == TaskStatus.PENDING
+    assert not (set(extra) & set(loaded.to_dict()))
+    assert len(await reader.list_tasks(**_owner_kwargs())) == 1
+    assert await reader.get(task.task_id, account_id="acme", user_id="bob") is None
+    assert agfs.files[path] == original
+
+    await reader.start(task.task_id, **_owner_kwargs())
+    await reader.complete(task.task_id, {"ok": True}, **_owner_kwargs())
+    saved = json.loads(agfs.files[path])
+    assert saved["status"] == "completed"
+    assert saved["result"] == {"ok": True}
+    assert {key: saved[key] for key in extra} == extra
+    reloaded = await TaskTracker(store=store).get(task.task_id, **_owner_kwargs())
+    assert reloaded is not None
+    assert reloaded.status == TaskStatus.COMPLETED
+    assert {key: _task_to_payload(reloaded)[key] for key in extra} == extra
+
+
+async def test_task_extension_payload_is_defensively_copied():
+    payload = {
+        "task_id": "task-1",
+        "task_type": "session_commit",
+        "status": "pending",
+        "future_field": {"values": [1]},
+        "meta": {"values": [2]},
+    }
+    original = deepcopy(payload)
+    record = TaskTracker._record_from_payload(payload)
+    record._extra_fields["future_field"]["values"].append(3)
+    record.meta["values"].append(4)
+    assert payload == original
+    saved = _task_to_payload(record)
+    saved["future_field"]["values"].append(5)
+    assert record._extra_fields["future_field"]["values"] == [1, 3]
+    record._extra_fields["status"] = "failed"
+    assert _task_to_payload(record)["status"] == "pending"
+
+
+@pytest.mark.parametrize("status", ["unknown", None])
+async def test_task_extensions_do_not_hide_invalid_status(status):
+    with pytest.raises(ValueError):
+        TaskTracker._record_from_payload(
+            {"task_id": "task-1", "task_type": "session_commit", "status": status, "extra": 1}
+        )
 
 
 async def test_persistent_store_writes_task_record_json():

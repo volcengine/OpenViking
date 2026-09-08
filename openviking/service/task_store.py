@@ -174,6 +174,7 @@ class PersistentTaskStore:
 def _task_to_payload(task: Any) -> Dict[str, Any]:
     status = getattr(task, "status", None)
     return {
+        **deepcopy(getattr(task, "_extra_fields", {})),
         "task_id": task.task_id,
         "task_type": task.task_type,
         "status": status.value if hasattr(status, "value") else status,
