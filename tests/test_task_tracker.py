@@ -698,3 +698,11 @@ async def test_session_service_get_commit_task_also_filters_account():
     )
 
     assert other_account_result is None
+
+
+async def test_feishu_response_checkpoint_survives_reload(tracker):
+    task = await tracker.create("add_resource", **_owner_kwargs())
+    await tracker.record_feishu_response(task.task_id, "nested/doc", "response-1", "acme", "alice")
+    restored = TaskTracker(store=tracker._store)
+    record = await restored.get(task.task_id, **_owner_kwargs())
+    assert record.meta["feishu_responses"] == {"nested/doc": "response-1"}

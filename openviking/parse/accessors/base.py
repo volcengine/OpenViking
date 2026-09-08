@@ -11,7 +11,10 @@ import shutil
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+
+if TYPE_CHECKING:
+    from openviking.parse.feishu_import import FeishuImportPlan
 
 
 class SourceType:
@@ -57,6 +60,8 @@ class LocalResource:
 
     is_temporary: bool = True
     """Whether this is a temporary resource that can be cleaned up after parsing."""
+
+    feishu_plan: Optional["FeishuImportPlan"] = None
 
     def cleanup(self) -> None:
         """

@@ -206,6 +206,9 @@ class UnderstandingAPI(BaseParser):
                     )
                 response_id = str(response_id_value)
             task_meta["response_id"] = response_id
+            checkpoint = kwargs.get("_response_checkpoint")
+            if checkpoint is not None:
+                await checkpoint(response_id)
 
             response_obj = await self._poll_response(response_id=response_id)
             zip_url = self._extract_zip_url(response_obj)
@@ -331,6 +334,11 @@ class UnderstandingAPI(BaseParser):
     def can_submit_url_directly(self, source: str, **kwargs) -> bool:
         """Return whether this URL can bypass source materialization."""
         if not source.startswith(("http://", "https://")) or not self._is_feishu_url(source):
+            return False
+        from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+
+        doc_type, _ = FeishuAccessor._parse_feishu_url(source)
+        if doc_type in {"folder", "file"}:
             return False
         if self._normalize_lark_file(kwargs):
             return True
