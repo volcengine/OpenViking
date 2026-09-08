@@ -565,6 +565,20 @@ void expect_paged_store_scan(KVStore& store) {
   }
 }
 
+void expect_put_data_rejects_length_mismatch(KVStore& store) {
+  const std::vector<std::string> keys = {"length:mismatch"};
+  const std::vector<std::string> values;
+  if (store.put_data(keys, values) != -1) {
+    SPDLOG_ERROR("Store accepted mismatched key/value lengths");
+    exit(1);
+  }
+  const auto fetched = store.get_data(keys);
+  if (fetched.size() != 1 || !fetched[0].empty()) {
+    SPDLOG_ERROR("Store wrote data after rejecting mismatched lengths");
+    exit(1);
+  }
+}
+
 void test_paged_store_scan() {
   SPDLOG_INFO("[Running] test_paged_store_scan...");
   VolatileStore volatile_store;
@@ -583,11 +597,30 @@ void test_paged_store_scan() {
   SPDLOG_INFO("[Passed] test_paged_store_scan");
 }
 
+void test_put_data_length_mismatch() {
+  SPDLOG_INFO("[Running] test_put_data_length_mismatch...");
+  VolatileStore volatile_store;
+  expect_put_data_rejects_length_mismatch(volatile_store);
+
+  const std::string db_path = "test_data_cpp/put_data_length_mismatch";
+  if (std::filesystem::exists(db_path)) {
+    std::filesystem::remove_all(db_path);
+  }
+  std::filesystem::create_directories(db_path);
+  {
+    PersistStore persist_store(db_path);
+    expect_put_data_rejects_length_mismatch(persist_store);
+  }
+  std::filesystem::remove_all(db_path);
+  SPDLOG_INFO("[Passed] test_put_data_length_mismatch");
+}
+
 int main() {
   init_logging("INFO", "stdout", "[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
   test_basic_workflow();
   test_routed_filter_projection_edge_cases();
   test_path_bitmap_lifecycle_and_reload();
   test_paged_store_scan();
+  test_put_data_length_mismatch();
   return 0;
 }
