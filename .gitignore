@@ -151,6 +151,11 @@ RAGbenchmark/datasets/*/
 RAGbenchmark/Output/
 RAGbenchmark/*.log
 
+# Glob benchmark local artifacts
+benchmark/retrieval/glob/**/local_only/
+benchmark/retrieval/glob/**/step3_result_*.json
+/step3_result_*.json
+
 # AI Coding
 CLAUDE.md
 *.so

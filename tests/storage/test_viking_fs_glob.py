@@ -101,11 +101,44 @@ async def _async_true():
     return True
 
 
-def test_glob_config_default_switch_to_remote_threshold_is_1000():
+def test_glob_config_defaults_to_fs_with_threshold_100():
     config = GlobConfig()
 
-    assert config.engine == "auto"
-    assert config.switch_to_remote_threshold == 1000
+    assert config.engine == "fs"
+    assert config.switch_to_remote_threshold == 100
+
+
+@pytest.mark.asyncio
+async def test_glob_auto_runtime_fallback_uses_threshold_100(fs):
+    vector_store = _RemoteGlobVectorStore([], count=100)
+    fs.vector_store = vector_store
+    fs.glob_config = SimpleNamespace(engine="auto")
+
+    should_use_remote = await fs._should_use_vikingdb_glob(
+        pattern="**/*.md",
+        uri="viking://resources",
+        node_limit=None,
+        ctx=_default_ctx(),
+    )
+
+    assert should_use_remote is True
+
+
+@pytest.mark.asyncio
+async def test_glob_auto_threshold_zero_skips_count(fs):
+    vector_store = _RemoteGlobVectorStore([], count=0)
+    fs.vector_store = vector_store
+    fs.glob_config = SimpleNamespace(engine="auto", switch_to_remote_threshold=0)
+
+    should_use_remote = await fs._should_use_vikingdb_glob(
+        pattern="**/*.md",
+        uri="viking://resources",
+        node_limit=None,
+        ctx=_default_ctx(),
+    )
+
+    assert should_use_remote is True
+    assert vector_store.count_calls == []
 
 
 @pytest.mark.asyncio

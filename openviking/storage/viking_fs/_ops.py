@@ -1466,7 +1466,7 @@ class _OpsMixin:
             return False
 
         glob_config = getattr(self, "glob_config", None)
-        engine = getattr(glob_config, "engine", "auto")
+        engine = getattr(glob_config, "engine", "fs")
         if engine == "fs":
             return False
 
@@ -1481,7 +1481,7 @@ class _OpsMixin:
         if not await self._collection_has_glob_uri_field(vector_store, ctx):
             return False
 
-        threshold = getattr(glob_config, "switch_to_remote_threshold", 1000)
+        threshold = getattr(glob_config, "switch_to_remote_threshold", 100)
         if threshold == 0:
             return True
 

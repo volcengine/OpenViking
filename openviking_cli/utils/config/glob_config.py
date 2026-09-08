@@ -13,7 +13,7 @@ class GlobConfig(BaseModel):
     """Configuration for glob engine behavior."""
 
     engine: GlobEngine = Field(
-        default="auto",
+        default="fs",
         description=(
             "Glob engine mode: 'auto' uses remote VikingDB path_glob when available, "
             "'fs' forces local filesystem glob."
@@ -21,7 +21,7 @@ class GlobConfig(BaseModel):
     )
 
     switch_to_remote_threshold: int = Field(
-        default=1000,
+        default=100,
         ge=0,
         description=(
             "Vector record count threshold to switch to VikingDB path_glob; "

@@ -981,16 +981,16 @@ Glob 引擎配置，用于路径模式匹配。这些设置为服务端配置，
 ```json
 {
   "glob": {
-    "engine": "auto",
-    "switch_to_remote_threshold": 1000
+    "engine": "fs",
+    "switch_to_remote_threshold": 100
   }
 }
 ```
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `engine` | str | 路径匹配引擎模式：`"auto"` 在 VikingDB / Volcengine 向量库可用且搜索范围记录数达到阈值时，使用远程 `path_glob` 后处理；不可用或失败时回退到本地文件系统搜索。`"fs"` 强制仅使用本地文件系统搜索。 | `"auto"` |
-| `switch_to_remote_threshold` | int | 切换到远程 `path_glob` 的记录数阈值。当搜索范围内记录数达到此阈值时使用远程路径匹配。设为 `0` 表示始终使用远程路径匹配。必须 ≥ 0。 | `1000` |
+| `engine` | str | 路径匹配引擎模式：`"auto"` 在 VikingDB / Volcengine 向量库可用且搜索范围记录数达到阈值时，使用远程 `path_glob` 后处理；不可用或失败时回退到本地文件系统搜索。`"fs"` 强制仅使用本地文件系统搜索。 | `"fs"` |
+| `switch_to_remote_threshold` | int | `auto` 模式切换到远程 `path_glob` 的记录数阈值。当搜索范围内记录数达到此阈值时使用远程路径匹配。设为 `0` 表示始终使用远程路径匹配。必须 ≥ 0。 | `100` |
 
 ### storage
 
