@@ -1,0 +1,22 @@
+services:
+  llamaparse-bridge:
+    build: .
+    env_file: .env
+    environment:
+      BRIDGE_BIND_HOST: 0.0.0.0
+      BRIDGE_PORT: 8080
+    init: true
+    ports:
+      - "${BRIDGE_PUBLISH_HOST:-127.0.0.1}:${BRIDGE_PORT:-8080}:8080"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
