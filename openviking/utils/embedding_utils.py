@@ -278,12 +278,12 @@ async def _build_image_data_uri(
     original resource bytes in VikingFS are left unchanged.
     Returns None if the image cannot be read.
     """
+    content = await viking_fs.read_file_bytes(file_path, ctx=ctx)
     try:
-        content = await viking_fs.read_file_bytes(file_path, ctx=ctx)
         image_config = getattr(get_openviking_config(), "image", None)
         return image_bytes_to_model_data_uri(content, file_name, config=image_config)
     except Exception as e:
-        logger.warning(f"Failed to read image for multimodal vectorization {file_path}: {e}")
+        logger.warning(f"Failed to encode image for multimodal vectorization {file_path}: {e}")
         return None
 
 
@@ -606,7 +606,17 @@ async def vectorize_file(
                     context.set_vectorize(Vectorize(text=embedding_text))
         elif content_type == ResourceContentType.IMAGE:
             # Multimodal embedders consume both parts; text-only embedders fall back to summary.
-            image_uri = await _build_image_data_uri(file_path, file_name, viking_fs, ctx)
+            try:
+                image_uri = await _build_image_data_uri(file_path, file_name, viking_fs, ctx)
+            except Exception:
+                if not summary:
+                    raise
+                logger.warning(
+                    "Failed to read image for multimodal vectorization %s; using summary",
+                    file_path,
+                    exc_info=True,
+                )
+                image_uri = None
             if image_uri:
                 context.set_vectorize(Vectorize(text=summary, images=[image_uri]))
             elif summary:

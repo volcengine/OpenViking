@@ -866,6 +866,36 @@ async def test_vectorize_image_file_falls_back_to_summary_when_image_unreadable(
 
 
 @pytest.mark.asyncio
+async def test_vectorize_unreadable_image_without_summary_is_not_treated_as_no_output(monkeypatch):
+    class UnreadableImageFS(DummyFS):
+        async def read_file_bytes(self, _path, ctx=None):
+            self.read_file_bytes_calls += 1
+            raise OSError("cannot read")
+
+    queue = DummyQueue()
+    fs = UnreadableImageFS("")
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: fs)
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="summary_first", max_input_tokens=1000)
+        ),
+    )
+
+    with pytest.raises(OSError, match="cannot read"):
+        await embedding_utils.vectorize_file(
+            file_path="viking://user/default/resources/photo.png",
+            summary_dict={"name": "photo.png", "summary": ""},
+            parent_uri="viking://user/default/resources",
+            ctx=DummyReq(),
+        )
+
+    assert queue.items == []
+
+
+@pytest.mark.asyncio
 async def test_vectorize_text_file_ignores_summary_content_without_reread(monkeypatch):
     queue = DummyQueue()
     raw_content = "# README\nraw text already read during summary\n"
