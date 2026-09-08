@@ -383,6 +383,22 @@ class SemanticDagExecutor:
         self._parent[dir_uri] = parent_uri
 
         try:
+            # A semantic DAG node is expected to be a directory.  In
+            # particular, do not turn a missing or file-shaped URI into a
+            # directory merely because listing it returned no children.  This
+            # can happen after a chunker removes the original file and a
+            # subsequent reindex still carries the stale path.
+            stat = getattr(self._viking_fs, "stat", None)
+            if stat is not None:
+                info = await stat(dir_uri, ctx=self._ctx)
+                if not info.get("isDir", info.get("is_dir", False)):
+                    logger.info("Skipping semantic directory node that is not a directory: %s", dir_uri)
+                    if parent_uri:
+                        await self._on_child_done(parent_uri, dir_uri, "")
+                    elif self._root_done:
+                        self._root_done.set()
+                    return True
+
             children_dirs, file_paths = await self._list_dir(dir_uri, "_dispatch_dir")
             if self._generation_trigger == "content_copy":
                 node = await self._prepare_transfer_node(dir_uri, children_dirs, file_paths)
