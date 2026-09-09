@@ -354,6 +354,37 @@ async def search(
             return result.rendered
         return "No matching context found."
 
+    # The context branch above rejects a list-only argument; do the same in the other
+    # direction. Everything it consumes is read only inside it, and the list path calls
+    # SearchService.search, whose signature has no parameter for any of them -- so
+    # passing one here does nothing at all, which for exclude_uris means excluded URIs
+    # come back in the results with no error.
+    supplied_context_only = [
+        name
+        for name, (value, default) in {
+            "query_expansion": (query_expansion, "auto"),
+            "max_tokens": (max_tokens, DEFAULT_MAX_TOKENS),
+            "quotas": (quotas, None),
+            "purpose": (purpose, None),
+            "detail": (detail, "auto"),
+            "detail_by_category": (detail_by_category, None),
+            "dedup_turns": (dedup_turns, 0),
+            "exclude_uris": (exclude_uris, None),
+            "peer_scope": (peer_scope, "all"),
+            "other_peer_penalty": (other_peer_penalty, None),
+            "other_peer_penalties": (other_peer_penalties, None),
+            "rewrite": (rewrite, "off"),
+            "rewrite_max_bullets": (rewrite_max_bullets, 6),
+        }.items()
+        if value != default
+    ]
+    if supplied_context_only:
+        raise InvalidArgumentError(
+            f"{', '.join(supplied_context_only)} "
+            f"{'is' if len(supplied_context_only) == 1 else 'are'} "
+            "only supported in mode='context'"
+        )
+
     if target_uri:
         target_uri = _resolve_mcp_workspace_uri(target_uri, ctx)
     session = None
