@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 
 from openviking.service.external_task_service import ExternalTaskService
 from openviking.service.task_tracker_concurrency import OwnerLoopDispatcher
+from openviking.service.task_work_index import TaskWorkRejected
 from openviking.storage.queuefs import QueueManager, get_queue_manager
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 
@@ -53,11 +54,16 @@ class ExternalTaskProcessor(DequeueHandlerBase):
         if not processed:
             # Register a new delivery before the old one is ACKed. Keeping the
             # task ID preserves cancellation and task-owned work across rotation.
-            await get_queue_manager().enqueue(
-                QueueManager.EXTERNAL_TASK,
-                {"task_id": task_id, "account_id": account_id, "user_id": user_id},
-            )
-            self.report_requeue()
+            try:
+                await get_queue_manager().enqueue(
+                    QueueManager.EXTERNAL_TASK,
+                    {"task_id": task_id, "account_id": account_id, "user_id": user_id},
+                )
+            except TaskWorkRejected:
+                # Cancellation only needs the current delivery to be ACKed.
+                pass
+            else:
+                self.report_requeue()
         self.report_success()
         return None
 
