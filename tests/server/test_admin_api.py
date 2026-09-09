@@ -524,6 +524,40 @@ async def test_list_accounts(admin_client: httpx.AsyncClient):
     assert acct in account_ids
 
 
+async def test_identity_settings_refreshes_a_stale_registry_on_demand(
+    admin_client: httpx.AsyncClient,
+    admin_app: FastAPI,
+    admin_service: OpenVikingService,
+):
+    """Detail settings reads must not depend on a preceding list request."""
+    replica = admin_app.state.api_key_manager
+    writer = APIKeyManager(
+        root_key=ROOT_KEY,
+        viking_fs=admin_service.viking_fs,
+    )
+    await writer.load()
+    acct = _uid()
+
+    await writer.ensure_trusted_identities({acct: {"trusted-user"}})
+    assert replica.has_user(acct, "trusted-user") is False
+
+    account_settings = await admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/settings",
+        headers=root_headers(),
+    )
+    assert account_settings.status_code == 200, account_settings.text
+    assert replica.has_user(acct, "trusted-user") is True
+
+    await writer.ensure_trusted_identities({acct: {"trusted-user-2"}})
+    assert replica.has_user(acct, "trusted-user-2") is False
+
+    user_settings = await admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/users/trusted-user-2/settings",
+        headers=root_headers(),
+    )
+    assert user_settings.status_code == 200, user_settings.text
+
+
 async def test_delete_account(admin_client: httpx.AsyncClient):
     """ROOT can delete an account."""
     acct = _uid()

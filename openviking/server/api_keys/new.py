@@ -125,6 +125,12 @@ class NewAPIKeyManager:
         """Return a cheap change signature for the on-disk key store."""
         return await self._legacy.compute_store_signature()
 
+    async def refresh_identity_registry_if_changed(
+        self, account_id: str | None = None
+    ) -> bool:
+        """Refresh account/user registry state for a management read when needed."""
+        return await self._legacy.refresh_identity_registry_if_changed(account_id)
+
     def resolve(self, api_key: str) -> ResolvedIdentity:
         """Resolve an API key to identity.
 
@@ -178,6 +184,15 @@ class NewAPIKeyManager:
         return self._legacy.resolve(api_key)
 
     async def create_account(
+        self,
+        account_id: str,
+        admin_user_id: str,
+        seed: Optional[str] = None,
+    ) -> str:
+        async with self._legacy.mutation_lock:
+            return await self._create_account_unlocked(account_id, admin_user_id, seed)
+
+    async def _create_account_unlocked(
         self,
         account_id: str,
         admin_user_id: str,
@@ -249,20 +264,46 @@ class NewAPIKeyManager:
                 self._legacy._prefix_index[key_prefix] = []
             self._legacy._prefix_index[key_prefix].append(entry)
 
+        account_was_created = False
         try:
-            await self._legacy._save_accounts_json()
-            await self._legacy._save_users_json(account_id)
+            created_account_ids = await self._legacy._save_accounts_json(
+                updated_account_ids={account_id},
+                reject_existing_account_ids={account_id},
+            )
+            account_was_created = account_id in created_account_ids
+            await self._legacy._save_users_json(
+                account_id,
+                {admin_user_id: user_info},
+                replace_existing=account_id in created_account_ids,
+            )
             await self._legacy._write_groups_json(account_id, {})
         except Exception:
-            await self._legacy._rollback_create_account(account_id)
+            await self._legacy._rollback_create_account(
+                account_id, account_was_created=account_was_created
+            )
             raise
         return key
 
     async def delete_account(self, account_id: str) -> None:
         """Delete an account and remove all its user keys from the index."""
-        await self._legacy.delete_account(account_id)
+        async with self._legacy.mutation_lock:
+            await self._legacy.delete_account(account_id)
+
+    async def ensure_trusted_identities(self, identities: dict[str, set[str]]) -> dict[str, int]:
+        """Merge trusted identities without generating API keys."""
+        return await self._legacy.ensure_trusted_identities(identities)
 
     async def register_user(
+        self,
+        account_id: str,
+        user_id: str,
+        role: str = "user",
+        seed: Optional[str] = None,
+    ) -> str:
+        async with self._legacy.mutation_lock:
+            return await self._register_user_unlocked(account_id, user_id, role, seed)
+
+    async def _register_user_unlocked(
         self,
         account_id: str,
         user_id: str,
@@ -321,7 +362,14 @@ class NewAPIKeyManager:
                 self._legacy._prefix_index[key_prefix] = []
             self._legacy._prefix_index[key_prefix].append(entry)
 
-        await self._legacy._save_users_json(account_id)
+        try:
+            await self._legacy._save_users_json(
+                account_id, {user_id: user_info}, reject_existing_user_ids={user_id}
+            )
+        except Exception:
+            account.users.pop(user_id, None)
+            self._legacy._remove_key_index_entry(account_id, user_id, user_info)
+            raise
         return key
 
     async def begin_user_deletion(
@@ -333,13 +381,14 @@ class NewAPIKeyManager:
         owner_account_id: str,
         owner_user_id: str,
     ) -> tuple[dict, bool]:
-        return await self._legacy.begin_user_deletion(
-            account_id,
-            user_id,
-            task_id=task_id,
-            owner_account_id=owner_account_id,
-            owner_user_id=owner_user_id,
-        )
+        async with self._legacy.mutation_lock:
+            return await self._legacy.begin_user_deletion(
+                account_id,
+                user_id,
+                task_id=task_id,
+                owner_account_id=owner_account_id,
+                owner_user_id=owner_user_id,
+            )
 
     async def replace_user_deletion_task(
         self,
@@ -351,17 +400,19 @@ class NewAPIKeyManager:
         owner_account_id: str,
         owner_user_id: str,
     ) -> dict:
-        return await self._legacy.replace_user_deletion_task(
-            account_id,
-            user_id,
-            expected_task_id=expected_task_id,
-            task_id=task_id,
-            owner_account_id=owner_account_id,
-            owner_user_id=owner_user_id,
-        )
+        async with self._legacy.mutation_lock:
+            return await self._legacy.replace_user_deletion_task(
+                account_id,
+                user_id,
+                expected_task_id=expected_task_id,
+                task_id=task_id,
+                owner_account_id=owner_account_id,
+                owner_user_id=owner_user_id,
+            )
 
     async def finish_user_deletion(self, account_id: str, user_id: str, task_id: str) -> bool:
-        return await self._legacy.finish_user_deletion(account_id, user_id, task_id)
+        async with self._legacy.mutation_lock:
+            return await self._legacy.finish_user_deletion(account_id, user_id, task_id)
 
     def get_user_deletion(self, account_id: str, user_id: str) -> Optional[dict]:
         return self._legacy.get_user_deletion(account_id, user_id)
@@ -373,6 +424,15 @@ class NewAPIKeyManager:
         return self._legacy.is_user_deleting(account_id, user_id)
 
     async def regenerate_key(
+        self,
+        account_id: str,
+        user_id: str,
+        seed: Optional[str] = None,
+    ) -> str:
+        async with self._legacy.mutation_lock:
+            return await self._regenerate_key_unlocked(account_id, user_id, seed)
+
+    async def _regenerate_key_unlocked(
         self,
         account_id: str,
         user_id: str,
@@ -446,12 +506,13 @@ class NewAPIKeyManager:
                 self._legacy._prefix_index[new_key_prefix] = []
             self._legacy._prefix_index[new_key_prefix].append(entry)
 
-        await self._legacy._save_users_json(account_id)
+        await self._legacy._save_users_json(account_id, {user_id: account.users[user_id]})
         return new_key
 
     async def set_role(self, account_id: str, user_id: str, role: str) -> None:
         """Update a user's role."""
-        await self._legacy.set_role(account_id, user_id, role)
+        async with self._legacy.mutation_lock:
+            await self._legacy.set_role(account_id, user_id, role)
 
     def get_accounts(
         self,
@@ -561,8 +622,8 @@ class NewAPIKeyManager:
     async def _ensure_parent_dirs_async(self, path: str) -> None:
         return await self._legacy._ensure_parent_dirs_async(path)
 
-    async def _save_accounts_json(self) -> None:
-        return await self._legacy._save_accounts_json()
+    async def _save_accounts_json(self, **kwargs) -> set[str]:
+        return await self._legacy._save_accounts_json(**kwargs)
 
     async def _save_users_json(self, account_id: str) -> None:
         return await self._legacy._save_users_json(account_id)
