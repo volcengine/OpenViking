@@ -513,7 +513,7 @@ class _FakePathLock:
 
     async def pathlock_acquire_exact(self, lock_path, *, ancestor_scope="all"):
         del lock_path
-        assert ancestor_scope == "parent"
+        assert ancestor_scope == "current_directory"
         if self.acquire_error is not None:
             raise self.acquire_error
         if not self.acquire_result:

@@ -18,7 +18,7 @@ pub enum PathLockAncestorScope {
     #[default]
     All,
     /// Check only the target path's direct parent directory.
-    Parent,
+    CurrentDirectory,
 }
 
 impl PathLockKind {

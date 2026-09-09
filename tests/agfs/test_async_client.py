@@ -91,14 +91,14 @@ async def test_pathlock_acquire_exact_forwards_ancestor_scope(monkeypatch):
     agfs = AsyncAGFSClient(_SyncAGFS())
 
     assert await agfs.pathlock_acquire_exact(
-        "/local/account/resources/file.md", ancestor_scope="parent"
+        "/local/account/resources/file.md", ancestor_scope="current_directory"
     ) == (
         "pathlock_acquire_exact",
         {"account_id": "account"},
         "/local/account/resources/file.md",
         0.0,
         None,
-        "parent",
+        "current_directory",
     )
 
     legacy_calls = []

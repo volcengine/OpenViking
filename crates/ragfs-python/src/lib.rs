@@ -2320,10 +2320,10 @@ impl RAGFSBindingClient {
         let owner_capability = extract_optional_owned_lease_ref(py, owner_lease_ref.as_ref())?;
         let ancestor_scope = match ancestor_scope {
             "all" => PathLockAncestorScope::All,
-            "parent" => PathLockAncestorScope::Parent,
+            "current_directory" => PathLockAncestorScope::CurrentDirectory,
             value => {
                 return Err(PyValueError::new_err(format!(
-                    "unsupported pathlock ancestor_scope '{value}'; expected 'all' or 'parent'"
+                    "unsupported pathlock ancestor_scope '{value}'; expected 'all' or 'current_directory'"
                 )))
             }
         };

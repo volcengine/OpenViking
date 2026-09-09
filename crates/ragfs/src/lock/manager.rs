@@ -1282,7 +1282,7 @@ impl PathLockManager {
                     });
                 }
             }
-            if scope == PathLockAncestorScope::Parent {
+            if scope == PathLockAncestorScope::CurrentDirectory {
                 break;
             }
 
@@ -2869,7 +2869,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn parent_ancestor_scope_ignores_higher_tree_lock() {
+    async fn current_directory_scope_ignores_higher_tree_lock() {
         let mgr = make_manager().await;
         let higher = mgr
             .acquire_tree("/data", Duration::ZERO, None)
@@ -2881,7 +2881,7 @@ mod tests {
                 "/data/sub/file.txt",
                 Duration::ZERO,
                 None,
-                PathLockAncestorScope::Parent,
+                PathLockAncestorScope::CurrentDirectory,
             )
             .await
             .unwrap();
@@ -2891,7 +2891,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn parent_ancestor_scope_checks_direct_parent_tree_lock() {
+    async fn current_directory_scope_checks_direct_parent_tree_lock() {
         let mgr = make_manager().await;
         let _parent = mgr
             .acquire_tree("/data/sub", Duration::ZERO, None)
@@ -2903,7 +2903,7 @@ mod tests {
                 "/data/sub/file.txt",
                 Duration::ZERO,
                 None,
-                PathLockAncestorScope::Parent,
+                PathLockAncestorScope::CurrentDirectory,
             )
             .await,
             Err(PathLockError::Timeout { .. })

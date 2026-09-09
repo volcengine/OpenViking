@@ -110,7 +110,7 @@ async def test_direct_write_skips_semantic_refresh_for_vectors_only_and_sidecar_
     )
 
     assert fake_fs._async_agfs.acquire_calls == [
-        ("/fake/viking://resources/demo.md", "parent")
+        ("/fake/viking://resources/demo.md", "current_directory")
     ]
     semantic_refresh.assert_not_awaited()
     vectorize_file.assert_awaited_once()
