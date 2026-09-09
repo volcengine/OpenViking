@@ -29,6 +29,7 @@ from openviking.session.memory.utils.line_numbers import (
     every_line_has_line_numbers,
     extract_start_line_number,
     strip_line_numbers,
+    strip_line_numbers_if_present,
 )
 from openviking_cli.utils import get_logger
 
@@ -483,20 +484,20 @@ class MultiSearchReplaceDiffStrategy:
             if search_content == replace_content:
                 continue
 
-            has_line_numbers = (
-                every_line_has_line_numbers(search_content)
-                and every_line_has_line_numbers(replace_content)
-            ) or (every_line_has_line_numbers(search_content) and replace_content.strip() == "")
-
-            if has_line_numbers:
+            search_has_line_numbers = every_line_has_line_numbers(search_content)
+            if search_has_line_numbers:
                 search_content = strip_line_numbers(search_content)
-                replace_content = strip_line_numbers(replace_content)
+            replace_content = strip_line_numbers_if_present(replace_content)
 
             if not search_content:
                 all_applied = False
                 break
 
             if search_content not in result_content:
+                all_applied = False
+                break
+
+            if search_has_line_numbers and result_content.count(search_content) > 1:
                 all_applied = False
                 break
 
@@ -537,19 +538,16 @@ class MultiSearchReplaceDiffStrategy:
             replace_content = unescape_markers(replace_content)
 
             # Strip line numbers if present
-            has_all_line_numbers = (
-                every_line_has_line_numbers(search_content)
-                and every_line_has_line_numbers(replace_content)
-            ) or (every_line_has_line_numbers(search_content) and replace_content.strip() == "")
+            search_has_line_numbers = every_line_has_line_numbers(search_content)
 
-            if has_all_line_numbers and start_line == 0:
+            if search_has_line_numbers and start_line == 0:
                 inferred_start_line = extract_start_line_number(search_content)
                 if inferred_start_line is not None:
                     start_line = inferred_start_line
 
-            if has_all_line_numbers:
+            if search_has_line_numbers:
                 search_content = strip_line_numbers(search_content)
-                replace_content = strip_line_numbers(replace_content)
+            replace_content = strip_line_numbers_if_present(replace_content)
 
             # If search and replace are identical, treat as success (no changes needed)
             if search_content == replace_content:
@@ -898,6 +896,11 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
         if search_content == replace_content:
             continue
 
+        search_has_line_numbers = every_line_has_line_numbers(search_content)
+        if search_has_line_numbers:
+            search_content = strip_line_numbers(search_content)
+        replace_content = strip_line_numbers_if_present(replace_content)
+
         if not search_content:
             all_applied = False
             break
@@ -908,6 +911,9 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
 
         match_count = result_content.count(search_content)
         if match_count > 1:
+            if search_has_line_numbers:
+                all_applied = False
+                break
             raise PatchParseError(
                 f"SEARCH content matched {match_count} locations; "
                 "The re-generated SEARCH string may contain additional lines "
@@ -967,19 +973,16 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
         replace_content = unescape_markers(replace_content)
 
         # Strip line numbers if present
-        has_all_line_numbers = (
-            every_line_has_line_numbers(search_content)
-            and every_line_has_line_numbers(replace_content)
-        ) or (every_line_has_line_numbers(search_content) and replace_content.strip() == "")
+        search_has_line_numbers = every_line_has_line_numbers(search_content)
 
-        if has_all_line_numbers and start_line == 0:
+        if search_has_line_numbers and start_line == 0:
             inferred_start_line = extract_start_line_number(search_content)
             if inferred_start_line is not None:
                 start_line = inferred_start_line
 
-        if has_all_line_numbers:
+        if search_has_line_numbers:
             search_content = strip_line_numbers(search_content)
-            replace_content = strip_line_numbers(replace_content)
+        replace_content = strip_line_numbers_if_present(replace_content)
 
         # If search and replace are identical, treat as success (no changes needed)
         if search_content == replace_content:
