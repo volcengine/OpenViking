@@ -26,6 +26,19 @@ class _SyncAGFS:
         """Return pathlock query arguments."""
         return ("pathlock_is_locked", ctx, path, ignore_stale)
 
+    def pathlock_acquire_exact(
+        self, ctx, path, timeout_secs, owner_lease_ref, ancestor_scope
+    ):
+        """Return exact-lock call arguments."""
+        return (
+            "pathlock_acquire_exact",
+            ctx,
+            path,
+            timeout_secs,
+            owner_lease_ref,
+            ancestor_scope,
+        )
+
 
 @pytest.mark.asyncio
 async def test_async_agfs_client_hides_threadpool(monkeypatch):
@@ -66,4 +79,38 @@ async def test_async_agfs_client_hides_threadpool(monkeypatch):
             ("/redo/id",),
             {"recursive": True, "ctx": {"account_id": "_system"}},
         ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pathlock_acquire_exact_forwards_ancestor_scope(monkeypatch):
+    async def fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(async_client.asyncio, "to_thread", fake_to_thread)
+    agfs = AsyncAGFSClient(_SyncAGFS())
+
+    assert await agfs.pathlock_acquire_exact(
+        "/local/account/resources/file.md", ancestor_scope="parent"
+    ) == (
+        "pathlock_acquire_exact",
+        {"account_id": "account"},
+        "/local/account/resources/file.md",
+        0.0,
+        None,
+        "parent",
+    )
+
+    legacy_calls = []
+
+    def legacy_acquire(ctx, path, timeout_secs, owner_lease_ref):
+        legacy_calls.append((ctx, path, timeout_secs, owner_lease_ref))
+        return {"lease_ref": "legacy"}
+
+    agfs._client.pathlock_acquire_exact = legacy_acquire
+    assert await agfs.pathlock_acquire_exact("/local/account/resources/file.md") == {
+        "lease_ref": "legacy"
+    }
+    assert legacy_calls == [
+        ({"account_id": "account"}, "/local/account/resources/file.md", 0.0, None)
     ]

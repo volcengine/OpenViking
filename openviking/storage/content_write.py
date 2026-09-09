@@ -779,7 +779,9 @@ class ContentWriteCoordinator:
     ) -> Dict[str, Any]:
         lock_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
         try:
-            lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(lock_path)
+            lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
+                lock_path, ancestor_scope="parent"
+            )
         except LockAcquisitionError as exc:
             raise ResourceBusyError(
                 f"resource is busy and cannot be written now: {uri}",
@@ -1238,7 +1240,9 @@ class ContentWriteCoordinator:
 
         lock_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
         try:
-            lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(lock_path)
+            lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
+                lock_path, ancestor_scope="parent"
+            )
         except LockAcquisitionError as exc:
             raise ResourceBusyError(
                 f"resource is busy and cannot be written now: {uri}",

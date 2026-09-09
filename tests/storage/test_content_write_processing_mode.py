@@ -24,10 +24,11 @@ class _FakePathLock:
 
     def __init__(self):
         self._lease = SimpleNamespace(id="lock-1")
+        self.acquire_calls = []
         self.release_calls = []
 
-    async def pathlock_acquire_exact(self, lock_path):
-        del lock_path
+    async def pathlock_acquire_exact(self, lock_path, *, ancestor_scope="all"):
+        self.acquire_calls.append((lock_path, ancestor_scope))
         return self._lease
 
     async def pathlock_release(self, lease):
@@ -108,6 +109,9 @@ async def test_direct_write_skips_semantic_refresh_for_vectors_only_and_sidecar_
         processing_mode="vectors_only",
     )
 
+    assert fake_fs._async_agfs.acquire_calls == [
+        ("/fake/viking://resources/demo.md", "parent")
+    ]
     semantic_refresh.assert_not_awaited()
     vectorize_file.assert_awaited_once()
     assert vectorize_file.await_args.kwargs["file_path"] == "viking://resources/demo.md"

@@ -21,8 +21,8 @@ use super::provider::PathLockProvider;
 use super::resolver::{LockPathResolver, ResolvedExactPaths};
 use super::types::{
     BorrowedPathLockLease, LockToken, OwnedPathLockLease, PathLockConflict, PathLockError,
-    PathLockHandoffRef, PathLockKind, PathLockLease, PathLockObserveSnapshot, PathLockRequest,
-    PathLockResult,
+    PathLockAncestorScope, PathLockHandoffRef, PathLockKind, PathLockLease,
+    PathLockObserveSnapshot, PathLockRequest, PathLockResult,
 };
 
 /// Configuration for the PathLockManager.
@@ -716,12 +716,34 @@ impl PathLockManager {
         timeout: Duration,
         owner_capability: Option<(&str, &str)>,
     ) -> PathLockResult<OwnedPathLockLease> {
+        self.acquire_exact_with_ancestor_scope(
+            path,
+            timeout,
+            owner_capability,
+            PathLockAncestorScope::All,
+        )
+        .await
+    }
+
+    /// Acquire an exact lock with a configurable ancestor Tree-lock check scope.
+    pub async fn acquire_exact_with_ancestor_scope(
+        &self,
+        path: &str,
+        timeout: Duration,
+        owner_capability: Option<(&str, &str)>,
+        ancestor_scope: PathLockAncestorScope,
+    ) -> PathLockResult<OwnedPathLockLease> {
         let request = PathLockRequest {
             path: path.to_string(),
             kind: PathLockKind::Exact,
         };
-        self.acquire_batch(&[request], timeout, owner_capability)
-            .await
+        self.acquire_batch_with_ancestor_scope(
+            &[request],
+            timeout,
+            owner_capability,
+            ancestor_scope,
+        )
+        .await
     }
 
     /// Acquire a tree lock on a single path.
@@ -807,6 +829,22 @@ impl PathLockManager {
         timeout: Duration,
         owner_capability: Option<(&str, &str)>,
     ) -> PathLockResult<OwnedPathLockLease> {
+        self.acquire_batch_with_ancestor_scope(
+            requests,
+            timeout,
+            owner_capability,
+            PathLockAncestorScope::All,
+        )
+        .await
+    }
+
+    async fn acquire_batch_with_ancestor_scope(
+        &self,
+        requests: &[PathLockRequest],
+        timeout: Duration,
+        owner_capability: Option<(&str, &str)>,
+        ancestor_scope: PathLockAncestorScope,
+    ) -> PathLockResult<OwnedPathLockLease> {
         if requests.is_empty() {
             return Err(PathLockError::InvalidRequest(
                 "lock request batch must not be empty".to_string(),
@@ -864,7 +902,10 @@ impl PathLockManager {
                 }
             }
             first_attempt = false;
-            let acquired_lock_paths = match self.try_acquire_batch_once(&sorted, &owner_id).await {
+            let acquired_lock_paths = match self
+                .try_acquire_batch_once(&sorted, &owner_id, ancestor_scope)
+                .await
+            {
                 Ok(acquired) => acquired,
                 Err((err, pre_conflict)) => {
                     drop(owner_registry);
@@ -998,6 +1039,7 @@ impl PathLockManager {
         &self,
         requests: &[PathLockRequest],
         owner_id: &str,
+        ancestor_scope: PathLockAncestorScope,
     ) -> Result<Vec<(String, AcquisitionChange)>, (PathLockError, bool)> {
         let mut acquired = Vec::new();
         let mut exact_resolutions: HashMap<String, ResolvedExactPaths> = HashMap::new();
@@ -1005,7 +1047,7 @@ impl PathLockManager {
             for request in requests {
                 match request.kind {
                     PathLockKind::Exact => {
-                        self.check_ancestor_tree_locks(&request.path, owner_id)
+                        self.check_ancestor_tree_locks(&request.path, owner_id, ancestor_scope)
                             .await?;
                         let resolved = self.resolver.resolve_exact_paths(&request.path).await?;
                         self.check_lock_paths(&resolved.conflict_paths, owner_id)
@@ -1022,7 +1064,7 @@ impl PathLockManager {
                     }
                     PathLockKind::Tree => {
                         let lock_path = self.resolver.resolve_tree_lock_path(&request.path).await?;
-                        self.check_ancestor_tree_locks(&request.path, owner_id)
+                        self.check_ancestor_tree_locks(&request.path, owner_id, ancestor_scope)
                             .await?;
                         let exact_candidates = self
                             .resolver
@@ -1054,7 +1096,7 @@ impl PathLockManager {
             for request in requests {
                 match request.kind {
                     PathLockKind::Exact => {
-                        self.check_ancestor_tree_locks(&request.path, owner_id)
+                        self.check_ancestor_tree_locks(&request.path, owner_id, ancestor_scope)
                             .await?;
                         let resolved = exact_resolutions.get(&request.path).ok_or_else(|| {
                             PathLockError::Io(format!(
@@ -1066,7 +1108,7 @@ impl PathLockManager {
                             .await?;
                     }
                     PathLockKind::Tree => {
-                        self.check_ancestor_tree_locks(&request.path, owner_id)
+                        self.check_ancestor_tree_locks(&request.path, owner_id, ancestor_scope)
                             .await?;
                         let exact_candidates = self
                             .resolver
@@ -1205,7 +1247,12 @@ impl PathLockManager {
     }
 
     /// Check ancestor directories for tree locks that would conflict.
-    async fn check_ancestor_tree_locks(&self, path: &str, owner_id: &str) -> PathLockResult<()> {
+    async fn check_ancestor_tree_locks(
+        &self,
+        path: &str,
+        owner_id: &str,
+        scope: PathLockAncestorScope,
+    ) -> PathLockResult<()> {
         let mut current = path.to_string();
         let now_ns = Self::now_ns();
 
@@ -1234,6 +1281,9 @@ impl PathLockManager {
                         kind: token.lock_type,
                     });
                 }
+            }
+            if scope == PathLockAncestorScope::Parent {
+                break;
             }
 
             current = parent;
@@ -2816,6 +2866,48 @@ mod tests {
         assert!(!mgr.is_locked("/data/file.txt", true).await.unwrap());
         let _root = mgr.acquire_tree("/", Duration::ZERO, None).await.unwrap();
         assert!(mgr.is_locked("/data/file.txt", true).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn parent_ancestor_scope_ignores_higher_tree_lock() {
+        let mgr = make_manager().await;
+        let higher = mgr
+            .acquire_tree("/data", Duration::ZERO, None)
+            .await
+            .unwrap();
+
+        let lease = mgr
+            .acquire_exact_with_ancestor_scope(
+                "/data/sub/file.txt",
+                Duration::ZERO,
+                None,
+                PathLockAncestorScope::Parent,
+            )
+            .await
+            .unwrap();
+
+        mgr.release(&lease).await.unwrap();
+        mgr.release(&higher).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn parent_ancestor_scope_checks_direct_parent_tree_lock() {
+        let mgr = make_manager().await;
+        let _parent = mgr
+            .acquire_tree("/data/sub", Duration::ZERO, None)
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            mgr.acquire_exact_with_ancestor_scope(
+                "/data/sub/file.txt",
+                Duration::ZERO,
+                None,
+                PathLockAncestorScope::Parent,
+            )
+            .await,
+            Err(PathLockError::Timeout { .. })
+        ));
     }
 
     #[tokio::test]

@@ -361,14 +361,24 @@ class AsyncAGFSClient:
         owner_lease_ref: Dict[str, Any] | None = None,
         *,
         fs_ctx: Dict[str, str] | None = None,
+        ancestor_scope: str = "all",
     ) -> Dict[str, Any]:
         """Acquire an exact lock on a single path."""
+        if ancestor_scope == "all":
+            return await self.run(
+                "pathlock_acquire_exact",
+                _fs_ctx_or_default(path, fs_ctx),
+                path,
+                timeout_secs,
+                owner_lease_ref,
+            )
         return await self.run(
             "pathlock_acquire_exact",
             _fs_ctx_or_default(path, fs_ctx),
             path,
             timeout_secs,
             owner_lease_ref,
+            ancestor_scope,
         )
 
     async def pathlock_acquire_exact_batch(

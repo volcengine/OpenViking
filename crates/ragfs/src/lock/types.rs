@@ -11,6 +11,16 @@ pub enum PathLockKind {
     Tree,
 }
 
+/// Scope used when checking ancestor Tree locks during lock acquisition.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PathLockAncestorScope {
+    /// Check every ancestor directory up to the filesystem root.
+    #[default]
+    All,
+    /// Check only the target path's direct parent directory.
+    Parent,
+}
+
 impl PathLockKind {
     /// Single-character encoding: `E` for Exact, `T` for Tree.
     pub fn to_code(self) -> char {

@@ -222,8 +222,8 @@ use ragfs::core::{
 };
 use ragfs::lock::types::PathLockError;
 use ragfs::lock::{
-    BorrowedPathLockLease, OwnedPathLockLease, PathLockConfig, PathLockHandoffRef, PathLockKind,
-    PathLockManager, PathLockRequest,
+    BorrowedPathLockLease, OwnedPathLockLease, PathLockAncestorScope, PathLockConfig,
+    PathLockHandoffRef, PathLockKind, PathLockManager, PathLockRequest,
 };
 
 /// Parse an optional listing sort field and return the matching RagFS value.
@@ -2304,7 +2304,7 @@ impl RAGFSBindingClient {
     // ── PathLock API ──
 
     /// Acquire an exact lock on a single path.
-    #[pyo3(signature = (ctx, path, timeout_secs=0.0, owner_lease_ref=None))]
+    #[pyo3(signature = (ctx, path, timeout_secs=0.0, owner_lease_ref=None, ancestor_scope="all"))]
     fn pathlock_acquire_exact(
         &self,
         py: Python<'_>,
@@ -2312,11 +2312,21 @@ impl RAGFSBindingClient {
         path: String,
         timeout_secs: f64,
         owner_lease_ref: Option<Py<PyAny>>,
+        ancestor_scope: &str,
     ) -> PyResult<Py<PyAny>> {
         let mgr = self.clone_pathlock_manager();
         let fs_ctx = build_fs_context(ctx);
         let timeout = validate_timeout_secs(timeout_secs)?;
         let owner_capability = extract_optional_owned_lease_ref(py, owner_lease_ref.as_ref())?;
+        let ancestor_scope = match ancestor_scope {
+            "all" => PathLockAncestorScope::All,
+            "parent" => PathLockAncestorScope::Parent,
+            value => {
+                return Err(PyValueError::new_err(format!(
+                    "unsupported pathlock ancestor_scope '{value}'; expected 'all' or 'parent'"
+                )))
+            }
+        };
         let lease = self
             .run_scoped(py, fs_ctx, move || {
                 let mgr = mgr.clone();
@@ -2326,7 +2336,13 @@ impl RAGFSBindingClient {
                     let capability = capability.as_ref().map(|(lease_ref, ownership_ref)| {
                         (lease_ref.as_str(), ownership_ref.as_str())
                     });
-                    mgr.acquire_exact(&path, timeout, capability).await
+                    mgr.acquire_exact_with_ancestor_scope(
+                        &path,
+                        timeout,
+                        capability,
+                        ancestor_scope,
+                    )
+                    .await
                 }
             })
             .map_err(pathlock_err_to_py)?;

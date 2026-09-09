@@ -27,6 +27,7 @@ pub use provider::{FilesystemPathLockProvider, MemoryPathLockProvider, PathLockP
 pub use resolver::LockPathResolver;
 pub use types::{
     BorrowedPathLockLease, LockToken, OwnedPathLockLease, PathLockConflict, PathLockHandoffRef,
-    PathLockKind, PathLockLease, PathLockObserveSnapshot, PathLockRequest, PathLockResult,
+    PathLockAncestorScope, PathLockKind, PathLockLease, PathLockObserveSnapshot, PathLockRequest,
+    PathLockResult,
 };
 pub use wrapper::PathLockWrappedFS;

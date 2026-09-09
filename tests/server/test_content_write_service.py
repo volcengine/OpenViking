@@ -511,8 +511,9 @@ class _FakePathLock:
         self.acquire_error = acquire_error
         self.release_calls = []
 
-    async def pathlock_acquire_exact(self, lock_path):
+    async def pathlock_acquire_exact(self, lock_path, *, ancestor_scope="all"):
         del lock_path
+        assert ancestor_scope == "parent"
         if self.acquire_error is not None:
             raise self.acquire_error
         if not self.acquire_result:
