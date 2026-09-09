@@ -121,11 +121,6 @@ export function EvolutionSettingsPopover() {
           ) : statusQuery.data ? (
             <div className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5">
               <div className="grid gap-0.5">
-                <span className="break-all text-xs text-muted-foreground">
-                  {t('settings.targetAccount', {
-                    account: targetAccountId || t('settings.unknownAccount'),
-                  })}
-                </span>
                 <span className="text-sm font-medium">
                   {statusQuery.data.enabled
                     ? t('settings.statusEnabled')

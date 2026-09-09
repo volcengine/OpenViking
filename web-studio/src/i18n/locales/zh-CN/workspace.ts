@@ -248,8 +248,6 @@ const workspace = {
       title: '经验设置',
       description:
         '作用账号的 Agent Evolution 开关。关闭后，该账号的新会话提交将停止提取经验与轨迹。',
-      targetAccount: '作用账号：{{account}}',
-      unknownAccount: '无法确认',
       scopeMismatch:
         '接口返回的作用账号与当前账号不一致或无法确认，已禁止修改。请使用当前账号的管理凭证。',
       loading: '正在读取开关状态...',
