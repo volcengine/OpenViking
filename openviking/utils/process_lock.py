@@ -8,6 +8,7 @@ directory, which causes silent failures in AGFS and VectorDB.
 
 import atexit
 import os
+import subprocess
 import sys
 import threading
 
@@ -44,6 +45,46 @@ def _read_pid_file(lock_path: str) -> int:
         return 0
 
 
+def _process_cmdline(pid: int) -> str | None:
+    """Lowercased command line of *pid*, or None when it cannot be read.
+
+    Used to tell a recycled PID from a live OpenViking process. Returning None
+    means "cannot tell", and the caller then trusts the liveness probe — the
+    lock is honoured rather than stolen.
+
+    Linux reads /proc (#1088). macOS has no /proc, so it asks `ps`: without
+    this branch a reused PID (a real incident: Spotlight's `mdwrite` inheriting
+    PID 857 after a reboot) is read as a running OpenViking instance, and the
+    server refuses to start on every launchd retry, forever (#4210).
+    """
+    if sys.platform.startswith("linux"):
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                return f.read().decode("utf-8", errors="replace").lower()
+        except OSError:
+            # /proc not available, or the process exited between kill and open.
+            return None
+
+    if sys.platform == "darwin":
+        try:
+            completed = subprocess.run(
+                ["/bin/ps", "-p", str(pid), "-o", "command="],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if completed.returncode != 0:
+            # `ps` exits non-zero when the PID is gone; the liveness probe above
+            # already answered that question, so say nothing rather than lie.
+            return None
+        return completed.stdout.strip().lower() or None
+
+    return None
+
+
 def _is_pid_alive(pid: int) -> bool:
     """Check whether a process with the given PID is still running."""
     if pid <= 0:
@@ -60,24 +101,17 @@ def _is_pid_alive(pid: int) -> bool:
             return False
         raise
 
-    # PID exists, but on Linux PIDs are recycled. Verify this is actually
-    # an OpenViking process by checking /proc/{pid}/cmdline to avoid false
-    # positives from PID reuse (see issue #1088).
-    if sys.platform.startswith("linux"):
-        try:
-            with open(f"/proc/{pid}/cmdline", "rb") as f:
-                cmdline = f.read().decode("utf-8", errors="replace").lower()
-            if "openviking" not in cmdline and "openviking-server" not in cmdline:
-                logger.info(
-                    "PID %d is alive but not an OpenViking process (cmdline: %.100s). "
-                    "Assuming stale lock from recycled PID.",
-                    pid,
-                    cmdline[:100],
-                )
-                return False
-        except OSError:
-            # /proc not available or process exited between kill and open
-            pass
+    # PID exists, but PIDs are recycled. Verify this is actually an OpenViking
+    # process to avoid false positives from PID reuse (see issues #1088, #4210).
+    cmdline = _process_cmdline(pid)
+    if cmdline is not None and "openviking" not in cmdline:
+        logger.info(
+            "PID %d is alive but not an OpenViking process (cmdline: %.100s). "
+            "Assuming stale lock from recycled PID.",
+            pid,
+            cmdline[:100],
+        )
+        return False
 
     return True
 

@@ -3,6 +3,7 @@
 import os
 import tempfile
 
+from openviking.utils import process_lock
 from openviking.utils.process_lock import (
     LOCK_FILENAME,
     DataDirectoryLocked,
@@ -35,10 +36,16 @@ class TestProcessLock:
             with open(lock_path) as f:
                 assert int(f.read().strip()) == os.getpid()
 
-    def test_live_pid_blocks_acquisition(self):
+    def test_live_pid_blocks_acquisition(self, monkeypatch):
         with tempfile.TemporaryDirectory() as tmpdir:
             lock_path = os.path.join(tmpdir, LOCK_FILENAME)
-            # PID 1 (init/launchd) is always alive.
+            # PID 1 (init/launchd) is always alive — but it is not OpenViking,
+            # and since #1088 a live PID only holds the lock when the process
+            # identity matches, so the verdict depended on which platform ran
+            # the test (on Windows `os.kill(1, 0)` does not even succeed, and
+            # this assertion failed before this stub was added). Pin the
+            # identity so the lock semantics are what is under test here.
+            monkeypatch.setattr(process_lock, "_is_pid_alive", lambda pid: pid == 1)
             with open(lock_path, "w") as f:
                 f.write("1")
             try:
@@ -48,9 +55,10 @@ class TestProcessLock:
                 assert "PID 1" in str(exc)
                 assert "connect clients over HTTP" in str(exc)
 
-    def test_error_message_includes_remediation(self):
+    def test_error_message_includes_remediation(self, monkeypatch):
         with tempfile.TemporaryDirectory() as tmpdir:
             lock_path = os.path.join(tmpdir, LOCK_FILENAME)
+            monkeypatch.setattr(process_lock, "_is_pid_alive", lambda pid: pid == 1)
             with open(lock_path, "w") as f:
                 f.write("1")
             try:
