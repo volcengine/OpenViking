@@ -423,7 +423,11 @@ async def test_to_dict(tracker: TaskTracker):
         auth={"provider": "git_http_basic", "password": "secret"},
         **_owner_kwargs(),
     )
+    task.meta = {"nested": [{"user_key": "secret", "api_key": "compile-key", "values": [1]}]}
+    task.result = {"nested": [{"user_key": "secret", "api_key": "compile-key", "values": [2]}]}
     d = task.to_dict()
+    assert d["meta"] == {"nested": [{"values": [1]}]}
+    assert d["result"] == {"nested": [{"values": [2]}]}
     assert d["task_id"] == task.task_id
     assert d["status"] == "pending"
     assert d["task_type"] == "session_commit"

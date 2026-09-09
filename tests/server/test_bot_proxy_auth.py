@@ -7,6 +7,7 @@ import asyncio
 import json
 from collections import deque
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -375,31 +376,52 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
         SimpleNamespace(),
     )
     tasks.register(service)
-    public_payload, private_payload = service._split_payload(
-        compile_service_module.CompileRequest.model_validate(
-            {
-                "from": ["viking://resources/source"],
-                "to": "viking://resources/wiki",
-                "skill": "viking://agent/skills/wiki",
-                "args": {"model_name": "model-1", "user_key": "model-user-key"},
-                "instruction": "Keep supporting evidence.",
-            }
-        )
-    )
-    assert public_payload["args"] == {"model_name": "model-1"}
-    assert private_payload == {"args": {"user_key": "model-user-key"}}
-    external_task_id = await service.submit(
-        "cmp_ov_1",
+    request = compile_service_module.CompileRequest.model_validate(
         {
             "from": ["viking://resources/source"],
             "to": "viking://resources/wiki",
             "skill": "viking://agent/skills/wiki",
             "instruction": "Keep supporting evidence.",
-        },
-        {
-            "args": {"user_key": "model-user-key"},
-        },
-        {"api_key": "active-user-key"},
+            "args": {
+                "model_name": "model-1",
+                "user_key": "model-user-key",
+                "api_key": "compile-api-key",
+            },
+        }
+    )
+    monkeypatch.setattr(service, "_normalize_request", AsyncMock(return_value=request))
+    store = PersistentTaskStore(MockLocalAGFS(root_path=tmp_path))
+    tracker = TaskTracker(store)
+    monkeypatch.setattr(external_task_service_module, "get_task_tracker", lambda: tracker)
+    monkeypatch.setattr(
+        external_task_service_module,
+        "get_queue_manager",
+        lambda: SimpleNamespace(enqueue=AsyncMock()),
+    )
+    connection = {"api_key": "active-user-key"}
+    owner = {"account_id": "acct", "user_id": "alice"}
+    task = await service.create(
+        request,
+        connection=connection,
+        ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER),
+    )
+    assert task.to_dict()["meta"]["request"]["args"] == {"model_name": "model-1"}
+    stored = await store.get(task.task_id, **owner)
+    assert stored["meta"]["request"]["args"] == {"model_name": "model-1"}
+
+    tracker = TaskTracker(store)
+    restored = await tracker.get(task.task_id, **owner)
+    listed = (await tracker.list_tasks(**owner))[0]
+    assert restored.to_dict() == listed.to_dict() == task.to_dict()
+    auth = await tracker.get_task_auth(task.task_id, **owner)
+    assert auth["external_request_private"] == {
+        "args": {"user_key": "model-user-key", "api_key": "compile-api-key"}
+    }
+    external_task_id = await service.submit(
+        task.task_id,
+        restored.meta["request"],
+        auth["external_request_private"],
+        auth["openviking_connection"],
     )
     status_snapshot = await service.get(
         external_task_id,
@@ -418,7 +440,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     ]
     assert all(request["method"] == "POST" for request in forwarded)
     assert "X-Gateway-Token" not in forwarded[0]["headers"]
-    assert forwarded[0]["headers"]["Idempotency-Key"] == "cmp_ov_1"
+    assert forwarded[0]["headers"]["Idempotency-Key"] == task.task_id
     assert forwarded[0]["headers"]["X-API-Key"] == "active-user-key"
     assert forwarded[0]["body"] == {
         "task_type": "compile",
@@ -427,12 +449,18 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
             "to": "viking://resources/wiki",
             "skill": "viking://agent/skills/wiki",
             "instruction": "Keep supporting evidence.",
-            "args": {"user_key": "model-user-key"},
+            "args": {
+                "model_name": "model-1",
+                "user_key": "model-user-key",
+                "api_key": "compile-api-key",
+            },
         },
     }
     assert forwarded[1]["body"] == {"session_id": "ma-session-1"}
     assert status_snapshot.meta == {"token_usage": {"total_tokens": 12}}
     assert cancel_snapshot.status == "cancelled"
+    await tracker.complete(task.task_id, {"output": "wiki"}, **owner)
+    assert await tracker.get_task_auth(task.task_id, **owner) == {}
 
     # Exercise the real task store, work index, consumer, and ACK lifecycle.
     class QueueBackend:
@@ -525,7 +553,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
         return await tasks.create(
             "compile",
             resource_id="viking://resources/source",
-            payload={**public_payload, "to": target},
+            payload={**restored.meta["request"], "to": target},
             connection={"api_key": "active-user-key"},
             ctx=RequestContext(user=UserIdentifier(account, user), role=Role.USER),
         )

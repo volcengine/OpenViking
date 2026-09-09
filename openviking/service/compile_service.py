@@ -20,7 +20,7 @@ from openviking.service.external_task_service import (
     ExternalTaskSnapshot,
 )
 from openviking.service.fs_service import FSService
-from openviking.service.task_tracker import TaskRecord
+from openviking.service.task_tracker import SENSITIVE_TASK_KEYS, TaskRecord
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
@@ -432,12 +432,14 @@ class CompileService:
     def _split_payload(request: CompileRequest) -> tuple[dict[str, Any], dict[str, Any]]:
         payload = request.model_dump(mode="json", by_alias=True, exclude_none=True)
         args = payload.get("args")
-        if not isinstance(args, dict) or "user_key" not in args:
+        if not isinstance(args, dict):
             return payload, {}
-        private_payload = {"args": {"user_key": args.pop("user_key")}}
+        private_args = {key: args.pop(key) for key in SENSITIVE_TASK_KEYS if key in args}
+        if not private_args:
+            return payload, {}
         if not args:
             payload.pop("args", None)
-        return payload, private_payload
+        return payload, {"args": private_args}
 
     @staticmethod
     def _snapshot(task: CompileSessionStatus) -> ExternalTaskSnapshot:
