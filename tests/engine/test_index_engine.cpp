@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 #include "index/index_engine.h"
+#include "index/detail/scalar/bitmap_holder/ranged_map.h"
 #include "store/persist_store.h"
 #include "store/volatile_store.h"
 #include <iostream>
@@ -33,6 +34,27 @@ void expect_filter_projection(IndexEngine& engine, const std::string& dsl,
         first_word, expected_first_word);
     exit(1);
   }
+}
+
+void test_ranged_map_center1d_at_maximum() {
+  SPDLOG_INFO("[Running] test_ranged_map_center1d_at_maximum...");
+
+  RangedMap ranged_map;
+  if (ranged_map.add_offset_and_score(0, 1.0) != 0 ||
+      ranged_map.add_offset_and_score(1, 2.0) != 0) {
+    SPDLOG_ERROR("Failed to add center1d regression data");
+    exit(1);
+  }
+
+  const RecallResultPtr result =
+      ranged_map.get_topk_result_center1d(2, true, 2.0, nullptr);
+  if (result == nullptr || result->offsets != std::vector<uint32_t>{1, 0} ||
+      result->scores != std::vector<float>{2.0f, 1.0f}) {
+    SPDLOG_ERROR("center1d maximum-boundary result was incorrect");
+    exit(1);
+  }
+
+  SPDLOG_INFO("[Passed] test_ranged_map_center1d_at_maximum");
 }
 
 void test_basic_workflow() {
@@ -585,6 +607,7 @@ void test_paged_store_scan() {
 
 int main() {
   init_logging("INFO", "stdout", "[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
+  test_ranged_map_center1d_at_maximum();
   test_basic_workflow();
   test_routed_filter_projection_edge_cases();
   test_path_bitmap_lifecycle_and_reload();
