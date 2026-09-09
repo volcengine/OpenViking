@@ -7,6 +7,8 @@
 #include <vector>
 #include <cassert>
 #include <filesystem>
+#include <fstream>
+#include <limits>
 #include <cmath>
 #include "spdlog/spdlog.h"
 #include "common/log_utils.h"
@@ -31,6 +33,27 @@ void expect_filter_projection(IndexEngine& engine, const std::string& dsl,
         "words={}, first_word={} (expected {})",
         dsl, result.eligible_count, expected_count, result.bitset_words.size(),
         first_word, expected_first_word);
+    exit(1);
+  }
+}
+
+void corrupt_first_vector_index_offset(const std::string& path) {
+  std::fstream file(path, std::ios::in | std::ios::out | std::ios::binary);
+  if (!file) {
+    SPDLOG_ERROR("Failed to open vector index dump for corruption: {}", path);
+    exit(1);
+  }
+  const std::streamoff offset_pos = static_cast<std::streamoff>(sizeof(size_t) * 3 +
+      sizeof(float) + sizeof(uint64_t));
+  file.seekp(offset_pos);
+  if (!file) {
+    SPDLOG_ERROR("Failed to seek vector index dump for corruption: {}", path);
+    exit(1);
+  }
+  const uint32_t bad_offset = 123456789U;
+  file.write(reinterpret_cast<const char*>(&bad_offset), sizeof(bad_offset));
+  if (!file) {
+    SPDLOG_ERROR("Failed to corrupt vector index dump: {}", path);
     exit(1);
   }
 }
@@ -213,6 +236,84 @@ void test_basic_workflow() {
 
   std::filesystem::remove_all(db_path);
   SPDLOG_INFO("[Passed] test_basic_workflow");
+}
+
+void test_sort_label_backfill_missing_offset() {
+  SPDLOG_INFO("[Running] test_sort_label_backfill_missing_offset...");
+
+  const std::string db_path = "test_data_cpp/sort_label_backfill_missing_offset";
+  if (std::filesystem::exists(db_path)) {
+    std::filesystem::remove_all(db_path);
+  }
+  std::filesystem::create_directories(db_path);
+
+  const std::string config = R"({
+        "CollectionName": "sort_label_backfill_missing_offset",
+        "IndexName": "default",
+        "VectorIndex": {
+            "IndexType": "flat",
+            "ElementCount": 0,
+            "MaxElementCount": 4,
+            "Dimension": 1,
+            "Distance": "l2",
+            "Quant": "float"
+        },
+        "ScalarIndex": [
+            {"FieldName": "count", "FieldType": "int64"}
+        ]
+    })";
+
+  IndexEngine engine(config);
+  if (!engine.is_valid()) {
+    SPDLOG_ERROR("Sort label backfill engine initialization failed");
+    exit(1);
+  }
+
+  AddDataRequest low;
+  low.label = 101;
+  low.vector = {0.1f};
+  low.fields_str = R"({"count":10})";
+  AddDataRequest high;
+  high.label = 102;
+  high.vector = {0.2f};
+  high.fields_str = R"({"count":20})";
+  if (engine.add_data({low, high}) != 0) {
+    SPDLOG_ERROR("Sort label backfill test data add failed");
+    exit(1);
+  }
+
+  SearchRequest sort_req;
+  sort_req.dsl = R"({"sorter":{"op":"sort","field":"count","order":"asc","topk":2}})";
+  SearchResult baseline = engine.search(sort_req);
+  if (baseline.result_num != 2 || baseline.labels.size() != 2 ||
+      baseline.labels[0] != 101 || baseline.labels[1] != 102) {
+    SPDLOG_ERROR("Sort label backfill baseline result was incorrect");
+    exit(1);
+  }
+
+  if (engine.dump(db_path) <= 0) {
+    SPDLOG_ERROR("Sort label backfill dump failed");
+    exit(1);
+  }
+
+  corrupt_first_vector_index_offset(db_path + "/vector_index/index_flat.data");
+
+  {
+    IndexEngine reloaded(db_path);
+    if (!reloaded.is_valid()) {
+      SPDLOG_ERROR("Reloaded sort label backfill engine is invalid");
+      exit(1);
+    }
+    SearchResult corrupted = reloaded.search(sort_req);
+    if (corrupted.result_num != 0 || !corrupted.labels.empty() ||
+        !corrupted.scores.empty()) {
+      SPDLOG_ERROR("Sort label backfill leaked a bogus label");
+      exit(1);
+    }
+  }
+
+  std::filesystem::remove_all(db_path);
+  SPDLOG_INFO("[Passed] test_sort_label_backfill_missing_offset");
 }
 
 void test_routed_filter_projection_edge_cases() {
@@ -586,6 +687,7 @@ void test_paged_store_scan() {
 int main() {
   init_logging("INFO", "stdout", "[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
   test_basic_workflow();
+  test_sort_label_backfill_missing_offset();
   test_routed_filter_projection_edge_cases();
   test_path_bitmap_lifecycle_and_reload();
   test_paged_store_scan();
