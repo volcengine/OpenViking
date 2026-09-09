@@ -142,7 +142,7 @@ _SENSITIVE_PATTERNS = re.compile(
 )
 
 _MAX_ERROR_LEN = 500
-_SENSITIVE_RESULT_KEYS = {"user_key"}
+SENSITIVE_TASK_KEYS = frozenset({"api_key", "user_key"})
 
 
 def _sanitize_error(error: str) -> str:
@@ -159,7 +159,7 @@ def _sanitize_task_result(result: Any) -> Any:
         return {
             key: _sanitize_task_result(value)
             for key, value in result.items()
-            if key not in _SENSITIVE_RESULT_KEYS
+            if key not in SENSITIVE_TASK_KEYS
         }
     if isinstance(result, list):
         return [_sanitize_task_result(item) for item in result]

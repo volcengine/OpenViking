@@ -467,8 +467,8 @@ async def test_public_serialization_skips_private_payloads(tracker: TaskTracker)
     task = await tracker.create("session_commit", **_owner_kwargs())
     task.auth = PrivatePayload()
     task._extra_fields = PrivatePayload()
-    task.meta = {"nested": [{"user_key": "secret", "values": [1]}]}
-    task.result = {"nested": [{"user_key": "secret", "values": [2]}]}
+    task.meta = {"nested": [{"user_key": "secret", "api_key": "compile-key", "values": [1]}]}
+    task.result = {"nested": [{"user_key": "secret", "api_key": "compile-key", "values": [2]}]}
 
     public = task.to_dict()
     assert set(public) == {
