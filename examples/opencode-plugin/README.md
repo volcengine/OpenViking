@@ -212,3 +212,20 @@ The plugin writes runtime files to `~/.config/opencode/openviking/` by default:
 - `openviking-session-state.json`
 
 Set `runtime.dataDir` in config to override this directory.
+
+## Automated npm releases
+
+Changes merged into upstream `main` under `examples/opencode-plugin/` trigger
+`.github/workflows/opencode-plugin-release.yml`. Releases use the same calendar
+version convention as the OpenClaw plugin: `YYYY.M.D`, then `YYYY.M.D-N` for
+subsequent releases on that date (Asia/Shanghai). No manual source version bump
+is required. The workflow changes the version only in the package being published;
+it does not commit generated version changes back to the repository.
+
+Releases are serialized. A queued run checks out current `main`, so several quick
+merges may be included in one package. The npm manifest records
+`openvikingSourceCommit`; rerunning a successfully published commit skips publication.
+Registry failures stop the workflow instead of treating an unavailable registry as
+an unused version. Only upstream `main` can publish the official npm `latest` tag.
+Manual dispatch on `main` retries a failed release using the existing npm credentials
+or Trusted Publishing configuration.
