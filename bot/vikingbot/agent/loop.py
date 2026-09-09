@@ -7,7 +7,7 @@ import json
 import re
 import time
 import uuid
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, aclosing
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -277,40 +277,28 @@ class AgentIterationLimitExceeded(RuntimeError):
         )
 
 
-_BUDGET_REMINDER_CONSEQUENCE = (
-    "若在轮次耗尽前未成功调用 submit_wiki_bundle，系统会把工作区所有文件"
-    "（含中间临时文件）原样写入目标目录，且不经校验。"
-)
-
-
 def render_budget_reminder(
     remaining: int,
     thresholds: tuple[int, int, int] = (15, 8, 3),
 ) -> str | None:
-    """Render the per-iteration budget countdown reminder for a structured task.
-
-    ``thresholds`` is a descending ``(heads_up, warn, critical)`` triple. A short,
-    action-oriented reminder is returned only once ``remaining`` has crossed the
-    corresponding threshold; otherwise ``None``. The consequence sentence keeps the
-    reminder tied to the real salvage failure mode instead of a vague deadline.
-    """
+    """Return a submission reminder within descending heads-up, warning and critical thresholds."""
     heads_up, warn, critical = thresholds
     remaining = max(0, remaining)
     if remaining <= critical:
-        action = f"还剩 {remaining} 轮。立即提交当前最好结果，禁止再开启新的探索/读取。"
+        return (
+            f"还剩 {remaining} 轮。收集子任务结果，检查并调用 submit_wiki_bundle；不再开启新任务。"
+        )
     elif remaining <= warn:
-        action = (
+        return (
             f"还剩 {remaining} 轮。必须开始提交：把当前最好结果通过 submit_wiki_bundle "
             "提交；不足的部分明确记为“未覆盖/待确认”，不要追求完美。"
         )
     elif remaining <= heads_up:
-        action = (
+        return (
             f"还剩 {remaining} 轮。请停止对已读文件的全量重扫，开始把已有发现收敛成最终产物，"
             "并准备调用 submit_wiki_bundle。"
         )
-    else:
-        return None
-    return f"{action}\n{_BUDGET_REMINDER_CONSEQUENCE}"
+    return None
 
 
 class AgentLoop:
@@ -501,53 +489,127 @@ class AgentLoop:
         tools: list[dict[str, Any]],
         session_key: SessionKey,
         publish_events: bool,
+        *,
+        agent_id: str = "main",
+        iteration: int | None = None,
     ) -> tuple[Any, bool, bool]:
-        """Call the provider and forward native stream deltas to the bus."""
+        """Forward provider events and log caller-observed timing for one model call.
+
+        Agent ID and iteration identify concurrent loops without changing their sessions.
+        Return the response and content/reasoning-stream flags; publish_events controls
+        forwarding deltas to the bus independently of timing logs.
+        Millisecond offsets include provider capacity waits and retries. The first event
+        can be a buffered final response, so it is not necessarily a first-token time.
+        Missing delta timings are null. Errors and cancellation propagate after logging;
+        request bodies, reasoning text and tool arguments are excluded from timing logs.
+        """
         streamed_content = False
         streamed_reasoning = False
         response = None
+        log_context = {
+            "call_id": uuid.uuid4().hex,
+            "session_id": session_key.safe_name(),
+            "agent_id": agent_id,
+            "iteration": iteration,
+            "model": self.model,
+            "message_count": len(messages),
+            "input_chars": _compact_msg_chars(messages),
+        }
+        first_events: dict[str, Any] = {
+            "first_event_ms": None,
+            "first_event_type": None,
+            "first_reasoning_ms": None,
+            "first_content_ms": None,
+        }
+        status, error_type = "ok", None
+        fallback = False
+        logger.info("[LLM_START] {}", json.dumps(log_context, ensure_ascii=False))
+        started = time.perf_counter()
+        try:
+            async with aclosing(
+                self.provider.chat_stream(
+                    messages=messages,
+                    tools=tools,
+                    model=self.model,
+                    temperature=self.temperature,
+                    session_id=session_key.safe_name(),
+                )
+            ) as stream:
+                async for event in stream:
+                    elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+                    if first_events["first_event_ms"] is None and (
+                        event.type == "response" or event.content
+                    ):
+                        first_events.update(first_event_ms=elapsed_ms, first_event_type=event.type)
+                    if event.type == "content_delta":
+                        if event.content:
+                            if first_events["first_content_ms"] is None:
+                                first_events["first_content_ms"] = elapsed_ms
+                            streamed_content = True
+                            if publish_events:
+                                await self.bus.publish_outbound(
+                                    OutboundMessage(
+                                        session_key=session_key,
+                                        content=event.content,
+                                        event_type=OutboundEventType.CONTENT_DELTA,
+                                    )
+                                )
+                    elif event.type == "reasoning_delta":
+                        if event.content:
+                            if first_events["first_reasoning_ms"] is None:
+                                first_events["first_reasoning_ms"] = elapsed_ms
+                            streamed_reasoning = True
+                            if publish_events:
+                                await self.bus.publish_outbound(
+                                    OutboundMessage(
+                                        session_key=session_key,
+                                        content=event.content,
+                                        event_type=OutboundEventType.REASONING_DELTA,
+                                    )
+                                )
+                    elif event.type == "response":
+                        response = event.response
 
-        async for event in self.provider.chat_stream(
-            messages=messages,
-            tools=tools,
-            model=self.model,
-            temperature=self.temperature,
-            session_id=session_key.safe_name(),
-        ):
-            if event.type == "content_delta":
-                if event.content:
-                    streamed_content = True
-                    if publish_events:
-                        await self.bus.publish_outbound(
-                            OutboundMessage(
-                                session_key=session_key,
-                                content=event.content,
-                                event_type=OutboundEventType.CONTENT_DELTA,
-                            )
-                        )
-            elif event.type == "reasoning_delta":
-                if event.content:
-                    streamed_reasoning = True
-                    if publish_events:
-                        await self.bus.publish_outbound(
-                            OutboundMessage(
-                                session_key=session_key,
-                                content=event.content,
-                                event_type=OutboundEventType.REASONING_DELTA,
-                            )
-                        )
-            elif event.type == "response":
-                response = event.response
-
-        if response is None:
-            response = await self.provider.chat(
-                messages=messages,
-                tools=tools,
-                model=self.model,
-                temperature=self.temperature,
-                session_id=session_key.safe_name(),
+            if response is None:
+                fallback = True
+                response = await self.provider.chat(
+                    messages=messages,
+                    tools=tools,
+                    model=self.model,
+                    temperature=self.temperature,
+                    session_id=session_key.safe_name(),
+                )
+            if response.finish_reason == "error":
+                status = "error"
+            return response, streamed_content, streamed_reasoning
+        except asyncio.CancelledError:
+            status, error_type = "cancelled", "CancelledError"
+            raise
+        except Exception as exc:
+            status, error_type = "error", type(exc).__name__
+            raise
+        finally:
+            logger.info(
+                "[LLM_END] {}",
+                json.dumps(
+                    {
+                        **log_context,
+                        **first_events,
+                        "duration_ms": round((time.perf_counter() - started) * 1000, 1),
+                        "status": status,
+                        "error_type": error_type,
+                        "fallback": fallback,
+                        "finish_reason": response.finish_reason if response is not None else None,
+                        "usage": response.usage if response is not None else {},
+                        "tool_names": (
+                            [call.name for call in response.tool_calls]
+                            if response is not None
+                            else []
+                        ),
+                    },
+                    ensure_ascii=False,
+                ),
             )
-        return response, streamed_content, streamed_reasoning
 
     def _register_builtin_hooks(self):
         """Register built-in hooks."""
@@ -1351,6 +1413,7 @@ class AgentLoop:
         context_compact_budget: int | None = None,
         status_note_provider: Any | None = None,
         skill_runtime: Any | None = None,
+        agent_id: str = "main",
     ) -> tuple[str | None, str | None, list[dict], dict[str, int], int]:
         """
         Run the core agent loop: call LLM, execute tools, repeat until done.
@@ -1389,9 +1452,10 @@ class AgentLoop:
                 before executing configured write tools.
             status_note_provider: Optional async callback ``(iteration) -> str | None``.
                 When set, its result is appended to the model-facing messages right before
-                every model call. Compile uses this to inject the per-iteration budget
-                countdown and read/unread summary; ordinary chat leaves it ``None`` so its
-                behavior is unchanged.
+                every model call. Compile emits a reminder at each configured iteration
+                threshold; ordinary chat leaves it ``None``.
+            agent_id: Diagnostic identity for model and tool logs; Compile children use
+                their child task ID while sharing the parent's session and workspace.
 
         Returns:
             tuple of (final_content, final_reasoning_content, tools_used, token_usage, iteration)
@@ -1464,6 +1528,8 @@ class AgentLoop:
                 tools=tool_definitions,
                 session_key=session_key,
                 publish_events=publish_events,
+                agent_id=agent_id,
+                iteration=iteration,
             )
             accumulate_token_usage(response)
 
@@ -1540,7 +1606,7 @@ class AgentLoop:
                     idx: int, tool_call, allowed_names=visible_tool_names
                 ):
                     """Execute a single tool and track execution time."""
-                    tool_execute_start_time = time.time()
+                    tool_execute_start_time = time.perf_counter()
                     if tool_call.name not in allowed_names:
                         result = f"Error: Tool '{tool_call.name}' is not available in this turn"
                         return (
@@ -1585,12 +1651,20 @@ class AgentLoop:
                             result=result,
                             effective_params=dict(tool_call.arguments),
                         )
-                    tool_execute_duration = (time.time() - tool_execute_start_time) * 1000
+                    tool_execute_duration = (time.perf_counter() - tool_execute_start_time) * 1000
                     return idx, tool_call, outcome, tool_execute_duration
 
                 for tool_call in response.tool_calls:
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
-                    logger.info(f"[TOOL_CALL]: {tool_call.name}({args_str[:200]})")
+                    logger.info(
+                        "[TOOL_CALL]: {}({}) session={} agent={} iteration={} call_id={}",
+                        tool_call.name,
+                        args_str[:200],
+                        session_key.safe_name(),
+                        agent_id,
+                        iteration,
+                        tool_call.id,
+                    )
                     if publish_events:
                         await self.bus.publish_outbound(
                             OutboundMessage(
@@ -1674,6 +1748,21 @@ class AgentLoop:
                         result_text if isinstance(result, MultimodalToolResult) else result
                     )
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
+                    logger.info(
+                        "[TOOL_END] {}",
+                        json.dumps(
+                            {
+                                "session_id": session_key.safe_name(),
+                                "agent_id": agent_id,
+                                "iteration": iteration,
+                                "tool_call_id": tool_call.id,
+                                "tool_name": tool_call.name,
+                                "duration_ms": round(tool_execute_duration, 1),
+                                "success": _is_tool_result_success(result),
+                            },
+                            ensure_ascii=False,
+                        ),
+                    )
                     logger.info(f"[RESULT]: {result_text[:600]}")
 
                     if publish_events:
@@ -1754,9 +1843,6 @@ class AgentLoop:
                     final_content = ""
                     break
 
-                messages.append(
-                    {"role": "user", "content": "Reflect on the results and decide next steps."}
-                )
             else:
                 text = (response.content or "").strip()
                 routed = False
@@ -1856,6 +1942,8 @@ class AgentLoop:
                     tools=[],
                     session_key=session_key,
                     publish_events=publish_events,
+                    agent_id=agent_id,
+                    iteration=iteration + 1,
                 )
                 accumulate_token_usage(response)
                 final_content = response.content
@@ -1903,14 +1991,10 @@ class AgentLoop:
         max_iterations = getattr(self, "max_iterations", 0)
 
         async def status_note_provider(iteration: int) -> str | None:
-            sections: list[str] = []
-            if budget_reminder_thresholds:
-                reminder = render_budget_reminder(
-                    max(0, max_iterations - iteration), budget_reminder_thresholds
-                )
-                if reminder:
-                    sections.append(reminder)
-            return "\n\n".join(sections) if sections else None
+            remaining = max(0, max_iterations - iteration)
+            if budget_reminder_thresholds and remaining in budget_reminder_thresholds:
+                return render_budget_reminder(remaining, budget_reminder_thresholds)
+            return None
 
         async def require_submission(context: _PlainTextContext) -> _PlainTextDelivered:
             messages = self.context.add_assistant_message(context.messages, context.text, [])

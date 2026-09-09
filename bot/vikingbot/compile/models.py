@@ -16,6 +16,7 @@ DEFAULT_COMPILE_INSTRUCTION = (
 )
 COMPILE_STAGING_ROOT = "__compile_staging__"
 COMPILE_OUTPUT_ROOT = f"{COMPILE_STAGING_ROOT}/output"
+COMPILE_DRAFT_ROOT = f"{COMPILE_STAGING_ROOT}/drafts"
 OKF_VERSION = "0.1"
 TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 WikiLanguage = Literal["en", "zh-CN"]

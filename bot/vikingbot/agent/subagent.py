@@ -4,6 +4,7 @@ import asyncio
 import json
 import time as _time
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -28,7 +29,9 @@ class SubagentManager:
 
     Subagents are lightweight agent instances that run in the background
     to handle specific tasks. They share the same LLM provider but have
-    isolated context and a focused system prompt.
+    isolated context and a focused system prompt. A request-owned task_runner
+    can supply its own execution loop and collect results with wait() instead
+    of publishing chat notifications.
     """
 
     def __init__(
@@ -50,8 +53,14 @@ class SubagentManager:
         self.sandbox_manager = sandbox_manager
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
         self._max_concurrency = getattr(
-            getattr(config, "agents", None), "subagent_max_concurrency", 4
+            getattr(config, "agents", None), "subagent_max_concurrency", 8
         )
+        self._worker_slots = asyncio.Semaphore(self._max_concurrency)
+        self._active_tasks: set[str] = set()
+        # A request-owned runner returns compact results to wait(), without chat notifications.
+        self.task_runner: Callable[[str, str, SessionKey], Awaitable[dict[str, Any]]] | None = None
+        self._completed_results: dict[str, dict[str, Any]] = {}
+        self._closed = False
 
     async def spawn(
         self,
@@ -66,22 +75,33 @@ class SubagentManager:
 
         Args:
             task: The task description for the subagent.
+            session_key: Parent session used for workspace access and result routing.
             label: Optional human-readable label for the task.
-            origin_channel: The channel to announce results to.
-            origin_chat_id: The chat ID to announce results to.
+            channel_metadata: Delivery metadata for chat notifications.
+            openviking_connection: Request-scoped identity for child tools.
 
         Returns:
-            Status message indicating the subagent was started.
+            A started or queued message with the task ID, or an error when spawning is closed
+            or capacity is exhausted. Managed tasks queue up to twice the worker count,
+            including uncollected results; chat tasks start immediately or return an error.
         """
-        if len(self._running_tasks) >= self._max_concurrency:
+        if self._closed:
+            return "Error: Subagent spawning is closed for this task."
+        if self.task_runner is not None:
+            outstanding = sum(not task.done() for task in self._running_tasks.values())
+            if outstanding + len(self._completed_results) >= 2 * self._max_concurrency:
+                return "Error: Subagent queue is full. Call wait_subagents, then spawn the remaining assignments."
+        elif self.get_running_count() >= self._max_concurrency:
             return f"Error: Subagent concurrency limit reached ({self._max_concurrency})"
 
         task_id = str(uuid.uuid4())[:8]
         display_label = label or task[:30] + ("..." if len(task) > 30 else "")
 
         # Create background task
-        bg_task = asyncio.create_task(
-            self._run_subagent(
+        run = (
+            self._run_managed_subagent(task_id, task, display_label, session_key)
+            if self.task_runner is not None
+            else self._run_subagent(
                 task_id,
                 task,
                 display_label,
@@ -90,13 +110,81 @@ class SubagentManager:
                 openviking_connection,
             )
         )
+        bg_task = asyncio.create_task(run)
         self._running_tasks[task_id] = bg_task
 
         # Cleanup when done
         bg_task.add_done_callback(lambda _: self._running_tasks.pop(task_id, None))
 
         logger.info(f"Spawned subagent [{task_id}]: {display_label}")
+        if self.task_runner is not None:
+            return f"Subagent accepted (id: {task_id})."
         return f"Subagent [{display_label}] started (id: {task_id}). I'll notify you when it completes."
+
+    async def _run_managed_subagent(
+        self, task_id: str, task: str, label: str, session_key: SessionKey
+    ) -> None:
+        """Run a request-owned child and retain its outcome until the parent collects it."""
+        result: dict[str, Any] = {"task_id": task_id, "label": label}
+        try:
+            async with self._worker_slots:
+                self._active_tasks.add(task_id)
+                assert self.task_runner is not None
+                result.update(await self.task_runner(task_id, task, session_key))
+                result["status"] = "completed"
+        except asyncio.CancelledError:
+            result["status"] = "cancelled"
+            raise
+        except Exception as exc:
+            result.update(status="failed", error=str(exc)[:1500])
+            logger.exception("Subagent [{}] failed", task_id)
+        finally:
+            self._active_tasks.discard(task_id)
+            self._completed_results[task_id] = result
+
+    async def wait(self, *, block: bool = True) -> dict[str, Any]:
+        """Collect new outcomes, waiting for a child to finish unless block is false.
+
+        Blocking waits return when results exist or no children remain, and propagate cancellation.
+        Return active/queued IDs, worker limits and free slots after draining results.
+        queue_capacity counts additional admissions; capacity is its compatibility alias.
+        Completed results are delivered once; unfinished children keep running.
+        """
+        while block and not self._completed_results:
+            running = [task for task in self._running_tasks.values() if not task.done()]
+            if not running:
+                break
+            await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
+        results = list(self._completed_results.values())
+        self._completed_results.clear()
+        pending = [key for key, task in self._running_tasks.items() if not task.done()]
+        queue_capacity = max(0, 2 * self._max_concurrency - len(pending))
+        return {
+            "results": results,
+            "running": [key for key in pending if key in self._active_tasks],
+            "queued": [key for key in pending if key not in self._active_tasks],
+            "max_concurrency": self._max_concurrency,
+            "free_worker_slots": max(0, self._max_concurrency - len(self._active_tasks)),
+            "queue_capacity": queue_capacity,
+            "capacity": queue_capacity,
+        }
+
+    def begin_submission(self, finalize: bool = False) -> str | None:
+        """Reject uncollected child work; seal spawning when validated output is finalized."""
+        if any(not task.done() for task in self._running_tasks.values()) or self._completed_results:
+            return "Error: Call wait_subagents to collect all child results and merge their drafts before submitting."
+        if finalize:
+            self._closed = True
+        return None
+
+    async def cancel_all(self) -> None:
+        """Stop accepting children and await cancellation before their workspace is removed."""
+        self._closed = True
+        tasks = list(self._running_tasks.values())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _run_subagent(
         self,
@@ -367,4 +455,6 @@ Skills with available="false" need dependencies installed first - you can try in
 
     def get_running_count(self) -> int:
         """Return the number of currently running subagents."""
-        return len(self._running_tasks)
+        if self.task_runner is not None:
+            return len(self._active_tasks)
+        return sum(not task.done() for task in self._running_tasks.values())

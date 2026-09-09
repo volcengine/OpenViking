@@ -4,6 +4,16 @@ Agent Runtime Server 负责执行 Agent 任务，当前支持 Compile。应用�
 
 内置 VikingBot 的 Compile 通过现有 `exec` 工具调用运行环境中的 `ov` CLI，按需读取 Skill、来源和已有目标内容。运行环境须启用命令执行、安装 `ov`，并配置好 CLI 的连接和身份；Compile 沿用该配置。任务启动时不下载输入文件、预加载目录摘要或注入 Skill 正文。Agent 生成结果后仍调用统一提交工具，由服务校验并写入目标；Resource 输出暂存于任务工作区的 `__compile_staging__/output/`，未提交的已有目标文件保持不变。
 
+开启 `bot.agents.subagent_enabled`（默认 `true`）时，Compile 使用 `spawn` 分工，通过 `wait_subagents` 领取文件清单、摘要和失败信息。每个子 Agent 独立维护上下文，写入路径和默认 shell 工作目录绑定到 `__compile_staging__/drafts/<id>/`；`read_file` 也支持按返回的完整草稿路径读取同任务的其他子 Agent 产物。子 Agent 使用目标相对路径写入，以 `submit_compile_draft(summary=...)` 提交，不能继续派生或提交最终结果。
+
+Resource 编译采用两阶段分工。第一阶段按来源生成草稿，主 Agent 用 `wait_subagents(wait_all=true)` 一次领取全部子任务的路径清单、文件大小（字节）、摘要和失败信息，处理失败后再做全局合并规划。主 Agent 根据完整清单归并主题、别名及不同命名的版本，只对有歧义的条目读取少量标题或元数据，不通读正文；同一主题的全部草稿交给同一个合并子 Agent，并按草稿总大小均衡分组。合并调用通过 `spawn(draft_paths=[...])` 指定已提交草稿，运行时将完整正文装入子任务初始输入，避免逐轮读取；输入限定为初始提示与上下文预算较小值的四分之一，超限不会截断，可拆分独立主题，单个超大主题则使用分段读取。每个输出页面仅有一个子 Agent 负责，导航统一由主 Agent 生成。主 Agent 汇集成品，检查格式、覆盖范围和路径冲突，移除不合格暂存文件及失效导航链接，报告排除原因后提交；已有目标文件保持不变。取消会停止运行中和排队的子任务，兜底保存不发布子任务目录中的草稿。
+
+`bot.agents.subagent_max_concurrency` 控制每个 Compile 同时运行的子 Agent 数量（默认 `8`，不包含主 Agent）。运行中、排队和已完成但未领取的结果合计不超过该值的两倍；排队任务会自动启动。两阶段复用同一并发与排队机制，主 Agent 按 `wait_subagents` 返回的容量继续派发，并仅重试失败分组。分组、格式检查和排除由 Agent 按提示及所选 Skill 执行；提交工具另行校验输出路径、大小和 OKF 格式。
+
+`wait_subagents()` 默认等待到有子任务完成、失败或已无子任务；空等期间不再触发主 Agent 的模型调用，也不增加循环轮次，取消可中断等待。主 Agent 还有其他工作可做时，使用 `wait_subagents(block=false)` 立即领取已有结果。
+
+同一个 VikingBot 服务内的所有 Compile 任务共享 `vlm.max_concurrent` 指定的模型请求并发额度（默认 `32`，必须为正数），包含主 Agent、子 Agent 和 compact 请求；流式响应结束或关闭后才释放额度。执行工具和等待子任务不占模型额度。该额度不包含普通聊天、语义处理及其他服务进程，也不限制每分钟 Token 数。
+
 **代码入口**：
 
 - `openviking/server/routers/compile.py` - 创建 Compile 任务
