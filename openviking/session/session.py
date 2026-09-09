@@ -4216,6 +4216,11 @@ class Session:
             f"{self._session_uri}/messages.jsonl",
             ctx=self.ctx,
         )
+        return await asyncio.to_thread(self._decode_live_messages_strict, content)
+
+    @staticmethod
+    def _decode_live_messages_strict(content: str) -> List[Message]:
+        """Decode a storage snapshot without mutating session state."""
         messages: List[Message] = []
         # Split on "\n" only, not str.splitlines(): the latter also treats
         # U+2028 / U+2029 / NEL (\x85) / \r / \v / \f as line boundaries, which
