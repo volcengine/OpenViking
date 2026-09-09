@@ -97,6 +97,17 @@ def test_root_build_system_honors_ci_compiler_overrides_and_requires_ragfs_for_w
     assert 'echo "OV_REQUIRE_RAGFS_BUILD=1" >> "$GITHUB_ENV"' in build_workflow
 
 
+def test_root_build_system_can_skip_cli_and_cpp_without_skipping_ragfs():
+    setup_py = _read_text("setup.py")
+
+    assert 'os.environ.get("OV_SKIP_OV_BUILD") == "1"' in setup_py
+    assert 'os.environ.get("OV_SKIP_CPP_BUILD") == "1"' in setup_py
+    assert "if SKIP_CPP_BUILD" in setup_py
+    assert "class OpenVikingDistribution(Distribution)" in setup_py
+    assert "self.build_ov_cli_artifact()" in setup_py
+    assert "self.build_ragfs_python_artifact()" in setup_py
+
+
 def test_rust_crates_declare_the_repo_minimum_rust_version():
     makefile = _read_text("Makefile")
     min_rust_version = _extract_rust_version(
