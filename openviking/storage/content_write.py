@@ -778,9 +778,12 @@ class ContentWriteCoordinator:
         ingest_options: IngestOptions | None = None,
     ) -> Dict[str, Any]:
         lock_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
+        ancestor_scope = (
+            "current_directory" if processing_mode == VECTORS_ONLY else "all"
+        )
         try:
             lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
-                lock_path, ancestor_scope="current_directory"
+                lock_path, ancestor_scope=ancestor_scope
             )
         except LockAcquisitionError as exc:
             raise ResourceBusyError(
@@ -1236,12 +1239,13 @@ class ContentWriteCoordinator:
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
         ingest_options: IngestOptions | None = None,
     ) -> Dict[str, Any]:
-        del processing_mode
-
         lock_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
+        ancestor_scope = (
+            "current_directory" if processing_mode == VECTORS_ONLY else "all"
+        )
         try:
             lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
-                lock_path, ancestor_scope="current_directory"
+                lock_path, ancestor_scope=ancestor_scope
             )
         except LockAcquisitionError as exc:
             raise ResourceBusyError(

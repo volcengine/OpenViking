@@ -509,11 +509,11 @@ class _FakePathLock:
         self._lease = SimpleNamespace(id="lock-1")
         self.acquire_result = acquire_result
         self.acquire_error = acquire_error
+        self.acquire_calls = []
         self.release_calls = []
 
     async def pathlock_acquire_exact(self, lock_path, *, ancestor_scope="all"):
-        del lock_path
-        assert ancestor_scope == "current_directory"
+        self.acquire_calls.append((lock_path, ancestor_scope))
         if self.acquire_error is not None:
             raise self.acquire_error
         if not self.acquire_result:
@@ -712,6 +712,9 @@ async def test_resource_write_lock_conflict_raises_resource_busy(monkeypatch):
         )
 
     assert exc_info.value.uri == file_uri
+    assert viking_fs._async_agfs.acquire_calls == [
+        ("/fake/viking/resources/demo/doc.md", "all")
+    ]
     assert viking_fs._async_agfs.release_calls == []
     assert viking_fs.content[file_uri] == "original"
 
@@ -733,6 +736,9 @@ async def test_memory_write_lock_conflict_raises_resource_busy(monkeypatch):
         )
 
     assert exc_info.value.uri == file_uri
+    assert viking_fs._async_agfs.acquire_calls == [
+        ("/fake/viking/user/default/memories/preferences/theme.md", "all")
+    ]
     assert viking_fs._async_agfs.release_calls == []
     assert viking_fs.content[file_uri] == "original"
 

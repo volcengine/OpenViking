@@ -152,6 +152,9 @@ async def test_direct_write_skips_semantic_refresh_for_vectors_only_and_sidecar_
         ingest_options=IngestOptions.from_search_tags(["team=search"], mode="append"),
     )
 
+    assert sidecar_fs._async_agfs.acquire_calls == [
+        ("/fake/viking://resources/demo/.abstract.md", "all")
+    ]
     written = sidecar_fs.write_file.await_args.args[1]
     assert parse_abstract_overview(written).body == "Updated body only.\n"
     assert parse_abstract_overview(written).metadata == parse_abstract_overview(current).metadata
@@ -310,6 +313,9 @@ async def test_memory_write_accepts_processing_mode_without_switching_refresh(
 
     content_write_module.MemoryUpdater.refresh_schema_overview.assert_awaited_once()
     content_write_module.MemoryUpdater.refresh_file_embedding.assert_awaited_once()
+    assert fake_fs._async_agfs.acquire_calls == [
+        ("/fake/viking://user/user-1/memories/demo.md", "current_directory")
+    ]
     assert result["context_type"] == "memory"
     assert result["semantic_status"] == "skipped"
     assert result["overview_status"] == expected_overview_status
