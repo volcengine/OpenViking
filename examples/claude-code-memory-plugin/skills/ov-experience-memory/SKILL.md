@@ -55,7 +55,8 @@ context or deeper intent analysis is useful.
 
    For tools using MCP-style parameters, set `target_uri` to this root. For
    OpenClaw `ov_search`, set `uri` to this root. Never hardcode `default`,
-   `test`, or another user ID.
+   `test`, or another user ID. If the server rejects the URI, resolve the root
+   as described in *Servers Without the Home Alias* and retry once.
 4. Start with `limit=5` and the tool's normal score threshold. Judge results by
    task, environment, preconditions, and likely effect; title similarity alone
    is insufficient. If no result is relevant, continue without Experience and
@@ -72,6 +73,26 @@ context or deeper intent analysis is useful.
 8. If execution fails for a materially new reason, perform at most one focused
    follow-up search using the failure evidence, then read only newly relevant
    Experience files.
+
+## Servers Without the Home Alias
+
+`viking://~` is the home alias for the caller's own space. A server released
+before the alias (OpenViking v0.4.16) does not resolve it and rejects the
+request with `INVALID_URI` (HTTP 400) instead of searching. Retry once against
+the caller's explicit root, resolved from evidence rather than guessed:
+
+- If a canonical `viking://user/<user_id>/...` URI is already visible in this
+  session — injected memory context, or an earlier OpenViking tool result —
+  reuse that `<user_id>` and search
+  `viking://user/<user_id>/memories/experiences`.
+- Otherwise repeat the same query with no target scope, narrowed to memories
+  with `context_type` when the tool accepts it, and keep only hits whose URI
+  contains `/memories/experiences/`. Those hits carry the canonical user ID;
+  reuse it for the reads and for any later Experience search in this task.
+
+Do not fall back to the uid-less `viking://user/memories/experiences`: only
+some older servers and roles expand it, and current servers reject it. If no
+explicit root can be resolved, continue without Experience.
 
 ## Applying Retrieved Experience
 

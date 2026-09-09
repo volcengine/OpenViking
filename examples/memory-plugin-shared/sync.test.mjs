@@ -113,6 +113,30 @@ async function findSkillFiles(dir) {
   return found;
 }
 
+// viking://~ is the home alias for the caller's own space, and a server older
+// than the alias rejects it outright instead of searching. A skill that sends
+// the agent to the Experience root therefore has to name the explicit
+// viking://user/<user_id> root it falls back to, or the whole workflow stops
+// against those servers.
+test("skills scoping the Experience root document the explicit-root fallback", async () => {
+  const files = [
+    ...(await findSkillFiles(join(ROOT, "examples"))),
+    ...(await findSkillFiles(join(ROOT, "agent-plugins"))),
+  ];
+  const scoped = [];
+  for (const file of files) {
+    const source = await readFile(file, "utf-8");
+    if (!source.includes("viking://~/memories/experiences")) continue;
+    scoped.push(file);
+    assert.match(
+      source,
+      /viking:\/\/user\/<user_id>/,
+      `${relative(ROOT, file)} scopes by viking://~ without naming the viking://user/<user_id> fallback`,
+    );
+  }
+  assert.ok(scoped.length > 0, "expected at least one skill scoping the Experience root");
+});
+
 test("shipped skill descriptions stay within the loader limit", async () => {
   const files = await findSkillFiles(join(ROOT, "examples"));
   assert.ok(files.length > 0, "expected at least one SKILL.md");

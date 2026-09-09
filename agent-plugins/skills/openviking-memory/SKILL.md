@@ -37,7 +37,12 @@ without memory.
    `limit` around 5-10. Use `search` when deeper intent analysis helps, or use
    `search` with `mode="context"` for a server-assembled, token-budgeted
    context block. In list mode, scope with `target_uri` when you know where to look, e.g.
-   `viking://~/memories/experiences` for prior task experience.
+   `viking://~/memories/experiences` for prior task experience. `viking://~` is
+   the home alias for your own user root; a server that predates the alias
+   rejects every `viking://~` URI with `INVALID_URI`. Against such a server use
+   the explicit `viking://user/<user_id>/...` root taken from a URI already
+   visible in this session, or drop `target_uri` and keep the hits whose URI
+   contains `/memories/experiences/`. Never guess a user ID.
 4. Judge results by task and environment fit, not title similarity. `read` the
    one to three exact file URIs likely to change how you execute. Ignore
    sidecar files such as `.abstract.md`, `.overview.md`, and
