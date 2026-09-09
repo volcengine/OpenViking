@@ -27,13 +27,15 @@ class ResolvedRetrievalTargets:
 def resolve_retrieval_targets(
     target_uri: Union[str, List[str]],
     ctx: RequestContext,
+    *,
+    context_type: Optional[ContextType] = None,
 ) -> ResolvedRetrievalTargets:
     """Resolve search/find target directories."""
     target_uris = _dedupe_target_uris(target_uri)
 
     if not target_uris:
         return ResolvedRetrievalTargets(
-            target_directories=default_target_directories(ctx),
+            target_directories=default_target_directories(ctx, context_type=context_type),
         )
 
     target_directories: List[str] = []
@@ -147,10 +149,16 @@ def _actor_peer_targets(ctx: RequestContext) -> List[str]:
         f"{peer_root}/memories",
         f"{peer_root}/resources",
     ]
-def _is_agent_scope_uri(target_uri: str) -> bool:
-    parts = target_uri[len("viking://"):].strip("/").split("/")
-    return parts and parts[0] == "agent" and len(parts) >= 2 and parts[1] in {"skills", "endpoints", "tools", "payments"}
 
+
+def _is_agent_scope_uri(target_uri: str) -> bool:
+    parts = target_uri[len("viking://") :].strip("/").split("/")
+    return (
+        parts
+        and parts[0] == "agent"
+        and len(parts) >= 2
+        and parts[1] in {"skills", "endpoints", "tools", "payments"}
+    )
 
 
 def _resolve_peer_target(

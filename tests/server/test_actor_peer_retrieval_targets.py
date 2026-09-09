@@ -30,10 +30,12 @@ def _ctx(
 def _target_dirs(
     target_uri="",
     actor_peer_id: str | None = None,
+    context_type: ContextType | None = None,
 ):
     return resolve_retrieval_targets(
         target_uri,
         _ctx(actor_peer_id),
+        context_type=context_type,
     ).target_directories
 
 
@@ -104,6 +106,13 @@ def test_actor_skill_defaults_include_user_and_shared_agent_skills():
     assert default_target_directories(
         _ctx("web-visitor-alice"), context_type=ContextType.SKILL
     ) == [
+        "viking://user/support_bot/skills",
+        "viking://agent/skills",
+    ]
+
+
+def test_empty_target_uri_respects_skill_context_type():
+    assert _target_dirs(context_type=ContextType.SKILL) == [
         "viking://user/support_bot/skills",
         "viking://agent/skills",
     ]
