@@ -131,20 +131,10 @@ class ContextBuilder:
 
         if session_key.type == "feishu":
             parts.append(
-                "## Feishu image delivery\n\n"
-                "To show an OpenViking image to the user, explicitly include "
-                "![description](viking://path/to/image.png) in your reply or message content, "
-                "outside code spans/blocks. This requests image delivery: the channel downloads "
-                "the image with the sender's permissions and attaches it to the reply. "
-                "Use this only when you intend to show the image. "
-                "When listing or citing resources, write the URI as inline code, "
-                "e.g. `viking://path/to/image.png`; URI citations do not send images. "
-                "Reading an image with openviking_multi_read only lets you inspect it; "
-                "it does not send the image to the user. "
-                "Describe your reply consistently with whether you requested an image attachment. "
-                "Delivery happens after composing the reply; do not claim confirmed delivery "
-                "without a receipt. If image conversion fails, the channel displays a text "
-                "placeholder and keeps the rest of the reply."
+                "## Feishu images\n\n"
+                "To display an OpenViking image, use ![description](viking://...) outside code.\n"
+                "To cite an image URI without displaying it, use inline code.\n"
+                "Reading an image does not send it to the user."
             )
 
         # Sandbox environment info

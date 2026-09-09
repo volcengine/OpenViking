@@ -173,12 +173,11 @@ async def test_image_delivery_instructions_are_scoped_to_feishu(tmp_path, channe
     prompt = await context.build_system_prompt(session_key, ov_tools_enable=False)
 
     if channel_type == "feishu":
-        assert "![description](viking://path/to/image.png)" in prompt
-        assert "URI citations do not send images" in prompt
-        assert "it does not send the image to the user" in prompt
-        assert "do not claim confirmed delivery" in prompt
+        assert "![description](viking://...) outside code" in prompt
+        assert "To cite an image URI without displaying it, use inline code" in prompt
+        assert "Reading an image does not send it to the user" in prompt
     else:
-        assert "## Feishu image delivery" not in prompt
+        assert "## Feishu images" not in prompt
 
 
 @pytest.mark.asyncio
