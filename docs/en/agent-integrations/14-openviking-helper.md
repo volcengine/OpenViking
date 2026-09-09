@@ -56,6 +56,19 @@ After syncing, you can browse the server-side memory categories and content from
 
 Helper reads the relevant local agent configuration and data to display integration status, sessions, and memories. Content is sent to the active OpenViking service only when you sync it or use a service-backed capability. Before syncing, confirm the service address and review the selected content for sensitive information.
 
+## Troubleshooting
+
+### Memory or Sessions content is empty with "Access denied for viking://user/..."
+
+On self-hosted services where the account ID and the user ID differ, requests that address another principal's user namespace are rejected by the server. A Helper version that builds these URIs from the account ID then shows an empty Memory tab (every category reports no entries) and a status-bar error such as `Access denied for viking://user/default/memories`; the Sessions tab may degrade to an unknown sync status for the same reason.
+
+To check whether this applies to your setup:
+
+1. Open Helper's connection settings file (`~/Library/Application Support/openviking-helper/openviking-helper.json` on macOS) and compare `accountId` with `userId`. The symptom only appears when the two values differ.
+2. Confirm that the same server, API key, and machine work from the `ov` CLI and from Web Studio. Those clients resolve the signed-in identity server-side, so they are unaffected.
+
+User namespaces are addressed by user ID, not by the account ID. Explicit user paths therefore use `viking://user/{user_id}/...`, and clients that do not know the user ID should use the home alias `viking://~/...`, which the server expands from the authenticated identity (see [Resource URIs](../api/02-resources.md)). If the two IDs differ in your Helper configuration and the tabs stay empty, report it on the project issue tracker together with both identity values so the Helper build can be corrected.
+
 ## See also
 
 - [Capability Reference](./16-capability-reference.md)
