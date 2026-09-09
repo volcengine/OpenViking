@@ -24,6 +24,14 @@ if TYPE_CHECKING:
 
 
 class SessionCommitProcessor(DequeueHandlerBase):
+    # Dependency-wait backoff (issue #4345): when a commit cannot run because
+    # its predecessor is still pending, re-enqueueing immediately hot-loops the
+    # queue (observed >800k requeues behind ~33 waiting commits). Exponential
+    # backoff with a cap bounds the churn while never dropping the message.
+    DEP_WAIT_BASE_S = 0.1
+    DEP_WAIT_MAX_S = 3.0
+    DEP_WAIT_MAX_HOLD_S = 1.0
+
     def __init__(
         self,
         session_service: "SessionService",
@@ -31,6 +39,9 @@ class SessionCommitProcessor(DequeueHandlerBase):
     ) -> None:
         self._session_service = session_service
         self._service_loop = service_loop
+        # key -> (attempt_count, next_attempt_monotonic). In-memory only:
+        # a restart just resumes the backoff schedule from the base delay.
+        self._dep_wait: Dict[str, tuple] = {}
 
     @staticmethod
     def _parse_message(data: Dict[str, Any]) -> tuple[SessionCommitMsg, RequestContext]:
@@ -85,17 +96,50 @@ class SessionCommitProcessor(DequeueHandlerBase):
             await session.load()
             with bind_task_context(msg.task_id, ctx.account_id, ctx.user.user_id):
                 processed = await session.resume_queued_commit(msg)
-            if not processed:
-                from openviking.storage.queuefs import QueueManager, get_queue_manager
-
-                await get_queue_manager().enqueue(
-                    QueueManager.SESSION_COMMIT,
-                    msg.to_dict(),
-                )
-                self.report_requeue()
+            if processed:
+                self._dep_wait.pop(self._dep_wait_key(msg), None)
+            else:
+                await self._requeue_with_backoff(msg)
             return processed
         finally:
             reset_root_observability_context(root_context_token)
+
+    @classmethod
+    def _dep_wait_key(cls, msg: SessionCommitMsg) -> str:
+        return f"{msg.session_id}:{msg.archive_uri}"
+
+    @classmethod
+    def _dep_wait_delay_s(cls, attempt: int) -> float:
+        return min(
+            cls.DEP_WAIT_BASE_S * (2 ** min(attempt, 6)),
+            cls.DEP_WAIT_MAX_S,
+        )
+
+    async def _requeue_with_backoff(self, msg: SessionCommitMsg) -> None:
+        """Re-enqueue a dependency-waiting commit after bounded backoff.
+
+        The predecessor commit is still pending (``resume_queued_commit``
+        returned False). Holding this worker briefly and applying exponential
+        backoff keeps the dequeue/ack/re-enqueue cycle bounded instead of
+        spinning at full consumer speed.
+        """
+        import time
+
+        from openviking.storage.queuefs import QueueManager, get_queue_manager
+
+        key = self._dep_wait_key(msg)
+        now = time.monotonic()
+        attempt, next_at = self._dep_wait.get(key, (0, 0.0))
+        if now < next_at:
+            await asyncio.sleep(min(next_at - now, self.DEP_WAIT_MAX_HOLD_S))
+        attempt += 1
+        delay = self._dep_wait_delay_s(attempt)
+        self._dep_wait[key] = (attempt, time.monotonic() + delay)
+        await get_queue_manager().enqueue(
+            QueueManager.SESSION_COMMIT,
+            msg.to_dict(),
+        )
+        self.report_requeue()
 
     async def _finalize_cancelled(self, msg: SessionCommitMsg, ctx: RequestContext) -> None:
         session = self._session_service.session(
