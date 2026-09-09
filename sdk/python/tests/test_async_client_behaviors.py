@@ -616,7 +616,10 @@ def test_sync_http_client_declares_common_sync_methods_explicitly():
         ["viking://resources/source"],
         "viking://resources/output",
         "viking://agent/skills/wiki",
-        options={"args": {"model_name": "endpoint-1"}},
+        options={
+            "instruction": "Keep supporting evidence.",
+            "args": {"model_name": "endpoint-1"},
+        },
     )
 
     assert result == {"task_id": "cmp_1"}
@@ -627,6 +630,7 @@ def test_sync_http_client_declares_common_sync_methods_explicitly():
             "from": ["viking://resources/source"],
             "to": "viking://resources/output",
             "skill": "viking://agent/skills/wiki",
+            "instruction": "Keep supporting evidence.",
             "args": {"model_name": "endpoint-1"},
         },
     )

@@ -949,14 +949,14 @@ export class OpenVikingClient {
       from: fromUris,
       to,
       skill,
-      reason: options.reason,
+      instruction: options.instruction,
       args:
         options.args && Object.keys(options.args).length
           ? options.args
           : undefined,
     });
     return this.request("POST", "/api/v1/compile", {
-      body: mergeExtra(body, options.extra, ["reason", "args"]),
+      body: mergeExtra(body, options.extra, ["instruction", "args"]),
     });
   }
 

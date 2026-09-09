@@ -24,7 +24,7 @@ from vikingbot.agent.tools.ov_file import (
 )
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.compile.models import (
-    DEFAULT_COMPILE_REASON,
+    DEFAULT_COMPILE_INSTRUCTION,
     CompileFailure,
     CompileLimits,
     CompileRequest,
@@ -921,7 +921,7 @@ def test_renderer_uses_compile_language_for_sources_without_related_pages_sectio
 
 
 @pytest.mark.asyncio
-async def test_wiki_language_classifier_uses_real_reason_and_one_model_call():
+async def test_wiki_language_classifier_uses_real_instruction_and_one_model_call():
     class Provider:
         def __init__(self):
             self.calls = []
@@ -941,8 +941,8 @@ async def test_wiki_language_classifier_uses_real_reason_and_one_model_call():
             "from": ["viking://resources/source"],
             "to": "viking://resources/wiki",
             "skill": "viking://agent/skills/wiki",
-            "reason": "请用中文输出",
-            "reason_provided": True,
+            "instruction": "请用中文输出",
+            "instruction_provided": True,
         }
     )
 
@@ -960,13 +960,13 @@ async def test_wiki_language_classifier_uses_real_reason_and_one_model_call():
     assert call["max_tokens"] == 64
     assert call["temperature"] == 0.0
     assert call["session_id"] == "cmp:wiki-language"
-    assert "input_kind=user_reason" in call["messages"][1]["content"]
+    assert "input_kind=user_instruction" in call["messages"][1]["content"]
     assert "请用中文输出" in call["messages"][1]["content"]
     assert "source sample" not in call["messages"][1]["content"]
 
 
 @pytest.mark.asyncio
-async def test_wiki_language_classifier_ignores_default_reason_and_defaults_non_chinese_to_en():
+async def test_wiki_language_classifier_ignores_default_instruction_and_defaults_non_chinese_to_en():
     class Provider:
         def __init__(self):
             self.message = ""
@@ -983,8 +983,8 @@ async def test_wiki_language_classifier_ignores_default_reason_and_defaults_non_
             "from": ["viking://resources/source"],
             "to": "viking://resources/wiki",
             "skill": "viking://agent/skills/wiki",
-            "reason": DEFAULT_COMPILE_REASON,
-            "reason_provided": False,
+            "instruction": DEFAULT_COMPILE_INSTRUCTION,
+            "instruction_provided": False,
         }
     )
 
@@ -999,7 +999,7 @@ async def test_wiki_language_classifier_ignores_default_reason_and_defaults_non_
     assert usage == {}
     assert "input_kind=source_content" in provider.message
     assert "这是实际的资源文本。" in provider.message
-    assert DEFAULT_COMPILE_REASON not in provider.message
+    assert DEFAULT_COMPILE_INSTRUCTION not in provider.message
 
 
 def test_memory_renderer_round_trips_fields_and_only_bumps_changed_version():
@@ -2112,7 +2112,7 @@ def test_compile_prompt_mentions_materialized_manifest_when_available():
             "from": ["viking://resources/source"],
             "to": "viking://resources/wiki",
             "skill": "viking://agent/skills/wiki",
-            "reason": "Compile the research",
+            "instruction": "Compile the research",
         }
     )
 
@@ -2139,7 +2139,7 @@ def test_compile_prompt_describes_editable_target_checkout():
             "from": ["viking://resources/source"],
             "to": "viking://resources/output",
             "skill": "viking://agent/skills/compiler",
-            "reason": "Refresh the output",
+            "instruction": "Refresh the output",
         }
     )
 
@@ -2985,7 +2985,7 @@ async def test_structured_task_injects_status_note_provider(iteration, with_note
 
 
 @pytest.mark.asyncio
-async def test_request_normalization_uses_default_reason_and_canonical_skill(monkeypatch):
+async def test_request_normalization_uses_default_instruction_and_canonical_skill(monkeypatch):
     class Client:
         created = set()
         skill_content = "---\nname: wiki\ndescription: Wiki\n---\nCompile it"
@@ -3027,7 +3027,7 @@ async def test_request_normalization_uses_default_reason_and_canonical_skill(mon
                 "from": ["viking://resources/source", "viking://resources/source"],
                 "to": "viking://resources/wiki",
                 "skill": "viking://agent/skills/wiki/SKILL.md",
-                "reason": "   ",
+                "instruction": "   ",
             }
         ),
         connection={"api_key": "secret"},
@@ -3035,8 +3035,8 @@ async def test_request_normalization_uses_default_reason_and_canonical_skill(mon
     assert normalized.from_ == ["viking://resources/source"]
     assert normalized.to == "viking://resources/wiki"
     assert normalized.skill == "viking://agent/skills/wiki"
-    assert normalized.reason == DEFAULT_COMPILE_REASON
-    assert normalized.reason_provided is False
+    assert normalized.instruction == DEFAULT_COMPILE_INSTRUCTION
+    assert normalized.instruction_provided is False
 
     Client.created.clear()
     Client.skill_content = "---\nname: wiki\n---\nCompile it"
@@ -3369,7 +3369,7 @@ async def test_execute_skill_target_skips_recursive_catalog_and_completes(
             "from": ["viking://resources/weekly"],
             "to": target_uri,
             "skill": "viking://agent/skills/skill-creator",
-            "reason": "Create a weekly report Skill",
+            "instruction": "Create a weekly report Skill",
         }
     )
     task = CompileTask(
@@ -3927,7 +3927,7 @@ def test_compile_prompt_uses_materialized_workflow_when_manifest_available():
             "from": ["viking://resources/source"],
             "to": "viking://resources/wiki",
             "skill": "viking://agent/skills/wiki",
-            "reason": "Compile the research",
+            "instruction": "Compile the research",
         }
     )
     common = {
@@ -3967,7 +3967,7 @@ def test_compile_prompt_includes_per_source_inventory():
             ],
             "to": "viking://resources/wiki",
             "skill": "viking://agent/skills/wiki",
-            "reason": "Compile",
+            "instruction": "Compile",
         }
     )
     sources = [
@@ -4024,7 +4024,7 @@ def test_compile_prompt_routes_skill_cli_commands_through_exec():
             "from": ["viking://resources/source"],
             "to": "viking://resources/wiki",
             "skill": "viking://agent/skills/ara",
-            "reason": "Compile the research",
+            "instruction": "Compile the research",
         }
     )
 
@@ -4069,7 +4069,7 @@ def test_compile_prompt_omits_exec_when_capability_is_disabled():
             "from": ["viking://resources/source"],
             "to": "viking://resources/wiki",
             "skill": "viking://agent/skills/wiki",
-            "reason": "Compile the research",
+            "instruction": "Compile the research",
         }
     )
 
@@ -4097,7 +4097,7 @@ def test_compile_prompt_requires_one_complete_skill_package_without_exec():
             "from": ["viking://resources/weekly"],
             "to": "viking://agent/skills",
             "skill": "viking://agent/skills/skill-creator",
-            "reason": "Create a weekly report Skill",
+            "instruction": "Create a weekly report Skill",
         }
     )
 
@@ -4166,7 +4166,7 @@ def _sanitized_compile_request() -> SanitizedCompileRequest:
         {
             "from": ["viking://resources/source"],
             "to": "viking://resources/wiki",
-            "reason": "Compile",
+            "instruction": "Compile",
             "skill": "viking://agent/skills/wiki",
         }
     )
@@ -5122,7 +5122,7 @@ async def test_task_store_restart_marks_nonterminal_without_persisting_connectio
             {
                 "from": ["viking://resources/source"],
                 "to": "viking://resources/wiki",
-                "reason": "Compile",
+                "instruction": "Compile",
                 "skill": "viking://agent/skills/wiki",
             }
         ),
@@ -5227,7 +5227,7 @@ async def test_task_owner_isolation_and_skill_snapshot_sync(tmp_path: Path):
             {
                 "from": ["viking://resources/source"],
                 "to": "viking://resources/wiki",
-                "reason": "Compile",
+                "instruction": "Compile",
                 "skill": "viking://agent/skills/wiki",
             }
         ),

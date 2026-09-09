@@ -59,9 +59,9 @@ type AddSkillOptions struct {
 
 // CompileOptions controls Compile.
 type CompileOptions struct {
-	Reason string
-	Args   map[string]any
-	Extra  map[string]any
+	Instruction string
+	Args        map[string]any
+	Extra       map[string]any
 }
 
 // AdminCreateAccountOptions controls AdminCreateAccountWithOptions.

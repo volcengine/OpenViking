@@ -8,19 +8,25 @@ pub async fn run(
     from_uris: Vec<String>,
     to: String,
     skill: String,
-    reason: Option<String>,
+    instruction: Option<String>,
     args: Option<String>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     let sources = normalize_sources(from_uris)?;
     let args = parse_args(args.as_deref())?;
-    let reason = reason
+    let instruction = instruction
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
     let accepted = client
-        .create_compile(&sources, to.trim(), skill.trim(), reason, args.as_ref())
+        .create_compile(
+            &sources,
+            to.trim(),
+            skill.trim(),
+            instruction,
+            args.as_ref(),
+        )
         .await?;
     render_accepted(&accepted, to.trim(), output_format, compact);
     Ok(())

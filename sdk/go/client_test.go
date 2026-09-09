@@ -1677,6 +1677,7 @@ func TestCompileAndListTasksRequests(t *testing.T) {
 			if !reflect.DeepEqual(body["from"], []any{"viking://resources/source"}) ||
 				body["to"] != "viking://resources/output" ||
 				body["skill"] != "viking://agent/skills/wiki" ||
+				body["instruction"] != "Keep supporting evidence." ||
 				!reflect.DeepEqual(body["args"], map[string]any{"model_name": "endpoint-1"}) {
 				t.Fatalf("body = %#v", body)
 			}
@@ -1706,7 +1707,10 @@ func TestCompileAndListTasksRequests(t *testing.T) {
 		[]string{"viking://resources/source"},
 		"viking://resources/output",
 		"viking://agent/skills/wiki",
-		&CompileOptions{Args: map[string]any{"model_name": "endpoint-1"}},
+		&CompileOptions{
+			Instruction: "Keep supporting evidence.",
+			Args:        map[string]any{"model_name": "endpoint-1"},
+		},
 	)
 	if err != nil {
 		t.Fatal(err)

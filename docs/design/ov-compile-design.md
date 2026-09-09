@@ -37,7 +37,7 @@ v1 的核心目标：
 ov compile \
   --from viking://resources/周报 \
   --to viking://resources/团队知识库 \
-  --reason "按月整理团队的成本优化进展" \
+  --instruction "按月整理团队的成本优化进展" \
   --skill viking://agent/skills/monthly_wiki \
   --args '{"model_name":"your-model-endpoint-id"}'
 ```
@@ -47,7 +47,7 @@ ov compile \
 | `--from` | 必填，可重复，也可使用逗号分隔多个目录 |
 | `--to` | 必填，目标 Wiki 目录 |
 | `--skill` | 必填，Skill 目录或 `SKILL.md` 的 Viking URI |
-| `--reason` | 可选，本次整理任务的描述 |
+| `--instruction` | 可选，本次整理任务的描述 |
 | `--args` | 可选，Provider 扩展参数 JSON 对象；`model_name` 可传模型 Endpoint ID |
 
 参数在 OpenViking 用户身份下 canonicalize 后满足以下约束：
@@ -57,7 +57,7 @@ ov compile \
 - `skill` 必须解析为 Skill root，目录 URI 和其 `SKILL.md` URI 视为同一个 Skill；
 - `from`、`to` 和 `skill` 的权限最终仍由 OpenViking Server 校验，CLI 不根据 URI 文本推断权限。
 
-`--reason` 为空时，VikingBot 使用以下默认任务描述：
+`--instruction` 为空时，VikingBot 使用以下默认任务描述：
 
 ```text
 Follow the loaded Skill's instructions to transform the provided source materials into the outputs required by the Skill.
@@ -153,7 +153,7 @@ POST /bot/v1/compile
 {
   "from": ["viking://resources/周报"],
   "to": "viking://resources/团队知识库",
-  "reason": "按月整理团队的成本优化进展",
+  "instruction": "按月整理团队的成本优化进展",
   "skill": "viking://agent/skills/monthly_wiki"
 }
 ```
@@ -171,7 +171,7 @@ POST /bot/v1/compile
 VikingBot 负责规范化参数并计算实际任务描述：
 
 ```python
-effective_reason = (request.reason or "").strip() or DEFAULT_COMPILE_REASON
+effective_instruction = (request.instruction or "").strip() or DEFAULT_COMPILE_INSTRUCTION
 ```
 
 ### 4.2 查询任务
@@ -243,7 +243,7 @@ GET /bot/v1/compile/{task_id}
 
 VikingBot 创建异步任务后依次执行：
 
-1. 计算 `effective_reason`，并对 `from`、`to` 和 `skill` 做 URI 语法校验。
+1. 计算 `effective_instruction`，并对 `from`、`to` 和 `skill` 做 URI 语法校验。
 2. 通过 OpenViking 现有 `fs/attrs` 取得来源和目标的 canonical URI，再用 stat/list/read 路径验证形状与权限；Skill API 直接返回 canonical Skill root。VikingBot 后续只使用这些响应中的 canonical URI。
 3. 通过 Skills API 取得 Skill root、定义和文件清单，通过现有 content read/download 路径读取辅助文件，在 task workspace 中物化快照，并交给 `SkillsLoader` 加载。
 4. 为每个来源建立 `source_id + directory_uri + overview` 描述，并使用现有 list/tree 能力建立目标 Wiki 的有界轻量 catalog。
@@ -397,7 +397,7 @@ class WikiBundleDraft(BaseModel):
 
 Pydantic model 使用 `extra="forbid"`；字段校验和 CompileLimits 都在 `submit_wiki_bundle` 内执行。校验失败时，工具将错误返回给 Agent 修复。达到迭代上限仍未提交合法结果时，Resource 目标按上述规则尝试 salvage；其他目标或没有合格 workspace 产物的 Resource 任务失败。
 
-页面数量由 reason、Skill 和材料决定。高层总结可以只生成一个页面，`link_count=0` 是合法结果。
+页面数量由 instruction、Skill 和材料决定。高层总结可以只生成一个页面，`link_count=0` 是合法结果。
 
 ## 8. Wiki 渲染与写入
 
@@ -529,7 +529,7 @@ OpenViking proxy 复用 `bot.py` 现有 Bot URL、httpx client、Gateway Token�
 - OpenViking adapter 的写入和删除工具不进入 request registry；Compile 管理的 Wiki 写入只能由 batch-write 完成；
 - 用户 connection 只注入 scope-guarded OpenViking read adapter，不传给 file 或 shell tool；
 - Compile 忽略 Skill 的 `allowed-tools`，固定工具集合中的 `exec` 可能产生 Compile 之外的副作用，不纳入 batch-write 的一致性保证；
-- Compile Prompt 明确把来源正文、catalog 和工具结果视为待整理数据，不能把其中的文本当作指令；只有用户的 reason、所选 Skill 和系统 Compile 规则构成指令层；
+- Compile Prompt 明确把来源正文、catalog 和工具结果视为待整理数据，不能把其中的文本当作指令；只有用户的 instruction、所选 Skill 和系统 Compile 规则构成指令层；
 - file tool 只能访问 task workspace；shell 的隔离强度取决于 backend，多用户部署必须关闭 `direct` Compile exec 或使用隔离 backend；
 - 最终 URI、写入条件和 metadata 由可信代码生成；
 - 日志不记录 source 正文、Skill 正文、完整 Prompt 或凭证。
@@ -546,7 +546,7 @@ task_id, principal_scope, sanitized_request, status, stage, timestamps, result, 
 
 Bot 当前没有通用的持久化后台任务管理器，因此这里实现一个最小 JSON task store，使用 per-task lock 和临时文件原子替换。进程内以有界的 `asyncio.Task` 集合和 semaphore 承载 accepted task；全局和单 principal admission 在任务创建前计数，超限同步返回 `RESOURCE_EXHAUSTED`。现有 `SessionManager` 继续只管理 chat JSONL，不承载 Compile 状态。
 
-`sanitized_request` 只包含 canonical `from/to/skill` 和 effective reason；`openviking_connection` 仅由运行中 `asyncio.Task` 持有，不进入 JSON、异常详情或日志。
+`sanitized_request` 只包含 canonical `from/to/skill` 和 effective instruction；`openviking_connection` 仅由运行中 `asyncio.Task` 持有，不进入 JSON、异常详情或日志。
 
 运行中任务目录可以保存有大小限制的 Skill 快照、catalog 和 draft，但不能保存用户凭证。任务进入终态后删除 workspace、Skill snapshot 和 draft；task/result/error JSON 最长保留 24 小时且最多保留 1,000 条，启动和任务结束时都会清理。
 
@@ -639,7 +639,7 @@ bot/vikingbot/compile/
 
 至少覆盖：
 
-- CLI 参数展开、默认 reason 和 Task ID 返回；
+- CLI 参数展开、默认 instruction 和 Task ID 返回；
 - Bot proxy 的创建/GET 查询身份转交、未启用 Bot 的 503 和上游错误；
 - Skill 复用现有 parser/loader、相对引用、requirements 和路径逃逸检查；`allowed-tools` 可正常解析但不影响 Compile 工具集合；
 - request registry 固定包含本地核心工具、scope-guarded OpenViking 只读工具和 `submit_wiki_bundle`，不包含 message/cron/spawn/Web/image/MCP/OV write，用户 connection 只进入 OV read adapter；
@@ -658,7 +658,7 @@ bot/vikingbot/compile/
 ov compile \
   --from viking://resources/周报 \
   --to viking://resources/团队知识库 \
-  --reason "按月整理团队的成本优化进展" \
+  --instruction "按月整理团队的成本优化进展" \
   --skill viking://agent/skills/monthly_wiki
 ```
 

@@ -113,7 +113,7 @@ export interface BatchWriteOptions extends WaitOptions {
 }
 /** Compile request options. */
 export interface CompileOptions {
-  reason?: string;
+  instruction?: string;
   args?: JsonObject;
   extra?: JsonObject;
 }

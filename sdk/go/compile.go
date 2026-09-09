@@ -21,11 +21,11 @@ func (c *Client) Compile(
 		"to":    to,
 		"skill": skill,
 	}
-	setString(payload, "reason", opts.Reason)
+	setString(payload, "instruction", opts.Instruction)
 	if len(opts.Args) > 0 {
 		payload["args"] = opts.Args
 	}
-	if err := mergeExtraProtected(payload, opts.Extra, "reason", "args"); err != nil {
+	if err := mergeExtraProtected(payload, opts.Extra, "instruction", "args"); err != nil {
 		return nil, err
 	}
 	var result map[string]any

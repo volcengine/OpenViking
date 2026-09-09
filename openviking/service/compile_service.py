@@ -39,8 +39,16 @@ class CompileRequest(BaseModel):
     from_: list[str] = Field(alias="from", min_length=1)
     to: str = Field(min_length=1)
     skill: str = Field(min_length=1)
-    reason: str | None = None
+    instruction: str | None = None
     args: dict[str, Any] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_reason(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "reason" in data:
+            data = dict(data)
+            data.setdefault("instruction", data.pop("reason"))
+        return data
 
     @model_validator(mode="after")
     def _normalize(self) -> "CompileRequest":
@@ -54,7 +62,7 @@ class CompileRequest(BaseModel):
         self.from_ = sources
         self.to = self.to.strip().rstrip("/")
         self.skill = self.skill.strip().rstrip("/")
-        self.reason = self.reason.strip() if self.reason and self.reason.strip() else None
+        self.instruction = self.instruction.strip() if self.instruction and self.instruction.strip() else None
         self.args = dict(self.args) if self.args else None
         if not self.to:
             raise ValueError("to must not be empty")

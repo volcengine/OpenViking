@@ -23,24 +23,24 @@ ov skills list
 
 ## 第三步：执行编译
 
-在 `--reason` 里说清楚**日期、时区、报告对象和侧重点**，Skill 会据此定位和取舍：
+在 `--instruction` 里说清楚**日期、时区、报告对象和侧重点**，Skill 会据此定位和取舍：
 
 ```bash
 ov compile \
   --from viking://resources/work-logs \
   --to viking://resources/daily-report \
   --skill viking://agent/skills/daily-report \
-  --reason "生成 2026-08-20 的日报，聚焦我的工作产出与决策"
+  --instruction "生成 2026-08-20 的日报，聚焦我的工作产出与决策"
 ```
 
-一次生成多天，把日期范围写进 `--reason` 即可（每天仍是独立一页）：
+一次生成多天，把日期范围写进 `--instruction` 即可（每天仍是独立一页）：
 
 ```bash
 ov compile \
   --from viking://resources/work-logs \
   --to viking://resources/daily-report \
   --skill viking://agent/skills/daily-report \
-  --reason "生成 2026-08-18 至 2026-08-20 每天一份日报"
+  --instruction "生成 2026-08-18 至 2026-08-20 每天一份日报"
 ```
 
 命令会立刻返回 `task_id`：
