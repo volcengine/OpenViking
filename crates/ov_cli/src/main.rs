@@ -1167,9 +1167,9 @@ enum Commands {
         /// Skill directory or SKILL.md Viking URI
         #[arg(long, value_name = "uri")]
         skill: String,
-        /// Description of this organization task
+        /// Additional instructions for this Compile task
         #[arg(long, value_name = "text")]
-        reason: Option<String>,
+        instruction: Option<String>,
         /// Provider arguments as a JSON object
         #[arg(long, value_name = "json")]
         args: Option<String>,
@@ -3663,7 +3663,7 @@ async fn main() {
             from_uris,
             to,
             skill,
-            reason,
+            instruction,
             args,
         } => {
             let client = ctx.get_client();
@@ -3672,7 +3672,7 @@ async fn main() {
                 from_uris,
                 to,
                 skill,
-                reason,
+                instruction,
                 args,
                 ctx.output_format,
                 ctx.compact,
@@ -4115,6 +4115,8 @@ mod tests {
             "viking://resources/wiki",
             "--skill",
             "viking://agent/skills/wiki",
+            "--instruction",
+            "Keep supporting evidence.",
             "--args",
             r#"{"model_name":"endpoint-1"}"#,
         ])
@@ -4123,13 +4125,13 @@ mod tests {
             Commands::Compile {
                 from_uris,
                 skill,
-                reason,
+                instruction,
                 args,
                 ..
             } => {
                 assert_eq!(from_uris.len(), 3);
                 assert_eq!(skill, "viking://agent/skills/wiki");
-                assert!(reason.is_none());
+                assert_eq!(instruction.as_deref(), Some("Keep supporting evidence."));
                 assert_eq!(args.as_deref(), Some(r#"{"model_name":"endpoint-1"}"#));
             }
             _ => panic!("expected compile command"),

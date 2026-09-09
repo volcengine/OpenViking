@@ -132,7 +132,7 @@ struct CompileCreateRequest<'a> {
     to: &'a str,
     skill: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    reason: Option<&'a str>,
+    instruction: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     args: Option<&'a serde_json::Map<String, Value>>,
 }
@@ -326,14 +326,14 @@ impl HttpClient {
         from_uris: &[String],
         to: &str,
         skill: &str,
-        reason: Option<&str>,
+        instruction: Option<&str>,
         args: Option<&serde_json::Map<String, Value>>,
     ) -> Result<CompileAccepted> {
         let body = CompileCreateRequest {
             from_uris,
             to,
             skill,
-            reason,
+            instruction,
             args,
         };
         self.post("/api/v1/compile", &body).await
@@ -2635,6 +2635,7 @@ mod tests {
             let read = stream.read(&mut buffer).await.expect("request should read");
             let request = String::from_utf8_lossy(&buffer[..read]);
             assert!(request.contains(r#""skill":"viking://agent/skills/wiki""#));
+            assert!(request.contains(r#""instruction":"Keep supporting evidence.""#));
             assert!(request.contains(r#""args":{"model_name":"endpoint-1"}"#));
             let body = r#"{"status":"ok","result":{"task_id":"cmp_1","status":"accepted","to":"viking://resources/wiki"}}"#;
             let response = format!(
@@ -2663,7 +2664,7 @@ mod tests {
                 &["viking://resources/source".into()],
                 "viking://resources/wiki",
                 "viking://agent/skills/wiki",
-                None,
+                Some("Keep supporting evidence."),
                 args.as_object(),
             )
             .await

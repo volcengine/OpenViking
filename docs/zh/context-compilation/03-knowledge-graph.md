@@ -40,7 +40,7 @@ ov compile \
   --from viking://resources/journal \
   --to viking://resources/journal-kg \
   --skill viking://agent/skills/knowledge-graph \
-  --reason "抽取人物、地点、法宝及其关系，构建可遍历的知识图谱"
+  --instruction "抽取人物、地点、法宝及其关系，构建可遍历的知识图谱"
 ```
 
 命令会立刻返回 `task_id`，之后：

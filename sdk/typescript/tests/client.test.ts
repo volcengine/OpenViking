@@ -805,7 +805,10 @@ describe("OpenVikingClient", () => {
         ["viking://resources/source"],
         "viking://resources/output",
         "viking://agent/skills/wiki",
-        { args: { model_name: "endpoint-1" } },
+        {
+          instruction: "Keep supporting evidence.",
+          args: { model_name: "endpoint-1" },
+        },
       ),
     ).resolves.toEqual({ task_id: "cmp_1" });
     await client.getSkill("demo");
@@ -818,6 +821,7 @@ describe("OpenVikingClient", () => {
       from: ["viking://resources/source"],
       to: "viking://resources/output",
       skill: "viking://agent/skills/wiki",
+      instruction: "Keep supporting evidence.",
       args: { model_name: "endpoint-1" },
     });
     const skillUrl = new URL(String(fetcher.mock.calls[1]![0]));

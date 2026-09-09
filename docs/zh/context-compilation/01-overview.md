@@ -10,7 +10,7 @@
 - **到哪里去（`--to`）**：产物写入的目标目录；
 - **用哪个 Skill（`--skill`）**：一份描述「要编译成什么样」的说明书。
 
-再加上一个可选的 **`--reason`**：给这次编译的补充指令，比如范围、受众、语言、侧重点。Skill 定义了「编译成什么形态」，`--reason` 则在此之上告诉 Agent「这一次具体要什么」。
+再加上一个可选的 **`--instruction`**：给这次编译的补充指令，比如范围、受众、语言、侧重点。Skill 定义了「编译成什么形态」，`--instruction` 则在此之上告诉 Agent「这一次具体要什么」。
 
 剩下的交给 OpenViking。Compile 依赖 [VikingBot](../concepts/15-vikingbot.md)：任务被接受后，VikingBot 会加载你指定的 Skill，以你的身份读取来源，在一个独立的 **Agent Loop** 里自主地阅读、归纳、组织、写页面——就像你雇了一个人，把一堆资料整理成一份干净的知识库，然后把成品交回给你。整个过程是异步的，你可以等它跑完，也可以拿到 `task_id` 之后去做别的事。
 
@@ -23,7 +23,7 @@ ov compile \
   --from viking://resources/research \
   --to viking://resources/research-wiki \
   --skill viking://agent/skills/llm-wiki \
-  --reason "把研究资料整理成便于团队检索的知识库"
+  --instruction "把研究资料整理成便于团队检索的知识库"
 ```
 
 命令会立即返回一个 `cmp_...` 任务 ID，之后用 `ov task status <id>` 查看进度、用 `ov task cancel <id>` 取消。完整的字段说明、任务生命周期和 HTTP 接口见 [Agent Runtime API](../api/23-agent-runtime.md)。

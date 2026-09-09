@@ -37,14 +37,14 @@ ov skills list
 
 ## Step 3: Run compile
 
-Spell out the **analytical question, comparison dimensions, baseline, and scope** in `--reason` — it directly sets the direction of the distillation:
+Spell out the **analytical question, comparison dimensions, baseline, and scope** in `--instruction` — it directly sets the direction of the distillation:
 
 ```bash
 ov compile \
   --from viking://resources/finance-reports \
   --to viking://resources/finance-insights \
   --skill viking://agent/skills/knowledge-distillation \
-  --reason "Compare the last three years of reports; obtain changes and drivers in revenue quality, profitability, and risk"
+  --instruction "Compare the last three years of reports; obtain changes and drivers in revenue quality, profitability, and risk"
 ```
 
 `--from` accepts multiple sources for cross-knowledge-base comparison:
@@ -54,7 +54,7 @@ ov compile \
   --from viking://resources/finance-2024,viking://resources/finance-2025 \
   --to viking://resources/finance-insights \
   --skill viking://agent/skills/knowledge-distillation \
-  --reason "Compare the two yearly knowledge bases; surface changes and structural differences in key metrics"
+  --instruction "Compare the two yearly knowledge bases; surface changes and structural differences in key metrics"
 ```
 
 The command returns a `task_id` immediately:
@@ -73,7 +73,7 @@ ov tree viking://resources/finance-insights
 ov read viking://resources/finance-insights/revenue-quality/growth-shifted-from-volume-to-pricing.md
 ```
 
-By default **no `index.md` is created** — a distillation is itself a set of conclusions, unless `--reason` explicitly asks for a navigation page. Re-running refreshes the same analysis page and time-bounds any conclusion that may change.
+By default **no `index.md` is created** — a distillation is itself a set of conclusions, unless `--instruction` explicitly asks for a navigation page. Re-running refreshes the same analysis page and time-bounds any conclusion that may change.
 
 ## Related docs
 

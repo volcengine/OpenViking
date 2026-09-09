@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from openviking.session.memory.dataclass import WikiLink
 from vikingbot.channels.openapi_models import OpenVikingConnection
 
-DEFAULT_COMPILE_REASON = (
+DEFAULT_COMPILE_INSTRUCTION = (
     "Follow the loaded Skill's instructions to transform the provided source materials "
     "into the outputs required by the Skill."
 )
@@ -60,11 +60,19 @@ class CompileRequest(BaseModel):
 
     from_: list[str] = Field(alias="from", min_length=1)
     to: str = Field(min_length=1)
-    reason: str | None = None
+    instruction: str | None = None
     skill: str = Field(min_length=1)
     args: dict[str, Any] | None = None
     openviking_connection: OpenVikingConnection | None = None
     _principal_scope: str = PrivateAttr(default="local")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_reason(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "reason" in data:
+            data = dict(data)
+            data.setdefault("instruction", data.pop("reason"))
+        return data
 
 
 class SanitizedCompileRequest(BaseModel):
@@ -72,8 +80,8 @@ class SanitizedCompileRequest(BaseModel):
 
     from_: list[str] = Field(alias="from")
     to: str
-    reason: str
-    reason_provided: bool = False
+    instruction: str
+    instruction_provided: bool = False
     skill: str
 
 
@@ -269,7 +277,7 @@ __all__ = [
     "CompileResult",
     "CompileSessionRequest",
     "CompileTask",
-    "DEFAULT_COMPILE_REASON",
+    "DEFAULT_COMPILE_INSTRUCTION",
     "OKF_VERSION",
     "SanitizedCompileRequest",
     "TERMINAL_STATUSES",

@@ -262,8 +262,10 @@ async def test_compile_route_uses_ov_owned_task_and_rejects_legacy_routes(monkey
                 "from": ["viking://resources/source"],
                 "to": "viking://resources/wiki",
                 "skill": "viking://agent/skills/wiki",
+                "instruction": "  Keep supporting evidence.  ",
             },
         )
+        assert calls["request"]["instruction"] == "Keep supporting evidence."
         legacy_created = await client.post("/bot/v1/compile", headers=headers, json={})
         legacy_status = await client.get("/bot/v1/compile/cmp_1", headers=headers)
         legacy_cancel = await client.post(
@@ -361,6 +363,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(monkey
                 "to": "viking://resources/wiki",
                 "skill": "viking://agent/skills/wiki",
                 "args": {"model_name": "model-1", "user_key": "model-user-key"},
+                "instruction": "Keep supporting evidence.",
             }
         )
     )
@@ -372,6 +375,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(monkey
             "from": ["viking://resources/source"],
             "to": "viking://resources/wiki",
             "skill": "viking://agent/skills/wiki",
+            "instruction": "Keep supporting evidence.",
         },
         {
             "args": {"user_key": "model-user-key"},
@@ -403,6 +407,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(monkey
             "from": ["viking://resources/source"],
             "to": "viking://resources/wiki",
             "skill": "viking://agent/skills/wiki",
+            "instruction": "Keep supporting evidence.",
             "args": {"user_key": "model-user-key"},
         },
     }

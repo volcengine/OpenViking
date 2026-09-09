@@ -11,7 +11,7 @@
 | `method` | 有前置条件、有序步骤、可验证结果的可复用流程 |
 | `comparison` | 在明确维度上对两个及以上对象做并排评估 |
 | `analysis` | 围绕一个问题的跨来源结论 |
-| `summary` | 单一来源的忠实数字化摘要（仅当 `--reason` 明确要求时才生成） |
+| `summary` | 单一来源的忠实数字化摘要（仅当 `--instruction` 明确要求时才生成） |
 
 默认以 `entity` 和 `concept` 为主，其余类型只在满足各自的严格判定时才提升。产物是一个**知识库**，不是逐文档的摘要拼盘。
 
@@ -59,7 +59,7 @@ ov compile \
   --from viking://resources/research \
   --to viking://resources/research-wiki \
   --skill viking://agent/skills/llm-wiki \
-  --reason "面向团队检索整理成 Wiki，保留每条结论的出处"
+  --instruction "面向团队检索整理成 Wiki，保留每条结论的出处"
 ```
 
 - `--from` 可以重复或用逗号分隔，一次传多个来源。

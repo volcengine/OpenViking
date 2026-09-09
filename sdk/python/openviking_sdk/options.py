@@ -98,7 +98,7 @@ class BatchWriteOptions(_ExtraOptions, total=False):
 
 
 class CompileOptions(_ExtraOptions, total=False):
-    reason: str
+    instruction: str
     args: Dict[str, Any]
 
 

@@ -17,7 +17,7 @@ Agent Runtime Server executes Agent tasks and currently supports Compile. Applic
 | `from` | string[] | Yes | - | One or more source directories |
 | `to` | string | Yes | - | Target Resource or Memory directory, or a supported Skill namespace |
 | `skill` | string | Yes | - | Skill directory or its `SKILL.md` URI |
-| `reason` | string | No | Skill-driven default | Additional instructions for this Compile run |
+| `instruction` | string | No | Skill-driven default | Additional instructions for this Compile run |
 | `args` | object | No | - | Execution backend extensions; `model_name` accepts a model endpoint ID |
 
 The entire `args` object is optional, and the model endpoint ID is not a top-level field. Use `args.model_name` to select a model; when omitted, the execution backend uses its default model configuration.
@@ -36,7 +36,7 @@ curl -X POST http://localhost:1933/api/v1/compile \
     "from": ["viking://resources/research"],
     "to": "viking://resources/research-wiki",
     "skill": "viking://user/default/skills/research-compiler",
-    "reason": "Track the historical progress and preserve supporting evidence.",
+    "instruction": "Track the historical progress and preserve supporting evidence.",
     "args": {"model_name": "your-model-endpoint-id"}
   }'
 ```
@@ -63,7 +63,7 @@ ov compile \
   --from viking://resources/research \
   --to viking://resources/research-wiki \
   --skill viking://user/default/skills/research-compiler \
-  --reason "Track the historical progress and preserve supporting evidence." \
+  --instruction "Track the historical progress and preserve supporting evidence." \
   --args '{"model_name":"your-model-endpoint-id"}'
 ```
 
@@ -71,7 +71,7 @@ ov compile \
 
 **SDKs**
 
-The Python, TypeScript, and Go SDKs pass `reason` and `args` through their Compile options:
+The Python, TypeScript, and Go SDKs pass `instruction` and `args` through their Compile options:
 
 ::: code-group
 
@@ -172,13 +172,13 @@ Idempotency-Key: <OV task_id>
     "from": ["viking://resources/research"],
     "to": "viking://resources/research-wiki",
     "skill": "viking://agent/skills/wiki",
-    "reason": "Organize the sources into a knowledge base.",
+    "instruction": "Organize the sources into a knowledge base.",
     "args": {"model_name": "your-model-endpoint-id"}
   }
 }
 ```
 
-Both `task_type` and `payload` are required. Only `task_type="compile"` is supported. The `payload` uses the task creation fields and validation rules described on this page; `reason` and `args` are optional. Bundled VikingBot does not support non-empty `args`. Unsupported types or invalid payloads return `4xx` without creating an execution task.
+Both `task_type` and `payload` are required. Only `task_type="compile"` is supported. The `payload` uses the task creation fields and validation rules described on this page; `instruction` and `args` are optional. Bundled VikingBot does not support non-empty `args`. Unsupported types or invalid payloads return `4xx` without creating an execution task.
 
 OV forwards the current user's OV API key in `X-API-Key`. It also sends `X-Gateway-Token` when `compile_api.gateway_token` is configured. These credentials must not appear in public task results.
 

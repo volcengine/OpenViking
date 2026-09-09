@@ -101,6 +101,7 @@ class TestOpenAPIAuth:
                 "from": ["viking://resources/source"],
                 "to": "viking://resources/wiki",
                 "skill": "viking://agent/skills/wiki",
+                "instruction": "Keep supporting evidence.",
             },
         }
         unsupported = client.post(

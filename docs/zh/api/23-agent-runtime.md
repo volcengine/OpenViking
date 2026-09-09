@@ -17,7 +17,7 @@ Agent Runtime Server 负责执行 Agent 任务，当前支持 Compile。应用�
 | `from` | string[] | 是 | - | 一个或多个来源目录 |
 | `to` | string | 是 | - | 目标 Resource 或 Memory 目录，或受支持的 Skill namespace |
 | `skill` | string | 是 | - | Skill 目录或其 `SKILL.md` URI |
-| `reason` | string | 否 | Skill 驱动的默认值 | 本次 Compile 的补充指令 |
+| `instruction` | string | 否 | Skill 驱动的默认值 | 本次 Compile 的补充指令 |
 | `args` | object | 否 | - | 执行端扩展参数；`model_name` 可传模型 Endpoint ID |
 
 `args` 整体可省略，模型 Endpoint ID 也不是顶层字段。需要指定模型时使用 `args.model_name`；不传时由执行端使用其默认模型配置。
@@ -36,7 +36,7 @@ curl -X POST http://localhost:1933/api/v1/compile \
     "from": ["viking://resources/research"],
     "to": "viking://resources/research-wiki",
     "skill": "viking://user/default/skills/research-compiler",
-    "reason": "追踪历史进展，并保留支撑证据。",
+    "instruction": "追踪历史进展，并保留支撑证据。",
     "args": {"model_name": "your-model-endpoint-id"}
   }'
 ```
@@ -63,7 +63,7 @@ ov compile \
   --from viking://resources/research \
   --to viking://resources/research-wiki \
   --skill viking://user/default/skills/research-compiler \
-  --reason "追踪历史进展，并保留支撑证据。" \
+  --instruction "追踪历史进展，并保留支撑证据。" \
   --args '{"model_name":"your-model-endpoint-id"}'
 ```
 
@@ -71,7 +71,7 @@ ov compile \
 
 **SDK**
 
-Python、TypeScript 和 Go SDK 都通过各自的 Compile options 传递 `reason` 和 `args`：
+Python、TypeScript 和 Go SDK 都通过各自的 Compile options 传递 `instruction` 和 `args`：
 
 ::: code-group
 
@@ -172,13 +172,13 @@ Idempotency-Key: <OV task_id>
     "from": ["viking://resources/research"],
     "to": "viking://resources/research-wiki",
     "skill": "viking://agent/skills/wiki",
-    "reason": "整理成知识库",
+    "instruction": "整理成知识库",
     "args": {"model_name": "your-model-endpoint-id"}
   }
 }
 ```
 
-`task_type` 和 `payload` 均必填。当前只支持 `task_type="compile"`；`payload` 使用本页创建任务的字段及校验规则，`reason`、`args` 可省略。内置 VikingBot 不支持非空 `args`。不支持的类型或无效的 payload 返回 `4xx`，不创建执行任务。
+`task_type` 和 `payload` 均必填。当前只支持 `task_type="compile"`；`payload` 使用本页创建任务的字段及校验规则，`instruction`、`args` 可省略。内置 VikingBot 不支持非空 `args`。不支持的类型或无效的 payload 返回 `4xx`，不创建执行任务。
 
 OV 通过 `X-API-Key` 传递当前用户的 OV API Key；配置 `compile_api.gateway_token` 时还会发送 `X-Gateway-Token`。这些凭证不能出现在公开任务结果中。
 

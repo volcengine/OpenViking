@@ -40,7 +40,7 @@ ov compile \
   --from viking://resources/journal \
   --to viking://resources/journal-kg \
   --skill viking://agent/skills/knowledge-graph \
-  --reason "Extract characters, places, artifacts and their relationships into a traversable graph"
+  --instruction "Extract characters, places, artifacts and their relationships into a traversable graph"
 ```
 
 The command returns a `task_id` immediately. Then:
