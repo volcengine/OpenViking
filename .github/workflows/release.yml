@@ -48,6 +48,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'v')
     uses: ./.github/workflows/_build.yml
     with:
+      version: ${{ github.event.release.tag_name || '' }}
       os_json: ${{ inputs.os_json || '["ubuntu-24.04", "ubuntu-24.04-arm", "macos-14", "macos-15-intel", "windows-latest"]' }}
       python_json: ${{ inputs.python_json || '["3.10"]' }}
       build_sdist: ${{ github.event_name == 'release' || inputs.build_sdist != false }}
