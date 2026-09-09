@@ -2,9 +2,11 @@ import asyncio
 import base64
 import json
 import os
+import shlex
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from vikingbot.agent.loop import (
@@ -14,6 +16,8 @@ from vikingbot.agent.loop import (
 )
 from vikingbot.agent.tools.base import MultimodalToolResult, Tool, ToolContext
 from vikingbot.agent.tools.compile import (
+    CompileChildTool,
+    SubmitCompileDraftTool,
     SubmitCompileOutputTool,
     SubmitWikiBundleTool,
 )
@@ -24,7 +28,10 @@ from vikingbot.agent.tools.ov_file import (
 )
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.agent.tools.shell import ExecTool
+from vikingbot.bus.queue import MessageBus
 from vikingbot.compile.models import (
+    COMPILE_DRAFT_ROOT,
+    COMPILE_OUTPUT_ROOT,
     DEFAULT_COMPILE_INSTRUCTION,
     CompileFailure,
     CompileLimits,
@@ -39,7 +46,7 @@ from vikingbot.compile.renderer import (
     WikiRenderer,
     wiki_page_path_from_title,
 )
-from vikingbot.compile.service import BotCompileService, CompileCapabilities
+from vikingbot.compile.service import BotCompileService, CompileCapabilities, _CompileProvider
 from vikingbot.compile.store import CompileTaskStore
 from vikingbot.config.schema import (
     Config,
@@ -49,6 +56,7 @@ from vikingbot.config.schema import (
     SandboxMode,
     SessionKey,
 )
+from vikingbot.providers.base import LLMProvider, LLMResponse, LLMStreamEvent, ToolCallRequest
 from vikingbot.sandbox import SandboxManager
 from vikingbot.sandbox.backends.srt import SrtBackend
 from vikingbot.sandbox.base import SandboxFileInfo
@@ -2339,12 +2347,10 @@ def test_budget_reminder_text_escalates_with_remaining_rounds():
     assert "必须开始提交" in warn
     assert "未覆盖/待确认" in warn
     assert "还剩 3 轮" in critical
-    assert "立即提交当前最好结果" in critical
-    assert "禁止再开启新的探索/读取" in critical
-    # The consequence sentence ties the reminder to the real salvage failure mode.
+    assert "收集子任务结果" in critical
+    assert "不再开启新任务" in critical
     for note in (heads_up, warn, critical):
         assert "submit_wiki_bundle" in note
-        assert "不经校验" in note
     assert "还剩 0 轮" in render_budget_reminder(0)
 
 
@@ -2353,7 +2359,8 @@ def test_budget_reminder_text_escalates_with_remaining_rounds():
     ("iteration", "with_note"),
     [
         (42, True),  # max_iterations=50, remaining == 8 -> budget reminder fires
-        (1, False),  # no thresholds -> provider stays quiet by default
+        (43, False),  # reminders are not repeated between thresholds
+        (1, False),
     ],
 )
 async def test_structured_task_injects_status_note_provider(iteration, with_note):
@@ -2386,8 +2393,7 @@ async def test_structured_task_injects_status_note_provider(iteration, with_note
         "stop_tool_names": ["submit_wiki_bundle"],
         "openviking_connection": None,
     }
-    if with_note:
-        kwargs["budget_reminder_thresholds"] = (15, 8, 3)
+    kwargs["budget_reminder_thresholds"] = (15, 8, 3)
 
     await AgentLoop.run_structured_task(FakeLoop(), **kwargs)
 
@@ -3090,6 +3096,8 @@ async def test_salvage_copies_workspace_and_repairs_links(tmp_path: Path):
         "bad#name.txt": b"unsafe URI",
         "__compile_staging__/work/notes.txt": b"notes",
         "__compile_staging__/tmp/check.txt": b"check",
+        f"{COMPILE_DRAFT_ROOT}/child/topic.md": b"unmerged",
+        f"{COMPILE_OUTPUT_ROOT}/__compile_staging__/output/leak.md": b"unmerged nested draft",
         "tmp_out/scratch.txt": b"scratch",
         "TmpCache/case.txt": b"case",
         "skills/wiki/SKILL.md": b"do not copy",
@@ -3151,6 +3159,8 @@ async def test_salvage_copies_workspace_and_repairs_links(tmp_path: Path):
     assert payloads["meta/events.jsonl"] == b""
     assert "__compile_staging__/work/notes.txt" not in payloads
     assert "__compile_staging__/tmp/check.txt" not in payloads
+    assert not any("drafts/" in path for path in payloads)
+    assert not any("__compile_staging__" in path for path in payloads)
     assert "tmp_out/scratch.txt" not in payloads
     assert "TmpCache/case.txt" not in payloads
     assert "sandboxes/cmp-srt-settings.json" not in payloads
@@ -3632,7 +3642,9 @@ async def test_iteration_limit_salvages_before_workspace_cleanup(monkeypatch, tm
     )
     service = BotCompileService(agent_loop=host_loop)
     submit_tool = SimpleNamespace(file_payloads=[], page_count=1, file_count=1)
-    registry = SimpleNamespace(get=lambda name: submit_tool)
+    registry = SimpleNamespace(
+        get=lambda name: submit_tool if name == "submit_wiki_bundle" else None
+    )
     monkeypatch.setattr(service, "_build_compile_registry", lambda *args, **kwargs: registry)
     monkeypatch.setattr(service, "_salvage_workspace", salvage)
 
@@ -3839,7 +3851,7 @@ async def test_compile_reads_with_existing_shell_cli_and_submits_without_preload
 
         async def run_structured_task(self, **kwargs):
             assert not writes
-            assert len(kwargs["system_prompt"]) < 1100
+            assert len(kwargs["system_prompt"]) < 2000
             assert "ov read <skill>/SKILL.md" in kwargs["system_prompt"]
             assert set(json.loads(kwargs["user_prompt"])) == {"reason", "from", "to", "skill"}
             assert kwargs["openviking_tool_names"] == set()
@@ -3926,3 +3938,276 @@ async def test_memory_update_resolves_only_submitted_target_without_inventory():
     )
     assert result.startswith("Error:")
     assert calls == [uri]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response_mode", ["write", "empty_submission", "plain_text", "empty_text", "text_after_checks"]
+)
+async def test_compile_children_stage_isolated_drafts_for_parent_submission(
+    tmp_path: Path, response_mode: str
+):
+    """Children recover from premature replies in the same history and submit checked, isolated files."""
+    from loguru import logger
+
+    histories = []
+    both_started = asyncio.Event()
+    checker = (
+        "import sys\nfrom pathlib import Path\n"
+        "root = Path(sys.argv[1])\n"
+        "assert {p.name for p in root.iterdir()} == {'topic.md', 'shell.md'}\n"
+        "print('checked')\n"
+    )
+
+    class Provider(LLMProvider):
+        async def chat(self, *, messages, tools, **kwargs):
+            assert {tool["function"]["name"] for tool in tools} == {
+                "read_file",
+                "write_file",
+                "edit_file",
+                "exec",
+                "submit_compile_draft",
+            }
+            assignment = json.loads(messages[1]["content"])["assignment"]
+            premature_text = f"Findings for {assignment}; draft content is ready."
+            if len(messages) == 2:
+                histories.append(messages)
+                if len(histories) == 2:
+                    both_started.set()
+                await asyncio.wait_for(both_started.wait(), 2)
+                if response_mode in {"plain_text", "empty_text"}:
+                    return LLMResponse(
+                        content=premature_text if response_mode == "plain_text" else ""
+                    )
+            results = {m["tool_call_id"]: m["content"] for m in messages if m["role"] == "tool"}
+            retained_text = any(
+                m.get("role") == "assistant" and m.get("content") == premature_text
+                for m in messages
+            )
+            if response_mode == "plain_text":
+                assert retained_text
+            if "run_checker" in results:
+                assert results["run_checker"].strip() == "checked"
+                assert results["read_draft"] == f"Shared\n{assignment}\n"
+                if response_mode == "text_after_checks" and not retained_text:
+                    return LLMResponse(content=premature_text)
+            if (
+                len(messages) == 2 and response_mode == "empty_submission"
+            ) or "run_checker" in results:
+                return LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCallRequest("submit", "submit_compile_draft", {"summary": "ready"}, 0)
+                    ],
+                )
+            if "write" in results:
+                # File acknowledgements can be reused as tool paths without adding another root.
+                written_path = results["write"].rsplit(" to ", 1)[1]
+                return LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCallRequest("read_draft", "read_file", {"path": written_path}, 0),
+                        ToolCallRequest(
+                            "run_checker",
+                            "exec",
+                            {"command": f"printf %s {shlex.quote(checker)} | python3 - ."},
+                            0,
+                        ),
+                    ],
+                )
+            return LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCallRequest(
+                        "write",
+                        "write_file",
+                        {"path": "topic.md", "content": f"Shared\n{assignment}\n"},
+                        0,
+                    ),
+                    ToolCallRequest(
+                        "shell",
+                        "exec",
+                        {"command": f"printf '%s\\n' Shared {assignment} | cat > shell.md"},
+                        0,
+                    ),
+                ],
+            )
+
+        def get_default_model(self):
+            return "fake"
+
+    config = Config(storage_workspace=str(tmp_path), sandbox=SandboxConfig(backend="direct"))
+    sandbox_manager = SandboxManager(config, tmp_path / "sandboxes", tmp_path / "source")
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=Provider(),
+        workspace=tmp_path / "workspace",
+        sandbox_manager=sandbox_manager,
+        config=config,
+    )
+    service = BotCompileService(agent_loop=loop)
+    request = _sanitized_compile_request()
+    registry = service._build_compile_registry(
+        loop,
+        target_uri=request.to,
+        source_roots={"src_1": request.from_[0]},
+        catalog_uris=set(),
+        file_catalog_uris=set(),
+        workspace_baseline=set(),
+        wiki_uri_resolver=None,
+    )
+    manager = service._configure_compile_subagents(
+        loop, registry, request=request, connection={}, usage={}
+    )
+    key = SessionKey(type="compile", channel_id="test", chat_id="test")
+    context = ToolContext(session_key=key, sandbox_manager=sandbox_manager)
+    submit = registry.get("submit_wiki_bundle")
+    timing_records = []
+    timing_sink = logger.add(
+        lambda message: timing_records.append(message.record["message"]),
+        filter=lambda record: record["message"].startswith(("[LLM_END]", "[TOOL_END]")),
+    )
+    try:
+        for assignment in ("A", "B"):
+            await registry.get("spawn").execute(context, task=assignment, label="same-label")
+        assert "collect all child results" in await submit.execute(context)
+        await asyncio.wait_for(asyncio.gather(*manager._running_tasks.values()), 5)
+        report = json.loads(await registry.get("wait_subagents").execute(context))
+        assert [result["status"] for result in report["results"]] == ["completed", "completed"]
+        assert len({result["draft_root"] for result in report["results"]}) == 2
+        assert all(
+            result["draft_root"] == f"{COMPILE_DRAFT_ROOT}/{result['task_id']}"
+            for result in report["results"]
+        )
+        assert all(len(result["files"]) == 2 for result in report["results"])
+        assert len(histories) == 2 and histories[0] is not histories[1]
+        assert report["final_output_directory"] == COMPILE_OUTPUT_ROOT
+        child_ids = {result["task_id"] for result in report["results"]}
+        for marker in ("[LLM_END]", "[TOOL_END]"):
+            records = [
+                json.loads(line.split(" ", 1)[1])
+                for line in timing_records
+                if line.startswith(marker)
+            ]
+            assert {record["agent_id"] for record in records} == child_ids
+            assert all(record["session_id"] == key.safe_name() for record in records)
+            assert all(
+                record["iteration"] >= 1 and record["duration_ms"] >= 0 for record in records
+            )
+        sandbox = await sandbox_manager.get_sandbox(key)
+        drafts = [
+            await sandbox.read_file(path)
+            for result in report["results"]
+            for path in result["files"]
+        ]
+        facts = sorted({line for draft in drafts for line in draft.splitlines()})
+        assert facts == ["A", "B", "Shared"]
+        merged = "---\ntype: concept\ntitle: Topic\ndescription: Facts\n---\n" + "\n".join(facts)
+        await sandbox.write_file(f"{COMPILE_OUTPUT_ROOT}/topic.md", merged)
+        assert (await submit.execute(context)).startswith("Resource output accepted")
+        assert len(submit.bundle.operations) == 1
+        assert submit.bundle.operations[0]["uri"] == f"{request.to}/topic.md"
+        assert base64.b64decode(submit.bundle.operations[0]["content_base64"]).decode() == merged
+        assert "closed" in await registry.get("spawn").execute(context, task="late writer")
+        assert loop.bus.inbound.empty()
+    finally:
+        logger.remove(timing_sink)
+        await manager.cancel_all()
+        await sandbox_manager.cleanup_all()
+
+
+@pytest.mark.asyncio
+async def test_compile_draft_submission_uses_bound_root_and_rejects_overrides(tmp_path: Path):
+    """An empty worker cannot claim a sibling's output; model paths stay child-relative."""
+    config = Config(sandbox=SandboxConfig(backend="direct", mode=SandboxMode.PER_SESSION))
+    sandboxes = SandboxManager(config, tmp_path / "sandboxes", tmp_path / "source")
+    key = SessionKey(type="compile", channel_id="test", chat_id="test")
+    context = ToolContext(session_key=key, sandbox_manager=sandboxes)
+    claimed: set[str] = set()
+    root = f"{COMPILE_DRAFT_ROOT}/worker-a"
+    tool = SubmitCompileDraftTool(CompileLimits(), claimed, root)
+    try:
+        sandbox = await sandboxes.get_sandbox(key)
+        await sandbox.write_file(f"{COMPILE_DRAFT_ROOT}/worker-b/topic.md", "other")
+        assert "No draft files" in await tool.execute(context, summary="ready")
+        assert tool.result is None
+        assert "Only summary" in await tool.execute(context, draft_root="worker-b", summary="ready")
+        assert tool.result is None
+        from vikingbot.agent.tools.filesystem import EditFileTool, ReadFileTool, WriteFileTool
+
+        writer = CompileChildTool(WriteFileTool(), root)
+        for invalid in ("../worker-b/topic.md", "/tmp/topic.md"):
+            with pytest.raises(ValueError):
+                await writer.execute(context, path=invalid, content="bad")
+        assert await writer.execute(context, path="topic.md", content="draft") == (
+            "Successfully wrote 5 bytes to topic.md"
+        )
+        assert (
+            await CompileChildTool(EditFileTool(), root).execute(
+                context, path="topic.md", old_text="draft", new_text="ready"
+            )
+            == "Successfully edited topic.md"
+        )
+        assert (
+            await CompileChildTool(ReadFileTool(), root).execute(context, path="topic.md")
+            == "ready"
+        )
+        assert await tool.execute(context, summary="ready") == "Draft accepted."
+        assert tool.result["files"] == [f"{root}/topic.md"]
+        assert await sandbox.read_file(f"{COMPILE_DRAFT_ROOT}/worker-b/topic.md") == "other"
+        # Source content and command output can contain paths that must remain verbatim.
+        literal = f"Successfully wrote 5 bytes to {root}/topic.md"
+        await writer.execute(context, path="literal.md", content=literal)
+        assert (
+            await CompileChildTool(ReadFileTool(), root).execute(context, path="literal.md")
+            == literal
+        )
+        assert (
+            await CompileChildTool(ExecTool(), root).execute(
+                context, command=f"printf %s {shlex.quote(literal)}"
+            )
+        ).strip() == literal
+    finally:
+        await sandboxes.cleanup_all()
+
+
+@pytest.mark.asyncio
+async def test_compile_stream_and_compaction_share_capacity_and_release_on_cancel():
+    """Compaction waits for another Compile's stream and proceeds when that stream is cancelled."""
+    entered, closed = asyncio.Event(), asyncio.Event()
+
+    async def stream(**kwargs):
+        try:
+            yield LLMStreamEvent(type="content_delta", content="partial")
+        finally:
+            closed.set()
+
+    async def publish(message):
+        entered.set()
+        await asyncio.Event().wait()
+
+    provider = SimpleNamespace(
+        chat_stream=stream, chat=AsyncMock(return_value=LLMResponse(content="summary"))
+    )
+    slots = asyncio.Semaphore(1)
+    loop = _compact_loop(_CompileProvider(provider, slots))
+    loop.temperature, loop.bus = 0, SimpleNamespace(publish_outbound=publish)
+    key = _FakeCompileSessionKey()
+    streaming = asyncio.create_task(loop._chat_with_stream_events([], [], key, True))
+    compact = None
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        other_loop = _compact_loop(_CompileProvider(provider, slots))
+        compact = asyncio.create_task(other_loop._chat_compact_summary(key, []))
+        await asyncio.sleep(0)
+        provider.chat.assert_not_awaited()
+        streaming.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await streaming
+        assert closed.is_set()
+        assert await asyncio.wait_for(compact, 2) == "summary"
+    finally:
+        pending = [task for task in (streaming, compact) if task is not None]
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)

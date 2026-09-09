@@ -471,7 +471,7 @@ class AgentsConfig(BaseModel):
         description="Enable the spawn tool so the main agent can start background subagents.",
     )
     subagent_max_concurrency: int = Field(
-        default=4,
+        default=8,
         ge=1,
         description="Maximum number of background subagents running at once.",
     )

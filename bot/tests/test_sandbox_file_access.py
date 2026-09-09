@@ -3,11 +3,15 @@
 """Regression tests for bounded local and remote sandbox file access."""
 
 import json
+import os
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
+from vikingbot.agent.tools.base import ToolContext
+from vikingbot.agent.tools.filesystem import ReadFileTool
 from vikingbot.sandbox.backends.aiosandbox import AioSandboxBackend
 from vikingbot.sandbox.backends.direct import DirectBackend
 from vikingbot.sandbox.backends.opensandbox import OpenSandboxBackend
@@ -16,6 +20,45 @@ from vikingbot.sandbox.base import SandboxFileInfo
 
 def _direct_backend(workspace: Path) -> DirectBackend:
     return DirectBackend(SimpleNamespace(restrict_workspaces={}), "test", workspace)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("bounds", "expected"),
+    [
+        ({}, "第一行\r\n\r\n第三行\n第四行"),
+        ({"offset": 2}, "\r\n第三行\n第四行"),
+        ({"limit": 2}, "第一行\r\n\r\n"),
+        ({"offset": 2, "limit": 2}, "\r\n第三行\n"),
+        ({"offset": 4, "limit": 10}, "第四行"),
+        ({"offset": 5, "limit": 1}, ""),
+        ({"limit": 0}, ""),
+        ({"offset": 0}, "Error: offset must be >= 1 and limit must be >= 0"),
+        ({"limit": -1}, "Error: offset must be >= 1 and limit must be >= 0"),
+    ],
+)
+async def test_read_file_selects_lines_without_changing_content(tmp_path, bounds, expected):
+    backend = _direct_backend(tmp_path)
+    (tmp_path / "source.md").write_bytes("第一行\r\n\r\n第三行\n第四行".encode())
+    context = ToolContext(
+        sandbox_manager=SimpleNamespace(get_sandbox=AsyncMock(return_value=backend))
+    )
+    tool = ReadFileTool()
+    assert bool(tool.validate_params({"path": "source.md", **bounds})) == expected.startswith(
+        "Error:"
+    )
+    assert await tool.execute(context, path="source.md", **bounds) == expected
+
+
+@pytest.mark.asyncio
+async def test_direct_command_reads_eof_from_stdin(tmp_path):
+    backend = _direct_backend(tmp_path)
+    await backend.start()
+    try:
+        assert (await backend.execute("wc -l", timeout=2)).strip() == "0"
+        assert (await backend.execute("printf 'line\\n' | wc -l", timeout=2)).strip() == "1"
+    finally:
+        await backend.stop()
 
 
 @pytest.mark.asyncio
@@ -256,3 +299,35 @@ async def test_opensandbox_vke_inventory_stops_at_the_remote_limit(tmp_path: Pat
     with pytest.raises(ValueError, match="inventory exceeds 1 entries"):
         await backend.list_files(max_entries=1)
     assert "limit = 1" in commands.calls[0][0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(os.name != "posix", reason="process group cleanup requires POSIX")
+async def test_direct_cancellation_stops_command_children(tmp_path: Path):
+    """Cancelling a task prevents its shell children from writing after cleanup."""
+    import asyncio
+    import shlex
+    import sys
+
+    backend = _direct_backend(tmp_path)
+    await backend.start()
+    script = "from pathlib import Path; import time; Path('started').touch(); time.sleep(0.5); Path('late').touch()"
+    execution = asyncio.create_task(
+        backend.execute(f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}")
+    )
+
+    async def wait_started():
+        while not (tmp_path / "started").exists():
+            await asyncio.sleep(0.005)
+
+    try:
+        await asyncio.wait_for(wait_started(), timeout=3)
+        execution.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await execution
+        await asyncio.sleep(0.6)
+        assert not (tmp_path / "late").exists()
+    finally:
+        execution.cancel()
+        await asyncio.gather(execution, return_exceptions=True)
+        await backend.stop()

@@ -25,7 +25,12 @@ from openviking.utils.path_safety import (
     validate_safe_viking_uri_path,
 )
 from openviking_cli.utils import VikingURI
-from vikingbot.compile.models import CompileLimits, WikiBundleDraft, WikiLanguage
+from vikingbot.compile.models import (
+    COMPILE_STAGING_ROOT,
+    CompileLimits,
+    WikiBundleDraft,
+    WikiLanguage,
+)
 
 _FRONTMATTER_RE = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.DOTALL)
 _FRONTMATTER_START_RE = re.compile(rb"\A---[ \t]*\r?\n")
@@ -379,6 +384,7 @@ def validate_relative_page_path(path: str) -> str:
 
 
 def validate_relative_file_path(path: str) -> str:
+    """Validate an output-relative path, rejecting metadata and internal staging directories."""
     relative = sanitize_relative_viking_path(path).strip("/")
     segments = relative.split("/")
     if (
@@ -389,6 +395,8 @@ def validate_relative_file_path(path: str) -> str:
         raise ValueError(f"invalid output file path: {path}")
     if segments[-1].lower() in _RESERVED_FILENAMES:
         raise ValueError(f"reserved output file path: {path}")
+    if COMPILE_STAGING_ROOT.casefold() in (segment.casefold() for segment in segments):
+        raise ValueError(f"reserved staging directory in output path: {path}")
     return relative
 
 
