@@ -8,6 +8,7 @@
 #include <cassert>
 #include <filesystem>
 #include <cmath>
+#include <limits>
 #include "spdlog/spdlog.h"
 #include "common/log_utils.h"
 
@@ -33,6 +34,53 @@ void expect_filter_projection(IndexEngine& engine, const std::string& dsl,
         first_word, expected_first_word);
     exit(1);
   }
+}
+
+void test_label_in_negative_label_rejected() {
+  SPDLOG_INFO("[Running] test_label_in_negative_label_rejected...");
+
+  const std::string config = R"({
+        "CollectionName": "label_in_negative_label_rejected",
+        "IndexName": "default",
+        "VectorIndex": {
+            "IndexType": "flat",
+            "ElementCount": 0,
+            "MaxElementCount": 4,
+            "Dimension": 1,
+            "Distance": "l2",
+            "Quant": "float"
+        },
+        "ScalarIndex": [
+            {"FieldName": "tag", "FieldType": "int64"}
+        ]
+    })";
+
+  IndexEngine engine(config);
+  if (!engine.is_valid()) {
+    SPDLOG_ERROR("LabelIn engine initialization failed");
+    exit(1);
+  }
+
+  AddDataRequest req;
+  req.label = std::numeric_limits<uint64_t>::max();
+  req.vector = {0.1f};
+  if (engine.add_data({req}) != 0) {
+    SPDLOG_ERROR("LabelIn test data add failed");
+    exit(1);
+  }
+  if (engine.set_filter_layout({req.label}) != 0) {
+    SPDLOG_ERROR("LabelIn filter layout registration failed");
+    exit(1);
+  }
+
+  try {
+    (void)engine.evaluate_filter(R"({"op":"label_in","labels":[-1]})");
+    SPDLOG_ERROR("LabelIn accepted a negative label");
+    exit(1);
+  } catch (const std::runtime_error&) {
+  }
+
+  SPDLOG_INFO("[Passed] test_label_in_negative_label_rejected");
 }
 
 void test_basic_workflow() {
@@ -585,6 +633,7 @@ void test_paged_store_scan() {
 
 int main() {
   init_logging("INFO", "stdout", "[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
+  test_label_in_negative_label_rejected();
   test_basic_workflow();
   test_routed_filter_projection_edge_cases();
   test_path_bitmap_lifecycle_and_reload();
