@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "openviking",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Semantic long-term memory and context engine for coding agents. Recall prior knowledge with the find/search/read MCP tools and persist durable facts with remember/write, backed by an OpenViking server.",
   "author": {
     "name": "Volcano Engine",

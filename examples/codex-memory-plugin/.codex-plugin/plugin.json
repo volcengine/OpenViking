@@ -1,6 +1,6 @@
 {
   "name": "openviking-memory",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "Long-term semantic memory for Codex, powered by OpenViking. Recall on UserPromptSubmit, incremental add_message on Stop (per turn), commit on SessionEnd (Codex >= 0.145) and on PreCompact, with an idle/ended sweep on SessionStart as the fallback for signals, crashes and older Codex builds. Includes a local stdio MCP proxy that reads OpenViking credentials from env/ovcli.conf.",
   "author": {
     "name": "OpenViking",
