@@ -20,6 +20,7 @@ from openviking.core.namespace import canonical_user_root
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.skill_loader import validate_skill_format
 from openviking.core.uri_validation import validate_request_viking_uri
+from openviking.models.embedder.base import query_embed_cache_scope
 from openviking.privacy.service import UserPrivacyConfigVersion
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
@@ -599,32 +600,35 @@ async def find_skills(
         user_root = f"{canonical_user_root(_ctx)}/skills"
         agent_root = "viking://agent/skills"
 
-        user_execution, agent_execution = await asyncio.gather(
-            run_operation(
-                operation="skills.find",
-                telemetry=request.telemetry,
-                fn=lambda: service.search.find(
-                    query=request.query,
-                    ctx=_ctx,
-                    target_uri=user_root,
-                    limit=request.limit,
-                    score_threshold=request.score_threshold,
-                    level=request.level,
+        # Both finds embed the same query text, so wrap the fan-out in the
+        # request-scoped cache to reuse the first in-flight embed.
+        with query_embed_cache_scope():
+            user_execution, agent_execution = await asyncio.gather(
+                run_operation(
+                    operation="skills.find",
+                    telemetry=request.telemetry,
+                    fn=lambda: service.search.find(
+                        query=request.query,
+                        ctx=_ctx,
+                        target_uri=user_root,
+                        limit=request.limit,
+                        score_threshold=request.score_threshold,
+                        level=request.level,
+                    ),
                 ),
-            ),
-            run_operation(
-                operation="skills.find",
-                telemetry=request.telemetry,
-                fn=lambda: service.search.find(
-                    query=request.query,
-                    ctx=_ctx,
-                    target_uri=agent_root,
-                    limit=request.limit,
-                    score_threshold=request.score_threshold,
-                    level=request.level,
+                run_operation(
+                    operation="skills.find",
+                    telemetry=request.telemetry,
+                    fn=lambda: service.search.find(
+                        query=request.query,
+                        ctx=_ctx,
+                        target_uri=agent_root,
+                        limit=request.limit,
+                        score_threshold=request.score_threshold,
+                        level=request.level,
+                    ),
                 ),
-            ),
-        )
+            )
 
         user_result = user_execution.result
         user_result_dict = (

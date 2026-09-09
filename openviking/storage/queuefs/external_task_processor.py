@@ -6,10 +6,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Callable, Coroutine, Dict, Optional
+from typing import Any, Dict, Optional
 
 from openviking.service.external_task_service import ExternalTaskService
 from openviking.service.task_tracker_concurrency import OwnerLoopDispatcher
+from openviking.service.task_work_index import TaskWorkRejected
+from openviking.storage.queuefs import QueueManager, get_queue_manager
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 
 
@@ -38,12 +40,6 @@ class ExternalTaskProcessor(DequeueHandlerBase):
             raise ValueError("External task queue payload is missing task ownership")
         return task_id, account_id, user_id
 
-    async def _run_on_service_loop(
-        self,
-        factory: Callable[[], Coroutine[Any, Any, None]],
-    ) -> None:
-        await self._dispatcher.run(factory)
-
     async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         if not data:
             return None
@@ -52,7 +48,22 @@ class ExternalTaskProcessor(DequeueHandlerBase):
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             self.report_error(str(exc), data)
             return None
-        await self._run_on_service_loop(lambda: self._service.execute(task_id, account_id, user_id))
+        processed = await self._dispatcher.run(
+            lambda: self._service.execute(task_id, account_id, user_id)
+        )
+        if not processed:
+            # Register a new delivery before the old one is ACKed. Keeping the
+            # task ID preserves cancellation and task-owned work across rotation.
+            try:
+                await get_queue_manager().enqueue(
+                    QueueManager.EXTERNAL_TASK,
+                    {"task_id": task_id, "account_id": account_id, "user_id": user_id},
+                )
+            except TaskWorkRejected:
+                # Cancellation only needs the current delivery to be ACKed.
+                pass
+            else:
+                self.report_requeue()
         self.report_success()
         return None
 
@@ -64,7 +75,7 @@ class ExternalTaskProcessor(DequeueHandlerBase):
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             self.report_error(str(exc), data)
             return None
-        await self._run_on_service_loop(
+        await self._dispatcher.run(
             lambda: self._service.cancel_recovered(task_id, account_id, user_id)
         )
         self.report_success()

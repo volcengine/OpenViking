@@ -257,6 +257,9 @@ class CompileService:
     def poll_interval_seconds(self) -> float:
         return self._endpoint().poll_interval_ms / 1000.0
 
+    def serialization_key(self, payload: Mapping[str, Any]) -> str:
+        return payload["to"]
+
     def configure_local_backend(self, base_url: str, gateway_token: str) -> None:
         if self._config.base_url:
             return

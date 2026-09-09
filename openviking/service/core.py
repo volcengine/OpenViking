@@ -526,7 +526,8 @@ class OpenVikingService:
                 self._queue_manager.USER_DELETION,
                 allow_create=True,
             )
-            await self._queue_manager.prepare_task_tracking(get_task_tracker())
+            restored_tasks = await self._queue_manager.prepare_task_tracking(get_task_tracker())
+            await self._external_task_service.restore_tasks(restored_tasks)
 
         if self._config.enable_watch_scheduler:
             await self._watch_scheduler.start()

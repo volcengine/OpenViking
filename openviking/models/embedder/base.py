@@ -7,9 +7,10 @@ import random
 import time
 import weakref
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from dataclasses import dataclass
 from threading import Lock
-from typing import Any, Awaitable, Callable, Dict, List, Optional, TypeVar, Union
+from typing import Any, Awaitable, Callable, Dict, Iterator, List, Optional, TypeVar, Union
 
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.embedding_input import (
@@ -41,11 +42,35 @@ query_embed_cache_var: contextvars.ContextVar[Optional[Dict[Any, "asyncio.Task"]
 )
 
 
+@contextmanager
+def query_embed_cache_scope() -> Iterator[None]:
+    """Install the request-scoped query embedding cache for one request body.
+
+    The scope must wrap the fan-out that spawns the sibling find tasks, not
+    the shared find chokepoint below it: asyncio.gather copies the current
+    context when it wraps each sibling in a task, so a scope installed by the
+    first find to run would stay invisible to its siblings and the dedup would
+    collapse. Callers that fan finds out should wrap that fan-out; callers
+    with no fan-out need no scope.
+    """
+    token = query_embed_cache_var.set({})
+    try:
+        yield
+    finally:
+        query_embed_cache_var.reset(token)
+
+
 def _query_cache_key(embedder: "EmbedderBase", embedding_input: "EmbeddingInput") -> tuple:
-    """Stable cache key for a prepared embedding input and its embedder."""
+    """Stable cache key for a prepared embedding input and its embedder.
+
+    Keyed by embedder identity rather than ``model_name`` so two embedder
+    instances that happen to share a name (e.g. a future dense/sparse pair)
+    never serve each other's vectors. The embedder is a long-lived process
+    singleton, so its id stays stable for the lifetime of the request scope.
+    """
     if isinstance(embedding_input, str):
-        return (embedder.model_name, embedding_input)
-    return (embedder.model_name, repr(embedding_input))
+        return (id(embedder), embedding_input)
+    return (id(embedder), repr(embedding_input))
 
 
 # A multimodal embedding input is a list of content parts, e.g.
@@ -142,7 +167,28 @@ async def _embed_from_request_cache(
             pending = asyncio.create_task(embedder.embed_async(embedding_input, is_query=True))
         cache[key] = pending
     try:
-        return await pending
+        # Shield the shared task: cancelling a waiter propagates to the future
+        # it is blocked on (Task.cancel cancels its _fut_waiter), so without
+        # the shield a cancelled waiter would kill the embed every sibling is
+        # waiting for and leave the key pointing at a cancelled task.
+        return await asyncio.shield(pending)
+    except asyncio.CancelledError:
+        if pending.cancelled():
+            # The shared embed itself was cancelled: evict the dead entry so
+            # the next find of this text starts a fresh embed instead of
+            # awaiting the cancelled task.
+            cache.pop(key, None)
+        else:
+            # Only this waiter was cancelled; the shared embed lives on. If it
+            # then fails with nobody left waiting on it, evict the stale entry
+            # and consume the exception so asyncio does not log
+            # "Task exception was never retrieved".
+            def _evict_if_failed(done: "asyncio.Task") -> None:
+                if not done.cancelled() and done.exception() is not None:
+                    cache.pop(key, None)
+
+            pending.add_done_callback(_evict_if_failed)
+        raise
     except Exception:
         # A failed embed must not poison the rest of the request.
         cache.pop(key, None)
