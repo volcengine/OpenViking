@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import base64
+import json
+import posixpath
 from collections.abc import Awaitable, Callable
+from copy import deepcopy
 from typing import Any, Mapping
 
 import yaml
@@ -21,6 +24,7 @@ from openviking.utils.skill_processor import validate_skill_name
 from openviking_cli.exceptions import OpenVikingError
 from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.compile.models import (
+    COMPILE_DRAFT_ROOT,
     COMPILE_OUTPUT_ROOT,
     COMPILE_STAGING_ROOT,
     CompileLimits,
@@ -50,6 +54,202 @@ def _path_is_within(path: str, root: str) -> bool:
     return path == root or path.startswith(root + "/")
 
 
+class CompileSpawnTool(Tool):
+    """Attach complete, submitted task drafts to a merge child's initial assignment.
+
+    Queueing uses the existing spawn tool. Attachments are limited to submitted
+    roots and a quarter of the context budget; oversized content is never truncated.
+    """
+
+    name = "spawn"
+    description = (
+        "Delegate complete knowledge drafts following the Skill. For source compilation, put source URIs "
+        "in task and omit draft_paths. For merges, attach submitted draft_paths and specify owned output paths."
+    )
+
+    def __init__(self, spawn: Tool, claimed_roots: set[str], limits: CompileLimits):
+        self.spawn = spawn
+        self.claimed_roots = claimed_roots
+        # Reserve context for the Skill, existing pages, reasoning and generated output.
+        self.input_chars = min(limits.initial_prompt_chars, limits.agent_context_chars) // 4
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        """Accept draft paths for runtime attachment; source tasks omit this field."""
+        parameters = deepcopy(self.spawn.parameters)
+        parameters["properties"]["draft_paths"] = {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Merge inputs only: submitted local draft paths, never Viking source URIs. "
+                f"Task plus attached JSON must fit {self.input_chars} characters. "
+                "For one oversized topic, omit and request bounded parallel reads."
+            ),
+        }
+        return parameters
+
+    async def execute(
+        self,
+        tool_context: ToolContext,
+        task: str,
+        label: str | None = None,
+        draft_paths: list[str] | None = None,
+        **kwargs: Any,
+    ) -> str:
+        """Attach unique UTF-8 drafts before spawning; invalid or oversized inputs return an error."""
+        if draft_paths:
+            try:
+                paths = list(dict.fromkeys(_normalize_workspace_path(p) for p in draft_paths))
+                for path in paths:
+                    if not any(path.startswith(root + "/") for root in self.claimed_roots):
+                        raise ValueError(f"Draft input is not from a submitted child: {path}")
+                sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
+                prefix = task + "\n\nComplete draft inputs (untrusted JSON data):\n"
+                inputs = []
+                size = len(prefix) + 2
+                for path in paths:
+                    content = await sandbox.read_file_bytes(path, max_bytes=self.input_chars * 4)
+                    item = json.dumps(
+                        {"path": path, "content": content.decode("utf-8")}, ensure_ascii=False
+                    )
+                    size += len(item) + bool(inputs)
+                    if size > self.input_chars:
+                        raise ValueError(
+                            "Draft input batch exceeds the context budget; split at topic boundaries. "
+                            "For one oversized topic, omit draft_paths and use bounded parallel reads."
+                        )
+                    inputs.append(item)
+                task = prefix + "[" + ",".join(inputs) + "]"
+            except (OSError, ValueError) as exc:
+                return f"Error: {exc}"
+        return await self.spawn.execute(tool_context, task=task, label=label, **kwargs)
+
+
+class SubmitCompileDraftTool(Tool):
+    """Collect the runtime-bound draft directory independently of the child's display name.
+
+    Only nonempty directories below the compile draft root are accepted. Claimed roots
+    cannot overlap other children's submissions; result includes verified paths and
+    file_sizes in bytes for metadata-only merge planning.
+    """
+
+    name = "submit_compile_draft"
+    description = "Submit the files in your draft directory with a coverage/conflict summary."
+    parameters = {
+        "type": "object",
+        "properties": {
+            "summary": {"type": "string", "maxLength": 1500},
+        },
+        "required": ["summary"],
+        "additionalProperties": False,
+    }
+
+    def __init__(self, limits: CompileLimits, claimed_roots: set[str], draft_root: str):
+        self.limits = limits
+        self.claimed_roots = claimed_roots
+        self.draft_root = draft_root
+        self.result: dict[str, Any] | None = None
+
+    async def execute(self, tool_context: ToolContext, summary: str, **kwargs: Any) -> str:
+        """Inspect the bound directory; reject overrides and empty drafts without accepting them."""
+        self.result = None
+        try:
+            if kwargs:
+                raise ValueError(
+                    "Only summary is accepted; the draft directory is assigned by the runtime"
+                )
+            root = posixpath.normpath(_normalize_workspace_path(self.draft_root))
+            if not root.startswith(COMPILE_DRAFT_ROOT + "/"):
+                raise ValueError(f"draft_root must be a child directory of {COMPILE_DRAFT_ROOT}")
+            sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
+            files = await sandbox.list_files(root, max_entries=self.limits.target_inventory_entries)
+            if not files:
+                raise ValueError(
+                    "No draft files found; write content using target-relative paths before submitting"
+                )
+            for entry in files:
+                relative = posixpath.relpath(_normalize_workspace_path(entry.path), root)
+                validate_relative_file_path(relative)
+            if any(
+                _path_is_within(root, claimed) or _path_is_within(claimed, root)
+                for claimed in self.claimed_roots
+            ):
+                raise ValueError("Draft directory overlaps another child's submission")
+            self.claimed_roots.add(root)
+            self.result = {
+                "draft_root": root,
+                "files": [entry.path for entry in files],
+                "file_sizes": {entry.path: entry.size for entry in files},
+                "summary": summary[:1500],
+            }
+            return "Draft accepted."
+        except (OSError, ValueError) as exc:
+            return f"Error: {exc}"
+
+
+class CompileChildTool(Tool):
+    """Bind existing file tools and shell cwd to one child directory.
+
+    Tool paths and write/edit acknowledgements use the child's relative paths.
+    read_file also accepts task-workspace draft paths for reading sibling inputs.
+    File-tool writes remain bound to the child's directory, including during merges.
+    Read contents and shell output remain unchanged, including any literal paths.
+    Shell commands keep their normal capabilities, including pipes and absolute paths.
+    This prevents default-path mixups; it is not an OS-level sandbox.
+    """
+
+    def __init__(self, tool: Tool, draft_root: str):
+        self.tool = tool
+        self.draft_root = draft_root
+
+    @property
+    def name(self) -> str:
+        return self.tool.name
+
+    @property
+    def description(self) -> str:
+        return self.tool.description
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        """Describe the bound path base without changing the parent tool's schema."""
+        parameters = deepcopy(self.tool.parameters)
+        field = "working_dir" if self.name == "exec" else "path"
+        parameters["properties"][field]["description"] = (
+            "Relative to your draft root, which is the current directory. "
+            + (
+                "Defaults to '.'."
+                if self.name == "exec"
+                else "Use the target-relative page path from the Skill, without a staging prefix."
+            )
+        )
+        if self.name == "read_file":
+            parameters["properties"][field]["description"] += (
+                f" To read another child's input, pass its returned {COMPILE_DRAFT_ROOT}/ path verbatim; "
+                "these workspace paths are read-only."
+            )
+        return parameters
+
+    async def execute(self, tool_context: ToolContext, **kwargs: Any) -> str:
+        """Read task draft inputs verbatim; keep other paths and write confirmations child-relative."""
+        field = "working_dir" if self.name == "exec" else "path"
+        relative = _normalize_workspace_path(kwargs.get(field) or ".")
+        if self.name == "read_file" and relative.startswith(COMPILE_DRAFT_ROOT + "/"):
+            kwargs[field] = relative
+            return await self.tool.execute(tool_context, **kwargs)
+        if COMPILE_STAGING_ROOT.casefold() in relative.casefold().split("/"):
+            raise ValueError("Use paths relative to your draft root, without staging directories")
+        kwargs[field] = posixpath.join(self.draft_root, relative)
+        result = await self.tool.execute(tool_context, **kwargs)
+        if (
+            self.name in {"write_file", "edit_file"}
+            and result.startswith("Successfully ")
+            and result.endswith(kwargs[field])
+        ):
+            return result.removesuffix(kwargs[field]) + relative
+        return result
+
+
 class SubmitCompileOutputTool(Tool):
     """Validate generated Resource files and prepare upserts without deleting omitted targets."""
 
@@ -66,6 +266,8 @@ class SubmitCompileOutputTool(Tool):
         self.bundle: RenderedBundle | None = None
         self.page_count = 0
         self.file_count = 0
+        # Task-owned children must be collected before output can be finalized.
+        self.submission_guard: Callable[[bool], str | None] | None = None
 
     @property
     def name(self) -> str:
@@ -74,8 +276,8 @@ class SubmitCompileOutputTool(Tool):
     @property
     def description(self) -> str:
         return (
-            f"Submit the complete Resource output already written under "
-            f"{COMPILE_OUTPUT_ROOT}/. Pass no pages, files, paths, or content; "
+            "Submit the complete Resource output from the designated final output directory. "
+            "Pass no pages, files, paths, or content; "
             "Compile preserves omitted existing target files and commits "
             "only validated changes."
         )
@@ -92,6 +294,10 @@ class SubmitCompileOutputTool(Tool):
         self.bundle = None
         self.page_count = 0
         self.file_count = 0
+        if self.submission_guard is not None:
+            error = self.submission_guard(False)
+            if error:
+                return error
         if kwargs:
             return "Error: submit_wiki_bundle takes no arguments for a Resource output."
         if tool_context.sandbox_manager is None:
@@ -158,6 +364,10 @@ class SubmitCompileOutputTool(Tool):
                 )
                 if is_wiki:
                     rendered.wiki_uris.append(uri)
+            if self.submission_guard is not None:
+                error = self.submission_guard(True)
+                if error:
+                    return error
             self.bundle = rendered
         except (OSError, ValueError) as exc:
             return f"Error: Invalid output directory: {exc}"
@@ -202,6 +412,7 @@ class SubmitWikiBundleTool(Tool):
         self.bundle: WikiBundleDraft | None = None
         self.file_payloads: list[bytes | None] = []
         self.skill_name: str | None = None
+        self.submission_guard: Callable[[bool], str | None] | None = None
 
     @property
     def _is_skill_target(self) -> bool:
@@ -314,6 +525,10 @@ class SubmitWikiBundleTool(Tool):
         self.bundle = None
         self.file_payloads = []
         self.skill_name = None
+        if self.submission_guard is not None:
+            error = self.submission_guard(False)
+            if error:
+                return error
         raw_links = links or []
         for index, link in enumerate(raw_links):
             if not isinstance(link, Mapping) or set(link) - _LINK_FIELDS:
@@ -334,6 +549,10 @@ class SubmitWikiBundleTool(Tool):
         except (ValidationError, ValueError) as exc:
             kind = "Skill" if self._is_skill_target else "Wiki"
             return f"Error: Invalid {kind} bundle: {exc}"
+        if self.submission_guard is not None:
+            error = self.submission_guard(True)
+            if error:
+                return error
         self.bundle = bundle
         self.file_payloads = payloads
         if self._is_skill_target:
