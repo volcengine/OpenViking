@@ -2349,25 +2349,51 @@ def _validate_distributed_environment(conn) -> None:
         if worker_count < 1:
             raise RuntimeError("openGauss distributed mode requires at least one active DN worker")
 
-        cursor.execute(
-            "SELECT EXISTS (SELECT 1 FROM pg_proc WHERE proname='run_command_on_all_nodes')"
-        )
-        if cursor.fetchone()[0]:
-            cursor.execute(
-                "SELECT nodeid, success, result "
-                "FROM run_command_on_all_nodes('SELECT 1', true, false)"
-            )
-            failed_nodes = [
-                (node_id, result) for node_id, success, result in cursor.fetchall() if not success
-            ]
-            if failed_nodes:
-                raise RuntimeError(f"openGauss distributed nodes are not reachable: {failed_nodes}")
+        _probe_distributed_workers(cursor)
         conn.commit()
     except Exception:
         conn.rollback()
         raise
     finally:
         cursor.close()
+
+
+def _probe_distributed_workers(cursor) -> None:
+    """Verify that every node which will host shards accepts connections from the CN.
+
+    Shards only live on DN workers, so ``run_command_on_workers`` is the authoritative
+    probe. ``run_command_on_all_nodes`` also dials the CN itself when the coordinator is
+    registered in ``pg_dist_node``; many spq deployments never configure that loopback
+    authentication, so it is used only as a fallback when the worker variant is missing.
+    """
+    cursor.execute(
+        """
+        SELECT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'run_command_on_workers'),
+               EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'run_command_on_all_nodes')
+        """
+    )
+    has_worker_probe, has_all_nodes_probe = cursor.fetchone()
+    if has_worker_probe:
+        probe_sql = (
+            "SELECT nodename || ':' || nodeport, success, result "
+            "FROM run_command_on_workers('SELECT 1')"
+        )
+    elif has_all_nodes_probe:
+        probe_sql = (
+            "SELECT nodeid, success, result FROM run_command_on_all_nodes('SELECT 1', true, false)"
+        )
+    else:
+        return
+    try:
+        cursor.execute(probe_sql)
+        rows = cursor.fetchall()
+    except Exception as exc:
+        # spq implements these helpers in PL/pgSQL and raises on the first unreachable
+        # node instead of reporting ``success = false`` rows.
+        raise RuntimeError(f"openGauss distributed workers are not reachable: {exc}") from exc
+    failed_nodes = [(node, result) for node, success, result in rows if not success]
+    if failed_nodes:
+        raise RuntimeError(f"openGauss distributed workers are not reachable: {failed_nodes}")
 
 
 def _distributed_table_kind(conn, table_name: str) -> Optional[str]:

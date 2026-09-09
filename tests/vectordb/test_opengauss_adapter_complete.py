@@ -18,6 +18,7 @@ from openviking.storage.vectordb_adapters.opengauss_adapter import (
     _is_undefined_table_error,
     _load_collection_meta,
     _PooledConnectionProxy,
+    _probe_distributed_workers,
     _validate_identifier,
     _validate_vector,
 )
@@ -1527,3 +1528,52 @@ def test_is_table_already_distributed_propagates_non_catalog_errors():
     with pytest.raises(RuntimeError, match="node down"):
         _is_table_already_distributed(broken_conn, "context")
     broken_conn.rollback.assert_called_once_with()
+
+
+def _probe_cursor(available, probe_rows=None, probe_error=None):
+    cursor = Mock()
+    executed = []
+
+    def _execute(sql, params=None):
+        executed.append(" ".join(sql.split()))
+        if "FROM run_command_on_" in sql and probe_error is not None:
+            raise probe_error
+
+    cursor.execute.side_effect = _execute
+    cursor.fetchone.return_value = available
+    cursor.fetchall.return_value = probe_rows or []
+    return cursor, executed
+
+
+def test_probe_distributed_workers_prefers_shard_hosting_workers():
+    cursor, executed = _probe_cursor(
+        (True, True), [("10.93.0.3:5432", True, "1"), ("10.93.0.4:5432", True, "1")]
+    )
+    _probe_distributed_workers(cursor)
+    assert any("FROM run_command_on_workers('SELECT 1')" in sql for sql in executed)
+    assert not any("FROM run_command_on_all_nodes(" in sql for sql in executed)
+
+
+def test_probe_distributed_workers_falls_back_to_all_nodes_probe():
+    cursor, executed = _probe_cursor((False, True), [(1, True, "1"), (2, True, "1")])
+    _probe_distributed_workers(cursor)
+    assert any("FROM run_command_on_all_nodes('SELECT 1', true, false)" in sql for sql in executed)
+
+    cursor, executed = _probe_cursor((False, False))
+    _probe_distributed_workers(cursor)
+    assert len(executed) == 1
+
+
+def test_probe_distributed_workers_reports_unreachable_nodes():
+    cursor, _ = _probe_cursor(
+        (True, True), [("10.93.0.3:5432", True, "1"), ("10.93.0.4:5432", False, "timeout")]
+    )
+    with pytest.raises(RuntimeError, match=r"not reachable.*10\.93\.0\.4:5432"):
+        _probe_distributed_workers(cursor)
+
+    cursor, _ = _probe_cursor(
+        (True, True),
+        probe_error=RuntimeError("connection establishment for node 10.93.0.4:5432 failed"),
+    )
+    with pytest.raises(RuntimeError, match=r"not reachable.*10\.93\.0\.4:5432 failed"):
+        _probe_distributed_workers(cursor)

@@ -103,7 +103,7 @@ pip install "openviking[opengauss]"
 
 1. `spq`/`spq_plugin_v2` 扩展；
 2. `create_distributed_table`；若 CN 兼容 Citus，可选使用 `create_reference_table`；
-3. 至少一个 active DN worker，且 `run_command_on_all_nodes('SELECT 1')` 全部成功；
+3. 至少一个 active DN worker，且 `run_command_on_workers('SELECT 1')` 在所有承载分片的 DN 上成功（CN 缺少该函数时回退到 `run_command_on_all_nodes`，此时还要求 CN 能连接自身）；
 4. 业务表和 metadata 表在 `pg_dist_partition` 中存在已验证记录。
 
 业务表按 `id` hash 分片。标准 spqplugin_v2 将 metadata 分别按 `table_name` 和 `index_name` hash 分片；只有明确提供 `create_reference_table` 的兼容集群才使用 reference table。openGauss 官方分布式向量示例明确覆盖普通 HNSW，Adapter 在 `mode=distributed` 下也只允许普通 HNSW。真实 CN + 2 DN 验收确认普通 HNSW 在 DN 使用 `Ann Index Scan`；同一集群中 HNSW-PQ 和 IVF-PQ 会在 SPQ 尝试构建零行 CN 逻辑表索引时失败，HNSW-RabitQ、IVFFlat 和 IVF-RabitQ 的 DN 计划仍为顺序扫描。Adapter 因此会在连接或建表前拒绝除普通 HNSW 之外的所有 distributed 索引类型；PQ、RabitQ、IVF 和 DiskANN 请使用 standalone。

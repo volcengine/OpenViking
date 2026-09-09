@@ -70,7 +70,7 @@ Plain HNSW may be created on an empty table. IVFFlat, PQ, RabitQ, and DiskANN ar
 
 ## Distributed mode
 
-Set `mode=distributed` and point `host/port` to an spq CN. Startup verifies the spq extension, distribution functions, active DN workers, all-node connectivity, and catalog state in `pg_dist_partition`. Collection tables are hash distributed by `id`. Standard spqplugin_v2 hash-distributes metadata by `table_name` and `index_name`; a Citus-compatible CN may use reference tables when it explicitly provides `create_reference_table`.
+Set `mode=distributed` and point `host/port` to an spq CN. Startup verifies the spq extension, distribution functions, active DN workers, connectivity to every shard-hosting worker via `run_command_on_workers('SELECT 1')` (falling back to `run_command_on_all_nodes`, which also requires CN self-connectivity, only when the worker variant is missing), and catalog state in `pg_dist_partition`. Collection tables are hash distributed by `id`. Standard spqplugin_v2 hash-distributes metadata by `table_name` and `index_name`; a Citus-compatible CN may use reference tables when it explicitly provides `create_reference_table`.
 
 The official openGauss distributed-vector example guarantees plain HNSW, and that is the only ANN type enabled by the adapter in `mode=distributed`. Real CN + 2 DN acceptance confirmed a DN `Ann Index Scan` for plain HNSW. In the same cluster, HNSW-PQ and IVF-PQ failed while SPQ attempted to build on the zero-row CN logical table; HNSW-RabitQ, IVFFlat, and IVF-RabitQ produced DN sequential scans instead of ANN scans. The adapter therefore rejects every distributed index type except plain HNSW before connecting or creating tables. Use standalone mode for PQ, RabitQ, IVF, or DiskANN indexes.
 

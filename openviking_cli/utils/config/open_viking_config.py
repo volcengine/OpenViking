@@ -553,9 +553,7 @@ class OpenVikingConfig(BaseModel):
                 and getattr(instance.storage, "vectordb", None)
                 and getattr(instance, "embedding", None)
             ):
-                instance.storage.vectordb.apply_resolved_dimension(
-                    instance.embedding.dimension
-                )
+                instance.storage.vectordb.apply_resolved_dimension(instance.embedding.dimension)
                 db_dim = instance.storage.vectordb.dimension
                 emb_dim = instance.embedding.dimension
                 if db_dim > 0 and emb_dim > 0 and db_dim != emb_dim:
