@@ -1400,7 +1400,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `backend` | str | VectorDB 后端类型: 'local'（基于文件）, 'http'（远程服务）, 'volcengine'（云上 VikingDB）, 'vikingdb'（私有部署）或 'cuvs'（本地存储 + GPU dense search） | "local" |
+| `backend` | str | VectorDB 后端类型: 'local'（基于文件）, 'http'（远程服务）, 'volcengine'（云上 VikingDB）, 'vikingdb'（私有部署）, 'cuvs'（本地存储 + GPU dense search）或 'milvus' | "local" |
 | `name` | str | VectorDB 的集合名称 | "context" |
 | `url` | str | 'http' 类型的远程服务 URL（例如 'http://localhost:5000'） | null |
 | `project_name` | str | 项目名称（别名 project） | "default" |
@@ -1410,6 +1410,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 | `volcengine` | object | 'volcengine' 类型的 VikingDB 配置 | - |
 | `vikingdb` | object | 'vikingdb' 类型的私有部署配置 | - |
 | `cuvs` | object | NVIDIA cuVS 配置，也用于在 'local' 下显式开启显存感知自动模式，参见 [cuVS 使用指南](./16-cuvs.md) | - |
+| `milvus` | object | 'milvus' 类型的 Milvus 或 Zilliz Cloud 配置 | - |
 
 默认使用本地模式
 ```
@@ -1459,39 +1460,35 @@ acl_inherited_grants
 火山向量库等远端 backend 的存量 collection 需要由部署方预先添加这些字段和 scalar index，OpenViking 只校验 schema。`volcengine` API key 数据面模式还要求 context collection 和配置的 index 已存在。权限模型详见 [资源访问控制（ACL）](../concepts/15-acl.md)。
 
 <details>
-<summary><b>openGauss</b></summary>
+<summary><b>Milvus</b></summary>
 
-需要 openGauss 服务端支持原生 `vector` 类型，并使用允许远程连接的数据库用户。
-可通过 `pip install "openviking[opengauss]"` 安装可选驱动。
-官方容器中的初始 `omm` 用户可能限制远程登录，必要时请为 OpenViking 创建普通数据库用户。
+使用该后端前需要安装 `milvus` 可选依赖。默认 `uri` 使用 Milvus Lite，
+并把数据写入本地 `milvus.db` 文件。自托管 Milvus 使用 HTTP URI；
+Zilliz Cloud 使用云端 endpoint 并配置 `token`。
 
 ```json
 {
   "storage": {
     "vectordb": {
       "name": "context",
-      "backend": "opengauss",
+      "backend": "milvus",
       "project": "default",
       "distance_metric": "cosine",
       "dimension": 1024,
-      "opengauss": {
-        "host": "127.0.0.1",
-        "port": 5432,
-        "user": "openviking",
-        "password": "your-password",
-        "db_name": "postgres",
-        "schema": "public",
-        "mode": "standalone"
+      "milvus": {
+        "uri": "./milvus.db",
+        "token": null,
+        "db_name": null,
+        "consistency_level": "Session"
       }
     }
   }
 }
 ```
 
-分布式 openGauss 部署可将 `mode` 设为 `"distributed"`；OpenViking 会尝试把元数据表标记为 reference table，并按 `id` 分布集合表。
+如果连接自托管服务，可设置 `"uri": "http://localhost:19530"`。如果使用
+Zilliz Cloud，把 `"uri"` 设置为云端 endpoint，并填写 `"token"`。
 </details>
-
-
 
 ## 配置文件
 

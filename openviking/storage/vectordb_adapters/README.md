@@ -152,6 +152,61 @@
 1. `backend`: 填写 Adapter 类的完整 Python 路径（例如 `my_project.adapters.MyAdapter`）。
 2. `custom_params`: 这是一个字典，你可以放入任何自定义参数，Adapter 的 `from_config` 方法可以通过 `config.custom_params` 获取这些值。
 
+内置 Milvus 后端可直接使用 registry 名称，并通过 `milvus` 配置块传递连接信息：
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "backend": "milvus",
+      "name": "context",
+      "project": "default",
+      "distance_metric": "cosine",
+      "dimension": 1024,
+      "milvus": {
+        "uri": "./milvus.db",
+        "token": null,
+        "db_name": null,
+        "consistency_level": "Session"
+      }
+    }
+  }
+}
+```
+
+`uri` 默认为 Milvus Lite 本地文件；也可以设置为自建 Milvus 服务
+（如 `http://localhost:19530`）或 Zilliz Cloud endpoint，认证统一使用
+`token` 字段。
+
+连接地址按显式 `milvus.uri`、`vectordb.url`、`custom_params.uri`、
+`./milvus.db` 的顺序选择；显式 `milvus.uri` 始终优先。
+
+Milvus 是可选后端，需要通过 `uv sync --extra milvus` 安装
+`pymilvus[milvus-lite]>=3.0.0`。未显式选择 Milvus 时，默认 `local` 后端的 import
+和启动不会加载 PyMilvus。
+
+兼容性边界：
+
+- Milvus Lite 会为 `VARCHAR`、`INT64`、`BOOL` 字段创建真实 `INVERTED` 索引；
+  Lite 不支持的 `ARRAY` 索引会明确降级，metadata 只把实际创建成功的字段列入
+  `ScalarIndex`，并在 `ScalarIndexUnavailable` 中记录降级字段。
+- 授权数组仍使用 `ARRAY_CONTAINS` 过滤。写入会物化 ACL 默认值，旧记录的 NULL ACL
+  值在读取和公开记录过滤时按 `False` / `[]` 处理。
+- 当前实现不提供 sparse/hybrid 检索；非零 `sparse_weight` 或 sparse query 会直接报错，
+  避免静默漏召回或忽略权重。
+- 标量排序和分组聚合在超过 10,000 条匹配记录时会明确报错，避免返回截断结果。
+- 旧动态 schema collection 可在重启时补充 ACL metadata；静态 schema 缺字段或字段类型
+  不兼容时会要求迁移或重建。绑定已有 collection 前还会完整校验 vector field/dim、
+  primary key、`auto_id`、dynamic schema 以及 ARRAY element/capacity；失败不会改写
+  sidecar 或 collection property。
+- 新 metadata 保存精确 logical project、logical collection、physical naming version
+  和 physical name。缺少可验证 identity 的旧 physical collection/sidecar 不会自动绑定，
+  也不能经该 adapter 读取、更新或删除；需要迁移/重建，或在确认 owner 后显式绑定。
+  当前与旧 metadata namespace 均保留，业务名称不得落入这些 namespace。
+- index metadata 与 collection property 更新失败会回滚本次新增的物理索引和两份 metadata；
+  Milvus Lite 的 drop-index 会连带清空 collection 索引，因此 rollback 会按原定义恢复既有
+  索引并恢复此前 load 状态。若恢复失败，adapter 会报告明确的不一致错误。
+
 
 
 ---
@@ -175,6 +230,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from openviking.storage.vectordb_adapters.base import CollectionAdapter
+
 
 class ThirdPartyCollectionAdapter(CollectionAdapter):
     def __init__(self, *, endpoint: str, token: str, collection_name: str):
