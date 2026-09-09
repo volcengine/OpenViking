@@ -214,10 +214,14 @@ class TaskTracker:
         self._dispatcher.bind_current_loop()
         self._install_work_index_callbacks()
 
-    async def restore_work_tasks(self, owners: Dict[str, tuple[str, str]]) -> None:
+    async def restore_work_tasks(self, owners: Dict[str, tuple[str, str]]) -> List[TaskRecord]:
         """Restore task records referenced by rebuilt QueueFS work."""
+        restored = []
         for task_id, (account_id, user_id) in owners.items():
-            await self.get(task_id, account_id=account_id, user_id=user_id)
+            task = await self.get(task_id, account_id=account_id, user_id=user_id)
+            if task is not None:
+                restored.append(task)
+        return restored
 
     async def _finalize_before_ack(self, metadata: QueueTaskMetadata) -> None:
         """Persist the terminal state before QueueFS removes the last recovery message."""

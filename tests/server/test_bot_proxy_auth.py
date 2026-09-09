@@ -3,6 +3,9 @@
 
 """Regression tests for bot proxy endpoint auth enforcement."""
 
+import asyncio
+import json
+from collections import deque
 from types import SimpleNamespace
 
 import httpx
@@ -15,11 +18,16 @@ import openviking.service.compile_service as compile_service_module
 import openviking.service.external_task_service as external_task_service_module
 from openviking.server.auth.plugins import DevAuthPlugin, TrustedAuthPlugin
 from openviking.server.config import ServerConfig
-from openviking.server.identity import AuthMode
+from openviking.server.identity import AuthMode, RequestContext, Role
 from openviking.service.compile_service import CompileService
 from openviking.service.external_task_service import ExternalTaskService
-from openviking.service.task_tracker import TaskRecord, TaskStatus
+from openviking.service.task_store import PersistentTaskStore
+from openviking.service.task_tracker import TaskRecord, TaskStatus, TaskTracker
+from openviking.storage.queuefs import QueueManager
+from openviking.storage.queuefs.external_task_processor import ExternalTaskProcessor
+from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.open_viking_config import CompileApiConfig
+from tests.utils.mock_agfs import MockLocalAGFS
 
 
 def test_set_bot_api_key_updates_module_state():
@@ -287,7 +295,10 @@ async def test_compile_route_uses_ov_owned_task_and_rejects_legacy_routes(monkey
 
 
 @pytest.mark.asyncio
-async def test_compile_api_client_session_protocol_retry_and_cancellation(monkeypatch):
+@pytest.mark.parametrize("finish", ["complete", "cancel", "poll_failure", "restart"])
+async def test_compile_api_client_session_protocol_retry_and_cancellation(
+    monkeypatch, tmp_path, finish
+):
     forwarded = []
     response_status = {
         "cancel": "cancelled",
@@ -415,100 +426,175 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(monkey
     assert status_snapshot.meta == {"token_usage": {"total_tokens": 12}}
     assert cancel_snapshot.status == "cancelled"
 
-    class Tracker:
+    # Exercise the real task store, work index, consumer, and ACK lifecycle.
+    class QueueBackend:
         def __init__(self):
-            self.task = TaskRecord(
-                task_id="cmp_ov_1",
-                task_type="compile",
-                status=TaskStatus.RUNNING,
-                stage="compile: running",
-                account_id="acct",
-                user_id="alice",
-                meta={
-                    "request": {
-                        "from": ["viking://resources/source"],
-                        "to": "viking://resources/wiki",
-                        "skill": "viking://agent/skills/wiki",
-                    },
-                    "token_usage": {"total_tokens": 12},
-                },
-            )
-            self.auth = {
-                "openviking_connection": {"api_key": "active-user-key"},
-                "external_request_private": {},
-            }
-            self.stage = None
-            self.stage_updates = []
-            self.error = None
+            self.pending = deque()
+            self.processing = {}
+            self.sequence = 0
 
-        async def get(self, *args, **kwargs):
-            return self.task
+        async def mkdir(self, path):
+            pass
 
-        async def get_task_auth(self, *args, **kwargs):
-            return self.auth
+        async def write(self, path, data):
+            if path.endswith("/enqueue"):
+                self.sequence += 1
+                message = {"id": str(self.sequence), "data": json.loads(data)}
+                self.pending.append(message)
+                return message["id"]
+            assert path.endswith("/ack")
+            del self.processing[data.decode()]
 
-        async def start(self, *args, **kwargs):
-            return None
+        async def read(self, path):
+            if path.endswith("/messages"):
+                result = [*self.pending, *self.processing.values()]
+            elif path.endswith("/size"):
+                result = len(self.pending)
+            else:
+                assert path.endswith("/dequeue")
+                result = self.pending.popleft() if self.pending else {}
+                if result:
+                    self.processing[result["id"]] = result
+            return json.dumps(result).encode()
 
-        async def update_task_auth(self, _task_id, values, **kwargs):
-            self.auth.update(values)
-
-        async def update_stage(self, _task_id, stage, **kwargs):
-            self.stage = stage
-            self.stage_updates.append(stage)
-            self.task.stage = stage
-
-        async def fail(self, _task_id, error, **kwargs):
-            self.error = error
-            self.task.status = TaskStatus.FAILED
-
-        async def complete(self, _task_id, result, **kwargs):
-            self.task.result = result
-            self.task.status = TaskStatus.COMPLETED
-
-        async def record_cancelled(self, _task_id, **kwargs):
-            self.task.status = TaskStatus.CANCELLED
-
-        def is_cancellation_requested(self, _task_id):
-            return False
-
-    async def no_sleep(_delay):
-        return None
-
-    monkeypatch.setattr(external_task_service_module.asyncio, "sleep", no_sleep)
-    tracker = Tracker()
+    backend = QueueBackend()
+    manager = QueueManager(agfs=object())
+    queue = manager.get_queue(
+        QueueManager.EXTERNAL_TASK,
+        dequeue_handler=ExternalTaskProcessor(tasks, asyncio.get_running_loop()),
+        allow_create=True,
+    )
+    queue._async_agfs = backend
+    store = PersistentTaskStore(MockLocalAGFS(root_path=tmp_path))
+    tracker = TaskTracker(store)
     monkeypatch.setattr(external_task_service_module, "get_task_tracker", lambda: tracker)
-    forwarded.clear()
-    response_status["submit_failures"] = 1
-    response_status["poll"] = ["running", "completed"]
+    monkeypatch.setattr(external_task_service_module, "get_queue_manager", lambda: manager)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.external_task_processor.get_queue_manager", lambda: manager
+    )
+    await manager.prepare_task_tracking(tracker)
+    real_sleep = asyncio.sleep
 
-    await tasks.execute("cmp_ov_1", "acct", "alice")
+    async def yield_to_workers(_delay):
+        await real_sleep(0)
 
-    assert [request["url"] for request in forwarded] == [
-        "https://compile.example.com/runtime/v1/tasks",
-        "https://compile.example.com/runtime/v1/tasks",
-        "https://compile.example.com/runtime/v1/tasks/status",
-        "https://compile.example.com/runtime/v1/tasks/status",
-    ]
-    assert forwarded[0]["headers"]["Idempotency-Key"] == "cmp_ov_1"
-    assert forwarded[1]["headers"]["Idempotency-Key"] == "cmp_ov_1"
-    assert tracker.stage_updates == ["compile: completed"]
-    assert tracker.task.status == TaskStatus.COMPLETED
-    assert tracker.task.result == {"output": "wiki"}
+    monkeypatch.setattr(external_task_service_module.asyncio, "sleep", yield_to_workers)
+    entered = asyncio.Event()
+    cancel_entered = asyncio.Event()
+    release = asyncio.Event()
+    submitted = []
+    polls = 0
+    rejected_id = None
 
-    forwarded.clear()
-    response_status["cancel"] = "cancelling"
-    response_status["cancel_failures"] = 3
-    response_status["poll"] = ["cancelling"] * 4 + ["cancelled"]
-    tracker.task.status = TaskStatus.CANCELLING
-    tracker.task.stage = "compile: running"
-    tracker.stage_updates.clear()
+    async def runtime_request(_client, method, url, headers, json):
+        nonlocal polls
+        if url.endswith("/runtime/v1/tasks"):
+            task_id = headers["Idempotency-Key"]
+            if task_id == rejected_id:
+                return FakeResponse({"detail": "invalid request"}, status_code=422)
+            submitted.append(task_id)
+            return FakeResponse({"session_id": task_id})
+        task_id = json["session_id"]
+        if task_id != first.task_id:
+            return FakeResponse({"status": "completed", "stage": "done", "result": {"ok": True}})
+        if url.endswith("/cancel"):
+            cancel_entered.set()
+            await release.wait()
+            return FakeResponse({"status": "cancelled", "stage": "cancelled"})
+        polls += 1
+        if polls == 1:
+            # Runtime queueing is already submitted work, unlike OV queueing.
+            return FakeResponse({"status": "pending", "stage": "queued"})
+        entered.set()
+        await release.wait()
+        if finish == "poll_failure":
+            return FakeResponse({"detail": "status unavailable"}, status_code=503)
+        return FakeResponse({"status": "completed", "stage": "done", "result": {"ok": True}})
 
-    await tasks.cancel_recovered("cmp_ov_1", "acct", "alice")
+    monkeypatch.setattr(FakeClient, "request", runtime_request)
 
-    assert tracker.task.status == TaskStatus.CANCELLED
-    assert response_status["cancel_failures"] == 0
-    assert response_status["poll"] == []
+    async def create(user="alice", target="viking://resources/wiki", account="acct"):
+        return await tasks.create(
+            "compile",
+            resource_id="viking://resources/source",
+            payload={**public_payload, "to": target},
+            connection={"api_key": "active-user-key"},
+            ctx=RequestContext(user=UserIdentifier(account, user), role=Role.USER),
+        )
+
+    async def state(task):
+        return await tracker.get(task.task_id, account_id=task.account_id, user_id=task.user_id)
+
+    first = await create()
+    waiting = await create(user="bob")
+    independent = await create(target="viking://resources/other")
+    cancelled = await create()
+    other_account = await create(account="other-account")
+    worker = asyncio.create_task(queue.dequeue())
+    await asyncio.wait_for(entered.wait(), timeout=5)
+
+    await queue.dequeue()  # Same target rotates, including across users.
+    assert (await state(waiting)).status == TaskStatus.PENDING
+    assert waiting.task_id not in submitted
+    assert tracker.has_work(waiting.task_id)  # Requeue survives ACK of the old delivery.
+    await queue.dequeue()
+    assert (await state(independent)).status == TaskStatus.COMPLETED
+    await tracker.cancel(cancelled.task_id, account_id="acct", user_id="alice")
+    await queue.dequeue()
+    assert (await state(cancelled)).status == TaskStatus.CANCELLED
+    assert cancelled.task_id not in submitted
+    await queue.dequeue()
+    assert (await state(other_account)).status == TaskStatus.COMPLETED
+
+    if finish == "cancel":
+        await tracker.cancel(first.task_id, account_id="acct", user_id="alice")
+        await asyncio.wait_for(cancel_entered.wait(), timeout=5)
+        assert (await state(first)).status == TaskStatus.CANCELLING
+    elif finish == "restart":
+        worker.cancel()  # Process stops without requesting cancellation of the OV task.
+        with pytest.raises(asyncio.CancelledError):
+            await worker
+        tracker = TaskTracker(store)
+        tasks = ExternalTaskService()
+        tasks.register(CompileService(service._config, tasks, SimpleNamespace()))
+        queue.set_dequeue_handler(ExternalTaskProcessor(tasks, asyncio.get_running_loop()))
+        await tasks.restore_tasks(await manager.prepare_task_tracking(tracker))
+        # Recover processing behind pending work to prove recovery reserves the target first.
+        backend.pending.extend(backend.processing.values())
+        backend.processing.clear()
+
+    await queue.dequeue()
+    assert waiting.task_id not in submitted
+    assert (await state(waiting)).status == TaskStatus.PENDING
+    release.set()
+    if finish == "restart":
+        await queue.dequeue()
+    else:
+        await asyncio.wait_for(worker, timeout=5)
+    expected = {
+        "cancel": TaskStatus.CANCELLED,
+        "poll_failure": TaskStatus.FAILED,
+    }.get(finish, TaskStatus.COMPLETED)
+    assert (await state(first)).status == expected
+    if expected == TaskStatus.CANCELLED:
+        # Recovery may replay a cancellation whose final ACK was lost.
+        await tasks.cancel_recovered(first.task_id, "acct", "alice")
+    if expected == TaskStatus.FAILED:
+        assert "UNAVAILABLE" in (await state(first)).error
+        assert not cancel_entered.is_set()
+    await queue.dequeue()
+    assert (await state(waiting)).status == TaskStatus.COMPLETED
+    assert submitted.count(first.task_id) == 1
+    assert not backend.pending and not backend.processing
+
+    # Submission failure also releases the target for the next task.
+    rejected = await create()
+    rejected_id = rejected.task_id
+    await queue.dequeue()
+    assert (await state(rejected)).status == TaskStatus.FAILED
+    after_rejection = await create()
+    await queue.dequeue()
+    assert (await state(after_rejection)).status == TaskStatus.COMPLETED
 
 
 @pytest.mark.asyncio
