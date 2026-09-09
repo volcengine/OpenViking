@@ -211,3 +211,7 @@ results:
 5. Search can retrieve text from the new resource.
 6. Record upload, job-creation, polling, ZIP-preparation, and ZIP-download times.
 7. Record the HTTPS hosts used for presigned result images and redirects.
+
+`ov add-resource --wait` keeps one HTTP request open while parsing and indexing finish. If the client
+reports an HTTP timeout, check `ov task list` before you retry. The server can finish the task after
+the client stops waiting, and an immediate retry can create a duplicate parse job.
