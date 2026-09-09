@@ -51,6 +51,7 @@ from openviking.storage.queuefs.semantic_lock import SemanticLockScope
 from openviking.storage.queuefs.semantic_msg import SemanticMsg, build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
 from openviking.storage.queuefs.semantic_queue import is_semantic_msg_stale
+from openviking.storage.upsert_options import RecordState
 from openviking.storage.viking_fs import LS_ALL_NODES, SyncDiff, get_viking_fs
 from openviking.telemetry import bind_telemetry, bind_telemetry_stage, resolve_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -1558,6 +1559,7 @@ class SemanticProcessor(DequeueHandlerBase):
         ctx: Optional[RequestContext] = None,
         ingest_options: IngestOptions | None = None,
         creator_acl_grant: CreatorAclGrant | None = None,
+        record_state: RecordState = RecordState.UNKNOWN,
     ) -> None:
         """Create directory Context and enqueue to EmbeddingQueue."""
 
@@ -1572,6 +1574,7 @@ class SemanticProcessor(DequeueHandlerBase):
             ctx=active_ctx,
             ingest_options=ingest_options,
             creator_acl_grant=creator_acl_grant,
+            record_state=record_state,
         )
 
     async def _load_transfer_file_summaries(
@@ -1600,6 +1603,7 @@ class SemanticProcessor(DequeueHandlerBase):
         preserve_existing_created_at: bool = False,
         ingest_options: IngestOptions | None = None,
         creator_acl_grant: CreatorAclGrant | None = None,
+        record_state: RecordState = RecordState.UNKNOWN,
     ) -> None:
         """Vectorize a single file using its content or summary."""
         from openviking.utils.embedding_utils import vectorize_file
@@ -1615,4 +1619,5 @@ class SemanticProcessor(DequeueHandlerBase):
             preserve_existing_created_at=preserve_existing_created_at,
             ingest_options=ingest_options,
             creator_acl_grant=creator_acl_grant,
+            record_state=record_state,
         )

@@ -30,6 +30,7 @@ from openviking.storage.abstract_overview import body_for_preview, embedding_tex
 from openviking.storage.acl import CreatorAclGrant
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
+from openviking.storage.upsert_options import RecordState
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.embedding_input import truncate_embedding_input
@@ -86,14 +87,20 @@ def _apply_scalar_overrides(embedding_msg, overrides: Optional[Dict[str, Any]]) 
 def _apply_ingest_options(
     embedding_msg,
     ingest_options: IngestOptions | None,
+    *,
+    record_state: RecordState = RecordState.UNKNOWN,
 ) -> None:
     ingest_options = IngestOptions.from_value(ingest_options)
-    if not embedding_msg or ingest_options.search_tags is None:
+    if not embedding_msg:
         return
-    embedding_msg.context_data["search_tags"] = list(ingest_options.search_tags or [])
-    embedding_msg.context_data["_upsert_options"] = {
-        "search_tag_mode": ingest_options.search_tag_mode
-    }
+    options = dict(embedding_msg.context_data.get("_upsert_options") or {})
+    if ingest_options.search_tags is not None:
+        embedding_msg.context_data["search_tags"] = list(ingest_options.search_tags or [])
+        options["search_tag_mode"] = ingest_options.search_tag_mode
+    if record_state != RecordState.UNKNOWN:
+        options["record_state"] = record_state.value
+    if options:
+        embedding_msg.context_data["_upsert_options"] = options
 
 
 async def _enqueue_embedding_message(
@@ -364,6 +371,7 @@ async def vectorize_directory_meta(
     scalar_overrides: Optional[Dict[int, Dict[str, Any]]] = None,
     ingest_options: IngestOptions | None = None,
     creator_acl_grant: CreatorAclGrant | None = None,
+    record_state: RecordState = RecordState.UNKNOWN,
     include_abstract: bool = True,
 ) -> None:
     """
@@ -420,7 +428,9 @@ async def vectorize_directory_meta(
                 msg_abstract,
                 (scalar_overrides or {}).get(int(ContextLevel.ABSTRACT.value)),
             )
-            _apply_ingest_options(msg_abstract, ingest_options)
+            _apply_ingest_options(
+                msg_abstract, ingest_options, record_state=record_state
+            )
             if msg_abstract:
                 try:
                     enqueued = await _enqueue_embedding_message(
@@ -467,7 +477,9 @@ async def vectorize_directory_meta(
                 msg_overview,
                 (scalar_overrides or {}).get(int(ContextLevel.OVERVIEW.value)),
             )
-            _apply_ingest_options(msg_overview, ingest_options)
+            _apply_ingest_options(
+                msg_overview, ingest_options, record_state=record_state
+            )
             if msg_overview:
                 try:
                     enqueued = await _enqueue_embedding_message(
@@ -508,6 +520,7 @@ async def vectorize_file(
     scalar_override: Optional[Dict[str, Any]] = None,
     ingest_options: IngestOptions | None = None,
     creator_acl_grant: CreatorAclGrant | None = None,
+    record_state: RecordState = RecordState.UNKNOWN,
 ) -> bool:
     """
     Vectorize a single file.
@@ -628,7 +641,9 @@ async def vectorize_file(
             return False
 
         _apply_scalar_overrides(embedding_msg, scalar_override)
-        _apply_ingest_options(embedding_msg, ingest_options)
+        _apply_ingest_options(
+            embedding_msg, ingest_options, record_state=record_state
+        )
         enqueued = await _enqueue_embedding_message(
             embedding_queue,
             embedding_msg,

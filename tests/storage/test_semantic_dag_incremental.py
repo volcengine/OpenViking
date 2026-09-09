@@ -16,6 +16,7 @@ from openviking.storage.abstract_overview import (
     render_abstract_overview,
 )
 from openviking.storage.queuefs.semantic_dag import SemanticDagExecutor
+from openviking.storage.upsert_options import RecordState
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -76,6 +77,7 @@ class _FakeProcessor:
         self.file_ingest_options = {}
         self.directory_ingest_options = {}
         self.vectorized_dirs = []
+        self.record_states = {}
         self.generated_overviews = []
 
     def _parse_overview_md(self, overview_content):
@@ -125,9 +127,11 @@ class _FakeProcessor:
         use_summary=False,
         ingest_options=None,
         creator_acl_grant=None,
+        record_state=None,
     ):
         del creator_acl_grant
         self.vectorized_files.append(file_path)
+        self.record_states[file_path] = record_state
         self.file_ingest_options[file_path] = ingest_options
 
     async def _vectorize_directory(
@@ -139,10 +143,12 @@ class _FakeProcessor:
         ctx=None,
         ingest_options=None,
         creator_acl_grant=None,
+        record_state=None,
     ):
         del creator_acl_grant
         self.directory_ingest_options[uri] = ingest_options
         self.vectorized_dirs.append(uri)
+        self.record_states[uri] = record_state
         return None
 
     async def _sync_topdown_recursive(
@@ -215,6 +221,7 @@ async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypa
 
     assert processor.summarized_files == [f"{root_uri}/a.txt"]
     assert processor.vectorized_files == [f"{root_uri}/a.txt"]
+    assert processor.record_states[f"{root_uri}/a.txt"] == RecordState.EXISTING
     assert processor.sync_calls == []
     overview = parse_abstract_overview(fake_fs._file_contents[f"{root_uri}/.overview.md"]).body
     assert "- a.txt: summary" in overview
@@ -268,6 +275,7 @@ async def test_content_write_tags_apply_only_to_changed_file(monkeypatch):
     await executor.run(root_uri)
 
     assert processor.file_ingest_options == {changed_uri: tag_options}
+    assert processor.record_states[changed_uri] == RecordState.EXISTING
     assert processor.directory_ingest_options[root_uri] == IngestOptions()
 
 

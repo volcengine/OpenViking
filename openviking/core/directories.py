@@ -21,6 +21,7 @@ from openviking.core.namespace import (
 from openviking.server.identity import RequestContext
 from openviking.storage.abstract_overview import AbstractOverviewFormatError
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
+from openviking.storage.upsert_options import RecordState
 from openviking.storage.vector_ids import vector_record_id
 
 if TYPE_CHECKING:
@@ -367,6 +368,9 @@ class DirectoryInitializer:
             context.set_vectorize(Vectorize(text=vector_text))
             emb_msg = EmbeddingMsgConverter.from_context(context)
             if emb_msg:
+                emb_msg.context_data["_upsert_options"] = {
+                    "record_state": RecordState.NEW.value
+                }
                 messages.append(emb_msg)
         await asyncio.gather(
             *(self.vikingdb.enqueue_embedding_msg(message) for message in messages)

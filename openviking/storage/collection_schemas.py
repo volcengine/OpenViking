@@ -28,10 +28,14 @@ from openviking.storage.errors import (
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.vector_ids import vector_record_id
+from openviking.storage.upsert_options import (
+    RecordState,
+    UpsertOptions,
+    normalize_upsert_options,
+)
 from openviking.storage.viking_vector_index_backend import (
     VIKINGDB_CONTENT_MAX_SIZE,
     VikingVectorIndexBackend,
-    normalize_upsert_options,
 )
 from openviking.telemetry import bind_telemetry, resolve_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -819,8 +823,14 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 try:
                     raw_upsert_options = inserted_data.pop("_upsert_options", {})
                     upsert_options = normalize_upsert_options(
-                        {**raw_upsert_options, "partial_update": True}
+                        {"partial_update": True, **raw_upsert_options}
                     )
+                    if upsert_options.record_state == RecordState.NEW:
+                        upsert_options = UpsertOptions(
+                            partial_update=False,
+                            search_tag_mode=upsert_options.search_tag_mode,
+                            record_state=upsert_options.record_state,
+                        )
                     # Ensure vector DB has deterministic IDs per semantic layer.
                     uri = inserted_data.get("uri")
                     if uri:

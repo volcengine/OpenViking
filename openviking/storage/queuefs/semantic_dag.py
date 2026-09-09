@@ -23,6 +23,7 @@ from openviking.storage.abstract_overview import (
     write_abstract_overview,
 )
 from openviking.storage.acl import CreatorAclGrant
+from openviking.storage.upsert_options import RecordState
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry import bind_telemetry, get_current_telemetry
 from openviking.utils.ingest_options import IngestOptions
@@ -234,6 +235,19 @@ class SemanticDagExecutor:
             if normalized.startswith(f"{root}/"):
                 return CreatorAclGrant.INHERITED
         return CreatorAclGrant.DIRECT if normalized in self._added_paths else None
+
+    def _record_state(self, uri: str) -> RecordState:
+        """Return write intent only when the semantic source proves it."""
+        normalized = uri.rstrip("/")
+        if self._generation_trigger == "resource_ingest" and self._target_preexisting is False:
+            root = self._root_uri.rstrip("/")
+            if normalized == root or normalized.startswith(f"{root}/"):
+                return RecordState.NEW
+        if normalized in self._added_paths:
+            return RecordState.NEW
+        if normalized in self._changed_paths:
+            return RecordState.EXISTING
+        return RecordState.UNKNOWN
 
     async def run(self, root_uri: str) -> None:
         """Run DAG execution starting from root_uri."""
@@ -823,6 +837,7 @@ class SemanticDagExecutor:
                     use_summary=use_summary,
                     ingest_options=self._ingest_options_for_file(file_path),
                     creator_acl_grant=self._creator_acl_grant(file_path),
+                    record_state=self._record_state(file_path),
                 )
             except Exception as e:
                 logger.error(
@@ -1101,6 +1116,7 @@ class SemanticDagExecutor:
                         ctx=self._ctx,
                         ingest_options=self._ingest_options_for_directory(),
                         creator_acl_grant=self._creator_acl_grant(dir_uri),
+                        record_state=self._record_state(dir_uri),
                     )
                 except Exception as e:
                     logger.error(

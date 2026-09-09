@@ -27,9 +27,10 @@ from openviking.privacy import (
 )
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import deny_direct_local_skill_input
-from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
+from openviking.storage.upsert_options import RecordState
 from openviking.storage.viking_fs import VikingFS
+from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.path_safety import safe_join_viking_uri
@@ -212,6 +213,7 @@ class SkillProcessor:
             )
 
             skill_dir_uri = context.uri
+            skill_preexisting = await viking_fs.exists(skill_dir_uri, ctx=ctx)
 
             write_start = time.perf_counter()
             await self._write_skill_content(
@@ -238,6 +240,9 @@ class SkillProcessor:
             await self._index_skill(
                 context=context,
                 skill_dir_uri=skill_dir_uri,
+                record_state=(
+                    RecordState.EXISTING if skill_preexisting else RecordState.NEW
+                ),
             )
             telemetry.set(
                 "skill.index.duration_ms", round((time.perf_counter() - index_start) * 1000, 3)
@@ -580,7 +585,12 @@ class SkillProcessor:
             else:
                 await viking_fs.write_file_bytes(aux_uri, file_bytes, ctx=ctx)
 
-    async def _index_skill(self, context: Context, skill_dir_uri: str):
+    async def _index_skill(
+        self,
+        context: Context,
+        skill_dir_uri: str,
+        record_state: RecordState = RecordState.UNKNOWN,
+    ):
         """Write skill directory vector via async queue as L0."""
         context.uri = skill_dir_uri
         context.is_leaf = False
@@ -589,6 +599,9 @@ class SkillProcessor:
         context.set_vectorize(Vectorize(text=context.abstract))
         embedding_msg = EmbeddingMsgConverter.from_context(context)
         if embedding_msg:
+            embedding_msg.context_data["_upsert_options"] = {
+                "record_state": record_state.value
+            }
             if embedding_msg.telemetry_id:
                 get_request_wait_tracker().register_embedding_root(
                     embedding_msg.telemetry_id, embedding_msg.id

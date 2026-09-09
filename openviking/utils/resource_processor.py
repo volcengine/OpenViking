@@ -30,6 +30,7 @@ from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.expr import And, Eq, PathScope
 from openviking.storage.internal_names import STORAGE_INTERNAL_ENTRY_NAMES
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+from openviking.storage.upsert_options import RecordState
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.telemetry import get_current_telemetry
@@ -558,7 +559,9 @@ class ResourceProcessor:
         temp_uri = prepared.get("temp_uri")
         temp_dir_path = prepared.get("temp_dir_path")
         source_committed = bool(prepared.get("source_committed"))
-        target_preexisting = bool(prepared.get("target_preexisting"))
+        target_preexisting_value = prepared.get("target_preexisting")
+        target_preexisting = target_preexisting_value is True
+        target_known_new = target_preexisting_value is False
         build_index = bool(kwargs.get("build_index", True))
         processing_mode = normalize_processing_mode(processing_mode)
         vectors_only = processing_mode == VECTORS_ONLY
@@ -570,6 +573,7 @@ class ResourceProcessor:
             root_is_file and not vectors_only and (summarize or build_index)
         )
         result: Dict[str, Any] = {"status": "success", "root_uri": root_uri}
+        added_vector_uris: set[str] = set()
 
         if should_summarize:
             stage_start = time.perf_counter()
@@ -626,6 +630,13 @@ class ResourceProcessor:
                         )
                         sync_deleted_files = list(getattr(diff, "deleted_files", []))
                         sync_deleted_dirs = list(getattr(diff, "deleted_dirs", []))
+                        added_vector_uris = {
+                            str(uri).rstrip("/")
+                            for uri in [
+                                *getattr(diff, "added_files", []),
+                                *getattr(diff, "added_dirs", []),
+                            ]
+                        }
                     else:
                         await viking_fs.persist_temp_tree(
                             temp_uri,
@@ -665,10 +676,23 @@ class ResourceProcessor:
                             creator_acl_grant=(
                                 CreatorAclGrant.DIRECT if not target_preexisting else None
                             ),
+                            record_state=(
+                                RecordState.NEW
+                                if target_known_new
+                                else RecordState.EXISTING
+                            ),
                         )
                     elif vectors_only:
                         await self._vectorize_resource_files(
-                            root_uri, ctx=ctx, ingest_options=ingest_options
+                            root_uri,
+                            ctx=ctx,
+                            ingest_options=ingest_options,
+                            record_state=(
+                                RecordState.NEW
+                                if target_known_new
+                                else RecordState.UNKNOWN
+                            ),
+                            added_uris=added_vector_uris,
                         )
             finally:
                 await get_viking_fs()._async_agfs.pathlock_release(resource_lock)
@@ -689,10 +713,20 @@ class ResourceProcessor:
                     ctx=ctx,
                     ingest_options=ingest_options,
                     creator_acl_grant=(CreatorAclGrant.DIRECT if not target_preexisting else None),
+                    record_state=(
+                        RecordState.NEW
+                        if target_known_new
+                        else RecordState.EXISTING
+                    ),
                 )
             else:
                 await self._vectorize_resource_files(
-                    root_uri, ctx=ctx, ingest_options=ingest_options
+                    root_uri,
+                    ctx=ctx,
+                    ingest_options=ingest_options,
+                    record_state=(
+                        RecordState.NEW if target_known_new else RecordState.UNKNOWN
+                    ),
                 )
         return result
 
@@ -760,6 +794,8 @@ class ResourceProcessor:
         *,
         ctx: RequestContext,
         ingest_options: IngestOptions | None = None,
+        record_state: RecordState = RecordState.UNKNOWN,
+        added_uris: set[str] | None = None,
     ) -> None:
         ingest_options = IngestOptions.from_value(ingest_options)
         viking_fs = get_viking_fs()
@@ -792,6 +828,11 @@ class ResourceProcessor:
         )
 
         async def vectorize(entry_uri: str, name: str, parent_uri: str) -> None:
+            entry_state = (
+                RecordState.NEW
+                if entry_uri.rstrip("/") in (added_uris or set())
+                else record_state
+            )
             await vectorize_file(
                 file_path=entry_uri,
                 summary_dict={"name": name, "summary": ""},
@@ -799,6 +840,7 @@ class ResourceProcessor:
                 context_type=context_type_for_uri(entry_uri),
                 ctx=ctx,
                 ingest_options=ingest_options,
+                record_state=entry_state,
             )
 
         for start in range(0, len(files), concurrency):
@@ -821,6 +863,7 @@ class ResourceProcessor:
         ctx: RequestContext,
         ingest_options: IngestOptions | None = None,
         creator_acl_grant: CreatorAclGrant | None = None,
+        record_state: RecordState = RecordState.UNKNOWN,
     ) -> None:
         parent = VikingURI(file_uri).parent
         if parent is None:
@@ -834,6 +877,7 @@ class ResourceProcessor:
             ctx=ctx,
             ingest_options=IngestOptions.from_value(ingest_options),
             creator_acl_grant=creator_acl_grant,
+            record_state=record_state,
         )
 
     async def reserve_unique_candidate(

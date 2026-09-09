@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.upsert_options import RecordState
 from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
@@ -163,6 +164,7 @@ async def test_process_skill_preserves_hyphenated_allowed_tools_in_meta(monkeypa
     vikingdb = MagicMock()
     vikingdb.enqueue_embedding_msg = AsyncMock(return_value=False)
     viking_fs = MagicMock()
+    viking_fs.exists = AsyncMock(return_value=False)
     viking_fs.write_context = AsyncMock()
 
     processor = SkillProcessor(vikingdb=vikingdb)
@@ -186,3 +188,6 @@ async def test_process_skill_preserves_hyphenated_allowed_tools_in_meta(monkeypa
     embedding_msg = vikingdb.enqueue_embedding_msg.await_args.args[0]
     assert embedding_msg.context_data["meta"]["allowed_tools"] == ["Read"]
     assert embedding_msg.context_data["meta"]["tags"] == ["dict"]
+    assert embedding_msg.context_data["_upsert_options"]["record_state"] == (
+        RecordState.NEW.value
+    )

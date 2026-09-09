@@ -40,6 +40,7 @@ from openviking.session.memory.utils import (
     parse_memory_file_with_fields,
 )
 from openviking.storage.abstract_overview import parse_abstract_overview
+from openviking.storage.upsert_options import RecordState
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -63,6 +64,46 @@ class TestMemoryUpdateResult:
 
 class TestMemoryUpdater:
     """Tests for MemoryUpdater."""
+
+    @pytest.mark.asyncio
+    async def test_vectorize_memories_marks_written_new_and_edited_existing(self):
+        written_uri = "viking://user/alice/memories/profile/new.md"
+        edited_uri = "viking://user/alice/memories/profile/existing.md"
+
+        class FakeVikingFS:
+            async def read_file(self, uri, ctx=None):
+                del uri, ctx
+                return MemoryFileUtils.write(MemoryFile(content="memory body"))
+
+        class FakeVikingDB:
+            def __init__(self):
+                self.messages = []
+
+            async def enqueue_embedding_msg(self, message):
+                self.messages.append(message)
+                return True
+
+        result = MemoryUpdateResult()
+        result.add_written(written_uri)
+        result.add_edited(edited_uri)
+        vikingdb = FakeVikingDB()
+        updater = MemoryUpdater(vikingdb=vikingdb)
+        updater._get_viking_fs = MagicMock(return_value=FakeVikingFS())
+        ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+
+        attempted = await updater._vectorize_memories(result, ctx)
+
+        assert attempted == 2
+        states = {
+            message.context_data["uri"]: message.context_data["_upsert_options"][
+                "record_state"
+            ]
+            for message in vikingdb.messages
+        }
+        assert states == {
+            written_uri: RecordState.NEW.value,
+            edited_uri: RecordState.EXISTING.value,
+        }
 
     def test_extract_context_initializes_page_id_map(self):
         extract_context = ExtractContext(

@@ -39,9 +39,9 @@ from openviking.storage.vectordb_adapters.base import (
     _truncate_text_field,
 )
 from openviking.storage.vectordb_adapters.local_adapter import LocalCollectionAdapter
+from openviking.storage.upsert_options import RecordState, UpsertOptions
 from openviking.storage.viking_vector_index_backend import (
     VIKINGDB_CONTENT_MAX_SIZE,
-    UpsertOptions,
     VikingVectorIndexBackend,
     _SingleAccountBackend,
 )
@@ -606,6 +606,65 @@ async def test_embedding_handler_truncates_queue_input_before_embed(monkeypatch)
     assert embedder.text is not None
     assert embedder.text.endswith("...(truncated for embedding)")
     assert "token-199" not in embedder.text
+
+
+@pytest.mark.asyncio
+async def test_embedding_handler_known_new_disables_partial_update(monkeypatch):
+    captured = {}
+
+    class _CapturingVikingDB:
+        is_closing = False
+        uses_content_field = False
+
+        async def upsert(self, data, *, ctx, options=UpsertOptions()):
+            del data, ctx
+            captured["options"] = options
+            return "rec-new"
+
+    embedder = _DummyEmbedder()
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(embedder),
+    )
+    handler = TextEmbeddingHandler(_CapturingVikingDB())
+    payload = _build_queue_payload()
+    queue_data = json.loads(payload["data"])
+    queue_data["context_data"]["_upsert_options"] = {
+        "record_state": "new"
+    }
+    payload["data"] = json.dumps(queue_data)
+
+    result = await handler.on_dequeue(payload)
+
+    assert result is not None
+    assert captured["options"].record_state == RecordState.NEW
+    assert captured["options"].partial_update is False
+
+
+@pytest.mark.asyncio
+async def test_embedding_handler_unknown_state_keeps_partial_update(monkeypatch):
+    captured = {}
+
+    class _CapturingVikingDB:
+        is_closing = False
+        uses_content_field = False
+
+        async def upsert(self, data, *, ctx, options=UpsertOptions()):
+            del data, ctx
+            captured["options"] = options
+            return "rec-1"
+
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(_DummyEmbedder()),
+    )
+    result = await TextEmbeddingHandler(_CapturingVikingDB()).on_dequeue(
+        _build_queue_payload()
+    )
+
+    assert result is not None
+    assert captured["options"].record_state == RecordState.UNKNOWN
+    assert captured["options"].partial_update is True
 
 
 @pytest.mark.asyncio
@@ -1856,6 +1915,41 @@ async def test_single_account_backend_upsert_partial_update_reads_then_upserts_e
                 "uri": "viking://resources/old",
             },
         ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_single_account_backend_known_new_partial_update_skips_existing_record_read():
+    calls = []
+
+    class _Adapter:
+        mode = "local"
+        USE_CONTENT_FIELD = False
+
+        def get(self, ids):  # pragma: no cover - known-new must not read
+            raise AssertionError(f"unexpected existing-record read: {ids}")
+
+        def upsert(self, data):
+            calls.append(("upsert", data))
+            return ["rec-new"]
+
+    backend = _SingleAccountBackend(
+        config=VectorDBBackendConfig(backend="local", name="context", dimension=2),
+        bound_account_id="acc1",
+        shared_adapter=_Adapter(),
+    )
+
+    result = await backend.upsert(
+        {"id": "rec-new", "abstract": "created"},
+        options=UpsertOptions(
+            partial_update=True,
+            record_state=RecordState.NEW,
+        ),
+    )
+
+    assert result == "rec-new"
+    assert calls == [
+        ("upsert", {"id": "rec-new", "abstract": "created", "account_id": "acc1"})
     ]
 
 

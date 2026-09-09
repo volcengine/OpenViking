@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.upsert_options import RecordState
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking_cli.session.user_id import UserIdentifier
@@ -193,6 +194,7 @@ async def test_vectors_only_replaces_preexisting_flat_file_without_directory_syn
     viking_fs.delete_temp.assert_awaited_once_with("viking://temp/job-1", ctx=ctx)
     rewrite_image_uris.assert_not_awaited()
     vectorize_file.assert_awaited_once()
+    assert vectorize_file.await_args.kwargs["record_state"] == RecordState.EXISTING
     viking_fs._async_agfs.pathlock_release.assert_awaited_once_with(lock)
 
 
@@ -261,6 +263,7 @@ async def test_vectors_only_persists_tree_and_vectorizes_files_only(monkeypatch,
                 "temp_uri": "viking://temp/demo",
                 "temp_dir_path": "tmp/demo",
                 "source_committed": False,
+                "target_preexisting": False,
             },
             ctx=ctx,
             resource_lock=lock,
@@ -303,6 +306,7 @@ async def test_vectors_only_persists_tree_and_vectorizes_files_only(monkeypatch,
         search_tags=["team=search"],
         search_tag_mode="append",
     )
+    assert page["record_state"] == RecordState.NEW
     processor._delete_resource_semantic_markers.assert_not_awaited()
     processor._delete_resource_semantic_vectors.assert_not_awaited()
     viking_fs._async_agfs.pathlock_release.assert_awaited_once_with(lock)

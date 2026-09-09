@@ -43,6 +43,7 @@ from openviking.session.memory.utils.resource_refs import (
 from openviking.session.memory.utils.template_utils import TemplateUtils
 from openviking.session.memory.utils.uri import render_template
 from openviking.storage.abstract_overview import freshness_metadata, render_abstract_overview
+from openviking.storage.upsert_options import RecordState
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -816,6 +817,7 @@ class MemoryUpdater:
         ctx: RequestContext,
         strict: bool = False,
         ingest_options=None,
+        record_state: RecordState = RecordState.UNKNOWN,
     ) -> bool:
         if not vikingdb or not bool(getattr(vikingdb, "has_queue_manager", False)):
             return False
@@ -831,6 +833,7 @@ class MemoryUpdater:
                 ctx,
                 uri_memory_type_map={uri: memory_type} if memory_type else {},
                 ingest_options=ingest_options,
+                record_states={uri: record_state},
             )
             return attempted > 0
         except Exception:
@@ -1397,6 +1400,7 @@ class MemoryUpdater:
         uri_memory_type_map: Dict[str, str] = None,
         search_tags_by_uri: Dict[str, List[str]] = None,
         ingest_options: Any = None,
+        record_states: Dict[str, RecordState] | None = None,
     ) -> int:
         """Vectorize written and edited memory files.
 
@@ -1414,6 +1418,9 @@ class MemoryUpdater:
 
         uri_memory_type_map = uri_memory_type_map or {}
         search_tags_by_uri = search_tags_by_uri or {}
+        record_states = record_states or {}
+        written_uris = set(result.written_uris)
+        edited_uris = set(result.edited_uris)
         viking_fs = self._get_viking_fs()
         request_wait_tracker = get_request_wait_tracker()
         attempted_count = 0
@@ -1494,18 +1501,28 @@ class MemoryUpdater:
                 # Convert to embedding msg and enqueue
                 embedding_msg = EmbeddingMsgConverter.from_context(memory_context)
                 if embedding_msg:
+                    embedding_msg.context_data.setdefault("_upsert_options", {})[
+                        "record_state"
+                    ] = record_states.get(
+                        uri,
+                        RecordState.NEW
+                        if uri in written_uris and uri not in edited_uris
+                        else RecordState.EXISTING
+                        if uri in edited_uris
+                        else RecordState.UNKNOWN,
+                    ).value
                     if getattr(ingest_options, "search_tags", None) is not None:
                         embedding_msg.context_data["search_tags"] = list(ingest_options.search_tags)
-                        embedding_msg.context_data["_upsert_options"] = {
-                            "search_tag_mode": ingest_options.search_tag_mode
-                        }
+                        embedding_msg.context_data["_upsert_options"][
+                            "search_tag_mode"
+                        ] = ingest_options.search_tag_mode
                     else:
                         transient_tags = search_tags_by_uri.get(uri)
                         if transient_tags:
                             embedding_msg.context_data["search_tags"] = list(transient_tags)
-                            embedding_msg.context_data["_upsert_options"] = {
-                                "search_tag_mode": "append"
-                            }
+                            embedding_msg.context_data["_upsert_options"][
+                                "search_tag_mode"
+                            ] = "append"
                     if embedding_msg.telemetry_id:
                         request_wait_tracker.register_embedding_root(
                             embedding_msg.telemetry_id, embedding_msg.id

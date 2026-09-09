@@ -42,6 +42,7 @@ from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
+from openviking.storage.upsert_options import RecordState
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -542,6 +543,11 @@ class ContentWriteCoordinator:
                     memory_type=MemoryUpdater.memory_type_from_uri(uri),
                     ctx=ctx,
                     strict=True,
+                    record_state=(
+                        RecordState.NEW
+                        if refresh_kinds[uri] == "added"
+                        else RecordState.EXISTING
+                    ),
                 )
                 embedding_requested = embedding_requested or requested
 
@@ -821,6 +827,9 @@ class ContentWriteCoordinator:
                     context_type=context_type,
                     ctx=ctx,
                     creator_acl_grant=(CreatorAclGrant.DIRECT if mode == "create" else None),
+                    record_state=(
+                        RecordState.NEW if mode == "create" else RecordState.EXISTING
+                    ),
                     ingest_options=ingest_options,
                 )
                 post_process_started = True
@@ -929,6 +938,7 @@ class ContentWriteCoordinator:
         context_type: str,
         ctx: RequestContext,
         creator_acl_grant: CreatorAclGrant | None = None,
+        record_state: RecordState = RecordState.UNKNOWN,
         ingest_options: IngestOptions | None = None,
     ) -> bool:
         parent = VikingURI(uri).parent
@@ -942,6 +952,7 @@ class ContentWriteCoordinator:
             context_type=context_type,
             ctx=ctx,
             creator_acl_grant=creator_acl_grant,
+            record_state=record_state,
             ingest_options=ingest_options,
         )
 
@@ -1266,6 +1277,9 @@ class ContentWriteCoordinator:
                 memory_type=MemoryUpdater.memory_type_from_uri(root_uri),
                 ctx=ctx,
                 ingest_options=ingest_options,
+                record_state=(
+                    RecordState.NEW if mode == "create" else RecordState.EXISTING
+                ),
             )
             queue_status = None
             if embedding_requested and wait:

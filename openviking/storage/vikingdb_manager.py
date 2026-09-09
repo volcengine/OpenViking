@@ -12,11 +12,10 @@ from openviking.storage.expr import FilterExpr
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.embedding_queue import EmbeddingQueue
 from openviking.storage.queuefs.queue_manager import QueueManager
+from openviking.storage.upsert_options import UpsertOptions, normalize_upsert_options
 from openviking.storage.viking_vector_index_backend import (
-    UpsertOptions,
     VectorTransferResult,
     VikingVectorIndexBackend,
-    normalize_upsert_options,
 )
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig

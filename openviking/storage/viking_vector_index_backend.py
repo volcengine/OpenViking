@@ -28,6 +28,11 @@ from openviking.storage.acl import (
     is_acl_uri,
 )
 from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, RawDSL
+from openviking.storage.upsert_options import (
+    RecordState,
+    UpsertOptions,
+    normalize_upsert_options,
+)
 from openviking.storage.vector_migration import (
     rewrite_transfer_uri,
     rewrite_vector_record,
@@ -83,12 +88,6 @@ FETCH_BY_URI_OUTPUT_FIELDS = [
 VIKINGDB_CONTENT_MAX_SIZE = 1024 * 1024
 
 
-@dataclass(frozen=True)
-class UpsertOptions:
-    partial_update: bool = False
-    search_tag_mode: str = "replace"
-
-
 @dataclass
 class VectorTransferResult:
     """Counts produced by one strict online vector URI transfer."""
@@ -107,19 +106,6 @@ class VectorTransferRollbackError(RuntimeError):
         super().__init__(message)
         self.phase = phase
         self.residual_count = residual_count
-
-
-def normalize_upsert_options(
-    options: UpsertOptions | Mapping[str, Any] | None = None,
-) -> UpsertOptions:
-    if options is None:
-        return UpsertOptions()
-    if isinstance(options, UpsertOptions):
-        return options
-    return UpsertOptions(
-        partial_update=bool(options.get("partial_update", False)),
-        search_tag_mode=str(options.get("search_tag_mode", "replace")),
-    )
 
 
 async def _wait_for_task_completion_despite_cancellation(
@@ -415,7 +401,7 @@ class _SingleAccountBackend:
             logger.warning("Rejecting upsert: %s", exc)
             return ""
 
-        if options.partial_update:
+        if options.partial_update and options.record_state != RecordState.NEW:
             try:
                 existing_records = await self._async_adapter.call("get", [payload["id"]])
                 if self._bound_account_id:
@@ -1066,10 +1052,12 @@ class VikingVectorIndexBackend:
         """
         options = normalize_upsert_options(options)
         logger.debug(
-            "[VikingVectorIndexBackend.upsert] uri=%s partial_update=%s search_tag_mode=%s",
+            "[VikingVectorIndexBackend.upsert] uri=%s partial_update=%s "
+            "search_tag_mode=%s record_state=%s",
             data.get("uri", ""),
             options.partial_update,
             options.search_tag_mode,
+            options.record_state.value,
         )
         data = {key: value for key, value in data.items() if key not in ACL_CONTEXT_FIELDS}
         data = (await self._materialize_acl_fields([data], ctx))[0]
@@ -1084,9 +1072,10 @@ class VikingVectorIndexBackend:
         )
         logger.debug(
             "[VikingVectorIndexBackend.upsert] Completed with partial_update=%s, "
-            "search_tag_mode=%s, result=%s",
+            "search_tag_mode=%s, record_state=%s, result=%s",
             options.partial_update,
             options.search_tag_mode,
+            options.record_state.value,
             result,
         )
         return result

@@ -73,6 +73,7 @@ class _FakeProcessor:
         ctx=None,
         ingest_options=None,
         creator_acl_grant=None,
+        record_state=None,
     ):
         pass
 
@@ -89,6 +90,7 @@ class _FakeProcessor:
         use_summary=False,
         ingest_options=None,
         creator_acl_grant=None,
+        record_state=None,
     ):
         self.vectorized_files.append(file_path)
 

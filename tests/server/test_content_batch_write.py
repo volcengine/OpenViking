@@ -8,6 +8,7 @@ from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils import MemoryFileUtils
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
+from openviking.storage.upsert_options import RecordState
 from openviking_cli.exceptions import (
     AlreadyExistsError,
     InvalidArgumentError,
@@ -452,6 +453,11 @@ async def test_batch_refresh_groups_resource_and_memory_work(monkeypatch):
     assert len(overview_calls) == 1
     assert overview_calls[0]["strict"] is True
     assert len(embedding_calls) == 2
+    states_by_uri = {call["uri"]: call["record_state"] for call in embedding_calls}
+    assert states_by_uri == {
+        "viking://user/default/memories/preferences/wiki/a.md": RecordState.NEW,
+        "viking://user/default/memories/preferences/wiki/b.md": RecordState.EXISTING,
+    }
     assert outcome.statuses(wait=False) == ("deferred", "queued")
     assert all(call["strict"] is True for call in embedding_calls)
 

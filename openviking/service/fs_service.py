@@ -33,6 +33,7 @@ from openviking.storage.expr import And, Eq, In, Or
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
+from openviking.storage.upsert_options import RecordState
 from openviking.storage.vector_ids import is_vector_record_id
 from openviking.storage.viking_fs import VikingFS
 from openviking.storage.vikingdb_manager import VikingDBManagerProxy
@@ -362,6 +363,9 @@ class FSService:
             context_type=context_type_for_uri(directory_uri),
             ctx=ctx,
             creator_acl_grant=(CreatorAclGrant.DIRECT if not directory_preexisting else None),
+            record_state=(
+                RecordState.NEW if not directory_preexisting else RecordState.EXISTING
+            ),
             include_overview=False,
         )
 

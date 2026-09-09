@@ -2033,6 +2033,7 @@ async def test_reindex_upsert_context_omits_search_tags_without_ingest_options(m
 
     assert "search_tags" not in captured["meta"]
     assert "search_tags" not in captured["msg"].context_data
+    assert "_upsert_options" not in captured["msg"].context_data
 
 
 @pytest.mark.asyncio
