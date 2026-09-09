@@ -85,16 +85,21 @@ VolatileStore::seek_range_page(const std::string& start_key,
 }
 
 int VolatileStore::exec_op(const std::vector<StorageOp>& ops) {
-  std::unique_lock<std::shared_mutex> lock(mutex_);
-  for (const auto& op : ops) {
-    if (op.type == StorageOp::PUT_OP) {
-      data_[op.key] = op.value;
-    } else if (op.type == StorageOp::DELETE_OP) {
-      data_.erase(op.key);
-    } else {
-      SPDLOG_WARN("Unknown op type: {}", static_cast<int>(op.type));
-      continue;
+  std::vector<int> unknown_types;
+  {
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+    for (const auto& op : ops) {
+      if (op.type == StorageOp::PUT_OP) {
+        data_[op.key] = op.value;
+      } else if (op.type == StorageOp::DELETE_OP) {
+        data_.erase(op.key);
+      } else {
+        unknown_types.push_back(static_cast<int>(op.type));
+      }
     }
+  }
+  for (int type : unknown_types) {
+    SPDLOG_WARN("Unknown op type: {}", type);
   }
   return 0;
 }
