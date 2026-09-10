@@ -6551,7 +6551,7 @@ mod fast_path1_tests {
         )
         .unwrap();
 
-        let stack = build_default_stack(RagfsConfig::default()).await;
+        let stack = build_default_stack(RagfsConfig::default()).await.unwrap();
         let mut params = HashMap::new();
         params.insert(
             "local_dir".to_string(),
