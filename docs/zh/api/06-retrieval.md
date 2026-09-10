@@ -400,7 +400,7 @@ openviking find "红色海报风格" --image ./poster.png --uri "viking://resour
 | tags | List[str] | 否 | None | 显式检索标签，必须是严格的 `k=v` 格式。多个 tags 之间是 AND 关系，结果必须同时包含所有请求的标签 |
 | limit | int | 否 | 10 | 最大返回结果数 |
 | node_limit | int | 否 | None | 可选 HTTP 别名；如果提供，会覆盖 limit |
-| score_threshold | float | 否 | None | 最低相关性分数阈值 |
+| score_threshold | float | 否 | None | 检索相关性分数的最低阈值，在可选的热度混合之前应用。启用热度加权时，返回的 `score` 是混合后的排序分，可能低于该阈值 |
 | filter | Dict | 否 | None | 元数据过滤器 |
 | since | str | 否 | None | 时间下界，支持 `2h` 或 ISO 8601 / `YYYY-MM-DD`。不带时区的值按 UTC 解释。CLI `--after` 会映射到这个字段 |
 | until | str | 否 | None | 时间上界，支持 `30m` 或 ISO 8601 / `YYYY-MM-DD`。不带时区的值按 UTC 解释。CLI `--before` 会映射到这个字段 |
