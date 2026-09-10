@@ -2095,7 +2095,7 @@ const envPrefix = Object.entries(integrationEnv)
 
 function renderHookCommand(command) {
   let rendered = command;
-  const cursorMatch = /^node\s+\$\{CURSOR_PLUGIN_ROOT\}\/(.+)$/u.exec(rendered);
+  const cursorMatch = /^node\s+"?\$\{CURSOR_PLUGIN_ROOT\}"?\/(.+)$/u.exec(rendered);
   if (cursorMatch) {
     rendered = `${shellArg(nodeBin)} ${shellArg(path.join(root, cursorMatch[1]))}`;
   } else {
