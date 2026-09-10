@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import threading
+import warnings
 import weakref
 from collections.abc import Callable
 from typing import Any, Protocol
@@ -97,9 +98,30 @@ class LoopScopedAsyncClientCache:
                 continue
             seen.add(client_id)
 
-            result = close_client(client)
-            if inspect.isawaitable(result):
-                await result
+            try:
+                result = close_client(client)
+                if inspect.isawaitable(result):
+                    await result
+            except Exception as exc:
+                # A client whose home event loop has already closed (e.g. a
+                # queue-worker loop that exited after using the client) cannot
+                # run its async close callback: asyncio raises "Event loop is
+                # closed" once the transport schedules the close on the dead
+                # loop. One failing client must not abort the shutdown of the
+                # remaining ones, so fall back to any synchronous close() and
+                # leave leftover sockets to garbage-collection finalizers.
+                warnings.warn(
+                    f"async close failed for {type(client).__name__} ({exc!r}); "
+                    "falling back to synchronous close() where available",
+                    ResourceWarning,
+                    stacklevel=2,
+                )
+                sync_close = getattr(client, "close", None)
+                if callable(sync_close):
+                    try:
+                        sync_close()
+                    except Exception:
+                        pass
 
     def close_all(self, close_client: Callable[[Any], Any]) -> None:
         """Close and clear all cached clients on a best-effort basis."""
