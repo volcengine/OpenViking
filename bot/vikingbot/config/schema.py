@@ -469,7 +469,10 @@ class AgentsConfig(BaseModel):
     message_max_concurrency: int = Field(
         default=4,
         ge=1,
-        description="Maximum number of inbound messages processed at once.",
+        description=(
+            "Maximum number of agent turns processed at once across the "
+            "message bus, CLI, cron, and heartbeat."
+        ),
     )
     subagent_enabled: bool = Field(
         default=True,

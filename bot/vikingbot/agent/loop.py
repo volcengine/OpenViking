@@ -419,8 +419,9 @@ class AgentLoop:
         )
 
         self._running = False
-        message_max_concurrency = getattr(
-            getattr(config, "agents", None), "message_max_concurrency", 4
+        self._idle_wakeup = asyncio.Event()
+        message_max_concurrency = (
+            config.agents.message_max_concurrency if config is not None else 4
         )
         self._message_semaphore = asyncio.Semaphore(message_max_concurrency)
         self._message_tasks: set[asyncio.Task] = set()
@@ -435,6 +436,10 @@ class AgentLoop:
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy, retryable on failure).
+
+        The resulting tool clients live on this AgentLoop and are shared by
+        every concurrent session. Session isolation is SessionKey-scoped in
+        the loop, not in the MCP client.
 
         Ported from HKUDS/nanobot v0.1.5.
         """
@@ -1115,6 +1120,24 @@ class AgentLoop:
             await self.sessions.save(session)
         return True
 
+    def _retain_session_lock(self, session_key: SessionKey) -> asyncio.Lock:
+        lock = self._session_locks.setdefault(session_key, asyncio.Lock())
+        self._session_lock_users[session_key] = (
+            self._session_lock_users.get(session_key, 0) + 1
+        )
+        return lock
+
+    def _release_session_lock(self, session_key: SessionKey) -> None:
+        users = self._session_lock_users.get(session_key)
+        if users is None:
+            self._session_locks.pop(session_key, None)
+            return
+        if users > 1:
+            self._session_lock_users[session_key] = users - 1
+            return
+        self._session_lock_users.pop(session_key, None)
+        self._session_locks.pop(session_key, None)
+
     async def _process_queued_message(
         self, msg: InboundMessage, session_lock: asyncio.Lock
     ) -> None:
@@ -1140,47 +1163,69 @@ class AgentLoop:
                                 f"Error publishing failure response: {publish_error}"
                             )
         finally:
-            users = self._session_lock_users[msg.session_key] - 1
-            if users:
-                self._session_lock_users[msg.session_key] = users
-            else:
-                self._session_lock_users.pop(msg.session_key)
-                self._session_locks.pop(msg.session_key)
+            self._release_session_lock(msg.session_key)
 
     async def run(self) -> None:
         """Run the agent loop, processing independent sessions concurrently."""
         self._running = True
+        self._idle_wakeup.clear()
         await self._connect_mcp()
         logger.info("Agent loop started")
 
         try:
             while self._running:
+                consume = asyncio.create_task(self.bus.consume_inbound())
+                wake = asyncio.create_task(self._idle_wakeup.wait())
                 try:
-                    msg = await asyncio.wait_for(self.bus.consume_inbound(), timeout=1.0)
-                except asyncio.TimeoutError:
+                    done, pending = await asyncio.wait(
+                        {consume, wake},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                except asyncio.CancelledError:
+                    if (
+                        consume.done()
+                        and not consume.cancelled()
+                        and consume.exception() is None
+                    ):
+                        await self.bus.publish_inbound(consume.result())
+                    else:
+                        consume.cancel()
+                    wake.cancel()
+                    await asyncio.gather(consume, wake, return_exceptions=True)
+                    raise
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+
+                if consume not in done or consume.cancelled():
+                    break
+                if consume.exception() is not None:
+                    if not self._running:
+                        break
                     continue
+                msg = consume.result()
 
                 if not self._running:
+                    # Already consumed from the bus; put it back so a restarted
+                    # loop can pick it up instead of dropping the turn.
                     await self.bus.publish_inbound(msg)
                     break
 
-                session_lock = self._session_locks.setdefault(
-                    msg.session_key, asyncio.Lock()
-                )
-                self._session_lock_users[msg.session_key] = (
-                    self._session_lock_users.get(msg.session_key, 0) + 1
-                )
+                session_lock = self._retain_session_lock(msg.session_key)
                 task = asyncio.create_task(self._process_queued_message(msg, session_lock))
                 self._message_tasks.add(task)
                 task.add_done_callback(self._message_tasks.discard)
         finally:
             self._running = False
             if self._message_tasks:
-                await asyncio.gather(*self._message_tasks)
+                await asyncio.shield(
+                    asyncio.gather(*self._message_tasks, return_exceptions=True)
+                )
 
     def stop(self) -> None:
-        """Stop the agent loop."""
+        """Stop accepting new bus messages and let in-flight turns drain."""
         self._running = False
+        self._idle_wakeup.set()
         logger.info("Agent loop stopping")
 
     async def _compact_tool_loop(
@@ -2879,7 +2924,11 @@ Respond with ONLY valid JSON, no markdown fences."""
         metadata: dict[str, object] | None = None,
     ) -> str:
         """
-        Process a message directly (for CLI or cron usage).
+        Process a message directly (CLI, cron, or heartbeat).
+
+        Uses the same per-session lock and global semaphore as the bus
+        consumer, so a direct call cannot race a queued turn on the same
+        SessionKey or bypass ``message_max_concurrency``.
 
         Args:
             content: The message content.
@@ -2895,6 +2944,11 @@ Respond with ONLY valid JSON, no markdown fences."""
             content=content,
             metadata=metadata or {},
         )
-
-        response = await self._process_message(msg)
-        return response.content if response else ""
+        session_lock = self._retain_session_lock(msg.session_key)
+        try:
+            async with session_lock:
+                async with self._message_semaphore:
+                    response = await self._process_message(msg)
+                    return response.content if response else ""
+        finally:
+            self._release_session_lock(msg.session_key)

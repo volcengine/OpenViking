@@ -530,10 +530,16 @@ def gateway(
         ]
         try:
             await asyncio.gather(*tasks)
+        except asyncio.CancelledError:
+            agent_loop.stop()
+            raise
         finally:
             await agent_loop.close_mcp()
 
-    asyncio.run(run())
+    try:
+        asyncio.run(run())
+    except KeyboardInterrupt:
+        console.print("\nGoodbye!")
 
 
 def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False, eval: bool = False):
@@ -908,7 +914,11 @@ def chat(
                 tasks.append(channels.start_all())
                 tasks.append(agent_loop.run())
 
-                await asyncio.gather(*tasks)
+                try:
+                    await asyncio.gather(*tasks)
+                except asyncio.CancelledError:
+                    agent_loop.stop()
+                    raise
         finally:
             await agent_loop.close_mcp()
 
