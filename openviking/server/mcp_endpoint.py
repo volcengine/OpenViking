@@ -1342,7 +1342,7 @@ async def grep(
     patterns = [pattern] if isinstance(pattern, str) else pattern
     semaphore = asyncio.Semaphore(10)
 
-    async def _grep_one(p: str) -> tuple[str, list[dict]]:
+    async def _grep_one(p: str) -> tuple[str, list[dict], Optional[str]]:
         async with semaphore:
             try:
                 result = await service.fs.grep(
@@ -1352,21 +1352,35 @@ async def grep(
                     case_insensitive=case_insensitive,
                     node_limit=node_limit,
                 )
-                return (p, result.get("matches", []))
-            except Exception:
-                return (p, [])
+                return (p, result.get("matches", []), None)
+            except Exception as exc:
+                # One bad pattern must not cost the others their matches -- that is what
+                # the fan-out is for -- but an empty list is indistinguishable from a real
+                # miss, so carry the reason instead of dropping it. POST /search/grep maps
+                # and re-raises these; reporting them is what keeps the two faces agreeing
+                # about whether a failure is a result.
+                return (p, [], f"{type(exc).__name__}: {exc}")
 
     results = await asyncio.gather(*[_grep_one(p) for p in patterns])
 
     merged: dict[str, list[tuple]] = {}
     total = 0
-    for p, matches in results:
+    failures: list[tuple[str, str]] = []
+    for p, matches, error in results:
+        if error is not None:
+            failures.append((p, error))
         total += len(matches)
         for m in matches:
             m_uri = m.get("uri", "?")
             merged.setdefault(m_uri, []).append((m.get("line", "?"), m.get("content", ""), p))
 
+    failure_lines = [f"  {p}: {error}" for p, error in failures]
+
     if not merged:
+        if failures:
+            # Nothing was searched successfully, so "no matches" would be an answer to a
+            # question that was never asked.
+            return "grep failed for every pattern:\n" + "\n".join(failure_lines)
         return f"No matches found for pattern(s): {', '.join(patterns)}"
 
     lines = [f"Found {total} match(es) across {len(patterns)} pattern(s):"]
@@ -1375,6 +1389,9 @@ async def grep(
         lines.append(f"\n{m_uri}")
         for line_no, content, p in hits:
             lines.append(f"  L{line_no} [{p}]: {content}")
+    if failures:
+        lines.append("\nPatterns that could not be searched:")
+        lines.extend(failure_lines)
     return "\n".join(lines)
 
 
