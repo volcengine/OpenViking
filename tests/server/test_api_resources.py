@@ -136,6 +136,43 @@ async def _wait_task_terminal(client: httpx.AsyncClient, task_id: str, timeout: 
     raise AssertionError(f"Task {task_id} did not finish; last_result={last_result}")
 
 
+@pytest.mark.parametrize(
+    ("code", "expected_status", "expected_code"),
+    [
+        ("INVALID_ARGUMENT", 400, "INVALID_ARGUMENT"),
+        ("PERMISSION_DENIED", 403, "PERMISSION_DENIED"),
+        (None, 500, "PROCESSING_ERROR"),
+    ],
+)
+async def test_add_resource_wait_preserves_queued_failure_code(
+    client: httpx.AsyncClient,
+    sample_markdown_file,
+    upload_temp_dir,
+    monkeypatch,
+    code,
+    expected_status,
+    expected_code,
+):
+    from openviking.utils.resource_processor import ResourceProcessor
+
+    async def reject_resource(self, **kwargs):
+        failure = {"status": "error", "errors": ["source rejected during processing"]}
+        if code is not None:
+            failure["code"] = code
+        return failure
+
+    monkeypatch.setattr(ResourceProcessor, "process_resource", reject_resource)
+    response = await client.post(
+        "/api/v1/resources",
+        json={"temp_file_id": sample_markdown_file.name, "wait": True, "timeout": 10},
+    )
+
+    assert response.status_code == expected_status, response.text
+    error = response.json()["error"]
+    assert error["code"] == expected_code
+    assert "source rejected during processing" in error["message"]
+
+
 async def test_add_resource_success(
     client: httpx.AsyncClient,
     sample_markdown_file,
