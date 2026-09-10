@@ -56,7 +56,6 @@ from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
     OpenVikingError,
-    ResourceExhaustedError,
 )
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.config import get_openviking_config
@@ -78,9 +77,6 @@ _CREATE_ALLOWED_EXTENSIONS = frozenset(
         ".ts",
     }
 )
-_BATCH_MAX_OPERATIONS = 256
-_BATCH_MAX_FILE_BYTES = 8 * 1024 * 1024
-_BATCH_MAX_TOTAL_BYTES = 16 * 1024 * 1024
 
 # Subtrees directly under a user root that OpenViking manages itself; only
 # memories/, resources/, and plain files may be written under a user root.
@@ -216,7 +212,8 @@ class ContentWriteCoordinator:
         Each operation follows the same create/replace/append semantics as ``write``;
         ``upsert`` is available for callers that already hold the desired final tree.
         Refresh runs only after every write and after releasing the tree lock, so derived
-        summaries are generated once per batch.
+        summaries are generated once per batch. Operation count and content size have
+        no application-level quotas; all operations undergo access and path validation.
         """
         normalized_root = self._validate_uri_path(root_uri, field_name="root_uri")
         await self._validate_batch_root(normalized_root, ctx=ctx)
@@ -414,15 +411,10 @@ class ContentWriteCoordinator:
     ) -> list[dict[str, Any]]:
         if not operations:
             raise InvalidArgumentError("batch-write operations must not be empty")
-        if len(operations) > _BATCH_MAX_OPERATIONS:
-            raise ResourceExhaustedError(
-                f"batch-write supports at most {_BATCH_MAX_OPERATIONS} operations"
-            )
 
         context_type = context_type_for_uri(root_uri)
         normalized: list[dict[str, Any]] = []
         seen: set[str] = set()
-        total_bytes = 0
         for raw in operations:
             if not isinstance(raw, dict):
                 raise InvalidArgumentError("batch-write operation must be an object")
@@ -449,7 +441,8 @@ class ContentWriteCoordinator:
                 content = raw.get("content")
                 if not isinstance(content, str):
                     raise InvalidArgumentError(f"batch-write content must be a string: {uri}")
-                encoded_content = content.encode("utf-8")
+                # Reject invalid UTF-8 before any operation writes to the target tree.
+                content.encode("utf-8")
             else:
                 if context_type == "memory":
                     raise InvalidArgumentError(
@@ -461,18 +454,11 @@ class ContentWriteCoordinator:
                         f"batch-write content_base64 must be a string: {uri}"
                     )
                 try:
-                    encoded_content = base64.b64decode(content_base64, validate=True)
+                    content = base64.b64decode(content_base64, validate=True)
                 except (binascii.Error, ValueError) as exc:
                     raise InvalidArgumentError(
                         f"batch-write content_base64 is invalid: {uri}"
                     ) from exc
-                content = encoded_content
-            content_size = len(encoded_content)
-            if content_size > _BATCH_MAX_FILE_BYTES:
-                raise ResourceExhaustedError(f"batch-write file exceeds size limit: {uri}")
-            total_bytes += content_size
-            if total_bytes > _BATCH_MAX_TOTAL_BYTES:
-                raise ResourceExhaustedError("batch-write total content exceeds size limit")
 
             mode = raw.get("mode", "replace")
             self._validate_batch_mode(mode)

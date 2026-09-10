@@ -366,7 +366,7 @@ Each operation contains:
 
 **Notes**
 
-- A request supports at most 256 operations, 8 MiB per file, and 16 MiB total.
+- Operation count, individual file size, and total content size have no application-level quotas.
 - All targets must be files below `root_uri`, use the same context type, and have unique canonical URIs.
 - Resource targets may use any safe file extension; Memory targets retain the text extension allowlist and do not accept binary content.
 - `replace`, `append`, and `create` match `write()` semantics. `upsert` replaces an existing file or creates a missing file.

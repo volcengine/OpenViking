@@ -406,9 +406,9 @@ class OpenSandboxBackend(SandboxBackend):
         self,
         path: str = ".",
         *,
-        max_entries: int,
+        max_entries: int | None,
     ) -> list[SandboxFileInfo]:
-        """List remote VKE files without materializing an unbounded search response."""
+        """List remote VKE files; None removes the entry quota without following symlinks."""
         if not self._is_vke:
             return await super().list_files(path, max_entries=max_entries)
         if not self._sandbox:
@@ -417,9 +417,7 @@ class OpenSandboxBackend(SandboxBackend):
         root = self._normalize_workspace_path(path)
         sandbox_root = self._sandbox_path(root or ".").rstrip("/")
 
-        # OpenSandbox's search API returns one fully materialized JSON array and
-        # has no server-side result limit. Traverse in the sandbox so both the
-        # walk and the response stop at the service-owned inventory bound.
+        # Traverse remotely to exclude symlinks and enforce any caller-supplied quota.
         script = "\n".join(
             [
                 "import json, os",
@@ -438,7 +436,7 @@ class OpenSandboxBackend(SandboxBackend):
                 "    with entries:",
                 "        for entry in entries:",
                 "            visited += 1",
-                "            if visited > limit:",
+                "            if limit is not None and visited > limit:",
                 "                overflow = True",
                 "                break",
                 "            relative = os.path.join(relative_dir, entry.name)",

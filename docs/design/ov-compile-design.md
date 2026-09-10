@@ -548,7 +548,7 @@ Bot 当前没有通用的持久化后台任务管理器，因此这里实现一�
 
 `sanitized_request` 只包含 canonical `from/to/skill` 和 effective reason；`openviking_connection` 仅由运行中 `asyncio.Task` 持有，不进入 JSON、异常详情或日志。
 
-运行中任务目录可以保存有大小限制的 Skill 快照、catalog 和 draft，但不能保存用户凭证。任务进入终态后删除 workspace、Skill snapshot 和 draft；task/result/error JSON 最长保留 24 小时且最多保留 1,000 条，启动和任务结束时都会清理。
+运行中任务目录可以保存 Skill 快照、catalog 和 draft，但不能保存用户凭证。正常完成后清理 workspace；部分完成或最终修复失败时保留草稿，不按文件数量或大小截断。task/result/error JSON 最长保留 24 小时且最多保留 1,000 条，启动和任务结束时都会清理。
 
 VikingBot 使用独立的 compile 并发限制，并对同一 canonical 目标目录串行执行。accepted task 最多排队 60 分钟，取得 target lock 和全局执行 slot 后持续运行，直到任务完成、失败或被取消。Agent 阶段达到迭代上限时允许 salvage；salvage 与 cleanup 各自受独立的短 grace deadline 约束。该锁只减少同一 Bot 进程内的浪费；跨进程或人工写入冲突仍由 batch-write 的 tree lock 和 content hash 检查解决。v1 task store 以单个 VikingBot gateway 进程为部署边界，不承诺多副本共享 task 查询。
 
@@ -561,18 +561,20 @@ v1 先使用集中定义、可测试的 `CompileLimits`，不把常量散落在 
 | 项目 | 默认值 |
 | --- | --- |
 | source roots | 16 |
-| source materialization files / 总大小 | 5,000 / 1 GiB |
-| Skill files / 单文件 / 总大小 | 128 / 8 MiB / 32 MiB |
-| target inventory entries / relevance catalog pages | 2,000 / 10 |
-| initial prompt characters | 200,000 |
-| tool URI count / 单次结果 / 任务累计结果 | 32 / 1 MiB / 8 MiB |
-| output pages / files / combined operations / 最终总大小 | 128 / 128 / 256 / 4 MiB |
-| concurrent Compile tasks / task runtime maximum and default | 10 / 60 min |
+| 每个 source root 的 inventory entries | 2,000 |
+| source batch files / bytes | 10 / 256,000（单个大文件独占批次） |
+| merge input files / characters | 20 / 60,000 |
+| initial prompt / agent context characters | 300,000 / 360,000 |
+| 主 Agent / 子 Agent model-tool rounds | 60 / 70 |
+| 最终校验修复 rounds | 3 |
+| 输出页数（含索引）/ 文件数 / 写入操作数 / 单文件与总大小 | 不设上限 |
+| 输出工作区和目标目录清单 | 不设总条目上限；远程目标清单分页读取 |
+| concurrent Compile tasks | 10 |
 | salvage / cleanup grace | 120 sec / 40 sec |
 | accepted tasks（全局 / 单 principal）/ queue wait | 40 / 10 / 60 min |
 | terminal task retention / records | 24 h / 1,000 |
 
-OpenViking batch-write 自己还要设置独立的 request 上限，至少覆盖 Compile 的 256 combined operations / 4 MiB，但不能信任 Bot 已经做过限制。超限统一返回 `RESOURCE_EXHAUSTED`。
+正常提交、渲染、最终修复兜底和迭代超限 salvage 均不因输出数量或大小拒绝、截断文件。路径安全、重复路径和文件格式校验继续生效；任务执行轮数、输入批次与并发限制独立于输出规模。
 
 ## 11. 错误处理
 
@@ -588,7 +590,7 @@ OpenViking batch-write 自己还要设置独立的 request 上限，至少覆盖
 | `MODEL_UNAVAILABLE` | 模型服务不可用 |
 | `WRITE_CONFLICT` | 目标页面在任务期间发生变化 |
 | `WRITE_FAILED` | 内容写入或索引刷新失败 |
-| `RESOURCE_EXHAUSTED` | Skill、catalog、工具输入或输出超过 Compile 上限 |
+| `RESOURCE_EXHAUSTED` | 输入、上下文或任务容量超过 Compile 上限 |
 | `DEADLINE_EXCEEDED` | Agent、batch refresh 或 CLI 等待超时 |
 | `BOT_RESTARTED` | Bot 重启中断了非终态 Compile 任务 |
 

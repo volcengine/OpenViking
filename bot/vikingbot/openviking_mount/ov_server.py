@@ -563,8 +563,11 @@ class VikingClient:
     async def mkdir(self, uri: str) -> None:
         await self.client.mkdir(uri)
 
-    async def tree(self, uri: str, *, node_limit: int = 1000) -> List[Dict[str, Any]]:
-        return await self.client.tree(uri, node_limit=node_limit)
+    async def tree(
+        self, uri: str, *, node_limit: int = 1000, offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """Return one visible tree page; offset skips entries from preceding pages."""
+        return await self.client.tree(uri, node_limit=node_limit, offset=offset)
 
     async def read_raw(self, uri: str, offset: int = 0, limit: int = -1) -> str:
         return await self.client.read_raw(uri, offset=offset, limit=limit)

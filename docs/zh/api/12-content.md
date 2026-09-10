@@ -366,7 +366,7 @@ openviking write viking://resources/docs/api.md \
 
 **说明**
 
-- 单次请求最多包含 256 个 operation，单文件不超过 8 MiB，总内容不超过 16 MiB。
+- 不设置 operation 数量、单文件大小或总内容大小的应用层上限。
 - 所有目标必须是 `root_uri` 下的文件、属于同一 context type，且 canonical URI 不能重复。
 - Resource 目标允许任意安全文件扩展名；Memory 目标仍使用文本扩展名白名单，且不接受二进制内容。
 - `replace`、`append`、`create` 与 `write()` 语义一致；`upsert` 会覆盖已有文件或创建缺失文件。

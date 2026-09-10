@@ -23,21 +23,26 @@ WikiLanguage = Literal["en", "zh-CN"]
 
 
 class CompileLimits(BaseModel):
+    """Bound task execution and source loading; generated output has no count or byte quota."""
+
     model_config = ConfigDict(frozen=True)
 
     source_roots: int = 16
-    target_total_bytes: int = 1024 * 1024 * 1024
-    skill_files: int = 128
-    skill_file_bytes: int = 8 * 1024 * 1024
-    skill_total_bytes: int = 32 * 1024 * 1024
-    target_inventory_entries: int = 2000
+    source_inventory_entries: int = 2000
     initial_prompt_chars: int = 300_000
-    agent_context_chars: int = 240_000
+    agent_context_chars: int = 360_000
+    # Merge attachments stay bounded independently of history compaction.
+    merge_input_chars: int = 60_000
+    # Maximum draft attachments per merge; the parent chooses topic boundaries.
+    merge_input_files: int = Field(default=20, ge=1)
+    # Metadata sizes are UTF-8 bytes; an oversized file owns one incremental-read task.
+    source_batch_bytes: int = 256_000
+    source_batch_files: int = 10
+    # Final Resource validation gets one repair attempt within the existing loop budget.
+    repair_iterations: int = 3
     agent_iterations: int = 60
-    output_pages: int = 128
-    output_files: int = 128
-    output_operations: int = 256
-    output_total_bytes: int = 4 * 1024 * 1024
+    # Per-child model/tool rounds, including draft checks and submission; parent budget is separate.
+    subagent_iterations: int = Field(default=70, ge=1)
     concurrent_tasks: int = 10
     accepted_tasks: int = 40
     accepted_tasks_per_principal: int = 10
