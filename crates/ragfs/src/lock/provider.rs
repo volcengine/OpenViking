@@ -192,7 +192,16 @@ impl FilesystemPathLockProvider {
 
     /// Read raw token bytes from `lock_path`, returning `None` if no token exists.
     async fn read_token_raw(&self, lock_path: &str) -> PathLockResult<Option<Vec<u8>>> {
-        match self.fs.read(lock_path, 0, 0).await {
+        let mut result = self.fs.read(lock_path, 0, 0).await;
+        if result
+            .as_ref()
+            .is_ok_and(|data| LockTokenCodec::decode(String::from_utf8_lossy(data).trim()).is_err())
+        {
+            // A concurrent in-place CAS write can expose a transient partial token.
+            tokio::task::yield_now().await;
+            result = self.fs.read(lock_path, 0, 0).await;
+        }
+        match result {
             Ok(data) => Ok(Some(data)),
             Err(e) => {
                 if matches!(
@@ -222,13 +231,13 @@ impl FilesystemPathLockProvider {
 }
 
 #[cfg(test)]
-mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
-
     use crate::core::{Error, FileSystem, WriteFlag};
+    };
     use crate::plugins::memfs::MemFileSystem;
 
-    use super::*;
+    }
 
     /// Verify legacy encrypted lock files are treated as removable upgrade leftovers.
     #[tokio::test]
