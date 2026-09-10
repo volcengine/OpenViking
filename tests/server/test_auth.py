@@ -473,6 +473,46 @@ async def test_task_endpoints_are_user_scoped():
     set_task_tracker(None)
 
 
+async def test_root_task_routes_load_default_user_history_after_tracker_restart():
+    """Dev-mode ROOT should see default/default persisted tasks after cache loss."""
+    set_task_tracker(None)
+    agfs = _FakeAgfs()
+    store = PersistentTaskStore(agfs)
+    tracker = TaskTracker(store=store)
+    set_task_tracker(tracker)
+    task = await tracker.create(
+        "session_commit",
+        resource_id="persisted-session",
+        account_id="default",
+        user_id="default",
+        task_id="persisted-default-task",
+    )
+    await tracker.complete(
+        task.task_id,
+        {"ok": True},
+        account_id="default",
+        user_id="default",
+    )
+
+    set_task_tracker(TaskTracker(store=PersistentTaskStore(agfs)))
+    app = _build_task_http_test_app(
+        ResolvedIdentity(role=Role.ROOT, account_id="default", user_id="default")
+    )
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        list_resp = await client.get("/api/v1/tasks")
+        assert list_resp.status_code == 200
+        task_ids = {item["task_id"] for item in list_resp.json()["result"]}
+        assert task.task_id in task_ids
+
+        get_resp = await client.get(f"/api/v1/tasks/{task.task_id}")
+        assert get_resp.status_code == 200
+        assert get_resp.json()["result"]["task_id"] == task.task_id
+
+    set_task_tracker(None)
+
+
 # ---- Role-based access tests ----
 
 

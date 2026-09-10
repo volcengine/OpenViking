@@ -37,6 +37,12 @@ async def get_task(
         if task is None:
             task = await tracker.get(
                 task_id,
+                account_id=_ctx.account_id,
+                user_id=_ctx.user.user_id,
+            )
+        if task is None:
+            task = await tracker.get(
+                task_id,
                 account_id=SYSTEM_TASK_ACCOUNT_ID,
                 user_id=SYSTEM_TASK_USER_ID,
             )
@@ -96,6 +102,14 @@ async def list_tasks(
     """List background tasks with optional filters."""
     tracker = get_task_tracker()
     if _ctx.role == Role.ROOT:
+        user_tasks = await tracker.list_tasks(
+            task_type=task_type,
+            status=status,
+            resource_id=resource_id,
+            limit=limit,
+            account_id=_ctx.account_id,
+            user_id=_ctx.user.user_id,
+        )
         system_tasks = await tracker.list_tasks(
             task_type=task_type,
             status=status,
@@ -113,6 +127,7 @@ async def list_tasks(
             include_internal=include_internal,
         )
         tasks_by_id = {task.task_id: task for task in cached_tasks}
+        tasks_by_id.update({task.task_id: task for task in user_tasks})
         tasks_by_id.update({task.task_id: task for task in system_tasks})
         tasks = sorted(tasks_by_id.values(), key=lambda task: task.created_at, reverse=True)[:limit]
     else:
