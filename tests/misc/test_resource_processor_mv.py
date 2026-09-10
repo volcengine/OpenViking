@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from openviking.utils.resource_processor import RESOURCE_LOCK_ACQUIRE_WAIT_SECS
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 
@@ -82,6 +84,9 @@ class _FakeVikingFS:
         self.exists_calls = []
         self.persist_calls = []
         self.delete_temp_calls = []
+
+    async def _ensure_access(self, uri, ctx=None, action=None):
+        return None
 
     def bind_request_context(self, ctx):
         return _CtxMgr()
@@ -351,7 +356,12 @@ async def test_resource_processor_allows_flat_root_only_for_single_no_split_sour
 
     assert result["status"] == "success"
     assert result["root_uri"] == root_uri
-    assert fake_fs._async_agfs.exact_attempts == [("/mock/resources/神雕_副本.md", 0.0)]
+    # Auto-named candidates skip to the next name on contention (0-wait);
+    # a caller-specified target waits for a busy lock instead (#4337).
+    expected_timeout = 0.0 if auto_candidate else RESOURCE_LOCK_ACQUIRE_WAIT_SECS
+    assert fake_fs._async_agfs.exact_attempts == [
+        ("/mock/resources/神雕_副本.md", expected_timeout)
+    ]
     assert fake_fs._async_agfs.tree_attempts == []
     assert rp.tree_builder.finalize_from_temp.await_args.kwargs["flatten_single_file"] is True
 
