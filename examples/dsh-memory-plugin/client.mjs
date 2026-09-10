@@ -129,6 +129,7 @@ export class OpenVikingClient {
     if (options.targetUri) body.target_uri = options.targetUri;
     if (options.limit) body.limit = options.limit;
     if (options.scoreThreshold !== undefined) body.score_threshold = options.scoreThreshold;
+    if (options.contextType) body.context_type = options.contextType;
     const response = await this.fetchJSON("/api/v1/search/find", {
       method: "POST",
       body: JSON.stringify(body),
