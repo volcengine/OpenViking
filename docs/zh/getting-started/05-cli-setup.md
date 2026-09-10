@@ -478,7 +478,9 @@ CLI 配置完成后，使用 `ov --help` 和 `ov <command> --help` 继续了解�
 添加资源会把数据写入 active OpenViking 服务端。如果你想做一个小演示，请选择你愿意存入服务端的资源。Agent 运行这类演示命令前，必须先征得用户同意。
 
 ```bash
-ov add-resource https://github.com/volcengine/OpenViking --wait
+ov add-resource https://github.com/volcengine/OpenViking
+# 使用返回的 task_id 查询状态；completed 后再检索
+ov task status TASK_ID
 ov find "what is OpenViking"
 ov tree viking://resources/ -L 2
 ```

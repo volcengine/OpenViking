@@ -105,7 +105,6 @@ client = SyncHTTPClient(
 ```python
 result = client.add_resource(
     path="https://example.com/docs",
-    options={"wait": False},
 )
 
 result = client.add_resource(path="/path/to/manual.pdf")
@@ -116,8 +115,7 @@ result = client.add_resource(
 )
 ```
 
-脚本和 demo 可以直接用 `wait=True`。  
-真正的服务里更常见的做法是异步导入，等到你确实需要结果时再调用 `wait_processed()`。
+导入默认返回 `task_id`。通过 `client.get_task(result["task_id"])` 查询状态，只有任务为 `completed` 时才读取摘要或检索本次导入的内容。轮询示例见 [后台任务](../../docs/zh/api/17-tasks.md)。
 
 ### 文件系统访问
 
@@ -251,7 +249,7 @@ memories = client.find(
 | `ImportError` 或本地扩展问题 | 重新安装 `openviking`；如果是源码开发，确认本地构建依赖齐全。 |
 | HTTP 模式下 `Connection refused` | 启动 `openviking-server`，并检查 `http://localhost:1933/health`。 |
 | 租户或认证报错 | 普通数据接口优先使用 `user_key`；`root_key` 仅在显式传入租户信息时使用。 |
-| 刚导入后检索慢或搜不到 | 等待 `wait_processed()`，或在导入时直接用 `wait=True`。 |
+| 刚导入后检索慢或搜不到 | 查询本次导入的 `task_id`，确认任务状态为 `completed` 后再检索。 |
 | 多个客户端或会话争用本地存储 | 不要反复起独立本地进程，改用 HTTP 服务端模式。 |
 
 ## 许可证

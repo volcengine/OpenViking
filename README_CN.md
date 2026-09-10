@@ -131,10 +131,11 @@ nohup openviking-server > /data/log/openviking.log 2>&1 &
 
 ```bash
 ov status
-ov add-resource https://github.com/volcengine/OpenViking # --wait
+ov add-resource https://github.com/volcengine/OpenViking
+# 将 TASK_ID 替换为提交时返回的任务 ID；状态为 completed 后再执行后续命令
+ov task status TASK_ID
 ov ls viking://resources/
 ov tree viking://resources/volcengine -L 2
-# 没加 --wait 的话，语义处理需要等一段时间
 ov find "what is openviking"
 ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
 ```

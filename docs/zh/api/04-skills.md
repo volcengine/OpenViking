@@ -154,7 +154,7 @@ This tool wraps the MCP tool `search-web`. Call this when the user needs functio
 2. 检测数据格式（结构化数据、SKILL.md 内容、MCP 格式）
 3. 解析技能定义
 4. 存储到当前用户的 `viking://user/{user_id}/skills/` 路径下
-5. 如指定 `wait=True`，等待向量化完成
+5. 默认返回 `task_id`，用于查询后台向量化任务
 
 **代码入口**：
 - `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.add_skill` - Python SDK 入口
@@ -199,10 +199,13 @@ This tool wraps the MCP tool `search-web`. Call this when the user needs functio
 
 #### 3. 使用示例
 
+导入默认返回 `task_id`。通过 [任务 API](17-tasks.md) 查询状态，任务为 `completed` 后再检索该技能。
+
 **TypeScript SDK**
 
 ```typescript
-await client.addSkill("./my-skill", { wait: true });
+const result = await client.addSkill("./my-skill");
+console.log(result.task_id);
 ```
 
 **HTTP API**：
@@ -222,8 +225,7 @@ curl -X POST http://localhost:1933/api/v1/skills \
       "name": "search-web",
       "description": "Search the web for current information",
       "content": "# search-web\n\nSearch the web for current information.\n\n## Parameters\n- **query** (string, required): Search query\n- **limit** (integer, optional): Max results, default 10"
-    },
-    "wait": true
+    }
   }'
 
 # 使用内联 SKILL.md 内容
@@ -322,21 +324,18 @@ result = client.add_skill(data="./skills/code-runner/")
 print(f"Added: {result['uri']}")
 print(f"Auxiliary files: {result['auxiliary_files']}")
 
-# 等待处理完成
-result = client.add_skill(data="./skills/my-skill/", wait=True)
-client.wait_processed()
+# 查询上一次导入任务的状态
+print(client.get_task(result["task_id"]))
 ```
 
 **Go SDK**
 
 ```go
-result, err := client.AddSkill(ctx, "./skills/my-skill/", &openviking.AddSkillOptions{
-    Wait: true,
-})
+result, err := client.AddSkill(ctx, "./skills/my-skill/", nil)
 if err != nil {
     return err
 }
-fmt.Println(result["uri"])
+fmt.Println(result["task_id"])
 ```
 
 **CLI**：
@@ -347,8 +346,8 @@ ov add-skill ./skills/my-skill.json
 ov add-skill ./skills/search-web/SKILL.md
 ov add-skill ./skills/code-runner/
 
-# 等待处理完成
-ov add-skill ./skills/my-skill/ --wait
+# 使用提交时返回的 task_id 查询进度
+ov task status TASK_ID
 
 # 使用 JSON 输出格式
 ov add-skill ./skills/my-skill/ -o json
@@ -366,11 +365,7 @@ ov add-skill ./skills/my-skill/ -o json
     "uri": "viking://user/alice/skills/my-skill",
     "name": "my-skill",
     "auxiliary_files": 2,
-    "queue_status": {
-      "pending": 0,
-      "processing": 0,
-      "completed": 1
-    }
+    "task_id": "uuid-xxx"
   },
   "telemetry": {
     "operation_id": "550e8400-e29b-41d4-a716-446655440000"
@@ -382,12 +377,13 @@ ov add-skill ./skills/my-skill/ -o json
 **CLI 响应（默认表格格式）**：
 ```
 Note: Skill is being processed in the background.
-Use 'ov wait' to wait for completion, or 'ov observer queue' to check status.
+Use 'ov task status <task_id>' to check progress, or 'ov task list' to see all tasks.
 status          success
 root_uri        viking://user/alice/skills/my-skill
 uri             viking://user/alice/skills/my-skill
 name            my-skill
 auxiliary_files 2
+task_id         uuid-xxx
 ```
 
 **CLI 响应（JSON 格式，使用 -o json）**：
@@ -397,7 +393,8 @@ auxiliary_files 2
   "root_uri": "viking://user/alice/skills/my-skill",
   "uri": "viking://user/alice/skills/my-skill",
   "name": "my-skill",
-  "auxiliary_files": 2
+  "auxiliary_files": 2,
+  "task_id": "uuid-xxx"
 }
 ```
 
@@ -410,6 +407,7 @@ auxiliary_files 2
 | `uri` | string | 技能在 OpenViking 中的 canonical 最终 URI（同 `root_uri`）|
 | `name` | string | 技能名称 |
 | `auxiliary_files` | number | 技能附带的辅助文件数量 |
+| `task_id` | string | 默认异步模式下返回的后台处理任务 ID；通过任务 API 查询最终状态 |
 | `queue_status` | object | （可选，仅当 `wait=True` 时）队列处理状态，包含 `pending`、`processing`、`completed` 计数 |
 
 #### 4. 错误处理
@@ -554,7 +552,6 @@ validated = client.validate_skill(data={"name": "search-web", "description": "..
 updated = client.update_skill(
     skill_name="search-web",
     data="./skills/search-web",
-    wait=True,
 )
 ```
 
@@ -576,9 +573,7 @@ validated, err := client.ValidateSkill(ctx, map[string]any{
     "name":        "search-web",
     "description": "...",
 }, nil)
-updated, err := client.UpdateSkill(ctx, "search-web", "./skills/search-web", &openviking.UpdateSkillOptions{
-    Wait: true,
-})
+updated, err := client.UpdateSkill(ctx, "search-web", "./skills/search-web", nil)
 _, _ = validated, updated
 ```
 
@@ -600,8 +595,7 @@ curl -X PUT http://localhost:1933/api/v1/skills/search-web \
       "name": "search-web",
       "description": "Search the web for current information",
       "content": "# search-web\n\nUpdated instructions."
-    },
-    "wait": true
+    }
   }'
 ```
 

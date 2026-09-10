@@ -131,10 +131,11 @@ nohup openviking-server > /data/log/openviking.log 2>&1 &
 
 ```bash
 ov status
-ov add-resource https://github.com/volcengine/OpenViking # --wait
+ov add-resource https://github.com/volcengine/OpenViking
+# TASK_ID を返されたタスク ID に置き換え、completed を確認してから後続のコマンドを実行します
+ov task status TASK_ID
 ov ls viking://resources/
 ov tree viking://resources/volcengine -L 2
-# --wait を付けない場合は、セマンティック処理の完了までしばらく待ちます
 ov find "what is openviking"
 ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/en
 ```

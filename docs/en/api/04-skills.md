@@ -156,7 +156,7 @@ Skills are a special type of resource that define actions or tools agents can pe
 2. Detect data format (structured data, SKILL.md content, MCP format)
 3. Parse skill definition
 4. Store to the current user's `viking://user/{user_id}/skills/` path
-5. If `wait=true`, wait for vectorization to complete
+5. Return a `task_id` by default for tracking background vectorization
 
 **Code Entry Points**:
 - `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.add_skill` - Python SDK entry point
@@ -200,6 +200,8 @@ Skills are a special type of resource that define actions or tools agents can pe
 
 #### 3. Usage Examples
 
+Imports return a `task_id` by default. Query the [Task API](17-tasks.md) and search the skill after the task reaches `completed`.
+
 **HTTP API**
 
 ```
@@ -217,8 +219,7 @@ curl -X POST http://localhost:1933/api/v1/skills \
       "name": "search-web",
       "description": "Search the web for current information",
       "content": "# search-web\n\nSearch the web for current information.\n\n## Parameters\n- **query** (string, required): Search query\n- **limit** (integer, optional): Max results, default 10"
-    },
-    "wait": true
+    }
   }'
 
 # Using inline SKILL.md content
@@ -317,27 +318,25 @@ result = client.add_skill(data="./skills/code-runner/")
 print(f"Added: {result['uri']}")
 print(f"Auxiliary files: {result['auxiliary_files']}")
 
-# Wait for processing completion
-result = client.add_skill(data="./skills/my-skill/", wait=True)
-client.wait_processed()
+# Check the status of the previous import task
+print(client.get_task(result["task_id"]))
 ```
 
 **TypeScript SDK**
 
 ```typescript
-await client.addSkill("./my-skill", { wait: true });
+const result = await client.addSkill("./my-skill");
+console.log(result.task_id);
 ```
 
 **Go SDK**
 
 ```go
-result, err := client.AddSkill(ctx, "./skills/my-skill/", &openviking.AddSkillOptions{
-    Wait: true,
-})
+result, err := client.AddSkill(ctx, "./skills/my-skill/", nil)
 if err != nil {
     return err
 }
-fmt.Println(result["uri"])
+fmt.Println(result["task_id"])
 ```
 
 **CLI**
@@ -348,8 +347,8 @@ ov add-skill ./skills/my-skill.json
 ov add-skill ./skills/search-web/SKILL.md
 ov add-skill ./skills/code-runner/
 
-# Wait for processing completion
-ov add-skill ./skills/my-skill/ --wait
+# Check progress using the task_id returned by submission
+ov task status TASK_ID
 
 # Use JSON output format
 ov add-skill ./skills/my-skill/ -o json
@@ -367,11 +366,7 @@ ov add-skill ./skills/my-skill/ -o json
     "uri": "viking://user/alice/skills/my-skill",
     "name": "my-skill",
     "auxiliary_files": 2,
-    "queue_status": {
-      "pending": 0,
-      "processing": 0,
-      "completed": 1
-    }
+    "task_id": "uuid-xxx"
   },
   "telemetry": {
     "operation_id": "550e8400-e29b-41d4-a716-446655440000"
@@ -383,12 +378,13 @@ ov add-skill ./skills/my-skill/ -o json
 **CLI response (default table format)**:
 ```
 Note: Skill is being processed in the background.
-Use 'ov wait' to wait for completion, or 'ov observer queue' to check status.
+Use 'ov task status <task_id>' to check progress, or 'ov task list' to see all tasks.
 status          success
 root_uri        viking://user/alice/skills/my-skill
 uri             viking://user/alice/skills/my-skill
 name            my-skill
 auxiliary_files 2
+task_id         uuid-xxx
 ```
 
 **CLI response (JSON format, using -o json)**:
@@ -398,7 +394,8 @@ auxiliary_files 2
   "root_uri": "viking://user/alice/skills/my-skill",
   "uri": "viking://user/alice/skills/my-skill",
   "name": "my-skill",
-  "auxiliary_files": 2
+  "auxiliary_files": 2,
+  "task_id": "uuid-xxx"
 }
 ```
 
@@ -411,6 +408,7 @@ auxiliary_files 2
 | `uri` | string | Canonical final URI of the skill in OpenViking (same as `root_uri`) |
 | `name` | string | Skill name |
 | `auxiliary_files` | number | Number of auxiliary files included with the skill |
+| `task_id` | string | Returned in the default asynchronous mode; query the Task API for the background processing task's final status |
 | `queue_status` | object | (Optional, only when `wait=true`) Queue processing status with `pending`, `processing`, `completed` counts |
 
 #### 4. Error Handling
@@ -553,7 +551,6 @@ validated = client.validate_skill(data={"name": "search-web", "description": "..
 updated = client.update_skill(
     skill_name="search-web",
     data="./skills/search-web",
-    wait=True,
 )
 ```
 
@@ -574,9 +571,7 @@ validated, err := client.ValidateSkill(ctx, map[string]any{
     "name":        "search-web",
     "description": "...",
 }, nil)
-updated, err := client.UpdateSkill(ctx, "search-web", "./skills/search-web", &openviking.UpdateSkillOptions{
-    Wait: true,
-})
+updated, err := client.UpdateSkill(ctx, "search-web", "./skills/search-web", nil)
 _, _ = validated, updated
 ```
 
@@ -598,8 +593,7 @@ curl -X PUT http://localhost:1933/api/v1/skills/search-web \
       "name": "search-web",
       "description": "Search the web for current information",
       "content": "# search-web\n\nUpdated instructions."
-    },
-    "wait": true
+    }
   }'
 ```
 

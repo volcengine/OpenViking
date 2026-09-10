@@ -136,6 +136,8 @@ Each API is organized in the following three parts:
 
 #### 3. Usage Examples
 
+For operations that return background tasks, default examples should submit a task and query its status. Avoid explicitly setting `wait` or `timeout`, and do not use global `wait_processed()` as a substitute for task status. Keep supported parameters and their actual defaults in the full reference. When later operations depend on asynchronous output, show polling by `task_id` until `completed` and handle `failed` and `cancelled`; do not just remove waiting parameters and immediately read the result.
+
 When an operation presents all transports together, prefer this order:
 - Python SDK example
 - TypeScript SDK example
@@ -216,8 +218,7 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -H "X-API-Key: your-key" \
   -d '{
     "path": "https://example.com/guide.md",
-    "reason": "User guide documentation",
-    "wait": true
+    "reason": "User guide documentation"
   }'
 ```
 
@@ -232,15 +233,15 @@ result = client.add_resource(
     path="./documents/guide.md",
     options={"reason": "User guide documentation"},
 )
-print(f"Added: {result['root_uri']}")
+print(f"Task ID: {result['task_id']}")
 
-client.wait_processed()
+print(client.get_task(result["task_id"]))
 ```
 
 **CLI**
 
 ```bash
-openviking add-resource ./documents/guide.md --reason "User guide documentation" --wait
+openviking add-resource ./documents/guide.md --reason "User guide documentation"
 ```
 
 **Response Example**
@@ -251,7 +252,7 @@ openviking add-resource ./documents/guide.md --reason "User guide documentation"
   "result": {
     "status": "success",
     "root_uri": "viking://resources/documents/guide.md",
-    "source_path": "./documents/guide.md",
+    "task_id": "uuid-xxx",
     "errors": []
   },
   "time": 0.123

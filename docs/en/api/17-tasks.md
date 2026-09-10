@@ -2,6 +2,8 @@
 
 The Task API tracks asynchronous resource imports, session commits, reindexing, snapshot restores, and similar operations.
 
+Submit an operation, save its `task_id`, and check status with separate requests. Receiving a task ID means the task was submitted; only `completed` means processing succeeded. `pending`, `running`, and `cancelling` are not terminal states. Stopping polling does not cancel the background task.
+
 ## API Reference
 
 ### get_task()
@@ -47,14 +49,29 @@ curl -X GET http://localhost:1933/api/v1/tasks/uuid-xxx \
 **Python SDK**
 
 ```python
+import asyncio
+
 from openviking_sdk import AsyncHTTPClient
 
 client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
 
-task = await client.get_task(task_id="uuid-xxx")
-print(f"Status: {task['status']}")
-await client.close()
+try:
+    submitted = await client.add_resource("https://example.com/guide.md")
+    task_id = submitted["task_id"]
+    print(f"Import task: {task_id}")
+    while True:
+        task = await client.get_task(task_id)
+        if task is None:
+            raise RuntimeError(f"Task {task_id} is no longer available")
+        if task["status"] == "completed":
+            break
+        if task["status"] in {"failed", "cancelled"}:
+            raise RuntimeError(f"Import task {task_id}: {task['status']} ({task.get('error')})")
+        await asyncio.sleep(2)
+    print(task["result"])
+finally:
+    await client.close()
 ```
 
 **TypeScript SDK**

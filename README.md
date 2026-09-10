@@ -123,10 +123,11 @@ The install already includes the `ov` client CLI. With the server running:
 
 ```bash
 ov status
-ov add-resource https://github.com/volcengine/OpenViking # --wait
+ov add-resource https://github.com/volcengine/OpenViking
+# Replace TASK_ID with the returned task_id; continue after status is completed
+ov task status TASK_ID
 ov ls viking://resources/
 ov tree viking://resources/volcengine -L 2
-# wait some time for semantic processing if not --wait
 ov find "what is openviking"
 ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/en
 ```
