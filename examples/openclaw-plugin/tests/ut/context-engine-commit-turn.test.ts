@@ -95,7 +95,7 @@ describe("context-engine capture ownership", () => {
     expect(client.commitSession).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["", "unknown", "2026.9.3-beta.1"])("does not ACK an unknown capture owner (%s)", async (version) => {
+  it.each(["", "unknown", "0.0.0", "2026.5.26", "2026.9.3-beta.1"])("does not ACK an unknown capture owner (%s)", async (version) => {
     const { engine, client } = makeEngine(version);
     await expect(engine.commitTurn(turn)).rejects.toThrow("cannot select turn capture");
     await expect(engine.commitTurn(turn)).rejects.toThrow("cannot select turn capture");

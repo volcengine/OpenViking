@@ -256,6 +256,11 @@ function usesDeferredTurnCapture(version: string | undefined): boolean | undefin
   const parts = match.slice(1, 4).map(Number);
   if (!parts.every(Number.isSafeInteger)) return undefined;
   const [year, month, day] = parts;
+  // OpenClaw uses 0.0.0 when version metadata cannot be resolved. More generally,
+  // versions outside our supported range cannot prove who owns capture.
+  if (year < 2026 || (year === 2026 && (month < 5 || (month === 5 && day < 27)))) {
+    return undefined;
+  }
   const boundary = year === 2026 && month === 9 && day === 3;
   // The 9.3 prerelease train can straddle the host change. Numeric packaging
   // revisions (-1, -2, ...) refer to the stable release; do not guess for betas.
