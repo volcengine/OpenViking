@@ -236,6 +236,153 @@ async def test_init_context_collection_backfills_metadata_for_empty_legacy_colle
     assert set(scalar_index) - set(existing_scalar_index) == {"tags"}
 
 
+# The Fields list of a collection created before ``search_tags`` was declared,
+# taken from the report in #4378. ``owner_space`` is a legacy field the current
+# schema no longer declares, so it exercises the extra-field direction too.
+_PRE_SEARCH_TAGS_FIELDS = [
+    "id",
+    "uri",
+    "type",
+    "context_type",
+    "vector",
+    "sparse_vector",
+    "created_at",
+    "updated_at",
+    "active_count",
+    "level",
+    "name",
+    "description",
+    "tags",
+    "abstract",
+    "account_id",
+    "owner_space",
+]
+
+
+def _legacy_storage(schema_updates, *, count):
+    class _FakeStorage:
+        async def create_collection(self, name, schema):
+            del name, schema
+            return False
+
+        async def get_collection_meta(self):
+            return {
+                "Description": "Unified context collection",
+                "Fields": [
+                    {"FieldName": name, "FieldType": "string"}
+                    for name in _PRE_SEARCH_TAGS_FIELDS
+                ],
+                "ScalarIndex": ["uri", "tags"],
+            }
+
+        async def count(self):
+            return count
+
+        async def update_collection_description(self, description):
+            del description
+            return True
+
+        async def update_collection_schema(self, fields, scalar_index):
+            schema_updates.append((fields, scalar_index))
+
+    return _FakeStorage()
+
+
+async def _init_and_collect_warnings(storage, config, monkeypatch, caplog):
+    import openviking.storage.collection_schemas as collection_schemas
+
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: config,
+    )
+    collection_schemas.logger.addHandler(caplog.handler)
+    collection_schemas.logger.setLevel(logging.WARNING)
+    try:
+        with caplog.at_level(logging.WARNING):
+            await init_context_collection(storage)
+    finally:
+        collection_schemas.logger.removeHandler(caplog.handler)
+    return [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+
+
+@pytest.mark.asyncio
+async def test_init_context_collection_warns_when_managed_collection_lacks_a_declared_field(
+    monkeypatch, caplog
+):
+    """A collection this process cannot migrate must say which fields it is dropping.
+
+    ``_filter_known_fields`` removes any field the collection does not declare, and
+    the upsert still returns an id, so ``set_tags`` on a pre-``search_tags``
+    collection reports success and reads back empty (#4378). A managed collection is
+    pre-created out of band, so naming the fields is all this can do.
+    """
+    schema_updates = []
+    config = _DummyConfig(_DummyEmbedder(), backend="vikingdb")
+
+    warnings = await _init_and_collect_warnings(
+        _legacy_storage(schema_updates, count=4321), config, monkeypatch, caplog
+    )
+
+    drift = [message for message in warnings if "search_tags" in message]
+    assert len(drift) == 1
+    assert "owner_user_id" in drift[0]
+    # The legacy field the current schema dropped is not this warning's business.
+    assert "owner_space" not in drift[0]
+    assert not schema_updates
+
+
+@pytest.mark.asyncio
+async def test_init_context_collection_migrates_rather_than_warning_for_a_local_collection(
+    monkeypatch, caplog
+):
+    """A local store is ours to alter, so the same drift is fixed, not reported."""
+    schema_updates = []
+    config = _DummyConfig(_DummyEmbedder(), backend="local")
+
+    warnings = await _init_and_collect_warnings(
+        _legacy_storage(schema_updates, count=4321), config, monkeypatch, caplog
+    )
+
+    assert not [message for message in warnings if "search_tags" in message]
+    assert len(schema_updates) == 1
+    fields, scalar_index = schema_updates[0]
+    added = {field["FieldName"] for field in fields} - set(_PRE_SEARCH_TAGS_FIELDS)
+    assert "search_tags" in added
+    assert "search_tags" in scalar_index
+
+
+@pytest.mark.asyncio
+async def test_init_context_collection_stays_quiet_when_a_managed_schema_is_current(
+    monkeypatch, caplog
+):
+    """The warning must not fire on every start of a healthy managed deployment."""
+    config = _DummyConfig(_DummyEmbedder(), backend="vikingdb")
+    current = CollectionSchemas.context_collection("context", config.embedding.dimension)
+
+    class _FakeStorage:
+        async def create_collection(self, name, schema):
+            del name, schema
+            return False
+
+        async def get_collection_meta(self):
+            return {
+                "Description": "Unified context collection",
+                "Fields": current["Fields"],
+                "ScalarIndex": current["ScalarIndex"],
+            }
+
+        async def count(self):
+            return 4321
+
+        async def update_collection_description(self, description):
+            del description
+            return True
+
+    warnings = await _init_and_collect_warnings(_FakeStorage(), config, monkeypatch, caplog)
+
+    assert not [m for m in warnings if m.startswith("Collection schema is missing field")]
+
+
 @pytest.mark.asyncio
 async def test_init_context_collection_rejects_mismatched_nonempty_collection(monkeypatch):
     """When embedding dimension mismatches for a non-empty collection, vectors are

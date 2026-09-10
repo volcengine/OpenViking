@@ -330,8 +330,26 @@ async def init_context_collection(storage) -> bool:
     existing_scalar_indexes = set(existing_meta.get("ScalarIndex", []))
     missing_scalar_indexes = sorted(expected_scalar_indexes - existing_scalar_indexes)
 
+    # Only a locally owned store is ours to alter. A managed collection is
+    # pre-created out of band, so its schema can only drift, never be migrated here.
+    local_schema_updatable = (
+        vectordb_cfg.backend in {"local", "cuvs"} and "Fields" in existing_meta
+    )
+    if missing_fields and not local_schema_updatable:
+        # An upsert drops fields the collection does not declare, and it reports
+        # success anyway, so a write to one of these is unreadable afterwards with
+        # nothing in the logs to say why. Name them once at startup instead.
+        logger.warning(
+            "Collection schema is missing field(s) the current version writes: %s. "
+            "An upsert drops undeclared fields and still reports success, so those "
+            "writes cannot be read back (a collection without 'search_tags' takes "
+            "set_tags and returns no tags). This backend's schema is managed out of "
+            "band; add the field(s) to the collection to restore those writes.",
+            ", ".join(missing_fields),
+        )
+
     async def _update_local_schema() -> None:
-        if vectordb_cfg.backend not in {"local", "cuvs"} or "Fields" not in existing_meta:
+        if not local_schema_updatable:
             return
         if not missing_fields and not missing_scalar_indexes:
             return
