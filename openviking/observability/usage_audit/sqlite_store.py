@@ -97,19 +97,42 @@ class SQLiteUsageAuditStore:
             )
         if current == SCHEMA_VERSION:
             return
-        if current == 4 and SCHEMA_VERSION == 5:
-            SQLiteUsageAuditStore._migrate_v4_to_v5_sync(conn)
-            return
+        # Additive steps chain, so a v4 snapshot reaches the current version in
+        # one pass instead of failing closed the moment a newer step is added.
+        additive_steps = {
+            4: SQLiteUsageAuditStore._migrate_v4_to_v5_sync,
+            5: SQLiteUsageAuditStore._migrate_v5_to_v6_sync,
+        }
         if current >= 4:
-            raise RuntimeError(
-                f"No usage/audit schema migration path from version {current} to {SCHEMA_VERSION}"
-            )
+            version = current
+            while version < SCHEMA_VERSION:
+                step = additive_steps.get(version)
+                if step is None:
+                    raise RuntimeError(
+                        "No usage/audit schema migration path from version "
+                        f"{version} to {SCHEMA_VERSION}"
+                    )
+                step(conn)
+                version += 1
+            return
         for table in RESET_ON_SCHEMA_UPGRADE_TABLES:
             conn.execute(f"DROP TABLE IF EXISTS {table}")
 
     @staticmethod
+    def _migrate_v5_to_v6_sync(conn: sqlite3.Connection) -> None:
+        """Add the nullable raw request path without deleting v5 usage data."""
+        SQLiteUsageAuditStore._add_request_audit_columns_sync(conn, ("url_path",))
+
+    @staticmethod
     def _migrate_v4_to_v5_sync(conn: sqlite3.Connection) -> None:
         """Add nullable audit error fields without deleting v4 usage data."""
+        SQLiteUsageAuditStore._add_request_audit_columns_sync(
+            conn, ("error_code", "error_message", "error_details")
+        )
+
+    @staticmethod
+    def _add_request_audit_columns_sync(conn: sqlite3.Connection, names: tuple[str, ...]) -> None:
+        """Add nullable TEXT columns to `request_audit` if they are missing."""
         table = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'request_audit'"
         ).fetchone()
@@ -118,7 +141,7 @@ class SQLiteUsageAuditStore:
         columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(request_audit)")}
         conn.execute("BEGIN")
         try:
-            for name in ("error_code", "error_message", "error_details"):
+            for name in names:
                 if name not in columns:
                     conn.execute(f"ALTER TABLE request_audit ADD COLUMN {name} TEXT")
             conn.execute("COMMIT")
@@ -254,11 +277,11 @@ class SQLiteUsageAuditStore:
         conn.executemany(
             """
             INSERT INTO request_audit (
-                request_id, account_id, user_id, method, route,
+                request_id, account_id, user_id, method, route, url_path,
                 api_type, status_code, duration_ms,
                 error_code, error_message, error_details, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
@@ -385,9 +408,7 @@ class SQLiteUsageAuditStore:
         assert self._conn is not None
         day = date.fromisoformat(user_date)
         utc_start, utc_end = _user_day_window_utc(day, tz)
-        rows = self._fetch_hourly_token_rows(
-            account_id, utc_start, utc_end, user_id=user_id
-        )
+        rows = self._fetch_hourly_token_rows(account_id, utc_start, utc_end, user_id=user_id)
         result = {"vlm_input": 0, "vlm_output": 0, "embedding_input": 0}
         for source, token_type, _, _, total in rows:
             key = f"{source}_{token_type}"
@@ -741,9 +762,9 @@ class SQLiteUsageAuditStore:
         offset = max(page - 1, 0) * page_size
         rows = self._conn.execute(
             f"""
-            SELECT request_id, account_id, user_id, method, route, api_type,
-                   status_code, duration_ms, error_code, error_message,
-                   error_details, created_at
+            SELECT request_id, account_id, user_id, method, route, url_path,
+                   api_type, status_code, duration_ms, error_code,
+                   error_message, error_details, created_at
             FROM request_audit
             WHERE {where_sql}
             ORDER BY created_at DESC, id DESC
