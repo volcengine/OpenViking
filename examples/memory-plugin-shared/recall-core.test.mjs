@@ -408,3 +408,16 @@ test("a legacy id equal to the effective one is not asked twice", async () => {
 
   assert.deepEqual(asked, ["same"]);
 });
+
+test("non-numeric max content chars config never emits a NaN max_chars budget", () => {
+  // cfg values reach buildRecallEndpointBody from several loaders; a string like
+  // "500 chars" makes Number() return NaN, Math.max(NaN, 1000) stays NaN, and
+  // JSON.stringify({ max_chars: NaN }) silently ships `"max_chars":null`.
+  const body = buildRecallEndpointBody({
+    recallLimit: 10,
+    recallMaxContentChars: "500 chars",
+  });
+  assert.ok(Number.isFinite(body.max_chars), `max_chars must be finite, got ${body.max_chars}`);
+  assert.ok(body.max_chars >= 1000, `max_chars must keep its floor, got ${body.max_chars}`);
+  assert.doesNotMatch(JSON.stringify(body), /"max_chars":null/);
+});

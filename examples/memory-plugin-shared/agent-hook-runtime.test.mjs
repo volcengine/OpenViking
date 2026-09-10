@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   commitAgentSession,
+  loadAgentHookConfig,
   makeAgentFetchJSON,
 } from "./lib/agent-hook-runtime.mjs";
 
@@ -77,4 +78,50 @@ test("agent fetch and commit logging preserve response trace_id", async (t) => {
       error: "commit failed",
     },
   });
+});
+
+test("blank numeric env vars fall back to defaults instead of clamping to the minimum", () => {
+  // Shell rc files commonly export these as empty strings (`export OPENVIKING_TIMEOUT_MS=`).
+  // envBool already treats a blank value as unset; envNumber must agree, otherwise
+  // Number("") === 0 silently clamps every knob to its floor (recall limit 10 -> 1,
+  // timeout 15s -> 1s) with no warning.
+  const names = [
+    "OPENVIKING_RECALL_LIMIT",
+    "OPENVIKING_RECALL_TOKEN_BUDGET",
+    "OPENVIKING_RECALL_MAX_CONTENT_CHARS",
+    "OPENVIKING_SCORE_THRESHOLD",
+    "OPENVIKING_TIMEOUT_MS",
+    "OPENVIKING_PROFILE_TOKEN_BUDGET",
+    "OPENVIKING_COMMIT_TURN_THRESHOLD",
+  ];
+  const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  for (const name of names) process.env[name] = "";
+  try {
+    const cfg = loadAgentHookConfig("test-client");
+    assert.equal(cfg.recallLimit, 10);
+    assert.equal(cfg.recallTokenBudget, 2000);
+    assert.equal(cfg.recallMaxContentChars, 500);
+    assert.equal(cfg.scoreThreshold, 0.35);
+    assert.equal(cfg.timeoutMs, 15000);
+    assert.equal(cfg.profileTokenBudget, 6000);
+    assert.equal(cfg.commitTurnThreshold, 8);
+    assert.equal(cfg.recallLimitConfigured, false);
+  } finally {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+});
+
+test("whitespace-only numeric env vars fall back to defaults too", () => {
+  const saved = process.env.OPENVIKING_TIMEOUT_MS;
+  process.env.OPENVIKING_TIMEOUT_MS = "   ";
+  try {
+    const cfg = loadAgentHookConfig("test-client");
+    assert.equal(cfg.timeoutMs, 15000);
+  } finally {
+    if (saved === undefined) delete process.env.OPENVIKING_TIMEOUT_MS;
+    else process.env.OPENVIKING_TIMEOUT_MS = saved;
+  }
 });

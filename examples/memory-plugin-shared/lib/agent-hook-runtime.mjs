@@ -24,7 +24,12 @@ function envBool(name, fallback) {
 }
 
 function envNumber(name, fallback, minimum = 0) {
-  const value = Number(process.env[name]);
+  const raw = process.env[name];
+  // A blank export (`export OPENVIKING_TIMEOUT_MS=` in a shell rc) means unset,
+  // same as envBool — otherwise Number("") === 0 would clamp the knob to its
+  // floor (timeout 15s -> 1s, recall limit 10 -> 1) without any warning.
+  if (raw == null || raw.trim() === "") return fallback;
+  const value = Number(raw);
   return Number.isFinite(value) ? Math.max(minimum, value) : fallback;
 }
 
