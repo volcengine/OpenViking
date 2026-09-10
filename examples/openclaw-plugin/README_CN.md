@@ -261,6 +261,7 @@ preflight 阶段的 `assemble()` 并不是简单地把旧聊天记录塞回来�
 - 它调用 `commit(wait=true)`，阻塞等待 commit 完成
 - 如果有 archive 生成，会再回读 `latest_archive_overview`
 - 返回新的 token 估算、latest archive id 和 summary
+- 如果归档已成功但 Phase 2 进入 failed 终态，仍会报告压缩边界已建立，并在 reason 和 details 中暴露降级原因
 - 如果摘要不够精确，模型可以再调用 `ov_archive_expand` 读取某个 archive 的原始消息
 
 所以 `afterTurn()` 更像"增量写入 + 条件触发异步提交"，而 `compact()` 才是"明确等待压缩与归档完成"的正式边界。

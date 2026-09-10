@@ -135,7 +135,7 @@ transformContext auto recall 流程：
 
 1. 解析 OpenViking session id。
 2. 调用 `commitSession(wait=true, keepRecentCount=0)`，要求服务端归档所有当前消息：`context-engine.ts:1500`。
-3. 如果 Phase 2 failed/timeout，返回失败原因。
+3. 如果 Phase 1 已经归档但 Phase 2 进入 failed 终态，仍视为压缩边界已建立，并在 `reason` 中报告抽取降级。
 4. 如果没有生成 archive，返回 `commit_no_archive`。
 5. 如果归档成功，再回读 `getSessionContext`，获取最新 `latest_archive_overview` 作为 summary：`context-engine.ts:1605`。
 6. 返回 tokensBefore/tokensAfter、latest archive id 和 summary。
@@ -171,7 +171,7 @@ transformContext auto recall 流程：
 插件把 OpenClaw turn 持续写入 OpenViking session，由服务端维护 `pending_tokens` 与 archive。超过阈值时：
 
 - `afterTurn` 路径：`wait=false`，异步 Phase 2，默认保留最近 10 条消息。
-- `compact` 路径：`wait=true`，同步等待 Phase 2，`keepRecentCount=0`，形成明确压缩边界。
+- `compact` 路径：`wait=true`，同步等待 Phase 2，`keepRecentCount=0`，形成明确压缩边界。若 Phase 2 failed 且服务端返回 `archived=true`，旧消息已经离开 live session，插件会返回 `commit_archived_phase2_failed`，而不是把下一次空 session compact 误判为可重试修复。若 Phase 2 timeout，archive 仍可能处于 pending 并被 context 读取路径回放原文，因此插件仍返回 `commit_timeout`。
 
 `commitKeepRecentCount` 默认 10，`commitTokenThresholdRatio` 默认 0.5（模型上下文窗口的 50%）：`config.ts`。
 
