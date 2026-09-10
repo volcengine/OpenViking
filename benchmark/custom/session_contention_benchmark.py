@@ -105,6 +105,8 @@ class BenchmarkConfig:
     ov_bin: str
     seed: int
     find_limit: int
+    max_failure_rate_percent: Optional[float]
+    max_success_p95_ms: Optional[float]
 
 
 @dataclass
@@ -477,7 +479,11 @@ class BenchmarkRunner:
                     self.recorder.add_note(f"cleanup_at_end failed: {type(exc).__name__}: {exc}")
             for adapter in self.adapters.values():
                 await adapter.close()
-            self._write_outputs()
+            exit_gate_violations = self._write_outputs()
+            if exit_gate_violations:
+                for violation in exit_gate_violations:
+                    print(f"[exit gate] {violation}", file=sys.stderr)
+                exit_code = 1
             self._print_summary_path()
         return exit_code
 
@@ -1135,13 +1141,16 @@ class BenchmarkRunner:
             )
         self.pending_tasks = []
 
-    def _write_outputs(self) -> None:
+    def _write_outputs(self) -> List[str]:
         output_dir = Path(self.config.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         summary_rows = build_request_summary_rows(
             events=self.recorder.request_events,
             phases=self.recorder.phases,
         )
+        exit_gate_violations = evaluate_exit_gates(self.config, summary_rows)
+        for violation in exit_gate_violations:
+            self.recorder.add_note(f"exit gate failed: {violation}")
         window_rows = build_request_window_rows(
             events=self.recorder.request_events,
             window_seconds=self.config.request_window_seconds,
@@ -1173,6 +1182,7 @@ class BenchmarkRunner:
                 "task_summary": task_rows,
                 "adapter_comparison": adapter_rows,
                 "errors": error_rows,
+                "exit_gate_violations": exit_gate_violations,
                 "summary_zh": report,
             },
         )
@@ -1184,6 +1194,7 @@ class BenchmarkRunner:
         write_csv(output_dir / "task_summary.csv", task_rows)
         write_csv(output_dir / "adapter_comparison.csv", adapter_rows)
         write_csv(output_dir / "errors.csv", error_rows)
+        return exit_gate_violations
 
     def _print_summary_path(self) -> None:
         summary_path = Path(self.config.output_dir) / "summary_zh.md"
@@ -1428,7 +1439,15 @@ def build_request_summary_rows(
     for event in events:
         overall.setdefault((event.adapter, event.operation), []).append(event)
     for (adapter, operation), group_events in sorted(overall.items()):
-        rows.append(build_summary_row(adapter, "ALL", operation, group_events, total_span(events)))
+        rows.append(
+            build_summary_row(
+                adapter,
+                "ALL",
+                operation,
+                group_events,
+                estimate_event_span_seconds(group_events),
+            )
+        )
     return rows
 
 
@@ -1439,9 +1458,12 @@ def build_summary_row(
     events: List[RequestEvent],
     duration_seconds: float,
 ) -> Dict[str, Any]:
-    latencies = [event.latency_ms for event in events]
-    successes = sum(1 for event in events if event.success)
-    failures = len(events) - successes
+    attempt_latencies = [event.latency_ms for event in events]
+    success_latencies = [event.latency_ms for event in events if event.success]
+    failure_latencies = [event.latency_ms for event in events if not event.success]
+    successes = len(success_latencies)
+    failures = len(failure_latencies)
+    measurement_span_seconds = max(duration_seconds, 1e-9)
     status_counts: Dict[str, int] = {}
     for event in events:
         key = (
@@ -1458,16 +1480,66 @@ def build_summary_row(
         "successes": successes,
         "failures": failures,
         "success_rate": round((successes / len(events)) * 100.0, 4) if events else 0.0,
-        "qps": round(len(events) / max(duration_seconds, 1e-9), 4),
-        "avg_ms": round_optional(sum(latencies) / len(latencies) if latencies else None),
-        "p50_ms": round_optional(percentile(latencies, 50)),
-        "p90_ms": round_optional(percentile(latencies, 90)),
-        "p95_ms": round_optional(percentile(latencies, 95)),
-        "p99_ms": round_optional(percentile(latencies, 99)),
-        "max_ms": round_optional(max(latencies) if latencies else None),
-        "slow_gt_1s": sum(1 for latency in latencies if latency > DEFAULT_SLOW_THRESHOLDS_MS[0]),
-        "slow_gt_3s": sum(1 for latency in latencies if latency > DEFAULT_SLOW_THRESHOLDS_MS[1]),
-        "slow_gt_5s": sum(1 for latency in latencies if latency > DEFAULT_SLOW_THRESHOLDS_MS[2]),
+        "qps_span_seconds": round(measurement_span_seconds, 6),
+        "qps": round(len(events) / measurement_span_seconds, 4),
+        "successful_qps": round(successes / measurement_span_seconds, 4),
+        "avg_ms": round_optional(
+            sum(success_latencies) / len(success_latencies) if success_latencies else None
+        ),
+        "p50_ms": round_optional(percentile(success_latencies, 50)),
+        "p90_ms": round_optional(percentile(success_latencies, 90)),
+        "p95_ms": round_optional(percentile(success_latencies, 95)),
+        "p99_ms": round_optional(percentile(success_latencies, 99)),
+        "max_ms": round_optional(max(success_latencies) if success_latencies else None),
+        "avg_attempt_ms": round_optional(
+            sum(attempt_latencies) / len(attempt_latencies) if attempt_latencies else None
+        ),
+        "p95_attempt_ms": round_optional(percentile(attempt_latencies, 95)),
+        "p99_attempt_ms": round_optional(percentile(attempt_latencies, 99)),
+        "max_attempt_ms": round_optional(max(attempt_latencies) if attempt_latencies else None),
+        "avg_success_ms": round_optional(
+            sum(success_latencies) / len(success_latencies) if success_latencies else None
+        ),
+        "p50_success_ms": round_optional(percentile(success_latencies, 50)),
+        "p90_success_ms": round_optional(percentile(success_latencies, 90)),
+        "p95_success_ms": round_optional(percentile(success_latencies, 95)),
+        "p99_success_ms": round_optional(percentile(success_latencies, 99)),
+        "max_success_ms": round_optional(max(success_latencies) if success_latencies else None),
+        "avg_failure_ms": round_optional(
+            sum(failure_latencies) / len(failure_latencies) if failure_latencies else None
+        ),
+        "p50_failure_ms": round_optional(percentile(failure_latencies, 50)),
+        "p90_failure_ms": round_optional(percentile(failure_latencies, 90)),
+        "p95_failure_ms": round_optional(percentile(failure_latencies, 95)),
+        "p99_failure_ms": round_optional(percentile(failure_latencies, 99)),
+        "max_failure_ms": round_optional(max(failure_latencies) if failure_latencies else None),
+        "slow_gt_1s": sum(
+            1 for latency in success_latencies if latency > DEFAULT_SLOW_THRESHOLDS_MS[0]
+        ),
+        "slow_gt_3s": sum(
+            1 for latency in success_latencies if latency > DEFAULT_SLOW_THRESHOLDS_MS[1]
+        ),
+        "slow_gt_5s": sum(
+            1 for latency in success_latencies if latency > DEFAULT_SLOW_THRESHOLDS_MS[2]
+        ),
+        "slow_success_gt_1s": sum(
+            1 for latency in success_latencies if latency > DEFAULT_SLOW_THRESHOLDS_MS[0]
+        ),
+        "slow_success_gt_3s": sum(
+            1 for latency in success_latencies if latency > DEFAULT_SLOW_THRESHOLDS_MS[1]
+        ),
+        "slow_success_gt_5s": sum(
+            1 for latency in success_latencies if latency > DEFAULT_SLOW_THRESHOLDS_MS[2]
+        ),
+        "slow_failure_gt_1s": sum(
+            1 for latency in failure_latencies if latency > DEFAULT_SLOW_THRESHOLDS_MS[0]
+        ),
+        "slow_failure_gt_3s": sum(
+            1 for latency in failure_latencies if latency > DEFAULT_SLOW_THRESHOLDS_MS[1]
+        ),
+        "slow_failure_gt_5s": sum(
+            1 for latency in failure_latencies if latency > DEFAULT_SLOW_THRESHOLDS_MS[2]
+        ),
         "status_codes": json.dumps(status_counts, sort_keys=True),
     }
 
@@ -1483,8 +1555,10 @@ def build_request_window_rows(
         ).append(event)
     rows: List[Dict[str, Any]] = []
     for (window_index, adapter, scenario, operation), window_events in sorted(groups.items()):
-        latencies = [event.latency_ms for event in window_events]
-        successes = sum(1 for event in window_events if event.success)
+        attempt_latencies = [event.latency_ms for event in window_events]
+        success_latencies = [event.latency_ms for event in window_events if event.success]
+        failure_latencies = [event.latency_ms for event in window_events if not event.success]
+        successes = len(success_latencies)
         rows.append(
             {
                 "window_index": window_index,
@@ -1498,9 +1572,25 @@ def build_request_window_rows(
                 "failures": len(window_events) - successes,
                 "success_rate": round((successes / len(window_events)) * 100.0, 4),
                 "qps": round(len(window_events) / max(window_seconds, 1e-9), 4),
-                "p95_ms": round_optional(percentile(latencies, 95)),
-                "p99_ms": round_optional(percentile(latencies, 99)),
-                "max_ms": round_optional(max(latencies) if latencies else None),
+                "successful_qps": round(successes / max(window_seconds, 1e-9), 4),
+                "p95_ms": round_optional(percentile(success_latencies, 95)),
+                "p99_ms": round_optional(percentile(success_latencies, 99)),
+                "max_ms": round_optional(max(success_latencies) if success_latencies else None),
+                "p95_attempt_ms": round_optional(percentile(attempt_latencies, 95)),
+                "p99_attempt_ms": round_optional(percentile(attempt_latencies, 99)),
+                "max_attempt_ms": round_optional(
+                    max(attempt_latencies) if attempt_latencies else None
+                ),
+                "p95_success_ms": round_optional(percentile(success_latencies, 95)),
+                "p99_success_ms": round_optional(percentile(success_latencies, 99)),
+                "max_success_ms": round_optional(
+                    max(success_latencies) if success_latencies else None
+                ),
+                "p95_failure_ms": round_optional(percentile(failure_latencies, 95)),
+                "p99_failure_ms": round_optional(percentile(failure_latencies, 99)),
+                "max_failure_ms": round_optional(
+                    max(failure_latencies) if failure_latencies else None
+                ),
             }
         )
     return rows
@@ -1547,6 +1637,39 @@ def build_adapter_comparison_rows(summary_rows: List[Dict[str, Any]]) -> List[Di
         and row["operation"] in {"add_resource", "find", "search", "add_message", "commit_session"}
     ]
     return sorted(rows, key=lambda row: (row["operation"], row["adapter"]))
+
+
+def evaluate_exit_gates(config: BenchmarkConfig, summary_rows: List[Dict[str, Any]]) -> List[str]:
+    if config.max_failure_rate_percent is None and config.max_success_p95_ms is None:
+        return []
+
+    violations: List[str] = []
+    overall_rows = [row for row in summary_rows if row["scenario"] == "ALL"]
+    for row in sorted(overall_rows, key=lambda item: (item["adapter"], item["operation"])):
+        label = f"{row['adapter']}/{row['operation']}"
+        requests = int(row.get("requests", 0))
+        failures = int(row.get("failures", 0))
+        failure_rate = failures / requests * 100.0 if requests else 0.0
+        if (
+            config.max_failure_rate_percent is not None
+            and failure_rate > config.max_failure_rate_percent
+        ):
+            violations.append(
+                f"{label} failure rate {failure_rate:.4f}% exceeds "
+                f"{config.max_failure_rate_percent:.4f}%"
+            )
+
+        if config.max_success_p95_ms is None or not requests:
+            continue
+        success_p95 = to_float(row.get("p95_success_ms"))
+        if success_p95 is None:
+            violations.append(f"{label} successful p95 is unavailable")
+        elif success_p95 > config.max_success_p95_ms:
+            violations.append(
+                f"{label} successful p95 {success_p95:.4f}ms exceeds "
+                f"{config.max_success_p95_ms:.4f}ms"
+            )
+    return violations
 
 
 def build_error_rows(events: List[RequestEvent]) -> List[Dict[str, Any]]:
@@ -1618,9 +1741,10 @@ def render_report_zh(
         if mixed_find and retrieval_find:
             lines.append(
                 "- "
-                f"`{adapter}` find p95: retrieval {fmt_ms(retrieval_find['p95_ms'])} -> "
-                f"mixed {fmt_ms(mixed_find['p95_ms'])}，变化 "
-                f"{fmt_delta_percent(percent_change(retrieval_find['p95_ms'], mixed_find['p95_ms']))}。"
+                f"`{adapter}` find 成功请求 p95: retrieval "
+                f"{fmt_ms(retrieval_find['p95_success_ms'])} -> "
+                f"mixed {fmt_ms(mixed_find['p95_success_ms'])}，变化 "
+                f"{fmt_delta_percent(percent_change(retrieval_find['p95_success_ms'], mixed_find['p95_success_ms']))}。"
             )
     incomplete = [row for row in task_rows if row["status"] == "incomplete"]
     if incomplete:
@@ -1649,10 +1773,11 @@ def render_report_zh(
                         "requests",
                         "success_rate",
                         "qps",
-                        "p50_ms",
-                        "p95_ms",
-                        "p99_ms",
-                        "max_ms",
+                        "successful_qps",
+                        "p50_success_ms",
+                        "p95_success_ms",
+                        "p99_success_ms",
+                        "p95_failure_ms",
                     ],
                 )
                 for row in summary_rows
@@ -1667,7 +1792,17 @@ def render_report_zh(
             [
                 pick(
                     row,
-                    ["adapter", "operation", "requests", "success_rate", "qps", "p95_ms", "p99_ms"],
+                    [
+                        "adapter",
+                        "operation",
+                        "requests",
+                        "success_rate",
+                        "qps",
+                        "successful_qps",
+                        "p95_success_ms",
+                        "p99_success_ms",
+                        "p95_failure_ms",
+                    ],
                 )
                 for row in adapter_rows
             ]
@@ -1730,14 +1865,6 @@ def find_summary(
 
 
 def estimate_event_span_seconds(events: List[RequestEvent]) -> float:
-    if len(events) < 2:
-        return 1e-9
-    starts = [event.elapsed_ms_since_run_start for event in events]
-    ends = [event.elapsed_ms_since_run_start + event.latency_ms for event in events]
-    return max((max(ends) - min(starts)) / 1000.0, 1e-9)
-
-
-def total_span(events: List[RequestEvent]) -> float:
     if not events:
         return 1e-9
     starts = [event.elapsed_ms_since_run_start for event in events]
@@ -1882,6 +2009,22 @@ def parse_args(argv: Optional[List[str]] = None) -> BenchmarkConfig:
     parser.add_argument("--ov-bin", default=os.getenv("OV_BIN", "ov"))
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--find-limit", type=int, default=10)
+    parser.add_argument(
+        "--max-failure-rate-percent",
+        type=float,
+        help=(
+            "Exit non-zero if any adapter/operation overall failure rate exceeds this "
+            "percentage. Disabled by default."
+        ),
+    )
+    parser.add_argument(
+        "--max-success-p95-ms",
+        type=float,
+        help=(
+            "Exit non-zero if any adapter/operation successful-request p95 exceeds this "
+            "latency. Disabled by default."
+        ),
+    )
     args = parser.parse_args(argv)
 
     profile = PROFILE_DEFAULTS[args.profile]
@@ -1903,6 +2046,12 @@ def parse_args(argv: Optional[List[str]] = None) -> BenchmarkConfig:
         parser.error(f"Unsupported adapters: {', '.join(invalid)}")
     if not adapters:
         parser.error("--adapters must not be empty")
+    if args.max_failure_rate_percent is not None and not (
+        0.0 <= args.max_failure_rate_percent <= 100.0
+    ):
+        parser.error("--max-failure-rate-percent must be between 0 and 100")
+    if args.max_success_p95_ms is not None and args.max_success_p95_ms < 0:
+        parser.error("--max-success-p95-ms must be >= 0")
 
     return BenchmarkConfig(
         server_url=args.server_url.rstrip("/"),
@@ -1935,6 +2084,8 @@ def parse_args(argv: Optional[List[str]] = None) -> BenchmarkConfig:
         ov_bin=args.ov_bin,
         seed=args.seed,
         find_limit=max(1, args.find_limit),
+        max_failure_rate_percent=args.max_failure_rate_percent,
+        max_success_p95_ms=args.max_success_p95_ms,
     )
 
 
