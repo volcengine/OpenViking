@@ -41,6 +41,7 @@ const DEFAULT_CONFIG = Object.freeze({
   skipSubagentSessions: false,
   requestTimeoutMs: 10000,
   mcpToolCallTimeoutMs: 60000,
+  attributionTags: "",
 });
 
 export function resolveConfig(input = {}, env = process.env, cwd = process.cwd()) {
@@ -77,6 +78,9 @@ export function resolveConfig(input = {}, env = process.env, cwd = process.cwd()
   if (env.OPENVIKING_RECALL_LIMIT) {
     config.recallLimit = env.OPENVIKING_RECALL_LIMIT;
     config.recallLimitConfigured = true;
+  }
+  if (env.OPENVIKING_ATTRIBUTION_TAGS !== undefined) {
+    config.attributionTags = String(env.OPENVIKING_ATTRIBUTION_TAGS);
   }
 
   config.endpoint = String(config.endpoint || DEFAULT_CONFIG.endpoint).replace(/\/+$/, "");
