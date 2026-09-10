@@ -44,10 +44,41 @@ def _read_pid_file(lock_path: str) -> int:
         return 0
 
 
+def _windows_is_pid_alive(pid: int) -> bool:
+    """Side-effect-free Windows PID liveness check.
+
+    ``os.kill(pid, 0)`` maps to ``CTRL_C_EVENT`` on Windows and can interrupt a
+    shared console. Use a ``SYNCHRONIZE`` process handle instead (see #4764).
+    """
+    import _winapi
+
+    handle = None
+    try:
+        try:
+            handle = _winapi.OpenProcess(_winapi.SYNCHRONIZE, False, pid)
+        except OSError as exc:
+            # Access denied: process may still be alive; keep the lock.
+            if getattr(exc, "winerror", None) == 5:
+                return True
+            # Missing / invalid PID (e.g. WinError 87) → treat as stale.
+            return False
+        # WAIT_TIMEOUT means the process has not exited yet.
+        return _winapi.WaitForSingleObject(handle, 0) == _winapi.WAIT_TIMEOUT
+    finally:
+        if handle is not None:
+            try:
+                _winapi.CloseHandle(handle)
+            except OSError:
+                pass
+
+
 def _is_pid_alive(pid: int) -> bool:
     """Check whether a process with the given PID is still running."""
     if pid <= 0:
         return False
+    if sys.platform == "win32":
+        return _windows_is_pid_alive(pid)
+
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -55,9 +86,7 @@ def _is_pid_alive(pid: int) -> bool:
     except PermissionError:
         # Process exists but we can't signal it.
         pass
-    except (OSError, SystemError):
-        if sys.platform == "win32":
-            return False
+    except SystemError:
         raise
 
     # PID exists, but on Linux PIDs are recycled. Verify this is actually

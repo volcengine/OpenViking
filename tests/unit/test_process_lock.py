@@ -96,16 +96,90 @@ class TestIsPidAlive:
         """Test that negative PID is not alive."""
         assert _is_pid_alive(-1) is False
 
-    def test_windows_system_error_treated_as_stale(self, monkeypatch):
-        """Windows SystemError from os.kill(pid, 0) should be treated as stale."""
+    def test_windows_liveness_never_calls_os_kill(self, monkeypatch):
+        """Windows liveness must not use os.kill (signal 0 == CTRL_C_EVENT)."""
 
-        def _raise_system_error(_pid: int, _sig: int) -> None:
-            raise SystemError("win32 wrapper failure")
+        def _boom(_pid: int, _sig: int) -> None:
+            raise AssertionError("os.kill must not be used for Windows PID checks")
+
+        class _FakeWinApi:
+            SYNCHRONIZE = 0x00100000
+            WAIT_TIMEOUT = 0x00000102
+            WAIT_OBJECT_0 = 0
+
+            @staticmethod
+            def OpenProcess(_access: int, _inherit: bool, _pid: int) -> int:
+                return 1
+
+            @staticmethod
+            def WaitForSingleObject(_handle: int, _timeout: int) -> int:
+                return _FakeWinApi.WAIT_TIMEOUT
+
+            @staticmethod
+            def CloseHandle(_handle: int) -> None:
+                return None
 
         monkeypatch.setattr(process_lock_module.sys, "platform", "win32")
-        monkeypatch.setattr(process_lock_module.os, "kill", _raise_system_error)
+        monkeypatch.setattr(process_lock_module.os, "kill", _boom)
+        monkeypatch.setitem(__import__("sys").modules, "_winapi", _FakeWinApi)
+
+        assert _is_pid_alive(os.getpid()) is True
+
+    def test_windows_missing_pid_treated_as_stale(self, monkeypatch):
+        """OpenProcess failure (e.g. WinError 87) means the PID is gone."""
+
+        err = OSError(87, "The parameter is incorrect")
+        err.winerror = 87
+
+        class _FakeWinApi:
+            SYNCHRONIZE = 0x00100000
+            WAIT_TIMEOUT = 0x00000102
+            WAIT_OBJECT_0 = 0
+
+            @staticmethod
+            def OpenProcess(_access: int, _inherit: bool, _pid: int) -> int:
+                raise err
+
+            @staticmethod
+            def WaitForSingleObject(_handle: int, _timeout: int) -> int:
+                raise AssertionError("should not wait without a handle")
+
+            @staticmethod
+            def CloseHandle(_handle: int) -> None:
+                raise AssertionError("should not close without a handle")
+
+        monkeypatch.setattr(process_lock_module.sys, "platform", "win32")
+        monkeypatch.setitem(__import__("sys").modules, "_winapi", _FakeWinApi)
 
         assert _is_pid_alive(12345) is False
+
+    def test_windows_access_denied_keeps_lock(self, monkeypatch):
+        """Access denied must not reclaim the lock; process may still be alive."""
+
+        err = OSError(5, "Access is denied")
+        err.winerror = 5
+
+        class _FakeWinApi:
+            SYNCHRONIZE = 0x00100000
+            WAIT_TIMEOUT = 0x00000102
+            WAIT_OBJECT_0 = 0
+
+            @staticmethod
+            def OpenProcess(_access: int, _inherit: bool, _pid: int) -> int:
+                raise err
+
+            @staticmethod
+            def WaitForSingleObject(_handle: int, _timeout: int) -> int:
+                raise AssertionError("unreachable")
+
+            @staticmethod
+            def CloseHandle(_handle: int) -> None:
+                raise AssertionError("unreachable")
+
+        monkeypatch.setattr(process_lock_module.sys, "platform", "win32")
+        monkeypatch.setitem(__import__("sys").modules, "_winapi", _FakeWinApi)
+
+        assert _is_pid_alive(12345) is True
 
     def test_non_windows_system_error_bubbles_up(self, monkeypatch):
         """Non-Windows should not downgrade unexpected SystemError values."""
@@ -219,17 +293,34 @@ class TestAcquireDataDirLock:
         error_msg = str(exc_info.value)
         assert str(tmp_path) in error_msg
 
-    def test_acquire_overwrites_windows_stale_lock_on_system_error(
+    def test_acquire_overwrites_windows_stale_lock_when_pid_missing(
         self, tmp_path: Path, monkeypatch
     ):
-        """Windows stale lock should be reclaimed when os.kill raises SystemError."""
+        """Windows stale lock should be reclaimed when OpenProcess says PID is gone."""
 
-        def _raise_system_error(_pid: int, _sig: int) -> None:
-            raise SystemError("win32 wrapper failure")
+        err = OSError(87, "The parameter is incorrect")
+        err.winerror = 87
+
+        class _FakeWinApi:
+            SYNCHRONIZE = 0x00100000
+            WAIT_TIMEOUT = 0x00000102
+            WAIT_OBJECT_0 = 0
+
+            @staticmethod
+            def OpenProcess(_access: int, _inherit: bool, _pid: int) -> int:
+                raise err
+
+            @staticmethod
+            def WaitForSingleObject(_handle: int, _timeout: int) -> int:
+                raise AssertionError("unreachable")
+
+            @staticmethod
+            def CloseHandle(_handle: int) -> None:
+                raise AssertionError("unreachable")
 
         (tmp_path / LOCK_FILENAME).write_text("12345")
         monkeypatch.setattr(process_lock_module.sys, "platform", "win32")
-        monkeypatch.setattr(process_lock_module.os, "kill", _raise_system_error)
+        monkeypatch.setitem(__import__("sys").modules, "_winapi", _FakeWinApi)
 
         acquire_data_dir_lock(str(tmp_path))
 
