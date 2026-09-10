@@ -3,11 +3,15 @@
 
 """``search`` must refuse a context-only argument in ``mode="list"``.
 
-The tool already refuses the mirror case — ``read_content`` and ``target_uri`` raise in
-``mode="context"``. Everything the context path consumes is read only inside that branch,
-and the list path calls ``SearchService.search``, whose signature has no parameter for any
-of them, so passing one in list mode did nothing and said nothing. For ``exclude_uris``
-that is not a tuning knob going unused: the caller gets back the URIs it asked to exclude.
+``POST /search`` already does: ``SearchRequest._validate_mode`` rejects any of
+``CONTEXT_ONLY_FIELDS`` supplied in list mode. The MCP tool did not, so the two faces of
+the same feature disagreed — and the tool refuses the mirror case (``read_content`` and
+``target_uri`` in ``mode="context"``), so the gap was only in this direction.
+
+Everything the context path consumes is read only inside that branch, and the list path
+calls ``SearchService.search``, whose signature has no parameter for any of them, so
+passing one in list mode did nothing and said nothing. For ``exclude_uris`` that is not a
+tuning knob going unused: the caller gets back the URIs it asked to exclude.
 
 These tests take no service fixture. A stub service records what the list path forwards,
 which is also how the "these never reach the search service" half is pinned.
@@ -83,7 +87,7 @@ async def test_list_mode_names_every_context_only_argument_it_refuses():
 
     message = str(excinfo.value)
     assert all(name in message for name in CONTEXT_ONLY_ARGS), message
-    assert "are only supported in mode='context'" in message
+    assert "require mode='context'" in message
 
 
 @pytest.mark.asyncio
@@ -105,7 +109,7 @@ async def test_context_mode_still_accepts_them():
     with pytest.raises(Exception) as excinfo:
         await mcp_endpoint.search(query="anything", mode="context", **CONTEXT_ONLY_ARGS)
 
-    assert "only supported in mode='context'" not in str(excinfo.value)
+    assert "require mode='context'" not in str(excinfo.value)
 
 
 @pytest.mark.asyncio
@@ -117,3 +121,25 @@ async def test_context_mode_still_refuses_list_only_arguments():
         await mcp_endpoint.search(
             query="anything", mode="context", target_uri="viking://user/test_user"
         )
+
+
+@pytest.mark.asyncio
+async def test_the_tool_covers_every_field_the_rest_validator_rejects():
+    """The tool's list must not drift from ``POST /search``'s.
+
+    The tool splits two of the REST fields in two — ``detail``/``detail_by_category`` and
+    ``other_peer_penalty``/``other_peer_penalties`` — so it carries two more names, not a
+    different set. A field added to one face has to reach the other.
+    """
+    from openviking.server.routers.search import CONTEXT_ONLY_FIELDS
+
+    missing = sorted(set(CONTEXT_ONLY_FIELDS) - set(CONTEXT_ONLY_ARGS))
+
+    assert not missing, (
+        "POST /search rejects these in list mode but the MCP tool does not: "
+        + ", ".join(missing)
+    )
+    assert set(CONTEXT_ONLY_ARGS) - set(CONTEXT_ONLY_FIELDS) == {
+        "detail_by_category",
+        "other_peer_penalties",
+    }

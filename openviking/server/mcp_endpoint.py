@@ -354,11 +354,16 @@ async def search(
             return result.rendered
         return "No matching context found."
 
-    # The context branch above rejects a list-only argument; do the same in the other
-    # direction. Everything it consumes is read only inside it, and the list path calls
-    # SearchService.search, whose signature has no parameter for any of them -- so
-    # passing one here does nothing at all, which for exclude_uris means excluded URIs
-    # come back in the results with no error.
+    # POST /search already rejects these in list mode (SearchRequest._validate_mode over
+    # CONTEXT_ONLY_FIELDS); this tool did not, so the two faces of the same feature
+    # disagreed. Everything the context branch consumes is read only inside it, and the
+    # list path calls SearchService.search, whose signature has no parameter for any of
+    # them -- so passing one here did nothing at all, which for exclude_uris means
+    # excluded URIs come back in the results with no error.
+    #
+    # The list is CONTEXT_ONLY_FIELDS plus the two fields this tool splits in two:
+    # detail/detail_by_category and other_peer_penalty/other_peer_penalties.
+    # test_mcp_search_modes.py pins that correspondence so the two cannot drift.
     supplied_context_only = [
         name
         for name, (value, default) in {
@@ -379,10 +384,10 @@ async def search(
         if value != default
     ]
     if supplied_context_only:
+        # Same wording as the REST validator, so the two faces report it identically.
         raise InvalidArgumentError(
-            f"{', '.join(supplied_context_only)} "
-            f"{'is' if len(supplied_context_only) == 1 else 'are'} "
-            "only supported in mode='context'"
+            f"{', '.join(supplied_context_only)} require mode='context'; "
+            "set mode='context' or drop these fields"
         )
 
     if target_uri:
