@@ -136,8 +136,7 @@ async def test_the_tool_covers_every_field_the_rest_validator_rejects():
     missing = sorted(set(CONTEXT_ONLY_FIELDS) - set(CONTEXT_ONLY_ARGS))
 
     assert not missing, (
-        "POST /search rejects these in list mode but the MCP tool does not: "
-        + ", ".join(missing)
+        "POST /search rejects these in list mode but the MCP tool does not: " + ", ".join(missing)
     )
     assert set(CONTEXT_ONLY_ARGS) - set(CONTEXT_ONLY_FIELDS) == {
         "detail_by_category",
