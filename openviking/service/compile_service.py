@@ -62,7 +62,9 @@ class CompileRequest(BaseModel):
         self.from_ = sources
         self.to = self.to.strip().rstrip("/")
         self.skill = self.skill.strip().rstrip("/")
-        self.instruction = self.instruction.strip() if self.instruction and self.instruction.strip() else None
+        self.instruction = (
+            self.instruction.strip() if self.instruction and self.instruction.strip() else None
+        )
         self.args = dict(self.args) if self.args else None
         if not self.to:
             raise ValueError("to must not be empty")

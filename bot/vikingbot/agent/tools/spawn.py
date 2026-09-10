@@ -70,6 +70,8 @@ class WaitSubagentsTool(Tool):
         """Optionally disclose a Resource destination after the final child result is collected."""
         self._manager = manager
         self._final_output_directory = final_output_directory
+        # Retain failed child IDs after their result inventories are drained.
+        self.failures: list[str] = []
 
     @property
     def name(self) -> str:
@@ -118,6 +120,11 @@ class WaitSubagentsTool(Tool):
             report = await self._manager.wait(block=True)
             results.extend(report["results"])
         report["results"] = results
+        self.failures.extend(
+            f"Child {result['task_id']}: {result.get('error') or result['status']}"
+            for result in results
+            if result.get("status") in {"failed", "cancelled"}
+        )
         if (
             self._final_output_directory is not None
             and report["results"]
