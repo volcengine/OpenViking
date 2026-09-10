@@ -125,6 +125,8 @@ export type CompactOpenVikingSessionParams = {
 type AfterTurnClient = Pick<OpenVikingClient, "addSessionMessage" | "getSession" | "commitSession" | "getTask">;
 
 export type AfterTurnOpenVikingSessionParams = {
+  /** Durable delivery must reject failed writes so the host retains its outbox row. */
+  throwOnError?: boolean;
   sessionId: string;
   sessionKey?: string;
   messages?: AgentMessage[];
@@ -786,6 +788,7 @@ function messageDigest(messages: AgentMessage[], maxCharsPerMsg = 2000): Array<{
 }
 
 export async function afterTurnOpenVikingSession({
+  throwOnError = false,
   sessionId,
   sessionKey,
   messages: rawMessages,
@@ -976,6 +979,9 @@ export async function afterTurnOpenVikingSession({
       senderIdFound: sender.found,
       senderId: sender.senderId ?? null,
     });
+    if (throwOnError) {
+      throw err;
+    }
   }
 }
 
