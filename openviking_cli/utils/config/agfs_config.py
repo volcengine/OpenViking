@@ -127,8 +127,13 @@ class QueueFSConfig(BaseModel):
     )
 
     recover_stale_sec: int = Field(
-        default=0,
-        description="Recover processing messages older than this many seconds on startup (0 = recover all).",
+        default=300,
+        description=(
+            "Recover 'processing' messages older than this many seconds at mount time. "
+            "0 does NOT disable recovery: the backend's mount-time UPDATE then resets "
+            "ALL processing rows (not scoped per queue), which in mode='worker' also "
+            "resets rows still owned by live workers — hence the bounded default."
+        ),
     )
 
     busy_timeout_ms: int = Field(
