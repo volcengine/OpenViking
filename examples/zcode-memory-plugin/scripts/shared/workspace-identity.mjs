@@ -30,6 +30,14 @@ const IDENTITY_CACHE_TTL_MS = 60_000;
 // hash suffix and for anything that later prefixes a peer id.
 const MAX_PEER_ID_LENGTH = 100;
 
+// The scheme default ports, stripped from the authority as identity-free:
+// folding them away is what makes the `ssh://` and `https://` spellings of one
+// repository agree, which the `git` preset depends on. `new URL` already drops
+// them for its special schemes, so the table carries the non-special ones git
+// remotes use — and it is also the judge of which explicit port `{git_port}`
+// surfaces: any port that is not the scheme's default.
+const DEFAULT_REMOTE_PORTS = { ssh: "22", http: "80", https: "443", git: "9418", rsync: "873" };
+
 export function stateDir(env = process.env) {
   const explicit = String(env.OPENVIKING_STATE_DIR || "").trim();
   if (explicit) return explicit;
@@ -77,43 +85,62 @@ export function sanitizePeerId(value) {
 }
 
 /**
+ * Parse a remote URL into its parts, or null when it names no shared identity.
+ *
+ * `port` is the explicit port as written. The scp spelling has no port syntax
+ * in git — a leading `8443/` there is a literal path — so it yields none, and
+ * `new URL` has already dropped the default port of its special schemes
+ * (`https://…:443` arrives as no port). The port never reaches the normalized
+ * remote; it exists for `{git_port}`.
+ */
+function parseGitRemote(url) {
+  const raw = String(url || "").trim();
+  if (!raw) return null;
+
+  // `C:\src\repo` and `C:/src/repo` are one machine's directory, not a shared
+  // identity — and the scp pattern would happily read the drive as a host.
+  if (/^[A-Za-z]:[\\/]/.test(raw)) return null;
+
+  const scp = /^(?:[^@/\\]+@)?([^:/\\]+):(?!\/)(.+)$/.exec(raw);
+  if (scp && !/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(raw)) {
+    return { scheme: "ssh", host: scp[1], path: scp[2], port: "" };
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return null;
+  }
+  // A local clone has no stable shared identity — fall through to the path
+  // rules instead of minting one from `file://` or a bare directory.
+  if (parsed.protocol === "file:" || !parsed.hostname) return null;
+  return {
+    scheme: parsed.protocol.slice(0, -1),
+    host: parsed.hostname,
+    path: parsed.pathname,
+    port: parsed.port,
+  };
+}
+
+/**
  * Normalize a remote URL to `host/path`, lowercased.
  *
  * Both spellings of the same repo converge, and userinfo is dropped — so a
  * remote with an embedded token cannot leak it into a peer id. The cost of
  * case folding is that two repos differing only in case share one namespace on
- * the rare case-sensitive forge.
+ * the rare case-sensitive forge. Ports are folded away too, default or not:
+ * that is what keeps one repository one peer when its ssh and https remotes
+ * sit on different ports, which is the common self-hosted shape (#4565).
  */
 export function normalizeGitRemote(url) {
-  const raw = String(url || "").trim();
-  if (!raw) return "";
+  return normalizeParsedRemote(parseGitRemote(url));
+}
 
-  // `C:\src\repo` and `C:/src/repo` are one machine's directory, not a shared
-  // identity — and the scp pattern would happily read the drive as a host.
-  if (/^[A-Za-z]:[\\/]/.test(raw)) return "";
-
-  let host = "";
-  let path = "";
-  const scp = /^(?:[^@/\\]+@)?([^:/\\]+):(?!\/)(.+)$/.exec(raw);
-  if (scp && !/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(raw)) {
-    host = scp[1];
-    path = scp[2];
-  } else {
-    let parsed;
-    try {
-      parsed = new URL(raw);
-    } catch {
-      return "";
-    }
-    // A local clone has no stable shared identity — fall through to the path
-    // rules instead of minting one from `file://` or a bare directory.
-    if (parsed.protocol === "file:" || !parsed.hostname) return "";
-    host = parsed.hostname;
-    path = parsed.pathname;
-  }
-
-  host = host.toLowerCase().replace(/^\[|\]$/g, "");
-  path = path.replace(/^\/+/, "").replace(/\/+$/, "").replace(/\.git$/i, "").toLowerCase();
+function normalizeParsedRemote(parts) {
+  if (!parts) return "";
+  const host = parts.host.toLowerCase().replace(/^\[|\]$/g, "");
+  const path = parts.path.replace(/^\/+/, "").replace(/\/+$/, "").replace(/\.git$/i, "").toLowerCase();
   if (!host || !path) return "";
   return `${host}/${path}`;
 }
@@ -275,6 +302,12 @@ function readCache(path, now) {
     if (typeof cached?.ts !== "number" || cached.ts > now || now - cached.ts > IDENTITY_CACHE_TTL_MS) return null;
     const identity = cached.identity;
     if (identity && typeof identity === "object" && identity.vars && typeof identity.vars === "object") {
+      // A key set from an older build — before `git_port` existed — makes
+      // `renderPeerTemplate` treat the variable as empty rather than unknown,
+      // so a template naming it would silently fall through to the port-less
+      // one for the rest of the TTL. Treat the mismatch as a miss; the walk
+      // is cheap and the entry rewrites in the new shape.
+      if (!Object.hasOwn(identity.vars, "git_port")) return null;
       return identity;
     }
   } catch { /* a cold or corrupt cache just costs one walk */ }
@@ -308,8 +341,16 @@ export function resolveWorkspaceIdentity({ cwd = "", env = process.env, cache = 
   const { root, rootKind, git, gitRoot } = findWorkspaceRoot(key, env);
   // Only the normalized form is kept. The raw URL may carry a token, and this
   // file outlives the process — writing it here would undo the care
-  // `normalizeGitRemote` takes to drop userinfo.
-  const remote = git ? normalizeGitRemote(readGitRemoteUrl(git.commonDir)) : "";
+  // `parseGitRemote` takes to drop userinfo.
+  const remoteParts = git ? parseGitRemote(readGitRemoteUrl(git.commonDir)) : null;
+  const remote = normalizeParsedRemote(remoteParts);
+  // The port a forge is actually served on, empty for the scheme default and
+  // for the scp spelling. No preset names the variable, so the default peer
+  // keeps folding ports away; opting in is what separates two forges that
+  // share a host and path.
+  const gitPort = remoteParts?.port && remoteParts.port !== (DEFAULT_REMOTE_PORTS[remoteParts.scheme] || "")
+    ? remoteParts.port
+    : "";
   const identity = {
     cwd: key,
     root,
@@ -327,6 +368,7 @@ export function resolveWorkspaceIdentity({ cwd = "", env = process.env, cache = 
       git_root: git ? legacySanitize(gitRoot) : "",
       cwd: legacySanitize(key),
       dir: root ? sanitizePeerId(root.split(/[/\\]/).filter(Boolean).pop() || "") : "",
+      git_port: gitPort,
     },
   };
   if (cache) writeCache(path, identity, now);

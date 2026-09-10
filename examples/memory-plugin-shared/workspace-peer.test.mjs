@@ -162,6 +162,32 @@ test("{harness} splits one repository per agent, for whoever asks for it", async
   assert.equal(chain.origin, "{git_remote}");
 });
 
+test("{git_port} separates same-host forges, for whoever opts in", async () => {
+  // The default keeps folding ports away — one repository stays one peer when
+  // its ssh and https remotes sit on different ports, which is the common
+  // self-hosted shape. This chain is for the rarer one: two forges on a single
+  // host serving the same path, distinguishable only by port.
+  const chain = ["{git_remote}-{git_port}", "{git_remote}"];
+
+  const forge8443 = await repo({ remote: "https://forge.corp:8443/group/repo.git" });
+  assert.equal(resolve(forge8443.root, forge8443.env, { peerSource: chain }).peerId, "forge.corp-group-repo-8443");
+  assert.equal(resolve(forge8443.root, forge8443.env).peerId, "forge.corp-group-repo",
+    "and the default chain still drops the port");
+
+  const forge9443 = await repo({ remote: "https://forge.corp:9443/group/repo.git" });
+  assert.equal(resolve(forge9443.root, forge9443.env, { peerSource: chain }).peerId, "forge.corp-group-repo-9443",
+    "the two forges stay distinct namespaces under the opt-in chain");
+
+  // Everything else falls through to the port-less template: the scp spelling
+  // (no port syntax), an absent port, and any scheme's default port.
+  for (const remote of ["git@forge.corp:group/repo.git", "https://forge.corp/group/repo.git", "ssh://git@forge.corp:22/group/repo.git"]) {
+    const r = await repo({ remote });
+    const resolved = resolve(r.root, r.env, { peerSource: chain });
+    assert.equal(resolved.peerId, "forge.corp-group-repo", `${remote} falls through`);
+    assert.equal(resolved.origin, "{git_remote}");
+  }
+});
+
 test("a template naming only empty variables resolves to no peer at all", async () => {
   const plain = await repo({ git: false });
   const unresolved = resolve(plain.root, plain.env, { peerSource: ["{git_remote}"] });
