@@ -78,6 +78,8 @@ pub enum CacheRuntimeProviderConfig {
 pub struct CacheFsConfig {
     /// Whether mounted data filesystems are wrapped by CachedFileSystem.
     pub enabled: bool,
+    /// Enable request-local stat caching independently of the shared provider.
+    pub request_cache_enabled: bool,
     /// CacheFS key namespace.
     pub namespace: String,
     /// Existing CacheFS policy and traversal settings.
@@ -89,6 +91,7 @@ impl Default for CacheFsConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            request_cache_enabled: false,
             namespace: "openviking".into(),
             policy: CachePolicy::default(),
         }
@@ -178,14 +181,16 @@ pub async fn build_configured_stack(
             ])
             .map_err(|error| Error::config(format!("CacheFS provider is incompatible: {error}")))?;
     }
-    let mountable = if cache.cachefs.enabled {
-        Arc::new(MountableFS::with_cache_runtime(
-            runtime
-                .as_ref()
-                .expect("cache provider is validated")
-                .clone(),
+    let mountable = if cache.cachefs.enabled || cache.cachefs.request_cache_enabled {
+        Arc::new(MountableFS::with_cache_layers(
+            if cache.cachefs.enabled {
+                runtime.clone()
+            } else {
+                None
+            },
             CacheNamespace::new(&cache.cachefs.namespace),
             cache.cachefs.policy,
+            cache.cachefs.request_cache_enabled,
         ))
     } else {
         Arc::new(MountableFS::new())

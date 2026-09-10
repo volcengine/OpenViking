@@ -1,4 +1,43 @@
 use async_trait::async_trait;
+#[tokio::test]
+async fn request_stat_four_layer_combinations_and_write_invalidation() {
+    use ragfs::cache::RequestStatCache;
+    for l0 in [false, true] {
+        for l1 in [false, true] {
+            let backend = CountingFileSystem::new();
+            backend
+                .write("/file", b"old", 0, WriteFlag::Create)
+                .await
+                .unwrap();
+            let fs = CachedFileSystem::with_cache_layers(
+                Box::new(backend.clone()),
+                l1.then(CacheRuntime::memory),
+                CacheNamespace::new("matrix"),
+                CachePolicy::default(),
+                l0,
+            );
+            let ctx = Arc::new(
+                FsContextInner::new("tenant")
+                    .with_request_stat_cache(Arc::new(RequestStatCache::default())),
+            );
+            FS_CTX
+                .scope(ctx, async {
+                    assert_eq!(fs.stat("/file").await.unwrap().size, 3);
+                    assert_eq!(fs.stat("/file").await.unwrap().size, 3);
+                    assert_eq!(backend.stat_count(), if l0 { 1 } else { 2 });
+                    fs.write("/file", b"new content", 0, WriteFlag::Create)
+                        .await
+                        .unwrap();
+                    assert_eq!(fs.stat("/file").await.unwrap().size, 11);
+                    fs.truncate("/file", 1).await.unwrap();
+                    assert_eq!(fs.stat("/file").await.unwrap().size, 1);
+                    fs.remove("/file").await.unwrap();
+                    assert!(matches!(fs.stat("/file").await, Err(Error::NotFound(_))));
+                })
+                .await;
+        }
+    }
+}
 use ragfs::cache::{
     CacheDecision, CacheNamespace, CachePolicy, CacheTraversalMode, CachedFileSystem,
 };

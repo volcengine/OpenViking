@@ -175,6 +175,15 @@ class AGFSCacheTraversalMode(str, Enum):
     CACHED_TRAVERSAL = "cached_traversal"
 
 
+class AGFSRequestCacheConfig(BaseModel):
+    """Process-local stat caches scoped to HTTP business requests."""
+
+    enabled: bool = False
+    max_active_request_caches: int = Field(default=1024, gt=0)
+
+    model_config = {"extra": "forbid"}
+
+
 class AGFSCacheFSConfig(BaseModel):
     """CacheFS behavior independent from the selected global Provider."""
 
@@ -183,6 +192,7 @@ class AGFSCacheFSConfig(BaseModel):
         description="CacheFS backend: 'local' | 'cache'",
     )
     namespace: str = Field(default="openviking", description="RAGFS cache namespace")
+    request_cache: AGFSRequestCacheConfig = Field(default_factory=AGFSRequestCacheConfig)
     max_file_size_bytes: int = Field(
         default=1024 * 1024,
         description="Maximum full-file object size admitted to cache",

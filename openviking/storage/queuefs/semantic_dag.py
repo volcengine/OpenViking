@@ -11,6 +11,7 @@ from typing import Any, ClassVar, Dict, List, Optional, Set
 from weakref import WeakKeyDictionary
 
 from openviking.parse.parsers.media import get_media_type
+from openviking.pyagfs.request_cache import without_request_cache
 from openviking.server.identity import RequestContext
 from openviking.service.task_work_index import bind_task_context, get_task_context
 from openviking.storage.abstract_overview import (
@@ -111,6 +112,7 @@ class SemanticNodeScheduler:
             task.add_done_callback(self._workers.discard)
             self._workers.add(task)
 
+    @without_request_cache
     async def _worker(self) -> None:
         while True:
             try:

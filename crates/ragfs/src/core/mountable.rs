@@ -90,7 +90,8 @@ pub struct MountableFS {
 #[cfg(feature = "cache")]
 #[derive(Clone)]
 struct MountCacheConfig {
-    runtime: Arc<CacheRuntime>,
+    runtime: Option<Arc<CacheRuntime>>,
+    request_cache_enabled: bool,
     namespace: CacheNamespace,
     policy: CachePolicy,
 }
@@ -253,6 +254,17 @@ impl MountableFS {
         namespace: CacheNamespace,
         policy: CachePolicy,
     ) -> Self {
+        Self::with_cache_layers(Some(runtime), namespace, policy, false)
+    }
+
+    /// Configure independent request-local and shared cache layers.
+    #[cfg(feature = "cache")]
+    pub fn with_cache_layers(
+        runtime: Option<Arc<CacheRuntime>>,
+        namespace: CacheNamespace,
+        policy: CachePolicy,
+        request_cache_enabled: bool,
+    ) -> Self {
         Self {
             mounts: Arc::new(RwLock::new(Trie::new())),
             registry: Arc::new(RwLock::new(HashMap::new())),
@@ -261,6 +273,7 @@ impl MountableFS {
             pathlock_manager: OnceLock::new(),
             cache: Some(MountCacheConfig {
                 runtime,
+                request_cache_enabled,
                 namespace,
                 policy,
             }),
@@ -417,7 +430,7 @@ impl MountableFS {
                     arc
                 } else {
                     match &self.cache {
-                        Some(cache) => Arc::new(CachedFileSystem::with_runtime(
+                        Some(cache) => Arc::new(CachedFileSystem::with_cache_layers(
                             Box::new(ArcFileSystem(arc)),
                             cache.runtime.clone(),
                             mount_namespace(&cache.namespace, &normalized_path),
@@ -425,6 +438,7 @@ impl MountableFS {
                                 .policy
                                 .clone()
                                 .with_traversal_mode(CacheTraversalMode::Backend),
+                            cache.request_cache_enabled,
                         )),
                         None => arc,
                     }
@@ -496,11 +510,12 @@ impl MountableFS {
                 } else {
                     cache.policy.clone()
                 };
-                Arc::new(CachedFileSystem::with_runtime(
+                Arc::new(CachedFileSystem::with_cache_layers(
                     Box::new(ArcFileSystem(fs)),
                     cache.runtime.clone(),
                     mount_namespace(&cache.namespace, mount_path),
                     policy,
+                    cache.request_cache_enabled,
                 ))
             }
             None => fs,
@@ -610,7 +625,13 @@ impl MountableFS {
     pub async fn write_raw(&self, path: &str, data: &[u8], flags: WriteFlag) -> Result<u64> {
         let (mount_info, rel_path) = self.find_mount(path).await?;
         let raw = Self::raw_backend_for_mount(&mount_info, "write_raw")?;
-        raw.write(&rel_path, data, 0, flags).await
+        let result = raw.write(&rel_path, data, 0, flags).await;
+        // Errors may follow a partial write; invalidate request metadata in either case.
+        #[cfg(feature = "cache")]
+        if let Some(cache) = Self::as_cached(&mount_info.fs) {
+            cache.invalidate_request_external_write(&rel_path);
+        }
+        result
     }
 
     /// Copy one file within the same mounted filesystem while preserving raw bytes when possible.
@@ -673,6 +694,15 @@ impl MountableFS {
                 Err(error) => Err(error),
             }
         };
+
+        // Raw/primary copies can mutate the destination without entering CacheFS::write,
+        // including a copy that fails after publishing only part of the data.
+        #[cfg(feature = "cache")]
+        if !matches!(result, Ok(false)) {
+            if let Some(cache) = Self::as_cached(&dst_mount.fs) {
+                cache.invalidate_request_external_write(&dst_rel_path);
+            }
+        }
 
         let release = match auto_lease {
             Some(lease) => manager.release(&lease).await,
@@ -827,6 +857,29 @@ impl FileSystem for ArcFileSystem {
 
     async fn stat(&self, path: &str) -> Result<FileInfo> {
         self.0.stat(path).await
+    }
+
+    async fn grep(
+        &self,
+        path: &str,
+        pattern: &str,
+        recursive: bool,
+        case_insensitive: bool,
+        node_limit: Option<usize>,
+        exclude_path: Option<&str>,
+        level_limit: Option<usize>,
+    ) -> Result<GrepResult> {
+        self.0
+            .grep(
+                path,
+                pattern,
+                recursive,
+                case_insensitive,
+                node_limit,
+                exclude_path,
+                level_limit,
+            )
+            .await
     }
 
     async fn rename(&self, old_path: &str, new_path: &str) -> Result<()> {
@@ -1541,6 +1594,37 @@ mod tests {
         mfs.register_plugin(MemFSPlugin).await;
         mfs.mount(test_config("memfs", mount_path)).await.unwrap();
         mfs
+    }
+
+    #[cfg(feature = "cache")]
+    #[tokio::test]
+    async fn raw_write_invalidates_request_stat() {
+        use crate::cache::RequestStatCache;
+        use crate::core::{FsContextInner, FS_CTX};
+        let mfs = MountableFS::with_cache_layers(
+            None,
+            CacheNamespace::new("raw-l0"),
+            CachePolicy::default(),
+            true,
+        );
+        mfs.register_plugin(crate::plugins::MemFSPlugin).await;
+        mfs.mount(test_config("memfs", "/local")).await.unwrap();
+        mfs.write_raw("/local/file", b"old", WriteFlag::Create)
+            .await
+            .unwrap();
+        let ctx = Arc::new(
+            FsContextInner::new("tenant")
+                .with_request_stat_cache(Arc::new(RequestStatCache::default())),
+        );
+        FS_CTX
+            .scope(ctx, async {
+                assert_eq!(mfs.stat("/local/file").await.unwrap().size, 3);
+                mfs.write_raw("/local/file", b"new content", WriteFlag::Create)
+                    .await
+                    .unwrap();
+                assert_eq!(mfs.stat("/local/file").await.unwrap().size, 11);
+            })
+            .await;
     }
 
     /// Create a MountableFS with two mounted mock plugins.

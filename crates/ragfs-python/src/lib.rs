@@ -210,7 +210,7 @@ fn validate_expire_secs(v: f64) -> PyResult<f64> {
     }
 }
 
-use ragfs::cache::{CachePolicy, CacheTraversalMode};
+use ragfs::cache::{CachePolicy, CacheTraversalMode, RequestCacheRegistry};
 use ragfs::cache_runtime::{CacheRuntime, DynamicProviderConfig, RedisProviderConfig};
 use ragfs::core::builder::{
     CacheFsConfig, CacheRuntimeProviderConfig, CacheStackConfig, EncryptionConfig,
@@ -306,6 +306,8 @@ enum CacheProviderKind {
 struct RagfsCacheConfig {
     enabled: bool,
     runtime_enabled: bool,
+    request_cache_enabled: bool,
+    max_active_request_caches: usize,
     provider: CacheProviderKind,
     namespace: String,
     max_file_size_bytes: usize,
@@ -355,6 +357,8 @@ impl Default for RagfsCacheConfig {
         Self {
             enabled: false,
             runtime_enabled: false,
+            request_cache_enabled: false,
+            max_active_request_caches: 1024,
             provider: CacheProviderKind::Redis,
             namespace: "openviking".to_string(),
             max_file_size_bytes: CachePolicy::default().max_file_size(),
@@ -399,7 +403,7 @@ impl Default for RedisCacheConfig {
 
 impl RagfsCacheConfig {
     fn stack_config(&self) -> Option<CacheStackConfig> {
-        if !self.enabled && !self.runtime_enabled {
+        if !self.enabled && !self.runtime_enabled && !self.request_cache_enabled {
             return None;
         }
         let provider = match self.provider {
@@ -429,9 +433,10 @@ impl RagfsCacheConfig {
             }
         };
         Some(CacheStackConfig {
-            provider: Some(provider),
+            provider: (self.enabled || self.runtime_enabled).then_some(provider),
             cachefs: CacheFsConfig {
                 enabled: self.enabled,
+                request_cache_enabled: self.request_cache_enabled,
                 namespace: self.namespace.clone(),
                 policy: cache_policy_from_config(self),
             },
@@ -495,6 +500,7 @@ fn cache_config_from_canonical_ov_conf(
         config.traversal_mode =
             traversal_mode(string_field(cachefs, "traversal_mode", "backend")?)?;
         config.bypass_prefixes = string_array_field(cachefs, "bypass_prefixes")?;
+        parse_request_cache_config(&mut config, cachefs.get("request_cache"))?;
     }
 
     if !config.runtime_enabled {
@@ -568,6 +574,7 @@ fn cache_config_from_value(cache: &serde_json::Value) -> Result<RagfsCacheConfig
         usize_field(cache, "max_file_size_bytes", config.max_file_size_bytes)?;
     config.traversal_mode = traversal_mode(string_field(cache, "traversal_mode", "backend")?)?;
     config.bypass_prefixes = string_array_field(cache, "bypass_prefixes")?;
+    parse_request_cache_config(&mut config, cache.get("request_cache"))?;
 
     if let Some(redis) = cache.get("redis") {
         let redis = redis
@@ -584,6 +591,21 @@ fn cache_config_from_value(cache: &serde_json::Value) -> Result<RagfsCacheConfig
     }
     validate_cache_runtime_config(&config)?;
     Ok(config)
+}
+
+fn parse_request_cache_config(
+    config: &mut RagfsCacheConfig,
+    value: Option<&serde_json::Value>,
+) -> Result<(), String> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    let object = value
+        .as_object()
+        .ok_or_else(|| "request_cache must be an object".to_string())?;
+    config.request_cache_enabled = bool_field(object, "enabled", false)?;
+    config.max_active_request_caches = usize_field(object, "max_active_request_caches", 1024)?;
+    Ok(())
 }
 
 fn parse_dynamic_config(
@@ -1119,7 +1141,11 @@ fn py_to_json_value(v: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
 ///
 /// When the dict contains `"bypass_cache": "true"`, plugin-local metadata caches (e.g. the S3FS
 /// stat cache) are bypassed so the operation observes fresh backend state.
-fn build_fs_context(ctx: Option<HashMap<String, String>>) -> FsContext {
+/// A nonempty `cache_id` shares request stat state within this client and account.
+fn build_fs_context(
+    ctx: Option<HashMap<String, String>>,
+    registry: Option<&RequestCacheRegistry>,
+) -> FsContext {
     let mut account_id = String::new();
     let mut disable_auto_pathlock = false;
     let mut lease_ref: Option<String> = None;
@@ -1141,10 +1167,18 @@ fn build_fs_context(ctx: Option<HashMap<String, String>>) -> FsContext {
     } else {
         None
     };
-    Arc::new(
-        FsContextInner::with_pathlock(account_id, pathlock.unwrap_or_default())
-            .with_bypass_cache(bypass_cache),
-    )
+    let request_cache = registry.and_then(|registry| {
+        ctx.as_ref()
+            .and_then(|ctx| ctx.get("cache_id"))
+            .filter(|cache_id| !cache_id.is_empty())
+            .and_then(|cache_id| registry.get_or_create(&account_id, cache_id))
+    });
+    let mut context = FsContextInner::with_pathlock(account_id, pathlock.unwrap_or_default())
+        .with_bypass_cache(bypass_cache);
+    if let Some(cache) = request_cache {
+        context = context.with_request_stat_cache(cache);
+    }
+    Arc::new(context)
 }
 
 /// Convert an OwnedPathLockLease to a Python dict.
@@ -1304,9 +1338,14 @@ struct RAGFSBindingClient {
     pathlock_manager: Arc<PathLockManager>,
     /// Shared cache runtime. Closed only after mounted QueueFS instances shut down.
     cache_runtime: Option<Arc<CacheRuntime>>,
+    request_cache_registry: Option<RequestCacheRegistry>,
 }
 
 impl RAGFSBindingClient {
+    fn build_fs_context(&self, ctx: Option<HashMap<String, String>>) -> FsContext {
+        build_fs_context(ctx, self.request_cache_registry.as_ref())
+    }
+
     /// Run an async filesystem op on the runtime, releasing the GIL, inside the FS_CTX scope.
     ///
     /// Centralizes the GIL-detach + `FS_CTX.scope` + `block_on` pattern so every data method
@@ -1469,7 +1508,17 @@ impl RAGFSBindingClient {
             git_backend,
             pathlock_manager: stack.pathlock_manager,
             cache_runtime: stack.cache_runtime,
+            request_cache_registry: cache_config
+                .request_cache_enabled
+                .then(|| RequestCacheRegistry::new(cache_config.max_active_request_caches)),
         })
+    }
+
+    /// Release registry ownership; in-flight filesystem calls retain their cache.
+    fn release_request_cache(&self, account_id: &str, cache_id: &str) {
+        if let Some(registry) = &self.request_cache_registry {
+            registry.release(account_id, cache_id);
+        }
     }
 
     /// Stop mounted background services, then close the shared CacheRuntime.
@@ -1647,7 +1696,7 @@ impl RAGFSBindingClient {
         sort_by: Option<&str>,
         sort_order: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let top = self.top.clone();
         let offset = parse_listing_offset(offset)?;
         let limit = parse_listing_limit(limit)?;
@@ -1694,7 +1743,7 @@ impl RAGFSBindingClient {
             ));
         }
 
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let top = self.top.clone();
         let off = if offset < 0 { 0u64 } else { offset as u64 };
         let sz = if size < 0 { 0u64 } else { size as u64 };
@@ -1740,7 +1789,7 @@ impl RAGFSBindingClient {
         ctx: Option<HashMap<String, String>>,
     ) -> PyResult<String> {
         let _ = max_retries; // not applicable for local binding
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let top = self.top.clone();
         let len = data.len();
         self.run_scoped(py, fs_ctx, move || async move {
@@ -1759,7 +1808,7 @@ impl RAGFSBindingClient {
         path: String,
         ctx: Option<HashMap<String, String>>,
     ) -> PyResult<HashMap<String, String>> {
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let top = self.top.clone();
         self.run_scoped(py, fs_ctx, move || async move { top.create(&path).await })
             .map_err(to_py_err)?;
@@ -1781,7 +1830,7 @@ impl RAGFSBindingClient {
         let mode_int = u32::from_str_radix(mode, 8)
             .map_err(|e| PyRuntimeError::new_err(format!("Invalid mode '{}': {}", mode, e)))?;
 
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let top = self.top.clone();
         self.run_scoped(py, fs_ctx, move || async move {
             top.mkdir(&path, mode_int).await
@@ -1805,7 +1854,7 @@ impl RAGFSBindingClient {
         let mode_int = u32::from_str_radix(mode, 8)
             .map_err(|e| PyRuntimeError::new_err(format!("Invalid mode '{}': {}", mode, e)))?;
 
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let top = self.top.clone();
         self.run_scoped(py, fs_ctx, move || async move {
             top.ensure_parent_dirs(&path, mode_int).await
@@ -1829,7 +1878,7 @@ impl RAGFSBindingClient {
         recursive: bool,
         ctx: Option<HashMap<String, String>>,
     ) -> PyResult<HashMap<String, String>> {
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let top = self.top.clone();
         self.run_scoped(py, fs_ctx, move || async move {
             if recursive {
@@ -1853,7 +1902,7 @@ impl RAGFSBindingClient {
         path: String,
         ctx: Option<HashMap<String, String>>,
     ) -> PyResult<Py<PyAny>> {
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let top = self.top.clone();
         let info = self
             .run_scoped(py, fs_ctx, move || async move { top.stat(&path).await })
@@ -1874,7 +1923,7 @@ impl RAGFSBindingClient {
         new_path: String,
         ctx: Option<HashMap<String, String>>,
     ) -> PyResult<HashMap<String, String>> {
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let top = self.top.clone();
         self.run_scoped(py, fs_ctx, move || async move {
             top.rename(&old_path, &new_path).await
@@ -1895,7 +1944,7 @@ impl RAGFSBindingClient {
         dst_path: String,
         ctx: Option<HashMap<String, String>>,
     ) -> PyResult<HashMap<String, bool>> {
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let mountable = self.mountable.clone();
         let performed = self
             .run_scoped(py, fs_ctx, move || async move {
@@ -1917,7 +1966,7 @@ impl RAGFSBindingClient {
         mode: u32,
         ctx: Option<HashMap<String, String>>,
     ) -> PyResult<HashMap<String, String>> {
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let top = self.top.clone();
         self.run_scoped(
             py,
@@ -1939,7 +1988,7 @@ impl RAGFSBindingClient {
         path: String,
         ctx: Option<HashMap<String, String>>,
     ) -> PyResult<HashMap<String, String>> {
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let top = self.top.clone();
         self.run_scoped(py, fs_ctx, move || async move {
             // Try create; if already exists, write empty to update mtime
@@ -2106,7 +2155,7 @@ impl RAGFSBindingClient {
             ));
         }
 
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let top = self.top.clone();
         let limit = node_limit.map(|n| if n < 0 { 0 } else { n as usize });
         let level_limit_usize = level_limit.map(|n| if n < 0 { 0 } else { n as usize });
@@ -2156,7 +2205,7 @@ impl RAGFSBindingClient {
         sort_by: Option<&str>,
         sort_order: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let top = self.top.clone();
         let limit = node_limit.map(|n| if n < 0 { 0 } else { n as usize });
         let level_limit_usize = level_limit.map(|n| if n < 0 { 0 } else { n as usize });
@@ -2214,7 +2263,7 @@ impl RAGFSBindingClient {
         continuation_token: Option<String>,
         ctx: Option<HashMap<String, String>>,
     ) -> PyResult<Py<PyAny>> {
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let top = self.top.clone();
         let page_size = page_size.map(|n| if n < 0 { 0 } else { n as usize });
         let level_limit_usize = level_limit.map(|n| if n < 0 { 0 } else { n as usize });
@@ -2255,7 +2304,7 @@ impl RAGFSBindingClient {
         path: String,
         ctx: Option<HashMap<String, String>>,
     ) -> PyResult<Py<PyAny>> {
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let mountable = self.mountable.clone();
         let result = self
             .run_scoped(py, fs_ctx, move || async move {
@@ -2281,7 +2330,7 @@ impl RAGFSBindingClient {
         path: String,
         ctx: Option<HashMap<String, String>>,
     ) -> PyResult<Py<PyAny>> {
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let mountable = self.mountable.clone();
         let result = self
             .run_scoped(py, fs_ctx, move || async move {
@@ -2314,7 +2363,7 @@ impl RAGFSBindingClient {
         owner_lease_ref: Option<Py<PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         let mgr = self.clone_pathlock_manager();
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let timeout = validate_timeout_secs(timeout_secs)?;
         let owner_capability = extract_optional_owned_lease_ref(py, owner_lease_ref.as_ref())?;
         let lease = self
@@ -2344,7 +2393,7 @@ impl RAGFSBindingClient {
         owner_lease_ref: Option<Py<PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         let mgr = self.clone_pathlock_manager();
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let timeout = validate_timeout_secs(timeout_secs)?;
         let owner_capability = extract_optional_owned_lease_ref(py, owner_lease_ref.as_ref())?;
         let lease = self
@@ -2374,7 +2423,7 @@ impl RAGFSBindingClient {
         owner_lease_ref: Option<Py<PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         let mgr = self.clone_pathlock_manager();
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let timeout = validate_timeout_secs(timeout_secs)?;
         let owner_capability = extract_optional_owned_lease_ref(py, owner_lease_ref.as_ref())?;
         let lease = self
@@ -2404,7 +2453,7 @@ impl RAGFSBindingClient {
         owner_lease_ref: Option<Py<PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         let mgr = self.clone_pathlock_manager();
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let timeout = validate_timeout_secs(timeout_secs)?;
         let owner_capability = extract_optional_owned_lease_ref(py, owner_lease_ref.as_ref())?;
         let lease = self
@@ -2435,7 +2484,7 @@ impl RAGFSBindingClient {
         owner_lease_ref: Option<Py<PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         let mgr = self.clone_pathlock_manager();
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let timeout = validate_timeout_secs(timeout_secs)?;
         let owner_capability = extract_optional_owned_lease_ref(py, owner_lease_ref.as_ref())?;
         let lease = self
@@ -2468,7 +2517,7 @@ impl RAGFSBindingClient {
         owner_lease_ref: Option<Py<PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         let mgr = self.clone_pathlock_manager();
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let timeout = validate_timeout_secs(timeout_secs)?;
         let owner_capability = extract_optional_owned_lease_ref(py, owner_lease_ref.as_ref())?;
 
@@ -2500,7 +2549,7 @@ impl RAGFSBindingClient {
     ) -> PyResult<Py<PyAny>> {
         let mgr = self.clone_pathlock_manager();
         let mgr2 = mgr.clone();
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let lease_ref = extract_lease_ref(py, &owned_lease_ref)?;
         let lease = self
             .run_scoped(py, fs_ctx, move || {
@@ -2526,7 +2575,7 @@ impl RAGFSBindingClient {
         owned_lease_ref: Py<PyAny>,
     ) -> PyResult<String> {
         let mgr = self.clone_pathlock_manager();
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let (lease_ref, ownership_ref) = extract_owned_lease_ref(py, &owned_lease_ref)?;
         let status = self
             .run_scoped(py, fs_ctx, move || {
@@ -2558,7 +2607,7 @@ impl RAGFSBindingClient {
         owned_lease_ref: Py<PyAny>,
     ) -> PyResult<()> {
         let mgr = self.clone_pathlock_manager();
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let (lease_ref, ownership_ref) = extract_owned_lease_ref(py, &owned_lease_ref)?;
         self.run_scoped(py, fs_ctx, move || {
             let mgr = mgr.clone();
@@ -2590,7 +2639,7 @@ impl RAGFSBindingClient {
         lock_paths: Vec<String>,
     ) -> PyResult<()> {
         let mgr = self.clone_pathlock_manager();
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let (lease_ref, ownership_ref) = extract_owned_lease_ref(py, &owned_lease_ref)?;
         self.run_scoped(py, fs_ctx, move || {
             let mgr = mgr.clone();
@@ -2622,7 +2671,7 @@ impl RAGFSBindingClient {
         owned_lease_ref: Py<PyAny>,
     ) -> PyResult<Py<PyAny>> {
         let mgr = self.clone_pathlock_manager();
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let (lease_ref, ownership_ref) = extract_owned_lease_ref(py, &owned_lease_ref)?;
         let handoff = self
             .run_scoped(py, fs_ctx, move || {
@@ -2654,7 +2703,7 @@ impl RAGFSBindingClient {
         owned_lease_ref: Py<PyAny>,
     ) -> PyResult<()> {
         let mgr = self.clone_pathlock_manager();
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let (lease_ref, ownership_ref) = extract_owned_lease_ref(py, &owned_lease_ref)?;
         self.run_scoped(py, fs_ctx, move || {
             let mgr = mgr.clone();
@@ -2685,7 +2734,7 @@ impl RAGFSBindingClient {
         handoff_ref: HashMap<String, Py<PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         let mgr = self.clone_pathlock_manager();
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let owner_id: String = handoff_ref
             .get("owner_id")
             .or_else(|| handoff_ref.get("handle_id"))
@@ -2744,7 +2793,7 @@ impl RAGFSBindingClient {
         ignore_stale: bool,
     ) -> PyResult<bool> {
         let mgr = self.clone_pathlock_manager();
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         self.run_scoped(py, fs_ctx, move || {
             let mgr = mgr.clone();
             let p = path.clone();
@@ -2761,7 +2810,7 @@ impl RAGFSBindingClient {
         ctx: Option<HashMap<String, String>>,
     ) -> PyResult<Py<PyAny>> {
         let mgr = self.clone_pathlock_manager();
-        let fs_ctx = build_fs_context(ctx);
+        let fs_ctx = self.build_fs_context(ctx);
         let snapshot = self.run_scoped(py, fs_ctx, move || {
             let mgr = mgr.clone();
             async move { mgr.observe().await }

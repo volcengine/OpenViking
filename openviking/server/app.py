@@ -419,6 +419,20 @@ def create_app(
     app.state.user_deletion_service = None
     set_server_config(config)
 
+    from openviking.server.request_cache_middleware import RequestCacheMiddleware
+
+    def request_cache_enabled():
+        try:
+            return get_openviking_config().storage.agfs.cachefs.request_cache.enabled
+        except FileNotFoundError:
+            # Router-only apps can run without initializing the storage service.
+            return False
+
+    app.add_middleware(
+        RequestCacheMiddleware,
+        enabled=request_cache_enabled,
+    )
+
     # Body dump middleware must be registered BEFORE observability so it ends up
     # nested inside the trace span (in Starlette, middleware added later wraps
     # earlier-added ones — so earlier registration = inner layer).

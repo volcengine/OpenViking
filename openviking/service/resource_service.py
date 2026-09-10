@@ -25,6 +25,7 @@ from openviking.observability.http_error_context import sanitize_public_http_err
 from openviking.parse.backend import ParserBackend, normalize_parser_backend
 from openviking.parse.mode import ParseMode, normalize_parse_mode
 from openviking.parse.parsers.constants import MPEG_TS_EXTENSION_ALIAS
+from openviking.pyagfs.request_cache import without_request_cache
 from openviking.resource.feishu_watch_auth import (
     FEISHU_ACCESS_TOKEN_ARG,
     FEISHU_APP_ID_ARG,
@@ -2136,6 +2137,7 @@ class ResourceService:
             logger.warning("[ResourceService] Failed to link resource reason memory: %s", exc)
             result.setdefault("warnings", []).append(f"Memory linking failed: {exc}")
 
+    @without_request_cache
     async def _monitor_queue_processing(
         self,
         task_id: str,

@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, List, Optional, Union
 
 from openviking.pyagfs import AGFSSyncClientProtocol, AsyncAGFSClient
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
+from openviking.pyagfs.request_cache import without_request_cache
 from openviking.service.task_work_index import (
     TaskWorkIndex,
     TaskWorkRejected,
@@ -345,6 +346,7 @@ class NamedQueue:
             logger.debug(f"[NamedQueue] Dequeue raw failed for {self.name}: {e}")
             return None
 
+    @without_request_cache
     async def process_dequeued(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Invoke the dequeue handler on already-fetched raw data.
 

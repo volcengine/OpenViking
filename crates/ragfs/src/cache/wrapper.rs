@@ -1,6 +1,7 @@
 //! A transparent [`FileSystem`](crate::FileSystem) cache wrapper.
 
 use super::envelope::{CacheEnvelope, CacheObjectKind, GenerationSnapshot};
+use super::RequestStatLookup;
 use super::{CacheMetrics, CachePolicy, CacheTraversalMode};
 use crate::cache_runtime::{CacheError, CacheResult, CacheRuntime, SetOptions, SetResult};
 use crate::core::filesystem::{
@@ -11,6 +12,7 @@ use crate::core::{
     FileInfo, FileSystem, GlobPage, GrepMatch, GrepResult, ListSortBy, MultiWriteWrappedFS, Result,
     SortOrder, TreeEntry, WriteFlag,
 };
+use crate::core::{FsContextView, FS_CTX};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::{self, StreamExt};
@@ -50,7 +52,8 @@ impl CacheNamespace {
 /// default mount path, so existing filesystem behavior remains unchanged.
 pub struct CachedFileSystem {
     backend: Box<dyn FileSystem>,
-    runtime: Arc<CacheRuntime>,
+    runtime: Option<Arc<CacheRuntime>>,
+    request_cache_enabled: bool,
     namespace: CacheNamespace,
     policy: CachePolicy,
     metrics: Arc<CacheMetrics>,
@@ -69,18 +72,21 @@ impl CachedFileSystem {
         namespace: CacheNamespace,
         policy: CachePolicy,
     ) -> Self {
-        Self::build(backend, runtime, namespace, policy)
+        Self::with_cache_layers(backend, Some(runtime), namespace, policy, false)
     }
 
-    fn build(
+    /// Wrap a backend with independently enabled request-local and shared caching.
+    pub fn with_cache_layers(
         backend: Box<dyn FileSystem>,
-        runtime: Arc<CacheRuntime>,
+        runtime: Option<Arc<CacheRuntime>>,
         namespace: CacheNamespace,
         policy: CachePolicy,
+        request_cache_enabled: bool,
     ) -> Self {
         Self {
             backend,
             runtime,
+            request_cache_enabled,
             namespace,
             policy,
             metrics: Arc::new(CacheMetrics::default()),
@@ -98,8 +104,8 @@ impl CachedFileSystem {
     }
 
     /// Return the unified cache runtime used by this wrapper.
-    pub fn runtime(&self) -> Arc<CacheRuntime> {
-        Arc::clone(&self.runtime)
+    pub fn runtime(&self) -> Option<Arc<CacheRuntime>> {
+        self.runtime.clone()
     }
 
     /// Return the wrapped filesystem for mount-stack capability discovery.
@@ -114,8 +120,74 @@ impl CachedFileSystem {
 
     /// Invalidate cache objects affected by a write that bypassed this wrapper.
     pub(crate) async fn invalidate_external_write(&self, path: &str) {
+        self.invalidate_request_external_write(path);
         self.invalidate_path_objects(path).await;
         self.invalidate_parent_directory(path).await;
+    }
+
+    pub(crate) fn invalidate_request_external_write(&self, path: &str) {
+        self.invalidate_request_structure(&Ok(()), &[path], &[]);
+    }
+
+    fn invalidate_request_stat(&self, exact: &[&str], subtrees: &[&str]) {
+        if self.request_cache_enabled {
+            if let Some(cache) = FsContextView::current().request_stat_cache() {
+                cache.invalidate(self.namespace.as_str(), exact, subtrees);
+            }
+        }
+    }
+
+    fn invalidate_request_mutation<T>(
+        &self,
+        result: &Result<T>,
+        exact: &[&str],
+        subtrees: &[&str],
+    ) {
+        use crate::core::Error;
+        // Validation failures do not mutate storage. Other errors may follow a
+        // partial write (including a multi-write quorum failure).
+        if !matches!(
+            result,
+            Err(Error::NotFound(_)
+                | Error::AlreadyExists(_)
+                | Error::PermissionDenied(_)
+                | Error::InvalidPath(_)
+                | Error::NotADirectory(_)
+                | Error::IsADirectory(_)
+                | Error::DirectoryNotEmpty(_)
+                | Error::InvalidOperation(_)
+                | Error::ContextMissing(_))
+        ) {
+            self.invalidate_request_stat(exact, subtrees);
+        }
+    }
+
+    fn invalidate_request_structure<T>(
+        &self,
+        result: &Result<T>,
+        paths: &[&str],
+        subtrees: &[&str],
+    ) {
+        if !self.request_cache_enabled || FsContextView::current().request_stat_cache().is_none() {
+            return;
+        }
+        // Object stores may create/remove implicit ancestors, even for non-Create
+        // writes. Derive these dependencies locally without probing storage.
+        let scopes = paths
+            .iter()
+            .flat_map(|path| ancestor_scopes(path))
+            .collect::<Vec<_>>();
+        let exact = scopes.iter().map(String::as_str).collect::<Vec<_>>();
+        self.invalidate_request_mutation(result, &exact, subtrees);
+    }
+
+    async fn shared_write_guard(&self) -> Option<tokio::sync::RwLockWriteGuard<'_, ()>> {
+        // Only the shared content/directory cache needs to serialize backend IO.
+        if self.runtime.is_some() {
+            Some(self.operation_lock.write().await)
+        } else {
+            None
+        }
     }
 
     async fn tree_directory_via_cache(
@@ -382,13 +454,19 @@ impl CachedFileSystem {
     }
 
     async fn cache_get(&self, key: &str) -> CacheResult<Option<Bytes>> {
+        let Some(runtime) = &self.runtime else {
+            return Ok(None);
+        };
         let started = Instant::now();
-        let result = self.runtime.get(key).await;
+        let result = runtime.get(key).await;
         self.metrics.get(started.elapsed());
         result
     }
 
     async fn cache_batch_get(&self, keys: &[String]) -> CacheResult<Vec<Option<Bytes>>> {
+        let Some(runtime) = &self.runtime else {
+            return Ok(vec![None; keys.len()]);
+        };
         if keys.is_empty() {
             return Ok(Vec::new());
         }
@@ -402,7 +480,7 @@ impl CachedFileSystem {
         }
 
         let started = Instant::now();
-        let result = self.runtime.mget(keys).await;
+        let result = runtime.mget(keys).await;
         self.metrics.get(started.elapsed());
         let values = result?;
         if values.len() != keys.len() {
@@ -416,8 +494,11 @@ impl CachedFileSystem {
     }
 
     async fn cache_put(&self, key: &str, value: Bytes, affected_path: &str) -> bool {
+        let Some(runtime) = &self.runtime else {
+            return false;
+        };
         let started = Instant::now();
-        let result = self.runtime.set(key, value, SetOptions::default()).await;
+        let result = runtime.set(key, value, SetOptions::default()).await;
         self.metrics.put(started.elapsed());
         match result {
             Ok(SetResult::Applied) => true,
@@ -435,8 +516,9 @@ impl CachedFileSystem {
     }
 
     async fn cache_delete(&self, key: &str, affected_path: &str) {
+        let Some(runtime) = &self.runtime else { return };
         let started = Instant::now();
-        let result = self.runtime.del(&[key.to_string()]).await;
+        let result = runtime.del(&[key.to_string()]).await;
         self.metrics.delete(started.elapsed());
         match result {
             Ok(_) => self.metrics.invalidation(),
@@ -461,6 +543,9 @@ impl CachedFileSystem {
     }
 
     async fn is_runtime_bypassed(&self, path: &str) -> bool {
+        if self.runtime.is_none() {
+            return true;
+        }
         let normalized = normalize_path(path);
         self.bypass_scopes
             .read()
@@ -556,11 +641,11 @@ impl CachedFileSystem {
     }
 
     async fn put_missing_generations(&self, missing: Vec<(String, u64)>) {
+        let Some(runtime) = &self.runtime else { return };
         stream::iter(missing)
             .for_each_concurrent(GENERATION_PUT_CONCURRENCY, |(key, value)| async move {
                 let started = Instant::now();
-                let result = self
-                    .runtime
+                let result = runtime
                     .set(
                         &key,
                         Bytes::copy_from_slice(&value.to_be_bytes()),
@@ -615,6 +700,9 @@ impl CachedFileSystem {
     }
 
     async fn bump_generation(&self, path: &str) {
+        if self.runtime.is_none() {
+            return;
+        }
         let key = self.generation_key(path);
         let current = match self.current_generation(&key).await {
             Ok(value) => value,
@@ -980,16 +1068,20 @@ impl CachedFileSystem {
 #[async_trait]
 impl FileSystem for CachedFileSystem {
     async fn create(&self, path: &str) -> Result<()> {
-        let _guard = self.operation_lock.write().await;
-        self.backend.create(path).await?;
+        let _guard = self.shared_write_guard().await;
+        let result = self.backend.create(path).await;
+        self.invalidate_request_structure(&result, &[path], &[]);
+        result?;
         self.invalidate_path_objects(path).await;
         self.invalidate_parent_directory(path).await;
         Ok(())
     }
 
     async fn mkdir(&self, path: &str, mode: u32) -> Result<()> {
-        let _guard = self.operation_lock.write().await;
-        self.backend.mkdir(path, mode).await?;
+        let _guard = self.shared_write_guard().await;
+        let result = self.backend.mkdir(path, mode).await;
+        self.invalidate_request_structure(&result, &[path], &[]);
+        result?;
         self.bump_generation(path).await;
         self.cache_delete(&self.directory_key(path), path).await;
         self.invalidate_parent_directory(path).await;
@@ -997,8 +1089,10 @@ impl FileSystem for CachedFileSystem {
     }
 
     async fn remove(&self, path: &str) -> Result<()> {
-        let _guard = self.operation_lock.write().await;
-        self.backend.remove(path).await?;
+        let _guard = self.shared_write_guard().await;
+        let result = self.backend.remove(path).await;
+        self.invalidate_request_structure(&result, &[path], &[]);
+        result?;
         self.bump_generation(path).await;
         self.invalidate_path_objects(path).await;
         self.invalidate_parent_directory(path).await;
@@ -1006,8 +1100,9 @@ impl FileSystem for CachedFileSystem {
     }
 
     async fn remove_all(&self, path: &str) -> Result<()> {
-        let _guard = self.operation_lock.write().await;
+        let _guard = self.shared_write_guard().await;
         let result = self.backend.remove_all(path).await;
+        self.invalidate_request_structure(&Ok(()), &[path], &[path]);
         // Recursive deletion is not transactional: a backend can remove part of
         // the subtree before reporting an error. Invalidate conservatively so
         // provider-backed caches cannot continue serving deleted objects.
@@ -1068,8 +1163,10 @@ impl FileSystem for CachedFileSystem {
     }
 
     async fn write(&self, path: &str, data: &[u8], offset: u64, flags: WriteFlag) -> Result<u64> {
-        let _guard = self.operation_lock.write().await;
-        let written = self.backend.write(path, data, offset, flags).await?;
+        let _guard = self.shared_write_guard().await;
+        let result = self.backend.write(path, data, offset, flags).await;
+        self.invalidate_request_structure(&result, &[path], &[]);
+        let written = result?;
         let normalized = normalize_path(path);
         let key = self.file_key(&normalized);
         self.cache_delete(&key, &normalized).await;
@@ -1151,12 +1248,33 @@ impl FileSystem for CachedFileSystem {
     }
 
     async fn stat(&self, path: &str) -> Result<FileInfo> {
-        self.backend.stat(path).await
+        let context = FsContextView::current();
+        let cache = context.request_stat_cache().filter(|_| {
+            self.request_cache_enabled
+                && !context.bypass_cache()
+                && self.policy.cache_directory(path)
+        });
+        let Some(cache) = cache else {
+            return self.backend.stat(path).await;
+        };
+        match cache.begin(self.namespace.as_str(), path) {
+            RequestStatLookup::Hit(result) => result,
+            RequestStatLookup::Miss(ticket) => {
+                // A plugin-local cache can refill old metadata after a write.
+                // L0's epoch is useful only when a miss observes fresh backend state.
+                let fresh = FS_CTX.with(|ctx| Arc::new((**ctx).clone().with_bypass_cache(true)));
+                let result = FS_CTX.scope(fresh, self.backend.stat(path)).await;
+                ticket.complete(&result);
+                result
+            }
+        }
     }
 
     async fn rename(&self, old_path: &str, new_path: &str) -> Result<()> {
-        let _guard = self.operation_lock.write().await;
-        self.backend.rename(old_path, new_path).await?;
+        let _guard = self.shared_write_guard().await;
+        let result = self.backend.rename(old_path, new_path).await;
+        self.invalidate_request_structure(&result, &[old_path, new_path], &[old_path, new_path]);
+        result?;
         self.bump_generation(old_path).await;
         self.bump_generation(new_path).await;
         self.invalidate_path_objects(old_path).await;
@@ -1167,8 +1285,10 @@ impl FileSystem for CachedFileSystem {
     }
 
     async fn replace(&self, src_path: &str, dst_path: &str) -> Result<()> {
-        let _guard = self.operation_lock.write().await;
-        self.backend.replace(src_path, dst_path).await?;
+        let _guard = self.shared_write_guard().await;
+        let result = self.backend.replace(src_path, dst_path).await;
+        self.invalidate_request_structure(&result, &[src_path, dst_path], &[src_path, dst_path]);
+        result?;
         self.bump_generation(src_path).await;
         self.bump_generation(dst_path).await;
         self.invalidate_path_objects(src_path).await;
@@ -1179,16 +1299,20 @@ impl FileSystem for CachedFileSystem {
     }
 
     async fn chmod(&self, path: &str, mode: u32) -> Result<()> {
-        let _guard = self.operation_lock.write().await;
-        self.backend.chmod(path, mode).await?;
+        let _guard = self.shared_write_guard().await;
+        let result = self.backend.chmod(path, mode).await;
+        self.invalidate_request_mutation(&result, &[path], &[]);
+        result?;
         self.invalidate_path_objects(path).await;
         self.invalidate_parent_directory(path).await;
         Ok(())
     }
 
     async fn truncate(&self, path: &str, size: u64) -> Result<()> {
-        let _guard = self.operation_lock.write().await;
-        self.backend.truncate(path, size).await?;
+        let _guard = self.shared_write_guard().await;
+        let result = self.backend.truncate(path, size).await;
+        self.invalidate_request_mutation(&result, &[path], &[]);
+        result?;
         self.cache_delete(&self.file_key(path), path).await;
         self.invalidate_parent_directory(path).await;
         Ok(())
@@ -1199,8 +1323,11 @@ impl FileSystem for CachedFileSystem {
     }
 
     async fn ensure_parent_dirs(&self, path: &str, mode: u32) -> Result<()> {
-        let _guard = self.operation_lock.write().await;
-        self.backend.ensure_parent_dirs(path, mode).await?;
+        let _guard = self.shared_write_guard().await;
+        let result = self.backend.ensure_parent_dirs(path, mode).await;
+        let scopes = ancestor_scopes(&parent_path(path));
+        self.invalidate_request_stat(&scopes.iter().map(String::as_str).collect::<Vec<_>>(), &[]);
+        result?;
         for scope in ancestor_scopes(&parent_path(path)) {
             self.cache_delete(&self.directory_key(&scope), &scope).await;
         }
@@ -1217,7 +1344,8 @@ impl FileSystem for CachedFileSystem {
         exclude_path: Option<&str>,
         level_limit: Option<usize>,
     ) -> Result<GrepResult> {
-        if self.policy.traversal_mode() == CacheTraversalMode::CachedTraversal
+        if self.runtime.is_some()
+            && self.policy.traversal_mode() == CacheTraversalMode::CachedTraversal
             && !self.wraps_multiwrite()
         {
             return self
@@ -1256,7 +1384,8 @@ impl FileSystem for CachedFileSystem {
         sort_by: Option<ListSortBy>,
         sort_order: Option<SortOrder>,
     ) -> Result<Vec<TreeEntry>> {
-        if self.policy.traversal_mode() == CacheTraversalMode::CachedTraversal
+        if self.runtime.is_some()
+            && self.policy.traversal_mode() == CacheTraversalMode::CachedTraversal
             && !self.wraps_multiwrite()
         {
             return self
