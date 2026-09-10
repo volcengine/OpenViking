@@ -10,7 +10,6 @@ only: the final matching decision is always made against the on-disk content
 
 from openviking.storage.keywordfs.config import (
     CjkMode,
-    ContentSource,
     HybridRetrievalConfig,
     KeywordConfig,
     TokenizerMode,
@@ -20,7 +19,6 @@ from openviking.storage.keywordfs.keyword_msg import KeywordMsg
 
 __all__ = [
     "CjkMode",
-    "ContentSource",
     "HybridRetrievalConfig",
     "KeywordConfig",
     "KeywordFS",

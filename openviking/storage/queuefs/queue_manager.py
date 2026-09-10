@@ -424,6 +424,8 @@ class QueueManager:
                     task_work_index=self._task_work_index,
                 )
             elif name == self.KEYWORD:
+                from openviking.storage.keywordfs.keyword_queue import KeywordQueue
+
                 self._queues[name] = KeywordQueue(
                     self._agfs,
                     self.mount_point,

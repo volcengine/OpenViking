@@ -134,9 +134,10 @@ def _keyword_indexing_enabled(viking_fs: Any) -> bool:
     the keyword sidecar must actually be wired into VikingFS.
     """
     config = get_openviking_config()
-    if not config.keyword.enabled:
+    keyword_config = getattr(config, "keyword", None)
+    if keyword_config is None or not keyword_config.enabled:
         return False
-    if config.keyword.respect_encryption and getattr(viking_fs, "_encryptor", None) is not None:
+    if keyword_config.respect_encryption and getattr(viking_fs, "_encryptor", None) is not None:
         return False
     getter = getattr(viking_fs, "_get_keyword_fs", None)
     return bool(getter is not None and getter() is not None)

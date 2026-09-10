@@ -616,9 +616,10 @@ class OpenVikingService:
             self._queue_manager = None
             logger.info("Queue manager stopped")
 
-        if self._keyword_fs is not None:
+        keyword_fs = getattr(self, "_keyword_fs", None)
+        if keyword_fs is not None:
             try:
-                self._keyword_fs.close()
+                keyword_fs.close()
             except Exception:
                 logger.warning("Failed to close keyword sidecar", exc_info=True)
             self._keyword_fs = None

@@ -57,3 +57,20 @@ def test_observer_keyword_not_wired(obs, tmp_path, monkeypatch):
     monkeypatch.setattr(vf_module, "get_viking_fs", lambda: vfs)
     c = obs.keyword
     assert not c.is_healthy and c.has_errors
+
+
+def test_observer_keyword_enabled_but_not_built_is_healthy(obs, tmp_path, monkeypatch):
+    """Enabled with no documents written yet is a normal startup state."""
+    import openviking.storage.viking_fs as vf_module
+
+    kfs = KeywordFS(tmp_path, KeywordConfig(enabled=True))
+    vfs = VikingFS(
+        agfs=_DummyAgfs(),
+        keyword_config=KeywordConfig(enabled=True),
+        keyword_fs=kfs,
+    )
+    monkeypatch.setattr(vf_module, "get_viking_fs", lambda: vfs)
+    c = obs.keyword
+    assert c.is_healthy is True
+    assert c.has_errors is False
+    assert "not built" in c.status

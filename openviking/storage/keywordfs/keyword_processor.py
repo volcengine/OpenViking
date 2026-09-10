@@ -11,7 +11,7 @@ from openviking_cli.utils.logger import get_logger
 
 from ..queuefs.named_queue import DequeueHandlerBase
 from .keyword_fs import KeywordFS
-from .keyword_msg import Delete, DeletePrefix, Move, Upsert, KeywordMsg
+from .keyword_msg import Copy, Delete, DeletePrefix, KeywordMsg, Move, Upsert
 
 logger = get_logger(__name__)
 
@@ -69,11 +69,13 @@ class KeywordProcessor(DequeueHandlerBase):
                 kfs.delete_prefix(msg.account_id, msg.uri)
             elif msg.kind == Move:
                 kfs.move(msg.account_id, msg.old_uri, msg.new_uri)
+            elif msg.kind == Copy:
+                kfs.copy(msg.account_id, msg.old_uri, msg.new_uri)
             else:
                 logger.warning(f"[KeywordProcessor] Unknown kind: {msg.kind}")
                 self.report_error(f"Unknown KeywordMsg kind: {msg.kind}", data)
                 return None
-        except sqlite3.OperationalError as e:
+        except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
             logger.warning(f"[KeywordProcessor] Transient DB error, requeueing: {e}")
             self.report_requeue()
             return None

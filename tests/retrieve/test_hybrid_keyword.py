@@ -69,10 +69,12 @@ async def test_weighted_fusion_includes_keyword_hit(kfs):
 
 
 @pytest.mark.asyncio
-async def test_disabled_returns_dense_unmodified(kfs):
+async def test_config_switch_is_reported_but_enhance_only_needs_a_sidecar(kfs):
     rec = HybridKeywordRecaller(kfs, HybridRetrievalConfig(enabled=False), KeywordConfig(enabled=True))
+    assert rec.enabled(_ctx()) is False
+    assert rec.sidecar_usable(_ctx()) is True
     out = await rec.enhance("rollback", _dense(), ["viking://resources/proj"], _ctx(), limit=10)
-    assert [m.uri for m in out] == ["viking://resources/proj/A.md", "viking://resources/proj/B.md"]
+    assert out
 
 
 @pytest.mark.asyncio
@@ -80,3 +82,74 @@ async def test_no_keyword_hit_returns_dense(kfs):
     rec = HybridKeywordRecaller(kfs, HybridRetrievalConfig(enabled=True), KeywordConfig(enabled=True))
     out = await rec.enhance("qqqq zzzz", _dense(), ["viking://resources/proj"], _ctx(), limit=10)
     assert [m.uri for m in out] == ["viking://resources/proj/A.md", "viking://resources/proj/B.md"]
+
+
+def test_weighted_fusion_prefers_stronger_bm25(kfs):
+    rec = HybridKeywordRecaller(
+        kfs,
+        HybridRetrievalConfig(enabled=True, fusion="weighted", keyword_weight=0.5),
+        KeywordConfig(enabled=True),
+    )
+    # FTS5 bm25 scores are negative: -10 is a stronger match than -1.
+    fused = rec._fuse_weighted(
+        [],
+        [("viking://resources/strong.md", -10.0), ("viking://resources/weak.md", -1.0)],
+        limit=2,
+    )
+    assert [m.uri for m in fused] == [
+        "viking://resources/strong.md",
+        "viking://resources/weak.md",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_short_query_skips_keyword_recall(kfs):
+    rec = HybridKeywordRecaller(
+        kfs, HybridRetrievalConfig(enabled=True, min_token_query_len=2), KeywordConfig(enabled=True)
+    )
+    out = await rec.enhance("a", [], ["viking://resources/proj"], _ctx(), limit=5)
+    assert out == []
+
+
+@pytest.mark.asyncio
+async def test_cjk_query_is_not_skipped_by_the_token_gate(kfs):
+    kfs.upsert(
+        ACCOUNT,
+        "viking://resources/proj/中文.md",
+        "单元圆 认证 接口",
+        level=2,
+        context_type="resource",
+    )
+    rec = HybridKeywordRecaller(
+        kfs,
+        HybridRetrievalConfig(enabled=True, min_token_query_len=2),
+        KeywordConfig(enabled=True, cjk_mode="char"),
+    )
+    # "单元圆" carries no spaces: a whitespace token count would treat it as one
+    # token and drop the query, even though the index tokenizes it into three.
+    out = await rec.enhance("单元圆", [], ["viking://resources/proj"], _ctx(), limit=10)
+    assert any(m.uri.endswith("中文.md") for m in out), out
+
+
+@pytest.mark.asyncio
+async def test_dense_hits_keep_their_dense_score(kfs):
+    rec = HybridKeywordRecaller(kfs, HybridRetrievalConfig(enabled=True), KeywordConfig(enabled=True))
+    out = await rec.enhance("rollback runbook", _dense(), ["viking://resources/proj"], _ctx(), limit=10)
+    b = next(m for m in out if m.uri.endswith("B.md"))
+    assert b.score == pytest.approx(0.7)
+
+
+@pytest.mark.asyncio
+async def test_keyword_only_hit_uses_indexed_metadata(kfs):
+    kfs.upsert(
+        ACCOUNT,
+        "viking://resources/proj/E.md",
+        "rollback 2.4.1",
+        level=1,
+        context_type="memory",
+    )
+    rec = HybridKeywordRecaller(kfs, HybridRetrievalConfig(enabled=True), KeywordConfig(enabled=True))
+    out = await rec.enhance("rollback 2.4.1", [], ["viking://resources/proj"], _ctx(), limit=10)
+    e = next(m for m in out if m.uri.endswith("E.md"))
+    assert e.level == 1
+    assert e.context_type == ContextType.MEMORY

@@ -4,7 +4,6 @@
 
 from openviking_cli.utils.config.keyword_config import (
     CjkMode,
-    ContentSource,
     HybridRetrievalConfig,
     KeywordConfig,
     TokenizerMode,
@@ -12,7 +11,6 @@ from openviking_cli.utils.config.keyword_config import (
 
 __all__ = [
     "CjkMode",
-    "ContentSource",
     "HybridRetrievalConfig",
     "KeywordConfig",
     "TokenizerMode",

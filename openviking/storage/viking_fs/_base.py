@@ -13,8 +13,8 @@ from openviking_cli.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from openviking.storage.acl import AclManager
-    from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
     from openviking.storage.keywordfs.keyword_fs import KeywordFS
+    from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
     from openviking_cli.utils.config import (
         GrepConfig,
         KeywordConfig,

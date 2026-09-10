@@ -13,6 +13,7 @@ Upsert = "upsert"
 Delete = "delete"
 DeletePrefix = "delete_prefix"
 Move = "move"
+Copy = "copy"
 
 
 @dataclass
@@ -24,6 +25,7 @@ class KeywordMsg:
       - ``delete``: remove ``uri`` from the index.
       - ``delete_prefix``: remove ``uri`` and every row whose URI starts with it.
       - ``move``: rewrite ``old_uri`` to ``new_uri`` in the index.
+      - ``copy``: duplicate ``old_uri`` onto ``new_uri`` in the index.
 
     The account is carried explicitly so the worker can route to the right DB
     file; the URI is always the canonical Viking URI (same value that the

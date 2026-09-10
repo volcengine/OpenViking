@@ -12,7 +12,6 @@ from openviking.storage.viking_fs._base import logger
 
 if TYPE_CHECKING:
     from openviking.storage.keywordfs.keyword_fs import KeywordFS
-    from openviking_cli.utils.config.keyword_config import KeywordConfig
 
 
 class _KeywordMixin:
@@ -20,7 +19,7 @@ class _KeywordMixin:
 
     def _get_keyword_fs(self) -> Optional["KeywordFS"]:
         """Get the keyword sidecar instance (may be None when disabled)."""
-        return self._keyword_fs
+        return getattr(self, "_keyword_fs", None)
 
     def set_keyword_fs(self, keyword_fs: Optional["KeywordFS"]) -> None:
         """Attach the keyword sidecar (for deferred initialization)."""
@@ -28,18 +27,24 @@ class _KeywordMixin:
 
     def _keyword_indexing_wired(self) -> bool:
         """True when the keyword sidecar should receive mutations."""
-        if not self.keyword_config or not self.keyword_config.enabled:
+        config = getattr(self, "keyword_config", None)
+        if not config or not config.enabled:
             return False
-        if self.keyword_config.respect_encryption and self._encryptor is not None:
+        if config.respect_encryption and getattr(self, "_encryptor", None) is not None:
             return False
         return self._get_keyword_fs() is not None
 
     def _keyword_available(self, ctx: Optional[RequestContext] = None) -> bool:
         """True when the local keyword sidecar is enabled, safe and ready."""
-        if not self.keyword_config or not self.keyword_config.enabled:
+        config = getattr(self, "keyword_config", None)
+        if not config or not config.enabled:
             return False
-        if self.keyword_config.respect_encryption and self._encryptor is not None:
+        if config.respect_encryption and getattr(self, "_encryptor", None) is not None:
             return False
+        return self._keyword_ready(ctx)
+
+    def _keyword_ready(self, ctx: Optional[RequestContext] = None) -> bool:
+        """Sidecar present and ready, ignoring the keyword.enabled switch."""
         kfs = self._get_keyword_fs()
         if kfs is None:
             return False
@@ -93,6 +98,31 @@ class _KeywordMixin:
         except Exception as e:
             logger.warning(f"[VikingFS] Failed to enqueue keyword moves: {e}")
 
+    async def _enqueue_keyword_copy(
+        self, uris: List[str], old_base: str, new_base: str, ctx
+    ) -> None:
+        """Best-effort enqueue of keyword copy messages (fire-and-forget)."""
+        if not self._keyword_indexing_wired() or not uris:
+            return
+        try:
+            from openviking.storage.keywordfs.keyword_msg import Copy, KeywordMsg
+            from openviking.storage.queuefs.queue_manager import get_queue_manager
+
+            qm = get_queue_manager()
+            queue = qm.get_queue(qm.KEYWORD)
+            real_ctx = self._ctx_or_default(ctx)
+            for u in uris:
+                await queue.enqueue(
+                    KeywordMsg(
+                        kind=Copy,
+                        old_uri=u,
+                        new_uri=new_base + u[len(old_base) :],
+                        account_id=real_ctx.account_id,
+                    )
+                )
+        except Exception as e:
+            logger.warning(f"[VikingFS] Failed to enqueue keyword copies: {e}")
+
     async def _maybe_hybrid_keyword(
         self,
         query: str,
@@ -103,25 +133,23 @@ class _KeywordMixin:
         override: Optional[bool] = None,
     ) -> List[Any]:
         """Fuse keyword-sidecar recall into dense results when hybrid is enabled."""
-        hybrid_cfg = (
-            getattr(self.retrieval_config, "hybrid", None) if self.retrieval_config else None
-        )
-        enabled = (
-            override
-            if override is not None
-            else bool(hybrid_cfg and getattr(hybrid_cfg, "enabled", False))
-        )
-        if not enabled:
+        if override is False:
             return matched
-        kfs = self._get_keyword_fs()
-        if kfs is None or not self._keyword_indexing_wired():
+        hybrid_cfg = getattr(getattr(self, "retrieval_config", None), "hybrid", None)
+        if override is None and not getattr(hybrid_cfg, "enabled", False):
             return matched
+        if not self._keyword_ready(ctx):
+            return matched
+        if hybrid_cfg is None:
+            from openviking_cli.utils.config.keyword_config import HybridRetrievalConfig
+
+            hybrid_cfg = HybridRetrievalConfig()
         try:
             from openviking.retrieve.hybrid_keyword import HybridKeywordRecaller
 
-            recaller = HybridKeywordRecaller(kfs, hybrid_cfg, self.keyword_config)
-            if not recaller.enabled(ctx):
-                return matched
+            recaller = HybridKeywordRecaller(
+                self._get_keyword_fs(), hybrid_cfg, getattr(self, "keyword_config", None)
+            )
             return await recaller.enhance(
                 query=query,
                 dense=matched,

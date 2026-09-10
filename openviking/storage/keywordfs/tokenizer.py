@@ -17,7 +17,7 @@ terms:
 from __future__ import annotations
 
 import re
-from typing import List, Optional
+from typing import List
 
 # CJK Unified Ideographs + Extension A + Compatibility Ideographs
 _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")

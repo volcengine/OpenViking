@@ -9,7 +9,6 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 TokenizerMode = Literal["auto", "char", "jieba"]
-ContentSource = Literal["content", "summary", "both"]
 CjkMode = Literal["char", "bigram"]
 
 
@@ -30,14 +29,6 @@ class KeywordConfig(BaseModel):
             "CJK tokenizer mode: 'auto' uses jieba when installed and falls back "
             "to character-level splitting; 'char' always splits CJK per character; "
             "'jieba' requires the optional 'jieba' dependency."
-        ),
-    )
-    content_source: ContentSource = Field(
-        default="content",
-        description=(
-            "Text source indexed by the keyword sidecar: 'content' uses the same "
-            "source as embedding.text_source for leaves, 'summary' uses the L0/L1 "
-            "summaries, 'both' indexes content and summaries."
         ),
     )
     max_doc_bytes: int = Field(

@@ -179,3 +179,31 @@ def test_from_embedding_text_and_multimodal(kfs):
 
     emb3 = EmbeddingMsg(message="", context_data={"uri": "viking://resources/c.md", "account_id": ACCOUNT})
     assert KeywordMsg.from_embedding(emb3) is None
+
+
+def test_move_onto_existing_uri_replaces_destination(kfs):
+    kfs.upsert(ACCOUNT, "viking://resources/a.md", "alpha", level=2)
+    kfs.upsert(ACCOUNT, "viking://resources/b.md", "beta", level=2)
+    assert kfs.move(ACCOUNT, "viking://resources/a.md", "viking://resources/b.md") is True
+    alpha = kfs.lookup(ACCOUNT, query="alpha", scope_uri="viking://resources")
+    assert [uri for uri, _ in alpha] == ["viking://resources/b.md"]
+    assert kfs.lookup(ACCOUNT, query="beta", scope_uri="viking://resources") == []
+
+
+def test_copy_duplicates_rows_without_rereading(kfs):
+    kfs.upsert(ACCOUNT, "viking://resources/a.md", "alpha", level=1)
+    assert kfs.copy(ACCOUNT, "viking://resources/a.md", "viking://resources/copy.md") is True
+    hits = kfs.lookup(ACCOUNT, query="alpha", scope_uri="viking://resources")
+    assert {uri for uri, _ in hits} == {
+        "viking://resources/a.md",
+        "viking://resources/copy.md",
+    }
+    assert kfs.copy(ACCOUNT, "viking://resources/missing.md", "viking://resources/x.md") is False
+
+
+def test_delete_prefix_does_not_treat_underscore_as_wildcard(kfs):
+    kfs.upsert(ACCOUNT, "viking://resources/a_b/x.md", "needle", level=2)
+    kfs.upsert(ACCOUNT, "viking://resources/axb/y.md", "needle", level=2)
+    assert kfs.delete_prefix(ACCOUNT, "viking://resources/a_b") == 1
+    hits = kfs.lookup(ACCOUNT, query="needle", scope_uri="viking://resources")
+    assert [uri for uri, _ in hits] == ["viking://resources/axb/y.md"]

@@ -127,6 +127,10 @@ class KeywordFS:
             "INSERT OR IGNORE INTO meta(key, value) VALUES('tokenizer_version', ?)",
             (_TOKENIZER_VERSION,),
         )
+        conn.execute(
+            "INSERT OR IGNORE INTO meta(key, value) VALUES('built_at', ?)",
+            (_utc_now(),),
+        )
         conn.commit()
 
     # ------------------------------------------------------------------
@@ -202,7 +206,7 @@ class KeywordFS:
             return True
 
     def move(self, account_id: str, old_uri: str, new_uri: str) -> bool:
-        """Rewrite ``old_uri`` to ``new_uri`` (idempotent)."""
+        """Rewrite ``old_uri`` to ``new_uri``, replacing any existing destination."""
         if not old_uri or not new_uri or old_uri == new_uri or self._closed:
             return False
         lock = self._lock(account_id)
@@ -214,9 +218,19 @@ class KeywordFS:
             if row is None:
                 return False
             rowid = int(row["kf_rowid"])
-            conn.execute("UPDATE kf SET uri=? WHERE rowid=?", (new_uri, rowid))
-            conn.execute("UPDATE uri_map SET uri=? WHERE uri=?", (new_uri, old_uri))
-            conn.commit()
+            try:
+                existing = conn.execute(
+                    "SELECT kf_rowid FROM uri_map WHERE uri=?", (new_uri,)
+                ).fetchone()
+                if existing is not None:
+                    self._delete_row(conn, int(existing["kf_rowid"]), new_uri)
+                    conn.execute("DELETE FROM uri_map WHERE uri=?", (new_uri,))
+                conn.execute("UPDATE kf SET uri=? WHERE rowid=?", (new_uri, rowid))
+                conn.execute("UPDATE uri_map SET uri=? WHERE uri=?", (new_uri, old_uri))
+                conn.commit()
+            except sqlite3.Error:
+                conn.rollback()
+                raise
             return True
 
     def delete_prefix(self, account_id: str, scope_uri: str) -> int:
@@ -226,15 +240,23 @@ class KeywordFS:
         lock = self._lock(account_id)
         with lock:
             conn = self._conn(account_id)
+            pattern = self._escape_like(scope_uri) + "%"
             rows = conn.execute(
-                "SELECT kf_rowid, uri FROM uri_map WHERE uri LIKE ?", (scope_uri + "%",)
+                "SELECT kf_rowid, uri FROM uri_map WHERE uri LIKE ? ESCAPE '\\'", (pattern,)
             ).fetchall()
             for r in rows:
                 self._delete_row(conn, int(r["kf_rowid"]), r["uri"])
             if rows:
-                conn.execute("DELETE FROM uri_map WHERE uri LIKE ?", (scope_uri + "%",))
+                conn.execute(
+                    "DELETE FROM uri_map WHERE uri LIKE ? ESCAPE '\\'", (pattern,)
+                )
                 conn.commit()
             return len(rows)
+
+    @staticmethod
+    def _escape_like(value: str) -> str:
+        """Escape LIKE wildcards so a URI prefix matches literally."""
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
     @staticmethod
     def _delete_row(conn: sqlite3.Connection, rowid: int, uri: str) -> None:
@@ -242,9 +264,87 @@ class KeywordFS:
         del uri  # rowid is sufficient for a regular (non-external) FTS5 table
         conn.execute("DELETE FROM kf WHERE rowid=?", (rowid,))
 
+    def copy(self, account_id: str, old_uri: str, new_uri: str) -> bool:
+        """Duplicate ``old_uri``'s index rows onto ``new_uri`` (idempotent).
+
+        Copies the tokenized FTS5 content and the URI metadata without re-reading
+        or re-tokenizing the document, matching how ``cp`` reuses vector records.
+        """
+        if not old_uri or not new_uri or old_uri == new_uri or self._closed:
+            return False
+        lock = self._lock(account_id)
+        with lock:
+            conn = self._conn(account_id)
+            src = conn.execute(
+                "SELECT kf_rowid, level, context_type, owner_user_id, byte_len "
+                "FROM uri_map WHERE uri=?",
+                (old_uri,),
+            ).fetchone()
+            if src is None:
+                return False
+            content_row = conn.execute(
+                "SELECT content FROM kf WHERE rowid=?", (int(src["kf_rowid"]),)
+            ).fetchone()
+            if content_row is None:
+                return False
+            try:
+                existing = conn.execute(
+                    "SELECT kf_rowid FROM uri_map WHERE uri=?", (new_uri,)
+                ).fetchone()
+                if existing is not None:
+                    self._delete_row(conn, int(existing["kf_rowid"]), new_uri)
+                    conn.execute("DELETE FROM uri_map WHERE uri=?", (new_uri,))
+                cur = conn.execute(
+                    "INSERT INTO kf(uri, content) VALUES(?, ?)",
+                    (new_uri, content_row["content"]),
+                )
+                conn.execute(
+                    "INSERT INTO uri_map(uri, kf_rowid, level, context_type, owner_user_id, "
+                    "byte_len, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        new_uri,
+                        int(cur.lastrowid),
+                        int(src["level"]),
+                        src["context_type"],
+                        src["owner_user_id"],
+                        int(src["byte_len"]),
+                        _utc_now(),
+                    ),
+                )
+                conn.commit()
+            except sqlite3.Error:
+                conn.rollback()
+                raise
+            return True
+
     # ------------------------------------------------------------------
     # query
     # ------------------------------------------------------------------
+
+    def meta_for(self, account_id: str, uris: List[str]) -> Dict[str, Dict]:
+        """Return ``{uri: {level, context_type, owner_user_id}}`` for known URIs."""
+        if not uris or self._closed:
+            return {}
+        lock = self._lock(account_id)
+        with lock:
+            conn = self._conn(account_id)
+            out: Dict[str, Dict] = {}
+            # SQLite's parameter limit is 999; chunk to stay well below it.
+            for start in range(0, len(uris), 500):
+                chunk = uris[start : start + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = conn.execute(
+                    f"SELECT uri, level, context_type, owner_user_id FROM uri_map "
+                    f"WHERE uri IN ({placeholders})",
+                    tuple(chunk),
+                ).fetchall()
+                for row in rows:
+                    out[row["uri"]] = {
+                        "level": int(row["level"]),
+                        "context_type": row["context_type"],
+                        "owner_user_id": row["owner_user_id"],
+                    }
+            return out
 
     def lookup(
         self,
@@ -273,7 +373,7 @@ class KeywordFS:
         with lock:
             conn = self._conn(account_id)
             results: List[Tuple[str, float]] = []
-            internal = max(limit * 5, min(max_candidates, 2000))
+            internal = min(max(limit * 5, 30), max_candidates)
             while True:
                 rows = conn.execute(
                     "SELECT uri, bm25(kf) AS score FROM kf WHERE kf MATCH ? "
@@ -345,6 +445,10 @@ class KeywordFS:
                 conn.execute(
                     "INSERT INTO meta(key, value) VALUES('tokenizer_version', ?)",
                     (_TOKENIZER_VERSION,),
+                )
+                conn.execute(
+                    "INSERT INTO meta(key, value) VALUES('built_at', ?)",
+                    (_utc_now(),),
                 )
                 now = _utc_now()
                 for item in items:
@@ -437,6 +541,7 @@ class KeywordFS:
         if not self.is_ready(account_id):
             return {
                 "ready": False,
+                "state": "not_built",
                 "docs": 0,
                 "tokenizer_version": _TOKENIZER_VERSION,
                 "last_built_at": None,
@@ -449,6 +554,7 @@ class KeywordFS:
                 built = conn.execute("SELECT value FROM meta WHERE key='built_at'").fetchone()
                 return {
                     "ready": True,
+                    "state": "ready",
                     "docs": int(docs),
                     "tokenizer_version": _TOKENIZER_VERSION,
                     "last_built_at": built["value"] if built else None,
@@ -456,6 +562,7 @@ class KeywordFS:
             except sqlite3.Error:
                 return {
                     "ready": False,
+                    "state": "error",
                     "docs": 0,
                     "tokenizer_version": _TOKENIZER_VERSION,
                     "last_built_at": None,
@@ -463,14 +570,15 @@ class KeywordFS:
 
     def close(self) -> None:
         self._closed = True
-        with threading.Lock():
-            conns = list(self._conns.values())
-            self._conns.clear()
-        for conn in conns:
-            try:
-                conn.close()
-            except Exception:  # pragma: no cover - defensive
-                pass
+        for account_id in list(self._conns):
+            lock = self._lock(account_id)
+            with lock:
+                conn = self._conns.pop(account_id, None)
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:  # pragma: no cover - defensive
+                    pass
 
 
 def _escape_fts_term(term: str) -> str:

@@ -32,16 +32,26 @@ class HybridKeywordRecaller:
         self._config = hybrid_config
         self._keyword_config = keyword_config
 
-    def enabled(self, ctx: Any = None) -> bool:
-        if self._keyword_fs is None or self._config is None:
-            return False
-        if not getattr(self._config, "enabled", False):
+    def sidecar_usable(self, ctx: Any = None) -> bool:
+        """True when a ready sidecar exists for this account (config-independent)."""
+        if self._keyword_fs is None:
             return False
         account_id = getattr(ctx, "account_id", None) or "default"
         try:
             return self._keyword_fs.is_ready(account_id)
         except Exception:
             return False
+
+    def enabled(self, ctx: Any = None) -> bool:
+        """Config-level switch (kept for callers that only know the config).
+
+        The request-level override is evaluated by the caller; ``enhance`` itself
+        only needs a usable sidecar so a forced request can fuse while the config
+        switch stays off.
+        """
+        if self._config is None or not getattr(self._config, "enabled", False):
+            return False
+        return self.sidecar_usable(ctx)
 
     async def enhance(
         self,
@@ -54,12 +64,16 @@ class HybridKeywordRecaller:
         read_abstract: Optional[ReadAbstract] = None,
     ) -> List[MatchedContext]:
         """Merge keyword candidates into ``dense`` and return the fused top ``limit``."""
-        if not self.enabled(ctx) or not query:
+        if not self.sidecar_usable(ctx) or not query:
             return list(dense)
         candidates = await self._recall(query, scope_uris, exclude_uri, ctx, limit)
         if not candidates:
             return list(dense)
-        fused = self._fuse(dense, candidates, limit)
+        meta_by_uri = self._keyword_fs.meta_for(
+            getattr(ctx, "account_id", None) or "default",
+            [uri for uri, _ in candidates],
+        )
+        fused = self._fuse(dense, candidates, limit, meta_by_uri=meta_by_uri)
         # Enrich keyword-only hits with best-effort abstract text.
         dense_uris = {m.uri for m in dense}
         for mc in fused:
@@ -80,6 +94,8 @@ class HybridKeywordRecaller:
         limit: int,
     ) -> List[Tuple[str, float]]:
         account_id = getattr(ctx, "account_id", None) or "default"
+        if not self._has_enough_tokens(query):
+            return []
         collected: Dict[str, float] = {}
         scopes = list(scope_uris) or [""]
         for scope in scopes:
@@ -100,22 +116,49 @@ class HybridKeywordRecaller:
         ranked = sorted(collected.items(), key=lambda x: x[1])
         return ranked[: max(limit * 3, 30)]
 
+    def _has_enough_tokens(self, query: str) -> bool:
+        """Apply ``min_token_query_len`` using the sidecar's own tokenizer.
+
+        A whitespace split would treat a CJK query such as ``单元圆`` as a single
+        token and silently skip recall, even though the index tokenizes it into
+        three searchable tokens.
+        """
+        min_tokens = int(getattr(self._config, "min_token_query_len", 2) or 1)
+        if min_tokens <= 1:
+            return True
+        from openviking.storage.keywordfs.tokenizer import tokenize
+
+        config = self._keyword_config
+        try:
+            tokenized = tokenize(
+                query,
+                getattr(config, "tokenizer", "auto"),
+                getattr(config, "cjk_mode", "char"),
+            )
+        except Exception:
+            tokenized = query
+        return len([tok for tok in tokenized.split() if tok]) >= min_tokens
+
     def _fuse(
         self,
         dense: Sequence[MatchedContext],
         candidates: Sequence[Tuple[str, float]],
         limit: int,
+        *,
+        meta_by_uri: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> List[MatchedContext]:
         fusion = getattr(self._config, "fusion", "rrf")
         if fusion == "weighted":
-            return self._fuse_weighted(dense, candidates, limit)
-        return self._fuse_rrf(dense, candidates, limit)
+            return self._fuse_weighted(dense, candidates, limit, meta_by_uri=meta_by_uri)
+        return self._fuse_rrf(dense, candidates, limit, meta_by_uri=meta_by_uri)
 
     def _fuse_rrf(
         self,
         dense: Sequence[MatchedContext],
         candidates: Sequence[Tuple[str, float]],
         limit: int,
+        *,
+        meta_by_uri: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> List[MatchedContext]:
         k = float(getattr(self._config, "rrf_k", 60.0) or 60.0)
         dense_rank = {m.uri: i for i, m in enumerate(dense)}
@@ -132,8 +175,13 @@ class HybridKeywordRecaller:
         for uri in ordered_uris:
             mc = by_uri.get(uri)
             if mc is None:
-                mc = self._make_keyword_context(uri, candidates)
-            out.append(replace(mc, score=scores[uri]))
+                mc = self._make_keyword_context(
+                    uri, candidates, meta=(meta_by_uri or {}).get(uri)
+                )
+                out.append(replace(mc, score=scores[uri]))
+            else:
+                # Dense hits keep the score clients already know.
+                out.append(mc)
             if len(out) >= limit:
                 break
         # Always keep the dense ordering for ties handled above; append leftover
@@ -153,9 +201,11 @@ class HybridKeywordRecaller:
         dense: Sequence[MatchedContext],
         candidates: Sequence[Tuple[str, float]],
         limit: int,
+        *,
+        meta_by_uri: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> List[MatchedContext]:
         w = float(getattr(self._config, "keyword_weight", 0.3) or 0.3)
-        raw_scores = {uri: score for uri, score in candidates}
+        raw_scores = dict(candidates)
         if raw_scores:
             lo = min(raw_scores.values())
             hi = max(raw_scores.values())
@@ -163,8 +213,9 @@ class HybridKeywordRecaller:
             lo = hi = 0.0
 
         def norm(uri: str) -> float:
+            """Map the strongest bm25 match (lowest score) to 1.0."""
             if hi > lo:
-                return (raw_scores[uri] - lo) / (hi - lo)
+                return 1.0 - (raw_scores[uri] - lo) / (hi - lo)
             return 0.5
 
         by_uri = {m.uri: m for m in dense}
@@ -181,13 +232,22 @@ class HybridKeywordRecaller:
         for uri in ordered:
             mc = by_uri.get(uri)
             if mc is None:
-                mc = self._make_keyword_context(uri, candidates)
-            out.append(replace(mc, score=scores[uri]))
+                mc = self._make_keyword_context(
+                    uri, candidates, meta=(meta_by_uri or {}).get(uri)
+                )
+                out.append(replace(mc, score=scores[uri]))
+            else:
+                out.append(mc)
             if len(out) >= limit:
                 break
         return out
 
-    def _make_keyword_context(self, uri: str, candidates: Sequence[Tuple[str, float]]) -> MatchedContext:
+    def _make_keyword_context(
+        self,
+        uri: str,
+        candidates: Sequence[Tuple[str, float]],
+        meta: Optional[Dict[str, Any]] = None,
+    ) -> MatchedContext:
         from openviking.core.context import ContextType
         from openviking.core.namespace import context_type_for_uri
 
@@ -196,7 +256,8 @@ class HybridKeywordRecaller:
             if u == uri:
                 score = s
                 break
-        ctype = context_type_for_uri(uri)
+        meta = meta or {}
+        ctype = meta.get("context_type") or context_type_for_uri(uri)
         try:
             context_type = ContextType(ctype)
         except ValueError:
@@ -204,7 +265,7 @@ class HybridKeywordRecaller:
         return MatchedContext(
             uri=uri,
             context_type=context_type,
-            level=2,
+            level=int(meta.get("level", 2) or 2),
             abstract="",
             category="",
             score=score,

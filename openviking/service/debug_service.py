@@ -231,13 +231,21 @@ class ObserverService:
             account = self._config.default_account if self._config else "default"
             st = kfs.stats(account or "default")
             lines = [
-                f"Enabled: true",
+                "Enabled: true",
                 f"Ready: {st['ready']}",
                 f"Docs: {st['docs']}",
                 f"Tokenizer version: {st['tokenizer_version']}",
                 f"Last built: {st['last_built_at'] or 'never'}",
                 f"DB: {kfs.db_path(account or 'default')}",
             ]
+            if st.get("state") == "not_built":
+                lines.append("State: enabled, not built yet")
+                return ComponentStatus(
+                    name="keyword",
+                    is_healthy=True,
+                    has_errors=False,
+                    status="\n".join(lines),
+                )
             return ComponentStatus(
                 name="keyword",
                 is_healthy=bool(st["ready"]),

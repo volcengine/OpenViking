@@ -163,7 +163,6 @@ CREATE TABLE uri_map (
   "keyword": {
     "enabled": false,                 // off-by-default
     "tokenizer": "auto",              // auto | char | jieba
-    "content_source": "content",      // content | summary | both（对齐 embedding.text_source）
     "max_doc_bytes": 65536,           // 跳过超大原文（对齐 #3006 的 verbatim 顾虑）
     "respect_encryption": true,       // encryption.enabled 时自动禁用索引
     "cjk_mode": "char"                // char | bigram（CJK 归一化粒度）
@@ -236,14 +235,13 @@ engine == "auto":
 
 ### 8.2 全量重建
 
-- 命令：`ov reindex <uri> --mode keyword --wait`，走 `reindex_executor`。
-- 流程：临时库 `*.sqlite3.tmp` 边扫边写 → 完成 `VACUUM INTO` 目标库 → 原子 rename → 更新 `meta.built_at`/`tokenizer_version`。
-- tokenizer 版本变更时自动触发全量重建（`meta.tokenizer_version` 比对）。
+**未实现（follow-up）**。`ov reindex <uri> --mode keyword --wait` 尚未接入 `reindex_executor`；当前只有 `KeywordFS.rebuild_account()` 这个库级入口（临时库 → 原子 rename → 写 `meta.built_at`/`tokenizer_version`），没有 CLI 命令、没有 tokenizer 版本变更时的自动重建。因此本轮 `auto` engine 不使用本地 sidecar：覆盖率不完整时无法保证不回退。
 
 ### 8.3 一致性语义
 
 - **不强一致**：新写入到可召回存在异步窗口（与 embedding 一致）；`wait_processed` 可等待收敛。
-- **回退保证正确性**：grep 的最终匹配始终基于磁盘原文（`_grep_in_files`）；FTS 召回为空 → 直接返回空（与远程 BM25 空召回语义一致，见 #2850 结论——索引确认无匹配）或按配置回退 fs 扫描。
+- **回退保证正确性**（已实现）：grep 的最终匹配始终基于磁盘原文（`_grep_in_files`）；本地引擎召回为空时回退 fs 扫描，因为 sidecar 覆盖率等于向量覆盖率（可能被截断，且不含 cp 产物与开启前的历史数据）。
+- **引擎选择**（已实现）：`auto` 不使用本地 sidecar，只解析为远程 BM25 或 fs 扫描；本地引擎必须显式 `grep.engine: local`。
 - `content_transform`（projection）存在时强制走 `fs`（与现有远程路径一致，FTS 无法安全做投影）。
 
 ---
@@ -255,17 +253,20 @@ engine == "auto":
 `_grep_local_then_fs`（镜像 `_grep_vikingdb_then_fs`）：
 
 ```python
-async def _grep_local_then_fs(self, uri, pattern, exclude_uri, case_insensitive, node_limit, level_limit, ctx):
-    query = " ".join(kw.strip() for kw in pattern.split("|") if kw.strip())   # 同现有
-    candidates = await self._keyword_fs.lookup(
-        query, scope=uri, exclude=exclude_uri, limit=min(node_limit*5, 100000), ctx=ctx)
+async def _grep_local_then_fs(self, uri, pattern, exclude_uri, case_insensitive,
+                             node_limit, level_limit, ctx, allowed_uris, ...):
+    candidates = self._keyword_fs.lookup(
+        query=..., scope_uri=uri, exclude_uri=..., limit=min(node_limit*5, 100000))
+    candidates = [u for u, _ in candidates if self._in_scope(u, allowed_uris, level_limit)]
     if not candidates:
-        return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
+        # 空召回不是权威结论：回退 fs 扫描（sidecar 覆盖率 = 向量覆盖率）
+        return await self._local_fs_fallback(uri=uri, pattern=pattern, ..., allowed_uris=allowed_uris)
     return await self._grep_in_files(candidates, pattern, case_insensitive, node_limit, ctx)
 ```
 
 - 复用 `_grep_in_files`（精确匹配），API/CLI 无变化。
-- `engine=local` 显式开启；`auto` 在无 vikingdb 时落到 `local_then_fs`。
+- 候选先按 `allowed_uris`（tag/ACL 作用域）与 `level_limit` 深度过滤，再进入精确匹配，保证与 `fs`/`vikingdb_then_fs` 语义一致。
+- `engine=local` 显式开启；`auto` **不**使用本地 sidecar（只解析为远程 BM25 或 fs 扫描），见 §8.3。
 
 ### 9.2 Phase 2 —— find/search hybrid（独立合入）
 
@@ -283,7 +284,7 @@ async def _grep_local_then_fs(self, uri, pattern, exclude_uri, case_insensitive,
 
 - **存储隔离**：每账号独立 DB 文件。
 - **查询隔离**：`KeywordFS.lookup` 强制 `account_id` 列过滤 + `viking_fs._ensure_access`（现有权限检查在调用前执行，不新增权限面）。
-- **peer/owner 过滤**：候选按 `owner_user_id` 后置过滤，行为与 `actor_peer_id` 一致。
+- **peer/owner 过滤**：**未实现（follow-up）**。当前 `lookup`/`enhance` 不做 `owner_user_id` 后置过滤；peer 隔离尚未接入候选列表，读取仍需经过现有权限检查。
 
 ---
 
@@ -299,7 +300,7 @@ async def _grep_local_then_fs(self, uri, pattern, exclude_uri, case_insensitive,
 ## 12. 可观测性与运维
 
 - **metrics**：`openviking_keyword_docs`（行数）、`openviking_keyword_queries_total`、`openviking_keyword_latency_seconds`、`openviking_keyword_rebuild_duration_seconds`（对齐 `metric-design.md` 边界）。
-- **observer**：`/api/v1/observer/keyword` 返回 `{enabled, db_path, docs, last_built_at, queue_pending, degraded}`。
+- **observer**：`/api/v1/observer/keyword` 已实现 `{enabled, db_path, docs, last_built_at, state}`（`state` 为 `not_built`/`ready`/`error`，`not_built` 视为健康）。`queue_pending` 与 `degraded` **未实现（follow-up）**。
 - **doctor**：`ov doctor` 检查 sidecar 可写、tokenizer 版本、行数与 `uri_map` 一致性。
 - **consistency**：`/api/v1/system/consistency` 增加 keyword 核对（每 URI 有向量是否也有关键词行，反向亦然——仅告警不阻塞）。
 
@@ -334,7 +335,7 @@ async def _grep_local_then_fs(self, uri, pattern, exclude_uri, case_insensitive,
 
 | 风险 | 缓解 |
 |---|---|
-| 磁盘额外占用（索引副本） | `max_doc_bytes` + `content_source=content` 控制；与 VikingDB 远程索引等价（#1857 讨论已认可） |
+| 磁盘额外占用（索引副本） | `max_doc_bytes` 控制（索引文本来自被嵌入的文本，对齐 `embedding.text_source`；summary 索引为 follow-up）；与 VikingDB 远程索引等价（#1857 讨论已认可） |
 | 加密与明文索引冲突 | `respect_encryption` 默认跳过；加密场景用查询期解密扫描 |
 | 只读副本/共享后端 sidecar 过期 | sidecar 为加速器，回退 fs 扫描；副本默认 `keyword.enabled=false`（同 `enable_watch_scheduler` 先例） |
 | CJK 召回精度（按字切分） | `jieba` 可选增强；hybrid 由 dense 补语义；bigram 模式可选 |
