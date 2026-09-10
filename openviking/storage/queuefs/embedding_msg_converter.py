@@ -22,10 +22,16 @@ class EmbeddingMsgConverter:
 
     @staticmethod
     def from_context(
-        context: Context, creator_acl_grant: CreatorAclGrant | None = None
+        context: Context,
+        creator_acl_grant: CreatorAclGrant | None = None,
+        *,
+        telemetry_id: str | None = None,
     ) -> EmbeddingMsg | None:
         """
         Convert a Context object to EmbeddingMsg.
+
+        Queued producers pass their message's request ID, including an empty ID
+        for detached work. Direct producers use the current request when omitted.
         """
         vectorization_text = context.get_vectorization_text()
         vectorization_images = context.get_vectorization_images()
@@ -85,6 +91,8 @@ class EmbeddingMsgConverter:
         embedding_msg = EmbeddingMsg(
             message=message,
             context_data=context_data,
-            telemetry_id=get_current_telemetry().telemetry_id,
+            telemetry_id=(
+                get_current_telemetry().telemetry_id if telemetry_id is None else telemetry_id
+            ),
         )
         return embedding_msg

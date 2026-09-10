@@ -267,8 +267,10 @@ async def test_memory_directory_vectorizes_changed_files_with_generated_summary(
         name = file_path.rsplit("/", 1)[-1]
         return {"name": name, "summary": f"summary:{name}", "content": "raw content"}
 
-    async def generate_overview(dir_uri, file_summaries, children_abstracts, llm_sem=None):
-        del dir_uri, children_abstracts, llm_sem
+    async def generate_overview(
+        dir_uri, file_summaries, children_abstracts, llm_sem=None, total_files=None
+    ):
+        del dir_uri, children_abstracts, llm_sem, total_files
         assert len(captured_file_vectorize) == 1
         assert all("content" not in summary for summary in file_summaries)
         return "overview"
@@ -306,6 +308,7 @@ async def test_memory_directory_vectorizes_changed_files_with_generated_summary(
             uri=dir_uri,
             context_type="memory",
             changes={"modified": [changed_uri]},
+            telemetry_id="memory-request",
         )
     )
 
@@ -319,8 +322,10 @@ async def test_memory_directory_vectorizes_changed_files_with_generated_summary(
         "content": "raw content",
     }
     assert captured_file_vectorize[0]["preserve_existing_created_at"] is True
+    assert captured_file_vectorize[0]["telemetry_id"] == "memory-request"
     assert len(captured_directory_vectorize) == 1
     assert captured_directory_vectorize[0]["uri"] == dir_uri
+    assert captured_directory_vectorize[0]["telemetry_id"] == "memory-request"
 
 
 @pytest.mark.asyncio

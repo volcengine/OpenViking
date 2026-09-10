@@ -125,6 +125,7 @@ class _FakeProcessor:
         use_summary=False,
         ingest_options=None,
         creator_acl_grant=None,
+        telemetry_id="",
     ):
         del creator_acl_grant
         self.vectorized_files.append(file_path)
@@ -139,6 +140,7 @@ class _FakeProcessor:
         ctx=None,
         ingest_options=None,
         creator_acl_grant=None,
+        telemetry_id="",
     ):
         del creator_acl_grant
         self.directory_ingest_options[uri] = ingest_options
