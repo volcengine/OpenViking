@@ -354,6 +354,42 @@ async def search(
             return result.rendered
         return "No matching context found."
 
+    # POST /search already rejects these in list mode (SearchRequest._validate_mode over
+    # CONTEXT_ONLY_FIELDS); this tool did not, so the two faces of the same feature
+    # disagreed. Everything the context branch consumes is read only inside it, and the
+    # list path calls SearchService.search, whose signature has no parameter for any of
+    # them -- so passing one here did nothing at all, which for exclude_uris means
+    # excluded URIs come back in the results with no error.
+    #
+    # The list is CONTEXT_ONLY_FIELDS plus the two fields this tool splits in two:
+    # detail/detail_by_category and other_peer_penalty/other_peer_penalties.
+    # test_mcp_search_modes.py pins that correspondence so the two cannot drift.
+    supplied_context_only = [
+        name
+        for name, (value, default) in {
+            "query_expansion": (query_expansion, "auto"),
+            "max_tokens": (max_tokens, DEFAULT_MAX_TOKENS),
+            "quotas": (quotas, None),
+            "purpose": (purpose, None),
+            "detail": (detail, "auto"),
+            "detail_by_category": (detail_by_category, None),
+            "dedup_turns": (dedup_turns, 0),
+            "exclude_uris": (exclude_uris, None),
+            "peer_scope": (peer_scope, "all"),
+            "other_peer_penalty": (other_peer_penalty, None),
+            "other_peer_penalties": (other_peer_penalties, None),
+            "rewrite": (rewrite, "off"),
+            "rewrite_max_bullets": (rewrite_max_bullets, 6),
+        }.items()
+        if value != default
+    ]
+    if supplied_context_only:
+        # Same wording as the REST validator, so the two faces report it identically.
+        raise InvalidArgumentError(
+            f"{', '.join(supplied_context_only)} require mode='context'; "
+            "set mode='context' or drop these fields"
+        )
+
     if target_uri:
         target_uri = _resolve_mcp_workspace_uri(target_uri, ctx)
     session = None
