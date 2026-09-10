@@ -13,11 +13,11 @@ servers/mcp-proxy.mjs                # stdio -> streamable-HTTP proxy to the OV 
 servers/config.mjs, debug-log.mjs    # credential/config resolution (adapted from claude-code-memory-plugin)
 servers/shared/                      # generated from examples/memory-plugin-shared/lib (do not edit)
 skills/openviking-memory/SKILL.md    # teaches the model the recall + persist loop
-skills/ov-memory-troubleshoot/ # read-only extraction troubleshooting
+skills/ov-memory-troubleshoot/       # read-only extraction troubleshooting
 plugin.test.mjs                      # node --test conformance checks
 ```
 
-Use `ov-memory-troubleshoot` to trace missing or incorrect memories from session input through JSON/Python extraction output, applied diffs, and stored files. It diagnoses without replaying extraction or changing memories; session and trace inspection may require the `ov` CLI or existing exports when MCP does not expose them.
+Use `ov-memory-troubleshoot` to trace backward from a memory file to its archive diff and, when needed, session messages. Diagnosis is read-only.
 
 Zero npm dependencies; the proxy and tests run on the Node.js standard library (Node 18+ for global `fetch`).
 
