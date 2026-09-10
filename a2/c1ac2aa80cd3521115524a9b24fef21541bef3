@@ -1,0 +1,46 @@
+bot/vikingbot/agent/loop.py
+  h_b34c679d17e2ac 10,281-288,303,1424,1427,1468-1469,1472-1473,1478-1480,1507-1509,1526,1943,1982,2012-2024,2063,2068-2069
+bot/vikingbot/agent/tools/compile.py
+  h_b34c679d17e2ac 8,41,63,68-69,72-78,82-87,93-99,103,105-108,119,123-152,156-161,192-193,207-214,218,222-226,237,250-267,359-362,395-400,405,410,423-428,431-440,471-479
+bot/vikingbot/agent/tools/spawn.py
+  h_b34c679d17e2ac 73-74,123-127
+bot/vikingbot/compile/models.py
+  h_b34c679d17e2ac 26-27,31,33-42,44-45
+bot/vikingbot/compile/renderer.py
+  h_b34c679d17e2ac 272-292,308,440,712
+bot/vikingbot/compile/service.py
+  h_b34c679d17e2ac 35,40,105-130,219,693,703-705,743,757-761,763-769,776-777,800-812,947-951,972,992,1022,1026-1038,1041,1043-1052,1137,1154-1160,1203,1207,1229,1250,1267,1298,1568-1606,1615-1616,1636-1639,1646-1651,1671-1672,1691,1702-1703,1714-1721,1728,1731,1743,1749,1753-1754,1768,1770-1773,1775-1777,1782-1791,1795-1807,1815-1819,1821-1828,1830,1837-1846
+bot/vikingbot/openviking_mount/ov_server.py
+  h_b34c679d17e2ac 566-570
+bot/vikingbot/sandbox/backends/aiosandbox.py
+  h_b34c679d17e2ac 206,208-212,219-257
+bot/vikingbot/sandbox/backends/opensandbox.py
+  h_b34c679d17e2ac 409,411,420,439
+bot/vikingbot/sandbox/base.py
+  h_b34c679d17e2ac 115-116,284,286,289-290,310
+docs/design/ov-compile-design.md
+  h_b34c679d17e2ac 551,564-572,577,593
+docs/en/api/12-content.md
+  h_b34c679d17e2ac 369
+docs/zh/api/12-content.md
+  h_b34c679d17e2ac 369
+examples/compile/ov-compile-skills/llm-wiki/OKF_CONFIG.yaml
+  h_b34c679d17e2ac 1-475
+examples/compile/ov-compile-skills/llm-wiki/SKILL.md
+  h_b34c679d17e2ac 3,8,10,12,14,16,18,20,22,24,26,28,30-32,34,36-41,43,45,47-52,54,56-60,62-110,112,114,116-119
+openviking/storage/content_write.py
+  h_b34c679d17e2ac 215-216,444-445,457
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "a2c1ac2aa80cd3521115524a9b24fef21541bef3",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
