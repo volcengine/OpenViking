@@ -122,6 +122,29 @@ class PDFParser(BaseParser):
                 warnings=[f"File not found: {pdf_path}"],
             )
 
+        # Scanned PDFs have no text layer: local extraction yields nothing, and
+        # the resulting empty document used to be committed as an empty
+        # resource. Reject them up front instead (PDFConfig.scan_detection).
+        scan = self._detect_scanned(pdf_path)
+        if scan:
+            message = (
+                f"Scanned PDF detected ({scan['pdf_type']}, "
+                f"{scan['pages_needing_ocr']}/{scan['page_count']} pages need OCR): "
+                "no text layer to extract, needs offline OCR. Not stored."
+            )
+            logger.warning(f"{pdf_path.name}: {message}")
+            # Deliberately no temp_dir_path: resource_processor aborts when it
+            # is missing, so nothing empty reaches storage.
+            return create_parse_result(
+                root=ResourceNode(type=NodeType.ROOT),
+                source_path=str(pdf_path),
+                source_format="pdf",
+                parser_name="PDFParser",
+                parse_time=time.time() - start_time,
+                meta={"scan_detection": scan},
+                warnings=[message],
+            )
+
         try:
             # Step 1: Convert PDF to Markdown
             markdown_content, conversion_meta = await self._convert_to_markdown(
@@ -172,6 +195,43 @@ class PDFParser(BaseParser):
                 parse_time=time.time() - start_time,
                 warnings=[f"Failed to parse PDF: {e}"],
             )
+
+    def _detect_scanned(self, pdf_path: Path) -> Optional[Dict[str, Any]]:
+        """Report scan evidence for a PDF, or None when it has a usable text layer.
+
+        Scanned PDFs carry no text, so local extraction returns nothing and the
+        blank document would otherwise be stored as an empty resource.
+
+        Detection is a guard, never a hard dependency: it returns None when
+        disabled, unavailable, or on any error, so a normal parse is unaffected.
+        """
+        if not self.config.scan_detection:
+            return None
+        try:
+            pdf_inspector = lazy_import("pdf_inspector", "pdf-inspector")
+            classification = pdf_inspector.classify_pdf(str(pdf_path))
+        except Exception as e:
+            logger.warning(f"PDF scan detection unavailable for {pdf_path.name}: {e}")
+            return None
+
+        pdf_type = str(getattr(classification, "pdf_type", "") or "")
+        page_count = int(getattr(classification, "page_count", 0) or 0)
+        ocr_pages = len(list(getattr(classification, "pages_needing_ocr", None) or []))
+
+        is_scan = pdf_type in ("scanned", "image_based")
+        if not is_scan and pdf_type == "mixed" and page_count:
+            # "mixed" still has extractable text -- only reject it when most
+            # pages are the unreadable part.
+            is_scan = (ocr_pages / page_count) >= self.config.scan_mixed_ratio
+        if not is_scan:
+            return None
+
+        return {
+            "pdf_type": pdf_type,
+            "page_count": page_count,
+            "pages_needing_ocr": ocr_pages,
+            "confidence": float(getattr(classification, "confidence", 0.0) or 0.0),
+        }
 
     async def _convert_to_markdown(
         self,

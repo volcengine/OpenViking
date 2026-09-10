@@ -166,6 +166,12 @@ class PDFConfig(ParserConfig):
     # Image extraction configuration
     image_resolution: int = 300  # Rendering DPI for extracted image regions
 
+    # Scanned-PDF detection. Scanned PDFs have no text layer, so local
+    # extraction yields nothing; without this they were silently stored as
+    # empty resources. Detected scans are rejected instead (never stored).
+    scan_detection: bool = True
+    scan_mixed_ratio: float = 0.5  # mixed PDFs: OCR-page ratio above this = scanned
+
     def validate(self) -> None:
         """
         Validate configuration.
@@ -194,6 +200,9 @@ class PDFConfig(ParserConfig):
 
         if self.font_heading_min_delta <= 0:
             raise ValueError("font_heading_min_delta must be positive")
+
+        if not 0.0 <= self.scan_mixed_ratio <= 1.0:
+            raise ValueError("scan_mixed_ratio must be between 0.0 and 1.0")
 
 
 @dataclass
