@@ -34,6 +34,7 @@ jobs:
         run: |
           node --test \
             examples/codex-memory-plugin/servers/mcp-proxy.test.mjs \
+            examples/codex-memory-plugin/servers/mcp-peer.test.mjs \
             examples/codex-memory-plugin/scripts/auto-capture.test.mjs \
             examples/codex-memory-plugin/scripts/capture-utils.test.mjs \
             examples/codex-memory-plugin/scripts/marketplace.test.mjs \
