@@ -71,6 +71,10 @@ ov task status cmp_01abc      # progress and final result
 ov task cancel cmp_01abc      # cooperative cancel
 ```
 
+With subagents enabled, Compile reads each source once and groups its text in task memory into batches of about **30,000 Unicode characters**. Small files can share a batch, while long files span batches. Boundaries favor sections, paragraphs and complete Markdown table rows. Later ranges receive enclosing headings, document frontmatter and table headers as reading context. Repeated context counts toward the character budget; each batch also has a limit of 10 distinct sources.
+
+Each child receives its complete assigned text, original URI, character offsets and line numbers directly and writes knowledge drafts. Existing Wiki lookup, deduplication and updates belong to the subsequent topic merges. Long paragraphs can split between complete lines; a single oversized line uses character ranges with continuation flags. Source files and directories remain unchanged, no split resources are created, and citations still point to the originals. Range coverage establishes delivery to children, not complete knowledge extraction.
+
 ## Step 4: Inspect the output
 
 When compile finishes, the target directory holds a Markdown knowledge base. Read the navigation page first, then drill in:
@@ -79,6 +83,10 @@ When compile finishes, the target directory holds a Markdown knowledge base. Rea
 ov tree viking://resources/research-wiki
 ov read viking://resources/research-wiki/index.md
 ```
+
+When Resource Wiki output is submitted, code adds body citations from YAML `sources`, supporting both `resource` and `path` fields while preserving existing citations. Navigation includes valid Wiki pages from the submission and retained target files, preserves model-written introductions, and creates missing ancestor `index.md` pages. Existing filenames stay unchanged.
+
+Broken relative links are corrected only when the filename identifies one page and the link label matches its title, filename stem, or explicit alias. Ambiguous or missing destinations remain unchanged and appear in the task result's `link_report.unresolved`; they do not fail submission or add model repair turns. Saving after an iteration limit applies the same rules to valid Wiki pages.
 
 Typical layout (page type maps to directory):
 

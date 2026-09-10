@@ -35,12 +35,13 @@ class CompileLimits(BaseModel):
     merge_input_chars: int = 60_000
     # Maximum draft attachments per merge; the parent chooses topic boundaries.
     merge_input_files: int = Field(default=20, ge=1)
-    # Metadata sizes are UTF-8 bytes; an oversized file owns one incremental-read task.
-    source_batch_bytes: int = 256_000
-    source_batch_files: int = 10
+    # Per-source-task Unicode characters, including repeated headings and table headers.
+    source_batch_chars: int = Field(default=30_000, ge=1)
+    # Secondary cap on distinct sources in one task, including empty files.
+    source_batch_files: int = Field(default=10, ge=1)
     # Final Resource validation gets one repair attempt within the existing loop budget.
     repair_iterations: int = 3
-    agent_iterations: int = 60
+    agent_iterations: int = 100
     # Per-child model/tool rounds, including draft checks and submission; parent budget is separate.
     subagent_iterations: int = Field(default=70, ge=1)
     concurrent_tasks: int = 10
@@ -206,6 +207,8 @@ class CompileResult(BaseModel):
     unchanged: list[str] = Field(default_factory=list)
     page_count: int = 0
     link_count: int = 0
+    # Path diagnostics are informational and never consume the agent repair budget.
+    link_report: dict[str, Any] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
 
 

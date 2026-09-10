@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import base64
+import posixpath
 import re
 from dataclasses import dataclass, field
+from pathlib import PurePosixPath
 from typing import Any, Mapping
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 import yaml
 
 from openviking.core.namespace import context_type_for_uri, relative_uri_path
 from openviking.session.memory.dataclass import MemoryFile, StoredLink
-from openviking.session.memory.utils.link_renderer import LinkRenderer
+from openviking.session.memory.utils.link_renderer import LinkRenderer, MarkdownLink
 from openviking.session.memory.utils.link_resolver import resolve_wiki_links
 from openviking.session.memory.utils.memory_file_utils import (
     MemoryFileUtils,
@@ -53,6 +55,8 @@ class RenderedBundle:
     unchanged: list[str] = field(default_factory=list)
     wiki_uris: list[str] = field(default_factory=list)
     link_count: int = 0
+    # Deterministic link diagnostics do not require an agent repair round.
+    link_report: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -62,6 +66,7 @@ class FinalizedOutput:
     files: dict[str, bytes] = field(default_factory=dict)
     wiki_paths: set[str] = field(default_factory=set)
     link_count: int = 0
+    link_report: dict[str, Any] = field(default_factory=dict)
 
 
 def wiki_page_path_from_title(title: str) -> str:
@@ -290,54 +295,252 @@ def validate_resource_file(path: str, payload: bytes) -> bool:
     return True
 
 
+def _markdown_link(label: str, target: str) -> str:
+    """Escape a display label and URI without changing the underlying filename."""
+    label = " ".join(label.split()).replace("\\", "\\\\").replace("[", r"\[").replace("]", r"\]")
+    return f"[{label}]({quote(target, safe='/:@#?=&%+,-._~')})"
+
+
+def _body_markdown_links(body: str) -> list[MarkdownLink]:
+    """Return editable inline links outside code, comments and image syntax."""
+    links = list(LinkRenderer.iter_markdown_links(body))
+    link_spans = {(link.start, link.end) for link in links}
+    protected = [s for s in LinkRenderer.protected_markdown_spans(body) if s not in link_spans]
+    protected.extend((m.start(), m.end()) for m in re.finditer(r"<!--.*?-->", body, re.DOTALL))
+    protected.extend((m.start(), m.end()) for m in re.finditer(r"(?m)^(?: {4}|\t)[^\n]*", body))
+    return [
+        link
+        for link in links
+        if not (link.start > 0 and body[link.start - 1] == "!")
+        and not any(link.start < end and link.end > start for start, end in protected)
+    ]
+
+
+def _link_uri(target: str, source_uri: str) -> str:
+    """Resolve a Markdown destination to an absolute URI for deduplication and lookup."""
+    target = LinkRenderer.normalize_markdown_target(target)
+    if re.match(r"^[A-Za-z][\w+.-]*:", target):
+        return target
+    directory = posixpath.dirname(source_uri.removeprefix("viking://"))
+    return "viking://" + posixpath.normpath(posixpath.join(directory, target))
+
+
+def _append_link_list(
+    body: str, kind: str, source_uri: str, entries: Mapping[str, str]
+) -> tuple[str, int]:
+    """Append missing URI-to-Markdown entries in one replaceable block, preserving all model prose."""
+    pattern = rf"\n*<!-- ov-compile:{kind}:start -->.*?<!-- ov-compile:{kind}:end -->\n*"
+    clean = re.sub(pattern, "\n\n", body, flags=re.DOTALL).rstrip()
+    linked = {_link_uri(link.target, source_uri) for link in _body_markdown_links(clean)}
+    lines = []
+    for uri, text in entries.items():
+        target = _link_uri(uri, source_uri)
+        if target not in linked:
+            lines.append("- " + text)
+            linked.add(target)
+    if not lines:
+        return (clean if clean != body.rstrip() else body), 0
+    heading = _LEADING_H1_RE.match(body)
+    title = (
+        {"sources": "来源", "navigation": "导航"}[kind]
+        if heading and re.search(r"[\u4e00-\u9fff]", heading.group())
+        else kind.title()
+    )
+    block = f"<!-- ov-compile:{kind}:start -->\n**{title}**\n\n" + "\n".join(lines)
+    return clean + "\n\n" + block + f"\n<!-- ov-compile:{kind}:end -->\n", len(lines)
+
+
+def _repair_relative_links(
+    body: str,
+    *,
+    source_path: str,
+    target_uri: str,
+    pages: Mapping[str, Mapping[str, Any]],
+    known_paths: set[str],
+    paths_by_name: Mapping[str, list[str]],
+) -> tuple[str, int, list[dict[str, Any]]]:
+    """Correct only unique filenames confirmed by the link label; retain and report other broken paths."""
+    source_uri = safe_join_viking_uri(target_uri, source_path)
+    repaired, unresolved = 0, []
+    for link in reversed(_body_markdown_links(body)):
+        target = link.target.strip().removeprefix("<").removesuffix(">")
+        if target.startswith(("/", "#", "?")) or re.match(r"^[A-Za-z][\w+.-]*:", target):
+            continue
+        raw_path = re.split(r"[#?]", target, maxsplit=1)[0]
+        resolved = relative_uri_path(target_uri, _link_uri(raw_path, source_uri))
+        if not resolved or resolved in known_paths:
+            continue
+        name = posixpath.basename(resolved)
+        candidates = paths_by_name.get(name, [])
+        candidate = candidates[0] if len(candidates) == 1 else None
+        metadata = pages.get(candidate, {})
+        aliases = metadata.get("aliases")
+        labels = [metadata.get("title"), posixpath.splitext(name)[0]]
+        labels.extend(aliases if isinstance(aliases, list) else [])
+        label = LinkRenderer._BACKSLASH_ESCAPE_RE.sub(r"\1", link.text).strip()
+        if candidate is None or candidate == source_path or label not in labels:
+            unresolved.append(
+                {
+                    "source_path": source_path,
+                    "target": link.target,
+                    "label": label,
+                    "candidates": candidates,
+                }
+            )
+            continue
+        corrected = posixpath.relpath(candidate, posixpath.dirname(source_path) or ".")
+        corrected = corrected if "/" in corrected else "./" + corrected
+        corrected = quote(corrected, safe="/,-._~") + target[len(raw_path) :]
+        # Replace only the destination, retaining the original label and optional tooltip.
+        start = body.index("](", link.start, link.end) + 2
+        body = (
+            body[:start]
+            + body[start : link.end].replace(link.target, corrected, 1)
+            + body[link.end :]
+        )
+        repaired += 1
+    return body, repaired, list(reversed(unresolved))
+
+
+def _source_link_entries(metadata: Mapping[str, Any], target_uri: str) -> dict[str, str]:
+    """Build source entries from resource/path metadata without inventing sources or renaming files."""
+    entries = {}
+    sources = metadata.get("sources")
+    for source in sources if isinstance(sources, list) else []:
+        if not isinstance(source, Mapping):
+            continue
+        uri = source.get("resource") or source.get("path")
+        if not isinstance(uri, str):
+            continue
+        uri = uri.strip()
+        if uri.startswith("viking://"):
+            try:
+                validate_safe_viking_uri_path(uri)
+            except ValueError:
+                continue
+            if uri.rstrip("/") == target_uri or relative_uri_path(target_uri, uri):
+                continue
+        elif not uri.startswith(("https://", "http://")):
+            continue
+        label = source.get("title") or source.get("file") or _wiki_page_basename(uri)
+        entries.setdefault(uri, _markdown_link(str(label), uri))
+    return entries
+
+
 def finalize_resource_output(
     files: Mapping[str, bytes],
     *,
     target_uri: str,
     source_roots: Mapping[str, str],
+    existing_files: Mapping[str, bytes] | None = None,
+    known_paths: set[str] | None = None,
 ) -> FinalizedOutput:
-    """Validate and deterministically finalize one Resource output.
+    """Finalize Wiki links without model calls or modifying unrelated retained files.
 
-    The files contain the submitted output layout. This pass only identifies
-    self-declared OKF Wiki pages, makes supplied source URIs readable, and links the
-    first body mention of another unambiguous Wiki filename. It does not decide create
-    versus update.
+    Submitted files override the retained catalog. Retained index pages are
+    refreshed and missing ancestor indexes are created; other retained pages only
+    supply link targets. Broken links that cannot be identified uniquely are
+    returned in link_report, never as validation errors.
     """
-    wiki_paths: set[str] = set()
-    for path, payload in files.items():
-        if validate_resource_file(path, payload):
-            wiki_paths.add(path)
-
-    wiki_uris = {safe_join_viking_uri(target_uri, path).rstrip("/") for path in wiki_paths}
-    mention_targets = _wiki_mention_targets(wiki_uris)
-    finalized = dict(files)
-    link_count = 0
-    for path in sorted(wiki_paths):
-        payload = files[path]
+    existing_files = existing_files or {}
+    all_files = {**existing_files, **files}
+    pages: dict[str, dict[str, Any]] = {}
+    for path, payload in all_files.items():
+        if path not in files and any(part.startswith(".") for part in path.split("/")):
+            continue
         try:
-            content = payload.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise ValueError(f'OKF Markdown file "{path}" must be UTF-8') from exc
+            if validate_resource_file(path, payload):
+                pages[path] = _split_frontmatter(payload.decode("utf-8"))[0]
+        except (ValueError, UnicodeError):
+            if path in files:
+                raise
+    wiki_paths = set(pages) & set(files)
+
+    finalized = dict(files)
+    if not wiki_paths:
+        return FinalizedOutput(files=finalized)
+    # Every nonempty Wiki directory has an index, even when the model omits it.
+    directories = {parent for path in pages for parent in PurePosixPath(path).parents}
+    for directory in sorted(directories):
+        index = str(directory / "index.md")
+        if index not in all_files:
+            title = directory.name or _wiki_page_basename(target_uri)
+            metadata = {"type": "index", "title": title, "description": title, "sources": []}
+            pages[index] = metadata
+            header = yaml.safe_dump(metadata, allow_unicode=True, sort_keys=False)
+            all_files[index] = f"---\n{header}---\n\n# {title}\n".encode("utf-8")
+        if index in pages and pages[index]["type"] == "index":
+            wiki_paths.add(index)
+
+    catalog_paths = set(known_paths or ()) | set(all_files) | {str(p) for p in directories}
+    paths_by_name: dict[str, list[str]] = {}
+    for path in pages:
+        paths_by_name.setdefault(posixpath.basename(path), []).append(path)
+    # Keep the existing filename-mention behavior scoped to submitted pages.
+    mention_targets = _wiki_mention_targets(
+        {safe_join_viking_uri(target_uri, path).rstrip("/") for path in wiki_paths}
+    )
+    link_count = 0
+    report: dict[str, Any] = {
+        "repaired_count": 0,
+        "source_links": 0,
+        "navigation_links": 0,
+        "unresolved": [],
+    }
+    for path in sorted(wiki_paths):
+        content = all_files[path].decode("utf-8")
         uri = safe_join_viking_uri(target_uri, path).rstrip("/")
         frontmatter = _FRONTMATTER_RE.match(content)
-        if frontmatter:
-            content = content[: frontmatter.end()] + _linkify_source_uris(
-                content[frontmatter.end() :], source_roots
-            )
-        else:
-            content = _linkify_source_uris(content, source_roots)
+        assert frontmatter is not None
+        prefix, body = content[: frontmatter.end()], content[frontmatter.end() :]
+        body = _strip_legacy_related_pages(body)
+        body, repaired, unresolved = _repair_relative_links(
+            body,
+            source_path=path,
+            target_uri=target_uri,
+            pages=pages,
+            known_paths=catalog_paths,
+            paths_by_name=paths_by_name,
+        )
+        report["repaired_count"] += repaired
+        report["unresolved"].extend(unresolved)
+        content = prefix + _linkify_source_uris(body, source_roots)
         content, rendered_count = _link_wiki_mentions(
             content,
             source_uri=uri,
             targets=mention_targets,
         )
-        finalized[path] = content.encode("utf-8")
+        body = content[len(prefix) :]
+        body, source_count = _append_link_list(
+            body, "sources", uri, _source_link_entries(pages[path], target_uri)
+        )
+        report["source_links"] += source_count
+        navigation_count = 0
+        if pages[path]["type"] == "index":
+            directory = posixpath.dirname(path)
+            prefix_path = directory + "/" if directory else ""
+            entries = {
+                safe_join_viking_uri(target_uri, page): _markdown_link(
+                    metadata["title"], posixpath.relpath(page, directory or ".")
+                )
+                + " — "
+                + metadata["description"]
+                for page, metadata in sorted(pages.items())
+                if metadata["type"] != "index" and page.startswith(prefix_path)
+            }
+            body, navigation_count = _append_link_list(body, "navigation", uri, entries)
+            report["navigation_links"] += navigation_count
+        payload = (prefix + body).encode("utf-8")
+        if path in files or existing_files.get(path) != payload:
+            finalized[path] = payload
         link_count += rendered_count
+        link_count += source_count + navigation_count
 
     return FinalizedOutput(
         files=finalized,
-        wiki_paths=wiki_paths,
+        wiki_paths=wiki_paths & set(finalized),
         link_count=link_count,
+        link_report=report,
     )
 
 

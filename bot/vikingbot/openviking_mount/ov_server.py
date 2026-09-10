@@ -537,11 +537,15 @@ class VikingClient:
         path: Optional[str] = None,
         recursive: bool = False,
         node_limit: int = 1000,
+        *,
+        offset: int = 0,
     ) -> List[Dict[str, Any]]:
-        """列出资源"""
+        """列出资源；offset 跳过指定数量的可见节点，递归深度遵循服务端默认值。"""
         if path is None or path == "":
             path = viking_resource_prefix
-        entries = await self.client.ls(path, recursive=recursive, node_limit=node_limit)
+        entries = await self.client.ls(
+            path, recursive=recursive, node_limit=node_limit, offset=offset
+        )
         return entries
 
     async def stat(self, uri: str) -> Dict[str, Any]:

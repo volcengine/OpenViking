@@ -5,8 +5,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-import posixpath
-import re
 import shlex
 import shutil
 import time
@@ -21,7 +19,6 @@ from typing import Any, Mapping
 from loguru import logger
 
 from openviking.core.namespace import classify_uri, relative_uri_path, uri_parts
-from openviking.session.memory.utils.link_renderer import LinkRenderer, MarkdownLink
 from openviking.utils.path_safety import (
     safe_join_viking_uri,
     sanitize_relative_viking_path,
@@ -66,10 +63,13 @@ from vikingbot.compile.models import (
 )
 from vikingbot.compile.renderer import (
     WikiRenderer,
+    finalize_resource_output,
     has_unclosed_frontmatter,
     validate_declared_okf_markdown,
     validate_relative_file_path,
+    validate_resource_file,
 )
+from vikingbot.compile.sources import CompileSourceRange, pack_source_batches
 from vikingbot.compile.store import CompileTaskStore
 from vikingbot.config.schema import SandboxBackend, SandboxMode, SessionKey
 from vikingbot.openviking_mount.ov_server import VikingClient
@@ -107,32 +107,6 @@ def _merge_usage(*values: Mapping[str, Any]) -> dict[str, int]:
             if isinstance(value, int):
                 merged[key] = merged.get(key, 0) + value
     return merged
-
-
-def _pack_source_batches(files: Mapping[str, int], limits: CompileLimits) -> list[list[str]]:
-    """Pack unique source URIs by byte size and file count, without reading their bodies.
-
-    Largest files are placed first. A file above the byte budget owns a batch and
-    must be read incrementally by its child; files are never truncated or omitted.
-    """
-    batches: list[list[str]] = []
-    sizes: list[int] = []
-    for uri, size in sorted(files.items(), key=lambda item: (-item[1], item[0])):
-        index = next(
-            (
-                i
-                for i, batch in enumerate(batches)
-                if len(batch) < limits.source_batch_files
-                and sizes[i] + size <= limits.source_batch_bytes
-            ),
-            len(batches),
-        )
-        if index == len(batches):
-            batches.append([])
-            sizes.append(0)
-        batches[index].append(uri)
-        sizes[index] += size
-    return batches
 
 
 def _consume_background_result(future: asyncio.Future[Any], *, label: str) -> None:
@@ -731,6 +705,10 @@ class BotCompileService:
                         return False
                     raise
 
+            async def load_resource_catalog() -> tuple[dict[str, bytes], set[str]]:
+                """Collect retained targets only when final Resource output is submitted."""
+                return await self._load_resource_link_catalog(client, request.to)
+
             request_loop = AgentLoop(
                 bus=self.agent_loop.bus,
                 provider=_CompileProvider(self.agent_loop.provider, self._model_slots),
@@ -759,6 +737,7 @@ class BotCompileService:
                 file_catalog_uris=file_catalog_uris,
                 workspace_baseline=workspace_baseline,
                 wiki_uri_resolver=resolve_wiki_uri,
+                load_existing=load_resource_catalog,
             )
             submit_tool = registry.get("submit_wiki_bundle")
             source_batches = (
@@ -969,6 +948,7 @@ class BotCompileService:
                     "unchanged": unchanged,
                     "page_count": page_count,
                     "link_count": rendered.link_count,
+                    "link_report": rendered.link_report,
                     "warnings": warnings,
                 }
             )
@@ -1159,13 +1139,7 @@ class BotCompileService:
         if not workspace_entries:
             return None
 
-        target_entries = []
-        # Pagination bounds each response without limiting the target inventory.
-        while True:
-            page = await client.tree(request.to, node_limit=1000, offset=len(target_entries))
-            target_entries.extend(page)
-            if len(page) < 1000:
-                break
+        target_entries = await self._list_resource_link_entries(client, request.to)
         existing: dict[str, str] = {}
         existing_by_case: dict[str, list[str]] = {}
         existing_sizes: dict[str, int] = {}
@@ -1245,17 +1219,31 @@ class BotCompileService:
         if not files:
             return None
 
-        known_paths = {*files, *existing}
-        for path in page_paths:
-            payload = files[path]
+        valid_files: dict[str, bytes] = {}
+        for path, payload in files.items():
             try:
-                content = payload.decode("utf-8")
-            except UnicodeDecodeError:
+                if validate_resource_file(path, payload):
+                    valid_files[path] = payload
+            except (ValueError, UnicodeError):
                 continue
-            repaired = self._repair_salvaged_markdown(
-                content, source_path=path, known_paths=known_paths
-            ).encode("utf-8")
-            files[path] = repaired
+        link_count = 0
+        link_report: dict[str, Any] = {}
+        if valid_files:
+            # Valid fallback pages share normal link rules; incomplete drafts retain their bytes.
+            retained, known_paths = await self._load_resource_link_catalog(
+                client, request.to, entries=target_entries
+            )
+            finalized = finalize_resource_output(
+                valid_files,
+                target_uri=request.to,
+                source_roots={str(i): uri for i, uri in enumerate(request.from_)},
+                existing_files={**retained, **files},
+                known_paths=known_paths,
+            )
+            files.update(finalized.files)
+            page_paths.update(finalized.wiki_paths)
+            link_count = finalized.link_count
+            link_report = finalized.link_report
 
         operations = []
         saved_page_paths = set(page_paths)
@@ -1312,92 +1300,10 @@ class BotCompileService:
             updated=list(batch_result.get("updated", [])),
             unchanged=list(batch_result.get("unchanged", [])),
             page_count=len(saved_page_paths),
+            link_count=link_count,
+            link_report=link_report,
             warnings=warnings,
         )
-
-    @staticmethod
-    def _repair_salvaged_markdown(
-        content: str,
-        *,
-        source_path: str,
-        known_paths: set[str],
-    ) -> str:
-        known = {path for path in known_paths if path}
-        paths_by_name: dict[str, set[str]] = {}
-        for path in known:
-            paths_by_name.setdefault(posixpath.basename(path).casefold(), set()).add(path)
-
-        links = list(LinkRenderer.iter_markdown_links(content))
-        link_spans = {(link.start, link.end) for link in links}
-        protected = [
-            span
-            for span in LinkRenderer.protected_markdown_spans(content)
-            if span not in link_spans
-        ]
-        source_dir = posixpath.dirname(source_path)
-
-        def replace(link: MarkdownLink, *, image: bool) -> str:
-            start = link.start - int(image)
-            original = content[start : link.end]
-            if any(
-                not (link.end <= span_start or start >= span_end)
-                for span_start, span_end in protected
-            ):
-                return original
-
-            target = link.target.strip()
-            if (
-                not target
-                or target.startswith(("#", "?", "/"))
-                or re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", target)
-            ):
-                return original
-            if target.startswith("<") and target.endswith(">"):
-                target = target[1:-1]
-
-            suffix_at = min(
-                (index for token in "#?" if (index := target.find(token)) >= 0),
-                default=len(target),
-            )
-            raw_path, suffix = target[:suffix_at], target[suffix_at:]
-            normalized_path = LinkRenderer.normalize_markdown_target(raw_path)
-            resolved = posixpath.normpath(posixpath.join(source_dir, normalized_path))
-            if resolved in known:
-                return original
-
-            name = posixpath.basename(normalized_path)
-            names = {name.casefold()}
-            if not posixpath.splitext(name)[1]:
-                names.add(f"{name}.md".casefold())
-            candidates = {
-                path
-                for name in names
-                for path in paths_by_name.get(name, set())
-                if path.casefold() != source_path.casefold()
-            }
-            if len(candidates) != 1:
-                return link.text
-            candidate = next(iter(candidates))
-
-            corrected = posixpath.relpath(candidate, source_dir or ".")
-            if corrected == ".":
-                return link.text
-            if "/" not in corrected and not corrected.startswith("."):
-                corrected = f"./{corrected}"
-            corrected = corrected.replace(" ", "%20").replace("(", "%28").replace(")", "%29")
-            image_marker = "!" if image else ""
-            return f"{image_marker}[{link.text}]({corrected}{suffix})"
-
-        result: list[str] = []
-        position = 0
-        for link in links:
-            image = link.start > 0 and content[link.start - 1] == "!"
-            start = link.start - int(image)
-            result.append(content[position:start])
-            result.append(replace(link, image=image))
-            position = link.end
-        result.append(content[position:])
-        return "".join(result)
 
     async def _materialize_skill_package(
         self,
@@ -1544,6 +1450,7 @@ class BotCompileService:
         file_catalog_uris: set[str],
         workspace_baseline: set[str] | None,
         wiki_uri_resolver: Callable[[str], Awaitable[bool]],
+        load_existing: Callable[[], Awaitable[tuple[dict[str, bytes], set[str]]]] | None = None,
     ) -> ToolRegistry:
         """Expose the existing workspace tools and one validated submission tool."""
         registry = ToolRegistry(config=request_loop.config)
@@ -1557,6 +1464,7 @@ class BotCompileService:
                     target_uri=target_uri,
                     source_roots=source_roots,
                     limits=self.limits,
+                    load_existing=load_existing,
                 )
             )
         else:
@@ -1573,13 +1481,85 @@ class BotCompileService:
             )
         return registry
 
+    @staticmethod
+    async def _list_resource_link_entries(
+        client: VikingClient, target_uri: str
+    ) -> list[dict[str, Any]]:
+        """Walk paginated directory listings without the server's recursive depth default.
+
+        Missing roots produce an empty catalog. Unreadable or hidden directories
+        are not traversed; other read errors remain visible to the caller.
+        """
+        pending = [target_uri.rstrip("/")]
+        seen = set(pending)
+        entries: list[dict[str, Any]] = []
+        while pending:
+            directory = pending.pop()
+            offset = 0
+            while True:
+                try:
+                    page = await client.list_resources(directory, node_limit=1000, offset=offset)
+                except OpenVikingError as exc:
+                    if (
+                        exc.code == "NOT_FOUND"
+                        and directory == target_uri.rstrip("/")
+                        and not entries
+                    ):
+                        return []
+                    raise
+                for entry in page:
+                    uri = entry["uri"].rstrip("/")
+                    path = relative_uri_path(target_uri, uri)
+                    if (
+                        not path
+                        or entry.get("access") == "denied"
+                        or any(part.startswith(".") for part in path.split("/"))
+                    ):
+                        continue
+                    entries.append(entry)
+                    if entry["isDir"] and uri not in seen:
+                        pending.append(uri)
+                        seen.add(uri)
+                offset += len(page)
+                if len(page) < 1000:
+                    break
+        return entries
+
+    @staticmethod
+    async def _load_resource_link_catalog(
+        client: VikingClient, target_uri: str, *, entries: list[dict[str, Any]] | None = None
+    ) -> tuple[dict[str, bytes], set[str]]:
+        """Read retained targets for navigation and path repair without using model context.
+
+        Entries from an existing directory walk are reused. Markdown downloads
+        use eight concurrent requests; other entries contribute only their paths.
+        """
+        if entries is None:
+            entries = await BotCompileService._list_resource_link_entries(client, target_uri)
+        paths = {relative_uri_path(target_uri, entry["uri"]) for entry in entries}
+        markdown = [
+            entry["uri"]
+            for entry in entries
+            if not entry["isDir"] and entry["uri"].lower().endswith(".md")
+        ]
+        files: dict[str, bytes] = {}
+        for start in range(0, len(markdown), 8):
+            batch = markdown[start : start + 8]
+            contents = await asyncio.gather(*(client.download_bytes(uri) for uri in batch))
+            files.update(
+                (relative_uri_path(target_uri, uri), content)
+                for uri, content in zip(batch, contents, strict=True)
+            )
+        return files, paths
+
     async def _prepare_source_batches(
         self, client: VikingClient, roots: list[str]
-    ) -> list[list[str]]:
-        """Inventory only requested roots and produce bounded source assignments.
+    ) -> list[list[CompileSourceRange]]:
+        """Read each visible source once and prepare complete in-memory source ranges.
 
-        Overlapping roots are deduplicated. Incomplete inventories and invalid
-        sizes fail explicitly so a successful plan never silently loses sources.
+        Overlapping roots are deduplicated before eight-way bounded reads. Listing
+        and read failures remain explicit; no source is silently skipped. The source
+        text stays in task memory and original URIs remain the citation targets.
         """
         limit = self.limits.source_inventory_entries
 
@@ -1592,7 +1572,7 @@ class BotCompileService:
                 raise ValueError(f"Compile source inventory exceeds {limit} entries: {root}")
             return entries
 
-        files: dict[str, int] = {}
+        files: set[str] = set()
         for root, entries in zip(
             roots, await asyncio.gather(*(inventory(r) for r in roots)), strict=True
         ):
@@ -1602,15 +1582,16 @@ class BotCompileService:
                     raise ValueError(f"Source inventory returned an out-of-scope URI: {uri}")
                 if entry.get("isDir", entry.get("is_dir", False)):
                     continue
-                size = entry.get("size")
-                if not isinstance(size, int) or size < 0:
-                    size = (await client.stat(uri)).get("size")
-                if not isinstance(size, int) or size < 0:
-                    raise ValueError(f"Source has no valid byte size: {uri}")
-                files[uri] = size
+                files.add(uri)
         if not files:
             raise ValueError("Compile sources contain no files")
-        return _pack_source_batches(files, self.limits)
+        sources: list[tuple[str, str]] = []
+        ordered = sorted(files)
+        for start in range(0, len(ordered), 8):
+            uris = ordered[start : start + 8]
+            contents = await asyncio.gather(*(client.read_raw(uri) for uri in uris))
+            sources.extend(zip(uris, contents, strict=True))
+        return pack_source_batches(sources, self.limits)
 
     def _configure_compile_subagents(
         self,
@@ -1621,7 +1602,7 @@ class BotCompileService:
         connection: dict[str, Any],
         usage: dict[str, int],
         skill_text: str,
-        source_batches: list[list[str]] | None = None,
+        source_batches: list[list[CompileSourceRange]] | None = None,
     ) -> SubagentManager | None:
         """Reuse the request's spawn manager with isolated model histories and per-child drafts.
 
@@ -1737,11 +1718,11 @@ class BotCompileService:
         skill_text: str,
         subagent_max_concurrency: int = 0,
         draft_root: str | None = None,
-        source_batches: list[list[str]] | None = None,
+        source_batches: list[list[CompileSourceRange]] | None = None,
     ) -> tuple[str, str]:
         """Describe role-specific I/O and submission; the selected Skill owns content rules.
 
-        The parent dispatches sources using only file counts and sizes, excludes
+        The parent dispatches source ranges using only counts and character sizes, excludes
         intermediate files before grouping knowledge drafts by topic, and owns navigation.
         Children write complete knowledge drafts according to the Skill;
         submission returns file metadata.
@@ -1792,6 +1773,9 @@ class BotCompileService:
                     "\nDuring topic merging, use `ov find '<topic and key entities>' "
                     f"--uri {shlex.quote(request.to)} --node-limit 10 --level 2` once per topic. "
                     "Select relevant existing pages from candidate abstracts; do not inventory the target tree."
+                    " Submission supplements source lists and navigation using submitted and retained pages, "
+                    "and repairs uniquely identified relative links without model calls. "
+                    "Keep useful navigation introductions; do not enumerate retained pages or run extra link-audit turns."
                 )
             system += (
                 "\nFor merges, fully read existing pages selected for update with `ov read` in bounded ranges, "
@@ -1803,7 +1787,7 @@ class BotCompileService:
             system += (
                 "\nFirst response: dispatch prepared source_batches with "
                 "spawn(source_batch=<number>, task='Compile assigned batch'), omitting draft_paths; "
-                "the runtime attaches source URIs and instructions. Do not reinventory sources, preload bodies, "
+                "the runtime attaches original source ranges and instructions. Do not reinventory sources, preload bodies, "
                 "infer source topics from filenames, or add inventory/summary-only tasks. "
                 f"Both source and merge phases share {subagent_max_concurrency} workers and "
                 f"{2 * subagent_max_concurrency} queue slots including uncollected results. "
@@ -1865,7 +1849,12 @@ class BotCompileService:
                 **(
                     {
                         "source_batches": [
-                            {"number": i, "file_count": len(batch)}
+                            {
+                                "number": i,
+                                "file_count": len({part.uri for part in batch}),
+                                "range_count": len(batch),
+                                "input_chars": sum(part.input_chars for part in batch),
+                            }
                             for i, batch in enumerate(source_batches, 1)
                         ]
                     }
