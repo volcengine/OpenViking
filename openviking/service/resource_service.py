@@ -718,54 +718,35 @@ class ResourceService:
                 from openviking.parse.understanding_api import PREPARED_RESPONSE_ID_ARG
 
                 internal_kwargs[PREPARED_RESPONSE_ID_ARG] = msg.understanding_response_id
-            try:
-                result = await self._execute_resource_ingestion(
-                    path=msg.path,
-                    ctx=ctx,
-                    to=target_uri,
-                    parent=parent_uri,
-                    to_is_directory=msg.to_is_directory,
-                    reason=msg.reason,
-                    instruction=msg.instruction,
-                    defer_post_processing=False,
-                    timeout=msg.timeout,
-                    build_index=msg.build_index,
-                    summarize=msg.summarize,
-                    processing_mode=msg.processing_mode,
-                    parse_mode=msg.parse_mode,
-                    watch_interval=msg.watch_interval,
-                    is_active=msg.is_active,
-                    manage_watch=not msg.skip_watch_management,
-                    tags=msg.tags,
-                    tag_mode=msg.tag_mode,
-                    allow_local_path_resolution=msg.allow_local_path_resolution,
-                    enforce_public_remote_targets=msg.enforce_public_remote_targets,
-                    resource_lock=resource_lock,
-                    stage_callback=stage_callback,
-                    watch_auth_state=watch_auth_state,
-                    prepared_resource=prepared_resource,
-                    internal_task=msg.internal_task,
-                    on_watch_ready=lambda task_id: setattr(msg, "watch_task_id", task_id),
-                    **internal_kwargs,
-                )
-            except BaseException:
-                if msg.cleanup_empty_target_on_failure and resource_lock is not None:
-                    await self._cleanup_reserved_target_if_empty(
-                        root_uri=msg.root_uri,
-                        ctx=ctx,
-                        resource_lock=resource_lock,
-                    )
-                raise
-            if (
-                result.get("status") == "error"
-                and msg.cleanup_empty_target_on_failure
-                and resource_lock is not None
-            ):
-                await self._cleanup_reserved_target_if_empty(
-                    root_uri=msg.root_uri,
-                    ctx=ctx,
-                    resource_lock=resource_lock,
-                )
+            result = await self._execute_resource_ingestion(
+                path=msg.path,
+                ctx=ctx,
+                to=target_uri,
+                parent=parent_uri,
+                to_is_directory=msg.to_is_directory,
+                reason=msg.reason,
+                instruction=msg.instruction,
+                defer_post_processing=False,
+                timeout=msg.timeout,
+                build_index=msg.build_index,
+                summarize=msg.summarize,
+                processing_mode=msg.processing_mode,
+                parse_mode=msg.parse_mode,
+                watch_interval=msg.watch_interval,
+                is_active=msg.is_active,
+                manage_watch=not msg.skip_watch_management,
+                tags=msg.tags,
+                tag_mode=msg.tag_mode,
+                allow_local_path_resolution=msg.allow_local_path_resolution,
+                enforce_public_remote_targets=msg.enforce_public_remote_targets,
+                resource_lock=resource_lock,
+                stage_callback=stage_callback,
+                watch_auth_state=watch_auth_state,
+                prepared_resource=prepared_resource,
+                internal_task=msg.internal_task,
+                on_watch_ready=lambda task_id: setattr(msg, "watch_task_id", task_id),
+                **internal_kwargs,
+            )
             if msg.staged_source is not None:
                 result["source_path"] = msg.source_path
             stage_result = stage_callback("processing_queue")
@@ -1744,10 +1725,15 @@ class ResourceService:
             return completed
         if task.status == TaskStatus.CANCELLED:
             return {"status": "cancelled"}
-        return {
+        failure: Dict[str, Any] = {
             "status": "error",
             "errors": [task.error],
         }
+        if isinstance(task.result, dict):
+            code = task.result.get("code")
+            if isinstance(code, str) and code:
+                failure["code"] = code
+        return failure
 
     async def _execute_resource_ingestion(
         self,

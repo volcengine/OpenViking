@@ -193,6 +193,21 @@ async def test_task_result_redacts_user_key(tracker: TaskTracker):
     assert "user_key" not in json.dumps(retrieved.to_dict())
 
 
+@pytest.mark.parametrize("result", [None, {"code": "PROCESSING_ERROR"}])
+async def test_fail_task_with_result(tracker: TaskTracker, result):
+    task = await tracker.create("add_resource", **_owner_kwargs())
+    await tracker.start(task.task_id, stage="parsing")
+    await tracker.fail(task.task_id, "Parse error", result=result, **_owner_kwargs())
+
+    reloaded = TaskTracker(store=tracker._store)
+    retrieved = await reloaded.get(task.task_id, **_owner_kwargs())
+    assert retrieved is not None
+    assert retrieved.status == TaskStatus.FAILED
+    assert retrieved.stage == "failed"
+    assert retrieved.error == "Parse error"
+    assert retrieved.result == result
+
+
 async def test_fail_task(tracker: TaskTracker):
     task = await tracker.create("session_commit", **_owner_kwargs())
     await tracker.start(task.task_id)

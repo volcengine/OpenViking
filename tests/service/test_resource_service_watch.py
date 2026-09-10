@@ -337,6 +337,33 @@ class TestWatchTaskCreation:
         assert task.processor_kwargs["tag_mode"] == "replace"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("raises", [False, True])
+    async def test_source_job_preserves_ingestion_failure(
+        self, resource_service: ResourceService, request_context: RequestContext, raises: bool
+    ):
+        error = ValueError("Not a valid ZIP file")
+        failure = {"status": "error", "errors": [str(error)]}
+        resource_service._execute_resource_ingestion = AsyncMock(
+            side_effect=error if raises else None, return_value=failure
+        )
+        msg = AddResourceMsg(
+            task_id="failed-source",
+            path="/test/corrupted.zip",
+            root_uri="viking://resources/corrupted",
+            account_id=request_context.account_id,
+            user_id=request_context.user.user_id,
+            role=str(request_context.role),
+        )
+        kwargs = {"ctx": request_context, "resource_lock": None, "stage_callback": AsyncMock()}
+        if raises:
+            with pytest.raises(ValueError, match="Not a valid ZIP file") as exc:
+                await resource_service.execute_add_resource_job(msg, **kwargs)
+            assert exc.value is error
+        else:
+            result = await resource_service.execute_add_resource_job(msg, **kwargs)
+            assert result == failure
+
+    @pytest.mark.asyncio
     async def test_execute_prepared_add_resource_job_forwards_tags_to_ingest(
         self,
         resource_service: ResourceService,
