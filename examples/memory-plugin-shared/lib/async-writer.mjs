@@ -47,6 +47,12 @@ export async function maybeDetach(cfg, { approve }) {
     process.env.OPENVIKING_HOOK_STDIN_CACHE = raw.toString();
     return false;
   }
+  // A worker that dies before draining its stdin turns the still-pending write
+  // below into an asynchronous EPIPE on this socket. The try/catch cannot see
+  // that — the failure arrives later, as an 'error' event, by which time
+  // approve() has already run — and an unhandled 'error' would take the whole
+  // hook down with a non-zero exit for a write path that is fire-and-forget.
+  child.stdin.on("error", () => { /* the worker is gone; nothing to recover */ });
 
   // Approve first, then write to the detached child. Ordering matters for
   // harnesses that read stdout before waiting for the hook process to exit.
