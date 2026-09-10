@@ -91,6 +91,13 @@ _SKILL_EXCLUDED_FILES = frozenset(
 )
 _CATALOG_FRONTMATTER_LINES = 128  # prefix read to detect unclosed OKF frontmatter
 _COMPILE_BUDGET_REMINDER_THRESHOLDS = (15, 8, 3)  # remaining iterations
+# One ordinary tool round saves source details while the full context is available.
+_COMPILE_PRE_COMPACT_PROMPT = (
+    "Context compaction follows this turn. Save unwritten knowledge from the sources already "
+    "read into your assigned draft/output files using existing tools, preserving details and citations. "
+    "Briefly state file paths, source coverage and remaining gaps alongside the writes. "
+    "Reuse existing drafts; do not read new sources or submit yet."
+)
 
 
 def _merge_usage(*values: Mapping[str, Any]) -> dict[str, int]:
@@ -794,6 +801,7 @@ class BotCompileService:
                     stop_tool_names=["submit_wiki_bundle"],
                     openviking_connection=connection,
                     context_compact_budget=self.limits.agent_context_chars,
+                    pre_compact_prompt=_COMPILE_PRE_COMPACT_PROMPT,
                     budget_reminder_thresholds=_COMPILE_BUDGET_REMINDER_THRESHOLDS,
                 )
                 agent_usage = _merge_usage(agent_usage, usage or {})
@@ -1687,6 +1695,7 @@ class BotCompileService:
                 allow_final_fallback=False,
                 inject_write_experience=False,
                 context_compact_budget=self.limits.agent_context_chars,
+                pre_compact_prompt=_COMPILE_PRE_COMPACT_PROMPT,
                 agent_id=child_id,
                 max_iterations=self.limits.subagent_iterations,
             )
@@ -1777,6 +1786,19 @@ class BotCompileService:
                 "and retrieve missing/truncated parts. Check after writes and submit after checks.",
             )
         )
+        if target_type == "resource":
+            if draft_root is None:
+                system += (
+                    "\nDuring topic merging, use `ov find '<topic and key entities>' "
+                    f"--uri {shlex.quote(request.to)} --node-limit 10 --level 2` once per topic. "
+                    "Select relevant existing pages from candidate abstracts; do not inventory the target tree."
+                )
+            system += (
+                "\nFor merges, fully read existing pages selected for update with `ov read` in bounded ranges, "
+                "then edit their original content, preserving unrelated facts and citations. "
+                "Keep existing target-relative paths and emit complete updated files; "
+                "create new pages only when no existing page fits."
+            )
         if draft_root is None and subagent_max_concurrency:
             system += (
                 "\nFirst response: dispatch prepared source_batches with "
@@ -1792,15 +1814,17 @@ class BotCompileService:
             )
             if target_type == "resource":
                 system += (
-                    "Plan merges from knowledge-draft paths, names, file_sizes, summaries and existing target paths "
-                    "from ov ls; inspect only headings/frontmatter when unclear. Exclude source copies, caches, "
+                    "Plan merges from knowledge-draft paths, names, file_sizes, summaries and retrieved target pages; "
+                    "inspect headings/frontmatter when unclear. Exclude source copies, caches, "
                     "temporary files and all index.md/_index.md, including in partial drafts. "
-                    "Group canonical topics across aliases, versions and directories; keep topics sharing a draft together. "
+                    "Group canonical topics across aliases, versions and directories; "
+                    "keep topics sharing a draft or existing target page together. "
                     "Plan each draft once and each output path with one owner. Spawn with topics, owned output paths, "
-                    "target URI and draft_paths within spawn's input attachment limits; keep unrelated topics separate. "
+                    "existing page URIs, target URI and draft_paths within spawn's input attachment limits; "
+                    "keep unrelated topics separate. "
                     "Collect merges and copy only listed knowledge files to final output; do not re-merge or copy draft trees. "
-                    "After all merges are collected and copied, generate navigation from final paths, titles and "
-                    "descriptions plus retained target pages, following the Skill. "
+                    "After collecting merges, create or update affected navigation pages from final output; "
+                    "read existing ones and retain unrelated entries, following the Skill. "
                     "Check Skill naming, directories, frontmatter, ownership and links once, then submit. "
                     "On validation failure, make one targeted repair within at most three remaining model turns; "
                     "a second invalid submission ends repair. Preserve invalid drafts and existing target files; "
@@ -1814,8 +1838,12 @@ class BotCompileService:
         elif draft_root is not None:
             if target_type == "resource":
                 system += (
-                    "\nWrite knowledge in named content pages, never index.md/_index.md: "
-                    "submission removes child navigation; the parent generates it. "
+                    "\nDo not create, update, or validate index.md, _index, or _index.md at any directory level, "
+                    "even when the Skill requires these files. These navigation index files will be generated or updated "
+                    "at a later stage, after the content pages are collected. "
+                    "Missing navigation files are expected in your drafts and must not delay submission. "
+                    "Follow all other Skill requirements for your assigned content pages, including content, "
+                    "directory layout, filenames, frontmatter, sources, and knowledge links. "
                 )
             system += (
                 "\nProduce complete knowledge pages with the Skill's fields, types and allowed values. "

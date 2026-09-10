@@ -294,13 +294,9 @@ Compile 不注册另一组 source tools。它在现有工具执行前增加 requ
 
 ### 6.3 目标上下文
 
-运行 Agent 前，VikingBot 使用现有 list/tree/read API 将 Resource 目标完整物化到任务工作区：
+Resource 目标由 Agent 在合并阶段按主题调用 `ov find '<主题和关键实体>' --uri '<to>' --node-limit 10 --level 2` 检索，每个主题最多返回 10 篇候选文档，不全量遍历目标目录。父 Agent 根据候选摘要选择相关旧页面，将旧页面 URI 与新草稿交给同一个合并任务；涉及同一旧页面的主题由同一个任务处理。
 
-```text
-__compile_staging__/target_checkout/<target-relative-path>
-```
-
-Agent 直接在该目录内新增、修改和重构最终文件，不需要声明 create/update，也不维护 target manifest 或 baseline hash。提交时 Compile 扫描完整 checkout、执行确定性 Wiki 内链处理，再将全部文件以 `upsert` 写回；checkout 中没有出现的目标文件不会被删除。
+合并 Agent 分段完整读取要更新的旧页面，在原文基础上修改，保留无关事实、引用和原相对路径；没有合适旧页面时才新增。父 Agent 汇总完整输出文件，并读取、更新受影响的导航页，保留其他条目。提交继续使用现有 batch-write `upsert`：同路径整文件覆盖，新路径新增，未输出的旧文件保留，不增加内容比较或跳过写入逻辑。这些检索和阅读要求由提示词驱动，不增加读取追踪或提交校验。
 
 ### 6.4 工具集合
 
@@ -352,6 +348,8 @@ await agent_loop.run_structured_task(
 ```
 
 BotCompileService 使用当前 provider/config、`workspace=task_workspace` 和 task-local `SandboxManager` 创建 request-local `AgentLoop`。`run_structured_task()` 用显式的 system/user prompt 建立 messages 后委托给 `_run_agent_loop()`；后者增加可选 `tool_registry` 和 `openviking_tool_names` 参数，并以选定 registry 同时生成 definitions 和执行工具。只有名称属于 `openviking_tool_names` 的现有 OV adapter 才在 `ToolContext`/post-call hook 中收到用户 connection；file 和 shell tool 收到 `None`。普通 chat 未传这些参数时仍使用 `self.tools` 和现有 connection 行为。
+
+Compile 父任务和子任务通过 `pre_compact_prompt` 启用压缩前补写：上下文超过字符预算的 85% 时，使用现有工具和迭代额度补写一轮草稿，下一轮执行 compact。补写轮不开放提交工具；压缩摘要保留草稿路径、来源覆盖范围、未写入内容和写入失败情况，最近的完整工具回合仍按现有规则保留。若上下文已经超过字符预算，则直接 compact，不再追加完整上下文的模型调用。该机制尽力保存细节，不增加独立文件清单、强制完整性校验或补写重试循环。
 
 该入口不使用普通 chat history、自动 memory/experience recall 或普通最终回答。只有 `submit_wiki_bundle` 成功执行并保存合法 bundle 后才能结束；参数校验或领域校验返回 `Error:` 时继续同一 loop 修复。只有自然语言而没有 submit 时，wrapper 追加提交提醒后继续；达到 `bot.agents.max_tool_iterations` 配置的 iteration limit（默认 50）时，不执行现有聊天路径的“禁用工具后再回答一次”。Resource 目标会先在独立、受限的 salvage 阶段尝试保存符合条件的 workspace 产物：存在可保存产物时任务以 `completed/salvaged` 结束，否则返回 `AGENT_OUTPUT_INVALID`；Memory 和 Skill 目标直接返回 `AGENT_OUTPUT_INVALID`。模型调用、工具执行和 token usage 仍沿用现有实现。
 

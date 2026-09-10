@@ -1335,7 +1335,9 @@ class AgentLoop:
                         "agent. Produce a dense, factual summary that preserves everything "
                         "needed to continue the task without re-reading the transcript, using "
                         "exactly these headings:\n## Current goal\n## Key facts & progress\n"
-                        "## Decisions\n## Constraints\n## Next steps / open questions\n"
+                        "## Saved files & coverage\n## Decisions\n## Constraints\n## Next steps / open questions\n"
+                        "Record saved draft paths, covered sources/ranges and unwritten gaps; "
+                        "distinguish successful writes from plans or failed writes. Continue from saved files. "
                         "Be precise about names, paths, tools, and numbers. Do not invent anything."
                     ),
                 },
@@ -1370,8 +1372,9 @@ class AgentLoop:
                     "content": (
                         "You are the final assembly step of a context-compaction pipeline. "
                         "Merge the segment summaries below into ONE note with exactly these "
-                        "headings:\n## Current goal\n## Key facts & progress\n## Decisions\n"
+                        "headings:\n## Current goal\n## Key facts & progress\n## Saved files & coverage\n## Decisions\n"
                         "## Constraints\n## Next steps / open questions\n"
+                        "Keep saved draft paths, coverage and unwritten gaps, including failed writes. "
                         "Preserve ALL distinct facts across segments; drop only duplicates. "
                         "Keep names, paths, tools, numbers. Carry over hard constraints from "
                         "the system instructions verbatim."
@@ -1420,6 +1423,7 @@ class AgentLoop:
         allow_final_fallback: bool = True,
         inject_write_experience: bool = True,
         context_compact_budget: int | None = None,
+        pre_compact_prompt: str | None = None,
         status_note_provider: Any | None = None,
         should_stop: Callable[[], bool] | None = None,
         skill_runtime: Any | None = None,
@@ -1461,6 +1465,9 @@ class AgentLoop:
                 tool-use iteration limit is reached.
             inject_write_experience: Whether to retrieve and inject relevant agent experience
                 before executing configured write tools.
+            pre_compact_prompt: Optional one-turn save instruction at 85% of the character
+                budget. Uses existing tools and iteration budget, then compacts. Already
+                oversized contexts compact immediately; saving is best effort.
             status_note_provider: Optional async callback ``(iteration) -> str | None``.
                 When set, its result is appended to the model-facing messages right before
                 every model call. Compile emits a reminder at each configured iteration
@@ -1494,6 +1501,9 @@ class AgentLoop:
         }
         write_exp_injected = False
         stop_tools = set(stop_tool_names or [])
+        compact_pending = False
+        compact_threshold_chars = (context_compact_budget or 0) * 0.85
+        compact_trigger_chars = compact_threshold_chars
 
         def accumulate_token_usage(response: Any) -> None:
             if not response.usage:
@@ -1509,15 +1519,25 @@ class AgentLoop:
                 break
             iteration += 1
 
+            saving_before_compact = False
             if context_compact_budget is not None:
-                current_chars = sum(
-                    len(json.dumps(message, ensure_ascii=False, default=str))
-                    for message in messages
-                )
-                if current_chars > context_compact_budget:
+                current_chars = _compact_msg_chars(messages)
+                if compact_pending or current_chars > context_compact_budget:
                     messages = await self._compact_tool_loop(
                         messages, session_key, budget_chars=context_compact_budget
                     )
+                    compact_pending = False
+                    # Fixed task content can exceed the save threshold; wait for new content.
+                    compact_trigger_chars = max(
+                        compact_threshold_chars, _compact_msg_chars(messages)
+                    )
+                elif (
+                    pre_compact_prompt
+                    and 1 < iteration < iteration_limit
+                    and current_chars > compact_trigger_chars
+                ):
+                    messages.append({"role": "user", "content": pre_compact_prompt})
+                    compact_pending = saving_before_compact = True
 
             if publish_events:
                 await self.bus.publish_outbound(
@@ -1538,6 +1558,12 @@ class AgentLoop:
                 disabled_tools=disabled_tools,
                 skill_runtime=skill_runtime,
             )
+            if saving_before_compact:
+                tool_definitions = [
+                    definition
+                    for definition in tool_definitions
+                    if definition.get("function", {}).get("name") not in stop_tools
+                ]
             visible_tool_names = {
                 str(definition.get("function", {}).get("name") or "")
                 for definition in tool_definitions
@@ -2000,12 +2026,14 @@ class AgentLoop:
         stop_tool_names: list[str],
         openviking_connection: dict[str, Any] | None,
         context_compact_budget: int | None = None,
+        pre_compact_prompt: str | None = None,
         budget_reminder_thresholds: tuple[int, int, int] | None = None,
     ) -> tuple[Any, list[dict], dict[str, int], int]:
         """Run a tool-terminated structured task through the existing agent loop.
 
         ``budget_reminder_thresholds`` optionally adds an iteration countdown before
-        model calls near the execution limit.
+        model calls near the execution limit. ``pre_compact_prompt`` enables a bounded
+        save turn before context compaction, using the task's existing file tools.
         """
 
         max_iterations = getattr(self, "max_iterations", 0)
@@ -2059,6 +2087,7 @@ class AgentLoop:
             allow_final_fallback=False,
             inject_write_experience=False,
             context_compact_budget=context_compact_budget,
+            pre_compact_prompt=pre_compact_prompt,
             status_note_provider=status_note_provider,
             should_stop=stop_repair,
         )
