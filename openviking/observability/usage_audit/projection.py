@@ -148,6 +148,14 @@ def project_events(
                 touched_audit_accounts=touched_audit_accounts,
             )
 
+        if event.event_name == "mcp.tool":
+            _project_mcp_tool(
+                event,
+                event_date=event_date,
+                hour=event_hour,
+                retrieval_rows=retrieval_rows,
+            )
+
     return UsageAuditProjection(
         token_rows=dict(token_rows),
         retrieval_rows=dict(retrieval_rows),
@@ -289,6 +297,38 @@ def _project_http_request(
 def should_skip_audit_route(route: str) -> bool:
     """Return whether an HTTP route should be omitted from product audit."""
     return route in AUDIT_EXCLUDED_ROUTES or route.startswith("/api/v1/console/")
+
+
+MCP_RETRIEVAL_OPERATIONS = frozenset({"find", "search"})
+
+
+def _project_mcp_tool(
+    event: ObservabilityEvent,
+    *,
+    event_date: str,
+    hour: int,
+    retrieval_rows: defaultdict[tuple, tuple[int, int]],
+) -> None:
+    """Count MCP retrieval tool calls into the same dashboard buckets as REST search.
+
+    MCP tool traffic reaches the server as ``POST /mcp`` with no per-tool route,
+    so the route-based projection in ``_project_http_request`` cannot see it.
+    The MCP endpoint emits one ``mcp.tool`` event per find/search call carrying
+    the tool name and outcome, and this projection feeds the same
+    ``retrieval_rows`` shape the REST endpoints produce.
+    """
+    operation = str(event.payload.get("tool") or "")
+    if operation not in MCP_RETRIEVAL_OPERATIONS:
+        return
+    account = normalize_identity(
+        event.payload.get("account_id") or event.account_id,
+        unknown=True,
+    )
+    row_user = normalize_identity(event.payload.get("user_id") or event.user_id) or ""
+    status = "error" if event.payload.get("status") == "error" else "success"
+    key = (account, row_user, event_date, hour, operation, status)
+    prev_count, prev_results = retrieval_rows[key]
+    retrieval_rows[key] = (prev_count + 1, prev_results)
 
 
 def retrieval_operation_for_http(method: str, route: str) -> str | None:
