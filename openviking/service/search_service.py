@@ -18,6 +18,7 @@ from openviking.utils.image_search import (
 )
 from openviking_cli.exceptions import InvalidArgumentError, NotInitializedError
 from openviking_cli.utils import get_logger
+from openviking_cli.retrieve import ContextType
 
 if TYPE_CHECKING:
     from openviking.session import Session
@@ -99,6 +100,7 @@ class SearchService:
         filter: Optional[Dict] = None,
         level: Optional[List[int]] = None,
         image_url: Optional[str] = None,
+        context_type: Optional[ContextType] = None,
     ) -> Any:
         """Complex search with session context.
 
@@ -133,6 +135,7 @@ class SearchService:
             filter=filter,
             level=level,
             image_url=resolved_image_url,
+            context_type=context_type,
         )
         return result
 
@@ -146,6 +149,7 @@ class SearchService:
         filter: Optional[Dict] = None,
         level: Optional[List[int]] = None,
         image_url: Optional[str] = None,
+        context_type: Optional[ContextType] = None,
     ) -> Any:
         """Semantic search without session context.
 
@@ -172,5 +176,6 @@ class SearchService:
             filter=filter,
             level=level,
             image_url=resolved_image_url,
+            context_type=context_type,
         )
         return result
