@@ -253,9 +253,20 @@ const LOCK_POLL_MS = 100;
  * exactly one wins, and the losers re-read a lock that now carries the
  * winner's fresh stamp. The winner drops the claim as soon as it is stamped,
  * so later generations can take over in turn; a claim left behind by a taker
- * that died mid-takeover ages out like the lock itself.
+ * that died mid-takeover ages out like the lock itself. Winning the claim only
+ * grants the right to revalidate that observed generation, never to overwrite
+ * whatever owner happens to be present later.
  */
-async function claimStaleLock(dir, ownerFile, token, seen, staleMs) {
+function isReleaseRace(err) {
+  return err?.code === "ENOENT" || err?.code === "ENOTDIR";
+}
+
+function sameNode(left, right) {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+/** @internal Exported for deterministic race regression tests. */
+export async function claimStaleLock(dir, ownerFile, token, seen, staleMs, observed) {
   const key = createHash("sha256").update(seen ?? "\u0000unstamped").digest("hex").slice(0, 32);
   const claimDir = join(dir, `claim-${key}`);
   try {
@@ -267,14 +278,47 @@ async function claimStaleLock(dir, ownerFile, token, seen, staleMs) {
           await rmdir(claimDir).catch(() => {});
         }
       } catch {}
+      return false;
     }
-    return false;
+    if (isReleaseRace(err)) return false;
+    throw err;
   }
-  await writeFile(ownerFile, token);
-  const now = new Date();
-  await utimes(dir, now, now).catch(() => {});
-  await rmdir(claimDir).catch(() => {});
-  return true;
+  try {
+    let current = null;
+    try {
+      current = await readFile(ownerFile, "utf-8");
+    } catch (err) {
+      if (!isReleaseRace(err)) throw err;
+    }
+    if (current !== seen) return false;
+
+    let currentStamp;
+    try {
+      currentStamp = await stat(seen === null ? dir : ownerFile);
+    } catch (err) {
+      if (isReleaseRace(err)) return false;
+      throw err;
+    }
+    if (!sameNode(currentStamp, observed)) return false;
+    // Creating the claim changes an unstamped lock directory's mtime, so its
+    // pre-claim observation is the applicable age. A stamped lock's owner file
+    // is unaffected by mkdir and must still have the observed stale timestamp.
+    const applicableMtimeMs = seen === null ? observed.mtimeMs : currentStamp.mtimeMs;
+    if (seen !== null && currentStamp.mtimeMs !== observed.mtimeMs) return false;
+    if (Date.now() - applicableMtimeMs <= staleMs) return false;
+
+    try {
+      await writeFile(ownerFile, token, seen === null ? { flag: "wx" } : undefined);
+    } catch (err) {
+      if (isReleaseRace(err) || (seen === null && err?.code === "EEXIST")) return false;
+      throw err;
+    }
+    const now = new Date();
+    await utimes(dir, now, now).catch(() => {});
+    return true;
+  } finally {
+    await rmdir(claimDir).catch(() => {});
+  }
 }
 
 /**
@@ -317,14 +361,15 @@ export async function withSessionLock(codexSessionId, fn, { waitMs = 0, staleMs 
       try {
         seen = await readFile(ownerFile, "utf-8");
       } catch {}
-      let ageMs;
+      let observed;
       try {
-        ageMs = Date.now() - (await stat(seen === null ? dir : ownerFile)).mtimeMs;
+        observed = await stat(seen === null ? dir : ownerFile);
       } catch {
         continue; // holder released between mkdir and stat; retry immediately
       }
+      const ageMs = Date.now() - observed.mtimeMs;
       if (ageMs > staleMs) {
-        if (await claimStaleLock(dir, ownerFile, token, seen, staleMs)) {
+        if (await claimStaleLock(dir, ownerFile, token, seen, staleMs, observed)) {
           held = true;
           break;
         }
