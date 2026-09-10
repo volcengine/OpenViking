@@ -10,7 +10,7 @@ from copy import deepcopy
 
 import pytest
 
-from openviking.pyagfs.exceptions import AGFSAlreadyExistsError
+from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
 from openviking.server.identity import RequestContext, Role
 from openviking.service.session_service import SessionService
 from openviking.service.task_store import PersistentTaskStore, _task_to_payload
@@ -140,7 +140,9 @@ class _FakeAgfs:
         )
         if self.fail_rm:
             raise OSError("simulated delete failure")
-        self.files.pop(path, None)
+        if path not in self.files:
+            raise AGFSNotFoundError(path)
+        del self.files[path]
         return {"message": "removed", "recursive": recursive, "force": force}
 
 
@@ -524,11 +526,16 @@ async def test_sanitize_preserves_safe_error():
 # ── TTL / Eviction ──
 
 
-async def test_evict_expired_completed(tracker: TaskTracker):
+@pytest.mark.parametrize("already_missing", [False, True])
+async def test_evict_expired_completed(already_missing):
+    agfs = _FakeAgfs()
+    tracker = TaskTracker(store=PersistentTaskStore(agfs))
     t = await tracker.create("session_commit", **_owner_kwargs())
     await tracker.start(t.task_id)
     await tracker.complete(t.task_id, {})
     assert await tracker._store.get(t.task_id, **_owner_kwargs()) is not None
+    if already_missing:
+        agfs.files.clear()
     # Simulate old timestamp (access internal state; get() returns defensive copies)
     tracker._tasks[t.task_id].updated_at = time.time() - tracker.TTL_COMPLETED - 1
     await tracker._evict_expired()
