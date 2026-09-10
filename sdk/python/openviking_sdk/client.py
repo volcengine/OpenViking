@@ -1415,6 +1415,13 @@ class AsyncHTTPClient:
         image: Any = None,
         options: Optional[SearchContextOptions] = None,
     ) -> SearchContextResult:
+        # POST /search rejects target_uri in context mode: the context path picks its own
+        # roots per bucket, so there is nowhere for a caller-supplied one to apply. Any
+        # non-empty value here has always come back as a server error, so say so before
+        # spending a round trip on it. SyncHTTPClient.search_context delegates here, so
+        # both clients are covered.
+        if target_uri:
+            raise ValueError("target_uri is not supported by search_context")
         search_options = dict(options or {})
         if image is not None:
             search_options["image"] = image
