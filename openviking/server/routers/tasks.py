@@ -35,6 +35,14 @@ async def get_task(
     if _ctx.role == Role.ROOT:
         task = await tracker.get(task_id)
         if task is None:
+            # The caller's own namespace is persisted on disk but not always in
+            # the process-local cache, e.g. after a server restart (#4393).
+            task = await tracker.get(
+                task_id,
+                account_id=_ctx.account_id,
+                user_id=_ctx.user.user_id,
+            )
+        if task is None:
             task = await tracker.get(
                 task_id,
                 account_id=SYSTEM_TASK_ACCOUNT_ID,
@@ -96,13 +104,16 @@ async def list_tasks(
     """List background tasks with optional filters."""
     tracker = get_task_tracker()
     if _ctx.role == Role.ROOT:
-        system_tasks = await tracker.list_tasks(
+        # Load the caller's own persisted namespace first so tasks that
+        # survived a restart are merged into the cache before the cache-only
+        # view below is taken (#4393).
+        owned_tasks = await tracker.list_tasks(
             task_type=task_type,
             status=status,
             resource_id=resource_id,
             limit=limit,
-            account_id=SYSTEM_TASK_ACCOUNT_ID,
-            user_id=SYSTEM_TASK_USER_ID,
+            account_id=_ctx.account_id,
+            user_id=_ctx.user.user_id,
             include_internal=include_internal,
         )
         cached_tasks = await tracker.list_tasks(
@@ -112,7 +123,17 @@ async def list_tasks(
             limit=limit,
             include_internal=include_internal,
         )
-        tasks_by_id = {task.task_id: task for task in cached_tasks}
+        system_tasks = await tracker.list_tasks(
+            task_type=task_type,
+            status=status,
+            resource_id=resource_id,
+            limit=limit,
+            account_id=SYSTEM_TASK_ACCOUNT_ID,
+            user_id=SYSTEM_TASK_USER_ID,
+            include_internal=include_internal,
+        )
+        tasks_by_id = {task.task_id: task for task in owned_tasks}
+        tasks_by_id.update({task.task_id: task for task in cached_tasks})
         tasks_by_id.update({task.task_id: task for task in system_tasks})
         tasks = sorted(tasks_by_id.values(), key=lambda task: task.created_at, reverse=True)[:limit]
     else:
