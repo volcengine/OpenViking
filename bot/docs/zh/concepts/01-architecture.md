@@ -85,7 +85,7 @@ Agent 处理过程中还会产生 reasoning、content delta、tool call、tool r
 5. 把工具结果追加到当前消息上下文；
 6. 再次调用模型，直到生成最终回答或达到 `max_tool_iterations`。
 
-队列模式由单个 AgentLoop 消费者按入站顺序处理消息。CLI、Cron 和 Heartbeat 也可以通过 `process_direct()` 直接触发相同的执行逻辑。
+队列模式会并发处理独立会话（上限为 `bot.agents.message_max_concurrency`），同一 `SessionKey` 上的轮次串行。CLI、Cron 和 Heartbeat 通过 `process_direct()` 走同一把会话锁和全局信号量。MCP 服务按 AgentLoop 连接一次，并在并发会话之间共享。
 
 ## 模型适配
 

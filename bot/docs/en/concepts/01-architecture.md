@@ -86,7 +86,7 @@ Each model call may return normal text or one or more tool calls. AgentLoop:
 5. appends the tool result to the current message context;
 6. calls the model again until it produces a final answer or reaches `max_tool_iterations`.
 
-Queue mode uses a single AgentLoop consumer to process inbound messages in order. CLI, Cron, and Heartbeat can invoke the same execution logic directly through `process_direct()`.
+Queue mode processes independent sessions concurrently, bounded by `bot.agents.message_max_concurrency`, and serializes turns on the same `SessionKey`. CLI, Cron, and Heartbeat call `process_direct()`, which uses the same per-session lock and global semaphore as the bus consumer. MCP servers are connected once per AgentLoop and shared across concurrent sessions.
 
 ## Model Adaptation
 

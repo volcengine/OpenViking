@@ -137,6 +137,7 @@ jobs:
       cuvs_changed: ${{ steps.check.outputs.cuvs_changed }}
       langchain_changed: ${{ steps.check.outputs.langchain_changed }}
       openclaw_changed: ${{ steps.check.outputs.openclaw_changed }}
+      bot_changed: ${{ steps.check.outputs.bot_changed }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -200,6 +201,20 @@ jobs:
             echo "openclaw_changed=false" >> $GITHUB_OUTPUT
           fi
 
+          # Focused VikingBot suite. #4746 may widen this job to the full
+          # bot test tree once stale tests are realigned.
+          BOT_PATTERN="^bot/|pyproject\.toml|uv\.lock|\.github/workflows/pr\.yml"
+          BOT_CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep -E "$BOT_PATTERN" || true)
+
+          if [ -n "$BOT_CHANGED_FILES" ]; then
+            echo "Bot changes detected:"
+            echo "$BOT_CHANGED_FILES"
+            echo "bot_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "No bot changes detected."
+            echo "bot_changed=false" >> $GITHUB_OUTPUT
+          fi
+
   build:
     needs: check-deps
     if: ${{ needs.check-deps.outputs.deps_changed == 'true' }}
@@ -212,6 +227,31 @@ jobs:
     with:
       os_json: '["ubuntu-24.04"]'
       python_json: '["3.11"]'
+
+  bot-tests:
+    needs: check-deps
+    if: ${{ needs.check-deps.outputs.bot_changed == 'true' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install bot dependencies
+        run: uv sync --frozen --extra bot --extra test
+
+      - name: Run VikingBot concurrency tests
+        run: |
+          uv run python -m pytest -q -o addopts='' \
+            bot/vikingbot/tests/unit/test_agent_message_concurrency.py
 
   langchain-tests:
     needs: check-deps
