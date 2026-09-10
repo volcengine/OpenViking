@@ -8,6 +8,8 @@ Watch API 管理资源的周期检查、暂停、恢复和手动触发。
 
 列出、查看、更新和触发通过 [`add_resource`](02-resources.md#add_resource) 配合 `watch_interval > 0` 创建的监控任务。控制面在 REST（`/api/v1/watches`）、`ov task watch` CLI 子命令组以及面向 Agent 的最小闭包 MCP 接口（`list_watches` / `cancel_watch`）三处镜像。
 
+当飞书在解析被监控的 wiki 根节点时返回节点已删除错误（`131005`），调度器会停用该 watch，并在 `last_error` 中保留失败原因。重启后该 watch 仍保持停用。权限错误、临时故障、普通 HTTP 404 响应或子节点缺失不会因此停用根节点的 watch。恢复源节点后，可通过更新 API 或 `ov task watch resume` 恢复检查。
+
 #### 1. API 实现介绍
 
 此控制面封装了 `WatchManager` 原语，未改动任何服务端行为。每个端点和 CLI 命令都支持通过 `task_id`（路径）或 `to_uri`（查询参数）定位目标任务，两种键可以互换；如果同时提供，二者必须指向同一任务，否则返回 400。

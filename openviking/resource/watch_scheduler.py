@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional, Set
 
 from openviking.connector.delegate import ConnectorDelegate
+from openviking.parse.accessors.feishu_accessor import FeishuAccessor
 from openviking.resource.feishu_watch_auth import (
     FeishuOAuthClient,
     FeishuTokenRefreshError,
@@ -478,6 +479,9 @@ class WatchScheduler:
         except Exception as e:
             execution_status = "failed"
             execution_error = str(e) or type(e).__name__
+            if FeishuAccessor.is_deleted_wiki_source_error(task.path, e):
+                should_deactivate = True
+                deactivation_reason = f"Watched Feishu wiki source no longer exists: {e}"
             logger.error(
                 f"[WatchScheduler] Task {task.task_id} execution failed, "
                 f"error_type={type(e).__name__}"
