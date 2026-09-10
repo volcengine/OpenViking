@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 import openviking.metrics.bootstrap as bootstrap
+import openviking.metrics.global_api as global_api
 from openviking.metrics.account_dimension import (
     configure_metric_account_dimension,
     reset_metric_account_dimension,
@@ -94,6 +95,18 @@ def test_create_default_collector_manager_propagates_construction_failures(monke
     monkeypatch.setattr(bootstrap, "QueuePipelineStateDataSource", _boom)
     with pytest.raises(RuntimeError, match="cannot init datasource"):
         bootstrap.create_default_collector_manager(app=None, service=None)
+
+
+def test_event_router_initializes_resource_stage_counters():
+    registry = MetricRegistry()
+
+    global_api._build_event_router(registry)
+
+    text = PrometheusExporter(registry=registry).render()
+    assert (
+        'openviking_resource_stage_total{account_id="__unknown__",stage="parse",status="error"} 0'
+        in text
+    )
 
 
 def test_optional_cache_datasource_instrumentation_is_wired_into_key_call_sites():

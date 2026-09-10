@@ -56,6 +56,16 @@ class QueueCollector(StateMetricCollector):
         statuses = metric_input
         for queue_name, status in statuses.items():
             labels = {"queue": str(queue_name)}
+            registry.initialize_counter(
+                self.PROCESSED_TOTAL,
+                labels=labels,
+                label_names=("queue",),
+            )
+            registry.initialize_counter(
+                self.ERRORS_TOTAL,
+                labels=labels,
+                label_names=("queue",),
+            )
             registry.set_gauge(
                 self.PENDING,
                 float(status.pending),

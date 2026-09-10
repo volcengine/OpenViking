@@ -106,6 +106,23 @@ class MetricRegistry:
         """
         self.counter(name, label_names=label_names).inc(labels=labels, amount=float(amount))
 
+    def initialize_counter(
+        self,
+        name: str,
+        *,
+        labels: Mapping[str, str] | None = None,
+        label_names: Sequence[str] = (),
+    ) -> None:
+        """
+        Materialize a Counter series at zero without treating zero as an increment.
+
+        Args:
+            name: Prometheus metric name.
+            labels: Optional label dict. Keys must exactly match `label_names`.
+            label_names: Ordered label key tuple for this metric name.
+        """
+        self.counter(name, label_names=label_names).initialize(labels=labels)
+
     def set_gauge(
         self,
         name: str,
@@ -376,6 +393,17 @@ class _CounterFamily:
                 return
             self._values[key] = self._values.get(key, 0.0) + float(amount)
 
+    def initialize(self, *, labels: Mapping[str, str] | None) -> None:
+        """Materialize one counter series at zero while preserving any existing value."""
+        key = self._normalize_and_validate(labels)
+        with self._lock:
+            if key in self._values:
+                return
+            if len(self._values) >= self._max_series:
+                self._on_drop(self.name)
+                return
+            self._values[key] = 0.0
+
     def copy_values(self) -> dict[tuple[tuple[str, str], ...], float]:
         """Return a detached copy of all series values in this family."""
         with self._lock:
@@ -620,6 +648,10 @@ class _Counter:
         """Increment one series in the bound counter family using the public wrapper API."""
         self._family.inc(labels=labels, amount=amount)
 
+    def initialize(self, *, labels: Mapping[str, str] | None = None) -> None:
+        """Materialize one series at zero without weakening positive-increment validation."""
+        self._family.initialize(labels=labels)
+
 
 class _Gauge:
     """Public lightweight handle used by callers to mutate one gauge family."""
@@ -635,6 +667,7 @@ class _Gauge:
     def inc(self, amount: float = 1.0, *, labels: Mapping[str, str] | None = None) -> None:
         """Increase one series in the bound gauge family by a positive delta."""
         self._family.add(labels=labels, delta=amount)
+
 
 class _Histogram:
     """Public lightweight handle used by callers to mutate one histogram family."""

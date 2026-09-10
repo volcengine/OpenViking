@@ -122,6 +122,27 @@ class CollectorMetricWriter:
             label_names=final_label_names,
         )
 
+    def initialize_counter(
+        self,
+        name: str,
+        *,
+        labels: dict[str, str] | None = None,
+        label_names: tuple[str, ...] = (),
+        account_id: str | None = None,
+    ) -> None:
+        """Initialize a zero-valued counter after normalizing account-aware labels."""
+        final_labels, final_label_names = self._with_account_labels(
+            metric_name=name,
+            labels=labels,
+            label_names=label_names,
+            explicit_account_id=account_id,
+        )
+        self._registry.initialize_counter(
+            name,
+            labels=final_labels,
+            label_names=final_label_names,
+        )
+
     def set_gauge(
         self,
         name: str,
