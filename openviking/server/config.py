@@ -328,7 +328,7 @@ class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 1933
     workers: int = 1
-    executor_workers: int = Field(
+    executor_threads: int = Field(
         default=0,
         ge=0,
         description=(

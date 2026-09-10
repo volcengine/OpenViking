@@ -83,7 +83,7 @@ def _configure_default_executor(config: ServerConfig) -> None:
     down when the loop closes. This must run before service initialization,
     because initialization itself can submit work through ``asyncio.to_thread``.
     """
-    max_workers = config.executor_workers
+    max_workers = config.executor_threads
     if max_workers == 0:
         return
 

@@ -344,7 +344,7 @@ def test_configure_default_executor_uses_configured_size(monkeypatch):
     monkeypatch.setattr(app_module, "ThreadPoolExecutor", _Executor)
     monkeypatch.setattr(app_module.asyncio, "get_running_loop", lambda: _Loop())
 
-    app_module._configure_default_executor(ServerConfig(executor_workers=48))
+    app_module._configure_default_executor(ServerConfig(executor_threads=48))
 
     assert created["max_workers"] == 48
     assert created["thread_name_prefix"] == "openviking-asyncio"
