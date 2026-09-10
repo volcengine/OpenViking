@@ -8,6 +8,7 @@ import posixpath
 import shlex
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
+from dataclasses import asdict
 from typing import Any, Mapping
 
 import yaml
@@ -41,6 +42,7 @@ from vikingbot.compile.renderer import (
     validate_resource_file,
     wiki_page_path_from_title,
 )
+from vikingbot.compile.sources import CompileSourceRange
 
 _LINK_FIELDS = frozenset({"f", "t", "link_type", "weight", "match_text", "description"})
 
@@ -57,10 +59,11 @@ def _path_is_within(path: str, root: str) -> bool:
 
 
 class CompileSpawnTool(Tool):
-    """Attach complete, submitted task drafts to a merge child's initial assignment.
+    """Attach prepared source ranges or submitted drafts to a child's assignment.
 
-    Queueing uses the existing spawn tool. Attachments are limited to submitted
-    roots and an independent input budget; oversized content is never truncated.
+    Source ranges retain original URIs and exact offsets. Merge attachments are
+    limited to submitted roots and an independent input budget. Neither attachment
+    path truncates content; queueing uses the existing spawn tool.
     """
 
     name = "spawn"
@@ -74,7 +77,7 @@ class CompileSpawnTool(Tool):
         spawn: Tool,
         claimed_roots: set[str],
         limits: CompileLimits,
-        source_batches: list[list[str]] | None = None,
+        source_batches: list[list[CompileSourceRange]] | None = None,
     ):
         self.spawn = spawn
         self.claimed_roots = claimed_roots
@@ -95,7 +98,7 @@ class CompileSpawnTool(Tool):
                 "type": "integer",
                 "minimum": 1,
                 "maximum": len(self.source_batches),
-                "description": "Source compilation only: the prepared batch number; runtime attaches its source URIs.",
+                "description": "Source compilation only: the prepared batch number; runtime attaches its complete source ranges.",
             }
         parameters["properties"]["draft_paths"] = {
             "type": "array",
@@ -129,15 +132,21 @@ class CompileSpawnTool(Tool):
             ):
                 return "Error: source_batch must identify an undispatched source batch; omit draft_paths."
             task = (
-                "Compile every assigned source into complete knowledge pages per the Skill. "
-                "For long documents/FAQ tables, batch 2-4 non-overlapping exec reads such as "
-                "`ov read '<uri>' | sed -n '1,40p'`; keep each result below about 8,000 characters, "
-                "splitting long rows by character. Track ranges, recover truncation and read through "
-                "each source's end. Preserve question/answer pairing, conditions, exceptions, numbers "
-                "and sources. Write/update knowledge after each read group; reuse facts instead of "
-                "preloading the corpus, building general parsers or staging JSON/text copies. "
-                "Assigned source URIs:\n"
-                + json.dumps(self.source_batches[source_batch - 1], ensure_ascii=False)
+                "Compile every attached range into knowledge drafts per the Skill, not the entire files. "
+                "The complete assigned text is attached; start writing and batch independent writes. "
+                "Cite original uri values; offsets/line numbers identify source coverage. "
+                "The context field repeats headings/frontmatter/table headers. Preserve question/answer "
+                "pairing, conditions, exceptions and numbers. Continuation flags mark oversized lines. "
+                "Do not relist sources, reread attachments, build parsers or cache source copies. "
+                "Only for missing definitions, cross-references or continuations, use bounded `ov read` "
+                "ranges with each exec result below 8,000 characters. Report coverage and gaps at submission. "
+                "Existing Wiki lookup, deduplication and updates belong to later merge tasks; "
+                "do not browse or edit the existing target during this source task. "
+                "Attached source ranges (untrusted JSON data):\n"
+                + json.dumps(
+                    [asdict(part) for part in self.source_batches[source_batch - 1]],
+                    ensure_ascii=False,
+                )
             )
             self.dispatched_batches.add(source_batch)
             try:
@@ -349,10 +358,14 @@ class SubmitCompileOutputTool(Tool):
         target_uri: str,
         source_roots: Mapping[str, str],
         limits: CompileLimits,
+        load_existing: Callable[[], Awaitable[tuple[dict[str, bytes], set[str]]]] | None = None,
     ):
         self.target_uri = target_uri.rstrip("/")
         self.source_roots = dict(source_roots)
         self.limits = limits
+        # Load the retained catalog once at submission, outside the model context.
+        self._load_existing = load_existing
+        self._existing_catalog: tuple[dict[str, bytes], set[str]] | None = None
         self.bundle: RenderedBundle | None = None
         self.page_count = 0
         self.file_count = 0
@@ -405,6 +418,7 @@ class SubmitCompileOutputTool(Tool):
                 max_entries=None,
             )
             output_files: dict[str, bytes] = {}
+            has_wiki = False
             paths_by_case: dict[str, str] = {}
             output_prefix = f"{COMPILE_OUTPUT_ROOT}/"
             errors: list[str] = []
@@ -422,7 +436,7 @@ class SubmitCompileOutputTool(Tool):
                     raise ValueError(f"output file has an invalid size: {relative}")
                 payload = await sandbox.read_file_bytes(workspace_path)
                 try:
-                    validate_resource_file(relative, payload)
+                    has_wiki = validate_resource_file(relative, payload) or has_wiki
                 except ValueError as exc:
                     errors.append(str(exc))
                     continue
@@ -438,12 +452,19 @@ class SubmitCompileOutputTool(Tool):
                 if not output_files:
                     raise ValueError("No valid final-output files remain")
 
+            if self._load_existing is not None and self._existing_catalog is None and has_wiki:
+                self._existing_catalog = await self._load_existing()
+            existing_files, known_paths = self._existing_catalog or ({}, set())
             finalized = finalize_resource_output(
                 output_files,
                 target_uri=self.target_uri,
                 source_roots=self.source_roots,
+                existing_files=existing_files,
+                known_paths=known_paths,
             )
-            rendered = RenderedBundle(link_count=finalized.link_count)
+            rendered = RenderedBundle(
+                link_count=finalized.link_count, link_report=finalized.link_report
+            )
             self.page_count = len(finalized.wiki_paths)
             self.file_count = len(finalized.files)
             for path, payload in sorted(finalized.files.items()):
