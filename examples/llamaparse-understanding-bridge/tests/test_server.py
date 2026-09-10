@@ -168,6 +168,14 @@ async def test_file_upload_returns_a_llamaparse_file_id(
             {"type": "input_file", "file_url": "https://documents.test/report.pdf"},
             {"file_id": None, "source_url": "https://documents.test/report.pdf"},
         ),
+        (
+            {"type": "input_image", "image_url": "https://media.test/diagram.png"},
+            {"file_id": None, "source_url": "https://media.test/diagram.png"},
+        ),
+        (
+            {"type": "input_audio", "audio_url": "https://media.test/interview.mp3"},
+            {"file_id": None, "source_url": "https://media.test/interview.mp3"},
+        ),
     ],
 )
 async def test_response_creation_maps_supported_sources(
@@ -187,17 +195,48 @@ async def test_response_creation_maps_supported_sources(
     assert llama.jobs == [expected]
 
 
-@pytest.mark.parametrize("content_type", ["input_image", "input_audio", "input_video"])
-async def test_response_creation_rejects_unsupported_media(
-    bridge_client: Any, settings: Settings, content_type: str
+@pytest.mark.parametrize(
+    "content",
+    [
+        {"type": "input_video", "video_url": "https://media.test/demo.mp4"},
+        {"type": []},
+    ],
+)
+async def test_response_creation_rejects_unsupported_input(
+    bridge_client: Any, settings: Settings, content: dict[str, Any]
 ) -> None:
     client, _ = bridge_client
-    payload = {"input": [{"content": [{"type": content_type, "image_url": "https://x"}]}]}
+    payload = {"input": [{"content": [content]}]}
 
     response = await client.post("/api/v3/responses", headers=_auth(settings), json=payload)
 
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "unsupported_input"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        {"type": "input_image"},
+        {"type": "input_image", "image_url": 42},
+        {"type": "input_image", "image_url": "ftp://media.test/diagram.png"},
+        {"type": "input_image", "audio_url": "https://media.test/diagram.png"},
+        {"type": "input_audio"},
+        {"type": "input_audio", "audio_url": ["https://media.test/interview.mp3"]},
+        {"type": "input_audio", "audio_url": "ftp://media.test/interview.mp3"},
+        {"type": "input_audio", "image_url": "https://media.test/interview.mp3"},
+    ],
+)
+async def test_response_creation_rejects_malformed_media_urls(
+    bridge_client: Any, settings: Settings, content: dict[str, Any]
+) -> None:
+    client, _ = bridge_client
+    payload = {"input": [{"content": [content]}]}
+
+    response = await client.post("/api/v3/responses", headers=_auth(settings), json=payload)
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_request"
 
 
 @pytest.mark.parametrize(

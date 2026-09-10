@@ -125,9 +125,10 @@ LlamaParse accepts [130+ file formats](https://developers.llamaindex.ai/llamapar
 including common documents, images, spreadsheets, and audio files. Add only the extensions that you
 want OpenViking to route to this bridge. Start with file types that you have tested.
 
-This example supports local file uploads and public HTTP or HTTPS document URLs. It does not support:
+This example supports local file uploads and public HTTP or HTTPS document, image, and audio URLs.
+It does not support:
 
-- direct `input_image`, `input_audio`, or `input_video` URL requests;
+- direct `input_video` URL requests because LlamaParse v2 does not support video files;
 - Feishu or Lark credential payloads;
 - the Understanding API resumable-upload endpoints.
 

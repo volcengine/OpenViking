@@ -43,11 +43,21 @@ def _source_from_request(payload: Dict[str, Any]) -> Tuple[str, str]:
         if isinstance(file_id, str) and file_id.strip():
             return "file_id", file_id.strip()
         raise BridgeError(400, "invalid_request", "file.file_id is required")
-    if content_type == "input_file":
-        file_url = item.get("file_url")
-        if isinstance(file_url, str) and file_url.startswith(("http://", "https://")):
-            return "source_url", file_url.strip()
-        raise BridgeError(400, "invalid_request", "input_file.file_url must be an HTTP URL")
+    url_fields = {
+        "input_file": "file_url",
+        "input_image": "image_url",
+        "input_audio": "audio_url",
+    }
+    url_field = url_fields.get(content_type) if isinstance(content_type, str) else None
+    if url_field is not None:
+        source_url = item.get(url_field)
+        if isinstance(source_url, str) and source_url.startswith(("http://", "https://")):
+            return "source_url", source_url.strip()
+        raise BridgeError(
+            400,
+            "invalid_request",
+            f"{content_type}.{url_field} must be an HTTP URL",
+        )
     raise BridgeError(400, "unsupported_input", f"unsupported input type: {content_type}")
 
 
