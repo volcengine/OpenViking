@@ -7,6 +7,7 @@ import json
 import re
 import time
 import uuid
+from collections.abc import Callable
 from contextlib import AsyncExitStack, aclosing
 from dataclasses import dataclass
 from datetime import datetime
@@ -277,6 +278,14 @@ class AgentIterationLimitExceeded(RuntimeError):
         )
 
 
+class AgentRepairLimitExceeded(RuntimeError):
+    """Final output repair stopped with usage retained for partial-output handling."""
+
+    def __init__(self, usage: dict[str, int]):
+        self.usage = usage
+        super().__init__("Final output repair budget exhausted")
+
+
 def render_budget_reminder(
     remaining: int,
     thresholds: tuple[int, int, int] = (15, 8, 3),
@@ -291,7 +300,7 @@ def render_budget_reminder(
     elif remaining <= warn:
         return (
             f"还剩 {remaining} 轮。必须开始提交：把当前最好结果通过 submit_wiki_bundle "
-            "提交；不足的部分明确记为“未覆盖/待确认”，不要追求完美。"
+            "提交，不要追求完美。"
         )
     elif remaining <= heads_up:
         return (
@@ -1412,8 +1421,10 @@ class AgentLoop:
         inject_write_experience: bool = True,
         context_compact_budget: int | None = None,
         status_note_provider: Any | None = None,
+        should_stop: Callable[[], bool] | None = None,
         skill_runtime: Any | None = None,
         agent_id: str = "main",
+        max_iterations: int | None = None,
     ) -> tuple[str | None, str | None, list[dict], dict[str, int], int]:
         """
         Run the core agent loop: call LLM, execute tools, repeat until done.
@@ -1454,12 +1465,19 @@ class AgentLoop:
                 When set, its result is appended to the model-facing messages right before
                 every model call. Compile emits a reminder at each configured iteration
                 threshold; ordinary chat leaves it ``None``.
+            should_stop: Optional synchronous callback checked before each iteration.
+                Returning true ends the loop without an extra model call.
             agent_id: Diagnostic identity for model and tool logs; Compile children use
                 their child task ID while sharing the parent's session and workspace.
+            max_iterations: Positive budget for this invocation, or None to use the
+                instance default. Concurrent children do not change each other's budgets.
 
         Returns:
             tuple of (final_content, final_reasoning_content, tools_used, token_usage, iteration)
         """
+        iteration_limit = self.max_iterations if max_iterations is None else max_iterations
+        if max_iterations is not None and max_iterations < 1:
+            raise ValueError("max_iterations must be positive")
         iteration = 0
         active_tools = tool_registry or self.tools
         scoped_openviking_tools = (
@@ -1486,7 +1504,9 @@ class AgentLoop:
             token_usage["total_tokens"] += cur_token.get("total_tokens", 0)
             token_usage["cache_read_input_tokens"] += cur_token.get("cache_read_input_tokens", 0)
 
-        while iteration < self.max_iterations:
+        while iteration < iteration_limit:
+            if should_stop is not None and should_stop():
+                break
             iteration += 1
 
             if context_compact_budget is not None:
@@ -1503,7 +1523,7 @@ class AgentLoop:
                 await self.bus.publish_outbound(
                     OutboundMessage(
                         session_key=session_key,
-                        content=f"Iteration {iteration}/{self.max_iterations}",
+                        content=f"Iteration {iteration}/{iteration_limit}",
                         event_type=OutboundEventType.ITERATION,
                     )
                 )
@@ -1920,7 +1940,7 @@ class AgentLoop:
         elif final_content is None or (
             isinstance(final_content, str) and not final_content.strip()
         ):
-            if iteration >= self.max_iterations and allow_final_fallback:
+            if iteration >= iteration_limit and allow_final_fallback:
                 messages.append(
                     {
                         "role": "user",
@@ -1959,7 +1979,7 @@ class AgentLoop:
                     )
 
         if final_content is None or (isinstance(final_content, str) and not final_content.strip()):
-            if iteration >= self.max_iterations:
+            if iteration >= iteration_limit:
                 final_content = (
                     "I reached the tool-use limit before completing every step, and the "
                     "available tool results are not enough for a reliable final answer."
@@ -1989,6 +2009,19 @@ class AgentLoop:
         """
 
         max_iterations = getattr(self, "max_iterations", 0)
+        submit_tool = tool_registry.get("submit_wiki_bundle")
+        repair_calls = 0
+
+        def stop_repair() -> bool:
+            """Bound final Resource repair without resetting the agent's total iteration budget."""
+            nonlocal repair_calls
+            attempts = getattr(submit_tool, "validation_attempts", 0)
+            if not attempts:
+                return False
+            if attempts >= 2 or repair_calls >= submit_tool.limits.repair_iterations:
+                return True
+            repair_calls += 1
+            return False
 
         async def status_note_provider(iteration: int) -> str | None:
             remaining = max(0, max_iterations - iteration)
@@ -2027,10 +2060,13 @@ class AgentLoop:
             inject_write_experience=False,
             context_compact_budget=context_compact_budget,
             status_note_provider=status_note_provider,
+            should_stop=stop_repair,
         )
         submit_tool = tool_registry.get("submit_wiki_bundle")
         bundle = getattr(submit_tool, "bundle", None)
         if bundle is None:
+            if getattr(submit_tool, "validation_attempts", 0):
+                raise AgentRepairLimitExceeded(token_usage)
             if iteration >= self.max_iterations:
                 raise AgentIterationLimitExceeded(self.max_iterations, usage=token_usage)
             raise ValueError("AGENT_OUTPUT_INVALID: Agent did not submit a valid Wiki bundle")

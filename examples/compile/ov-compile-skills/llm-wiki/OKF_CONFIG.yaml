@@ -1,0 +1,475 @@
+# LLM Wiki contract: page roles start at the output root.
+# L1/L2/L3 use configured names; L4+ materializes only for supported knowledge.
+# Projection views and mining artifacts are disabled.
+version: '1.0'
+frontmatter:
+  required:
+  - type
+  - title
+  - description
+  - tags
+  - status
+  - sources
+  - generated
+  - knowledge_links
+  allowed_types:
+  - entity
+  - concept
+  - method
+  - comparison
+  - analysis
+  - index
+  page_role_directory:
+    topic: TOPIC(主题知识:解释对象、概念、产品、机制是什么)
+    reference: REFERENCE(精确参考:规则、参数、口径、FAQ、术语)
+    procedure: PROCEDURE(操作方法:SOP、流程、排障、审批、实施步骤)
+    synthesis: SYNTHESIS(综合分析:对比、分析、决策、复盘、综合研究)
+  knowledge_type_directory:
+    products: 产品与解决方案
+    marketing: 市场与营销
+    sales: 销售与商业拓展
+    customer-development: 客户经营
+    customer-service: 客户服务
+    network-planning: 网络规划与调度
+    operations: 运营与履约
+    quality-safety: 质量与安全
+    business-management: 经营与管理
+    enterprise-services: 企业综合服务
+    human-resource: 人力与组织
+    finance: 财务、资金与信用
+    technology: 技术、数据与智能化
+    compliance: 制度、法务与风险治理
+  defaults:
+    status: stable
+  sources:
+    required_fields:
+    - resource
+    - title
+    - author
+    require_input: true
+    require_intermediate: false
+  generated:
+    required_fields:
+    - by
+    - at
+    by_template: '{skill}/{model}'
+main_view:
+  single_source_of_truth: true
+  root_path: .
+  level_structure:
+    level_1: page_role
+    level_2: business_domain
+    level_3: core_subdomain
+    level_4_plus: dynamic
+  page_roles:
+  - topic
+  - reference
+  - procedure
+  - synthesis
+  path_structure:
+  - page_role
+  - business_domain
+  - subdomain
+  - filename
+  role_domains:
+    topic:
+    - products
+    - marketing
+    - sales
+    - customer-development
+    - customer-service
+    - network-planning
+    - operations
+    - quality-safety
+    - business-management
+    - enterprise-services
+    - human-resource
+    - finance
+    - technology
+    - compliance
+    reference:
+    - products
+    - marketing
+    - sales
+    - customer-development
+    - customer-service
+    - network-planning
+    - operations
+    - quality-safety
+    - business-management
+    - enterprise-services
+    - human-resource
+    - finance
+    - technology
+    - compliance
+    procedure:
+    - products
+    - marketing
+    - sales
+    - customer-development
+    - customer-service
+    - network-planning
+    - operations
+    - quality-safety
+    - business-management
+    - enterprise-services
+    - human-resource
+    - finance
+    - technology
+    - compliance
+    synthesis:
+    - products
+    - marketing
+    - sales
+    - customer-development
+    - customer-service
+    - network-planning
+    - operations
+    - quality-safety
+    - business-management
+    - enterprise-services
+    - human-resource
+    - finance
+    - technology
+    - compliance
+  business_domains:
+    products:
+    - name: product-management
+      description: 产品规划与生命周期
+    - name: product-pricing
+      description: 产品定价与资费
+    - name: express
+      description: 快递产品
+    - name: large-item
+      description: 大件产品
+    - name: less-than-truckload
+      description: 零担产品
+    - name: air-freight
+      description: 航空货运产品
+    - name: home-service
+      description: 到家服务
+    - name: cold-chain
+      description: 冷运医药
+    - name: supply-chain
+      description: 供应链解决方案
+    - name: international-freight
+      description: 国际与货代
+    - name: industry-solutions
+      description: 行业解决方案
+    - name: digital-products
+      description: 数字化产品与服务
+    marketing:
+    - name: market-research
+      description: 市场研究与趋势
+    - name: segmentation-positioning
+      description: 市场细分与定位
+    - name: brand-management
+      description: 品牌管理
+    - name: go-to-market
+      description: 市场进入与推广策略
+    - name: campaign-management
+      description: 营销活动
+    - name: channel-media
+      description: 渠道与媒介
+    - name: content-creative
+      description: 内容与创意
+    - name: lead-generation
+      description: 获客与线索
+    - name: growth-conversion
+      description: 增长与转化
+    - name: marketing-analytics
+      description: 营销分析
+    - name: public-relations-reputation
+      description: 公关、舆情与声誉
+    sales:
+    - name: sales-strategy
+      description: 销售策略与目标
+    - name: account-prospecting
+      description: 客户拓展
+    - name: opportunity-management
+      description: 商机管理
+    - name: solution-selling
+      description: 方案销售
+    - name: pricing-quotation
+      description: 报价与商务定价
+    - name: visit-management
+      description: 客户拜访
+    - name: sales-review
+      description: 销售评审
+    - name: bidding
+      description: 招投标
+    - name: contract-handover
+      description: 签约与交接
+    - name: channel-partner
+      description: 渠道与伙伴
+    - name: sales-force-management
+      description: 销售队伍与画像
+    customer-development:
+    - name: customer-master-data
+      description: 客户主数据与标签
+    - name: customer-insight
+      description: 客户画像与洞察
+    - name: customer-value
+      description: 客户价值、质量与收益
+    - name: customer-risk
+      description: 客户经营风险
+    - name: lifecycle-management
+      description: 客户生命周期
+    - name: customer-success
+      description: 客户运维与成功
+    - name: retention-growth
+      description: 留存、续约与增购
+    - name: key-account-management
+      description: 大客户管理
+    - name: customer-portfolio
+      description: 客群与组合管理
+    customer-service:
+    - name: service-channels
+      description: 服务渠道与受理
+    - name: service-operation
+      description: 客服作业
+    - name: service-management
+      description: 客服管理
+    - name: knowledge-assistance
+      description: 客服知识与辅助
+    - name: voice-of-customer
+      description: 客户声音
+    - name: complaint-management
+      description: 投诉管理
+    - name: claims
+      description: 理赔
+    - name: service-recovery
+      description: 服务补救
+    - name: service-analytics
+      description: 服务分析
+    network-planning:
+    - name: network-design
+      description: 网络设计与布局
+    - name: air-network
+      description: 空网规划
+    - name: land-network
+      description: 陆网规划
+    - name: route-planning
+      description: 路由规划
+    - name: line-optimization
+      description: 线路优化
+    - name: facility-planning
+      description: 场地规划
+    - name: site-planning
+      description: 网点规划
+    - name: capacity-planning
+      description: 运力与产能规划
+    - name: dispatch
+      description: 调度运营
+    - name: network-standards
+      description: 网络标准
+    - name: planning-analytics
+      description: 规调问数与分析
+    operations:
+    - name: pickup-delivery
+      description: 收派与末端履约
+    - name: courier-operation
+      description: 小哥运营与管理
+    - name: transfer-operation
+      description: 中转作业
+    - name: air-transport
+      description: 航空运输
+    - name: land-transport
+      description: 陆运作业
+    - name: rail-transport
+      description: 铁运作业
+    - name: handover
+      description: 接驳作业
+    - name: network-site-operation
+      description: 网点运营
+    - name: warehouse-operation
+      description: 仓储作业
+    - name: large-item-operation
+      description: 大件与零担运营
+    - name: home-service-operation
+      description: 到家服务履约
+    - name: international-freight-operation
+      description: 国际货运作业
+    - name: circular-operation
+      description: 循环运营
+    quality-safety:
+    - name: express-quality
+      description: 快件质量
+    - name: fulfillment-quality
+      description: 履约质量
+    - name: service-quality
+      description: 服务质量
+    - name: key-account-fulfillment
+      description: 大客户履约质量
+    - name: quality-standards
+      description: 质量标准
+    - name: quality-monitoring
+      description: 质量监控与检查
+    - name: exception-incident
+      description: 异常与事件
+    - name: root-cause-improvement
+      description: 根因分析与改善
+    - name: operational-safety
+      description: 运营安全
+    - name: safety-management
+      description: 安全管理
+    business-management:
+    - name: strategy-planning
+      description: 战略与经营规划
+    - name: operating-analysis
+      description: 经营分析
+    - name: commercial-analysis
+      description: 商业分析
+    - name: forecasting
+      description: 预测与决策支持
+    - name: performance-management
+      description: 经营绩效
+    - name: project-management
+      description: 项目管理
+    - name: process-management
+      description: 流程管理
+    - name: portfolio-program-management
+      description: 项目群与组合管理
+    - name: innovation
+      description: 创新管理
+    enterprise-services:
+    - name: procurement
+      description: 采购管理
+    - name: supplier-management
+      description: 供应商管理
+    - name: materials
+      description: 物资管理
+    - name: asset-management
+      description: 资产管理
+    - name: property
+      description: 物业管理
+    - name: administrative-services
+      description: 行政与后勤
+    - name: meeting-collaboration
+      description: 会议与协同
+    - name: public-affairs
+      description: 公共事务
+    - name: charity
+      description: 公益
+    human-resource:
+    - name: workforce-planning
+      description: 人力规划
+    - name: talent-recruitment
+      description: 人才招聘
+    - name: talent-intelligence
+      description: 人才识别与雷达
+    - name: talent-development
+      description: 人才发展
+    - name: organization-development
+      description: 组织发展
+    - name: learning-development
+      description: 学习发展与课程运营
+    - name: employee-service
+      description: 员工服务
+    - name: employee-voice
+      description: 员工声音
+    - name: performance
+      description: 绩效管理
+    - name: digital-workforce
+      description: 数字员工
+    - name: culture-engagement
+      description: 企业文化与员工认同
+    - name: employee-care-union
+      description: 员工关怀与工会
+    - name: labor-relations
+      description: 用工与劳动关系
+    finance:
+    - name: accounting-settlement
+      description: 核算与结算
+    - name: receivables-collection
+      description: 应收与收款
+    - name: treasury
+      description: 资金管理
+    - name: budget
+      description: 预算管理
+    - name: tax
+      description: 税务管理
+    - name: credit-management
+      description: 信用管理
+    - name: cost-profit
+      description: 成本与利润
+    - name: revenue-management
+      description: 营收管理
+    - name: financial-analysis
+      description: 财务分析
+    technology:
+    - name: ai-agent
+      description: AI与智能体
+    - name: application-systems
+      description: 业务应用与系统
+    - name: software-engineering
+      description: 软件工程与系统集成
+    - name: data-platform
+      description: 数据平台
+    - name: data-governance
+      description: 数据治理
+    - name: analytics-bi
+      description: 智能问数与BI
+    - name: api-integration
+      description: 接口与集成规范
+    - name: infrastructure-cloud
+      description: 基础设施与云平台
+    - name: cybersecurity
+      description: 技术安全与身份权限
+    - name: operations-maintenance
+      description: 运维与可观测性
+    - name: tools-platform
+      description: 工具与平台
+    compliance:
+    - name: corporate-policies
+      description: 公司制度与标准
+    - name: regulatory-compliance
+      description: 监管合规
+    - name: legal
+      description: 法律事务
+    - name: contract
+      description: 合同管理
+    - name: intellectual-property
+      description: 知识产权
+    - name: data-privacy
+      description: 数据安全与隐私合规
+    - name: labor-compliance
+      description: 用工合规
+    - name: finance-tax-compliance
+      description: 财税合规
+    - name: procurement-compliance
+      description: 采购合规
+    - name: operational-safety-compliance
+      description: 安全生产与运营合规
+    - name: audit-integrity
+      description: 审计与廉洁
+    - name: enterprise-risk
+      description: 企业风险控制
+  navigation:
+    filename: index.md
+    type: index
+  exempt_paths:
+  - '**/index.md'
+  derived_views_include_exempt: false
+intermediates:
+  required: false
+cross_knowledge:
+  frontmatter_field: knowledge_links
+  context_field: context
+  require_body_link: true
+  allowed_relations:
+  - related
+  - depends-on
+  - derived-from
+  - supersedes
+views: []
+wikilinks:
+  enabled: true
+  syntax: markdown-link
+  auto_link: true
+  catalog_only: true
+  first_occurrence_per_paragraph: true
+  exclude:
+  - headings
+  - tables
+  - code

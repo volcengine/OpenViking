@@ -27,7 +27,6 @@ from openviking.utils.path_safety import (
 from openviking_cli.utils import VikingURI
 from vikingbot.compile.models import (
     COMPILE_STAGING_ROOT,
-    CompileLimits,
     WikiBundleDraft,
     WikiLanguage,
 )
@@ -270,6 +269,27 @@ def _link_wiki_mentions(
     return prefix + rendered, count
 
 
+def validate_resource_file(path: str, payload: bytes) -> bool:
+    """Validate one Resource artifact; return whether it declares a valid OKF Wiki page."""
+    if validate_declared_okf_markdown(path, payload) is None:
+        return False
+    frontmatter, _body = _split_frontmatter(payload.decode("utf-8"))
+    missing = [
+        field
+        for field in ("type", "title", "description")
+        if not isinstance(frontmatter.get(field), str) or not str(frontmatter[field]).strip()
+    ]
+    if missing:
+        raise ValueError(
+            f'OKF Markdown file "{path}" must have non-empty YAML frontmatter fields: '
+            + ", ".join(missing)
+        )
+    description = str(frontmatter["description"]).strip()
+    if "\n" in description or "\r" in description:
+        raise ValueError(f'OKF Markdown file "{path}" frontmatter description must be one line')
+    return True
+
+
 def finalize_resource_output(
     files: Mapping[str, bytes],
     *,
@@ -285,26 +305,7 @@ def finalize_resource_output(
     """
     wiki_paths: set[str] = set()
     for path, payload in files.items():
-        page_type = validate_declared_okf_markdown(path, payload)
-        if page_type is not None:
-            text = payload.decode("utf-8")
-            frontmatter, _body = _split_frontmatter(text)
-            missing = [
-                field
-                for field in ("type", "title", "description")
-                if not isinstance(frontmatter.get(field), str)
-                or not str(frontmatter[field]).strip()
-            ]
-            if missing:
-                raise ValueError(
-                    f'OKF Markdown file "{path}" must have non-empty YAML frontmatter fields: '
-                    + ", ".join(missing)
-                )
-            description = str(frontmatter["description"]).strip()
-            if "\n" in description or "\r" in description:
-                raise ValueError(
-                    f'OKF Markdown file "{path}" frontmatter description must be one line'
-                )
+        if validate_resource_file(path, payload):
             wiki_paths.add(path)
 
     wiki_uris = {safe_join_viking_uri(target_uri, path).rstrip("/") for path in wiki_paths}
@@ -436,8 +437,7 @@ def _merge_stored_links(
 
 
 class WikiRenderer:
-    def __init__(self, limits: CompileLimits | None = None):
-        self.limits = limits or CompileLimits()
+    """Validate and render complete Wiki bundles without count or byte quotas."""
 
     def render(
         self,
@@ -455,12 +455,6 @@ class WikiRenderer:
         file_catalog_uris = set(catalog_uris) | set(file_catalog_uris or ())
         existing_bytes = existing_bytes or {}
         file_payloads = file_payloads or []
-        if len(bundle.pages) > self.limits.output_pages:
-            raise ValueError("Wiki bundle exceeds the page limit")
-        if len(bundle.files) > self.limits.output_files:
-            raise ValueError("Wiki bundle exceeds the file limit")
-        if len(bundle.pages) + len(bundle.files) > self.limits.output_operations:
-            raise ValueError("Wiki bundle exceeds the combined output operation limit")
         if not bundle.pages and bundle.links:
             raise ValueError("an empty Wiki bundle cannot contain links")
         target_type = context_type_for_uri(target_uri)
@@ -563,7 +557,6 @@ class WikiRenderer:
             else {}
         )
         result = RenderedBundle()
-        total_bytes = 0
         for page in bundle.pages:
             uri = page_uris[page.page_id][0]
             result.wiki_uris.append(uri)
@@ -640,9 +633,6 @@ class WikiRenderer:
             else:
                 candidate = visible
 
-            total_bytes += len(candidate.encode("utf-8"))
-            if total_bytes > self.limits.output_total_bytes:
-                raise ValueError("Wiki bundle exceeds the final content size limit")
             if candidate == old_raw:
                 result.unchanged.append(uri)
                 continue
@@ -664,9 +654,6 @@ class WikiRenderer:
                 if candidate == old_raw:
                     continue
                 result.link_count += automatic_count
-                total_bytes += len(candidate.encode("utf-8"))
-                if total_bytes > self.limits.output_total_bytes:
-                    raise ValueError("Wiki bundle exceeds the final content size limit")
                 result.updated.append(uri)
                 result.wiki_uris.append(uri)
                 result.operations.append(
@@ -676,8 +663,6 @@ class WikiRenderer:
                         "mode": "upsert",
                     }
                 )
-            if len(result.created) + len(result.updated) > self.limits.output_pages:
-                raise ValueError("Wiki mention linking exceeds the page limit")
 
         for index, file in enumerate(bundle.files):
             uri = file_uris[index]
@@ -689,9 +674,6 @@ class WikiRenderer:
                 assert candidate is not None
                 operation_content = {"content_base64": base64.b64encode(candidate).decode("ascii")}
 
-            total_bytes += len(candidate)
-            if total_bytes > self.limits.output_total_bytes:
-                raise ValueError("Wiki bundle exceeds the final content size limit")
             if target_type == "resource":
                 page_type = validate_declared_okf_markdown(uri, candidate)
                 if page_type is not None:
@@ -713,8 +695,6 @@ class WikiRenderer:
             else:
                 result.created.append(uri)
             result.operations.append({"uri": uri, **operation_content, "mode": "upsert"})
-        if len(result.operations) > self.limits.output_operations:
-            raise ValueError("Wiki bundle exceeds the combined output operation limit")
         return result
 
 
@@ -729,5 +709,6 @@ __all__ = [
     "validate_declared_okf_markdown",
     "validate_relative_file_path",
     "validate_relative_page_path",
+    "validate_resource_file",
     "wiki_page_path_from_title",
 ]

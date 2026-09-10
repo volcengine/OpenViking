@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import posixpath
+import shlex
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from typing import Any, Mapping
@@ -37,6 +38,7 @@ from vikingbot.compile.renderer import (
     validate_declared_okf_markdown,
     validate_relative_file_path,
     validate_relative_page_path,
+    validate_resource_file,
     wiki_page_path_from_title,
 )
 
@@ -58,32 +60,52 @@ class CompileSpawnTool(Tool):
     """Attach complete, submitted task drafts to a merge child's initial assignment.
 
     Queueing uses the existing spawn tool. Attachments are limited to submitted
-    roots and a quarter of the context budget; oversized content is never truncated.
+    roots and an independent input budget; oversized content is never truncated.
     """
 
     name = "spawn"
     description = (
-        "Delegate complete knowledge drafts following the Skill. For source compilation, put source URIs "
-        "in task and omit draft_paths. For merges, attach submitted draft_paths and specify owned output paths."
+        "Delegate source compilation or draft merges. Use source_batch when available; "
+        "for merges, give topics and owned output paths in task, and attach draft_paths."
     )
 
-    def __init__(self, spawn: Tool, claimed_roots: set[str], limits: CompileLimits):
+    def __init__(
+        self,
+        spawn: Tool,
+        claimed_roots: set[str],
+        limits: CompileLimits,
+        source_batches: list[list[str]] | None = None,
+    ):
         self.spawn = spawn
         self.claimed_roots = claimed_roots
         # Reserve context for the Skill, existing pages, reasoning and generated output.
-        self.input_chars = min(limits.initial_prompt_chars, limits.agent_context_chars) // 4
+        self.input_chars = min(
+            limits.merge_input_chars, limits.initial_prompt_chars, limits.agent_context_chars
+        )
+        self.input_files = limits.merge_input_files
+        self.source_batches = source_batches
+        self.dispatched_batches: set[int] = set()
 
     @property
     def parameters(self) -> dict[str, Any]:
         """Accept draft paths for runtime attachment; source tasks omit this field."""
         parameters = deepcopy(self.spawn.parameters)
+        if self.source_batches is not None:
+            parameters["properties"]["source_batch"] = {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": len(self.source_batches),
+                "description": "Source compilation only: the prepared batch number; runtime attaches its source URIs.",
+            }
         parameters["properties"]["draft_paths"] = {
             "type": "array",
             "items": {"type": "string"},
+            "maxItems": self.input_files,
             "description": (
-                "Merge inputs only: submitted local draft paths, never Viking source URIs. "
-                f"Task plus attached JSON must fit {self.input_chars} characters. "
-                "For one oversized topic, omit and request bounded parallel reads."
+                f"Merge input attachments: at most {self.input_files} files and "
+                f"{self.input_chars} characters including task and attached JSON. "
+                "Split at topic boundaries; only for one oversized topic, omit this field "
+                "and request bounded reads of that topic alone."
             ),
         }
         return parameters
@@ -94,12 +116,49 @@ class CompileSpawnTool(Tool):
         task: str,
         label: str | None = None,
         draft_paths: list[str] | None = None,
+        source_batch: int | None = None,
         **kwargs: Any,
     ) -> str:
         """Attach unique UTF-8 drafts before spawning; invalid or oversized inputs return an error."""
+        if source_batch is not None:
+            if (
+                not self.source_batches
+                or not 1 <= source_batch <= len(self.source_batches)
+                or source_batch in self.dispatched_batches
+                or draft_paths
+            ):
+                return "Error: source_batch must identify an undispatched source batch; omit draft_paths."
+            task = (
+                "Compile every assigned source into complete knowledge pages per the Skill. "
+                "For long documents/FAQ tables, batch 2-4 non-overlapping exec reads such as "
+                "`ov read '<uri>' | sed -n '1,40p'`; keep each result below about 8,000 characters, "
+                "splitting long rows by character. Track ranges, recover truncation and read through "
+                "each source's end. Preserve question/answer pairing, conditions, exceptions, numbers "
+                "and sources. Write/update knowledge after each read group; reuse facts instead of "
+                "preloading the corpus, building general parsers or staging JSON/text copies. "
+                "Assigned source URIs:\n"
+                + json.dumps(self.source_batches[source_batch - 1], ensure_ascii=False)
+            )
+            self.dispatched_batches.add(source_batch)
+            try:
+                result = await self.spawn.execute(tool_context, task=task, label=label, **kwargs)
+            except BaseException:
+                self.dispatched_batches.discard(source_batch)
+                raise
+            if str(result).startswith("Error:"):
+                self.dispatched_batches.discard(source_batch)
+            return result
+        if self.source_batches and len(self.dispatched_batches) < len(self.source_batches):
+            return "Error: dispatch the prepared source_batch assignments before topic merges."
         if draft_paths:
             try:
                 paths = list(dict.fromkeys(_normalize_workspace_path(p) for p in draft_paths))
+                if len(paths) > self.input_files:
+                    raise ValueError(
+                        f"Merge input batch exceeds the {self.input_files}-file limit; "
+                        "split at topic boundaries. For one oversized topic, omit draft_paths "
+                        "and use bounded parallel reads of that topic only."
+                    )
                 for path in paths:
                     if not any(path.startswith(root + "/") for root in self.claimed_roots):
                         raise ValueError(f"Draft input is not from a submitted child: {path}")
@@ -130,7 +189,8 @@ class SubmitCompileDraftTool(Tool):
 
     Only nonempty directories below the compile draft root are accepted. Claimed roots
     cannot overlap other children's submissions; result includes verified paths and
-    file_sizes in bytes for metadata-only merge planning.
+    file_sizes in bytes for metadata-only merge planning. Resource children discard
+    index.md and _index.md at any depth; their final navigation belongs to the parent.
     """
 
     name = "submit_compile_draft"
@@ -144,14 +204,26 @@ class SubmitCompileDraftTool(Tool):
         "additionalProperties": False,
     }
 
-    def __init__(self, limits: CompileLimits, claimed_roots: set[str], draft_root: str):
+    def __init__(
+        self,
+        limits: CompileLimits,
+        claimed_roots: set[str],
+        draft_root: str,
+        *,
+        exclude_navigation: bool = False,
+    ):
         self.limits = limits
         self.claimed_roots = claimed_roots
         self.draft_root = draft_root
+        self.exclude_navigation = exclude_navigation
         self.result: dict[str, Any] | None = None
 
     async def execute(self, tool_context: ToolContext, summary: str, **kwargs: Any) -> str:
-        """Inspect the bound directory; reject overrides and empty drafts without accepting them."""
+        """Collect bound files, optionally removing navigation; reject empty or overlapping drafts.
+
+        Navigation removal only affects the child's directory. A navigation-only
+        submission remains unclaimed so the child can submit knowledge pages later.
+        """
         self.result = None
         try:
             if kwargs:
@@ -162,7 +234,7 @@ class SubmitCompileDraftTool(Tool):
             if not root.startswith(COMPILE_DRAFT_ROOT + "/"):
                 raise ValueError(f"draft_root must be a child directory of {COMPILE_DRAFT_ROOT}")
             sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
-            files = await sandbox.list_files(root, max_entries=self.limits.target_inventory_entries)
+            files = await sandbox.list_files(root, max_entries=None)
             if not files:
                 raise ValueError(
                     "No draft files found; write content using target-relative paths before submitting"
@@ -175,6 +247,24 @@ class SubmitCompileDraftTool(Tool):
                 for claimed in self.claimed_roots
             ):
                 raise ValueError("Draft directory overlaps another child's submission")
+            if self.exclude_navigation:
+                knowledge_files = [
+                    entry
+                    for entry in files
+                    if posixpath.basename(entry.path).casefold() not in {"index.md", "_index.md"}
+                ]
+                if len(knowledge_files) != len(files):
+                    output = await sandbox.execute(
+                        f"find {shlex.quote(root)} -type f "
+                        r"\( -iname index.md -o -iname _index.md \) -delete"
+                    )
+                    sandbox._ensure_command_succeeded(output, "draft navigation removal")
+                files = knowledge_files
+                if not files:
+                    raise ValueError(
+                        "No knowledge draft files found after removing navigation; "
+                        "write knowledge pages and leave index.md/_index.md to the parent"
+                    )
             self.claimed_roots.add(root)
             self.result = {
                 "draft_root": root,
@@ -266,6 +356,10 @@ class SubmitCompileOutputTool(Tool):
         self.bundle: RenderedBundle | None = None
         self.page_count = 0
         self.file_count = 0
+        # Only final output validation starts the bounded repair phase; queue guards do not.
+        self.validation_attempts = 0
+        self.warnings: list[str] = []
+        self._accept_partial = False
         # Task-owned children must be collected before output can be finalized.
         self.submission_guard: Callable[[bool], str | None] | None = None
 
@@ -294,25 +388,26 @@ class SubmitCompileOutputTool(Tool):
         self.bundle = None
         self.page_count = 0
         self.file_count = 0
-        if self.submission_guard is not None:
-            error = self.submission_guard(False)
-            if error:
-                return error
         if kwargs:
             return "Error: submit_wiki_bundle takes no arguments for a Resource output."
         if tool_context.sandbox_manager is None:
             return "Error: Invalid output directory: task sandbox is unavailable"
+        if self.submission_guard is not None:
+            # Final validation and its bounded repair do not launch more children.
+            error = self.submission_guard(True)
+            if error:
+                return error
+        self.validation_attempts += 1
         try:
             sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
             entries = await sandbox.list_files(
                 COMPILE_OUTPUT_ROOT,
-                max_entries=self.limits.target_inventory_entries,
+                max_entries=None,
             )
             output_files: dict[str, bytes] = {}
             paths_by_case: dict[str, str] = {}
-            declared_total = 0
-            actual_total = 0
             output_prefix = f"{COMPILE_OUTPUT_ROOT}/"
+            errors: list[str] = []
             for entry in entries:
                 workspace_path = _normalize_workspace_path(entry.path)
                 if not workspace_path.startswith(output_prefix):
@@ -325,17 +420,23 @@ class SubmitCompileOutputTool(Tool):
                     raise ValueError(f"case-colliding output paths: {prior}, {relative}")
                 if entry.size < 0:
                     raise ValueError(f"output file has an invalid size: {relative}")
-                declared_total += entry.size
-                if declared_total > self.limits.target_total_bytes:
-                    raise ValueError("output files exceed the output size limit")
-                payload = await sandbox.read_file_bytes(
-                    workspace_path,
-                    max_bytes=self.limits.target_total_bytes,
-                )
-                actual_total += len(payload)
-                if actual_total > self.limits.target_total_bytes:
-                    raise ValueError("output files exceed the output size limit")
+                payload = await sandbox.read_file_bytes(workspace_path)
+                try:
+                    validate_resource_file(relative, payload)
+                except ValueError as exc:
+                    errors.append(str(exc))
+                    continue
                 output_files[relative] = payload
+
+            if errors and not self._accept_partial:
+                raise ValueError("\n".join(errors)[:6000])
+            if self._accept_partial:
+                self.warnings = [
+                    "Final repair stopped; only valid final-output files are published.",
+                    *errors,
+                ]
+                if not output_files:
+                    raise ValueError("No valid final-output files remain")
 
             finalized = finalize_resource_output(
                 output_files,
@@ -345,13 +446,6 @@ class SubmitCompileOutputTool(Tool):
             rendered = RenderedBundle(link_count=finalized.link_count)
             self.page_count = len(finalized.wiki_paths)
             self.file_count = len(finalized.files)
-            artifact_count = self.file_count - self.page_count
-            if self.page_count > self.limits.output_pages:
-                raise ValueError("Wiki page limit exceeded")
-            if artifact_count > self.limits.output_files:
-                raise ValueError("artifact file limit exceeded")
-            if self.file_count > self.limits.output_operations:
-                raise ValueError("combined output operation limit exceeded")
             for path, payload in sorted(finalized.files.items()):
                 uri = safe_join_viking_uri(self.target_uri, path).rstrip("/")
                 is_wiki = path in finalized.wiki_paths
@@ -364,10 +458,6 @@ class SubmitCompileOutputTool(Tool):
                 )
                 if is_wiki:
                     rendered.wiki_uris.append(uri)
-            if self.submission_guard is not None:
-                error = self.submission_guard(True)
-                if error:
-                    return error
             self.bundle = rendered
         except (OSError, ValueError) as exc:
             return f"Error: Invalid output directory: {exc}"
@@ -377,6 +467,15 @@ class SubmitCompileOutputTool(Tool):
             f"Resource output accepted with {changed} changed file(s) and "
             f"{self.page_count} Wiki page(s) in the submitted output."
         )
+
+    async def accept_valid_output(self, tool_context: ToolContext) -> str:
+        """Finalize usable output after the repair budget, keeping invalid files in the workspace.
+
+        This runtime-only fallback never asks the model to retry and never publishes
+        files that fail normal per-file validation. All valid files are retained.
+        """
+        self._accept_partial = True
+        return await self.execute(tool_context)
 
 
 class SubmitWikiBundleTool(Tool):
@@ -578,7 +677,6 @@ class SubmitWikiBundleTool(Tool):
         sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
         files: set[str] = set()
         pending = [""]
-        visited = 0
         while pending:
             directory = pending.pop()
             try:
@@ -587,9 +685,6 @@ class SubmitWikiBundleTool(Tool):
                 raise ValueError("task workspace could not be inspected") from exc
             for name, is_dir in entries:
                 relative = _normalize_workspace_path(f"{directory}/{name}" if directory else name)
-                visited += 1
-                if visited > self.limits.target_inventory_entries:
-                    raise ValueError("task workspace inventory limit exceeded")
                 if _path_is_within(relative, COMPILE_STAGING_ROOT):
                     continue
                 if name in {".git", "__pycache__"}:
@@ -722,12 +817,6 @@ class SubmitWikiBundleTool(Tool):
         self, bundle: WikiBundleDraft, *, tool_context: ToolContext
     ) -> tuple[list[bytes | None], list[str]]:
         target_type = context_type_for_uri(self.target_uri)
-        if len(bundle.pages) > self.limits.output_pages:
-            raise ValueError("page limit exceeded")
-        if len(bundle.files) > self.limits.output_files:
-            raise ValueError("file limit exceeded")
-        if len(bundle.pages) + len(bundle.files) > self.limits.output_operations:
-            raise ValueError("combined output operation limit exceeded")
         if not bundle.pages and bundle.links:
             raise ValueError("empty bundle must not contain links")
         if target_type == "skill" and (bundle.pages or bundle.links):
@@ -746,7 +835,6 @@ class SubmitWikiBundleTool(Tool):
         page_ids: set[int] = set()
         page_uris: dict[int, str] = {}
         final_uris: set[str] = set()
-        total_bytes = 0
         for page in bundle.pages:
             if page.body_markdown is None:
                 raise ValueError(f"page {page.page_id} body was not materialized")
@@ -794,7 +882,6 @@ class SubmitWikiBundleTool(Tool):
                 raise ValueError(f"duplicate final Wiki path: {final_uri}")
             final_uris.add(final_uri)
             page_uris[page.page_id] = final_uri
-            total_bytes += len(page.body_markdown.encode("utf-8"))
 
         file_payloads: list[bytes | None] = []
         for index, file in enumerate(bundle.files):
@@ -828,9 +915,6 @@ class SubmitWikiBundleTool(Tool):
                     label=f"file {index}",
                 )
                 content_bytes = payload
-            total_bytes += len(content_bytes)
-            if total_bytes > self.limits.output_total_bytes:
-                raise ValueError("draft content size limit exceeded")
             if target_type == "resource":
                 page_type = validate_declared_okf_markdown(final_uri, content_bytes)
                 existing_wiki = bool(file.update_uri and await self._is_wiki_uri(final_uri))
@@ -841,8 +925,6 @@ class SubmitWikiBundleTool(Tool):
                     )
             file_payloads.append(payload)
 
-        if total_bytes > self.limits.output_total_bytes:
-            raise ValueError("draft content size limit exceeded")
         if target_type == "skill":
             self.skill_name = self._validate_skill_bundle(bundle, file_payloads)
         page_by_id = {page.page_id: page for page in bundle.pages}

@@ -203,39 +203,58 @@ class AioSandboxBackend(SandboxBackend):
         self,
         path: str = ".",
         *,
-        max_entries: int,
+        max_entries: int | None,
     ) -> list[SandboxFileInfo]:
-        """Recursively enumerate the remote AIO workspace with a server-side bound."""
+        """List remote files; None walks directories without the glob API's result quota.
+
+        Returned paths stay relative to the workspace. Invalid paths and missing
+        size metadata fail explicitly; a supplied entry quota also fails on overflow.
+        """
         if not self._client:
             raise SandboxNotStartedError()
         self._validate_max_entries(max_entries)
         root = self._normalize_workspace_path(path)
         sandbox_root = self._sandbox_path(root or ".")
-        result = await self._client.file.glob_files(
-            path=sandbox_root,
-            pattern="**",
-            include_hidden=True,
-            files_only=False,
-            include_metadata=True,
-            max_results=max_entries + 1,
-            sort_by="path",
-        )
-        data = getattr(result, "data", result)
-        entries = list(getattr(data, "files", None) or [])
-        total_count = getattr(data, "total_count", None)
         normalized_entries = []
-        for entry in entries:
-            remote_path = str(getattr(entry, "path", ""))
-            if not remote_path.startswith("/"):
-                remote_path = posixpath.join(sandbox_root, remote_path)
-            normalized_entries.append((entry, posixpath.normpath(remote_path)))
-        root_entries = sum(remote_path == sandbox_root for _, remote_path in normalized_entries)
-        if (
-            bool(getattr(data, "truncated", False))
-            or len(entries) - root_entries > max_entries
-            or (isinstance(total_count, int) and total_count - root_entries > max_entries)
-        ):
-            raise ValueError(f"Sandbox workspace inventory exceeds {max_entries} entries")
+        if max_entries is None:
+            pending = [sandbox_root]
+            while pending:
+                directory = pending.pop()
+                for entry in await self._list_path(directory):
+                    name = str(getattr(entry, "name", ""))
+                    if not name or name in {".", ".."} or "/" in name:
+                        raise IOError("Sandbox returned an invalid directory entry")
+                    if bool(getattr(entry, "is_symlink", False)):
+                        continue
+                    remote_path = posixpath.join(directory, name)
+                    normalized_entries.append((entry, remote_path))
+                    if bool(getattr(entry, "is_directory", False)):
+                        pending.append(remote_path)
+        else:
+            result = await self._client.file.glob_files(
+                path=sandbox_root,
+                pattern="**",
+                include_hidden=True,
+                files_only=False,
+                include_metadata=True,
+                max_results=max_entries + 1,
+                sort_by="path",
+            )
+            data = getattr(result, "data", result)
+            entries = list(getattr(data, "files", None) or [])
+            total_count = getattr(data, "total_count", None)
+            for entry in entries:
+                remote_path = str(getattr(entry, "path", ""))
+                if not remote_path.startswith("/"):
+                    remote_path = posixpath.join(sandbox_root, remote_path)
+                normalized_entries.append((entry, posixpath.normpath(remote_path)))
+            root_entries = sum(remote_path == sandbox_root for _, remote_path in normalized_entries)
+            if (
+                bool(getattr(data, "truncated", False))
+                or len(entries) - root_entries > max_entries
+                or (isinstance(total_count, int) and total_count - root_entries > max_entries)
+            ):
+                raise ValueError(f"Sandbox workspace inventory exceeds {max_entries} entries")
 
         workspace_prefix = self.sandbox_cwd.rstrip("/") + "/"
         root_prefix = sandbox_root.rstrip("/") + "/"
