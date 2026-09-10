@@ -28,6 +28,8 @@ function readProxyConfig() {
     user: cfg.user,
     peerId: resolveMcpActorPeerId(cfg),
     userAgent: cfg.userAgent,
+    skillsetsOnly: cfg.skillsetsOnly,
+    skillsetsExclude: cfg.skillsetsExclude,
     timeoutMs: cfg.timeoutMs,
     debug: cfg.debug,
     debugLogPath: cfg.debugLogPath,

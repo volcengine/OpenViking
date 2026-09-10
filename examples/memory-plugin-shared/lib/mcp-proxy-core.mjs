@@ -8,6 +8,8 @@
 import { statSync } from "node:fs";
 import { createInterface } from "node:readline";
 
+import { filterFindText, normalizeSkillsetList } from "./skillset-filter.mjs";
+
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
 const DELETE_TIMEOUT_MS = 2000;
 const MAX_CONCURRENT_REQUESTS = 16;
@@ -200,6 +202,20 @@ export function createOpenVikingMcpProxy({
         tools: [...upstreamTools, ...additions],
       },
     };
+  }
+
+  function filterFindResponse(request, outbound) {
+    if (request?.method !== "tools/call" || request.params?.name !== "find") return outbound;
+    const onlySets = normalizeSkillsetList(proxyConfig.skillsetsOnly);
+    const excludeSets = normalizeSkillsetList(proxyConfig.skillsetsExclude);
+    if (!onlySets.length && !excludeSets.length) return outbound;
+    if (!outbound?.result?.content) return outbound;
+    for (const part of outbound.result.content) {
+      if (part?.type === "text" && typeof part.text === "string") {
+        part.text = filterFindText(part.text, onlySets, excludeSets);
+      }
+    }
+    return outbound;
   }
 
   async function callLocalTool(message) {
@@ -453,7 +469,7 @@ export function createOpenVikingMcpProxy({
         return;
       }
       for (const outbound of result.messages) {
-        await writeMessage(appendLocalTools(message, outbound));
+        await writeMessage(filterFindResponse(message, appendLocalTools(message, outbound)));
       }
     } catch (err) {
       if (expectsResponse) {

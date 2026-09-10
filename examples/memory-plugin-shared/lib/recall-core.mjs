@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { compressRecallContext } from "./recall-compress-core.mjs";
+import { filterRecallEntries, isBlockedSkill, normalizeSkillsetList, renderFilteredEntries } from "./skillset-filter.mjs";
 
 const PREFERENCE_QUERY_RE = /prefer|preference|favorite|favourite|like|偏好|喜欢|爱好|更倾向/i;
 const TEMPORAL_QUERY_RE = /when|what time|date|day|month|year|yesterday|today|tomorrow|last|next|什么时候|何时|哪天|几月|几年|昨天|今天|明天/i;
@@ -286,7 +287,7 @@ async function resolveTargetUri(fetchJSON, targetUri, actorPeerId = "") {
   return `viking://user/${space}/${parts.join("/")}`;
 }
 
-async function searchOneSource(fetchJSON, query, source, limit, actorPeerId = "") {
+async function searchOneSource(fetchJSON, query, source, limit, actorPeerId = "", onlySets = [], excludeSets = []) {
   const resolvedUri = await resolveTargetUri(fetchJSON, source.uri, actorPeerId);
   const body = { query, target_uri: resolvedUri, limit, score_threshold: 0 };
   const res = await fetchJSON("/api/v1/search/find", {
@@ -295,12 +296,16 @@ async function searchOneSource(fetchJSON, query, source, limit, actorPeerId = ""
   }, { actorPeerId });
   if (!res.ok) return [];
   const items = res.result?.[source.bucket] || [];
-  return items.map((item) => ({ ...item, _sourceType: source.type }));
+  const filterSkills = source.type === "skill" && (onlySets.length || excludeSets.length);
+  const kept = filterSkills
+    ? items.filter((it) => !isBlockedSkill(it?.uri, onlySets, excludeSets))
+    : items;
+  return kept.map((item) => ({ ...item, _sourceType: source.type }));
 }
 
-async function searchAllSources(fetchJSON, query, perSourceLimit, actorPeerId = "", log = () => {}) {
+async function searchAllSources(fetchJSON, query, perSourceLimit, actorPeerId = "", log = () => {}, onlySets = [], excludeSets = []) {
   const results = await Promise.all(
-    SOURCES.map((src) => searchOneSource(fetchJSON, query, src, perSourceLimit, actorPeerId)),
+    SOURCES.map((src) => searchOneSource(fetchJSON, query, src, perSourceLimit, actorPeerId, onlySets, excludeSets)),
   );
   const all = results.flat();
   log("recall_search_summary", {
@@ -500,16 +505,34 @@ export async function fetchAssembledContext(fetchJSON, cfg, query, options = {})
 
   const result = res.result || {};
   const stats = result.stats || {};
+  let entries = Array.isArray(result.entries) ? result.entries : [];
+  let rendered = String(result.rendered || "").trim();
+  let digest = String(result.digest || "").trim();
+  const onlySets = normalizeSkillsetList(cfg.skillsetsOnly);
+  const excludeSets = normalizeSkillsetList(cfg.skillsetsExclude);
+  let droppedSkills = 0;
+  if ((onlySets.length || excludeSets.length) && entries.length) {
+    const filtered = filterRecallEntries(entries, onlySets, excludeSets);
+    if (filtered.dropped > 0) {
+      // The server-rendered block and digest embed the blocked skills, so both
+      // are discarded and re-rendered from the filtered entries.
+      droppedSkills = filtered.dropped;
+      entries = filtered.entries;
+      rendered = renderFilteredEntries(entries);
+      digest = "";
+    }
+  }
   log("recall_context_assembled", {
-    entries: Array.isArray(result.entries) ? result.entries.length : 0,
+    entries: entries.length,
+    droppedSkills,
     usedTokens: stats.used_tokens || 0,
     tiers: stats.tier_counts || {},
     rewrite: stats.rewrite || "off",
   });
   return {
-    rendered: String(result.rendered || "").trim(),
-    entries: Array.isArray(result.entries) ? result.entries : [],
-    digest: String(result.digest || "").trim(),
+    rendered,
+    entries,
+    digest,
     stats,
   };
 }
@@ -657,7 +680,11 @@ async function recallForPeer(fetchJSON, cfg, query, options = {}) {
 
   const recallLimit = Math.max(1, Number(cfg.recallLimit || DEFAULT_CONTEXT_LIMIT));
   const perSourceLimit = Math.max(recallLimit * 2, 8);
-  const raw = await searchAllSources(fetchJSON, trimmed, perSourceLimit, actorPeerId, log);
+  const raw = await searchAllSources(
+    fetchJSON, trimmed, perSourceLimit, actorPeerId, log,
+    normalizeSkillsetList(cfg.skillsetsOnly),
+    normalizeSkillsetList(cfg.skillsetsExclude),
+  );
   if (raw.length === 0) return null;
 
   const profile = buildQueryProfile(trimmed);

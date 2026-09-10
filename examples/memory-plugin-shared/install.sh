@@ -2016,7 +2016,7 @@ assemble_agent_integration() { # assemble_agent_integration <source-subdir> <des
     agent-hook-runtime.mjs agent-uri-guard.mjs credentials.mjs debug-log.mjs \
     batch-send.mjs mcp-proxy-core.mjs pending-queue.mjs profile-inject.mjs \
     retryable.mjs \
-    recall-compress-core.mjs recall-core.mjs \
+    recall-compress-core.mjs recall-core.mjs skillset-filter.mjs \
     session-model.mjs uri-guard.mjs workspace-identity.mjs workspace-peer.mjs; do
     cp "$shared/lib/$file" "$shared_dest.tmp/$file"
   done

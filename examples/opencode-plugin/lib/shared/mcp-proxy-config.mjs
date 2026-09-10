@@ -12,6 +12,8 @@
 import { homedir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 
+import { normalizeSkillsetList } from "./skillset-filter.mjs";
+
 export const DEFAULT_PROXY_TIMEOUT_MS = 15000;
 const MIN_PROXY_TIMEOUT_MS = 1000;
 
@@ -96,6 +98,8 @@ export function buildMcpProxyConfig({
   user = "",
   peerId = "",
   userAgent = "",
+  skillsetsOnly = [],
+  skillsetsExclude = [],
   timeoutMs,
   debug = false,
   debugLogPath = "",
@@ -111,6 +115,8 @@ export function buildMcpProxyConfig({
     user: user || "",
     peerId: peerId || "",
     userAgent: userAgent || "",
+    skillsetsOnly: normalizeSkillsetList(skillsetsOnly),
+    skillsetsExclude: normalizeSkillsetList(skillsetsExclude),
     timeoutMs: Math.max(
       MIN_PROXY_TIMEOUT_MS,
       Number(timeoutMs) || DEFAULT_PROXY_TIMEOUT_MS,
