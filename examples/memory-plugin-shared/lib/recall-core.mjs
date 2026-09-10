@@ -347,13 +347,22 @@ async function buildFallbackInjectionBlock(fetchJSON, items, cfg, actorPeerId = 
   let contentCount = 0;
   let hintCount = 0;
 
-  for (const item of items) {
+  // Level-2 bodies each cost one /content/read round-trip; awaiting them one
+  // by one inside the budget walk multiplies that latency by the item count.
+  // Prefetch concurrently (idempotent local reads, same shape as the parallel
+  // search fan-out above) and keep the budget walk itself strictly serial so
+  // line order, budget accounting and hint fallback stay unchanged.
+  const contents = await Promise.all(
+    items.map((item) => resolveItemContent(fetchJSON, item, cfg, actorPeerId)),
+  );
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
     const score = (clampScore(item.score) * 100).toFixed(0);
     const uriLine = `- [${item._sourceType} ${score}%] ${item.uri}`;
 
     if (budgetRemaining > 0) {
-      const content = await resolveItemContent(fetchJSON, item, cfg, actorPeerId);
-      const contentLine = `- [${item._sourceType} ${score}%] ${content}`;
+      const contentLine = `- [${item._sourceType} ${score}%] ${contents[i]}`;
       const lineTokens = estimateTokens(contentLine);
 
       if (lineTokens > budgetRemaining && contentCount > 0) {
