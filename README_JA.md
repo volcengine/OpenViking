@@ -46,8 +46,7 @@ OpenViking はコンテキストを `viking://` 仮想ファイルシステム�
 - **ファイルシステムでコンテキストを整理。** リソースは文書やコード、メモリはユーザーの好みや経験、スキルはタスクの実行方法を保存します。それぞれに `viking://` URI があり、閲覧や検索に使えます。→ [Viking URI](https://docs.openviking.ai/en/concepts/04-viking-uri) · [Context types](https://docs.openviking.ai/en/concepts/02-context-types)
 - **必要なコンテキストを読み込む。** ディレクトリの要約（L0）と概要（L1）を使い、全文（L2）を読むか判断します。→ [Context layers](https://docs.openviking.ai/en/concepts/03-context-layers)
 - **ディレクトリ構造に沿って検索。** ベクトル検索で候補のディレクトリを見つけ、その内容を探索します。`find` はクエリを直接実行し、`search` はセッションのコンテキストを使って検索を計画できます。→ [Retrieval](https://docs.openviking.ai/en/concepts/07-retrieval)
-- **検索を確認する。** 結果にはソース URI が含まれます。任意のテレメトリとランタイム監視で検索や処理の問題を調べられます。→ [Retrieval API](https://docs.openviking.ai/en/api/06-retrieval) · [Observers](https://docs.openviking.ai/en/api/18-observer)
-- **セッションからメモリを抽出。** コミットすると会話をアーカイブし、メモリポリシーに従ってバックグラウンドで抽出します。候補を既存のメモリと比較し、新規作成、統合、スキップを判断します。→ [Session](https://docs.openviking.ai/en/concepts/08-session)
+- **セッションからメモリを抽出。** コミットすると会話をアーカイブし、メモリポリシーに従ってバックグラウンドで抽出します。候補を既存のメモリと比較し、新規作成、統合、スキップを判断します。VikingBot を有効にすると、`ov compile` とスキルで資料を Wiki、知識グラフ、レポートに整理できます。→ [Session](https://docs.openviking.ai/en/concepts/08-session) · [Context compilation](https://docs.openviking.ai/en/context-compilation/01-overview)
 
 [Architecture](https://docs.openviking.ai/en/concepts/01-architecture) · [設計の背景](https://blog.openviking.ai/post/openviking-context-database/)
 
@@ -226,8 +225,6 @@ ov chat   # 別のターミナルで実行
 ```
 
 公式 Docker イメージには VikingBot が同梱されており、サーバーとコンソール UI とともにデフォルトで起動します。詳細: [VikingBot guide](https://docs.openviking.ai/en/guides/17-vikingbot)。
-
-VikingBot は[コンテキストのコンパイル](https://docs.openviking.ai/en/context-compilation/01-overview)も実行します。`ov compile` とスキルで資料を Wiki、知識グラフ、レポートに整理できます。
 
 ## 本番環境へのデプロイ
 

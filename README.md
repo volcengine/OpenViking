@@ -46,8 +46,7 @@ OpenViking organizes context as a virtual filesystem under `viking://`. Agents c
 - **One filesystem for all context.** Resources hold documents and code; memories retain user preferences and experience; skills define how to perform tasks. Each has a `viking://` URI for browsing and retrieval. → [Viking URI](https://docs.openviking.ai/en/concepts/04-viking-uri) · [Context types](https://docs.openviking.ai/en/concepts/02-context-types)
 - **Load only the context you need.** Directory abstracts (L0) and overviews (L1) help agents decide when to read full content (L2). → [Context layers](https://docs.openviking.ai/en/concepts/03-context-layers)
 - **Search within the directory structure.** Vector search finds candidate directories, then explores their contents. `find` runs a query directly; `search` can use session context to plan retrieval. → [Retrieval](https://docs.openviking.ai/en/concepts/07-retrieval)
-- **Inspect retrieval.** Results include source URIs. Optional telemetry and runtime observers help diagnose search and processing issues. → [Retrieval API](https://docs.openviking.ai/en/api/06-retrieval) · [Observers](https://docs.openviking.ai/en/api/18-observer)
-- **Turn sessions into memory.** Committing a session archives the conversation and starts background extraction. Memory policies control what is retained; candidates are compared with existing memories for creation, merging, or skipping. → [Sessions](https://docs.openviking.ai/en/concepts/08-session)
+- **Turn sessions into memory.** Committing a session archives the conversation and starts background extraction. Memory policies control what is retained; candidates are compared with existing memories for creation, merging, or skipping. With VikingBot enabled, `ov compile` uses a skill to organize source material into a wiki, knowledge graph, or report. → [Sessions](https://docs.openviking.ai/en/concepts/08-session) · [Context compilation](https://docs.openviking.ai/en/context-compilation/01-overview)
 
 [Architecture](https://docs.openviking.ai/en/concepts/01-architecture) · [Design rationale](https://blog.openviking.ai/post/openviking-context-database/)
 
@@ -226,8 +225,6 @@ ov chat   # in another terminal
 ```
 
 The official Docker image bundles VikingBot and starts it by default alongside the server and console UI. Details: [VikingBot guide](https://docs.openviking.ai/en/guides/17-vikingbot).
-
-VikingBot also powers [context compilation](https://docs.openviking.ai/en/context-compilation/01-overview): `ov compile` uses a skill to organize source material into a wiki, knowledge graph, or report.
 
 ## Deploy in production
 

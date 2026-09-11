@@ -46,8 +46,7 @@ OpenViking 将上下文组织成 `viking://` 虚拟文件系统。Agent 可以�
 - **用文件系统组织上下文。** 资源存放文档和代码，记忆保留用户偏好与经验，技能定义任务执行方式。每项上下文都有 `viking://` URI，供 Agent 浏览和检索。→ [Viking URI](https://docs.openviking.ai/zh/concepts/04-viking-uri) · [上下文类型](https://docs.openviking.ai/zh/concepts/02-context-types)
 - **按需加载上下文。** 目录摘要（L0）和概览（L1）帮助 Agent 判断何时读取完整内容（L2）。→ [上下文分层](https://docs.openviking.ai/zh/concepts/03-context-layers)
 - **沿目录结构检索。** 向量检索先找到候选目录，再探索其中的内容。`find` 直接执行查询，`search` 可以结合会话上下文规划检索。→ [检索机制](https://docs.openviking.ai/zh/concepts/07-retrieval)
-- **查看检索过程。** 结果带有来源 URI，可选的遥测和运行状态观测用于排查检索与处理问题。→ [检索 API](https://docs.openviking.ai/zh/api/06-retrieval) · [运行观测](https://docs.openviking.ai/zh/api/18-observer)
-- **从会话提取记忆。** 提交 Session 后，会话被归档，后台按记忆策略提取内容，与已有记忆比较后新建、合并或跳过。→ [会话管理](https://docs.openviking.ai/zh/concepts/08-session)
+- **从会话提取记忆。** 提交 Session 后，会话被归档，后台按记忆策略提取内容，与已有记忆比较后新建、合并或跳过。启用 VikingBot 后，还可用 `ov compile` 配合技能，将资料整理成 Wiki、知识图谱或报告。→ [会话管理](https://docs.openviking.ai/zh/concepts/08-session) · [上下文编译](https://docs.openviking.ai/zh/context-compilation/01-overview)
 
 [架构](https://docs.openviking.ai/zh/concepts/01-architecture) · [设计思路](https://blog.openviking.ai/post/openviking-context-database/)
 
@@ -226,8 +225,6 @@ ov chat   # 在另一个终端运行
 ```
 
 官方 Docker 镜像内置 VikingBot，默认随服务器和控制台 UI 一起启动。详情见 [VikingBot 指南](https://docs.openviking.ai/zh/guides/17-vikingbot)。
-
-VikingBot 也为[上下文编译](https://docs.openviking.ai/zh/context-compilation/01-overview)提供运行支持：`ov compile` 配合技能，将资料整理成 Wiki、知识图谱或报告。
 
 ## 生产部署
 
