@@ -261,6 +261,17 @@ class EmbedderBase(ABC):
         self.model_name = model_name
         self.config = config or {}
         self.max_input_tokens = resolve_embedding_max_input_tokens(self.config)
+        self.tokenizer_safety_factor = float(self.config.get("tokenizer_safety_factor", 1.0) or 1.0)
+        if self.tokenizer_safety_factor <= 0:
+            self.tokenizer_safety_factor = 1.0
+        # Conservative guard: dividing the limit by the safety factor is
+        # equivalent to multiplying the token estimate, so CJK-inflated real
+        # token counts stay within the provider context window.
+        self._guarded_max_tokens = (
+            int(self.max_input_tokens / self.tokenizer_safety_factor)
+            if self.max_input_tokens is not None
+            else None
+        )
         self.max_retries = int(self.config.get("max_retries", 3))
         self.max_concurrent = int(self.config.get("max_concurrent", 10))
         self.provider = self.config.get("provider", "unknown")
@@ -278,7 +289,7 @@ class EmbedderBase(ABC):
         text parts extracted, so image parts are safely dropped.
         """
         if isinstance(content, list) and self.supports_multimodal:
-            if self.max_input_tokens is None:
+            if self._guarded_max_tokens is None:
                 return content
             truncated_parts = []
             for part in content:
@@ -286,16 +297,16 @@ class EmbedderBase(ABC):
                     part = {
                         **part,
                         "text": truncate_embedding_input(
-                            part.get("text", ""), self.max_input_tokens
+                            part.get("text", ""), self._guarded_max_tokens
                         ),
                     }
                 truncated_parts.append(part)
             return truncated_parts
         else:
             content = extract_text_from_content(content)
-            if self.max_input_tokens is None:
+            if self._guarded_max_tokens is None:
                 return content
-            return truncate_embedding_input(content, self.max_input_tokens)
+            return truncate_embedding_input(content, self._guarded_max_tokens)
 
     @property
     def supports_multimodal(self) -> bool:
