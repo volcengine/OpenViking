@@ -202,8 +202,6 @@ Connect your agent to OpenViking for cross-session memory. Choose a native integ
 </tr>
 </table>
 
-**MCP · Any compatible client** — Connect to OpenViking’s built-in `/mcp` endpoint for memory and context tools. [MCP setup](https://docs.openviking.ai/en/agent-integrations/06-mcp-clients).
-
 For setup instructions and integration details, see [Integrations](https://openviking.ai/integrations).
 
 ## OpenViking Helper (Beta)

@@ -211,8 +211,6 @@ Rust CLI 通过 `npm i -g @openviking/cli` 安装，也可以从源码构建：`
 </tr>
 </table>
 
-**MCP · 任意兼容客户端** — 连接 OpenViking 内置的 `/mcp` 端点，即可使用记忆和上下文工具。[MCP 接入指南](https://docs.openviking.ai/zh/agent-integrations/06-mcp-clients)。
-
 详细接入方式请参考 [Integrations](https://openviking.ai/integrations)。
 
 ## OpenViking Helper（Beta）

@@ -211,8 +211,6 @@ OpenViking を接続して、セッションをまたいで記憶を引き継ぎ
 </tr>
 </table>
 
-**MCP · 対応するすべてのクライアント** — OpenViking 内蔵の `/mcp` エンドポイントに接続すると、記憶とコンテキストのツールを使えます。[MCP 接続ガイド](https://docs.openviking.ai/en/agent-integrations/06-mcp-clients)。
-
 設定方法と統合の詳細は [Integrations](https://openviking.ai/integrations) を参照してください。
 
 ## OpenViking Helper（Beta）
