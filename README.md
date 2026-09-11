@@ -139,21 +139,50 @@ Next steps:
 
 ## Use it with your agent
 
-Integrations inject OpenViking recall into your agent's context and auto-commit session memory:
+Connect your agent to OpenViking for cross-session memory. Choose a native integration for automatic recall and session capture, or use MCP to give your agent memory and context tools.
 
-- [Claude Code](https://docs.openviking.ai/en/agent-integrations/02-claude-code)
-- [Codex](https://docs.openviking.ai/en/agent-integrations/04-codex)
-- [OpenClaw](https://docs.openviking.ai/en/agent-integrations/03-openclaw)
-- [Hermes](https://docs.openviking.ai/en/agent-integrations/05-hermes)
-- [Cursor](https://docs.openviking.ai/en/agent-integrations/12-cursor)
-- [TRAE / TRAE CN / TraeCode CLI 2.0](https://docs.openviking.ai/en/agent-integrations/13-trae)
-- [OpenCode](https://docs.openviking.ai/en/agent-integrations/10-opencode)
-- [pi](https://docs.openviking.ai/en/agent-integrations/11-pi)
-- [Agent Plugins 1.0](https://docs.openviking.ai/en/agent-integrations/15-agent-plugins)
-- [MCP clients](https://docs.openviking.ai/en/agent-integrations/06-mcp-clients)
-- [LangChain / LangGraph](https://docs.openviking.ai/en/agent-integrations/07-langchain-langgraph)
+<table>
+<tr>
+<td align="center" width="25%">
+<a href="https://docs.openviking.ai/en/agent-integrations/02-claude-code"><img src="docs/images/agents/image/claude-code/logo.png" width="28" height="28" alt=""><br><strong>Claude Code</strong></a><br>
+<sub>Hooks + MCP</sub>
+</td>
+<td align="center" width="25%">
+<a href="https://docs.openviking.ai/en/agent-integrations/04-codex"><img src="docs/images/integrations/codex.png" width="28" height="28" alt=""><br><strong>Codex</strong></a><br>
+<sub>Hooks + MCP</sub>
+</td>
+<td align="center" width="25%">
+<a href="https://docs.openviking.ai/en/agent-integrations/12-cursor"><img src="docs/images/agents/image/cursor/logo.png" width="28" height="28" alt=""><br><strong>Cursor</strong></a><br>
+<sub>Hooks + MCP</sub>
+</td>
+<td align="center" width="25%">
+<a href="https://docs.openviking.ai/en/agent-integrations/13-trae"><img src="docs/images/agents/image/trae/logo.png" width="28" height="28" alt=""><br><strong>TRAE</strong></a><br>
+<sub>Hooks + MCP</sub>
+</td>
+</tr>
+<tr>
+<td align="center" width="25%">
+<a href="https://docs.openviking.ai/en/agent-integrations/03-openclaw"><img src="docs/images/integrations/openclaw.jpg" width="28" height="28" alt=""><br><strong>OpenClaw</strong></a><br>
+<sub>Context-engine plugin</sub>
+</td>
+<td align="center" width="25%">
+<a href="https://docs.openviking.ai/en/agent-integrations/05-hermes"><img src="docs/images/integrations/hermes-agent.png" width="28" height="28" alt=""><br><strong>Hermes</strong></a><br>
+<sub>Built-in provider</sub>
+</td>
+<td align="center" width="25%">
+<a href="https://docs.openviking.ai/en/agent-integrations/10-opencode"><img src="docs/images/agents/image/opencode/logo.png" width="28" height="28" alt=""><br><strong>OpenCode</strong></a><br>
+<sub>Plugin + MCP</sub>
+</td>
+<td align="center" width="25%">
+<a href="https://docs.openviking.ai/en/agent-integrations/11-pi"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/pi-dark.svg"><img src="docs/images/integrations/pi.svg" width="28" height="28" alt=""></picture><br><strong>pi</strong></a><br>
+<sub>Native extension</sub>
+</td>
+</tr>
+</table>
 
-Setup instructions for each agent: [Agent integrations overview](https://docs.openviking.ai/en/agent-integrations/01-overview).
+**MCP · Any compatible client** — Connect to OpenViking’s built-in `/mcp` endpoint for memory and context tools. [MCP setup](https://docs.openviking.ai/en/agent-integrations/06-mcp-clients).
+
+Build your own: [Agent Plugins 1.0](https://docs.openviking.ai/en/agent-integrations/15-agent-plugins) · [LangChain / LangGraph](https://docs.openviking.ai/en/agent-integrations/07-langchain-langgraph) · [All integrations](https://docs.openviking.ai/en/agent-integrations/01-overview).
 
 ## OpenViking Helper (Beta)
 

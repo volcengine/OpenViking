@@ -148,21 +148,50 @@ Rust CLI 通过 `npm i -g @openviking/cli` 安装，也可以从源码构建：`
 
 ## 接入你的 Agent
 
-集成会把 OpenViking 的召回注入 Agent 上下文，并自动提交会话记忆：
+将 Agent 接入 OpenViking，跨会话保留记忆。原生集成支持自动召回与会话采集；也可通过 MCP 提供记忆和上下文工具。
 
-- [Claude Code](https://docs.openviking.ai/zh/agent-integrations/02-claude-code)
-- [Codex](https://docs.openviking.ai/zh/agent-integrations/04-codex)
-- [OpenClaw](https://docs.openviking.ai/zh/agent-integrations/03-openclaw)
-- [Hermes](https://docs.openviking.ai/zh/agent-integrations/05-hermes)
-- [Cursor](https://docs.openviking.ai/zh/agent-integrations/12-cursor)
-- [Trae](https://docs.openviking.ai/zh/agent-integrations/13-trae)
-- [OpenCode](https://docs.openviking.ai/zh/agent-integrations/10-opencode)
-- [pi](https://docs.openviking.ai/zh/agent-integrations/11-pi)
-- [Agent Plugins 1.0](https://docs.openviking.ai/zh/agent-integrations/15-agent-plugins)
-- [MCP 客户端](https://docs.openviking.ai/zh/agent-integrations/06-mcp-clients)
-- [LangChain / LangGraph](https://docs.openviking.ai/zh/agent-integrations/07-langchain-langgraph)
+<table>
+<tr>
+<td align="center" width="25%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/02-claude-code"><img src="docs/images/agents/image/claude-code/logo.png" width="28" height="28" alt=""><br><strong>Claude Code</strong></a><br>
+<sub>Hooks + MCP</sub>
+</td>
+<td align="center" width="25%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/04-codex"><img src="docs/images/integrations/codex.png" width="28" height="28" alt=""><br><strong>Codex</strong></a><br>
+<sub>Hooks + MCP</sub>
+</td>
+<td align="center" width="25%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/12-cursor"><img src="docs/images/agents/image/cursor/logo.png" width="28" height="28" alt=""><br><strong>Cursor</strong></a><br>
+<sub>Hooks + MCP</sub>
+</td>
+<td align="center" width="25%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/13-trae"><img src="docs/images/agents/image/trae/logo.png" width="28" height="28" alt=""><br><strong>TRAE</strong></a><br>
+<sub>Hooks + MCP</sub>
+</td>
+</tr>
+<tr>
+<td align="center" width="25%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/03-openclaw"><img src="docs/images/integrations/openclaw.jpg" width="28" height="28" alt=""><br><strong>OpenClaw</strong></a><br>
+<sub>上下文引擎插件</sub>
+</td>
+<td align="center" width="25%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/05-hermes"><img src="docs/images/integrations/hermes-agent.png" width="28" height="28" alt=""><br><strong>Hermes</strong></a><br>
+<sub>内置记忆 Provider</sub>
+</td>
+<td align="center" width="25%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/10-opencode"><img src="docs/images/agents/image/opencode/logo.png" width="28" height="28" alt=""><br><strong>OpenCode</strong></a><br>
+<sub>Plugin + MCP</sub>
+</td>
+<td align="center" width="25%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/11-pi"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/pi-dark.svg"><img src="docs/images/integrations/pi.svg" width="28" height="28" alt=""></picture><br><strong>pi</strong></a><br>
+<sub>原生扩展</sub>
+</td>
+</tr>
+</table>
 
-各 Agent 的接入步骤：[Agent 集成总览](https://docs.openviking.ai/zh/agent-integrations/01-overview)。
+**MCP · 任意兼容客户端** — 连接 OpenViking 内置的 `/mcp` 端点，即可使用记忆和上下文工具。[MCP 接入指南](https://docs.openviking.ai/zh/agent-integrations/06-mcp-clients)。
+
+构建自己的集成：[Agent Plugins 1.0](https://docs.openviking.ai/zh/agent-integrations/15-agent-plugins) · [LangChain / LangGraph](https://docs.openviking.ai/zh/agent-integrations/07-langchain-langgraph) · [全部集成](https://docs.openviking.ai/zh/agent-integrations/01-overview)。
 
 ## OpenViking Helper（Beta）
 

@@ -148,21 +148,50 @@ Rust CLI は `npm i -g @openviking/cli` でインストールできます。ソ�
 
 ## エージェントと組み合わせて使う
 
-統合機能は、OpenViking の recall をエージェントのコンテキストに注入し、セッションメモリを自動的にコミットします:
+OpenViking を接続して、セッションをまたいで記憶を引き継ぎます。ネイティブ統合で自動想起とセッション収集を使うか、MCP で記憶とコンテキストのツールを提供できます。
 
-- [Claude Code](https://docs.openviking.ai/en/agent-integrations/02-claude-code)
-- [Codex](https://docs.openviking.ai/en/agent-integrations/04-codex)
-- [OpenClaw](https://docs.openviking.ai/en/agent-integrations/03-openclaw)
-- [Hermes](https://docs.openviking.ai/en/agent-integrations/05-hermes)
-- [Cursor](https://docs.openviking.ai/en/agent-integrations/12-cursor)
-- [Trae](https://docs.openviking.ai/en/agent-integrations/13-trae)
-- [OpenCode](https://docs.openviking.ai/en/agent-integrations/10-opencode)
-- [pi](https://docs.openviking.ai/en/agent-integrations/11-pi)
-- [Agent Plugins 1.0](https://docs.openviking.ai/en/agent-integrations/15-agent-plugins)
-- [MCP クライアント](https://docs.openviking.ai/en/agent-integrations/06-mcp-clients)
-- [LangChain / LangGraph](https://docs.openviking.ai/en/agent-integrations/07-langchain-langgraph)
+<table>
+<tr>
+<td align="center" width="25%">
+<a href="https://docs.openviking.ai/en/agent-integrations/02-claude-code"><img src="docs/images/agents/image/claude-code/logo.png" width="28" height="28" alt=""><br><strong>Claude Code</strong></a><br>
+<sub>Hooks + MCP</sub>
+</td>
+<td align="center" width="25%">
+<a href="https://docs.openviking.ai/en/agent-integrations/04-codex"><img src="docs/images/integrations/codex.png" width="28" height="28" alt=""><br><strong>Codex</strong></a><br>
+<sub>Hooks + MCP</sub>
+</td>
+<td align="center" width="25%">
+<a href="https://docs.openviking.ai/en/agent-integrations/12-cursor"><img src="docs/images/agents/image/cursor/logo.png" width="28" height="28" alt=""><br><strong>Cursor</strong></a><br>
+<sub>Hooks + MCP</sub>
+</td>
+<td align="center" width="25%">
+<a href="https://docs.openviking.ai/en/agent-integrations/13-trae"><img src="docs/images/agents/image/trae/logo.png" width="28" height="28" alt=""><br><strong>TRAE</strong></a><br>
+<sub>Hooks + MCP</sub>
+</td>
+</tr>
+<tr>
+<td align="center" width="25%">
+<a href="https://docs.openviking.ai/en/agent-integrations/03-openclaw"><img src="docs/images/integrations/openclaw.jpg" width="28" height="28" alt=""><br><strong>OpenClaw</strong></a><br>
+<sub>コンテキストエンジンプラグイン</sub>
+</td>
+<td align="center" width="25%">
+<a href="https://docs.openviking.ai/en/agent-integrations/05-hermes"><img src="docs/images/integrations/hermes-agent.png" width="28" height="28" alt=""><br><strong>Hermes</strong></a><br>
+<sub>内蔵メモリ Provider</sub>
+</td>
+<td align="center" width="25%">
+<a href="https://docs.openviking.ai/en/agent-integrations/10-opencode"><img src="docs/images/agents/image/opencode/logo.png" width="28" height="28" alt=""><br><strong>OpenCode</strong></a><br>
+<sub>Plugin + MCP</sub>
+</td>
+<td align="center" width="25%">
+<a href="https://docs.openviking.ai/en/agent-integrations/11-pi"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/pi-dark.svg"><img src="docs/images/integrations/pi.svg" width="28" height="28" alt=""></picture><br><strong>pi</strong></a><br>
+<sub>ネイティブ拡張</sub>
+</td>
+</tr>
+</table>
 
-各エージェントのセットアップ手順: [Agent integrations overview](https://docs.openviking.ai/en/agent-integrations/01-overview)。
+**MCP · 対応するすべてのクライアント** — OpenViking 内蔵の `/mcp` エンドポイントに接続すると、記憶とコンテキストのツールを使えます。[MCP 接続ガイド](https://docs.openviking.ai/en/agent-integrations/06-mcp-clients)。
+
+独自の統合を構築：[Agent Plugins 1.0](https://docs.openviking.ai/en/agent-integrations/15-agent-plugins) · [LangChain / LangGraph](https://docs.openviking.ai/en/agent-integrations/07-langchain-langgraph) · [すべての統合](https://docs.openviking.ai/en/agent-integrations/01-overview)。
 
 ## OpenViking Helper（Beta）
 
