@@ -45,7 +45,7 @@ import {
 import { useAppConnection } from '#/hooks/use-app-connection'
 import { ovClient } from '#/lib/ov-client'
 import { postResources } from '#/gen/ov-client'
-import { commitSession } from '#/lib/sessions/api'
+import { retryFailedCommits } from '#/lib/sessions/api'
 import { cn } from '#/lib/utils'
 import { QueueStatusCard } from '#/routes/monitoring/-components/queue-status-card'
 import { TaskDetailSheet } from '#/routes/tasks/-components/task-detail-sheet'
@@ -132,16 +132,32 @@ function TasksRoute() {
 
       // ── 1. task_type 精确匹配优先（不受 URI 前缀干扰）──────────────────────
       if (task.task_type === 'session_commit') {
-        const res = await commitSession(task.resource_id)
+        // An archived session has no live messages, so re-calling commit is a
+        // silent no-op (`skipped/no_messages`). Failed Phase 2 work must be
+        // retried through the dedicated endpoint instead.
+        const res = await retryFailedCommits(task.resource_id)
         const resAny = res as any
-        if (resAny?.result?.reason === 'no_messages' || resAny?.reason === 'no_messages') {
-          toast.info(
-            i18n.language.startsWith('zh')
-              ? '该会话无未提交消息，已无需重复入队'
-              : 'Session has no pending uncommitted messages',
+        const retried = Array.isArray(resAny?.retried) ? resAny.retried : []
+        if (retried.length > 0) {
+          // Fresh Phase 2 task IDs were enqueued; the task list picks them up.
+          return { res, task }
+        }
+        const failed = Array.isArray(resAny?.failed) ? resAny.failed : []
+        if (failed.length > 0) {
+          throw new Error(
+            String(
+              failed[0]?.error ||
+                (i18n.language.startsWith('zh')
+                  ? '重新入队失败'
+                  : 'Re-queue failed'),
+            ),
           )
         }
-        return { res, task }
+        throw new Error(
+          i18n.language.startsWith('zh')
+            ? '该会话没有可重试的失败归档'
+            : 'No retryable failed archive for this session',
+        )
       }
       const resourceUri = task.resource_id || ''
 

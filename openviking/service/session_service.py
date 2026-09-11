@@ -32,6 +32,7 @@ from openviking.session import Session
 from openviking.session.auto_commit_policy import AutoCommitPolicy
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory_policy import MemoryPolicy
+from openviking.session.session import _SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
 from openviking.storage.viking_fs import VikingFS
 from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.utils.tags import normalize_search_tags
@@ -481,6 +482,50 @@ class SessionService:
         )
         self._record_lifecycle_metric("extract", "ok")
         return memories
+
+    async def retry_failed_commits(
+        self,
+        session_id: str,
+        ctx: RequestContext,
+        *,
+        archive_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Re-enqueue memory extraction for failed session commit archives.
+
+        A failed Phase 2 (memory extraction) archive is terminal: re-calling
+        commit is a no-op because the session has no live messages, and the
+        queue consumer treats the persisted ``.failed.json`` marker as final.
+        This is the real retry path used by the Studio task center.
+
+        Args:
+            session_id: Session ID whose failed commits should be retried
+            ctx: Request context of the caller
+            archive_uri: Retry one specific archive; ``None`` sweeps all
+                failed archives of the session
+
+        Returns:
+            Dict with ``retried`` / ``skipped`` / ``failed`` lists, plus a
+            convenience ``task_ids`` list of newly enqueued Phase 2 tasks.
+        """
+        self._ensure_initialized()
+        session = await self.get(session_id, ctx)
+        if not await session.exists():
+            self._record_lifecycle_metric("retry_commit", "error")
+            raise NotFoundError(session_id, "session")
+
+        session_path = self._viking_fs._uri_to_path(session.uri, ctx=ctx)
+        lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
+            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
+        )
+        try:
+            await session.load()
+            result = await session.retry_failed_commit(archive_uri=archive_uri)
+        finally:
+            await self._viking_fs._async_agfs.pathlock_release(lease)
+
+        result["task_ids"] = [entry.get("task_id") for entry in result.get("retried", [])]
+        self._record_lifecycle_metric("retry_commit", "ok")
+        return result
 
     @staticmethod
     def effective_auto_commit_policy(session: Session) -> Optional[Dict[str, Any]]:

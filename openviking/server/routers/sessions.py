@@ -664,6 +664,19 @@ class CommitRequest(BaseModel):
         return self
 
 
+class CommitRetryRequest(BaseModel):
+    """Retry request body for failed session commit archives."""
+
+    archive_uri: Optional[str] = Field(
+        default=None,
+        description=(
+            "Retry one specific failed archive. Omit to sweep every failed "
+            "archive of the session."
+        ),
+    )
+    telemetry: TelemetryRequest = False
+
+
 @router.post("/{session_id}/commit")
 async def commit_session(
     session_id: str = Path(..., description="Session ID"),
@@ -699,6 +712,37 @@ async def commit_session(
             session_id,
             _ctx,
             **commit_kwargs,
+        ),
+    )
+    return Response(
+        status="ok",
+        result=execution.result,
+        telemetry=execution.telemetry,
+    ).model_dump(exclude_none=True)
+
+
+@router.post("/{session_id}/commits/retry")
+async def retry_failed_session_commits(
+    session_id: str = Path(..., description="Session ID"),
+    body: CommitRetryRequest = Body(default_factory=CommitRetryRequest),
+    _ctx: RequestContext = Depends(get_session_request_context),
+):
+    """Re-enqueue memory extraction for failed session commit archives.
+
+    The task-center "re-queue" action must use this endpoint for
+    ``session_commit`` tasks: calling commit again is a silent no-op for an
+    already-archived session, while a failed archive is terminal until its
+    ``.failed.json`` marker is cleared and the persisted Phase 2 work is
+    re-enqueued under a fresh task ID.
+    """
+    service = get_service()
+    execution = await run_operation(
+        operation="session.retry_failed_commits",
+        telemetry=body.telemetry,
+        fn=lambda: service.sessions.retry_failed_commits(
+            session_id,
+            _ctx,
+            archive_uri=body.archive_uri,
         ),
     )
     return Response(
