@@ -14,6 +14,7 @@ from openviking.utils.model_retry import (
     ERROR_CLASS_TRANSIENT,
     classify_api_error,
     extract_metric_error_code,
+    retry_after_seconds,
     retry_async,
     retry_sync,
 )
@@ -46,6 +47,77 @@ def test_extract_metric_error_code_uses_safe_fallbacks_only():
     wrapped_timeout.__cause__ = TimeoutError("request timed out")
     assert extract_metric_error_code(wrapped_timeout) == "timeout"
     assert extract_metric_error_code(RuntimeError("request_id=not-a-metric-label")) == "unknown"
+
+
+def test_retry_after_seconds_reads_numeric_header():
+    error = RuntimeError("429 TooManyRequests")
+    error.response = type("Response", (), {"headers": {"Retry-After": "43"}})()
+    assert retry_after_seconds(error) == 43.0
+
+
+def test_retry_after_seconds_walks_cause_chain():
+    inner = RuntimeError("429 TooManyRequests")
+    inner.response = type("Response", (), {"headers": {"retry-after": "11"}})()
+    outer = RuntimeError("provider failed")
+    outer.__cause__ = inner
+    assert retry_after_seconds(outer) == 11.0
+
+
+def test_retry_after_seconds_ignores_malformed_and_negative():
+    bad = RuntimeError("429 TooManyRequests")
+    bad.response = type("Response", (), {"headers": {"Retry-After": "not-a-delay"}})()
+    assert retry_after_seconds(bad) is None
+
+    negative = RuntimeError("429 TooManyRequests")
+    negative.retry_after = "-3"
+    assert retry_after_seconds(negative) is None
+
+
+def test_retry_sync_honors_retry_after_over_local_backoff(monkeypatch):
+    """Regression for #4765: Retry-After=43 must win over max_delay=8."""
+    attempts = {"count": 0}
+    sleeps = []
+    error = RuntimeError("429 TooManyRequests")
+    error.response = type("Response", (), {"headers": {"Retry-After": "43"}})()
+
+    def _call():
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise error
+        return "ok"
+
+    monkeypatch.setattr("openviking.utils.model_retry.time.sleep", sleeps.append)
+
+    assert (
+        retry_sync(_call, max_retries=1, base_delay=0.5, max_delay=8.0, jitter=False) == "ok"
+    )
+    assert sleeps == [43.0]
+    assert attempts["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_retry_async_honors_retry_after_over_local_backoff(monkeypatch):
+    attempts = {"count": 0}
+    sleeps = []
+    error = RuntimeError("429 TooManyRequests")
+    error.response = type("Response", (), {"headers": {"Retry-After": "43"}})()
+
+    async def _call():
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise error
+        return "ok"
+
+    async def _sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr("openviking.utils.model_retry.asyncio.sleep", _sleep)
+
+    assert (
+        await retry_async(_call, max_retries=1, base_delay=0.5, max_delay=8.0, jitter=False)
+        == "ok"
+    )
+    assert sleeps == [43.0]
 
 
 def test_classify_all_credentials_failed_prefers_transient_over_auth():

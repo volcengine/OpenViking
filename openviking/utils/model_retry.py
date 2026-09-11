@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
+import email.utils
 import logging
+import math
 import random
 import re
 import threading
@@ -112,8 +115,8 @@ CONTENT_SAFETY_PATTERNS = (
     "contentfilter",
     "moderation",
     "sensitive content",
-    "内容安全",
-    "敏感",
+    "鍐呭瀹夊叏",
+    "鏁忔劅",
 )
 
 QUOTA_EXCEEDED_PATTERNS = (
@@ -251,7 +254,7 @@ def classify_api_error(error: Exception) -> str:
             if _pattern_matches(text_lower, text_compact, pattern):
                 return ERROR_CLASS_AUTH
 
-    # Check quota_exceeded *before* transient so that "429 … AccountQuotaExceeded"
+    # Check quota_exceeded *before* transient so that "429 鈥?AccountQuotaExceeded"
     # is classified as quota_exceeded, not transient.
     for text in texts:
         text_lower = text.lower()
@@ -363,6 +366,49 @@ def rate_limit_retry_delay(attempt: int) -> float:
     return delay * random.uniform(0.8, 1.2)
 
 
+def retry_after_seconds(error: BaseException) -> float | None:
+    """Return a provider ``Retry-After`` hint in seconds, if one is available.
+
+    Looks on the exception itself and on ``exception.response.headers``, walking
+    the ``__cause__`` / ``__context__`` chain. Malformed, negative, or non-finite
+    values are ignored so retry classification stays unchanged.
+    """
+    for exc in _iter_exception_chain(error):
+        candidates = [getattr(exc, "retry_after", None)]
+        response = getattr(exc, "response", None)
+        headers = getattr(response, "headers", None)
+        if headers is not None:
+            try:
+                candidates.append(headers.get("Retry-After"))
+                candidates.append(headers.get("retry-after"))
+            except Exception:
+                pass
+        for value in candidates:
+            if value is None:
+                continue
+            raw = str(value).strip()
+            if not raw:
+                continue
+            try:
+                try:
+                    seconds = float(raw)
+                except ValueError:
+                    retry_at = email.utils.parsedate_to_datetime(raw)
+                    if retry_at is None:
+                        continue
+                    if retry_at.tzinfo is None:
+                        retry_at = retry_at.replace(tzinfo=datetime.timezone.utc)
+                    seconds = retry_at.timestamp() - time.time()
+            except (TypeError, ValueError, OverflowError, IndexError, OSError):
+                continue
+            if not math.isfinite(seconds) or seconds < 0:
+                continue
+            # Bound runaway provider hints; do not clamp to the caller's
+            # max_delay — Retry-After may legitimately exceed local backoff.
+            return min(seconds, RATE_LIMIT_RETRY_MAX_DELAY_SECONDS)
+    return None
+
+
 def _compute_delay(
     attempt: int,
     *,
@@ -373,6 +419,27 @@ def _compute_delay(
     delay = min(base_delay * (2**attempt), max_delay)
     if jitter:
         delay += random.uniform(0.0, min(base_delay, delay))
+    return delay
+
+
+def _retry_delay_for_error(
+    error: BaseException,
+    attempt: int,
+    *,
+    base_delay: float,
+    max_delay: float,
+    jitter: bool,
+) -> float:
+    """Local exponential backoff, raised to at least any provider Retry-After."""
+    delay = _compute_delay(
+        attempt,
+        base_delay=base_delay,
+        max_delay=max_delay,
+        jitter=jitter,
+    )
+    retry_after = retry_after_seconds(error)
+    if retry_after is not None:
+        delay = max(delay, retry_after)
     return delay
 
 
@@ -397,7 +464,8 @@ def retry_sync(
             if max_retries <= 0 or attempt >= max_retries or not is_retryable(e):
                 raise
 
-            delay = _compute_delay(
+            delay = _retry_delay_for_error(
+                e,
                 attempt,
                 base_delay=base_delay,
                 max_delay=max_delay,
@@ -437,7 +505,8 @@ async def retry_async(
             if max_retries <= 0 or attempt >= max_retries or not is_retryable(e):
                 raise
 
-            delay = _compute_delay(
+            delay = _retry_delay_for_error(
+                e,
                 attempt,
                 base_delay=base_delay,
                 max_delay=max_delay,
