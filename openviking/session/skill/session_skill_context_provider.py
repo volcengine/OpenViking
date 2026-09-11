@@ -89,7 +89,11 @@ class SessionSkillContextProvider(SessionExtractContextProvider):
     def instruction(self) -> str:
         return (
             "You are an extraction agent. Analyze the archived conversation, use read when "
-            "needed, and output only JSON that matches the schema descriptions."
+            "needed, and output only JSON that matches the schema descriptions. "
+            "Only call `read` on an exact `.../SKILL.md` path from the skill listing "
+            "already provided — never on a directory path. If that listing was empty, "
+            "no read is needed; proceed directly to creating a new skill when the "
+            "conversation shows a reusable workflow."
         )
 
     async def prefetch(self) -> List[Dict[str, Any]]:
@@ -163,7 +167,20 @@ class SessionSkillContextProvider(SessionExtractContextProvider):
         limit = arguments.get("limit", -1)
 
         if not uri.endswith("/SKILL.md"):
-            return await super().execute_tool(tool_call)
+            # This agent only exposes `read` (see get_tools()). The generic
+            # filesystem "List it first" error is unfollowable here and causes
+            # repeated identical failed retries instead of recovery (#4831).
+            return {
+                "error": (
+                    f"{uri} is a directory or non-skill URI, not a skill file. "
+                    "This agent has no `list` tool — use the skill listing already "
+                    "provided at the start of this conversation "
+                    "(skill_name/uri/abstract entries) and only call `read` on a "
+                    "specific `.../SKILL.md` path from that listing. If that listing "
+                    "was empty, no read is needed — proceed directly to creating a "
+                    "new skill if the conversation shows a reusable workflow."
+                )
+            }
 
         try:
             raw_content = await self._viking_fs.read_file(uri, ctx=self._ctx)
