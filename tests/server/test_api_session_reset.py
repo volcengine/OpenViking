@@ -142,3 +142,34 @@ async def test_reset_rejects_retention_and_non_boolean_flag(client, options):
     response = await client.post("/api/v1/sessions/unused/commit", json=options)
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
+
+
+@pytest.mark.parametrize("failed_file", [".overview.md", ".done"])
+async def test_reset_write_failure_does_not_block_next_archive(service, monkeypatch, failed_file):
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    session = service.sessions.session(ctx, session_id="reset-write-failure")
+    await session.ensure_exists()
+    fs = session._viking_fs
+    write = fs.write_file
+    failed = False
+
+    async def fail_once(uri, content, **kwargs):
+        nonlocal failed
+        if uri.endswith(f"archive_001/{failed_file}") and not failed:
+            failed = True
+            raise OSError("transient reset write failure")
+        return await write(uri, content, **kwargs)
+
+    monkeypatch.setattr(fs, "write_file", fail_once)
+    with pytest.raises(OSError, match="transient reset write failure"):
+        await session.commit_async(reset_context=True)
+
+    boundary = f"{session._session_uri}/history/archive_001"
+    assert await session._archive_terminal_state(boundary) == "failed"
+    assert await session._can_run_archive(2)
+    # Retrying reset publishes a new terminal boundary rather than reusing the partial one.
+    assert (await session.commit_async(reset_context=True))["reset_context"] is True
+    context = await session.get_session_context()
+    assert context["messages"] == []
+    assert context["latest_archive_overview"] == ""
+    assert context["stats"]["failedArchives"] == 0

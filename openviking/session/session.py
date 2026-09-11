@@ -2263,14 +2263,20 @@ class Session:
         archive_uri = (
             f"{self._session_uri}/history/archive_{self._compression.compression_index:03d}"
         )
-        await self._viking_fs.write_file(f"{archive_uri}/messages.jsonl", "", ctx=self.ctx)
-        await self._viking_fs.write_file(f"{archive_uri}/.overview.md", "", ctx=self.ctx)
-        # Publish last. Older Phase 2 jobs only update their own archive directories.
-        await self._viking_fs.write_file(
-            f"{archive_uri}/.done",
-            json.dumps({"context_reset": True, "working_memory_enabled": False}),
-            ctx=self.ctx,
-        )
+        try:
+            await self._viking_fs.write_file(f"{archive_uri}/messages.jsonl", "", ctx=self.ctx)
+            await self._viking_fs.write_file(f"{archive_uri}/.overview.md", "", ctx=self.ctx)
+            # Publish last. Older Phase 2 jobs only update their own archive directories.
+            await self._viking_fs.write_file(
+                f"{archive_uri}/.done",
+                json.dumps({"context_reset": True, "working_memory_enabled": False}),
+                ctx=self.ctx,
+            )
+        except Exception as exc:
+            # No queue owns this empty archive: leave a terminal state so the
+            # next commit cannot wait forever for a failed reset.
+            await self._write_failed_marker(archive_uri, stage="context_reset", error=str(exc))
+            raise
         self._meta.commit_count = self._compression.compression_index
         await self._save_meta()
 
