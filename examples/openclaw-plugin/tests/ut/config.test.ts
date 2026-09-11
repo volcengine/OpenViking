@@ -20,6 +20,8 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.recallMaxInjectedChars).toBe(4000);
     expect(cfg.recallTokenBudget).toBe(4000);
     expect(cfg.commitTokenThresholdRatio).toBe(0.5);
+    expect(cfg.commitRetentionMode).toBe("message_count");
+    expect(cfg.commitKeepRecentCount).toBe(10);
     expect(cfg.captureMode).toBe("semantic");
     expect(cfg.captureMaxLength).toBe(24000);
     expect(cfg.autoRecallTimeoutMs).toBe(15000);
@@ -251,6 +253,11 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
       recallScoreThreshold: 1.5,
     });
     expect(cfg.recallScoreThreshold).toBe(1);
+  });
+
+  it.each(["unknown", "", null, 0, false])("rejects invalid commitRetentionMode %j", (value) => {
+    expect(() => memoryOpenVikingConfigSchema.parse({ commitRetentionMode: value }))
+      .toThrow('commitRetentionMode must be "message_count" or "turn_budget"');
   });
 
   it("throws on invalid captureMode", () => {

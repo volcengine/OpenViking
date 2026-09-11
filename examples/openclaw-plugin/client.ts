@@ -845,6 +845,8 @@ export class OpenVikingClient {
        * preserves the pre-v2 "archive everything" behavior.
       */
       keepRecentCount?: number;
+      /** Opt in to the server's turn-aware defaults instead of message-count retention. */
+      retentionMode?: "turn_budget";
       agentId?: string;
     },
   ): Promise<CommitSessionResult> {
@@ -859,11 +861,14 @@ export class OpenVikingClient {
         sessionId,
         wait: options?.wait ?? false,
         keepRecentCount,
+        retentionMode: options?.retentionMode,
       },
       options?.agentId,
     );
     const body: Record<string, unknown> = {};
-    if (keepRecentCount > 0) {
+    if (options?.retentionMode === "turn_budget") {
+      body.retention_mode = "turn_budget";
+    } else if (keepRecentCount > 0) {
       body.keep_recent_count = keepRecentCount;
     }
     const result = await this.request<CommitSessionResult>(
