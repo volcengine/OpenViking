@@ -379,6 +379,24 @@ def test_renderer_creates_okf_pages_links_and_source_fallbacks():
     assert "- [source](viking://resources/source)" in first["content"]
 
 
+@pytest.mark.parametrize("name", ["a#one.md", "a%23one.md"])
+@pytest.mark.parametrize("inline", [True, False])
+def test_renderer_encodes_literal_source_filenames(name, inline):
+    source = f"viking://resources/source#1/{name}"
+    bundle = WikiBundleDraft.model_validate(
+        {"pages": [_page(1, "Overview", body_markdown=f"Source: {source}" if inline else "Body")]}
+    )
+    rendered = WikiRenderer().render(
+        bundle=bundle,
+        target_uri="viking://resources/wiki",
+        source_roots={"src_1": source},
+        catalog_uris=set(),
+        existing_raw={},
+    )
+    encoded = source.replace("%", "%25").replace("#", "%23")
+    assert rendered.operations[0]["content"].count(f"]({encoded})") == 1
+
+
 def test_renderer_preserves_existing_link_without_adding_another_mention_or_backlink():
     bundle = WikiBundleDraft.model_validate(
         {
@@ -4499,7 +4517,8 @@ async def test_salvage_copies_workspace_and_repairs_links(tmp_path: Path):
         "caseonly.md": b"case mismatch",
         "Foo.md": b"first",
         "foo.md": b"duplicate",
-        "bad#name.txt": b"unsafe URI",
+        "hash#name.txt": b"literal hash",
+        "bad?name.txt": b"unsafe URI",
         "__compile_staging__/work/notes.txt": b"notes",
         "__compile_staging__/tmp/check.txt": b"check",
         READLIST_PATH: b"compile_resources/src_1/a.md\n",
@@ -4570,7 +4589,8 @@ async def test_salvage_copies_workspace_and_repairs_links(tmp_path: Path):
     assert "sandboxes/cmp-srt-settings.json" not in payloads
     assert "sandboxes/cmp-srt-settings.json" not in {path for path, _limit in sandbox.reads}
     assert sum(path.casefold() == "foo.md" for path in payloads) == 1
-    assert "bad#name.txt" not in payloads
+    assert payloads["hash#name.txt"] == b"literal hash"
+    assert "bad?name.txt" not in payloads
     topic = payloads["guide/topic.md"].decode()
     assert "[Home](../home.md#top)" in topic
     assert "[Meta](../meta/readme.md)" in topic
