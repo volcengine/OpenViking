@@ -143,45 +143,47 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
 
 <table>
 <tr>
-<td align="center" valign="bottom" width="33%">
+<td align="center" valign="bottom" width="20%">
 <a href="https://docs.openviking.ai/zh/agent-integrations/02-claude-code"><img src="docs/images/agents/image/claude-code/logo.png" width="32" height="32" alt=""><br><strong>Claude</strong></a><br>
-<sub>Hooks + MCP</sub>
+<sub>Hooks&nbsp;+&nbsp;MCP</sub>
 </td>
-<td align="center" valign="bottom" width="33%">
+<td align="center" valign="bottom" width="20%">
 <a href="https://docs.openviking.ai/zh/agent-integrations/04-codex"><img src="docs/images/integrations/codex.png" width="32" height="32" alt=""><br><strong>Codex</strong></a><br>
-<sub>Hooks + MCP</sub>
+<sub>Hooks&nbsp;+&nbsp;MCP</sub>
 </td>
-<td align="center" valign="bottom" width="33%">
+<td align="center" valign="bottom" width="20%">
 <a href="https://docs.openviking.ai/zh/agent-integrations/12-cursor"><img src="docs/images/agents/image/cursor/logo.png" width="32" height="32" alt=""><br><strong>Cursor</strong></a><br>
-<sub>Hooks + MCP</sub>
+<sub>Hooks&nbsp;+&nbsp;MCP</sub>
 </td>
-</tr>
-<tr>
-<td align="center" valign="bottom" width="33%">
+<td align="center" valign="bottom" width="20%">
 <a href="https://docs.openviking.ai/zh/agent-integrations/13-trae"><img src="docs/images/agents/image/trae/logo.png" width="32" height="32" alt=""><br><strong>TRAE</strong></a><br>
-<sub>Hooks + MCP</sub>
+<sub>Hooks&nbsp;+&nbsp;MCP</sub>
 </td>
-<td align="center" valign="bottom" width="33%">
+<td align="center" valign="bottom" width="20%">
 <a href="https://docs.openviking.ai/zh/agent-integrations/03-openclaw"><img src="docs/images/integrations/openclaw.jpg" width="24" height="24" alt=""><br><strong>OpenClaw</strong></a><br>
 <sub>上下文引擎</sub>
 </td>
-<td align="center" valign="bottom" width="33%">
+</tr>
+<tr>
+<td align="center" valign="bottom" width="20%">
 <a href="https://docs.openviking.ai/zh/agent-integrations/05-hermes"><img src="docs/images/integrations/hermes-agent.png" width="24" height="24" alt=""><br><strong>Hermes</strong></a><br>
 <sub>内置记忆</sub>
 </td>
-</tr>
-<tr>
-<td align="center" valign="bottom" width="33%">
+<td align="center" valign="bottom" width="20%">
 <a href="https://docs.openviking.ai/zh/agent-integrations/10-opencode"><img src="docs/images/agents/image/opencode/logo.png" width="32" height="32" alt=""><br><strong>OpenCode</strong></a><br>
-<sub>Plugin + MCP</sub>
+<sub>Plugin&nbsp;+&nbsp;MCP</sub>
 </td>
-<td align="center" valign="bottom" width="33%">
+<td align="center" valign="bottom" width="20%">
 <a href="https://docs.openviking.ai/zh/agent-integrations/11-pi"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/pi-dark.svg"><img src="docs/images/integrations/pi.svg" width="41" height="41" alt=""></picture><br><strong>pi</strong></a><br>
 <sub>原生扩展</sub>
 </td>
-<td align="center" valign="bottom" width="33%">
+<td align="center" valign="bottom" width="20%">
 <a href="docs/images/agents/zh/deerflow-memory-manager.md"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/deerflow-dark.svg"><img src="docs/images/integrations/deerflow.svg" width="19" height="24" alt=""></picture><br><strong>DeerFlow</strong></a><br>
-<sub>Plugin + MCP</sub>
+<sub>Plugin&nbsp;+&nbsp;MCP</sub>
+</td>
+<td align="center" valign="bottom" width="20%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/07-langchain-langgraph"><img src="docs/images/integrations/langchain.svg" width="24" height="24" alt=""><br><strong>LangChain</strong></a><br>
+<sub>工具&nbsp;+&nbsp;存储</sub>
 </td>
 </tr>
 </table>
@@ -190,23 +192,20 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
 
 <table>
 <tr>
-<td align="center" valign="bottom" width="33%">
+<td align="center" valign="bottom" width="50%">
 <a href="https://docs.openviking.ai/zh/agent-integrations/15-agent-plugins"><img src="docs/images/integrations/agent-plugins.svg" width="24" height="23" alt=""><br><strong>Agent&nbsp;Plugins&nbsp;1.0</strong></a>
 </td>
-<td align="center" valign="bottom" width="33%">
+<td align="center" valign="bottom" width="50%">
 <a href="https://docs.openviking.ai/zh/agent-integrations/06-mcp-clients"><img src="docs/images/integrations/mcp.svg" width="24" height="24" alt=""><br><strong>MCP&nbsp;客&#8288;户&#8288;端</strong></a>
-</td>
-<td align="center" valign="bottom" width="33%">
-<a href="https://docs.openviking.ai/zh/agent-integrations/07-langchain-langgraph"><img src="docs/images/integrations/langchain.svg" width="24" height="24" alt=""><br><strong>LangChain</strong></a>
 </td>
 </tr>
 </table>
 
 详细接入方式请参考 [Integrations](https://openviking.ai/integrations)。
 
-## OpenViking Helper（Beta）
+## 桌面客户端（Beta）
 
-OpenViking Helper 是面向 macOS 和 Windows x64 的桌面控制台（Beta），用于配置支持的本地 Agent 接入、查看会话中的召回与捕获事件，并将本地记忆和技能同步到 OpenViking。
+桌面客户端是面向 macOS 和 Windows x64 的控制台（Beta），用于配置支持的本地 Agent 接入、查看会话中的召回与捕获事件，并将本地记忆和技能同步到 OpenViking。
 
 下载：
 
