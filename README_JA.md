@@ -151,7 +151,7 @@ OpenViking を接続して、セッションをまたいで記憶を引き継ぎ
 <sub>Hooks&nbsp;+&nbsp;MCP</sub>
 </td>
 <td align="center" valign="bottom" width="20%">
-<a href="https://docs.openviking.ai/en/agent-integrations/04-codex"><img src="docs/images/integrations/logos/codex.png" width="32" height="32" alt=""><br><strong>Codex</strong></a><br>
+<a href="https://docs.openviking.ai/en/agent-integrations/04-codex"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/logos/openai-dark.svg"><img src="docs/images/integrations/logos/openai.svg" width="32" height="32" alt=""></picture><br><strong>Codex</strong></a><br>
 <sub>Hooks&nbsp;+&nbsp;MCP</sub>
 </td>
 <td align="center" valign="bottom" width="20%">
