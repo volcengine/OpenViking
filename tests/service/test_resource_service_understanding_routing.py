@@ -117,6 +117,79 @@ async def test_extensionless_remote_url_queues_frozen_understanding_route(
 
 
 @pytest.mark.asyncio
+async def test_tos_url_queues_understanding_directly_without_preparing_local_source(
+    monkeypatch,
+):
+    """A configured TOS media URL must bypass OpenViking's local download."""
+    ctx = RequestContext(
+        user=UserIdentifier("acct", "alice"),
+        role=Role.USER,
+        api_key="secret",
+    )
+    source = (
+        "https://bucket.tos-cn-beijing.volces.com/video/sample.mp4"
+        "?X-Tos-Credential=credential&X-Tos-Signature=signature"
+    )
+    lock = {"lease_ref": "lock-1"}
+    agfs = SimpleNamespace(
+        pathlock_to_handoff=AsyncMock(return_value={"handle_id": "lock-1"}),
+        pathlock_handoff=AsyncMock(),
+        pathlock_release=AsyncMock(),
+    )
+    processor = SimpleNamespace(
+        should_use_understanding_directly=lambda value, **_kwargs: value == source,
+        prepare_durable_source=AsyncMock(),
+        submit_understanding=AsyncMock(return_value="response-1"),
+        tree_builder=SimpleNamespace(
+            resolve_target_uri=AsyncMock(
+                return_value=(
+                    "viking://resources/sample",
+                    "viking://resources/sample",
+                )
+            )
+        ),
+        reserve_unique_candidate=AsyncMock(return_value=("viking://resources/sample", lock)),
+        process_resource=AsyncMock(),
+    )
+    service = ResourceService(
+        vikingdb=object(),
+        viking_fs=SimpleNamespace(_async_agfs=agfs),
+        resource_processor=processor,
+        skill_processor=object(),
+    )
+    service._connector_delegate = SimpleNamespace(should_delegate=lambda *_args, **_kwargs: False)
+    tracker = SimpleNamespace(
+        create=AsyncMock(return_value=SimpleNamespace(task_id="task-1")),
+        update_stage=AsyncMock(),
+        fail=AsyncMock(),
+    )
+    queue_manager = SimpleNamespace(enqueue=AsyncMock())
+    monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: False)
+    monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: queue_manager)
+
+    result = await service.add_resource(
+        path=source,
+        ctx=ctx,
+        wait=False,
+        allow_local_path_resolution=False,
+    )
+
+    assert result["status"] == "success"
+    assert result["source_path"] == ("https://bucket.tos-cn-beijing.volces.com/video/sample.mp4")
+    processor.prepare_durable_source.assert_not_awaited()
+    processor.submit_understanding.assert_awaited_once_with(source)
+    assert queue_manager.enqueue.await_args.args[0] == QueueManager.EXTERNAL_PARSE
+    queued = AddResourceMsg.from_dict(queue_manager.enqueue.await_args.args[1])
+    assert queued.path == "https://bucket.tos-cn-beijing.volces.com/video/sample.mp4"
+    assert queued.source_path == "https://bucket.tos-cn-beijing.volces.com/video/sample.mp4"
+    assert queued.understanding_response_id == "response-1"
+    assert tracker.create.await_args.kwargs["meta"] == {
+        "source_path": "https://bucket.tos-cn-beijing.volces.com/video/sample.mp4"
+    }
+
+
+@pytest.mark.asyncio
 async def test_remote_mpeg_ts_url_queues_understanding_after_prepare(
     monkeypatch,
     tmp_path,

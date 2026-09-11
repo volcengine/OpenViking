@@ -119,6 +119,7 @@ Understanding 不受 `wait=false` 限制。`wait=true` 在当前请求内完成 
 | Git，`wait=true` | GitAccessor | 内置目录/代码仓库 Parser | 是 | 解析、落盘及语义队列完成后返回 |
 | 飞书 URL，`parser_api.enable_feishu_url=true` 且有 user/app 凭证 | Understanding 直接读取飞书 | Understanding | 是 | `wait=false` 时提交并入队；`wait=true` 时同步解析 |
 | 飞书 URL，直达配置关闭或无可用凭证 | FeishuAccessor | 内置 Markdown Parser | 是 | Accessor 拉取、归一化后走标准链 |
+| 公网 TOS HTTP(S) URL，默认解析模式且后缀命中 `parser_api.extensions` | Understanding 直接读取 URL | Understanding | 是 | 提交 URL 后立即入队，不在 OpenViking 本地下载和重新上传 |
 | HTTP 服务请求，`wait=false`，命中 Understanding | HTTPAccessor 识别类型并上传同一份本地文件 | Understanding | 是 | 类型识别、Understanding 提交、URI 预占和入队后返回 |
 | 其他 URL、文件、目录、原始文本 | 对应 Accessor；原始文本无需 Accessor | 内置 Parser 或同步 Understanding | 是 | 至少完成解析和落盘后返回 |
 
@@ -136,7 +137,7 @@ HTTPAccessor (50)
 LocalAccessor (1)
 ```
 
-Accessor 的产物统一是 `LocalResource`，包含本地文件或目录路径、`source_type`、原始来源、是否需要清理，以及检测元数据。标准 Parser 不再负责 clone 或下载；只有明确开启的飞书 Understanding 直达链会在 Accessor 前消费原始 URL。
+Accessor 的产物统一是 `LocalResource`，包含本地文件或目录路径、`source_type`、原始来源、是否需要清理，以及检测元数据。标准 Parser 不再负责 clone 或下载；明确开启的飞书 Understanding 直达链，以及满足扩展名白名单且不使用 header 鉴权的公网 TOS URL，会在 Accessor 前消费原始 URL。
 
 ### 飞书资源
 
@@ -253,6 +254,8 @@ TreeBuilder + 标准摘要/索引链
 ```
 
 同步路径中，Accessor 已下载的本地文件会直接上传给 Understanding，`original_source` 只保留作来源元数据。普通 HTTP 文件的异步路径也先上传已检测文件，再通过统一的 `AddResourceMsg` 持久化 `understanding_response_id`、冻结的 `resolved_extension` 和 `parser_backend="understanding"`；Worker 直接恢复 response，既不重新下载源 URL，也不因配置变化重新选择后端。这些冻结字段是内部任务字段，公共 `args` 不能指定，避免调用方绕过外部解析开关和扩展名白名单。
+
+公网 TOS 虚拟主机 URL 是普通 HTTP 路径的受限例外：仅在默认解析模式、URL 路径后缀命中 `parser_api.extensions` 且未提供 `tos_signature` / `tos_access` header 鉴权时，生产端才把 URL 直接提交给 Understanding。预签名查询参数只用于该次提交；QueueFS、task metadata 和 API 返回值只保留去掉 query/fragment 的来源 URL。使用 header 鉴权、未命中扩展名白名单或选择其他解析模式时，仍由 HTTPAccessor 下载并按原链路处理。
 
 飞书直达的异步路径也冻结 `parser_backend="understanding"`。生产端统一调用 Understanding 提交：显式 user token 直接转换为 `lark_file`，应用凭证则在 UnderstandingAPI 内获取 tenant token。QueueFS 只持久化 `understanding_response_id`，不保存 token；Worker 从该 response 继续轮询，不重复提交也不重新判断配置。未显式指定资源名的飞书 artifact 会从 ZIP 单一根目录恢复真实标题，目标 URI 因而延迟到解析完成后确定。
 

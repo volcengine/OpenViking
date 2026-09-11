@@ -333,23 +333,53 @@ class UnderstandingAPI(BaseParser):
 
     def can_submit_url_directly(self, source: str, **kwargs) -> bool:
         """Return whether this URL can bypass source materialization."""
-        if not source.startswith(("http://", "https://")) or not self._is_feishu_url(source):
+        if not source.startswith(("http://", "https://")):
             return False
-        from openviking.parse.accessors.feishu_accessor import FeishuAccessor
-        from openviking.parse.feishu_import import recursive_wiki
+        if self._is_feishu_url(source):
+            from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+            from openviking.parse.feishu_import import recursive_wiki
 
-        doc_type, _ = FeishuAccessor._parse_feishu_url(source)
-        if doc_type in {"folder", "file"} or (doc_type == "wiki" and recursive_wiki(kwargs)):
+            doc_type, _ = FeishuAccessor._parse_feishu_url(source)
+            if doc_type in {"folder", "file"} or (doc_type == "wiki" and recursive_wiki(kwargs)):
+                return False
+            if self._normalize_lark_file(kwargs):
+                return True
+            try:
+                from openviking.resource.feishu_watch_auth import load_feishu_app_credentials
+
+                load_feishu_app_credentials()
+                return True
+            except (FileNotFoundError, ValueError):
+                return False
+
+        if not self._is_tos_url(source):
             return False
-        if self._normalize_lark_file(kwargs):
-            return True
+        if kwargs.get("tos_signature") or kwargs.get("tos_access"):
+            return False
         try:
-            from openviking.resource.feishu_watch_auth import load_feishu_app_credentials
+            from openviking_cli.utils.config.open_viking_config import get_openviking_config
 
-            load_feishu_app_credentials()
-            return True
-        except (FileNotFoundError, ValueError):
+            parser_api = get_openviking_config().parser_api
+        except Exception:
             return False
+        extension = Path(urlparse(source).path).suffix.lower().lstrip(".")
+        extensions = {
+            str(value).lower().lstrip(".")
+            for value in (getattr(parser_api, "extensions", None) or [])
+        }
+        return bool(extension and extension in extensions)
+
+    @staticmethod
+    def _is_tos_url(source: str) -> bool:
+        """Recognize Volcano Engine TOS virtual-hosted URLs."""
+        try:
+            parsed = urlparse(source)
+        except ValueError:
+            return False
+        hostname = (parsed.hostname or "").lower()
+        return ".tos-" in hostname and (
+            hostname.endswith(".volces.com") or hostname.endswith(".volces.com.cn")
+        )
 
     async def parse_content(
         self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs
@@ -362,7 +392,6 @@ class UnderstandingAPI(BaseParser):
     def _auth_headers(self, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
         headers = {
             "Authorization": f"Bearer {self._api_key}",
-            "x-kb-env": "snake",
         }
         if extra:
             headers.update(extra)
