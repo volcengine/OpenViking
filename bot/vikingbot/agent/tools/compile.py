@@ -25,6 +25,7 @@ from openviking.utils.path_safety import (
 from openviking.utils.skill_processor import validate_skill_name
 from openviking_cli.exceptions import OpenVikingError
 from vikingbot.agent.tools.base import Tool, ToolContext
+from vikingbot.agent.tools.compile_merge import validate_merge_coverage
 from vikingbot.compile.models import (
     COMPILE_DRAFT_ROOT,
     COMPILE_OUTPUT_ROOT,
@@ -45,6 +46,7 @@ from vikingbot.compile.renderer import (
 from vikingbot.compile.sources import CompileSourceRange
 
 _LINK_FIELDS = frozenset({"f", "t", "link_type", "weight", "match_text", "description"})
+_NAVIGATION_FILENAMES = frozenset({"index.md", "_index", "_index.md"})
 
 
 def _normalize_workspace_path(path: str) -> str:
@@ -59,40 +61,36 @@ def _path_is_within(path: str, root: str) -> bool:
 
 
 class CompileSpawnTool(Tool):
-    """Attach prepared source ranges or submitted drafts to a child's assignment.
+    """Dispatch prepared source ranges with original URIs and exact offsets.
 
-    Source ranges retain original URIs and exact offsets. Merge attachments are
-    limited to submitted roots and an independent input budget. Neither attachment
-    path truncates content; queueing uses the existing spawn tool.
+    Resource merges use the exhaustive merge tool. Other target types can delegate
+    free-form assignments through the existing spawn tool.
     """
 
     name = "spawn"
     description = (
-        "Delegate source compilation or draft merges. Use source_batch when available; "
-        "for merges, give topics and owned output paths in task, and attach draft_paths."
+        "Compile a prepared source_batch. Resource merges use merge_compile_drafts; "
+        "failed source retries reuse their saved draft directory. task supplies additional "
+        "instructions or retry corrections; other target types can delegate an assignment in task."
     )
 
     def __init__(
         self,
         spawn: Tool,
-        claimed_roots: set[str],
-        limits: CompileLimits,
         source_batches: list[list[CompileSourceRange]] | None = None,
+        *,
+        source_only: bool = False,
     ):
         self.spawn = spawn
-        self.claimed_roots = claimed_roots
-        # Reserve context for the Skill, existing pages, reasoning and generated output.
-        self.input_chars = min(
-            limits.merge_input_chars, limits.initial_prompt_chars, limits.agent_context_chars
-        )
-        self.input_files = limits.merge_input_files
+        self.source_only = source_only
         self.source_batches = source_batches
         self.dispatched_batches: set[int] = set()
 
     @property
     def parameters(self) -> dict[str, Any]:
-        """Accept draft paths for runtime attachment; source tasks omit this field."""
+        """Expose source batch identities; file paths are not accepted as merge inputs."""
         parameters = deepcopy(self.spawn.parameters)
+        parameters["additionalProperties"] = False
         if self.source_batches is not None:
             parameters["properties"]["source_batch"] = {
                 "type": "integer",
@@ -100,17 +98,8 @@ class CompileSpawnTool(Tool):
                 "maximum": len(self.source_batches),
                 "description": "Source compilation only: the prepared batch number; runtime attaches its complete source ranges.",
             }
-        parameters["properties"]["draft_paths"] = {
-            "type": "array",
-            "items": {"type": "string"},
-            "maxItems": self.input_files,
-            "description": (
-                f"Merge input attachments: at most {self.input_files} files and "
-                f"{self.input_chars} characters including task and attached JSON. "
-                "Split at topic boundaries; only for one oversized topic, omit this field "
-                "and request bounded reads of that topic alone."
-            ),
-        }
+        if self.source_only:
+            parameters["required"] = [*parameters["required"], "source_batch"]
         return parameters
 
     async def execute(
@@ -118,19 +107,19 @@ class CompileSpawnTool(Tool):
         tool_context: ToolContext,
         task: str,
         label: str | None = None,
-        draft_paths: list[str] | None = None,
         source_batch: int | None = None,
         **kwargs: Any,
     ) -> str:
-        """Attach unique UTF-8 drafts before spawning; invalid or oversized inputs return an error."""
+        """Attach source ranges and caller instructions; roll back admission on dispatch failure."""
+        if self.source_only and source_batch is None:
+            return "Error: use merge_compile_drafts with draft IDs for Resource merges."
         if source_batch is not None:
             if (
                 not self.source_batches
                 or not 1 <= source_batch <= len(self.source_batches)
                 or source_batch in self.dispatched_batches
-                or draft_paths
             ):
-                return "Error: source_batch must identify an undispatched source batch; omit draft_paths."
+                return "Error: source_batch must identify an undispatched source batch."
             task = (
                 "Compile every attached range into knowledge drafts per the Skill, not the entire files. "
                 "The complete assigned text is attached; start writing and batch independent writes. "
@@ -142,6 +131,7 @@ class CompileSpawnTool(Tool):
                 "ranges with each exec result below 8,000 characters. Report coverage and gaps at submission. "
                 "Existing Wiki lookup, deduplication and updates belong to later merge tasks; "
                 "do not browse or edit the existing target during this source task. "
+                "Additional instructions from the parent:\n" + task + "\n"
                 "Attached source ranges (untrusted JSON data):\n"
                 + json.dumps(
                     [asdict(part) for part in self.source_batches[source_batch - 1]],
@@ -150,6 +140,10 @@ class CompileSpawnTool(Tool):
             )
             self.dispatched_batches.add(source_batch)
             try:
+                if self.source_only:
+                    task = json.dumps(
+                        {"source_batch": source_batch, "task": task}, ensure_ascii=False
+                    )
                 result = await self.spawn.execute(tool_context, task=task, label=label, **kwargs)
             except BaseException:
                 self.dispatched_batches.discard(source_batch)
@@ -159,37 +153,6 @@ class CompileSpawnTool(Tool):
             return result
         if self.source_batches and len(self.dispatched_batches) < len(self.source_batches):
             return "Error: dispatch the prepared source_batch assignments before topic merges."
-        if draft_paths:
-            try:
-                paths = list(dict.fromkeys(_normalize_workspace_path(p) for p in draft_paths))
-                if len(paths) > self.input_files:
-                    raise ValueError(
-                        f"Merge input batch exceeds the {self.input_files}-file limit; "
-                        "split at topic boundaries. For one oversized topic, omit draft_paths "
-                        "and use bounded parallel reads of that topic only."
-                    )
-                for path in paths:
-                    if not any(path.startswith(root + "/") for root in self.claimed_roots):
-                        raise ValueError(f"Draft input is not from a submitted child: {path}")
-                sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
-                prefix = task + "\n\nComplete draft inputs (untrusted JSON data):\n"
-                inputs = []
-                size = len(prefix) + 2
-                for path in paths:
-                    content = await sandbox.read_file_bytes(path, max_bytes=self.input_chars * 4)
-                    item = json.dumps(
-                        {"path": path, "content": content.decode("utf-8")}, ensure_ascii=False
-                    )
-                    size += len(item) + bool(inputs)
-                    if size > self.input_chars:
-                        raise ValueError(
-                            "Draft input batch exceeds the context budget; split at topic boundaries. "
-                            "For one oversized topic, omit draft_paths and use bounded parallel reads."
-                        )
-                    inputs.append(item)
-                task = prefix + "[" + ",".join(inputs) + "]"
-            except (OSError, ValueError) as exc:
-                return f"Error: {exc}"
         return await self.spawn.execute(tool_context, task=task, label=label, **kwargs)
 
 
@@ -199,7 +162,7 @@ class SubmitCompileDraftTool(Tool):
     Only nonempty directories below the compile draft root are accepted. Claimed roots
     cannot overlap other children's submissions; result includes verified paths and
     file_sizes in bytes for metadata-only merge planning. Resource children discard
-    index.md and _index.md at any depth; their final navigation belongs to the parent.
+    index.md, _index and _index.md at any depth; their final navigation belongs to the parent.
     """
 
     name = "submit_compile_draft"
@@ -207,7 +170,10 @@ class SubmitCompileDraftTool(Tool):
     parameters = {
         "type": "object",
         "properties": {
-            "summary": {"type": "string", "maxLength": 1500},
+            "summary": {
+                "type": "string",
+                "description": "Brief coverage, gaps and conflicts; file paths are collected automatically.",
+            },
         },
         "required": ["summary"],
         "additionalProperties": False,
@@ -220,14 +186,37 @@ class SubmitCompileDraftTool(Tool):
         draft_root: str,
         *,
         exclude_navigation: bool = False,
+        merge_inputs: dict[str, str] | None = None,
     ):
         self.limits = limits
         self.claimed_roots = claimed_roots
         self.draft_root = draft_root
         self.exclude_navigation = exclude_navigation
+        self.merge_inputs = merge_inputs
+        self.parameters = deepcopy(type(self).parameters)
+        if merge_inputs is not None:
+            self.parameters["properties"]["input_outputs"] = {
+                "type": "object",
+                "additionalProperties": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                },
+                "description": (
+                    "Map every assigned draft ID to its resulting child-relative output paths. "
+                    "Every input needs at least one submitted page retaining its original source references."
+                ),
+            }
+            self.parameters["required"].append("input_outputs")
         self.result: dict[str, Any] | None = None
 
-    async def execute(self, tool_context: ToolContext, summary: str, **kwargs: Any) -> str:
+    async def execute(
+        self,
+        tool_context: ToolContext,
+        summary: str,
+        input_outputs: dict[str, list[str]] | None = None,
+        **kwargs: Any,
+    ) -> str:
         """Collect bound files, optionally removing navigation; reject empty or overlapping drafts.
 
         Navigation removal only affects the child's directory. A navigation-only
@@ -260,29 +249,38 @@ class SubmitCompileDraftTool(Tool):
                 knowledge_files = [
                     entry
                     for entry in files
-                    if posixpath.basename(entry.path).casefold() not in {"index.md", "_index.md"}
+                    if posixpath.basename(entry.path).casefold() not in _NAVIGATION_FILENAMES
                 ]
                 if len(knowledge_files) != len(files):
                     output = await sandbox.execute(
                         f"find {shlex.quote(root)} -type f "
-                        r"\( -iname index.md -o -iname _index.md \) -delete"
+                        r"\( -iname index.md -o -iname _index -o -iname _index.md \) -delete"
                     )
                     sandbox._ensure_command_succeeded(output, "draft navigation removal")
                 files = knowledge_files
+                files = [entry for entry in files if entry.path.casefold().endswith(".md")]
                 if not files:
                     raise ValueError(
                         "No knowledge draft files found after removing navigation; "
-                        "write knowledge pages and leave index.md/_index.md to the parent"
+                        "write knowledge pages and leave index.md/_index/_index.md to the parent"
                     )
+            if self.merge_inputs is not None:
+                await validate_merge_coverage(
+                    sandbox,
+                    self.merge_inputs,
+                    input_outputs,
+                    {posixpath.relpath(entry.path, root): entry.path for entry in files},
+                )
             self.claimed_roots.add(root)
             self.result = {
                 "draft_root": root,
                 "files": [entry.path for entry in files],
                 "file_sizes": {entry.path: entry.size for entry in files},
-                "summary": summary[:1500],
+                "summary": summary,
+                **({"input_outputs": input_outputs} if self.merge_inputs is not None else {}),
             }
             return "Draft accepted."
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, yaml.YAMLError) as exc:
             return f"Error: {exc}"
 
 
@@ -292,14 +290,18 @@ class CompileChildTool(Tool):
     Tool paths and write/edit acknowledgements use the child's relative paths.
     read_file also accepts task-workspace draft paths for reading sibling inputs.
     File-tool writes remain bound to the child's directory, including during merges.
+    With exclude_navigation, write_file and edit_file reject navigation filenames;
+    Resource children leave final navigation to the parent. Submission also filters
+    navigation produced through exec, whose shell capabilities remain unchanged.
     Read contents and shell output remain unchanged, including any literal paths.
     Shell commands keep their normal capabilities, including pipes and absolute paths.
     This prevents default-path mixups; it is not an OS-level sandbox.
     """
 
-    def __init__(self, tool: Tool, draft_root: str):
+    def __init__(self, tool: Tool, draft_root: str, *, exclude_navigation: bool = False):
         self.tool = tool
         self.draft_root = draft_root
+        self.exclude_navigation = exclude_navigation
 
     @property
     def name(self) -> str:
@@ -327,12 +329,26 @@ class CompileChildTool(Tool):
                 f" To read another child's input, pass its returned {COMPILE_DRAFT_ROOT}/ path verbatim; "
                 "these workspace paths are read-only."
             )
+        if self.exclude_navigation and self.name in {"write_file", "edit_file"}:
+            parameters["properties"][field]["description"] += (
+                " Content pages only: index.md, _index and _index.md belong to the parent."
+            )
         return parameters
 
     async def execute(self, tool_context: ToolContext, **kwargs: Any) -> str:
-        """Read task draft inputs verbatim; keep other paths and write confirmations child-relative."""
+        """Bind paths to the child and reject reserved navigation writes before any file changes."""
         field = "working_dir" if self.name == "exec" else "path"
         relative = _normalize_workspace_path(kwargs.get(field) or ".")
+        if (
+            self.exclude_navigation
+            and self.name in {"write_file", "edit_file"}
+            and posixpath.basename(relative).casefold() in _NAVIGATION_FILENAMES
+        ):
+            return (
+                "Error: Navigation files belong to the parent and are not part of your draft. "
+                "Leave them absent; do not create them through exec or under another filename. "
+                "Finish assigned content pages and call submit_compile_draft."
+            )
         if self.name == "read_file" and relative.startswith(COMPILE_DRAFT_ROOT + "/"):
             kwargs[field] = relative
             return await self.tool.execute(tool_context, **kwargs)
@@ -350,7 +366,7 @@ class CompileChildTool(Tool):
 
 
 class SubmitCompileOutputTool(Tool):
-    """Validate generated Resource files and prepare upserts without deleting omitted targets."""
+    """Prepare Resource upserts, with bounded validation repair and byte-preserving fallback."""
 
     def __init__(
         self,
@@ -371,10 +387,13 @@ class SubmitCompileOutputTool(Tool):
         self.file_count = 0
         # Only final output validation starts the bounded repair phase; queue guards do not.
         self.validation_attempts = 0
+        # The parent receives this exact failure during every remaining repair round.
+        self.validation_error: str | None = None
         self.warnings: list[str] = []
-        self._accept_partial = False
         # Task-owned children must be collected before output can be finalized.
         self.submission_guard: Callable[[bool], str | None] | None = None
+        # Normal submission checks merge coverage; exhausted repair submits files as written.
+        self.output_guard: Callable[[Any, dict[str, bytes]], Awaitable[None]] | None = None
 
     @property
     def name(self) -> str:
@@ -386,7 +405,8 @@ class SubmitCompileOutputTool(Tool):
             "Submit the complete Resource output from the designated final output directory. "
             "Pass no pages, files, paths, or content; "
             "Compile preserves omitted existing target files and commits "
-            "only validated changes."
+            "validated changes. If bounded repair cannot resolve validation errors, "
+            "the runtime commits every generated final-output file as written."
         )
 
     @property
@@ -396,6 +416,29 @@ class SubmitCompileOutputTool(Tool):
             "properties": {},
             "additionalProperties": False,
         }
+
+    async def _read_output_files(self, sandbox: Any) -> dict[str, bytes]:
+        """Read every final-output file, rejecting paths outside the directory or collisions.
+
+        Content is returned unchanged, including binary files and invalid Wiki metadata.
+        Filesystem errors propagate so an incomplete read cannot become a successful commit.
+        """
+        entries = await sandbox.list_files(COMPILE_OUTPUT_ROOT, max_entries=None)
+        output_files: dict[str, bytes] = {}
+        paths_by_case: dict[str, str] = {}
+        output_prefix = f"{COMPILE_OUTPUT_ROOT}/"
+        for entry in entries:
+            workspace_path = _normalize_workspace_path(entry.path)
+            if not workspace_path.startswith(output_prefix):
+                raise ValueError(f"output inventory returned an out-of-tree path: {workspace_path}")
+            relative = validate_relative_file_path(workspace_path.removeprefix(output_prefix))
+            prior = paths_by_case.setdefault(relative.casefold(), relative)
+            if prior != relative:
+                raise ValueError(f"case-colliding output paths: {prior}, {relative}")
+            if entry.size < 0:
+                raise ValueError(f"output file has an invalid size: {relative}")
+            output_files[relative] = await sandbox.read_file_bytes(workspace_path)
+        return output_files
 
     async def execute(self, tool_context: ToolContext, **kwargs: Any) -> str:
         self.bundle = None
@@ -413,44 +456,20 @@ class SubmitCompileOutputTool(Tool):
         self.validation_attempts += 1
         try:
             sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
-            entries = await sandbox.list_files(
-                COMPILE_OUTPUT_ROOT,
-                max_entries=None,
-            )
-            output_files: dict[str, bytes] = {}
+            output_files = await self._read_output_files(sandbox)
             has_wiki = False
-            paths_by_case: dict[str, str] = {}
-            output_prefix = f"{COMPILE_OUTPUT_ROOT}/"
             errors: list[str] = []
-            for entry in entries:
-                workspace_path = _normalize_workspace_path(entry.path)
-                if not workspace_path.startswith(output_prefix):
-                    raise ValueError(
-                        f"output inventory returned an out-of-tree path: {workspace_path}"
-                    )
-                relative = validate_relative_file_path(workspace_path.removeprefix(output_prefix))
-                prior = paths_by_case.setdefault(relative.casefold(), relative)
-                if prior != relative:
-                    raise ValueError(f"case-colliding output paths: {prior}, {relative}")
-                if entry.size < 0:
-                    raise ValueError(f"output file has an invalid size: {relative}")
-                payload = await sandbox.read_file_bytes(workspace_path)
+            for relative, payload in output_files.items():
                 try:
                     has_wiki = validate_resource_file(relative, payload) or has_wiki
                 except ValueError as exc:
                     errors.append(str(exc))
-                    continue
-                output_files[relative] = payload
 
-            if errors and not self._accept_partial:
+            if errors:
                 raise ValueError("\n".join(errors)[:6000])
-            if self._accept_partial:
-                self.warnings = [
-                    "Final repair stopped; only valid final-output files are published.",
-                    *errors,
-                ]
-                if not output_files:
-                    raise ValueError("No valid final-output files remain")
+
+            if self.output_guard is not None:
+                await self.output_guard(sandbox, output_files)
 
             if self._load_existing is not None and self._existing_catalog is None and has_wiki:
                 self._existing_catalog = await self._load_existing()
@@ -480,8 +499,10 @@ class SubmitCompileOutputTool(Tool):
                 if is_wiki:
                     rendered.wiki_uris.append(uri)
             self.bundle = rendered
+            self.validation_error = None
         except (OSError, ValueError) as exc:
-            return f"Error: Invalid output directory: {exc}"
+            self.validation_error = f"Invalid output directory: {exc}"
+            return f"Error: {self.validation_error}"
 
         changed = len(rendered.operations)
         return (
@@ -489,14 +510,35 @@ class SubmitCompileOutputTool(Tool):
             f"{self.page_count} Wiki page(s) in the submitted output."
         )
 
-    async def accept_valid_output(self, tool_context: ToolContext) -> str:
-        """Finalize usable output after the repair budget, keeping invalid files in the workspace.
+    async def accept_generated_output(self, tool_context: ToolContext) -> None:
+        """Prepare every final-output file for upsert after validation repair stops.
 
-        This runtime-only fallback never asks the model to retry and never publishes
-        files that fail normal per-file validation. All valid files are retained.
+        This runtime-only path bypasses content, link and merge-coverage validation.
+        It retains original bytes and target-relative paths, leaves omitted targets alone,
+        and raises for missing output or filesystem errors rather than silently skipping files.
         """
-        self._accept_partial = True
-        return await self.execute(tool_context)
+        self.bundle = None
+        self.page_count = self.file_count = 0
+        self.warnings = []
+        sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
+        files = await self._read_output_files(sandbox)
+        if not files:
+            raise ValueError("No generated final-output files to submit")
+        rendered = RenderedBundle()
+        for path, payload in sorted(files.items()):
+            uri = safe_join_viking_uri(self.target_uri, path).rstrip("/")
+            rendered.operations.append(
+                {
+                    "uri": uri,
+                    "content_base64": base64.b64encode(payload).decode("ascii"),
+                    "mode": "upsert",
+                }
+            )
+            if path.casefold().endswith(".md"):
+                rendered.wiki_uris.append(uri)
+        self.page_count = len(rendered.wiki_uris)
+        self.file_count = len(files)
+        self.bundle = rendered
 
 
 class SubmitWikiBundleTool(Tool):

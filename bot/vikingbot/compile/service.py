@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import posixpath
 import shlex
 import shutil
 import time
@@ -42,6 +43,7 @@ from vikingbot.agent.tools.compile import (
     SubmitCompileOutputTool,
     SubmitWikiBundleTool,
 )
+from vikingbot.agent.tools.compile_merge import CompileMergeTool
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.agent.tools.spawn import WaitSubagentsTool
 from vikingbot.compile.models import (
@@ -91,12 +93,14 @@ _SKILL_EXCLUDED_FILES = frozenset(
 )
 _CATALOG_FRONTMATTER_LINES = 128  # prefix read to detect unclosed OKF frontmatter
 _COMPILE_BUDGET_REMINDER_THRESHOLDS = (15, 8, 3)  # remaining iterations
-# One ordinary tool round saves source details while the full context is available.
+# A pre-compaction round submits finished work or saves details needed to continue.
 _COMPILE_PRE_COMPACT_PROMPT = (
-    "Context compaction follows this turn. Save unwritten knowledge from the sources already "
-    "read into your assigned draft/output files using existing tools, preserving details and citations. "
+    "Context compaction follows this turn if work continues. If your assigned deliverables are "
+    "ready, call your submission tool now; successful submission finishes your work without compaction. "
+    "Otherwise save unwritten knowledge from the sources already read into your assigned draft/output "
+    "files using existing tools, preserving details and citations. "
     "Briefly state file paths, source coverage and remaining gaps alongside the writes. "
-    "Reuse existing drafts; do not read new sources or submit yet."
+    "Reuse existing drafts and do not read new sources during this save turn."
 )
 
 
@@ -462,12 +466,6 @@ class BotCompileService:
             raise CompileFailure(
                 "INVALID_ARGUMENT", "from must contain files or directories", stage="queued"
             )
-        if len(raw_sources) > self.limits.source_roots:
-            raise CompileFailure(
-                "RESOURCE_EXHAUSTED",
-                "Compile source root limit exceeded.",
-                stage="queued",
-            )
         client = await VikingClient.create(connection=connection, config=self.config)
         try:
             sources: list[str] = []
@@ -476,11 +474,6 @@ class BotCompileService:
                 canonical = str(attrs.get("uri") or "").rstrip("/")
                 if canonical not in sources:
                     sources.append(canonical)
-            if len(sources) > self.limits.source_roots:
-                raise CompileFailure(
-                    "RESOURCE_EXHAUSTED", "Compile source root limit exceeded.", stage="queued"
-                )
-
             skill_uri = request.skill.strip().rstrip("/")
             if skill_uri.endswith("/SKILL.md"):
                 skill_uri = skill_uri[: -len("/SKILL.md")]
@@ -709,6 +702,17 @@ class BotCompileService:
                 """Collect retained targets only when final Resource output is submitted."""
                 return await self._load_resource_link_catalog(client, request.to)
 
+            async def load_merge_target(uri: str) -> bytes | None:
+                """Load one selected target for measured merge input; absent pages return None."""
+                if not relative_uri_path(request.to, uri):
+                    raise ValueError(f"Merge target is outside the requested Wiki: {uri}")
+                try:
+                    return await client.download_bytes(uri)
+                except OpenVikingError as exc:
+                    if exc.code == "NOT_FOUND":
+                        return None
+                    raise OSError(f"Cannot load merge target {uri}: {exc}") from exc
+
             request_loop = AgentLoop(
                 bus=self.agent_loop.bus,
                 provider=_CompileProvider(self.agent_loop.provider, self._model_slots),
@@ -753,6 +757,7 @@ class BotCompileService:
                 usage=child_usage,
                 skill_text=skill_text,
                 source_batches=source_batches,
+                load_merge_target=load_merge_target,
             )
             system_prompt, user_prompt = self._build_prompts(
                 request=request,
@@ -787,23 +792,26 @@ class BotCompileService:
             except AgentRepairLimitExceeded as exc:
                 agent_usage = _merge_usage(agent_usage, exc.usage)
                 preserve_workspace = True
-                await submit_tool.accept_valid_output(
+                await submit_tool.accept_generated_output(
                     ToolContext(session_key=session_key, sandbox_manager=sandbox_manager)
                 )
                 bundle = submit_tool.bundle
-                if bundle is None:
-                    raise CompileFailure(
-                        "AGENT_OUTPUT_INVALID",
-                        f"Final repair budget exhausted; no valid output. Drafts retained at {workspace}.",
-                        stage="agent",
-                    ) from exc
             except AgentIterationLimitExceeded as exc:
                 agent_usage = _merge_usage(agent_usage, getattr(exc, "usage", None) or {})
                 if subagents is not None:
                     await subagents.cancel_all()
+                if resource_target and subagents is not None:
+                    preserve_workspace = True
+                    raise CompileFailure(
+                        "COMPILE_INCOMPLETE",
+                        f"Compile reached its {exc.max_iterations}-iteration limit without complete "
+                        f"validated output. Nothing was published; drafts and merge state retained at {workspace}.",
+                        stage="agent",
+                    ) from exc
                 if target_type != "resource":
                     raise CompileFailure("AGENT_OUTPUT_INVALID", str(exc), stage="agent") from exc
                 assert sandbox is not None
+                preserve_workspace = True
                 await self._complete_salvaged_task(
                     task_id=task_id,
                     client=client,
@@ -932,10 +940,9 @@ class BotCompileService:
                 dict.fromkeys([*rendered.unchanged, *batch_result.get("unchanged", [])])
             )
             warnings = list(getattr(submit_tool, "warnings", []))
-            warnings.extend(getattr(registry.get("wait_subagents"), "failures", []))
+            if not resource_target and registry.get("merge_compile_drafts") is None:
+                warnings.extend(getattr(registry.get("wait_subagents"), "failures", []))
             preserve_workspace = preserve_workspace or bool(warnings)
-            if preserve_workspace:
-                warnings.append(f"Partial output; unresolved drafts retained at {workspace}.")
             if output_file_count == 0:
                 warnings.append("No reliable output was produced from the supplied materials.")
             result = CompileResult(
@@ -957,11 +964,15 @@ class BotCompileService:
                 if task.status == "cancelling":
                     return
                 task.status = "completed"
-                task.stage = "partial" if preserve_workspace else "completed"
+                task.stage = "completed"
                 task.result = result
                 task.error = None
 
             await self.store.update(task_id, complete)
+        except BaseException:
+            # Source and merge evidence must survive failed or cancelled Resource execution.
+            preserve_workspace = preserve_workspace or target_type == "resource"
+            raise
         finally:
             if subagents is not None:
                 await subagents.cancel_all()
@@ -1015,29 +1026,25 @@ class BotCompileService:
                     sandbox = await sandbox_manager.get_sandbox(session_key)
                     workspace = sandbox_manager.get_workspace_path(session_key)
                     for entry in await sandbox.list_files(max_entries=None):
-                        if entry.path.startswith(
-                            (f"{COMPILE_DRAFT_ROOT}/", f"{COMPILE_OUTPUT_ROOT}/")
-                        ):
+                        if entry.path.startswith(f"{COMPILE_STAGING_ROOT}/"):
                             # Remote sandboxes can discard files on stop; retain drafts locally.
-                            if entry.size >= 0:
-                                path = workspace / sanitize_relative_viking_path(entry.path)
-                                payload = await sandbox.read_file_bytes(entry.path)
-                                path.parent.mkdir(parents=True, exist_ok=True)
-                                path.write_bytes(payload)
+                            path = workspace / sanitize_relative_viking_path(entry.path)
+                            payload = await sandbox.read_file_bytes(entry.path)
+                            path.parent.mkdir(parents=True, exist_ok=True)
+                            path.write_bytes(payload)
+                # Destructive sandbox cleanup requires a complete recovery copy.
+                await sandbox_manager.cleanup_session(session_key)
             finally:
                 try:
-                    await sandbox_manager.cleanup_session(session_key)
+                    if client is not None:
+                        await client.close()
                 finally:
-                    try:
-                        if client is not None:
-                            await client.close()
-                    finally:
-                        if not preserve_workspace:
-                            await asyncio.to_thread(
-                                shutil.rmtree,
-                                workspace_parent,
-                                ignore_errors=True,
-                            )
+                    if not preserve_workspace:
+                        await asyncio.to_thread(
+                            shutil.rmtree,
+                            workspace_parent,
+                            ignore_errors=True,
+                        )
 
         try:
             await _await_with_hard_timeout(
@@ -1049,6 +1056,10 @@ class BotCompileService:
             logger.warning(
                 "Compile cleanup exceeded its {}-second grace limit",
                 self.limits.cleanup_grace_seconds,
+            )
+        except Exception:
+            logger.exception(
+                "Compile cleanup failed; incomplete recovery copies retain their sandbox"
             )
 
     async def _complete_salvaged_task(
@@ -1077,10 +1088,12 @@ class BotCompileService:
             def complete(task: CompileTask) -> None:
                 if task.status in TERMINAL_STATUSES or task.status == "cancelling":
                     return
-                task.status = "completed"
+                task.status = "failed"
                 task.stage = "salvaged"
                 task.result = result
-                task.error = None
+                task.error = CompileErrorInfo(
+                    code="COMPILE_INCOMPLETE", message="\n".join(result.warnings)
+                )
 
             await self.store.update(task_id, complete)
             return result
@@ -1602,6 +1615,7 @@ class BotCompileService:
         connection: dict[str, Any],
         usage: dict[str, int],
         skill_text: str,
+        load_merge_target: Callable[[str], Awaitable[bytes | None]],
         source_batches: list[list[CompileSourceRange]] | None = None,
     ) -> SubagentManager | None:
         """Reuse the request's spawn manager with isolated model histories and per-child drafts.
@@ -1614,20 +1628,77 @@ class BotCompileService:
             return None
         manager = request_loop.subagents
         claimed_roots: set[str] = set()
+        resource_target = classify_uri(request.to).context_type == "resource"
+        merge_tool = (
+            CompileMergeTool(
+                manager,
+                self.limits,
+                len(source_batches or []),
+                target_uri=request.to,
+                load_existing=load_merge_target,
+            )
+            if resource_target
+            else None
+        )
 
         async def run_child(
-            child_id: str, assignment: str, session_key: SessionKey
+            child_id: str,
+            assignment: str,
+            session_key: SessionKey,
+            merge_inputs: dict[str, str] | None = None,
+            *,
+            draft_root: str | None = None,
         ) -> dict[str, Any]:
-            """Run an independent draft task and return paths and a bounded completion report."""
-            draft_root = f"{COMPILE_DRAFT_ROOT}/{child_id}"
+            """Run a draft task, reusing a supplied root and returning all submitted files.
+
+            Source retries supply the same root; its inventory is a recovery aid,
+            not evidence of complete source coverage. Merge children use fresh roots.
+            """
+            draft_root = draft_root or f"{COMPILE_DRAFT_ROOT}/{child_id}"
             sandbox = await request_loop.sandbox_manager.get_sandbox(session_key)
             await sandbox.execute(f"mkdir -p {shlex.quote(draft_root)}")
             system, user = self._build_prompts(
                 request=request, draft_root=draft_root, skill_text=skill_text
             )
-            system += f"\nBudget: {self.limits.subagent_iterations} model/tool rounds, including checks and submission."
+            if merge_inputs is not None:
+                system += (
+                    "\nCurrent execution role: bounded incremental merge. The assignment contains all "
+                    "input ranges and complete previous checkpoint pages for this batch. Use only that "
+                    "content; do not reread full originals or target pages. Original files can span "
+                    "multiple batches. Preserve checkpoint content and source references, emit complete "
+                    "updated pages, and submit input_outputs for every range and checkpoint ID."
+                )
+            system += (
+                f"\nBudget: {self.limits.subagent_iterations} model/tool rounds, including checks and submission. "
+                "Reserve rounds to check coverage and call submit_compile_draft."
+            )
+            saved_files = await sandbox.list_files(draft_root, max_entries=None)
+            if saved_files:
+                system += (
+                    "\nYour draft directory contains unsubmitted work from an earlier attempt. "
+                    "Reuse those files and compare relevant saved pages with the attached source ranges "
+                    "to find gaps. Read a saved page before revising it; retain completed knowledge and "
+                    "write only missing material or necessary repairs. Do not restart the batch from scratch. "
+                    "File existence does not prove coverage or validity. Submit all retained and new pages "
+                    "once the assigned coverage is complete. The inventory previews at most 100 files; "
+                    "use exec to list further paths if needed."
+                )
             user = json.dumps(
-                {"request": json.loads(user), "assignment": assignment}, ensure_ascii=False
+                {
+                    "request": json.loads(user),
+                    "assignment": assignment,
+                    "existing_drafts": {
+                        "file_count": len(saved_files),
+                        "files": [
+                            {
+                                "path": posixpath.relpath(entry.path, draft_root),
+                                "size_bytes": entry.size,
+                            }
+                            for entry in saved_files[:100]
+                        ],
+                    },
+                },
+                ensure_ascii=False,
             )
             if len(system) + len(user) > self.limits.initial_prompt_chars:
                 raise ValueError("Subagent assignment exceeds the initial prompt limit")
@@ -1637,12 +1708,19 @@ class BotCompileService:
                 claimed_roots,
                 draft_root,
                 exclude_navigation=classify_uri(request.to).context_type == "resource",
+                merge_inputs=merge_inputs,
             )
             child_tools.register(submit_draft)
             for name in _COMPILE_CORE_TOOLS:
                 tool = registry.get(name)
                 if tool is not None:
-                    child_tools.register(CompileChildTool(tool, draft_root))
+                    child_tools.register(
+                        CompileChildTool(
+                            tool,
+                            draft_root,
+                            exclude_navigation=classify_uri(request.to).context_type == "resource",
+                        )
+                    )
 
             async def require_draft_submission(context: _PlainTextContext) -> _PlainTextDelivered:
                 """Retain a child's text and tool history until it writes and submits its drafts.
@@ -1664,6 +1742,16 @@ class BotCompileService:
                 )
                 return _PlainTextDelivered(messages=messages, tools_used=[])
 
+            async def remind_submission(iteration: int) -> str | None:
+                """Count remaining rounds, including the current call, and prompt timely submission."""
+                remaining = self.limits.subagent_iterations - iteration + 1
+                if remaining in (*_COMPILE_BUDGET_REMINDER_THRESHOLDS, 1):
+                    return (
+                        f"{remaining} model/tool rounds remain, including this one. Reuse saved pages and reserve time for "
+                        "coverage checks and submit_compile_draft. Do not claim incomplete coverage is complete."
+                    )
+                return None
+
             _summary, _reasoning, _tools, tokens, iterations = await request_loop._run_agent_loop(
                 messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
                 session_key=session_key,
@@ -1677,6 +1765,7 @@ class BotCompileService:
                 inject_write_experience=False,
                 context_compact_budget=self.limits.agent_context_chars,
                 pre_compact_prompt=_COMPILE_PRE_COMPACT_PROMPT,
+                status_note_provider=remind_submission,
                 agent_id=child_id,
                 max_iterations=self.limits.subagent_iterations,
             )
@@ -1684,13 +1773,46 @@ class BotCompileService:
             if submit_draft.result is None:
                 raise ValueError(
                     f"Subagent stopped without submitting its draft files after {iterations} iterations; "
-                    f"inspect partial drafts under {COMPILE_DRAFT_ROOT}/ before retrying."
+                    f"Saved files remain under {draft_root}; a source batch retry reuses that directory."
                 )
             return submit_draft.result
 
-        manager.task_runner = run_child
-        compile_spawn = CompileSpawnTool(spawn, claimed_roots, self.limits, source_batches)
+        async def run_resource_child(
+            child_id: str, envelope: str, session_key: SessionKey
+        ) -> dict[str, Any]:
+            """Bind runtime source identities or merge inputs independently of model-authored tasks.
+
+            Source attempts share a batch-owned draft root. Only successful source
+            submissions enter the merge catalog. Failure releases admission and any
+            submission claim so a retry can repair and submit the retained files.
+            """
+            assignment = json.loads(envelope)
+            batch = assignment.get("source_batch")
+            draft_root = f"{COMPILE_DRAFT_ROOT}/source-{batch}" if batch is not None else None
+            try:
+                result = await run_child(
+                    child_id,
+                    assignment["task"],
+                    session_key,
+                    assignment.get("draft_inputs"),
+                    draft_root=draft_root,
+                )
+                if batch is not None:
+                    sandbox = await request_loop.sandbox_manager.get_sandbox(session_key)
+                    return await merge_tool.add_source(sandbox, batch, result)
+                return result
+            except BaseException:
+                if batch is not None:
+                    claimed_roots.discard(draft_root)
+                    compile_spawn.dispatched_batches.discard(batch)
+                raise
+
+        manager.task_runner = run_resource_child if resource_target else run_child
+        compile_spawn = CompileSpawnTool(spawn, source_batches, source_only=resource_target)
         registry.register(compile_spawn)
+        if merge_tool is not None:
+            registry.register(merge_tool)
+            registry.get("submit_wiki_bundle").output_guard = merge_tool.validate_final
         registry.register(
             WaitSubagentsTool(
                 manager,
@@ -1699,6 +1821,13 @@ class BotCompileService:
                     if classify_uri(request.to).context_type == "resource"
                     else None
                 ),
+                collection_guard=(
+                    lambda: (
+                        "Error: merge_compile_drafts owns collection while its plan runs."
+                        if merge_tool is not None and merge_tool.active
+                        else None
+                    )
+                ),
             )
         )
 
@@ -1706,6 +1835,10 @@ class BotCompileService:
             """Require all planned sources to be dispatched and all child outcomes collected."""
             if source_batches and len(compile_spawn.dispatched_batches) < len(source_batches):
                 return "Error: dispatch and collect every prepared source_batch before submitting."
+            if merge_tool is not None:
+                error = merge_tool.submission_error()
+                if error:
+                    return error
             return manager.begin_submission(finalize)
 
         registry.get("submit_wiki_bundle").submission_guard = guard_submission
@@ -1736,7 +1869,7 @@ class BotCompileService:
         elif target_type == "resource":
             output_rule = (
                 (
-                    "Only the parent writes final deliverables to the directory returned by wait_subagents. "
+                    "The merge tool collects content in the final output directory; the parent owns navigation. "
                     if subagent_max_concurrency
                     else f"Write final deliverables under {COMPILE_OUTPUT_ROOT}/. "
                 )
@@ -1786,7 +1919,7 @@ class BotCompileService:
         if draft_root is None and subagent_max_concurrency:
             system += (
                 "\nFirst response: dispatch prepared source_batches with "
-                "spawn(source_batch=<number>, task='Compile assigned batch'), omitting draft_paths; "
+                "spawn(source_batch=<number>, task='Compile assigned batch'); "
                 "the runtime attaches original source ranges and instructions. Do not reinventory sources, preload bodies, "
                 "infer source topics from filenames, or add inventory/summary-only tasks. "
                 f"Both source and merge phases share {subagent_max_concurrency} workers and "
@@ -1795,23 +1928,42 @@ class BotCompileService:
                 "wait_subagents(block=true) and refill queue_capacity. After all are admitted, "
                 "wait_subagents(wait_all=true). Avoid per-spawn polling. "
                 "Retain only returned paths, sizes and child summaries; do not repeatedly restart failed children. "
+                "A failed source_batch retry reuses its saved draft directory; supply targeted corrections "
+                "in task and preserve existing knowledge while completing gaps. "
             )
             if target_type == "resource":
                 system += (
-                    "Plan merges from knowledge-draft paths, names, file_sizes, summaries and retrieved target pages; "
+                    "Plan merges from the returned draft IDs, paths, sizes, summaries and retrieved target pages; "
                     "inspect headings/frontmatter when unclear. Exclude source copies, caches, "
                     "temporary files and all index.md/_index.md, including in partial drafts. "
                     "Group canonical topics across aliases, versions and directories; "
                     "keep topics sharing a draft or existing target page together. "
-                    "Plan each draft once and each output path with one owner. Spawn with topics, owned output paths, "
-                    "existing page URIs, target URI and draft_paths within spawn's input attachment limits; "
-                    "keep unrelated topics separate. "
-                    "Collect merges and copy only listed knowledge files to final output; do not re-merge or copy draft trees. "
-                    "After collecting merges, create or update affected navigation pages from final output; "
+                    "Use merge_compile_drafts(groups=[{name, task, draft_ids, existing_pages, reuse}, ...]) "
+                    "to save topic assignments incrementally. Names identify stable canonical topics; "
+                    "existing_pages lists selected target URIs for runtime loading and budgeting. "
+                    "Set reuse=true only for an independent single draft needing no rewriting. "
+                    "Correct only unassigned/conflicting IDs; valid assignments persist, and omitted fields stay unchanged. "
+                    "An ID in one group moves an untouched draft; repeating it in the same group is harmless. "
+                    "Keep topics sharing output pages together. Call run=true after all assignments are unambiguous. "
+                    "Runtime batches by actual text size, including previous outputs, saves checkpoints, and "
+                    "resumes failed groups from their last successful batch. No group is an unbounded read task. "
+                    "Source collection supplies each draft catalog once. Merge replies contain counts, "
+                    "applied changes and issue previews; full state remains at state_path. "
+                    "Omit arguments for summary counts. Use view=unassigned for missing draft IDs and paths, "
+                    "view=drafts to recover the catalog after compaction, view=groups for saved group names, "
+                    "or view=group with group_name for one group's task, members and processed offsets. "
+                    "Use view=failures or view=conflicts for issue details; follow next_offset with offset "
+                    "and limit (default 20, maximum 50) while the plan is unchanged. Detail queries cannot "
+                    "be combined with plan updates or run=true. Do not repeatedly retry "
+                    "an unchanged failure. Do not dispatch merges via spawn, call wait_subagents or copy their files. "
+                    "After all merges complete, create or update affected navigation pages from final output; "
                     "read existing ones and retain unrelated entries, following the Skill. "
                     "Check Skill naming, directories, frontmatter, ownership and links once, then submit. "
                     "On validation failure, make one targeted repair within at most three remaining model turns; "
-                    "a second invalid submission ends repair. Preserve invalid drafts and existing target files; "
+                    "a second invalid submission ends repair. Each repair round includes the validation "
+                    "error and remaining repair budget. If repair does not succeed, runtime commits every "
+                    "file in the final output directory as written, without content validation or an "
+                    "incomplete-output report. Preserve generated files and existing target files; "
                     "do not launch reviewers or rewrite all pages."
                 )
             else:
@@ -1820,15 +1972,6 @@ class BotCompileService:
                     "Consult source bodies only for gaps or conflicts; follow the Skill, validate and submit."
                 )
         elif draft_root is not None:
-            if target_type == "resource":
-                system += (
-                    "\nDo not create, update, or validate index.md, _index, or _index.md at any directory level, "
-                    "even when the Skill requires these files. These navigation index files will be generated or updated "
-                    "at a later stage, after the content pages are collected. "
-                    "Missing navigation files are expected in your drafts and must not delay submission. "
-                    "Follow all other Skill requirements for your assigned content pages, including content, "
-                    "directory layout, filenames, frontmatter, sources, and knowledge links. "
-                )
             system += (
                 "\nProduce complete knowledge pages with the Skill's fields, types and allowed values. "
                 "Source tasks write knowledge incrementally; inventories or summaries are insufficient. "
@@ -1840,6 +1983,17 @@ class BotCompileService:
                 "knowledge files from temporary files and report coverage, gaps, conflicts and remaining path/metadata issues."
             )
         system += "\n\nSelected Skill (read referenced files on demand):\n" + skill_text
+        if draft_root is not None and target_type == "resource":
+            system += (
+                "\n\nCurrent execution role: content-draft subagent. The attached Skill defines the final Wiki "
+                "contract; your deliverable is only the assigned content pages. Follow its content, directory, "
+                "filename, frontmatter, source and knowledge-link requirements for those pages. "
+                "The parent owns final navigation after collecting and merging drafts. "
+                "Do not create, update, or validate index.md, _index, or _index.md at any directory level, "
+                "including through exec, even when the Skill requires these files in the final Wiki. "
+                "Missing navigation files are expected in your drafts and must not delay submission. "
+                "Once assigned content pages are ready, call submit_compile_draft."
+            )
         user = json.dumps(
             {
                 "instruction": request.instruction,

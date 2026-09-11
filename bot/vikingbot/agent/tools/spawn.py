@@ -1,6 +1,7 @@
 """Spawn tool for creating background subagents."""
 
 import json
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from vikingbot.agent.subagent import SubagentManager
@@ -66,10 +67,18 @@ class SpawnTool(Tool):
 class WaitSubagentsTool(Tool):
     """Collect compact results from the current task's children without importing their histories."""
 
-    def __init__(self, manager: SubagentManager, *, final_output_directory: str | None = None):
+    def __init__(
+        self,
+        manager: SubagentManager,
+        *,
+        final_output_directory: str | None = None,
+        collection_guard: Callable[[], str | None] | None = None,
+    ):
         """Optionally disclose a Resource destination after the final child result is collected."""
         self._manager = manager
         self._final_output_directory = final_output_directory
+        # A task-owned merge executor can reserve result collection while its plan runs.
+        self._collection_guard = collection_guard
         # Retain failed child IDs after their result inventories are drained.
         self.failures: list[str] = []
 
@@ -114,6 +123,10 @@ class WaitSubagentsTool(Tool):
         """
         if wait_all and not block:
             return "Error: wait_all=true requires block=true."
+        if self._collection_guard is not None:
+            error = self._collection_guard()
+            if error:
+                return error
         report = await self._manager.wait(block=block)
         results = list(report["results"])
         while wait_all and (report["running"] or report["queued"]):
@@ -133,8 +146,8 @@ class WaitSubagentsTool(Tool):
         ):
             report["final_output_directory"] = self._final_output_directory
             report["next_step"] = (
-                "Source results: plan topic merges from the complete inventory. "
-                "Merge results: copy listed outputs here, then add navigation and validate. "
-                "Keep this destination parent-only."
+                "Save source draft IDs in named topic groups with merge_compile_drafts. "
+                "Repair missing or conflicting assignments, then call run=true to execute bounded batches. "
+                "After complete merge coverage, add navigation and submit."
             )
         return json.dumps(report, ensure_ascii=False)

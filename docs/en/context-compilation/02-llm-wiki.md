@@ -71,11 +71,17 @@ ov task status cmp_01abc      # progress and final result
 ov task cancel cmp_01abc      # cooperative cancel
 ```
 
-With subagents enabled, Compile reads each source once and groups its text in task memory into batches of about **30,000 Unicode characters**. Small files can share a batch, while long files span batches. Boundaries favor sections, paragraphs and complete Markdown table rows. Later ranges receive enclosing headings, document frontmatter and table headers as reading context. Repeated context counts toward the character budget; each batch also has a limit of 10 distinct sources.
+With subagents enabled, Compile reads each source once and groups its text in task memory into batches of at most **80,000 Unicode characters**. Small files can share a batch, while long files span batches. Boundaries favor sections, paragraphs and complete Markdown table rows. Later ranges receive enclosing headings, document frontmatter and table headers as reading context. Repeated context counts toward the character budget; each batch also has a limit of 10 distinct sources.
 
 Each child receives its complete assigned text, original URI, character offsets and line numbers directly and writes knowledge drafts. Existing Wiki lookup, deduplication and updates belong to the subsequent topic merges. Long paragraphs can split between complete lines; a single oversized line uses character ranges with continuation flags. Source files and directories remain unchanged, no split resources are created, and citations still point to the originals. Range coverage establishes delivery to children, not complete knowledge extraction.
 
+Within one compile task, retries of a failed source batch reuse its `__compile_staging__/drafts/source-<batch>` directory. The child receives an existing-file inventory and the parent's retry instructions, then repairs or completes the saved pages before submitting the combined inventory. Existing files are not assumed to establish complete coverage. Children receive submission reminders with 15, 8, 3 and 1 rounds remaining. Retained source drafts do not by themselves resume a task across a bot restart.
+
+The main agent receives draft catalogs when collecting child results. Merge plan updates return counts, applied assignment changes and issue previews. Complete assignments, task descriptions and checkpoints are retained in `__compile_staging__/merge-state.json`. The internal `merge_compile_drafts` tool supports read-only `view` queries: `drafts`, `unassigned`, `groups`, `failures`, `conflicts`, or `group` with an exact `group_name`. List pages use `offset` and `limit` (default 20, maximum 50), with `next_offset` indicating more records. These queries let the agent recover details after context compaction. Final coverage checks use the complete saved state.
+
 ## Step 4: Inspect the output
+
+Final validation errors are returned to the parent with a countdown of up to three repair rounds. If repair still fails, Compile writes every generated final-output file to the target as written, including files that fail content or merge validation. Successful writes complete the task without an incomplete-output report; existing target files omitted from the output remain unchanged.
 
 When compile finishes, the target directory holds a Markdown knowledge base. Read the navigation page first, then drill in:
 
@@ -84,7 +90,7 @@ ov tree viking://resources/research-wiki
 ov read viking://resources/research-wiki/index.md
 ```
 
-When Resource Wiki output is submitted, code adds body citations from YAML `sources`, supporting both `resource` and `path` fields while preserving existing citations. Navigation includes valid Wiki pages from the submission and retained target files, preserves model-written introductions, and creates missing ancestor `index.md` pages. Existing filenames stay unchanged.
+When Resource Wiki output is submitted, code adds body citations from YAML `sources`, supporting both `resource` and `path` fields while preserving existing citations. Navigation includes valid Wiki pages from the submission and retained target files, preserves model-written introductions, and creates missing ancestor `index.md` pages. Each index has a descriptive paragraph after its title, followed by a `## Navigation` heading (`## 分类导航` in Chinese) and plain Markdown links without HTML comment delimiters. Each index lists only its direct knowledge pages and links to the `index.md` of each immediate child directory; deeper content is reached through those child indexes. Existing filenames stay unchanged.
 
 Broken relative links are corrected only when the filename identifies one page and the link label matches its title, filename stem, or explicit alias. Ambiguous or missing destinations remain unchanged and appear in the task result's `link_report.unresolved`; they do not fail submission or add model repair turns. Saving after an iteration limit applies the same rules to valid Wiki pages.
 

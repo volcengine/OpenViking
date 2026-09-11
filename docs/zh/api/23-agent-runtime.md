@@ -6,9 +6,15 @@ Agent Runtime Server 负责执行 Agent 任务，当前支持 Compile。应用�
 
 开启 `bot.agents.subagent_enabled`（默认 `true`）时，Compile 使用 `spawn` 分工，通过 `wait_subagents` 领取文件清单、摘要和失败信息。每个子 Agent 独立维护上下文，写入路径和默认 shell 工作目录绑定到 `__compile_staging__/drafts/<id>/`；`read_file` 也支持按返回的完整草稿路径读取同任务的其他子 Agent 产物。子 Agent 使用目标相对路径写入，以 `submit_compile_draft(summary=...)` 提交，不能继续派生或提交最终结果。
 
-Resource 编译采用两阶段分工。第一阶段按来源生成草稿，主 Agent 用 `wait_subagents(wait_all=true)` 一次领取全部子任务的路径清单、文件大小（字节）、摘要和失败信息，处理失败后再做全局合并规划。主 Agent 根据完整清单归并主题、别名及不同命名的版本，只对有歧义的条目读取少量标题或元数据，不通读正文；同一主题的全部草稿交给同一个合并子 Agent，并按草稿总大小均衡分组。合并调用通过 `spawn(draft_paths=[...])` 指定已提交草稿，运行时将完整正文装入子任务初始输入，避免逐轮读取；输入限定为初始提示与上下文预算较小值的四分之一，超限不会截断，可拆分独立主题，单个超大主题则使用分段读取。每个输出页面仅有一个子 Agent 负责，导航统一由主 Agent 生成。主 Agent 汇集成品，检查格式、覆盖范围和路径冲突，移除不合格暂存文件及失效导航链接，报告排除原因后提交；已有目标文件保持不变。取消会停止运行中和排队的子任务，兜底保存不发布子任务目录中的草稿。
+Resource 编译采用两阶段分工。来源子任务提交内容页，运行时返回稳定草稿 ID、真实路径和字符数。主 Agent 按主题、别名和相关旧页面分组，通过 `merge_compile_drafts(groups=[{name, task, draft_ids, existing_pages, reuse}, ...])` 增量保存归属。组名稳定，省略的组、字段和草稿分配保持不变；同组重复 ID 自动去重，跨组重复记录为冲突，未知 ID 单独报告，不丢弃其他正确分配。只需补交缺失或冲突项；尚未处理的草稿可移动到另一组。调用 `run=true` 前必须完成全部来源的无歧义分配，主 Agent 不逐个调度或复制成品。
 
-`bot.agents.subagent_max_concurrency` 控制每个 Compile 同时运行的子 Agent 数量（默认 `8`，不包含主 Agent）。运行中、排队和已完成但未领取的结果合计不超过该值的两倍；排队任务会自动启动。两阶段复用同一并发与排队机制，主 Agent 按 `wait_subagents` 返回的容量继续派发，并仅重试失败分组。分组、格式检查和排除由 Agent 按提示及所选 Skill 执行；提交工具另行校验输出路径、大小和 OKF 格式。
+合并不限制文件数量，每批完整任务文本限制为 60,000 字符，包含新输入片段、已有页面片段、上一批完整暂存结果和 JSON 开销；新片段至多使用预算的一半。运行时复用 `split_source` 按字符区间无重叠切片，大文件和已选旧页面也参与预算。不同主题并行，同一主题逐批更新暂存结果；每批校验输入到输出的对应关系及来源保留，成功后保存字符进度，失败重试从上一批继续。标记 `reuse=true` 的独立单稿，仅在校验通过且原目标路径不存在时直接收集。整个组完成后才复制成品；最终提交检查全部输入、输出和来源引用。若暂存结果已占满预算，停止该组并保留进度、报告超出预算，不再派发超大任务。该检查保证流转和引用完整，不等同于逐条事实的语义等价证明。主 Agent 默认 120 轮，子 Agent 70 轮。
+
+Resource 最终校验失败后，主 Agent 在最多 3 轮修复的每一轮收到具体错误和剩余修复轮数；第二次无效提交也会结束修复。修复结束时，运行时将 `__compile_staging__/output/` 中所有文件按原始字节 upsert 到 `to`，不再执行内容、链接或合并覆盖校验。写入成功后任务标为 `completed`，不附加未完成提示；未涉及的目标文件保持不变。文件读取、权限和实际写入失败仍会导致任务失败。
+
+Resource 子任务编译在最终提交前达到总轮次上限时，任务返回 `failed/COMPILE_INCOMPLETE`。失败或取消保留任务工作区中的草稿及 `__compile_staging__/merge-state.json`，供恢复使用。
+
+`bot.agents.subagent_max_concurrency` 控制每个 Compile 同时运行的子 Agent 数量（默认 `8`，不包含主 Agent）。运行中、排队和已完成但未领取的结果合计不超过该值的两倍；排队任务会自动启动。来源阶段由主 Agent 按 `wait_subagents` 返回的容量派发；Resource 合并阶段由运行时自动调度完整计划，并仅重试未完成输入。主题判断由 Agent 负责，运行时校验草稿覆盖、输出路径、来源保留和 OKF 格式。
 
 `wait_subagents()` 默认等待到有子任务完成、失败或已无子任务；空等期间不再触发主 Agent 的模型调用，也不增加循环轮次，取消可中断等待。主 Agent 还有其他工作可做时，使用 `wait_subagents(block=false)` 立即领取已有结果。
 
@@ -150,8 +156,8 @@ ov task cancel cmp_01abc
 | `pending` | `queued` |
 | `running` | 执行端返回的执行 Stage，例如 `agent`、`writing` |
 | `cancelling` | 收敛当前进程内工作和清理资源 |
-| `completed` | `completed`、`salvaged` |
-| `failed` | 失败发生时的 Stage；响应包含 `error` |
+| `completed` | `completed` |
+| `failed` | 失败 Stage，或 `partial`、`salvaged`；包含 `error`，部分保存时还包含 `result` |
 | `cancelled` | `cancelled` |
 
 ### 旧接口
