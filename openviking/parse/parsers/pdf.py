@@ -48,6 +48,7 @@ class PDFParser(BaseParser):
 
     Strategies:
     - "local": Use pdfplumber for text and table extraction
+    - "anydoc": Use anydoc for text extraction (faster, no images/tables)
     - "mineru": Use MinerU API for advanced PDF processing
     - "auto": Try local first, fallback to MinerU if configured
 
@@ -254,6 +255,9 @@ class PDFParser(BaseParser):
         if self.config.strategy == "local":
             return await self._convert_local(pdf_path, resource_name=resource_name)
 
+        elif self.config.strategy == "anydoc":
+            return await self._convert_anydoc(pdf_path)
+
         elif self.config.strategy == "mineru":
             return await self._convert_mineru(pdf_path, resource_name=resource_name)
 
@@ -275,6 +279,37 @@ class PDFParser(BaseParser):
 
         else:
             raise ValueError(f"Unknown strategy: {self.config.strategy}")
+
+    async def _convert_anydoc(self, pdf_path: Path) -> tuple[str, Dict[str, Any]]:
+        """Convert PDF to Markdown with anydoc.
+
+        anydoc's PDF path is markdown-only (``to_document`` raises
+        UnsupportedError for PDF), so this returns text and nothing else: no
+        images, no tables, and no bookmark- or font-derived headings. Markdown
+        headings anydoc emits itself are kept as-is. It is roughly an order of
+        magnitude faster than pdfplumber, which is the whole reason to pick it,
+        and it raises ``NeedsOcrError`` when *any* page needs OCR --
+        all-or-nothing.
+        """
+        return await asyncio.to_thread(self._convert_anydoc_sync, pdf_path)
+
+    def _convert_anydoc_sync(self, pdf_path: Path) -> tuple[str, Dict[str, Any]]:
+        """同步版：用 anydoc 将 PDF 转 Markdown。
+
+        该方法会在 :meth:`_convert_anydoc` 中通过 asyncio.to_thread 调用。
+        """
+        anydoc = lazy_import("anydoc", "firecrawl-anydoc")
+
+        markdown_content = anydoc.to_markdown(str(pdf_path))
+        meta = {
+            "strategy": "anydoc",
+            "library": "anydoc",
+            "images_extracted": 0,
+            "tables_extracted": 0,
+        }
+
+        logger.info(f"anydoc conversion: {len(markdown_content)} chars")
+        return markdown_content, meta
 
     async def _convert_local(
         self, pdf_path: Path, storage=None, resource_name: Optional[str] = None
