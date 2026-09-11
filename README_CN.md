@@ -181,7 +181,7 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
 </td>
 <td align="center" valign="bottom" width="33%">
 <a href="docs/images/agents/zh/deerflow-memory-manager.md"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/deerflow-dark.svg"><img src="docs/images/integrations/deerflow.svg" width="19" height="24" alt=""></picture><br><strong>DeerFlow</strong></a><br>
-<sub>Memory + MCP</sub>
+<sub>Plugin + MCP</sub>
 </td>
 </tr>
 </table>
