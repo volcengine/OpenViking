@@ -328,26 +328,33 @@ def _link_uri(target: str, source_uri: str) -> str:
 def _append_link_list(
     body: str, kind: str, source_uri: str, entries: Mapping[str, str]
 ) -> tuple[str, int]:
-    """Append missing URI-to-Markdown entries in one replaceable block, preserving all model prose."""
+    """Render plain Markdown links and return their count; navigation replaces its heading section."""
     pattern = rf"\n*<!-- ov-compile:{kind}:start -->.*?<!-- ov-compile:{kind}:end -->\n*"
     clean = re.sub(pattern, "\n\n", body, flags=re.DOTALL).rstrip()
+    if kind == "navigation":
+        clean = re.sub(
+            r"(?ms)^## (?:分类导航|Navigation)[ \t]*\n.*?(?=^## |\Z)", "", clean
+        ).rstrip()
     linked = {_link_uri(link.target, source_uri) for link in _body_markdown_links(clean)}
     lines = []
     for uri, text in entries.items():
         target = _link_uri(uri, source_uri)
-        if target not in linked:
+        if kind == "navigation" or target not in linked:
             lines.append("- " + text)
             linked.add(target)
     if not lines:
         return (clean if clean != body.rstrip() else body), 0
-    heading = _LEADING_H1_RE.match(body)
     title = (
-        {"sources": "来源", "navigation": "导航"}[kind]
-        if heading and re.search(r"[\u4e00-\u9fff]", heading.group())
+        {"sources": "来源", "navigation": "分类导航"}[kind]
+        if re.search(r"[\u4e00-\u9fff]", body + "".join(entries.values()))
         else kind.title()
     )
-    block = f"<!-- ov-compile:{kind}:start -->\n**{title}**\n\n" + "\n".join(lines)
-    return clean + "\n\n" + block + f"\n<!-- ov-compile:{kind}:end -->\n", len(lines)
+    heading = f"## {title}" if kind == "navigation" else f"**{title}**"
+    block = heading + "\n\n" + "\n".join(lines)
+    if kind == "navigation":
+        sections = re.split(r"(?m)(?=^## |^\*\*(?:来源|Sources)\*\*)", clean, maxsplit=1)
+        return "\n\n".join([sections[0].rstrip(), block, *sections[1:]]) + "\n", len(lines)
+    return clean + "\n\n" + block + "\n", len(lines)
 
 
 def _repair_relative_links(
@@ -438,8 +445,9 @@ def finalize_resource_output(
     """Finalize Wiki links without model calls or modifying unrelated retained files.
 
     Submitted files override the retained catalog. Retained index pages are
-    refreshed and missing ancestor indexes are created; other retained pages only
-    supply link targets. Broken links that cannot be identified uniquely are
+    refreshed with direct pages and child-directory indexes, and missing ancestor
+    indexes are created; other retained pages only supply link targets.
+    Broken links that cannot be identified uniquely are
     returned in link_report, never as validation errors.
     """
     existing_files = existing_files or {}
@@ -460,12 +468,18 @@ def finalize_resource_output(
     if not wiki_paths:
         return FinalizedOutput(files=finalized)
     # Every nonempty Wiki directory has an index, even when the model omits it.
+    chinese = any(re.search(r"[\u4e00-\u9fff]", metadata["title"]) for metadata in pages.values())
     directories = {parent for path in pages for parent in PurePosixPath(path).parents}
     for directory in sorted(directories):
         index = str(directory / "index.md")
         if index not in all_files:
             title = directory.name or _wiki_page_basename(target_uri)
-            metadata = {"type": "index", "title": title, "description": title, "sources": []}
+            description = (
+                f"本目录汇总 {title} 下的知识页面与分类入口，可通过分类导航逐层查阅。"
+                if chinese
+                else f"Browse the knowledge pages and categories in {title} using the navigation below."
+            )
+            metadata = {"type": "index", "title": title, "description": description, "sources": []}
             pages[index] = metadata
             header = yaml.safe_dump(metadata, allow_unicode=True, sort_keys=False)
             all_files[index] = f"---\n{header}---\n\n# {title}\n".encode("utf-8")
@@ -517,8 +531,19 @@ def finalize_resource_output(
         report["source_links"] += source_count
         navigation_count = 0
         if pages[path]["type"] == "index":
+            heading = _LEADING_H1_RE.match(body)
+            if heading:
+                rest = body[heading.end() :].lstrip()
+                if not rest or rest.startswith(("#", "**", "- ", "<!--")):
+                    body = (
+                        body[: heading.end()].rstrip()
+                        + "\n\n"
+                        + pages[path]["description"]
+                        + "\n\n"
+                        + rest
+                    )
             directory = posixpath.dirname(path)
-            prefix_path = directory + "/" if directory else ""
+            # Each index exposes one level; child indexes provide access to deeper pages.
             entries = {
                 safe_join_viking_uri(target_uri, page): _markdown_link(
                     metadata["title"], posixpath.relpath(page, directory or ".")
@@ -526,7 +551,7 @@ def finalize_resource_output(
                 + " — "
                 + metadata["description"]
                 for page, metadata in sorted(pages.items())
-                if metadata["type"] != "index" and page.startswith(prefix_path)
+                if page != path and posixpath.dirname(page.removesuffix("/index.md")) == directory
             }
             body, navigation_count = _append_link_list(body, "navigation", uri, entries)
             report["navigation_links"] += navigation_count

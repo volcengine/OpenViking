@@ -262,7 +262,8 @@ class SubagentManager:
                             "type": "function",
                             "function": {
                                 "name": tc.name,
-                                "arguments": json.dumps(tc.arguments),
+                                # Keep Unicode readable in model-facing tool history.
+                                "arguments": json.dumps(tc.arguments, ensure_ascii=False),
                             },
                         }
                         for tc in response.tool_calls

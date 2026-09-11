@@ -215,12 +215,9 @@ def _compact_strip_note_header(content: str) -> str:
 
 
 def _compact_build_note(previous_summary: str, new_summary: str) -> str:
+    """Join complete compaction summaries without dropping saved facts or unfinished work."""
     previous = (previous_summary or "").strip()
     new = (new_summary or "").strip()
-    if len(previous) > 24_000:
-        previous = previous[:24_000] + "\n...<older summary trimmed>"
-    if len(new) > 24_000:
-        new = new[:24_000] + "\n...<summary trimmed>"
     parts = ["[Context compaction]"]
     if previous:
         parts.append(previous)
@@ -279,7 +276,7 @@ class AgentIterationLimitExceeded(RuntimeError):
 
 
 class AgentRepairLimitExceeded(RuntimeError):
-    """Final output repair stopped with usage retained for partial-output handling."""
+    """Final validation repair stopped; usage and generated files remain available for submission."""
 
     def __init__(self, usage: dict[str, int]):
         self.usage = usage
@@ -1225,8 +1222,9 @@ class AgentLoop:
         Keeps system messages and the original task, folds older turns into a
         structured summary note (the previous note is reused verbatim, only the
         region since it is summarized), and retains the most recent complete turns.
-        Cuts only between complete turns and stays within ``budget_chars``; best
-        effort on summarization failure.
+        Summaries remain complete; ``budget_chars`` limits retained recent turns,
+        with cuts only between turns. Fixed instructions, summaries and the newest
+        turn can exceed that budget. Summarization failure is handled best effort.
         """
         budget = budget_chars or 240_000
 
@@ -1466,8 +1464,9 @@ class AgentLoop:
             inject_write_experience: Whether to retrieve and inject relevant agent experience
                 before executing configured write tools.
             pre_compact_prompt: Optional one-turn save instruction at 85% of the character
-                budget. Uses existing tools and iteration budget, then compacts. Already
-                oversized contexts compact immediately; saving is best effort.
+                budget. Uses existing tools and iteration budget; a successful stop tool
+                ends the loop before compaction. Already oversized contexts compact
+                immediately; saving is best effort.
             status_note_provider: Optional async callback ``(iteration) -> str | None``.
                 When set, its result is appended to the model-facing messages right before
                 every model call. Compile emits a reminder at each configured iteration
@@ -1519,7 +1518,6 @@ class AgentLoop:
                 break
             iteration += 1
 
-            saving_before_compact = False
             if context_compact_budget is not None:
                 current_chars = _compact_msg_chars(messages)
                 if compact_pending or current_chars > context_compact_budget:
@@ -1537,7 +1535,7 @@ class AgentLoop:
                     and current_chars > compact_trigger_chars
                 ):
                     messages.append({"role": "user", "content": pre_compact_prompt})
-                    compact_pending = saving_before_compact = True
+                    compact_pending = True
 
             if publish_events:
                 await self.bus.publish_outbound(
@@ -1558,12 +1556,6 @@ class AgentLoop:
                 disabled_tools=disabled_tools,
                 skill_runtime=skill_runtime,
             )
-            if saving_before_compact:
-                tool_definitions = [
-                    definition
-                    for definition in tool_definitions
-                    if definition.get("function", {}).get("name") not in stop_tools
-                ]
             visible_tool_names = {
                 str(definition.get("function", {}).get("name") or "")
                 for definition in tool_definitions
@@ -1635,7 +1627,8 @@ class AgentLoop:
                         "type": "function",
                         "function": {
                             "name": tc.name,
-                            "arguments": json.dumps(args),
+                            # Unicode escapes inflate the history's character budget.
+                            "arguments": json.dumps(args, ensure_ascii=False),
                         },
                     }
                     for tc, args in zip(response.tool_calls, args_list, strict=False)
@@ -2052,6 +2045,17 @@ class AgentLoop:
             return False
 
         async def status_note_provider(iteration: int) -> str | None:
+            if repair_calls:
+                remaining_repairs = submit_tool.limits.repair_iterations - repair_calls + 1
+                return (
+                    f"Final output validation failed: {submit_tool.validation_error}\n"
+                    f"This is repair round {repair_calls}/{submit_tool.limits.repair_iterations}; "
+                    f"{remaining_repairs} repair round(s) remain including this one. "
+                    "Fix the reported output error directly and call submit_wiki_bundle again. "
+                    "Inspections also consume repair rounds; do not investigate unrelated failures. "
+                    "When repair ends, the runtime commits every file in the final output directory "
+                    "as written, including files that fail validation. Preserve all generated output."
+                )
             remaining = max(0, max_iterations - iteration)
             if budget_reminder_thresholds and remaining in budget_reminder_thresholds:
                 return render_budget_reminder(remaining, budget_reminder_thresholds)

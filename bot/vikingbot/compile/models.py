@@ -27,21 +27,18 @@ class CompileLimits(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    source_roots: int = 16
     source_inventory_entries: int = 2000
     initial_prompt_chars: int = 300_000
     agent_context_chars: int = 360_000
-    # Merge attachments stay bounded independently of history compaction.
-    merge_input_chars: int = 60_000
-    # Maximum draft attachments per merge; the parent chooses topic boundaries.
-    merge_input_files: int = Field(default=20, ge=1)
+    # Entire merge batch assignment, including new ranges, checkpoints and JSON metadata.
+    merge_input_chars: int = Field(default=60_000, ge=1)
     # Per-source-task Unicode characters, including repeated headings and table headers.
-    source_batch_chars: int = Field(default=30_000, ge=1)
+    source_batch_chars: int = Field(default=80_000, ge=1)
     # Secondary cap on distinct sources in one task, including empty files.
     source_batch_files: int = Field(default=10, ge=1)
     # Final Resource validation gets one repair attempt within the existing loop budget.
     repair_iterations: int = 3
-    agent_iterations: int = 100
+    agent_iterations: int = 120
     # Per-child model/tool rounds, including draft checks and submission; parent budget is separate.
     subagent_iterations: int = Field(default=70, ge=1)
     concurrent_tasks: int = 10

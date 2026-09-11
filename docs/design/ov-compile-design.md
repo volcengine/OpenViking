@@ -197,7 +197,7 @@ GET /bot/v1/compile/{task_id}
 | `accepted` | `queued` |
 | `running` | `loading_skill`、`collecting_context`、`agent`、`rendering` |
 | `committing` | `writing`、`refreshing`、`salvaging` |
-| `completed` | `completed`、`salvaged` |
+| `completed` | `completed` |
 | `failed` | 失败时所在阶段 |
 
 完成结果：
@@ -296,7 +296,7 @@ Compile 不注册另一组 source tools。它在现有工具执行前增加 requ
 
 Resource 目标由 Agent 在合并阶段按主题调用 `ov find '<主题和关键实体>' --uri '<to>' --node-limit 10 --level 2` 检索，每个主题最多返回 10 篇候选文档，不全量遍历目标目录。父 Agent 根据候选摘要选择相关旧页面，将旧页面 URI 与新草稿交给同一个合并任务；涉及同一旧页面的主题由同一个任务处理。
 
-合并 Agent 分段完整读取要更新的旧页面，在原文基础上修改，保留无关事实、引用和原相对路径；没有合适旧页面时才新增。父 Agent 汇总完整输出文件，并读取、更新受影响的导航页，保留其他条目。提交继续使用现有 batch-write `upsert`：同路径整文件覆盖，新路径新增，未输出的旧文件保留，不增加内容比较或跳过写入逻辑。这些检索和阅读要求由提示词驱动，不增加读取追踪或提交校验。
+合并 Agent 分段完整读取要更新的旧页面，在原文基础上修改，保留无关事实、引用和原相对路径；没有合适旧页面时才新增。父 Agent 以稳定草稿 ID 增量保存主题归属，修正缺失或冲突项后启动执行；运行时按字符预算分批，包含新输入、已有页面和上批暂存结果，每批校验对应关系和来源保留并保存进度。全组完成后复制成品，失败从最后成功批次继续。父 Agent 读取、更新受影响的导航页，保留其他条目。提交继续使用现有 batch-write `upsert`：同路径整文件覆盖，新路径新增，未输出的旧文件保留，不增加内容比较或跳过写入逻辑。这些检索和阅读要求由提示词驱动，不增加读取追踪或提交校验。
 
 ### 6.4 工具集合
 
@@ -351,7 +351,7 @@ BotCompileService 使用当前 provider/config、`workspace=task_workspace` 和 
 
 Compile 父任务和子任务通过 `pre_compact_prompt` 启用压缩前补写：上下文超过字符预算的 85% 时，使用现有工具和迭代额度补写一轮草稿，下一轮执行 compact。补写轮不开放提交工具；压缩摘要保留草稿路径、来源覆盖范围、未写入内容和写入失败情况，最近的完整工具回合仍按现有规则保留。若上下文已经超过字符预算，则直接 compact，不再追加完整上下文的模型调用。该机制尽力保存细节，不增加独立文件清单、强制完整性校验或补写重试循环。
 
-该入口不使用普通 chat history、自动 memory/experience recall 或普通最终回答。只有 `submit_wiki_bundle` 成功执行并保存合法 bundle 后才能结束；参数校验或领域校验返回 `Error:` 时继续同一 loop 修复。只有自然语言而没有 submit 时，wrapper 追加提交提醒后继续；达到 `bot.agents.max_tool_iterations` 配置的 iteration limit（默认 50）时，不执行现有聊天路径的“禁用工具后再回答一次”。Resource 目标会先在独立、受限的 salvage 阶段尝试保存符合条件的 workspace 产物：存在可保存产物时任务以 `completed/salvaged` 结束，否则返回 `AGENT_OUTPUT_INVALID`；Memory 和 Skill 目标直接返回 `AGENT_OUTPUT_INVALID`。模型调用、工具执行和 token usage 仍沿用现有实现。
+该入口不使用普通 chat history、自动 memory/experience recall 或普通最终回答。`submit_wiki_bundle` 返回校验错误时继续同一 loop 修复。Resource 最终校验失败后，每轮都向主 Agent 提供具体错误和剩余修复轮数；最多修复 3 轮，第二次无效提交也会结束修复。修复未成功时，运行时将最终输出目录中的全部文件按原始字节 upsert 到 `to`，绕过内容、链接和合并覆盖校验，写入成功即标为 `completed`，不报告未完成部分。工作区保留与任务成功状态互不影响。主 Agent 总上限由 `CompileLimits.agent_iterations` 控制，默认 120 轮。Resource 子任务编译在最终提交前耗尽总轮次时返回 `failed/COMPILE_INCOMPLETE`，并保留草稿及合并状态。单 Agent Resource 的迭代超限保存以 `failed/salvaged` 结束；Memory 和 Skill 目标返回 `AGENT_OUTPUT_INVALID`。模型调用、工具执行和 token usage 沿用现有实现。
 
 现有 `_run_agent_loop()` 的 stop 判定需要从“出现 stop tool name”改成“该 stop tool 的结果通过 `_is_tool_result_success()`”；这是 structured task 正确重试的必要条件，默认聊天未传 `stop_tool_names`，行为不变。
 
@@ -558,12 +558,12 @@ v1 先使用集中定义、可测试的 `CompileLimits`，不把常量散落在 
 
 | 项目 | 默认值 |
 | --- | --- |
-| source roots | 16 |
+| `from` 来源路径数量 | 不设上限 |
 | 每个 source root 的 inventory entries | 2,000 |
 | source batch files / bytes | 10 / 256,000（单个大文件独占批次） |
-| merge input files / characters | 20 / 60,000 |
+| merge input files / batch characters | 不限文件数 / 60,000；新片段、已有页片段、上批完整结果及 JSON 合计，超出按区间分批 |
 | initial prompt / agent context characters | 300,000 / 360,000 |
-| 主 Agent / 子 Agent model-tool rounds | 60 / 70 |
+| 主 Agent / 子 Agent model-tool rounds | 120 / 70 |
 | 最终校验修复 rounds | 3 |
 | 输出页数（含索引）/ 文件数 / 写入操作数 / 单文件与总大小 | 不设上限 |
 | 输出工作区和目标目录清单 | 不设总条目上限；远程目标清单分页读取 |
@@ -572,7 +572,7 @@ v1 先使用集中定义、可测试的 `CompileLimits`，不把常量散落在 
 | accepted tasks（全局 / 单 principal）/ queue wait | 40 / 10 / 60 min |
 | terminal task retention / records | 24 h / 1,000 |
 
-正常提交、渲染、最终修复兜底和迭代超限 salvage 均不因输出数量或大小拒绝、截断文件。路径安全、重复路径和文件格式校验继续生效；任务执行轮数、输入批次与并发限制独立于输出规模。
+正常提交、渲染、最终修复兜底和迭代超限 salvage 均不因输出数量或大小拒绝、截断文件。最终修复兜底保留路径范围和重复路径约束，但不执行文件格式、链接或合并覆盖校验，不过滤无效内容。任务执行轮数、输入批次与并发限制独立于输出规模。
 
 ## 11. 错误处理
 
