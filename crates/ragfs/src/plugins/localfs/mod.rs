@@ -280,10 +280,24 @@ impl LocalFileSystem {
 
     /// Map local file failures into stable filesystem error categories.
     fn map_error(path: &str, error: std::io::Error) -> Error {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            return Error::NotFound(path.to_string());
+        match error.kind() {
+            // A child path below a regular file (for example
+            // `file/.path.ovlock`) is absent from the filesystem namespace.
+            // PathLock probes such compatibility candidates and relies on the
+            // same NotFound result that the former metadata precheck returned.
+            ErrorKind::NotFound | ErrorKind::NotADirectory => Error::NotFound(path.to_string()),
+            ErrorKind::IsADirectory => Error::IsADirectory(path.to_string()),
+            _ => Error::plugin(format!("failed to read file: {}", error)),
         }
-        Error::plugin(format!("failed to read file: {}", error))
+    }
+
+    /// Map a failed directory open without issuing a separate metadata request.
+    fn map_read_dir_error(path: &str, error: std::io::Error) -> Error {
+        match error.kind() {
+            ErrorKind::NotFound => Error::NotFound(path.to_string()),
+            ErrorKind::NotADirectory => Error::NotADirectory(path.to_string()),
+            _ => Error::plugin(format!("failed to read directory: {}", error)),
+        }
     }
 
     /// Run blocking local filesystem work on a dedicated thread.
@@ -364,6 +378,7 @@ impl LocalFileSystem {
     fn grep_via_rg(
         base_path: &Path,
         target_path: &Path,
+        target_is_dir: bool,
         pattern: &str,
         recursive: bool,
         case_insensitive: bool,
@@ -385,7 +400,7 @@ impl LocalFileSystem {
         }
 
         // Non-recursive directory search: only scan the current directory (no descent).
-        if !recursive && target_path.is_dir() {
+        if !recursive && target_is_dir {
             cmd.arg("--max-depth").arg("1");
         }
 
@@ -395,7 +410,7 @@ impl LocalFileSystem {
         }
 
         // Run rg from base_path so we can interpret relative paths in JSON output reliably.
-        let current_dir = if target_path.is_dir() {
+        let current_dir = if target_is_dir {
             target_path
         } else {
             target_path.parent().unwrap_or(target_path)
@@ -404,7 +419,7 @@ impl LocalFileSystem {
 
         cmd.arg(pattern);
         // Search relative to the query root so returned paths can be interpreted as query-root relative.
-        if target_path.is_dir() {
+        if target_is_dir {
             cmd.arg(".");
         } else {
             cmd.arg(
@@ -561,6 +576,7 @@ impl LocalFileSystem {
     fn grep_via_libs(
         base_path: &Path,
         virtual_path: &str,
+        root_is_file: bool,
         pattern: &str,
         recursive: bool,
         case_insensitive: bool,
@@ -569,9 +585,6 @@ impl LocalFileSystem {
         level_limit: Option<usize>,
     ) -> Result<GrepResult> {
         let local_root = Self::resolve_virtual_path(base_path, virtual_path);
-        if !local_root.exists() {
-            return Err(Error::NotFound(virtual_path.to_string()));
-        }
 
         if node_limit == Some(0) {
             return Ok(GrepResult::new());
@@ -598,7 +611,7 @@ impl LocalFileSystem {
             .and_then(|p| Self::exclude_to_query_root_relative_path(base_path, &local_root, p));
 
         // Single file: search directly.
-        if local_root.is_file() {
+        if root_is_file {
             let file_virtual = Self::local_to_query_relative_path(&local_root, &local_root)
                 .ok_or_else(|| Error::InvalidPath(virtual_path.to_string()))?;
 
@@ -649,8 +662,28 @@ impl LocalFileSystem {
             .git_exclude(true);
         // Apply git-related ignore rules even if the target directory isn't inside a git repo.
         builder.require_git(false);
-        if !recursive && local_root.is_dir() {
-            builder.max_depth(Some(1));
+        let effective_max_depth = match (recursive, level_limit) {
+            (false, Some(limit)) => Some(limit.min(1)),
+            (false, None) => Some(1),
+            (true, limit) => limit,
+        };
+        if let Some(max_depth) = effective_max_depth {
+            builder.max_depth(Some(max_depth));
+        }
+
+        if exclude_rel.as_deref() == Some(".") {
+            return Ok(out);
+        }
+        if let Some(excluded) = exclude_rel.clone() {
+            let query_root = local_root.clone();
+            builder.filter_entry(move |entry| {
+                let Some(relative) =
+                    Self::local_to_query_relative_path(&query_root, entry.path())
+                else {
+                    return true;
+                };
+                !Self::is_excluded_virtual(&relative, &excluded)
+            });
         }
 
         for dent in builder.build() {
@@ -966,14 +999,8 @@ impl FileSystem for LocalFileSystem {
     async fn read(&self, path: &str, offset: u64, size: u64) -> Result<Vec<u8>> {
         let local_path = self.resolve_path(path)?;
 
-        // Check if exists and is not a directory
-        let metadata = fs::metadata(&local_path).map_err(|_| Error::NotFound(path.to_string()))?;
-
-        if metadata.is_dir() {
-            return Err(Error::plugin(format!("is a directory: {}", path)));
-        }
-
-        // Read file
+        // Let the authoritative read report NotFound/IsADirectory instead of issuing a
+        // separate pathname metadata request first.
         let data = fs::read(&local_path).map_err(|e| Self::map_error(path, e))?;
 
         // Apply offset and size
@@ -1078,18 +1105,8 @@ impl FileSystem for LocalFileSystem {
         let path = path.to_string();
 
         let entries = Self::run_blocking_fs(move || {
-            // Check if directory exists
-            if !local_path.exists() {
-                return Err(Error::NotFound(path.clone()));
-            }
-
-            if !local_path.is_dir() {
-                return Err(Error::NotADirectory(path));
-            }
-
-            // Read directory
             let entries = fs::read_dir(&local_path)
-                .map_err(|e| Error::plugin(format!("failed to read directory: {}", e)))?;
+                .map_err(|e| Self::map_read_dir_error(&path, e))?;
 
             let mut files = Vec::new();
             for entry in entries {
@@ -1297,9 +1314,10 @@ impl FileSystem for LocalFileSystem {
         }
 
         let local = self.resolve_path(path)?;
-        if !local.exists() {
-            return Err(Error::NotFound(path.to_string()));
-        }
+        let root_metadata =
+            fs::metadata(&local).map_err(|_| Error::NotFound(path.to_string()))?;
+        let root_is_dir = root_metadata.is_dir();
+        let root_is_file = root_metadata.is_file();
         let pattern_owned = pattern.to_string();
         let path_owned = path.to_string();
         let base_path = self.base_path.clone();
@@ -1314,6 +1332,7 @@ impl FileSystem for LocalFileSystem {
                 LocalFileSystem::grep_via_rg(
                     rg_base_path.as_path(),
                     local.as_path(),
+                    root_is_dir,
                     rg_pattern.as_str(),
                     recursive,
                     case_insensitive,
@@ -1334,6 +1353,7 @@ impl FileSystem for LocalFileSystem {
             LocalFileSystem::grep_via_libs(
                 base_path.as_path(),
                 &path_owned,
+                root_is_file,
                 &pattern_owned,
                 recursive,
                 case_insensitive,
@@ -1470,6 +1490,59 @@ mod tests {
 
         let err = fs.read("/../secret.txt", 0, 0).await.unwrap_err();
         assert!(matches!(err, Error::InvalidPath(_)));
+    }
+
+    #[tokio::test]
+    async fn test_localfs_read_preserves_file_directory_and_missing_errors() {
+        let (dir, fs) = fallback_localfs();
+        write_file(dir.path(), "note.txt", "hello");
+        std::fs::create_dir(dir.path().join("folder")).unwrap();
+
+        assert_eq!(fs.read("/note.txt", 0, 0).await.unwrap(), b"hello");
+
+        let directory_error = fs.read("/folder", 0, 0).await.unwrap_err();
+        assert!(matches!(directory_error, Error::IsADirectory(_)));
+
+        let missing_error = fs.read("/missing.txt", 0, 0).await.unwrap_err();
+        assert!(matches!(missing_error, Error::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn test_localfs_read_treats_child_below_file_as_not_found() {
+        let (dir, fs) = fallback_localfs();
+        write_file(dir.path(), "note.txt", "hello");
+
+        let error = fs
+            .read("/note.txt/.path.ovlock", 0, 0)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, Error::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn test_localfs_read_dir_preserves_directory_file_and_missing_errors() {
+        let (dir, fs) = fallback_localfs();
+        write_file(dir.path(), "folder/note.txt", "hello");
+        write_file(dir.path(), "plain.txt", "hello");
+
+        let entries = fs
+            .read_dir("/folder", None, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "note.txt");
+
+        let file_error = fs
+            .read_dir("/plain.txt", None, None, None, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(file_error, Error::NotADirectory(_)));
+
+        let missing_error = fs
+            .read_dir("/missing", None, None, None, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(missing_error, Error::NotFound(_)));
     }
 
     #[tokio::test]
@@ -1732,6 +1805,92 @@ mod tests {
         assert_eq!(out.count, 1);
         assert_eq!(out.matches.len(), 1);
         assert_eq!(out.matches[0].file, "ok/y.txt");
+    }
+
+    #[tokio::test]
+    async fn test_localfs_grep_level_limit_keeps_boundary_and_prunes_deeper_files() {
+        let (dir, fs) = fallback_localfs();
+        write_file(dir.path(), "top.txt", "hit\n");
+        write_file(dir.path(), "one/boundary.txt", "hit\n");
+        write_file(dir.path(), "one/two/deeper.txt", "hit\n");
+
+        let out = fs
+            .grep("/", "hit", true, false, None, None, Some(2))
+            .await
+            .unwrap();
+
+        let mut files = out
+            .matches
+            .iter()
+            .map(|matched| matched.file.as_str())
+            .collect::<Vec<_>>();
+        files.sort_unstable();
+        assert_eq!(files, vec!["one/boundary.txt", "top.txt"]);
+    }
+
+    #[tokio::test]
+    async fn test_localfs_grep_level_limit_zero_does_not_expand_query_root() {
+        let (dir, fs) = fallback_localfs();
+        write_file(dir.path(), "top.txt", "hit\n");
+
+        let out = fs
+            .grep("/", "hit", true, false, None, None, Some(0))
+            .await
+            .unwrap();
+
+        assert_eq!(out.count, 0);
+        assert!(out.matches.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_localfs_grep_non_recursive_respects_smaller_level_limit() {
+        let (dir, fs) = fallback_localfs();
+        write_file(dir.path(), "top.txt", "hit\n");
+
+        let out = fs
+            .grep("/", "hit", false, false, None, None, Some(0))
+            .await
+            .unwrap();
+
+        assert_eq!(out.count, 0);
+        assert!(out.matches.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_localfs_grep_exclude_prunes_only_exact_relative_subtree() {
+        let (dir, fs) = fallback_localfs();
+        write_file(dir.path(), "a/cache/excluded.txt", "hit\n");
+        write_file(dir.path(), "b/cache/kept.txt", "hit\n");
+
+        let out = fs
+            .grep(
+                "/",
+                "hit",
+                true,
+                false,
+                None,
+                Some("/a/cache"),
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(out.count, 1);
+        assert_eq!(out.matches[0].file, "b/cache/kept.txt");
+    }
+
+    #[tokio::test]
+    async fn test_localfs_grep_excluding_query_root_returns_no_matches() {
+        let (dir, fs) = fallback_localfs();
+        write_file(dir.path(), "top.txt", "hit\n");
+
+        let out = fs
+            .grep("/", "hit", true, false, None, Some("/"), None)
+            .await
+            .unwrap();
+
+        assert_eq!(out.count, 0);
+        assert!(out.matches.is_empty());
     }
 
     #[cfg(unix)]
