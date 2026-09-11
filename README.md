@@ -36,7 +36,10 @@ OpenViking is an open-source context database for AI agents. It gives agents a p
 OpenViking organizes context as a virtual filesystem under `viking://`. Agents can operate on it like files: use `ls`, `tree`, `read`, and `write` to browse directories, read, create, and edit content, or search within a directory. Directory summaries support on-demand loading.
 
 <a href="https://openviking.ai/studio" target="_blank" rel="noopener noreferrer">
-  <img src="docs/images/studio-playground.png" alt="OpenViking Studio: browse context and try semantic search">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/studio-playground-dark.png">
+    <img src="docs/images/studio-playground.png" alt="OpenViking Studio: browse context and try semantic search">
+  </picture>
 </a>
 
 [Try OpenViking Studio](https://openviking.ai/studio) in your browser, no installation required. [Self-host Web Studio](web-studio/README.md).
