@@ -440,13 +440,8 @@ const SCRIPT_DEFINITIONS: &[ScriptDefinition] = &[
 /// Redis-backed PathLock provider.
 pub struct RedisPathLockProvider {
     runtime: Arc<CacheRuntime>,
-    tokens_key: String,
+    namespace: String,
     hash_ttl_ms: i64,
-}
-
-/// Return the Redis HASH key for one OpenViking instance.
-fn tokens_key(namespace: &str) -> String {
-    format!("ov:pathlock:{{{namespace}}}:tokens")
 }
 
 impl RedisPathLockProvider {
@@ -487,17 +482,67 @@ impl RedisPathLockProvider {
         }
         Ok(Self {
             runtime,
-            tokens_key: tokens_key(namespace),
+            namespace: namespace.to_string(),
             hash_ttl_ms: hash_ttl_ms as i64,
         })
     }
 
+    /// Return the Redis HASH key responsible for one logical path.
+    fn tokens_key_for_path(&self, path: &str) -> PathLockResult<String> {
+        let suffix = if path == "/" || path == "/local" {
+            "global".to_string()
+        } else {
+            let scope = path
+                .strip_prefix("/local/")
+                .and_then(|path| path.split('/').next())
+                .filter(|scope| !scope.is_empty())
+                .ok_or_else(|| {
+                    PathLockError::InvalidRequest(format!(
+                        "cache PathLock path must be '/' or below '/local': {path}"
+                    ))
+                })?;
+            match scope {
+                "_system" => "scope:_system".to_string(),
+                account => format!("scope:account:{account}"),
+            }
+        };
+        Ok(format!(
+            "ov:pathlock:{{{}}}:{suffix}:tokens",
+            self.namespace
+        ))
+    }
+
+    /// Return the shared Redis HASH key for one same-scope path batch.
+    fn tokens_key_for_batch<'a>(
+        &self,
+        paths: impl IntoIterator<Item = &'a str>,
+    ) -> PathLockResult<String> {
+        let mut paths = paths.into_iter();
+        let first_path = paths.next().ok_or_else(|| {
+            PathLockError::InvalidRequest("lock request batch must not be empty".to_string())
+        })?;
+        let key = self.tokens_key_for_path(first_path)?;
+        for path in paths {
+            if self.tokens_key_for_path(path)? != key {
+                return Err(PathLockError::InvalidRequest(
+                    "cache PathLock batch paths must belong to one scope".to_string(),
+                ));
+            }
+        }
+        Ok(key)
+    }
+
     /// Execute one registered PathLock script and decode its provider-neutral result.
-    async fn execute(&self, script_id: &str, args: Vec<Bytes>) -> PathLockResult<ScriptValue> {
+    async fn execute(
+        &self,
+        script_id: &str,
+        key: String,
+        args: Vec<Bytes>,
+    ) -> PathLockResult<ScriptValue> {
         self.runtime
             .execute_script(ScriptRequest {
                 script_id: script_id.to_string(),
-                keys: vec![self.tokens_key.clone()],
+                keys: vec![key],
                 args,
             })
             .await
@@ -509,9 +554,10 @@ impl RedisPathLockProvider {
     async fn execute_array(
         &self,
         script_id: &str,
+        key: String,
         args: Vec<Bytes>,
     ) -> PathLockResult<Vec<ScriptValue>> {
-        match self.execute(script_id, args).await? {
+        match self.execute(script_id, key, args).await? {
             ScriptValue::Array(values) => Ok(values),
             other => Err(PathLockError::Internal(format!(
                 "Redis PathLock {script_id} returned non-array result: {other:?}"
@@ -520,8 +566,13 @@ impl RedisPathLockProvider {
     }
 
     /// Execute one script and require an integer result.
-    async fn execute_integer(&self, script_id: &str, args: Vec<Bytes>) -> PathLockResult<i64> {
-        match self.execute(script_id, args).await? {
+    async fn execute_integer(
+        &self,
+        script_id: &str,
+        key: String,
+        args: Vec<Bytes>,
+    ) -> PathLockResult<i64> {
+        match self.execute(script_id, key, args).await? {
             ScriptValue::Integer(value) => Ok(value),
             other => Err(PathLockError::Internal(format!(
                 "Redis PathLock {script_id} returned non-integer result: {other:?}"
@@ -621,9 +672,11 @@ impl RedisPathLockProvider {
         if paths.is_empty() {
             return Ok(Vec::new());
         }
+        let key = self.tokens_key_for_batch(paths.iter().map(String::as_str))?;
         let values = self
             .execute_array(
                 READ_MANY_ID,
+                key,
                 paths.iter().map(Self::bytes).collect::<Vec<_>>(),
             )
             .await?;
@@ -680,6 +733,8 @@ impl PathLockProvider for RedisPathLockProvider {
                 "lock request batch must not be empty".to_string(),
             ));
         }
+        let key =
+            self.tokens_key_for_batch(requests.iter().map(|request| request.path.as_str()))?;
         let mut args = vec![
             Self::bytes(owner_id),
             Self::bytes(now_ns.to_string()),
@@ -690,7 +745,7 @@ impl PathLockProvider for RedisPathLockProvider {
             args.push(Self::bytes(&request.path));
             args.push(Self::bytes(Self::kind_code(request.kind)));
         }
-        let values = self.execute_array(ACQUIRE_BATCH_ID, args).await?;
+        let values = self.execute_array(ACQUIRE_BATCH_ID, key, args).await?;
         let status = Self::result_status(&values, "acquire_batch")?;
         if status != "ok" {
             return Err(Self::decode_error_result("acquire_batch", &values)?);
@@ -734,6 +789,11 @@ impl PathLockProvider for RedisPathLockProvider {
         acquisitions: &[AtomicAcquisition],
         owner_id: &str,
     ) -> PathLockResult<Option<()>> {
+        if acquisitions.is_empty() {
+            return Ok(Some(()));
+        }
+        let key =
+            self.tokens_key_for_batch(acquisitions.iter().map(|item| item.handle.as_str()))?;
         let mut args = vec![
             Self::bytes(owner_id),
             Self::bytes(self.hash_ttl_ms.to_string()),
@@ -761,7 +821,7 @@ impl PathLockProvider for RedisPathLockProvider {
                 }
             }
         }
-        let values = self.execute_array(ROLLBACK_BATCH_ID, args).await?;
+        let values = self.execute_array(ROLLBACK_BATCH_ID, key, args).await?;
         let status = Self::result_status(&values, "rollback_batch")?;
         if status == "ok" && values.len() == 1 {
             return Ok(Some(()));
@@ -777,9 +837,11 @@ impl PathLockProvider for RedisPathLockProvider {
         stale_before_ns: u128,
         ignore_stale: bool,
     ) -> PathLockResult<Option<bool>> {
+        let key = self.tokens_key_for_path(path)?;
         let values = self
             .execute_array(
                 IS_LOCKED_ID,
+                key,
                 vec![
                     Self::bytes(path),
                     Self::bytes(stale_before_ns.to_string()),
@@ -814,9 +876,11 @@ impl PathLockProvider for RedisPathLockProvider {
 
     /// Atomically create one token when the path is absent.
     async fn try_create_token(&self, lock_path: &str, token: &LockToken) -> PathLockResult<()> {
+        let key = self.tokens_key_for_path(lock_path)?;
         let values = self
             .execute_array(
                 CREATE_ID,
+                key,
                 vec![
                     Self::bytes(lock_path),
                     Self::bytes(LockTokenCodec::encode(token)),
@@ -849,8 +913,10 @@ impl PathLockProvider for RedisPathLockProvider {
         expected: &LockToken,
         replacement: &LockToken,
     ) -> PathLockResult<bool> {
+        let key = self.tokens_key_for_path(lock_path)?;
         self.execute_integer(
             COMPARE_WRITE_ID,
+            key,
             vec![
                 Self::bytes(lock_path),
                 Self::bytes(LockTokenCodec::encode(expected)),
@@ -869,9 +935,11 @@ impl PathLockProvider for RedisPathLockProvider {
         owner_id: &str,
         time_ns: u128,
     ) -> PathLockResult<bool> {
+        let key = self.tokens_key_for_path(lock_path)?;
         let values = self
             .execute_array(
                 REFRESH_ID,
+                key,
                 vec![
                     Self::bytes(lock_path),
                     Self::bytes(owner_id),
@@ -910,8 +978,10 @@ impl PathLockProvider for RedisPathLockProvider {
         if current.owner_id != owner_id {
             return Ok(false);
         }
+        let key = self.tokens_key_for_path(lock_path)?;
         self.execute_integer(
             COMPARE_REMOVE_ID,
+            key,
             vec![
                 Self::bytes(lock_path),
                 Self::bytes(LockTokenCodec::encode(&current)),
@@ -924,8 +994,9 @@ impl PathLockProvider for RedisPathLockProvider {
 
     /// Return logical paths equal to or below one root.
     async fn scan_descendant_locks(&self, root: &str) -> PathLockResult<Vec<String>> {
+        let key = self.tokens_key_for_path(root)?;
         let values = self
-            .execute_array(SCAN_DESCENDANTS_ID, vec![Self::bytes(root)])
+            .execute_array(SCAN_DESCENDANTS_ID, key, vec![Self::bytes(root)])
             .await?;
         let status = Self::result_status(&values, "scan_descendants")?;
         if status != "ok" {
@@ -1104,7 +1175,6 @@ return redis.call("HGET", KEYS[1], ARGV[2])
         .unwrap();
         let namespace = format!("pathlock-test-{}-{test_name}", std::process::id());
         let provider = RedisPathLockProvider::new(runtime.clone(), &namespace, 1.0).unwrap();
-        runtime.del(&[provider.tokens_key.clone()]).await.unwrap();
         Some((runtime, provider))
     }
 
@@ -1121,17 +1191,20 @@ return redis.call("HGET", KEYS[1], ARGV[2])
         .await
         .unwrap();
         let namespace = format!("pathlock-manager-test-{}-{test_name}", std::process::id());
-        let key = tokens_key(&namespace);
-        runtime.del(&[key.clone()]).await.unwrap();
         let config = PathLockConfig {
             provider: "cache".to_string(),
             namespace: Some(namespace.clone()),
             lock_timeout_secs: 0.0,
             lock_expire_secs: 3.0,
         };
+        let first_provider =
+            Arc::new(RedisPathLockProvider::new(runtime.clone(), &namespace, 3.0).unwrap());
+        let key = first_provider
+            .tokens_key_for_path("/local/account-a")
+            .unwrap();
         let first = PathLockManager::new(
             Arc::new(MemFileSystem::new()),
-            Arc::new(RedisPathLockProvider::new(runtime.clone(), &namespace, 3.0).unwrap()),
+            first_provider,
             config.clone(),
         );
         let second = PathLockManager::new(
@@ -1173,16 +1246,20 @@ return redis.call("HGET", KEYS[1], ARGV[2])
         .unwrap();
         let namespace = format!("pathlock-topology-test-{}-{test_name}", std::process::id());
         let provider = RedisPathLockProvider::new(runtime.clone(), &namespace, 3.0).unwrap();
-        runtime.del(&[provider.tokens_key.clone()]).await.unwrap();
 
         provider
-            .try_acquire_batch_atomic(&[request("/root", PathLockKind::Tree)], "owner-a", 100, 0)
+            .try_acquire_batch_atomic(
+                &[request("/local/account-a/root", PathLockKind::Tree)],
+                "owner-a",
+                100,
+                0,
+            )
             .await
             .unwrap();
         assert!(matches!(
             provider
                 .try_acquire_batch_atomic(
-                    &[request("/root/child", PathLockKind::Exact)],
+                    &[request("/local/account-a/root/child", PathLockKind::Exact)],
                     "owner-b",
                     101,
                     0,
@@ -1191,7 +1268,6 @@ return redis.call("HGET", KEYS[1], ARGV[2])
             Err(PathLockError::Conflict { .. })
         ));
 
-        runtime.del(&[provider.tokens_key.clone()]).await.unwrap();
         runtime.close().await.unwrap();
     }
 
@@ -1217,7 +1293,6 @@ return redis.call("HGET", KEYS[1], ARGV[2])
     fn provider_rejects_invalid_configuration() {
         let runtime = CacheRuntime::memory();
 
-        assert_eq!(tokens_key("prod-a"), "ov:pathlock:{prod-a}:tokens");
         assert!(matches!(
             RedisPathLockProvider::new(runtime.clone(), "bad{name}", 1.0),
             Err(PathLockError::InvalidRequest(_))
@@ -1228,22 +1303,91 @@ return redis.call("HGET", KEYS[1], ARGV[2])
         ));
     }
 
+    /// Verify global, system, and account paths use separate Redis HASH keys.
+    #[tokio::test]
+    async fn provider_routes_tokens_to_scope_hashes() {
+        let Some((runtime, provider)) = test_provider("scope-keys").await else {
+            return;
+        };
+        runtime
+            .register_script(ScriptDefinition {
+                id: TEST_HASH_ID,
+                redis_lua: TEST_HASH_SCRIPT,
+            })
+            .unwrap();
+
+        let cases = [
+            ("/", "global"),
+            ("/local", "global"),
+            ("/local/_system/tasks/task.json", "scope:_system"),
+            ("/local/account-a/resources/a.md", "scope:account:account-a"),
+            ("/local/account-b/resources/b.md", "scope:account:account-b"),
+        ];
+        let namespace = format!("pathlock-test-{}-scope-keys", std::process::id());
+        for (index, (path, scope)) in cases.iter().enumerate() {
+            provider
+                .try_create_token(
+                    path,
+                    &token("owner-a", index as u128 + 1, PathLockKind::Exact),
+                )
+                .await
+                .unwrap();
+            let raw = runtime
+                .execute_script(ScriptRequest {
+                    script_id: TEST_HASH_ID.to_string(),
+                    keys: vec![format!("ov:pathlock:{{{namespace}}}:{scope}:tokens")],
+                    args: vec![
+                        RedisPathLockProvider::bytes("get"),
+                        RedisPathLockProvider::bytes(path),
+                    ],
+                })
+                .await
+                .unwrap()
+                .decode()
+                .unwrap();
+            assert!(matches!(raw, ScriptValue::Bytes(_)), "{path} missing");
+        }
+        assert!(matches!(
+            provider
+                .try_acquire_batch_atomic(
+                    &[
+                        request("/local/account-a/a", PathLockKind::Exact),
+                        request("/local/account-b/b", PathLockKind::Exact),
+                    ],
+                    "owner-a",
+                    10,
+                    0,
+                )
+                .await,
+            Err(PathLockError::InvalidRequest(_))
+        ));
+        assert!(matches!(
+            provider
+                .try_create_token("/queue", &token("owner-a", 10, PathLockKind::Exact))
+                .await,
+            Err(PathLockError::InvalidRequest(_))
+        ));
+
+        runtime.close().await.unwrap();
+    }
+
     /// Verify CRUD preserves the token format and refreshes the HASH TTL.
     #[tokio::test]
     async fn provider_crud_preserves_tokens_and_hash_ttl() {
         let Some((runtime, provider)) = test_provider("crud").await else {
             return;
         };
+        let path = "/local/account-a/a";
         let original = token("owner-a", 100, PathLockKind::Exact);
 
-        provider.try_create_token("/a", &original).await.unwrap();
+        provider.try_create_token(path, &original).await.unwrap();
         assert_eq!(
-            provider.read_token("/a").await.unwrap(),
+            provider.read_token(path).await.unwrap(),
             Some(original.clone())
         );
-        assert!(provider.refresh_token("/a", "owner-a", 200).await.unwrap());
+        assert!(provider.refresh_token(path, "owner-a", 200).await.unwrap());
         assert_eq!(
-            provider.read_token("/a").await.unwrap(),
+            provider.read_token(path).await.unwrap(),
             Some(token("owner-a", 200, PathLockKind::Exact))
         );
 
@@ -1256,7 +1400,7 @@ return redis.call("HGET", KEYS[1], ARGV[2])
         let ttl = runtime
             .execute_script(ScriptRequest {
                 script_id: TEST_PTTL_ID.to_string(),
-                keys: vec![provider.tokens_key.clone()],
+                keys: vec![provider.tokens_key_for_path(path).unwrap()],
                 args: Vec::new(),
             })
             .await
@@ -1265,8 +1409,8 @@ return redis.call("HGET", KEYS[1], ARGV[2])
             .unwrap();
         assert!(matches!(ttl, ScriptValue::Integer(value) if value > 0 && value <= 2_000));
 
-        assert!(provider.remove_token("/a", "owner-a", false).await.unwrap());
-        assert_eq!(provider.read_token("/a").await.unwrap(), None);
+        assert!(provider.remove_token(path, "owner-a", false).await.unwrap());
+        assert_eq!(provider.read_token(path).await.unwrap(), None);
         runtime.close().await.unwrap();
     }
 
@@ -1276,7 +1420,7 @@ return redis.call("HGET", KEYS[1], ARGV[2])
         let Some((runtime, provider)) = test_provider("atomic").await else {
             return;
         };
-        let initial = vec![request("/locked", PathLockKind::Tree)];
+        let initial = vec![request("/local/account-a/locked", PathLockKind::Tree)];
         let acquired = provider
             .try_acquire_batch_atomic(&initial, "owner-a", 100, 0)
             .await
@@ -1287,38 +1431,49 @@ return redis.call("HGET", KEYS[1], ARGV[2])
             [AtomicAcquisition {
                 handle,
                 change: AcquisitionChange::Created { .. },
-            }] if handle == "/locked"
+            }] if handle == "/local/account-a/locked"
         ));
 
         let conflicting = vec![
-            request("/free", PathLockKind::Exact),
-            request("/locked/child", PathLockKind::Exact),
+            request("/local/account-a/free", PathLockKind::Exact),
+            request("/local/account-a/locked/child", PathLockKind::Exact),
         ];
         assert!(matches!(
             provider
                 .try_acquire_batch_atomic(&conflicting, "owner-b", 101, 0)
                 .await,
-            Err(PathLockError::Conflict { lock_path, .. }) if lock_path == "/locked"
+            Err(PathLockError::Conflict { lock_path, .. })
+                if lock_path == "/local/account-a/locked"
         ));
-        assert_eq!(provider.read_token("/free").await.unwrap(), None);
+        assert_eq!(
+            provider.read_token("/local/account-a/free").await.unwrap(),
+            None
+        );
 
         provider
-            .try_acquire_batch_atomic(&[request("/a", PathLockKind::Exact)], "owner-a", 102, 0)
+            .try_acquire_batch_atomic(
+                &[request("/local/account-a/a", PathLockKind::Exact)],
+                "owner-a",
+                102,
+                0,
+            )
             .await
             .unwrap();
         assert!(provider
-            .try_acquire_batch_atomic(&[request("/a/b", PathLockKind::Exact)], "owner-b", 103, 0,)
+            .try_acquire_batch_atomic(
+                &[request("/local/account-a/a/b", PathLockKind::Exact)],
+                "owner-b",
+                103,
+                0,
+            )
             .await
             .is_ok());
-        assert!(matches!(
-            provider
-                .try_acquire_batch_atomic(&[request("/", PathLockKind::Tree)], "owner-c", 104, 0,)
-                .await,
-            Err(PathLockError::Conflict { .. })
-        ));
+        assert!(provider
+            .try_acquire_batch_atomic(&[request("/", PathLockKind::Tree)], "owner-c", 104, 0,)
+            .await
+            .is_ok());
 
-        runtime.del(&[provider.tokens_key.clone()]).await.unwrap();
-        let race = [request("/race", PathLockKind::Exact)];
+        let race = [request("/local/account-a/race", PathLockKind::Exact)];
         let (first, second) = tokio::join!(
             provider.try_acquire_batch_atomic(&race, "owner-a", 200, 0),
             provider.try_acquire_batch_atomic(&race, "owner-b", 200, 0),
@@ -1328,7 +1483,6 @@ return redis.call("HGET", KEYS[1], ARGV[2])
             matches!(first, Err(PathLockError::Conflict { .. }))
                 || matches!(second, Err(PathLockError::Conflict { .. }))
         );
-        runtime.del(&[provider.tokens_key.clone()]).await.unwrap();
         runtime.close().await.unwrap();
     }
 
@@ -1338,7 +1492,7 @@ return redis.call("HGET", KEYS[1], ARGV[2])
         let Some((runtime, provider)) = test_provider("rollback").await else {
             return;
         };
-        let exact = vec![request("/a", PathLockKind::Exact)];
+        let exact = vec![request("/local/account-a/a", PathLockKind::Exact)];
         let created = provider
             .try_acquire_batch_atomic(&exact, "owner-a", 100, 0)
             .await
@@ -1349,13 +1503,16 @@ return redis.call("HGET", KEYS[1], ARGV[2])
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(provider.read_token("/a").await.unwrap(), None);
+        assert_eq!(
+            provider.read_token("/local/account-a/a").await.unwrap(),
+            None
+        );
 
         provider
             .try_acquire_batch_atomic(&exact, "owner-a", 200, 0)
             .await
             .unwrap();
-        let tree = vec![request("/a", PathLockKind::Tree)];
+        let tree = vec![request("/local/account-a/a", PathLockKind::Tree)];
         let upgraded = provider
             .try_acquire_batch_atomic(&tree, "owner-a", 300, 0)
             .await
@@ -1367,13 +1524,13 @@ return redis.call("HGET", KEYS[1], ARGV[2])
             .unwrap()
             .unwrap();
         assert_eq!(
-            provider.read_token("/a").await.unwrap(),
+            provider.read_token("/local/account-a/a").await.unwrap(),
             Some(token("owner-a", 200, PathLockKind::Exact))
         );
 
         let changed = provider
             .try_acquire_batch_atomic(
-                &[request("/changed", PathLockKind::Exact)],
+                &[request("/local/account-a/changed", PathLockKind::Exact)],
                 "owner-a",
                 400,
                 0,
@@ -1382,7 +1539,7 @@ return redis.call("HGET", KEYS[1], ARGV[2])
             .unwrap()
             .unwrap();
         assert!(provider
-            .refresh_token("/changed", "owner-a", 500)
+            .refresh_token("/local/account-a/changed", "owner-a", 500)
             .await
             .unwrap());
         assert!(matches!(
@@ -1392,11 +1549,13 @@ return redis.call("HGET", KEYS[1], ARGV[2])
             Err(PathLockError::Io(_))
         ));
         assert_eq!(
-            provider.read_token("/changed").await.unwrap(),
+            provider
+                .read_token("/local/account-a/changed")
+                .await
+                .unwrap(),
             Some(token("owner-a", 500, PathLockKind::Exact))
         );
 
-        runtime.del(&[provider.tokens_key.clone()]).await.unwrap();
         runtime.close().await.unwrap();
     }
 
@@ -1407,7 +1566,7 @@ return redis.call("HGET", KEYS[1], ARGV[2])
             return;
         };
         let lease = first
-            .acquire_tree("/a", Duration::ZERO, None)
+            .acquire_tree("/local/account-a/a", Duration::ZERO, None)
             .await
             .unwrap();
         let handoff = first.to_handoff(&lease);
@@ -1415,12 +1574,12 @@ return redis.call("HGET", KEYS[1], ARGV[2])
 
         let adopted = second.adopt(&handoff).await.unwrap();
 
-        assert_eq!(adopted.lease.lock_paths, vec!["/a"]);
+        assert_eq!(adopted.lease.lock_paths, vec!["/local/account-a/a"]);
         second.release(&adopted).await.unwrap();
         let legacy = PathLockHandoffRef {
             lease_ref: None,
             owner_id: "owner-a".to_string(),
-            lock_paths: vec!["/a".to_string()],
+            lock_paths: vec!["/local/account-a/a".to_string()],
             covered_paths: Vec::new(),
         };
         assert!(matches!(
@@ -1438,14 +1597,14 @@ return redis.call("HGET", KEYS[1], ARGV[2])
             return;
         };
         let exact = first
-            .acquire_exact("/a/", Duration::ZERO, None)
+            .acquire_exact("/local/account-a/a/", Duration::ZERO, None)
             .await
             .unwrap();
-        assert_eq!(exact.lease.lock_paths, vec!["/a"]);
-        assert!(first.is_locked("/a/", true).await.unwrap());
+        assert_eq!(exact.lease.lock_paths, vec!["/local/account-a/a"]);
+        assert!(first.is_locked("/local/account-a/a/", true).await.unwrap());
         let tree = first
             .acquire_tree(
-                "/a",
+                "/local/account-a/a",
                 Duration::ZERO,
                 Some((&exact.lease.lease_ref, &exact.ownership_ref)),
             )
@@ -1455,27 +1614,34 @@ return redis.call("HGET", KEYS[1], ARGV[2])
         first.release(&tree).await.unwrap();
 
         let child = second
-            .acquire_exact("/a/child", Duration::ZERO, None)
+            .acquire_exact("/local/account-a/a/child", Duration::ZERO, None)
             .await
             .unwrap();
         second.release(&child).await.unwrap();
         first.release(&exact).await.unwrap();
-        assert!(!first.is_locked("/a", true).await.unwrap());
+        assert!(!first.is_locked("/local/account-a/a", true).await.unwrap());
 
         let batch = first
-            .acquire_exact_batch(&["/x".to_string(), "/y".to_string()], Duration::ZERO, None)
+            .acquire_exact_batch(
+                &[
+                    "/local/account-a/x".to_string(),
+                    "/local/account-a/y".to_string(),
+                ],
+                Duration::ZERO,
+                None,
+            )
             .await
             .unwrap();
         first
-            .release_selected(&batch, &["/x".to_string()])
+            .release_selected(&batch, &["/local/account-a/x".to_string()])
             .await
             .unwrap();
         let released = second
-            .acquire_exact("/x", Duration::ZERO, None)
+            .acquire_exact("/local/account-a/x", Duration::ZERO, None)
             .await
             .unwrap();
         assert!(second
-            .acquire_exact("/y", Duration::from_millis(1), None)
+            .acquire_exact("/local/account-a/y", Duration::from_millis(1), None,)
             .await
             .is_err());
         second.release(&released).await.unwrap();
@@ -1491,42 +1657,49 @@ return redis.call("HGET", KEYS[1], ARGV[2])
         let Some((runtime, provider)) = test_provider("stale").await else {
             return;
         };
+        let same_path = "/local/account-a/same";
         provider
-            .try_create_token("/same", &token("owner-a", 1, PathLockKind::Exact))
+            .try_create_token(same_path, &token("owner-a", 1, PathLockKind::Exact))
             .await
             .unwrap();
         let reentrant = provider
-            .try_acquire_batch_atomic(&[request("/same", PathLockKind::Exact)], "owner-a", 100, 50)
+            .try_acquire_batch_atomic(
+                &[request(same_path, PathLockKind::Exact)],
+                "owner-a",
+                100,
+                50,
+            )
             .await
             .unwrap()
             .unwrap();
         assert!(matches!(reentrant[0].change, AcquisitionChange::Reentrant));
         assert_eq!(
-            provider.read_token("/same").await.unwrap(),
+            provider.read_token(same_path).await.unwrap(),
             Some(token("owner-a", 1, PathLockKind::Exact))
         );
         assert_eq!(
             provider
-                .is_path_locked_atomic("/same", 100, 50, true)
+                .is_path_locked_atomic(same_path, 100, 50, true)
                 .await
                 .unwrap(),
             Some(false)
         );
         assert_eq!(
             provider
-                .is_path_locked_atomic("/same", 100, 50, false)
+                .is_path_locked_atomic(same_path, 100, 50, false)
                 .await
                 .unwrap(),
             Some(true)
         );
 
+        let foreign_path = "/local/account-a/foreign";
         provider
-            .try_create_token("/foreign", &token("owner-b", 1, PathLockKind::Exact))
+            .try_create_token(foreign_path, &token("owner-b", 1, PathLockKind::Exact))
             .await
             .unwrap();
         provider
             .try_acquire_batch_atomic(
-                &[request("/foreign", PathLockKind::Exact)],
+                &[request(foreign_path, PathLockKind::Exact)],
                 "owner-a",
                 100,
                 50,
@@ -1535,7 +1708,7 @@ return redis.call("HGET", KEYS[1], ARGV[2])
             .unwrap();
         assert_eq!(
             provider
-                .read_token("/foreign")
+                .read_token(foreign_path)
                 .await
                 .unwrap()
                 .unwrap()
@@ -1543,7 +1716,6 @@ return redis.call("HGET", KEYS[1], ARGV[2])
             "owner-a"
         );
 
-        runtime.del(&[provider.tokens_key.clone()]).await.unwrap();
         runtime.close().await.unwrap();
     }
 
@@ -1559,14 +1731,16 @@ return redis.call("HGET", KEYS[1], ARGV[2])
                 redis_lua: TEST_HASH_SCRIPT,
             })
             .unwrap();
+        let path = "/local/account-a/invalid";
+        let key = provider.tokens_key_for_path(path).unwrap();
         let invalid = "owner-a:340282366920938463463374607431768211456:E";
         runtime
             .execute_script(ScriptRequest {
                 script_id: TEST_HASH_ID.to_string(),
-                keys: vec![provider.tokens_key.clone()],
+                keys: vec![key.clone()],
                 args: vec![
                     RedisPathLockProvider::bytes("set"),
-                    RedisPathLockProvider::bytes("/invalid"),
+                    RedisPathLockProvider::bytes(path),
                     RedisPathLockProvider::bytes(invalid),
                 ],
             })
@@ -1575,22 +1749,17 @@ return redis.call("HGET", KEYS[1], ARGV[2])
 
         assert!(matches!(
             provider
-                .try_acquire_batch_atomic(
-                    &[request("/invalid", PathLockKind::Tree)],
-                    "owner-a",
-                    100,
-                    0,
-                )
+                .try_acquire_batch_atomic(&[request(path, PathLockKind::Tree)], "owner-a", 100, 0,)
                 .await,
             Err(PathLockError::InvalidToken(_))
         ));
         let raw = runtime
             .execute_script(ScriptRequest {
                 script_id: TEST_HASH_ID.to_string(),
-                keys: vec![provider.tokens_key.clone()],
+                keys: vec![key],
                 args: vec![
                     RedisPathLockProvider::bytes("get"),
-                    RedisPathLockProvider::bytes("/invalid"),
+                    RedisPathLockProvider::bytes(path),
                 ],
             })
             .await
@@ -1599,7 +1768,6 @@ return redis.call("HGET", KEYS[1], ARGV[2])
             .unwrap();
         assert_eq!(raw, ScriptValue::Bytes(invalid.as_bytes().to_vec()));
 
-        runtime.del(&[provider.tokens_key.clone()]).await.unwrap();
         runtime.close().await.unwrap();
     }
 
@@ -1673,7 +1841,7 @@ return redis.call("HGET", KEYS[1], ARGV[2])
         for count in [100usize, 500, 1_000] {
             let requests = (0..count)
                 .map(|index| PathLockRequest {
-                    path: format!("/perf/{index}"),
+                    path: format!("/local/account-a/perf/{index}"),
                     kind: PathLockKind::Exact,
                 })
                 .collect::<Vec<_>>();
@@ -1694,7 +1862,6 @@ return redis.call("HGET", KEYS[1], ARGV[2])
                 .unwrap();
         }
 
-        runtime.del(&[provider.tokens_key.clone()]).await.unwrap();
         runtime.close().await.unwrap();
     }
 }

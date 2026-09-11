@@ -605,12 +605,16 @@ mod tests {
 
         let lease = stack
             .pathlock_manager
-            .acquire_exact("/builder", std::time::Duration::ZERO, None)
+            .acquire_exact(
+                "/local/account-a/builder",
+                std::time::Duration::ZERO,
+                None,
+            )
             .await
             .unwrap();
 
         assert!(stack.cache_runtime.is_some());
-        assert_eq!(lease.lease.lock_paths, vec!["/builder"]);
+        assert_eq!(lease.lease.lock_paths, vec!["/local/account-a/builder"]);
         stack.pathlock_manager.release(&lease).await.unwrap();
     }
 
