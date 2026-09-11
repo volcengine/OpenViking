@@ -213,6 +213,8 @@ openviking read viking://resources/docs/api.md
 
 写入文件，并自动刷新相关语义与向量。
 
+文件 URI 使用原始文件名：传入 `viking://resources/docs/a#one.md` 会写入名为 `a#one.md` 的文件。在 Markdown 引用中，文件名中的 `#` 编码为 `%23`，字面量 `%` 编码为 `%25`，例如 `[打开](./a%23one.md)` 或 `[章节](./a%23one.md#intro)`。链接解析先分离锚点，再对路径解码一次；`a#one.md` 与 `a%23one.md` 是两个不同的文件名。
+
 **参数**
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |

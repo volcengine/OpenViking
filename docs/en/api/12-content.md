@@ -213,6 +213,8 @@ openviking read viking://resources/docs/api.md
 
 Write a file and automatically refresh related semantics and vectors.
 
+File URIs contain literal filenames: pass `viking://resources/docs/a#one.md` to write a file named `a#one.md`. In Markdown references, encode filename `#` as `%23` and literal `%` as `%25`: `[Open](./a%23one.md)` or `[Section](./a%23one.md#intro)`. Link parsing separates the fragment before decoding the path once; `a#one.md` and `a%23one.md` remain distinct filenames.
+
 **Parameters**
 
 | Parameter | Type | Required | Default | Description |
