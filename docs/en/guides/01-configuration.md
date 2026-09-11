@@ -892,11 +892,32 @@ PDF parsing configuration. Three strategies are supported: `local` (local pdfplu
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `strategy` | str | Parsing strategy: `local` / `mineru` / `auto` (default `auto`) |
-| `mineru_endpoint` | str | MinerU API **base URL** (e.g. `http://127.0.0.1:8000`) |
-| `mineru_timeout` | float | Request timeout in seconds (default `300.0`) |
-| `mineru_bodys` | dict | MinerU API multipart form fields |
+| `mineru_endpoint` | str | MinerU API **base URL** (e.g. `http://127.0.0.1:8000`, or `https://mineru.net/api/v4` for the online API) |
+| `mineru_timeout` | float | Request/polling timeout in seconds (default `300.0`) |
+| `mineru_bodys` | dict | MinerU API multipart form fields (passed through) |
+| `mineru_api_mode` | str | Protocol flavor: `auto` (detect from the response, default) / `sync` (legacy inline `/file_parse`) / `async` (task APIs) |
+| `mineru_token` | str | Optional bearer token for the online MinerU API (sent as `Authorization: Bearer ...`) |
 
-**MinerU protocol**: a synchronous `POST {mineru_endpoint}/file_parse` request with the PDF as the multipart `files` field; form parameters are passed through from `mineru_bodys`.
+**MinerU protocols** — three flavors are supported:
+
+- **Legacy self-hosted (`sync`)**: a single `POST {mineru_endpoint}/file_parse` answering inline with the markdown; form parameters are passed through from `mineru_bodys`.
+- **Current self-hosted (`async`)**: `POST {mineru_endpoint}/tasks` answers `202` with `task_id`/`status_url`/`result_url`; the task is polled until `completed` and the markdown is downloaded from the result zip.
+- **Online batch API (`async`)**: `POST {mineru_endpoint}/extract/task/batch` (Bearer-token auth via `mineru_token`), poll `{mineru_endpoint}/extract-results/batch/{batch_id}` until `state=done`, download `full_zip_url` and unpack.
+
+Under the default `mineru_api_mode=auto` the flavor is detected automatically: the inline endpoint is tried first and a `404` (or a task-shaped response) switches to the task flow, so existing self-hosted v1 deployments keep working without config changes. The startup `/health` preflight only applies to the sync flavor (the online service has no such endpoint).
+
+**Online example:**
+
+```json
+{
+  "pdf": {
+    "strategy": "mineru",
+    "mineru_endpoint": "https://mineru.net/api/v4",
+    "mineru_api_mode": "auto",
+    "mineru_token": "your-mineru-api-token"
+  }
+}
+```
 
 ### rerank
 

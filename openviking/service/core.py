@@ -201,7 +201,7 @@ class OpenVikingService:
         self._vikingdb_manager.acl_manager = AclManager(self._vikingdb_manager)
 
         # Configure queues if QueueManager is available.
-        # Workers are NOT started here — start() is called after VikingFS is initialized
+        # Workers are NOT started here 鈥?start() is called after VikingFS is initialized
         # in initialize(), so that recovered tasks don't race against VikingFS init.
         if self._queue_manager:
             self._queue_manager.setup_standard_queues(self._vikingdb_manager, start=False)
@@ -543,16 +543,17 @@ class OpenVikingService:
         # misconfiguration or a stopped service surfaces now instead of on the
         # first PDF import. Required for strategy="mineru"; advisory for "auto".
         pdf_config = self._config.pdf
-        should_preflight_mineru = pdf_config.strategy == "mineru" or (
-            pdf_config.strategy == "auto" and pdf_config.mineru_endpoint is not None
-        )
+        should_preflight_mineru = (
+            pdf_config.strategy in ("mineru", "mineru-first")
+            or (pdf_config.strategy == "auto" and pdf_config.mineru_endpoint is not None)
+        ) and pdf_config.mineru_api_mode != "async"
 
         if should_preflight_mineru and pdf_config.mineru_endpoint:
             try:
                 await wait_for_mineru_ready(pdf_config.mineru_endpoint)
                 logger.info("MinerU preflight passed: %s", pdf_config.mineru_endpoint)
             except RuntimeError as exc:
-                if pdf_config.strategy == "mineru":
+                if pdf_config.strategy in ("mineru", "mineru-first"):
                     raise
                 logger.warning(
                     "MinerU preflight failed (fallback will retry on first parse): %s", exc
