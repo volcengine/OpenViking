@@ -242,8 +242,15 @@ OpenViking は、VikingMem 論文に記載されたコア機能の一部をオ�
 
 > **VikingMem: A Memory Base Management System for Stateful LLM-based Applications**
 > Jiajie Fu, Junwen Chen, Mengzhao Wang, Aoxiang He, Maojia Sheng, Xiangyu Ke, Yifan Zhu, and Yunjun Gao.
-> arXiv:2605.29640, 2026. Accepted by VLDB 2026.
-> 📄 [arXiv で論文を読む](https://arxiv.org/abs/2605.29640)
+> arXiv:2605.29640, 2026. 2026 年 9 月に VLDB 2026 で発表済み。
+> 📄 [arXiv で論文を読む](https://arxiv.org/abs/2605.29640) · [PDF を読む](https://arxiv.org/pdf/2605.29640)
+
+OpenViking は以下の論文の TrieHI を統合し、ファイルシステム形式のコンテキスト整理とディレクトリ再帰検索を実現しています:
+
+> **Directory-Aware Query and Maintenance in Vector Databases**
+> Mengzhao Wang, Zheng Gong, Jingpei Hu, Jiajie Fu, Maojia Sheng, Junwen Chen, and Yifan Zhu.
+> arXiv:2606.16903, 2026. ICDE 採択済み。
+> 📄 [arXiv で論文を読む](https://arxiv.org/abs/2606.16903) · [PDF を読む](https://arxiv.org/pdf/2606.16903)
 
 ## パートナープロジェクト
 

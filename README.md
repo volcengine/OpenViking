@@ -233,8 +233,15 @@ OpenViking open-sources a subset of the core capabilities described in the Vikin
 
 > **VikingMem: A Memory Base Management System for Stateful LLM-based Applications**
 > Jiajie Fu, Junwen Chen, Mengzhao Wang, Aoxiang He, Maojia Sheng, Xiangyu Ke, Yifan Zhu, and Yunjun Gao.
-> arXiv:2605.29640, 2026. Accepted by VLDB 2026.
-> 📄 [Read the paper on arXiv](https://arxiv.org/abs/2605.29640)
+> arXiv:2605.29640, 2026. Presented at VLDB 2026 in September.
+> 📄 [Read the paper on arXiv](https://arxiv.org/abs/2605.29640) · [Read PDF](https://arxiv.org/pdf/2605.29640)
+
+OpenViking integrates TrieHI from the following paper to support filesystem-style context organization and directory-recursive retrieval:
+
+> **Directory-Aware Query and Maintenance in Vector Databases**
+> Mengzhao Wang, Zheng Gong, Jingpei Hu, Jiajie Fu, Maojia Sheng, Junwen Chen, and Yifan Zhu.
+> arXiv:2606.16903, 2026. Accepted by ICDE.
+> 📄 [Read the paper on arXiv](https://arxiv.org/abs/2606.16903) · [Read PDF](https://arxiv.org/pdf/2606.16903)
 
 ## Partner Projects
 

@@ -242,8 +242,15 @@ OpenViking 开源了 VikingMem 论文中描述的部分核心能力：
 
 > **VikingMem: A Memory Base Management System for Stateful LLM-based Applications**
 > Jiajie Fu, Junwen Chen, Mengzhao Wang, Aoxiang He, Maojia Sheng, Xiangyu Ke, Yifan Zhu, and Yunjun Gao.
-> arXiv:2605.29640, 2026。已被 VLDB 2026 接收。
-> 📄 [在 arXiv 阅读论文](https://arxiv.org/abs/2605.29640)
+> arXiv:2605.29640, 2026。已于 2026 年 9 月在 VLDB 2026 完成演讲。
+> 📄 [在 arXiv 阅读论文](https://arxiv.org/abs/2605.29640) · [阅读 PDF](https://arxiv.org/pdf/2605.29640)
+
+OpenViking 集成了以下论文中的 TrieHI，支持文件系统式上下文组织和目录递归检索：
+
+> **Directory-Aware Query and Maintenance in Vector Databases**
+> Mengzhao Wang, Zheng Gong, Jingpei Hu, Jiajie Fu, Maojia Sheng, Junwen Chen, and Yifan Zhu.
+> arXiv:2606.16903, 2026。已被 ICDE 接收。
+> 📄 [在 arXiv 阅读论文](https://arxiv.org/abs/2606.16903) · [阅读 PDF](https://arxiv.org/pdf/2606.16903)
 
 ## 合作伙伴
 
