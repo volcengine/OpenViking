@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import base64
+import posixpath
 import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping
-from urllib.parse import unquote
 
 import yaml
 
@@ -190,9 +190,10 @@ def _linkify_source_uris(body: str, source_roots: Mapping[str, str]) -> str:
             continue
         if not _citation_target_allowed(target, source_roots):
             continue
-        label = unquote(target.rstrip("/").rsplit("/", 1)[-1]).removesuffix(".md")
+        label = target.rstrip("/").rsplit("/", 1)[-1].removesuffix(".md")
         label = label.replace("[", r"\[").replace("]", r"\]") or "Source"
-        replacements.append((start, end, f"[{label}]({target})"))
+        encoded_target = LinkRenderer.encode_markdown_target(target)
+        replacements.append((start, end, f"[{label}]({encoded_target})"))
 
     rendered = list(body)
     for start, end, replacement in reversed(replacements):
@@ -201,7 +202,7 @@ def _linkify_source_uris(body: str, source_roots: Mapping[str, str]) -> str:
 
 
 def _wiki_page_basename(uri: str) -> str:
-    name = unquote(uri.rstrip("/").rsplit("/", 1)[-1])
+    name = uri.rstrip("/").rsplit("/", 1)[-1]
     return name[:-3] if name.casefold().endswith(".md") else name
 
 
@@ -218,10 +219,9 @@ def _wiki_mention_targets(uris: set[str]) -> dict[str, str]:
 
 def _has_link_to(body: str, source_uri: str, target_uri: str) -> bool:
     relative = LinkRenderer.relative_path(source_uri, target_uri)
-    expected = {
-        LinkRenderer.normalize_markdown_target(target_uri),
-        LinkRenderer.normalize_markdown_target(relative if relative is not None else target_uri),
-    }
+    expected = {target_uri.rstrip("/")}
+    if relative is not None:
+        expected.add(posixpath.normpath(relative))
     return any(
         link.start == 0 or body[link.start - 1] != "!"
         for link in LinkRenderer.iter_markdown_links(body)
@@ -355,8 +355,8 @@ def _render_source_fallback(
             for linked in linked_targets
         ):
             continue
-        label = unquote(target.rstrip("/").rsplit("/", 1)[-1]) or f"Source {source_id}"
-        missing.append((label, target))
+        label = target.rstrip("/").rsplit("/", 1)[-1] or f"Source {source_id}"
+        missing.append((label, LinkRenderer.encode_markdown_target(target)))
     if not missing:
         return body.rstrip()
     heading = "来源" if wiki_language == "zh-CN" else "Sources"
