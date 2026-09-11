@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Sequence
 
 from openviking.core.context import Context, Vectorize
 from openviking.core.namespace import (
+    AGENT_SHARED_ROOTS,
     canonical_user_root,
     context_type_for_uri,
     is_session_uri,
@@ -49,7 +50,7 @@ class _DirectoryTarget:
     ctx: RequestContext
 
 
-# Preset directory tree - each scope has a root DirectoryDefinition
+# Preset directory trees, keyed by their namespace path.
 PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
     "user": DirectoryDefinition(
         path="",
@@ -152,6 +153,13 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
         overview="Globally shared resource storage, organized by project/topic. "
         "No preset subdirectory structure, users create project directories as needed.",
     ),
+    "agent/skills": DirectoryDefinition(
+        path="",
+        abstract="Shared skill registry. Stores callable skill definitions available across the account.",
+        overview="Use this directory for skills shared by users in the same account. "
+        "Each skill is stored in its own directory using the SKILL.md format. "
+        "User-private skills remain under viking://user/{user_id}/skills.",
+    ),
 }
 
 
@@ -175,13 +183,12 @@ class DirectoryInitializer:
 
     async def initialize_account_workspace(self, ctx: RequestContext) -> tuple[int, int]:
         """Initialize account and first-user preset directories as one batch."""
-        account_target = self._account_directory_target(ctx)
+        account_targets = self._account_directory_targets(ctx)
         user_root, user_children = self._user_directory_targets(ctx)
 
-        root_targets = (account_target, user_root)
+        root_targets = (*account_targets, user_root)
         root_results = await asyncio.gather(
-            self._ensure_agfs_directory(account_target),
-            self._ensure_agfs_directory(user_root),
+            *(self._ensure_agfs_directory(target) for target in root_targets),
             return_exceptions=True,
         )
         created_targets, root_error = self._partition_directory_results(root_targets, root_results)
@@ -200,8 +207,9 @@ class DirectoryInitializer:
         await self._ensure_directory_l0_l1_vectors(created_targets)
         if child_error is not None:
             raise child_error
-        return int(root_results[0] is True), int(root_results[1] is True) + sum(
-            result is True for result in child_results
+        return (
+            sum(result is True for result in root_results[:-1]),
+            int(root_results[-1] is True) + sum(result is True for result in child_results),
         )
 
     async def initialize_account_directories(self, ctx: RequestContext) -> int:
@@ -210,11 +218,20 @@ class DirectoryInitializer:
         ``viking://user`` is the container of user spaces, not a space itself.
         Its concrete metadata belongs to ``viking://user/{user_id}`` and is
         created by ``initialize_user_directories``.
+
+        Likewise, ``viking://agent`` remains a container, created implicitly
+        when its shared skills directory is initialized.
         """
-        target = self._account_directory_target(ctx)
-        created = await self._ensure_agfs_directory(target)
-        await self._ensure_directory_l0_l1_vectors([target] if created else [])
-        return int(created)
+        targets = self._account_directory_targets(ctx)
+        results = await asyncio.gather(
+            *(self._ensure_agfs_directory(target) for target in targets),
+            return_exceptions=True,
+        )
+        created_targets, error = self._partition_directory_results(targets, results)
+        await self._ensure_directory_l0_l1_vectors(created_targets)
+        if error is not None:
+            raise error
+        return len(created_targets)
 
     async def initialize_user_directories(self, ctx: RequestContext) -> int:
         """Initialize the current user's root and first-level entry directories.
@@ -242,14 +259,21 @@ class DirectoryInitializer:
         return int(root_created) + sum(result is True for result in child_results)
 
     @staticmethod
-    def _account_directory_target(ctx: RequestContext) -> _DirectoryTarget:
-        return _DirectoryTarget(
-            uri="viking://resources",
-            parent_uri=None,
-            definition=PRESET_DIRECTORIES["resources"],
-            scope="resources",
-            ctx=ctx,
-        )
+    def _account_directory_targets(ctx: RequestContext) -> list[_DirectoryTarget]:
+        targets = []
+        for uri in ("viking://resources", *AGENT_SHARED_ROOTS):
+            namespace_path = uri.removeprefix("viking://")
+            parent_path, _, _ = namespace_path.rpartition("/")
+            targets.append(
+                _DirectoryTarget(
+                    uri=uri,
+                    parent_uri=f"viking://{parent_path}" if parent_path else None,
+                    definition=PRESET_DIRECTORIES[namespace_path],
+                    scope=namespace_path.split("/", 1)[0],
+                    ctx=ctx,
+                )
+            )
+        return targets
 
     @staticmethod
     def _user_directory_targets(
