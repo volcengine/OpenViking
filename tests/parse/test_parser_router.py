@@ -247,6 +247,46 @@ def test_directories_never_route_to_understanding(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_submit_materialized_url_preserves_original_filename(tmp_path):
+    staged = tmp_path / "tmp8unv3f.txt"
+    staged.write_text("content")
+    resource = LocalResource(
+        path=staged,
+        source_type=SourceType.HTTP,
+        original_source="https://example.com/note.txt",
+        meta={"resolved_name": "note.txt", "original_filename": "note.txt"},
+    )
+    understanding = SimpleNamespace(submit_file=AsyncMock(return_value="response-1"))
+    router = ParserRouter(parser_registry=object())
+    router._understanding_api = understanding
+
+    response_id = await router.submit(resource)
+
+    assert response_id == "response-1"
+    understanding.submit_file.assert_awaited_once_with(staged, file_name="note.txt")
+
+
+@pytest.mark.asyncio
+async def test_upload_file_preserves_temp_upload_filename(tmp_path):
+    staged = tmp_path / "upload_0123456789abcdef.txt"
+    staged.write_text("content")
+    resource = LocalResource(
+        path=staged,
+        source_type=SourceType.LOCAL,
+        original_source=str(staged),
+        meta={"resolved_name": "note.txt", "original_filename": "note.txt"},
+    )
+    understanding = SimpleNamespace(upload_file=AsyncMock(return_value="file-1"))
+    router = ParserRouter(parser_registry=object())
+    router._understanding_api = understanding
+
+    file_id = await router.upload_file(resource)
+
+    assert file_id == "file-1"
+    understanding.upload_file.assert_awaited_once_with(staged, file_name="note.txt")
+
+
+@pytest.mark.asyncio
 async def test_normalized_feishu_markdown_stays_internal(monkeypatch, tmp_path):
     config = SimpleNamespace(
         parser_api=SimpleNamespace(
