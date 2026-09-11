@@ -143,37 +143,37 @@ Connect your agent to OpenViking for cross-session memory. Choose a native integ
 
 <table>
 <tr>
-<td align="center" width="25%">
+<td align="center" valign="top" width="25%">
 <a href="https://docs.openviking.ai/en/agent-integrations/02-claude-code"><img src="docs/images/agents/image/claude-code/logo.png" width="28" height="28" alt=""><br><strong>Claude Code</strong></a><br>
 <sub>Hooks + MCP</sub>
 </td>
-<td align="center" width="25%">
+<td align="center" valign="top" width="25%">
 <a href="https://docs.openviking.ai/en/agent-integrations/04-codex"><img src="docs/images/integrations/codex.png" width="28" height="28" alt=""><br><strong>Codex</strong></a><br>
 <sub>Hooks + MCP</sub>
 </td>
-<td align="center" width="25%">
+<td align="center" valign="top" width="25%">
 <a href="https://docs.openviking.ai/en/agent-integrations/12-cursor"><img src="docs/images/agents/image/cursor/logo.png" width="28" height="28" alt=""><br><strong>Cursor</strong></a><br>
 <sub>Hooks + MCP</sub>
 </td>
-<td align="center" width="25%">
+<td align="center" valign="top" width="25%">
 <a href="https://docs.openviking.ai/en/agent-integrations/13-trae"><img src="docs/images/agents/image/trae/logo.png" width="28" height="28" alt=""><br><strong>TRAE</strong></a><br>
 <sub>Hooks + MCP</sub>
 </td>
 </tr>
 <tr>
-<td align="center" width="25%">
+<td align="center" valign="top" width="25%">
 <a href="https://docs.openviking.ai/en/agent-integrations/03-openclaw"><img src="docs/images/integrations/openclaw.jpg" width="28" height="28" alt=""><br><strong>OpenClaw</strong></a><br>
-<sub>Context-engine plugin</sub>
+<sub>Context engine</sub>
 </td>
-<td align="center" width="25%">
+<td align="center" valign="top" width="25%">
 <a href="https://docs.openviking.ai/en/agent-integrations/05-hermes"><img src="docs/images/integrations/hermes-agent.png" width="28" height="28" alt=""><br><strong>Hermes</strong></a><br>
 <sub>Built-in provider</sub>
 </td>
-<td align="center" width="25%">
+<td align="center" valign="top" width="25%">
 <a href="https://docs.openviking.ai/en/agent-integrations/10-opencode"><img src="docs/images/agents/image/opencode/logo.png" width="28" height="28" alt=""><br><strong>OpenCode</strong></a><br>
 <sub>Plugin + MCP</sub>
 </td>
-<td align="center" width="25%">
+<td align="center" valign="top" width="25%">
 <a href="https://docs.openviking.ai/en/agent-integrations/11-pi"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/pi-dark.svg"><img src="docs/images/integrations/pi.svg" width="28" height="28" alt=""></picture><br><strong>pi</strong></a><br>
 <sub>Native extension</sub>
 </td>
