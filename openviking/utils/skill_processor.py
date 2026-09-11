@@ -36,7 +36,6 @@ from openviking.utils.path_safety import safe_join_viking_uri
 from openviking.utils.zip_safe import safe_extract_zip
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils import get_logger
-from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
@@ -94,7 +93,7 @@ class SkillProcessor:
 
     Workflow:
     1. Parse skill data (directory, file, string, or dict)
-    2. Generate L1 overview using VLM
+    2. Use skill metadata as L0 and skill instructions as L1
     3. Write skill content to VikingFS
     4. Write auxiliary files
     5. Index to vector store
@@ -167,7 +166,6 @@ class SkillProcessor:
         privacy_change_reason: str = "auto-extracted from add_skill",
         target_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
-        config = get_openviking_config()
         cleanup_path = preparation.cleanup_path
         skill_dict = preparation.skill_dict
         auxiliary_files = preparation.auxiliary_files
@@ -204,13 +202,6 @@ class SkillProcessor:
             )
             context.set_vectorize(Vectorize(text=context.abstract))
 
-            overview_start = time.perf_counter()
-            overview = await self._generate_overview(skill_dict, config)
-            telemetry.set(
-                "skill.overview.duration_ms",
-                round((time.perf_counter() - overview_start) * 1000, 3),
-            )
-
             skill_dir_uri = context.uri
 
             write_start = time.perf_counter()
@@ -219,7 +210,7 @@ class SkillProcessor:
                 skill_dict=skill_dict,
                 skill_dir_uri=skill_dir_uri,
                 abstract=skill_abstract,
-                overview=overview,
+                overview=skill_dict.get("content", ""),
                 ctx=ctx,
             )
 

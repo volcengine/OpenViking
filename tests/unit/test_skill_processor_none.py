@@ -152,14 +152,7 @@ class TestParseSkillNoneData:
 
 
 @pytest.mark.asyncio
-async def test_process_skill_preserves_hyphenated_allowed_tools_in_meta(monkeypatch):
-    config = MagicMock()
-    config.vlm.get_completion_async = AsyncMock(return_value="overview")
-    monkeypatch.setattr(
-        "openviking.utils.skill_processor.get_openviking_config",
-        lambda: config,
-    )
-
+async def test_process_skill_preserves_hyphenated_allowed_tools_in_meta():
     vikingdb = MagicMock()
     vikingdb.enqueue_embedding_msg = AsyncMock(return_value=False)
     viking_fs = MagicMock()
