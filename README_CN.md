@@ -2,7 +2,7 @@
 
 <a href="https://openviking.ai/" target="_blank">
   <picture>
-    <img alt="OpenViking" src="docs/images/ov-logo.png" width="120" height="auto">
+    <img alt="OpenViking" src="docs/images/ov-logo.png" width="200px" height="auto">
   </picture>
 </a>
 
@@ -19,6 +19,12 @@
 [![](https://img.shields.io/badge/license-AGPLv3-white?labelColor=black\&style=flat-square)](https://github.com/volcengine/OpenViking/blob/main/LICENSE)
 [![](https://img.shields.io/github/last-commit/volcengine/OpenViking?color=c4f042\&labelColor=black\&style=flat-square)](https://github.com/volcengine/OpenViking/commits/main)
 
+👋 加入我们的社区
+
+📱 <a href="https://docs.openviking.ai/zh/about/01-about-us#飞书群">飞书群</a> · <a href="https://docs.openviking.ai/zh/about/01-about-us#微信群">微信群</a> · <a href="https://discord.com/invite/eHvx8E9XF3">Discord</a> · <a href="https://x.com/openvikingai">X</a>
+
+<a href="https://trendshift.io/repositories/19668" target="_blank"><img src="https://trendshift.io/api/badge/repositories/19668" alt="volcengine%2FOpenViking | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+
 </div>
 
 ***
@@ -29,52 +35,62 @@ OpenViking 是面向 AI 智能体的开源上下文数据库，用来存储知�
 
 上下文存放在 `viking://` 虚拟文件系统中。Agent 可以用 `ls`、`tree` 浏览目录，在项目或记忆目录内检索，按需读取详情。目录摘要帮助 Agent 先选择上下文，再加载全文。
 
-[快速开始](#快速开始) · [Agent 接入](#接入你的-agent) · [SDK 与工具](#基于-openviking-构建应用) · [部署](#生产部署)
-
 [![OpenViking Studio：浏览上下文，体验语义检索](docs/images/studio-playground.png)](https://openviking.ai/studio)
 
-[在线体验 OpenViking Studio](https://openviking.ai/studio)，无需安装。
+[在线体验 OpenViking Studio](https://openviking.ai/studio)，无需安装。 [自行部署 Web Studio](web-studio/README_CN.md)。
 
-## 核心概念
+## 为什么用 OpenViking
 
-### 资源、记忆与技能
-
-| 上下文 | 存什么 |
-| --- | --- |
-| **资源** | Agent 可引用的文档、代码库和网页 |
-| **记忆** | 从会话中提取的用户偏好、事实和经验 |
-| **技能** | Agent 执行任务所需的指令与配套文件 |
-
-`viking://~` 指向当前用户的主目录。资源可以在账号内共享；记忆和会话归属于各自的用户。见[上下文类型](https://docs.openviking.ai/zh/concepts/02-context-types)和 [URI 命名空间](https://docs.openviking.ai/zh/concepts/04-viking-uri)。
-
-### 分层加载上下文
-
-经过语义处理的目录，在内容旁存放摘要和概览：
-
-```text
-viking://
-├── resources/project/
-│   ├── .abstract.md  # L0
-│   ├── .overview.md  # L1
-│   └── api.md        # L2
-└── ~/
-    ├── memories/
-    └── skills/
-```
-
-L0（摘要）和 L1（概览）描述目录。Agent 据此决定往哪里查、何时读取 L2（完整内容）。见[上下文分层](https://docs.openviking.ai/zh/concepts/03-context-layers)。
-
-### 沿目录结构检索
-
-向量检索先找到候选目录，再探索目录中的内容。`find` 直接执行查询；`search` 可以结合会话上下文规划检索。指定目标 URI，即可将查询限定在项目或记忆子树内。见[检索机制](https://docs.openviking.ai/zh/concepts/07-retrieval)。
-
-结果带有来源 URI；可选的[检索遥测](https://docs.openviking.ai/zh/api/06-retrieval)和[运行状态观测](https://docs.openviking.ai/zh/api/18-observer)用于排查检索与处理问题。
-
-### 从会话提取记忆
-
-Session 记录消息和上下文使用情况。提交后，会话被归档，后台开始提取记忆：将候选内容与已有记忆比较，再新建、合并或跳过，供后续会话检索。记忆策略控制提取哪些类型，包括用户偏好和 Agent 经验。见[会话管理](https://docs.openviking.ai/zh/concepts/08-session)。
+- **用文件系统组织上下文。** 资源存放文档和代码，记忆保留用户偏好与经验，技能定义任务执行方式。每项上下文都有 `viking://` URI，供 Agent 浏览和检索。→ [Viking URI](https://docs.openviking.ai/zh/concepts/04-viking-uri) · [上下文类型](https://docs.openviking.ai/zh/concepts/02-context-types)
+- **按需加载上下文。** 目录摘要（L0）和概览（L1）帮助 Agent 判断何时读取完整内容（L2）。→ [上下文分层](https://docs.openviking.ai/zh/concepts/03-context-layers)
+- **沿目录结构检索。** 向量检索先找到候选目录，再探索其中的内容。`find` 直接执行查询，`search` 可以结合会话上下文规划检索。→ [检索机制](https://docs.openviking.ai/zh/concepts/07-retrieval)
+- **查看检索过程。** 结果带有来源 URI，可选的遥测和运行状态观测用于排查检索与处理问题。→ [检索 API](https://docs.openviking.ai/zh/api/06-retrieval) · [运行观测](https://docs.openviking.ai/zh/api/18-observer)
+- **从会话提取记忆。** 提交 Session 后，会话被归档，后台按记忆策略提取内容，与已有记忆比较后新建、合并或跳过。→ [会话管理](https://docs.openviking.ai/zh/concepts/08-session)
 
 [架构](https://docs.openviking.ai/zh/concepts/01-architecture) · [设计思路](https://blog.openviking.ai/post/openviking-context-database/)
+
+```
+viking://
+├── resources/              # 资源：项目文档、代码库、网页等
+│   └── my_project/
+│       ├── docs/
+│       │   ├── api/
+│       │   └── tutorials/
+│       └── src/
+└── user/
+    └── {user_id}/
+        ├── memories/
+        │   └── preferences/
+        │       ├── writing_style
+        │       └── coding_habits
+        ├── resources/
+        │   └── private_project/
+        ├── skills/
+        │   ├── search_code
+        │   └── analyze_data
+        └── peers/
+            └── web-visitor-alice/
+```
+
+三个加载层级：
+
+- **L0（摘要）**：一句话总结，用来快速判断相关性。
+- **L1（概览）**：核心信息和使用场景，供规划阶段决策。
+- **L2（详情）**：完整原始数据，只在需要时读取。
+
+经过语义处理的目录带有 L0/L1 摘要，Agent 可以先判断相关性，再读取全文：
+
+```
+viking://resources/my_project/
+├── .abstract.md           # L0：约 100 tokens——快速判断相关性
+├── .overview.md           # L1：约 2k tokens——结构和要点
+└── docs/
+    ├── .abstract.md
+    ├── .overview.md
+    └── api/
+        ├── auth.md         # L2：完整内容，按需加载
+        └── endpoints.md
+```
 
 ## 评测结果
 
@@ -117,6 +133,8 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
 ```
 
 `ov find` 返回匹配的上下文及其 URI，可继续查看内容。客户端配置（`ov config`）、CLI 独立安装和索引维护，见 [CLI 安装](https://docs.openviking.ai/zh/getting-started/05-cli-setup)。
+
+构建自己的应用，可使用 [Python](sdk/python/README_CN.md)、[Go](sdk/go/README_CN.md)、[TypeScript](sdk/typescript/README_CN.md) SDK 或 [HTTP API](https://docs.openviking.ai/zh/api/01-overview)。
 
 ## 接入你的 Agent
 
@@ -185,14 +203,6 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
 
 详细接入方式请参考 [Integrations](https://openviking.ai/integrations)。
 
-## 基于 OpenViking 构建应用
-
-| 工具 | 用途 |
-| --- | --- |
-| [Python](sdk/python/README_CN.md)、[Go](sdk/go/README_CN.md)、[TypeScript](sdk/typescript/README_CN.md) SDK · [HTTP API](https://docs.openviking.ai/zh/api/01-overview) | 为应用接入上下文存储、检索和会话管理 |
-| [上下文编译](https://docs.openviking.ai/zh/context-compilation/01-overview) | 用 `ov compile` 配合技能，将资料整理成 Wiki、知识图谱或报告；需要启用 VikingBot |
-| [Web Studio](web-studio/README_CN.md) | 在 Web 控制台浏览上下文、执行语义检索并使用 Agent |
-
 ## OpenViking Helper（Beta）
 
 OpenViking Helper 是面向 macOS 和 Windows x64 的桌面控制台（Beta），用于配置支持的本地 Agent 接入、查看会话中的召回与捕获事件，并将本地记忆和技能同步到 OpenViking。
@@ -215,6 +225,8 @@ ov chat   # 在另一个终端运行
 
 官方 Docker 镜像内置 VikingBot，默认随服务器和控制台 UI 一起启动。详情见 [VikingBot 指南](https://docs.openviking.ai/zh/guides/17-vikingbot)。
 
+VikingBot 也为[上下文编译](https://docs.openviking.ai/zh/context-compilation/01-overview)提供运行支持：`ov compile` 配合技能，将资料整理成 Wiki、知识图谱或报告。
+
 ## 生产部署
 
 开源服务器采用 [AGPLv3](LICENSE)，可在自己的环境部署，无需激活码。见[服务器配置](https://docs.openviking.ai/zh/getting-started/03-quickstart-server)和 [Docker 与部署指南](https://docs.openviking.ai/zh/guides/03-deployment)。
@@ -223,13 +235,26 @@ ov chat   # 在另一个终端运行
 
 ## 商业版本
 
-### 托管 SaaS
+<table>
+<tr>
+<td width="50%" valign="top">
 
-由[火山引擎](https://www.volcengine.com/product/openviking-service)托管和运维，提供个人版、企业版，以及开源部署的迁移工具。套餐与额度见[服务文档](https://docs.volcengine.com/docs/84313/2374478)。中国以外地区的托管服务计划在 [BytePlus](https://www.byteplus.com) 上线。
+<img src="docs/images/commercial-saas.png" alt="商业化 SaaS 版" width="100%" />
 
-### 企业私有化部署
+<h3>☁️ 商业化 SaaS 版</h3>
+<p>由<a href="https://www.volcengine.com/product/openviking-service">火山引擎</a>托管和运维，提供个人版、企业版，以及开源部署的迁移工具。套餐与额度见<a href="https://docs.volcengine.com/docs/84313/2374478">服务文档</a>。中国以外地区的托管服务计划在 <a href="https://www.byteplus.com">BytePlus</a> 上线。</p>
 
-部署在自己的云账号 / VPC（BYOC）或离线环境中，提供分布式部署和官方技术支持，通过激活码启用。[咨询私有化部署](https://my.feishu.cn/share/base/form/shrcnMFqymCd9sq77sLk34Krxoc)。
+</td>
+<td width="50%" valign="top">
+
+<img src="docs/images/commercial-self-hosted.png" alt="私有化部署版" width="100%" />
+
+<h3>🏢 私有化部署版</h3>
+<p>部署在自己的云账号 / VPC（BYOC）或离线环境中，提供分布式部署和官方技术支持，通过激活码启用。<a href="https://my.feishu.cn/share/base/form/shrcnMFqymCd9sq77sLk34Krxoc">咨询私有化部署</a>。</p>
+
+</td>
+</tr>
+</table>
 
 ## 研究
 

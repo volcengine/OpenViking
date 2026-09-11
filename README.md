@@ -2,7 +2,7 @@
 
 <a href="https://openviking.ai/" target="_blank">
   <picture>
-    <img alt="OpenViking" src="docs/images/ov-logo.png" width="120" height="auto">
+    <img alt="OpenViking" src="docs/images/ov-logo.png" width="200px" height="auto">
   </picture>
 </a>
 
@@ -19,6 +19,12 @@ English / [中文](README_CN.md) / [日本語](README_JA.md)
 [![](https://img.shields.io/badge/license-AGPLv3-white?labelColor=black\&style=flat-square)](https://github.com/volcengine/OpenViking/blob/main/LICENSE)
 [![](https://img.shields.io/github/last-commit/volcengine/OpenViking?color=c4f042\&labelColor=black\&style=flat-square)](https://github.com/volcengine/OpenViking/commits/main)
 
+👋 Join our Community
+
+📱 <a href="https://docs.openviking.ai/en/about/01-about-us#lark-group">Lark Group</a> · <a href="https://docs.openviking.ai/en/about/01-about-us#wechat-group">WeChat</a> · <a href="https://discord.com/invite/eHvx8E9XF3">Discord</a> · <a href="https://x.com/openvikingai">X</a>
+
+<a href="https://trendshift.io/repositories/19668" target="_blank"><img src="https://trendshift.io/api/badge/repositories/19668" alt="volcengine%2FOpenViking | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+
 </div>
 
 ***
@@ -29,54 +35,64 @@ OpenViking is an open-source context database for AI agents. It gives agents a p
 
 Context lives in a virtual filesystem under `viking://`. Agents can browse it with `ls` and `tree`, search within a project or memory directory, and read details as needed. Directory summaries help them select context before loading full files.
 
-[Quick start](#quick-start) · [Agent integrations](#use-it-with-your-agent) · [SDKs & tools](#build-with-openviking) · [Deployment](#deploy-in-production)
-
 [![OpenViking Studio: browse context and try semantic search](docs/images/studio-playground.png)](https://openviking.ai/studio)
 
-[Try OpenViking Studio](https://openviking.ai/studio) in your browser, no installation required.
+[Try OpenViking Studio](https://openviking.ai/studio) in your browser, no installation required. [Self-host Web Studio](web-studio/README.md).
 
-## Core concepts
+## Why OpenViking
 
-### Resources, memories, and skills
-
-| Context | What it holds |
-| --- | --- |
-| **Resources** | Documents, repositories, and web pages an agent can reference |
-| **Memories** | User preferences, facts, and experience learned from sessions |
-| **Skills** | Instructions and supporting files for tasks an agent can perform |
-
-`viking://~` resolves to the current user's home. Resources can be shared within an account; memories and sessions belong to individual users. See [context types](https://docs.openviking.ai/en/concepts/02-context-types) and [URI namespaces](https://docs.openviking.ai/en/concepts/04-viking-uri).
-
-### Load context in layers
-
-Semantically processed directories have summaries alongside their content:
-
-```text
-viking://
-├── resources/project/
-│   ├── .abstract.md  # L0
-│   ├── .overview.md  # L1
-│   └── api.md        # L2
-└── ~/
-    ├── memories/
-    └── skills/
-```
-
-L0 (abstract) and L1 (overview) summarize directories. Agents use them to decide where to look and when to read L2 (full content). [Context layers](https://docs.openviking.ai/en/concepts/03-context-layers)
-
-### Retrieve within the directory structure
-
-Vector search finds candidate directories, then retrieval explores their contents. `find` runs a query directly; `search` can use session context to plan what to retrieve. Use a target URI to scope a query to a project or memory subtree. [Retrieval](https://docs.openviking.ai/en/concepts/07-retrieval)
-
-Results include source URIs; optional [retrieval telemetry](https://docs.openviking.ai/en/api/06-retrieval) and [runtime observers](https://docs.openviking.ai/en/api/18-observer) help diagnose search and processing issues.
-
-### Turn sessions into memory
-
-A session records messages and context use. Committing it archives the conversation and starts background memory extraction: candidates are compared with existing memories, then created, merged, or skipped. Later sessions can retrieve that knowledge. Memory policies control which types are extracted, including user preferences and agent experience. [Sessions](https://docs.openviking.ai/en/concepts/08-session)
+- **One filesystem for all context.** Resources hold documents and code; memories retain user preferences and experience; skills define how to perform tasks. Each has a `viking://` URI for browsing and retrieval. → [Viking URI](https://docs.openviking.ai/en/concepts/04-viking-uri) · [Context types](https://docs.openviking.ai/en/concepts/02-context-types)
+- **Load only the context you need.** Directory abstracts (L0) and overviews (L1) help agents decide when to read full content (L2). → [Context layers](https://docs.openviking.ai/en/concepts/03-context-layers)
+- **Search within the directory structure.** Vector search finds candidate directories, then explores their contents. `find` runs a query directly; `search` can use session context to plan retrieval. → [Retrieval](https://docs.openviking.ai/en/concepts/07-retrieval)
+- **Inspect retrieval.** Results include source URIs. Optional telemetry and runtime observers help diagnose search and processing issues. → [Retrieval API](https://docs.openviking.ai/en/api/06-retrieval) · [Observers](https://docs.openviking.ai/en/api/18-observer)
+- **Turn sessions into memory.** Committing a session archives the conversation and starts background extraction. Memory policies control what is retained; candidates are compared with existing memories for creation, merging, or skipping. → [Sessions](https://docs.openviking.ai/en/concepts/08-session)
 
 [Architecture](https://docs.openviking.ai/en/concepts/01-architecture) · [Design rationale](https://blog.openviking.ai/post/openviking-context-database/)
 
-## Benchmarks
+```
+viking://
+├── resources/              # Resources: project docs, repos, web pages, etc.
+│   └── my_project/
+│       ├── docs/
+│       │   ├── api/
+│       │   └── tutorials/
+│       └── src/
+└── user/
+    └── {user_id}/
+        ├── memories/
+        │   └── preferences/
+        │       ├── writing_style
+        │       └── coding_habits
+        ├── resources/
+        │   └── private_project/
+        ├── skills/
+        │   ├── search_code
+        │   └── analyze_data
+        └── peers/
+            └── web-visitor-alice/
+```
+
+The three loading tiers:
+
+- **L0 (Abstract)**: a one-sentence summary for quick relevance checks.
+- **L1 (Overview)**: core information and usage scenarios for planning.
+- **L2 (Details)**: the full original data, read only when needed.
+
+Semantically processed directories carry L0/L1 summaries, so agents can judge relevance before reading full files:
+
+```
+viking://resources/my_project/
+├── .abstract.md           # L0: quick relevance check
+├── .overview.md           # L1: structure and key points
+└── docs/
+    ├── .abstract.md
+    ├── .overview.md
+    └── api/
+        ├── auth.md         # L2: full content, loaded on demand
+        └── endpoints.md
+```
+
+## Proof it works
 
 OpenViking 0.3.22 has been evaluated on long-conversation user memory (LoCoMo) and multi-turn agent tasks (tau2-bench). Full results and setup details, including knowledge-base QA, are in the [benchmark report](https://blog.openviking.ai/post/openviking-benchmark-results/); reproduction scripts live in [./benchmark](./benchmark).
 
@@ -117,6 +133,8 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/en
 ```
 
 `ov find` returns matching context with URIs you can inspect. For client configuration (`ov config`), standalone CLI installs, and index maintenance, see [CLI setup](https://docs.openviking.ai/en/getting-started/05-cli-setup).
+
+Build your own integration with the [Python](sdk/python/README.md), [Go](sdk/go/README.md), or [TypeScript](sdk/typescript/README.md) SDK, or the [HTTP API](https://docs.openviking.ai/en/api/01-overview).
 
 ## Use it with your agent
 
@@ -185,14 +203,6 @@ Connect your agent to OpenViking for cross-session memory. Choose a native integ
 
 For setup instructions and integration details, see [Integrations](https://openviking.ai/integrations).
 
-## Build with OpenViking
-
-| Tool | Use it to |
-| --- | --- |
-| [Python](sdk/python/README.md), [Go](sdk/go/README.md), [TypeScript](sdk/typescript/README.md) SDKs · [HTTP API](https://docs.openviking.ai/en/api/01-overview) | Add context storage, retrieval, and sessions to your application |
-| [Context compilation](https://docs.openviking.ai/en/context-compilation/01-overview) | Use `ov compile` with a skill to turn source material into a wiki, knowledge graph, or report; requires VikingBot |
-| [Web Studio](web-studio/README.md) | Browse stored context, run semantic search, and work with agents in a web console |
-
 ## OpenViking Helper (Beta)
 
 OpenViking Helper is a desktop console for macOS and Windows x64 (beta). It configures supported local agent integrations, inspects recall and capture events in sessions, and syncs local memories and skills to OpenViking.
@@ -215,6 +225,8 @@ ov chat   # in another terminal
 
 The official Docker image bundles VikingBot and starts it by default alongside the server and console UI. Details: [VikingBot guide](https://docs.openviking.ai/en/guides/17-vikingbot).
 
+VikingBot also powers [context compilation](https://docs.openviking.ai/en/context-compilation/01-overview): `ov compile` uses a skill to organize source material into a wiki, knowledge graph, or report.
+
 ## Deploy in production
 
 Run the open-source server in your own environment under [AGPLv3](LICENSE). It requires no activation key. Start with [server setup](https://docs.openviking.ai/en/getting-started/03-quickstart-server) or the [Docker and deployment guide](https://docs.openviking.ai/en/guides/03-deployment).
@@ -223,13 +235,26 @@ The server supports [accounts and user isolation](https://docs.openviking.ai/en/
 
 ## Commercial editions
 
-### Managed SaaS
+<table>
+<tr>
+<td width="50%" valign="top">
 
-[Volcano Engine](https://www.volcengine.com/product/openviking-service) hosts and operates OpenViking. Personal and Enterprise plans cover individual and team use, with migration tooling for open-source deployments. See the [service documentation](https://docs.volcengine.com/docs/84313/2374478) for plans and limits. Hosting outside China is planned on [BytePlus](https://www.byteplus.com).
+<img src="docs/images/commercial-saas.png" alt="Managed SaaS" width="100%" />
 
-### Self-managed enterprise
+<h3>☁️ Managed SaaS</h3>
+<p><a href="https://www.volcengine.com/product/openviking-service">Volcano Engine</a> hosts and operates OpenViking. Personal and Enterprise plans cover individual and team use, with migration tooling for open-source deployments. See the <a href="https://docs.volcengine.com/docs/84313/2374478">service documentation</a> for plans and limits. Hosting outside China is planned on <a href="https://www.byteplus.com">BytePlus</a>.</p>
 
-Deploy in your own cloud account / VPC (BYOC) or an offline environment. This edition adds distributed deployment and official support, activated by a license key. [Contact the team](https://docs.google.com/forms/d/e/1FAIpQLScQqwsm7fvKdjtNiW5rWNXJjoHPtedVzLsKSMJgObtsj2_udA/viewform).
+</td>
+<td width="50%" valign="top">
+
+<img src="docs/images/commercial-self-hosted.png" alt="Self-Managed" width="100%" />
+
+<h3>🏢 Self-Managed</h3>
+<p>Deploy in your own cloud account / VPC (BYOC) or an offline environment. This edition adds distributed deployment and official support, activated by a license key. <a href="https://docs.google.com/forms/d/e/1FAIpQLScQqwsm7fvKdjtNiW5rWNXJjoHPtedVzLsKSMJgObtsj2_udA/viewform">Contact the team</a>.</p>
+
+</td>
+</tr>
+</table>
 
 ## Research
 

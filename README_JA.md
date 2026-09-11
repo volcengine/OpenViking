@@ -2,7 +2,7 @@
 
 <a href="https://openviking.ai/" target="_blank">
   <picture>
-    <img alt="OpenViking" src="docs/images/ov-logo.png" width="120" height="auto">
+    <img alt="OpenViking" src="docs/images/ov-logo.png" width="200px" height="auto">
   </picture>
 </a>
 
@@ -19,6 +19,12 @@
 [![](https://img.shields.io/badge/license-AGPLv3-white?labelColor=black\&style=flat-square)](https://github.com/volcengine/OpenViking/blob/main/LICENSE)
 [![](https://img.shields.io/github/last-commit/volcengine/OpenViking?color=c4f042\&labelColor=black\&style=flat-square)](https://github.com/volcengine/OpenViking/commits/main)
 
+👋 コミュニティに参加しよう
+
+📱 <a href="https://docs.openviking.ai/en/about/01-about-us#lark-group">Larkグループ</a> · <a href="https://docs.openviking.ai/en/about/01-about-us#wechat-group">WeChat</a> · <a href="https://discord.com/invite/eHvx8E9XF3">Discord</a> · <a href="https://x.com/openvikingai">X</a>
+
+<a href="https://trendshift.io/repositories/19668" target="_blank"><img src="https://trendshift.io/api/badge/repositories/19668" alt="volcengine%2FOpenViking | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+
 </div>
 
 ***
@@ -29,52 +35,62 @@ OpenVikingは、AIエージェントのためのオープンソースのコン�
 
 コンテキストは `viking://` 仮想ファイルシステムに保存されます。エージェントは `ls` や `tree` で閲覧し、プロジェクトやメモリのディレクトリ内を検索して、必要な詳細を読み込めます。ディレクトリの要約を使い、全文を読む前にコンテキストを選択します。
 
-[クイックスタート](#クイックスタート) · [エージェント連携](#エージェントと組み合わせて使う) · [SDK とツール](#openvikingでアプリを構築する) · [デプロイ](#本番環境へのデプロイ)
-
 [![OpenViking Studio：コンテキストの閲覧と意味検索](docs/images/studio-playground.png)](https://openviking.ai/studio)
 
-[OpenViking Studioを試す](https://openviking.ai/studio)。ブラウザから利用でき、インストールは不要です。
+[OpenViking Studioを試す](https://openviking.ai/studio)。ブラウザから利用でき、インストールは不要です。 [Web Studioを自分の環境にデプロイ](web-studio/README.md)。
 
-## コアコンセプト
+## OpenVikingを選ぶ理由
 
-### リソース、メモリ、スキル
+- **ファイルシステムでコンテキストを整理。** リソースは文書やコード、メモリはユーザーの好みや経験、スキルはタスクの実行方法を保存します。それぞれに `viking://` URI があり、閲覧や検索に使えます。→ [Viking URI](https://docs.openviking.ai/en/concepts/04-viking-uri) · [Context types](https://docs.openviking.ai/en/concepts/02-context-types)
+- **必要なコンテキストを読み込む。** ディレクトリの要約（L0）と概要（L1）を使い、全文（L2）を読むか判断します。→ [Context layers](https://docs.openviking.ai/en/concepts/03-context-layers)
+- **ディレクトリ構造に沿って検索。** ベクトル検索で候補のディレクトリを見つけ、その内容を探索します。`find` はクエリを直接実行し、`search` はセッションのコンテキストを使って検索を計画できます。→ [Retrieval](https://docs.openviking.ai/en/concepts/07-retrieval)
+- **検索を確認する。** 結果にはソース URI が含まれます。任意のテレメトリとランタイム監視で検索や処理の問題を調べられます。→ [Retrieval API](https://docs.openviking.ai/en/api/06-retrieval) · [Observers](https://docs.openviking.ai/en/api/18-observer)
+- **セッションからメモリを抽出。** コミットすると会話をアーカイブし、メモリポリシーに従ってバックグラウンドで抽出します。候補を既存のメモリと比較し、新規作成、統合、スキップを判断します。→ [Session](https://docs.openviking.ai/en/concepts/08-session)
 
-| コンテキスト | 保存するもの |
-| --- | --- |
-| **リソース** | エージェントが参照する文書、リポジトリ、Web ページ |
-| **メモリ** | セッションから学んだユーザーの好み、事実、経験 |
-| **スキル** | タスクを実行するための指示と関連ファイル |
+[Architecture](https://docs.openviking.ai/en/concepts/01-architecture) · [設計の背景](https://blog.openviking.ai/post/openviking-context-database/)
 
-`viking://~` は現在のユーザーのホームを指します。リソースはアカウント内で共有でき、メモリとセッションは各ユーザーに属します。[コンテキストの種類](https://docs.openviking.ai/en/concepts/02-context-types) · [URI 名前空間](https://docs.openviking.ai/en/concepts/04-viking-uri)
-
-### 階層ごとにコンテキストを読み込む
-
-意味処理を終えたディレクトリには、コンテンツとともに要約が保存されます。
-
-```text
+```
 viking://
-├── resources/project/
-│   ├── .abstract.md  # L0
-│   ├── .overview.md  # L1
-│   └── api.md        # L2
-└── ~/
-    ├── memories/
-    └── skills/
+├── resources/              # リソース: プロジェクトドキュメント、リポジトリ、Webページなど
+│   └── my_project/
+│       ├── docs/
+│       │   ├── api/
+│       │   └── tutorials/
+│       └── src/
+└── user/
+    └── {user_id}/
+        ├── memories/
+        │   └── preferences/
+        │       ├── writing_style
+        │       └── coding_habits
+        ├── resources/
+        │   └── private_project/
+        ├── skills/
+        │   ├── search_code
+        │   └── analyze_data
+        └── peers/
+            └── web-visitor-alice/
 ```
 
-L0（要約）と L1（概要）はディレクトリを説明します。エージェントはこれらを使い、どこを調べ、いつ L2（全文）を読むかを決めます。[コンテキストの階層](https://docs.openviking.ai/en/concepts/03-context-layers)
+3つのローディング階層:
 
-### ディレクトリ構造に沿って検索する
+- **L0（Abstract）**: 迅速な関連性チェックのための一文の要約。
+- **L1（Overview）**: 計画立案のためのコア情報と使用シナリオ。
+- **L2（Details）**: 完全なオリジナルデータ。必要な場合にのみ読み込まれます。
 
-ベクトル検索で候補のディレクトリを見つけ、その内容を探索します。`find` はクエリを直接実行し、`search` はセッションのコンテキストを使って検索を計画できます。対象 URI を指定すると、プロジェクトやメモリのサブツリー内に検索を限定できます。[検索の仕組み](https://docs.openviking.ai/en/concepts/07-retrieval)
+意味処理を終えたディレクトリには L0/L1 の要約があり、全文を読む前に関連性を判断できます。
 
-結果にはソース URI が含まれます。任意の[検索テレメトリ](https://docs.openviking.ai/en/api/06-retrieval)と[ランタイム監視](https://docs.openviking.ai/en/api/18-observer)で検索や処理の問題を調べられます。
-
-### セッションからメモリを抽出する
-
-セッションはメッセージとコンテキストの利用を記録します。コミットすると会話をアーカイブし、バックグラウンドでメモリを抽出します。候補を既存のメモリと比較し、新規作成、統合、スキップを判断します。後続のセッションはその知識を検索できます。抽出する種類はメモリポリシーで指定し、ユーザーの好みやエージェントの経験を扱えます。[セッション](https://docs.openviking.ai/en/concepts/08-session)
-
-[アーキテクチャ](https://docs.openviking.ai/en/concepts/01-architecture) · [設計の背景](https://blog.openviking.ai/post/openviking-context-database/)
+```
+viking://resources/my_project/
+├── .abstract.md           # L0: 〜100 tokens - 迅速な関連性チェック
+├── .overview.md           # L1: 〜2k tokens - 構造とキーポイント
+└── docs/
+    ├── .abstract.md
+    ├── .overview.md
+    └── api/
+        ├── auth.md         # L2: 完全なコンテンツ、オンデマンドでロード
+        └── endpoints.md
+```
 
 ## 実証データ
 
@@ -117,6 +133,8 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/en
 ```
 
 `ov find` は一致したコンテキストと URI を返します。クライアント設定（`ov config`）、CLI の単体インストール、インデックス管理は [CLI セットアップ](https://docs.openviking.ai/en/getting-started/05-cli-setup)を参照してください。
+
+独自のアプリには [Python](sdk/python/README.md)、[Go](sdk/go/README.md)、[TypeScript](sdk/typescript/README.md) SDK、または [HTTP API](https://docs.openviking.ai/en/api/01-overview) を使えます。
 
 ## エージェントと組み合わせて使う
 
@@ -185,14 +203,6 @@ OpenViking を接続して、セッションをまたいで記憶を引き継ぎ
 
 設定方法と統合の詳細は [Integrations](https://openviking.ai/integrations) を参照してください。
 
-## OpenVikingでアプリを構築する
-
-| ツール | 用途 |
-| --- | --- |
-| [Python](sdk/python/README.md)、[Go](sdk/go/README.md)、[TypeScript](sdk/typescript/README.md) SDK · [HTTP API](https://docs.openviking.ai/en/api/01-overview) | アプリにコンテキストの保存、検索、セッション管理を組み込む |
-| [コンテキストのコンパイル](https://docs.openviking.ai/en/context-compilation/01-overview) | `ov compile` とスキルで資料を Wiki、知識グラフ、レポートに整理する。VikingBot が必要 |
-| [Web Studio](web-studio/README.md) | Web コンソールでコンテキストを閲覧し、意味検索やエージェントを使う |
-
 ## OpenViking Helper（Beta）
 
 OpenViking Helper は macOS と Windows x64 向けのデスクトップコンソール（Beta）です。対応するローカルエージェントとの連携を設定し、セッションのリコールやキャプチャを確認して、ローカルのメモリとスキルを OpenViking に同期できます。
@@ -215,6 +225,8 @@ ov chat   # 別のターミナルで実行
 
 公式 Docker イメージには VikingBot が同梱されており、サーバーとコンソール UI とともにデフォルトで起動します。詳細: [VikingBot guide](https://docs.openviking.ai/en/guides/17-vikingbot)。
 
+VikingBot は[コンテキストのコンパイル](https://docs.openviking.ai/en/context-compilation/01-overview)も実行します。`ov compile` とスキルで資料を Wiki、知識グラフ、レポートに整理できます。
+
 ## 本番環境へのデプロイ
 
 オープンソースのサーバーは [AGPLv3](LICENSE) のもとで自分の環境にデプロイでき、アクティベーションキーは不要です。[サーバー設定](https://docs.openviking.ai/en/getting-started/03-quickstart-server) · [Docker とデプロイのガイド](https://docs.openviking.ai/en/guides/03-deployment)
@@ -223,13 +235,26 @@ ov chat   # 別のターミナルで実行
 
 ## 商用版
 
-### マネージド SaaS
+<table>
+<tr>
+<td width="50%" valign="top">
 
-[Volcano Engine](https://www.volcengine.com/product/openviking-service) がホスティングと運用を担当します。個人向けと企業向けのプラン、オープンソース環境からの移行ツールを提供します。プランと制限は[サービス文書](https://docs.volcengine.com/docs/84313/2374478)を参照してください。中国以外でのホスティングは [BytePlus](https://www.byteplus.com) で予定されています。
+<img src="docs/images/commercial-saas.png" alt="マネージド SaaS 版" width="100%" />
 
-### 企業向けプライベートデプロイ
+<h3>☁️ マネージド SaaS 版</h3>
+<p><a href="https://www.volcengine.com/product/openviking-service">Volcano Engine</a> がホスティングと運用を担当します。個人向けと企業向けのプラン、オープンソース環境からの移行ツールを提供します。プランと制限は<a href="https://docs.volcengine.com/docs/84313/2374478">サービス文書</a>を参照してください。中国以外でのホスティングは <a href="https://www.byteplus.com">BytePlus</a> で予定されています。</p>
 
-自社のクラウドアカウント / VPC（BYOC）、またはオフライン環境にデプロイできます。分散デプロイと公式サポートを提供し、ライセンスキーで有効化します。[チームに問い合わせる](https://docs.google.com/forms/d/e/1FAIpQLScQqwsm7fvKdjtNiW5rWNXJjoHPtedVzLsKSMJgObtsj2_udA/viewform)。
+</td>
+<td width="50%" valign="top">
+
+<img src="docs/images/commercial-self-hosted.png" alt="プライベートデプロイ版" width="100%" />
+
+<h3>🏢 プライベートデプロイ版</h3>
+<p>自社のクラウドアカウント / VPC（BYOC）、またはオフライン環境にデプロイできます。分散デプロイと公式サポートを提供し、ライセンスキーで有効化します。<a href="https://docs.google.com/forms/d/e/1FAIpQLScQqwsm7fvKdjtNiW5rWNXJjoHPtedVzLsKSMJgObtsj2_udA/viewform">チームに問い合わせる</a>。</p>
+
+</td>
+</tr>
+</table>
 
 ## 研究
 
