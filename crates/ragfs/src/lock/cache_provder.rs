@@ -240,8 +240,10 @@ for _, request in ipairs(requests) do
     end
 end
 
-if #stale > 0 then
-    redis.call("HDEL", key, unpack(stale))
+local stale_batch_size = 1000
+for start_index = 1, #stale, stale_batch_size do
+    local end_index = math.min(start_index + stale_batch_size - 1, #stale)
+    redis.call("HDEL", key, unpack(stale, start_index, end_index))
 end
 for _, change in ipairs(changes) do
     if change.change ~= "reentrant" then
