@@ -8,7 +8,7 @@ import shutil
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional, Set, Union
 
 from openviking.parse.accessors.base import LocalResource, SourceType
 from openviking.server.identity import RequestContext
@@ -78,6 +78,9 @@ async def stage_source(
     *,
     viking_fs: Any,
     ctx: RequestContext,
+    ignore_dirs: Optional[Union[Set[str], List[str], str]] = None,
+    include: Optional[str] = None,
+    exclude: Optional[str] = None,
 ) -> StagedSource:
     """Copy one prepared source into task-owned VikingFS storage."""
     path = resource.path
@@ -88,7 +91,15 @@ async def stage_source(
     source_uri = safe_join_viking_uri(f"{temp_uri}/source", path.name or "resource")
     try:
         if path.is_dir():
-            await _copy_local_tree(path, source_uri, viking_fs, ctx)
+            await _copy_local_tree(
+                path,
+                source_uri,
+                viking_fs,
+                ctx,
+                ignore_dirs=ignore_dirs,
+                include=include,
+                exclude=exclude,
+            )
         else:
             await viking_fs.write_file_bytes(
                 source_uri,
@@ -154,28 +165,77 @@ async def materialize_source(
     )
 
 
+def _parse_ignore_dirs(
+    ignore_dirs: Optional[Union[Set[str], List[str], str]],
+) -> Optional[Set[str]]:
+    from openviking.parse.directory_scan import _parse_patterns
+
+    if isinstance(ignore_dirs, str):
+        return set(_parse_patterns(ignore_dirs)) or None
+    if ignore_dirs:
+        return {str(item) for item in ignore_dirs}
+    return None
+
+
 async def _copy_local_tree(
     local_dir: Path,
     target_uri: str,
     viking_fs: Any,
     ctx: RequestContext,
+    *,
+    ignore_dirs: Optional[Union[Set[str], List[str], str]] = None,
+    include: Optional[str] = None,
+    exclude: Optional[str] = None,
 ) -> None:
+    """Copy a local directory tree, applying the same path filters as upload/scan."""
+    # Reuse directory_scan helpers so watch refresh staging matches upload filtering.
+    from openviking.parse.directory_scan import (
+        _matches_exclude,
+        _matches_include,
+        _parse_patterns,
+        _should_skip_directory,
+    )
+    from openviking.parse.gitignore import GitignoreMatcher
+
+    parsed_ignore_dirs = _parse_ignore_dirs(ignore_dirs)
+    include_patterns = _parse_patterns(include)
+    exclude_patterns = _parse_patterns(exclude)
+    gitignore_matcher = GitignoreMatcher(local_dir)
+
     directories = {target_uri}
     files: list[tuple[Path, str]] = []
     for root, dir_names, file_names in os.walk(local_dir, followlinks=False):
         root_path = Path(root)
-        dir_names[:] = [name for name in dir_names if not (root_path / name).is_symlink()]
-        relative_root = root_path.relative_to(local_dir)
-        if relative_root.parts:
-            directories.add(safe_join_viking_uri(target_uri, relative_root.as_posix()))
+        dir_spec = gitignore_matcher.spec_for_dir(root_path)
+
+        kept_dirs: list[str] = []
+        for name in dir_names:
+            sub_dir = root_path / name
+            if sub_dir.is_symlink():
+                continue
+            should_skip, _ = _should_skip_directory(sub_dir, local_dir, parsed_ignore_dirs)
+            if should_skip:
+                continue
+            if gitignore_matcher.is_ignored_dir(sub_dir, dir_spec):
+                continue
+            kept_dirs.append(name)
+        dir_names[:] = kept_dirs
+
+        # Do not mkdir every walked directory — excluded subtrees would leave
+        # empty dir skeletons in staging (#4604 review). Parents of kept files
+        # are still registered below.
         for name in file_names:
             local_path = root_path / name
             if local_path.is_symlink() or not local_path.is_file():
                 continue
-            target_file_uri = safe_join_viking_uri(
-                target_uri,
-                local_path.relative_to(local_dir).as_posix(),
-            )
+            if gitignore_matcher.is_ignored_file(local_path, dir_spec):
+                continue
+            rel_path = local_path.relative_to(local_dir).as_posix()
+            if include_patterns and not _matches_include(name, include_patterns):
+                continue
+            if exclude_patterns and _matches_exclude(rel_path, name, exclude_patterns):
+                continue
+            target_file_uri = safe_join_viking_uri(target_uri, rel_path)
             directories.add(target_file_uri.rsplit("/", 1)[0])
             files.append((local_path, target_file_uri))
 
