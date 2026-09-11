@@ -1,0 +1,336 @@
+# Let the Agent Turn the Page: Codex-Style Context Management on Pi, Backed by OpenViking
+
+Published: 2026-09-11
+Canonical human page: https://blog.openviking.ai/post/agent-managed-context-windows/
+
+Cover image:
+/assets/covers/agent-managed-context-windows.webp
+
+What happens when the context window fills up? The usual answer is that the harness compacts the conversation at a threshold. With GPT-6 Astra, Codex tries something else: the model decides when to open a new window, and the old one is kept intact outside the model. We rebuilt that mechanism on Pi with OpenViking’s session archive.
+
+## What Codex changed for GPT-6 Astra
+
+In the GPT-6 Astra model documentation, OpenAI added a section for Codex called “experimental context management”. The original is two sentences:
+
+> On supported Codex clients, users signed in with ChatGPT Plus or Pro can opt in to experimental context management. Astra keeps notes across context windows and can search earlier messages and tool results from the same task.
+
+The switch lives in `config.toml` (`features.context_management.experimental_mode = true`). At launch it only works for ChatGPT Plus/Pro accounts; Business, Enterprise, and API-key logins are not supported yet.
+
+The documentation credits the model: Astra “keeps notes across context windows” and “can search earlier messages and tool results”. But the Codex harness is open source, and reading [codex-rs](https://github.com/openai/codex/tree/main/codex-rs) shows how the other half, the part outside the model, is built:
+
+- **The tools the model sees.** The `notes` namespace (`write_file` / `append_to_file` / `read_file` / `search_contents` / `list_files_by_prefix`) is a private scratchpad that survives across windows. The `history` namespace (`list_windows` / `list_items` / `read_item` / `search_contents`) reads closed windows back by window id and item id. `new_context` takes no parameters and is described in one line: “Start a new context window. Does not clear, reset, or otherwise affect environment state.” `get_context_remaining` returns the tokens left.
+- **What happens at a reset.** Calling `new_context` only sets a flag. Once the current sampling finishes, the session loads a brand-new window: the system/developer prompt, environment state, retained client messages, plus a `<context_window>` block holding the current and previous window ids and a `thread_hint` pulled from the notes backend (at most 4000 bytes). **At no step of the switch does an LLM write a summary.**
+- **The prompts.** A standing guidance message tells the model to keep a checkpoint in notes (goal, decisions, progress, learnings, next steps, and any unfinished user requests). When the model sees a previous-window id it knows a reset happened: read the checkpoint first, then fill the gaps with history. When fewer than 6144 tokens remain, a reminder fires once: save notes, then call `new_context`. When nothing is left, an extra 16384-token buffer is granted and the model is forced to make exactly one notes write followed by a reset.
+- **Storage lives on OpenAI’s backend** (`alpha/notes/v2/*`, `alpha/history/v2/*`), which is why the feature is currently limited to ChatGPT Plus/Pro logins.
+
+So “the capability is in the model” and “the harness builds the scaffolding” are not in conflict. The tools, prompts, and storage come from the harness; the model’s contribution is that it was trained to use them and to judge well. The real shift is that **control moves from fixed harness rules to the model**: when to turn the page, what to write down before doing so, and where to recover details afterwards are all the model’s decisions. What makes those decisions possible is storage outside the model that holds the entire history.
+
+*What Codex’s experimental context management is made of*
+
+- Model — GPT-6 Astra. Decides when to turn the page, what to write down first, and where to look afterwards.
+- Tools
+  - notes — write_file · append_to_file · read_file · search_contents · list_files_by_prefix. A private scratchpad that survives across windows.
+  - history — list_windows · list_items · read_item · search_contents. Reads closed windows back by window id and item id.
+  - new_context · get_context_remaining — Open a new window with no parameters; ask how many tokens are left.
+- OpenAI backend storage — alpha/notes/v2/*, alpha/history/v2/*. Which is why it is limited to ChatGPT Plus/Pro today.
+- Window 1 (closed) — The whole conversation goes into history as is, tool output included. No LLM writes a summary at any step.
+- Handoff, `<context_window>` — Current and previous window ids, plus a thread_hint pulled from notes (≤ 4000 bytes).
+- Window 2 (fresh) — System/developer prompt, environment state, retained client messages, plus that `<context_window>` block.
+
+*Tools, prompts, and storage all come from the harness. At a reset the old window stays whole in history; only a `<context_window>` block travels to the new one.*
+
+## Before this: threshold compaction and its three problems
+
+For a long time, mainstream harnesses (Codex itself, Claude Code, and most open-source coding agents) have handled long conversations the same way: **compaction**. Whether the user types `/compact` or context usage crosses a preset threshold, the harness has the model rewrite the whole conversation as a summary, swaps the summary in for the original context, and carries on.
+
+It is simple and dependable, and it has three problems that do not go away:
+
+1. **It loses information.** The summary is written by a model, usually the same one doing the work. Details it judged unimportant at compaction time are gone for good. Tool output is the first thing to be dropped, and that is exactly where the exact file paths, error logs, and key numbers live.
+2. **The trigger ignores the task.** The threshold is pure token arithmetic; it does not know where the work stands. For assistant-style agents, a window can hold several interleaved topics, and a mechanical compaction blends them together. For coding agents, the compaction often lands halfway through a phase, say after three files are edited and before the tests run. Afterwards, what the model remembers about “where the code changes stand” is one sentence.
+3. **The context is long on average.** Compaction only fires when the window is nearly full, so most of the time the model works inside a long, mixed context. That dilutes attention, and unrelated history pulls the current judgment off course, the effect often called context rot.
+
+All three come from one root cause: **the only copy of the conversation lives inside the model’s context**. Because it is the only copy, compaction has to lose something, the trigger has to yield to token capacity, and the context has to keep growing until then.
+
+*Two timelines*
+
+*Top: threshold compaction. Context climbs to the threshold, the compaction lands in the middle of a task, and the climb resumes from a summary. Bottom: resets at task boundaries. Every task starts in a nearly empty window.*
+
+## The road OpenViking took earlier: move the primary copy out of the model
+
+A few months ago, our work on VikingBot and [OpenClaw](https://docs.openviking.ai/en/agent-integrations/03-openclaw) took a different route: instead of keeping the primary copy of the conversation in the model’s context, every message is appended to an OpenViking session. The window the model sees is assembled by OpenViking: distant history is condensed into a summary, only the short, task-relevant active messages stay in the window, and when the model needs a detail it calls a tool and gets the archived original back. This is what OpenViking calls [“Data in, Context out”](https://blog.openviking.ai/post/openviking-context-database/): the data goes in complete, and each turn the model receives a context assembled on demand.
+
+In the OpenClaw plugin, what the model sees each turn is “a condensed history summary + an archive index + the active messages”, not an ever-growing raw transcript. Messages stream into the OpenViking session, and once the tokens waiting to be archived reach a configured share of the model’s window, a commit fires: the server archives that batch to disk and generates a Working Memory and long-term memories for it in the background. On the model side, two tools, `ov_archive_search` and `ov_archive_expand`, search the archive by keyword and expand a segment back into its original messages. VikingBot follows the same logic: the session context always carries the overview of the latest archive, and commits are triggered automatically by a message threshold.
+
+This fixed information loss and the long average context: the archive is complete and can be recalled at any time, and context pressure stays low. But the trigger was still rule-driven, so the problem of badly timed page turns remained. In our internal [Agent Swarm](https://blog.openviking.ai/post/agent-swarm-memory/) setup we went half a step further: when the lead agent delegates a task, it decides whether the sub-agent should compact its context first. The decision belongs to an agent, just not the one doing the work.
+
+The models changed too. Back then 256K windows were the norm; now 1M windows are common, developers are used to working in very long contexts, and compaction happens far less often. Precisely because it is rarer, when it happens matters more. A long assistant session tends to interleave seven or eight unrelated tasks, and the user almost never thinks about when to turn the page. With a threshold trigger, compaction is more likely to cut a task in half, when a reset before the task began would have given it a whole clean window.
+
+Codex’s new mechanism closes exactly that gap: the agent doing the work makes the call. We already had the complete copy of the data outside the model; what remained was handing “when to turn the page” to the model. So we ran an experiment.
+
+## The experiment: Pi + Doubao Seed 2.1 Pro + OpenViking
+
+- **The harness is [Pi](https://github.com/earendil-works/pi)** (`@earendil-works/pi-coding-agent`). Its extension API is light: you can register tools, and you can intercept and rewrite the entire message list before each request goes to the model, which is exactly what this experiment needs.
+- **The model is Doubao Seed 2.1 Pro** (`doubao-seed-2-1-pro-260628` on Volcengine Ark, with `reasoning_effort: high`). It has never been trained to manage its own context. Can it do the job with nothing but tool definitions and prompts? That is one of the questions the experiment asks.
+- **Not a line of OpenViking’s server changes.** Archiving, Working Memory generation, and archive search all reuse existing endpoints. Codex built two dedicated backends, notes and history, for this feature; OpenViking’s existing session archive already is a history backend.
+- The whole experiment is a standalone Pi extension that lives alongside [the existing OpenViking Pi extension](https://docs.openviking.ai/en/agent-integrations/11-pi) without touching it.
+
+### Three tools in the model’s hands
+
+| Tool | Parameters | What it does |
+| --- | --- | --- |
+| `new_context` | `reason`, `notes`, `next_steps?` | Archives the current window and continues in a fresh one. `notes` is the handoff written for the next window. |
+| `history` | `action` ∈ list_windows / list_items / read_item / search_contents | Reads archived windows: list windows, list the items of one window, read one item, full-text search. |
+| `get_context_remaining` | none | Tokens left, how long the window has been open, how many turns it has run, how long since the user’s last message, and one line of advice. |
+
+One clear difference from Codex: its `new_context` takes no parameters because the notes are already in the dedicated notes backend. We have no separate notes tool, so the model passes reason and notes with the call. That came with a side benefit: every reset preserves, verbatim, the reason the model gave, which turned out to be very useful when debugging and reviewing runs.
+
+### The signals the model sees
+
+To decide well, the model has to feel the pressure on its context. We give it three signals.
+
+**Standing guidance.** Appended to the end of the system prompt and unchanged for the whole session. Its core message: “You manage your own context window in this session; nothing is summarized behind your back.” It spells out when to open a new window (a phase of the work is finished, the user switches to an unrelated topic, the user comes back after a long idle gap with something new, the status line or `get_context_remaining` says the window is filling up) and when not to (in the middle of an unverified edit sequence, right after a reset, or just to get away from a problem that is not solved). Finally it asks the model to write complete notes before resetting, to read the window header first in the new window and use `history` for whatever it does not cover, and never to ask the user to repeat something an archived window already holds.
+
+**A status line.** Appended after every user message, for example:
+
+```text
+[context-status] window w3 · 45 turns · ~57.5k/128k tokens (45%) · 35s since your previous message
+```
+
+If a new message arrives after more than 30 minutes of idle time, one more line is added: “If this request starts unrelated work, consider new_context before you begin.”
+
+**Threshold reminders.** Each window gets at most one soft and one hard reminder. Past the soft threshold: “finish or checkpoint the step you are on, then call new_context with complete notes.” Past the hard threshold the wording tightens: “call it now; if the window overflows first, the harness compacts it for you and your notes are never written.”
+
+### What a context is made of after a reset
+
+When the model calls `new_context`, the extension pushes every message of the current window to the OpenViking session, appends a handoff message built from the reason and the notes, and commits. OpenViking writes the archive to disk and generates a Working Memory for it in the background. **A successful archive is a hard precondition for the reset**: if OpenViking is unreachable or the commit fails, nothing is cut and the model keeps working in the current window. Once the archive is in place, the message list the model sees takes the shape on the left of the figure below.
+
+*After a reset: the request the model sees vs. the session in OpenViking*
+
+```text
+One request, as the model sees it
+
+system prompt
+├ Pi’s own system prompt
+└ <context-window-management>   standing guidance, unchanged all session
+
+window header   (one user message, present from w2 on)
+<context_window id="w2" previous="w1" archive="archive_001">
+  ├ Reason you gave     the reason the model gave
+  ├ <handoff-notes>     the model’s own handoff notes
+  ├ <pending-request>   the user’s last message in the old window
+  ├ <working-memory>    generated by OpenViking from the full archive   [A]
+  └ history …           how to read the rest from archive_001           [B]
+
+active messages of this window
+├ user / assistant / tool   from the moment of the reset
+├ [context-status]          one line after every user message
+├ [context-reminder]        at most one soft and one hard
+└ <openviking-context>      memory blocks injected by auto-recall
+```
+
+```text
+The session directory in OpenViking
+
+viking://user/<uid>/sessions/pi-<session>/
+  └ history/
+    ├ archive_001/
+      ├ .abstract.md     one line, visible from list_windows
+      ├ .overview.md     seven-section Working Memory, goes into the header   [A]
+      └ messages.jsonl   the full transcript, every tool output included      [B]
+    ├ archive_002/
+    └ archive_003/
+```
+
+*A: the Working Memory in the window header is archive_001/.overview.md. B: history’s read_item and search_contents read messages.jsonl. The previous window is gone from the active list, and kept in full on the right.*
+
+The previous window is gone from the active list, but it has not gone away. On the OpenViking server, the session’s directory (right side of the figure) records all of it. The three files map to OpenViking’s three loading levels: `history list_windows` returns only the lightweight abstract; the new window header loads only the overview; the full transcript is touched only when the model explicitly calls `history read_item` or `search_contents`. Every turn, the model’s context carries just the overview layer, while the bulk of the raw text stays in OpenViking, ready to be pulled on demand.
+
+Throughout, not a single entry of Pi’s session file on disk is deleted; only the message list sent to the model changes. Within a turn, the very next sampling after the tool batch completes is already in the new window. Doing the switch in the background like this matches Codex’s semantics.
+
+### What the window header looks like
+
+Below is the real window header the model saw after the first reset of a long task, trimmed for length with the structure intact:
+
+```text
+<openviking-context source="context-window">
+<context_window id="w2" previous="w1" archive="archive_001" opened="2026-09-11T05:16:33Z">
+This is a fresh context window. The earlier conversation of this session was archived
+to OpenViking and is no longer in context. Files, the working directory, running
+processes and tools are unchanged.
+
+Reason you gave: Context window reached ~45% (soft reminder). 8 of 22 files
+inventoried so far; need a fresh window to finish the remaining 14 files.
+
+Your handoff notes:
+<handoff-notes>Goal: Inventory all 22 files under src/ alphabetically — for each file,
+read it, append an entry to INVENTORY.md (file name, responsibility, main exports,
+risks), and tick the file off in TASK.md.
+
+What is done (8 of 22, ticked in TASK.md, entries appended to INVENTORY.md):
+1. src/capture-adapter.mjs — done
+   …
+Key decisions: Writing INVENTORY.md incrementally (one entry appended per file)
+rather than holding until end. …
+What remains (14 files, in order):
+9. src/context-window-core.test.mjs (85KB — large test file)
+   …
+Next steps: …</handoff-notes>
+
+The user's most recent message in the previous window was:
+<pending-request>Read TASK.md, then work through every file it lists, in order. …
+Do not summarise the files you have not read yet.</pending-request>
+
+Working Memory of the archived window, generated by OpenViking:
+<working-memory archive="archive_001"># Working Memory
+## Session Title
+Source inventory of 22 src/ files for OpenViking pi extension
+## Current State
+8 of 22 src/ files have been inventoried … 14 files remain …
+## Task & Goals …
+## Key Facts & Decisions …
+## Files & Context …
+## Errors & Corrections
+- INVENTORY.md did not exist at session start (ENOENT error on first read); resolved
+  by creating the file before writing the first entry.
+- context-window-core.mjs was too large for a single read …; resolved by reading in
+  chunks with offset parameter …
+## Open Issues …</working-memory>
+
+To recover anything not covered above: history {"action":"list_windows"} /
+{"action":"list_items","window":"w1"} / {"action":"read_item","item":"w1:<index>"} /
+{"action":"search_contents","query":"..."}.
+Continue from the notes above. If the pending request is not finished, resume it now.
+</context_window>
+</openviking-context>
+```
+
+Two “summaries” coexist here, from two viewpoints. `handoff-notes` comes from the working model: the notes it wrote before resetting. `working-memory` is generated by the OpenViking server from the complete archive, tool output included, in seven sections. The first says what the model intended to do; the second records what actually happened. The two errors under Errors & Corrections above, for instance, never appear in the model’s own notes.
+
+### What OpenViking carries here
+
+Taken apart, the model side does only two things: decide when to turn the page, and write the handoff notes. OpenViking does the rest:
+
+- **Lossless archive.** Every message in a window, above all the long tool output, goes into `messages.jsonl` as is. A reset is not compaction; it moves the primary copy of the data from the model’s context into the database. Information loss disappears at the root.
+- **The summary is written server-side.** OpenViking generates the Working Memory in the background with its own model, from the complete archive. It takes no room in the working model’s context, consumes none of its attention, and is never rushed because the window is running out. Codex dropped the objective summary and bet everything on the model’s subjective notes; we stack the two: the model states its intent, the server records the facts.
+- **Layered reads.** The abstract / overview / raw-text ladder already exists in OpenViking. The window header carries only the overview, which keeps every new window small at the start; when the model needs a specific detail, one `history` call returns the original text, and the user never has to re-explain the past.
+- **Searchable everywhere.** The model’s `history search_contents` maps straight onto OpenViking’s `search/grep` endpoint, a full-text search across every archive.
+- **Long-term memory across sessions.** This is something Codex’s notes/history backends do not have. Besides archiving and generating the Working Memory, an OpenViking commit also runs memory extraction and writes user preferences, facts, and experience into long-term memory under `viking://user/...`. The next session, the next agent, even an agent running on a different harness, can recall them through auto-recall. What a reset leaves behind no longer serves only the current task.
+- **One backend, many harnesses.** The session, commit, archive, and grep endpoints this experiment relies on are the same ones the OpenClaw plugin, VikingBot, and the Claude Code memory plugin use. The server needed no new code path for “agent-managed windows”. The new mode is just another way to use the infrastructure OpenViking already has.
+
+### Side by side with Codex
+
+| Codex | This experiment |
+| --- | --- |
+| history backend `alpha/history/v2` | The OpenViking session’s message stream, each window archived to `history/archive_NNN/messages.jsonl` |
+| notes backend `alpha/notes/v2` | The `notes` parameter of `new_context` |
+| `<context_window>` carries a `thread_hint` | The Working Memory generated by OpenViking + the model’s own handoff notes |
+| `history.list_windows / list_items / read_item / search_contents` | Same action names, mapped to `fs/ls`, `content/read messages.jsonl`, and `search/grep` |
+| `new_context` (no parameters) | `new_context(reason, notes, next_steps?)` |
+| `get_context_remaining` → `{tokens_left}` | Tokens left plus window age, turn count, idle gap, archive readiness, and one line of advice |
+| Native window rebuild after sampling | A virtual cut in Pi’s `context` hook |
+| Three prompts: guidance / reminder / fallback | Standing guidance / soft and hard reminders / Pi’s compaction as the fallback |
+| No long-term memory | The commit also extracts long-term memory, usable across sessions and agents |
+
+## Running a task that does not fit in one window
+
+A short acceptance script proves the code path works, but it says nothing about whether the model will actually make decisions under pressure. So we set up a task that cannot possibly fit in one window:
+
+- Put the extension’s own 22 source files (411 KB, about 105k tokens if read in full) into an empty project.
+- Tell Pi the model’s context window is 128k, and lower the soft reminder threshold to 45%, so the whole reset cycle plays out within one demo.
+- Ask the model to work through the files in the order listed in `TASK.md`, and after each one append an entry to `INVENTORY.md` (responsibility, main exports, risks) and tick it off in `TASK.md`. It must not summarize files it has not read.
+- **The task description never mentions context management.** All the model has to go on are the standing guidance, the status line, and the three tools.
+
+Here is how it went:
+
+| Metric | Value |
+| --- | --- |
+| provider requests | 96 |
+| resets, all chosen by the model, w1 → w4 | 3 |
+| peak context, about 60.1k of 128k tokens | 47% |
+| tokens right after a reset | ≈5k |
+| archives in OpenViking, each with a Working Memory | 3 |
+| files in INVENTORY.md, TASK.md fully ticked | 22/22 |
+| wall clock, including three Working Memory waits of 50 s, 90 s, and 66 s | 23 min |
+| compacted summaries that entered the model’s context | 0 |
+
+*Context pressure across the long run*
+
+*96 provider requests; the y axis is context usage per request (payload bytes / 4, against the 128k window). The three dashed lines are where the model called new_context itself, annotated with the reason it gave. The soft reminder threshold was lowered to 45%.*
+
+```text
+w1  request 20   39%
+w1  request 21   43%
+w1  request 22   47%
+w1  request 23   47%
+      ---- new_context: w1 archived, w2 opens ----
+w2  request 24    4%
+w2  request 25    7%
+…
+w3  request 93   42%
+      ---- new_context: w3 archived, w4 opens ----
+w4  request 94    5%
+```
+
+### Three resets, two kinds of reason
+
+The first two resets were pressure-driven. In its reason, the model named the current usage and where the task stood:
+
+> Context window reached ~45% (soft reminder). 8 of 22 files inventoried so far; need a fresh window to finish the remaining 14 files.
+
+> Context window at ~46% (soft reminder). 11 of 22 files done (8 from previous window + 3 more …). Need fresh window for remaining 11 files.
+
+The third was different: no reminder had fired. After all 22 files were inventoried, the user asked a follow-up about the first file. The model answered, judged that this phase of work was over, and reset on its own:
+
+> Inventory task is fully complete (22/22 files done). User asked a follow-up question about file 1; answering it closes this work phase.
+
+Turning the page at a task boundary is exactly what threshold compaction cannot do. It guarantees the next piece of work starts in a clean window.
+
+One more detail: at 32% into w3, the model called `get_context_remaining` on its own, got the advice “no action needed”, and went back to work. It neither reset at the first sign of pressure nor ignored the space it had left.
+
+Across three resets, not one line of “compacted conversation” ever entered the model’s context. Three complete archives sit in OpenViking, each with its own Working Memory, waiting for `history` to read them.
+
+We also ran the same task with the same model once more with window management switched off, leaving compaction to Pi’s own threshold: both runs finished 22 of 22, the compaction run sent about a third more prompt tokens (4.52M against 3.31M, a gap that shrinks to about a tenth once cache discounts are applied), but its context peaked at 97% against 47% for the agent-managed run, and before compaction kicked in it burned one 125k-token request that returned a single token.
+
+## What we learned
+
+**Handing control of the context to the model works, even without training for it.** Doubao Seed 2.1 Pro had never seen these three tools. With one standing guidance block, one status line, and one soft reminder, it gave sound reasons and usable notes at all three resets, and found a task boundary on its own with no reminder at all. The core of the Codex mechanism, then, is “give the model pressure signals and a safe way out”. Dedicated training on the model side can make it more consistent, but it is not a prerequisite.
+
+**With a complete way back, the model can afford to turn the page.** The fatal flaw of threshold compaction is that once you compact, there is no undo, so the system waits until the last moment. With a complete archive, the cost of a reset drops to “one more `history` call”. That is why the model was willing to reset at 45% and to turn the page decisively at a task boundary. The quality of the “when to reset” decision depends on how wide a way back the system leaves afterwards. Here OpenViking plays the same role as Codex’s history backend, and takes care of summary generation, global search, and long-term memory along the way.
+
+**Who writes the summary is a real question.** Threshold compaction asks a model whose window is nearly full, with its attention already diluted, to squeeze out a summary. This mechanism splits the job: the model writes only what it knows best (its goals, key decisions, next steps), and the objective record is left to an external system, which generates the Working Memory in the background from the full transcript, tool output included. Two records, subjective and objective, side by side are more reliable than any single-viewpoint summary.
+
+**The visible cost is mostly waiting.** Right now each reset blocks for 50 to 90 seconds while the Working Memory is generated. That wait can be removed: open the new window as soon as the commit succeeds, let the model carry on with its own notes, and fill the Working Memory into the header once it is ready. The fallback of “open the window anyway and read the summary later” already exists; it just only activates on timeout today. Making it the default means taking the commit off the reset’s critical path. This demo keeps the blocking design on purpose, so that “the full summary is there the moment the window opens” is easy to see. Codex and Claude Code block at this step today as well.
+
+**Known limitations.** Pi only gets an exact token count after each model reply; messages appended after that are estimated from character counts, so the pressure numbers in the status line are partly estimates. The status line is updated once per user message, so during a long tool loop the model still sees the number from the start of the turn; for a live reading it has to call `get_context_remaining`. And once notes enter OpenViking they are indexed and searchable like everything else, unlike the private scratchpad that only the model can read and write in Codex.
+
+## Still an experiment
+
+The code is in the OpenViking repository under [`examples/pi-experimental-context-management/`](https://github.com/volcengine/OpenViking/tree/main/examples/pi-experimental-context-management?utm_source=blog&utm_medium=article&utm_campaign=agent-managed-context-windows) (the final path once merged). The word experimental in the name is meant literally: this is a sandbox for testing an idea, not a product you install and forget. Next to it, `demo-evidence/` keeps the full raw trace of the long run: every request payload, every tool call the model made with its arguments, the three archives and their Working Memories, Pi’s session file, and the extension log, with secrets and internal addresses redacted.
+
+What we want to do next:
+
+- Make the asynchronous reset the default and take the wait off the critical path.
+- Add a standalone `notes` tool so the model can take notes as it works, instead of writing them once at the moment of reset.
+- Bring “the model decides when to reset” back into VikingBot and OpenClaw. They already have archiving, search, and threshold triggers; this is the one missing piece.
+- Extend the controlled comparison to more tasks and models, threshold compaction against model-managed resets, and turn “better-timed page turns” from an intuition into numbers.
+- Cut the Working Memory generation time, or move to lighter incremental updates. It is the largest item on the reset’s cost sheet today.
+
+If you are trying this on your own harness, come talk to us in the [OpenViking repository](https://github.com/volcengine/OpenViking?utm_source=blog&utm_medium=article&utm_campaign=agent-managed-context-windows).
+
+## Reproduce it
+
+```bash
+# OpenViking server URL and key, plus an OpenAI-compatible model endpoint
+export OPENVIKING_URL=… OPENVIKING_API_KEY=…
+export E2E_LLM_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+export E2E_LLM_API_KEY=… E2E_LLM_MODEL=doubao-seed-2-1-pro-260628 E2E_LLM_API=openai-completions
+
+# the short acceptance gate (a few minutes)
+bash examples/pi-experimental-context-management/scripts/e2e-window.sh
+
+# the long task (25–40 minutes)
+E2E_WINDOW_LONG=1 E2E_LLM_REASONING=high \
+  bash examples/pi-experimental-context-management/scripts/e2e-window.sh
+```
+
+**More detail.** The interactive demo and every configuration option are documented in `README.md` and `CONTEXT-WINDOW.md` in [the same directory](https://github.com/volcengine/OpenViking/tree/main/examples/pi-experimental-context-management?utm_source=blog&utm_medium=article&utm_campaign=agent-managed-context-windows).
