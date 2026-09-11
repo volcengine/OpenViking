@@ -12,7 +12,7 @@ import pytest_asyncio
 
 from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.server.api_keys import APIKeyManager
-from openviking.server.api_keys.legacy import ACCOUNTS_PATH
+from openviking.server.api_keys.legacy import ACCOUNTS_PATH, USERS_PATH_TEMPLATE
 from openviking.server.identity import Role
 from openviking.service.core import OpenVikingService
 from openviking_cli.exceptions import (
@@ -105,6 +105,278 @@ async def test_create_duplicate_account_raises(manager: APIKeyManager):
         await manager.create_account(acct, "bob")
 
 
+async def test_ensure_trusted_identities_creates_keyless_users_once(
+    manager: APIKeyManager, monkeypatch: pytest.MonkeyPatch
+):
+    """Trusted identity batches add only missing users and never mint keys."""
+    acme = _uid()
+    globex = _uid()
+
+    logged: list[tuple] = []
+
+    def _record_info(*args) -> None:
+        logged.append(args)
+
+    monkeypatch.setattr(manager._legacy.__module__ + ".logger.info", _record_info)
+    result = await manager.ensure_trusted_identities({acme: {"alice", "bob"}, globex: {"eve"}})
+
+    assert result == {"created_accounts": 2, "created_users": 3}
+    assert logged == [
+        ("Persisted trusted identities for account %s: %s", acme, ["alice", "bob"]),
+        ("Persisted trusted identities for account %s: %s", globex, ["eve"]),
+    ]
+    assert manager.get_user_role(acme, "alice") == Role.USER
+    assert "key" not in manager._legacy._accounts[acme].users["alice"]
+    assert manager.get_users(acme, expose_key=True) == [
+        {"user_id": "alice", "role": "user"},
+        {"user_id": "bob", "role": "user"},
+    ]
+
+    writes: list[str] = []
+    original_write = manager._legacy._write_json
+
+    async def _record_write(path: str, data: dict, lease_ref=None):
+        writes.append(path)
+        await original_write(path, data, lease_ref)
+
+    monkeypatch.setattr(manager._legacy, "_write_json", _record_write)
+    repeat = await manager.ensure_trusted_identities(
+        {acme: {"alice", "bob"}, globex: {"eve"}}
+    )
+
+    assert repeat == {"created_accounts": 0, "created_users": 0}
+    assert writes == []
+
+
+async def test_trusted_identity_merge_serializes_with_user_registration(
+    manager: APIKeyManager, monkeypatch: pytest.MonkeyPatch
+):
+    """A background merge cannot overlap a manager mutation in one process."""
+    acct = _uid()
+    await manager.create_account(acct, "alice")
+
+    entered_merge = asyncio.Event()
+    release_merge = asyncio.Event()
+    original_merge = manager._legacy._ensure_trusted_identities_unlocked
+
+    async def _blocked_merge(identities):
+        entered_merge.set()
+        await release_merge.wait()
+        return await original_merge(identities)
+
+    monkeypatch.setattr(manager._legacy, "_ensure_trusted_identities_unlocked", _blocked_merge)
+    merge_task = asyncio.create_task(
+        manager.ensure_trusted_identities({acct: {"trusted-user"}})
+    )
+    await entered_merge.wait()
+
+    register_task = asyncio.create_task(manager.register_user(acct, "bob"))
+    await asyncio.sleep(0)
+    assert not register_task.done()
+
+    release_merge.set()
+    await asyncio.gather(merge_task, register_task)
+    assert {item["user_id"] for item in manager.get_users(acct)} == {
+        "alice",
+        "bob",
+        "trusted-user",
+    }
+
+
+async def test_reload_serializes_with_account_deletion(
+    manager: APIKeyManager, monkeypatch: pytest.MonkeyPatch
+):
+    """Reload must not restore an account deleted while an old snapshot is building."""
+    acct = _uid()
+    await manager.create_account(acct, "alice")
+
+    entered_build = asyncio.Event()
+    release_build = asyncio.Event()
+    original_build = manager._legacy._build_state
+
+    async def _blocked_build(accounts_data, *, allow_migration):
+        entered_build.set()
+        await release_build.wait()
+        return await original_build(accounts_data, allow_migration=allow_migration)
+
+    monkeypatch.setattr(manager._legacy, "_build_state", _blocked_build)
+    reload_task = asyncio.create_task(manager.reload())
+    await entered_build.wait()
+
+    delete_task = asyncio.create_task(manager.delete_account(acct))
+    await asyncio.sleep(0)
+    assert not delete_task.done()
+
+    release_build.set()
+    await asyncio.gather(reload_task, delete_task)
+    assert all(item["account_id"] != acct for item in manager.get_accounts())
+
+
+async def test_identity_registry_refresh_reads_another_instances_trusted_user(
+    manager: APIKeyManager, manager_service
+):
+    """A management reader refreshes a changed account/user registry on demand."""
+    replica = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await replica.load()
+    acct = _uid()
+
+    await manager.ensure_trusted_identities({acct: {"alice"}})
+    assert replica.has_user(acct, "alice") is False
+
+    assert await replica.refresh_identity_registry_if_changed(acct) is True
+    assert replica.has_user(acct, "alice") is True
+
+
+async def test_account_registry_refresh_check_stats_only_accounts_file(
+    manager: APIKeyManager, monkeypatch: pytest.MonkeyPatch
+):
+    """The account-list fast path must not stat every account's users file."""
+    stat_paths: list[str] = []
+
+    async def _record_stat(path: str) -> tuple:
+        stat_paths.append(path)
+        return (path,)
+
+    monkeypatch.setattr(manager._legacy, "_stat_signature", _record_stat)
+
+    await manager._legacy._identity_registry_signature()
+
+    assert stat_paths == [ACCOUNTS_PATH]
+
+
+async def test_trusted_identity_merge_refreshes_only_affected_user_signatures(
+    manager: APIKeyManager, monkeypatch: pytest.MonkeyPatch
+):
+    """A trusted batch must not stat unrelated accounts' user registries."""
+    target = _uid()
+    unrelated = _uid()
+    await manager.create_account(target, "admin")
+    await manager.create_account(unrelated, "admin")
+
+    stat_paths: list[str] = []
+    original_stat = manager._legacy._stat_signature
+
+    async def _record_stat(path: str) -> tuple:
+        stat_paths.append(path)
+        return await original_stat(path)
+
+    monkeypatch.setattr(manager._legacy, "_stat_signature", _record_stat)
+
+    await manager.ensure_trusted_identities({target: {"trusted-user"}})
+
+    assert stat_paths.count(ACCOUNTS_PATH) == 1
+    assert stat_paths.count(USERS_PATH_TEMPLATE.format(account_id=target)) == 1
+    assert USERS_PATH_TEMPLATE.format(account_id=unrelated) not in stat_paths
+
+
+async def test_management_writer_preserves_a_trusted_identity_from_another_instance(
+    manager: APIKeyManager, manager_service
+):
+    """A stale manager write must merge, rather than replace, a trusted registry update."""
+    acct = _uid()
+    await manager.create_account(acct, "admin")
+
+    replica = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await replica.load()
+
+    await manager.ensure_trusted_identities({acct: {"trusted-user"}})
+    assert replica.has_user(acct, "trusted-user") is False
+
+    await replica.register_user(acct, "managed-user")
+
+    verifier = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await verifier.load()
+    assert {item["user_id"] for item in verifier.get_users(acct)} == {
+        "admin",
+        "trusted-user",
+        "managed-user",
+    }
+
+
+async def test_concurrent_management_registration_of_same_user_rejects_second_writer(
+    manager: APIKeyManager, manager_service
+):
+    """The second stale instance must not replace the first user's key."""
+    acct = _uid()
+    await manager.create_account(acct, "admin")
+    replica = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await replica.load()
+
+    first_key = await manager.register_user(acct, "alice")
+
+    with pytest.raises(AlreadyExistsError):
+        await replica.register_user(acct, "alice")
+    assert replica.has_user(acct, "alice") is False
+
+    verifier = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await verifier.load()
+    assert verifier.resolve(first_key).user_id == "alice"
+
+
+async def test_management_registration_does_not_replace_a_trusted_user(
+    manager: APIKeyManager, manager_service
+):
+    """A stale management writer must reject an identity created by trusted flush."""
+    acct = _uid()
+    await manager.create_account(acct, "admin")
+    replica = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await replica.load()
+
+    await manager.ensure_trusted_identities({acct: {"alice"}})
+
+    with pytest.raises(AlreadyExistsError):
+        await replica.register_user(acct, "alice")
+
+    verifier = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await verifier.load()
+    assert verifier.get_users(acct, expose_key=True) == [
+        {"user_id": "admin", "role": "admin", "api_key": manager._accounts[acct].users["admin"]["key"]},
+        {"user_id": "alice", "role": "user"},
+    ]
+
+
+async def test_management_account_writer_preserves_a_trusted_account_from_another_instance(
+    manager: APIKeyManager, manager_service
+):
+    """A stale account write must retain accounts registered by another instance."""
+    replica = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await replica.load()
+    trusted_account = _uid()
+    managed_account = _uid()
+
+    await manager.ensure_trusted_identities({trusted_account: {"trusted-user"}})
+    await replica.create_account(managed_account, "managed-admin")
+
+    verifier = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await verifier.load()
+    assert {item["account_id"] for item in verifier.get_accounts()} >= {
+        trusted_account,
+        managed_account,
+    }
+
+
+async def test_concurrent_management_creation_of_same_account_rejects_second_writer(
+    manager: APIKeyManager, manager_service
+):
+    """A stale instance cannot create a second admin for an existing account."""
+    replica = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await replica.load()
+    account_id = _uid()
+
+    first_key = await manager.create_account(account_id, "alice")
+
+    with pytest.raises(AlreadyExistsError):
+        await replica.create_account(account_id, "bob")
+    assert account_id not in replica._legacy._accounts
+
+    verifier = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await verifier.load()
+    assert verifier.resolve(first_key).user_id == "alice"
+    assert verifier.get_users(account_id, expose_key=False) == [
+        {"user_id": "alice", "role": "admin"}
+    ]
+
+
 async def test_create_account_rolls_back_when_user_persistence_fails(
     manager: APIKeyManager, monkeypatch: pytest.MonkeyPatch
 ):
@@ -112,10 +384,10 @@ async def test_create_account_rolls_back_when_user_persistence_fails(
     acct = _uid()
     original_save_users_json = manager._legacy._save_users_json
 
-    async def _fail_save_users_json(account_id: str) -> None:
+    async def _fail_save_users_json(account_id: str, *args, **kwargs) -> None:
         if account_id == acct:
             raise AGFSNotFoundError(account_id)
-        await original_save_users_json(account_id)
+        await original_save_users_json(account_id, *args, **kwargs)
 
     monkeypatch.setattr(manager._legacy, "_save_users_json", _fail_save_users_json)
 
@@ -139,6 +411,22 @@ async def test_delete_account(manager: APIKeyManager):
     await manager.delete_account(acct)
     with pytest.raises(UnauthenticatedError):
         manager.resolve(key)
+
+
+async def test_recreated_account_does_not_restore_deleted_users(manager: APIKeyManager):
+    """A same-name account starts with only its newly created admin."""
+    acct = _uid()
+    old_key = await manager.create_account(acct, "old-admin")
+
+    await manager.delete_account(acct)
+    new_key = await manager.create_account(acct, "new-admin")
+
+    with pytest.raises(UnauthenticatedError):
+        manager.resolve(old_key)
+    assert manager.resolve(new_key).user_id == "new-admin"
+    assert manager.get_users(acct, expose_key=False) == [
+        {"user_id": "new-admin", "role": "admin"}
+    ]
 
 
 async def test_delete_nonexistent_account_raises(manager: APIKeyManager):

@@ -1978,15 +1978,35 @@ class _OpsMixin:
                     "access": "denied",
                 }
             else:
-                new_entry = dict(entry)
+                new_entry = self._normalize_ls_entry(dict(entry))
                 new_entry["uri"] = entry_uri
-            if entry.get("isDir"):
+            if new_entry.get("isDir"):
                 all_entries.append(new_entry)
             elif not name.startswith("."):
                 all_entries.append(new_entry)
             elif show_all_hidden:
                 all_entries.append(new_entry)
         return all_entries
+
+    @staticmethod
+    def _normalize_ls_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
+        """Fill synthetic metadata for virtual directory rows (#4859).
+
+        S3/TOS CommonPrefixes under ``directory_marker_mode=none`` may omit
+        ``modTime`` / ``size``. Keep those rows listable instead of letting
+        downstream WebDAV/CLI paths treat them as incomplete and drop them.
+        """
+        is_dir = bool(entry.get("isDir", False))
+        mode = entry.get("mode")
+        # Some backends omit isDir but still advertise a directory mode bit.
+        if not is_dir and isinstance(mode, int) and (mode & 0o170000) == 0o040000:
+            is_dir = True
+            entry["isDir"] = True
+        if is_dir:
+            entry.setdefault("size", 0)
+            if not entry.get("modTime") and entry.get("mtime") is None:
+                entry["modTime"] = format_iso8601(datetime.now(timezone.utc))
+        return entry
 
     async def _ls_browsable_items(
         self,

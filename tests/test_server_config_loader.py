@@ -61,6 +61,7 @@ def test_load_server_config_preserves_supported_fields(tmp_path):
                     "host": "0.0.0.0",
                     "port": 1944,
                     "workers": 2,
+                    "executor_threads": 64,
                     "timeout_keep_alive": 120,
                     "auth_mode": "trusted",
                     "with_bot": True,
@@ -78,6 +79,7 @@ def test_load_server_config_preserves_supported_fields(tmp_path):
     assert config.host == "0.0.0.0"
     assert config.port == 1944
     assert config.workers == 2
+    assert config.executor_threads == 64
     assert config.timeout_keep_alive == 120
     assert config.auth_mode == "trusted"
     assert config.with_bot is True
@@ -93,6 +95,18 @@ def test_load_server_config_defaults_timeout_keep_alive(tmp_path):
     config = load_server_config(str(config_path))
 
     assert config.timeout_keep_alive == 5
+    assert config.executor_threads == 0
+
+
+def test_load_server_config_rejects_negative_default_executor_size(tmp_path):
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(json.dumps({"server": {"executor_threads": -1}}))
+
+    with pytest.raises(
+        ValueError,
+        match=r"server\.executor_threads",
+    ):
+        load_server_config(str(config_path))
 
 
 def test_load_server_config_rejects_legacy_queuefs_scope(tmp_path):

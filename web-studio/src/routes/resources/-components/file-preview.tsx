@@ -294,6 +294,7 @@ function dirnameVikingUri(fileUri: string): string {
   return `${trimmed.slice(0, idx + 1)}`
 }
 
+/** Resolve a decoded file path without interpreting literal # or percent signs. */
 function resolveRelativeVikingUri(
   baseFileUri: string,
   rawPath: string,
@@ -301,11 +302,8 @@ function resolveRelativeVikingUri(
   const baseDir = dirnameVikingUri(baseFileUri)
   const baseBody = baseDir.slice(vikingPrefix.length, -1)
 
-  const pathPart = rawPath.split('#')[0]?.split('?')[0] || ''
-  const suffix = rawPath.slice(pathPart.length)
-
   const baseSegments = baseBody ? baseBody.split('/').filter(Boolean) : []
-  const relativeSegments = pathPart.split('/').filter(Boolean)
+  const relativeSegments = rawPath.split('/').filter(Boolean)
 
   const merged = [...baseSegments]
   for (const segment of relativeSegments) {
@@ -320,7 +318,7 @@ function resolveRelativeVikingUri(
   }
 
   const resolved = `${vikingPrefix}${merged.join('/')}`
-  return `${resolved}${suffix}`
+  return resolved
 }
 
 type MarkdownAssetTarget =
@@ -349,11 +347,8 @@ function resolveMarkdownAssetTarget(
     return { kind: 'external', value: trimmed }
   }
 
-  // react-markdown percent-encodes the URL it passes via `src`/`href`
-  // (e.g. Chinese characters become %E4%BA%92). Decode it back to the literal
-  // form so the API client's query serializer encodes it exactly once and we
-  // avoid a double-encoded URI that the backend rejects with HTTP 400.
-  const decoded = safeDecodeUri(trimmed)
+  // Split URL components before decoding; %23 is literal filename data.
+  const decoded = safeDecodeUri(trimmed.split(/[?#]/, 1)[0])
 
   const vikingUri = decoded.startsWith(vikingPrefix)
     ? decoded
@@ -361,8 +356,7 @@ function resolveMarkdownAssetTarget(
   return { kind: 'viking', value: vikingUri }
 }
 
-function resolveMarkdownAssetUrl(assetPath: string, fileUri: string): string {
-  const target = resolveMarkdownAssetTarget(assetPath, fileUri)
+function resolveMarkdownAssetUrl(target: MarkdownAssetTarget): string {
   if (target.kind === 'viking') {
     return toDownloadUrl(target.value)
   }
@@ -389,7 +383,7 @@ function MarkdownLink({
   const resolvedHref = target
     ? isInternal
       ? target.value
-      : resolveMarkdownAssetUrl(target.value, fileUri)
+      : resolveMarkdownAssetUrl(target)
     : ''
   const isExternal = /^(https?:|mailto:|tel:)/i.test(resolvedHref)
 
@@ -427,7 +421,7 @@ function DirectoryMarkdownLink({
   }
 
   return (
-    <MarkdownLink href={decodedHref} fileUri={fileUri} onNavigate={onNavigate}>
+    <MarkdownLink href={href} fileUri={fileUri} onNavigate={onNavigate}>
       {children}
     </MarkdownLink>
   )

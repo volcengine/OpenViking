@@ -32,6 +32,7 @@
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | task_id | str | 是 | - | 后台 API 返回的任务 ID |
+| include_events | bool | 否 | false | 在 HTTP 响应中包含持久化的执行事件 |
 
 #### 3. 使用示例
 
@@ -114,6 +115,44 @@ ov task status uuid-xxx
 ```
 
 `stage` 可以为 `null`。Git 仓库资源导入任务可能报告 `queued`、`fetching`、`parsing`、`finalizing`、`processing_queue`；其他任务类型可能将其留空。实时队列计数不会出现在任务状态中；需要实时数量时使用 observer queue，任务完成后可读取 `result.queue_status`。
+
+**执行事件记录（HTTP）**
+
+请求 `GET /api/v1/tasks/{task_id}?include_events=true`，即可获得额外的 `result.execution_events` 字段。默认详情响应和任务列表不包含此字段。事件沿用任务记录的权限和保留策略。
+
+```json
+{
+  "items": [
+    {
+      "seq": 1,
+      "recorded_at": "2026-09-09T01:00:00.123456+00:00",
+      "kind": "created",
+      "status": "pending",
+      "stage": null,
+      "operation": null,
+      "error": null
+    }
+  ],
+  "dropped_count": 0,
+  "started_mid_task": false
+}
+```
+
+| 事件类型 | 记录的事实 |
+|----------|------------|
+| `created` | TaskTracker 创建了任务记录 |
+| `status_changed` | TaskTracker 接受了新的任务状态，包括取消过程和终态 |
+| `stage_changed` | 执行路径在任务活跃期间上报了不同的阶段 |
+| `error_recorded` | TaskTracker 接受了任务的首个脱敏错误 |
+| `waiting_for_descendants` | 等待路径发现任务仍有未结束的队列工作，已排除自身 work ID |
+
+`recorded_at` 是 TaskTracker 记录事件的 UTC 时间，不是浏览器轮询时间，也不一定是底层异常发生的时间。事件与任务状态在同一次写入成功后才对外发布。`seq` 确定任务内的事件顺序，即使多个事件时间相同也不会混淆。`stage` 表示任务最后上报的阶段；并行工作可能在其他阶段产生错误。`operation` 存在时标识上报事件的工作项。错误沿用现有脱敏和长度限制；这里不包含完整组件日志或 Python 堆栈。
+
+每个任务最多保留 64 条事件，序列化事件数据不超过 32 KiB。超限时优先删除较早事件，`dropped_count` 记录删除数量，保留事件的序号不重置。事件随任务过期清理。旧任务返回 `execution_events: null`；若旧的活跃任务后来产生事件，则 `started_mid_task` 为 true，不会重建此前的历史。旧版本服务即使收到参数也可能不返回该字段。Studio 会说明这些情况，并保留任务元数据、结果和错误展示。
+
+扩展执行事件时，在 `openviking/service/task_events.py` 注册事件类型、补充 Studio 翻译，然后在实际执行点调用 `await tracker.record_event(task_id, kind, account_id=..., user_id=..., operation=...)`。这个内部接口不修改任务状态或阶段，只接受有长度限制的操作标识，不接受任意日志内容。现有生命周期方法会自动记录它们接受的状态变化。
+
+持久化任务文件新增 `execution_events` 字段。回滚目标需要具备未知任务字段的保留能力（提交 `a5166386` 或之后的版本）；更早的读取实现可能拒绝这些文件。回滚期间也会停止上报事件，因此跨降级执行的任务历史可能不完整。
 
 **响应示例（完成）**
 

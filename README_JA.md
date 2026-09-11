@@ -148,21 +148,70 @@ Rust CLI は `npm i -g @openviking/cli` でインストールできます。ソ�
 
 ## エージェントと組み合わせて使う
 
-統合機能は、OpenViking の recall をエージェントのコンテキストに注入し、セッションメモリを自動的にコミットします:
+OpenViking を接続して、セッションをまたいで記憶を引き継ぎます。ネイティブ統合で自動想起とセッション収集を使うか、MCP で記憶とコンテキストのツールを提供できます。
 
-- [Claude Code](https://docs.openviking.ai/en/agent-integrations/02-claude-code)
-- [Codex](https://docs.openviking.ai/en/agent-integrations/04-codex)
-- [OpenClaw](https://docs.openviking.ai/en/agent-integrations/03-openclaw)
-- [Hermes](https://docs.openviking.ai/en/agent-integrations/05-hermes)
-- [Cursor](https://docs.openviking.ai/en/agent-integrations/12-cursor)
-- [Trae](https://docs.openviking.ai/en/agent-integrations/13-trae)
-- [OpenCode](https://docs.openviking.ai/en/agent-integrations/10-opencode)
-- [pi](https://docs.openviking.ai/en/agent-integrations/11-pi)
-- [Agent Plugins 1.0](https://docs.openviking.ai/en/agent-integrations/15-agent-plugins)
-- [MCP クライアント](https://docs.openviking.ai/en/agent-integrations/06-mcp-clients)
-- [LangChain / LangGraph](https://docs.openviking.ai/en/agent-integrations/07-langchain-langgraph)
+<table>
+<tr>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/en/agent-integrations/02-claude-code"><img src="docs/images/agents/image/claude-code/logo.png" width="32" height="32" alt=""><br><strong>Claude</strong></a><br>
+<sub>Hooks&nbsp;+&nbsp;MCP</sub>
+</td>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/en/agent-integrations/04-codex"><img src="docs/images/integrations/codex.png" width="32" height="32" alt=""><br><strong>Codex</strong></a><br>
+<sub>Hooks&nbsp;+&nbsp;MCP</sub>
+</td>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/en/agent-integrations/12-cursor"><img src="docs/images/agents/image/cursor/logo.png" width="32" height="32" alt=""><br><strong>Cursor</strong></a><br>
+<sub>Hooks&nbsp;+&nbsp;MCP</sub>
+</td>
+</tr>
+<tr>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/en/agent-integrations/13-trae"><img src="docs/images/agents/image/trae/logo.png" width="32" height="32" alt=""><br><strong>TRAE</strong></a><br>
+<sub>Hooks&nbsp;+&nbsp;MCP</sub>
+</td>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/en/agent-integrations/03-openclaw"><img src="docs/images/integrations/openclaw.jpg" width="24" height="24" alt=""><br><strong>OpenClaw</strong></a><br>
+<sub>コンテキストエンジン</sub>
+</td>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/en/agent-integrations/05-hermes"><img src="docs/images/integrations/hermes-agent.png" width="24" height="24" alt=""><br><strong>Hermes</strong></a><br>
+<sub>内蔵メモリ</sub>
+</td>
+</tr>
+<tr>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/en/agent-integrations/10-opencode"><img src="docs/images/agents/image/opencode/logo.png" width="32" height="32" alt=""><br><strong>OpenCode</strong></a><br>
+<sub>Plugin&nbsp;+&nbsp;MCP</sub>
+</td>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/en/agent-integrations/11-pi"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/pi-dark.svg"><img src="docs/images/integrations/pi.svg" width="41" height="41" alt=""></picture><br><strong>pi</strong></a><br>
+<sub>ネイティブ拡張</sub>
+</td>
+<td align="center" valign="bottom" width="33%">
+<a href="docs/images/agents/en/deerflow-memory-manager.md"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/deerflow-dark.svg"><img src="docs/images/integrations/deerflow.svg" width="19" height="24" alt=""></picture><br><strong>DeerFlow</strong></a><br>
+<sub>Memory&nbsp;+&nbsp;MCP</sub>
+</td>
+</tr>
+</table>
 
-各エージェントのセットアップ手順: [Agent integrations overview](https://docs.openviking.ai/en/agent-integrations/01-overview)。
+**汎用接続**
+
+<table>
+<tr>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/en/agent-integrations/15-agent-plugins"><img src="docs/images/integrations/agent-plugins.svg" width="24" height="23" alt=""><br><strong>Agent&nbsp;Plugins&nbsp;1.0</strong></a>
+</td>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/en/agent-integrations/06-mcp-clients"><img src="docs/images/integrations/mcp.svg" width="24" height="24" alt=""><br><strong>MCP&nbsp;ク&#8288;ラ&#8288;イ&#8288;ア&#8288;ン&#8288;ト</strong></a>
+</td>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/en/agent-integrations/07-langchain-langgraph"><img src="docs/images/integrations/langchain.svg" width="24" height="24" alt=""><br><strong>LangChain</strong></a>
+</td>
+</tr>
+</table>
+
+設定方法と統合の詳細は [Integrations](https://openviking.ai/integrations) を参照してください。
 
 ## OpenViking Helper（Beta）
 
@@ -238,12 +287,26 @@ ov chat   # 別のターミナルで実行
 
 ## 研究
 
-OpenViking は、VikingMem 論文に記載されたコア機能の一部をオープンソースとして公開しています:
+**対話とともに進化するエージェントの記憶。** VikingMem は、イベントを起点に長期記憶を抽出・更新・統合し、状態を持つエージェントが対話を通じて再利用できる経験を蓄積する仕組みを示しています。OpenViking は、そのコア機能の一部をオープンソースとして公開しています。
 
-> **VikingMem: A Memory Base Management System for Stateful LLM-based Applications**
-> Jiajie Fu, Junwen Chen, Mengzhao Wang, Aoxiang He, Maojia Sheng, Xiangyu Ke, Yifan Zhu, and Yunjun Gao.
-> arXiv:2605.29640, 2026. Accepted by VLDB 2026.
-> 📄 [arXiv で論文を読む](https://arxiv.org/abs/2605.29640)
+> **VikingMem: A Memory Base Management System for Stateful LLM-based Applications**<br>
+> Jiajie Fu, Junwen Chen, Mengzhao Wang, Aoxiang He, Maojia Sheng, Xiangyu Ke, Yifan Zhu, and Yunjun Gao.<br>
+> arXiv:2605.29640, 2026. 2026 年 9 月に VLDB 2026 で発表済み。<br>
+> 📄 [arXiv で論文を読む](https://arxiv.org/abs/2605.29640) · [PDF を読む](https://arxiv.org/pdf/2605.29640)
+
+**ディレクトリ構造を検索のコンテキストに。** 本論文は、OpenViking のディレクトリを考慮した検索に形式的基盤、インデックス設計、実験による検証を提供します。ディレクトリ範囲のクエリと構造の保守操作を定義し、TrieHI を提案しています。OpenViking はこれを統合し、ベクトルによる順位付けの前に検索範囲を確定します。エージェントはプロジェクトや記憶のサブツリー内で根拠を探し、周辺のコンテキストを保ちながら、知識の変化に応じてディレクトリを再編できます。
+
+> **Directory-Aware Query and Maintenance in Vector Databases**<br>
+> Mengzhao Wang, Zheng Gong, Jingpei Hu, Jiajie Fu, Maojia Sheng, Junwen Chen, and Yifan Zhu.<br>
+> arXiv:2606.16903, 2026. ICDE 採択済み。<br>
+> 📄 [arXiv で論文を読む](https://arxiv.org/abs/2606.16903) · [PDF を読む](https://arxiv.org/pdf/2606.16903)
+
+**少ないトークンで回答に必要な根拠を集める。** VikingRAG は意味検索と文書構造を組み合わせ、根拠の不足に応じて関連するディレクトリ部分を取得します。そのコア機構は OpenViking に統合されています。さらに、検索履歴の再利用と必要な場合のみ複数ラウンドの検索へ移行する手法を研究し、回答品質を保ちながら探索の繰り返しを減らします。
+
+> **VikingRAG: Accurate and Token-efficient Retrieval-augmented Generation over Structured Documents**<br>
+> Peiyuan Gao, Gaoyuan Zhang, Haojie Qin, Yahui Sun, Qianyi Zhang, Yunhao Zhang, Zeyu Wang, and Wei Lu.<br>
+> arXiv:2609.11390, 2026. 投稿中。<br>
+> 📄 [arXiv で論文を読む](https://arxiv.org/abs/2609.11390) · [PDF を読む](https://arxiv.org/pdf/2609.11390)
 
 ## パートナープロジェクト
 

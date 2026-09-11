@@ -508,6 +508,7 @@ export class OpenVikingClient {
     };
     const body = {
       ...buildContextSearchBody(contractConfig, { sessionId: options.sessionId }),
+      ...(options.dedupTurns === 0 ? { dedup_turns: 0 } : {}),
       query,
       ...(options.contextType !== undefined ? { context_type: options.contextType } : {}),
       ...(options.detail !== undefined ? { detail: options.detail } : {}),

@@ -129,6 +129,14 @@ class ContextBuilder:
         # Core identity
         parts.append(await self._get_identity(session_key))
 
+        if session_key.type == "feishu":
+            parts.append(
+                "## Feishu images\n\n"
+                "To display an OpenViking image, use ![description](viking://...) outside code.\n"
+                "To cite an image URI without displaying it, use inline code.\n"
+                "Reading an image does not send it to the user."
+            )
+
         # Sandbox environment info
         if self.sandbox_manager:
             sandbox_cwd = await self.sandbox_manager.get_sandbox_cwd(session_key)

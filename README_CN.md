@@ -148,21 +148,70 @@ Rust CLI 通过 `npm i -g @openviking/cli` 安装，也可以从源码构建：`
 
 ## 接入你的 Agent
 
-集成会把 OpenViking 的召回注入 Agent 上下文，并自动提交会话记忆：
+将 Agent 接入 OpenViking，跨会话保留记忆。原生集成支持自动召回与会话采集；也可通过 MCP 提供记忆和上下文工具。
 
-- [Claude Code](https://docs.openviking.ai/zh/agent-integrations/02-claude-code)
-- [Codex](https://docs.openviking.ai/zh/agent-integrations/04-codex)
-- [OpenClaw](https://docs.openviking.ai/zh/agent-integrations/03-openclaw)
-- [Hermes](https://docs.openviking.ai/zh/agent-integrations/05-hermes)
-- [Cursor](https://docs.openviking.ai/zh/agent-integrations/12-cursor)
-- [Trae](https://docs.openviking.ai/zh/agent-integrations/13-trae)
-- [OpenCode](https://docs.openviking.ai/zh/agent-integrations/10-opencode)
-- [pi](https://docs.openviking.ai/zh/agent-integrations/11-pi)
-- [Agent Plugins 1.0](https://docs.openviking.ai/zh/agent-integrations/15-agent-plugins)
-- [MCP 客户端](https://docs.openviking.ai/zh/agent-integrations/06-mcp-clients)
-- [LangChain / LangGraph](https://docs.openviking.ai/zh/agent-integrations/07-langchain-langgraph)
+<table>
+<tr>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/02-claude-code"><img src="docs/images/agents/image/claude-code/logo.png" width="32" height="32" alt=""><br><strong>Claude</strong></a><br>
+<sub>Hooks&nbsp;+&nbsp;MCP</sub>
+</td>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/04-codex"><img src="docs/images/integrations/codex.png" width="32" height="32" alt=""><br><strong>Codex</strong></a><br>
+<sub>Hooks&nbsp;+&nbsp;MCP</sub>
+</td>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/12-cursor"><img src="docs/images/agents/image/cursor/logo.png" width="32" height="32" alt=""><br><strong>Cursor</strong></a><br>
+<sub>Hooks&nbsp;+&nbsp;MCP</sub>
+</td>
+</tr>
+<tr>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/13-trae"><img src="docs/images/agents/image/trae/logo.png" width="32" height="32" alt=""><br><strong>TRAE</strong></a><br>
+<sub>Hooks&nbsp;+&nbsp;MCP</sub>
+</td>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/03-openclaw"><img src="docs/images/integrations/openclaw.jpg" width="24" height="24" alt=""><br><strong>OpenClaw</strong></a><br>
+<sub>上下文引擎</sub>
+</td>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/05-hermes"><img src="docs/images/integrations/hermes-agent.png" width="24" height="24" alt=""><br><strong>Hermes</strong></a><br>
+<sub>内置记忆</sub>
+</td>
+</tr>
+<tr>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/10-opencode"><img src="docs/images/agents/image/opencode/logo.png" width="32" height="32" alt=""><br><strong>OpenCode</strong></a><br>
+<sub>Plugin&nbsp;+&nbsp;MCP</sub>
+</td>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/11-pi"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/pi-dark.svg"><img src="docs/images/integrations/pi.svg" width="41" height="41" alt=""></picture><br><strong>pi</strong></a><br>
+<sub>原生扩展</sub>
+</td>
+<td align="center" valign="bottom" width="33%">
+<a href="docs/images/agents/zh/deerflow-memory-manager.md"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/deerflow-dark.svg"><img src="docs/images/integrations/deerflow.svg" width="19" height="24" alt=""></picture><br><strong>DeerFlow</strong></a><br>
+<sub>Memory&nbsp;+&nbsp;MCP</sub>
+</td>
+</tr>
+</table>
 
-各 Agent 的接入步骤：[Agent 集成总览](https://docs.openviking.ai/zh/agent-integrations/01-overview)。
+**通用接入**
+
+<table>
+<tr>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/15-agent-plugins"><img src="docs/images/integrations/agent-plugins.svg" width="24" height="23" alt=""><br><strong>Agent&nbsp;Plugins&nbsp;1.0</strong></a>
+</td>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/06-mcp-clients"><img src="docs/images/integrations/mcp.svg" width="24" height="24" alt=""><br><strong>MCP&nbsp;客&#8288;户&#8288;端</strong></a>
+</td>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/07-langchain-langgraph"><img src="docs/images/integrations/langchain.svg" width="24" height="24" alt=""><br><strong>LangChain</strong></a>
+</td>
+</tr>
+</table>
+
+详细接入方式请参考 [Integrations](https://openviking.ai/integrations)。
 
 ## OpenViking Helper（Beta）
 
@@ -238,12 +287,26 @@ ov chat   # 在另一个终端运行
 
 ## 研究
 
-OpenViking 开源了 VikingMem 论文中描述的部分核心能力：
+**让 Agent 的记忆随交互演化。** VikingMem 以事件驱动长期记忆的提取、更新与整合，让有状态 Agent 在持续交互中积累可复用的经验。OpenViking 开源了其中的部分核心能力。
 
-> **VikingMem: A Memory Base Management System for Stateful LLM-based Applications**
-> Jiajie Fu, Junwen Chen, Mengzhao Wang, Aoxiang He, Maojia Sheng, Xiangyu Ke, Yifan Zhu, and Yunjun Gao.
-> arXiv:2605.29640, 2026。已被 VLDB 2026 接收。
-> 📄 [在 arXiv 阅读论文](https://arxiv.org/abs/2605.29640)
+> **VikingMem: A Memory Base Management System for Stateful LLM-based Applications**<br>
+> Jiajie Fu, Junwen Chen, Mengzhao Wang, Aoxiang He, Maojia Sheng, Xiangyu Ke, Yifan Zhu, and Yunjun Gao.<br>
+> arXiv:2605.29640, 2026。已于 2026 年 9 月在 VLDB 2026 完成演讲。<br>
+> 📄 [在 arXiv 阅读论文](https://arxiv.org/abs/2605.29640) · [阅读 PDF](https://arxiv.org/pdf/2605.29640)
+
+**让目录结构成为检索上下文。** 这篇论文为 OpenViking 的目录语义检索提供形式化基础、索引设计与实验验证。论文定义了目录范围查询与结构维护操作，并提出 TrieHI，OpenViking 已将其集成，用于在向量排序前确定目录检索范围。文件系统范式由此贯穿组织与检索：Agent 可以在项目或记忆子树内查找证据、保留周边上下文，并随知识演化调整目录结构。
+
+> **Directory-Aware Query and Maintenance in Vector Databases**<br>
+> Mengzhao Wang, Zheng Gong, Jingpei Hu, Jiajie Fu, Maojia Sheng, Junwen Chen, and Yifan Zhu.<br>
+> arXiv:2606.16903, 2026。已被 ICDE 接收。<br>
+> 📄 [在 arXiv 阅读论文](https://arxiv.org/abs/2606.16903) · [阅读 PDF](https://arxiv.org/pdf/2606.16903)
+
+**用更少的 Token 找齐回答所需的证据。** VikingRAG 将语义检索与文档结构结合，按证据缺口展开相关目录片段，核心机制已集成到 OpenViking。论文进一步研究检索轨迹复用与按需升级多轮检索，在保持回答质量的同时减少重复探索。
+
+> **VikingRAG: Accurate and Token-efficient Retrieval-augmented Generation over Structured Documents**<br>
+> Peiyuan Gao, Gaoyuan Zhang, Haojie Qin, Yahui Sun, Qianyi Zhang, Yunhao Zhang, Zeyu Wang, and Wei Lu.<br>
+> arXiv:2609.11390, 2026。投递中。<br>
+> 📄 [在 arXiv 阅读论文](https://arxiv.org/abs/2609.11390) · [阅读 PDF](https://arxiv.org/pdf/2609.11390)
 
 ## 合作伙伴
 
