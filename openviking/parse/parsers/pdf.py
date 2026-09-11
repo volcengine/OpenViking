@@ -17,6 +17,7 @@ import base64
 import hashlib
 import io
 import re
+import tempfile
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -30,6 +31,7 @@ from openviking.parse.base import (
     lazy_import,
 )
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.utils.zip_safe import normalize_zip_filenames
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.parser_config import PDFConfig
@@ -680,6 +682,66 @@ class PDFParser(BaseParser):
             logger.debug(f"Image extraction error: {e}")
             return None
 
+    def _mineru_auth_headers(self) -> Dict[str, str]:
+        """Authorization headers for the online MinerU API (empty when unset)."""
+        if self.config.mineru_token:
+            return {"Authorization": f"Bearer {self.config.mineru_token}"}
+        return {}
+
+    def _mineru_base_url(self) -> str:
+        return self.config.mineru_endpoint.rstrip("/")
+
+    def _mineru_file_parse_url(self) -> str:
+        """Upload URL: ``<endpoint>/file_parse`` unless the endpoint already ends with it."""
+        base = self._mineru_base_url()
+        return base if base.endswith("/file_parse") else f"{base}/file_parse"
+
+    async def _mineru_post(
+        self, client, url: str, pdf_path: Path, data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """POST the PDF as multipart and return the parsed JSON body."""
+        with open(pdf_path, "rb") as f:
+            files = {"files": (pdf_path.name, f, "application/pdf")}
+            logger.info(f"Calling MinerU API: {url}")
+            response = await client.post(
+                url,
+                files=files,
+                data=data,
+                headers=self._mineru_auth_headers(),
+            )
+            response.raise_for_status()
+        return response.json()
+
+    @staticmethod
+    def _is_http_404(exc: Exception) -> bool:
+        status = getattr(exc, "response", None)
+        return getattr(status, "status_code", None) == 404
+
+    @staticmethod
+    def _mineru_payload_data(result: Dict[str, Any]) -> Dict[str, Any]:
+        data = result.get("data")
+        return data if isinstance(data, dict) else {}
+
+    @staticmethod
+    def _mineru_response_flavor(result: Dict[str, Any]) -> Optional[str]:
+        """Classify a create/submit response as one of the three protocols.
+
+        Returns ``"v1-sync"``, ``"v2-tasks"``, ``"online-batch"`` or None when
+        the shape is unrecognized.
+        """
+        data = PDFParser._mineru_payload_data(result)
+        if isinstance(result.get("task_id"), str) and isinstance(
+            result.get("status_url") or result.get("result_url"), str
+        ):
+            return "v2-tasks"
+        if isinstance(data.get("batch_id"), str):
+            return "online-batch"
+        if result.get("status") == "completed" and isinstance(
+            result.get("results"), dict
+        ):
+            return "v1-sync"
+        return None
+
     async def _convert_mineru(
         self,
         pdf_path: Path,
@@ -687,7 +749,23 @@ class PDFParser(BaseParser):
         resource_name: Optional[str] = None,
     ) -> tuple[str, Dict[str, Any]]:
         """
-        Convert PDF to Markdown using the MinerU /file_parse API.
+        Convert PDF to Markdown via the MinerU API.
+
+        Three protocol flavors are supported, selected by
+        ``PDFConfig.mineru_api_mode``:
+
+        - ``"sync"``: the legacy self-hosted single-shot contract — one
+          ``POST <endpoint>/file_parse`` answering inline with
+          ``{"status": "completed", "results": ...}``.
+        - ``"async"``: the task-based contracts — the current self-hosted
+          ``POST <endpoint>/tasks`` API (202 + ``status_url``/``result_url``)
+          and the online batch API (``/extract/task/batch`` + polling
+          ``/extract-results/batch/{id}``, Bearer-token auth). Both deliver
+          the markdown inside a zip archive. The self-hosted endpoint is
+          probed first; a 404 falls through to the online endpoint.
+        - ``"auto"`` (default): the flavor is detected — the inline POST is
+          attempted first and a 404 (or a task-shaped response) switches to
+          the task flow, so existing v1 deployments keep working unchanged.
 
         Args:
             pdf_path: Path to PDF file
@@ -698,8 +776,8 @@ class PDFParser(BaseParser):
 
         Returns:
             Tuple of (markdown_content, metadata) where metadata includes
-            strategy, endpoint, api_version, backend, task_id, processing_time
-            (seconds) and images_saved
+            strategy, endpoint, api_mode, api_version, backend, task_id,
+            processing_time (seconds) and images_saved
 
         Raises:
             ValueError: If MinerU endpoint is not configured, or the task does
@@ -711,11 +789,7 @@ class PDFParser(BaseParser):
         if not self.config.mineru_endpoint:
             raise ValueError("MinerU endpoint not configured")
 
-        # mineru_endpoint is a base URL; append /file_parse unless it already ends with it
-        base = self.config.mineru_endpoint.rstrip("/")
-        url = base if base.endswith("/file_parse") else f"{base}/file_parse"
-
-        meta = {
+        meta: Dict[str, Any] = {
             "strategy": "mineru",
             "endpoint": self.config.mineru_endpoint,
             "api_version": None,
@@ -723,43 +797,261 @@ class PDFParser(BaseParser):
 
         try:
             async with httpx.AsyncClient(timeout=self.config.mineru_timeout) as client:
-                # Prepare file upload
-                with open(pdf_path, "rb") as f:
-                    files = {"files": (pdf_path.name, f, "application/pdf")}
-
-                    # Prepare Form fields
+                mode = self.config.mineru_api_mode
+                if mode != "async":
                     data: Dict[str, Any] = dict(self.config.mineru_bodys or {})
-
                     # MinerU must return extracted images for the markdown refs.
                     data["return_images"] = True
+                    try:
+                        result = await self._mineru_post(
+                            client, self._mineru_file_parse_url(), pdf_path, data
+                        )
+                    except Exception as exc:
+                        if mode == "sync" or not self._is_http_404(exc):
+                            raise
+                        # auto: /file_parse is gone -> task-based protocol
+                        result = None
+                    if result is not None:
+                        flavor = self._mineru_response_flavor(result)
+                        if mode == "sync" or flavor in (None, "v1-sync"):
+                            meta["api_mode"] = "v1-sync"
+                            return await self._convert_mineru_v1(
+                                result, pdf_path, meta,
+                                storage=storage, resource_name=resource_name,
+                            )
+                        return await self._mineru_continue_task(
+                            client, result, meta, pdf_path,
+                            storage=storage, resource_name=resource_name,
+                        )
+                return await self._mineru_run_task_flow(
+                    client, meta, pdf_path,
+                    storage=storage, resource_name=resource_name,
+                )
+        except Exception as e:
+            logger.error(f"MinerU API call failed: {e}")
+            raise
 
-                    # Make API request
-                    logger.info(f"Calling MinerU API: {url}")
-                    response = await client.post(
-                        url,
-                        files=files,
-                        data=data,
-                    )
-                    response.raise_for_status()
+    async def _mineru_run_task_flow(
+        self, client, meta: Dict[str, Any], pdf_path: Path, **kwargs
+    ) -> tuple[str, Dict[str, Any]]:
+        """Explicit async mode: probe the task endpoints until one accepts."""
+        errors = []
+        base = self._mineru_base_url()
+        for url, kind, data in (
+            (f"{base}/tasks", "v2-tasks", self._mineru_v2_form()),
+            (f"{base}/extract/task/batch", "online-batch", self._mineru_online_form()),
+        ):
+            try:
+                result = await self._mineru_post(client, url, pdf_path, data)
+            except Exception as exc:
+                if self._is_http_404(exc):
+                    errors.append(f"{url}: 404")
+                    continue
+                raise
+            flavor = self._mineru_response_flavor(result)
+            if flavor in (None, kind):
+                return await self._mineru_continue_task(
+                    client, result, meta, pdf_path, **kwargs
+                )
+            errors.append(f"{url}: unexpected response shape")
+        raise ValueError(
+            "No MinerU task endpoint responded on "
+            f"{base} (tried /tasks, /extract/task/batch; {errors}). "
+            "Check pdf.mineru_endpoint and, for the online API, pdf.mineru_token."
+        )
 
-            # Parse response
-            result = response.json()
-            if result.get("status") != "completed":
-                raise ValueError(f"MinerU task not completed: {result.get('status')}")
+    def _mineru_v2_form(self) -> Dict[str, Any]:
+        """Form fields for the current self-hosted /tasks API."""
+        data: Dict[str, Any] = {
+            "return_md": "true",
+            "return_images": "true",
+            "response_format_zip": "true",
+        }
+        data.update(self.config.mineru_bodys or {})
+        return data
 
-            results = result.get("results") or {}
-            file_result = results.get(pdf_path.name) or next(iter(results.values()), {})
-            markdown_content = file_result.get("md_content") or ""
+    def _mineru_online_form(self) -> Dict[str, Any]:
+        """Form fields for the online batch API (pass-through of mineru_bodys)."""
+        return dict(self.config.mineru_bodys or {})
 
-            # Extract metadata from response
-            meta["api_version"] = result.get("version")
-            meta["backend"] = result.get("backend")
-            meta["task_id"] = result.get("task_id")
-            started_at, completed_at = result.get("started_at"), result.get("completed_at")
-            if started_at and completed_at:
-                meta["processing_time"] = (
-                    parse_iso_datetime(completed_at) - parse_iso_datetime(started_at)
-                ).total_seconds()
+    async def _mineru_continue_task(
+        self,
+        client,
+        result: Dict[str, Any],
+        meta: Dict[str, Any],
+        pdf_path: Path,
+        storage=None,
+        resource_name: Optional[str] = None,
+    ) -> tuple[str, Dict[str, Any]]:
+        """Drive an already-submitted task to completion and unpack the zip."""
+        flavor = self._mineru_response_flavor(result) or "v2-tasks"
+        meta["api_mode"] = flavor
+        base = self._mineru_base_url()
+
+        if flavor == "v2-tasks":
+            task_id = result["task_id"]
+            meta["task_id"] = task_id
+            status_url = self._mineru_absolute(result.get("status_url"), base)
+            result_url = self._mineru_absolute(result.get("result_url"), base)
+            logger.info(f"MinerU task {task_id} submitted; polling {status_url}")
+            deadline = time.monotonic() + self.config.mineru_timeout
+            await self._mineru_poll(
+                client, status_url, deadline,
+                done_when=lambda body: body.get("status") == "completed",
+                busy_when=lambda body: body.get("status") in ("pending", "processing"),
+                failure_detail=self._mineru_failure_detail,
+            )
+            zip_url = result_url
+        else:  # online-batch
+            batch_id = self._mineru_payload_data(result)["batch_id"]
+            meta["task_id"] = batch_id
+            poll_url = f"{base}/extract-results/batch/{batch_id}"
+            logger.info(f"MinerU online batch {batch_id} submitted; polling {poll_url}")
+            deadline = time.monotonic() + self.config.mineru_timeout
+            await self._mineru_poll(
+                client, poll_url, deadline,
+                done_when=self._mineru_online_done,
+                busy_when=self._mineru_online_busy,
+                failure_detail=self._mineru_online_failure_detail,
+            )
+            zip_url = self._mineru_online_zip_url(
+                await self._mineru_get_json(client, poll_url)
+            )
+            if not zip_url:
+                raise ValueError(
+                    "MinerU online task completed but no zip url found in "
+                    f"{poll_url} response"
+                )
+
+        zip_bytes = await self._mineru_download_zip(client, zip_url)
+        markdown_content, meta = self._mineru_unpack_zip(
+            zip_bytes, pdf_path, meta,
+            storage=storage, resource_name=resource_name,
+        )
+        logger.info(f"MinerU {flavor} conversion: {len(markdown_content)} chars")
+        return markdown_content, meta
+
+    @staticmethod
+    def _mineru_absolute(url: Optional[str], base: str) -> str:
+        if url and url.startswith(("http://", "https://")):
+            return url
+        return base + (url or "")
+
+    async def _mineru_poll(
+        self, client, url: str, deadline: float,
+        done_when, busy_when, failure_detail,
+    ) -> None:
+        """Poll until ``done_when`` holds; raise on failure or timeout."""
+        last_state = None
+        while time.monotonic() < deadline:
+            body = await self._mineru_get_json(client, url)
+            if done_when(body):
+                return
+            if busy_when(body):
+                state = repr(body)[:120]
+                if state != last_state:
+                    logger.info(f"MinerU task still busy: {state}")
+                    last_state = state
+                await asyncio.sleep(3.0)
+                continue
+            raise ValueError(
+                f"MinerU task failed: {failure_detail(body)}"
+            )
+        raise TimeoutError(
+            f"MinerU task did not finish within {self.config.mineru_timeout}s: {url}"
+        )
+
+    async def _mineru_get_json(self, client, url: str) -> Dict[str, Any]:
+        response = await client.get(url, headers=self._mineru_auth_headers())
+        response.raise_for_status()
+        return response.json()
+
+    @staticmethod
+    def _mineru_online_result_entry(body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        data = PDFParser._mineru_payload_data(body)
+        entries = data.get("extract_result")
+        if isinstance(entries, list) and entries and isinstance(entries[0], dict):
+            return entries[0]
+        return None
+
+    @classmethod
+    def _mineru_online_done(cls, body: Dict[str, Any]) -> bool:
+        entry = cls._mineru_online_result_entry(body)
+        return bool(entry) and entry.get("state") == "done"
+
+    @classmethod
+    def _mineru_online_busy(cls, body: Dict[str, Any]) -> bool:
+        entry = cls._mineru_online_result_entry(body)
+        return bool(entry) and entry.get("state") in ("waiting", "pending", "running")
+
+    @classmethod
+    def _mineru_online_failure_detail(cls, body: Dict[str, Any]) -> str:
+        entry = cls._mineru_online_result_entry(body) or {}
+        for key in ("err_msg", "err_no", "state", "message", "msg"):
+            if entry.get(key):
+                return f"{key}={entry[key]}"
+        return cls._mineru_failure_detail(body)
+
+    @staticmethod
+    def _mineru_failure_detail(body: Dict[str, Any]) -> str:
+        for key in ("msg", "message", "error", "err_msg"):
+            value = body.get(key)
+            if isinstance(value, str) and value:
+                return value
+        return repr(body)[:200]
+
+    @classmethod
+    def _mineru_online_zip_url(cls, body: Dict[str, Any]) -> Optional[str]:
+        entry = cls._mineru_online_result_entry(body) or {}
+        for key in ("full_zip_url", "zip_url", "result_url"):
+            value = entry.get(key)
+            if isinstance(value, str) and value.startswith(("http://", "https://")):
+                return value
+        return None
+
+    async def _mineru_download_zip(self, client, zip_url: str) -> bytes:
+        """Download the result archive (signed urls may already carry auth)."""
+        response = await client.get(
+            zip_url,
+            headers=self._mineru_auth_headers(),
+            follow_redirects=True,
+        )
+        response.raise_for_status()
+        return response.content
+
+    def _mineru_unpack_zip(
+        self,
+        zip_bytes: bytes,
+        pdf_path: Path,
+        meta: Dict[str, Any],
+        storage=None,
+        resource_name: Optional[str] = None,
+    ) -> tuple[str, Dict[str, Any]]:
+        """Unpack the zip result: locate the markdown and persist images.
+
+        The archive layout follows the standard MinerU export: a markdown file
+        (``full.md`` preferred) plus an ``images/`` directory it references.
+        """
+        from openviking.utils.zip_safe import safe_extract_zip
+
+        import zipfile
+
+        with tempfile.TemporaryDirectory(prefix="mineru-") as tmp:
+            tmp_dir = Path(tmp)
+            zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
+            normalize_zip_filenames(zf)
+            safe_extract_zip(zf, tmp_dir)
+            zf.close()
+
+            md_path = self._mineru_pick_markdown(tmp_dir)
+            if md_path is None:
+                raise ValueError(
+                    f"No markdown file found in MinerU zip result extracted to {tmp_dir}"
+                )
+            markdown_content = md_path.read_text(encoding="utf-8", errors="replace")
+            root_dir = md_path.parent
+
+            meta["api_version"] = "task-zip"
 
             if not markdown_content:
                 logger.warning(f"MinerU returned empty content for {pdf_path}")
@@ -773,89 +1065,128 @@ class PDFParser(BaseParser):
             if resource_name is None:
                 resource_name = pdf_path.stem
 
-            # MinerU embeds images as base64 data-URLs, referenced from markdown
-            # as `images/<filename>`; save them into the media store and rewrite
-            # the references to the stored relative paths.
+            # Persist every shipped image and rewrite the markdown references
+            # (``images/<name>``) to the stored relative paths.
             repl: Dict[str, str] = {}
             media_dir = storage.media_dir
-            for img_name, data_url in (file_result.get("images") or {}).items():
-                try:
-                    # data URL form: "data:image/jpeg;base64,<b64>"
-                    image_bytes = base64.b64decode(data_url.split(",", 1)[-1])
-                    img_path = Path(img_name)
-                    image_path = storage.save_image(
-                        resource_name,
-                        image_bytes,
-                        filename=img_path.stem,
-                        extension=img_path.suffix or ".png",
-                    )
-                    repl[f"images/{img_name}"] = image_path.relative_to(media_dir).as_posix()
-                except Exception as img_err:
-                    logger.warning(f"Failed to save MinerU image {img_name}: {img_err}")
+            images_dir = root_dir / "images"
+            if images_dir.is_dir():
+                for img in sorted(images_dir.iterdir()):
+                    if not img.is_file():
+                        continue
+                    try:
+                        image_path = storage.save_image(
+                            resource_name,
+                            img.read_bytes(),
+                            filename=img.stem,
+                            extension=img.suffix or ".png",
+                        )
+                        repl[f"images/{img.name}"] = (
+                            image_path.relative_to(media_dir).as_posix()
+                        )
+                    except Exception as img_err:
+                        logger.warning(f"Failed to save MinerU image {img.name}: {img_err}")
 
             if repl:
-                # Single pass over the markdown replaces every known reference;
-                # unknown ``images/...`` text is left untouched.
                 ref_pattern = re.compile(
-                    "|".join(re.escape(ref) for ref in sorted(repl, key=len, reverse=True))
+                    "|".join(
+                        re.escape(ref) for ref in sorted(repl, key=len, reverse=True)
+                    )
                 )
-                markdown_content = ref_pattern.sub(lambda m: repl[m.group(0)], markdown_content)
+                markdown_content = ref_pattern.sub(
+                    lambda m: repl[m.group(0)], markdown_content
+                )
                 meta["images_saved"] = len(repl)
 
-            logger.info(f"MinerU conversion: {len(markdown_content)} chars")
+        return markdown_content, meta
 
+    @staticmethod
+    def _mineru_pick_markdown(root_dir: Path) -> Optional[Path]:
+        """Pick the document markdown from an extracted MinerU zip.
+
+        Preference order: ``full.md`` next to the images dir, any single
+        ``*.md`` in a flat layout, else the shallowest ``*.md``.
+        """
+        candidates = [p for p in root_dir.rglob("*.md") if p.is_file()]
+        if not candidates:
+            return None
+        for p in candidates:
+            if p.name == "full.md":
+                return p
+        if len(candidates) == 1:
+            return candidates[0]
+        return min(candidates, key=lambda p: (len(p.parts), -p.stat().st_size))
+
+    async def _convert_mineru_v1(
+        self,
+        result: Dict[str, Any],
+        pdf_path: Path,
+        meta: Dict[str, Any],
+        storage=None,
+        resource_name: Optional[str] = None,
+    ) -> tuple[str, Dict[str, Any]]:
+        """Handle the legacy inline response (``md_content`` + base64 images)."""
+        if result.get("status") != "completed":
+            raise ValueError(f"MinerU task not completed: {result.get('status')}")
+
+        results = result.get("results") or {}
+        file_result = results.get(pdf_path.name) or next(iter(results.values()), {})
+        markdown_content = file_result.get("md_content") or ""
+
+        # Extract metadata from response
+        meta["api_version"] = result.get("version")
+        meta["backend"] = result.get("backend")
+        meta["task_id"] = result.get("task_id")
+        started_at, completed_at = result.get("started_at"), result.get("completed_at")
+        if started_at and completed_at:
+            meta["processing_time"] = (
+                parse_iso_datetime(completed_at) - parse_iso_datetime(started_at)
+            ).total_seconds()
+
+        if not markdown_content:
+            logger.warning(f"MinerU returned empty content for {pdf_path}")
             return markdown_content, meta
 
-        except Exception as e:
-            logger.error(f"MinerU API call failed: {e}")
-            raise
+        if storage is None:
+            from openviking_cli.utils.storage import get_storage
 
-    def _format_table_markdown(self, table: List[List[Optional[str]]]) -> str:
-        """
-        Convert table data to Markdown table format.
+            storage = get_storage()
 
-        Args:
-            table: 2D array of table cells
+        if resource_name is None:
+            resource_name = pdf_path.stem
 
-        Returns:
-            Markdown table string
+        # MinerU embeds images as base64 data-URLs, referenced from markdown
+        # as `images/<filename>`; save them into the media store and rewrite
+        # the references to the stored relative paths.
+        repl: Dict[str, str] = {}
+        media_dir = storage.media_dir
+        for img_name, data_url in (file_result.get("images") or {}).items():
+            try:
+                # data URL form: "data:image/jpeg;base64,<b64>"
+                image_bytes = base64.b64decode(data_url.split(",", 1)[-1])
+                img_path = Path(img_name)
+                image_path = storage.save_image(
+                    resource_name,
+                    image_bytes,
+                    filename=img_path.stem,
+                    extension=img_path.suffix or ".png",
+                )
+                repl[f"images/{img_name}"] = image_path.relative_to(media_dir).as_posix()
+            except Exception as img_err:
+                logger.warning(f"Failed to save MinerU image {img_name}: {img_err}")
 
-        Examples:
-            >>> table = [["Name", "Age"], ["Alice", "30"], ["Bob", "25"]]
-            >>> print(parser._format_table_markdown(table))
-            | Name | Age |
-            | --- | --- |
-            | Alice | 30 |
-            | Bob | 25 |
-        """
-        if not table or not table[0]:
-            return ""
+        if repl:
+            # Single pass over the markdown replaces every known reference;
+            # unknown ``images/...`` text is left untouched.
+            ref_pattern = re.compile(
+                "|".join(re.escape(ref) for ref in sorted(repl, key=len, reverse=True))
+            )
+            markdown_content = ref_pattern.sub(lambda m: repl[m.group(0)], markdown_content)
+            meta["images_saved"] = len(repl)
 
-        # Clean cells and handle None values
-        def clean_cell(cell):
-            if cell is None:
-                return ""
-            return str(cell).strip().replace("|", "\\|")  # Escape pipe characters
+        logger.info(f"MinerU conversion: {len(markdown_content)} chars")
 
-        lines = []
-
-        # Header row
-        header = table[0]
-        header_cells = [clean_cell(cell) for cell in header]
-        lines.append("| " + " | ".join(header_cells) + " |")
-
-        # Separator row
-        separator = ["---"] * len(header)
-        lines.append("| " + " | ".join(separator) + " |")
-
-        # Data rows
-        for row in table[1:]:
-            # Pad row to match header length
-            padded_row = row + [None] * (len(header) - len(row))
-            cells = [clean_cell(cell) for cell in padded_row[: len(header)]]
-            lines.append("| " + " | ".join(cells) + " |")
-
-        return "\n".join(lines)
+        return markdown_content, meta
 
     async def parse_content(
         self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs

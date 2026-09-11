@@ -149,6 +149,10 @@ class PDFConfig(ParserConfig):
         mineru_endpoint: MinerU API endpoint URL
         mineru_timeout: MinerU request timeout in seconds
         mineru_bodys: Additional MinerU API multipart form fields
+        mineru_api_mode: MinerU protocol flavor — "auto" (detect from the
+            response shape), "sync" (self-hosted single-shot /file_parse) or
+            "async" (online task API: create task, poll, download zip)
+        mineru_token: Optional bearer token for the online MinerU API
     """
 
     strategy: str = "auto"  # "local" | "mineru" | "auto"
@@ -157,6 +161,12 @@ class PDFConfig(ParserConfig):
     mineru_endpoint: Optional[str] = None  # API endpoint URL
     mineru_timeout: float = 300.0  # Request timeout in seconds (5 minutes)
     mineru_bodys: Optional[dict] = None  # Additional API multipart form fields
+    # "auto" (default) detects the protocol from the response shape; "sync"
+    # forces the self-hosted single-shot /file_parse contract; "async" forces
+    # the online task API (create task -> poll -> download zip result).
+    mineru_api_mode: str = "auto"  # "auto" | "sync" | "async"
+    # Bearer token for the online MinerU API (sent as Authorization header).
+    mineru_token: Optional[str] = None
 
     # Heading detection configuration
     heading_detection: str = "auto"  # "bookmarks" | "font" | "auto" | "none"
@@ -188,6 +198,12 @@ class PDFConfig(ParserConfig):
 
         if self.mineru_timeout <= 0:
             raise ValueError("mineru_timeout must be positive")
+
+        if self.mineru_api_mode not in ("auto", "sync", "async"):
+            raise ValueError(
+                f"Invalid mineru_api_mode '{self.mineru_api_mode}'. "
+                "Must be 'auto', 'sync' or 'async'"
+            )
 
         if self.heading_detection not in ("bookmarks", "font", "auto", "none"):
             raise ValueError(f"Invalid heading_detection: {self.heading_detection}")
