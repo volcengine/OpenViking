@@ -76,6 +76,7 @@ from openviking_cli.exceptions import (
     UnauthenticatedError,
 )
 from openviking_cli.utils import get_logger
+from openviking.server.routers.search import context_only_fields_error
 
 logger = get_logger(__name__)
 
@@ -273,6 +274,14 @@ async def find(
     return await _format_search_result(result, service=service, ctx=ctx, read_content=read_content)
 
 
+# This tool exposes two of the router's context-only fields as a pair each, so a caller
+# that sets either half has set the field the router names.
+_MCP_CONTEXT_ONLY_ALIASES = {
+    "detail_by_category": "detail",
+    "other_peer_penalties": "other_peer_penalty",
+}
+
+
 @mcp.tool()
 async def search(
     query: str,
@@ -355,18 +364,17 @@ async def search(
             return result.rendered
         return "No matching context found."
 
-    # POST /search already rejects these in list mode (SearchRequest._validate_mode over
-    # CONTEXT_ONLY_FIELDS); this tool did not, so the two faces of the same feature
-    # disagreed. Everything the context branch consumes is read only inside it, and the
-    # list path calls SearchService.search, whose signature has no parameter for any of
-    # them -- so passing one here did nothing at all, which for exclude_uris means
-    # excluded URIs come back in the results with no error.
+    # POST /search rejects these in list mode and this tool did not, so the two faces of
+    # one feature disagreed about whether the request was valid. The list path calls
+    # SearchService.search, whose signature has no parameter for any of them, so passing
+    # one here did nothing at all -- for exclude_uris that means excluded URIs come back
+    # in the results with no error.
     #
-    # The list is CONTEXT_ONLY_FIELDS plus the two fields this tool splits in two:
-    # detail/detail_by_category and other_peer_penalty/other_peer_penalties.
-    # test_mcp_search_modes.py pins that correspondence so the two cannot drift.
-    supplied_context_only = [
-        name
+    # The names and the wording come from the router rather than being restated here, so
+    # a field added to CONTEXT_ONLY_FIELDS reaches both faces at once. This tool splits
+    # two of those fields in two, and each half maps back onto the one the router knows.
+    supplied_by_caller = {
+        name: value
         for name, (value, default) in {
             "query_expansion": (query_expansion, "auto"),
             "max_tokens": (max_tokens, DEFAULT_MAX_TOKENS),
@@ -381,15 +389,14 @@ async def search(
             "other_peer_penalties": (other_peer_penalties, None),
             "rewrite": (rewrite, "off"),
             "rewrite_max_bullets": (rewrite_max_bullets, 6),
-        }.items()
-        if value != default
-    ]
-    if supplied_context_only:
-        # Same wording as the REST validator, so the two faces report it identically.
-        raise InvalidArgumentError(
-            f"{', '.join(supplied_context_only)} require mode='context'; "
-            "set mode='context' or drop these fields"
-        )
+        }.items() if value != default
+    }
+    as_named_by_caller: Dict[str, set] = {}
+    for name in supplied_by_caller:
+        as_named_by_caller.setdefault(_MCP_CONTEXT_ONLY_ALIASES.get(name, name), set()).add(name)
+    error = context_only_fields_error(as_named_by_caller, as_named_by_caller=as_named_by_caller)
+    if error:
+        raise InvalidArgumentError(error)
 
     if target_uri:
         target_uri = _resolve_mcp_workspace_uri(target_uri, ctx)

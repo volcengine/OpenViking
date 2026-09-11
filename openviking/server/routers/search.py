@@ -172,6 +172,28 @@ CONTEXT_ONLY_FIELDS = (
 )
 
 
+def context_only_fields_error(supplied_fields, as_named_by_caller=None) -> Optional[str]:
+    """The refusal for context-only arguments in list mode, or None if there is nothing to refuse.
+
+    Both faces of search have to answer the same way here, and both used to carry their
+    own copy of the field list and the wording. The MCP tool never builds a
+    ``SearchRequest`` -- it calls ``SearchService.search`` directly -- so it cannot inherit
+    the validator; it can inherit this.
+
+    ``as_named_by_caller`` maps a field in ``CONTEXT_ONLY_FIELDS`` to the spellings the
+    caller actually used, for a face that exposes one of them under more than one name --
+    and a caller can set more than one of those at once. Telling somebody who passed
+    ``detail_by_category`` that ``detail`` is the problem is not an improvement on having
+    no error at all.
+    """
+    used = sorted(set(CONTEXT_ONLY_FIELDS) & set(supplied_fields))
+    if not used:
+        return None
+    names = sorted({name for field in used for name in ((as_named_by_caller or {}).get(field) or {field})})
+    return (f"{', '.join(names)} require mode='context'; "
+            "set mode='context' or drop these fields")
+
+
 class SearchRequest(BaseModel):
     """Request model for search with session.
 
@@ -218,12 +240,9 @@ class SearchRequest(BaseModel):
     @model_validator(mode="after")
     def _validate_mode(self) -> "SearchRequest":
         if self.mode == "list":
-            used = sorted(set(CONTEXT_ONLY_FIELDS) & self.model_fields_set)
-            if used:
-                raise ValueError(
-                    f"{', '.join(used)} require mode='context'; "
-                    "set mode='context' or drop these fields"
-                )
+            error = context_only_fields_error(self.model_fields_set)
+            if error:
+                raise ValueError(error)
             return self
 
         if self.read_content:

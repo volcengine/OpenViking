@@ -142,3 +142,36 @@ async def test_the_tool_covers_every_field_the_rest_validator_rejects():
         "detail_by_category",
         "other_peer_penalties",
     }
+
+
+def test_both_faces_share_one_definition_of_the_refusal():
+    """A field added to CONTEXT_ONLY_FIELDS has to reach the MCP tool without a second edit.
+
+    The point of routing this through ``context_only_fields_error`` rather than restating
+    the list is that the two faces cannot drift. Pin that by asking the helper directly
+    with a field the tool has no parameter for: the router owns the names, so the message
+    still names it.
+    """
+    from openviking.server.routers.search import CONTEXT_ONLY_FIELDS, context_only_fields_error
+
+    for field in CONTEXT_ONLY_FIELDS:
+        message = context_only_fields_error({field})
+        assert message is not None, f"{field} is context-only but produced no refusal"
+        assert field in message
+
+    assert context_only_fields_error(set()) is None
+    assert context_only_fields_error({"query", "limit"}) is None
+
+
+def test_the_refusal_names_what_the_caller_typed():
+    """The tool splits two router fields in two, and the caller has to hear their own name."""
+    from openviking.server.routers.search import context_only_fields_error
+
+    message = context_only_fields_error({"detail": {"detail_by_category"}},
+                                        as_named_by_caller={"detail": {"detail_by_category"}})
+    assert "detail_by_category" in message
+
+    both = context_only_fields_error({"detail": {"detail", "detail_by_category"}},
+                                     as_named_by_caller={"detail": {"detail", "detail_by_category"}})
+    assert "detail_by_category" in both and "detail" in both
+
