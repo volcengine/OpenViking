@@ -39,11 +39,11 @@ OpenViking 是面向 AI 智能体的开源上下文数据库，用来存储知�
 
 ### 资源、记忆与技能
 
-| 上下文 | 存什么 | URI 示例 |
-| --- | --- | --- |
-| **资源** | Agent 可引用的文档、代码库和网页 | `viking://resources/project/` |
-| **记忆** | 从会话中提取的用户偏好、事实和经验 | `viking://~/memories/` |
-| **技能** | Agent 执行任务所需的指令与配套文件 | `viking://~/skills/` |
+| 上下文 | 存什么 |
+| --- | --- |
+| **资源** | Agent 可引用的文档、代码库和网页 |
+| **记忆** | 从会话中提取的用户偏好、事实和经验 |
+| **技能** | Agent 执行任务所需的指令与配套文件 |
 
 `viking://~` 指向当前用户的主目录。资源可以在账号内共享；记忆和会话归属于各自的用户。见[上下文类型](https://docs.openviking.ai/zh/concepts/02-context-types)和 [URI 命名空间](https://docs.openviking.ai/zh/concepts/04-viking-uri)。
 
@@ -52,14 +52,17 @@ OpenViking 是面向 AI 智能体的开源上下文数据库，用来存储知�
 经过语义处理的目录，在内容旁存放摘要和概览：
 
 ```text
-viking://resources/project/
-├── .abstract.md     # L0：摘要，用于判断相关性
-├── .overview.md     # L1：概览与导航
-├── api.md           # L2：完整内容
-└── examples/
+viking://
+├── resources/project/
+│   ├── .abstract.md  # L0
+│   ├── .overview.md  # L1
+│   └── api.md        # L2
+└── ~/
+    ├── memories/
+    └── skills/
 ```
 
-L0 和 L1 描述目录，不会为每个文件各生成一份。Agent 据此决定往哪里查、何时读取 L2。见[上下文分层](https://docs.openviking.ai/zh/concepts/03-context-layers)。
+L0（摘要）和 L1（概览）描述目录。Agent 据此决定往哪里查、何时读取 L2（完整内容）。见[上下文分层](https://docs.openviking.ai/zh/concepts/03-context-layers)。
 
 ### 沿目录结构检索
 
@@ -123,21 +126,21 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
 <tr>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/zh/agent-integrations/02-claude-code"><img src="docs/images/agents/image/claude-code/logo.png" width="32" height="32" alt=""><br><strong>Claude Code</strong></a><br>
-<sub>Hooks&nbsp;+&nbsp;MCP</sub>
+<sub>Hooks + MCP</sub>
 </td>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/zh/agent-integrations/04-codex"><img src="docs/images/integrations/codex.png" width="32" height="32" alt=""><br><strong>Codex</strong></a><br>
-<sub>Hooks&nbsp;+&nbsp;MCP</sub>
+<sub>Hooks + MCP</sub>
 </td>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/zh/agent-integrations/12-cursor"><img src="docs/images/agents/image/cursor/logo.png" width="32" height="32" alt=""><br><strong>Cursor</strong></a><br>
-<sub>Hooks&nbsp;+&nbsp;MCP</sub>
+<sub>Hooks + MCP</sub>
 </td>
 </tr>
 <tr>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/zh/agent-integrations/13-trae"><img src="docs/images/agents/image/trae/logo.png" width="32" height="32" alt=""><br><strong>TRAE</strong></a><br>
-<sub>Hooks&nbsp;+&nbsp;MCP</sub>
+<sub>Hooks + MCP</sub>
 </td>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/zh/agent-integrations/03-openclaw"><img src="docs/images/integrations/openclaw.jpg" width="24" height="24" alt=""><br><strong>OpenClaw</strong></a><br>
@@ -151,7 +154,7 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
 <tr>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/zh/agent-integrations/10-opencode"><img src="docs/images/agents/image/opencode/logo.png" width="32" height="32" alt=""><br><strong>OpenCode</strong></a><br>
-<sub>Plugin&nbsp;+&nbsp;MCP</sub>
+<sub>Plugin + MCP</sub>
 </td>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/zh/agent-integrations/11-pi"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/pi-dark.svg"><img src="docs/images/integrations/pi.svg" width="41" height="41" alt=""></picture><br><strong>pi</strong></a><br>
@@ -159,7 +162,7 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
 </td>
 <td align="center" valign="bottom" width="33%">
 <a href="docs/images/agents/zh/deerflow-memory-manager.md"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/deerflow-dark.svg"><img src="docs/images/integrations/deerflow.svg" width="19" height="24" alt=""></picture><br><strong>DeerFlow</strong></a><br>
-<sub>Memory&nbsp;+&nbsp;MCP</sub>
+<sub>Memory + MCP</sub>
 </td>
 </tr>
 </table>
@@ -169,10 +172,10 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
 <table>
 <tr>
 <td align="center" valign="bottom" width="33%">
-<a href="https://docs.openviking.ai/zh/agent-integrations/15-agent-plugins"><img src="docs/images/integrations/agent-plugins.svg" width="24" height="23" alt=""><br><strong>Agent&nbsp;Plugins&nbsp;1.0</strong></a>
+<a href="https://docs.openviking.ai/zh/agent-integrations/15-agent-plugins"><img src="docs/images/integrations/agent-plugins.svg" width="24" height="23" alt=""><br><strong>Agent Plugins 1.0</strong></a>
 </td>
 <td align="center" valign="bottom" width="33%">
-<a href="https://docs.openviking.ai/zh/agent-integrations/06-mcp-clients"><img src="docs/images/integrations/mcp.svg" width="24" height="24" alt=""><br><strong>MCP&nbsp;客&#8288;户&#8288;端</strong></a>
+<a href="https://docs.openviking.ai/zh/agent-integrations/06-mcp-clients"><img src="docs/images/integrations/mcp.svg" width="24" height="24" alt=""><br><strong>MCP 客&#8288;户&#8288;端</strong></a>
 </td>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/zh/agent-integrations/07-langchain-langgraph"><img src="docs/images/integrations/langchain.svg" width="24" height="24" alt=""><br><strong>LangChain</strong></a>

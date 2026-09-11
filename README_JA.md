@@ -39,11 +39,11 @@ OpenVikingは、AIエージェントのためのオープンソースのコン�
 
 ### リソース、メモリ、スキル
 
-| コンテキスト | 保存するもの | URI の例 |
-| --- | --- | --- |
-| **リソース** | エージェントが参照する文書、リポジトリ、Web ページ | `viking://resources/project/` |
-| **メモリ** | セッションから学んだユーザーの好み、事実、経験 | `viking://~/memories/` |
-| **スキル** | タスクを実行するための指示と関連ファイル | `viking://~/skills/` |
+| コンテキスト | 保存するもの |
+| --- | --- |
+| **リソース** | エージェントが参照する文書、リポジトリ、Web ページ |
+| **メモリ** | セッションから学んだユーザーの好み、事実、経験 |
+| **スキル** | タスクを実行するための指示と関連ファイル |
 
 `viking://~` は現在のユーザーのホームを指します。リソースはアカウント内で共有でき、メモリとセッションは各ユーザーに属します。[コンテキストの種類](https://docs.openviking.ai/en/concepts/02-context-types) · [URI 名前空間](https://docs.openviking.ai/en/concepts/04-viking-uri)
 
@@ -52,14 +52,17 @@ OpenVikingは、AIエージェントのためのオープンソースのコン�
 意味処理を終えたディレクトリには、コンテンツとともに要約が保存されます。
 
 ```text
-viking://resources/project/
-├── .abstract.md     # L0：関連性を判断する短い要約
-├── .overview.md     # L1：概要とナビゲーション
-├── api.md           # L2：全文
-└── examples/
+viking://
+├── resources/project/
+│   ├── .abstract.md  # L0
+│   ├── .overview.md  # L1
+│   └── api.md        # L2
+└── ~/
+    ├── memories/
+    └── skills/
 ```
 
-L0 と L1 はディレクトリを説明するもので、ファイルごとに生成されるものではありません。エージェントはこれらを使い、どこを調べ、いつ L2 を読むかを決めます。[コンテキストの階層](https://docs.openviking.ai/en/concepts/03-context-layers)
+L0（要約）と L1（概要）はディレクトリを説明します。エージェントはこれらを使い、どこを調べ、いつ L2（全文）を読むかを決めます。[コンテキストの階層](https://docs.openviking.ai/en/concepts/03-context-layers)
 
 ### ディレクトリ構造に沿って検索する
 
@@ -123,21 +126,21 @@ OpenViking を接続して、セッションをまたいで記憶を引き継ぎ
 <tr>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/en/agent-integrations/02-claude-code"><img src="docs/images/agents/image/claude-code/logo.png" width="32" height="32" alt=""><br><strong>Claude Code</strong></a><br>
-<sub>Hooks&nbsp;+&nbsp;MCP</sub>
+<sub>Hooks + MCP</sub>
 </td>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/en/agent-integrations/04-codex"><img src="docs/images/integrations/codex.png" width="32" height="32" alt=""><br><strong>Codex</strong></a><br>
-<sub>Hooks&nbsp;+&nbsp;MCP</sub>
+<sub>Hooks + MCP</sub>
 </td>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/en/agent-integrations/12-cursor"><img src="docs/images/agents/image/cursor/logo.png" width="32" height="32" alt=""><br><strong>Cursor</strong></a><br>
-<sub>Hooks&nbsp;+&nbsp;MCP</sub>
+<sub>Hooks + MCP</sub>
 </td>
 </tr>
 <tr>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/en/agent-integrations/13-trae"><img src="docs/images/agents/image/trae/logo.png" width="32" height="32" alt=""><br><strong>TRAE</strong></a><br>
-<sub>Hooks&nbsp;+&nbsp;MCP</sub>
+<sub>Hooks + MCP</sub>
 </td>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/en/agent-integrations/03-openclaw"><img src="docs/images/integrations/openclaw.jpg" width="24" height="24" alt=""><br><strong>OpenClaw</strong></a><br>
@@ -151,7 +154,7 @@ OpenViking を接続して、セッションをまたいで記憶を引き継ぎ
 <tr>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/en/agent-integrations/10-opencode"><img src="docs/images/agents/image/opencode/logo.png" width="32" height="32" alt=""><br><strong>OpenCode</strong></a><br>
-<sub>Plugin&nbsp;+&nbsp;MCP</sub>
+<sub>Plugin + MCP</sub>
 </td>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/en/agent-integrations/11-pi"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/pi-dark.svg"><img src="docs/images/integrations/pi.svg" width="41" height="41" alt=""></picture><br><strong>pi</strong></a><br>
@@ -159,7 +162,7 @@ OpenViking を接続して、セッションをまたいで記憶を引き継ぎ
 </td>
 <td align="center" valign="bottom" width="33%">
 <a href="docs/images/agents/en/deerflow-memory-manager.md"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/deerflow-dark.svg"><img src="docs/images/integrations/deerflow.svg" width="19" height="24" alt=""></picture><br><strong>DeerFlow</strong></a><br>
-<sub>Memory&nbsp;+&nbsp;MCP</sub>
+<sub>Memory + MCP</sub>
 </td>
 </tr>
 </table>
@@ -169,10 +172,10 @@ OpenViking を接続して、セッションをまたいで記憶を引き継ぎ
 <table>
 <tr>
 <td align="center" valign="bottom" width="33%">
-<a href="https://docs.openviking.ai/en/agent-integrations/15-agent-plugins"><img src="docs/images/integrations/agent-plugins.svg" width="24" height="23" alt=""><br><strong>Agent&nbsp;Plugins&nbsp;1.0</strong></a>
+<a href="https://docs.openviking.ai/en/agent-integrations/15-agent-plugins"><img src="docs/images/integrations/agent-plugins.svg" width="24" height="23" alt=""><br><strong>Agent Plugins 1.0</strong></a>
 </td>
 <td align="center" valign="bottom" width="33%">
-<a href="https://docs.openviking.ai/en/agent-integrations/06-mcp-clients"><img src="docs/images/integrations/mcp.svg" width="24" height="24" alt=""><br><strong>MCP&nbsp;ク&#8288;ラ&#8288;イ&#8288;ア&#8288;ン&#8288;ト</strong></a>
+<a href="https://docs.openviking.ai/en/agent-integrations/06-mcp-clients"><img src="docs/images/integrations/mcp.svg" width="24" height="24" alt=""><br><strong>MCP ク&#8288;ラ&#8288;イ&#8288;ア&#8288;ン&#8288;ト</strong></a>
 </td>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/en/agent-integrations/07-langchain-langgraph"><img src="docs/images/integrations/langchain.svg" width="24" height="24" alt=""><br><strong>LangChain</strong></a>

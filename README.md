@@ -39,11 +39,11 @@ Context lives in a virtual filesystem under `viking://`. Agents can browse it wi
 
 ### Resources, memories, and skills
 
-| Context | What it holds | Example URI |
-| --- | --- | --- |
-| **Resources** | Documents, repositories, and web pages an agent can reference | `viking://resources/project/` |
-| **Memories** | User preferences, facts, and experience learned from sessions | `viking://~/memories/` |
-| **Skills** | Instructions and supporting files for tasks an agent can perform | `viking://~/skills/` |
+| Context | What it holds |
+| --- | --- |
+| **Resources** | Documents, repositories, and web pages an agent can reference |
+| **Memories** | User preferences, facts, and experience learned from sessions |
+| **Skills** | Instructions and supporting files for tasks an agent can perform |
 
 `viking://~` resolves to the current user's home. Resources can be shared within an account; memories and sessions belong to individual users. See [context types](https://docs.openviking.ai/en/concepts/02-context-types) and [URI namespaces](https://docs.openviking.ai/en/concepts/04-viking-uri).
 
@@ -52,14 +52,17 @@ Context lives in a virtual filesystem under `viking://`. Agents can browse it wi
 Semantically processed directories have summaries alongside their content:
 
 ```text
-viking://resources/project/
-├── .abstract.md     # L0: brief summary for relevance checks
-├── .overview.md     # L1: overview and navigation
-├── api.md           # L2: full content
-└── examples/
+viking://
+├── resources/project/
+│   ├── .abstract.md  # L0
+│   ├── .overview.md  # L1
+│   └── api.md        # L2
+└── ~/
+    ├── memories/
+    └── skills/
 ```
 
-L0 and L1 describe a directory, rather than duplicating every file. Agents use them to decide where to look and when to read L2. [Context layers](https://docs.openviking.ai/en/concepts/03-context-layers)
+L0 (abstract) and L1 (overview) summarize directories. Agents use them to decide where to look and when to read L2 (full content). [Context layers](https://docs.openviking.ai/en/concepts/03-context-layers)
 
 ### Retrieve within the directory structure
 
@@ -123,43 +126,43 @@ Connect your agent to OpenViking for cross-session memory. Choose a native integ
 <tr>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/en/agent-integrations/02-claude-code"><img src="docs/images/agents/image/claude-code/logo.png" width="32" height="32" alt=""><br><strong>Claude Code</strong></a><br>
-<sub>Hooks&nbsp;+&nbsp;MCP</sub>
+<sub>Hooks + MCP</sub>
 </td>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/en/agent-integrations/04-codex"><img src="docs/images/integrations/codex.png" width="32" height="32" alt=""><br><strong>Codex</strong></a><br>
-<sub>Hooks&nbsp;+&nbsp;MCP</sub>
+<sub>Hooks + MCP</sub>
 </td>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/en/agent-integrations/12-cursor"><img src="docs/images/agents/image/cursor/logo.png" width="32" height="32" alt=""><br><strong>Cursor</strong></a><br>
-<sub>Hooks&nbsp;+&nbsp;MCP</sub>
+<sub>Hooks + MCP</sub>
 </td>
 </tr>
 <tr>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/en/agent-integrations/13-trae"><img src="docs/images/agents/image/trae/logo.png" width="32" height="32" alt=""><br><strong>TRAE</strong></a><br>
-<sub>Hooks&nbsp;+&nbsp;MCP</sub>
+<sub>Hooks + MCP</sub>
 </td>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/en/agent-integrations/03-openclaw"><img src="docs/images/integrations/openclaw.jpg" width="24" height="24" alt=""><br><strong>OpenClaw</strong></a><br>
-<sub>Context&nbsp;engine</sub>
+<sub>Context engine</sub>
 </td>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/en/agent-integrations/05-hermes"><img src="docs/images/integrations/hermes-agent.png" width="24" height="24" alt=""><br><strong>Hermes</strong></a><br>
-<sub>Built-in&nbsp;memory</sub>
+<sub>Built-in memory</sub>
 </td>
 </tr>
 <tr>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/en/agent-integrations/10-opencode"><img src="docs/images/agents/image/opencode/logo.png" width="32" height="32" alt=""><br><strong>OpenCode</strong></a><br>
-<sub>Plugin&nbsp;+&nbsp;MCP</sub>
+<sub>Plugin + MCP</sub>
 </td>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/en/agent-integrations/11-pi"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/pi-dark.svg"><img src="docs/images/integrations/pi.svg" width="41" height="41" alt=""></picture><br><strong>pi</strong></a><br>
-<sub>Native&nbsp;extension</sub>
+<sub>Native extension</sub>
 </td>
 <td align="center" valign="bottom" width="33%">
 <a href="docs/images/agents/en/deerflow-memory-manager.md"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/deerflow-dark.svg"><img src="docs/images/integrations/deerflow.svg" width="19" height="24" alt=""></picture><br><strong>DeerFlow</strong></a><br>
-<sub>Memory&nbsp;+&nbsp;MCP</sub>
+<sub>Memory + MCP</sub>
 </td>
 </tr>
 </table>
@@ -169,10 +172,10 @@ Connect your agent to OpenViking for cross-session memory. Choose a native integ
 <table>
 <tr>
 <td align="center" valign="bottom" width="33%">
-<a href="https://docs.openviking.ai/en/agent-integrations/15-agent-plugins"><img src="docs/images/integrations/agent-plugins.svg" width="24" height="23" alt=""><br><strong>Agent&nbsp;Plugins&nbsp;1.0</strong></a>
+<a href="https://docs.openviking.ai/en/agent-integrations/15-agent-plugins"><img src="docs/images/integrations/agent-plugins.svg" width="24" height="23" alt=""><br><strong>Agent Plugins 1.0</strong></a>
 </td>
 <td align="center" valign="bottom" width="33%">
-<a href="https://docs.openviking.ai/en/agent-integrations/06-mcp-clients"><img src="docs/images/integrations/mcp.svg" width="24" height="24" alt=""><br><strong>MCP&nbsp;clients</strong></a>
+<a href="https://docs.openviking.ai/en/agent-integrations/06-mcp-clients"><img src="docs/images/integrations/mcp.svg" width="24" height="24" alt=""><br><strong>MCP clients</strong></a>
 </td>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/en/agent-integrations/07-langchain-langgraph"><img src="docs/images/integrations/langchain.svg" width="24" height="24" alt=""><br><strong>LangChain</strong></a>
