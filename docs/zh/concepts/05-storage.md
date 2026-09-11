@@ -22,14 +22,17 @@ OpenViking 采用双层存储架构，分离内容存储和索引存储。
 | 存储层 | 职责 | 存储内容 |
 |--------|------|----------|
 | **AGFS** | 内容存储 | L0/L1/L2 完整内容、多媒体文件 |
-| **向量库** | 索引存储 | URI、向量、元数据（不存文件内容） |
+| **向量库** | 索引存储 | URI、向量、元数据；兼容的 VikingDB 集合还可持久化用于 grep 召回的有界正文投影 |
 
 ### 设计优势
 
-1. **职责清晰**：向量库只负责检索，AGFS 负责存储
-2. **内存优化**：向量库不存储文件内容，节省内存
-3. **单一数据源**：所有内容从 AGFS 读取，向量库只存引用
+1. **职责清晰**：向量库负责检索，AGFS 仍是权威内容源
+2. **按后端优化**：兼容的 VikingDB 集合可持久化有界派生正文，其他后端只存引用和索引字段
+3. **读取一致**：常规文件读取来自 AGFS，向量库中的正文只是派生检索投影
 4. **独立扩展**：向量库和 AGFS 可分别扩展
+
+集合 Schema 兼容时，VikingDB 后端可持久化最多 1 MiB 的有界 `content` 投影，用于 grep 的 VikingDB FullText/BM25 候选召回。精确匹配仍从 AGFS 读取召回文件。其他后端会在写入向量库前丢弃 `content`。
+
 > 注：AGFS 已经重写为 Rust 实现（RAGFS）
 
 ## VikingFS 虚拟文件系统
@@ -93,24 +96,30 @@ viking://resources/docs/auth/
 
 ## 向量库索引
 
-向量库存储语义索引，支持向量搜索和标量过滤。
+向量库存储语义索引，支持向量搜索和标量过滤。当前统一 Schema 定义了下列字段；`content` 是否实际持久化取决于前述后端和集合 Schema。
 
 ### Context 集合 Schema
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `id` | string | 主键 |
-| `uri` | string | 资源 URI |
-| `parent_uri` | string | 父目录 URI |
+| `uri` | path | Viking URI |
+| `type` | string | 预留资源子类型 |
 | `context_type` | string | resource/memory/skill |
-| `is_leaf` | bool | 是否叶子节点 |
 | `vector` | vector | 密集向量 |
 | `sparse_vector` | sparse_vector | 稀疏向量 |
-| `abstract` | string | L0 摘要文本 |
+| `created_at` | date_time | 创建时间 |
+| `updated_at` | date_time | 最后更新时间 |
+| `active_count` | int64 | 使用次数 |
+| `level` | int64 | L0/L1/L2 层级 |
 | `name` | string | 名称 |
 | `description` | string | 描述 |
-| `created_at` | string | 创建时间 |
-| `active_count` | int64 | 使用次数 |
+| `tags` | string | 标签 |
+| `search_tags` | list&lt;string&gt; | 检索标签 |
+| `abstract` | string | L0 摘要文本 |
+| `content` | text | 有界全文投影（兼容的 VikingDB 集合） |
+| `account_id` | string | 账户作用域 |
+| `owner_user_id` | string | 所属用户作用域 |
 
 ### 索引策略
 
@@ -148,7 +157,7 @@ viking_fs.mv(
     "viking://resources/docs/auth",
     "viking://resources/docs/authentication"
 )
-# 自动更新向量库中的 uri 和 parent_uri 字段
+# 自动更新向量库中受影响的 uri 值
 ```
 
 ## 相关文档

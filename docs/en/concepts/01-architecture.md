@@ -81,7 +81,7 @@ OpenViking uses a dual-layer storage architecture separating content from index 
 | Layer | Responsibility | Content |
 |-------|----------------|---------|
 | **AGFS** | Content storage | L0/L1/L2 full content, multimedia files |
-| **Vector Index** | Index storage | URIs, vectors, metadata (no file content) |
+| **Vector Index** | Index storage | URIs, vectors, metadata; compatible VikingDB-backed collections can also persist bounded content for grep recall |
 
 ## Data Flow Overview
 
@@ -149,7 +149,7 @@ curl http://localhost:1933/api/v1/search/find \
 | **Pure Storage Layer** | Storage only handles AGFS operations and basic vector search; Rerank is in retrieval layer |
 | **Three-Layer Information** | L0/L1/L2 enables progressive detail loading, saving token consumption |
 | **Two-Stage Retrieval** | Vector search recalls candidates + Rerank improves accuracy |
-| **Single Data Source** | All content read from AGFS; vector index only stores references |
+| **Authoritative Content Source** | AGFS is the authoritative content source; backend-specific indexes may store bounded derived content for retrieval |
 
 ## Related Documents
 

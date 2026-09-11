@@ -23,14 +23,17 @@ OpenViking uses a dual-layer storage architecture that separates content storage
 | Layer | Responsibility | Content |
 |-------|----------------|---------|
 | **AGFS** | Content storage | L0/L1/L2 full content, multimedia files |
-| **Vector Index** | Index storage | URIs, vectors, metadata (no file content) |
+| **Vector Index** | Index storage | URIs, vectors, metadata; compatible VikingDB-backed collections can also persist bounded content for grep recall |
 
 ### Design Benefits
 
-1. **Clear responsibilities**: Vector index handles retrieval, AGFS handles storage
-2. **Memory optimization**: Vector index doesn't store file content, saving memory
-3. **Single data source**: All content read from AGFS; vector index only stores references
+1. **Clear responsibilities**: Vector index handles retrieval; AGFS remains the authoritative content source
+2. **Backend-aware footprint**: Compatible VikingDB-backed collections can persist bounded derived content; other adapters store references and index fields only
+3. **Consistent reads**: Regular file reads resolve from AGFS; vector-index content is a derived retrieval projection
 4. **Independent scaling**: Vector index and AGFS can scale separately
+
+With a compatible collection schema, VikingDB-backed adapters can persist a bounded `content` projection (up to 1 MiB) for VikingDB FullText/BM25 candidate recall used by grep. Precise matching still reads the recalled files from AGFS. Other adapters drop `content` before writing to the vector index.
+
 Note: AGFS has been rewritten as a Rust implementation (RAGFS)
 
 ## VikingFS Virtual Filesystem
@@ -94,24 +97,30 @@ viking://resources/docs/auth/
 
 ## Vector Index
 
-The vector index stores semantic indices, supporting vector search and scalar filtering.
+The vector index stores semantic indices, supporting vector search and scalar filtering. The current unified schema declares the following fields; whether `content` is persisted depends on the backend and collection schema as described above.
 
 ### Context Collection Schema
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | string | Primary key |
-| `uri` | string | Resource URI |
-| `parent_uri` | string | Parent directory URI |
+| `uri` | path | Viking URI |
+| `type` | string | Reserved resource subtype |
 | `context_type` | string | resource/memory/skill |
-| `is_leaf` | bool | Whether leaf node |
 | `vector` | vector | Dense vector |
 | `sparse_vector` | sparse_vector | Sparse vector |
-| `abstract` | string | L0 abstract text |
+| `created_at` | date_time | Creation time |
+| `updated_at` | date_time | Last update time |
+| `active_count` | int64 | Usage count |
+| `level` | int64 | L0/L1/L2 level |
 | `name` | string | Name |
 | `description` | string | Description |
-| `created_at` | string | Creation time |
-| `active_count` | int64 | Usage count |
+| `tags` | string | Tags |
+| `search_tags` | list&lt;string&gt; | Search tags |
+| `abstract` | string | L0 abstract text |
+| `content` | text | Bounded full-text projection (compatible VikingDB collections) |
+| `account_id` | string | Account scope |
+| `owner_user_id` | string | Owner user scope |
 
 ### Index Strategy
 
@@ -149,7 +158,7 @@ viking_fs.mv(
     "viking://resources/docs/auth",
     "viking://resources/docs/authentication"
 )
-# Automatically updates uri and parent_uri fields in vector index
+# Automatically updates affected uri values in vector index
 ```
 
 ## Related Documents
