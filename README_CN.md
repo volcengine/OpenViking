@@ -153,7 +153,7 @@ Rust CLI 通过 `npm i -g @openviking/cli` 安装，也可以从源码构建：`
 <table>
 <tr>
 <td align="center" valign="top" width="25%">
-<a href="https://docs.openviking.ai/zh/agent-integrations/02-claude-code"><img src="docs/images/agents/image/claude-code/logo.png" width="28" height="28" alt=""><br><strong>Claude Code</strong></a><br>
+<a href="https://docs.openviking.ai/zh/agent-integrations/02-claude-code"><img src="docs/images/agents/image/claude-code/logo.png" width="28" height="28" alt=""><br><strong>Claude</strong></a><br>
 <sub>Hooks + MCP</sub>
 </td>
 <td align="center" valign="top" width="25%">
@@ -191,7 +191,7 @@ Rust CLI 通过 `npm i -g @openviking/cli` 安装，也可以从源码构建：`
 
 **MCP · 任意兼容客户端** — 连接 OpenViking 内置的 `/mcp` 端点，即可使用记忆和上下文工具。[MCP 接入指南](https://docs.openviking.ai/zh/agent-integrations/06-mcp-clients)。
 
-构建自己的集成：[Agent Plugins 1.0](https://docs.openviking.ai/zh/agent-integrations/15-agent-plugins) · [LangChain / LangGraph](https://docs.openviking.ai/zh/agent-integrations/07-langchain-langgraph) · [全部集成](https://docs.openviking.ai/zh/agent-integrations/01-overview)。
+详细接入方式请参考 [Integrations](https://openviking.ai/integrations)。
 
 ## OpenViking Helper（Beta）
 

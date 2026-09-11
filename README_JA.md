@@ -153,7 +153,7 @@ OpenViking を接続して、セッションをまたいで記憶を引き継ぎ
 <table>
 <tr>
 <td align="center" valign="top" width="25%">
-<a href="https://docs.openviking.ai/en/agent-integrations/02-claude-code"><img src="docs/images/agents/image/claude-code/logo.png" width="28" height="28" alt=""><br><strong>Claude Code</strong></a><br>
+<a href="https://docs.openviking.ai/en/agent-integrations/02-claude-code"><img src="docs/images/agents/image/claude-code/logo.png" width="28" height="28" alt=""><br><strong>Claude</strong></a><br>
 <sub>Hooks + MCP</sub>
 </td>
 <td align="center" valign="top" width="25%">
@@ -191,7 +191,7 @@ OpenViking を接続して、セッションをまたいで記憶を引き継ぎ
 
 **MCP · 対応するすべてのクライアント** — OpenViking 内蔵の `/mcp` エンドポイントに接続すると、記憶とコンテキストのツールを使えます。[MCP 接続ガイド](https://docs.openviking.ai/en/agent-integrations/06-mcp-clients)。
 
-独自の統合を構築：[Agent Plugins 1.0](https://docs.openviking.ai/en/agent-integrations/15-agent-plugins) · [LangChain / LangGraph](https://docs.openviking.ai/en/agent-integrations/07-langchain-langgraph) · [すべての統合](https://docs.openviking.ai/en/agent-integrations/01-overview)。
+設定方法と統合の詳細は [Integrations](https://openviking.ai/integrations) を参照してください。
 
 ## OpenViking Helper（Beta）
 

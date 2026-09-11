@@ -144,7 +144,7 @@ Connect your agent to OpenViking for cross-session memory. Choose a native integ
 <table>
 <tr>
 <td align="center" valign="top" width="25%">
-<a href="https://docs.openviking.ai/en/agent-integrations/02-claude-code"><img src="docs/images/agents/image/claude-code/logo.png" width="28" height="28" alt=""><br><strong>Claude Code</strong></a><br>
+<a href="https://docs.openviking.ai/en/agent-integrations/02-claude-code"><img src="docs/images/agents/image/claude-code/logo.png" width="28" height="28" alt=""><br><strong>Claude</strong></a><br>
 <sub>Hooks + MCP</sub>
 </td>
 <td align="center" valign="top" width="25%">
@@ -182,7 +182,7 @@ Connect your agent to OpenViking for cross-session memory. Choose a native integ
 
 **MCP · Any compatible client** — Connect to OpenViking’s built-in `/mcp` endpoint for memory and context tools. [MCP setup](https://docs.openviking.ai/en/agent-integrations/06-mcp-clients).
 
-Build your own: [Agent Plugins 1.0](https://docs.openviking.ai/en/agent-integrations/15-agent-plugins) · [LangChain / LangGraph](https://docs.openviking.ai/en/agent-integrations/07-langchain-langgraph) · [All integrations](https://docs.openviking.ai/en/agent-integrations/01-overview).
+For setup instructions and integration details, see [Integrations](https://openviking.ai/integrations).
 
 ## OpenViking Helper (Beta)
 
