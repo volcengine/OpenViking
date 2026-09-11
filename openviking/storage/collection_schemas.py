@@ -18,6 +18,10 @@ from typing import Any, Dict, List, Optional
 
 from openviking.core.context import ContextType, ResourceContentType
 from openviking.models.embedder.base import embed_compat
+from openviking.observability.context import (
+    bind_root_observability_context,
+    reset_root_observability_context,
+)
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.acl import ACL_GRANT_FIELDS, ACL_MODE_FIELD, AclMode
 from openviking.storage.errors import (
@@ -35,6 +39,7 @@ from openviking.storage.viking_vector_index_backend import (
 )
 from openviking.telemetry import bind_telemetry, resolve_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+from openviking.telemetry.span_models import create_root_span_attributes
 from openviking.utils.circuit_breaker import (
     CircuitBreaker,
     CircuitBreakerOpen,
@@ -608,20 +613,33 @@ class TextEmbeddingHandler(DequeueHandlerBase):
         report_success = False
         report_error_args: Optional[tuple[str, Optional[Dict[str, Any]]]] = None
         request_failed_message: Optional[str] = None
+        root_context_token = None
         try:
             embedding_msg = EmbeddingMsg.from_json(data["data"])
             inserted_data = embedding_msg.context_data
             account_id = inserted_data.get("account_id", "default")
             context_user = inserted_data.get("user") or {}
-            user_id = (
-                context_user.get("user_id")
-                or inserted_data.get("owner_user_id")
-                or "default"
-            )
+            user_id = context_user.get("user_id") or inserted_data.get("owner_user_id") or "default"
             user = UserIdentifier(account_id=account_id, user_id=user_id)
             ctx = RequestContext(user=user, role=Role.USER, bypass_acl=True)
             collector = resolve_telemetry(embedding_msg.telemetry_id)
             telemetry_ctx = bind_telemetry(collector) if collector is not None else nullcontext()
+
+            # Bind the message identity into the observability context so that
+            # per-call model events (embedding.call / vlm.call) emitted inside
+            # this worker thread inherit the requesting user instead of being
+            # attributed to an empty user_id. Queue workers run on their own
+            # event loop where no HTTP root context exists; SemanticProcessor
+            # restores identity the same way from SemanticMsg.
+            root_attrs = create_root_span_attributes(
+                http_method="QUEUE",
+                http_route="/queuefs/embedding",
+                request_id=embedding_msg.telemetry_id or embedding_msg.id,
+                url_path=inserted_data.get("uri"),
+            )
+            root_attrs.account_id = account_id
+            root_attrs.user_id = user_id
+            root_context_token = bind_root_observability_context(root_attrs)
 
             with telemetry_ctx:
                 if self._vikingdb.is_closing:
@@ -902,6 +920,8 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             report_error_args = (error_msg, data)
             return None
         finally:
+            if root_context_token is not None:
+                reset_root_observability_context(root_context_token)
             if embedding_msg is not None and request_failed_message is not None:
                 self._record_request_failure(embedding_msg, request_failed_message)
             if report_error_args is not None:
