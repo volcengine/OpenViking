@@ -243,6 +243,13 @@ The two editions below answer "who operates it and where it runs", not "can I us
 > arXiv:2606.16903, 2026. Accepted by ICDE.
 > 📄 [Read the paper on arXiv](https://arxiv.org/abs/2606.16903) · [Read PDF](https://arxiv.org/pdf/2606.16903)
 
+**Retrieve the evidence you need with fewer tokens.** VikingRAG combines semantic search with document structure, exposing relevant directory segments as evidence gaps arise. Its core mechanisms are integrated into OpenViking. The paper further explores reusing retrieval traces and escalating to multi-round retrieval only when needed, reducing repeated exploration while preserving answer quality.
+
+> **VikingRAG: Accurate and Token-efficient Retrieval-augmented Generation over Structured Documents**
+> Peiyuan Gao, Gaoyuan Zhang, Haojie Qin, Yahui Sun, Qianyi Zhang, Yunhao Zhang, Zeyu Wang, and Wei Lu.
+> arXiv:2609.11390, 2026. Submitted.
+> 📄 [Read the paper on arXiv](https://arxiv.org/abs/2609.11390) · [Read PDF](https://arxiv.org/pdf/2609.11390)
+
 ## Partner Projects
 
 OpenViking welcomes collaboration with other open-source projects to build the context data ecosystem. Our confirmed partners include:

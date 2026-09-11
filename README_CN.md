@@ -252,6 +252,13 @@ ov chat   # 在另一个终端运行
 > arXiv:2606.16903, 2026。已被 ICDE 接收。
 > 📄 [在 arXiv 阅读论文](https://arxiv.org/abs/2606.16903) · [阅读 PDF](https://arxiv.org/pdf/2606.16903)
 
+**用更少的 Token 找齐回答所需的证据。** VikingRAG 将语义检索与文档结构结合，按证据缺口展开相关目录片段，核心机制已集成到 OpenViking。论文进一步研究检索轨迹复用与按需升级多轮检索，在保持回答质量的同时减少重复探索。
+
+> **VikingRAG: Accurate and Token-efficient Retrieval-augmented Generation over Structured Documents**
+> Peiyuan Gao, Gaoyuan Zhang, Haojie Qin, Yahui Sun, Qianyi Zhang, Yunhao Zhang, Zeyu Wang, and Wei Lu.
+> arXiv:2609.11390, 2026。投递中。
+> 📄 [在 arXiv 阅读论文](https://arxiv.org/abs/2609.11390) · [阅读 PDF](https://arxiv.org/pdf/2609.11390)
+
 ## 合作伙伴
 
 OpenViking 欢迎与其他开源项目合作建设上下文数据生态。目前已确认的合作项目包括：

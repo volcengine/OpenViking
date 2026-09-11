@@ -252,6 +252,13 @@ ov chat   # 別のターミナルで実行
 > arXiv:2606.16903, 2026. ICDE 採択済み。
 > 📄 [arXiv で論文を読む](https://arxiv.org/abs/2606.16903) · [PDF を読む](https://arxiv.org/pdf/2606.16903)
 
+**少ないトークンで回答に必要な根拠を集める。** VikingRAG は意味検索と文書構造を組み合わせ、根拠の不足に応じて関連するディレクトリ部分を取得します。そのコア機構は OpenViking に統合されています。さらに、検索履歴の再利用と必要な場合のみ複数ラウンドの検索へ移行する手法を研究し、回答品質を保ちながら探索の繰り返しを減らします。
+
+> **VikingRAG: Accurate and Token-efficient Retrieval-augmented Generation over Structured Documents**
+> Peiyuan Gao, Gaoyuan Zhang, Haojie Qin, Yahui Sun, Qianyi Zhang, Yunhao Zhang, Zeyu Wang, and Wei Lu.
+> arXiv:2609.11390, 2026. 投稿中。
+> 📄 [arXiv で論文を読む](https://arxiv.org/abs/2609.11390) · [PDF を読む](https://arxiv.org/pdf/2609.11390)
+
 ## パートナープロジェクト
 
 OpenViking は、コンテキストデータエコシステムを構築するために他のオープンソースプロジェクトとのコラボレーションを歓迎します。確認済みのパートナーは以下の通りです:
