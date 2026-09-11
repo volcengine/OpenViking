@@ -190,7 +190,7 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
 <table>
 <tr>
 <td align="center" valign="bottom" width="33%">
-<a href="https://docs.openviking.ai/zh/agent-integrations/15-agent-plugins"><img src="docs/images/integrations/agent-plugins.svg" width="24" height="23" alt=""><br><strong>Agent Plugins 1.0</strong></a>
+<a href="https://docs.openviking.ai/zh/agent-integrations/15-agent-plugins"><img src="docs/images/integrations/agent-plugins.svg" width="24" height="23" alt=""><br><strong>Agent&nbsp;Plugins&nbsp;1.0</strong></a>
 </td>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/zh/agent-integrations/06-mcp-clients"><img src="docs/images/integrations/mcp.svg" width="24" height="24" alt=""><br><strong>MCP 客&#8288;户&#8288;端</strong></a>
