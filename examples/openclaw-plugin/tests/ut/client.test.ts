@@ -805,3 +805,24 @@ describe("OpenVikingClient canonical namespace policy", () => {
     expect(body).not.toHaveProperty("role_id");
   });
 });
+
+
+describe("OpenVikingClient session reset", () => {
+  it("requests an empty archive boundary on the same session", async () => {
+    const transport = vi.fn().mockResolvedValue(okResponse({
+      session_id: "same-session", status: "skipped", reset_context: true,
+    }));
+    const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5000, "", "", undefined, false, true, { transport });
+    await client.commitSession("same-session", { keepRecentCount: 0, resetContext: true });
+    const [url, init] = transport.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("/sessions/same-session/commit");
+    expect(JSON.parse(String(init.body))).toEqual({ reset_context: true });
+  });
+});
+
+
+it("does not report reset success when an older server ignores reset_context", async () => {
+  const transport = vi.fn().mockResolvedValue(okResponse({ session_id: "s", status: "skipped" }));
+  const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5000, "", "", undefined, false, true, { transport });
+  await expect(client.commitSession("s", { resetContext: true })).rejects.toThrow("did not confirm reset_context");
+});

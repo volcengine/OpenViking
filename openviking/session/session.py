@@ -1860,6 +1860,7 @@ class Session:
         persist_keep_recent_count: bool = True,
         record_auto_commit_success: bool = False,
         event_tags: Optional[List[str]] = None,
+        reset_context: bool = False,
     ) -> Dict[str, Any]:
         """Archive immediately and enqueue restart-safe Phase 2 processing.
 
@@ -1876,6 +1877,8 @@ class Session:
                 behavior of archiving everything. The plugin's afterTurn path
                 typically passes its configured value (default 10); the compact
                 path passes ``0``.
+            reset_context: Archive all live messages, then append an empty completed
+                archive to stop context and future summaries at this boundary.
             persist_keep_recent_count: When ``True`` (default), ``keep_recent_count``
                 is remembered in meta for subsequent add_message() accounting.
                 The idle full-commit path passes ``False`` with
@@ -1895,6 +1898,8 @@ class Session:
         from openviking.storage.queuefs import QueueManager, get_queue_manager
         from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
 
+        if reset_context and (keep_recent_count != 0 or retention_mode is not None):
+            raise ValueError("reset_context requires keep_recent_count=0 and no retention_mode")
         trace_id = tracer.get_trace_id()
         keep_recent_count = max(0, int(keep_recent_count or 0))
         if retention_mode not in (None, RETENTION_MODE_TURN_BUDGET):
@@ -2035,6 +2040,8 @@ class Session:
                     min_raw_tail_steps=effective_min_tail,
                 )
                 await self._save_meta()
+                if reset_context:
+                    await self._append_context_reset_archive()
                 get_current_telemetry().set("memory.extracted", 0)
                 return {
                     "session_id": self.session_id,
@@ -2044,6 +2051,7 @@ class Session:
                     "archived": False,
                     "reason": "no_messages",
                     "trace_id": trace_id,
+                    **({"reset_context": True} if reset_context else {}),
                 }
 
             total = len(self._messages)
@@ -2224,16 +2232,15 @@ class Session:
                 self._messages = original_messages
                 self._compression.compression_index -= 1
                 raise
+            if reset_context:
+                await self._append_context_reset_archive()
         finally:
             await self._viking_fs._async_agfs.pathlock_release(lease)
         # Lock released; Phase 1 intent, queue item, retained root, metadata and
         # ready metadata are all durable.
 
         self._compression.original_count += len(messages_to_archive)
-        logger.info(
-            f"Archived: {len(messages_to_archive)} messages → "
-            f"history/archive_{self._compression.compression_index:03d}/"
-        )
+        logger.info(f"Archived: {len(messages_to_archive)} messages → {archive_uri}/")
 
         return {
             "session_id": self.session_id,
@@ -2242,11 +2249,30 @@ class Session:
             "archive_uri": archive_uri,
             "archived": True,
             "trace_id": trace_id,
+            **({"reset_context": True} if reset_context else {}),
             "estimated_active_tokens": (
                 retention_plan.estimated_active_tokens if retention_plan else 0
             ),
             "budget_exceeded": retention_plan.budget_exceeded if retention_plan else False,
         }
+
+    async def _append_context_reset_archive(self) -> None:
+        """Publish an empty terminal archive while holding the Phase 1 session lock."""
+        # ponytail: reuse archive ordering; no second session identity or context store.
+        self._compression.compression_index += 1
+        archive_uri = (
+            f"{self._session_uri}/history/archive_{self._compression.compression_index:03d}"
+        )
+        await self._viking_fs.write_file(f"{archive_uri}/messages.jsonl", "", ctx=self.ctx)
+        await self._viking_fs.write_file(f"{archive_uri}/.overview.md", "", ctx=self.ctx)
+        # Publish last. Older Phase 2 jobs only update their own archive directories.
+        await self._viking_fs.write_file(
+            f"{archive_uri}/.done",
+            json.dumps({"context_reset": True, "working_memory_enabled": False}),
+            ctx=self.ctx,
+        )
+        self._meta.commit_count = self._compression.compression_index
+        await self._save_meta()
 
     async def finalize_cancelled_commit(self, archive_uri: str) -> None:
         """Make a cancelled queued commit terminal without discarding its raw archive."""
@@ -3252,14 +3278,25 @@ class Session:
                     ),
                 }
             else:
-                # A required overview that is missing or unreadable still keeps
-                # the archive terminal here; the warning is emitted by the full
-                # scan used for Phase 2 bookkeeping.
-                logger.warning(
-                    "Completed archive has no readable overview: %s",
-                    terminal["archive_uri"],
-                )
-                failed_archives = 1
+                try:
+                    done = json.loads(
+                        await self._viking_fs.read_file(
+                            f"{terminal['archive_uri']}/.done", ctx=self.ctx
+                        )
+                    )
+                except (OSError, ValueError):
+                    done = {}
+                if isinstance(done, dict) and done.get("context_reset") is True:
+                    terminal = None
+                else:
+                    # A required overview that is missing or unreadable still keeps
+                    # the archive terminal here; the warning is emitted by the full
+                    # scan used for Phase 2 bookkeeping.
+                    logger.warning(
+                        "Completed archive has no readable overview: %s",
+                        terminal["archive_uri"],
+                    )
+                    failed_archives = 1
         elif terminal is not None:
             failed_archives = 1
 
@@ -3523,6 +3560,7 @@ class Session:
                     "archive_id": state.archive_id,
                     "archive_uri": state.archive_uri,
                     "index": state.index,
+                    "context_reset": state.done.get("context_reset") is True,
                 }
             )
 
@@ -3588,6 +3626,8 @@ class Session:
             exclude_archive_uri,
             before_archive_index,
         ):
+            if archive.get("context_reset"):
+                break
             overview = await self._read_archive_overview(archive["archive_uri"])
             if not overview:
                 continue

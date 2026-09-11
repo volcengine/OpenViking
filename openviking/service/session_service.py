@@ -373,6 +373,7 @@ class SessionService:
         retained_message_token_budget: Optional[int] = None,
         min_raw_tail_steps: Optional[int] = None,
         event_tags: Optional[List[str]] = None,
+        reset_context: bool = False,
     ) -> Dict[str, Any]:
         """Commit a session (archive messages and extract memories).
 
@@ -394,6 +395,7 @@ class SessionService:
             retained_message_token_budget=retained_message_token_budget,
             min_raw_tail_steps=min_raw_tail_steps,
             event_tags=event_tags,
+            reset_context=reset_context,
         )
 
     async def commit_async(
@@ -407,6 +409,7 @@ class SessionService:
         retained_message_token_budget: Optional[int] = None,
         min_raw_tail_steps: Optional[int] = None,
         event_tags: Optional[List[str]] = None,
+        reset_context: bool = False,
     ) -> Dict[str, Any]:
         """Async commit a session.
 
@@ -436,6 +439,8 @@ class SessionService:
         )
         if event_tags is not None:
             commit_kwargs["event_tags"] = event_tags
+        if reset_context:
+            commit_kwargs["reset_context"] = True
         result = await session.commit_async(**commit_kwargs)
         self._record_lifecycle_metric("commit", "ok" if result.get("status") else "error")
         self._record_archive_metric("ok" if result.get("archived") else "skip")
