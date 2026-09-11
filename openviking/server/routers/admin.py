@@ -161,6 +161,12 @@ def _should_expose_user_key(request: Request) -> bool:
     return config.get_effective_auth_mode() != "trusted"
 
 
+def _registry_watcher_running(request: Request) -> bool:
+    plugin = getattr(request.app.state, "auth_plugin", None)
+    watch_task = getattr(plugin, "_watch_task", None)
+    return watch_task is not None and not watch_task.done()
+
+
 def _check_account_access(ctx: RequestContext, account_id: str) -> None:
     """ADMIN can only operate on their own account."""
     if ctx.role == Role.ADMIN and ctx.account_id != account_id:
@@ -173,10 +179,14 @@ async def _check_account_exists(
     manager = getattr(request.app.state, "api_key_manager", None)
     if manager is None:
         return None
-    await manager.refresh_identity_registry_if_changed(refresh_scope)
+    watcher_running = _registry_watcher_running(request)
+    if not watcher_running:
+        await manager.refresh_accounts_from_store()
     accounts = manager.get_accounts()
     if not any(item.get("account_id") == account_id for item in accounts):
         raise NotFoundError(account_id, "account")
+    if refresh_scope is not None and not watcher_running:
+        await manager.refresh_account_users_from_store(refresh_scope)
     return manager
 
 
@@ -337,7 +347,8 @@ async def list_accounts(
 ):
     """List accounts in creation order. `name` supports wildcard (* and ?) matching."""
     manager = _get_api_key_manager(request)
-    await manager.refresh_identity_registry_if_changed()
+    if not _registry_watcher_running(request):
+        await manager.refresh_accounts_from_store()
     accounts = manager.get_accounts(name_filter=name, limit=limit, page=page)
     return Response(status="ok", result=accounts)
 
@@ -518,7 +529,8 @@ async def list_users(
     """List users in an account, in creation order. `name` supports wildcard (* and ?) matching."""
     _check_account_access(ctx, account_id)
     manager = _get_api_key_manager(request)
-    await manager.refresh_identity_registry_if_changed(account_id)
+    if not _registry_watcher_running(request):
+        await manager.refresh_account_users_from_store(account_id)
     expose_key = _should_expose_user_key(request)
     users = manager.get_users(
         account_id,
@@ -681,7 +693,9 @@ async def list_groups(
     ctx: RequestContext = Depends(get_request_context),
 ):
     _check_account_access(ctx, account_id)
-    result = _get_api_key_manager(request).get_groups(account_id)
+    manager = _get_api_key_manager(request)
+    await manager.ensure_account_groups_loaded(account_id)
+    result = manager.get_groups(account_id)
     return Response(status="ok", result=result)
 
 
@@ -707,7 +721,9 @@ async def list_group_members(
     ctx: RequestContext = Depends(get_request_context),
 ):
     _check_account_access(ctx, account_id)
-    members = _get_api_key_manager(request).get_group_members(account_id, group_id)
+    manager = _get_api_key_manager(request)
+    await manager.ensure_account_groups_loaded(account_id)
+    members = manager.get_group_members(account_id, group_id)
     return Response(status="ok", result={"group_id": group_id, "members": members})
 
 

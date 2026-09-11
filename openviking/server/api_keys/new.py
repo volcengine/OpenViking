@@ -131,6 +131,18 @@ class NewAPIKeyManager:
         """Refresh account/user registry state for a management read when needed."""
         return await self._legacy.refresh_identity_registry_if_changed(account_id)
 
+    async def refresh_accounts_from_store(self) -> None:
+        """Refresh account metadata without loading user or group registries."""
+        await self._legacy.refresh_accounts_from_store()
+
+    async def refresh_account_users_from_store(self, account_id: str) -> None:
+        """Refresh one account's users without loading unrelated registries."""
+        await self._legacy.refresh_account_users_from_store(account_id)
+
+    async def ensure_account_groups_loaded(self, account_id: str) -> None:
+        """Load one account's groups after an account-only refresh."""
+        await self._legacy.ensure_account_groups_loaded(account_id)
+
     def resolve(self, api_key: str) -> ResolvedIdentity:
         """Resolve an API key to identity.
 
