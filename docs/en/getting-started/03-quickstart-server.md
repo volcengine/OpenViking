@@ -53,6 +53,8 @@ curl http://localhost:1933/health
 
 Web Studio is also served at `http://localhost:1933/studio` (bundled with pip/pipx installs since v0.3.21 — no Docker required).
 
+For a local server that survives terminal closure and restarts automatically, follow the [systemd (Linux) or launchd (macOS) service instructions](../guides/03-deployment.md#persistent-local-services).
+
 ## Connect with Python SDK
 
 ```python
@@ -343,7 +345,7 @@ nohup openviking-server > /data/log/openviking.log 2>&1 &
 
 ```
 
-*Note: For production environments requiring auto-restart on failure, we recommend using `systemctl` (not covered here).*
+*Note: `nohup` does not provide startup-on-login or reliable crash recovery. For a persistent service, use the [systemd or launchd setup](../guides/03-deployment.md#persistent-local-services).*
 
 #### Verify Service Status
 

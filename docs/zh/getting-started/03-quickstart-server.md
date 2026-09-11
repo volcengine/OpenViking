@@ -53,6 +53,8 @@ curl http://localhost:1933/health
 
 Web Studio 也会在 `http://localhost:1933/studio` 提供（自 v0.3.21 起 pip/pipx 安装即自带，无需 Docker）。
 
+如果希望本地服务在关闭终端后继续运行并自动恢复，请参考[使用 systemd（Linux）或 launchd（macOS）管理服务](../guides/03-deployment.md#本地服务常驻运行)。
+
 ## 使用 Python SDK 连接
 
 ```python
@@ -330,7 +332,7 @@ nohup openviking-server > /data/log/openviking.log 2>&1 &
 # 默认会以执行命令的路径下创建 ./data 存放数据
 # 如果后续希望杀死服务进程记得要清理两个后台服务：pkill openviking; pkill agfs
 ```
-可以看到服务在后台常驻运行。当然如果希望重启自动恢复，建议采用 systemctl 启动，此处不赘述。
+`nohup` 不提供登录时自动启动或可靠的异常恢复。如果需要常驻服务，请使用 [systemd 或 launchd 方案](../guides/03-deployment.md#本地服务常驻运行)。
 服务启动后，可以在 /data 下看到数据文件、日志文件等。
 
 **验证服务状态：**

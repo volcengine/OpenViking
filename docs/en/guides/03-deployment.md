@@ -87,11 +87,13 @@ Server manages local RAGFS and VectorDB. Configure the storage path in `ov.conf`
 openviking-server
 ```
 
-## Deploying with Systemd (Recommended)
+## Persistent Local Services
 
-For Linux systems, you can use Systemd to manage OpenViking as a service, enabling automatic restart and startup on boot. Firstly, you should tried to install and configure openviking on your own.
+### Linux: systemd (Recommended)
 
-### Create Systemd Service File
+On Linux, systemd keeps OpenViking running after logout, restarts it after failures, and starts it at boot. First install and configure OpenViking, then confirm that `openviking-server` starts successfully in the foreground. Run `command -v openviking-server` and use the returned absolute path for `ExecStart` below.
+
+#### Create a systemd service file
 
 Create `/etc/systemd/system/openviking.service` file:
 
@@ -104,7 +106,7 @@ After=network.target
 Type=simple
 # Replace with your working directory
 WorkingDirectory=/var/lib/openviking
-# Choose one of the following start methods
+# Replace with the output of command -v openviking-server
 ExecStart=/usr/bin/openviking-server
 Restart=always
 RestartSec=5
@@ -115,7 +117,7 @@ Environment="OPENVIKING_CONFIG_FILE=/etc/openviking/ov.conf"
 WantedBy=multi-user.target
 ```
 
-### Manage the Service
+#### Manage the service
 
 After creating the service file, use the following commands to manage the OpenViking service:
 
@@ -135,6 +137,67 @@ sudo systemctl status openviking.service
 # View service logs
 sudo journalctl -u openviking.service -f
 ```
+
+### macOS: launchd
+
+A user LaunchAgent keeps OpenViking running after its terminal closes, restarts it after failures, and loads it whenever that user logs in. It does not run before login. First confirm that the server works in the foreground, then run `command -v openviking-server` to find its absolute executable path.
+
+#### Create a LaunchAgent
+
+Create `~/Library/LaunchAgents/ai.openviking.server.plist` with the following content. Replace every `/Users/your-name` path, including the executable path, with absolute paths on your machine; launchd does not expand `~`.
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.openviking.server</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/your-name/.local/bin/openviking-server</string>
+    <string>--config</string>
+    <string>/Users/your-name/.openviking/ov.conf</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/your-name/.openviking</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/your-name/Library/Logs/OpenViking.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/your-name/Library/Logs/OpenViking.error.log</string>
+</dict>
+</plist>
+```
+
+Validate and load it:
+
+```bash
+plutil -lint ~/Library/LaunchAgents/ai.openviking.server.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.openviking.server.plist
+```
+
+#### Manage the LaunchAgent
+
+```bash
+# Check status
+launchctl print gui/$(id -u)/ai.openviking.server
+
+# Restart after changing the config
+launchctl kickstart -k gui/$(id -u)/ai.openviking.server
+
+# Follow logs
+tail -f ~/Library/Logs/OpenViking.log ~/Library/Logs/OpenViking.error.log
+
+# Stop and unload
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/ai.openviking.server.plist
+```
+
+After editing the plist itself, run `bootout` and then `bootstrap` again so launchd reloads the definition.
 
 ## Connecting Clients
 
