@@ -111,7 +111,8 @@ async def test_reset_empty_archive_survives_late_summary_and_next_commit(
     assert (await context())["latest_archive_overview"] == ""
     fs = session._viking_fs
     boundary = f"{session._session_uri}/history/archive_003"
-    assert await fs.read_file(f"{boundary}/.overview.md", ctx=session.ctx) == ""
+    assert not await fs.exists(f"{boundary}/.overview.md", ctx=session.ctx)
+    assert not await fs.exists(f"{boundary}/messages.jsonl", ctx=session.ctx)
     assert json.loads(await fs.read_file(f"{boundary}/.done", ctx=session.ctx))["context_reset"]
     assert "old task two" in await fs.read_file(
         f"{jobs[1].archive_uri}/messages.jsonl", ctx=session.ctx
@@ -146,8 +147,7 @@ async def test_reset_rejects_retention_and_non_boolean_flag(client, options):
     assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
 
 
-@pytest.mark.parametrize("failed_file", [".overview.md", ".done"])
-async def test_reset_write_failure_does_not_block_next_archive(service, monkeypatch, failed_file):
+async def test_reset_write_failure_does_not_block_next_archive(service, monkeypatch):
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
     session = service.sessions.session(ctx, session_id="reset-write-failure")
     await session.ensure_exists()
@@ -157,7 +157,7 @@ async def test_reset_write_failure_does_not_block_next_archive(service, monkeypa
 
     async def fail_once(uri, content, **kwargs):
         nonlocal failed
-        if uri.endswith(f"archive_001/{failed_file}") and not failed:
+        if uri.endswith("archive_001/.done") and not failed:
             failed = True
             raise OSError("transient reset write failure")
         return await write(uri, content, **kwargs)
