@@ -2,12 +2,15 @@
 
 RAGFS cache is an optional read-cache layer for OpenViking. It speeds up full file reads and directory reads. It is only an acceleration layer, not the source of truth; backend filesystem data remains authoritative.
 
-Assumptions:
+CachedFileSystem assumptions:
 
 - Only one OpenViking / RAGFS process writes to the same namespace.
 - File and directory changes go through RAGFS.
 - The backend is not modified externally by bypassing RAGFS.
 - After a cache Provider successfully writes or deletes one key, later reads of that key do not return the old value.
+
+These assumptions apply to the read-cache layer. QueueFS and PathLock also use
+CacheRuntime, but define their own consistency rules.
 
 ## Quick Start
 
@@ -42,6 +45,11 @@ Configure the global top-level `cache` Provider, then select `backend=cache` und
         "namespace": "openviking",
         "max_file_size_bytes": 1048576,
         "bypass_prefixes": ["/queue", "/tmp"]
+      },
+      "pathlock": {
+        "provider": "cache",
+        "namespace": "openviking",
+        "lock_expire_secs": 30.0
       }
     }
   }
@@ -69,6 +77,33 @@ Available Providers:
 | `dynamic` | YuanRong, Mooncake, or closed-source cache systems | Loaded from an external shared library through the versioned C ABI |
 
 `MemoryMockProvider` is only used by unit and smoke tests; it is not a production configuration option.
+
+### Cache-backed PathLock
+
+Set `storage.agfs.pathlock.provider` to `cache` to coordinate path locks
+between OpenViking processes through the shared Redis CacheRuntime.
+`pathlock.namespace` is required and must be the same for every process in
+one OpenViking deployment. Cache-backed PathLock only supports the built-in
+Redis Provider.
+
+Redis HASH keys are partitioned by logical path scope:
+
+```text
+ov:pathlock:{namespace}:global:tokens
+ov:pathlock:{namespace}:scope:_system:tokens
+ov:pathlock:{namespace}:scope:account:{account}:tokens
+```
+
+`{namespace}` is the Redis Cluster hash tag, so all PathLock keys for one
+deployment remain in one slot. Tree conflict checks scan only the HASH for
+the request scope. `/` and `/local` use the global HASH but do not scan
+account or `_system` HASHes. A batch containing paths from different scopes
+is rejected.
+
+Do not run versions that use the legacy single HASH key together with versions
+that use scoped keys. Stop old writers, wait at least
+`2 * lock_expire_secs` for legacy keys to expire, and then start the new
+version.
 
 ## Breaking Configuration Change
 
@@ -120,6 +155,14 @@ The top-level `cache` section is a sibling of `storage`:
 | `traversal_mode` | str | `"backend"` | Use backend traversal or `cached_traversal` for recursive APIs |
 | `bypass_prefixes` | list[str] | `[]` | Path prefixes that always bypass cache |
 
+`storage.agfs.pathlock` controls PathLock storage:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `provider` | str | `"filesystem"` | `filesystem`, `memory`, or `cache` |
+| `namespace` | str or null | `null` | Required OpenViking instance name when `provider=cache` |
+| `lock_expire_secs` | float | `30.0` | Lock stale timeout; must be at least `1.0` |
+
 Redis configuration:
 
 | Option | Default | Description |
@@ -155,23 +198,28 @@ OpenViking uses `cache.params.library` to load the dynamic library. All remainin
 
 ## Architecture
 
-RAGFS splits caching into two layers:
+RAGFS separates Provider access from its consumers:
 
 - `CachedFileSystem`: implements filesystem semantics, including cache hit/miss handling, backend fallback, cache fill, invalidation, generation checks, and metrics.
 - `CacheRuntime`: exposes common primitive operations and binds either the built-in RedisProvider or an external DynamicProvider during startup.
+- `QueueFS` and `RedisPathLockProvider`: reuse the shared CacheRuntime for queue and distributed-lock storage. RedisPathLockProvider requires the built-in RedisProvider.
 
 Call flow:
 
 ```text
 OpenViking
   -> RAGFS / MountableFS
-  -> CachedFileSystem
-       |-> CacheRuntime -> RedisProvider
-       |               `-> DynamicProvider -> external shared library
+       |-> CachedFileSystem ------\
+       |-> QueueFS cache backend --+-> shared CacheRuntime -> RedisProvider
+       `-> RedisPathLockProvider --/                     `-> DynamicProvider
        `-> Backend FileSystem
 ```
 
-With this boundary, file, directory, rename, recursive delete, and write-after-invalidation logic live only in the common layer. An external Provider does not need to understand path semantics; it only supplies primitive key-value operations through the stable C ABI.
+CachedFileSystem and QueueFS can use RedisProvider or DynamicProvider.
+RedisPathLockProvider depends on Redis Lua execution and therefore only uses
+RedisProvider. Filesystem semantics remain in CachedFileSystem; an external
+Provider only supplies primitive key-value operations through the stable C
+ABI.
 
 ## Cache Objects
 
