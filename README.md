@@ -310,7 +310,7 @@ To propose a partnership, [open an issue](https://github.com/volcengine/OpenViki
 - **Contribute**: bug fixes and new features are both welcome — see [CONTRIBUTING.md](CONTRIBUTING.md)
 
 <a href="https://github.com/volcengine/OpenViking/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=volcengine/OpenViking" alt="OpenViking contributors" />
+  <img src="https://contrib.rocks/image?repo=volcengine/OpenViking&amp;columns=15&amp;max=120" alt="OpenViking contributors" />
 </a>
 
 ## Security and privacy

@@ -310,7 +310,7 @@ ov chat   # 在另一个终端运行
 - **贡献**：修 bug、加新功能都欢迎——见 [CONTRIBUTING_CN.md](CONTRIBUTING_CN.md)
 
 <a href="https://github.com/volcengine/OpenViking/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=volcengine/OpenViking" alt="OpenViking contributors" />
+  <img src="https://contrib.rocks/image?repo=volcengine/OpenViking&amp;columns=15&amp;max=120" alt="OpenViking contributors" />
 </a>
 
 ## 安全与隐私

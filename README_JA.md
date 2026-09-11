@@ -310,7 +310,7 @@ ov chat   # 別のターミナルで実行
 - **コントリビュート**: バグ修正も新機能も歓迎します — [CONTRIBUTING_JA.md](CONTRIBUTING_JA.md) を参照してください
 
 <a href="https://github.com/volcengine/OpenViking/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=volcengine/OpenViking" alt="OpenViking contributors" />
+  <img src="https://contrib.rocks/image?repo=volcengine/OpenViking&amp;columns=15&amp;max=120" alt="OpenViking contributors" />
 </a>
 
 ## セキュリティとプライバシー
