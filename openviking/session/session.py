@@ -2300,6 +2300,137 @@ class Session:
             error="session commit cancelled",
         )
 
+    async def retry_failed_commit(self, archive_uri: Optional[str] = None) -> Dict[str, Any]:
+        """Re-enqueue memory extraction for failed Phase 2 archives.
+
+        The Studio "re-queue" action cannot go through :meth:`commit_async`
+        again: an already-archived session has no live messages, so the commit
+        returns ``skipped/no_messages`` and never reaches Phase 2. The queue
+        consumer also treats an existing ``.failed.json`` marker as terminal.
+        This method is the real retry path: it clears the terminal marker and
+        re-enqueues the persisted Phase 1 queue message under a fresh task ID.
+
+        Args:
+            archive_uri: One specific failed archive to retry. ``None`` retries
+                every failed archive of this session.
+
+        Returns:
+            Dict with ``retried`` / ``skipped`` / ``failed`` entries.
+        """
+        from openviking.service.task_tracker import get_task_tracker
+        from openviking.storage.queuefs import QueueManager, get_queue_manager
+
+        retried: List[Dict[str, Any]] = []
+        skipped: List[Dict[str, Any]] = []
+        failures: List[Dict[str, Any]] = []
+
+        if archive_uri:
+            targets = [archive_uri]
+        else:
+            refs = await self._list_archive_refs()
+            targets = [ref["archive_uri"] for ref in refs]
+
+        for target_uri in targets:
+            try:
+                state = await self._archive_terminal_state(target_uri)
+            except Exception as exc:
+                failures.append({"archive_uri": target_uri, "error": str(exc)})
+                continue
+            if state != "failed":
+                skipped.append(
+                    {"archive_uri": target_uri, "reason": f"archive_state_{state}"}
+                )
+                continue
+
+            try:
+                entry = await self._requeue_failed_archive(target_uri)
+            except ValueError as exc:
+                skipped.append({"archive_uri": target_uri, "reason": str(exc)})
+                continue
+            except Exception as exc:
+                failures.append({"archive_uri": target_uri, "error": str(exc)})
+                continue
+            retried.append(entry)
+            logger.info(
+                "Re-enqueued failed session commit: session=%s archive=%s task=%s",
+                self.session_id,
+                target_uri,
+                entry.get("task_id"),
+            )
+
+        if not archive_uri:
+            # Full sweep: failed terminal markers of skipped entries that
+            # cannot be requeued would block later archives, so surface them
+            # to the caller instead of silently keeping the session stuck.
+            logger.info(
+                "Session commit retry sweep: session=%s retried=%d skipped=%d failed=%d",
+                self.session_id,
+                len(retried),
+                len(skipped),
+                len(failures),
+            )
+        return {"retried": retried, "skipped": skipped, "failed": failures}
+
+    async def _requeue_failed_archive(self, archive_uri: str) -> Dict[str, Any]:
+        """Clear one failed marker and re-enqueue its persisted Phase 2 work.
+
+        Must be called while holding the session path lock so the marker
+        removal and queue enqueue are atomic with respect to the queue
+        consumer (which bails out on any existing ``.failed.json``).
+        """
+        from openviking.service.task_tracker import get_task_tracker
+        from openviking.storage.queuefs import QueueManager, get_queue_manager
+        from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
+
+        try:
+            failed = json.loads(
+                await self._viking_fs.read_file(f"{archive_uri}/.failed.json", ctx=self.ctx)
+            )
+        except Exception as exc:
+            if _is_storage_not_found(exc):
+                raise ValueError("missing_failed_marker") from exc
+            raise
+
+        phase1 = await self._read_phase1_meta(archive_uri)
+        queue_message = phase1.get("queue_message")
+        if not isinstance(queue_message, dict) or not queue_message:
+            raise ValueError("missing_phase1_queue_message")
+
+        try:
+            archive_messages = await self._read_archive_messages(archive_uri)
+        except Exception:
+            archive_messages = []
+        if not archive_messages:
+            raise ValueError("archive_has_no_messages")
+
+        msg = SessionCommitMsg.from_dict(queue_message)
+        msg.task_id = str(uuid4())
+        await self._viking_fs.rm(f"{archive_uri}/.failed.json", ctx=self.ctx)
+        try:
+            await get_queue_manager().enqueue(QueueManager.SESSION_COMMIT, msg.to_dict())
+        except Exception:
+            # Restore the terminal marker: without it this archive would read
+            # as pending forever and block all later archives of the session.
+            await self._write_failed_marker(
+                archive_uri,
+                stage=str(failed.get("stage") or "memory_extraction"),
+                error=str(failed.get("error") or "session commit failed"),
+                completed_memory_steps=failed.get("completed_memory_steps"),
+            )
+            raise
+        await get_task_tracker().create(
+            "session_commit",
+            resource_id=self.session_id,
+            account_id=self.ctx.account_id,
+            user_id=self.ctx.user.user_id,
+            task_id=msg.task_id,
+        )
+        return {
+            "archive_uri": archive_uri,
+            "task_id": msg.task_id,
+            "previous_error": str(failed.get("error") or ""),
+        }
+
     async def resume_queued_commit(self, msg: "SessionCommitMsg") -> bool:
         """Run one durable Phase 2 job from its archived messages."""
         from openviking.service.task_tracker import get_task_tracker
