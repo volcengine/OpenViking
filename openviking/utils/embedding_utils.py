@@ -565,6 +565,12 @@ async def vectorize_file(
                     f"Unsupported file type for {file_path}, falling back to summary for vectorization"
                 )
                 context.set_vectorize(Vectorize(text=summary))
+            elif effective_text_source == TEXT_SOURCE_SUMMARY_ONLY:
+                logger.warning(
+                    f"Unsupported file type for {file_path} with text_source=summary_only "
+                    "and no summary available, skipping vectorization"
+                )
+                return False
             elif is_text_file(file_name):
                 content = _coerce_text_file_content(await viking_fs.read_file(file_path, ctx=ctx))
                 embedding_text = truncate_embedding_input(
@@ -581,6 +587,13 @@ async def vectorize_file(
         elif content_type == ResourceContentType.TEXT:
             if embed_summary:
                 context.set_vectorize(Vectorize(text=summary))
+            elif effective_text_source == TEXT_SOURCE_SUMMARY_ONLY:
+                # summary_only must not fall through to raw file content (#4843).
+                logger.warning(
+                    f"No summary available for {file_path} with text_source=summary_only, "
+                    "skipping vectorization"
+                )
+                return False
             else:
                 try:
                     content = _coerce_text_file_content(
