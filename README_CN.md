@@ -152,39 +152,61 @@ Rust CLI 通过 `npm i -g @openviking/cli` 安装，也可以从源码构建：`
 
 <table>
 <tr>
-<td align="center" valign="top" width="25%">
-<a href="https://docs.openviking.ai/zh/agent-integrations/02-claude-code"><img src="docs/images/agents/image/claude-code/logo.png" width="28" height="28" alt=""><br><strong>Claude</strong></a><br>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/02-claude-code"><img src="docs/images/agents/image/claude-code/logo.png" width="32" height="32" alt=""><br><strong>Claude</strong></a><br>
 <sub>Hooks + MCP</sub>
 </td>
-<td align="center" valign="top" width="25%">
-<a href="https://docs.openviking.ai/zh/agent-integrations/04-codex"><img src="docs/images/integrations/codex.png" width="28" height="28" alt=""><br><strong>Codex</strong></a><br>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/04-codex"><img src="docs/images/integrations/codex.png" width="32" height="32" alt=""><br><strong>Codex</strong></a><br>
 <sub>Hooks + MCP</sub>
 </td>
-<td align="center" valign="top" width="25%">
-<a href="https://docs.openviking.ai/zh/agent-integrations/12-cursor"><img src="docs/images/agents/image/cursor/logo.png" width="28" height="28" alt=""><br><strong>Cursor</strong></a><br>
-<sub>Hooks + MCP</sub>
-</td>
-<td align="center" valign="top" width="25%">
-<a href="https://docs.openviking.ai/zh/agent-integrations/13-trae"><img src="docs/images/agents/image/trae/logo.png" width="28" height="28" alt=""><br><strong>TRAE</strong></a><br>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/12-cursor"><img src="docs/images/agents/image/cursor/logo.png" width="32" height="32" alt=""><br><strong>Cursor</strong></a><br>
 <sub>Hooks + MCP</sub>
 </td>
 </tr>
 <tr>
-<td align="center" valign="top" width="25%">
-<a href="https://docs.openviking.ai/zh/agent-integrations/03-openclaw"><img src="docs/images/integrations/openclaw.jpg" width="28" height="28" alt=""><br><strong>OpenClaw</strong></a><br>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/13-trae"><img src="docs/images/agents/image/trae/logo.png" width="32" height="32" alt=""><br><strong>TRAE</strong></a><br>
+<sub>Hooks + MCP</sub>
+</td>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/03-openclaw"><img src="docs/images/integrations/openclaw.jpg" width="24" height="24" alt=""><br><strong>OpenClaw</strong></a><br>
 <sub>上下文引擎</sub>
 </td>
-<td align="center" valign="top" width="25%">
-<a href="https://docs.openviking.ai/zh/agent-integrations/05-hermes"><img src="docs/images/integrations/hermes-agent.png" width="28" height="28" alt=""><br><strong>Hermes</strong></a><br>
-<sub>内置记忆 Provider</sub>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/05-hermes"><img src="docs/images/integrations/hermes-agent.png" width="24" height="24" alt=""><br><strong>Hermes</strong></a><br>
+<sub>内置记忆</sub>
 </td>
-<td align="center" valign="top" width="25%">
-<a href="https://docs.openviking.ai/zh/agent-integrations/10-opencode"><img src="docs/images/agents/image/opencode/logo.png" width="28" height="28" alt=""><br><strong>OpenCode</strong></a><br>
+</tr>
+<tr>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/10-opencode"><img src="docs/images/agents/image/opencode/logo.png" width="32" height="32" alt=""><br><strong>OpenCode</strong></a><br>
 <sub>Plugin + MCP</sub>
 </td>
-<td align="center" valign="top" width="25%">
-<a href="https://docs.openviking.ai/zh/agent-integrations/11-pi"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/pi-dark.svg"><img src="docs/images/integrations/pi.svg" width="28" height="28" alt=""></picture><br><strong>pi</strong></a><br>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/11-pi"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/pi-dark.svg"><img src="docs/images/integrations/pi.svg" width="41" height="41" alt=""></picture><br><strong>pi</strong></a><br>
 <sub>原生扩展</sub>
+</td>
+<td align="center" valign="bottom" width="33%">
+<a href="docs/images/agents/zh/deerflow-memory-manager.md"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/deerflow-dark.svg"><img src="docs/images/integrations/deerflow.svg" width="19" height="24" alt=""></picture><br><strong>DeerFlow</strong></a><br>
+<sub>MemoryManager + MCP</sub>
+</td>
+</tr>
+</table>
+
+**通用接入**
+
+<table>
+<tr>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/15-agent-plugins"><img src="docs/images/integrations/agent-plugins.svg" width="24" height="23" alt=""><br><strong>Agent Plugins 1.0</strong></a>
+</td>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/06-mcp-clients"><img src="docs/images/integrations/mcp.svg" width="24" height="24" alt=""><br><strong>MCP 客户端</strong></a>
+</td>
+<td align="center" valign="bottom" width="33%">
+<a href="https://docs.openviking.ai/zh/agent-integrations/07-langchain-langgraph"><img src="docs/images/integrations/langchain.svg" width="24" height="24" alt=""><br><strong>LangChain</strong></a>
 </td>
 </tr>
 </table>
