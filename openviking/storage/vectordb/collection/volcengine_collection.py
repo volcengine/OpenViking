@@ -274,19 +274,24 @@ class VolcengineCollection(ICollection):
             normalized["op"] = "time_range"
         return normalized
 
-    def _data_post(self, path: str, data: Dict[str, Any]):
+    def _data_post(self, path: str, data: Dict[str, Any], *, raise_for_status: bool = False):
         # Centralized sanitization at the request exit, covering all data API inputs
         safe_data = self._sanitize_payload(data)
         if isinstance(safe_data, dict) and "filter" in safe_data:
             safe_data["filter"] = self._normalize_date_time_filter(safe_data["filter"])
         response = self.data_client.do_req("POST", path, req_body=safe_data)
         if response.status_code != 200:
-            logger.error(f"Request to {path} failed: {response.text}")
+            error = self._build_response_error(response, path)
+            logger.error(str(error))
+            if raise_for_status:
+                raise error
             return {}
         try:
             result = response.json()
             return result.get("result", {})
         except json.JSONDecodeError:
+            if raise_for_status:
+                raise ConnectionError(f"Request to {path} failed: invalid JSON response")
             return {}
 
     def _data_get(self, path: str, params: Dict[str, Any]):
@@ -561,6 +566,7 @@ class VolcengineCollection(ICollection):
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> SearchResult:
         path = "/api/vikingdb/data/search/random"
         data = {
@@ -573,7 +579,9 @@ class VolcengineCollection(ICollection):
             "offset": offset,
             "ignore_unknown_fields": True,
         }
-        resp_data = self._data_post(path, data)
+        if advance is not None:
+            data["advance"] = advance
+        resp_data = self._data_post(path, data, raise_for_status=True)
         return self._parse_search_result(resp_data)
 
     def search_by_keywords(

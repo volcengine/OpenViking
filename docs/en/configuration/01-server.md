@@ -50,6 +50,7 @@ Optional sections use their defaults when omitted. Unknown fields are rejected.
 | `rerank` | object | disabled | Retrieval result reranking |
 | `retrieval` | object | see below | Ranking and intent-analysis behavior |
 | `grep` | object | built-in defaults | Text search engine |
+| `glob` | object | built-in defaults | Path glob engine |
 | `storage` | object | local | Workspace, file system, and vector database |
 | `queue_workers` | object | see below | Runtime concurrency for QueueFS consumer workers |
 | `server` | object | local development | HTTP, authentication, uploads, and observability |

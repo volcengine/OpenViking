@@ -199,7 +199,6 @@ class _AsyncVectorAdapter:
 
         await asyncio.to_thread(_update)
 
-
 class _SingleAccountBackend:
     """绑定单个 account 的后端实现（内部类）"""
 
@@ -716,6 +715,36 @@ class _SingleAccountBackend:
         except Exception as e:
             logger.error("Error querying collection: %s", e, exc_info=True)
             return []
+
+    async def search_by_random(
+        self,
+        filter: Optional[Dict[str, Any] | FilterExpr] = None,
+        limit: int = 10,
+        offset: int = 0,
+        output_fields: Optional[List[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        try:
+            if self._bound_account_id:
+                account_filter = Eq("account_id", self._bound_account_id)
+                if filter:
+                    if isinstance(filter, dict):
+                        filter = RawDSL(filter)
+                    filter = And([account_filter, filter])
+                else:
+                    filter = account_filter
+
+            return await self._async_adapter.call(
+                "search_by_random",
+                filter=filter,
+                limit=limit,
+                offset=offset,
+                output_fields=output_fields,
+                advance=advance,
+            )
+        except Exception as e:
+            logger.error("Error searching collection by random: %s", e, exc_info=True)
+            raise
 
     async def search(
         self,
@@ -1330,6 +1359,26 @@ class VikingVectorIndexBackend:
             output_fields=output_fields,
             order_by=order_by,
             order_desc=order_desc,
+        )
+
+    async def search_by_random(
+        self,
+        filter: Optional[Dict[str, Any] | FilterExpr] = None,
+        limit: int = 10,
+        offset: int = 0,
+        output_fields: Optional[List[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
+        *,
+        ctx: RequestContext,
+    ) -> List[Dict[str, Any]]:
+        backend = self._get_backend_for_context(ctx)
+        filter = self._merge_filters(filter, self._tenant_filter(ctx))
+        return await backend.search_by_random(
+            filter=filter,
+            limit=limit,
+            offset=offset,
+            output_fields=output_fields,
+            advance=advance,
         )
 
     async def search(
@@ -2305,16 +2354,19 @@ class VikingVectorIndexBackend:
 
     @staticmethod
     def _merge_filters(*filters: Optional[FilterExpr]) -> Optional[FilterExpr]:
-        non_empty = [
-            f
-            for f in filters
-            if f
-            and not (
-                isinstance(f, RawDSL)
-                and f.payload.get("op") == "and"
-                and not f.payload.get("conds")
-            )
-        ]
+        non_empty: List[FilterExpr] = []
+        for item in filters:
+            if not item:
+                continue
+            if isinstance(item, dict):
+                item = RawDSL(item)
+            if (
+                isinstance(item, RawDSL)
+                and item.payload.get("op") == "and"
+                and not item.payload.get("conds")
+            ):
+                continue
+            non_empty.append(item)
         if not non_empty:
             return None
         if len(non_empty) == 1:

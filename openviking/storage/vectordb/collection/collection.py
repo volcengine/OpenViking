@@ -116,6 +116,7 @@ class ICollection(ABC):
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> SearchResult:
         raise NotImplementedError
 
@@ -475,6 +476,7 @@ class Collection:
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ):
         """Retrieve random documents from the index.
 
@@ -494,7 +496,14 @@ class Collection:
         """
         if self.__collection is None:
             raise RuntimeError("Collection is closed")
-        return self.__collection.search_by_random(index_name, limit, offset, filters, output_fields)
+        return self.__collection.search_by_random(
+            index_name=index_name,
+            limit=limit,
+            offset=offset,
+            filters=filters,
+            output_fields=output_fields,
+            advance=advance,
+        )
 
     def search_by_scalar(
         self,

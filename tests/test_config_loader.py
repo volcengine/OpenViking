@@ -136,6 +136,13 @@ def test_runtime_concurrency_uses_scope_specific_defaults():
     assert config.reindex.file_vectorization_concurrency == 8
 
 
+def test_glob_uses_safe_defaults():
+    config = OpenVikingConfig.from_dict({})
+
+    assert config.glob.engine == "fs"
+    assert config.glob.switch_to_remote_threshold == 100
+
+
 def test_runtime_concurrency_accepts_separate_values():
     config = OpenVikingConfig.from_dict(
         {

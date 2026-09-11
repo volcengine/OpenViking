@@ -152,6 +152,7 @@ class SearchByRandomRequest(BaseModel):
     project: Optional[str] = Field("default", description="Project name")
     filter: Optional[Any] = Field(None, description="Filter conditions")
     output_fields: Optional[Any] = Field(None, description="Output fields")
+    advance: Optional[Any] = Field(None, description="Advanced search options")
     limit: Optional[int] = Field(10, description="Result limit")
     offset: Optional[int] = Field(0, description="Result offset")
 
