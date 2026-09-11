@@ -77,15 +77,15 @@ def _json_object(environ: Mapping[str, str], name: str) -> Dict[str, Any]:
 
 def _validate_parse_options(parse_options: Mapping[str, Any]) -> None:
     for name in ("output_options", "processing_options"):
-        value = parse_options.get(name)
-        if value is not None and not isinstance(value, dict):
+        if name in parse_options and not isinstance(parse_options[name], dict):
             raise ValueError(f"LLAMAPARSE_PARSE_OPTIONS_JSON.{name} must be an object")
 
     output_options = parse_options.get("output_options")
     if not isinstance(output_options, dict):
         return
-    images_to_save = output_options.get("images_to_save")
-    if images_to_save is not None and not isinstance(images_to_save, list):
+    if "images_to_save" in output_options and not isinstance(
+        output_options["images_to_save"], list
+    ):
         raise ValueError(
             "LLAMAPARSE_PARSE_OPTIONS_JSON.output_options.images_to_save must be an array"
         )

@@ -160,12 +160,23 @@ class ArtifactCache:
 
 
 def _markdown(result: Dict[str, Any]) -> str:
+    markdown = result.get("markdown")
+    pages = markdown.get("pages") if isinstance(markdown, dict) else None
+    if isinstance(pages, list):
+        failed_pages = [
+            str(page.get("page_number", index))
+            for index, page in enumerate(pages, start=1)
+            if isinstance(page, dict) and page.get("success") is False
+        ]
+        if failed_pages:
+            raise LlamaParseError(
+                502, f"completed LlamaParse job has failed pages: {', '.join(failed_pages)}"
+            )
+
     full = result.get("markdown_full")
     if isinstance(full, str) and full.strip():
         return full
 
-    markdown = result.get("markdown")
-    pages = markdown.get("pages") if isinstance(markdown, dict) else None
     if isinstance(pages, list):
         content = [page.get("markdown") for page in pages if isinstance(page, dict)]
         text = "\n\n".join(part for part in content if isinstance(part, str) and part.strip())
@@ -192,6 +203,15 @@ def _safe_image_name(value: Any) -> str:
     return path.name
 
 
+def _create_zip(markdown: str, images: Sequence[Tuple[str, bytes]]) -> bytes:
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("content.md", markdown.encode("utf-8"))
+        for name, content in images:
+            archive.writestr(name, content)
+    return output.getvalue()
+
+
 async def build_artifact(client: LlamaParseClient, job_id: str) -> bytes:
     """Build the ZIP layout consumed by OpenViking's Understanding parser."""
     result = await client.get_job(job_id, include_result=True)
@@ -200,6 +220,7 @@ async def build_artifact(client: LlamaParseClient, job_id: str) -> bytes:
     if status != "COMPLETED":
         raise LlamaParseError(409, f"LlamaParse job is not complete: {status or 'UNKNOWN'}")
 
+    markdown = _markdown(result)
     used_names = {"content.md"}
     image_sources: list[Tuple[str, str]] = []
     for image in _images(result):
@@ -231,9 +252,5 @@ async def build_artifact(client: LlamaParseClient, job_id: str) -> bytes:
         await asyncio.gather(*tasks, return_exceptions=True)
         raise
 
-    output = io.BytesIO()
-    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("content.md", _markdown(result).encode("utf-8"))
-        for name, content in images:
-            archive.writestr(name, content)
-    return output.getvalue()
+    # Deflate can be CPU-intensive for image-heavy results. Keep it off the event loop.
+    return await asyncio.to_thread(_create_zip, markdown, images)

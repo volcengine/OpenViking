@@ -221,7 +221,9 @@ async def test_download_uses_a_client_without_the_llama_api_key(settings: Settin
         raise AssertionError("asset request used the LlamaParse API client")
 
     async def download_handler(request: httpx.Request) -> httpx.Response:
-        assert request.url == "https://assets.test/image.png?signature=secret"
+        assert request.url == "https://8.8.8.8/image.png?signature=secret"
+        assert request.headers["host"] == "assets.test"
+        assert request.extensions["sni_hostname"] == "assets.test"
         assert "authorization" not in request.headers
         return httpx.Response(200, content=b"image")
 
@@ -233,6 +235,84 @@ async def test_download_uses_a_client_without_the_llama_api_key(settings: Settin
         await downloads.aclose()
 
     assert content == b"image"
+
+
+async def test_download_pins_validated_address_when_dns_changes(settings: Settings) -> None:
+    class DnsChangingTransport(httpx.AsyncBaseTransport):
+        def __init__(self) -> None:
+            self.connected_hosts: list[str] = []
+
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            connected_host = "127.0.0.1" if request.url.host == "assets.test" else request.url.host
+            self.connected_hosts.append(connected_host)
+            assert request.headers["host"] == "assets.test"
+            assert request.extensions["sni_hostname"] == "assets.test"
+            return httpx.Response(200, content=b"image", request=request)
+
+    transport = DnsChangingTransport()
+    api = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(500)))
+    downloads = httpx.AsyncClient(transport=transport)
+    client = LlamaParseClient(settings, api_client=api, download_client=downloads)
+    try:
+        content = await client.download_asset("https://assets.test/image.png")
+    finally:
+        await api.aclose()
+        await downloads.aclose()
+
+    assert content == b"image"
+    assert transport.connected_hosts == ["8.8.8.8"]
+
+
+async def test_download_tries_each_validated_address(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def resolve(_: str, __: int) -> set[ipaddress.IPv4Address]:
+        return {ipaddress.ip_address("1.1.1.1"), ipaddress.ip_address("8.8.8.8")}
+
+    requests: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.host)
+        if request.url.host == "1.1.1.1":
+            raise httpx.ConnectError("first address unavailable", request=request)
+        return httpx.Response(200, content=b"image", request=request)
+
+    monkeypatch.setattr(llamaparse, "_resolve_host_addresses", resolve)
+    client, api, downloads = _client(settings, handler)
+    try:
+        content = await client.download_asset("https://assets.test/image.png")
+    finally:
+        await api.aclose()
+        await downloads.aclose()
+
+    assert content == b"image"
+    assert requests == ["1.1.1.1", "8.8.8.8"]
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_status", "message"),
+    [
+        (httpx.ConnectTimeout("timeout"), 504, "timed out"),
+        (httpx.ConnectError("offline"), 502, "request failed"),
+        (httpx.ReadTimeout("timeout"), 504, "timed out"),
+        (httpx.ReadError("offline"), 502, "request failed"),
+    ],
+)
+async def test_download_network_errors_are_translated(
+    settings: Settings, error: Exception, expected_status: int, message: str
+) -> None:
+    async def handler(_: httpx.Request) -> httpx.Response:
+        raise error
+
+    client, api, downloads = _client(settings, handler)
+    try:
+        with pytest.raises(LlamaParseError, match=message) as raised:
+            await client.download_asset("https://assets.test/image.png")
+    finally:
+        await api.aclose()
+        await downloads.aclose()
+
+    assert raised.value.status_code == expected_status
 
 
 async def test_download_rejects_insecure_asset_url(settings: Settings) -> None:
@@ -258,7 +338,7 @@ async def test_download_rejects_redirect_to_private_address(
     settings: Settings,
 ) -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.host == "assets.test":
+        if request.headers["host"] == "assets.test":
             return httpx.Response(302, headers={"Location": "https://127.0.0.1/secret"})
         return httpx.Response(200, content=b"private data")
 

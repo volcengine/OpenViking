@@ -425,6 +425,40 @@ async def test_artifact_preparation_error_is_returned_on_poll(
     assert failed_status.json()["error"]["message"] == "artifact failed"
 
 
+async def test_artifact_preparation_limits_concurrent_builds(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    llama = FakeLlamaParseClient()
+    routes = server.BridgeRoutes(settings, llama, owns_client=False)  # type: ignore[arg-type]
+    release_builds = asyncio.Event()
+    two_builds_started = asyncio.Event()
+    active_builds = 0
+    max_active_builds = 0
+
+    async def build(_: Any, job_id: str) -> bytes:
+        nonlocal active_builds, max_active_builds
+        active_builds += 1
+        max_active_builds = max(max_active_builds, active_builds)
+        if active_builds == 2:
+            two_builds_started.set()
+        await release_builds.wait()
+        active_builds -= 1
+        return job_id.encode()
+
+    monkeypatch.setattr(server, "build_artifact", build)
+    tasks = [
+        asyncio.create_task(routes._prepare_artifact(f"job-{index}"))  # noqa: SLF001
+        for index in range(3)
+    ]
+    try:
+        await asyncio.wait_for(two_builds_started.wait(), timeout=1)
+        await asyncio.sleep(0)
+        assert max_active_builds == 2
+    finally:
+        release_builds.set()
+        await asyncio.gather(*tasks)
+
+
 async def test_valid_artifact_url_returns_not_found_before_cache_is_ready(
     bridge_client: Any, settings: Settings
 ) -> None:

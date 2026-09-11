@@ -164,8 +164,9 @@ Other advanced environment variables are documented in `.env.example`.
 Artifact URLs use an HMAC signature and expire after five minutes by default. OpenViking downloads the
 ZIP as soon as parsing completes. Before it reports `completed`, the bridge downloads result images
 concurrently and writes the ZIP to a bounded local cache. A repeated download reads the same cached
-file. The bridge accepts only HTTPS image URLs that resolve to public addresses, checks each redirect,
-and does not send the LlamaCloud API key to image hosts.
+file. The bridge rejects a result if LlamaParse reports any failed page. It accepts only HTTPS image
+URLs, pins each connection to a validated public address, checks each redirect, and does not send the
+LlamaCloud API key to image hosts.
 
 The cache defaults to the system temporary directory, expires files after five minutes, and uses at
 most 1 GiB. Configure `BRIDGE_ARTIFACT_CACHE_DIR`, `BRIDGE_ARTIFACT_TTL_SECONDS`, and

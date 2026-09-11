@@ -8,6 +8,7 @@ import asyncio
 import io
 import os
 import stat
+import threading
 import time
 import zipfile
 from pathlib import Path
@@ -196,6 +197,68 @@ async def test_build_artifact_joins_page_markdown() -> None:
 
     with zipfile.ZipFile(io.BytesIO(content)) as archive:
         assert archive.read("content.md") == b"page one\n\npage two"
+
+
+@pytest.mark.parametrize(
+    "result_fields",
+    [
+        {"markdown_full": "page one"},
+        {},
+    ],
+    ids=["markdown-full", "page-list"],
+)
+async def test_build_artifact_rejects_failed_pages(
+    result_fields: dict[str, Any],
+) -> None:
+    result = {
+        "job": {"status": "COMPLETED"},
+        "markdown": {
+            "pages": [
+                {"page_number": 1, "markdown": "page one", "success": True},
+                {
+                    "page_number": 2,
+                    "markdown": "",
+                    "success": False,
+                    "error": "page failed",
+                },
+            ]
+        },
+        **result_fields,
+    }
+
+    with pytest.raises(LlamaParseError, match=r"failed pages: 2$"):
+        await build_artifact(ArtifactClient(result), "job-1")  # type: ignore[arg-type]
+
+
+async def test_build_artifact_does_not_block_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_loop_thread = threading.get_ident()
+    write_threads: list[int] = []
+    original_write = zipfile.ZipFile.writestr
+
+    def blocking_write(
+        archive: zipfile.ZipFile,
+        name: Any,
+        data: Any,
+        compress_type: Any = None,
+        compresslevel: Any = None,
+    ) -> None:
+        write_threads.append(threading.get_ident())
+        original_write(archive, name, data, compress_type, compresslevel)
+
+    monkeypatch.setattr(zipfile.ZipFile, "writestr", blocking_write)
+    client = ArtifactClient(
+        {
+            "job": {"status": "COMPLETED"},
+            "markdown_full": "content",
+        }
+    )
+
+    await build_artifact(client, "job-1")  # type: ignore[arg-type]
+
+    assert write_threads
+    assert all(thread_id != event_loop_thread for thread_id in write_threads)
 
 
 @pytest.mark.parametrize(

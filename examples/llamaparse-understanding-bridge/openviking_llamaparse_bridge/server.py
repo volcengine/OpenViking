@@ -17,6 +17,8 @@ from .artifacts import ArtifactCache, ArtifactSigner, build_artifact
 from .config import Settings, load_settings
 from .llamaparse import LlamaParseClient, LlamaParseError
 
+MAX_CONCURRENT_ARTIFACT_BUILDS = 2
+
 
 class BridgeError(RuntimeError):
     """A client-facing bridge error."""
@@ -106,10 +108,13 @@ class BridgeRoutes:
             settings.artifact_cache_max_bytes,
         )
         self._artifact_tasks: Dict[str, asyncio.Task[None]] = {}
+        # Limit concurrent ZIP memory and CPU use across completed jobs.
+        self._artifact_builds = asyncio.Semaphore(MAX_CONCURRENT_ARTIFACT_BUILDS)
 
     async def _prepare_artifact(self, job_id: str) -> None:
-        content = await build_artifact(self.client, job_id)
-        await self.artifacts.store(job_id, content)
+        async with self._artifact_builds:
+            content = await build_artifact(self.client, job_id)
+            await self.artifacts.store(job_id, content)
 
     def _artifact_task_done(self, job_id: str, task: asyncio.Task[None]) -> None:
         if task.cancelled():

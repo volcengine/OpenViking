@@ -8,7 +8,7 @@ import asyncio
 import ipaddress
 import socket
 from copy import deepcopy
-from typing import Any, BinaryIO, Dict, Optional, Set, Union
+from typing import Any, BinaryIO, Dict, Optional, Set, Tuple, Union
 from urllib.parse import quote, urlsplit
 
 import httpx
@@ -40,7 +40,7 @@ async def _resolve_host_addresses(host: str, port: int) -> Set[IPAddress]:
     return addresses
 
 
-async def _validate_asset_url(url: str) -> None:
+async def _validate_asset_url(url: str) -> Tuple[str, Tuple[IPAddress, ...]]:
     try:
         parsed = urlsplit(url)
         port = parsed.port or 443
@@ -54,6 +54,10 @@ async def _validate_asset_url(url: str) -> None:
     addresses = await _resolve_host_addresses(parsed.hostname, port)
     if any(not address.is_global for address in addresses):
         raise LlamaParseError(502, "LlamaParse asset URL must resolve to a public address")
+    ordered_addresses = tuple(
+        sorted(addresses, key=lambda address: (address.version, address.packed))
+    )
+    return parsed.hostname, ordered_addresses
 
 
 class LlamaParseClient:
@@ -80,6 +84,8 @@ class LlamaParseClient:
         self._downloads = download_client or httpx.AsyncClient(
             timeout=timeout,
             follow_redirects=False,
+            # A proxy could resolve the original host again and bypass IP pinning.
+            trust_env=False,
         )
 
     async def aclose(self) -> None:
@@ -206,12 +212,39 @@ class LlamaParseClient:
         )
         return self._json_response(response)
 
+    async def _request_asset(self, url: str) -> Tuple[httpx.Response, httpx.URL]:
+        hostname, addresses = await _validate_asset_url(url)
+        original_url = httpx.URL(url)
+        last_error: Optional[httpx.RequestError] = None
+        for address in addresses:
+            # Connect to the validated IP. Keep the original host for HTTP and TLS checks.
+            request = self._downloads.build_request(
+                "GET",
+                original_url.copy_with(host=str(address)),
+                headers={
+                    "Host": original_url.netloc.decode("ascii"),
+                    "Connection": "close",
+                },
+                extensions={"sni_hostname": hostname},
+            )
+            try:
+                return await self._downloads.send(request), original_url
+            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                last_error = exc
+            except httpx.TimeoutException as exc:
+                raise LlamaParseError(504, "LlamaParse request timed out") from exc
+            except httpx.RequestError as exc:
+                raise LlamaParseError(502, "LlamaParse request failed") from exc
+
+        if isinstance(last_error, httpx.TimeoutException):
+            raise LlamaParseError(504, "LlamaParse request timed out") from last_error
+        raise LlamaParseError(502, "LlamaParse request failed") from last_error
+
     async def download_asset(self, url: str) -> bytes:
         """Download one presigned result asset without forwarding credentials."""
         current_url = url
         for redirect_count in range(MAX_ASSET_REDIRECTS + 1):
-            await _validate_asset_url(current_url)
-            response = await self._request(self._downloads, "GET", current_url)
+            response, original_url = await self._request_asset(current_url)
             if not response.is_redirect:
                 if response.is_error:
                     raise LlamaParseError(response.status_code, self._error_message(response))
@@ -222,6 +255,6 @@ class LlamaParseClient:
                 raise LlamaParseError(502, "LlamaParse asset redirect has no location")
             if redirect_count == MAX_ASSET_REDIRECTS:
                 raise LlamaParseError(502, "LlamaParse asset returned too many redirects")
-            current_url = str(response.url.join(location))
+            current_url = str(original_url.join(location))
 
         raise AssertionError("asset redirect loop exceeded its fixed bound")

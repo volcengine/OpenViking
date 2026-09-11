@@ -128,6 +128,18 @@ def test_settings_rejects_blank_keys(field: str, message: str) -> None:
             },
             "images_to_save must be an array",
         ),
+        (
+            {"LLAMAPARSE_PARSE_OPTIONS_JSON": '{"output_options": null}'},
+            "output_options must be an object",
+        ),
+        (
+            {"LLAMAPARSE_PARSE_OPTIONS_JSON": '{"processing_options": null}'},
+            "processing_options must be an object",
+        ),
+        (
+            {"LLAMAPARSE_PARSE_OPTIONS_JSON": ('{"output_options": {"images_to_save": null}}')},
+            "images_to_save must be an array",
+        ),
     ],
 )
 def test_load_settings_rejects_invalid_values(overrides: dict[str, str], message: str) -> None:
