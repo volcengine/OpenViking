@@ -59,6 +59,10 @@ from vikingbot.utils.session_paths import portable_path_component
 
 from openviking.core.skill_loader import SkillLoader
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.session.memory.utils.resource_refs import (
+    content_references_resource,
+    unlink_resource_references_from_memory,
+)
 from openviking_cli.exceptions import OpenVikingError
 
 
@@ -381,20 +385,28 @@ def test_renderer_creates_okf_pages_links_and_source_fallbacks():
 
 @pytest.mark.parametrize("name", ["a#one.md", "a%23one.md"])
 @pytest.mark.parametrize("inline", [True, False])
-def test_renderer_encodes_literal_source_filenames(name, inline):
+@pytest.mark.parametrize("scope", ["resources", "user/alice/memories"])
+def test_renderer_encodes_literal_source_filenames(name, inline, scope):
     source = f"viking://resources/source#1/{name}"
     bundle = WikiBundleDraft.model_validate(
         {"pages": [_page(1, "Overview", body_markdown=f"Source: {source}" if inline else "Body")]}
     )
     rendered = WikiRenderer().render(
         bundle=bundle,
-        target_uri="viking://resources/wiki",
+        target_uri=f"viking://{scope}/wiki",
         source_roots={"src_1": source},
         catalog_uris=set(),
         existing_raw={},
     )
     encoded = source.replace("%", "%25").replace("#", "%23")
     assert rendered.operations[0]["content"].count(f"]({encoded})") == 1
+    if scope != "resources":
+        mf = MemoryFileUtils.read(rendered.operations[0]["content"])
+        assert mf.extra_fields["resource_refs"][0]["resource_uri"] == source
+        assert content_references_resource(mf.content, source)
+        assert unlink_resource_references_from_memory(mf, source)
+        assert "resource_refs" not in mf.extra_fields
+        assert not content_references_resource(mf.content, source)
 
 
 def test_renderer_preserves_existing_link_without_adding_another_mention_or_backlink():
