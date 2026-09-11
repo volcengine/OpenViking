@@ -4115,7 +4115,14 @@ export type GetTaskByTaskIdData = {
          */
         task_id: string;
     };
-    query?: never;
+    query?: {
+        /**
+         * Include Events
+         *
+         * Include recorded execution events
+         */
+        include_events?: boolean;
+    };
     url: '/api/v1/tasks/{task_id}';
 };
 

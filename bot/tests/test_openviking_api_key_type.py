@@ -430,7 +430,7 @@ def test_ov_server_without_root_server_section_stays_standalone():
     assert bot_data["api_key_type"] == "user"
 
 
-def test_server_managed_load_config_ignores_bot_ov_server(monkeypatch, tmp_path):
+def test_server_managed_load_config_preserves_bot_ov_server_credentials(monkeypatch, tmp_path):
     config_path = tmp_path / "ov.conf"
     config_path.write_text(
         json.dumps(
@@ -444,6 +444,7 @@ def test_server_managed_load_config_ignores_bot_ov_server(monkeypatch, tmp_path)
                 "bot": {
                     "ov_server": {
                         "server_url": "https://remote.example",
+                        "api_key_type": "user",
                         "api_key": "bot-key",
                     }
                 },
@@ -455,9 +456,10 @@ def test_server_managed_load_config_ignores_bot_ov_server(monkeypatch, tmp_path)
     config = config_loader_module.load_config()
 
     assert config.ov_server.server_url == "http://127.0.0.1:1935"
-    assert config.ov_server.api_key == ""
+    assert config.ov_server.api_key == "bot-key"
     assert config.ov_server.get_config_source() == "inherited"
-    assert config.ov_server.get_api_key_source() == "none"
+    assert config.ov_server.get_api_key_source() == "bot.ov_server.api_key"
+    assert config.ov_server.api_key_type == "user"
     assert config.ov_server.is_server_managed() is True
 
 
@@ -485,6 +487,9 @@ def test_server_managed_load_config_uses_runtime_server_url(monkeypatch, tmp_pat
     config = config_loader_module.load_config()
 
     assert config.ov_server.server_url == "http://127.0.0.1:1940"
+    assert config.ov_server.api_key == ""
+    assert config.ov_server.get_config_source() == "inherited"
+    assert config.ov_server.get_api_key_source() == "none"
     assert config.ov_server.is_server_managed() is True
 
 

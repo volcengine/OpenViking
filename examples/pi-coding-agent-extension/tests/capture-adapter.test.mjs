@@ -16,29 +16,54 @@ test("extractBranchCapturePayloads converts user text to message payload", () =>
   assert.equal(result.payloads[0].peer_id, "peer-a");
 });
 
-test("extractBranchCapturePayloads emits structured tool parts", () => {
-  const branch = [
-    {
-      type: "message",
-      message: {
-        role: "assistant",
-        content: [
-          { type: "text", text: "I will inspect it." },
-          { type: "tool_call", id: "call-1", name: "read", input: { path: "a.txt" } },
-        ],
-      },
-    },
-  ];
+for (const role of ["toolResult", "tool_result", "tool"]) {
+  for (const isError of [false, true]) {
+    test(`extractBranchCapturePayloads preserves ${role} ${isError ? "error" : "completed"} results`, () => {
+      const output = [{ type: "text", text: "OVTOOLMARKER98765\n" }];
+      const branch = [
+        { type: "message", message: { role: "user", content: "Run the command and report its output." } },
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [{
+              type: "toolCall",
+              id: "call-1",
+              name: "bash",
+              arguments: { command: "echo OVTOOLMARKER98765" },
+            }],
+          },
+        },
+        {
+          type: "message",
+          message: { role, toolCallId: "call-1", toolName: "bash", content: output, isError },
+        },
+      ];
+      const cfg = { captureAssistantTurns: true, captureToolMaxChars: 2000 };
+      const result = extractBranchCapturePayloads(branch, 0, cfg);
+      assert.deepEqual(result.payloads.map((payload) => payload.role), ["user", "assistant", "user"]);
+      assert.deepEqual(result.payloads[1].parts, [{
+        type: "tool",
+        tool_id: "call-1",
+        tool_name: "bash",
+        tool_status: "running",
+        tool_input: { command: "echo OVTOOLMARKER98765" },
+      }]);
+      assert.deepEqual(result.payloads[2].parts, [{
+        type: "tool",
+        tool_id: "call-1",
+        tool_name: "bash",
+        tool_status: isError ? "error" : "completed",
+        tool_output: JSON.stringify(output),
+      }]);
 
-  const result = extractBranchCapturePayloads(branch, 0, {
-    captureAssistantTurns: true,
-    captureToolMaxChars: 2000,
-  });
-  assert.equal(result.payloads.length, 1);
-  assert.equal(result.payloads[0].role, "assistant");
-  assert.ok(Array.isArray(result.payloads[0].parts));
-  assert.equal(result.payloads[0].parts.some((part) => part.type === "tool" && part.tool_name === "read"), true);
-});
+      const incremental = extractBranchCapturePayloads(branch, 2, cfg);
+      assert.deepEqual(incremental.payloads, [result.payloads[2]]);
+      assert.equal(incremental.nextEntryCount, 3);
+      assert.deepEqual(extractBranchCapturePayloads(branch, incremental.nextEntryCount, cfg).payloads, []);
+    });
+  }
+}
 
 test("extractBranchCapturePayloads resets watermark when branch shrinks", () => {
   const result = extractBranchCapturePayloads([

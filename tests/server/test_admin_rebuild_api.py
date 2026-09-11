@@ -922,10 +922,11 @@ async def test_prune_orphans_dry_run_preserves_resource_l1_fallback_and_skips_un
 
 
 @pytest.mark.asyncio
-async def test_prune_orphans_deletes_stale_memory_chunk_with_uri_owner_ctx(monkeypatch):
+@pytest.mark.parametrize("filename", ["theme.md", "report#chunk_notes.md", "report#chunk_0000"])
+async def test_prune_orphans_deletes_stale_memory_chunk_with_uri_owner_ctx(monkeypatch, filename):
     from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
 
-    base_uri = "viking://user/bob/memories/preferences/theme.md"
+    base_uri = f"viking://user/bob/memories/preferences/{filename}"
     deleted = {}
 
     class FakeVikingFS:

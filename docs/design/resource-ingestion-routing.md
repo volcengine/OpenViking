@@ -177,9 +177,11 @@ Accessor 路径中的文档图片和 Base 附件字段图片使用同一条素�
 `UnifiedResourceProcessor.prepare` 随后冻结两个字段：
 
 - `resolved_extension`：本次 Parser 路由唯一使用的扩展名。
-- `resolved_name`：用于展示和默认资源命名，不参与 HTTP 资源的类型覆盖。
+- `resolved_name`：用于展示、默认资源命名和 Understanding 上传文件名，不参与 HTTP 资源的类型覆盖。
 
 HTTP 资源以 HTTPAccessor 检出的 `meta.extension` 为准；本地文件或上传的临时文件可优先使用显式 `source_name` 的扩展名。这样既不会拿随机临时文件名选 Parser，也不会让用户提供的 URL 名称覆盖实际下载内容类型。
+
+本地文件进入 Understanding 时，ParserRouter 将冻结的 `resolved_name` 作为 `source_name` 传给上传层；普通上传和分片上传都使用这个名称的 basename，本地路径只用于读取文件。同步解析、提前提交解析和仅上传获取 `file_id` 使用相同规则。`resource_name` 只控制外层资源目录，例如 `README.md` 下载为 `/tmp/tmpABC.md` 后，上传文件名仍为 `README.md`。
 
 ## 无后缀 URL 怎么判断类型
 

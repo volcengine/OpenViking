@@ -245,10 +245,34 @@ function validTokenBudget(raw: unknown): number | undefined {
   return undefined;
 }
 
+// OpenClaw 9.1/9.2 still capture via afterTurn even when commitTurn exists.
+// 9.3 (#140024) defers admitted turns to commitTurn; standalone runners keep
+// afterTurn. The registration API's runtime.version is the HOST version.
+function usesDeferredTurnCapture(version: string | undefined): boolean | undefined {
+  const match = version?.trim().match(
+    /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/,
+  );
+  if (!match) return undefined;
+  const parts = match.slice(1, 4).map(Number);
+  if (!parts.every(Number.isSafeInteger)) return undefined;
+  const [year, month, day] = parts;
+  // OpenClaw uses 0.0.0 when version metadata cannot be resolved. More generally,
+  // versions outside our supported range cannot prove who owns capture.
+  if (year < 2026 || (year === 2026 && (month < 5 || (month === 5 && day < 27)))) {
+    return undefined;
+  }
+  const boundary = year === 2026 && month === 9 && day === 3;
+  // The 9.3 prerelease train can straddle the host change. Numeric packaging
+  // revisions (-1, -2, ...) refer to the stable release; do not guess for betas.
+  if (boundary && match[4] && !/^\d+$/.test(match[4])) return undefined;
+  return year > 2026 || (year === 2026 && (month > 9 || (month === 9 && day >= 3)));
+}
+
 export function createMemoryOpenVikingContextEngine(params: {
   id: string;
   name: string;
   version?: string;
+  hostVersion?: string;
   cfg: ParsedMemoryOpenVikingConfig;
   logger: Logger;
   getClient: () => Promise<OpenVikingClient>;
@@ -333,6 +357,8 @@ export function createMemoryOpenVikingContextEngine(params: {
   }
 
   const committedTurnKeys = new Set<string>();
+  const inFlightTurns = new Map<string, Promise<void>>();
+  const deferredTurnCapture = usesDeferredTurnCapture(params.hostVersion);
 
   return {
     info: {
@@ -368,6 +394,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         sessionId: assembleParams.sessionId,
         sessionKey: resolveSessionKey(assembleParams),
         messages: assembleParams.messages,
+        prompt: assembleParams.prompt,
         tokenBudget,
         runtimeContext: assembleParams.runtimeContext,
         isMainAssemble,
@@ -388,20 +415,56 @@ export function createMemoryOpenVikingContextEngine(params: {
       });
     },
 
-    // Capture still happens in afterTurn (host calls it per LLM call + on finalize);
-    // commitTurn only acknowledges the accepted turn so OpenClaw drains its outbox.
-    // ponytail: in-memory key set, not durable across restarts — the host outbox is.
-    async commitTurn({ advancementKey, sessionId }): Promise<{ status: "committed" | "duplicate" }> {
+    async commitTurn(commitParams): Promise<{ status: "committed" | "duplicate" }> {
+      const { advancementKey, sessionId } = commitParams;
+      if (deferredTurnCapture === undefined) {
+        // ACKing with an unknown capture owner can discard the only copy in the
+        // host outbox. Reject instead; legacy afterTurn remains available.
+        throw new Error(`openviking: cannot select turn capture for OpenClaw version ${params.hostVersion ?? "(missing)"}`);
+      }
       if (committedTurnKeys.has(advancementKey)) {
         diag("commitTurn_duplicate", sessionId, { advancementKey });
         return { status: "duplicate" };
       }
-      committedTurnKeys.add(advancementKey);
-      if (committedTurnKeys.size > 1024) {
-        committedTurnKeys.delete(committedTurnKeys.values().next().value as string);
+      const pending = inFlightTurns.get(advancementKey);
+      if (pending) {
+        await pending;
+        return { status: "duplicate" };
       }
-      diag("commitTurn", sessionId, { advancementKey });
-      return { status: "committed" };
+      // Publish the promise before capture begins so concurrent deliveries share
+      // both success and failure. Completion keys are intentionally process-local.
+      const capture = Promise.resolve().then(async () => {
+        if (deferredTurnCapture) {
+          await afterTurnOpenVikingSession({
+            sessionId,
+            sessionKey: resolveSessionKey(commitParams),
+            messages: commitParams.messages,
+            prePromptMessageCount: 0, // Host already supplies the closed-turn range.
+            isHeartbeat: commitParams.isHeartbeat,
+            tokenBudget: 128_000, // Durable delivery does not carry a token budget.
+            throwOnError: true,
+            cfg,
+            getClient,
+            logger,
+            resolveAgentId,
+            rememberSessionAgentId,
+            isBypassedSession,
+            diag,
+          });
+        }
+        committedTurnKeys.add(advancementKey);
+        if (committedTurnKeys.size > 1024) {
+          committedTurnKeys.delete(committedTurnKeys.values().next().value as string);
+        }
+        diag("commitTurn", sessionId, { advancementKey, deferredTurnCapture });
+      });
+      inFlightTurns.set(advancementKey, capture);
+      try {
+        await capture;
+        return { status: "committed" };
+      } finally {
+        inFlightTurns.delete(advancementKey);
+      }
     },
 
     async afterTurn(afterTurnParams): Promise<void> {

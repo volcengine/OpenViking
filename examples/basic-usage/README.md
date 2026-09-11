@@ -104,7 +104,6 @@ Add a URL, local file, or directory:
 ```python
 result = client.add_resource(
     path="https://example.com/docs",
-    options={"wait": False},
 )
 
 result = client.add_resource(path="/path/to/manual.pdf")
@@ -115,8 +114,7 @@ result = client.add_resource(
 )
 ```
 
-For scripts and demos, `wait=True` is fine. In long-running applications, it is often better to ingest
-asynchronously and call `wait_processed()` when you actually need the indexed result.
+Imports return a `task_id` by default. Query `client.get_task(result["task_id"])` and read summaries or search the imported content only after the task reaches `completed`. See [Background Tasks](../../docs/en/api/17-tasks.md) for polling examples.
 
 ### Filesystem Access
 
@@ -250,7 +248,7 @@ You can also use Volcengine or Azure OpenAI. For current provider-specific examp
 | `ImportError` or local extension issues | Reinstall `openviking`; if developing from source, ensure local build dependencies are available. |
 | `Connection refused` in HTTP mode | Start `openviking-server` and verify `http://localhost:1933/health`. |
 | Tenant/auth errors | Prefer `user_key` for normal data APIs; use `root_key` only with explicit tenant headers. |
-| Slow or empty search results right after ingestion | Wait for `wait_processed()` or ingest with `wait=True`. |
+| Slow or empty search results right after ingestion | Query the import task by `task_id` and search after its status reaches `completed`. |
 | Multiple clients or sessions competing for local storage | Use HTTP server mode instead of spinning up separate local processes. |
 
 ## License
