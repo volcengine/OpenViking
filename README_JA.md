@@ -154,21 +154,21 @@ OpenViking を接続して、セッションをまたいで記憶を引き継ぎ
 <tr>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/en/agent-integrations/02-claude-code"><img src="docs/images/agents/image/claude-code/logo.png" width="32" height="32" alt=""><br><strong>Claude</strong></a><br>
-<sub>Hooks + MCP</sub>
+<sub>Hooks&nbsp;+&nbsp;MCP</sub>
 </td>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/en/agent-integrations/04-codex"><img src="docs/images/integrations/codex.png" width="32" height="32" alt=""><br><strong>Codex</strong></a><br>
-<sub>Hooks + MCP</sub>
+<sub>Hooks&nbsp;+&nbsp;MCP</sub>
 </td>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/en/agent-integrations/12-cursor"><img src="docs/images/agents/image/cursor/logo.png" width="32" height="32" alt=""><br><strong>Cursor</strong></a><br>
-<sub>Hooks + MCP</sub>
+<sub>Hooks&nbsp;+&nbsp;MCP</sub>
 </td>
 </tr>
 <tr>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/en/agent-integrations/13-trae"><img src="docs/images/agents/image/trae/logo.png" width="32" height="32" alt=""><br><strong>TRAE</strong></a><br>
-<sub>Hooks + MCP</sub>
+<sub>Hooks&nbsp;+&nbsp;MCP</sub>
 </td>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/en/agent-integrations/03-openclaw"><img src="docs/images/integrations/openclaw.jpg" width="24" height="24" alt=""><br><strong>OpenClaw</strong></a><br>
@@ -182,7 +182,7 @@ OpenViking を接続して、セッションをまたいで記憶を引き継ぎ
 <tr>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/en/agent-integrations/10-opencode"><img src="docs/images/agents/image/opencode/logo.png" width="32" height="32" alt=""><br><strong>OpenCode</strong></a><br>
-<sub>Plugin + MCP</sub>
+<sub>Plugin&nbsp;+&nbsp;MCP</sub>
 </td>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/en/agent-integrations/11-pi"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/pi-dark.svg"><img src="docs/images/integrations/pi.svg" width="41" height="41" alt=""></picture><br><strong>pi</strong></a><br>
@@ -190,7 +190,7 @@ OpenViking を接続して、セッションをまたいで記憶を引き継ぎ
 </td>
 <td align="center" valign="bottom" width="33%">
 <a href="docs/images/agents/en/deerflow-memory-manager.md"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/deerflow-dark.svg"><img src="docs/images/integrations/deerflow.svg" width="19" height="24" alt=""></picture><br><strong>DeerFlow</strong></a><br>
-<sub>MemoryManager + MCP</sub>
+<sub>Memory&nbsp;+&nbsp;MCP</sub>
 </td>
 </tr>
 </table>
@@ -200,10 +200,10 @@ OpenViking を接続して、セッションをまたいで記憶を引き継ぎ
 <table>
 <tr>
 <td align="center" valign="bottom" width="33%">
-<a href="https://docs.openviking.ai/en/agent-integrations/15-agent-plugins"><img src="docs/images/integrations/agent-plugins.svg" width="24" height="23" alt=""><br><strong>Agent Plugins 1.0</strong></a>
+<a href="https://docs.openviking.ai/en/agent-integrations/15-agent-plugins"><img src="docs/images/integrations/agent-plugins.svg" width="24" height="23" alt=""><br><strong>Agent&nbsp;Plugins&nbsp;1.0</strong></a>
 </td>
 <td align="center" valign="bottom" width="33%">
-<a href="https://docs.openviking.ai/en/agent-integrations/06-mcp-clients"><img src="docs/images/integrations/mcp.svg" width="24" height="24" alt=""><br><strong>MCP クライアント</strong></a>
+<a href="https://docs.openviking.ai/en/agent-integrations/06-mcp-clients"><img src="docs/images/integrations/mcp.svg" width="24" height="24" alt=""><br><strong>MCP&nbsp;クライアント</strong></a>
 </td>
 <td align="center" valign="bottom" width="33%">
 <a href="https://docs.openviking.ai/en/agent-integrations/07-langchain-langgraph"><img src="docs/images/integrations/langchain.svg" width="24" height="24" alt=""><br><strong>LangChain</strong></a>
