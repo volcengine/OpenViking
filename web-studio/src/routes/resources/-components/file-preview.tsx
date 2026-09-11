@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react'
+import {
+  isValidElement,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  lazy,
+  Suspense,
+} from 'react'
 import type { ComponentProps, ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import hljs from 'highlight.js/lib/core'
@@ -37,6 +45,9 @@ import { OkfMetadataPanel } from './okf-metadata-panel'
 
 const LazyCodeEditor = lazy(() =>
   import('./code-editor').then((m) => ({ default: m.CodeEditor })),
+)
+const LazyMermaidDiagram = lazy(() =>
+  import('./mermaid-diagram').then((m) => ({ default: m.MermaidDiagram })),
 )
 
 const languageLoaders: Partial<
@@ -724,6 +735,26 @@ function MarkdownCode({
 }
 
 function MarkdownPre({ children }: ComponentProps<'pre'>) {
+  const child =
+    Array.isArray(children) && children.length === 1 ? children[0] : children
+  if (
+    isValidElement<{ className?: string; children?: ReactNode }>(child) &&
+    normalizeMarkdownLanguage(child.props.className) === 'mermaid'
+  ) {
+    const chart = textFromReactNode(child.props.children).replace(/\n$/, '')
+    return (
+      <Suspense
+        fallback={
+          <pre className="overflow-x-auto rounded-md border bg-muted/30 p-3 text-xs leading-6 text-foreground dark:bg-muted-foreground/20">
+            <code className="hljs block whitespace-pre font-mono">{chart}</code>
+          </pre>
+        }
+      >
+        <LazyMermaidDiagram chart={chart} />
+      </Suspense>
+    )
+  }
+
   return (
     <pre className="overflow-x-auto rounded-md border bg-muted/30 p-3 text-xs leading-6 text-foreground dark:bg-muted-foreground/20">
       {children}

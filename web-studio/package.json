@@ -41,6 +41,7 @@
     "@microsoft/fetch-event-source": "^2.0.1",
     "@streamdown/cjk": "^1.0.3",
     "@streamdown/code": "^1.1.1",
+    "@streamdown/mermaid": "^1.0.2",
     "@tailwindcss/vite": "^4.1.18",
     "@tanstack/react-devtools": "latest",
     "@tanstack/react-form": "^1.28.6",
