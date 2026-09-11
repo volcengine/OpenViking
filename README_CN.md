@@ -238,14 +238,14 @@ ov chat   # 在另一个终端运行
 
 ## 研究
 
-OpenViking 开源了 VikingMem 论文中描述的部分核心能力：
+**让 Agent 的记忆随交互演化。** VikingMem 以事件驱动长期记忆的提取、更新与整合，让有状态 Agent 在持续交互中积累可复用的经验。OpenViking 开源了其中的部分核心能力。
 
 > **VikingMem: A Memory Base Management System for Stateful LLM-based Applications**
 > Jiajie Fu, Junwen Chen, Mengzhao Wang, Aoxiang He, Maojia Sheng, Xiangyu Ke, Yifan Zhu, and Yunjun Gao.
 > arXiv:2605.29640, 2026。已于 2026 年 9 月在 VLDB 2026 完成演讲。
 > 📄 [在 arXiv 阅读论文](https://arxiv.org/abs/2605.29640) · [阅读 PDF](https://arxiv.org/pdf/2605.29640)
 
-OpenViking 集成了以下论文中的 TrieHI，支持文件系统式上下文组织和目录递归检索：
+**让目录结构成为检索上下文。** 这篇论文为 OpenViking 的目录语义检索提供形式化基础、索引设计与实验验证。论文定义了目录范围查询与结构维护操作，并提出 TrieHI，OpenViking 已将其集成，用于在向量排序前确定目录检索范围。文件系统范式由此贯穿组织与检索：Agent 可以在项目或记忆子树内查找证据、保留周边上下文，并随知识演化调整目录结构。
 
 > **Directory-Aware Query and Maintenance in Vector Databases**
 > Mengzhao Wang, Zheng Gong, Jingpei Hu, Jiajie Fu, Maojia Sheng, Junwen Chen, and Yifan Zhu.

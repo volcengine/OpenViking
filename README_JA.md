@@ -238,14 +238,14 @@ ov chat   # 別のターミナルで実行
 
 ## 研究
 
-OpenViking は、VikingMem 論文に記載されたコア機能の一部をオープンソースとして公開しています:
+**対話とともに進化するエージェントの記憶。** VikingMem は、イベントを起点に長期記憶を抽出・更新・統合し、状態を持つエージェントが対話を通じて再利用できる経験を蓄積する仕組みを示しています。OpenViking は、そのコア機能の一部をオープンソースとして公開しています。
 
 > **VikingMem: A Memory Base Management System for Stateful LLM-based Applications**
 > Jiajie Fu, Junwen Chen, Mengzhao Wang, Aoxiang He, Maojia Sheng, Xiangyu Ke, Yifan Zhu, and Yunjun Gao.
 > arXiv:2605.29640, 2026. 2026 年 9 月に VLDB 2026 で発表済み。
 > 📄 [arXiv で論文を読む](https://arxiv.org/abs/2605.29640) · [PDF を読む](https://arxiv.org/pdf/2605.29640)
 
-OpenViking は以下の論文の TrieHI を統合し、ファイルシステム形式のコンテキスト整理とディレクトリ再帰検索を実現しています:
+**ディレクトリ構造を検索のコンテキストに。** 本論文は、OpenViking のディレクトリを考慮した検索に形式的基盤、インデックス設計、実験による検証を提供します。ディレクトリ範囲のクエリと構造の保守操作を定義し、TrieHI を提案しています。OpenViking はこれを統合し、ベクトルによる順位付けの前に検索範囲を確定します。エージェントはプロジェクトや記憶のサブツリー内で根拠を探し、周辺のコンテキストを保ちながら、知識の変化に応じてディレクトリを再編できます。
 
 > **Directory-Aware Query and Maintenance in Vector Databases**
 > Mengzhao Wang, Zheng Gong, Jingpei Hu, Jiajie Fu, Maojia Sheng, Junwen Chen, and Yifan Zhu.

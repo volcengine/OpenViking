@@ -229,14 +229,14 @@ The two editions below answer "who operates it and where it runs", not "can I us
 
 ## Research
 
-OpenViking open-sources a subset of the core capabilities described in the VikingMem paper:
+**Memory that evolves with your agent.** VikingMem develops an event-driven approach to extracting, updating, and consolidating long-term memory, giving stateful agents a way to retain useful experience as interactions accumulate. OpenViking open-sources a subset of these core capabilities.
 
 > **VikingMem: A Memory Base Management System for Stateful LLM-based Applications**
 > Jiajie Fu, Junwen Chen, Mengzhao Wang, Aoxiang He, Maojia Sheng, Xiangyu Ke, Yifan Zhu, and Yunjun Gao.
 > arXiv:2605.29640, 2026. Presented at VLDB 2026 in September.
 > 📄 [Read the paper on arXiv](https://arxiv.org/abs/2605.29640) · [Read PDF](https://arxiv.org/pdf/2605.29640)
 
-OpenViking integrates TrieHI from the following paper to support filesystem-style context organization and directory-recursive retrieval:
+**Directory structure as retrieval context.** This paper provides the formal foundations, index design, and experimental evidence behind OpenViking’s directory-aware retrieval. It defines directory-scoped query and maintenance operations and introduces TrieHI, which OpenViking integrates to resolve directory scopes before vector ranking. This connects the filesystem paradigm to retrieval: agents can search a project or memory subtree, retain its surrounding context, and reorganize it as knowledge evolves.
 
 > **Directory-Aware Query and Maintenance in Vector Databases**
 > Mengzhao Wang, Zheng Gong, Jingpei Hu, Jiajie Fu, Maojia Sheng, Junwen Chen, and Yifan Zhu.
