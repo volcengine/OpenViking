@@ -75,6 +75,6 @@ print(client.observer.vikingdb())
 
 ## See Also
 
-- [QueueFS Documentation](../queuefs/README.md)
-- [Storage Documentation](../../docs/OpenViking存储.md)
-- [API Documentation](../../docs/OpenViking接口文档.md)
+- [QueueFS module](../queuefs/)
+- [Storage concepts](../../../docs/en/concepts/05-storage.md)
+- [Observer API](../../../docs/en/api/18-observer.md)

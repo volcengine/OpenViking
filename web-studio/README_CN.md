@@ -383,4 +383,3 @@ openviking-server --with-bot
 
 - [Web Studio 国际化贡献指南](./CONTRIBUTING_CN.md)：翻译归属、服务端动态文本和审查清单。
 - [OpenViking server deployment](../docs/en/guides/03-deployment.md)：服务端部署说明。
-- [VikingBot validation with OpenViking Server](../bot/docs/vikingbot-phase1-validation-with-openviking-server.md)：Bot proxy 验证流程。
