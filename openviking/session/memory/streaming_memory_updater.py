@@ -11,6 +11,7 @@ PatchMergeContextProvider, then applies the merged operations with MemoryUpdater
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import re
 import threading
 from collections.abc import Iterable
@@ -110,6 +111,7 @@ class MemoryUpdateRequest:
     strict_extract_errors: bool = False
     isolation_options: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
+    memory_registry: MemoryTypeRegistry | None = None
 
 
 @dataclass(slots=True)
@@ -321,7 +323,7 @@ class StreamingMemoryUpdater:
         self, request: MemoryUpdateRequest
     ) -> tuple[MemoryUpdateRequest | None, MemoryUpdateRequest | None]:
         operations = request.operations
-        registry = self.registry or create_default_registry()
+        registry = request.memory_registry or self.registry or create_default_registry()
         append_ops: list[ResolvedOperation] = []
         merge_ops: list[ResolvedOperation] = []
         for op in list(operations.upsert_operations or []):
@@ -412,6 +414,29 @@ class StreamingMemoryUpdater:
         requests: list[MemoryUpdateRequest],
         reason: str,
     ) -> StreamingMemoryUpdateResult:
+        # Keep long-lived batchers scoped to user/type, not every published version.
+        # Requests from different extraction snapshots must be merged/applied separately.
+        by_template: dict[str, list[MemoryUpdateRequest]] = {}
+        for request in requests:
+            registry = request.memory_registry or self.registry
+            serialized = (
+                "\n".join(
+                    schema.model_dump_json()
+                    + f":account_content={schema._account_content_template}"
+                    for schema in sorted(registry.list_all(True), key=lambda s: s.memory_type)
+                )
+                if registry is not None
+                else ""
+            )
+            revision = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+            by_template.setdefault(revision, []).append(request)
+        if len(by_template) > 1:
+            results = [
+                await self._process_batch(group_key, batch, reason)
+                for batch in by_template.values()
+            ]
+            return combine_streaming_memory_results(*results, fallback_request_count=len(requests))
+
         input_operations = sum(_operation_count(request.operations) for request in requests)
         input_patches = sum(
             len(getattr(request.operations, "upsert_operations", []) or []) for request in requests
@@ -476,7 +501,7 @@ class StreamingMemoryUpdater:
             )
             try:
                 updater = MemoryUpdater(
-                    registry=self.registry,
+                    registry=request.memory_registry or self.registry,
                     vikingdb=self.vikingdb,
                     transaction_handle=lease,
                 )
@@ -550,7 +575,9 @@ class StreamingMemoryUpdater:
                 operations=operations,
                 messages=_combined_request_messages(kind_requests),
                 ctx=kind_requests[0].ctx,
-                registry=self.registry or create_default_registry(),
+                registry=kind_requests[0].memory_registry
+                or self.registry
+                or create_default_registry(),
                 strict_extract_errors=any(
                     request.strict_extract_errors for request in kind_requests
                 ),
@@ -961,6 +988,7 @@ async def merge_one_memory_type_operations(
         required_file_uris=required_file_uris,
         patches=patches,
         output_language=merge_output_language_from_messages(messages),
+        memory_registry=registry,
     )
     provider._ctx = ctx
     provider._viking_fs = safe_get_viking_fs()
@@ -1158,6 +1186,9 @@ async def render_operation_after_file_content(
     return MemoryFileUtils.write(
         mf,
         content_template=schema.content_template,
+        account_content_template_type=(
+            schema.memory_type if schema._account_content_template else None
+        ),
         extract_context=extract_context,
     )
 
@@ -1587,6 +1618,7 @@ def clone_memory_update_request(
         strict_extract_errors=request.strict_extract_errors,
         isolation_options=dict(request.isolation_options or {}),
         metadata=dict(request.metadata or {}),
+        memory_registry=request.memory_registry,
     )
 
 

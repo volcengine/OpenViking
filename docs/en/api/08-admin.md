@@ -157,6 +157,161 @@ ov --sudo admin set-account-settings acme --acl-enabled true
 Before an existing setting is replaced, it is backed up to
 `/local/{account_id}/_system/setting.backup.json`.
 
+### account_memory_templates
+
+ROOT can manage any Account; ADMIN can manage only its own Account. Ordinary
+Users cannot use these endpoints. Authorization is role-based, not based on
+whether the User is named `default`.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/v1/admin/accounts/{account_id}/memory-templates` | List the six editable templates, full defaults and effective values |
+| GET | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | Read one template |
+| PUT | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | Complete and publish one template |
+| DELETE | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | Remove that override and restore deployment defaults |
+
+The kernel accepts the existing memory YAML structure as a JSON object and enforces
+the following editing allowlist at the API boundary. Only these six types are
+exposed. Experience, Cases, Trajectories and other types are not exposed for reading
+or editing. These APIs cannot create, delete or rename Memory Types; DELETE removes
+only the Account override.
+
+| Type | Editable configuration |
+|------|------------------------|
+| `profile` | `description`; `fields.content.description` |
+| `events` | `description`; `fields.event_name.description`, `fields.summary.description`; `content_template` |
+| `preferences` | `description`; `fields.topic.description`, `fields.content.description` |
+| `entities` | `description`; `fields.category.description`, `fields.name.description`, `fields.content.description` |
+| `soul` | `description`; `fields.core_truths.description`, `fields.boundaries.description`, `fields.vibe.description`, `fields.continuity.description`; `content_template` |
+| `identity` | `description`; `fields.creature.description`, `fields.name.description`, `fields.vibe.description`, `fields.avatar.description`, `fields.emoji.description`, `fields.introduction.description`; `content_template` |
+
+Here `fields.<name>.description` selects an existing entry in the `fields` array
+by `name`; it does not replace that field. JSON keys are case-sensitive: use
+`description`, not `Description`. Profile's `content` field permits only its
+description to change.
+
+All other configuration stays locked to deployment defaults: `memory_type`,
+`enabled`, `operation_mode`, `stage`, `peer_enabled`, `directory`,
+`filename_template`, field names/types/merge operations/initial values,
+`embedding_template`, `overview_template`, and unlisted field descriptions.
+Profile keeps `profile.md` and content's `merge_op=patch`; Events keeps
+`add_only` and the descriptions of `goal` and `ranges`; Identity keeps Name's
+immutable merge rule. Profile, Preferences and Entities cannot edit
+`content_template`. Changing topic/category/name/event_name instructions can
+still indirectly affect future paths/names, without changing their templates.
+
+Example: change only the type description:
+
+```bash
+curl -X PUT "$OV_ENDPOINT/api/v1/admin/accounts/acme/memory-templates/profile" \
+  -H "X-API-Key: $OV_ADMIN_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"description":"Remember business facts in {{ language }}."}'
+```
+
+PUT completes omitted values from **deployment defaults**, not the previous
+Account override, and persists a **complete YAML template**. `fields` updates
+existing entries by name, replacing only permitted descriptions; all omitted
+fields and attributes retain default values. Fields cannot be added, removed or
+renamed, and an empty list does not remove any fields. Full GET `effective`
+objects can be submitted unchanged: locked values matching defaults are accepted.
+Changed locked values, unknown keys/fields and duplicate field names return
+`INVALID_ARGUMENT` without modifying the active file. To edit one description while
+preserving all other customizations, GET `effective`, modify that object, then
+PUT it. An empty object publishes a complete copy of the defaults as custom;
+DELETE removes the custom file. DELETE is idempotent.
+
+Results contain `memory_type`, `status` (`system_default` or `custom`),
+`updated_at` (UTC publication time or null), and full `defaults` / `effective`
+objects using YAML field names such as `fields[].type`. List returns
+`result.account_id` and `result.templates`; single-template operations return
+`result.account_id` plus the template result.
+
+Storage is per Account and per type:
+
+```text
+/local/{account_id}/_system/memory_templates/
+  profile.yaml
+  preferences.yaml
+  events.yaml
+  ...
+```
+
+Only published overrides create files. Each file contains the complete schema
+and an internal `_updated_at` timestamp; no `memory_templates.json` is used.
+The previous content is backed up to `{type}.yaml.backup`. Access goes through
+AGFS, preserving the deployment's encryption/storage configuration. Do not edit
+encrypted backing files directly. `setting.json` and User `user_config.json`
+are unchanged. Personal deployments use the default Account; enterprise
+deployments use the target Account, with no separate kernel storage layout.
+
+The ordinary Session memory extraction pipeline loads Account templates before
+schema filtering and initial-file generation. The resulting registry snapshot is
+used for extraction, patch merging, and memory-file updates. A later publication
+does not change an in-flight extraction's snapshot, and requests with different
+snapshots are not merged into one streaming batch. Work queued before publication
+uses the configuration at **extraction start**, not at HTTP Commit acceptance.
+All eligible Users/Peers in that Account share the templates; no shared deployment
+registry is mutated. Publishing/resetting does not proactively rewrite existing
+memories; subsequent commits can update them according to the effective rules.
+
+Editable descriptions and content templates must be nonempty strings with valid
+Jinja syntax; each serialized file is limited to 1 MiB. Each editable `description`
+(type-level or `fields[].description`) is limited to 50,000 Unicode code points,
+including whitespace and Jinja source. This is a per-field source-character limit,
+not a UTF-8 byte, rendered-output or combined-description limit. Oversized updates
+return 400 without modifying the active configuration. Publication does not invoke
+an LLM. Storage failures/corrupt files
+are reported, not silently treated as defaults. This change adds no public
+file-browser directory, SDK/CLI commands, drafts or version-history UI.
+
+#### Managed content-template contract
+
+`content_template` formats extracted/merged fields into Markdown. Administrators
+may change headings, order, fixed text and conditional visibility, including
+omitting fields or the Events ChatLog/resource-event branch. Omission does not
+disable extraction, remove stored field metadata or delete Session messages.
+Events' default embedding template consumes the body, so these edits can affect
+retrieval input. Paths, field definitions and merge rules remain locked.
+
+| Type | Content variables |
+| --- | --- |
+| events | event_name, goal, summary, ranges |
+| soul | core_truths, boundaries, vibe, continuity |
+| identity | name, creature, vibe, emoji, avatar, introduction |
+
+`language` belongs to description templates, not this content context. Only Events
+may call these read-only `extract_context` helpers with positional arguments:
+`get_resource_event_content(ranges, summary)`,
+`get_first_message_time_from_ranges(ranges)`,
+`get_first_message_time_with_weekday_from_ranges(ranges)`,
+`get_event_content(ranges, summary[, ratio_threshold])`,
+`get_year(ranges)`, `get_month(ranges)`, `get_day(ranges)`.
+The first argument must be `ranges` or `ranges|default('')`; an explicit ratio must
+be a numeric literal from 0 to 1 (omitted: 0.2; built-in: 0).
+
+Supported Jinja: `if/elif/else`, comparisons/boolean expressions, local `set`, and
+non-nested/non-recursive `for` over an explicit list/tuple of at most 32 items
+(including title/value pairs). `loop.index/index0/first/last/length` are available.
+Filters: `default`, `trim`, `lower`, `upper`, `length`. Tests: `defined`, `undefined`,
+`none`, `string`. Built-in field/context names cannot be overwritten. Imports,
+inheritance, macros, arbitrary calls/attributes, subscripts, arithmetic/string
+multiplication/concatenation and reserved `MEMORY_FIELDS` comments are not allowed.
+
+Limits: 64 KiB UTF-8 source, 2048 AST nodes, 1 MiB rendered body excluding system
+metadata. Account overrides are checked at publication and extraction load, then
+rendered with a restricted Jinja environment and only approved fields/helpers.
+Runtime failures stop that file write instead of falling back to an empty body.
+Deployment-owned templates retain their existing rendering behavior. These guards
+do not replace Worker resource quotas, evaluate extraction quality or sanitize
+Markdown/HTML for UI display. Description rendering is outside this content-only change.
+
+Publication validation failures return `INVALID_ARGUMENT` with `error.details`:
+`field=content_template`, a controlled `reason`, and `line` when available. The
+active configuration remains unchanged. Structurally valid older overrides using
+unsupported Jinja can still be read, replaced or reset, but extraction refuses to
+execute them unchecked. Corrupt YAML remains an explicit error.
+
 ### user_settings
 
 ROOT can manage any User and ADMIN can manage Users in its own account. The

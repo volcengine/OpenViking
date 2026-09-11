@@ -1041,6 +1041,48 @@ def test_enforce_merge_group_peer_enabled_false_keeps_self_scope():
 
 
 @pytest.mark.asyncio
+async def test_streaming_memory_updater_separates_template_snapshots(monkeypatch):
+    fs = InMemoryVikingFS({})
+    for module in ("streaming_memory_updater", "memory_updater"):
+        monkeypatch.setattr(f"openviking.session.memory.{module}.get_viking_fs", lambda: fs)
+    updater = StreamingMemoryUpdater(
+        registry=_registry(),
+        config=StreamingMemoryUpdaterConfig(
+            max_operations_per_update=2,
+            max_wait_seconds=0.05,
+            timer_check_interval_seconds=0.01,
+        ),
+    )
+    requests = []
+    for index in (1, 2):
+        registry = _registry()
+        registry.get("notes").content_template = f"# Version {index}\n{{{{ content }}}}"
+        requests.append(
+            MemoryUpdateRequest(
+                operations=ResolvedOperations(
+                    upsert_operations=[_note_op(f"note{index}")],
+                    delete_file_contents=[],
+                    errors=[],
+                ),
+                messages=[],
+                ctx=_ctx(),
+                memory_registry=registry,
+                metadata={"session_id": f"s{index}"},
+            )
+        )
+    try:
+        results = await asyncio.gather(*(updater.submit(request) for request in requests))
+    finally:
+        await updater.close()
+    for index, result in enumerate(results, 1):
+        assert not result.apply_result.errors
+        uri = f"viking://user/u/memories/notes/note{index}.md"
+        content = MemoryFileUtils.read(fs.files[uri], uri=uri).content
+        assert f"# Version {index}" in content
+        assert f"# Version {3 - index}" not in content
+
+
+@pytest.mark.asyncio
 async def test_streaming_memory_updater_batches_per_merge_group(monkeypatch):
     fs = InMemoryVikingFS({})
     fs.search = AsyncMock(return_value=[])

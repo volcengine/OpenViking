@@ -154,6 +154,155 @@ ov --sudo admin set-account-settings acme --acl-enabled true
 覆盖已有配置前，内核会先备份到
 `/local/{account_id}/_system/setting.backup.json`。
 
+### account_memory_templates
+
+ROOT 可管理任意 Account；ADMIN 仅可管理自己 Account 的模板；普通 User 无权调用。
+权限按管理员角色判断，不按 User 是否叫 `default` 判断。
+
+| 方法 | 路径 | 用途 |
+|------|------|------|
+| GET | `/api/v1/admin/accounts/{account_id}/memory-templates` | 列出六类开放模板、完整默认值及生效值 |
+| GET | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | 查询单个模板 |
+| PUT | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | 补齐并发布单个模板 |
+| DELETE | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | 删除该模板覆盖，恢复部署默认值 |
+
+内核接收原有 Memory YAML 结构对应的 JSON 对象，并在接口层强制校验以下白名单。
+仅开放下列六类模板；Experience、Cases、Trajectories 等其他类型不开放查询或编辑，
+不支持通过接口新增、删除或重命名 Memory Type。DELETE 仅移除自定义覆盖，不删除模板类型。
+
+| 模板 | 可编辑项 | 用途 |
+|------|----------|------|
+| `profile` | `description`；`fields.content.description` | 稳定身份、背景和工作方式的抽取说明；正文内容、语言、Markdown 结构、长度和更新时间要求 |
+| `events` | `description`；`fields.event_name.description`、`fields.summary.description`；`content_template` | 事件范围、原子性与排除项；名称语言、粒度和格式；摘要事实、日期和语言；Summary、时间、ChatLog 的标题、顺序和展示方式 |
+| `preferences` | `description`；`fields.topic.description`、`fields.content.description` | 偏好、习惯、反感及与 Profile/Event 的边界；主题粒度、语言和命名；正文语义、条目和 Markdown 要求 |
+| `entities` | `description`；`fields.category.description`、`fields.name.description`、`fields.content.description` | 实体与关系范围；分类法、语言和粒度；实体命名；卡片事实、章节、语言和长度 |
+| `soul` | `description`；`fields.core_truths.description`、`fields.boundaries.description`、`fields.vibe.description`、`fields.continuity.description`；`content_template` | 核心原则、边界、气质和连续性的抽取表达；四个字段的标题、顺序和固定文案 |
+| `identity` | `description`；`fields.creature.description`、`fields.name.description`、`fields.vibe.description`、`fields.avatar.description`、`fields.emoji.description`、`fields.introduction.description`；`content_template` | 身份信息范围；身份、名称、气质、头像、Emoji、自我介绍的字段要求；正文标签、顺序和固定文案 |
+
+表中 `fields.<name>.description` 表示在 `fields` 数组中按 `name` 定位并修改
+`description`，不是替换整个字段。JSON 属性名统一小写（`description`，不是
+`Description`）。Profile 的 `fields.content` 仅开放其 description，不开放字段本身。
+
+除白名单说明文字和三个正文模板外，所有配置均锁定为部署默认值，包括：
+`memory_type`、`enabled`、`operation_mode`、`stage`、`peer_enabled`、
+`directory`、`filename_template`、所有字段的名称/类型/`merge_op`/`init_value`、
+`embedding_template` 和 `overview_template`，以及未开放的字段说明。
+例如 Profile 保留 `profile.md` 和 content 的 `merge_op=patch`；Events 保留
+`add_only` 以及 `goal/ranges` 的说明；Identity 的 Name immutable 规则不变。
+Profile、Preferences、Entities 不开放 `content_template`。
+改写 topic/category/name/event_name 的生成说明仍可能间接影响未来的目录或文件名，
+但不允许修改目录/文件名模板本身。
+
+例如，仅修改类型说明：
+
+```bash
+curl -X PUT "$OV_ENDPOINT/api/v1/admin/accounts/acme/memory-templates/profile" \
+  -H "X-API-Key: $OV_ADMIN_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"description":"只记住业务相关事实，使用 {{ language }}。"}'
+```
+
+PUT 从**部署默认模板**补齐未传入的配置，不从上一次 Account 自定义值补齐，最终保存
+**完整 YAML 模板**。`fields` 按已有字段名合并，只覆盖白名单允许的说明文字，
+未传入的字段和属性全部保留默认值；不能新增、删除或重命名字段，提交空列表不会删除字段。
+完整 GET `effective` 对象可以回传：锁定字段值与默认值相同则接受，任何锁定值变更、
+未知配置项、未知字段或重复字段名均返回 `INVALID_ARGUMENT`，当前生效文件不变。
+若仅调整一个 description 且需保留其他自定义内容，应先 GET，修改 `effective` 对象后
+整体 PUT。空对象会发布一份完整默认配置，状态仍为自定义；恢复系统默认应调用 DELETE。
+DELETE 幂等。
+
+返回包含 `memory_type`、`status`（`system_default` / `custom`）、
+`updated_at`（UTC 发布时间，默认状态为 null），以及完整的 `defaults` / `effective`。
+对象使用 YAML 字段名，例如 `fields[].type`。列表接口返回 `result.account_id` 和
+`result.templates`；单模板操作返回 `result.account_id` 及上述模板结果。
+
+按 Account、按模板独立存储：
+
+```text
+/local/{account_id}/_system/memory_templates/
+  profile.yaml
+  preferences.yaml
+  events.yaml
+  ...
+```
+
+仅发布自定义时创建对应文件。文件包含完整 Schema 和内部 `_updated_at` 时间戳，
+不再使用集中式 `memory_templates.json`。更新前备份至 `{type}.yaml.backup`。
+读写经过 AGFS，沿用当前部署的加密和存储配置，不能直接编辑加密后的底层文件。
+不修改 Account 的 `setting.json` 或 User 的 `user_config.json`。
+个人版使用默认 Account；企业版使用指定 Account，内核不区分两套文件结构。
+
+普通 Session 记忆抽取在筛选 Schema 和初始化记忆文件之前读取 Account 模板。
+同一份 Registry 快照贯穿模型抽取、补丁合并和记忆文件更新；发布新模板不改变已开始
+抽取的快照，不同快照的请求不会合并进同一批流式更新。排队任务按**抽取开始时**取值，
+不是按 HTTP Commit 受理时间取值。同一 Account 下符合记忆策略的 User/Peer 共用模板，
+不同 Account 不串用，也不修改共享的部署 Registry。发布或恢复默认不会主动重写历史
+记忆，后续 Commit 可按生效规则更新已有记忆。
+
+白名单内提交的说明和正文模板必须是非空字符串，并通过 Jinja 语法校验；单文件序列化后不超过 1 MiB。
+每个可编辑 `description`（类型说明及 `fields[].description`）最多 50,000 个 Unicode 码点，按提交的原文计数，包含空格、换行和 Jinja 源码，不按 UTF-8 字节或渲染后的长度计数。各说明独立计数，不合并计算；整个配置仍受 1 MiB 上限约束。超过上限返回 400，不修改当前配置。
+发布不调用 LLM。存储错误或文件损坏明确报错，不伪装成系统默认。本次不增加公共文件浏览目录、SDK/CLI 命令、草稿或历史版本 UI。
+
+#### content_template 的编辑与执行边界
+
+正文模板用于将已抽取/合并的字段组织为 Markdown，不是抽取 Prompt。
+允许修改标题、顺序、固定文案，按条件显示/隐藏字段。不要求保留默认标题或输出全部字段；
+但隐藏字段不等于停止抽取/删除该字段，也不会删除原始 Session 或系统保存的字段元数据。
+Events 的默认 embedding 模板引用正文，因此正文变化也可能影响后续检索输入。
+路径、文件名、字段定义、merge_op（包括 Identity name 的 immutable）仍锁定。
+
+| 类型 | 正文中可引用的字段 |
+| --- | --- |
+| events | event_name、goal、summary、ranges |
+| soul | core_truths、boundaries、vibe、continuity |
+| identity | name、creature、vibe、emoji、avatar、introduction |
+
+`language` 仍是说明字段的变量，不属于上述正文变量；正文不要引用其他 Account/User、请求上下文或任意 Python 对象。
+仅 Events 可调用以下 `extract_context` 只读方法（位置参数）：
+
+- `get_resource_event_content(ranges, summary)`：资源添加事件正文；非资源事件为空。
+- `get_first_message_time_from_ranges(ranges)`：第一条来源消息日期。
+- `get_first_message_time_with_weekday_from_ranges(ranges)`：日期及星期。
+- `get_event_content(ranges, summary[, ratio_threshold])`：按已有逻辑选择 ChatLog/摘要；省略阈值为 0.2，显式 0 表示存在原文时优先原文。
+- `get_year(ranges)`、`get_month(ranges)`、`get_day(ranges)`：来源日期分量。
+
+首个参数使用 `ranges`（或 `ranges|default('')`），不能自行构造消息范围；阈值只能为 0～1 的数字字面量。
+允许去掉 ChatLog 或资源事件分支，但去掉后不再自动展示这些正文/资源链接；原始 Session 仍保留。
+
+支持的 Jinja 子集：
+
+- `if/elif/else`、比较/布尔条件、`set` 局部变量（不能覆盖内置字段、extract_context、loop）。
+- `for` 遍历模板中显式写出的列表/元组，最多 32 项；支持标题/字段二元组和 `loop.index/index0/first/last/length`。不支持嵌套/递归循环、range() 或遍历消息/长字符串。
+- 过滤器：`default`、`trim`、`lower`、`upper`、`length`；测试：`defined`、`undefined`、`none`、`string`。
+- 不支持模板导入/继承、宏、任意函数/对象属性访问、下标访问、算术或字符串倍增/拼接。不能注入系统保留的 `<!-- MEMORY_FIELDS ... -->` 元数据。
+
+模板 UTF-8 大小 ≤ 64 KiB，AST 节点 ≤ 2048，渲染正文 ≤ 1 MiB（不含系统追加元数据）。
+Account 覆盖在发布时和抽取加载时验证，运行时使用受限 Jinja 环境，只提供白名单字段/方法。
+渲染失败会报告错误并停止该次文件写入，不走旧的空正文 fallback；部署内置模板的渲染路径不变。
+这些保护不代替 Worker 的 CPU/内存配额，也不评估记忆效果或做前端 Markdown/HTML 安全过滤。
+说明字段的既有渲染规则不在本次正文模板限制的改动范围内。
+
+校验失败返回 `INVALID_ARGUMENT`，`error.details` 含 `field=content_template`、受控 `reason` 和可用时的 `line`。
+失败不修改当前发布配置。此前保存的、结构有效但使用不支持 Jinja 的模板仍可读取、重新发布或恢复默认；
+不会绕过新规则继续执行，抽取加载时提示修复。损坏 YAML 仍明确报错。
+
+示例：只展示事件名称和摘要，不输出 ChatLog：
+
+```json
+{"content_template": "# {{ event_name }}\n\n## 事件摘要\n{{ summary }}"}
+```
+
+示例：Soul 的分节展示：
+
+```jinja
+{% for title, text in [('核心价值', core_truths), ('边界', boundaries), ('气质', vibe), ('连续性', continuity)] %}
+{% if text %}
+## {{ title }}
+{{ text }}
+{% endif %}
+{% endfor %}
+```
+
 ### user_settings
 
 ROOT 可管理任意 User，ADMIN 仅可管理所属 account 内的 User。User 配置接口当前

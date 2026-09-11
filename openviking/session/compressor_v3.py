@@ -678,7 +678,11 @@ class SessionCompressorV3:
             logger.warning("VikingFS unavailable, skipping v3 memory extraction", exc_info=True)
             return _V3ExtractionResult()
 
-        registry = create_default_registry()
+        from openviking.session.memory.account_templates import resolve_account_memory_registry
+
+        registry = await resolve_account_memory_registry(
+            viking_fs, ctx.account_id, create_default_registry()
+        )
         if allow_self_memory:
             await registry.initialize_memory_files(
                 ctx,
@@ -692,6 +696,7 @@ class SessionCompressorV3:
             ctx=ctx,
             viking_fs=viking_fs,
             transaction_handle=None,
+            memory_registry=registry,
         )
         await context_provider.prepare_extraction_messages()
         extract_context = context_provider.get_extract_context()
@@ -738,6 +743,7 @@ class SessionCompressorV3:
                 messages=list(messages),
                 ctx=ctx,
                 strict_extract_errors=strict_extract_errors,
+                memory_registry=registry,
                 isolation_options={
                     "allowed_memory_types": allowed_memory_types,
                     "allow_self": allow_self_memory,
