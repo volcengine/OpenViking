@@ -4,7 +4,7 @@
 import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.acl import AclManager
+from openviking.storage.acl import AclEntry, AclLevel, AclManager, AclMode
 from openviking.storage.collection_schemas import CollectionSchemas
 from openviking.storage.expr import And, Eq, In, Or, PathScope
 from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
@@ -280,6 +280,63 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl(tmp_path, leg
             ]
         )
 
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_acl_subtree_scan_uses_stable_pagination_for_large_subtree(tmp_path):
+    ctx = RequestContext(user=UserIdentifier("acct", "owner"), role=Role.ADMIN)
+    root = "viking://resources/acl-large"
+    backend = VikingVectorIndexBackend(
+        config=VectorDBBackendConfig(
+            backend="local", name="context", dimension=4, path=str(tmp_path / "vectors")
+        )
+    )
+    try:
+        assert await backend.create_collection(
+            "context", CollectionSchemas.context_collection("context", 4)
+        )
+        backend.acl_manager = AclManager(backend)
+        backend.acl_manager.set_enabled(ctx.account_id, True)
+
+        records = [
+            {
+                "id": "root",
+                "uri": root,
+                "account_id": "acct",
+                "context_type": "resource",
+                "level": 1,
+                "vector": [1.0, 0.0, 0.0, 0.0],
+            }
+        ]
+        records.extend(
+            {
+                "id": f"child-{index:04d}",
+                "uri": f"{root}/doc-{index:04d}.md",
+                "account_id": "acct",
+                "context_type": "resource",
+                "level": 2,
+                "vector": [1.0, 0.0, 0.0, 0.0],
+            }
+            for index in range(620)
+        )
+        await backend._upsert_many_raw(records, ctx=ctx)
+
+        scanned = await backend.acl_manager._scroll_all(
+            PathScope("uri", root, depth=-1), ["id"], ctx
+        )
+        scanned_ids = [str(record["id"]) for record in scanned]
+
+        assert len(scanned_ids) == 621
+        assert len(set(scanned_ids)) == 621
+        effective = await backend.acl_manager.set_acl(
+            root,
+            [AclEntry("user:owner", AclLevel.MANAGE)],
+            ctx,
+            acl_mode=AclMode.RESTRICTED,
+        )
+        assert effective.mode is AclMode.RESTRICTED
     finally:
         await backend.close()
 

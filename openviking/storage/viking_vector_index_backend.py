@@ -1388,7 +1388,7 @@ class VikingVectorIndexBackend:
         ctx: RequestContext,
     ) -> tuple[List[Dict[str, Any]], Optional[str]]:
         backend = self._get_backend_for_context(ctx)
-        return await backend.scroll(
+        return await backend.strict_scroll(
             filter=filter,
             limit=limit,
             cursor=cursor,
