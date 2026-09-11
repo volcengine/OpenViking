@@ -80,6 +80,7 @@ from openviking.utils.skill_processor import SkillProcessingPreparation, SkillPr
 from openviking_cli.exceptions import (
     ConflictError,
     DeadlineExceededError,
+    FailedPreconditionError,
     InternalError,
     InvalidArgumentError,
     NotInitializedError,
@@ -1156,6 +1157,7 @@ class ResourceService:
                 create_parent=create_parent,
                 source_info=plan.source_identity,
                 defer_candidate_resolution=defer_candidate_resolution,
+                to_is_directory=planned_to_is_directory,
             )
             lock_handoff = await self._lock_to_handoff_payload(resource_lock)
             message_path = plan.path
@@ -1270,6 +1272,7 @@ class ResourceService:
         create_parent: bool,
         source_info: _ResourceSourceInfo,
         defer_candidate_resolution: bool,
+        to_is_directory: bool,
     ) -> tuple[str, Optional[Dict[str, Any]], bool, bool]:
         """Resolve the target and track ownership of a newly reserved empty path."""
         if not self._resource_processor or not self._viking_fs:
@@ -1313,6 +1316,16 @@ class ResourceService:
         )
         try:
             await self._viking_fs._ensure_access(root_uri, ctx, action=AclAction.WRITE)
+            if to_is_directory and await self._viking_fs.exists(root_uri, ctx=ctx):
+                target_stat = await self._viking_fs.stat(root_uri, ctx=ctx, skip_count=True)
+                if not target_stat.get("isDir"):
+                    raise FailedPreconditionError(
+                        "Target URI already exists as a file and cannot be used as a "
+                        f"resource directory: {root_uri}. Choose another 'to', use "
+                        "'parent' to add a new resource under a directory, or use "
+                        "content/write to update the existing file.",
+                        details={"resource": root_uri, "type": "file"},
+                    )
         except BaseException:
             await self._release_lock_ref(resource_lock)
             raise

@@ -6,6 +6,7 @@ import pytest
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_service import ResourceService
 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
+from openviking_cli.exceptions import FailedPreconditionError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -108,6 +109,7 @@ async def test_explicit_target_plan_tracks_reservation_ownership(
 
     viking_fs = SimpleNamespace(
         exists=AsyncMock(side_effect=target_exists),
+        stat=AsyncMock(return_value={"isDir": True}),
         _ensure_access=AsyncMock(side_effect=ensure_access),
         _uri_to_path=lambda uri, ctx: f"/agfs/{uri}",
         _async_agfs=SimpleNamespace(pathlock_acquire_tree=AsyncMock(side_effect=acquire_lock)),
@@ -131,6 +133,7 @@ async def test_explicit_target_plan_tracks_reservation_ownership(
             source_format="zip",
         ),
         defer_candidate_resolution=False,
+        to_is_directory=True,
     )
 
     assert planned == (
@@ -139,7 +142,56 @@ async def test_explicit_target_plan_tracks_reservation_ownership(
         False,
         cleanup_empty_target_on_failure,
     )
-    assert calls == ["acl", "exists", "lock", "acl"]
+    assert calls == ["acl", "exists", "lock", "acl", "exists"]
+
+
+@pytest.mark.asyncio
+async def test_explicit_directory_target_rejects_existing_file():
+    lock = {"lease_ref": "lock-1"}
+    ctx = _ctx()
+    async_agfs = SimpleNamespace(
+        pathlock_acquire_tree=AsyncMock(return_value=lock),
+        pathlock_release=AsyncMock(),
+    )
+    viking_fs = SimpleNamespace(
+        exists=AsyncMock(return_value=True),
+        stat=AsyncMock(return_value={"isDir": False}),
+        _ensure_access=AsyncMock(),
+        _uri_to_path=lambda uri, ctx: f"/agfs/{uri}",
+        _async_agfs=async_agfs,
+    )
+    processor = SimpleNamespace(
+        tree_builder=SimpleNamespace(
+            resolve_target_uri=AsyncMock(return_value=("viking://resources/report.md", None))
+        )
+    )
+    service = _service(viking_fs, processor)
+
+    with pytest.raises(
+        FailedPreconditionError,
+        match="already exists as a file",
+    ):
+        await service._plan_source_job_target(
+            path="report.md",
+            ctx=ctx,
+            to="viking://resources/report.md",
+            parent="",
+            create_parent=False,
+            source_info=SimpleNamespace(
+                source_path="report.md",
+                source_name="report.md",
+                source_format="markdown",
+            ),
+            defer_candidate_resolution=False,
+            to_is_directory=True,
+        )
+
+    viking_fs.stat.assert_awaited_once_with(
+        "viking://resources/report.md",
+        ctx=ctx,
+        skip_count=True,
+    )
+    async_agfs.pathlock_release.assert_awaited_once_with(lock)
 
 
 @pytest.mark.asyncio
