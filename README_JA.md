@@ -35,7 +35,9 @@ OpenVikingは、AIエージェントのためのオープンソースのコン�
 
 OpenViking はコンテキストを `viking://` 仮想ファイルシステムとして整理します。エージェントはファイルと同じように、`ls`、`tree`、`read`、`write` などでディレクトリの閲覧、内容の読み取り、作成、編集を行い、ディレクトリ内を検索できます。ディレクトリの要約により、必要に応じて内容を読み込めます。
 
-[![OpenViking Studio：コンテキストの閲覧と意味検索](docs/images/studio-playground.png)](https://openviking.ai/studio)
+<a href="https://openviking.ai/studio" target="_blank" rel="noopener noreferrer">
+  <img src="docs/images/studio-playground.png" alt="OpenViking Studio：コンテキストの閲覧と意味検索">
+</a>
 
 [OpenViking Studioを試す](https://openviking.ai/studio)。ブラウザから利用でき、インストールは不要です。 [Web Studioを自分の環境にデプロイ](web-studio/README.md)。
 

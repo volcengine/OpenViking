@@ -35,7 +35,9 @@ OpenViking 是面向 AI 智能体的开源上下文数据库，用来存储知�
 
 OpenViking 将上下文组织成 `viking://` 虚拟文件系统。Agent 可以像操作文件一样，通过 `ls`、`tree`、`read`、`write` 等操作浏览目录、读取、创建和编辑内容，也可以在目录内检索。目录摘要支持按需加载。
 
-[![OpenViking Studio：浏览上下文，体验语义检索](docs/images/studio-playground.png)](https://openviking.ai/studio)
+<a href="https://openviking.ai/studio" target="_blank" rel="noopener noreferrer">
+  <img src="docs/images/studio-playground.png" alt="OpenViking Studio：浏览上下文，体验语义检索">
+</a>
 
 [在线体验 OpenViking Studio](https://openviking.ai/studio)，无需安装。 [自行部署 Web Studio](web-studio/README_CN.md)。
 
