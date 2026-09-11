@@ -340,16 +340,12 @@ fmt.Println(result["task_id"])
 
 **CLI**：
 
-`ov add-skill` 与 `ov skills add` 使用同一套参数和导入流程。Git 仓库或
-GitHub `tree` 目录由 CLI 克隆到本地，再将选中的技能打包上传；服务端 API
-仍接收内联内容或临时上传文件。目录中的 `references/`、`scripts/` 等附件一并上传。
+`ov add-skill` 与 `ov skills add` 使用同一套参数和导入流程。
 技能集合可以用 `--list` 查看、`--skill` 选择；批量导入需要确认，或使用 `--yes`。
-默认不等待向量化完成，但仍需完成下载、上传，以及服务端的解析、overview 生成和文件写入。
-`--wait` 额外等待向量化完成。
 
 ```bash
 # 从独立 skills 分支导入一个技能；也可以写成 ov skills add
-ov add-skill https://github.com/volcengine/OpenViking/tree/skills/llm-wiki --wait
+ov add-skill https://github.com/volcengine/OpenViking/tree/skills/llm-wiki
 
 # 查看本地技能集合，再选择导入
 ov add-skill ./examples/compile/ov-compile-skills --list
