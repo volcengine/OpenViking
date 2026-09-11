@@ -117,8 +117,10 @@ async def test_reset_empty_archive_survives_late_summary_and_next_commit(
         f"{jobs[1].archive_uri}/messages.jsonl", ctx=session.ctx
     )
 
-    # Reset an already-empty session, then summarize new work without old overview fallback.
+    # Reset an already-empty session: confirmed, but no second boundary directory.
     assert (await commit(reset_context=True))["reset_context"] is True
+    assert not await fs.exists(f"{session._session_uri}/history/archive_004", ctx=session.ctx)
+    # Summarize new work without old overview fallback.
     await add("new task")
     assert (await context())["messages"][0]["parts"][0]["text"] == "new task"
     await commit()

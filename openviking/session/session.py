@@ -2256,9 +2256,20 @@ class Session:
             "budget_exceeded": retention_plan.budget_exceeded if retention_plan else False,
         }
 
+    async def _is_context_reset_archive(self, archive_uri: str) -> bool:
+        """Return True when the archive's ``.done`` marks a context reset boundary."""
+        try:
+            done = json.loads(await self._viking_fs.read_file(f"{archive_uri}/.done", ctx=self.ctx))
+        except Exception:
+            return False
+        return isinstance(done, dict) and done.get("context_reset") is True
+
     async def _append_context_reset_archive(self) -> None:
         """Publish an empty terminal archive while holding the Phase 1 session lock."""
         # ponytail: reuse archive ordering; no second session identity or context store.
+        newest = f"{self._session_uri}/history/archive_{self._compression.compression_index:03d}"
+        if self._compression.compression_index > 0 and await self._is_context_reset_archive(newest):
+            return  # Context is already empty; no second boundary needed.
         self._compression.compression_index += 1
         archive_uri = (
             f"{self._session_uri}/history/archive_{self._compression.compression_index:03d}"
@@ -3283,26 +3294,17 @@ class Session:
                         terminal["archive_uri"], overview
                     ),
                 }
+            elif await self._is_context_reset_archive(terminal["archive_uri"]):
+                terminal = None
             else:
-                try:
-                    done = json.loads(
-                        await self._viking_fs.read_file(
-                            f"{terminal['archive_uri']}/.done", ctx=self.ctx
-                        )
-                    )
-                except (OSError, ValueError):
-                    done = {}
-                if isinstance(done, dict) and done.get("context_reset") is True:
-                    terminal = None
-                else:
-                    # A required overview that is missing or unreadable still keeps
-                    # the archive terminal here; the warning is emitted by the full
-                    # scan used for Phase 2 bookkeeping.
-                    logger.warning(
-                        "Completed archive has no readable overview: %s",
-                        terminal["archive_uri"],
-                    )
-                    failed_archives = 1
+                # A required overview that is missing or unreadable still keeps
+                # the archive terminal here; the warning is emitted by the full
+                # scan used for Phase 2 bookkeeping.
+                logger.warning(
+                    "Completed archive has no readable overview: %s",
+                    terminal["archive_uri"],
+                )
+                failed_archives = 1
         elif terminal is not None:
             failed_archives = 1
 
