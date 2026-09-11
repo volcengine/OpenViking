@@ -143,7 +143,7 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
 <table>
 <tr>
 <td align="center" valign="bottom" width="33%">
-<a href="https://docs.openviking.ai/zh/agent-integrations/02-claude-code"><img src="docs/images/agents/image/claude-code/logo.png" width="32" height="32" alt=""><br><strong>Claude Code</strong></a><br>
+<a href="https://docs.openviking.ai/zh/agent-integrations/02-claude-code"><img src="docs/images/agents/image/claude-code/logo.png" width="32" height="32" alt=""><br><strong>Claude</strong></a><br>
 <sub>Hooks + MCP</sub>
 </td>
 <td align="center" valign="bottom" width="33%">
@@ -258,21 +258,21 @@ VikingBot 也为[上下文编译](https://docs.openviking.ai/zh/context-compilat
 
 ## 研究
 
-VikingMem 研究事件驱动的记忆提取、更新与整合，OpenViking 实现了其中部分能力。
+**让 Agent 的记忆随交互演化。** VikingMem 以事件驱动长期记忆的提取、更新与整合，让有状态 Agent 在持续交互中积累可复用的经验。OpenViking 开源了其中的部分核心能力。
 
 > **VikingMem: A Memory Base Management System for Stateful LLM-based Applications**<br>
 > Jiajie Fu, Junwen Chen, Mengzhao Wang, Aoxiang He, Maojia Sheng, Xiangyu Ke, Yifan Zhu, and Yunjun Gao.<br>
 > arXiv:2605.29640, 2026。已于 2026 年 9 月在 VLDB 2026 完成演讲。<br>
 > 📄 [在 arXiv 阅读论文](https://arxiv.org/abs/2605.29640) · [阅读 PDF](https://arxiv.org/pdf/2605.29640)
 
-目录感知检索利用文档结构限定查询范围。OpenViking 集成了论文中的 TrieHI 索引，在向量排序前确定目录范围。
+**让目录结构成为检索上下文。** 这篇论文为 OpenViking 的目录语义检索提供形式化基础、索引设计与实验验证。论文定义了目录范围查询与结构维护操作，并提出 TrieHI，OpenViking 已将其集成，用于在向量排序前确定目录检索范围。文件系统范式由此贯穿组织与检索：Agent 可以在项目或记忆子树内查找证据、保留周边上下文，并随知识演化调整目录结构。
 
 > **Directory-Aware Query and Maintenance in Vector Databases**<br>
 > Mengzhao Wang, Zheng Gong, Jingpei Hu, Jiajie Fu, Maojia Sheng, Junwen Chen, and Yifan Zhu.<br>
 > arXiv:2606.16903, 2026。已被 ICDE 接收。<br>
 > 📄 [在 arXiv 阅读论文](https://arxiv.org/abs/2606.16903) · [阅读 PDF](https://arxiv.org/pdf/2606.16903)
 
-VikingRAG 将语义检索与文档结构结合，核心机制已集成到 OpenViking。论文还研究了检索轨迹复用和按需多轮检索。
+**用更少的 Token 找齐回答所需的证据。** VikingRAG 将语义检索与文档结构结合，按证据缺口展开相关目录片段，核心机制已集成到 OpenViking。论文进一步研究检索轨迹复用与按需升级多轮检索，在保持回答质量的同时减少重复探索。
 
 > **VikingRAG: Accurate and Token-efficient Retrieval-augmented Generation over Structured Documents**<br>
 > Peiyuan Gao, Gaoyuan Zhang, Haojie Qin, Yahui Sun, Qianyi Zhang, Yunhao Zhang, Zeyu Wang, and Wei Lu.<br>

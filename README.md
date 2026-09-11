@@ -143,7 +143,7 @@ Connect your agent to OpenViking for cross-session memory. Choose a native integ
 <table>
 <tr>
 <td align="center" valign="bottom" width="33%">
-<a href="https://docs.openviking.ai/en/agent-integrations/02-claude-code"><img src="docs/images/agents/image/claude-code/logo.png" width="32" height="32" alt=""><br><strong>Claude Code</strong></a><br>
+<a href="https://docs.openviking.ai/en/agent-integrations/02-claude-code"><img src="docs/images/agents/image/claude-code/logo.png" width="32" height="32" alt=""><br><strong>Claude</strong></a><br>
 <sub>Hooks + MCP</sub>
 </td>
 <td align="center" valign="bottom" width="33%">
@@ -258,21 +258,21 @@ The server supports [accounts and user isolation](https://docs.openviking.ai/en/
 
 ## Research
 
-VikingMem studies event-driven memory extraction, updates, and consolidation. OpenViking implements a subset of these capabilities.
+**Memory that evolves with your agent.** VikingMem develops an event-driven approach to extracting, updating, and consolidating long-term memory, giving stateful agents a way to retain useful experience as interactions accumulate. OpenViking open-sources a subset of these core capabilities.
 
 > **VikingMem: A Memory Base Management System for Stateful LLM-based Applications**<br>
 > Jiajie Fu, Junwen Chen, Mengzhao Wang, Aoxiang He, Maojia Sheng, Xiangyu Ke, Yifan Zhu, and Yunjun Gao.<br>
 > arXiv:2605.29640, 2026. Presented at VLDB 2026 in September.<br>
 > 📄 [Read the paper on arXiv](https://arxiv.org/abs/2605.29640) · [Read PDF](https://arxiv.org/pdf/2605.29640)
 
-Directory-aware retrieval uses document structure to scope searches. OpenViking integrates this paper’s TrieHI index to resolve directory scopes before vector ranking.
+**Directory structure as retrieval context.** This paper provides the formal foundations, index design, and experimental evidence behind OpenViking’s directory-aware retrieval. It defines directory-scoped query and maintenance operations and introduces TrieHI, which OpenViking integrates to resolve directory scopes before vector ranking. This connects the filesystem paradigm to retrieval: agents can search a project or memory subtree, retain its surrounding context, and reorganize it as knowledge evolves.
 
 > **Directory-Aware Query and Maintenance in Vector Databases**<br>
 > Mengzhao Wang, Zheng Gong, Jingpei Hu, Jiajie Fu, Maojia Sheng, Junwen Chen, and Yifan Zhu.<br>
 > arXiv:2606.16903, 2026. Accepted by ICDE.<br>
 > 📄 [Read the paper on arXiv](https://arxiv.org/abs/2606.16903) · [Read PDF](https://arxiv.org/pdf/2606.16903)
 
-VikingRAG combines semantic search with document structure; its core mechanisms are integrated into OpenViking. The paper also explores retrieval-trace reuse and on-demand multi-round retrieval.
+**Retrieve the evidence you need with fewer tokens.** VikingRAG combines semantic search with document structure, exposing relevant directory segments as evidence gaps arise. Its core mechanisms are integrated into OpenViking. The paper further explores reusing retrieval traces and escalating to multi-round retrieval only when needed, reducing repeated exploration while preserving answer quality.
 
 > **VikingRAG: Accurate and Token-efficient Retrieval-augmented Generation over Structured Documents**<br>
 > Peiyuan Gao, Gaoyuan Zhang, Haojie Qin, Yahui Sun, Qianyi Zhang, Yunhao Zhang, Zeyu Wang, and Wei Lu.<br>
