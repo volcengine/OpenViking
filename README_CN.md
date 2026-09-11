@@ -145,6 +145,7 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
 将 Agent 接入 OpenViking，跨会话保留记忆。原生集成支持自动召回与会话采集；也可通过 MCP 提供记忆和上下文工具。
 
 <table>
+<tbody>
 <tr>
 <td align="center" valign="bottom" width="16%">
 <a href="https://docs.openviking.ai/zh/agent-integrations/02-claude-code"><img src="docs/images/integrations/logos/claude-code.png" width="32" height="32" alt=""><br><strong>Claude</strong></a><br>
@@ -171,6 +172,8 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
 <sub>内置记忆</sub>
 </td>
 </tr>
+</tbody>
+<tbody>
 <tr>
 <td align="center" valign="bottom" width="16%">
 <a href="https://docs.openviking.ai/zh/agent-integrations/10-opencode"><img src="docs/images/integrations/logos/opencode.png" width="32" height="32" alt=""><br><strong>OpenCode</strong></a><br>
@@ -197,6 +200,7 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
 <sub>工具&nbsp;+&nbsp;存储</sub>
 </td>
 </tr>
+</tbody>
 </table>
 
 **通用接入**

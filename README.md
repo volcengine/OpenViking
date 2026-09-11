@@ -145,6 +145,7 @@ Build your own integration with the [Python](sdk/python/README.md), [Go](sdk/go/
 Connect your agent to OpenViking for cross-session memory. Choose a native integration for automatic recall and session capture, or use MCP to give your agent memory and context tools.
 
 <table>
+<tbody>
 <tr>
 <td align="center" valign="bottom" width="16%">
 <a href="https://docs.openviking.ai/en/agent-integrations/02-claude-code"><img src="docs/images/integrations/logos/claude-code.png" width="32" height="32" alt=""><br><strong>Claude</strong></a><br>
@@ -171,6 +172,8 @@ Connect your agent to OpenViking for cross-session memory. Choose a native integ
 <sub>Built-in</sub>
 </td>
 </tr>
+</tbody>
+<tbody>
 <tr>
 <td align="center" valign="bottom" width="16%">
 <a href="https://docs.openviking.ai/en/agent-integrations/10-opencode"><img src="docs/images/integrations/logos/opencode.png" width="32" height="32" alt=""><br><strong>OpenCode</strong></a><br>
@@ -197,6 +200,7 @@ Connect your agent to OpenViking for cross-session memory. Choose a native integ
 <sub>Tools&nbsp;+&nbsp;store</sub>
 </td>
 </tr>
+</tbody>
 </table>
 
 **General integrations**
