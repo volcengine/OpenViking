@@ -164,6 +164,20 @@ class _FakeProcessor:
         )
 
 
+class _FailOnceSummaryProcessor(_FakeProcessor):
+    def __init__(self, viking_fs, failed_path):
+        super().__init__(viking_fs)
+        self.failed_path = failed_path
+        self.failed = False
+
+    async def _generate_single_file_summary(self, file_path, llm_sem=None, ctx=None):
+        self.summarized_files.append(file_path)
+        if file_path == self.failed_path and not self.failed:
+            self.failed = True
+            raise RuntimeError("temporary summary failure")
+        return {"name": file_path.split("/")[-1], "summary": "summary"}
+
+
 @pytest.mark.asyncio
 async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypatch):
     root_uri = "viking://resources/root"
@@ -219,6 +233,46 @@ async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypa
     overview = parse_abstract_overview(fake_fs._file_contents[f"{root_uri}/.overview.md"]).body
     assert "- a.txt: summary" in overview
     assert "- b.txt: old-b" in overview
+
+
+@pytest.mark.asyncio
+async def test_retry_progress_skips_files_completed_before_directory_failure(monkeypatch):
+    root_uri = "viking://resources/retry"
+    a_path = f"{root_uri}/a.txt"
+    b_path = f"{root_uri}/b.txt"
+    fake_fs = _FakeVikingFS(
+        tree={root_uri: [{"name": "a.txt", "isDir": False}, {"name": "b.txt", "isDir": False}]},
+        file_contents={a_path: "a", b_path: "b"},
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
+    )
+
+    processor = _FailOnceSummaryProcessor(fake_fs, b_path)
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
+
+    def make_executor(retry_progress=None):
+        return SemanticDagExecutor(
+            processor=processor,
+            context_type="resource",
+            max_concurrent_llm=1,
+            ctx=ctx,
+            incremental_update=True,
+            target_uri=root_uri,
+            recursive=False,
+            changes={"modified": [a_path, b_path]},
+            retry_progress=retry_progress,
+        )
+
+    first = make_executor()
+    with pytest.raises(RuntimeError, match="temporary summary failure"):
+        await first.run(root_uri)
+
+    await make_executor(first.retry_progress).run(root_uri)
+
+    assert processor.summarized_files == [a_path, b_path, b_path]
 
 
 @pytest.mark.asyncio
