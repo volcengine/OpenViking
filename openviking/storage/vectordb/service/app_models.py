@@ -4,6 +4,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
+from openviking.storage.vectordb.collection.diversity import VectorDiversityOptions
+
 # ==================== Collection Models ====================
 
 
@@ -108,6 +110,9 @@ class SearchByVectorRequest(BaseModel):
     output_fields: Optional[Any] = Field(None, description="Output fields")
     limit: Optional[int] = Field(10, description="Result limit")
     offset: Optional[int] = Field(0, description="Result offset")
+    diversity: Optional[VectorDiversityOptions] = Field(
+        None, description="Vector-index diversity settings"
+    )
 
 
 class SearchByIdRequest(BaseModel):

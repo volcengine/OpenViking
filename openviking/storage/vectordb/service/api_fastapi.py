@@ -5,7 +5,8 @@ import time
 from dataclasses import asdict
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi.responses import JSONResponse
 
 from openviking.storage.vectordb.project.project_group import get_or_create_project_group
 from openviking.storage.vectordb.service.app_models import (
@@ -423,10 +424,18 @@ async def search_by_vector(request: SearchByVectorRequest, req: Request):
             filters=filters,
             sparse_vector=sparse_vector,
             output_fields=output_fields,
+            diversity=request.diversity,
         )
         return success_response("search success", asdict(result), request=req)
     except VikingDBException as e:
         return error_response(e.message, e.code.value, request=req)
+    except NotImplementedError as e:
+        return JSONResponse(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            content=error_response(str(e), ErrorCode.NOT_IMPLEMENTED.value, request=req),
+        )
+    except ValueError as e:
+        return error_response(str(e), ErrorCode.INVALID_PARAM.value, request=req)
 
 
 @search_router.post("/id", response_model=ApiResponse)
