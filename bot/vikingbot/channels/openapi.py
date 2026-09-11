@@ -421,8 +421,12 @@ class OpenAPIChannel(BaseChannel):
                         status_code=403,
                         detail=("openviking_connection is only accepted from trusted server proxy"),
                     )
-                await channel._assert_runtime_upstream_auth_mode(
+                health = await channel._assert_runtime_upstream_auth_mode(
                     channel._identity_headers_from_connection(request.openviking_connection)
+                )
+                request.openviking_connection = channel._reconcile_forwarded_connection(
+                    request.openviking_connection,
+                    health,
                 )
                 request._principal_scope = channel._connection_principal_scope(
                     request.openviking_connection
@@ -848,6 +852,86 @@ class OpenAPIChannel(BaseChannel):
         self._assert_runtime_health_mode(health)
         return health
 
+    def _reconcile_forwarded_connection(
+        self,
+        connection: Any,
+        health: dict[str, Any],
+    ) -> OpenVikingConnection:
+        """Re-bind a trusted forwarded connection to upstream-verified identity.
+
+        Loopback / gateway-token trust only proves the carrier is the Server
+        proxy path (#4848). Claimed ``account_id`` / ``user_id`` / ``role`` on a
+        connection that carries an API key must still match what ``/health``
+        resolves for that key.
+        """
+        if isinstance(connection, OpenVikingConnection):
+            values = connection.model_dump(exclude_none=True)
+        elif isinstance(connection, dict):
+            values = dict(connection)
+        else:
+            values = {}
+
+        api_key = str(values.get("api_key") or "").strip()
+        actor_peer_id = str(values.get("actor_peer_id") or "").strip()
+        agent_id = str(values.get("agent_id") or "").strip() or DEFAULT_OPENVIKING_AGENT_ID
+        auth_mode = self._ov_server_auth_mode()
+
+        if api_key:
+            role = str(health.get("role") or "").strip().lower()
+            account_id = str(health.get("account_id") or "").strip()
+            user_id = str(health.get("user_id") or "").strip()
+            if auth_mode == "api_key":
+                if role not in {"user", "admin"} or not account_id or not user_id:
+                    raise HTTPException(
+                        status_code=401,
+                        detail=(
+                            "OpenViking credentials did not resolve to a usable "
+                            "User/Admin identity"
+                        ),
+                    )
+                api_key_type = "user"
+            else:
+                if not account_id or not user_id:
+                    raise HTTPException(
+                        status_code=401,
+                        detail="Invalid OpenViking credentials",
+                    )
+                api_key_type = "root" if auth_mode == "trusted" else "user"
+                role = role or str(values.get("role") or "user").strip().lower() or "user"
+            rebuilt = self._build_openviking_connection(
+                api_key=api_key,
+                account_id=account_id,
+                user_id=user_id,
+                role=role,
+                api_key_type=api_key_type,
+                actor_peer_id=actor_peer_id,
+            )
+            rebuilt["agent_id"] = agent_id
+            return OpenVikingConnection(**rebuilt)
+
+        # Keyless forwards are only valid for trusted/dev upstreams. In api_key
+        # mode, unauthenticated /health still returns 200 with auth_mode and no
+        # resolved identity, so claimed account/user/role must not be accepted
+        # without a real API key (Web Studio review on #4866).
+        if auth_mode not in {"trusted", "dev"}:
+            raise HTTPException(
+                status_code=401,
+                detail=(
+                    "OpenViking API key required on forwarded connection "
+                    f"when upstream auth_mode is {auth_mode or 'unknown'}"
+                ),
+            )
+
+        # Trusted / DEV forwards may omit api_key; keep proxy-asserted identity
+        # but never honor a client-chosen upstream URL.
+        values["server_url"] = self._ov_server_url()
+        values["agent_id"] = agent_id
+        if actor_peer_id:
+            values["actor_peer_id"] = actor_peer_id
+        return OpenVikingConnection(
+            **{key: value for key, value in values.items() if value not in ("", None)}
+        )
+
     def _build_openviking_connection(
         self,
         *,
@@ -951,6 +1035,10 @@ class OpenAPIChannel(BaseChannel):
 
         gateway_is_localhost = self._is_gateway_localhost()
         gateway_challenge_headers = {"X-VikingBot-Gateway": "true"}
+        if token_configured and x_gateway_token:
+            # Validate on localhost too: connection trust needs token_valid even
+            # when the gateway itself still allows unauthenticated loopback calls.
+            token_valid = secrets.compare_digest(x_gateway_token, gateway_token)
         if not gateway_is_localhost:
             if not token_configured:
                 raise HTTPException(
@@ -958,14 +1046,12 @@ class OpenAPIChannel(BaseChannel):
                     detail="OpenAPI gateway token is required when host is non-localhost",
                     headers=gateway_challenge_headers,
                 )
-            if x_gateway_token:
-                token_valid = secrets.compare_digest(x_gateway_token, gateway_token)
-                if not token_valid:
-                    raise HTTPException(
-                        status_code=403,
-                        detail="Invalid X-Gateway-Token",
-                        headers=gateway_challenge_headers,
-                    )
+            if x_gateway_token and not token_valid:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Invalid X-Gateway-Token",
+                    headers=gateway_challenge_headers,
+                )
             if not token_valid:
                 raise HTTPException(
                     status_code=401,
@@ -975,7 +1061,13 @@ class OpenAPIChannel(BaseChannel):
 
         loopback_request = self._is_loopback_request(request)
         local_forward_trust = loopback_request and gateway_is_localhost
-        forwarded_trusted = loopback_request and (token_valid or local_forward_trust)
+        # Loopback alone is only enough when no gateway token is configured
+        # (legacy --with-bot). Once a token exists, only authenticated proxy
+        # forwards may supply openviking_connection (#4848 follow-up).
+        if token_configured:
+            forwarded_trusted = loopback_request and token_valid
+        else:
+            forwarded_trusted = local_forward_trust
 
         return GatewayRequestAuth(
             gateway_token_configured=token_configured,
@@ -1001,8 +1093,12 @@ class OpenAPIChannel(BaseChannel):
                     status_code=503,
                     detail=OPENVIKING_UPSTREAM_NOT_CONFIGURED_DETAIL,
                 )
-            await self._assert_runtime_upstream_auth_mode(
+            health = await self._assert_runtime_upstream_auth_mode(
                 self._identity_headers_from_connection(chat_request.openviking_connection)
+            )
+            chat_request.openviking_connection = self._reconcile_forwarded_connection(
+                chat_request.openviking_connection,
+                health,
             )
             chat_request._principal_scope = self._connection_principal_scope(
                 chat_request.openviking_connection
@@ -1040,8 +1136,12 @@ class OpenAPIChannel(BaseChannel):
                     status_code=503,
                     detail=OPENVIKING_UPSTREAM_NOT_CONFIGURED_DETAIL,
                 )
-            await self._assert_runtime_upstream_auth_mode(
+            health = await self._assert_runtime_upstream_auth_mode(
                 self._identity_headers_from_connection(compile_request.openviking_connection)
+            )
+            compile_request.openviking_connection = self._reconcile_forwarded_connection(
+                compile_request.openviking_connection,
+                health,
             )
             compile_request._principal_scope = self._connection_principal_scope(
                 compile_request.openviking_connection
