@@ -122,7 +122,6 @@ pub async fn add(
             .add_skill(
                 &target.data,
                 wait,
-                None,
                 show_progress,
                 verbose,
                 source_metadata,
