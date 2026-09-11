@@ -480,6 +480,10 @@ JSON 输出 - 错误：
 | PUT | `/api/v1/admin/agent-evolution` | 更新调用方 account 的 Agent 进化状态 |
 | GET | `/api/v1/admin/accounts/{account_id}/settings` | 获取 account 生效配置 |
 | PATCH | `/api/v1/admin/accounts/{account_id}/settings` | 更新白名单内的 account 配置 |
+| GET | `/api/v1/admin/accounts/{account_id}/memory-templates` | 列出可编辑记忆模板、默认值及生效值 |
+| GET | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | 查询单个记忆模板 |
+| PUT | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | 补齐并发布单个记忆模板 |
+| DELETE | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | 删除记忆模板覆盖，恢复部署默认值 |
 | POST | `/api/v1/admin/accounts` | 创建账号及首个管理员 |
 | GET | `/api/v1/admin/accounts` | 列出账号 |
 | POST | `/api/v1/admin/migrate` | 迁移旧版身份数据 |

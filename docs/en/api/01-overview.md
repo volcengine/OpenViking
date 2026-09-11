@@ -485,6 +485,10 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | PUT | `/api/v1/admin/agent-evolution` | Update the caller account's Agent Evolution status |
 | GET | `/api/v1/admin/accounts/{account_id}/settings` | Get effective account settings |
 | PATCH | `/api/v1/admin/accounts/{account_id}/settings` | Update allowlisted account settings |
+| GET | `/api/v1/admin/accounts/{account_id}/memory-templates` | List editable memory templates, defaults and effective values |
+| GET | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | Read one memory template |
+| PUT | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | Complete and publish one memory template |
+| DELETE | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | Remove a memory template override and restore deployment defaults |
 | POST | `/api/v1/admin/accounts` | Create an account and its first administrator |
 | GET | `/api/v1/admin/accounts` | List accounts |
 | POST | `/api/v1/admin/migrate` | Migrate legacy identity data |
