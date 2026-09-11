@@ -195,7 +195,7 @@ class LiteLLMVLMProvider(VLMBase):
         """Resolve model name by applying provider prefixes."""
         if _has_litellm_prefix(model, EXPLICIT_LITELLM_PREFIXES):
             return model
-        if model.lower().startswith("openai/"):
+        if model.lower().startswith(("openai/", *OLLAMA_LITELLM_PREFIXES)):
             return model
 
         provider = self._detected_provider or detect_provider_by_model(model)
