@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -150,7 +151,7 @@ async def test_stale_content_write_keeps_file_work_without_directory_aggregation
     msg = SemanticMsg(
         uri="viking://resources/wiki",
         context_type="resource",
-        recursive=False,
+        recursive=True,
         coalesce_key="resource|wiki",
         coalesce_version=1,
         changes={"modified": [changed], "deleted": ["viking://resources/wiki/old.md"]},
@@ -160,10 +161,82 @@ async def test_stale_content_write_keeps_file_work_without_directory_aggregation
     await processor.on_dequeue(msg.to_dict())
 
     assert _FakeDagExecutor.calls[0]["aggregate_directory"] is False
+    assert _FakeDagExecutor.calls[0]["recursive"] is False
     assert _FakeDagExecutor.calls[0]["changes"] == {"modified": [changed]}
     assert _FakeDagExecutor.calls[0]["coalesce_key"] == ""
     assert _FakeDagExecutor.runs == ["viking://resources/wiki"]
     processor._enqueue_parent_refresh.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_file_only_message_drives_real_dag_non_recursively_without_requeue(monkeypatch):
+    root_uri = "viking://resources/wiki"
+    changed = f"{root_uri}/changed.md"
+    child_uri = f"{root_uri}/child"
+    nested = f"{child_uri}/nested.md"
+    fake_fs = _FakeVikingFS()
+    ls_mock = AsyncMock(
+        side_effect=lambda uri, **_: {
+            root_uri: [
+                {"name": "changed.md", "isDir": False},
+                {"name": "child", "isDir": True},
+            ],
+            child_uri: [{"name": "nested.md", "isDir": False}],
+        }.get(uri, [])
+    )
+    monkeypatch.setattr(fake_fs, "ls", ls_mock, raising=False)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: fake_fs,
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.get_viking_fs",
+        lambda: fake_fs,
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticLockScope.resolve",
+        AsyncMock(return_value=SimpleNamespace(lock=None, close=AsyncMock())),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.is_semantic_msg_stale",
+        lambda msg: False,
+    )
+
+    processor = SemanticProcessor(max_concurrent_llm=1)
+    summary_mock = AsyncMock(return_value={"name": "changed.md", "summary": "summary"})
+    requeue_mock = AsyncMock()
+    monkeypatch.setattr(processor, "_generate_single_file_summary", summary_mock)
+    monkeypatch.setattr(processor, "_requeue_semantic_msg_after_error", requeue_mock)
+    msg = SemanticMsg(
+        uri=root_uri,
+        context_type="resource",
+        aggregate_directory=False,
+        recursive=True,
+        changes={"modified": [changed, nested]},
+        skip_vectorization=True,
+    )
+
+    await asyncio.wait_for(processor.on_dequeue(msg.to_dict()), timeout=0.5)
+
+    stats = SemanticProcessor.consume_dag_stats(uri=root_uri)
+    assert stats is not None
+    assert (
+        stats.total_nodes,
+        stats.pending_nodes,
+        stats.in_progress_nodes,
+        stats.done_nodes,
+    ) == (2, 0, 0, 2)
+    ls_mock.assert_awaited_once()
+    assert ls_mock.await_args is not None
+    assert ls_mock.await_args.args[0] == root_uri
+    summary_mock.assert_awaited_once()
+    assert summary_mock.await_args is not None
+    assert summary_mock.await_args.args[0] == changed
+    requeue_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio
