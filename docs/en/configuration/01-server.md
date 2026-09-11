@@ -137,6 +137,21 @@ API-based `embedding`, `vlm`, `query_planner`, and `rerank` configurations reuse
 
 Changing the model or `dimension` can make existing vector collections incompatible and may require migration or reindexing.
 
+#### `embedding.max_input_tokens`
+
+`max_input_tokens` sits on the `embedding` object itself, next to `dense` / `sparse` / `hybrid` (not inside them).
+
+| Field | Type / values | Default | Purpose |
+|---|---|---|---|
+| `max_input_tokens` | integer; `0` disables | `4096` | Maximum estimated raw-text tokens per embedding input; oversized inputs are truncated before the request is sent |
+
+**Truncation semantics (observed on a self-hosted v0.4.17.dev7 deployment with Qwen3-Embedding-8B)**
+
+- The token estimate is character-based: CJK characters count as one token each and other characters as roughly four characters per token (`openviking/utils/embedding_input.py:estimate_embedding_input_tokens()`).
+- When the estimate exceeds the limit, the input is truncated from the head — the beginning of the text is kept — and a `\n...(truncated for embedding)` suffix is appended (`openviking/utils/embedding_input.py:truncate_embedding_input()`).
+- The limit interacts with the embedding slot capacity: in-flight token volume per embedder scales with `embedding.max_concurrent` (default `10`) × `max_input_tokens`, so raising the limit for long-document workloads also raises per-request token volume against the embedding provider.
+- Boundary to keep in mind: because only the head of an oversized document is embedded, content in the middle of a long document beyond the truncation point is, in practice, not represented in its vector and cannot be recalled by vector search. Keep the default, split long documents at ingest, or set `embedding.text_source` to a summary-based mode when mid-document recall matters.
+
 ### `rerank`
 
 | Field | Type / values | Default | Purpose |

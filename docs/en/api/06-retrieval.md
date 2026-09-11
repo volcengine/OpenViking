@@ -94,6 +94,10 @@ class FindResult:
     total: int                       # Total count (auto-calculated)
 ```
 
+**Result Buckets**
+
+`FindResult` partitions hits into three independent buckets — `memories`, `resources`, and `skills`. A hit appears in exactly one bucket, so reading only a single bucket (for example, only `result["memories"]`) silently misses every hit in the other buckets, including knowledge-layer hits in `resources` and `skills`. Observed on a self-hosted v0.4.17.dev7 deployment with Qwen3-Embedding-8B: consumers that iterate only one bucket reported "no results" while matching content sat in another bucket. Iterate all three buckets, or use `context_type` / `target_uri` to scope the query intentionally, and do not infer "no results" from one empty bucket.
+
 **MatchedContext Structure**
 
 ```python
@@ -1126,6 +1130,27 @@ curl -X GET "http://localhost:1933/api/v1/content/overview?uri=viking://resource
 curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://resources/docs/auth.md" \
     -H "X-API-Key: your-key"
 ```
+
+## Behavioral Notes
+
+The behaviors in this section were observed on a self-hosted v0.4.17.dev7 deployment with Qwen3-Embedding-8B and are deliberately worded as observations rather than contractual guarantees.
+
+### Tag Filtering and `set_tags` Propagation
+
+The `tags` parameter of `find()` and `search()` (strict `k=v` form, AND-combined) is applied as a filter against the tags stored on vector records, not against live filesystem metadata: `openviking/utils/tags.py:build_search_tags_filter()` builds the vector-store filter consumed by `openviking/server/routers/search.py:search()`.
+
+**Observed behavior**:
+
+- Tags written after ingest via the filesystem `set_tags` operation did not show up on existing vector records immediately; tag-filtered searches did not return the affected URIs until the content was re-indexed (re-ingest or reindex).
+- The most reliable path to tag-filterable content is to pass tags at ingest time, e.g. `add_resource(..., tags=["project=demo", "type=runbook"])`, so the tags are present on the vector records from the start.
+- After calling `set_tags`, verify propagation with the debug endpoints (see [Debug](21-debug.md)) before relying on tag-filtered retrieval.
+
+### Same-Query Cache
+
+Identical retrieval queries (same query text and scope) may be served from a cache instead of running the full retrieval pipeline.
+
+- **Observed behavior**: repeating an unchanged query returned in sub-millisecond time, while the first execution of the same query took the usual pipeline time.
+- **Practical impact**: benchmarks and evaluations must vary the query text between runs; otherwise the measured latency reflects cache replay rather than retrieval cost.
 
 ## Best Practices
 
