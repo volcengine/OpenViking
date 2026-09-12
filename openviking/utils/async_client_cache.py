@@ -122,7 +122,11 @@ class LoopScopedAsyncClientCache:
 
     @classmethod
     async def close_current_loop_clients(cls) -> None:
-        """Close every cached client owned by the current event loop."""
+        """Close cached clients owned by the current event loop.
+
+        The no-loop fallback client is managed separately by ``close_all`` or
+        ``close_all_async``; it is not owned by the current loop.
+        """
         loop = asyncio.get_running_loop()
         with cls._instances_lock:
             caches = list(cls._instances)
