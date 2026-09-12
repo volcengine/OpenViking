@@ -1,6 +1,9 @@
 import re
 from pathlib import Path
 
+import pytest
+import yaml
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -122,3 +125,22 @@ def test_rust_crates_declare_the_repo_minimum_rust_version():
     ):
         cargo_toml = _read_text(relative_path)
         assert f'rust-version = "{min_rust_version}"' in cargo_toml
+
+
+@pytest.mark.parametrize("storage", [{}, {"workspace": "./data"}, {"workspace": "./custom"}])
+def test_docker_relative_workspace_is_inside_persistent_mount(tmp_path, monkeypatch, storage):
+    from openviking_cli.utils.config.storage_config import StorageConfig
+
+    runtime = _read_text("Dockerfile").rsplit("\nFROM ", maxsplit=1)[1]
+    workdir = re.findall(r"^WORKDIR (.+)$", runtime, re.MULTILINE)[-1]
+    compose = yaml.safe_load(_read_text("docker-compose.yml"))
+    mount_target = compose["services"]["openviking"]["volumes"][0].split(":")[1]
+    container_cwd = tmp_path / workdir.lstrip("/")
+    container_cwd.mkdir(parents=True)
+    monkeypatch.chdir(container_cwd)
+
+    config = StorageConfig(**storage)
+
+    assert Path(config.workspace).is_relative_to(tmp_path / mount_target.lstrip("/"))
+    assert config.agfs.path == config.workspace
+    assert config.vectordb.path == config.workspace
