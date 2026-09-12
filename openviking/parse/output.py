@@ -307,6 +307,57 @@ class LocalParseOutputStore(ParseOutputStore):
         await asyncio.to_thread(shutil.rmtree, artifact_root, ignore_errors=True)
 
 
+@dataclass(frozen=True)
+class ResolvedDocRoot:
+    """The single document root located inside a parse artifact.
+
+    ``doc_name`` is the original (un-sanitized) entry name; ``doc_rel`` is its
+    artifact-relative path (the file itself when flattened to a single file).
+    """
+
+    doc_name: str
+    doc_rel: str
+    root_is_file: bool
+
+
+async def resolve_artifact_doc_root(
+    store: ParseOutputStore,
+    ref: ParseArtifactRef,
+    *,
+    flatten_single_file: bool = False,
+) -> ResolvedDocRoot:
+    """Locate the single document root inside an artifact, backend-agnostically.
+
+    Parsers lay out both AGFS and local artifacts the same way — exactly one
+    document directory under the root — so this structural walk is shared. It
+    only reads the artifact via ``store``; resolving the final target URI against
+    the live resource tree is a separate, VikingFS-only concern handled by the
+    caller (TreeBuilder.resolve_target_uri).
+    """
+    top = [e for e in await store.list(ref, "") if e.name not in {".", ".."}]
+    doc_dirs = [e for e in top if e.is_dir]
+    if len(doc_dirs) != 1:
+        raise ValueError(
+            f"expected exactly 1 document directory in artifact {ref.root}, found {len(doc_dirs)}"
+        )
+
+    doc_entry = doc_dirs[0]
+    doc_name = doc_entry.name
+    doc_rel = doc_entry.rel_path
+    root_is_file = False
+
+    if flatten_single_file:
+        children = [
+            e for e in await store.list(ref, doc_rel) if e.name not in {".", ".."}
+        ]
+        if len(children) == 1 and not children[0].is_dir:
+            doc_name = children[0].name
+            doc_rel = children[0].rel_path
+            root_is_file = True
+
+    return ResolvedDocRoot(doc_name=doc_name, doc_rel=doc_rel, root_is_file=root_is_file)
+
+
 def build_parse_output_store(
     *,
     viking_fs: Any = None,
@@ -336,6 +387,8 @@ __all__ = [
     "LocalParseOutputStore",
     "ParseArtifactRef",
     "ParseOutputStore",
+    "ResolvedDocRoot",
     "build_parse_output_store",
+    "resolve_artifact_doc_root",
     "sanitize_relative_viking_path",
 ]
