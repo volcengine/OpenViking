@@ -104,23 +104,31 @@ async def read_target_vector_snapshot(
     return vectors
 
 
-async def read_new_manifest(store: Any, ref: Any) -> Dict[str, NewEntry]:
+async def read_new_manifest(store: Any, ref: Any, *, doc_rel: str = "") -> Dict[str, NewEntry]:
     """Walk the parse output store and return ``rel_path -> NewEntry``.
 
     md5 is intentionally empty: it is computed at the final-bytes upload site
     (local/AGFS write) rather than by reading artifacts back here.
+
+    ``doc_rel`` (e.g. ``repository``) is stripped from every path so the manifest
+    keys line up with the target resource tree, which has no such wrapper.
     """
     manifest: Dict[str, NewEntry] = {}
+    base = doc_rel.strip("/")
+    prefix = f"{base}/" if base else ""
 
     async def _walk(rel: str) -> None:
         for entry in await store.list(ref, rel):
             if _is_excluded_rel_path(entry.rel_path):
                 continue
-            manifest[entry.rel_path] = NewEntry(md5="", is_dir=entry.is_dir)
             if entry.is_dir:
                 await _walk(entry.rel_path)
+                continue
+            key = entry.rel_path[len(prefix):] if prefix else entry.rel_path
+            if key:
+                manifest[key] = NewEntry(md5="", is_dir=False)
 
-    await _walk("")
+    await _walk(base)
     return manifest
 
 
@@ -132,14 +140,19 @@ async def build_resource_diff_plan(
     artifact_ref: Any,
     target_uri: str,
     ctx: Any,
+    doc_rel: str = "",
 ) -> DiffPlan:
     """Read all three snapshots and assemble the incremental plan.
 
     md5 on the N side is not yet populated (see :func:`read_new_manifest`); the
     planner therefore routes intersection files through ``needs_body_compare``
     until the apply stage supplies fingerprints at write time.
+
+    ``doc_rel`` is the artifact-relative path of the document root (e.g.
+    ``repository``); it is stripped from the manifest so the new-tree keys align
+    with the target file/vector snapshots.
     """
-    new = await read_new_manifest(store, artifact_ref)
+    new = await read_new_manifest(store, artifact_ref, doc_rel=doc_rel)
     target_files, files_complete = await read_target_file_snapshot(
         viking_fs, target_uri, ctx=ctx
     )

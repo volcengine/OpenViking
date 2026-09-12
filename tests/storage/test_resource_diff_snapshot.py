@@ -152,8 +152,8 @@ class TestReadNewManifest:
         ref = ParseArtifactRef(backend="agfs", root="viking://temp/n", root_type="dir")
 
         manifest = await read_new_manifest(store, ref)
-        assert set(manifest) == {"a.py", "sub", "sub/b.py"}
+        # Leaf files only; directories are traversed, not emitted as diff keys.
+        assert set(manifest) == {"a.py", "sub/b.py"}
         assert manifest["a.py"].is_dir is False
-        assert manifest["sub"].is_dir is True
         # md5 is filled at the final-bytes upload site, not here.
         assert manifest["a.py"].md5 == ""
