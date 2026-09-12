@@ -506,10 +506,12 @@ class ResourceProcessor:
                     except Exception:
                         pass
 
+            artifact_ref = parse_result.ensure_artifact_ref()
             prepared = {
                 "root_uri": root_uri,
                 "temp_uri": temp_uri or parse_result.temp_dir_path,
                 "temp_dir_path": parse_result.temp_dir_path,
+                "artifact_ref": artifact_ref.to_dict() if artifact_ref is not None else None,
                 "source_committed": source_committed,
                 "target_preexisting": target_preexisting,
                 "is_code_repo": parse_result.source_format == "repository",
@@ -557,6 +559,18 @@ class ResourceProcessor:
         root_uri = str(prepared.get("root_uri") or "")
         temp_uri = prepared.get("temp_uri")
         temp_dir_path = prepared.get("temp_dir_path")
+        # The artifact ref crosses the queue alongside temp_dir_path. Step 2a only
+        # supports the AGFS backend, whose root is the temp URI; validate the ref
+        # so a future backend cannot silently reach here without wiring.
+        artifact_ref_data = prepared.get("artifact_ref")
+        if artifact_ref_data is not None:
+            from openviking.parse.output import ParseArtifactRef
+
+            artifact_ref = ParseArtifactRef.from_dict(artifact_ref_data)
+            if artifact_ref.backend != "agfs":
+                raise ValueError(
+                    f"Unsupported parse artifact backend in post-process: {artifact_ref.backend}"
+                )
         source_committed = bool(prepared.get("source_committed"))
         target_preexisting = bool(prepared.get("target_preexisting"))
         build_index = bool(kwargs.get("build_index", True))

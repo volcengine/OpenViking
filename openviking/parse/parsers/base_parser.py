@@ -2,9 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import TYPE_CHECKING, List, Optional, Union
 
 from openviking.parse.base import ParseResult
+
+if TYPE_CHECKING:
+    from openviking.parse.output import ParseOutputStore
 
 
 class BaseParser(ABC):
@@ -16,6 +19,14 @@ class BaseParser(ABC):
 
     All parsers use async interface for parsing operations.
     """
+
+    #: Optional artifact store. When unset, parsers fall back to the global
+    #: VikingFS singleton (AGFS temp), i.e. the pre-abstraction behaviour.
+    _output_store: "Optional[ParseOutputStore]" = None
+
+    def set_output_store(self, store: "Optional[ParseOutputStore]") -> None:
+        """Attach an artifact store for this parse. ``None`` restores the default."""
+        self._output_store = store
 
     @abstractmethod
     async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
@@ -121,3 +132,13 @@ class BaseParser(ABC):
             Temporary URI string (e.g., "viking://temp/abc12345")
         """
         return self._get_viking_fs().create_temp_uri()
+
+    def _artifact_ref_for(self, temp_uri: str):
+        """Build a serializable artifact ref for a temp root this parser wrote.
+
+        Step 2a always uses the AGFS backend; the ref is a thin view over the
+        temp URI so downstream persistence can migrate off bare strings.
+        """
+        from openviking.parse.output import ParseArtifactRef
+
+        return ParseArtifactRef(backend="agfs", root=temp_uri, root_type="dir")
