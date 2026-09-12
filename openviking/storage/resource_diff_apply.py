@@ -45,9 +45,12 @@ class ApplyResult:
 
 async def _upload(rel_path: str, *, store, artifact_ref, target, result: ApplyResult) -> None:
     data = await store.read_bytes(artifact_ref, rel_path)
-    await target.write_file(rel_path, data)
+    # The target may normalize bytes on write (e.g. encoding). md5 must reflect
+    # the FINAL stored bytes, so hash what write_file reports it stored.
+    written = await target.write_file(rel_path, data)
+    final_bytes = written if written is not None else data
     result.uploaded.append(rel_path)
-    result.md5_by_rel[rel_path] = content_md5(data)
+    result.md5_by_rel[rel_path] = content_md5(final_bytes)
 
 
 async def apply_diff_plan(
@@ -85,9 +88,10 @@ async def apply_diff_plan(
         if old_bytes is not None and old_bytes == new_bytes:
             result.unchanged.append(rel_path)
             continue
-        await target.write_file(rel_path, new_bytes)
+        written = await target.write_file(rel_path, new_bytes)
+        final_bytes = written if written is not None else new_bytes
         result.uploaded.append(rel_path)
-        result.md5_by_rel[rel_path] = content_md5(new_bytes)
+        result.md5_by_rel[rel_path] = content_md5(final_bytes)
 
     result.unchanged.extend(plan.unchanged)
 
