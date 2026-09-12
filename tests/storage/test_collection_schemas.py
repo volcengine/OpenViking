@@ -189,12 +189,8 @@ async def test_init_context_collection_backfills_metadata_for_empty_legacy_colle
     schema_updates = []
     config = _DummyConfig(_DummyEmbedder(), backend="local")
     existing_schema = CollectionSchemas.context_collection("context", config.embedding.dimension)
-    existing_fields = [
-        field for field in existing_schema["Fields"] if field["FieldName"] != "tags"
-    ]
-    existing_scalar_index = [
-        field for field in existing_schema["ScalarIndex"] if field != "tags"
-    ]
+    existing_fields = [field for field in existing_schema["Fields"] if field["FieldName"] != "tags"]
+    existing_scalar_index = [field for field in existing_schema["ScalarIndex"] if field != "tags"]
 
     class _FakeStorage:
         async def create_collection(self, name, schema):
@@ -475,6 +471,84 @@ async def test_embedding_handler_propagates_account_id_on_success(monkeypatch):
     await handler.on_dequeue(_build_queue_payload_for_account("acct-embed-success"))
 
     assert captured["account_id"] == "acct-embed-success"
+
+
+@pytest.mark.asyncio
+async def test_embedding_handler_binds_message_identity_to_observability_context(monkeypatch):
+    """Embedding worker must restore the requesting user identity from the message.
+
+    The worker runs on a dedicated event loop with no HTTP root context, so
+    per-call model events (embedding.call) can only inherit user_id from the
+    observability context bound in TextEmbeddingHandler.on_dequeue. Without
+    the bind, usage_audit attributes background embedding tokens to an empty
+    user_id. The dummy embedder below mirrors DenseEmbedderBase.update_token_usage,
+    which reads account_id from the root context and publishes the event; the
+    enriched event's user_id comes from the bound context at publish time.
+    """
+    from openviking.metrics.datasources import EmbeddingEventDataSource
+    from openviking.observability.context import get_root_observability_context
+    from openviking.observability.events import (
+        ObservabilityEvent,
+        register_event_subscriber,
+        unregister_event_subscriber,
+    )
+
+    class _IdentityEmittingEmbedder(_DummyEmbedder):
+        async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+            root = get_root_observability_context()
+            EmbeddingEventDataSource.record_call(
+                provider="local",
+                model_name="dummy-model",
+                duration_seconds=0.01,
+                prompt_tokens=1,
+                completion_tokens=0,
+                account_id=root.account_id if root is not None else None,
+            )
+            return EmbedResult(dense_vector=[0.1, 0.2])
+
+    class _DummyVikingDB:
+        is_closing = False
+
+        async def upsert(self, _data, *, ctx, options=UpsertOptions()):
+            return None
+
+    captured_events: list[ObservabilityEvent] = []
+
+    def _capture(event: ObservabilityEvent) -> None:
+        captured_events.append(event)
+
+    register_event_subscriber("test-embedding-identity", _capture)
+    try:
+        monkeypatch.setattr(
+            "openviking_cli.utils.config.get_openviking_config",
+            lambda: _DummyConfig(_IdentityEmittingEmbedder()),
+        )
+
+        msg = EmbeddingMsg(
+            message="hello",
+            context_data={
+                "id": "id-1",
+                "uri": "viking://user/teleagent/resources/sample",
+                "account_id": "acct-1",
+                "user": {"account_id": "acct-1", "user_id": "teleagent"},
+                "abstract": "sample",
+            },
+            telemetry_id="telemetry-1",
+        )
+
+        handler = TextEmbeddingHandler(_DummyVikingDB())
+        await handler.on_dequeue({"data": json.dumps(msg.to_dict())})
+    finally:
+        unregister_event_subscriber("test-embedding-identity")
+
+    embedding_events = [e for e in captured_events if e.event_name == "embedding.call"]
+    assert embedding_events, "expected one embedding.call event"
+    event = embedding_events[-1]
+    # The event published inside the worker saw the message identity.
+    assert event.account_id == "acct-1"
+    assert event.user_id == "teleagent"
+    # Root identity is no longer bound after the handler returns.
+    assert get_root_observability_context() is None
 
 
 @pytest.mark.asyncio
