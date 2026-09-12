@@ -1,0 +1,26 @@
+bot/vikingbot/agent/loop.py
+  h_b34c679d17e2ac 26,1403-1427,1811,1813,1837
+bot/vikingbot/agent/tools/base.py
+  h_b34c679d17e2ac 10-12
+bot/vikingbot/agent/tools/compile.py
+  h_b34c679d17e2ac 27,299-302,305-314,318,338-339,343-348,351,362-363,375-381,543,782,856-859
+bot/vikingbot/agent/tools/compile_merge.py
+  h_b34c679d17e2ac 9,17,113,136-147,161-168,175-182,199-202,317,339-340,383-388,421-422,428-437,465-467,477-480,485,488-493,523,557-565,586,679-704,711-717,719,761-762,767-768,774-785,789-790,799,816,834-839,849-857
+bot/vikingbot/compile/service.py
+  h_b34c679d17e2ac 38,83,804,807-820,822,1146,1660-1682,1727,1735,1950-1953,1955-1959,1962-1985,1995
+bot/vikingbot/compile/sources.py
+  h_b34c679d17e2ac 141,152,154
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "34f02b7fd1eb1d113c9d4bcea4fc8b0814e2675b",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
