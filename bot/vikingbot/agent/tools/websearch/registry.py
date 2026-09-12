@@ -78,9 +78,9 @@ class WebSearchBackendRegistry:
         """
         Auto-select the best available backend.
 
-        Priority: tavily → exa → brave → ddgs
+        Priority: tavily → exa → brave → serply → ddgs
         """
-        priority = ["tavily", "exa", "brave", "ddgs"]
+        priority = ["tavily", "exa", "brave", "serply", "ddgs"]
 
         for name in priority:
             backend = self.create(name, brave_api_key, exa_api_key, tavily_api_key)
