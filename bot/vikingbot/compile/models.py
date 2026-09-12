@@ -34,8 +34,6 @@ class CompileLimits(BaseModel):
     merge_input_chars: int = Field(default=60_000, ge=1)
     # Per-source-task Unicode characters, including repeated headings and table headers.
     source_batch_chars: int = Field(default=80_000, ge=1)
-    # Secondary cap on distinct sources in one task, including empty files.
-    source_batch_files: int = Field(default=10, ge=1)
     # Final Resource validation gets one repair attempt within the existing loop budget.
     repair_iterations: int = 3
     agent_iterations: int = 120
