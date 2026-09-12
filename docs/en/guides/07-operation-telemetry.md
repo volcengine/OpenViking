@@ -31,7 +31,9 @@ Typical response shape:
         "llm": {
           "input": 12,
           "output": 6,
-          "total": 18
+          "total": 18,
+          "prompt_cached": 8,
+          "completion_reasoning": 4
         }
       },
       "vector": {
@@ -163,6 +165,8 @@ Only fields that are actually produced by an operation are returned. Missing gro
 | `summary.tokens.llm.input` | Total LLM input tokens |
 | `summary.tokens.llm.output` | Total LLM output tokens |
 | `summary.tokens.llm.total` | Total LLM tokens |
+| `summary.tokens.llm.prompt_cached` | Cached prompt tokens reported by the provider |
+| `summary.tokens.llm.completion_reasoning` | Reasoning tokens in the completion reported by the provider |
 | `summary.tokens.embedding.total` | Total embedding-model tokens |
 
 ### `summary.vector`
