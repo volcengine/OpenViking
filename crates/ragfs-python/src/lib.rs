@@ -197,19 +197,6 @@ fn validate_timeout_secs(v: f64) -> PyResult<Duration> {
     }
 }
 
-/// Validate and convert a lock expire duration from Python config.
-///
-/// Must be finite, positive, and at least 1.0 second.
-fn validate_expire_secs(v: f64) -> PyResult<f64> {
-    if v.is_finite() && v >= 1.0 {
-        Ok(v)
-    } else {
-        Err(PyValueError::new_err(
-            "lock_expire_secs must be a finite number >= 1.0",
-        ))
-    }
-}
-
 use ragfs::cache::{CachePolicy, CacheTraversalMode};
 use ragfs::cache_runtime::{CacheRuntime, DynamicProviderConfig, RedisProviderConfig};
 use ragfs::core::builder::{
@@ -439,6 +426,89 @@ impl RagfsCacheConfig {
     }
 }
 
+/// Load PathLock configuration from one canonical OpenViking config file.
+fn pathlock_config_from_ov_conf(path: &str) -> Result<PathLockConfig, String> {
+    let raw = fs::read_to_string(path)
+        .map_err(|error| format!("failed to read OpenViking config {path}: {error}"))?;
+    let json: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|error| format!("failed to parse OpenViking config {path}: {error}"))?;
+    pathlock_config_from_canonical_ov_conf(&json)
+}
+
+/// Parse PathLock configuration from the canonical `storage.agfs.pathlock` section.
+fn pathlock_config_from_canonical_ov_conf(
+    json: &serde_json::Value,
+) -> Result<PathLockConfig, String> {
+    let pathlock = json
+        .get("storage")
+        .and_then(|storage| storage.get("agfs"))
+        .and_then(|agfs| agfs.get("pathlock"));
+    match pathlock {
+        Some(pathlock) => pathlock_config_from_value(pathlock),
+        None => Ok(PathLockConfig::default()),
+    }
+}
+
+/// Parse one sectioned PathLock configuration object.
+fn pathlock_config_from_value(value: &serde_json::Value) -> Result<PathLockConfig, String> {
+    let pathlock = value
+        .as_object()
+        .ok_or_else(|| "pathlock config must be an object".to_string())?;
+    const FIELDS: &[&str] = &[
+        "provider",
+        "namespace",
+        "lock_timeout_secs",
+        "lock_expire_secs",
+    ];
+    if let Some(field) = pathlock
+        .keys()
+        .find(|field| !FIELDS.contains(&field.as_str()))
+    {
+        return Err(format!("unsupported pathlock field: {field}"));
+    }
+
+    let provider = string_field(pathlock, "provider", "filesystem")?;
+    if !matches!(provider.as_str(), "filesystem" | "memory" | "cache") {
+        return Err(format!(
+            "unsupported pathlock.provider: {provider}; expected filesystem, memory, or cache"
+        ));
+    }
+    let namespace = optional_string_field(pathlock, "namespace")?;
+    if provider == "cache" && namespace.as_deref().is_none_or(str::is_empty) {
+        return Err("pathlock.namespace is required for provider=cache".to_string());
+    }
+    if let Some(namespace) = &namespace {
+        if !namespace
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        {
+            return Err(
+                "pathlock.namespace must contain only ASCII letters, digits, '.', '_' or '-'"
+                    .to_string(),
+            );
+        }
+    }
+
+    let lock_timeout_secs =
+        f64_field(pathlock, "lock_timeout_secs", 0.0)?;
+    if !lock_timeout_secs.is_finite() || lock_timeout_secs < 0.0 {
+        return Err(
+            "pathlock.lock_timeout_secs must be a finite non-negative number".to_string(),
+        );
+    }
+    let lock_expire_secs = f64_field(pathlock, "lock_expire_secs", 30.0)?;
+    if !lock_expire_secs.is_finite() || lock_expire_secs < 1.0 {
+        return Err("pathlock.lock_expire_secs must be finite and >= 1.0".to_string());
+    }
+
+    Ok(PathLockConfig {
+        provider,
+        namespace,
+        lock_timeout_secs,
+        lock_expire_secs,
+    })
+}
+
 fn cache_config_from_ov_conf(path: &str) -> Result<RagfsCacheConfig, String> {
     let raw = fs::read_to_string(path)
         .map_err(|error| format!("failed to read OpenViking config {path}: {error}"))?;
@@ -447,8 +517,30 @@ fn cache_config_from_ov_conf(path: &str) -> Result<RagfsCacheConfig, String> {
     cache_config_from_canonical_ov_conf(&json)
 }
 
+/// Load canonical cache configuration while forcing a shared Runtime consumer.
+fn cache_config_from_ov_conf_with_runtime(
+    path: &str,
+    force_runtime: bool,
+) -> Result<RagfsCacheConfig, String> {
+    let raw = fs::read_to_string(path)
+        .map_err(|error| format!("failed to read OpenViking config {path}: {error}"))?;
+    let json: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|error| format!("failed to parse OpenViking config {path}: {error}"))?;
+    cache_config_from_canonical_ov_conf_with_runtime(&json, force_runtime)
+}
+
 fn cache_config_from_canonical_ov_conf(
     json: &serde_json::Value,
+) -> Result<RagfsCacheConfig, String> {
+    let pathlock_uses_cache =
+        pathlock_config_from_canonical_ov_conf(json)?.provider == "cache";
+    cache_config_from_canonical_ov_conf_with_runtime(json, pathlock_uses_cache)
+}
+
+/// Parse canonical cache configuration and optionally require its shared Runtime.
+fn cache_config_from_canonical_ov_conf_with_runtime(
+    json: &serde_json::Value,
+    force_runtime: bool,
 ) -> Result<RagfsCacheConfig, String> {
     let agfs = json.get("storage").and_then(|storage| storage.get("agfs"));
     if agfs.and_then(|agfs| agfs.get("cache")).is_some() {
@@ -484,7 +576,7 @@ fn cache_config_from_canonical_ov_conf(
 
     let mut config = RagfsCacheConfig::default();
     config.enabled = cachefs_backend == "cache";
-    config.runtime_enabled = config.enabled || queuefs_backend == "cache";
+    config.runtime_enabled = config.enabled || queuefs_backend == "cache" || force_runtime;
     if let Some(cachefs) = cachefs {
         let cachefs = cachefs
             .as_object()
@@ -526,6 +618,11 @@ fn cache_config_from_canonical_ov_conf(
     match config.provider {
         CacheProviderKind::Redis => parse_redis_config(&mut config.redis, &params, "cache.params")?,
         CacheProviderKind::Dynamic => {
+            if force_runtime {
+                return Err(
+                    "cache-backed PathLock requires top-level cache.provider=redis".to_string(),
+                );
+            }
             parse_dynamic_config(&mut config.dynamic, &params)?;
         }
     }
@@ -705,6 +802,20 @@ fn string_field(
             .map(ToOwned::to_owned)
             .ok_or_else(|| format!("{key} must be a string")),
         None => Ok(default.to_string()),
+    }
+}
+
+/// Read a floating-point field or return its default.
+fn f64_field(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    default: f64,
+) -> Result<f64, String> {
+    match object.get(key) {
+        Some(value) => value
+            .as_f64()
+            .ok_or_else(|| format!("{key} must be a number")),
+        None => Ok(default),
     }
 }
 
@@ -1351,6 +1462,16 @@ impl RAGFSBindingClient {
 
         // Phase A (holding GIL): parse the sectioned config into an owned RagfsConfig.
         let mut ragfs_cfg = RagfsConfig::default();
+        let inline_pathlock_configured = config
+            .as_ref()
+            .is_some_and(|config| config.contains_key("pathlock"));
+        if !inline_pathlock_configured {
+            if let Some(path) = config_path {
+                ragfs_cfg.pathlock = pathlock_config_from_ov_conf(path).map_err(|error| {
+                    PyRuntimeError::new_err(format!("Invalid PathLock config: {error}"))
+                })?;
+            }
+        }
         let mut runtime_cache_config = None;
         let mut inline_git_cfg: Option<ragfs::git::GitConfig> = None;
         if let Some(cfg) = config {
@@ -1402,43 +1523,43 @@ impl RAGFSBindingClient {
             }
             if let Some(pl_obj) = cfg.get("pathlock") {
                 let pl_value = py_to_json_value(pl_obj.bind(py))?;
-                let provider = pl_value
-                    .get("provider")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("filesystem");
-                if !matches!(provider, "filesystem" | "memory") {
-                    return Err(PyValueError::new_err(
-                        "pathlock.provider must be 'filesystem' or 'memory'",
-                    ));
-                }
-                let lock_expire_secs = validate_expire_secs(
-                    pl_value
-                        .get("lock_expire_secs")
-                        .and_then(|v| v.as_f64())
-                        .unwrap_or(30.0),
-                )?;
-                let lock_timeout_secs = validate_timeout_secs(
-                    pl_value
-                        .get("lock_timeout_secs")
-                        .and_then(|v| v.as_f64())
-                        .unwrap_or(0.0),
-                )?
-                .as_secs_f64();
-                ragfs_cfg.pathlock = PathLockConfig {
-                    provider: provider.to_string(),
-                    lock_timeout_secs,
-                    lock_expire_secs,
-                };
+                ragfs_cfg.pathlock = pathlock_config_from_value(&pl_value)
+                    .map_err(PyValueError::new_err)?;
             }
         }
 
+        let inline_cache_configured = runtime_cache_config.is_some();
+        let pathlock_uses_cache = ragfs_cfg.pathlock.provider == "cache";
         let file_cache_config = config_path
-            .map(cache_config_from_ov_conf)
+            .map(|path| {
+                if inline_cache_configured {
+                    cache_config_from_ov_conf_with_runtime(path, false)
+                } else if inline_pathlock_configured {
+                    cache_config_from_ov_conf_with_runtime(path, pathlock_uses_cache)
+                } else {
+                    cache_config_from_ov_conf(path)
+                }
+            })
             .transpose()
             .map_err(|error| PyRuntimeError::new_err(format!("Invalid cache config: {error}")))?;
-        let cache_config = runtime_cache_config
+        let mut cache_config = runtime_cache_config
             .or(file_cache_config)
             .unwrap_or_default();
+        if pathlock_uses_cache {
+            if cache_config.provider != CacheProviderKind::Redis {
+                return Err(PyValueError::new_err(
+                    "cache-backed PathLock requires cache.provider=redis",
+                ));
+            }
+            if inline_cache_configured {
+                cache_config.runtime_enabled = true;
+            }
+            if !cache_config.runtime_enabled {
+                return Err(PyValueError::new_err(
+                    "top-level cache config is required for cache-backed PathLock",
+                ));
+            }
+        }
 
         // Phase B: RAGFS owns Runtime construction and injects the same instance
         // into CacheFS and QueueFS. The binding only translates configuration.
@@ -2942,6 +3063,86 @@ mod tests {
     }
 
     #[test]
+    fn constructor_inline_pathlock_overrides_canonical_pathlock() {
+        Python::initialize();
+        let path = std::env::temp_dir().join(format!(
+            "openviking-inline-pathlock-override-{}.json",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            r#"{
+                "storage": {
+                    "agfs": {
+                        "pathlock": {"provider": "cache"}
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        Python::attach(|py| {
+            let ty = py.get_type::<RAGFSBindingClient>();
+            let pathlock = PyDict::new(py);
+            pathlock.set_item("provider", "filesystem").unwrap();
+            let config = PyDict::new(py);
+            config.set_item("pathlock", pathlock).unwrap();
+            let kwargs = PyDict::new(py);
+            kwargs
+                .set_item("config_path", path.to_str().unwrap())
+                .unwrap();
+            kwargs.set_item("config", config).unwrap();
+
+            let instance = ty.call((), Some(&kwargs));
+            assert!(instance.is_ok());
+        });
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn constructor_inline_redis_pathlock_uses_inline_cache() {
+        let Ok(endpoint) = std::env::var("REDIS_URL") else {
+            return;
+        };
+        Python::initialize();
+        let path = std::env::temp_dir().join(format!(
+            "openviking-inline-redis-pathlock-{}.json",
+            std::process::id()
+        ));
+        fs::write(&path, r#"{"storage": {"agfs": {"backend": "local"}}}"#).unwrap();
+
+        Python::attach(|py| {
+            let ty = py.get_type::<RAGFSBindingClient>();
+            let redis = PyDict::new(py);
+            redis.set_item("endpoints", vec![endpoint]).unwrap();
+            redis.set_item("command_timeout_ms", 1_000).unwrap();
+            let cache = PyDict::new(py);
+            cache.set_item("enabled", false).unwrap();
+            cache.set_item("runtime_enabled", false).unwrap();
+            cache.set_item("provider", "redis").unwrap();
+            cache.set_item("redis", redis).unwrap();
+            let pathlock = PyDict::new(py);
+            pathlock.set_item("provider", "cache").unwrap();
+            pathlock.set_item("namespace", "inline-prod").unwrap();
+            pathlock.set_item("lock_expire_secs", 3.0).unwrap();
+            let config = PyDict::new(py);
+            config.set_item("cache", cache).unwrap();
+            config.set_item("pathlock", pathlock).unwrap();
+            let kwargs = PyDict::new(py);
+            kwargs
+                .set_item("config_path", path.to_str().unwrap())
+                .unwrap();
+            kwargs.set_item("config", config).unwrap();
+
+            let instance = ty.call((), Some(&kwargs));
+            assert!(instance.is_ok());
+        });
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn parse_tracing_level_accepts_critical_as_error() {
         assert_eq!(parse_tracing_level("CRITICAL").unwrap(), Level::ERROR);
     }
@@ -2999,6 +3200,59 @@ mod tests {
         assert_eq!(cache_config.traversal_mode, CacheTraversalMode::Backend);
 
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn canonical_redis_pathlock_config_is_parsed_and_enables_runtime() {
+        let path = std::env::temp_dir().join(format!(
+            "openviking-redis-pathlock-config-{}.json",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            r#"{
+                "cache": {
+                    "provider": "redis",
+                    "params": {"endpoints": ["redis://redis:6379"]}
+                },
+                "storage": {
+                    "agfs": {
+                        "pathlock": {
+                            "provider": "cache",
+                            "namespace": "prod-a",
+                            "lock_expire_secs": 60.0
+                        }
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let pathlock = pathlock_config_from_ov_conf(path.to_str().unwrap()).unwrap();
+        let cache = cache_config_from_ov_conf(path.to_str().unwrap()).unwrap();
+
+        assert_eq!(pathlock.provider, "cache");
+        assert_eq!(pathlock.namespace.as_deref(), Some("prod-a"));
+        assert_eq!(pathlock.lock_expire_secs, 60.0);
+        assert!(cache.runtime_enabled);
+        assert_eq!(cache.provider, CacheProviderKind::Redis);
+        assert_eq!(cache.redis.endpoints, vec!["redis://redis:6379"]);
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn redis_pathlock_config_requires_namespace() {
+        let error = pathlock_config_from_canonical_ov_conf(&serde_json::json!({
+            "storage": {
+                "agfs": {
+                    "pathlock": {"provider": "cache"}
+                }
+            }
+        }))
+        .unwrap_err();
+
+        assert!(error.contains("namespace"));
     }
 
     #[test]

@@ -17,7 +17,7 @@ use crate::core::internal_names::{EXACT_LOCK_FILE_PREFIX, PATH_LOCK_FILE};
 use crate::core::{FileSystem, FsContextView};
 
 use super::metrics::LockMetrics;
-use super::provider::PathLockProvider;
+use super::provider::{AcquisitionChange, AtomicAcquisition, PathLockHandleMode, PathLockProvider};
 use super::resolver::{LockPathResolver, ResolvedExactPaths};
 use super::types::{
     BorrowedPathLockLease, LockToken, OwnedPathLockLease, PathLockConflict, PathLockError,
@@ -28,8 +28,10 @@ use super::types::{
 /// Configuration for the PathLockManager.
 #[derive(Debug, Clone)]
 pub struct PathLockConfig {
-    /// Built-in provider name: `filesystem` or `memory`.
+    /// Built-in provider name: `filesystem`, `memory`, or `cache`.
     pub provider: String,
+    /// OpenViking instance name used by the cache-backed provider.
+    pub namespace: Option<String>,
     /// Default wait timeout for auto-acquired locks.
     pub lock_timeout_secs: f64,
     /// Seconds after which a lock token is considered stale.
@@ -40,6 +42,7 @@ impl Default for PathLockConfig {
     fn default() -> Self {
         Self {
             provider: "filesystem".to_string(),
+            namespace: None,
             lock_timeout_secs: 0.0,
             lock_expire_secs: 30.0,
         }
@@ -110,16 +113,6 @@ struct LeaseEntry {
     pending_handoff: bool,
     lock_kinds: HashMap<String, PathLockKind>,
     last_active_at: Instant,
-}
-
-#[derive(Debug)]
-enum AcquisitionChange {
-    Created,
-    Reentrant,
-    Upgraded {
-        previous: LockToken,
-        replacement: LockToken,
-    },
 }
 
 #[derive(Debug)]
@@ -642,12 +635,7 @@ impl PathLockManager {
     fn normalize_requests(requests: &[PathLockRequest]) -> Vec<PathLockRequest> {
         let mut by_path: HashMap<String, PathLockKind> = HashMap::new();
         for request in requests {
-            let trimmed = request.path.trim_end_matches('/');
-            let path = if trimmed.is_empty() {
-                "/".to_string()
-            } else {
-                trimmed.to_string()
-            };
+            let path = Self::normalize_path(&request.path);
             by_path
                 .entry(path)
                 .and_modify(|kind| {
@@ -671,10 +659,24 @@ impl PathLockManager {
         normalized
     }
 
+    /// Normalize one logical path using the existing PathLock trailing-slash rule.
+    fn normalize_path(path: &str) -> String {
+        let trimmed = path.trim_end_matches('/');
+        if trimmed.is_empty() {
+            "/".to_string()
+        } else {
+            trimmed.to_string()
+        }
+    }
+
+    /// Return the configured lock expiry in nanoseconds.
+    fn lock_expire_ns(&self) -> u128 {
+        (self.config.lock_expire_secs * 1_000_000_000.0) as u128
+    }
+
     /// Check if a token is stale based on config.
     fn is_stale(&self, token: &LockToken, now_ns: u128) -> bool {
-        let expire_ns = (self.config.lock_expire_secs * 1_000_000_000.0) as u128;
-        now_ns.saturating_sub(token.time_ns) > expire_ns
+        now_ns.saturating_sub(token.time_ns) > self.lock_expire_ns()
     }
 
     /// Return whether an acquire-loop error should be retried within the wait budget.
@@ -900,7 +902,7 @@ impl PathLockManager {
                         });
                     }
 
-                    if pre_conflict {
+                    if pre_conflict && self.provider.handle_mode() == PathLockHandleMode::LockPath {
                         if let PathLockError::Conflict { ref lock_path, .. } = &err {
                             let token = match self.provider.read_token(lock_path).await {
                                 Ok(token) => token,
@@ -943,7 +945,7 @@ impl PathLockManager {
                 owner_id: owner_id.clone(),
                 lock_paths: acquired_lock_paths
                     .iter()
-                    .map(|(lock_path, _)| lock_path.clone())
+                    .map(|acquisition| acquisition.handle.clone())
                     .collect(),
                 covered_paths: sorted.clone(),
             };
@@ -998,7 +1000,23 @@ impl PathLockManager {
         &self,
         requests: &[PathLockRequest],
         owner_id: &str,
-    ) -> Result<Vec<(String, AcquisitionChange)>, (PathLockError, bool)> {
+    ) -> Result<Vec<AtomicAcquisition>, (PathLockError, bool)> {
+        let now_ns = Self::now_ns();
+        match self
+            .provider
+            .try_acquire_batch_atomic(
+                requests,
+                owner_id,
+                now_ns,
+                now_ns.saturating_sub(self.lock_expire_ns()),
+            )
+            .await
+        {
+            Ok(Some(acquisitions)) => return Ok(acquisitions),
+            Ok(None) => {}
+            Err(error) => return Err((error, true)),
+        }
+
         let mut acquired = Vec::new();
         let mut exact_resolutions: HashMap<String, ResolvedExactPaths> = HashMap::new();
         let acquisition: PathLockResult<()> = async {
@@ -1018,7 +1036,10 @@ impl PathLockManager {
                         let change = self
                             .try_acquire_one(&lock_path, owner_id, PathLockKind::Exact)
                             .await?;
-                        acquired.push((lock_path, change));
+                        acquired.push(AtomicAcquisition {
+                            handle: lock_path,
+                            change,
+                        });
                     }
                     PathLockKind::Tree => {
                         let lock_path = self.resolver.resolve_tree_lock_path(&request.path).await?;
@@ -1036,7 +1057,10 @@ impl PathLockManager {
                         let change = self
                             .try_acquire_one(&lock_path, owner_id, PathLockKind::Tree)
                             .await?;
-                        acquired.push((lock_path, change));
+                        acquired.push(AtomicAcquisition {
+                            handle: lock_path,
+                            change,
+                        });
                     }
                 }
             }
@@ -1092,14 +1116,22 @@ impl PathLockManager {
     /// Roll back token changes made by one incomplete batch acquisition.
     async fn rollback_acquisitions(
         &self,
-        acquired_lock_paths: &[(String, AcquisitionChange)],
+        acquired_lock_paths: &[AtomicAcquisition],
         owner_id: &str,
     ) -> PathLockResult<()> {
+        if let Some(result) = self
+            .provider
+            .rollback_acquisitions_atomic(acquired_lock_paths, owner_id)
+            .await?
+        {
+            return Ok(result);
+        }
+
         let mut first_error = None;
-        for (lock_path, change) in acquired_lock_paths.iter().rev() {
-            let result = match change {
-                AcquisitionChange::Created => {
-                    Self::remove_owned_token_with(&self.provider, lock_path, owner_id)
+        for acquisition in acquired_lock_paths.iter().rev() {
+            let result = match &acquisition.change {
+                AcquisitionChange::Created { .. } => {
+                    Self::remove_owned_token_with(&self.provider, &acquisition.handle, owner_id)
                         .await
                         .map(|_| ())
                 }
@@ -1109,12 +1141,13 @@ impl PathLockManager {
                     replacement,
                 } => match self
                     .provider
-                    .compare_and_write_token(lock_path, replacement, previous)
+                    .compare_and_write_token(&acquisition.handle, replacement, previous)
                     .await
                 {
                     Ok(true) => Ok(()),
                     Ok(false) => Err(PathLockError::Io(format!(
-                        "failed to roll back token upgrade at '{lock_path}'"
+                        "failed to roll back token upgrade at '{}'",
+                        acquisition.handle
                     ))),
                     Err(error) => Err(error),
                 },
@@ -1184,7 +1217,7 @@ impl PathLockManager {
 
         self.provider.try_create_token(lock_path, &token).await?;
         debug!(lock_path = %lock_path, owner_id = %owner_id, kind = ?kind, "created new pathlock token");
-        Ok(AcquisitionChange::Created)
+        Ok(AcquisitionChange::Created { replacement: token })
     }
 
     /// Check concrete lock-file paths for a live token owned by another owner.
@@ -1747,6 +1780,12 @@ impl PathLockManager {
         }
 
         let legacy_handoff = handoff.covered_paths.is_empty();
+        let handle_mode = self.provider.handle_mode();
+        if handle_mode == PathLockHandleMode::LogicalPath && legacy_handoff {
+            return Err(PathLockError::HandoffFailed(
+                "logical-path provider handoff requires covered_paths".to_string(),
+            ));
+        }
         if !legacy_handoff && handoff.covered_paths.len() != handoff.lock_paths.len() {
             return Err(PathLockError::InvalidRequest(
                 "handoff lock_paths and covered_paths must have equal lengths".to_string(),
@@ -1759,38 +1798,52 @@ impl PathLockManager {
         // We validate live ownership/kind by the lock file path itself and keep covered_paths empty.
         // Upgrade path: once old queue payloads are drained, remove this branch and require covered_paths.
         for (index, lp) in handoff.lock_paths.iter().enumerate() {
-            let expected_kind = if legacy_handoff {
-                let file_name = lp.rsplit('/').next().unwrap_or("");
-                if lp == &format!("/{}", PATH_LOCK_FILE)
-                    || lp.ends_with(&format!("/{}", PATH_LOCK_FILE))
-                {
-                    PathLockKind::Tree
-                } else if file_name.starts_with(EXACT_LOCK_FILE_PREFIX) {
-                    PathLockKind::Exact
-                } else {
-                    return Err(PathLockError::InvalidRequest(format!(
-                        "legacy handoff lock path '{lp}' is not a supported lock file"
-                    )));
-                }
-            } else {
-                let request = &handoff.covered_paths[index];
-                let expected_paths = match request.kind {
-                    PathLockKind::Exact => {
-                        self.resolver
-                            .resolve_exact_conflict_paths(&request.path)
-                            .await?
+            let expected_kind = match handle_mode {
+                PathLockHandleMode::LogicalPath => {
+                    let request = &handoff.covered_paths[index];
+                    let expected_path = Self::normalize_path(&request.path);
+                    if lp != &expected_path {
+                        return Err(PathLockError::InvalidRequest(format!(
+                            "handoff coverage '{}' does not match logical lock path '{lp}'",
+                            request.path
+                        )));
                     }
-                    PathLockKind::Tree => {
-                        vec![self.resolver.resolve_tree_lock_path(&request.path).await?]
-                    }
-                };
-                if !expected_paths.contains(lp) {
-                    return Err(PathLockError::InvalidRequest(format!(
-                        "handoff coverage '{}' does not map to lock path '{lp}'",
-                        request.path
-                    )));
+                    request.kind
                 }
-                request.kind
+                PathLockHandleMode::LockPath if legacy_handoff => {
+                    let file_name = lp.rsplit('/').next().unwrap_or("");
+                    if lp == &format!("/{}", PATH_LOCK_FILE)
+                        || lp.ends_with(&format!("/{}", PATH_LOCK_FILE))
+                    {
+                        PathLockKind::Tree
+                    } else if file_name.starts_with(EXACT_LOCK_FILE_PREFIX) {
+                        PathLockKind::Exact
+                    } else {
+                        return Err(PathLockError::InvalidRequest(format!(
+                            "legacy handoff lock path '{lp}' is not a supported lock file"
+                        )));
+                    }
+                }
+                PathLockHandleMode::LockPath => {
+                    let request = &handoff.covered_paths[index];
+                    let expected_paths = match request.kind {
+                        PathLockKind::Exact => {
+                            self.resolver
+                                .resolve_exact_conflict_paths(&request.path)
+                                .await?
+                        }
+                        PathLockKind::Tree => {
+                            vec![self.resolver.resolve_tree_lock_path(&request.path).await?]
+                        }
+                    };
+                    if !expected_paths.contains(lp) {
+                        return Err(PathLockError::InvalidRequest(format!(
+                            "handoff coverage '{}' does not map to lock path '{lp}'",
+                            request.path
+                        )));
+                    }
+                    request.kind
+                }
             };
             expected_kinds.push(expected_kind);
         }
@@ -1882,6 +1935,19 @@ impl PathLockManager {
     /// Check if a path is locked (for observability).
     pub async fn is_locked(&self, path: &str, ignore_stale: bool) -> PathLockResult<bool> {
         let now_ns = Self::now_ns();
+        let normalized_path = Self::normalize_path(path);
+        if let Some(locked) = self
+            .provider
+            .is_path_locked_atomic(
+                &normalized_path,
+                now_ns,
+                now_ns.saturating_sub(self.lock_expire_ns()),
+                ignore_stale,
+            )
+            .await?
+        {
+            return Ok(locked);
+        }
 
         // Check own .path.ovlock.
         let dir_lock = format!("{}/{}", path.trim_end_matches('/'), PATH_LOCK_FILE);

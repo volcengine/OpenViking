@@ -1099,7 +1099,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 
 更多配置示例见 [多写存储指南](./13-multi-write-storage.md)。
 
-##### 全局 Cache Provider 与 CacheFS 配置
+##### 全局 Cache Provider、CacheFS 与 PathLock 配置
 
 全局 `cache` 与 `storage` 并列，标准配置只包含 Provider 名称和 Provider 自有参数：
 
@@ -1117,6 +1117,15 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 | `max_file_size_bytes` | int | 允许缓存的单文件最大字节数 | `1048576` |
 | `traversal_mode` | str | `backend` 或 `cached_traversal` | `backend` |
 | `bypass_prefixes` | array[str] | 绕过缓存的路径前缀 | `[]` |
+
+`storage.agfs.pathlock` 选择 PathLock 存储 Provider：
+
+| 参数 | 类型 | 说明 | 默认值 |
+|------|------|------|--------|
+| `provider` | str | `filesystem`、`memory` 或 `cache`；`cache` 复用 Redis CacheRuntime | `filesystem` |
+| `namespace` | str（可选） | Redis PathLock key 使用的 OpenViking 实例名；`provider=cache` 时必填 | `null` |
+| `lock_expire_secs` | float | 未刷新的锁进入 stale 状态前的秒数；不得小于 `1.0` | `30.0` |
+| `lock_timeout_secs` | float | 已废弃且忽略；运行时等待超时固定为 `0.0` | `0.0` |
 
 ```json
 {
@@ -1143,13 +1152,18 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
       "queuefs": {
         "backend": "cache",
         "cache_key_prefix": "production"
+      },
+      "pathlock": {
+        "provider": "cache",
+        "namespace": "production",
+        "lock_expire_secs": 30.0
       }
     }
   }
 }
 ```
 
-标准配置没有全局 `cache.enabled`。当 CacheFS 或 QueueFS 选择 `backend=cache` 时初始化 CacheRuntime；全部模块使用本地 backend 时不解析 `cache.params`，也不连接 Provider。
+标准配置没有全局 `cache.enabled`。当 CacheFS 或 QueueFS 选择 `backend=cache`，或 PathLock 选择 `provider=cache` 时初始化 CacheRuntime。Cache PathLock 当前只支持 `cache.provider=redis`，不支持 DynamicProvider。全部模块使用本地 Provider 时不解析 `cache.params`，也不连接 Provider。
 
 这是一次配置破坏性变更：`storage.agfs.cache`、`storage.agfs.queuefs.backend="redis"` 和 `storage.agfs.queuefs.redis` 已删除并会被拒绝。请把 Provider 参数迁移到顶层 `cache.provider/cache.params`，业务模块改为 `cachefs.backend="cache"` 或 `queuefs.backend="cache"`；Redis 的 `singleton` 改为 `standalone`，`tls_enabled` 改为使用 `rediss://` endpoint。
 
@@ -1811,7 +1825,7 @@ openviking add-resource ./docs --exclude "*.tmp"
 
 ## storage.transaction 段
 
-`storage.transaction` 已废弃，仅保留为兼容旧配置。新配置请仅使用 `storage.agfs.pathlock` 配置过期时间。若旧字段仍然出现，OpenViking 会在运行时给出 warning；其中 `lock_timeout` 已废弃且会被忽略，`lock_expire` 会在未显式配置新字段时自动映射到新的 `pathlock` 配置，`redo_recovery_enabled` 则会被忽略。
+`storage.transaction` 已废弃，仅保留为兼容旧配置。新配置请使用 `storage.agfs.pathlock` 配置 PathLock Provider、namespace 和过期时间。若旧字段仍然出现，OpenViking 会在运行时给出 warning；其中 `lock_timeout` 已废弃且会被忽略，`lock_expire` 会在未显式配置新字段时自动映射到新的 `pathlock` 配置，`redo_recovery_enabled` 则会被忽略。
 
 推荐写法：
 
@@ -1820,6 +1834,7 @@ openviking add-resource ./docs --exclude "*.tmp"
   "storage": {
     "agfs": {
       "pathlock": {
+        "provider": "filesystem",
         "lock_expire_secs": 30.0
       }
     }
