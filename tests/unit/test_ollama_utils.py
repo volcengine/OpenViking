@@ -9,6 +9,7 @@ from openviking_cli.utils.ollama import (
     OllamaStartResult,
     detect_ollama_in_config,
     ensure_ollama_for_server,
+    normalize_ollama_openai_base,
     parse_ollama_url,
     start_ollama,
 )
@@ -37,6 +38,53 @@ class TestParseOllamaUrl:
     def test_empty_returns_defaults(self):
         assert parse_ollama_url("") == ("localhost", 11434)
 
+
+# ---------------------------------------------------------------------------
+# normalize_ollama_openai_base (#4302)
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeOllamaOpenAIBase:
+    """The OpenAI client appends ``/embeddings`` to its base URL, so a bare
+    ``http://127.0.0.1:11434`` — the form docs/*/guides/01-configuration.md
+    shows — reaches ``/embeddings`` and Ollama answers ``404 page not found``.
+    """
+
+    def test_bare_host_gains_the_openai_prefix(self):
+        assert (
+            normalize_ollama_openai_base("http://127.0.0.1:11434")
+            == "http://127.0.0.1:11434/v1"
+        )
+
+    def test_trailing_slash_is_not_doubled(self):
+        assert (
+            normalize_ollama_openai_base("http://localhost:11434/")
+            == "http://localhost:11434/v1"
+        )
+
+    def test_existing_v1_is_left_alone(self):
+        assert (
+            normalize_ollama_openai_base("http://localhost:11434/v1")
+            == "http://localhost:11434/v1"
+        )
+
+    def test_reverse_proxy_prefix_is_left_alone(self):
+        # An explicit path is the operator's decision; do not rewrite it.
+        assert (
+            normalize_ollama_openai_base("https://gpu.internal/ollama/v1")
+            == "https://gpu.internal/ollama/v1"
+        )
+
+    def test_schemeless_host_is_still_recognised_as_pathless(self):
+        assert normalize_ollama_openai_base("localhost:11434") == "localhost:11434/v1"
+
+    def test_none_and_empty_fall_back_to_the_local_default(self):
+        assert normalize_ollama_openai_base(None) == "http://localhost:11434/v1"
+        assert normalize_ollama_openai_base("   ") == "http://localhost:11434/v1"
+
+    def test_result_is_idempotent(self):
+        once = normalize_ollama_openai_base("http://127.0.0.1:11434")
+        assert normalize_ollama_openai_base(once) == once
 
 # ---------------------------------------------------------------------------
 # detect_ollama_in_config
