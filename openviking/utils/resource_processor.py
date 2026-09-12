@@ -50,6 +50,23 @@ _MAX_FILE_VECTORIZATION_CONCURRENCY = 64
 VECTORDB_MAX_QUERY_LIMIT = 100_000
 
 
+class _DocRelStore:
+    """Adapts a parse output store so apply reads use target-relative paths.
+
+    The DiffPlan keys files relative to the resource root (doc_rel stripped),
+    but the underlying artifact stores them under ``<doc_rel>/...``. This wrapper
+    re-adds the prefix on read so apply_diff_plan can stay backend-agnostic.
+    """
+
+    def __init__(self, store: Any, doc_rel: str) -> None:
+        self._store = store
+        base = (doc_rel or "").strip("/")
+        self._prefix = f"{base}/" if base else ""
+
+    async def read_bytes(self, ref: Any, rel_path: str) -> bytes:
+        return await self._store.read_bytes(ref, f"{self._prefix}{rel_path}")
+
+
 class ResourceProcessor:
     """
     Handles coordinated write operations.
@@ -164,6 +181,75 @@ class ResourceProcessor:
             doc_rel=doc_rel,
             target=target,
         )
+
+    async def _apply_local_incremental(
+        self,
+        *,
+        output_store: Any,
+        artifact_ref: Any,
+        doc_rel: str,
+        root_uri: str,
+        ctx: RequestContext,
+        lease_ref: Optional[Dict[str, Any]],
+    ) -> Any:
+        """Apply a local artifact incrementally against an existing resource tree.
+
+        Only added/modified files are uploaded and removed files/vectors are
+        deleted, decided by the DiffPlan (artifact md5 manifest vs vector-store
+        md5). The completeness gate inside build_resource_diff_plan refuses
+        deletions from an incomplete target snapshot, so an unreadable target
+        never causes data loss.
+        """
+        from openviking.storage.resource_diff import build_resource_diff_plan
+        from openviking.storage.resource_diff_apply import apply_diff_plan
+        from openviking.storage.resource_target import AgfsResourceTarget
+
+        plan = await build_resource_diff_plan(
+            viking_fs=get_viking_fs(),
+            vikingdb=self.vikingdb,
+            store=output_store,
+            artifact_ref=artifact_ref,
+            target_uri=root_uri,
+            ctx=ctx,
+            doc_rel=doc_rel,
+        )
+        target = AgfsResourceTarget(
+            viking_fs=get_viking_fs(),
+            vikingdb=self.vikingdb,
+            root_uri=root_uri,
+            ctx=ctx,
+            lease_ref=lease_ref,
+        )
+        # The store reads/writes artifact-relative paths, but the manifest walk
+        # keys diff results without the doc_rel prefix; apply reads bytes via the
+        # same store, so wrap it to re-add the prefix on read.
+        return await apply_diff_plan(
+            plan,
+            store=_DocRelStore(output_store, doc_rel),
+            artifact_ref=artifact_ref,
+            target=target,
+        )
+
+    @staticmethod
+    def _apply_result_to_changes(apply_result: Any, root_uri: str) -> Dict[str, List[str]]:
+        """Convert an ApplyResult into target-URI-keyed semantic changes.
+
+        The DAG matches its changed-path set against target URIs, so relative
+        paths are joined onto ``root_uri``. Only files that actually changed
+        (uploaded) or were removed are reported; unchanged files are omitted so
+        the DAG reuses their summaries.
+        """
+        base = root_uri.rstrip("/")
+
+        def _uris(rels: List[str]) -> List[str]:
+            return sorted(f"{base}/{rel}" for rel in rels)
+
+        changes: Dict[str, List[str]] = {}
+        if apply_result.uploaded:
+            changes["modified"] = _uris(apply_result.uploaded)
+        if apply_result.deleted:
+            changes["deleted"] = _uris(apply_result.deleted)
+        return changes
 
     @staticmethod
     def _empty_directory_error(meta: Dict[str, Any]) -> str:
@@ -485,6 +571,7 @@ class ResourceProcessor:
             resource_lock: Optional[Dict[str, Any]] = preacquired_lock
             target_preexisting = False
             source_committed = False
+            local_incremental_changes: Optional[Dict[str, List[str]]] = None
 
             if root_uri and temp_uri:
                 stage_start = time.perf_counter()
@@ -572,6 +659,35 @@ class ResourceProcessor:
                             )
                         temp_uri = root_uri
                         source_committed = True
+                    elif artifact_ref is not None and artifact_ref.backend == "local":
+                        # Incremental local import: the target already exists, so
+                        # only upload changed files and delete removed ones,
+                        # decided by DiffPlan (artifact md5 vs vector-store md5).
+                        # This mirrors the initial branch but with a diff subset;
+                        # AGFS incremental still flows through the semantic sync.
+                        apply_result = await self._apply_local_incremental(
+                            output_store=output_store,
+                            artifact_ref=artifact_ref,
+                            doc_rel=self._artifact_doc_rel(artifact_ref, temp_uri),
+                            root_uri=root_uri,
+                            ctx=ctx,
+                            lease_ref=resource_lock,
+                        )
+                        # Hand the applied change set to post-processing so the
+                        # semantic DAG only re-summarizes/re-vectorizes changed
+                        # files (target-URI keyed), like the content_write path.
+                        local_incremental_changes = self._apply_result_to_changes(
+                            apply_result, root_uri
+                        )
+                        if not root_is_file:
+                            await rewrite_image_uris(
+                                root_uri,
+                                ctx=ctx,
+                                lease_ref=resource_lock,
+                            )
+                        await output_store.cleanup(artifact_ref)
+                        temp_uri = root_uri
+                        source_committed = True
                 except Exception:
                     stage_status = "error"
                     # Mirror the Phase 3 (finalize) on-error cleanup: a lock or
@@ -614,6 +730,9 @@ class ResourceProcessor:
                 "target_preexisting": target_preexisting,
                 "is_code_repo": parse_result.source_format == "repository",
                 "root_is_file": root_is_file,
+                # For local incremental commits, the changed-file set is already
+                # known (DiffPlan), so post-processing only re-summarizes those.
+                "changes": local_incremental_changes,
                 "semantic_source": self._semantic_source_metadata(
                     path=path,
                     prepared_resource=prepared_resource,
@@ -699,6 +818,7 @@ class ResourceProcessor:
                         ingest_options=ingest_options,
                         semantic_source=semantic_source,
                         generation_trigger="resource_ingest",
+                        changes=prepared.get("changes"),
                         **kwargs,
                     )
                     if (
