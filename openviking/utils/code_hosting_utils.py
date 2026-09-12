@@ -116,6 +116,18 @@ _NESTED_REPOSITORY_DOMAIN_CONFIG_FIELDS = (
 )
 
 
+def _normalize_host(host: str) -> str:
+    """Normalize casing and a DNS trailing dot, retaining an explicit port."""
+    hostname, separator, port = host.rpartition(":")
+    if separator and port.isdigit():
+        return f"{hostname.rstrip('.').lower()}:{port}"
+    return host.rstrip(".").lower()
+
+
+def _normalize_domains(domains: Iterable[str]) -> set[str]:
+    return {_normalize_host(domain) for domain in domains}
+
+
 def _get_code_config():
     return get_openviking_config().code
 
@@ -134,7 +146,7 @@ def get_configured_code_hosting_domains(code_config=None) -> set[str]:
 
     domains: set[str] = set()
     for field_name in _CODE_HOSTING_DOMAIN_CONFIG_FIELDS:
-        domains.update(domain.lower() for domain in _get_domains_for_field(field_name, code_config))
+        domains.update(_normalize_domains(_get_domains_for_field(field_name, code_config)))
     return domains
 
 
@@ -150,7 +162,7 @@ def _get_reserved_top_level_segments(parsed: ParseResult) -> frozenset[str]:
             reserved.update(segments)
     reserved.update(
         _KNOWN_PLATFORM_RESERVED_TOP_LEVEL_SEGMENTS.get(
-            (parsed.hostname or "").lower(), frozenset()
+            _normalize_host(parsed.hostname or ""), frozenset()
         )
     )
     return frozenset(reserved)
@@ -158,7 +170,9 @@ def _get_reserved_top_level_segments(parsed: ParseResult) -> frozenset[str]:
 
 def _get_known_platform_non_repo_segments(parsed: ParseResult) -> frozenset[str]:
     """Return browse-route markers for a configured public platform."""
-    return _KNOWN_PLATFORM_NON_REPO_PATH_SEGMENTS.get((parsed.hostname or "").lower(), frozenset())
+    return _KNOWN_PLATFORM_NON_REPO_PATH_SEGMENTS.get(
+        _normalize_host(parsed.hostname or ""), frozenset()
+    )
 
 
 def _find_known_platform_non_repo_segment(
@@ -213,8 +227,8 @@ def _domain_matches(parsed: ParseResult, domains: Iterable[str]) -> bool:
     if not hostname:
         return False
 
-    normalized_domains = {domain.lower() for domain in domains}
-    host = hostname.lower()
+    normalized_domains = _normalize_domains(domains)
+    host = _normalize_host(hostname)
     candidates = {host}
 
     try:
@@ -233,10 +247,10 @@ def _extract_host(url: str) -> str:
         rest = url[4:]
         if ":" not in rest:
             return ""
-        return rest.split(":", 1)[0].strip().lower()
+        return _normalize_host(rest.split(":", 1)[0].strip())
 
     parsed = urlparse(url)
-    return (parsed.hostname or parsed.netloc or "").strip().lower()
+    return _normalize_host((parsed.hostname or parsed.netloc or "").strip())
 
 
 def _get_all_domains() -> list[str]:
@@ -244,7 +258,7 @@ def _get_all_domains() -> list[str]:
 
 
 def _get_azure_devops_domains() -> set[str]:
-    return set(_get_domains_for_field("azure_devops_domains"))
+    return _normalize_domains(_get_domains_for_field("azure_devops_domains"))
 
 
 def _sanitize_segment(segment: str) -> str:
@@ -360,7 +374,7 @@ def _parse_scp_git_repo_url(url: str) -> Optional[ParsedGitRepoURL]:
         return None
 
     host, path = rest.split(":", 1)
-    host = host.strip().lower()
+    host = _normalize_host(host.strip())
     if not host or host not in get_configured_code_hosting_domains():
         return None
 
@@ -386,7 +400,7 @@ def _parse_scp_git_repo_url(url: str) -> Optional[ParsedGitRepoURL]:
 def _is_known_platform_tree_route(parsed: ParseResult, path_parts: list[str]) -> bool:
     """Return whether the URL uses a known platform's owner/repo tree route."""
     return (
-        (parsed.hostname or "").lower() in _KNOWN_PLATFORM_TREE_ROUTE_HOSTS
+        _normalize_host(parsed.hostname or "") in _KNOWN_PLATFORM_TREE_ROUTE_HOSTS
         and len(path_parts) >= 3
         and path_parts[2] == "tree"
     )
@@ -590,6 +604,7 @@ def parse_code_hosting_url(url: str) -> Optional[str]:
         if ":" not in url[4:]:
             return None
         host_part, path_part = url[4:].split(":", 1)
+        host_part = _normalize_host(host_part)
         if host_part not in all_domains:
             return None
         path_parts = [p for p in path_part.split("/") if p]
@@ -670,7 +685,7 @@ def is_github_url(url: str) -> bool:
         True if the URL is a GitHub URL
     """
     config = get_openviking_config()
-    return _extract_host(url) in config.code.github_domains
+    return _extract_host(url) in _normalize_domains(config.code.github_domains)
 
 
 def is_gitlab_url(url: str) -> bool:
@@ -683,7 +698,7 @@ def is_gitlab_url(url: str) -> bool:
         True if the URL is a GitLab URL
     """
     config = get_openviking_config()
-    return _extract_host(url) in config.code.gitlab_domains
+    return _extract_host(url) in _normalize_domains(config.code.gitlab_domains)
 
 
 def is_code_hosting_url(url: str) -> bool:
@@ -701,7 +716,7 @@ def is_code_hosting_url(url: str) -> bool:
     if url.startswith("git@"):
         if ":" not in url[4:]:
             return False
-        host_part = url[4:].split(":", 1)[0]
+        host_part = _normalize_host(url[4:].split(":", 1)[0])
         return host_part in all_domains
 
     return _domain_matches(urlparse(url), all_domains)
@@ -721,7 +736,7 @@ def is_code_hosting_blob_url(url: str) -> bool:
 
     config = get_openviking_config()
     parsed = urlparse(url)
-    host = (parsed.hostname or "").lower()
+    host = _normalize_host(parsed.hostname or "")
     if not host:
         return False
 
@@ -729,7 +744,7 @@ def is_code_hosting_blob_url(url: str) -> bool:
     if host in raw_hosts:
         return True
 
-    code_hosts = set(config.code.github_domains) | set(config.code.gitlab_domains)
+    code_hosts = _normalize_domains(config.code.github_domains + config.code.gitlab_domains)
     if host not in code_hosts:
         return False
 
