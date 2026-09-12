@@ -24,6 +24,7 @@ from .model_usage import ModelUsageCollector
 from .observer_health import ObserverHealthCollector
 from .observer_state import ObserverStateCollector
 from .queue import QueueCollector
+from .queue_wait import QueueWaitCollector
 from .rerank import RerankCollector
 from .retrieval import RetrievalCollector
 from .retrieval_backend_probe import RetrievalBackendProbeCollector
@@ -47,6 +48,7 @@ __all__ = [
     "EncryptionCollector",
     "FeedbackCollector",
     "QueueCollector",
+    "QueueWaitCollector",
     "RerankCollector",
     "LockCollector",
     "VikingDBCollector",

@@ -44,6 +44,7 @@ from .collectors.cache import CacheCollector
 from .collectors.embedding import EmbeddingCollector
 from .collectors.encryption import EncryptionCollector
 from .collectors.http import HTTPCollector
+from .collectors.queue_wait import QueueWaitCollector
 from .collectors.rerank import RerankCollector
 from .collectors.resource import ResourceIngestionCollector
 from .collectors.retrieval import RetrievalCollector
@@ -304,6 +305,7 @@ def _build_event_router(registry: MetricRegistry) -> EventCollectorRouter:
     retrieval_collector = RetrievalCollector()
     encryption_collector = EncryptionCollector()
     telemetry_bridge_collector = TelemetryBridgeCollector()
+    queue_wait_collector = QueueWaitCollector()
 
     def _receiver(collector, event_name: str):
         """
@@ -346,6 +348,7 @@ def _build_event_router(registry: MetricRegistry) -> EventCollectorRouter:
         ("encryption.key_cache_miss", encryption_collector),
         ("encryption.key_version_usage", encryption_collector),
         ("telemetry.summary", telemetry_bridge_collector),
+        ("queue.wait", queue_wait_collector),
     ):
         router.register(event_name, _receiver(collector, event_name))
     return router

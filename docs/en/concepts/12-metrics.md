@@ -228,6 +228,7 @@ Notes:
 | `openviking_queue_errors_total` | Counter | `queue` | total error count per queue |
 | `openviking_queue_pending` | Gauge | `queue` | pending queue items |
 | `openviking_queue_in_progress` | Gauge | `queue` | in-progress queue items |
+| `openviking_queue_wait_seconds` | Histogram | `queue` | enqueue-to-dequeue wait per message; long upper buckets filling indicates interactive work starving behind bulk backlog (#4578) |
 | `openviking_lock_active` | Gauge | none | current active locks |
 | `openviking_lock_waiting` | Gauge | none | locks currently waiting |
 | `openviking_lock_stale` | Gauge | none | potentially stale locks |
