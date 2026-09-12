@@ -153,6 +153,19 @@ DynamicProvider 配置：
 }
 ```
 
+### Linux wheel 校验
+
+Linux wheel 构建会在发布前校验其中携带的 `ragfs_python` 扩展：执行
+`readelf -d`，如果扩展引用 ASan，或 wheel 中包含任何 `libasan*` 文件，构建都会失败。
+在仓库根目录可以用下面的命令执行同一个 guard：
+
+```bash
+python -m build_support.ragfs_wheel dist/openviking-*.whl
+```
+
+对于刻意启用 ASan 的 native 构建，该检查必须失败；对于干净的 release
+构建必须通过。只有通过检查本身，不能证明 guard 一定能拦截错误构建。
+
 ## 整体架构
 
 RAGFS 将缓存拆成两层：

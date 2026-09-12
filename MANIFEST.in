@@ -9,6 +9,7 @@ include pyproject.toml
 include setup.py
 include Cargo.toml
 include Cargo.lock
+graft build_support
 graft crates/ragfs
 graft crates/ragfs-python
 recursive-include openviking *.yaml

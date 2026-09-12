@@ -153,6 +153,21 @@ OpenViking uses `cache.params.library` to load the dynamic library. All remainin
 }
 ```
 
+### Linux wheel validation
+
+The Linux wheel build validates the bundled `ragfs_python` extension before
+the wheel is published. It runs `readelf -d` and fails if the extension
+references ASan or if any `libasan*` file is packaged. Run the same guard
+locally from the repository root with:
+
+```bash
+python -m build_support.ragfs_wheel dist/openviking-*.whl
+```
+
+This check must fail for a deliberately ASan-enabled native build and pass
+for a clean release build; a passing check alone does not prove that the
+guard is effective.
+
 ## Architecture
 
 RAGFS splits caching into two layers:
