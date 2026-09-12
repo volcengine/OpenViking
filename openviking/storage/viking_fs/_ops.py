@@ -1567,12 +1567,21 @@ class _OpsMixin:
         content: Union[str, bytes],
         ctx: Optional[RequestContext] = None,
     ) -> bool:
-        """Create a file under an exact pathlock; return False if it already exists."""
+        """Create under an exact pathlock, returning False only for an existing file.
+
+        Contention raises retryable ResourceBusyError: a lock holder might fail
+        before publishing, so contention alone does not prove the file exists.
+        """
+        from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+
         fs = cast("VikingFS", self)
         await fs._ensure_access(uri, ctx, action=AclAction.WRITE)
         path = fs._uri_to_path(uri, ctx=ctx)
         await fs._ensure_parent_dirs(path, ctx=ctx)
-        lease = await fs._async_agfs.pathlock_acquire_exact(path)
+        try:
+            lease = await fs._async_agfs.pathlock_acquire_exact(path)
+        except LockAcquisitionError as exc:
+            raise ResourceBusyError(f"Resource is being processed: {uri}", uri=uri) from exc
         try:
             if await fs.exists(uri, ctx=ctx):
                 return False

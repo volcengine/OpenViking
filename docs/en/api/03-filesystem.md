@@ -464,7 +464,7 @@ Create a directory.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI for the new directory |
-| description | str | No | `null` | Initial directory description. When omitted, the directory name is used as the default L0; when provided, this description is used. Default creation preserves an existing `.abstract.md` under the storage pathlock and queues L0 vectorization only when it creates the file. An explicit description still replaces the abstract and queues vectorization. |
+| description | str | No | `null` | Initial directory description. When omitted, the directory name is used as the default L0; when provided, this description is used. Default creation preserves an existing `.abstract.md` under the storage pathlock and queues L0 vectorization only when it creates the file. An explicit description still replaces the abstract and queues vectorization. If a concurrent writer holds the default abstract lock, creation raises a retryable `ResourceBusyError`; retry after that writer finishes. |
 
 
 **Python HTTP SDK**

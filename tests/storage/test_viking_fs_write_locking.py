@@ -334,7 +334,11 @@ async def test_default_mkdir_preserves_concurrent_abstract(monkeypatch, competin
     writes = []
 
     class ConcurrentAGFS:
-        async def pathlock_acquire_exact(self, path):
+        async def pathlock_acquire_exact(self, path, timeout_secs=0.0):
+            from openviking.storage.errors import LockAcquisitionError
+
+            if lock.locked() and timeout_secs == 0.0:
+                raise LockAcquisitionError("path is locked")
             await lock.acquire()
             return {"lease_ref": "held"}
 
@@ -377,7 +381,13 @@ async def test_default_mkdir_preserves_concurrent_abstract(monkeypatch, competin
         other = service.mkdir(
             uri, ctx, description="custom" if competing_write == "description" else None
         )
-    await asyncio.gather(other, service.mkdir(uri, ctx))
+    from openviking.storage.errors import ResourceBusyError
+
+    outcomes = await asyncio.gather(other, service.mkdir(uri, ctx), return_exceptions=True)
+    assert not isinstance(outcomes[0], BaseException)
+    assert isinstance(outcomes[1], ResourceBusyError)
+    assert outcomes[1].retryable
+    assert outcomes[1].uri == abstract_uri
     await service.mkdir(uri, ctx)  # A later default also preserves the stored abstract.
 
     assert len(writes) == 1
@@ -405,3 +415,30 @@ async def test_create_if_absent_releases_lease_on_failure(monkeypatch, failure):
     assert backend.events[-1] == ("release", {"lease_ref": "lease-1"})
     if failure == "exists":
         fs.write_file.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_if_absent_maps_contention_without_claiming_success(monkeypatch):
+    from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+
+    fs = VikingFS(agfs=_FakeAGFS())
+    fs._async_agfs = _AsyncAppendAGFS()
+    fs._async_agfs.pathlock_acquire_exact = AsyncMock(
+        side_effect=LockAcquisitionError("path is locked")
+    )
+    fs._async_agfs.pathlock_release = AsyncMock()
+    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
+    monkeypatch.setattr(fs, "_ensure_parent_dirs", AsyncMock())
+    monkeypatch.setattr(fs, "exists", AsyncMock(return_value=False))
+    monkeypatch.setattr(fs, "write_file", AsyncMock())
+    uri = "viking://resources/note.md"
+
+    with pytest.raises(ResourceBusyError) as error:
+        await fs.write_file_if_absent(uri, "default", _default_ctx())
+
+    assert error.value.uri == uri
+    assert error.value.retryable
+    assert isinstance(error.value.__cause__, LockAcquisitionError)
+    fs.exists.assert_not_awaited()
+    fs.write_file.assert_not_awaited()
+    fs._async_agfs.pathlock_release.assert_not_awaited()
