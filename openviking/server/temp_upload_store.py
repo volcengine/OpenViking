@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from queue import Full, Queue
 from threading import Lock, Thread
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from openviking.server.config import ServerConfig, TempUploadConfig
 from openviking.server.identity import RequestContext, Role
@@ -25,6 +25,9 @@ from openviking.server.local_input_guard import _read_upload_meta
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.utils.config.open_viking_config import get_openviking_config
+
+if TYPE_CHECKING:
+    from openviking.resource.shared_source import SharedSource
 
 _CHUNK_SIZE = 1024 * 1024
 _SHARED_UPLOAD_ROOT = "viking://upload"
@@ -253,6 +256,40 @@ class TempUploadStore:
         if shared_id is None:
             return await asyncio.to_thread(self._resolve_local, temp_file_id)
         return await self._resolve_shared(temp_file_id, shared_id, ctx)
+
+    async def resolve_shared_reference(
+        self,
+        temp_file_id: str,
+        ctx: RequestContext,
+    ) -> Optional["SharedSource"]:
+        """Validate a shared upload and return a download-free SOURCE reference.
+
+        The API only checks ownership and existence; the worker downloads the
+        content once (see :func:`materialize_shared_source`). Returns ``None`` for
+        non-shared ids so callers can fall back to the local-copy path.
+        """
+        from openviking.resource.shared_source import SharedSource
+
+        shared_id = _parse_shared_temp_file_id(temp_file_id)
+        if shared_id is None:
+            return None
+        meta = await self._read_shared_meta(shared_id, ctx)
+        self._validate_shared_meta(meta, temp_file_id, ctx)
+        content_uri = meta["storage_uri"]
+        vfs = get_viking_fs()
+        if not await vfs.exists(content_uri, ctx=self._internal_ctx(ctx)):
+            raise PermissionDeniedError("Temporary upload is invalid: content missing.")
+        original_filename = meta.get("original_filename") or ""
+        return SharedSource.from_dict(
+            {
+                "temp_file_id": temp_file_id,
+                "content_uri": content_uri,
+                "account_id": ctx.account_id,
+                "original_filename": original_filename,
+                "file_ext": meta.get("file_ext") or Path(original_filename).suffix,
+                "meta": {},
+            }
+        )
 
     async def _save_local(self, upload_file: Any) -> str:
         config = get_openviking_config()

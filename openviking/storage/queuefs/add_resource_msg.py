@@ -27,6 +27,7 @@ class AddResourceMsg:
     telemetry_id: Optional[str] = None
     prepared: Optional[Dict[str, Any]] = None
     staged_source: Optional[Dict[str, Any]] = None
+    shared_source: Optional[Dict[str, Any]] = None
     job_phase: AddResourcePhase | str | None = None
     lock_handoff: Optional[Dict[str, Any]] = None
     actor_peer_id: Optional[str] = None
@@ -77,6 +78,7 @@ class AddResourceMsg:
             raise ValueError("source jobs cannot contain prepared post-process data")
         if self.prepared is not None and (
             self.staged_source is not None
+            or self.shared_source is not None
             or self.understanding_response_id is not None
             or self.understanding_file_id is not None
         ):
@@ -85,6 +87,7 @@ class AddResourceMsg:
             payload is not None
             for payload in (
                 self.staged_source,
+                self.shared_source,
                 self.understanding_response_id,
                 self.understanding_file_id,
             )
@@ -112,8 +115,15 @@ class AddResourceMsg:
             from openviking.resource.staged_source import StagedSource
 
             staged_source = StagedSource.from_dict(data["staged_source"]).to_dict()
-        if prepared is not None and staged_source is not None:
-            raise ValueError("prepared and staged_source are mutually exclusive")
+        shared_source = None
+        if data.get("shared_source") is not None:
+            from openviking.resource.shared_source import SharedSource
+
+            shared_source = SharedSource.from_dict(data["shared_source"]).to_dict()
+        if prepared is not None and (staged_source is not None or shared_source is not None):
+            raise ValueError("prepared and source payloads are mutually exclusive")
+        if staged_source is not None and shared_source is not None:
+            raise ValueError("staged_source and shared_source are mutually exclusive")
         job_phase = data.get("job_phase") or (
             AddResourcePhase.POST_PROCESS.value
             if prepared is not None
@@ -127,12 +137,13 @@ class AddResourceMsg:
             lock_handoff_retry = 0
         if prepared is not None:
             args.clear()
-        if not task_id or (not path and not prepared and not staged_source) or not root_uri:
+        has_source_payload = bool(prepared or staged_source or shared_source)
+        if not task_id or (not path and not has_source_payload) or not root_uri:
             missing = []
             if not task_id:
                 missing.append("task_id")
-            if not path and not prepared and not staged_source:
-                missing.append("path, prepared, or staged_source")
+            if not path and not has_source_payload:
+                missing.append("path, prepared, staged_source, or shared_source")
             if not root_uri:
                 missing.append("root_uri")
             raise ValueError(f"Missing required fields: {missing}")
@@ -184,6 +195,7 @@ class AddResourceMsg:
             ),
             prepared=prepared,
             staged_source=staged_source,
+            shared_source=shared_source,
             job_phase=job_phase,
             watch_interval=float(data.get("watch_interval", 0) or 0),
             is_active=(data.get("is_active") if isinstance(data.get("is_active"), bool) else None),

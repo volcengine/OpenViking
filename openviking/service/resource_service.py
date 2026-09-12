@@ -89,6 +89,7 @@ from openviking_cli.utils import get_logger
 if TYPE_CHECKING:
     from openviking.connector.delegate import ConnectorDelegate
     from openviking.parse.accessors.base import LocalResource
+    from openviking.resource.shared_source import SharedSource
     from openviking.resource.staged_source import StagedSource
     from openviking.resource.watch_manager import WatchManager, WatchTask
     from openviking.resource.watch_scheduler import WatchScheduler
@@ -183,6 +184,7 @@ class _SourcePlan:
     processor_args: Dict[str, Any]
     task_auth: Dict[str, Any] = field(repr=False)
     staged_source: Optional["StagedSource"] = None
+    shared_source: Optional["SharedSource"] = None
     understanding_response_id: Optional[str] = None
     understanding_file_id: Optional[str] = None
     defer_unnamed_target: bool = False
@@ -769,6 +771,17 @@ class ResourceService:
                     viking_fs=self._viking_fs,
                     ctx=ctx,
                 )
+            elif msg.shared_source is not None:
+                from openviking.resource.shared_source import (
+                    SharedSource,
+                    materialize_shared_source,
+                )
+
+                prepared_resource = await materialize_shared_source(
+                    SharedSource.from_dict(msg.shared_source),
+                    viking_fs=self._viking_fs,
+                    ctx=ctx,
+                )
             if msg.defer_target_resolution:
                 from openviking_cli.utils.uri import VikingURI
 
@@ -830,7 +843,7 @@ class ResourceService:
                     ctx=ctx,
                     resource_lock=resource_lock,
                 )
-            if msg.staged_source is not None:
+            if msg.staged_source is not None or msg.shared_source is not None:
                 result["source_path"] = msg.source_path
             stage_result = stage_callback("processing_queue")
             if inspect.isawaitable(stage_result):
@@ -910,12 +923,39 @@ class ResourceService:
         allow_local_path_resolution: bool,
         processor_kwargs: Dict[str, Any],
         watch_auth_state: Optional[Dict[str, Any]],
+        shared_source: Optional["SharedSource"] = None,
     ) -> Optional[_SourcePlan]:
         """Freeze one durable standard-pipeline source before it crosses QueueFS."""
         from openviking.parse.accessors.feishu_accessor import FeishuAccessor
         from openviking.resource.staged_source import stage_source
 
         source_name = processor_kwargs.get("source_name")
+        # A shared upload is already durable; reference it directly instead of
+        # downloading + re-staging a second copy. Its identity comes from the
+        # validated upload meta, so no accessor preflight is needed.
+        if shared_source is not None:
+            queued_args = {
+                key: value
+                for key, value in processor_kwargs.items()
+                if key not in _ADD_RESOURCE_ARGS_RESERVED_FIELDS | _ADD_RESOURCE_TRANSIENT_ARGS
+            }
+            queued_args = self._sanitize_watch_processor_kwargs(queued_args)
+            resolved_name = source_name or shared_source.original_filename or None
+            source_format = (
+                Path(shared_source.original_filename).suffix.lower().lstrip(".") or "file"
+            )
+            return _SourcePlan(
+                path=path,
+                source_identity=_ResourceSourceInfo(
+                    source_name=resolved_name,
+                    source_path=shared_source.original_filename or path,
+                    source_format=source_format,
+                ),
+                processor_args=queued_args,
+                task_auth={},
+                shared_source=shared_source,
+            )
+
         git_source = is_git_repo_url(path)
         feishu_source = FeishuAccessor._is_feishu_url(path)
         remote_source = is_remote_resource_source(path)
@@ -1176,6 +1216,9 @@ class ResourceService:
                 staged_source=(
                     plan.staged_source.to_dict() if plan.staged_source is not None else None
                 ),
+                shared_source=(
+                    plan.shared_source.to_dict() if plan.shared_source is not None else None
+                ),
                 telemetry_id=get_current_telemetry().telemetry_id or None,
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
@@ -1197,10 +1240,14 @@ class ResourceService:
                 tags=tags,
                 tag_mode=tag_mode,
                 allow_local_path_resolution=(
-                    True if plan.staged_source is not None else allow_local_path_resolution
+                    True
+                    if (plan.staged_source is not None or plan.shared_source is not None)
+                    else allow_local_path_resolution
                 ),
                 enforce_public_remote_targets=(
-                    enforce_public_remote_targets and plan.staged_source is None
+                    enforce_public_remote_targets
+                    and plan.staged_source is None
+                    and plan.shared_source is None
                 ),
                 strict=bool(processor_kwargs.get("strict", False)),
                 ignore_dirs=processor_kwargs.get("ignore_dirs"),
@@ -1401,6 +1448,7 @@ class ResourceService:
         add_type: Optional[str] = None,
         internal_task: bool = False,
         args: Optional[Dict[str, Any]] = None,
+        shared_source: Optional["SharedSource"] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Accept and route a new resource-add request."""
@@ -1434,6 +1482,7 @@ class ResourceService:
             enforce_public_remote_targets=enforce_public_remote_targets,
             internal_task=internal_task,
             args=args,
+            shared_source=shared_source,
             **kwargs,
         )
 
@@ -1508,6 +1557,7 @@ class ResourceService:
         internal_task: bool = False,
         args: Optional[Dict[str, Any]] = None,
         connector_states: Optional[Dict[str, Any]] = None,
+        shared_source: Optional["SharedSource"] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Validate and route one resource ingestion request.
@@ -1802,6 +1852,7 @@ class ResourceService:
             allow_local_path_resolution=allow_local_path_resolution,
             processor_kwargs=kwargs,
             watch_auth_state=normalized_args.watch_auth_state,
+            shared_source=shared_source,
         )
         if source_plan is not None:
             result = await self._enqueue_source_plan(
