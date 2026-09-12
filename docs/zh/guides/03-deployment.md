@@ -182,7 +182,7 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 
 ### Docker
 
-OpenViking 提供预构建的 Docker 镜像，发布在 GitHub Container Registry。容器内所有持久化状态（`ov.conf`、`ovcli.conf` 以及工作区数据）都放在 `/app/.openviking` 下，挂载一个目录即可：
+OpenViking 提供预构建的 Docker 镜像，发布在 GitHub Container Registry。运行目录为 `/app/.openviking`，因此默认的 `storage.workspace`（`./data`）解析为 `/app/.openviking/data`。默认工作区、`ov.conf` 和 `ovcli.conf` 共用一个持久卷。若将工作区配置为此目录以外的绝对路径，需要另外挂载该路径：
 
 ```bash
 docker run -d \
@@ -208,6 +208,8 @@ Docker 镜像默认会同时启动：
 ```
 
 未设置时服务将拒绝启动。如需自定义绑定地址，可通过环境变量 `OPENVIKING_SERVER_HOST` 覆盖。
+
+**从旧镜像升级：** 运行目录为 `/app` 的旧镜像会把 `./data` 解析为默认挂载之外的 `/app/data`。删除旧容器前，先停止容器并备份其实际工作区（例如 `docker cp openviking:/app/data ./openviking-data-backup`）。启动替换容器前，将备份恢复到挂载的宿主机工作区，通常为 `~/.openviking/data`。若目标工作区已存在，先确认要保留的数据，不要直接覆盖。绝对工作区路径不变；其他相对路径现在以 `/app/.openviking` 为基准。
 
 升级容器的方式
 ```bash
