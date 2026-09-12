@@ -936,14 +936,23 @@ impl FileSystem for LocalFileSystem {
                 .map_err(|e| Error::plugin(format!("failed to read directory: {}", e)))?;
 
             if entries.count() > 0 {
-                return Err(Error::plugin(format!("directory not empty: {}", path)));
+                return Err(Error::DirectoryNotEmpty(path.to_string()));
             }
         }
 
         // Remove file or empty directory
-        fs::remove_file(&local_path)
-            .or_else(|_| fs::remove_dir(&local_path))
-            .map_err(|e| Error::plugin(format!("failed to remove: {}", e)))?;
+        fs::remove_file(&local_path).or_else(|_| fs::remove_dir(&local_path)).map_err(|e| {
+            // Concurrent writers can refill a directory between the emptiness
+            // check and remove_dir; keep the typed DirectoryNotEmpty signal.
+            // Unix ENOTEMPTY=39; Windows ERROR_DIR_NOT_EMPTY=145.
+            let message = e.to_string().to_ascii_lowercase();
+            if matches!(e.raw_os_error(), Some(39 | 145))
+                || message.contains("directory not empty")
+            {
+                return Error::DirectoryNotEmpty(path.to_string());
+            }
+            Error::plugin(format!("failed to remove: {e}"))
+        })?;
 
         Ok(())
     }
@@ -970,7 +979,7 @@ impl FileSystem for LocalFileSystem {
         let metadata = fs::metadata(&local_path).map_err(|_| Error::NotFound(path.to_string()))?;
 
         if metadata.is_dir() {
-            return Err(Error::plugin(format!("is a directory: {}", path)));
+            return Err(Error::IsADirectory(path.to_string()));
         }
 
         // Read file
@@ -997,7 +1006,7 @@ impl FileSystem for LocalFileSystem {
 
         // Check if it's a directory
         if local_path.exists() && local_path.is_dir() {
-            return Err(Error::plugin(format!("is a directory: {}", path)));
+            return Err(Error::IsADirectory(path.to_string()));
         }
 
         // Check if parent directory exists
@@ -1540,6 +1549,42 @@ mod tests {
             let err = fs.write("/missing", b"data", 0, flag).await.unwrap_err();
             assert!(matches!(err, Error::NotFound(_)));
         }
+    }
+
+    #[tokio::test]
+    async fn test_localfs_read_write_directory_maps_to_is_a_directory() {
+        let (_dir, fs) = fallback_localfs();
+        fs.mkdir("/docs", 0o755).await.unwrap();
+
+        let err = fs.read("/docs", 0, 0).await.unwrap_err();
+        assert!(
+            matches!(err, Error::IsADirectory(_)),
+            "expected IsADirectory on read, got {err:?}"
+        );
+
+        let err = fs
+            .write("/docs", b"nope", 0, WriteFlag::Create)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::IsADirectory(_)),
+            "expected IsADirectory on write, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_localfs_remove_nonempty_maps_to_directory_not_empty() {
+        let (_dir, fs) = fallback_localfs();
+        fs.mkdir("/tasks", 0o755).await.unwrap();
+        fs.write("/tasks/note.md", b"keep", 0, WriteFlag::Create)
+            .await
+            .unwrap();
+
+        let err = fs.remove("/tasks").await.unwrap_err();
+        assert!(
+            matches!(err, Error::DirectoryNotEmpty(_)),
+            "expected DirectoryNotEmpty, got {err:?}"
+        );
     }
 
     #[test]
