@@ -138,7 +138,7 @@ class FeishuChannel(BaseChannel):
         ):  # Refresh 1 min before expire
             return self._tenant_access_token
 
-        url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
+        url = f"{self.config.domain}/open-apis/auth/v3/tenant_access_token/internal"
         payload = {"app_id": self.config.app_id, "app_secret": self.config.app_secret}
 
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -161,7 +161,7 @@ class FeishuChannel(BaseChannel):
             raise ValueError("Feishu image upload requires a non-empty image")
 
         token = await self._get_tenant_access_token()
-        url = "https://open.feishu.cn/open-apis/im/v1/images"
+        url = f"{self.config.domain}/open-apis/im/v1/images"
 
         headers = {"Authorization": f"Bearer {token}"}
         data = {"image_type": "message"}
@@ -327,6 +327,7 @@ class FeishuChannel(BaseChannel):
             lark.Client.builder()
             .app_id(self.config.app_id)
             .app_secret(self.config.app_secret)
+            .domain(self.config.domain)
             .log_level(lark.LogLevel.INFO)
             .build()
         )
@@ -346,6 +347,7 @@ class FeishuChannel(BaseChannel):
             self.config.app_id,
             self.config.app_secret,
             event_handler=event_handler,
+            domain=self.config.domain,
             log_level=lark.LogLevel.INFO,
         )
 
