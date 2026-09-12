@@ -3,6 +3,7 @@
 """Shared upload utilities for directory and file uploading to VikingFS."""
 
 import asyncio
+import json
 import os
 from pathlib import Path
 from typing import Any, List, Optional, Set, Tuple, Union
@@ -15,6 +16,7 @@ from openviking.parse.parsers.constants import (
     IGNORE_EXTENSIONS,
 )
 from openviking.parse.parsers.text_encoding import normalize_text_bytes
+from openviking.utils.content_hash import content_md5
 from openviking.utils.path_safety import safe_join_viking_uri
 from openviking_cli.utils.logger import get_logger
 
@@ -103,6 +105,12 @@ def should_skip_file(
 
 
 _UPLOAD_CONCURRENCY = 8
+
+# Sidecar written at the artifact root in output-store mode: maps each uploaded
+# business file's artifact-relative path to the md5 of its final (encoding-
+# normalized) bytes. The incremental diff reads this so it can compare
+# fingerprints without re-reading file contents.
+ARTIFACT_MANIFEST_NAME = ".artifact_manifest.json"
 
 
 async def upload_directory(
@@ -245,6 +253,8 @@ async def upload_directory(
     # --- Phase 3: Upload files concurrently ---
     sem = asyncio.Semaphore(_UPLOAD_CONCURRENCY)
     errors: List[Optional[str]] = [None] * len(files_to_upload)
+    # rel_path -> md5 of final bytes, collected in store mode for the manifest.
+    md5_by_target: dict[str, str] = {}
 
     async def _upload_one(idx: int, file_path: Path, target: str) -> None:
         async with sem:
@@ -257,6 +267,9 @@ async def upload_directory(
                 encoded = await asyncio.to_thread(_read_and_encode)
                 if use_store:
                     await output_store.write_bytes(artifact_ref, target, encoded)
+                    # Fingerprint the final (normalized) bytes at the write point;
+                    # this is a local read, no extra remote IO.
+                    md5_by_target[target] = content_md5(encoded)
                 else:
                     await viking_fs.write_file_bytes(target, encoded)
             except Exception as exc:
@@ -268,6 +281,17 @@ async def upload_directory(
         if err:
             warnings.append(err)
             logger.warning(err)
+
+    # In store mode, persist the md5 manifest at the artifact root so the
+    # incremental diff can compare fingerprints without re-reading files. Only
+    # write it when every file uploaded cleanly, so a partial manifest never
+    # masquerades as a complete fingerprint set.
+    if use_store and not any(errors):
+        await output_store.write_bytes(
+            artifact_ref,
+            ARTIFACT_MANIFEST_NAME,
+            json.dumps(md5_by_target, ensure_ascii=False).encode("utf-8"),
+        )
 
     uploaded_count = sum(1 for e in errors if e is None)
     return uploaded_count, warnings

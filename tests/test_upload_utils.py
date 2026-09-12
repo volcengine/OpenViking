@@ -471,6 +471,9 @@ class _RecordingStore:
     async def write_bytes(self, ref, rel_path: str, content: bytes) -> None:
         self.writes[rel_path] = content
 
+    async def read_bytes(self, ref, rel_path: str) -> bytes:
+        return self.writes[rel_path]
+
 
 class TestUploadDirectoryOutputStore:
     @pytest.mark.asyncio
@@ -498,6 +501,32 @@ class TestUploadDirectoryOutputStore:
         assert store.writes["repo/hello.py"] == b"print('hello')"
         assert "repo/src/main.go" in store.writes
         assert viking_fs.write_file_bytes_calls == []
+
+    @pytest.mark.asyncio
+    async def test_writes_content_md5_manifest(self, tmp_dir: Path) -> None:
+        import hashlib
+        import json
+
+        from openviking.parse.parsers.upload_utils import ARTIFACT_MANIFEST_NAME
+
+        store = _RecordingStore()
+
+        await upload_directory(
+            tmp_dir,
+            "repo",
+            FakeVikingFS(),
+            output_store=store,
+            artifact_ref=object(),
+        )
+
+        # A manifest of final-byte md5 keyed by artifact-relative path is written
+        # so the incremental diff can compare fingerprints without re-reading.
+        assert ARTIFACT_MANIFEST_NAME in store.writes
+        manifest = json.loads(store.writes[ARTIFACT_MANIFEST_NAME].decode("utf-8"))
+        assert manifest["repo/hello.py"] == hashlib.md5(b"print('hello')").hexdigest()
+        # Every uploaded business file has an md5; the manifest itself is excluded.
+        assert "repo/src/main.go" in manifest
+        assert ARTIFACT_MANIFEST_NAME not in manifest
 
     @pytest.mark.asyncio
     async def test_store_write_failure_produces_warning(self, tmp_path: Path) -> None:

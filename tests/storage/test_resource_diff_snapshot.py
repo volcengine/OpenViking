@@ -9,6 +9,8 @@ plumbing and that permission-hidden / truncated target trees mark the file
 snapshot incomplete so the planner refuses deletions.
 """
 
+import json
+
 import pytest
 
 from openviking.parse.output import AgfsParseOutputStore, ParseArtifactRef
@@ -155,5 +157,40 @@ class TestReadNewManifest:
         # Leaf files only; directories are traversed, not emitted as diff keys.
         assert set(manifest) == {"a.py", "sub/b.py"}
         assert manifest["a.py"].is_dir is False
-        # md5 is filled at the final-bytes upload site, not here.
+        # No artifact manifest present -> md5 unknown, diff falls back to bytes.
+        assert manifest["a.py"].md5 == ""
+
+    async def test_fills_md5_from_artifact_manifest(self, tmp_path) -> None:
+        from openviking.parse.output import LocalParseOutputStore
+        from openviking.parse.parsers.upload_utils import ARTIFACT_MANIFEST_NAME
+
+        store = LocalParseOutputStore(local_root=str(tmp_path / "out"))
+        ref = await store.create_artifact(root_type="dir")
+        await store.write_bytes(ref, "repository/a.py", b"a")
+        await store.write_bytes(ref, "repository/sub/b.py", b"b")
+        # Manifest keys are artifact-relative (as upload_directory writes them).
+        await store.write_text(
+            ref,
+            ARTIFACT_MANIFEST_NAME,
+            json.dumps({"repository/a.py": "md5a", "repository/sub/b.py": "md5b"}),
+        )
+
+        manifest = await read_new_manifest(store, ref, doc_rel="repository")
+
+        # doc_rel stripped, md5 taken from the artifact manifest.
+        assert set(manifest) == {"a.py", "sub/b.py"}
+        assert manifest["a.py"].md5 == "md5a"
+        assert manifest["sub/b.py"].md5 == "md5b"
+
+    async def test_missing_manifest_falls_back_to_empty_md5(self, tmp_path) -> None:
+        from openviking.parse.output import LocalParseOutputStore
+
+        store = LocalParseOutputStore(local_root=str(tmp_path / "out"))
+        ref = await store.create_artifact(root_type="dir")
+        await store.write_bytes(ref, "repository/a.py", b"a")
+
+        manifest = await read_new_manifest(store, ref, doc_rel="repository")
+
+        # No manifest sidecar -> md5 unknown, no error raised.
+        assert set(manifest) == {"a.py"}
         assert manifest["a.py"].md5 == ""

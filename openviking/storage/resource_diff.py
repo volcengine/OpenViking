@@ -19,6 +19,7 @@ Assembling the plan then delegates to :func:`build_diff_plan`.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List, Tuple
 
 from openviking.storage.internal_names import STORAGE_INTERNAL_ENTRY_NAMES
@@ -107,15 +108,31 @@ async def read_target_vector_snapshot(
 async def read_new_manifest(store: Any, ref: Any, *, doc_rel: str = "") -> Dict[str, NewEntry]:
     """Walk the parse output store and return ``rel_path -> NewEntry``.
 
-    md5 is intentionally empty: it is computed at the final-bytes upload site
-    (local/AGFS write) rather than by reading artifacts back here.
+    md5 is populated from the artifact manifest (``.artifact_manifest.json``)
+    written at upload time, so the diff can compare fingerprints without
+    re-reading files. A missing/unreadable manifest leaves md5 empty and the diff
+    falls back to comparing file bytes.
 
     ``doc_rel`` (e.g. ``repository``) is stripped from every path so the manifest
     keys line up with the target resource tree, which has no such wrapper.
     """
+    from openviking.parse.parsers.upload_utils import ARTIFACT_MANIFEST_NAME
+
     manifest: Dict[str, NewEntry] = {}
     base = doc_rel.strip("/")
     prefix = f"{base}/" if base else ""
+
+    # md5 sidecar is keyed by artifact-relative path (pre-strip); read once.
+    md5_by_artifact_rel: Dict[str, str] = {}
+    try:
+        raw = await store.read_bytes(ref, ARTIFACT_MANIFEST_NAME)
+        loaded = json.loads(raw.decode("utf-8"))
+        if isinstance(loaded, dict):
+            md5_by_artifact_rel = {str(k): str(v) for k, v in loaded.items()}
+    except Exception:
+        # No manifest (legacy/agfs artifacts) or unreadable: fall back to empty
+        # md5 so the diff compares bytes instead of assuming equality.
+        md5_by_artifact_rel = {}
 
     async def _walk(rel: str) -> None:
         for entry in await store.list(ref, rel):
@@ -126,7 +143,9 @@ async def read_new_manifest(store: Any, ref: Any, *, doc_rel: str = "") -> Dict[
                 continue
             key = entry.rel_path[len(prefix):] if prefix else entry.rel_path
             if key:
-                manifest[key] = NewEntry(md5="", is_dir=False)
+                manifest[key] = NewEntry(
+                    md5=md5_by_artifact_rel.get(entry.rel_path, ""), is_dir=False
+                )
 
     await _walk(base)
     return manifest
