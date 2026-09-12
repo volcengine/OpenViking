@@ -17,6 +17,7 @@ from openviking.metrics.core.registry import MetricRegistry
 from openviking.metrics.datasources.base import EventMetricDataSource
 from openviking.metrics.datasources.resource import ResourceIngestionEventDataSource
 from openviking.metrics.exporters.prometheus import PrometheusExporter
+from openviking.metrics.global_api import _build_event_router
 
 
 def test_create_default_collector_manager_registers_expected_collectors_in_order():
@@ -172,3 +173,72 @@ def test_resource_ingestion_event_datasource_can_drive_resource_ingestion_collec
     )
 
     reset_metric_account_dimension()
+
+
+def test_resource_stage_counter_series_preinitialized_by_event_router():
+    registry = MetricRegistry()
+    _build_event_router(registry)
+    text = PrometheusExporter(registry=registry).render()
+    # Regression for #4500: every known stage/status series must exist at zero right after
+    # metrics bootstrap, before any resource event happens, so `increase()` can observe the
+    # first increment of each label set.
+    for stage in ResourceIngestionCollector.KNOWN_STAGES:
+        for status in ResourceIngestionCollector.KNOWN_STATUSES:
+            assert (
+                f'openviking_resource_stage_total{{account_id="__unknown__",stage="{stage}",'
+                f'status="{status}"}} 0' in text
+            )
+
+
+def test_resource_stage_first_error_is_visible_to_increase(monkeypatch):
+    registry = MetricRegistry()
+    _build_event_router(registry)
+    collector = ResourceIngestionCollector()
+
+    def _emit(event_name: str, payload: dict) -> None:
+        collector.receive(event_name, payload, registry)
+
+    monkeypatch.setattr(EventMetricDataSource, "_emit", staticmethod(_emit), raising=False)
+
+    # Prometheus scrapes the pre-initialized zero-valued series first...
+    first_scrape = PrometheusExporter(registry=registry).render()
+    assert (
+        'openviking_resource_stage_total{account_id="__unknown__",stage="parse",status="error"} 0'
+        in first_scrape
+    )
+    # ...then the very first parse error lands and increments the series from zero.
+    ResourceIngestionEventDataSource.record_stage(stage="parse", status="error", duration_seconds=0.02)
+    second_scrape = PrometheusExporter(registry=registry).render()
+    assert (
+        'openviking_resource_stage_total{account_id="__unknown__",stage="parse",status="error"} 1'
+        in second_scrape
+    )
+
+
+def test_resource_stage_first_event_initializes_sibling_status_series():
+    configure_metric_account_dimension(
+        enabled=True,
+        metric_allowlist={ResourceIngestionCollector.STAGE_TOTAL},
+        max_active_accounts=10,
+    )
+    try:
+        registry = MetricRegistry()
+        collector = ResourceIngestionCollector()
+        # A brand-new (stage, account) pair whose first event is "ok" must also expose the
+        # matching "error" series at zero, so a later first error is not invisible to `increase()`.
+        collector.receive(
+            "resource.stage",
+            {"stage": "persist", "status": "ok", "duration_seconds": 0.1, "account_id": "acct-new"},
+            registry,
+        )
+        text = PrometheusExporter(registry=registry).render()
+        assert (
+            'openviking_resource_stage_total{account_id="acct-new",stage="persist",status="ok"} 1'
+            in text
+        )
+        assert (
+            'openviking_resource_stage_total{account_id="acct-new",stage="persist",status="error"} 0'
+            in text
+        )
+    finally:
+        reset_metric_account_dimension()

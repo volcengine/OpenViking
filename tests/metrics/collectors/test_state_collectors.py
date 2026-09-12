@@ -47,6 +47,72 @@ def test_queue_collector_maps_status(monkeypatch):
     assert 'openviking_queue_errors_total{queue="semantic"} 2' in text
 
 
+def test_queue_collector_preinitializes_counter_series_at_zero(monkeypatch):
+    class DummyQueueStatus:
+        def __init__(
+            self, pending: int, in_progress: int, processed: int, error_count: int
+        ) -> None:
+            self.pending = pending
+            self.in_progress = in_progress
+            self.processed = processed
+            self.error_count = error_count
+
+    class DummyQueueManager:
+        async def check_status(self):
+            return {"AddResource": DummyQueueStatus(1, 0, 0, 0)}
+
+    monkeypatch.setattr(
+        "openviking.metrics.datasources.queue.get_queue_manager",
+        lambda: DummyQueueManager(),
+    )
+    registry = MetricRegistry()
+    QueueCollector(data_source=QueuePipelineStateDataSource()).collect(registry)
+    text = PrometheusExporter(registry=registry).render()
+    # Regression for #4500: series must be scraped at zero before the first increment so
+    # Prometheus `increase()` does not miss the first error of each queue label set.
+    assert 'openviking_queue_errors_total{queue="AddResource"} 0' in text
+    assert 'openviking_queue_processed_total{queue="AddResource"} 0' in text
+
+
+def test_queue_counter_first_error_visible_across_scrapes(monkeypatch):
+    """End-to-end scrape sequence for queue counters (#4500).
+
+    Prometheus evaluates increase() between two scrapes; the series must
+    exist at zero in scrape A for the first error recorded before scrape
+    B to be counted. Drives two collection cycles with cumulative
+    error_count going 0 -> 1.
+    """
+
+    class DummyQueueStatus:
+        def __init__(self, pending, in_progress, processed, error_count):
+            self.pending = pending
+            self.in_progress = in_progress
+            self.processed = processed
+            self.error_count = error_count
+
+    state = {"errors": 0}
+
+    class DummyQueueManager:
+        async def check_status(self):
+            return {"AddResource": DummyQueueStatus(1, 0, 0, state["errors"])}
+
+    monkeypatch.setattr(
+        "openviking.metrics.datasources.queue.get_queue_manager",
+        lambda: DummyQueueManager(),
+    )
+    registry = MetricRegistry()
+    collector = QueueCollector(data_source=QueuePipelineStateDataSource())
+
+    collector.collect(registry)
+    scrape_a = PrometheusExporter(registry=registry).render()
+    assert 'openviking_queue_errors_total{queue="AddResource"} 0' in scrape_a
+
+    state["errors"] = 1  # first error arrives between scrapes
+    collector.collect(registry)
+    scrape_b = PrometheusExporter(registry=registry).render()
+    assert 'openviking_queue_errors_total{queue="AddResource"} 1' in scrape_b
+
+
 def test_task_tracker_collector_maps_counts(monkeypatch):
     class DummyTracker:
         def snapshot_counts_by_type(self):

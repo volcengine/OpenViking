@@ -52,6 +52,11 @@ class QueueCollector(StateMetricCollector):
         The datasource provides cumulative `processed` and `error_count` values. This collector
         converts them into Prometheus counters by incrementing by positive deltas and ignoring
         decreases.
+
+        Counter series are also pre-initialized to zero for every queue seen in the status
+        snapshot. Without this, a series only appears together with its first increment, so
+        Prometheus never scrapes the pre-increment sample and `increase()` misses that first
+        increment (issue #4500).
         """
         statuses = metric_input
         for queue_name, status in statuses.items():
@@ -65,6 +70,17 @@ class QueueCollector(StateMetricCollector):
             registry.set_gauge(
                 self.IN_PROGRESS,
                 float(status.in_progress),
+                labels=labels,
+                label_names=("queue",),
+            )
+
+            registry.init_counter_series(
+                self.PROCESSED_TOTAL,
+                labels=labels,
+                label_names=("queue",),
+            )
+            registry.init_counter_series(
+                self.ERRORS_TOTAL,
                 labels=labels,
                 label_names=("queue",),
             )
