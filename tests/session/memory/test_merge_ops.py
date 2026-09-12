@@ -90,6 +90,67 @@ class TestPatchOp:
         assert await op_int.apply(100, 200) == 200
 
     @pytest.mark.asyncio
+    async def test_full_string_replacement_preserves_numbered_content(self):
+        """A full replacement has no SEARCH to prove the model copied the
+        numbered read view, so it is stored verbatim (#4413)."""
+        op = PatchOp(FieldType.STRING)
+        numbered = "1\t# Deployment\n2\t- Auth: required"
+
+        assert await op.apply("old", numbered) == numbered
+
+    @pytest.mark.asyncio
+    async def test_full_string_replacement_preserves_consecutive_numeric_columns(self):
+        """Consecutive numeric columns (years + measurements) are genuine data
+        and must not be stripped as display prefixes (#4413)."""
+        op = PatchOp(FieldType.STRING)
+        tsv = "2024\t17\n2025\t19"
+
+        assert await op.apply("old content", tsv) == tsv
+
+    @pytest.mark.asyncio
+    async def test_full_string_replacement_preserves_one_based_consecutive_columns(self):
+        """A 1-based consecutive run (quarter index) is still indistinguishable
+        from a display prefix by shape, so it must be preserved (#4413)."""
+        op = PatchOp(FieldType.STRING)
+        quarters = "1\t120000\n2\t138000\n3\t141000"
+
+        assert await op.apply("old content", quarters) == quarters
+
+    @pytest.mark.asyncio
+    async def test_full_string_replacement_preserves_tabular_data(self):
+        """Non-consecutive numeric columns are genuine data (#4413)."""
+        op = PatchOp(FieldType.STRING)
+        tsv = "1\tfoo\tbar\n3\tbaz\tqux"
+
+        assert await op.apply("old", tsv) == tsv
+
+    @pytest.mark.asyncio
+    async def test_no_original_content_preserves_block_replaces_verbatim(self):
+        """New-memory block replaces carry no SEARCH evidence, so they are
+        joined verbatim — stripping by shape would eat consecutive numeric
+        columns (#4413)."""
+        op = PatchOp(FieldType.STRING)
+        patch = StrPatch(
+            blocks=[
+                SearchReplaceBlock(search="", replace="1\t## Deploy\n2\t- Auth: required"),
+                SearchReplaceBlock(search="", replace="1\t- Bind: loopback"),
+            ]
+        )
+
+        result = await op.apply(None, patch)
+
+        assert result == "1\t## Deploy\n2\t- Auth: required\n1\t- Bind: loopback"
+
+    @pytest.mark.asyncio
+    async def test_no_original_content_preserves_consecutive_numeric_columns(self):
+        """A new memory whose content is a consecutive numeric table survives
+        the write path intact (#4413)."""
+        op = PatchOp(FieldType.STRING)
+        tsv = "2024\t17\n2025\t19"
+
+        assert await op.apply(None, tsv) == tsv
+
+    @pytest.mark.asyncio
     async def test_apply_dict_patch(self, monkeypatch):
         """Dict-form string patches should be applied without blocking the event loop."""
         from openviking.session.memory.merge_op import patch_handler
@@ -470,6 +531,112 @@ class TestApplyStrPatch:
         result = apply_str_patch(original, patch)
 
         assert result == "alpha\nBETA\ngamma"
+
+    def test_numbered_patch_strips_accumulated_line_number_prefixes(self):
+        """A REPLACE block echoing a stacked numbered view must not leak prefixes (#4413)."""
+        original = "## Roadmap\n- step one"
+        patch = StrPatch(
+            blocks=[
+                SearchReplaceBlock(
+                    search="1\t## Roadmap\n2\t- step one",
+                    replace="1\t1\t## Roadmap\n2\t2\t- step one\n3\t3\t- step two",
+                )
+            ]
+        )
+
+        result = apply_str_patch(original, patch)
+
+        assert result == "## Roadmap\n- step one\n- step two"
+
+    def test_numbered_patch_with_accumulated_prefixes_in_search_matches_clean_content(self):
+        """SEARCH copied from a stacked numbered view must fully strip prefixes (#4413)."""
+        original = "## Roadmap\n- step one"
+        patch = StrPatch(
+            blocks=[
+                SearchReplaceBlock(
+                    search="1\t1\t## Roadmap\n2\t2\t- step one",
+                    replace="1\t1\t## Roadmap\n2\t2\t- step one\n3\t3\t- step two",
+                )
+            ]
+        )
+
+        result = apply_str_patch(original, patch)
+
+        assert result == "## Roadmap\n- step one\n- step two"
+
+    def test_exact_match_clean_search_stores_numbered_replace_verbatim(self):
+        """With a clean SEARCH there is no proof the REPLACE prefixes were
+        copied from the numbered view, so the replace is stored verbatim
+        (#4413) — a stored display prefix is noise, a stripped data column
+        is loss."""
+        original = "# Deployment\n- Bind: loopback"
+        patch = StrPatch(
+            blocks=[
+                SearchReplaceBlock(
+                    search="- Bind: loopback",
+                    replace="2\t- Bind: Tailscale",
+                )
+            ]
+        )
+
+        result = apply_str_patch(original, patch)
+
+        assert result == "# Deployment\n2\t- Bind: Tailscale"
+
+    def test_write_path_clean_search_stores_consecutive_numbered_replace_verbatim(self):
+        """A REPLACE forming a consecutive numbered view is stored verbatim
+        when SEARCH carries no prefixes — consecutive numeric columns are
+        indistinguishable from display prefixes by shape (#4413)."""
+        original = "## Deploy\n- Auth: required"
+        patch = StrPatch(
+            blocks=[
+                SearchReplaceBlock(
+                    search="- Auth: required",
+                    replace="2\t- Auth: optional\n3\t- Bind: loopback",
+                )
+            ]
+        )
+
+        result = apply_str_patch(original, patch)
+
+        assert result == "## Deploy\n2\t- Auth: optional\n3\t- Bind: loopback"
+
+    def test_write_path_clean_search_preserves_year_columns(self):
+        """Real year+measurement columns survive SEARCH/REPLACE edits with a
+        clean SEARCH (#4413)."""
+        original = "## Metrics\nheader"
+        patch = StrPatch(
+            blocks=[
+                SearchReplaceBlock(
+                    search="header",
+                    replace="2024\t17\n2025\t19",
+                )
+            ]
+        )
+
+        result = apply_str_patch(original, patch)
+
+        assert result == "## Metrics\n2024\t17\n2025\t19"
+
+    def test_write_path_preserves_genuine_tabular_replace(self):
+        """Non-consecutive numeric first columns are real data, not display
+        prefixes, and must survive the write path (#4413)."""
+        tsv = "1\tfoo\tbar\n3\tbaz\tqux"
+        patch = StrPatch(blocks=[SearchReplaceBlock(search="header", replace=tsv)])
+
+        result = apply_str_patch("header", patch)
+
+        assert result == tsv
+
+    def test_write_path_preserves_mixed_numbered_and_plain_replace(self):
+        """Mixed numbered/plain REPLACE lines carry no numbered-view proof and
+        must be stored verbatim (#4413)."""
+        mixed = "1\theader\nplain line\n3\tmore"
+        patch = StrPatch(blocks=[SearchReplaceBlock(search="seed", replace=mixed)])
+
+        result = apply_str_patch("seed", patch)
+
+        assert result == mixed
 
 
 # ============================================================================

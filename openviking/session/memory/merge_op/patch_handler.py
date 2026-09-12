@@ -874,6 +874,37 @@ def _delete_complete_lines(content: str, delete_content: str) -> str:
     return content[:start] + content[end:]
 
 
+def _clean_replace_prefixes(search_content: str, replace_content: str) -> str:
+    """Return REPLACE with numbered-view display prefixes removed (#4413).
+
+    Evidence-based: REPLACE prefixes are stripped only when SEARCH itself is
+    fully numbered, which proves the block was copied from the numbered read
+    view (partial copies with non-consecutive numbers included). When SEARCH
+    is clean, REPLACE is stored verbatim: consecutive numeric columns (years,
+    quarter indexes) are indistinguishable from display prefixes by shape
+    alone, and stripping them destroys genuine data — a stored display prefix
+    is recoverable noise, a stripped data column is not.
+    """
+    if every_line_has_line_numbers(search_content):
+        if every_line_has_line_numbers(replace_content) or replace_content.strip() == "":
+            return strip_line_numbers(replace_content)
+        return replace_content
+    return replace_content
+
+
+def _clean_block_prefixes(search_content: str, replace_content: str) -> tuple[str, str]:
+    """Clean display prefixes from both sides of a patch block (#4413).
+
+    SEARCH is stripped only when fully numbered; stripped SEARCH text that
+    matches several locations needs the caller's start-line disambiguation,
+    so the exact-match fast path must use _clean_replace_prefixes() instead.
+    """
+    cleaned_replace = _clean_replace_prefixes(search_content, replace_content)
+    if every_line_has_line_numbers(search_content):
+        return strip_line_numbers(search_content), cleaned_replace
+    return search_content, cleaned_replace
+
+
 def apply_str_patch(original_content: str, patch: StrPatch) -> str:
     """Apply a StrPatch to original content.
 
@@ -894,6 +925,13 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
     for block in patch.blocks:
         search_content = unescape_markers(block.search)
         replace_content = unescape_markers(block.replace)
+
+        # Write-path cleanup (#4413): REPLACE copied from the numbered read
+        # view keeps its display prefixes even when SEARCH matches exactly,
+        # and this fast path would write them verbatim into stored memories.
+        # SEARCH stays untouched here: stripped SEARCH text matching several
+        # locations needs the fallback's start-line disambiguation.
+        replace_content = _clean_replace_prefixes(search_content, replace_content)
 
         if search_content == replace_content:
             continue
@@ -966,20 +1004,17 @@ def apply_str_patch(original_content: str, patch: StrPatch) -> str:
         search_content = unescape_markers(search_content)
         replace_content = unescape_markers(replace_content)
 
-        # Strip line numbers if present
-        has_all_line_numbers = (
-            every_line_has_line_numbers(search_content)
-            and every_line_has_line_numbers(replace_content)
-        ) or (every_line_has_line_numbers(search_content) and replace_content.strip() == "")
-
-        if has_all_line_numbers and start_line == 0:
+        # Infer the start line from a numbered SEARCH before stripping it.
+        if every_line_has_line_numbers(search_content) and start_line == 0:
             inferred_start_line = extract_start_line_number(search_content)
             if inferred_start_line is not None:
                 start_line = inferred_start_line
 
-        if has_all_line_numbers:
-            search_content = strip_line_numbers(search_content)
-            replace_content = strip_line_numbers(replace_content)
+        # Write-path cleanup (#4413): covers mixed blocks too, where only one
+        # side carries display prefixes.
+        search_content, replace_content = _clean_block_prefixes(
+            search_content, replace_content
+        )
 
         # If search and replace are identical, treat as success (no changes needed)
         if search_content == replace_content:
