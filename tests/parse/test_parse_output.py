@@ -2,15 +2,16 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Contract tests for the parse output store abstraction.
 
-Step 2a only ships the AGFS backend, which must forward 1:1 to the existing
-VikingFS singleton so parser behaviour is unchanged. The local backend and its
-parametrization arrive in Step 2b.
+The AGFS backend forwards 1:1 to the VikingFS singleton; the local backend
+lays artifacts out under a configured root directory. Both must satisfy the same
+byte/directory contract so parsers stay backend-agnostic.
 """
 
 import pytest
 
 from openviking.parse.output import (
     AgfsParseOutputStore,
+    LocalParseOutputStore,
     ParseArtifactRef,
     build_parse_output_store,
 )
@@ -51,6 +52,11 @@ class _FakeVikingFS:
         self.deleted.append(uri)
 
 
+# ---------------------------------------------------------------------------
+# ParseArtifactRef
+# ---------------------------------------------------------------------------
+
+
 class TestParseArtifactRef:
     def test_serialization_roundtrip(self) -> None:
         ref = ParseArtifactRef(
@@ -74,34 +80,44 @@ class TestParseArtifactRef:
             )
 
 
+# ---------------------------------------------------------------------------
+# Shared contract, parametrized over both backends
+# ---------------------------------------------------------------------------
+
+
+def _make_store(backend: str, tmp_path):
+    if backend == "agfs":
+        return AgfsParseOutputStore(viking_fs=_FakeVikingFS())
+    return LocalParseOutputStore(local_root=str(tmp_path / "parse-out"))
+
+
 @pytest.mark.asyncio
-class TestAgfsParseOutputStore:
-    async def test_create_artifact_allocates_temp_root(self) -> None:
-        vfs = _FakeVikingFS()
-        store = AgfsParseOutputStore(viking_fs=vfs)
-
+@pytest.mark.parametrize("backend", ["agfs", "local"])
+class TestParseOutputStoreContract:
+    async def test_create_artifact_reports_backend(self, backend, tmp_path) -> None:
+        store = _make_store(backend, tmp_path)
         ref = await store.create_artifact(root_type="dir")
-
-        assert ref.backend == "agfs"
-        assert ref.root == "viking://temp/fake1"
+        assert ref.backend == backend
         assert ref.root_type == "dir"
+        assert ref.root
 
-    async def test_write_and_read_bytes_roundtrip_via_vikingfs(self) -> None:
-        vfs = _FakeVikingFS()
-        store = AgfsParseOutputStore(viking_fs=vfs)
+    async def test_write_and_read_bytes_roundtrip(self, backend, tmp_path) -> None:
+        store = _make_store(backend, tmp_path)
         ref = await store.create_artifact(root_type="dir")
 
         await store.mkdir(ref, "repo")
         await store.write_bytes(ref, "repo/main.py", b"print(1)")
 
-        # The AGFS backend must round-trip through the VikingFS singleton, using
-        # the artifact root to resolve the absolute URI.
-        assert vfs.files["viking://temp/fake1/repo/main.py"] == b"print(1)"
         assert await store.read_bytes(ref, "repo/main.py") == b"print(1)"
 
-    async def test_list_returns_relative_entries(self) -> None:
-        vfs = _FakeVikingFS()
-        store = AgfsParseOutputStore(viking_fs=vfs)
+    async def test_write_and_read_text(self, backend, tmp_path) -> None:
+        store = _make_store(backend, tmp_path)
+        ref = await store.create_artifact(root_type="dir")
+        await store.write_text(ref, "note.md", "# hi")
+        assert await store.read_text(ref, "note.md") == "# hi"
+
+    async def test_list_returns_relative_entries(self, backend, tmp_path) -> None:
+        store = _make_store(backend, tmp_path)
         ref = await store.create_artifact(root_type="dir")
         await store.write_bytes(ref, "a.py", b"a")
         await store.write_bytes(ref, "b.py", b"b")
@@ -109,26 +125,120 @@ class TestAgfsParseOutputStore:
         names = {entry.name for entry in await store.list(ref, "")}
         assert names == {"a.py", "b.py"}
 
-    async def test_cleanup_deletes_artifact_root(self) -> None:
+    async def test_cleanup_is_idempotent(self, backend, tmp_path) -> None:
+        store = _make_store(backend, tmp_path)
+        ref = await store.create_artifact(root_type="dir")
+        await store.write_bytes(ref, "a.py", b"a")
+
+        await store.cleanup(ref)
+        await store.cleanup(ref)  # must not raise
+
+    async def test_rejects_unsafe_relative_path(self, backend, tmp_path) -> None:
+        store = _make_store(backend, tmp_path)
+        ref = await store.create_artifact(root_type="dir")
+        with pytest.raises(ValueError):
+            await store.write_bytes(ref, "../escape.py", b"x")
+
+    async def test_ref_roundtrip_reopens_same_artifact(self, backend, tmp_path) -> None:
+        store = _make_store(backend, tmp_path)
+        ref = await store.create_artifact(root_type="dir")
+        await store.write_bytes(ref, "a.py", b"a")
+
+        # A serialized ref must reopen the same artifact bytes.
+        reopened = ParseArtifactRef.from_dict(ref.to_dict())
+        assert await store.read_bytes(reopened, "a.py") == b"a"
+
+
+# ---------------------------------------------------------------------------
+# AGFS-specific: must forward to the VikingFS singleton
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestAgfsParseOutputStore:
+    async def test_write_round_trips_through_vikingfs(self) -> None:
+        vfs = _FakeVikingFS()
+        store = AgfsParseOutputStore(viking_fs=vfs)
+        ref = await store.create_artifact(root_type="dir")
+
+        await store.write_bytes(ref, "repo/main.py", b"print(1)")
+
+        assert vfs.files["viking://temp/fake1/repo/main.py"] == b"print(1)"
+
+    async def test_cleanup_deletes_via_vikingfs(self) -> None:
         vfs = _FakeVikingFS()
         store = AgfsParseOutputStore(viking_fs=vfs)
         ref = await store.create_artifact(root_type="dir")
 
         await store.cleanup(ref)
-        await store.cleanup(ref)  # idempotent
+        await store.cleanup(ref)
 
         assert vfs.deleted == ["viking://temp/fake1"]
 
-    async def test_rejects_unsafe_relative_path(self) -> None:
-        vfs = _FakeVikingFS()
-        store = AgfsParseOutputStore(viking_fs=vfs)
-        ref = await store.create_artifact(root_type="dir")
 
-        with pytest.raises(ValueError):
-            await store.write_bytes(ref, "../escape.py", b"x")
+# ---------------------------------------------------------------------------
+# Local-specific: filesystem layout, isolation, case conflicts
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestLocalParseOutputStore:
+    async def test_artifacts_are_isolated(self, tmp_path) -> None:
+        store = LocalParseOutputStore(local_root=str(tmp_path / "out"))
+        a = await store.create_artifact(root_type="dir")
+        b = await store.create_artifact(root_type="dir")
+        assert a.root != b.root
+
+        await store.write_bytes(a, "f.py", b"a")
+        await store.write_bytes(b, "f.py", b"b")
+        assert await store.read_bytes(a, "f.py") == b"a"
+        assert await store.read_bytes(b, "f.py") == b"b"
+
+    async def test_root_stays_under_configured_local_root(self, tmp_path) -> None:
+        root = tmp_path / "out"
+        store = LocalParseOutputStore(local_root=str(root))
+        ref = await store.create_artifact(root_type="dir")
+        assert str(root) in ref.root
+
+    async def test_cleanup_removes_directory(self, tmp_path) -> None:
+        from pathlib import Path
+
+        store = LocalParseOutputStore(local_root=str(tmp_path / "out"))
+        ref = await store.create_artifact(root_type="dir")
+        await store.write_bytes(ref, "a.py", b"a")
+        assert Path(ref.root).exists()
+
+        await store.cleanup(ref)
+        assert not Path(ref.root).exists()
+
+    async def test_case_only_conflict_is_detected(self, tmp_path) -> None:
+        store = LocalParseOutputStore(local_root=str(tmp_path / "out"))
+        ref = await store.create_artifact(root_type="dir")
+        await store.write_bytes(ref, "Readme.md", b"a")
+        with pytest.raises(ValueError, match="case"):
+            await store.write_bytes(ref, "README.MD", b"b")
+
+    async def test_missing_artifact_read_raises(self, tmp_path) -> None:
+        store = LocalParseOutputStore(local_root=str(tmp_path / "out"))
+        ref = await store.create_artifact(root_type="dir")
+        with pytest.raises(FileNotFoundError):
+            await store.read_bytes(ref, "missing.py")
+
+
+# ---------------------------------------------------------------------------
+# Factory
+# ---------------------------------------------------------------------------
 
 
 class TestBuildParseOutputStore:
     def test_defaults_to_agfs_backend(self) -> None:
         store = build_parse_output_store(viking_fs=_FakeVikingFS())
         assert isinstance(store, AgfsParseOutputStore)
+
+    def test_local_backend_requires_root(self) -> None:
+        with pytest.raises(ValueError, match="local_root"):
+            build_parse_output_store(backend="local", local_root=None)
+
+    def test_builds_local_backend(self, tmp_path) -> None:
+        store = build_parse_output_store(backend="local", local_root=str(tmp_path))
+        assert isinstance(store, LocalParseOutputStore)

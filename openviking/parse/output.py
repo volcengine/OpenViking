@@ -23,8 +23,12 @@ Design notes:
 
 from __future__ import annotations
 
+import asyncio
+import shutil
+import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, List, Literal, Optional
 
 from openviking.utils.path_safety import safe_join_viking_uri, sanitize_relative_viking_path
@@ -202,18 +206,125 @@ class AgfsParseOutputStore(ParseOutputStore):
         await self._fs().delete_temp(ref.root)
 
 
+class LocalParseOutputStore(ParseOutputStore):
+    """Artifact store backed by a local directory tree.
+
+    For single-machine deployments where every worker in the SOURCE/POST_PROCESS
+    chain shares the same filesystem, artifacts stay on local disk instead of
+    round-tripping through AGFS temp. Enabling this is a deployment constraint
+    (see StorageConfig.parse_output); the store itself only moves bytes.
+
+    Case-only name collisions are detected explicitly rather than relying on the
+    host filesystem's case sensitivity, so behaviour matches across platforms.
+    """
+
+    backend = "local"
+
+    def __init__(self, local_root: str) -> None:
+        if not local_root:
+            raise ValueError("LocalParseOutputStore requires a local_root")
+        self._root = Path(local_root).expanduser().resolve()
+        self._root.mkdir(parents=True, exist_ok=True)
+
+    def _resolve(self, ref: ParseArtifactRef, rel_path: str) -> Path:
+        artifact_root = Path(ref.root).resolve()
+        # The artifact root must stay inside the configured store root.
+        if artifact_root != self._root and self._root not in artifact_root.parents:
+            raise ValueError("parse artifact root escapes the configured local_root")
+        rel = (rel_path or "").strip("/")
+        if not rel:
+            return artifact_root
+        safe_rel = sanitize_relative_viking_path(rel)
+        target = artifact_root.joinpath(*Path(safe_rel).parts).resolve()
+        if artifact_root != target and artifact_root not in target.parents:
+            raise ValueError(f"resolved path escapes the artifact root: {rel_path}")
+        return target
+
+    @staticmethod
+    def _check_case_conflict(target: Path) -> None:
+        parent = target.parent
+        if not parent.is_dir():
+            return
+        lower = target.name.casefold()
+        for existing in parent.iterdir():
+            if existing.name != target.name and existing.name.casefold() == lower:
+                raise ValueError(
+                    f"case-only name conflict: {target.name} vs existing {existing.name}"
+                )
+
+    async def create_artifact(self, *, root_type: str = "dir") -> ParseArtifactRef:
+        if root_type not in _ROOT_TYPES:
+            raise ValueError(f"root_type must be one of {sorted(_ROOT_TYPES)}")
+        artifact_root = self._root / f"artifact-{uuid.uuid4().hex}"
+        await asyncio.to_thread(artifact_root.mkdir, parents=True, exist_ok=False)
+        return ParseArtifactRef(
+            backend=self.backend,
+            root=str(artifact_root),
+            root_type=root_type,
+        )
+
+    async def mkdir(self, ref: ParseArtifactRef, rel_path: str = "") -> None:
+        target = self._resolve(ref, rel_path)
+        await asyncio.to_thread(target.mkdir, parents=True, exist_ok=True)
+
+    async def write_bytes(self, ref: ParseArtifactRef, rel_path: str, content: bytes) -> None:
+        target = self._resolve(ref, rel_path)
+
+        def _write() -> None:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            self._check_case_conflict(target)
+            target.write_bytes(content)
+
+        await asyncio.to_thread(_write)
+
+    async def read_bytes(self, ref: ParseArtifactRef, rel_path: str) -> bytes:
+        target = self._resolve(ref, rel_path)
+        return await asyncio.to_thread(target.read_bytes)
+
+    async def list(self, ref: ParseArtifactRef, rel_path: str = "") -> List[ArtifactEntry]:
+        base = self._resolve(ref, rel_path)
+
+        def _scan() -> List[ArtifactEntry]:
+            if not base.is_dir():
+                return []
+            rel_prefix = (rel_path or "").strip("/")
+            entries: List[ArtifactEntry] = []
+            for child in sorted(base.iterdir(), key=lambda p: p.name):
+                child_rel = f"{rel_prefix}/{child.name}" if rel_prefix else child.name
+                entries.append(
+                    ArtifactEntry(
+                        name=child.name,
+                        rel_path=child_rel,
+                        is_dir=child.is_dir(),
+                    )
+                )
+            return entries
+
+        return await asyncio.to_thread(_scan)
+
+    async def cleanup(self, ref: ParseArtifactRef) -> None:
+        artifact_root = Path(ref.root)
+        await asyncio.to_thread(shutil.rmtree, artifact_root, ignore_errors=True)
+
+
 def build_parse_output_store(
     *,
     viking_fs: Any = None,
     backend: Optional[Literal["agfs", "local"]] = None,
+    local_root: Optional[str] = None,
 ) -> ParseOutputStore:
     """Return the configured artifact store.
 
-    Step 2a only wires the AGFS backend; ``backend`` is accepted so callers can
-    pass the resolved config without another branch once local lands in 2b.
+    ``backend`` defaults to AGFS. The local backend requires ``local_root`` and
+    is only safe when every worker in the parse/post-process chain shares that
+    path (a deployment constraint owned by the operator, not auto-detected).
     """
     if backend in (None, "agfs"):
         return AgfsParseOutputStore(viking_fs=viking_fs)
+    if backend == "local":
+        if not local_root:
+            raise ValueError("local parse output backend requires storage.parse_output.local_root")
+        return LocalParseOutputStore(local_root=local_root)
     raise ValueError(f"unsupported parse output backend: {backend}")
 
 
@@ -222,6 +333,7 @@ def build_parse_output_store(
 __all__ = [
     "ArtifactEntry",
     "AgfsParseOutputStore",
+    "LocalParseOutputStore",
     "ParseArtifactRef",
     "ParseOutputStore",
     "build_parse_output_store",
