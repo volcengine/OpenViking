@@ -195,3 +195,60 @@ async def test_commit_if_needed_commits_when_needs_commit_and_pending(tmp_path):
     assert await replayer.commit_if_needed("claude_code", _ref()) is True
     assert replayer.client.committed == ["import__claude_code__s1"]
     assert store.get("claude_code", "s1").needs_commit is False
+
+
+async def test_commit_if_needed_recovers_when_commit_is_consumed_before_error(tmp_path):
+    class _CommitConsumedErrorReplay(_FakeReplay):
+        async def commit(self, sid, keep_recent_count=0):
+            self.committed.append(sid)
+            self.pending = 0
+            raise RuntimeError("response lost after commit")
+
+    store = CursorStore(tmp_path)
+    store.set_pending(
+        "claude_code",
+        "s1",
+        "import__claude_code__s1",
+        Cursor(BYTE_OFFSET, {"offset": 0}),
+        Cursor(BYTE_OFFSET, {"offset": 10}),
+        1,
+        0,
+    )
+    store.confirm_append("claude_code", "s1", Cursor(BYTE_OFFSET, {"offset": 10}), 1)
+    fake = _CommitConsumedErrorReplay(pending=500)
+    replayer = SessionReplayer(fake, store)
+
+    assert await replayer.commit_if_needed("claude_code", _ref()) is True
+    assert store.get("claude_code", "s1").needs_commit is False
+    assert await replayer.commit_if_needed("claude_code", _ref()) is False
+    assert fake.committed == ["import__claude_code__s1"]
+
+
+async def test_commit_if_needed_reraises_when_commit_was_not_consumed(tmp_path):
+    commit_error = RuntimeError("commit rejected")
+
+    class _CommitErrorReplay(_FakeReplay):
+        async def commit(self, sid, keep_recent_count=0):
+            self.committed.append(sid)
+            raise commit_error
+
+    store = CursorStore(tmp_path)
+    store.set_pending(
+        "claude_code",
+        "s1",
+        "import__claude_code__s1",
+        Cursor(BYTE_OFFSET, {"offset": 0}),
+        Cursor(BYTE_OFFSET, {"offset": 10}),
+        1,
+        0,
+    )
+    store.confirm_append("claude_code", "s1", Cursor(BYTE_OFFSET, {"offset": 10}), 1)
+    replayer = SessionReplayer(_CommitErrorReplay(pending=500), store)
+
+    try:
+        await replayer.commit_if_needed("claude_code", _ref())
+    except RuntimeError as raised:
+        assert raised is commit_error
+    else:
+        raise AssertionError("commit error was not re-raised")
+    assert store.get("claude_code", "s1").needs_commit is True
