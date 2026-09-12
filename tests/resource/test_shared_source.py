@@ -6,6 +6,8 @@ import pytest
 
 from openviking.parse.accessors.base import SourceType
 from openviking.resource.shared_source import SharedSource, materialize_shared_source
+from openviking.server.identity import RequestContext, Role
+from openviking_cli.session.user_id import UserIdentifier
 
 
 def _valid_payload() -> dict:
@@ -46,24 +48,34 @@ class TestSharedSourceValidation:
 
 
 class _FakeVikingFS:
-    def __init__(self, content: bytes, content_uri: str, account_id: str) -> None:
+    def __init__(
+        self,
+        content: bytes,
+        content_uri: str,
+        account_id: str,
+        *,
+        exists: bool = True,
+    ) -> None:
         self._content = content
         self._content_uri = content_uri
         self._account_id = account_id
+        self._exists = exists
         self.read_calls: list[str] = []
+        self.read_contexts = []
 
     async def exists(self, uri: str, *, ctx) -> bool:
-        return uri == self._content_uri
+        return self._exists and uri == self._content_uri
 
     async def read_file_bytes(self, uri: str, *, ctx) -> bytes:
         self.read_calls.append(uri)
+        self.read_contexts.append(ctx)
         if uri != self._content_uri:
             raise FileNotFoundError(uri)
         return self._content
 
 
-class _Ctx:
-    account_id = "acct-1"
+def _ctx() -> RequestContext:
+    return RequestContext(user=UserIdentifier("acct-1", "user-1"), role=Role.USER)
 
 
 @pytest.mark.asyncio
@@ -72,7 +84,7 @@ class TestMaterializeSharedSource:
         src = SharedSource.from_dict(_valid_payload())
         vfs = _FakeVikingFS(b"PK\x03\x04zip-bytes", src.content_uri, "acct-1")
 
-        resource = await materialize_shared_source(src, viking_fs=vfs, ctx=_Ctx())
+        resource = await materialize_shared_source(src, viking_fs=vfs, ctx=_ctx())
         try:
             assert resource.source_type == SourceType.LOCAL
             assert resource.path.exists()
@@ -80,6 +92,8 @@ class TestMaterializeSharedSource:
             assert resource.path.read_bytes() == b"PK\x03\x04zip-bytes"
             # Worker downloads the shared object exactly once; API never staged it.
             assert vfs.read_calls == [src.content_uri]
+            assert vfs.read_contexts[0].role == "root"
+            assert vfs.read_contexts[0].account_id == "acct-1"
         finally:
             resource.cleanup()
         assert not resource.path.exists()
@@ -89,4 +103,14 @@ class TestMaterializeSharedSource:
         vfs = _FakeVikingFS(b"", "viking://upload/other/leaf/content", "acct-1")
 
         with pytest.raises(ValueError, match="missing"):
-            await materialize_shared_source(src, viking_fs=vfs, ctx=_Ctx())
+            await materialize_shared_source(src, viking_fs=vfs, ctx=_ctx())
+
+    async def test_exact_read_succeeds_even_when_exists_is_stale(self) -> None:
+        src = SharedSource.from_dict(_valid_payload())
+        vfs = _FakeVikingFS(b"payload", src.content_uri, "acct-1", exists=False)
+
+        resource = await materialize_shared_source(src, viking_fs=vfs, ctx=_ctx())
+        try:
+            assert resource.path.read_bytes() == b"payload"
+        finally:
+            resource.cleanup()

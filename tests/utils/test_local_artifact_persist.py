@@ -65,7 +65,7 @@ async def test_persist_local_artifact_uploads_to_resource_tree(tmp_path, monkeyp
     doc_rel = rp._artifact_doc_rel(ref, f"{ref.root}/repository")
     assert doc_rel == "repository"
 
-    await rp._persist_local_artifact(
+    apply_result = await rp._persist_local_artifact(
         output_store=store,
         artifact_ref=ref,
         doc_rel=doc_rel,
@@ -80,6 +80,9 @@ async def test_persist_local_artifact_uploads_to_resource_tree(tmp_path, monkeyp
     assert agfs.files["viking://resources/acme/demo/src/b.py"] == b"print('b')"
     assert agfs.persist_temp_tree_calls == 0
     assert agfs.created_temp_uris == 0
+    assert apply_result.uploaded == ["a.py", "src/b.py"]
+    assert apply_result.files == ["a.py", "src/b.py"]
+    assert set(apply_result.md5_by_rel) == {"a.py", "src/b.py"}
 
 
 def test_build_parse_output_store_defaults_to_none(monkeypatch):

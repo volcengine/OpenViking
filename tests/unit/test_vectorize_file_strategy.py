@@ -219,6 +219,32 @@ async def test_vectorize_file_threads_supplied_md5_without_reading_bytes(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_vectorize_file_uses_supplied_content_without_reading_file(monkeypatch):
+    queue = DummyQueue()
+    fs = DummyFS("remote content")
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: fs)
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
+        ),
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/a.py",
+        summary_dict={"name": "a.py", "summary": ""},
+        parent_uri="viking://user/default/resources",
+        ctx=DummyReq(),
+        file_content=b"print('local')",
+    )
+
+    assert queue.items[0].message == "print('local')"
+    assert fs.read_file_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_vectorize_file_omits_md5_when_not_supplied(monkeypatch):
     queue = DummyQueue()
     fs = DummyFS("deployment guide")

@@ -18,7 +18,8 @@ from pathlib import Path
 from typing import Any, Dict
 
 from openviking.parse.accessors.base import LocalResource, SourceType
-from openviking.server.identity import RequestContext
+from openviking.server.error_mapping import is_not_found_error
+from openviking.server.identity import RequestContext, Role
 
 _SHARED_UPLOAD_ROOT = "viking://upload"
 
@@ -83,18 +84,21 @@ async def materialize_shared_source(
     resource only cleans up the worker-local copy. A missing or expired object
     fails loudly instead of yielding an empty input.
     """
-    if not await viking_fs.exists(shared.content_uri, ctx=ctx):
-        raise ValueError("Shared upload content is missing or expired")
-
     suffix = shared.file_ext or Path(shared.original_filename).suffix or ".tmp"
     local_root = Path(tempfile.mkdtemp(prefix="ov_shared_source_"))
     filename = shared.original_filename or f"resource{suffix}"
     local_path = local_root / Path(filename).name
     try:
-        content = await viking_fs.read_file_bytes(shared.content_uri, ctx=ctx)
+        internal_ctx = RequestContext(user=ctx.user, role=Role.ROOT)
+        content = await viking_fs.read_file_bytes(shared.content_uri, ctx=internal_ctx)
         await asyncio.to_thread(local_path.write_bytes, content)
-    except BaseException:
+    except asyncio.CancelledError:
         shutil.rmtree(local_root, ignore_errors=True)
+        raise
+    except Exception as exc:
+        shutil.rmtree(local_root, ignore_errors=True)
+        if is_not_found_error(exc):
+            raise ValueError("Shared upload content is missing or expired") from exc
         raise
 
     meta = dict(shared.meta)

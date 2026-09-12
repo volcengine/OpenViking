@@ -292,16 +292,21 @@ async def _resolve_resource_content_type(
     file_name: str,
     viking_fs: Any,
     ctx: Optional[RequestContext],
+    file_content: Optional[bytes] = None,
 ) -> Optional[ResourceContentType]:
     content_type = get_resource_content_type(file_name)
     if Path(file_name).suffix.lower() != ".ts":
         return content_type
     try:
-        prefix = await viking_fs.read(
-            file_path,
-            offset=0,
-            size=MPEG_TS_PROBE_BYTES,
-            ctx=ctx,
+        prefix = (
+            file_content[:MPEG_TS_PROBE_BYTES]
+            if file_content is not None
+            else await viking_fs.read(
+                file_path,
+                offset=0,
+                size=MPEG_TS_PROBE_BYTES,
+                ctx=ctx,
+            )
         )
     except Exception:
         return content_type
@@ -509,6 +514,7 @@ async def vectorize_file(
     ingest_options: IngestOptions | None = None,
     creator_acl_grant: CreatorAclGrant | None = None,
     file_md5: Optional[str] = None,
+    file_content: Optional[bytes] = None,
 ) -> bool:
     """
     Vectorize a single file.
@@ -550,7 +556,9 @@ async def vectorize_file(
             owner_space=owner_space_for_uri(file_path),
         )
 
-        content_type = await _resolve_resource_content_type(file_path, file_name, viking_fs, ctx)
+        content_type = await _resolve_resource_content_type(
+            file_path, file_name, viking_fs, ctx, file_content=file_content
+        )
         embedding_cfg = get_openviking_config().embedding
         configured_text_source = embedding_cfg.text_source
         effective_text_source = TEXT_SOURCE_SUMMARY_ONLY if use_summary else configured_text_source
@@ -567,7 +575,11 @@ async def vectorize_file(
                 )
                 context.set_vectorize(Vectorize(text=summary))
             elif is_text_file(file_name):
-                content = _coerce_text_file_content(await viking_fs.read_file(file_path, ctx=ctx))
+                content = _coerce_text_file_content(
+                    file_content
+                    if file_content is not None
+                    else await viking_fs.read_file(file_path, ctx=ctx)
+                )
                 embedding_text = truncate_embedding_input(
                     content,
                     embedding_cfg.max_input_tokens,
@@ -585,7 +597,9 @@ async def vectorize_file(
             else:
                 try:
                     content = _coerce_text_file_content(
-                        await viking_fs.read_file(file_path, ctx=ctx)
+                        file_content
+                        if file_content is not None
+                        else await viking_fs.read_file(file_path, ctx=ctx)
                     )
                 except Exception as e:
                     logger.warning(

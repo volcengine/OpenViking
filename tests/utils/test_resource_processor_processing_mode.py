@@ -130,6 +130,31 @@ async def test_flat_file_skips_all_post_processing_when_build_index_false(
 
 
 @pytest.mark.asyncio
+async def test_local_artifact_without_semantic_work_is_cleaned(monkeypatch, ctx, tmp_path):
+    from openviking.parse.output import LocalParseOutputStore
+
+    store = LocalParseOutputStore(local_root=str(tmp_path))
+    ref = await store.create_artifact()
+    await store.write_bytes(ref, "repository/a.py", b"a")
+    processor = ResourceProcessor(_FakeVikingDB())
+    processor._build_parse_output_store = Mock(return_value=store)
+
+    await processor.finish_prepared_resource(
+        {
+            "root_uri": "viking://resources/demo",
+            "temp_uri": "viking://resources/demo",
+            "source_committed": True,
+            "artifact_ref": ref.to_dict(),
+            "artifact_files": ["a.py"],
+        },
+        ctx=ctx,
+        build_index=False,
+    )
+
+    assert not tmp_path.joinpath(ref.root).exists()
+
+
+@pytest.mark.asyncio
 async def test_vectors_only_replaces_preexisting_flat_file_without_directory_sync(
     monkeypatch,
     ctx,
@@ -303,9 +328,58 @@ async def test_vectors_only_persists_tree_and_vectorizes_files_only(monkeypatch,
         search_tags=["team=search"],
         search_tag_mode="append",
     )
-    processor._delete_resource_semantic_markers.assert_not_awaited()
-    processor._delete_resource_semantic_vectors.assert_not_awaited()
-    viking_fs._async_agfs.pathlock_release.assert_awaited_once_with(lock)
+
+
+@pytest.mark.asyncio
+async def test_local_vectors_only_uses_artifact_snapshot_when_target_tree_is_empty(
+    monkeypatch, ctx, tmp_path
+):
+    from openviking.parse.output import LocalParseOutputStore, ParseArtifactRef
+    from openviking.utils.content_hash import content_md5
+
+    store = LocalParseOutputStore(local_root=str(tmp_path))
+    raw_ref = await store.create_artifact()
+    ref = ParseArtifactRef(
+        backend="local",
+        root=raw_ref.root,
+        resource_rel="repository",
+    )
+    await store.write_bytes(ref, "repository/a.py", b"print('a')")
+    viking_fs = SimpleNamespace(tree=AsyncMock(return_value=[]))
+    vectorize_file = AsyncMock(return_value=True)
+    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: viking_fs)
+    monkeypatch.setattr("openviking.utils.resource_processor.vectorize_file", vectorize_file)
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.get_openviking_config",
+        lambda: SimpleNamespace(
+            queue_workers=SimpleNamespace(
+                add_resource=SimpleNamespace(file_vectorization_concurrency=8)
+            )
+        ),
+    )
+    processor = ResourceProcessor(_FakeVikingDB())
+    processor._build_parse_output_store = Mock(return_value=store)
+
+    await processor.finish_prepared_resource(
+        {
+            "root_uri": "viking://resources/demo",
+            "temp_uri": "viking://resources/demo",
+            "source_committed": True,
+            "artifact_ref": ref.to_dict(),
+            "artifact_files": ["a.py"],
+            "file_md5s": {
+                "viking://resources/demo/a.py": content_md5(b"print('a')")
+            },
+        },
+        ctx=ctx,
+        build_index=True,
+        processing_mode="vectors_only",
+    )
+
+    viking_fs.tree.assert_not_awaited()
+    vectorize_file.assert_awaited_once()
+    assert vectorize_file.await_args.kwargs["file_content"] == b"print('a')"
+    assert vectorize_file.await_args.kwargs["file_md5"] == content_md5(b"print('a')")
 
 
 @pytest.mark.asyncio

@@ -211,6 +211,17 @@ class TestLocalParseOutputStore:
         await store.cleanup(ref)
         assert not Path(ref.root).exists()
 
+    async def test_cleanup_rejects_artifact_outside_store_root(self, tmp_path) -> None:
+        store = LocalParseOutputStore(local_root=str(tmp_path / "out"))
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        ref = ParseArtifactRef(backend="local", root=str(outside))
+
+        with pytest.raises(ValueError, match="escapes"):
+            await store.cleanup(ref)
+
+        assert outside.exists()
+
     async def test_case_only_conflict_is_detected(self, tmp_path) -> None:
         store = LocalParseOutputStore(local_root=str(tmp_path / "out"))
         ref = await store.create_artifact(root_type="dir")

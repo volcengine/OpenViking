@@ -63,6 +63,9 @@ class DiffPlan:
     orphan_vectors: List[str] = field(default_factory=list)
     structural: List[str] = field(default_factory=list)
     needs_body_compare: List[str] = field(default_factory=list)
+    new_files: List[str] = field(default_factory=list)
+    new_md5s: Mapping[str, str] = field(default_factory=dict)
+    file_abstracts: Mapping[str, str] = field(default_factory=dict)
 
 
 def _is_control_path(rel_path: str) -> bool:
@@ -86,6 +89,15 @@ def build_diff_plan(
     additions never depend on completeness.
     """
     plan = DiffPlan()
+    plan.new_files = sorted(key for key, entry in new.items() if not entry.is_dir)
+    plan.new_md5s = {
+        key: entry.md5 for key, entry in new.items() if not entry.is_dir and entry.md5
+    }
+    plan.file_abstracts = {
+        key: vector.abstract
+        for key, vector in target_vectors.items()
+        if key in new and vector.abstract
+    }
 
     # Business-file key universe, excluding control sidecars.
     keys = {
@@ -105,6 +117,8 @@ def build_diff_plan(
         f_is_dir = f.is_dir if f is not None else None
         if n is not None and f is not None and n_is_dir != f_is_dir:
             plan.structural.append(key)
+            if not n.is_dir:
+                plan.added.append(key)
             continue
 
         # Directories carry no file-level md5; their children are classified on

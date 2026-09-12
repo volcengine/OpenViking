@@ -36,11 +36,12 @@ class TestDecisionTable:
         plan = build_diff_plan(
             new={"a.py": _n("m1")},
             target_files={"a.py": _f()},
-            target_vectors={"a.py": _v("m1")},
+            target_vectors={"a.py": TargetVector(md5="m1", abstract="old summary")},
         )
         assert plan.unchanged == ["a.py"]
         assert plan.modified == []
         assert plan.added == []
+        assert plan.file_abstracts == {"a.py": "old summary"}
 
     def test_intersection_different_md5_is_modified(self) -> None:
         plan = build_diff_plan(
@@ -141,6 +142,7 @@ class TestTypeConflicts:
             target_vectors={},
         )
         assert "a" in plan.structural
+        assert plan.added == ["a"]
 
 
 class TestControlFileExclusion:

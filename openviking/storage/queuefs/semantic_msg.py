@@ -77,6 +77,9 @@ class SemanticMsg:
     # local incremental apply so the DAG's re-vectorization writes a fresh
     # fingerprint; empty for all other flows.
     file_md5s: Dict[str, str] = field(default_factory=dict)
+    artifact_ref: Optional[Dict[str, Any]] = None
+    artifact_files: List[str] = field(default_factory=list)
+    file_abstracts: Dict[str, str] = field(default_factory=dict)
 
     def __init__(
         self,
@@ -105,6 +108,9 @@ class SemanticMsg:
         propagate_to_parent: bool = True,
         copy_source_uri: str = "",
         file_md5s: Optional[Dict[str, str]] = None,
+        artifact_ref: Optional[Dict[str, Any]] = None,
+        artifact_files: Optional[List[str]] = None,
+        file_abstracts: Optional[Dict[str, str]] = None,
     ):
         self.id = str(uuid4())
         self.timestamp = int(datetime.now().timestamp())
@@ -133,6 +139,9 @@ class SemanticMsg:
         self.propagate_to_parent = bool(propagate_to_parent)
         self.copy_source_uri = copy_source_uri
         self.file_md5s = dict(file_md5s or {})
+        self.artifact_ref = dict(artifact_ref) if artifact_ref else None
+        self.artifact_files = list(artifact_files or [])
+        self.file_abstracts = dict(file_abstracts or {})
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert object to dictionary."""
@@ -194,6 +203,21 @@ class SemanticMsg:
             copy_source_uri=data.get("copy_source_uri", ""),
             file_md5s=(
                 data.get("file_md5s") if isinstance(data.get("file_md5s"), dict) else None
+            ),
+            artifact_ref=(
+                data.get("artifact_ref")
+                if isinstance(data.get("artifact_ref"), dict)
+                else None
+            ),
+            artifact_files=(
+                data.get("artifact_files")
+                if isinstance(data.get("artifact_files"), list)
+                else None
+            ),
+            file_abstracts=(
+                data.get("file_abstracts")
+                if isinstance(data.get("file_abstracts"), dict)
+                else None
             ),
         )
         if "id" in data and data["id"]:

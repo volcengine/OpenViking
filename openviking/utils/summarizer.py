@@ -118,6 +118,9 @@ class Summarizer:
         # Per-file md5 (target-URI keyed) for those changed files, so the DAG's
         # re-vectorization records the fresh fingerprint.
         file_md5s = kwargs.get("file_md5s") or {}
+        artifact_ref = kwargs.get("artifact_ref")
+        artifact_files = kwargs.get("artifact_files") or []
+        file_abstracts = kwargs.get("file_abstracts") or {}
         if not temp_uris:
             temp_uris = resource_uris
         if len(temp_uris) != len(resource_uris):
@@ -204,6 +207,9 @@ class Summarizer:
                     generation_trigger=generation_trigger,
                     changes=changes,
                     file_md5s=file_md5s,
+                    artifact_ref=artifact_ref,
+                    artifact_files=artifact_files,
+                    file_abstracts=file_abstracts,
                 )
                 if msg.telemetry_id:
                     get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)

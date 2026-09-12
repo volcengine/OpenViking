@@ -168,6 +168,42 @@ async def test_explicit_subpath_not_split():
 
 
 @pytest.mark.asyncio
+async def test_local_artifact_snapshot_is_forwarded_to_semantic_message():
+    queue = _DummyQueue()
+    qm = _DummyQueueManager(queue)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    artifact_ref = {
+        "backend": "local",
+        "root": "/tmp/artifact-1",
+        "resource_rel": "repository",
+        "root_type": "dir",
+    }
+
+    with (
+        patch("openviking.utils.summarizer.get_queue_manager", return_value=qm),
+        patch(
+            "openviking.utils.summarizer.get_current_telemetry",
+            return_value=SimpleNamespace(telemetry_id="tid"),
+        ),
+        patch(
+            "openviking.utils.summarizer.get_request_wait_tracker",
+            return_value=_DummyWaitTracker(),
+        ),
+    ):
+        await Summarizer(vlm_processor=None).summarize(
+            resource_uris=["viking://resources/repo"],
+            temp_uris=["viking://resources/repo"],
+            ctx=ctx,
+            artifact_ref=artifact_ref,
+            artifact_files=["a.py", "src/b.py"],
+        )
+
+    assert queue.msgs[0].artifact_ref == artifact_ref
+    assert queue.msgs[0].artifact_ref["resource_rel"] == "repository"
+    assert queue.msgs[0].artifact_files == ["a.py", "src/b.py"]
+
+
+@pytest.mark.asyncio
 async def test_resources_root_empty_import_is_error():
     queue = _DummyQueue()
     qm = _DummyQueueManager(queue)

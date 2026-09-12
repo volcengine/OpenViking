@@ -88,6 +88,24 @@ class SemanticProcessor(DequeueHandlerBase):
     """
 
     _stats_lock = threading.Lock()
+
+    @staticmethod
+    async def _cleanup_local_artifact(msg: SemanticMsg) -> None:
+        try:
+            if not msg.artifact_ref:
+                return
+            from openviking.parse.output import ParseArtifactRef, build_parse_output_store
+
+            artifact_ref = ParseArtifactRef.from_dict(msg.artifact_ref)
+            if artifact_ref.backend != "local":
+                return
+            parse_output = get_openviking_config().storage.parse_output
+            store = build_parse_output_store(
+                backend="local", local_root=parse_output.resolved_local_root()
+            )
+            await store.cleanup(artifact_ref)
+        except Exception as exc:
+            logger.warning("Failed to clean local parse artifact: %s", exc)
     _dag_stats_by_telemetry_id: Dict[str, DagStats] = {}
     _dag_stats_by_uri: Dict[str, DagStats] = {}
     _dag_stats_order: List[Tuple[str, str]] = []
@@ -242,6 +260,7 @@ class SemanticProcessor(DequeueHandlerBase):
             self._merge_request_stats(msg.telemetry_id, error_count=1)
             get_request_wait_tracker().mark_semantic_failed(msg.telemetry_id, msg.id, str(error))
             self.report_error(str(error), data)
+            await self._cleanup_local_artifact(msg)
             return
         self.report_success()
 
@@ -350,6 +369,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 if msg.telemetry_id and msg.id:
                     get_request_wait_tracker().mark_semantic_done(msg.telemetry_id, msg.id)
                 self.report_success()
+                await self._cleanup_local_artifact(msg)
                 return None
             if is_semantic_msg_stale(msg):
                 live_file_changes = {
@@ -379,6 +399,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     if msg.telemetry_id and msg.id:
                         get_request_wait_tracker().mark_semantic_done(msg.telemetry_id, msg.id)
                     self.report_success()
+                    await self._cleanup_local_artifact(msg)
                     return None
             # Circuit breaker: if API is known-broken, re-enqueue and wait
             try:
@@ -411,7 +432,7 @@ class SemanticProcessor(DequeueHandlerBase):
                         f"Processing semantic generation for: {msg.uri} (recursive={msg.recursive})"
                     )
 
-                    logger.info(f"Processing semantic generation for: {msg})")
+                    logger.debug("Processing semantic message id=%s uri=%s", msg.id, msg.uri)
 
                     semantic_lock = await SemanticLockScope.resolve(
                         msg.lock_handoff,
@@ -436,6 +457,21 @@ class SemanticProcessor(DequeueHandlerBase):
                             run_uri = msg.uri
                             changes = msg.changes
                             viking_fs = get_viking_fs()
+                            artifact_store = None
+                            artifact_ref = None
+                            if msg.artifact_ref and msg.artifact_files:
+                                from openviking.parse.output import (
+                                    ParseArtifactRef,
+                                    build_parse_output_store,
+                                )
+
+                                artifact_ref = ParseArtifactRef.from_dict(msg.artifact_ref)
+                                if artifact_ref.backend == "local":
+                                    parse_output = get_openviking_config().storage.parse_output
+                                    artifact_store = build_parse_output_store(
+                                        backend="local",
+                                        local_root=parse_output.resolved_local_root(),
+                                    )
                             if msg.target_uri:
                                 target_exists = await viking_fs.exists(
                                     msg.target_uri, ctx=current_ctx
@@ -463,12 +499,16 @@ class SemanticProcessor(DequeueHandlerBase):
                                     is_incremental = True
                                     target_uri = msg.target_uri
                                     run_uri = msg.target_uri
-                                elif target_exists and msg.changes and msg.uri == msg.target_uri:
+                                elif (
+                                    target_exists
+                                    and msg.changes is not None
+                                    and msg.uri == msg.target_uri
+                                ):
                                     is_incremental = True
                                     logger.info(
                                         f"Using direct incremental semantic update for: {msg.uri}"
                                     )
-                            elif msg.changes:
+                            elif msg.changes is not None:
                                 is_incremental = True
                                 target_uri = msg.uri
                                 logger.info(
@@ -496,6 +536,10 @@ class SemanticProcessor(DequeueHandlerBase):
                                 aggregate_directory=msg.aggregate_directory,
                                 copy_source_uri=msg.copy_source_uri,
                                 file_md5s=msg.file_md5s,
+                                artifact_store=artifact_store,
+                                artifact_ref=artifact_ref,
+                                artifact_files=msg.artifact_files,
+                                file_abstracts=msg.file_abstracts,
                             )
                             await executor.run(run_uri)
                             self._cache_dag_stats(
@@ -523,6 +567,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     logger.info(f"Completed semantic generation for: {msg.uri}")
                     self.report_success()
                     self._circuit_breaker.record_success()
+                    await self._cleanup_local_artifact(msg)
                     return None
                 finally:
                     reset_root_observability_context(root_context_token)
@@ -553,6 +598,8 @@ class SemanticProcessor(DequeueHandlerBase):
                         msg.telemetry_id, msg.id, str(e)
                     )
                 self.report_error(str(e), data)
+                if msg is not None:
+                    await self._cleanup_local_artifact(msg)
             elif error_class == ERROR_CLASS_PERMANENT:
                 logger.critical(
                     f"Permanent API error processing semantic message, dropping: {e}",
@@ -565,6 +612,8 @@ class SemanticProcessor(DequeueHandlerBase):
                         msg.telemetry_id, msg.id, str(e)
                     )
                 self.report_error(str(e), data)
+                if msg is not None:
+                    await self._cleanup_local_artifact(msg)
             else:
                 # Transient or unknown — re-enqueue for retry
                 logger.warning(
@@ -600,6 +649,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 await viking_fs._async_agfs.pathlock_release(lock)
             except Exception as exc:
                 logger.warning("Failed to release cancelled semantic lock: %s", exc)
+        await self._cleanup_local_artifact(msg)
         self.report_success()
         return None
 
@@ -965,13 +1015,18 @@ class SemanticProcessor(DequeueHandlerBase):
         file_name: str,
         llm_sem: asyncio.Semaphore,
         ctx: Optional[RequestContext] = None,
+        file_content: Optional[bytes] = None,
     ) -> Dict[str, Any]:
         """Generate summary for a single text file (code, documentation, or other text)."""
         viking_fs = get_viking_fs()
         vlm = get_openviking_config().vlm
         active_ctx = ctx or self._default_ctx
 
-        content = await viking_fs.read_file(file_path, ctx=active_ctx)
+        content = (
+            file_content
+            if file_content is not None
+            else await viking_fs.read_file(file_path, ctx=active_ctx)
+        )
         if isinstance(content, bytes):
             from openviking.utils.embedding_utils import _decode_text_bytes
 
@@ -1043,6 +1098,7 @@ class SemanticProcessor(DequeueHandlerBase):
         file_path: str,
         llm_sem: Optional[asyncio.Semaphore] = None,
         ctx: Optional[RequestContext] = None,
+        file_content: Optional[bytes] = None,
     ) -> Dict[str, Any]:
         """Generate summary for a single file.
 
@@ -1057,11 +1113,15 @@ class SemanticProcessor(DequeueHandlerBase):
         media_type = get_media_type(file_name, None)
         if file_name.lower().endswith(".ts"):
             try:
-                prefix = await get_viking_fs().read(
-                    file_path,
-                    offset=0,
-                    size=MPEG_TS_PROBE_BYTES,
-                    ctx=ctx,
+                prefix = (
+                    file_content[:MPEG_TS_PROBE_BYTES]
+                    if file_content is not None
+                    else await get_viking_fs().read(
+                        file_path,
+                        offset=0,
+                        size=MPEG_TS_PROBE_BYTES,
+                        ctx=ctx,
+                    )
                 )
             except Exception:
                 prefix = None
@@ -1073,7 +1133,9 @@ class SemanticProcessor(DequeueHandlerBase):
         elif media_type == "video":
             return await generate_video_summary(file_path, file_name, llm_sem, ctx=ctx)
         else:
-            return await self._generate_text_summary(file_path, file_name, llm_sem, ctx=ctx)
+            return await self._generate_text_summary(
+                file_path, file_name, llm_sem, ctx=ctx, file_content=file_content
+            )
 
     def _child_summary_line(
         self,
@@ -1602,6 +1664,7 @@ class SemanticProcessor(DequeueHandlerBase):
         ingest_options: IngestOptions | None = None,
         creator_acl_grant: CreatorAclGrant | None = None,
         file_md5: Optional[str] = None,
+        file_content: Optional[bytes] = None,
     ) -> None:
         """Vectorize a single file using its content or summary."""
         from openviking.utils.embedding_utils import vectorize_file
@@ -1618,4 +1681,5 @@ class SemanticProcessor(DequeueHandlerBase):
             ingest_options=ingest_options,
             creator_acl_grant=creator_acl_grant,
             file_md5=file_md5,
+            file_content=file_content,
         )

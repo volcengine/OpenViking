@@ -99,6 +99,7 @@ async def test_target_source_syncs_before_semantic_dag(monkeypatch):
     _FakeDagExecutor.runs = []
     processor = SemanticProcessor()
     processor._enqueue_parent_refresh = AsyncMock()
+    processor._cleanup_local_artifact = AsyncMock()
     processor._sync_topdown_recursive = AsyncMock(
         return_value=SyncDiff(
             updated_files=["viking://resources/org/repo/a.md"],
@@ -121,6 +122,58 @@ async def test_target_source_syncs_before_semantic_dag(monkeypatch):
         "deleted": [],
     }
     assert _FakeDagExecutor.runs == ["viking://resources/org/repo"]
+    processor._cleanup_local_artifact.assert_awaited_once_with(msg)
+
+
+@pytest.mark.asyncio
+async def test_local_artifact_is_cleaned_after_semantic_success(monkeypatch, tmp_path):
+    from openviking.parse.output import LocalParseOutputStore
+
+    store = LocalParseOutputStore(local_root=str(tmp_path))
+    raw_ref = await store.create_artifact()
+    from openviking.parse.output import ParseArtifactRef
+
+    ref = ParseArtifactRef(
+        backend=raw_ref.backend,
+        root=raw_ref.root,
+        resource_rel="repository",
+        root_type=raw_ref.root_type,
+    )
+    await store.write_bytes(ref, "repository/a.py", b"a")
+
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: _FakeVikingFS(),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticDagExecutor",
+        _FakeDagExecutor,
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticLockScope.resolve",
+        AsyncMock(return_value=SimpleNamespace(lock=None, close=AsyncMock())),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_openviking_config",
+        lambda: SimpleNamespace(
+            storage=SimpleNamespace(
+                parse_output=SimpleNamespace(resolved_local_root=lambda: str(tmp_path))
+            )
+        ),
+    )
+
+    processor = SemanticProcessor()
+    processor._enqueue_parent_refresh = AsyncMock()
+    msg = SemanticMsg(
+        uri="viking://resources/root",
+        context_type="resource",
+        artifact_ref=ref.to_dict(),
+        artifact_files=["a.py"],
+    )
+
+    await processor.on_dequeue(msg.to_dict())
+
+    assert not tmp_path.joinpath(ref.root).exists()
 
 
 @pytest.mark.asyncio

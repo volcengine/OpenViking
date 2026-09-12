@@ -180,6 +180,10 @@ class SemanticDagExecutor:
         aggregate_directory: bool = True,
         copy_source_uri: str = "",
         file_md5s: Optional[Dict[str, str]] = None,
+        artifact_files: Optional[List[str]] = None,
+        artifact_store: Optional[Any] = None,
+        artifact_ref: Optional[Any] = None,
+        file_abstracts: Optional[Dict[str, str]] = None,
     ):
         self._processor = processor
         self._context_type = context_type
@@ -190,6 +194,7 @@ class SemanticDagExecutor:
         self._recursive = recursive
         self._lock = lock
         self._is_code_repo = is_code_repo
+        self._changes_provided = changes is not None
         self._changes = changes or {}
         self._skip_vectorization = skip_vectorization
         self._ingest_options = IngestOptions.from_value(ingest_options)
@@ -209,6 +214,10 @@ class SemanticDagExecutor:
         # Per-file md5 (target-URI keyed) supplied by local incremental apply, so
         # re-vectorization records the fresh fingerprint instead of leaving it stale.
         self._file_md5s = dict(file_md5s or {})
+        self._artifact_files = [path.strip("/") for path in (artifact_files or []) if path]
+        self._artifact_store = artifact_store
+        self._artifact_ref = artifact_ref
+        self._file_abstracts = dict(file_abstracts or {})
         self._node_concurrency = max(1, max_concurrent_llm)
         self._llm_sem = asyncio.Semaphore(max_concurrent_llm)
         self._viking_fs = get_viking_fs()
@@ -570,6 +579,8 @@ class SemanticDagExecutor:
 
     async def _list_dir(self, uri: str, from_hint: str) -> tuple[list[str], list[str]]:
         """List directory entries and return (child_dirs, file_paths)."""
+        if self._artifact_files and self._root_uri:
+            return self._list_artifact_dir(uri)
         try:
             entries = await self._viking_fs.ls(uri, node_limit=LS_ALL_NODES, ctx=self._ctx)
         except Exception as e:
@@ -594,6 +605,49 @@ class SemanticDagExecutor:
 
         return sorted(children_dirs), sorted(file_paths)
 
+    def _list_artifact_dir(self, uri: str) -> tuple[list[str], list[str]]:
+        root = self._root_uri.rstrip("/")
+        current = uri.rstrip("/")
+        if current == root:
+            prefix = ""
+        elif current.startswith(f"{root}/"):
+            prefix = current[len(root) + 1 :] + "/"
+        else:
+            return [], []
+
+        child_dirs: set[str] = set()
+        file_paths: list[str] = []
+        for rel_path in self._artifact_files:
+            if not rel_path.startswith(prefix):
+                continue
+            remainder = rel_path[len(prefix) :]
+            if not remainder:
+                continue
+            head, separator, _ = remainder.partition("/")
+            if not head or head.startswith(".") or head in _SKIP_FILENAMES:
+                continue
+            child_uri = VikingURI(current).join(head).uri
+            if separator:
+                child_dirs.add(child_uri)
+            else:
+                file_paths.append(child_uri)
+        return sorted(child_dirs), sorted(file_paths)
+
+    async def _read_artifact_file(self, file_path: str) -> Optional[bytes]:
+        if not self._artifact_store or not self._artifact_ref or not self._root_uri:
+            return None
+        root = self._root_uri.rstrip("/")
+        if not file_path.startswith(f"{root}/"):
+            return None
+        rel_path = file_path[len(root) + 1 :]
+        artifact_doc_rel = str(getattr(self._artifact_ref, "resource_rel", "")).strip("/")
+        artifact_rel = (
+            f"{artifact_doc_rel}/{rel_path}"
+            if artifact_doc_rel
+            else rel_path
+        )
+        return await self._artifact_store.read_bytes(self._artifact_ref, artifact_rel)
+
     def _get_target_file_path(self, current_uri: str) -> Optional[str]:
         if not self._incremental_update or not self._target_uri or not self._root_uri:
             logger.warning(
@@ -612,7 +666,7 @@ class SemanticDagExecutor:
     def _is_direct_incremental_update(self) -> bool:
         return (
             self._incremental_update
-            and bool(self._changed_paths)
+            and self._changes_provided
             and self._target_uri == self._root_uri
         )
 
@@ -663,6 +717,12 @@ class SemanticDagExecutor:
         target_path = self._get_target_file_path(file_path)
         if not target_path:
             return None
+        vector_abstract = self._file_abstracts.get(target_path.rstrip("/"))
+        if vector_abstract:
+            return {
+                "name": file_path.rsplit("/", 1)[-1],
+                "summary": vector_abstract,
+            }
 
         try:
             parent_uri = "/".join(target_path.rsplit("/", 1)[:-1])
@@ -768,6 +828,7 @@ class SemanticDagExecutor:
 
         file_name = file_path.split("/")[-1]
         need_vectorize = True
+        file_content = None
         try:
             summary_dict = None
             if self._incremental_update:
@@ -798,10 +859,17 @@ class SemanticDagExecutor:
             else:
                 self._file_change_status[file_path] = True
             if summary_dict is None:
+                file_content = await self._read_artifact_file(file_path)
+                summary_kwargs: Dict[str, Any] = {
+                    "llm_sem": self._llm_sem,
+                    "ctx": self._ctx,
+                }
+                if file_content is not None:
+                    summary_kwargs["file_content"] = file_content
                 summary_dict = await self._processor._generate_single_file_summary(
-                    file_path, llm_sem=self._llm_sem, ctx=self._ctx
+                    file_path, **summary_kwargs
                 )
-        except AbstractOverviewFormatError:
+        except (AbstractOverviewFormatError, FileNotFoundError, ValueError):
             # A generated sidecar that opted into OKF must never be treated as
             # an empty file summary; doing so would silently feed metadata or
             # corrupted YAML into a later regeneration.
@@ -818,6 +886,9 @@ class SemanticDagExecutor:
         if need_vectorize and not self._skip_vectorization:
             use_summary = self._is_code_repo and bool(summary_dict.get("summary"))
             try:
+                vectorize_kwargs: Dict[str, Any] = {}
+                if file_content is not None:
+                    vectorize_kwargs["file_content"] = file_content
                 await self._processor._vectorize_single_file(
                     parent_uri=parent_uri,
                     context_type=self._context_type,
@@ -828,6 +899,7 @@ class SemanticDagExecutor:
                     ingest_options=self._ingest_options_for_file(file_path),
                     creator_acl_grant=self._creator_acl_grant(file_path),
                     file_md5=self._file_md5s.get(file_path.rstrip("/")) or None,
+                    **vectorize_kwargs,
                 )
             except Exception as e:
                 logger.error(

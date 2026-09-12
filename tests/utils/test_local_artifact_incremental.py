@@ -114,6 +114,7 @@ async def test_incremental_noop_uploads_nothing(tmp_path, monkeypatch):
     assert agfs.written == []
     assert agfs.removed == []
     assert set(result.unchanged) == {"a.py", "b.py"}
+    assert result.files == ["a.py", "b.py"]
 
 
 @pytest.mark.asyncio
@@ -144,6 +145,7 @@ async def test_incremental_modified_uploads_only_changed(tmp_path, monkeypatch):
     assert agfs.written == [f"{_ROOT}/a.py"]
     assert agfs.files[f"{_ROOT}/a.py"] == b"print('A2')"
     assert result.uploaded == ["a.py"]
+    assert result.files == ["a.py", "b.py"]
 
 
 @pytest.mark.asyncio
@@ -178,13 +180,20 @@ async def test_incremental_deletes_removed_file_and_vector(tmp_path, monkeypatch
 def test_apply_result_to_changes_maps_to_target_uris():
     from openviking.storage.resource_diff_apply import ApplyResult
 
-    result = ApplyResult(uploaded=["a.py", "sub/c.py"], deleted=["b.py"], unchanged=["d.py"])
+    result = ApplyResult(
+        uploaded=["a.py", "sub/c.py"],
+        added=["a.py"],
+        modified=["sub/c.py"],
+        deleted=["b.py"],
+        unchanged=["d.py"],
+    )
     changes = ResourceProcessor._apply_result_to_changes(result, _ROOT)
 
     # Changed/removed files become target URIs; unchanged files are omitted so
     # the DAG reuses their summaries.
     assert changes == {
-        "modified": [f"{_ROOT}/a.py", f"{_ROOT}/sub/c.py"],
+        "added": [f"{_ROOT}/a.py"],
+        "modified": [f"{_ROOT}/sub/c.py"],
         "deleted": [f"{_ROOT}/b.py"],
     }
 
@@ -196,3 +205,15 @@ def test_apply_result_to_changes_empty_when_noop():
         ApplyResult(unchanged=["a.py", "b.py"]), _ROOT
     )
     assert changes == {}
+
+
+def test_apply_result_to_changes_reindexes_repair_files():
+    from openviking.storage.resource_diff_apply import ApplyResult
+
+    changes = ResourceProcessor._apply_result_to_changes(
+        ApplyResult(repair=["missing-vector.py"]), _ROOT
+    )
+
+    assert changes == {
+        "modified": [f"{_ROOT}/missing-vector.py"],
+    }

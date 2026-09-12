@@ -75,6 +75,7 @@ class _FakeProcessor:
         self.vectorized_files = []
         self.file_ingest_options = {}
         self.file_md5s = {}
+        self.file_contents = {}
         self.directory_ingest_options = {}
         self.vectorized_dirs = []
         self.generated_overviews = []
@@ -88,8 +89,11 @@ class _FakeProcessor:
             results[m.group("name").strip()] = m.group("summary").strip()
         return results
 
-    async def _generate_single_file_summary(self, file_path, llm_sem=None, ctx=None):
+    async def _generate_single_file_summary(
+        self, file_path, llm_sem=None, ctx=None, file_content=None
+    ):
         self.summarized_files.append(file_path)
+        self.file_contents[("summary", file_path)] = file_content
         return {"name": file_path.split("/")[-1], "summary": "summary"}
 
     async def _generate_overview(self, dir_uri, file_summaries, children_abstracts, **kwargs):
@@ -127,11 +131,13 @@ class _FakeProcessor:
         ingest_options=None,
         creator_acl_grant=None,
         file_md5=None,
+        file_content=None,
     ):
         del creator_acl_grant
         self.vectorized_files.append(file_path)
         self.file_ingest_options[file_path] = ingest_options
         self.file_md5s[file_path] = file_md5
+        self.file_contents[("vector", file_path)] = file_content
 
     async def _vectorize_directory(
         self,
@@ -225,6 +231,130 @@ async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypa
     overview = parse_abstract_overview(fake_fs._file_contents[f"{root_uri}/.overview.md"]).body
     assert "- a.txt: summary" in overview
     assert "- b.txt: old-b" in overview
+
+
+@pytest.mark.asyncio
+async def test_artifact_snapshot_drives_dag_when_target_listing_is_empty(
+    tmp_path, monkeypatch
+):
+    from openviking.parse.output import LocalParseOutputStore
+
+    root_uri = "viking://resources/root"
+    store = LocalParseOutputStore(local_root=str(tmp_path / "artifacts"))
+    raw_ref = await store.create_artifact(root_type="dir")
+    from openviking.parse.output import ParseArtifactRef
+
+    ref = ParseArtifactRef(
+        backend=raw_ref.backend,
+        root=raw_ref.root,
+        resource_rel="repository",
+        root_type=raw_ref.root_type,
+    )
+    await store.write_bytes(ref, "repository/a.txt", b"alpha")
+    await store.write_bytes(ref, "repository/src/b.txt", b"beta")
+    fake_fs = _FakeVikingFS(tree={}, file_contents={})
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
+    )
+
+    processor = _FakeProcessor(fake_fs)
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=ctx,
+        artifact_files=["a.txt", "src/b.txt"],
+        artifact_store=store,
+        artifact_ref=ref,
+    )
+
+    await executor.run(root_uri)
+
+    assert sorted(processor.summarized_files) == [
+        f"{root_uri}/a.txt",
+        f"{root_uri}/src/b.txt",
+    ]
+    assert sorted(processor.vectorized_files) == [
+        f"{root_uri}/a.txt",
+        f"{root_uri}/src/b.txt",
+    ]
+    assert processor.file_contents[("summary", f"{root_uri}/a.txt")] == b"alpha"
+    assert processor.file_contents[("vector", f"{root_uri}/src/b.txt")] == b"beta"
+
+
+@pytest.mark.asyncio
+async def test_direct_incremental_reuses_vector_abstract_without_overview(monkeypatch):
+    root_uri = "viking://resources/root"
+    file_uri = f"{root_uri}/a.txt"
+    fake_fs = _FakeVikingFS(
+        tree={root_uri: [{"name": "a.txt", "isDir": False}]},
+        file_contents={},
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
+    )
+
+    processor = _FakeProcessor(fake_fs)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER),
+        incremental_update=True,
+        target_uri=root_uri,
+        changes={},
+        artifact_files=["a.txt"],
+        file_abstracts={file_uri: "summary from vector"},
+    )
+
+    await executor.run(root_uri)
+
+    assert processor.summarized_files == []
+    assert processor.vectorized_files == []
+
+
+@pytest.mark.asyncio
+async def test_missing_local_artifact_fails_instead_of_using_empty_summary(
+    tmp_path, monkeypatch
+):
+    from openviking.parse.output import LocalParseOutputStore, ParseArtifactRef
+
+    root_uri = "viking://resources/root"
+    store = LocalParseOutputStore(local_root=str(tmp_path / "artifacts"))
+    ref = ParseArtifactRef(
+        backend="local",
+        root=str(tmp_path / "artifacts" / "missing"),
+        resource_rel="repository",
+    )
+    fake_fs = _FakeVikingFS(tree={}, file_contents={})
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
+    )
+    executor = SemanticDagExecutor(
+        processor=_FakeProcessor(fake_fs),
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER),
+        artifact_files=["a.txt"],
+        artifact_store=store,
+        artifact_ref=ref,
+    )
+
+    with pytest.raises(FileNotFoundError):
+        await executor.run(root_uri)
 
 
 @pytest.mark.asyncio

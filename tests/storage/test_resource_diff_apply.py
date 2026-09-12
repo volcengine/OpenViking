@@ -75,6 +75,8 @@ class TestApplyDiffPlan:
 
         assert target.written == {"a.py": b"aaa", "b.py": b"bbb"}
         assert set(result.uploaded) == {"a.py", "b.py"}
+        assert result.added == ["a.py"]
+        assert result.modified == ["b.py"]
         # md5 is computed from the uploaded bytes so it can feed embedding.
         assert result.md5_by_rel["a.py"] == content_md5(b"aaa")
         assert result.md5_by_rel["b.py"] == content_md5(b"bbb")
@@ -87,7 +89,7 @@ class TestApplyDiffPlan:
         result = await apply_diff_plan(plan, store=store, artifact_ref=_REF, target=target)
 
         assert target.deleted_files == ["gone.py"]
-        assert target.deleted_vectors == ["ghost.py"]
+        assert target.deleted_vectors == ["gone.py", "ghost.py"]
         assert result.deleted == ["gone.py"]
 
     async def test_needs_body_compare_equal_is_unchanged(self) -> None:
@@ -108,6 +110,7 @@ class TestApplyDiffPlan:
         result = await apply_diff_plan(plan, store=store, artifact_ref=_REF, target=target)
 
         assert result.uploaded == ["a.py"]
+        assert result.modified == ["a.py"]
         assert target.written == {"a.py": b"new"}
         assert result.md5_by_rel["a.py"] == content_md5(b"new")
 
@@ -121,6 +124,7 @@ class TestApplyDiffPlan:
         result = await apply_diff_plan(plan, store=store, artifact_ref=_REF, target=target)
 
         assert "a" in target.deleted_files
+        assert "a" in target.deleted_vectors
         assert target.written["a"] == b"newfile"
         assert "a" in result.structural
 

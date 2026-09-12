@@ -25,3 +25,24 @@ class TestSemanticMsgFileMd5s:
         msg = SemanticMsg(uri="viking://resources/x", context_type="resource")
         assert msg.file_md5s == {}
         assert SemanticMsg.from_dict(msg.to_dict()).file_md5s == {}
+
+    def test_roundtrip_preserves_local_artifact_snapshot(self) -> None:
+        msg = SemanticMsg(
+            uri="viking://resources/x",
+            context_type="resource",
+            artifact_ref={
+                "backend": "local",
+                "root": "/tmp/artifact-1",
+                "resource_rel": "repository",
+                "root_type": "dir",
+            },
+            artifact_files=["a.py", "src/b.py"],
+            file_abstracts={"viking://resources/x/a.py": "summary a"},
+        )
+
+        restored = SemanticMsg.from_json(msg.to_json())
+
+        assert restored.artifact_ref == msg.artifact_ref
+        assert restored.artifact_ref["resource_rel"] == "repository"
+        assert restored.artifact_files == ["a.py", "src/b.py"]
+        assert restored.file_abstracts == {"viking://resources/x/a.py": "summary a"}

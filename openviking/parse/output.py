@@ -7,9 +7,8 @@ persists into the final resource location) through a small store interface rathe
 than reaching for the global VikingFS singleton directly. This decouples "which
 backend holds the artifact" from "how a parser lays out its output".
 
-Step 2a ships only :class:`AgfsParseOutputStore`, which forwards 1:1 to the
-existing VikingFS singleton so behaviour is unchanged. A local-directory backend
-(single-machine deployments) is added in Step 2b behind the same interface.
+The AGFS implementation preserves the original shared-temp behavior, while the
+local implementation keeps parser artifacts on a configured shared local path.
 
 Design notes:
 - Business rules (filtering, encoding, flatten, name conflicts, sidecar
@@ -303,7 +302,7 @@ class LocalParseOutputStore(ParseOutputStore):
         return await asyncio.to_thread(_scan)
 
     async def cleanup(self, ref: ParseArtifactRef) -> None:
-        artifact_root = Path(ref.root)
+        artifact_root = self._resolve(ref, "")
         await asyncio.to_thread(shutil.rmtree, artifact_root, ignore_errors=True)
 
 

@@ -34,10 +34,15 @@ class ApplyResult:
     """What the executor actually performed, for reporting and md5 hand-off."""
 
     uploaded: List[str] = field(default_factory=list)
+    added: List[str] = field(default_factory=list)
+    modified: List[str] = field(default_factory=list)
     unchanged: List[str] = field(default_factory=list)
     deleted: List[str] = field(default_factory=list)
     orphan_vectors: List[str] = field(default_factory=list)
     structural: List[str] = field(default_factory=list)
+    repair: List[str] = field(default_factory=list)
+    files: List[str] = field(default_factory=list)
+    abstracts_by_rel: Dict[str, str] = field(default_factory=dict)
     # rel_path -> md5 of the bytes just uploaded; handed to the embedding stage
     # so the next diff can skip by fingerprint.
     md5_by_rel: Dict[str, str] = field(default_factory=dict)
@@ -68,12 +73,20 @@ async def apply_diff_plan(
     Any target write/delete failure propagates; the caller marks the task failed
     rather than reporting partial success as done.
     """
-    result = ApplyResult()
+    result = ApplyResult(
+        added=list(plan.added),
+        modified=list(plan.modified),
+        repair=list(plan.repair),
+        files=list(plan.new_files),
+        md5_by_rel=dict(plan.new_md5s),
+        abstracts_by_rel=dict(plan.file_abstracts),
+    )
 
     # Structural replacements: delete the stale node up front. The replacement is
     # written by its added/modified classification below.
     for rel_path in plan.structural:
         await target.delete_file(rel_path)
+        await target.delete_vector(rel_path)
         result.structural.append(rel_path)
 
     for rel_path in [*plan.added, *plan.modified]:
@@ -91,12 +104,14 @@ async def apply_diff_plan(
         written = await target.write_file(rel_path, new_bytes)
         final_bytes = written if written is not None else new_bytes
         result.uploaded.append(rel_path)
+        result.modified.append(rel_path)
         result.md5_by_rel[rel_path] = content_md5(final_bytes)
 
     result.unchanged.extend(plan.unchanged)
 
     for rel_path in plan.deleted:
         await target.delete_file(rel_path)
+        await target.delete_vector(rel_path)
         result.deleted.append(rel_path)
 
     for rel_path in plan.orphan_vectors:
@@ -135,9 +150,11 @@ async def apply_full_artifact_upload(
             written = await target.write_file(target_rel, data)
             final_bytes = written if written is not None else data
             result.uploaded.append(target_rel)
+            result.files.append(target_rel)
             result.md5_by_rel[target_rel] = content_md5(final_bytes)
 
     await _walk(base)
+    result.files.sort()
     return result
 
 
