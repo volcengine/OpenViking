@@ -8,14 +8,19 @@ import importlib
 
 from .base import CollectionAdapter
 from .http_adapter import HttpCollectionAdapter
-from .local_adapter import CuVSCollectionAdapter, LocalCollectionAdapter
+from .local_adapter import LocalCollectionAdapter
+from .opengauss_adapter import OpenGaussCollectionAdapter
+from .pgvector_adapter import PgVectorCollectionAdapter
+from .qdrant_adapter import QdrantCollectionAdapter
 from .vikingdb_private_adapter import VikingDBPrivateCollectionAdapter
 from .volcengine_adapter import VolcengineCollectionAdapter
 
 _ADAPTER_REGISTRY: dict[str, type[CollectionAdapter]] = {
     "local": LocalCollectionAdapter,
-    "cuvs": CuVSCollectionAdapter,
     "http": HttpCollectionAdapter,
+    "opengauss": OpenGaussCollectionAdapter,
+    "pgvector": PgVectorCollectionAdapter,
+    "qdrant": QdrantCollectionAdapter,
     "volcengine": VolcengineCollectionAdapter,
     "vikingdb": VikingDBPrivateCollectionAdapter,
 }
@@ -40,7 +45,7 @@ def create_collection_adapter(config) -> CollectionAdapter:
 
     if adapter_cls is None:
         raise ValueError(
-            f"Vector backend {backend} is not supported. "
+            f"Vector backend {config.backend} is not supported. "
             f"Available backends: {sorted(_ADAPTER_REGISTRY)}"
         )
     return adapter_cls.from_config(config)

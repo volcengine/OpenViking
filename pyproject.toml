@@ -105,6 +105,11 @@ auth = [
   "httpx>=0.25.0",
   "python-ldap>=3.4.0",
 ]
+pgvector = [
+    "psycopg2-binary>=2.9",
+    "pgvector>=0.2",
+    "packaging>=20.0",
+]
 dev = [
     "mypy>=1.0.0",
     "ruff>=0.1.0",
