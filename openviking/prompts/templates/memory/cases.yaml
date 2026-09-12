@@ -38,17 +38,17 @@ content_template: |
   {%- endif %}
   {%- endfor %}
 embedding_template: |-
-  {{ case_name }}
+  {{ case_name|default("", true) }}
 
-  {{ task_signature }}
+  {{ task_signature|default("", true) }}
 
-  {{ input }}
+  {{ input|default(content, true) }}
 
-  {{ rubric }}
+  {{ rubric|default("", true) }}
 overview_template: |-
   # Cases Overview
   {% for item in items %}
-  - [{{ item.file_content.case_name }}](./{{ item.file_name }}) — {{ item.file_content.task_signature }}
+  - [{{ item.file_content.case_name|default(item.file_name|replace(".md", ""), true) }}](./{{ item.file_name }}){% if item.file_content.task_signature|default("", true) %} — {{ item.file_content.task_signature }}{% endif %}
   {% endfor %}
 
 fields:
