@@ -23,7 +23,7 @@ from vikingbot.agent.remote_skills import SkillRuntimeContext
 from vikingbot.agent.skills import SkillsLoader
 from vikingbot.agent.subagent import SubagentManager
 from vikingbot.agent.tools import register_default_tools
-from vikingbot.agent.tools.base import MultimodalToolResult
+from vikingbot.agent.tools.base import TOOL_RESULT_DIRECTORY, MultimodalToolResult
 from vikingbot.agent.tools.registry import ToolExecutionResult, ToolRegistry
 from vikingbot.bus.events import InboundMessage, OutboundEventType, OutboundMessage
 from vikingbot.bus.queue import MessageBus
@@ -1400,6 +1400,31 @@ class AgentLoop:
                 logger.warning("Tool-loop compaction summary attempt {}/3 failed: {}", attempt, exc)
         return ""
 
+    async def _preview_tool_result(self, result: Any, session_key: SessionKey) -> Any:
+        """Save text exceeding 8,000 characters and return a bounded head/tail preview.
+
+        Non-text results pass through. Saving failures are explicit in the preview;
+        original tool outcomes still determine success and stop conditions.
+        """
+        if not isinstance(result, str) or len(result) <= 8_000:
+            return result
+        path = f"{TOOL_RESULT_DIRECTORY}/{uuid.uuid4().hex}.txt"
+        try:
+            sandbox = await self.sandbox_manager.get_sandbox(session_key)
+            await sandbox.write_file_bytes(path, result.encode("utf-8"))
+            notice = (
+                f"Full output ({len(result)} characters) saved at task-relative path {path}. "
+                "Use read_file with offset/limit or a script to inspect selected sections; "
+                "do not print the complete file. This file is not a deliverable."
+            )
+        except Exception as exc:
+            notice = (
+                f"Full output ({len(result)} characters) could NOT be saved: "
+                f"{type(exc).__name__}. Only this preview is available; "
+                "retrieve smaller sections from the original source if needed."
+            )
+        return f"{result[:4_000]}\n\n[Output truncated. {notice}]\n\n{result[-2_000:]}"
+
     async def _run_agent_loop(
         self,
         messages: list[dict],
@@ -1783,8 +1808,9 @@ class AgentLoop:
                 for _idx, tool_call, outcome, tool_execute_duration in results:
                     result = outcome.result
                     result_text = str(result)
+                    model_result = await self._preview_tool_result(result, session_key)
                     recorded_result = (
-                        result_text if isinstance(result, MultimodalToolResult) else result
+                        result_text if isinstance(result, MultimodalToolResult) else model_result
                     )
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.info(
@@ -1808,11 +1834,10 @@ class AgentLoop:
                         await self.bus.publish_outbound(
                             OutboundMessage(
                                 session_key=session_key,
-                                content=result_text,
+                                content=str(model_result),
                                 event_type=OutboundEventType.TOOL_RESULT,
                             )
                         )
-                    model_result = result
                     if isinstance(result, MultimodalToolResult):
                         result_media_bytes = _inline_media_bytes([{"content": result.content}])
                         if not self.provider.supports_tool_result_media(self.model):

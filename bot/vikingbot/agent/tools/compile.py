@@ -24,7 +24,7 @@ from openviking.utils.path_safety import (
 )
 from openviking.utils.skill_processor import validate_skill_name
 from openviking_cli.exceptions import OpenVikingError
-from vikingbot.agent.tools.base import Tool, ToolContext
+from vikingbot.agent.tools.base import TOOL_RESULT_DIRECTORY, Tool, ToolContext
 from vikingbot.agent.tools.compile_merge import validate_merge_coverage
 from vikingbot.compile.models import (
     COMPILE_DRAFT_ROOT,
@@ -296,12 +296,26 @@ class CompileChildTool(Tool):
     Read contents and shell output remain unchanged, including any literal paths.
     Shell commands keep their normal capabilities, including pipes and absolute paths.
     This prevents default-path mixups; it is not an OS-level sandbox.
+
+    merge_only confines file access to the child's fresh output directory. Skills,
+    originals, shared drafts and tool results are not readable; assigned fragments,
+    checkpoints and task-specific output requirements are supplied in the prompt.
     """
 
-    def __init__(self, tool: Tool, draft_root: str, *, exclude_navigation: bool = False):
+    def __init__(
+        self,
+        tool: Tool,
+        draft_root: str,
+        *,
+        exclude_navigation: bool = False,
+        merge_only: bool = False,
+    ):
+        if merge_only and tool.name not in {"read_file", "write_file", "edit_file"}:
+            raise ValueError("Merge children accept only bound file tools")
         self.tool = tool
         self.draft_root = draft_root
         self.exclude_navigation = exclude_navigation
+        self.merge_only = merge_only
 
     @property
     def name(self) -> str:
@@ -321,13 +335,20 @@ class CompileChildTool(Tool):
             + (
                 "Defaults to '.'."
                 if self.name == "exec"
+                else "Use the assigned target-relative path, without a staging prefix."
+                if self.merge_only
                 else "Use the target-relative page path from the Skill, without a staging prefix."
             )
         )
-        if self.name == "read_file":
+        if self.name == "read_file" and self.merge_only:
+            parameters["properties"][field]["description"] += (
+                " Only your own output files are readable; Skills and originals are unavailable. "
+                "Use offset/limit for large files; shared tool-result files are not readable."
+            )
+        elif self.name == "read_file":
             parameters["properties"][field]["description"] += (
                 f" To read another child's input, pass its returned {COMPILE_DRAFT_ROOT}/ path verbatim; "
-                "these workspace paths are read-only."
+                f"{TOOL_RESULT_DIRECTORY}/ paths also address the task root. These paths are read-only."
             )
         if self.exclude_navigation and self.name in {"write_file", "edit_file"}:
             parameters["properties"][field]["description"] += (
@@ -338,6 +359,8 @@ class CompileChildTool(Tool):
     async def execute(self, tool_context: ToolContext, **kwargs: Any) -> str:
         """Bind paths to the child and reject reserved navigation writes before any file changes."""
         field = "working_dir" if self.name == "exec" else "path"
+        if self.merge_only and str(kwargs.get(field, "")).startswith("viking://"):
+            raise ValueError("Merge children can only access their own output files")
         relative = _normalize_workspace_path(kwargs.get(field) or ".")
         if (
             self.exclude_navigation
@@ -349,7 +372,13 @@ class CompileChildTool(Tool):
                 "Leave them absent; do not create them through exec or under another filename. "
                 "Finish assigned content pages and call submit_compile_draft."
             )
-        if self.name == "read_file" and relative.startswith(COMPILE_DRAFT_ROOT + "/"):
+        if self.name == "read_file" and relative.startswith(
+            (COMPILE_DRAFT_ROOT + "/", TOOL_RESULT_DIRECTORY + "/")
+        ):
+            if self.merge_only:
+                raise ValueError(
+                    "Merge inputs are attached fragments; shared workspace reads are forbidden"
+                )
             kwargs[field] = relative
             return await self.tool.execute(tool_context, **kwargs)
         if COMPILE_STAGING_ROOT.casefold() in relative.casefold().split("/"):
@@ -511,7 +540,7 @@ class SubmitCompileOutputTool(Tool):
         )
 
     async def accept_generated_output(self, tool_context: ToolContext) -> None:
-        """Prepare every final-output file for upsert after validation repair stops.
+        """Prepare every final-output file for upsert when repair or execution rounds run out.
 
         This runtime-only path bypasses content, link and merge-coverage validation.
         It retains original bytes and target-relative paths, leaves omitted targets alone,
@@ -750,7 +779,7 @@ class SubmitWikiBundleTool(Tool):
                 relative = _normalize_workspace_path(f"{directory}/{name}" if directory else name)
                 if _path_is_within(relative, COMPILE_STAGING_ROOT):
                     continue
-                if name in {".git", "__pycache__"}:
+                if name in {".git", "__pycache__", TOOL_RESULT_DIRECTORY}:
                     continue
                 if is_dir:
                     pending.append(relative)
@@ -824,6 +853,10 @@ class SubmitWikiBundleTool(Tool):
     ) -> bytes:
         try:
             relative = _normalize_workspace_path(workspace_path)
+            if TOOL_RESULT_DIRECTORY in relative.split("/"):
+                raise ValueError(
+                    "Tool-result files cannot be submitted as artifacts or page bodies"
+                )
             if tool_context.sandbox_manager is None:
                 raise ValueError("task sandbox is unavailable")
             sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)

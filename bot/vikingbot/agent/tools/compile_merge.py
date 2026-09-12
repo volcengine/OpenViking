@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import posixpath
+import re
 from collections import Counter, deque
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -13,7 +14,7 @@ from typing import Any
 import yaml
 
 from openviking.core.namespace import relative_uri_path
-from openviking.utils.path_safety import safe_join_viking_uri
+from openviking.utils.path_safety import safe_join_viking_uri, sanitize_relative_viking_path
 from vikingbot.agent.subagent import SubagentManager
 from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.compile.models import (
@@ -109,6 +110,7 @@ class CompileMergeTool(Tool):
     name = "merge_compile_drafts"
     description = (
         "Patch topic groups by stable name; valid assignments are retained even when other IDs fail. "
+        "Prefer reuse=true for independent single drafts needing no content or path changes. "
         "Use run=true after resolving unassigned IDs and conflicts. Runtime batches by actual text "
         "size, including previous results, and resumes failed groups from their last checkpoint. "
         "Replies contain counts, applied changes and bounded issue previews. Source collection "
@@ -131,7 +133,18 @@ class CompileMergeTool(Tool):
                         "task": {
                             "type": "string",
                             "minLength": 1,
-                            "description": "Topic, intended output pages and merge requirements; omit to retain.",
+                            "description": (
+                                "Deliverable purposes, included/excluded content, concrete revisions and necessary "
+                                "format/metadata/citation/configuration requirements for this group. Merge agents "
+                                "receive no Skill and cannot read it; provide concise rules, not 'follow the Skill' "
+                                "or its full text. Avoid product-wide tasks. Omit to retain. "
+                                "Supplying task without reuse disables reuse."
+                            ),
+                        },
+                        "output_pages": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Expected target-relative page paths reserved to this group. Declare new pages before run; existing_pages also reserves paths. Adjust only within task scope, never into another group's reservation. Omit to retain.",
                         },
                         "draft_ids": {
                             "type": "array",
@@ -145,12 +158,27 @@ class CompileMergeTool(Tool):
                         },
                         "reuse": {
                             "type": "boolean",
-                            "description": "True only when a single draft needs no rewriting; runtime also checks its destination is absent.",
+                            "description": (
+                                "Prefer true for an independent single draft needing no content or path changes. "
+                                "Use false for required revisions and describe them in task; do not set false mechanically. "
+                                "New groups without task default to true. Supplying task without reuse disables it; "
+                                "other omissions retain the saved choice. "
+                                "Runtime reuses only one draft with no existing target pages and an absent destination; "
+                                "output ownership and coverage checks still apply."
+                            ),
                         },
                     },
                     "required": ["name", "draft_ids"],
                     "additionalProperties": False,
                 },
+            },
+            "groups_file": {
+                "type": "string",
+                "minLength": 1,
+                "description": (
+                    "Task-relative JSON file containing the groups array; mutually exclusive with "
+                    "groups. Runtime loads and validates it without returning the file contents."
+                ),
             },
             "run": {
                 "type": "boolean",
@@ -167,6 +195,10 @@ class CompileMergeTool(Tool):
                 "type": "string",
                 "minLength": 1,
                 "description": "Exact saved topic name, required only for view=group.",
+            },
+            "query": {
+                "type": "string",
+                "description": "Case-insensitive text filter on a detail view's metadata, applied before pagination; does not read bodies.",
             },
             "offset": {
                 "type": "integer",
@@ -282,7 +314,7 @@ class CompileMergeTool(Tool):
         }
 
     def _inspect(
-        self, view: str, group_name: str | None, offset: int, limit: int
+        self, view: str, group_name: str | None, offset: int, limit: int, query: str = ""
     ) -> dict[str, Any]:
         """Read one page from current state without mutating assignments or loading bodies.
 
@@ -304,7 +336,8 @@ class CompileMergeTool(Tool):
                 group = self.groups[group_name]
                 keys = [key for key in keys if self.assignments.get(key) == group_name]
                 reply["group"] = {
-                    key: group[key] for key in ("name", "task", "reuse", "status", "batches")
+                    key: group[key]
+                    for key in ("name", "task", "output_pages", "reuse", "status", "batches")
                 }
             items = [
                 {"id": key, **self.drafts[key], "group": self.assignments.get(key)} for key in keys
@@ -347,6 +380,12 @@ class CompileMergeTool(Tool):
                 {"draft_id": key, "groups": owners}
                 for key, owners in sorted(self.conflicts.items())
             ]
+        if query:
+            items = [
+                item
+                for item in items
+                if query.casefold() in json.dumps(item, ensure_ascii=False).casefold()
+            ]
         reply.update(
             view=view,
             items=items[offset : offset + limit],
@@ -379,11 +418,23 @@ class CompileMergeTool(Tool):
             if not validate_resource_file(relative, text.encode()):
                 raise ValueError(f"Source draft is not a knowledge page: {path}")
             _source_uris(text.encode())
+            metadata, body = _split_frontmatter(text)
+            tags = metadata.get("tags")
             drafts[f"s{batch}d{index}"] = {
                 "path": path,
                 "relative_path": relative,
                 "chars": len(text),
                 "size_bytes": result["file_sizes"][path],
+                # Bounded planning hints reuse validated text; deeper inspection is on demand.
+                **{
+                    field: str(metadata.get(field) or "")[:cap]
+                    for field, cap in (("title", 160), ("description", 320), ("type", 80))
+                },
+                "tags": [str(tag)[:48] for tag in tags[:8]] if isinstance(tags, list) else [],
+                "headings": [
+                    heading[:120]
+                    for heading in re.findall(r"(?m)^ {0,3}#{1,6}[ \t]+[^\r\n]+", body[:4096])[:6]
+                ],
             }
         self.drafts.update(drafts)
         self.sources.add(batch)
@@ -411,7 +462,9 @@ class CompileMergeTool(Tool):
                     "name": name,
                     "task": f"Merge topic: {name}",
                     "existing_pages": [],
-                    "reuse": False,
+                    # Optional page reservations; task defines the semantic content boundary.
+                    "output_pages": [],
+                    "reuse": "task" not in update,
                     "status": "planned",
                     "inputs": {},
                     "existing_paths": {},
@@ -421,14 +474,23 @@ class CompileMergeTool(Tool):
                     "batches": 0,
                 },
             )
-            for field in ("task", "reuse", "existing_pages"):
+            # Custom instructions require agent work unless reuse is explicitly allowed.
+            if "task" in update and "reuse" not in update:
+                update = {**update, "reuse": False}
+            for field in ("task", "reuse", "existing_pages", "output_pages"):
                 if field not in update:
                     continue
                 value = (
                     list(dict.fromkeys(update[field]))
-                    if field == "existing_pages"
+                    if field in {"existing_pages", "output_pages"}
                     else update[field]
                 )
+                if field == "output_pages":
+                    try:
+                        value = [validate_relative_file_path(path) for path in value]
+                    except ValueError as exc:
+                        errors.append(f"Group {name}: {exc}")
+                        continue
                 if (group["batches"] or group["status"] == "completed") and value != group[field]:
                     errors.append(f"Group {name} has checkpoints; its {field} is fixed.")
                 else:
@@ -458,7 +520,7 @@ class CompileMergeTool(Tool):
         return errors
 
     async def _prepare(self, sandbox: Any, group: dict[str, Any]) -> None:
-        """Snapshot selected targets before batching; only explicitly reusable singletons bypass LLM work."""
+        """Snapshot selected targets before batching; eligible reusable singletons bypass LLM work."""
         keys = [key for key, name in self.assignments.items() if name == group["name"]]
         if group["batches"]:
             group["inputs"].update({key: self.drafts[key]["path"] for key in keys})
@@ -492,7 +554,15 @@ class CompileMergeTool(Tool):
                 group["inputs"][key] = path
                 group["existing_paths"][key] = relative
         group["inputs"].update({key: self.drafts[key]["path"] for key in keys})
-        if group["reuse"] and len(keys) == 1 and not group["existing_paths"]:
+        if (
+            group["reuse"]
+            and len(keys) == 1
+            and not group["existing_paths"]
+            and (
+                not group["output_pages"]
+                or group["output_pages"] == [self.drafts[keys[0]]["relative_path"]]
+            )
+        ):
             key = keys[0]
             relative = self.drafts[key]["relative_path"]
             group["checkpoints"] = {relative: self.drafts[key]["path"]}
@@ -513,6 +583,7 @@ class CompileMergeTool(Tool):
             "checkpoint ID needs an input_outputs receipt. Character offsets are half-open; continuation "
             "flags identify partial lines. Later batches supply the remaining text; do not invent it.\n"
         )
+        task += "output_pages: " + json.dumps(group["output_pages"], ensure_ascii=False) + "\n"
         records, bindings, parts = [], {}, {}
         for relative, path in group["checkpoints"].items():
             key = "checkpoint:" + relative
@@ -605,14 +676,47 @@ class CompileMergeTool(Tool):
         group["status"] = "pending"
         group.pop("error", None)
 
+    def _output_paths(self, group: dict[str, Any]) -> set[str]:
+        """Return reserved and generated target-relative paths, including selected updates."""
+        paths = set(group["output_pages"]) | set(group["checkpoints"])
+        paths.update(relative_uri_path(self.target_uri, uri) for uri in group["existing_pages"])
+        keys = [key for key, name in self.assignments.items() if name == group["name"]]
+        if group["reuse"] and len(keys) == 1:
+            paths.add(self.drafts[keys[0]]["relative_path"])
+        return paths - {""}
+
+    def _collision(self, path: str, name: str, owner: str) -> str:
+        """Describe both owners and retained results; checkpointed plans cannot be reassigned."""
+        locations = {
+            label: {
+                page: file
+                for page, file in self.groups[label]["checkpoints"].items()
+                if page.casefold() == path.casefold()
+            }
+            for label in (name, owner)
+        }
+        return (
+            f"Output collision: {path}; groups/checkpoints (empty = not generated): {locations}. "
+            "Patch untouched groups to coordinate ownership or merge inputs; processed inputs and "
+            "checkpointed plans are fixed. Retain drafts/checkpoints; do not regenerate unchanged "
+            "work, add filename suffixes, or edit merge-state.json."
+        )
+
     async def _publish(self, sandbox: Any, group: dict[str, Any]) -> None:
         """Copy a fully covered group's last checkpoint, rejecting destination collisions."""
         outputs = group["checkpoints"]
         await validate_merge_coverage(sandbox, group["inputs"], group["input_outputs"], outputs)
         for path in outputs:
             owner = self.output_owners.get(path.casefold())
+            if owner is None:
+                for name in dict.fromkeys(self.assignments.values()):
+                    if name != group["name"] and path.casefold() in {
+                        p.casefold() for p in self._output_paths(self.groups[name])
+                    }:
+                        owner = name
+                        break
             if owner is not None and owner != group["name"]:
-                raise ValueError(f"Output collision: {path} already belongs to {owner}")
+                raise ValueError(self._collision(path, group["name"], owner))
         for relative, path in outputs.items():
             await sandbox.write_file_bytes(
                 f"{COMPILE_OUTPUT_ROOT}/{relative}", await sandbox.read_file_bytes(path)
@@ -654,18 +758,36 @@ class CompileMergeTool(Tool):
         group_name: str | None = None,
         offset: int = 0,
         limit: int = _REPORT_PAGE_SIZE,
+        groups_file: str | None = None,
+        query: str = "",
         **kwargs: Any,
     ) -> str:
         """Persist local plan repairs, then run complete plans through the existing bounded queue.
 
+        groups_file loads the same array as groups from a task-relative JSON file.
+        File parameters use the same validation as inline groups before any mutation.
         The tool registry validates field types and ranges; query combinations are
         checked here. Detail queries cannot accompany mutations. A failed batch
         pauses only its group; run=true resumes saved offsets. Replies report
         applied changes and issues; persisted state and coverage remain complete.
         """
+        if groups_file is not None:
+            try:
+                if groups is not None:
+                    raise ValueError("Use either groups or groups_file, not both.")
+                path = sanitize_relative_viking_path(groups_file)
+                sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
+                groups = json.loads((await sandbox.read_file_bytes(path)).decode("utf-8"))
+                errors = self.validate_params({"groups": groups})
+                if errors:
+                    return json.dumps(self._feedback(errors=errors), ensure_ascii=False)
+            except (OSError, ValueError) as exc:
+                return json.dumps(self._feedback(errors=[str(exc)]), ensure_ascii=False)
         query_error = None
         if (view == "group") != (group_name is not None):
             query_error = "group_name is required only for view=group."
+        elif query and view == "summary":
+            query_error = "query requires a detail view."
         elif (groups is not None or run) and (
             view != "summary" or group_name is not None or offset or limit != _REPORT_PAGE_SIZE
         ):
@@ -674,7 +796,7 @@ class CompileMergeTool(Tool):
             return json.dumps(self._feedback(errors=[query_error]), ensure_ascii=False)
         if groups is None and not run:
             try:
-                reply = self._inspect(view, group_name, offset, limit)
+                reply = self._inspect(view, group_name, offset, limit, query)
             except ValueError as exc:
                 reply = self._feedback(errors=[str(exc)])
             return json.dumps(reply, ensure_ascii=False)
@@ -691,7 +813,7 @@ class CompileMergeTool(Tool):
         previous_assignments = dict(self.assignments)
         previous_conflicts = set(self.conflicts)
         previous_groups = {
-            name: (group["task"], group["reuse"], group["existing_pages"])
+            name: (group["task"], group["reuse"], group["existing_pages"], group["output_pages"])
             for name, group in self.groups.items()
         }
         try:
@@ -709,7 +831,12 @@ class CompileMergeTool(Tool):
                     name
                     for name, group in self.groups.items()
                     if previous_groups.get(name)
-                    != (group["task"], group["reuse"], group["existing_pages"])
+                    != (
+                        group["task"],
+                        group["reuse"],
+                        group["existing_pages"],
+                        group["output_pages"],
+                    )
                 ],
             }
             if errors or not run or self.conflicts or self.drafts.keys() - self.assignments.keys():
@@ -719,7 +846,15 @@ class CompileMergeTool(Tool):
                 for name in dict.fromkeys(self.assignments.values())
                 if self.groups[name]["status"] != "completed"
             )
-            owners = {}
+            owners = dict(self.output_owners)
+            for name in dict.fromkeys(self.assignments.values()):
+                for path in sorted(self._output_paths(self.groups[name])):
+                    owner = owners.get(path.casefold())
+                    if owner is not None and owner != name:
+                        errors.append(self._collision(path, name, owner))
+                    owners[path.casefold()] = name
+            if errors:
+                return json.dumps(self._feedback(**changes, errors=errors), ensure_ascii=False)
             prepared = deque()
             for name in ready:
                 group = self.groups[name]
@@ -729,15 +864,7 @@ class CompileMergeTool(Tool):
                     group.update(status="failed", error=str(exc))
                     continue
                 prepared.append(name)
-                for path in group["existing_paths"].values():
-                    if path.casefold() in owners:
-                        errors.append(
-                            f"Existing page {path} belongs to both {owners[path.casefold()]} and {name}; assign these inputs to one group."
-                        )
-                    owners[path.casefold()] = name
             ready = prepared
-            if errors:
-                return json.dumps(self._feedback(**changes, errors=errors), ensure_ascii=False)
             report = await self.manager.wait(block=False)
             while ready or report["running"] or report["queued"] or report["results"]:
                 for result in report["results"]:

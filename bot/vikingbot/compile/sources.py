@@ -138,7 +138,7 @@ def split_source(uri: str, content: str, max_chars: int) -> list[CompileSourceRa
 def pack_source_batches(
     sources: Iterable[tuple[str, str]], limits: CompileLimits
 ) -> list[list[CompileSourceRange]]:
-    """Pack exact source ranges in input order, bounded by characters and source count.
+    """Pack exact source ranges in input order, bounded only by characters.
 
     Adjacent ranges may share a batch when they fit. Small files share remaining
     capacity; original URIs remain the citation targets for all ranges. Source text
@@ -147,18 +147,13 @@ def pack_source_batches(
     batches: list[list[CompileSourceRange]] = []
     batch: list[CompileSourceRange] = []
     size = 0
-    uris: set[str] = set()
     for uri, content in sources:
         for part in split_source(uri, content, limits.source_batch_chars):
-            if batch and (
-                size + part.input_chars > limits.source_batch_chars
-                or (uri not in uris and len(uris) >= limits.source_batch_files)
-            ):
+            if batch and size + part.input_chars > limits.source_batch_chars:
                 batches.append(batch)
-                batch, size, uris = [], 0, set()
+                batch, size = [], 0
             batch.append(part)
             size += part.input_chars
-            uris.add(uri)
     if batch:
         batches.append(batch)
     return batches
