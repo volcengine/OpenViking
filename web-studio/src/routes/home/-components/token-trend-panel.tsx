@@ -6,7 +6,7 @@ import { TOKEN_SERIES_DAYS } from '../-constants/dashboard'
 import type { ConsoleSeries, HomeT, TokenSeriesItem } from '../-types/dashboard'
 import { getLastDaysRange, isDisabledPayload } from '../-lib/format'
 import { normalizeTokenSeries } from '../-lib/normalize'
-import { EmptyState, Panel, SectionHeading } from './panel'
+import { EmptyState, Panel, RequestError, SectionHeading } from './panel'
 
 const TokenTrendChart = lazy(() =>
   import('./token-trend-chart').then((module) => ({
@@ -18,6 +18,7 @@ export function TokenTrendPanel({
   data,
   disabled: disabledProp,
   disabledMessage,
+  errorMessage,
   isError,
   isLoading,
   t,
@@ -25,6 +26,7 @@ export function TokenTrendPanel({
   data: ConsoleSeries<TokenSeriesItem> | undefined
   disabled?: boolean
   disabledMessage?: string
+  errorMessage?: string
   isError: boolean
   isLoading: boolean
   t: HomeT
@@ -51,7 +53,9 @@ export function TokenTrendPanel({
       {isLoading ? (
         <Skeleton className="h-72 w-full" />
       ) : isError ? (
-        <EmptyState>{t('requestFailed')}</EmptyState>
+        <EmptyState>
+          <RequestError summary={t('requestFailed')} detail={errorMessage} />
+        </EmptyState>
       ) : disabled ? (
         <EmptyState>{disabledMessage ?? t('usageDisabled')}</EmptyState>
       ) : items.length === 0 ? (
