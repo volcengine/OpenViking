@@ -104,6 +104,67 @@ class ResourceProcessor:
             )
         return self._media_processor
 
+    def _build_parse_output_store(self):
+        """Return the configured parse output store, or None for AGFS mode.
+
+        Local mode keeps parse artifacts on a shared local dir; it is only safe
+        when every worker in the parse/persist chain shares that path, which the
+        operator asserts via config. AGFS (the default) returns None so callers
+        keep the legacy temp-tree behaviour untouched.
+        """
+        try:
+            parse_output = get_openviking_config().storage.parse_output
+        except Exception:
+            return None
+        if getattr(parse_output, "mode", "agfs") != "local":
+            return None
+        from openviking.parse.output import build_parse_output_store
+
+        return build_parse_output_store(
+            backend="local", local_root=parse_output.resolved_local_root()
+        )
+
+    @staticmethod
+    def _artifact_doc_rel(artifact_ref: Any, temp_doc_uri: Optional[str]) -> str:
+        """Return the document root's path relative to the artifact root.
+
+        ``temp_doc_uri`` is ``<artifact_root>/<doc_rel>`` (finalize built it), so
+        the relative document path is the suffix after the artifact root.
+        """
+        root = artifact_ref.root.rstrip("/")
+        doc = str(temp_doc_uri or "").rstrip("/")
+        if doc.startswith(f"{root}/"):
+            return doc[len(root) + 1 :]
+        return ""
+
+    async def _persist_local_artifact(
+        self,
+        *,
+        output_store: Any,
+        artifact_ref: Any,
+        doc_rel: str,
+        root_uri: str,
+        ctx: RequestContext,
+        lease_ref: Optional[Dict[str, Any]],
+    ) -> None:
+        """Upload a local parse artifact into the final AGFS resource location."""
+        from openviking.storage.resource_diff_apply import apply_full_artifact_upload
+        from openviking.storage.resource_target import AgfsResourceTarget
+
+        target = AgfsResourceTarget(
+            viking_fs=get_viking_fs(),
+            vikingdb=self.vikingdb,
+            root_uri=root_uri,
+            ctx=ctx,
+            lease_ref=lease_ref,
+        )
+        await apply_full_artifact_upload(
+            store=output_store,
+            artifact_ref=artifact_ref,
+            doc_rel=doc_rel,
+            target=target,
+        )
+
     @staticmethod
     def _empty_directory_error(meta: Dict[str, Any]) -> str:
         """Build a bounded error message for a directory with no successful files."""
@@ -259,6 +320,13 @@ class ResourceProcessor:
                 # Use reason as instruction fallback so it influences L0/L1
                 # generation and improves search relevance as documented.
                 effective_instruction = instruction or reason
+                # Local artifact mode (single-machine deployments) writes parse
+                # artifacts to a shared local dir instead of AGFS temp. The store
+                # is task-scoped and threaded through parse kwargs so concurrent
+                # tasks never share it. Default agfs mode leaves kwargs untouched.
+                output_store = self._build_parse_output_store()
+                if output_store is not None:
+                    kwargs.setdefault("parse_output_store", output_store)
                 if path.startswith(("http://", "https://", "git@", "ssh://", "git://")):
                     await _set_stage("fetching")
                 else:
@@ -356,6 +424,7 @@ class ResourceProcessor:
                 stage_start = time.perf_counter()
                 stage_status = "ok"
                 finalize_start = time.perf_counter()
+                artifact_ref = parse_result.artifact_ref
                 with get_viking_fs().bind_request_context(ctx):
                     context_tree = await self.tree_builder.finalize_from_temp(
                         temp_dir_path=parse_result.temp_dir_path,
@@ -372,6 +441,8 @@ class ResourceProcessor:
                             and parse_result.source_format not in {"directory", "repository"}
                             and not to_is_directory
                         ),
+                        artifact_ref=artifact_ref,
+                        output_store=output_store if artifact_ref is not None else None,
                     )
                     if context_tree and context_tree.root:
                         result["root_uri"] = context_tree.root.uri
@@ -465,22 +536,40 @@ class ResourceProcessor:
                                 root_is_file=root_is_file,
                             )
                     if not target_preexisting:
-                        await viking_fs.persist_temp_tree(
-                            temp_uri,
-                            root_uri,
-                            ctx=ctx,
-                            lease_ref=resource_lock,
-                        )
+                        if artifact_ref is not None and artifact_ref.backend == "local":
+                            # Local artifacts are not in AGFS temp, so persist by
+                            # uploading every file under the document root to the
+                            # final resource location (initial import = all added).
+                            # rewrite_image_uris still runs afterwards against the
+                            # now-uploaded AGFS files, identical to the temp path.
+                            await self._persist_local_artifact(
+                                output_store=output_store,
+                                artifact_ref=artifact_ref,
+                                doc_rel=self._artifact_doc_rel(artifact_ref, temp_uri),
+                                root_uri=root_uri,
+                                ctx=ctx,
+                                lease_ref=resource_lock,
+                            )
+                        else:
+                            await viking_fs.persist_temp_tree(
+                                temp_uri,
+                                root_uri,
+                                ctx=ctx,
+                                lease_ref=resource_lock,
+                            )
                         if not root_is_file:
                             await rewrite_image_uris(
                                 root_uri,
                                 ctx=ctx,
                                 lease_ref=resource_lock,
                             )
-                        await viking_fs.delete_temp(
-                            parse_result.temp_dir_path,
-                            ctx=ctx,
-                        )
+                        if artifact_ref is not None and artifact_ref.backend == "local":
+                            await output_store.cleanup(artifact_ref)
+                        else:
+                            await viking_fs.delete_temp(
+                                parse_result.temp_dir_path,
+                                ctx=ctx,
+                            )
                         temp_uri = root_uri
                         source_committed = True
                 except Exception:
@@ -507,11 +596,20 @@ class ResourceProcessor:
                         pass
 
             artifact_ref = parse_result.ensure_artifact_ref()
+            # Once a local artifact has been committed into AGFS, downstream
+            # post-processing (semantic/embedding) reads the AGFS resource tree,
+            # so the prepared payload must not carry the local ref across the
+            # queue (finish_prepared_resource only understands the agfs backend).
+            prepared_artifact_ref = None
+            if artifact_ref is not None and not (
+                artifact_ref.backend == "local" and source_committed
+            ):
+                prepared_artifact_ref = artifact_ref.to_dict()
             prepared = {
                 "root_uri": root_uri,
                 "temp_uri": temp_uri or parse_result.temp_dir_path,
                 "temp_dir_path": parse_result.temp_dir_path,
-                "artifact_ref": artifact_ref.to_dict() if artifact_ref is not None else None,
+                "artifact_ref": prepared_artifact_ref,
                 "source_committed": source_committed,
                 "target_preexisting": target_preexisting,
                 "is_code_repo": parse_result.source_format == "repository",

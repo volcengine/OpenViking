@@ -106,4 +106,39 @@ async def apply_diff_plan(
     return result
 
 
-__all__ = ["ApplyResult", "apply_diff_plan"]
+async def apply_full_artifact_upload(
+    *,
+    store: Any,
+    artifact_ref: Any,
+    doc_rel: str,
+    target: Any,
+) -> ApplyResult:
+    """Upload every file under ``doc_rel`` in the artifact to the target.
+
+    Initial import is "the plan is all added": there is no existing target to
+    diff against, so every business file below the document root is uploaded.
+    Paths are made target-relative by stripping the ``doc_rel`` prefix (e.g. the
+    ``repository`` wrapper), and md5 is computed from the final stored bytes at
+    the upload point, exactly like the incremental path.
+    """
+    result = ApplyResult()
+    base = doc_rel.strip("/")
+    prefix = f"{base}/" if base else ""
+
+    async def _walk(rel: str) -> None:
+        for entry in await store.list(artifact_ref, rel):
+            if entry.is_dir:
+                await _walk(entry.rel_path)
+                continue
+            target_rel = entry.rel_path[len(prefix):] if prefix else entry.rel_path
+            data = await store.read_bytes(artifact_ref, entry.rel_path)
+            written = await target.write_file(target_rel, data)
+            final_bytes = written if written is not None else data
+            result.uploaded.append(target_rel)
+            result.md5_by_rel[target_rel] = content_md5(final_bytes)
+
+    await _walk(base)
+    return result
+
+
+__all__ = ["ApplyResult", "apply_diff_plan", "apply_full_artifact_upload"]
