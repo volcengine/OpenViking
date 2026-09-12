@@ -4,8 +4,7 @@
 
 import uvicorn
 
-from .config import load_settings
-from .server import create_app
+from .bridge import create_app, load_settings
 
 
 def main() -> None:

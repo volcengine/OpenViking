@@ -1,66 +1,73 @@
 # LlamaParse v2 Understanding API bridge
 
-This example lets OpenViking use LlamaParse v2 without changes to OpenViking core. It runs as
-a small HTTP service and implements the Understanding API endpoints that OpenViking already uses.
+This example shows how to connect a hosted parser to OpenViking through the Understanding API.
+It maps OpenViking requests to LlamaParse v2 without changes to OpenViking core. Use the same
+pattern to adapt services such as Azure AI Document Intelligence or Amazon Textract.
+
+## API mapping
+
+| OpenViking Understanding API | LlamaParse v2 | Bridge action |
+|---|---|---|
+| `POST /api/v3/files` | `POST /api/v1/beta/files` | Upload the local file and return the LlamaParse file ID. |
+| `POST /api/v3/responses` | `POST /api/v2/parse` | Convert `file_id` or a public URL to a parse job. |
+| `GET /api/v3/responses/{id}` | `GET /api/v2/parse/{id}` | Map the LlamaParse job state to `in_progress`, `completed`, or `failed`. |
+| `result.zip_url` | Markdown and image URLs | Build the `content.md` and image ZIP that OpenViking expects. |
 
 ```text
-OpenViking -> Understanding API bridge -> LlamaParse v2
-           <- Markdown and image ZIP  <-
+OpenViking -> bridge -> LlamaParse v2
+OpenViking <- ZIP    <- Markdown and images
 ```
 
-The bridge does not store LlamaParse file or job state. A LlamaParse file ID is also the
-Understanding file ID. A LlamaParse job ID is also the Understanding response ID. This means that
-polling continues to work after a bridge restart. The bridge stores only short-lived result ZIP files
-in its local cache.
+The bridge reuses each LlamaParse file ID and job ID. Polling still works after a bridge restart.
+Completed ZIP files stay in a small in-memory cache for five minutes. The bridge builds the ZIP
+before it reports `completed`. Thus, image downloads and ZIP creation do not use OpenViking's fixed
+60-second artifact download window. A bridge restart removes cached ZIP files, but OpenViking can
+poll the job again and rebuild the ZIP.
 
-## Requirements
+## Run
+
+Requirements:
 
 - Python 3.10 or later and [`uv`](https://docs.astral.sh/uv/), or Docker
 - A [LlamaCloud API key](https://developers.llamaindex.ai/llamaparse/general/api_key/)
-- An OpenViking server configuration
+- An OpenViking server
 
-## Run with `uv`
+From the OpenViking repository root:
 
-Run all commands from the OpenViking repository root.
+```bash
+cp examples/llamaparse-understanding-bridge/.env.example \
+  examples/llamaparse-understanding-bridge/.env
+```
 
-1. Create the bridge settings file:
+Set these values in `.env`:
 
-   ```bash
-   cp examples/llamaparse-understanding-bridge/.env.example \
-     examples/llamaparse-understanding-bridge/.env
-   ```
+```text
+LLAMA_CLOUD_API_KEY=llx-...
+PARSER_BRIDGE_API_KEY=<a-random-secret-with-at-least-32-characters>
+```
 
-2. Set these two values in the new `.env` file:
+Run directly:
 
-   ```text
-   LLAMA_CLOUD_API_KEY=llx-...
-   PARSER_BRIDGE_API_KEY=<a-random-secret-with-at-least-32-characters>
-   ```
+```bash
+uv run --env-file examples/llamaparse-understanding-bridge/.env \
+  --project examples/llamaparse-understanding-bridge \
+  openviking-llamaparse-bridge
+```
 
-   OpenViking and the bridge must use the same `PARSER_BRIDGE_API_KEY`. You can create one with:
+Or run with Docker:
 
-   ```bash
-   python -c 'import secrets; print(secrets.token_urlsafe(32))'
-   ```
-
-3. Start the bridge:
-
-   ```bash
-   uv run --frozen --env-file examples/llamaparse-understanding-bridge/.env \
-     --project examples/llamaparse-understanding-bridge \
-     openviking-llamaparse-bridge
-   ```
-
-4. Confirm that it is ready:
-
-   ```bash
-   curl http://127.0.0.1:8080/health
-   ```
+```bash
+docker build -t openviking-llamaparse-bridge \
+  examples/llamaparse-understanding-bridge
+docker run --rm --env-file examples/llamaparse-understanding-bridge/.env \
+  -p 127.0.0.1:8080:8080 \
+  -e BRIDGE_BIND_HOST=0.0.0.0 \
+  openviking-llamaparse-bridge
+```
 
 ## Configure OpenViking
 
-Run `openviking-server init` first if you do not have an OpenViking configuration. Then add this
-section to `~/.openviking/ov.conf`:
+Run `openviking-server init` if `~/.openviking/ov.conf` does not exist. Add:
 
 ```json
 {
@@ -74,146 +81,47 @@ section to `~/.openviking/ov.conf`:
 }
 ```
 
-Set `PARSER_BRIDGE_API_KEY` in the environment that starts OpenViking. OpenViking expands environment
-variables in `ov.conf`. You can also put the key directly in `ov.conf`, but take care not to commit
-the file.
+Set `PARSER_BRIDGE_API_KEY` in the environment that starts OpenViking. Restart OpenViking after a
+configuration change. `parser_api.extensions` selects which file types use this bridge. Other file
+types continue to use the current OpenViking parsers. Keep `parser_api.enable_resumable_upload`
+disabled. Set `parser_api.http_timeout_seconds` above `BRIDGE_HTTP_TIMEOUT_SECONDS`, which defaults
+to 120 seconds.
 
-The `extensions` list controls routing. OpenViking sends only the listed file types to this bridge.
-It continues to use its built-in parsers for other file types. Restart OpenViking after you change
-`ov.conf`.
+## Inputs and results
 
-`http_timeout_seconds` must be greater than `BRIDGE_HTTP_TIMEOUT_SECONDS`. The values above give the
-bridge 120 seconds for one LlamaCloud request and give OpenViking 130 seconds to receive the bridge
-response. Calibrate these values with representative documents before production use.
+The example supports local file uploads and public document, image, and audio URLs. It does not
+support video or credential-gated URLs. OpenViking identifies Lark and Feishu credentials with a
+`lark_file` field, so the bridge rejects that request with a clear `unsupported_input` error. Other
+private URLs fail through the normal LlamaParse error response.
 
-Start OpenViking and the bridge as separate processes. If one process stops, it does not stop the
-other process.
+LlamaParse can complete a job when some pages fail. The bridge keeps the usable Markdown and adds a
+visible failed-page note. It fails the job only when there is no usable Markdown.
 
-## Run with Docker
-
-Create the `.env` file as shown above. Then run this command from the repository root:
-
-```bash
-docker compose -f examples/llamaparse-understanding-bridge/compose.yaml up --build
-```
-
-The default configuration publishes the bridge only at `http://127.0.0.1:8080`. If OpenViking runs
-in a different container, both containers must share a network. Set `parser_api.host` and
-`BRIDGE_PUBLIC_URL` to an address that the OpenViking container can reach, such as the bridge service
-name. Do not use `127.0.0.1` between separate containers. To accept connections from another host,
-also set `BRIDGE_PUBLISH_HOST=0.0.0.0` and restrict access with a firewall.
-
-## Main settings
+## Settings
 
 | Setting | Default | Purpose |
 |---|---|---|
-| `LLAMA_CLOUD_API_KEY` | Required | Authenticates requests to LlamaCloud. |
-| `PARSER_BRIDGE_API_KEY` | Required | Authenticates OpenViking requests. Use at least 32 characters. |
-| `LLAMAPARSE_REGION` | `na` | Selects the `na` or `eu` LlamaCloud endpoint. |
-| `LLAMAPARSE_TIER` | `agentic` | Selects `cost_effective`, `agentic`, or `agentic_plus`. |
-| `LLAMAPARSE_COST_OPTIMIZER` | `true` | Sends simple pages to the lower-cost tier. It requires `agentic` or `agentic_plus`. |
-| `BRIDGE_PUBLIC_URL` | `http://127.0.0.1:8080` | Base URL that OpenViking uses to download result ZIP files. |
-| `BRIDGE_PORT` | `8080` | Local bridge port. |
+| `LLAMA_CLOUD_API_KEY` | Required | Authenticate with LlamaCloud. |
+| `PARSER_BRIDGE_API_KEY` | Required | Authenticate OpenViking requests. Use at least 32 characters. |
+| `LLAMAPARSE_REGION` | `na` | Select the `na` or `eu` LlamaCloud endpoint. |
+| `LLAMAPARSE_TIER` | `agentic` | Select `cost_effective`, `agentic`, or `agentic_plus`. |
+| `LLAMAPARSE_COST_OPTIMIZER` | `true` | Route simple pages to the lower-cost tier. |
+| `BRIDGE_PUBLIC_URL` | `http://127.0.0.1:8080` | Set the URL that OpenViking uses to download ZIP files. |
 
-The bridge does not offer the LlamaParse `fast` tier. OpenViking requires Markdown, and the `fast`
-tier does not return Markdown. Cost Optimizer is an option, not a tier. It can route simple pages to
-`cost_effective` while the selected agentic tier handles complex pages.
+Use `LLAMAPARSE_PARSE_OPTIONS_JSON` for advanced LlamaParse v2 options. The bridge owns `file_id`,
+`source_url`, `tier`, and `version`. It also requests embedded and layout images because OpenViking
+needs the image files referenced by the returned Markdown.
 
-## File types
+## Test
 
-LlamaParse accepts [130+ file formats](https://developers.llamaindex.ai/llamaparse/general/supported_document_types/),
-including common documents, images, spreadsheets, and audio files. Add only the extensions that you
-want OpenViking to route to this bridge. Start with file types that you have tested.
-
-This example supports local file uploads and public HTTP or HTTPS document, image, and audio URLs.
-It does not support:
-
-- direct `input_video` URL requests because LlamaParse v2 does not support video files;
-- Feishu or Lark credential payloads;
-- the Understanding API resumable-upload endpoints.
-
-Keep `parser_api.enable_resumable_upload` disabled. The simple upload path supports files up to
-OpenViking's default limit of 512 MiB. Your LlamaCloud account and selected parser can apply a lower
-limit.
-
-## Advanced settings
-
-Most users do not need more settings. To pass LlamaParse v2 parse options, set one JSON object:
-
-```text
-LLAMAPARSE_PARSE_OPTIONS_JSON={"input_options":{"spreadsheet":{"detect_sub_tables_in_sheets":true}}}
-```
-
-See the [LlamaParse configuration guide](https://developers.llamaindex.ai/llamaparse/parse/guides/configuring-parse/)
-for available fields. The bridge owns `file_id`, `source_url`, `tier`, and `version`, so the JSON
-object cannot replace them. `LLAMAPARSE_COST_OPTIMIZER` controls
-`processing_options.cost_optimizer`. The bridge also requests embedded and layout images because
-OpenViking needs the files referenced by the returned Markdown.
-
-Other advanced environment variables are documented in `.env.example`.
-
-## API mapping
-
-| OpenViking request | LlamaParse v2 operation |
-|---|---|
-| `POST /api/v3/files` | Upload a file with `purpose=parse`. |
-| `POST /api/v3/responses` | Create a parse job. |
-| `GET /api/v3/responses/{response_id}` | Read the parse job status. |
-| `GET /artifacts/{job_id}.zip` | Download a cached ZIP with `content.md` and parsed images. |
-
-Artifact URLs use an HMAC signature and expire after five minutes by default. OpenViking downloads the
-ZIP as soon as parsing completes. Before it reports `completed`, the bridge downloads result images
-concurrently and writes the ZIP to a bounded local cache. A repeated download reads the same cached
-file. The bridge rejects a result if LlamaParse reports any failed page. It accepts only HTTPS image
-URLs, pins each connection to a validated public address, checks each redirect, and does not send the
-LlamaCloud API key to image hosts.
-
-The cache defaults to the system temporary directory, expires files after five minutes, and uses at
-most 1 GiB. Configure `BRIDGE_ARTIFACT_CACHE_DIR`, `BRIDGE_ARTIFACT_TTL_SECONDS`, and
-`BRIDGE_ARTIFACT_CACHE_MAX_BYTES` only when the defaults do not fit the deployment. This local cache
-is for one bridge instance. Shared cache storage and multi-replica operation are outside this discovery
-example.
-
-## Local tests
-
-The tests use mock HTTP services. They do not consume LlamaCloud credits.
+The mocked contract tests do not use LlamaCloud credits:
 
 ```bash
-uv --native-tls run \
-  --frozen \
-  --project examples/llamaparse-understanding-bridge \
-  --extra test --extra dev \
+uv run --project examples/llamaparse-understanding-bridge --extra test \
   pytest -c examples/llamaparse-understanding-bridge/pyproject.toml \
-  examples/llamaparse-understanding-bridge/tests -q
+  examples/llamaparse-understanding-bridge/tests/test_bridge.py -q
 ```
 
-Run the other checks with the same environment:
-
-```bash
-uv --native-tls run --frozen --project examples/llamaparse-understanding-bridge --extra dev \
-  ruff format --check examples/llamaparse-understanding-bridge
-uv --native-tls run --frozen --project examples/llamaparse-understanding-bridge --extra dev \
-  ruff check examples/llamaparse-understanding-bridge
-uv --native-tls run --frozen --project examples/llamaparse-understanding-bridge --extra dev \
-  mypy examples/llamaparse-understanding-bridge/openviking_llamaparse_bridge
-uv --native-tls run --frozen --project examples/llamaparse-understanding-bridge --extra dev \
-  python -m build --no-isolation examples/llamaparse-understanding-bridge
-```
-
-## Live test
-
-The live test uses LlamaCloud credits. Start with a small, non-sensitive PDF. Start the bridge and
-OpenViking, add that PDF through the normal OpenViking resource API or client, and confirm these
-results:
-
-1. The bridge returns a LlamaParse file ID and job ID.
-2. OpenViking polls until the job is complete.
-3. OpenViking downloads the signed ZIP.
-4. The new resource contains the parsed Markdown and its images.
-5. Search can retrieve text from the new resource.
-6. Record upload, job-creation, polling, ZIP-preparation, and ZIP-download times.
-7. Record the HTTPS hosts used for presigned result images and redirects.
-
-`ov add-resource --wait` keeps one HTTP request open while parsing and indexing finish. If the client
-reports an HTTP timeout, check `ov task list` before you retry. The server can finish the task after
-the client stops waiting, and an immediate retry can create a duplicate parse job.
+For a live check, start the bridge and OpenViking, add a small PDF, and confirm that OpenViking
+stores `content.md` and any extracted images. `ov add-resource --wait` can stop waiting after 60
+seconds while the server continues the task. Check `ov task list` before you retry.

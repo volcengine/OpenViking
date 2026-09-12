@@ -2,6 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """LlamaParse v2 adapter for the OpenViking Understanding API."""
 
-from .server import create_app
+from .bridge import create_app
 
 __all__ = ["create_app"]

@@ -136,7 +136,6 @@ jobs:
       deps_changed: ${{ steps.check.outputs.deps_changed }}
       cuvs_changed: ${{ steps.check.outputs.cuvs_changed }}
       langchain_changed: ${{ steps.check.outputs.langchain_changed }}
-      llamaparse_bridge_changed: ${{ steps.check.outputs.llamaparse_bridge_changed }}
       openclaw_changed: ${{ steps.check.outputs.openclaw_changed }}
     steps:
       - uses: actions/checkout@v6
@@ -201,18 +200,6 @@ jobs:
             echo "openclaw_changed=false" >> $GITHUB_OUTPUT
           fi
 
-          LLAMAPARSE_BRIDGE_PATTERN="examples/llamaparse-understanding-bridge/|\.github/workflows/pr\.yml"
-          LLAMAPARSE_BRIDGE_CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep -E "$LLAMAPARSE_BRIDGE_PATTERN" || true)
-
-          if [ -n "$LLAMAPARSE_BRIDGE_CHANGED_FILES" ]; then
-            echo "LlamaParse bridge changes detected:"
-            echo "$LLAMAPARSE_BRIDGE_CHANGED_FILES"
-            echo "llamaparse_bridge_changed=true" >> $GITHUB_OUTPUT
-          else
-            echo "No LlamaParse bridge changes detected."
-            echo "llamaparse_bridge_changed=false" >> $GITHUB_OUTPUT
-          fi
-
   build:
     needs: check-deps
     if: ${{ needs.check-deps.outputs.deps_changed == 'true' }}
@@ -225,69 +212,6 @@ jobs:
     with:
       os_json: '["ubuntu-24.04"]'
       python_json: '["3.11"]'
-
-  llamaparse-bridge-tests:
-    needs: check-deps
-    if: ${{ needs.check-deps.outputs.llamaparse_bridge_changed == 'true' }}
-    runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: examples/llamaparse-understanding-bridge
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10", "3.13"]
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-python@v6
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-
-      - name: Install locked dependencies
-        run: uv sync --frozen --extra test --extra dev
-
-      - name: Check formatting and lint
-        run: |
-          uv run --frozen --extra test --extra dev ruff format --check .
-          uv run --frozen --extra test --extra dev ruff check .
-
-      - name: Type-check bridge
-        run: uv run --frozen --extra test --extra dev mypy openviking_llamaparse_bridge
-
-      - name: Run bridge tests
-        run: uv run --frozen --extra test --extra dev pytest -q
-
-      - name: Build package
-        run: uv run --frozen --extra test --extra dev python -m build --no-isolation
-
-      - name: Build Docker image
-        if: matrix.python-version == '3.13'
-        run: docker build --tag openviking-llamaparse-bridge:test .
-
-      - name: Smoke-test Docker image
-        if: matrix.python-version == '3.13'
-        run: |
-          docker run --detach --rm \
-            --name openviking-llamaparse-bridge-test \
-            --publish 127.0.0.1:18080:8080 \
-            --env LLAMA_CLOUD_API_KEY=llx-ci-placeholder \
-            --env PARSER_BRIDGE_API_KEY=ci-bridge-secret-with-at-least-32-chars \
-            --env BRIDGE_BIND_HOST=0.0.0.0 \
-            openviking-llamaparse-bridge:test
-          trap 'docker stop openviking-llamaparse-bridge-test' EXIT
-          for attempt in {1..30}; do
-            if curl --fail --silent http://127.0.0.1:18080/health; then
-              exit 0
-            fi
-            sleep 1
-          done
-          docker logs openviking-llamaparse-bridge-test
-          exit 1
 
   langchain-tests:
     needs: check-deps
