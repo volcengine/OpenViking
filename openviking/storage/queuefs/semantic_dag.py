@@ -19,6 +19,7 @@ from openviking.storage.abstract_overview import (
     body_for_preview,
     deterministic_sample,
     freshness_metadata,
+    read_abstract_overview_pending_child_uris,
     read_abstract_overview_pending_snapshot,
     write_abstract_overview,
 )
@@ -53,6 +54,11 @@ class DirNode:
     pending_snapshot: int = 0
     sampled_children_dirs: Optional[Set[str]] = None
     sampled_file_paths: Optional[Set[str]] = None
+    # Bounded changed-child URI set from freshness accounting (#4577). When
+    # present and not overflowing, aggregation only rebuilds sampled inputs that
+    # are actually dirty instead of the whole sample set.
+    pending_child_uris: Optional[Set[str]] = None
+    pending_child_uris_overflow: bool = False
     total_entries: Optional[int] = None
     missing_summary_entries: Optional[int] = None
     transfer_inputs_ready: bool = True
@@ -413,6 +419,19 @@ class SemanticDagExecutor:
                 if self._aggregate_directory
                 else 0
             )
+            pending_child_uris: Optional[Set[str]] = None
+            pending_child_uris_overflow = False
+            if self._aggregate_directory:
+                pending_child_uris, pending_child_uris_overflow = (
+                    await read_abstract_overview_pending_child_uris(
+                        viking_fs=self._viking_fs,
+                        dir_uri=dir_uri,
+                        ctx=self._ctx,
+                        lock=self._lock,
+                    )
+                )
+                if not pending_child_uris and not pending_child_uris_overflow:
+                    pending_child_uris = None  # legacy sidecar: no collection recorded
             file_index = {path: idx for idx, path in enumerate(file_paths)}
             child_index = {path: idx for idx, path in enumerate(children_dirs)}
             # Recursive/initial work still maintains every file. Incremental
@@ -446,6 +465,8 @@ class SemanticDagExecutor:
                 children_abstracts=[None] * len(children_dirs),
                 pending=pending,
                 pending_snapshot=pending_snapshot,
+                pending_child_uris=pending_child_uris,
+                pending_child_uris_overflow=pending_child_uris_overflow,
                 sampled_children_dirs=sampled_children_dirs,
                 sampled_file_paths=sampled_file_paths,
                 dispatched=True,
@@ -548,6 +569,16 @@ class SemanticDagExecutor:
             ctx=self._ctx,
             lock=self._lock,
         )
+        pending_child_uris, pending_child_uris_overflow = (
+            await read_abstract_overview_pending_child_uris(
+                viking_fs=self._viking_fs,
+                dir_uri=dir_uri,
+                ctx=self._ctx,
+                lock=self._lock,
+            )
+        )
+        if not pending_child_uris and not pending_child_uris_overflow:
+            pending_child_uris = None  # legacy sidecar: no collection recorded
         return DirNode(
             uri=dir_uri,
             children_dirs=selected_dirs,
@@ -558,6 +589,8 @@ class SemanticDagExecutor:
             children_abstracts=[loaded[("directory", uri)] for uri in selected_dirs],
             pending=0,
             pending_snapshot=pending_snapshot,
+                pending_child_uris=pending_child_uris,
+                pending_child_uris_overflow=pending_child_uris_overflow,
             total_entries=len(candidates),
             missing_summary_entries=missing_count,
             transfer_inputs_ready=not candidates or bool(selected),
@@ -770,13 +803,33 @@ class SemanticDagExecutor:
                 content_changed = await self._check_file_content_changed(file_path)
                 self._file_change_status[file_path] = content_changed
                 node = self._nodes.get(parent_uri)
-                regenerate_sampled_summary = bool(
-                    self._aggregate_directory
-                    and node is not None
-                    and node.pending_snapshot > 0
-                    and node.sampled_file_paths is not None
-                    and file_path in node.sampled_file_paths
+                node_has_pending_uris = (
+                    node is not None
+                    and node.pending_child_uris is not None
+                    and not node.pending_child_uris_overflow
                 )
+                if node_has_pending_uris:
+                    # Freshness accounting recorded *which* children changed
+                    # (#4577): only dirty sampled inputs must be rebuilt; the
+                    # rest of the sample set can trust their existing L1.
+                    regenerate_sampled_summary = bool(
+                        self._aggregate_directory
+                        and node is not None
+                        and node.pending_snapshot > 0
+                        and node.pending_child_uris is not None
+                        and file_path in node.pending_child_uris
+                    )
+                else:
+                    # Legacy sidecar (no URI collection) or overflow: pending
+                    # freshness records a count only, so rebuild every sampled
+                    # input once aggregation triggers.
+                    regenerate_sampled_summary = bool(
+                        self._aggregate_directory
+                        and node is not None
+                        and node.pending_snapshot > 0
+                        and node.sampled_file_paths is not None
+                        and file_path in node.sampled_file_paths
+                    )
 
                 if not content_changed and not regenerate_sampled_summary:
                     summary_dict = await self._read_existing_summary(file_path)
