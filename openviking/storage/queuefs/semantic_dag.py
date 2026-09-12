@@ -179,6 +179,7 @@ class SemanticDagExecutor:
         generation_trigger: str = "semantic_refresh",
         aggregate_directory: bool = True,
         copy_source_uri: str = "",
+        file_md5s: Optional[Dict[str, str]] = None,
     ):
         self._processor = processor
         self._context_type = context_type
@@ -205,6 +206,9 @@ class SemanticDagExecutor:
             path for key in ("added", "modified", "deleted") for path in self._changes.get(key, [])
         }
         self._added_paths = {path.rstrip("/") for path in self._changes.get("added", [])}
+        # Per-file md5 (target-URI keyed) supplied by local incremental apply, so
+        # re-vectorization records the fresh fingerprint instead of leaving it stale.
+        self._file_md5s = dict(file_md5s or {})
         self._node_concurrency = max(1, max_concurrent_llm)
         self._llm_sem = asyncio.Semaphore(max_concurrent_llm)
         self._viking_fs = get_viking_fs()
@@ -823,6 +827,7 @@ class SemanticDagExecutor:
                     use_summary=use_summary,
                     ingest_options=self._ingest_options_for_file(file_path),
                     creator_acl_grant=self._creator_acl_grant(file_path),
+                    file_md5=self._file_md5s.get(file_path.rstrip("/")) or None,
                 )
             except Exception as e:
                 logger.error(

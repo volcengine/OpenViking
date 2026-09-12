@@ -74,6 +74,7 @@ class _FakeProcessor:
         self.sync_calls = []
         self.vectorized_files = []
         self.file_ingest_options = {}
+        self.file_md5s = {}
         self.directory_ingest_options = {}
         self.vectorized_dirs = []
         self.generated_overviews = []
@@ -125,10 +126,12 @@ class _FakeProcessor:
         use_summary=False,
         ingest_options=None,
         creator_acl_grant=None,
+        file_md5=None,
     ):
         del creator_acl_grant
         self.vectorized_files.append(file_path)
         self.file_ingest_options[file_path] = ingest_options
+        self.file_md5s[file_path] = file_md5
 
     async def _vectorize_directory(
         self,
@@ -209,6 +212,7 @@ async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypa
         incremental_update=True,
         target_uri=root_uri,
         changes={"modified": [f"{root_uri}/a.txt"]},
+        file_md5s={f"{root_uri}/a.txt": "md5-a-new"},
     )
 
     await executor.run(root_uri)
@@ -216,6 +220,8 @@ async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypa
     assert processor.summarized_files == [f"{root_uri}/a.txt"]
     assert processor.vectorized_files == [f"{root_uri}/a.txt"]
     assert processor.sync_calls == []
+    # The apply-time md5 is threaded through so the vector record is refreshed.
+    assert processor.file_md5s[f"{root_uri}/a.txt"] == "md5-a-new"
     overview = parse_abstract_overview(fake_fs._file_contents[f"{root_uri}/.overview.md"]).body
     assert "- a.txt: summary" in overview
     assert "- b.txt: old-b" in overview

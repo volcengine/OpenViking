@@ -73,6 +73,10 @@ class SemanticMsg:
     use_hierarchical_aggregation: bool = False
     propagate_to_parent: bool = True
     copy_source_uri: str = ""
+    # Per-file md5 of final stored bytes, keyed by target URI. Supplied by the
+    # local incremental apply so the DAG's re-vectorization writes a fresh
+    # fingerprint; empty for all other flows.
+    file_md5s: Dict[str, str] = field(default_factory=dict)
 
     def __init__(
         self,
@@ -100,6 +104,7 @@ class SemanticMsg:
         use_hierarchical_aggregation: bool = False,
         propagate_to_parent: bool = True,
         copy_source_uri: str = "",
+        file_md5s: Optional[Dict[str, str]] = None,
     ):
         self.id = str(uuid4())
         self.timestamp = int(datetime.now().timestamp())
@@ -127,6 +132,7 @@ class SemanticMsg:
         self.use_hierarchical_aggregation = bool(use_hierarchical_aggregation)
         self.propagate_to_parent = bool(propagate_to_parent)
         self.copy_source_uri = copy_source_uri
+        self.file_md5s = dict(file_md5s or {})
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert object to dictionary."""
@@ -186,6 +192,9 @@ class SemanticMsg:
             use_hierarchical_aggregation=data.get("use_hierarchical_aggregation", False),
             propagate_to_parent=data.get("propagate_to_parent", True),
             copy_source_uri=data.get("copy_source_uri", ""),
+            file_md5s=(
+                data.get("file_md5s") if isinstance(data.get("file_md5s"), dict) else None
+            ),
         )
         if "id" in data and data["id"]:
             obj.id = data["id"]

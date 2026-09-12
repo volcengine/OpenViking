@@ -115,6 +115,9 @@ class Summarizer:
         # semantic DAG restricts re-summarization/vectorization to these files
         # instead of diffing the whole tree.
         changes = kwargs.get("changes")
+        # Per-file md5 (target-URI keyed) for those changed files, so the DAG's
+        # re-vectorization records the fresh fingerprint.
+        file_md5s = kwargs.get("file_md5s") or {}
         if not temp_uris:
             temp_uris = resource_uris
         if len(temp_uris) != len(resource_uris):
@@ -200,6 +203,7 @@ class Summarizer:
                     source=source,
                     generation_trigger=generation_trigger,
                     changes=changes,
+                    file_md5s=file_md5s,
                 )
                 if msg.telemetry_id:
                     get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)

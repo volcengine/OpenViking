@@ -252,6 +252,16 @@ class ResourceProcessor:
         return changes
 
     @staticmethod
+    def _apply_result_to_file_md5s(apply_result: Any, root_uri: str) -> Dict[str, str]:
+        """Map uploaded files' md5 to target URIs for the DAG's re-vectorization."""
+        base = root_uri.rstrip("/")
+        return {
+            f"{base}/{rel}": md5
+            for rel, md5 in apply_result.md5_by_rel.items()
+            if md5
+        }
+
+    @staticmethod
     def _empty_directory_error(meta: Dict[str, Any]) -> str:
         """Build a bounded error message for a directory with no successful files."""
         failed_files = meta.get("failed_files")
@@ -572,6 +582,7 @@ class ResourceProcessor:
             target_preexisting = False
             source_committed = False
             local_incremental_changes: Optional[Dict[str, List[str]]] = None
+            local_incremental_file_md5s: Dict[str, str] = {}
 
             if root_uri and temp_uri:
                 stage_start = time.perf_counter()
@@ -679,6 +690,9 @@ class ResourceProcessor:
                         local_incremental_changes = self._apply_result_to_changes(
                             apply_result, root_uri
                         )
+                        local_incremental_file_md5s = self._apply_result_to_file_md5s(
+                            apply_result, root_uri
+                        )
                         if not root_is_file:
                             await rewrite_image_uris(
                                 root_uri,
@@ -733,6 +747,7 @@ class ResourceProcessor:
                 # For local incremental commits, the changed-file set is already
                 # known (DiffPlan), so post-processing only re-summarizes those.
                 "changes": local_incremental_changes,
+                "file_md5s": local_incremental_file_md5s,
                 "semantic_source": self._semantic_source_metadata(
                     path=path,
                     prepared_resource=prepared_resource,
@@ -819,6 +834,7 @@ class ResourceProcessor:
                         semantic_source=semantic_source,
                         generation_trigger="resource_ingest",
                         changes=prepared.get("changes"),
+                        file_md5s=prepared.get("file_md5s"),
                         **kwargs,
                     )
                     if (

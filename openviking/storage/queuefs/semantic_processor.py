@@ -495,6 +495,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                 generation_trigger=msg.generation_trigger,
                                 aggregate_directory=msg.aggregate_directory,
                                 copy_source_uri=msg.copy_source_uri,
+                                file_md5s=msg.file_md5s,
                             )
                             await executor.run(run_uri)
                             self._cache_dag_stats(
@@ -1600,6 +1601,7 @@ class SemanticProcessor(DequeueHandlerBase):
         preserve_existing_created_at: bool = False,
         ingest_options: IngestOptions | None = None,
         creator_acl_grant: CreatorAclGrant | None = None,
+        file_md5: Optional[str] = None,
     ) -> None:
         """Vectorize a single file using its content or summary."""
         from openviking.utils.embedding_utils import vectorize_file
@@ -1615,4 +1617,5 @@ class SemanticProcessor(DequeueHandlerBase):
             preserve_existing_created_at=preserve_existing_created_at,
             ingest_options=ingest_options,
             creator_acl_grant=creator_acl_grant,
+            file_md5=file_md5,
         )

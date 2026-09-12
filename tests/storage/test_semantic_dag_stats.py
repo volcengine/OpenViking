@@ -106,6 +106,7 @@ class _FakeProcessor:
         use_summary=False,
         ingest_options=None,
         creator_acl_grant=None,
+        file_md5=None,
     ):
         if self.verify_streaming:
             assert summary_dict["content"]
