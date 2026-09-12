@@ -80,6 +80,17 @@ FETCH_BY_URI_OUTPUT_FIELDS = [
     "owner_user_id",
 ]
 
+# Fields an incremental diff needs from existing target records. md5 is listed
+# explicitly because the default lookup projection omits it; a missing value
+# means "unknown" and the caller falls back to reading file bytes.
+INCREMENTAL_DIFF_OUTPUT_FIELDS = [
+    "id",
+    "uri",
+    "level",
+    "abstract",
+    "md5",
+]
+
 VIKINGDB_CONTENT_MAX_SIZE = 1024 * 1024
 
 
@@ -1677,6 +1688,55 @@ class VikingVectorIndexBackend:
         return {
             requested_by_canonical[uri]: abstract
             for uri, abstract in abstracts.items()
+            if uri in requested_by_canonical
+        }
+
+    async def get_l2_diff_records_by_uris(
+        self,
+        uris: List[str],
+        *,
+        ctx: RequestContext,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Load existing L2 diff metadata (md5 + abstract) for a bounded URI set.
+
+        Returns a map keyed by the caller's original URI to
+        ``{"md5": str, "abstract": str}``. ``md5`` is empty when the record
+        predates the field, in which case incremental diff must fall back to
+        comparing file bytes rather than assuming equality. Uses full strict
+        pagination so a truncated page never masquerades as "record absent".
+        """
+        requested_by_canonical: Dict[str, str] = {}
+        for uri in uris:
+            requested_by_canonical.setdefault(resolve_uri(uri).uri, uri)
+        canonical_uris = list(requested_by_canonical)
+        if not canonical_uris:
+            return {}
+
+        records_by_uri: Dict[str, Dict[str, Any]] = {}
+        chunk_size = 100
+        for start in range(0, len(canonical_uris), chunk_size):
+            chunk = canonical_uris[start : start + chunk_size]
+            cursor: Optional[str] = None
+            while True:
+                records, cursor = await self._strict_transfer_page(
+                    ctx,
+                    And([In("uri", chunk), Eq("level", 2)]),
+                    limit=100,
+                    cursor=cursor,
+                    output_fields=["uri", "md5", "abstract"],
+                )
+                for record in records:
+                    uri = str(record.get("uri") or "")
+                    if uri and uri not in records_by_uri:
+                        records_by_uri[uri] = {
+                            "md5": str(record.get("md5") or ""),
+                            "abstract": str(record.get("abstract") or ""),
+                        }
+                if cursor is None:
+                    break
+        return {
+            requested_by_canonical[uri]: record
+            for uri, record in records_by_uri.items()
             if uri in requested_by_canonical
         }
 

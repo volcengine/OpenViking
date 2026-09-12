@@ -118,6 +118,11 @@ class CollectionSchemas:
                 {"FieldName": "search_tags", "FieldType": "list<string>"},
                 {"FieldName": "abstract", "FieldType": "string"},
                 {"FieldName": "content", "FieldType": "text"},
+                # md5 of the final stored file bytes for this record's URI. Used by
+                # incremental diff to skip re-processing unchanged files. Older
+                # records may lack it; callers must treat missing/empty as "unknown"
+                # and fall back to reading file bytes.
+                {"FieldName": "md5", "FieldType": "string", "DefaultValue": ""},
                 {"FieldName": "account_id", "FieldType": "string"},
                 {"FieldName": "owner_user_id", "FieldType": "string"},
                 {

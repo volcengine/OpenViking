@@ -740,6 +740,11 @@ def test_context_collection_uses_acl_mode_and_excludes_parent_uri():
     assert "acl_enabled" not in field_names
     assert "acl_enabled" not in schema["ScalarIndex"]
     assert "parent_uri" not in field_names
+    # md5 fingerprint field backs incremental diff; it is a scalar value column,
+    # not indexed (looked up alongside a URI/level scan, never filtered on).
+    md5_field = next(field for field in schema["Fields"] if field["FieldName"] == "md5")
+    assert md5_field == {"FieldName": "md5", "FieldType": "string", "DefaultValue": ""}
+    assert "md5" not in schema["ScalarIndex"]
     assert "parent_uri" not in schema["ScalarIndex"]
     assert "acl_restricted" not in field_names
     assert "acl_restricted" not in schema["ScalarIndex"]

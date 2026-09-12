@@ -189,6 +189,63 @@ async def test_vectorize_file_uses_summary_first(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_vectorize_file_threads_supplied_md5_without_reading_bytes(monkeypatch):
+    # The upload site already holds the final bytes; vectorize_file must accept
+    # the fingerprint via file_md5 and never read the file back to compute it.
+    queue = DummyQueue()
+    fs = DummyFS("deployment guide")
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: fs)
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="summary_first", max_input_tokens=1000)
+        ),
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/demo.md",
+        summary_dict={"name": "demo.md", "summary": "deployment summary"},
+        parent_uri="viking://user/default/resources",
+        ctx=DummyReq(),
+        file_md5="a" * 32,
+    )
+
+    assert len(queue.items) == 1
+    assert queue.items[0].context_data["md5"] == "a" * 32
+    # No file read was issued just to fingerprint the content.
+    assert fs.read_file_bytes_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_vectorize_file_omits_md5_when_not_supplied(monkeypatch):
+    queue = DummyQueue()
+    fs = DummyFS("deployment guide")
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: fs)
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="summary_first", max_input_tokens=1000)
+        ),
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/demo.md",
+        summary_dict={"name": "demo.md", "summary": "deployment summary"},
+        parent_uri="viking://user/default/resources",
+        ctx=DummyReq(),
+    )
+
+    assert len(queue.items) == 1
+    # Unknown fingerprint must not be emitted, so a partial update never clears it.
+    assert "md5" not in queue.items[0].context_data
+    assert fs.read_file_bytes_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_vectorize_image_downsamples_large_embedding_input(monkeypatch):
     queue = DummyQueue()
     original = _jpeg_bytes(80, 220)

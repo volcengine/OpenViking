@@ -508,6 +508,7 @@ async def vectorize_file(
     scalar_override: Optional[Dict[str, Any]] = None,
     ingest_options: IngestOptions | None = None,
     creator_acl_grant: CreatorAclGrant | None = None,
+    file_md5: Optional[str] = None,
 ) -> bool:
     """
     Vectorize a single file.
@@ -622,6 +623,14 @@ async def vectorize_file(
         else:
             logger.debug(f"Skipping file {file_path} (no text content or summary)")
             return False
+
+        # md5 fingerprints the final stored bytes so incremental diff can skip
+        # unchanged files. It is supplied by the upload site that already holds
+        # those bytes (parser output store / diff apply); vectorize_file never
+        # reads the file back just to hash it. Unknown (None) leaves md5 empty and
+        # diff falls back to comparing bytes.
+        if file_md5:
+            context.md5 = file_md5
 
         embedding_msg = EmbeddingMsgConverter.from_context(context, creator_acl_grant)
         if not embedding_msg:
