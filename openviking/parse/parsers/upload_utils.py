@@ -114,12 +114,21 @@ async def upload_directory(
     max_file_size: int = 10 * 1024 * 1024,
     include: Optional[str] = None,
     exclude: Optional[str] = None,
+    output_store: Any = None,
+    artifact_ref: Any = None,
 ) -> Tuple[int, List[str]]:
     """Upload an entire directory recursively and return uploaded count with warnings.
 
     Optimized: collects all files in one pass, pre-creates directories upfront,
     then uploads all files concurrently (up to _UPLOAD_CONCURRENCY at a time).
+
+    When ``output_store``/``artifact_ref`` are provided, artifacts are written
+    through the parse output store using paths relative to ``viking_uri_base``
+    (local mode); otherwise they are written to the VikingFS singleton at
+    absolute temp URIs (AGFS mode). Filtering and encoding normalization are
+    identical either way, so final bytes match across backends.
     """
+    use_store = output_store is not None and artifact_ref is not None
     effective_ignore_extensions = (
         ignore_extensions if ignore_extensions is not None else IGNORE_EXTENSIONS
     )
@@ -145,8 +154,11 @@ async def upload_directory(
     warnings: List[str] = []
 
     # --- Phase 1: Collect files and unique parent directory URIs in one pass ---
-    files_to_upload: List[Tuple[Path, str]] = []  # (local_path, target_uri)
-    parent_uris: Set[str] = {viking_uri_base}
+    # Each item is (local_path, target). ``target`` is an absolute viking URI in
+    # AGFS mode, or an artifact-relative path in output-store mode.
+    files_to_upload: List[Tuple[Path, str]] = []
+    parent_uris: Set[str] = set() if use_store else {viking_uri_base}
+    base_rel = viking_uri_base.strip("/") if use_store else viking_uri_base
 
     for root, dirs, files in os.walk(local_dir):
         dir_path = Path(root)
@@ -194,38 +206,47 @@ async def upload_directory(
             ):
                 continue
             try:
-                target_uri = safe_join_viking_uri(viking_uri_base, rel_path_str)
+                if use_store:
+                    # Artifact-relative path under the resource root; the store
+                    # resolves it to a local/agfs location.
+                    target = f"{base_rel}/{rel_path_str}" if base_rel else rel_path_str
+                else:
+                    target = safe_join_viking_uri(viking_uri_base, rel_path_str)
             except ValueError as exc:
                 warning = f"Skipping {file_path}: {exc}"
                 warnings.append(warning)
                 logger.warning(warning)
                 continue
-            files_to_upload.append((file_path, target_uri))
-            parent_uris.add(target_uri.rsplit("/", 1)[0])
+            files_to_upload.append((file_path, target))
+            if not use_store:
+                parent_uris.add(target.rsplit("/", 1)[0])
 
     # --- Phase 2: Pre-create all directories ---
-    # Memoized mkdir: each unique VikingFS path is created at most once.
-    # This is equivalent to _ensure_parent_dirs but avoids redundant HTTP calls
-    # by tracking already-processed paths across all directories.
-    _created: Set[str] = set()
+    # Store-backed writes create parents implicitly, so this AGFS-only pre-mkdir
+    # pass is skipped in output-store mode.
+    if not use_store:
+        # Memoized mkdir: each unique VikingFS path is created at most once.
+        # This is equivalent to _ensure_parent_dirs but avoids redundant HTTP
+        # calls by tracking already-processed paths across all directories.
+        _created: Set[str] = set()
 
-    for dir_uri in sorted(parent_uris):
-        if dir_uri in _created:
-            continue
-        try:
-            await viking_fs.mkdir(dir_uri, exist_ok=True)
-            _created.add(dir_uri)
-        except Exception as e:
-            if "already" in str(e).lower():
+        for dir_uri in sorted(parent_uris):
+            if dir_uri in _created:
+                continue
+            try:
+                await viking_fs.mkdir(dir_uri, exist_ok=True)
                 _created.add(dir_uri)
-            else:
-                logger.warning(f"Failed to create directory {dir_uri}: {e}")
+            except Exception as e:
+                if "already" in str(e).lower():
+                    _created.add(dir_uri)
+                else:
+                    logger.warning(f"Failed to create directory {dir_uri}: {e}")
 
     # --- Phase 3: Upload files concurrently ---
     sem = asyncio.Semaphore(_UPLOAD_CONCURRENCY)
     errors: List[Optional[str]] = [None] * len(files_to_upload)
 
-    async def _upload_one(idx: int, file_path: Path, target_uri: str) -> None:
+    async def _upload_one(idx: int, file_path: Path, target: str) -> None:
         async with sem:
 
             def _read_and_encode() -> bytes:
@@ -234,11 +255,14 @@ async def upload_directory(
 
             try:
                 encoded = await asyncio.to_thread(_read_and_encode)
-                await viking_fs.write_file_bytes(target_uri, encoded)
+                if use_store:
+                    await output_store.write_bytes(artifact_ref, target, encoded)
+                else:
+                    await viking_fs.write_file_bytes(target, encoded)
             except Exception as exc:
                 errors[idx] = f"Failed to upload {file_path}: {exc}"
 
-    await asyncio.gather(*[_upload_one(i, fp, uri) for i, (fp, uri) in enumerate(files_to_upload)])
+    await asyncio.gather(*[_upload_one(i, fp, tgt) for i, (fp, tgt) in enumerate(files_to_upload)])
 
     for err in errors:
         if err:

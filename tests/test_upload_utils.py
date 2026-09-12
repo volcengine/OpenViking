@@ -458,6 +458,69 @@ class TestUploadDirectoryEdgeCases:
 
 
 # ---------------------------------------------------------------------------
+# upload_directory (parse output store path)
+# ---------------------------------------------------------------------------
+
+
+class _RecordingStore:
+    """Minimal parse output store recording writes by relative path."""
+
+    def __init__(self) -> None:
+        self.writes: Dict[str, bytes] = {}
+
+    async def write_bytes(self, ref, rel_path: str, content: bytes) -> None:
+        self.writes[rel_path] = content
+
+
+class TestUploadDirectoryOutputStore:
+    @pytest.mark.asyncio
+    async def test_writes_go_to_store_not_vikingfs(self, tmp_dir: Path) -> None:
+        # When an output store is supplied, artifacts must land in the store
+        # (local mode) and never touch the VikingFS singleton (AGFS temp).
+        class GuardedVikingFS(FakeVikingFS):
+            async def write_file_bytes(self, uri: str, content: bytes) -> None:
+                raise AssertionError("output-store mode must not write VikingFS")
+
+        store = _RecordingStore()
+        viking_fs = GuardedVikingFS()
+
+        count, warnings = await upload_directory(
+            tmp_dir,
+            "repo",
+            viking_fs,
+            output_store=store,
+            artifact_ref=object(),
+        )
+
+        assert count == 4
+        assert warnings == []
+        # Relative paths under the artifact root, encoding-normalized.
+        assert store.writes["repo/hello.py"] == b"print('hello')"
+        assert "repo/src/main.go" in store.writes
+        assert viking_fs.write_file_bytes_calls == []
+
+    @pytest.mark.asyncio
+    async def test_store_write_failure_produces_warning(self, tmp_path: Path) -> None:
+        class FailingStore:
+            async def write_bytes(self, ref, rel_path: str, content: bytes) -> None:
+                raise IOError("store write error")
+
+        (tmp_path / "ok.py").write_text("print(1)", encoding="utf-8")
+
+        count, warnings = await upload_directory(
+            tmp_path,
+            "repo",
+            FakeVikingFS(),
+            output_store=FailingStore(),
+            artifact_ref=object(),
+        )
+
+        assert count == 0
+        assert len(warnings) == 1
+        assert "store write error" in warnings[0]
+
+
+# ---------------------------------------------------------------------------
 # sanitize_relative_viking_path (additional edge cases)
 # ---------------------------------------------------------------------------
 

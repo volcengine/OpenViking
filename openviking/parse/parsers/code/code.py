@@ -160,23 +160,35 @@ class CodeRepositoryParser(BaseParser):
 
             local_dir = source_path
 
-            # 3. Create VikingFS temp URI
-            viking_fs = self._get_viking_fs()
-            temp_viking_uri = self._create_temp_uri()
-            # The structure in temp should be: viking://temp/{uuid}/repository/...
+            # 3. Allocate the artifact root. Local mode (a parse_output_store was
+            # threaded through kwargs) writes into that store on the local disk;
+            # otherwise the legacy AGFS temp path is used. Either way the layout
+            # is viking-temp-shaped: <root>/repository/...
+            output_store = kwargs.get("parse_output_store")
+            artifact_ref = None
+            if output_store is not None:
+                artifact_ref = await output_store.create_artifact(root_type="dir")
+                temp_viking_uri = artifact_ref.root
+                viking_fs = None
+            else:
+                viking_fs = self._get_viking_fs()
+                temp_viking_uri = self._create_temp_uri()
+            # The structure in temp should be: <root>/repository/...
             # Use simple name 'repository' for temp, TreeBuilder will rename it to org/repo later
             target_root_uri = f"{temp_viking_uri}/repository"
 
-            logger.info(f"Uploading to VikingFS: {target_root_uri}")
+            logger.info(f"Uploading code repository artifacts to: {target_root_uri}")
 
-            # 4. Upload to VikingFS (filtering on the fly)
+            # 4. Upload to the artifact store (filtering on the fly)
             file_count = await self._upload_directory(
                 local_dir,
-                target_root_uri,
+                "repository" if output_store is not None else target_root_uri,
                 viking_fs,
                 ignore_dirs=kwargs.get("ignore_dirs"),
                 include=kwargs.get("include"),
                 exclude=kwargs.get("exclude"),
+                output_store=output_store,
+                artifact_ref=artifact_ref,
             )
 
             logger.info(f"Uploaded {file_count} files to {target_root_uri}")
@@ -209,6 +221,8 @@ class CodeRepositoryParser(BaseParser):
                 parse_time=time.time() - start_time,
             )
             result.temp_dir_path = temp_viking_uri  # Points to parent of repo_name
+            if artifact_ref is not None:
+                result.artifact_ref = artifact_ref
             result.meta["file_count"] = file_count
             result.meta["repo_name"] = repo_name
             if branch:
@@ -588,8 +602,10 @@ class CodeRepositoryParser(BaseParser):
         ignore_dirs: Optional[Union[Set[str], List[str], str]] = None,
         include: Optional[str] = None,
         exclude: Optional[str] = None,
+        output_store: Any = None,
+        artifact_ref: Any = None,
     ) -> int:
-        """Recursively upload directory to VikingFS using shared upload utilities."""
+        """Recursively upload directory to the artifact store (AGFS or local)."""
         count, _ = await upload_directory(
             local_dir,
             viking_uri_base,
@@ -597,5 +613,7 @@ class CodeRepositoryParser(BaseParser):
             ignore_dirs=ignore_dirs,
             include=include,
             exclude=exclude,
+            output_store=output_store,
+            artifact_ref=artifact_ref,
         )
         return count
