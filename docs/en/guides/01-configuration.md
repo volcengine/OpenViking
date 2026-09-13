@@ -1425,7 +1425,7 @@ Vector database storage configuration
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `backend` | str | VectorDB backend type: 'local' (file-based), 'http' (remote service), 'volcengine' (cloud VikingDB), 'vikingdb' (private deployment), or 'cuvs' (local storage + GPU dense search) | "local" |
+| `backend` | str | VectorDB backend type: 'local' (file-based), 'http' (remote service), 'volcengine' (cloud VikingDB), 'vikingdb' (private deployment), 'qdrant' (REST), or 'cuvs' (local storage + GPU dense search) | "local" |
 | `name` | str | VectorDB collection name | "context" |
 | `url` | str | Remote service URL for 'http' type (e.g., 'http://localhost:5000') | null |
 | `project_name` | str | Project name (alias project) | "default" |
@@ -1434,6 +1434,7 @@ Vector database storage configuration
 | `sparse_weight` | float | Sparse weight for hybrid vector search, only effective when using hybrid index | 0.0 |
 | `volcengine` | object | 'volcengine' type VikingDB configuration | - |
 | `vikingdb` | object | 'vikingdb' type private deployment configuration | - |
+| `qdrant` | object | Qdrant REST URL, API key, timeout, named vector names, and optional physical data/metadata collection names | - |
 | `cuvs` | object | NVIDIA cuVS configuration for the 'cuvs' backend and the opt-in memory-aware auto mode on 'local'; see the [cuVS guide](./16-cuvs.md) | - |
 
 Default local mode
@@ -1479,9 +1480,131 @@ acl_inherited_grants
 
 Each element uses `{mask}:{principal}`: `1` means `read`, `3` means `write`, and `7` means `manage`.
 
-Local backends add the fields to an existing collection and rebuild the scalar index during startup. Existing records are not rewritten; missing ACL fields read as `acl_mode=none` and empty lists.
+Local, cuVS, and Qdrant backends add the fields to an existing collection and rebuild/update the scalar index during startup. Existing records are not rewritten; missing ACL fields read as `acl_mode=none` and empty lists.
 
-For existing remote collections, including Volcengine VikingDB, provision these fields and scalar indexes before startup; OpenViking validates but does not alter the remote schema. Volcengine API-key data-plane mode also requires the context collection and configured index to exist. See [Resource Access Control (ACL)](../concepts/15-acl.md) for permission semantics.
+Legacy `acl_enabled` values are not converted to `acl_mode`. Before upgrading an existing Qdrant collection or exposing a migrated target, review its ACL data: the old boolean alone no longer establishes protection. The migration tool treats such records as ACL-incomplete and requires explicit risk acknowledgement; see [ACL and recovery boundaries](../../../scripts/maintenance/README.md#acl-and-recovery-boundaries).
+
+For other existing remote collections, including Volcengine VikingDB, provision these fields and scalar indexes before startup; OpenViking validates but does not alter the remote schema. Volcengine API-key data-plane mode also requires the context collection and configured index to exist. See [Resource Access Control (ACL)](../concepts/15-acl.md) for permission semantics.
+
+<details>
+<summary><b>Qdrant REST</b></summary>
+
+The supported server range is Qdrant >=1.16 on every node. The runtime checks the
+endpoint version before claiming a new sparse owner; maintenance tools check
+before preflight. Dense-only and existing-term reads do not perform a version
+check and are not evidence that an older server is supported.
+OpenViking uses the standard-library REST transport; no `qdrant-client` dependency
+is required. Set `sparse_weight` to `0` for dense-only mode, or to a value in
+`(0, 1]` to enable named sparse vectors and client-side weighted RRF hybrid
+search:
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "backend": "qdrant",
+      "url": "http://127.0.0.1:6333",
+      "project": "default",
+      "name": "context",
+      "dimension": 1536,
+      "sparse_weight": 0.5,
+      "qdrant": {
+        "api_key": "optional-key",
+        "timeout_seconds": 10,
+        "dense_vector_name": "vector",
+        "sparse_vector_name": "sparse_vector",
+        "data_collection_name": "default__context__generation",
+        "metadata_collection_name": "default__context__generation__openviking_meta"
+      }
+    }
+  }
+}
+```
+
+OpenViking stores a metadata marker and sparse term dictionary in a deterministic
+sidecar collection. Existing Qdrant collections without that marker fail closed
+instead of being adopted. URI scope metadata and account/tag filters are retained;
+`Contains` and server-side content grep are unsupported, so grep uses the
+filesystem fallback (`USE_CONTENT_FIELD=False`).
+
+Explicit physical collection names require a matching `logical_collection` in
+the marker. Older ordinary current-format markers without that field remain
+compatible when using default-derived physical names.
+
+New sparse terms reserve a deterministic per-index owner using a native
+`update_filter` with insert-only semantics and verify ownership before writing
+vectors. Existing term-keyed dictionary rows remain readable and are never
+overwritten. Stop all old application writers when
+upgrading; mixed old/new writers are unsupported. Optional, non-destructive
+[dictionary owner seeding](../../../scripts/maintenance/README.md#upgrade-an-existing-current-format-sparse-dictionary)
+retains legacy rows and does not re-embed data.
+
+Collections created before PR `#3872` cannot be adopted by the current adapter.
+Run the [pre-`#3872` migration runbook](../../../scripts/maintenance/README.md)
+or re-ingest the data before cutting configuration over to the current target
+collection. Keep the source collection and legacy metadata sidecar for the
+rollback window.
+
+For an online migration, `data_collection_name` and
+`metadata_collection_name` are immutable physical target names, not aliases.
+Runtime rollout must match the marker's logical collection, target pair, and
+vector/sparse policy. The controller separately validates `migration_id` and
+its code-owned `migrator_version`; neither is a runtime configuration option.
+`timeout_seconds` is pinned in the controller plan, not stored in the marker.
+The operational phases are:
+
+```text
+preflight -> prepare -> backfill -> reconcile -> verify
+```
+
+The online copy does not freeze the entire long copy. Acquire the external
+per-source lock, keep legacy serving the source, and acquire the write barrier
+only for final reconciliation and cutover. Drain in-flight writes before the
+final source snapshot. Run
+`cutover --confirm --lock-held --barrier-held --deployment-hooks` only with
+the operator-held barrier; the operator explicitly releases it after current
+readiness and read-only smoke pass. The compatibility `apply` command retains
+the full-window freeze semantics for its offline path.
+
+The temporary SQLite reconciliation manifest stores only target IDs and
+fingerprints and requires disk space for approximately one source scan. It is
+not a source snapshot across online page reads. Use
+`--allow-acl-fail-open` only after reviewing the incomplete-record count:
+the flag warns and records the risk, but never fakes ACL protection. Rollback
+is automatic only while the barrier is held and before any accepted
+current-format target write; after barrier release use a separate reverse
+migration. Run `retire --confirm` only after the retention window and after
+reviewing that the target is not served.
+
+Hybrid search sends separate dense and sparse requests to Qdrant and combines
+the results in the client with a weighted reciprocal-rank score. This is not
+Qdrant's server-side RRF: the score is a client-side rank score, and hybrid
+queries cost both vector round trips.
+
+**ACL migration is not a backfill.** The migration copies ACL payloads as-is;
+records with missing or malformed ACL fields remain fail-open and continue to
+follow legacy URI-namespace visibility rules until they are rewritten or
+re-ingested. Review the reported incomplete-record count and pass
+`--allow-acl-fail-open` only when the temporary exposure is explicitly accepted;
+omit it once every source record has complete ACL fields.
+
+**Ownership normalization is part of the migration.** For a user-scoped URI
+such as `/user/alice/memories/a.md`, a missing `owner_user_id` is derived as
+`alice`, so the target payload can intentionally differ from the source
+payload. The ownerless roots `/user` and `/resources` remain without an owner
+when their source value is null or absent. A malformed owner or an owner that
+does not match the URI fails preflight/apply closed. Verify both a derived
+user owner and an ownerless root in the target before cutover.
+
+For live coverage, set `QDRANT_URL` and optionally `QDRANT_API_KEY`, then run:
+
+```bash
+QDRANT_URL=http://127.0.0.1:6333 \
+  pytest --confcutdir=tests/storage -q \
+  tests/storage/test_qdrant_integration.py \
+  tests/storage/test_qdrant_migration_integration.py
+```
+</details>
 
 <details>
 <summary><b>openGauss</b></summary>
@@ -1515,7 +1638,6 @@ In the official container, the initial `omm` user may be restricted for remote l
 
 Set `mode` to `"distributed"` for openGauss distributed deployments; OpenViking will attempt to mark metadata tables as reference tables and distribute collection tables by `id`.
 </details>
-
 
 ## Config Files
 

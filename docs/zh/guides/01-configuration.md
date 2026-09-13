@@ -1400,7 +1400,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `backend` | str | VectorDB 后端类型: 'local'（基于文件）, 'http'（远程服务）, 'volcengine'（云上 VikingDB）, 'vikingdb'（私有部署）或 'cuvs'（本地存储 + GPU dense search） | "local" |
+| `backend` | str | VectorDB 后端类型: 'local'（基于文件）, 'http'（远程服务）, 'volcengine'（云上 VikingDB）, 'vikingdb'（私有部署）, 'qdrant'（REST）或 'cuvs'（本地存储 + GPU dense search） | "local" |
 | `name` | str | VectorDB 的集合名称 | "context" |
 | `url` | str | 'http' 类型的远程服务 URL（例如 'http://localhost:5000'） | null |
 | `project_name` | str | 项目名称（别名 project） | "default" |
@@ -1409,6 +1409,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 | `sparse_weight` | float | 混合向量搜索的稀疏权重，仅在使用混合索引时生效 | 0.0 |
 | `volcengine` | object | 'volcengine' 类型的 VikingDB 配置 | - |
 | `vikingdb` | object | 'vikingdb' 类型的私有部署配置 | - |
+| `qdrant` | object | Qdrant REST 地址、API key、超时、named vector 名称以及可选的 physical data/metadata collection 名称 | - |
 | `cuvs` | object | NVIDIA cuVS 配置，也用于在 'local' 下显式开启显存感知自动模式，参见 [cuVS 使用指南](./16-cuvs.md) | - |
 
 默认使用本地模式
@@ -1454,9 +1455,117 @@ acl_inherited_grants
 
 每个元素使用 `{mask}:{principal}` 格式，其中 `1` 表示 `read`、`3` 表示 `write`、`7` 表示 `manage`。
 
-本地 backend 会在启动时为存量 collection 增加字段并重建标量索引。旧记录不做全量回填；缺失 ACL 字段按 `acl_mode=none` 和空列表读取。
+本地、cuVS 和 Qdrant backend 会在启动时为存量 collection 增加字段并重建或更新标量索引。旧记录不做全量回填；缺失 ACL 字段按 `acl_mode=none` 和空列表读取。
 
-火山向量库等远端 backend 的存量 collection 需要由部署方预先添加这些字段和 scalar index，OpenViking 只校验 schema。`volcengine` API key 数据面模式还要求 context collection 和配置的 index 已存在。权限模型详见 [资源访问控制（ACL）](../concepts/15-acl.md)。
+旧的 `acl_enabled` 不会自动转换为 `acl_mode`。升级现有 Qdrant collection 或开放迁移目标前，必须检查 ACL 数据：只有旧布尔字段不再代表记录受到保护。迁移工具会将这类记录计为 ACL 不完整，并要求显式确认风险，详见 [ACL 与恢复边界](../../../scripts/maintenance/README.md#acl-and-recovery-boundaries)。
+
+其他远端 backend（包括火山向量库）的存量 collection 需要由部署方预先添加这些字段和 scalar index，OpenViking 只校验 schema。`volcengine` API key 数据面模式还要求 context collection 和配置的 index 已存在。权限模型详见 [资源访问控制（ACL）](../concepts/15-acl.md)。
+
+<details>
+<summary><b>Qdrant REST</b></summary>
+
+支持的版本范围是所有 Qdrant server 节点 >=1.16。Runtime 在取得新 sparse owner 前
+检查 endpoint 版本，maintenance tools 在 preflight 前检查。Dense-only 和既有
+term 的读取不会检查版本，读取成功不代表支持旧版本。
+OpenViking 使用 Python 标准库 REST transport，不需要新增 `qdrant-client`
+依赖。`sparse_weight=0` 表示 dense-only；设置为 `(0, 1]` 内的值会启用
+named sparse vector 和客户端 weighted RRF hybrid search：
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "backend": "qdrant",
+      "url": "http://127.0.0.1:6333",
+      "project": "default",
+      "name": "context",
+      "dimension": 1536,
+      "sparse_weight": 0.5,
+      "qdrant": {
+        "api_key": "optional-key",
+        "timeout_seconds": 10,
+        "dense_vector_name": "vector",
+        "sparse_vector_name": "sparse_vector",
+        "data_collection_name": "default__context__generation",
+        "metadata_collection_name": "default__context__generation__openviking_meta"
+      }
+    }
+  }
+}
+```
+
+OpenViking 会在确定性的 sidecar collection 中保存 metadata marker 和 sparse
+term dictionary。没有 marker 的既有 Qdrant collection 会 fail closed，不会被
+隐式接管。URI scope metadata、account 隔离和多 tag 过滤会保留；`Contains`
+及服务端 content grep 不支持，因此 grep 继续使用 filesystem fallback
+（`USE_CONTENT_FIELD=False`）。
+
+显式指定 physical collection names 时，marker 必须包含匹配的
+`logical_collection`。旧版普通 current-format marker 没有该字段时，
+仍可使用默认派生的 physical names 读取。
+
+新 sparse term 使用原生 `update_filter` 实现 insert-only，取得每个 index 唯一的 owner，并在写入
+vector 前读回验证。旧的 term-keyed dictionary 只读保留，不覆写。升级时必须
+停止所有旧版 application writers；不支持旧／新版混合写入。可选的
+[dictionary owner seeding](../../../scripts/maintenance/README.md#upgrade-an-existing-current-format-sparse-dictionary)
+会保留旧 rows，不删除或重新 embedding 数据。
+
+PR `#3872` 之前建立的 collection 不能由当前 adapter 直接接管。切换配置到
+当前 target collection 前，请先执行
+[pre-`#3872` migration runbook](../../../scripts/maintenance/README.md)，或
+重新导入数据。请在回滚窗口内保留 source collection 和旧 metadata sidecar。
+
+在线迁移时，`data_collection_name` 和 `metadata_collection_name` 是不可变的
+physical target 名称，不是 alias。Runtime rollout 必须匹配 marker 的 logical
+collection、target pair 和 vector/sparse policy。Controller 单独验证
+`migration_id` 及代码定义的 `migrator_version`，两者都不是 runtime 配置项。
+`timeout_seconds` 固定在 controller plan 中，不存入 marker。操作阶段为：
+
+```text
+preflight -> prepare -> backfill -> reconcile -> verify
+```
+
+online copy 不会冻结整个长 copy 窗口。请先取得 external per-source lock，让
+legacy 持续服务 source；只有 final reconcile/cutover 前才取得 write barrier，
+并先 drain in-flight writes。只有在 operator 持有 barrier 时才运行
+`cutover --confirm --lock-held --barrier-held --deployment-hooks`；current
+readiness 和 read-only smoke 通过后，仍由 operator 明确 release barrier。
+兼容性的 `apply` offline 路径仍保留全窗口 freeze 语义。
+
+临时 SQLite reconciliation manifest 只保存 target IDs 和 fingerprints，需要
+约一份 source scan 的磁盘空间，并不代表 online page reads 形成单一 snapshot。
+只有审阅 incomplete record 数量后才可传入 `--allow-acl-fail-open`；该选项只
+记录并警告风险，绝不会伪造 ACL protection。rollback 只允许在 barrier 仍持有且
+target 尚未接受 current-format write 时自动执行；release barrier 后必须另行设计
+reverse migration。`retire --confirm` 只能在 retention window 结束且确认 target
+未被 serving 后执行。
+
+Hybrid search 会分别向 Qdrant 发出 dense 和 sparse 请求，再由客户端以
+weighted reciprocal-rank score 合并结果。这不是 Qdrant 的 server-side RRF：
+分数是客户端 rank 合并分数，hybrid query 会额外进行两次向量 round trip。
+
+**ACL 迁移不会回填既有记录。** migration 会原样复制 ACL payload；缺少或格式
+错误 ACL 字段的记录会继续 fail-open，并遵循原有的 URI namespace 可见性规则，
+直到被重写或重新导入。请先审阅 incomplete record 数量，仅在明确接受这段暂时
+暴露风险时传入 `--allow-acl-fail-open`；当所有 source 记录的 ACL 字段完整后
+应移除该选项。
+
+**迁移也会规范化 ownership。** 对 `/user/alice/memories/a.md` 这类个人 URI，
+若缺少 `owner_user_id`，会从 URI 推导为 `alice`，所以 target payload 可能会
+有意不同于 source payload。ownerless root `/user` 和 `/resources` 在 source
+值为 null 或缺失时保持无 owner。owner 格式错误或与 URI 不一致会让
+preflight/apply fail closed。切换前请在 target 分别验证一笔推导出的 user owner
+和一笔 ownerless root。
+
+要运行 live coverage，请设置 `QDRANT_URL`（可选 `QDRANT_API_KEY`）：
+
+```bash
+QDRANT_URL=http://127.0.0.1:6333 \
+  pytest --confcutdir=tests/storage -q \
+  tests/storage/test_qdrant_integration.py \
+  tests/storage/test_qdrant_migration_integration.py
+```
+</details>
 
 <details>
 <summary><b>openGauss</b></summary>
@@ -1490,8 +1599,6 @@ acl_inherited_grants
 
 分布式 openGauss 部署可将 `mode` 设为 `"distributed"`；OpenViking 会尝试把元数据表标记为 reference table，并按 `id` 分布集合表。
 </details>
-
-
 
 ## 配置文件
 

@@ -88,4 +88,3 @@ The report separates two success metrics:
 Paired counts and a two-sided exact McNemar p-value are reported for both metrics. A
 protocol advantage requires repeated paired runs with more exclusive wins and acceptable
 retry, token, and latency cost; one favorable sample is not sufficient.
-
