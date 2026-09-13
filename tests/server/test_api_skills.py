@@ -466,7 +466,7 @@ async def test_skills_api_show_reads_source_metadata_and_hides_internal_file(cli
     assert all(file["path"] != ".source.json" for file in shown["files"])
 
 
-async def test_skills_api_add_accepts_source_metadata_override(client):
+async def test_skills_api_add_accepts_source_metadata_override(client, monkeypatch, tmp_path):
     response = await client.post(
         "/api/v1/skills",
         json={
@@ -495,6 +495,69 @@ async def test_skills_api_add_accepts_source_metadata_override(client):
     assert source["ref_name"] == "main"
     assert source["subdir"] == "skills/git-source-skill"
     assert source["skill_name"] == "git-source-skill"
+
+    from openviking.parse.accessors.base import LocalResource, SourceType
+    from openviking.parse.accessors.git_accessor import GitAccessor
+
+    downloads = []
+
+    async def download(_accessor, source, **kwargs):
+        root = tmp_path / f"download-{len(downloads)}"
+        for name in ("remote-a", "remote-b"):
+            path = root / "skills" / name
+            path.mkdir(parents=True)
+            (path / "SKILL.md").write_text(_skill_md(name, f"Revision {len(downloads)}"))
+            (path / "asset.bin").write_bytes(b"\x00\xff")
+        downloads.append((root, source, kwargs.get("ref")))
+        return LocalResource(path=root, source_type=SourceType.GIT, original_source=source)
+
+    monkeypatch.setattr(GitAccessor, "access", download)
+    url = "https://github.com/acme/skills/tree/feature/foo/skills"
+    listing = await client.post("/api/v1/skills", json={"data": url, "list_only": True})
+    assert listing.status_code == 200, listing.text
+    assert {item["name"] for item in listing.json()["result"]["skills"]} == {"remote-a", "remote-b"}
+    assert (await client.get("/api/v1/skills/remote-a")).status_code == 404
+    assert downloads[-1][2] == "feature/foo"
+    assert not downloads[-1][0].exists()
+
+    selected = await client.post(
+        "/api/v1/skills", json={"data": url, "skills": ["remote-a"], "wait": True}
+    )
+    assert selected.status_code == 200, selected.text
+    assert selected.json()["result"]["name"] == "remote-a"
+    assert (await client.get("/api/v1/skills/remote-b")).status_code == 404
+    detail = (await client.get("/api/v1/skills/remote-a", params={"include_source": True})).json()[
+        "result"
+    ]
+    assert detail["source"]["subdir"] == "skills/remote-a"
+    assert detail["source"]["ref_name"] == "feature/foo"
+    assert any(item["name"] == "asset.bin" for item in detail["files"])
+
+    refreshed = await client.put(
+        "/api/v1/skills/remote-a", json={"from_source": True, "wait": True}
+    )
+    assert refreshed.status_code == 200, refreshed.text
+    assert refreshed.json()["result"]["name"] == "remote-a"
+    assert downloads[-1][2] == "feature/foo"
+
+    batch = await client.post("/api/v1/skills", json={"data": url, "skills": ["*"]})
+    assert batch.status_code == 200, batch.text
+    installed = batch.json()["result"]["installed"]
+    assert {item["name"] for item in installed} == {"remote-a", "remote-b"}
+    assert len({item["task_id"] for item in installed}) == 2
+    assert all(not root.exists() for root, _, _ in downloads)
+
+    missing = await client.post("/api/v1/skills", json={"data": url, "skills": ["missing"]})
+    assert missing.status_code == 400, missing.text
+    assert not downloads[-1][0].exists()
+    count = len(downloads)
+    traversal = await client.post(
+        "/api/v1/skills", json={"data": "https://github.com/acme/skills/tree/main/%2e%2e/outside"}
+    )
+    assert traversal.status_code == 400, traversal.text
+    local = await client.post("/api/v1/skills", json={"data": str(tmp_path)})
+    assert local.status_code == 403, local.text
+    assert len(downloads) == count
 
 
 async def test_skills_api_update_accepts_binary_auxiliary_files(client, tmp_path):

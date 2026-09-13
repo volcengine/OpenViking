@@ -1,5 +1,5 @@
 use serde::de::DeserializeOwned;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use std::env;
 use std::path::Path;
 
@@ -1004,85 +1004,48 @@ impl HttpClient {
         verbose: bool,
         source_metadata: Option<Value>,
         target_uri: Option<&str>,
+        skills: &[String],
+        list_only: bool,
     ) -> Result<serde_json::Value> {
-        let path_obj = Path::new(data);
-
-        if path_obj.exists() {
-            if path_obj.is_dir() {
-                let zip_file = if show_progress {
-                    self.zip_directory_with_progress(path_obj, verbose, None)?
+        let path = Path::new(data);
+        let mut body = json!({"wait": wait});
+        if !skills.is_empty() {
+            body["skills"] = json!(skills);
+        }
+        if list_only {
+            body["list_only"] = json!(true);
+        }
+        if let Some(target_uri) = target_uri {
+            body["target_uri"] = json!(target_uri);
+        }
+        if let Some(metadata) = source_metadata {
+            body["source_metadata"] = metadata;
+        } else if path.exists() {
+            body["source_metadata"] = json!({"type": "local", "source": data, "path": data});
+        }
+        if path.is_dir() || path.is_file() {
+            let archive = if path.is_dir() {
+                Some(if show_progress {
+                    self.zip_directory_with_progress(path, verbose, None)?
                 } else {
-                    self.zip_directory(path_obj, None)?
-                };
-                let temp_file_id = if show_progress {
-                    self.upload_temp_file_with_progress(zip_file.path(), verbose)
-                        .await?
-                } else {
-                    self.upload_temp_file(zip_file.path()).await?
-                };
-
-                let mut body = serde_json::json!({
-                    "temp_file_id": temp_file_id,
-                    "wait": wait,
-                });
-                if let Some(source_metadata) = source_metadata.clone() {
-                    body["source_metadata"] = source_metadata;
-                }
-                if let Some(target_uri) = target_uri {
-                    body["target_uri"] = serde_json::Value::String(target_uri.to_string());
-                }
-                let dynamic_timeout =
-                    TimeoutConfig::for_resource_processing().calculate(zip_file.path())?;
-                self.base
-                    .post_with_timeout("/api/v1/skills", &body, dynamic_timeout)
-                    .await
-            } else if path_obj.is_file() {
-                let temp_file_id = if show_progress {
-                    self.upload_temp_file_with_progress(path_obj, verbose)
-                        .await?
-                } else {
-                    self.upload_temp_file(path_obj).await?
-                };
-
-                let mut body = serde_json::json!({
-                    "temp_file_id": temp_file_id,
-                    "wait": wait,
-                });
-                if let Some(source_metadata) = source_metadata.clone() {
-                    body["source_metadata"] = source_metadata;
-                }
-                if let Some(target_uri) = target_uri {
-                    body["target_uri"] = serde_json::Value::String(target_uri.to_string());
-                }
-                let dynamic_timeout =
-                    TimeoutConfig::for_resource_processing().calculate(path_obj)?;
-                self.base
-                    .post_with_timeout("/api/v1/skills", &body, dynamic_timeout)
-                    .await
+                    self.zip_directory(path, None)?
+                })
             } else {
-                let mut body = serde_json::json!({
-                    "data": data,
-                    "wait": wait,
-                });
-                if let Some(source_metadata) = source_metadata.clone() {
-                    body["source_metadata"] = source_metadata;
-                }
-                if let Some(target_uri) = target_uri {
-                    body["target_uri"] = serde_json::Value::String(target_uri.to_string());
-                }
-                self.post("/api/v1/skills", &body).await
-            }
+                None
+            };
+            let upload = archive.as_ref().map(|file| file.path()).unwrap_or(path);
+            let id = if show_progress {
+                self.upload_temp_file_with_progress(upload, verbose).await?
+            } else {
+                self.upload_temp_file(upload).await?
+            };
+            body["temp_file_id"] = json!(id);
+            let dynamic_timeout = TimeoutConfig::for_resource_processing().calculate(upload)?;
+            self.base
+                .post_with_timeout("/api/v1/skills", &body, dynamic_timeout)
+                .await
         } else {
-            let mut body = serde_json::json!({
-                "data": data,
-                "wait": wait,
-            });
-            if let Some(source_metadata) = source_metadata {
-                body["source_metadata"] = source_metadata;
-            }
-            if let Some(target_uri) = target_uri {
-                body["target_uri"] = serde_json::Value::String(target_uri.to_string());
-            }
+            body["data"] = json!(data);
             self.post("/api/v1/skills", &body).await
         }
     }
@@ -2315,8 +2278,7 @@ mod tests {
         assert!(!request.contains("include_mod_time_iso="));
 
         let (default_url, default_request_rx) = spawn_request_capture_server().await;
-        let default_client =
-            HttpClient::new(default_url, None, None, None, None, 5.0, false, None);
+        let default_client = HttpClient::new(default_url, None, None, None, None, 5.0, false, None);
         default_client
             .ls(
                 "viking://resources",
@@ -2507,8 +2469,7 @@ mod tests {
         assert!(!request.contains("include_mod_time_iso="));
 
         let (default_url, default_request_rx) = spawn_request_capture_server().await;
-        let default_client =
-            HttpClient::new(default_url, None, None, None, None, 5.0, false, None);
+        let default_client = HttpClient::new(default_url, None, None, None, None, 5.0, false, None);
         default_client
             .tree(
                 "viking://resources",

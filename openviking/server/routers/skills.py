@@ -33,6 +33,7 @@ from openviking.server.skill_source_metadata import (
 )
 from openviking.server.telemetry import run_operation
 from openviking.server.temp_upload_store import TempUploadStore
+from openviking.service.skill_sources import resolve_skill_source
 from openviking.telemetry import TelemetryRequest
 from openviking.utils.skill_processor import validate_skill_name
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, ResourceExhaustedError
@@ -52,6 +53,7 @@ class UpdateSkillRequest(BaseModel):
 
     data: Any = None
     temp_file_id: Optional[str] = None
+    from_source: bool = False
     wait: bool = False
     timeout: Optional[float] = None
     source_metadata: Optional[Dict[str, Any]] = None
@@ -60,8 +62,11 @@ class UpdateSkillRequest(BaseModel):
 
     @model_validator(mode="after")
     def check_data_or_temp_file_id(self):
-        if self.data is None and not self.temp_file_id:
-            raise ValueError("Either 'data' or 'temp_file_id' must be provided")
+        if self.from_source:
+            if self.data is not None or self.temp_file_id:
+                raise ValueError("from_source cannot be combined with data or temp_file_id")
+        elif self.data is None and not self.temp_file_id:
+            raise ValueError("Either data, temp_file_id, or from_source must be provided")
         return self
 
 
@@ -742,7 +747,21 @@ async def update_skill(
         if resolved.original_filename and request.source_metadata is None:
             source_metadata["original_filename"] = resolved.original_filename
 
+    git_source = None
+    if request.from_source:
+        git_source = await read_skill_source_metadata(service, _ctx, root_uri)
+        if git_source.get("type") != "git":
+            raise InvalidArgumentError(
+                "Skill has no recorded Git source; supply content or an upload"
+            )
+        git_source = {
+            key: git_source.get(key)
+            for key in ("type", "source", "clone_url", "ref_name", "subdir")
+        }
+        data = git_source.get("clone_url")
+
     source_path_hint = resolved.original_filename if resolved else None
+
     async def _update() -> Dict[str, Any]:
         # Derive backup root from the actual skill root URI to keep backup in the same scope.
         skill_root_parent = root_uri.rsplit("/", 1)[0]
@@ -755,43 +774,56 @@ async def update_skill(
         try:
             if privacy is not None:
                 previous_privacy = await privacy.get_current(_ctx, "skill", skill_name)
-            preparation = await service.resources._skill_processor.prepare_skill_processing(  # noqa: SLF001
+            async with resolve_skill_source(
                 data,
-                ctx=_ctx,
                 allow_local_path_resolution=allow_local_path_resolution,
-                source_path_hint=source_path_hint,
-            )
-            expected_name = _validate_skill_name(skill_name)
-            if preparation.skill_dict.get("name") != expected_name:
-                raise InvalidArgumentError(
-                    f"Skill name mismatch: path name is '{expected_name}', content name is '{preparation.skill_dict.get('name')}'",
-                    details={
-                        "expected": expected_name,
-                        "actual": preparation.skill_dict.get("name"),
-                    },
+                source_metadata=source_metadata,
+                git_source=git_source,
+            ) as targets:
+                if len(targets) > 1:
+                    targets = [
+                        (item, metadata) for item, metadata in targets if item.name == skill_name
+                    ]
+                if len(targets) != 1:
+                    raise InvalidArgumentError("Update source must identify exactly one skill")
+                skill_data, skill_source = targets[0]
+                preparation = await service.resources._skill_processor.prepare_skill_processing(  # noqa: SLF001
+                    skill_data,
+                    ctx=_ctx,
+                    allow_local_path_resolution=isinstance(skill_data, Path),
+                    source_path_hint=source_path_hint,
                 )
-            await service.fs.mv(root_uri, backup_uri, ctx=_ctx)
-            backup_created = True
-            result = await service.resources.add_skill(
-                data=preparation,
-                ctx=_ctx,
-                wait=request.wait,
-                timeout=request.timeout,
-                allow_local_path_resolution=False,
-                source_path_hint=source_path_hint,
-                apply_privacy=False,
-                privacy_change_reason="auto-extracted from update_skill",
-                target_uri=skill_root_parent,
-            )
-            await persist_skill_source_metadata(service, _ctx, result, source_metadata)
-            privacy_update_attempted = True
-            await service.resources._skill_processor.apply_skill_privacy(  # noqa: SLF001
-                preparation.skill_dict,
-                preparation.privacy_values,
-                _ctx,
-                change_reason="auto-extracted from update_skill",
-                delete_if_empty=True,
-            )
+                expected_name = _validate_skill_name(skill_name)
+                if preparation.skill_dict.get("name") != expected_name:
+                    raise InvalidArgumentError(
+                        f"Skill name mismatch: path name is '{expected_name}', content name is '{preparation.skill_dict.get('name')}'",
+                        details={
+                            "expected": expected_name,
+                            "actual": preparation.skill_dict.get("name"),
+                        },
+                    )
+                await service.fs.mv(root_uri, backup_uri, ctx=_ctx)
+                backup_created = True
+                result = await service.resources.add_skill(
+                    data=preparation,
+                    ctx=_ctx,
+                    wait=request.wait,
+                    timeout=request.timeout,
+                    allow_local_path_resolution=False,
+                    source_path_hint=source_path_hint,
+                    apply_privacy=False,
+                    privacy_change_reason="auto-extracted from update_skill",
+                    target_uri=skill_root_parent,
+                )
+                await persist_skill_source_metadata(service, _ctx, result, skill_source)
+                privacy_update_attempted = True
+                await service.resources._skill_processor.apply_skill_privacy(  # noqa: SLF001
+                    preparation.skill_dict,
+                    preparation.privacy_values,
+                    _ctx,
+                    change_reason="auto-extracted from update_skill",
+                    delete_if_empty=True,
+                )
         except Exception:
             if backup_created:
                 try:

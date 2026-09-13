@@ -7,76 +7,15 @@ use crate::terminal_ui::{
 };
 use crate::theme;
 use colored::Colorize;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::io::{self, IsTerminal, Write};
-use std::path::{Component, Path, PathBuf};
-use std::process::Command;
-use tempfile::TempDir;
-use url::Url;
-
-enum PreparedSource {
-    Raw(String),
-    Path {
-        path: PathBuf,
-        _temp_dir: Option<TempDir>,
-        origin: SourceOrigin,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct GitSource {
-    clone_url: String,
-    ref_name: Option<String>,
-    subdir: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone)]
-enum SourceOrigin {
-    Local { source: String },
-    Git(GitSource),
-}
-
-#[derive(Debug)]
-struct AddTarget {
-    data: String,
-    source: Option<SkillSourceRecord>,
-    _temp_dir: Option<TempDir>,
-}
+use std::path::Path;
 
 #[derive(Debug, Clone)]
 struct InstalledSkillSummary {
     name: String,
     description: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-struct SkillSourceRecord {
-    #[serde(rename = "type")]
-    source_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    source: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    path: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    clone_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    ref_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    subdir: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    skill_name: Option<String>,
-}
-
-impl PreparedSource {
-    fn path(&self) -> Option<&Path> {
-        match self {
-            Self::Path { path, .. } => Some(path.as_path()),
-            Self::Raw(_) => None,
-        }
-    }
 }
 
 pub async fn add(
@@ -92,44 +31,51 @@ pub async fn add(
     compact: bool,
     parent: Option<&str>,
 ) -> Result<()> {
-    let source = prepare_source(data)?;
-    if list_only {
-        return list_source_skills(&source, output_format, compact);
-    }
-
-    let targets = resolve_add_targets(&source, &skill_names)?;
-    if targets.is_empty() {
-        return Err(Error::Client("No skills to install.".to_string()));
-    }
-    if targets.len() > 1 && !yes {
-        let names = targets.iter().map(skill_target_label).collect::<Vec<_>>();
-        if !confirm_action("Install", &names)? {
+    if list_only || (!yes && !data.contains('\n')) {
+        let listing = client
+            .add_skill(
+                data,
+                false,
+                show_progress,
+                verbose,
+                None,
+                parent,
+                &skill_names,
+                true,
+            )
+            .await?;
+        if list_only {
+            output_success(listing, output_format, compact);
+            return Ok(());
+        }
+        let names = listing["skills"]
+            .as_array()
+            .ok_or_else(|| Error::Parse("Invalid skill source listing".into()))?
+            .iter()
+            .filter_map(|skill| skill["path"].as_str().map(String::from))
+            .collect::<Vec<_>>();
+        if names.len() > 1 && !confirm_action("Install", &names)? {
             output_message_result(
-                serde_json::json!({ "cancelled": true, "skills": names }),
-                "Aborted.".to_string(),
+                json!({"cancelled": true, "skills": names}),
+                "Aborted.".into(),
                 output_format,
                 compact,
             );
             return Ok(());
         }
     }
-
-    let mut installed = Vec::new();
-
-    for target in targets {
-        let source_metadata = source_record_value(target.source.as_ref())?;
-        let result = client
-            .add_skill(
-                &target.data,
-                wait,
-                show_progress,
-                verbose,
-                source_metadata,
-                parent,
-            )
-            .await?;
-        installed.push(result);
-    }
+    let result = client
+        .add_skill(
+            data,
+            wait,
+            show_progress,
+            verbose,
+            None,
+            parent,
+            &skill_names,
+            false,
+        )
+        .await?;
 
     if !wait && matches!(output_format, OutputFormat::Table) {
         eprintln!("Note: Skill processing may continue in the background.");
@@ -138,19 +84,7 @@ pub async fn add(
         );
     }
 
-    if installed.len() == 1 {
-        output_success(installed.remove(0), output_format, compact);
-    } else {
-        let total = installed.len();
-        output_success(
-            serde_json::json!({
-                "installed": installed,
-                "total": total,
-            }),
-            output_format,
-            compact,
-        );
-    }
+    output_success(result, output_format, compact);
     Ok(())
 }
 
@@ -244,31 +178,35 @@ pub async fn update(
     let mut updated = Vec::new();
     let mut skipped = Vec::new();
     for name in names {
-        let update_target = match resolve_update_target(client, &name, !update_all).await {
-            Ok(target) => target,
+        let result = async {
+            let detail = client.skill_show(&name, false, false, true, Some(0), parent).await?;
+            if detail["source"]["type"].as_str() == Some("git") {
+                let mut body = json!({"from_source": true, "wait": wait});
+                if let Some(parent) = parent {
+                    body["target_uri"] = json!(parent);
+                }
+                client.put(&format!("/api/v1/skills/{}", name), &body).await
+            } else if !update_all && can_prompt() {
+                print!("Source for skill '{}' is not a Git source. Enter a local path or Git URL (blank to abort): ", name);
+                io::stdout().flush()?;
+                let mut input = String::new();
+                io::stdin().read_line(&mut input)?;
+                let data = input.trim();
+                if data.is_empty() {
+                    return Err(Error::Client("No update source supplied.".into()));
+                }
+                client.skill_update(&name, data, wait, None, false, false, None, parent).await
+            } else {
+                Err(Error::Client(format!("Skill '{}' has no recorded Git source; supply a local path or Git URL interactively.", name)))
+            }
+        }.await;
+        match result {
+            Ok(result) => updated.push(result),
             Err(error) if update_all => {
-                skipped.push(json!({
-                    "name": name,
-                    "reason": error.to_string(),
-                }));
-                continue;
+                skipped.push(json!({"name": name, "reason": error.to_string()}))
             }
             Err(error) => return Err(error),
-        };
-        let source_metadata = source_record_value(update_target.source.as_ref())?;
-        let result = client
-            .skill_update(
-                &name,
-                &update_target.data,
-                wait,
-                None,
-                false,
-                false,
-                source_metadata,
-                parent,
-            )
-            .await?;
-        updated.push(result);
+        }
     }
     let total = updated.len();
     let skipped_total = skipped.len();
@@ -720,579 +658,6 @@ fn output_skill_validate_success(result: &Value, output_format: OutputFormat, co
     println!("{}", lines.join("\n"));
 }
 
-fn prepare_source(data: &str) -> Result<PreparedSource> {
-    let path = Path::new(data);
-    if path.exists() {
-        return Ok(PreparedSource::Path {
-            path: path.to_path_buf(),
-            _temp_dir: None,
-            origin: SourceOrigin::Local {
-                source: data.to_string(),
-            },
-        });
-    }
-    if let Some(git_source) = parse_git_source(data) {
-        return prepare_git_source(git_source);
-    }
-    Ok(PreparedSource::Raw(data.to_string()))
-}
-
-fn prepare_git_source(git_source: GitSource) -> Result<PreparedSource> {
-    let temp_dir = tempfile::tempdir()?;
-    let status = Command::new("git")
-        .arg("clone")
-        .arg("--depth")
-        .arg("1")
-        .args(
-            git_source
-                .ref_name
-                .iter()
-                .flat_map(|ref_name| ["--branch", ref_name.as_str()]),
-        )
-        .arg(&git_source.clone_url)
-        .arg(temp_dir.path())
-        .status()
-        .map_err(|e| Error::Client(format!("Failed to run git clone: {}", e)))?;
-    if !status.success() {
-        return Err(Error::Client(format!(
-            "Failed to clone skill source: {}",
-            git_source.clone_url
-        )));
-    }
-    let path = if let Some(subdir) = git_source.subdir.as_ref() {
-        let normalized_subdir = normalize_git_subdir(subdir)?;
-        let repo_root = std::fs::canonicalize(temp_dir.path()).map_err(|e| {
-            Error::Client(format!(
-                "Failed to resolve cloned repository root '{}': {}",
-                temp_dir.path().display(),
-                e
-            ))
-        })?;
-        let requested_path = temp_dir.path().join(&normalized_subdir);
-        let canonical_path = std::fs::canonicalize(&requested_path).map_err(|e| {
-            Error::Client(format!(
-                "Skill path '{}' was not found in cloned repository '{}': {}",
-                normalized_subdir.display(),
-                git_source.clone_url,
-                e
-            ))
-        })?;
-        if !canonical_path.starts_with(&repo_root) {
-            return Err(Error::Client(format!(
-                "Git skill subdir '{}' escapes cloned repository '{}'.",
-                normalized_subdir.display(),
-                git_source.clone_url
-            )));
-        }
-        canonical_path
-    } else {
-        temp_dir.path().to_path_buf()
-    };
-    Ok(PreparedSource::Path {
-        path,
-        _temp_dir: Some(temp_dir),
-        origin: SourceOrigin::Git(git_source),
-    })
-}
-
-fn normalize_git_subdir(subdir: &Path) -> Result<PathBuf> {
-    let mut normalized = PathBuf::new();
-    for component in subdir.components() {
-        match component {
-            Component::Normal(part) => normalized.push(part),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                return Err(Error::Parse(format!(
-                    "Git source metadata contains unsafe subdir '{}': parent directory components are not allowed.",
-                    subdir.display()
-                )));
-            }
-            Component::RootDir | Component::Prefix(_) => {
-                return Err(Error::Parse(format!(
-                    "Git source metadata contains absolute subdir '{}', which is not allowed.",
-                    subdir.display()
-                )));
-            }
-        }
-    }
-
-    if normalized.as_os_str().is_empty() {
-        return Err(Error::Parse(
-            "Git source metadata missing subdir".to_string(),
-        ));
-    }
-
-    Ok(normalized)
-}
-
-fn parse_git_source(data: &str) -> Option<GitSource> {
-    if let Some(source) = parse_github_tree_source(data) {
-        return Some(source);
-    }
-    let is_plain_git_source = data.starts_with("git@")
-        || data.starts_with("ssh://")
-        || data.starts_with("git://")
-        || ((data.starts_with("https://") || data.starts_with("http://"))
-            && (data.ends_with(".git")
-                || data.contains("github.com/")
-                || data.contains("gitlab.com/")
-                || data.contains("bitbucket.org/")));
-    is_plain_git_source.then(|| GitSource {
-        clone_url: data.to_string(),
-        ref_name: None,
-        subdir: None,
-    })
-}
-
-fn parse_github_tree_source(data: &str) -> Option<GitSource> {
-    let url = Url::parse(data).ok()?;
-    if url.host_str()? != "github.com" {
-        return None;
-    }
-
-    let segments = url.path_segments()?.collect::<Vec<_>>();
-    if segments.len() < 5 || segments.get(2) != Some(&"tree") {
-        return None;
-    }
-
-    let owner = segments[0];
-    let repo = segments[1].trim_end_matches(".git");
-    let (branch, subdir_segments) = split_github_tree_ref_and_subdir(&segments)?;
-    let subdir = subdir_segments
-        .iter()
-        .fold(PathBuf::new(), |mut path, segment| {
-            path.push(segment);
-            path
-        });
-    if owner.is_empty() || repo.is_empty() || branch.is_empty() || subdir.as_os_str().is_empty() {
-        return None;
-    }
-
-    Some(GitSource {
-        clone_url: format!("https://github.com/{owner}/{repo}.git"),
-        ref_name: Some(branch),
-        subdir: Some(subdir),
-    })
-}
-
-fn split_github_tree_ref_and_subdir(segments: &[&str]) -> Option<(String, Vec<String>)> {
-    if segments.len() < 5 {
-        return None;
-    }
-    let default_branch = segments[3];
-    let default_subdir = &segments[4..];
-    if default_branch.is_empty() || default_subdir.is_empty() {
-        return None;
-    }
-
-    if let Some(skill_root_index) = segments[4..]
-        .iter()
-        .position(|segment| *segment == "skills")
-    {
-        let split_at = 4 + skill_root_index;
-        let branch = segments[3..split_at].join("/");
-        let subdir = segments[split_at..]
-            .iter()
-            .map(|segment| (*segment).to_string())
-            .collect::<Vec<_>>();
-        if !branch.is_empty() && !subdir.is_empty() {
-            return Some((branch, subdir));
-        }
-    }
-
-    Some((
-        default_branch.to_string(),
-        default_subdir
-            .iter()
-            .map(|segment| (*segment).to_string())
-            .collect::<Vec<_>>(),
-    ))
-}
-
-fn resolve_add_targets(source: &PreparedSource, skill_names: &[String]) -> Result<Vec<AddTarget>> {
-    if skill_names.is_empty() {
-        return match source {
-            PreparedSource::Raw(data) => Ok(vec![AddTarget {
-                data: data.clone(),
-                source: None,
-                _temp_dir: None,
-            }]),
-            PreparedSource::Path { path, .. } => resolve_default_add_targets(source, path),
-        };
-    }
-
-    let Some(root) = source.path() else {
-        return Err(Error::Client(
-            "--skill can only be used with a local or git skill source.".to_string(),
-        ));
-    };
-    if !root.is_dir() {
-        return Err(Error::Client(
-            "--skill requires a directory source.".to_string(),
-        ));
-    }
-
-    let requested = normalize_skill_names(skill_names.to_vec())?;
-    if requested.iter().any(|name| name == "*") {
-        if requested.len() > 1 {
-            return Err(Error::Client(
-                "Use --skill '*' by itself when installing all skills.".to_string(),
-            ));
-        }
-        let targets = discover_skill_dirs(root)?;
-        if targets.is_empty() {
-            return Err(Error::Client(format!(
-                "No skill directories found under '{}'.",
-                root.display()
-            )));
-        }
-        return targets
-            .into_iter()
-            .map(|path| add_target_from_path(source, root, path))
-            .collect();
-    }
-
-    requested
-        .into_iter()
-        .map(|name| {
-            resolve_named_skill_dir(root, &name)
-                .and_then(|path| add_target_from_path(source, root, path))
-        })
-        .collect()
-}
-
-fn resolve_default_add_targets(source: &PreparedSource, path: &Path) -> Result<Vec<AddTarget>> {
-    if !path.is_dir() {
-        return Ok(vec![add_target_from_path(
-            source,
-            path,
-            path.to_path_buf(),
-        )?]);
-    }
-    if path.join("SKILL.md").is_file() {
-        return Ok(vec![add_target_from_path(
-            source,
-            path,
-            path.to_path_buf(),
-        )?]);
-    }
-
-    let targets = discover_skill_dirs(path)?;
-    if targets.is_empty() {
-        return Err(Error::Client(format!(
-            "SKILL.md not found in '{}'.",
-            path.display()
-        )));
-    }
-    targets
-        .into_iter()
-        .map(|target| add_target_from_path(source, path, target))
-        .collect()
-}
-
-fn add_target_from_path(
-    source: &PreparedSource,
-    root: &Path,
-    target: PathBuf,
-) -> Result<AddTarget> {
-    Ok(AddTarget {
-        data: path_to_string(&target),
-        source: source_record_for_target(source, root, &target)?,
-        _temp_dir: None,
-    })
-}
-
-fn source_record_for_target(
-    source: &PreparedSource,
-    root: &Path,
-    target: &Path,
-) -> Result<Option<SkillSourceRecord>> {
-    let PreparedSource::Path { origin, .. } = source else {
-        return Ok(None);
-    };
-
-    match origin {
-        SourceOrigin::Local { source } => Ok(Some(SkillSourceRecord {
-            source_type: "local".to_string(),
-            source: Some(source.clone()),
-            path: Some(path_to_string(target)),
-            clone_url: None,
-            ref_name: None,
-            subdir: None,
-            skill_name: None,
-        })),
-        SourceOrigin::Git(git_source) => {
-            let subdir = git_subdir_for_target(git_source.subdir.as_ref(), root, target)?;
-            Ok(Some(SkillSourceRecord {
-                source_type: "git".to_string(),
-                source: Some(git_source_source(git_source)),
-                path: None,
-                clone_url: Some(git_source.clone_url.clone()),
-                ref_name: git_source.ref_name.clone(),
-                subdir: subdir.map(|path| path_to_string(&path)),
-                skill_name: None,
-            }))
-        }
-    }
-}
-
-fn git_subdir_for_target(
-    source_subdir: Option<&PathBuf>,
-    root: &Path,
-    target: &Path,
-) -> Result<Option<PathBuf>> {
-    let relative = target
-        .strip_prefix(root)
-        .ok()
-        .filter(|path| !path.as_os_str().is_empty());
-    let mut subdir = source_subdir.cloned().unwrap_or_default();
-    if let Some(relative) = relative {
-        subdir.push(relative);
-    }
-    if subdir.as_os_str().is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(subdir))
-    }
-}
-
-fn git_source_source(git_source: &GitSource) -> String {
-    if git_source.clone_url.contains("github.com/")
-        && let (Some(ref_name), Some(subdir)) = (&git_source.ref_name, &git_source.subdir)
-    {
-        let repo = git_source
-            .clone_url
-            .trim_end_matches(".git")
-            .trim_start_matches("https://github.com/");
-        return format!(
-            "https://github.com/{}/tree/{}/{}",
-            repo,
-            ref_name,
-            path_to_string(subdir)
-        );
-    }
-    git_source.clone_url.clone()
-}
-
-fn list_source_skills(
-    source: &PreparedSource,
-    output_format: OutputFormat,
-    compact: bool,
-) -> Result<()> {
-    let Some(root) = source.path() else {
-        return Err(Error::Client(
-            "--list can only be used with a local or git skill source.".to_string(),
-        ));
-    };
-    if !root.is_dir() {
-        return Err(Error::Client(
-            "--list requires a directory skill source.".to_string(),
-        ));
-    }
-
-    let dirs = discover_skill_dirs(root)?;
-    let skills = dirs
-        .iter()
-        .map(|dir| skill_dir_summary(dir, root))
-        .collect::<Result<Vec<_>>>()?;
-    output_success(
-        serde_json::json!({
-            "source": path_to_string(root),
-            "skills": skills,
-            "total": skills.len(),
-        }),
-        output_format,
-        compact,
-    );
-    Ok(())
-}
-
-fn skill_dir_summary(dir: &Path, root: &Path) -> Result<Value> {
-    let skill_md = dir.join("SKILL.md");
-    let content = std::fs::read_to_string(&skill_md).map_err(|e| {
-        Error::Client(format!(
-            "Failed to read skill file '{}': {}",
-            skill_md.display(),
-            e
-        ))
-    })?;
-    let parsed = parse_skill_md(&content).ok();
-    let name = parsed
-        .as_ref()
-        .and_then(|parsed| yaml_mapping_get_str(&parsed.meta, "name"))
-        .map(ToString::to_string)
-        .or_else(|| {
-            dir.file_name()
-                .and_then(|name| name.to_str())
-                .map(ToString::to_string)
-        })
-        .unwrap_or_default();
-    let description = parsed
-        .as_ref()
-        .and_then(|parsed| yaml_mapping_get_str(&parsed.meta, "description"))
-        .unwrap_or("")
-        .to_string();
-    let relative_path = dir.strip_prefix(root).unwrap_or(dir);
-
-    Ok(serde_json::json!({
-        "name": name,
-        "description": description,
-        "path": path_to_string(relative_path),
-    }))
-}
-
-fn skill_target_label(target: &AddTarget) -> String {
-    let path = Path::new(&target.data);
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(&target.data)
-        .to_string()
-}
-
-async fn resolve_update_target(
-    client: &HttpClient,
-    name: &str,
-    allow_prompt: bool,
-) -> Result<AddTarget> {
-    if let Some(record) = read_skill_source_record(client, name).await? {
-        return update_target_from_record(&record, name, allow_prompt);
-    }
-
-    if allow_prompt && let Some(target) = prompt_update_source(name)? {
-        return Ok(target);
-    }
-
-    Err(Error::Client(format!(
-        "Skill '{}' has no recorded updateable source metadata. Reinstall it with 'ov skills add <source>' or run update interactively to provide a new source.",
-        name
-    )))
-}
-
-async fn read_skill_source_record(
-    client: &HttpClient,
-    name: &str,
-) -> Result<Option<SkillSourceRecord>> {
-    let result = client
-        .skill_show(name, false, false, true, Some(0), None)
-        .await?;
-    let Some(source) = result.get("source") else {
-        return Ok(None);
-    };
-    if !source
-        .get("tracked")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        return Ok(None);
-    }
-    let mut record: SkillSourceRecord = serde_json::from_value(source.clone())
-        .map_err(|e| Error::Parse(format!("Invalid source metadata for '{}': {}", name, e)))?;
-    record.skill_name = Some(name.to_string());
-    Ok(Some(record))
-}
-
-fn update_target_from_record(
-    record: &SkillSourceRecord,
-    name: &str,
-    allow_prompt: bool,
-) -> Result<AddTarget> {
-    match record.source_type.as_str() {
-        "git" => {
-            let prepared = prepare_source_from_git_record(record)?;
-            let PreparedSource::Path {
-                path, _temp_dir, ..
-            } = prepared
-            else {
-                return Err(Error::Parse(format!(
-                    "Skill '{}' git source did not resolve to a path",
-                    name
-                )));
-            };
-            Ok(AddTarget {
-                data: path_to_string(&path),
-                source: Some(record.clone()),
-                _temp_dir,
-            })
-        }
-        "local" => {
-            if allow_prompt {
-                if let Some(target) = prompt_update_source(name)? {
-                    return Ok(target);
-                }
-                return Err(Error::Client(format!(
-                    "Local source metadata for skill '{}' is not trusted. Provide a local path or git source to continue.",
-                    name
-                )));
-            }
-            Err(Error::Client(format!(
-                "Skill '{}' was installed from a local source, but server-recorded local paths are not trusted for non-interactive update. Re-run 'ov skills update {}' interactively to provide a local path or git source.",
-                name, name
-            )))
-        }
-        other => Err(Error::Parse(format!(
-            "Unsupported source type '{}' for skill '{}'",
-            other, name
-        ))),
-    }
-}
-
-fn prepare_source_from_git_record(record: &SkillSourceRecord) -> Result<PreparedSource> {
-    let clone_url = record
-        .clone_url
-        .as_deref()
-        .ok_or_else(|| Error::Parse("Git source metadata missing clone_url".to_string()))?;
-    let subdir = record
-        .subdir
-        .as_ref()
-        .map(PathBuf::from)
-        .map(|path| normalize_git_subdir(&path))
-        .transpose()?;
-    let git_source = GitSource {
-        clone_url: clone_url.to_string(),
-        ref_name: record.ref_name.clone(),
-        subdir,
-    };
-    prepare_git_source(git_source)
-}
-
-fn prompt_update_source(name: &str) -> Result<Option<AddTarget>> {
-    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-        return Ok(None);
-    }
-
-    print!(
-        "Source for skill '{}' is missing or untracked. Enter a local path or git source to update it (blank to abort): ",
-        name
-    );
-    io::stdout().flush()?;
-
-    let mut answer = String::new();
-    io::stdin().read_line(&mut answer)?;
-    let source_text = answer.trim();
-    if source_text.is_empty() {
-        return Ok(None);
-    }
-    let source = prepare_source(source_text)?;
-    let targets = resolve_add_targets(&source, &[name.to_string()])?;
-    let mut target = targets.into_iter().next().ok_or_else(|| {
-        Error::Client(format!(
-            "Skill '{}' was not found in source '{}'.",
-            name, source_text
-        ))
-    })?;
-    if let PreparedSource::Path { _temp_dir, .. } = source {
-        target._temp_dir = _temp_dir;
-    }
-    Ok(Some(target))
-}
-
-fn source_record_value(source: Option<&SkillSourceRecord>) -> Result<Option<Value>> {
-    source
-        .map(serde_json::to_value)
-        .transpose()
-        .map_err(|e| Error::Parse(format!("Failed to serialize source metadata: {}", e)))
-}
-
 fn normalize_skill_names(names: Vec<String>) -> Result<Vec<String>> {
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();
@@ -1306,45 +671,6 @@ fn normalize_skill_names(names: Vec<String>) -> Result<Vec<String>> {
         }
     }
     Ok(out)
-}
-
-fn discover_skill_dirs(root: &Path) -> Result<Vec<PathBuf>> {
-    let mut dirs = Vec::new();
-    if root.join("SKILL.md").is_file() {
-        dirs.push(root.to_path_buf());
-    }
-    for entry in std::fs::read_dir(root)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() && path.join("SKILL.md").is_file() {
-            dirs.push(path);
-        }
-    }
-    dirs.sort();
-    dirs.dedup();
-    Ok(dirs)
-}
-
-fn resolve_named_skill_dir(root: &Path, name: &str) -> Result<PathBuf> {
-    let child = root.join(name);
-    if child.is_dir() && child.join("SKILL.md").is_file() {
-        return Ok(child);
-    }
-
-    if root.join("SKILL.md").is_file()
-        && root
-            .file_name()
-            .and_then(|value| value.to_str())
-            .is_some_and(|root_name| root_name == name)
-    {
-        return Ok(root.to_path_buf());
-    }
-
-    Err(Error::Client(format!(
-        "Skill '{}' was not found under '{}'.",
-        name,
-        root.display()
-    )))
 }
 
 async fn resolve_installed_skill_names(
@@ -1617,10 +943,6 @@ fn format_name_list(names: &[String]) -> String {
     )
 }
 
-fn path_to_string(path: &Path) -> String {
-    path.to_string_lossy().to_string()
-}
-
 fn output_skill_show(result: &Value, output_format: OutputFormat, compact: bool) {
     if matches!(output_format, OutputFormat::Table)
         && let Some(rendered) = render_skill_show_for_table(result)
@@ -1774,13 +1096,10 @@ fn output_message_result(
 #[cfg(test)]
 mod tests {
     use super::{
-        PreparedSource, RenderedSkillSelectRegion, SkillSourceRecord, SourceOrigin,
-        filter_skill_show_level, parse_github_tree_source, parse_skill_md,
-        prepare_source_from_git_record, render_skill_show_for_table, rendered_skill_select_rows,
-        resolve_add_targets, update_target_from_record,
+        RenderedSkillSelectRegion, filter_skill_show_level, parse_skill_md,
+        render_skill_show_for_table, rendered_skill_select_rows,
     };
     use serde_json::json;
-    use std::path::Path;
 
     #[test]
     fn skill_show_table_renders_complete_skill_information() {
@@ -1863,159 +1182,6 @@ mod tests {
             Some("demo-skill")
         );
         assert_eq!(parsed.body, "# Demo");
-    }
-
-    #[test]
-    fn github_tree_skill_url_resolves_to_repo_and_subdir() {
-        let source = parse_github_tree_source(
-            "https://github.com/anthropics/skills/tree/main/skills/algorithmic-art",
-        )
-        .expect("github tree source");
-
-        assert_eq!(source.clone_url, "https://github.com/anthropics/skills.git");
-        assert_eq!(source.ref_name.as_deref(), Some("main"));
-        assert_eq!(
-            source.subdir.as_deref(),
-            Some(Path::new("skills/algorithmic-art"))
-        );
-    }
-
-    #[test]
-    fn github_tree_skill_url_supports_slash_branch_before_skills_dir() {
-        let source = parse_github_tree_source(
-            "https://github.com/acme/skills/tree/feature/foo/skills/demo-skill",
-        )
-        .expect("github tree source");
-
-        assert_eq!(source.clone_url, "https://github.com/acme/skills.git");
-        assert_eq!(source.ref_name.as_deref(), Some("feature/foo"));
-        assert_eq!(
-            source.subdir.as_deref(),
-            Some(Path::new("skills/demo-skill"))
-        );
-    }
-
-    #[test]
-    fn update_target_rejects_api_source_record_without_prompt() {
-        let record = SkillSourceRecord {
-            source_type: "api".to_string(),
-            source: Some("inline_content".to_string()),
-            path: None,
-            clone_url: None,
-            ref_name: None,
-            subdir: None,
-            skill_name: Some("api-skill".to_string()),
-        };
-
-        let error = update_target_from_record(&record, "api-skill", false)
-            .expect_err("api source should not be directly updateable");
-        assert!(
-            error
-                .to_string()
-                .contains("Unsupported source type 'api' for skill 'api-skill'")
-        );
-    }
-
-    #[test]
-    fn update_target_rejects_local_source_record_without_prompt() {
-        let record = SkillSourceRecord {
-            source_type: "local".to_string(),
-            source: Some("/tmp/demo-skill".to_string()),
-            path: Some("/tmp/demo-skill".to_string()),
-            clone_url: None,
-            ref_name: None,
-            subdir: None,
-            skill_name: Some("local-skill".to_string()),
-        };
-
-        let error = update_target_from_record(&record, "local-skill", false)
-            .expect_err("local source should not be trusted for non-interactive update");
-        assert!(
-            error
-                .to_string()
-                .contains("server-recorded local paths are not trusted")
-        );
-    }
-
-    #[test]
-    fn prepare_source_from_git_record_rejects_parent_dir_subdir() {
-        let record = SkillSourceRecord {
-            source_type: "git".to_string(),
-            source: Some("https://github.com/acme/skills/tree/main/skills/demo".to_string()),
-            path: None,
-            clone_url: Some("https://github.com/acme/skills.git".to_string()),
-            ref_name: Some("main".to_string()),
-            subdir: Some("../outside".to_string()),
-            skill_name: Some("demo".to_string()),
-        };
-
-        let error = prepare_source_from_git_record(&record)
-            .err()
-            .expect("parent dir subdir should be rejected before clone");
-        assert!(
-            error
-                .to_string()
-                .contains("parent directory components are not allowed")
-        );
-    }
-
-    #[test]
-    fn prepare_source_from_git_record_rejects_absolute_subdir() {
-        let record = SkillSourceRecord {
-            source_type: "git".to_string(),
-            source: Some("https://github.com/acme/skills/tree/main/skills/demo".to_string()),
-            path: None,
-            clone_url: Some("https://github.com/acme/skills.git".to_string()),
-            ref_name: Some("main".to_string()),
-            subdir: Some("/tmp/escape".to_string()),
-            skill_name: Some("demo".to_string()),
-        };
-
-        let error = prepare_source_from_git_record(&record)
-            .err()
-            .expect("absolute subdir should be rejected before clone");
-        assert!(error.to_string().contains("absolute subdir"));
-    }
-
-    #[test]
-    fn default_add_targets_expand_skill_collection_directory() {
-        let temp_dir = tempfile::tempdir().expect("tempdir");
-        let root = temp_dir.path().join("skills");
-        let skill_a = root.join("skill-a");
-        let skill_b = root.join("skill-b");
-        std::fs::create_dir_all(&skill_a).expect("skill-a dir");
-        std::fs::create_dir_all(&skill_b).expect("skill-b dir");
-        std::fs::write(
-            skill_a.join("SKILL.md"),
-            "---\nname: skill-a\ndescription: A\n---\n",
-        )
-        .expect("skill-a md");
-        std::fs::write(
-            skill_b.join("SKILL.md"),
-            "---\nname: skill-b\ndescription: B\n---\n",
-        )
-        .expect("skill-b md");
-
-        let source = PreparedSource::Path {
-            path: root,
-            _temp_dir: None,
-            origin: SourceOrigin::Local {
-                source: temp_dir.path().to_string_lossy().to_string(),
-            },
-        };
-        let targets = resolve_add_targets(&source, &[]).expect("targets");
-
-        assert_eq!(targets.len(), 2);
-        assert!(
-            targets
-                .iter()
-                .any(|target| target.data.ends_with("skill-a"))
-        );
-        assert!(
-            targets
-                .iter()
-                .any(|target| target.data.ends_with("skill-b"))
-        );
     }
 
     #[test]

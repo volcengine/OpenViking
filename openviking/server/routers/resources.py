@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Resource endpoints for OpenViking HTTP Server."""
 
+import asyncio
+from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -19,6 +21,7 @@ from openviking.server.responses import response_from_result
 from openviking.server.skill_source_metadata import persist_skill_source_metadata
 from openviking.server.telemetry import run_operation
 from openviking.server.temp_upload_store import TempUploadStore
+from openviking.service.skill_sources import describe_skill_sources, resolve_skill_source
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import InvalidArgumentError
 
@@ -138,8 +141,8 @@ class AddSkillRequest(BaseModel):
     """Request model for add_skill.
 
     Attributes:
-        data: Inline skill content or structured skill data. HTTP requests do not treat
-            string values as host filesystem paths.
+        data: Git skill URL, inline skill content, or structured skill data.
+            HTTP requests do not treat strings as host filesystem paths.
         temp_file_id: Temporary upload id returned by /api/v1/resources/temp_upload.
         wait: Whether to wait for skill processing to complete.
         timeout: Timeout in seconds when wait=True.
@@ -149,6 +152,8 @@ class AddSkillRequest(BaseModel):
 
     data: Any = None
     temp_file_id: Optional[str] = None
+    skills: list[str] = Field(default_factory=list)
+    list_only: bool = False
     wait: bool = False
     timeout: Optional[float] = None
     source_metadata: Optional[Dict[str, Any]] = None
@@ -377,20 +382,43 @@ async def add_skill(
 
     async def _add() -> dict[str, Any]:
         try:
-            result = await service.resources.add_skill(
-                data=data,
-                ctx=_ctx,
-                wait=request.wait,
-                timeout=request.timeout,
+            async with resolve_skill_source(
+                data,
+                names=request.skills,
                 allow_local_path_resolution=allow_local_path_resolution,
-                source_path_hint=source_path_hint,
-                target_uri=target_uri,
-            )
-            await persist_skill_source_metadata(service, _ctx, result, source_metadata)
-        except Exception:
-            raise
-        else:
-            return result
+                source_metadata=source_metadata,
+            ) as targets:
+                if request.list_only:
+                    return await asyncio.to_thread(describe_skill_sources, targets)
+                installed = []
+                for skill_data, skill_source in targets:
+
+                    async def _install(skill_data=skill_data, skill_source=skill_source):
+                        result = await service.resources.add_skill(
+                            data=skill_data,
+                            ctx=_ctx,
+                            wait=request.wait,
+                            timeout=request.timeout,
+                            allow_local_path_resolution=isinstance(skill_data, Path),
+                            source_path_hint=source_path_hint,
+                            target_uri=target_uri,
+                        )
+                        await persist_skill_source_metadata(service, _ctx, result, skill_source)
+                        return result
+
+                    # Each skill owns its own queue wait tracker and task ID.
+                    if len(targets) == 1:
+                        installed.append(await _install())
+                    else:
+                        execution = await run_operation(
+                            operation="resources.add_skill",
+                            telemetry=request.telemetry,
+                            fn=_install,
+                        )
+                        installed.append(execution.result)
+                if len(installed) == 1:
+                    return installed[0]
+                return {"installed": installed, "total": len(installed)}
         finally:
             if resolved:
                 await resolved.cleanup()
