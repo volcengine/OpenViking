@@ -34,6 +34,7 @@ logger = get_logger(__name__)
 
 _FEISHU_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(feishu://image/([^)]+)\)")
 _FEISHU_DOCUMENT_FORBIDDEN = 1770032
+_FEISHU_WIKI_NODE_DELETED = 131005
 _FEISHU_WIKI_NODE_PERMISSION_DENIED = 131006
 _FEISHU_BITABLE_PERMISSION_REQUIRED = 99991672
 _FEISHU_LEGACY_DOC_LOGIN_REQUIRED = 91404
@@ -832,6 +833,25 @@ class FeishuAccessor(DataAccessor):
         has_drive_folder_path = len(path_parts) >= 3 and path_parts[:2] == ["drive", "folder"]
         has_file_path = path_parts[0] == "file"
         return is_feishu_domain and (has_doc_path or has_drive_folder_path or has_file_path)
+
+    @classmethod
+    def is_deleted_wiki_source_error(cls, source: str, error: Exception) -> bool:
+        """Identify a deleted source root, excluding missing descendants and generic HTTP errors."""
+        if not isinstance(error, OpenVikingError):
+            return False
+        if error.details.get("feishu_code") != _FEISHU_WIKI_NODE_DELETED:
+            return False
+        try:
+            if not cls._is_feishu_url(source):
+                return False
+            doc_type, token = cls._parse_feishu_url(source)
+        except ValueError:
+            return False
+        return (
+            doc_type == "wiki"
+            and error.details.get("resource") == token
+            and error.details.get("operation") == f"resolve wiki node {token}"
+        )
 
     @staticmethod
     def _parse_feishu_url(url: str) -> Tuple[str, str]:
