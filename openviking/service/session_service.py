@@ -68,6 +68,7 @@ class SessionService:
         self._agent_evolution_config_provider: Optional[AgentEvolutionConfigProvider] = None
         self._agent_evolution_config_path: Optional[str] = None
         self._default_user_memory_policy: Optional[Dict[str, Any]] = None
+        self._default_user_auto_commit_policy: Optional[Dict[str, Any]] = None
         self._configure_agent_evolution_provider()
         self._usage_reporter: Optional["UsageReporter"] = None
         # Server-wide controls remain disabled until configured during app setup.
@@ -106,6 +107,11 @@ class SessionService:
         policy.validate_memory_types(set(MemoryTypeRegistry().list_names(include_disabled=False)))
         self._default_user_memory_policy = policy.to_dict()
 
+    def set_default_user_auto_commit_policy(self, policy: Optional[Dict[str, Any]]) -> None:
+        self._default_user_auto_commit_policy = (
+            None if policy is None else AutoCommitPolicy.from_dict(policy).to_dict()
+        )
+
     def set_agent_evolution_config(self, config: AgentEvolutionConfig) -> None:
         """Set the default used when an account has no persisted override."""
         self._agent_evolution_enabled = config.enabled
@@ -140,6 +146,13 @@ class SessionService:
     def set_session_auto_commit_config(self, config: SessionAutoCommitConfig) -> None:
         """Set server-wide controls for automatic session commits."""
         self._session_auto_commit_config = config.model_copy(deep=True)
+
+    def _new_session_auto_commit_policy(self) -> Optional[Dict[str, Any]]:
+        if self._default_user_auto_commit_policy is not None:
+            return dict(self._default_user_auto_commit_policy)
+        if self._session_auto_commit_config.default_enabled:
+            return AutoCommitPolicy.from_dict(None).to_dict()
+        return None
 
     def _ensure_initialized(self) -> None:
         """Ensure all dependencies are initialized."""
@@ -264,12 +277,12 @@ class SessionService:
             # the server default turns it on. Absent both, it stays disabled.
             if update_auto_commit_policy and auto_commit_policy is None:
                 session.meta.auto_commit_policy = None
-            elif auto_commit_policy is not None or self._session_auto_commit_config.default_enabled:
+            elif auto_commit_policy is not None:
                 session.meta.auto_commit_policy = AutoCommitPolicy.from_dict(
                     auto_commit_policy
                 ).to_dict()
             else:
-                session.meta.auto_commit_policy = None
+                session.meta.auto_commit_policy = self._new_session_auto_commit_policy()
             if event_tags is not None:
                 session.meta.event_search_tags = normalize_search_tags(
                     event_tags,
@@ -298,8 +311,7 @@ class SessionService:
             if not await session.exists():
                 if not auto_create:
                     raise NotFoundError(session_id, "session")
-                if self._session_auto_commit_config.default_enabled:
-                    session.meta.auto_commit_policy = AutoCommitPolicy.from_dict(None).to_dict()
+                session.meta.auto_commit_policy = self._new_session_auto_commit_policy()
                 await session.ensure_exists()
             await session.load()
             self._record_lifecycle_metric("get", "ok")
