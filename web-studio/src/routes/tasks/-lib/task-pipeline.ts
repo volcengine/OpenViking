@@ -12,11 +12,16 @@ export type PipelineGroup =
   | { type: 'serial'; step: PipelineStep }
   | { type: 'parallel'; steps: PipelineStep[] }
 
+type QueueStatus = Record<
+  string,
+  { error_count?: number; processed?: number } | undefined
+>
+
 function inferState(
   qKey: string | null,
   fallback: StepState,
   status: string | undefined,
-  qStatus: Record<string, { error_count?: number; processed?: number }> | undefined,
+  qStatus: QueueStatus | undefined,
 ): StepState {
   if (status === 'pending') return 'pending'
   if (qKey && qStatus?.[qKey]) {
@@ -40,7 +45,7 @@ export function getTaskPipelineSteps(
   const type = task.task_type
   const status = task.status
   const resObj = (task.result || {}) as Record<string, any>
-  const qStatus = resObj.queue_status as Record<string, { error_count?: number; processed?: number }> | undefined
+  const qStatus = resObj.queue_status as QueueStatus | undefined
 
   if (type === 'session_commit') {
     return [
@@ -106,7 +111,7 @@ export function getTaskPipelineGroups(
   const type = task.task_type
   const status = task.status
   const resObj = (task.result || {}) as Record<string, any>
-  const qStatus = resObj.queue_status as Record<string, { error_count?: number; processed?: number }> | undefined
+  const qStatus = resObj.queue_status as QueueStatus | undefined
 
   if (type === 'session_commit') {
     return [
