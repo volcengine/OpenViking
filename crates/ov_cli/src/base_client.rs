@@ -467,16 +467,6 @@ impl BaseClient {
         })
     }
 
-    pub(crate) fn create_client_with_timeout(
-        &self,
-        timeout: std::time::Duration,
-    ) -> Result<ReqwestClient> {
-        ReqwestClient::builder()
-            .timeout(timeout)
-            .build()
-            .map_err(|e| Error::from_reqwest("Failed to build HTTP client", e))
-    }
-
     pub(crate) fn create_client_with_connect_timeout(
         &self,
         connect_timeout: std::time::Duration,
@@ -534,9 +524,13 @@ impl BaseClient {
         timeout: std::time::Duration,
     ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
-        let client = self.create_client_with_timeout(timeout)?;
 
-        let request = client.post(&url).headers(self.build_headers()).json(body);
+        let request = self
+            .http
+            .post(&url)
+            .headers(self.build_headers())
+            .timeout(timeout)
+            .json(body);
         let request = if self.profile_enabled {
             request.query(&[("profile", "1")])
         } else {
