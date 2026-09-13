@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Callable, Optional
@@ -73,6 +74,25 @@ logger = get_logger(__name__)
 
 WORKER_WITH_BOT_ENV = "OPENVIKING_WORKER_WITH_BOT"
 WORKER_BOT_API_URL_ENV = "OPENVIKING_WORKER_BOT_API_URL"
+
+
+def _configure_default_executor(config: ServerConfig) -> None:
+    """Apply the configured asyncio default executor to the current worker loop.
+
+    The event loop owns the executor after ``set_default_executor`` and shuts it
+    down when the loop closes. This must run before service initialization,
+    because initialization itself can submit work through ``asyncio.to_thread``.
+    """
+    max_workers = config.executor_threads
+    if max_workers == 0:
+        return
+
+    executor = ThreadPoolExecutor(
+        max_workers=max_workers,
+        thread_name_prefix="openviking-asyncio",
+    )
+    asyncio.get_running_loop().set_default_executor(executor)
+    logger.info("Configured asyncio default executor: max_workers=%d", max_workers)
 
 
 def create_worker_app() -> FastAPI:
@@ -310,6 +330,7 @@ def create_app(
     async def lifespan(app: FastAPI):
         """Application lifespan handler."""
         nonlocal service
+        _configure_default_executor(config)
         owns_service = service is None
         if owns_service:
             service = OpenVikingService()

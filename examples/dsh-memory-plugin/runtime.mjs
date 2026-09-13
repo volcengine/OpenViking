@@ -22,6 +22,10 @@ export class OpenVikingRuntime {
     this.config = config;
     this.logger = logger;
     this.states = new Map();
+    this.drainTimer = null;
+    this.drainRunning = false;
+    this.drainPromise = Promise.resolve();
+    this.drainHealth = null;
   }
 
   stateFor(session) {
@@ -90,10 +94,7 @@ export class OpenVikingRuntime {
     // Replay is a write, so it stays behind the same toggle: a backlog queued
     // while capture was on waits for a session that still writes.
     if (state.config.syncTurns) {
-      await replayPending(
-        (path, init) => this.client.fetchJSON(path, init),
-        (stage, data) => this.log(stage, data),
-      );
+      await this.replayPendingQueue();
     }
     await this.refreshPendingState(state);
     const profile = await buildProfileBlock(
@@ -260,7 +261,15 @@ export class OpenVikingRuntime {
     const createdAt = Math.max(Date.now(), state.pendingCreatedAt + 1);
     state.pendingCreatedAt = createdAt;
     const result = await enqueue(type, state.ovSessionId, payload, { createdAt });
-    if (result.ok) state.hasPendingWrites = true;
+    if (result.ok) {
+      // Log the latch transition only: every message that follows while the
+      // latch holds takes the cheap enqueue path, so this fires once per
+      // outage, not once per message.
+      if (!state.hasPendingWrites) {
+        this.log("pending_latched", { sessionId: state.ovSessionId, type });
+      }
+      state.hasPendingWrites = true;
+    }
     if (!result.ok) {
       this.log("pending_enqueue_error", {
         sessionId: state.ovSessionId,
@@ -295,6 +304,7 @@ export class OpenVikingRuntime {
   }
 
   async refreshPendingState(state) {
+    const wasPending = state.hasPendingWrites;
     const pending = (await listPending()).filter(
       item => item.entry?.sessionId === state.ovSessionId,
     );
@@ -303,6 +313,84 @@ export class OpenVikingRuntime {
       (latest, item) => Math.max(latest, Number(item.entry?.createdAt || 0)),
       state.pendingCreatedAt,
     );
+    // Only the flip back to direct sends is logged: the recovery moment that
+    // proves the drainer worked, once per outage.
+    if (wasPending && !state.hasPendingWrites) {
+      this.log("pending_cleared", { sessionId: state.ovSessionId });
+    }
+  }
+
+  /**
+   * Replay the pending queue through this runtime's client. The session-start
+   * path calls it without options and keeps consuming retries; the drainer
+   * passes consumeRetries:false so transient failures stay retryable.
+   */
+  async replayPendingQueue(options = {}) {
+    await replayPending(
+      (path, init) => this.client.fetchJSON(path, init),
+      (stage, data) => this.log(stage, data),
+      options,
+    );
+  }
+
+  /**
+   * One drainer tick, following the session-start replay flow: probe health
+   * first and only replay when the server answers. Replays run without
+   * consuming retry budgets, then every session's latch is re-derived from
+   * the queue. An empty queue clears the latches with zero HTTP traffic, so
+   * once a transient write failure recovers, capture and commit resume on
+   * their own without restarting the long-lived dsh process.
+   */
+  async drainTick() {
+    if (this.drainRunning) return;
+    this.drainRunning = true;
+    try {
+      const pending = await listPending();
+      if (pending.length > 0) {
+        const health = await this.client.healthResult();
+        if (!health.ok) {
+          // Only the flip into the outage is logged, not every 60s probe.
+          if (this.drainHealth !== false) {
+            this.log("drain_health_down", { status: health.status || 0 });
+          }
+          this.drainHealth = false;
+        } else {
+          if (this.drainHealth === false) {
+            this.log("drain_health_restored", {});
+          }
+          this.drainHealth = true;
+          await this.replayPendingQueue({ consumeRetries: false });
+        }
+      }
+      for (const state of this.states.values()) {
+        await this.refreshPendingState(state);
+      }
+    } finally {
+      this.drainRunning = false;
+    }
+  }
+
+  /**
+   * Start the background drainer. The interval is fixed per process; each tick
+   * is single-flight, so a slow replay run never overlaps the next one.
+   */
+  startDrainer() {
+    if (this.drainTimer) return this.drainTimer;
+    const parsed = parseInt(process.env.OPENVIKING_PENDING_DRAIN_INTERVAL_MS || "", 10);
+    const intervalMs = Number.isFinite(parsed) && parsed > 0 ? parsed : 60000;
+    this.drainTimer = setInterval(() => {
+      this.drainPromise = this.drainTick().catch(error => this.log("drain_error", {
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    }, intervalMs);
+    this.drainTimer.unref?.();
+    return this.drainTimer;
+  }
+
+  stopDrainer() {
+    if (!this.drainTimer) return;
+    clearInterval(this.drainTimer);
+    this.drainTimer = null;
   }
 
   async flush(session) {

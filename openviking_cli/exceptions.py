@@ -155,13 +155,24 @@ class InternalError(OpenVikingError):
 class DeadlineExceededError(OpenVikingError):
     """Operation timed out."""
 
-    def __init__(self, operation: str = "operation", timeout: Optional[float] = None):
+    def __init__(
+        self,
+        operation: str = "operation",
+        timeout: Optional[float] = None,
+        *,
+        task_id: Optional[str] = None,
+    ):
         message = f"{operation.capitalize()} timed out"
         if timeout:
             message += f" after {timeout}s"
-        super().__init__(
-            message, code="DEADLINE_EXCEEDED", details={"operation": operation, "timeout": timeout}
-        )
+        details = {"operation": operation, "timeout": timeout}
+        if task_id is not None:
+            message += (
+                ". This timeout only stops waiting; it does not cancel or fail the background task. "
+                f"Check its status with 'ov task status {task_id}'."
+            )
+            details["task_id"] = task_id
+        super().__init__(message, code="DEADLINE_EXCEEDED", details=details)
 
 
 class UnimplementedError(OpenVikingError):

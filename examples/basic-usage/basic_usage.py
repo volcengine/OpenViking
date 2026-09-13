@@ -17,6 +17,7 @@ Requirements:
 
 import os
 import sys
+import time
 
 # Add parent directory to path for local development
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -70,26 +71,48 @@ def main():
         # Add a URL resource
         result = client.add_resource(
             path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md",
-            wait=False,  # Non-blocking, process in background
         )
 
-        root_uri = result.get("root_uri", "")
-        print(f"   Root URI: {root_uri}")
-
-        # Get the file count
-        files = client.ls(uri=root_uri)
-        print(f"   Files indexed: {len(files)}")
+        task_id = result["task_id"]
+        print(f"   Import task: {task_id}")
 
     except Exception as e:
         print(f"   Error adding resource: {e}")
-        root_uri = ""
+        task_id = None
 
     print()
 
     # ============================================================
-    # 3. Browsing the Virtual Filesystem
+    # 3. Tracking the Import Task
     # ============================================================
-    print("3. Browsing the virtual filesystem...")
+    print("3. Checking import progress...")
+    print("-" * 40)
+
+    root_uri = ""
+    if task_id:
+        try:
+            while True:
+                task = client.get_task(task_id)
+                if task is None:
+                    raise RuntimeError(f"Task {task_id} is no longer available")
+                if task["status"] == "completed":
+                    break
+                if task["status"] in {"failed", "cancelled"}:
+                    raise RuntimeError(
+                        f"Import task {task_id}: {task['status']} ({task.get('error')})"
+                    )
+                time.sleep(2)
+            root_uri = task["result"]["root_uri"]
+            print(f"   Processing complete: {root_uri}")
+        except Exception as e:
+            print(f"   Import task {task_id}: {e}")
+
+    print()
+
+    # ============================================================
+    # 4. Browsing the Virtual Filesystem
+    # ============================================================
+    print("4. Browsing the virtual filesystem...")
     print("-" * 40)
 
     if root_uri:
@@ -107,22 +130,6 @@ def main():
 
         except Exception as e:
             print(f"   Error browsing filesystem: {e}")
-
-    print()
-
-    # ============================================================
-    # 4. Waiting for Semantic Processing
-    # ============================================================
-    print("4. Waiting for semantic processing...")
-    print("-" * 40)
-
-    try:
-        # Wait for all async operations to complete
-        status = client.wait_processed(timeout=60)
-        print(f"   Processing complete: {status}")
-    except Exception as e:
-        print(f"   Note: {e}")
-        print("   Continuing without waiting...")
 
     print()
 

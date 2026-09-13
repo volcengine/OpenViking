@@ -23,7 +23,7 @@ The agent runs install → setup → restart → verify automatically. See [INST
 
 | Stage | What happens |
 |-------|-------------|
-| **Every turn** (`afterTurn`) | New messages are appended to an OpenViking session; commit/extraction is threshold-triggered |
+| **Every turn** (`afterTurn` or `commitTurn`, depending on host/runner) | New messages are appended to an OpenViking session; commit/extraction is threshold-triggered |
 | **Explicit remember** (`memory_store`) | Important long-term facts can be written and committed immediately |
 | **On `/compact`** (`compact`) | Pending session messages are committed and extracted into long-term memories |
 | **Before each reply** (`assemble`) | Relevant memories are auto-retrieved and injected into context |
@@ -202,6 +202,17 @@ That means OpenClaw sees "compressed history summary + archive index + active me
 
 `afterTurn()` has a narrower job: append only the new turn into the OpenViking session.
 
+Capture ownership depends on the **host** version from `api.runtime.version`:
+
+- Before OpenClaw 2026.9.3, `afterTurn` captures messages; `commitTurn` only acknowledges the turn to avoid writing those messages twice.
+- Starting with 2026.9.3, admitted/deferred turns are captured inside `commitTurn` before acknowledgment. Standalone runners still capture via `afterTurn`.
+- The minimum supported OpenClaw version remains 2026.5.27. Missing/unparseable versions and ambiguous 2026.9.3 prereleases reject `commitTurn` rather than silently discarding queued messages; `afterTurn` remains available. Numeric packaging revisions such as `2026.9.3-1` use the 9.3 behavior.
+
+Durable capture propagates client/write/commit failures to the host for retry and shares one in-flight write between concurrent deliveries of the same advancement key. Disabled capture, heartbeats, bypassed sessions, and empty turns are intentional skips. The legacy `afterTurn` callback retains best-effort error handling.
+
+The host's durable delivery does not supply the model token budget or sender runtime context: this path uses the 128,000-token fallback and cannot attach the runtime sender ID to user messages. Message writes remain non-transactional: replay after partial writes or a process crash can duplicate messages. The in-memory advancement-key cache does not provide server-side exactly-once delivery.
+
+
 - it slices only the newly added messages
 - it keeps only `user` / `assistant` capture text
 - it preserves `toolCall` / `toolResult` content in the serialized turn text
@@ -214,7 +225,7 @@ After that, the plugin checks `pending_tokens`. Once it reaches `commitTokenThre
 - the current turn is not blocked waiting for extraction
 - if `logFindRequests` is enabled, the logs include the task id and follow-up extraction detail
 
-This automatic path is best-effort and commit-dependent. Short but important facts can stay only in the live session until a threshold commit, `/compact`, or an explicit store happens.
+Memory extraction on this automatic path is commit-dependent. Short but important facts can stay only in the live session until a threshold commit, `/compact`, or an explicit store happens.
 
 ### Explicit long-term memory writes
 

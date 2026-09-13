@@ -28,6 +28,7 @@ router = APIRouter(prefix="/api/v1", tags=["tasks"])
 @router.get("/tasks/{task_id}")
 async def get_task(
     task_id: str,
+    include_events: bool = Query(False, description="Include recorded execution events"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get the status of a single background task."""
@@ -52,7 +53,7 @@ async def get_task(
             code="NOT_FOUND",
             details={"resource": task_id, "type": "task"},
         )
-    return Response(status="ok", result=task.to_dict())
+    return Response(status="ok", result=task.to_dict(include_events=include_events))
 
 
 @router.post("/tasks/{task_id}/cancel")
