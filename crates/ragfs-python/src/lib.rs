@@ -1251,6 +1251,7 @@ fn handoff_ref_to_py_dict(py: Python<'_>, handoff: &PathLockHandoffRef) -> PyRes
         covered.append(item)?;
     }
     dict.set_item("covered_paths", covered)?;
+    dict.set_item("created_dirs", &handoff.created_dirs)?;
     Ok(dict.into())
 }
 
@@ -2718,11 +2719,17 @@ impl RAGFSBindingClient {
             .map(|v| v.extract(py))
             .transpose()?
             .filter(|s: &String| !s.is_empty());
+        let created_dirs: Vec<String> = handoff_ref
+            .get("created_dirs")
+            .map(|v| v.extract(py))
+            .transpose()?
+            .unwrap_or_default();
         let handoff = PathLockHandoffRef {
             lease_ref,
             owner_id,
             lock_paths,
             covered_paths,
+            created_dirs,
         };
         let lease = self
             .run_scoped(py, fs_ctx, move || {

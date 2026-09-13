@@ -213,14 +213,16 @@ pub trait FileSystem: Send + Sync + Any {
     /// * `Error::NotFound` - If the parent directory doesn't exist
     async fn mkdir(&self, path: &str, mode: u32) -> Result<()>;
 
-    /// Remove a file at the specified path
+    /// Remove a file — or, on backends that support it (localfs, memfs), an
+    /// empty directory — at the specified path
     ///
     /// # Arguments
     /// * `path` - The path of the file to remove
     ///
     /// # Errors
     /// * `Error::NotFound` - If the file doesn't exist
-    /// * `Error::IsADirectory` - If the path points to a directory
+    /// * `Error::IsADirectory` - If the path points to a non-empty directory
+    ///   (or any directory, on backends without empty-directory removal)
     async fn remove(&self, path: &str) -> Result<()>;
 
     /// Recursively remove a file or directory

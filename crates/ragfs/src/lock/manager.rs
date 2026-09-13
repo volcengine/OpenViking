@@ -514,6 +514,7 @@ impl PathLockManager {
         // Spawn a background task that refreshes active owned leases.
         let refresh_registry = registry.clone();
         let refresh_provider = provider.clone();
+        let refresh_fs = fs.clone();
         let refresh_config = config.clone();
         let refresh_metrics = metrics.clone();
         let refresh_interval = Duration::from_secs_f64(config.lock_expire_secs / 3.0);
@@ -558,6 +559,7 @@ impl PathLockManager {
                 for (lease_ref, owner) in stale_candidates {
                     match Self::release_lease_paths_with(
                         &refresh_provider,
+                        &refresh_fs,
                         &refresh_registry,
                         owner,
                         &lease_ref,
@@ -864,7 +866,10 @@ impl PathLockManager {
                 }
             }
             first_attempt = false;
-            let acquired_lock_paths = match self.try_acquire_batch_once(&sorted, &owner_id).await {
+            let (acquired_lock_paths, created_dirs) = match self
+                .try_acquire_batch_once(&sorted, &owner_id)
+                .await
+            {
                 Ok(acquired) => acquired,
                 Err((err, pre_conflict)) => {
                     drop(owner_registry);
@@ -946,6 +951,7 @@ impl PathLockManager {
                     .map(|(lock_path, _)| lock_path.clone())
                     .collect(),
                 covered_paths: sorted.clone(),
+                created_dirs,
             };
             let ownership_ref = Self::new_owner_id();
             let lock_kinds: Vec<_> = sorted.iter().map(|request| request.kind).collect();
@@ -955,6 +961,7 @@ impl PathLockManager {
                 let rollback = self
                     .rollback_acquisitions(&acquired_lock_paths, &owner_id)
                     .await;
+                Self::cleanup_created_dirs(&self.resolver.fs, &lease.created_dirs).await;
                 break match rollback {
                     Ok(()) => Err(error),
                     Err(rollback_error) => Err(Self::rollback_error(error, rollback_error)),
@@ -968,6 +975,7 @@ impl PathLockManager {
                 let rollback = self
                     .rollback_acquisitions(&acquired_lock_paths, &owner_id)
                     .await;
+                Self::cleanup_created_dirs(&self.resolver.fs, &lease.created_dirs).await;
                 break match rollback {
                     Ok(()) => Err(error),
                     Err(rollback_error) => Err(Self::rollback_error(error, rollback_error)),
@@ -998,8 +1006,9 @@ impl PathLockManager {
         &self,
         requests: &[PathLockRequest],
         owner_id: &str,
-    ) -> Result<Vec<(String, AcquisitionChange)>, (PathLockError, bool)> {
+    ) -> Result<(Vec<(String, AcquisitionChange)>, Vec<String>), (PathLockError, bool)> {
         let mut acquired = Vec::new();
+        let mut created_dirs: Vec<String> = Vec::new();
         let mut exact_resolutions: HashMap<String, ResolvedExactPaths> = HashMap::new();
         let acquisition: PathLockResult<()> = async {
             for request in requests {
@@ -1012,11 +1021,13 @@ impl PathLockManager {
                             .await?;
                         let lock_path = resolved.acquire_lock_path.clone();
                         exact_resolutions.insert(request.path.clone(), resolved);
-                        self.ensure_lock_dir(&lock_path).await.map_err(|error| {
-                            PathLockError::Io(format!("failed to create lock dir: {error}"))
-                        })?;
                         let change = self
-                            .try_acquire_one(&lock_path, owner_id, PathLockKind::Exact)
+                            .acquire_token_ensuring_dir(
+                                &lock_path,
+                                owner_id,
+                                PathLockKind::Exact,
+                                &mut created_dirs,
+                            )
                             .await?;
                         acquired.push((lock_path, change));
                     }
@@ -1030,11 +1041,13 @@ impl PathLockManager {
                             .await?;
                         self.check_lock_paths(&exact_candidates, owner_id).await?;
                         self.check_descendant_locks(&request.path, owner_id).await?;
-                        self.ensure_lock_dir(&lock_path).await.map_err(|error| {
-                            PathLockError::Io(format!("failed to create lock dir: {error}"))
-                        })?;
                         let change = self
-                            .try_acquire_one(&lock_path, owner_id, PathLockKind::Tree)
+                            .acquire_token_ensuring_dir(
+                                &lock_path,
+                                owner_id,
+                                PathLockKind::Tree,
+                                &mut created_dirs,
+                            )
                             .await?;
                         acquired.push((lock_path, change));
                     }
@@ -1044,7 +1057,9 @@ impl PathLockManager {
         }
         .await;
         if let Err(error) = acquisition {
-            if let Err(rollback_error) = self.rollback_acquisitions(&acquired, owner_id).await {
+            let rollback = self.rollback_acquisitions(&acquired, owner_id).await;
+            Self::cleanup_created_dirs(&self.resolver.fs, &created_dirs).await;
+            if let Err(rollback_error) = rollback {
                 return Err((Self::rollback_error(error, rollback_error), false));
             }
             return Err((error, true));
@@ -1081,12 +1096,14 @@ impl PathLockManager {
         }
         .await;
         if let Err(error) = verification {
-            if let Err(rollback_error) = self.rollback_acquisitions(&acquired, owner_id).await {
+            let rollback = self.rollback_acquisitions(&acquired, owner_id).await;
+            Self::cleanup_created_dirs(&self.resolver.fs, &created_dirs).await;
+            if let Err(rollback_error) = rollback {
                 return Err((Self::rollback_error(error, rollback_error), false));
             }
             return Err((error, false));
         }
-        Ok(acquired)
+        Ok((acquired, created_dirs))
     }
 
     /// Roll back token changes made by one incomplete batch acquisition.
@@ -1268,11 +1285,14 @@ impl PathLockManager {
     }
 
     /// Ensure the parent directory of a lock path exists.
-    async fn ensure_lock_dir(&self, lock_path: &str) -> PathLockResult<()> {
+    ///
+    /// Returns every directory this call materialized (creation order,
+    /// shallowest first) so the lease can reclaim still-empty ones on release.
+    async fn ensure_lock_dir(&self, lock_path: &str) -> PathLockResult<Vec<String>> {
         if let Some(parent_end) = lock_path.rfind('/') {
             let parent = &lock_path[..parent_end];
             if parent.is_empty() || parent == "/" {
-                return Ok(());
+                return Ok(Vec::new());
             }
             // Walk up creating missing ancestors.
             let mut missing: Vec<String> = Vec::new();
@@ -1306,8 +1326,69 @@ impl PathLockManager {
             if !created_dirs.is_empty() {
                 debug!(lock_path = %lock_path, created_dirs = ?created_dirs, "ensured pathlock parent directories");
             }
+            return Ok(created_dirs);
         }
-        Ok(())
+        Ok(Vec::new())
+    }
+
+    /// Create the lock token for one resolved lock path, materializing missing
+    /// lock directories and recording them in `created_dirs`.
+    ///
+    /// A concurrent final release may reclaim an empty lock directory between
+    /// `ensure_lock_dir` and token creation; when token creation fails for a
+    /// non-conflict reason and the directory turns out to be missing again,
+    /// re-create it and retry once before giving up.
+    async fn acquire_token_ensuring_dir(
+        &self,
+        lock_path: &str,
+        owner_id: &str,
+        kind: PathLockKind,
+        created_dirs: &mut Vec<String>,
+    ) -> PathLockResult<AcquisitionChange> {
+        created_dirs.extend(
+            self.ensure_lock_dir(lock_path).await.map_err(|error| {
+                PathLockError::Io(format!("failed to create lock dir: {error}"))
+            })?,
+        );
+        match self.try_acquire_one(lock_path, owner_id, kind).await {
+            Ok(change) => Ok(change),
+            Err(error) if Self::is_retryable_error(&error) => Err(error),
+            Err(error) => {
+                let recreated = match self.ensure_lock_dir(lock_path).await {
+                    Ok(recreated) => recreated,
+                    Err(_) => return Err(error),
+                };
+                if recreated.is_empty() {
+                    return Err(error);
+                }
+                created_dirs.extend(recreated);
+                self.try_acquire_one(lock_path, owner_id, kind).await
+            }
+        }
+    }
+
+    /// Best-effort removal of directories materialized during lock acquisition.
+    ///
+    /// Directories are removed deepest-first and only while still empty:
+    /// `FileSystem::remove` refuses non-empty directories, so content written
+    /// under a reserved path while the lock was held is never touched.
+    /// Failures are logged and ignored — leaking an empty directory is the
+    /// pre-existing behavior this reclamation improves on.
+    async fn cleanup_created_dirs(fs: &Arc<dyn FileSystem>, created_dirs: &[String]) {
+        for dir in created_dirs.iter().rev() {
+            match fs.stat(dir).await {
+                Ok(info) if info.is_dir => {}
+                _ => continue,
+            }
+            match fs.remove(dir).await {
+                Ok(()) => {
+                    debug!(dir = %dir, "reclaimed pathlock-created directory");
+                }
+                Err(error) => {
+                    debug!(dir = %dir, error = %error, "left pathlock-created directory in place");
+                }
+            }
+        }
     }
 
     /// Refresh an owned lease. Returns "refreshed", "lost", or "failed".
@@ -1382,6 +1463,7 @@ impl PathLockManager {
             })?;
         let result = Self::release_lease_paths_with(
             &self.provider,
+            &self.resolver.fs,
             &self.lease_registry,
             owner,
             &lease.lease.lease_ref,
@@ -1422,6 +1504,7 @@ impl PathLockManager {
             })?;
         let result = Self::release_lease_paths_with(
             &self.provider,
+            &self.resolver.fs,
             &self.lease_registry,
             owner,
             &lease.lease.lease_ref,
@@ -1437,8 +1520,10 @@ impl PathLockManager {
     }
 
     /// Release selected paths while serializing all state and provider work for one owner.
+    #[allow(clippy::too_many_arguments)]
     async fn release_lease_paths_with(
         provider: &Arc<dyn PathLockProvider>,
+        fs: &Arc<dyn FileSystem>,
         lease_registry: &Arc<LeaseRegistry>,
         owner: Arc<OwnerState>,
         lease_ref: &str,
@@ -1465,6 +1550,7 @@ impl PathLockManager {
         if stale_cutoff.is_some_and(|cutoff| entry.last_active_at > cutoff) {
             return Ok(false);
         }
+        let created_dirs = entry.lease.created_dirs.clone();
         let selected: Option<HashSet<&str>> =
             selected_paths.map(|paths| paths.iter().map(String::as_str).collect());
         let mut seen = HashSet::new();
@@ -1562,6 +1648,36 @@ impl PathLockManager {
         }
 
         let removed = !owner_registry.entries.contains_key(lease_ref);
+        if removed && !created_dirs.is_empty() {
+            // Final release: reclaim still-empty directories this lease
+            // materialized while acquiring lock tokens, so locking a missing
+            // path leaves nothing behind. Non-empty directories (reservations
+            // that received content, or tokens that failed to release) are
+            // kept.
+            Self::cleanup_created_dirs(fs, &created_dirs).await;
+            // A directory can survive cleanup because another same-owner
+            // lease still keeps a token inside it (reentrant coverage).
+            // Donate it to a surviving lease holding a lock path under it so
+            // the final release can reclaim it; cleanup only ever removes
+            // empty directories, so donating is always safe.
+            for dir in &created_dirs {
+                if !fs.stat(dir).await.is_ok_and(|info| info.is_dir) {
+                    continue;
+                }
+                let prefix = format!("{}/", dir.trim_end_matches('/'));
+                if let Some(entry) = owner_registry.entries.values_mut().find(|entry| {
+                    entry
+                        .lease
+                        .lock_paths
+                        .iter()
+                        .any(|lock_path| lock_path.starts_with(&prefix))
+                }) {
+                    if !entry.lease.created_dirs.contains(dir) {
+                        entry.lease.created_dirs.push(dir.clone());
+                    }
+                }
+            }
+        }
         if let Some(error) = first_error {
             if ownership_ref.is_some() || !removed {
                 return Err(error);
@@ -1652,6 +1768,7 @@ impl PathLockManager {
             owner_id: lease.lease.owner_id.clone(),
             lock_paths: lease.lease.lock_paths.clone(),
             covered_paths: lease.lease.covered_paths.clone(),
+            created_dirs: lease.lease.created_dirs.clone(),
         }
     }
 
@@ -1849,6 +1966,7 @@ impl PathLockManager {
             owner_id: handoff.owner_id.clone(),
             lock_paths: handoff.lock_paths.clone(),
             covered_paths: handoff.covered_paths.clone(),
+            created_dirs: handoff.created_dirs.clone(),
         };
         let ownership_ref = Self::new_owner_id();
         owner_registry.insert(
@@ -2441,6 +2559,248 @@ mod tests {
         assert_eq!(mgr.metrics_snapshot().await.active_lock_count, 0);
     }
 
+    /// Build a manager + filesystem provider over one shared memfs with `/data`.
+    fn reclaim_test_manager() -> (Arc<MemFileSystem>, PathLockManager) {
+        let fs = Arc::new(MemFileSystem::new());
+        let provider = Arc::new(crate::lock::provider::FilesystemPathLockProvider::new(
+            fs.clone(),
+            PathLockConfig::default().lock_expire_secs,
+        ));
+        let mgr = PathLockManager::new(fs.clone(), provider, PathLockConfig::default());
+        (fs, mgr)
+    }
+
+    #[tokio::test]
+    async fn tree_lock_on_missing_path_reclaims_reserved_directory_on_release() {
+        let (fs, mgr) = reclaim_test_manager();
+        fs.mkdir("/data", 0o755).await.unwrap();
+
+        // Regression for volcengine/OpenViking#4966: tree-locking an
+        // already-deleted file path (deletion snapshot) must not leave an
+        // empty directory behind once the lease is released.
+        let lease = mgr
+            .acquire_tree("/data/deleted.md", Duration::ZERO, None)
+            .await
+            .unwrap();
+
+        // While held, the reservation directory and its token exist.
+        assert!(fs.stat("/data/deleted.md").await.unwrap().is_dir);
+        assert!(fs.stat("/data/deleted.md/.path.ovlock").await.is_ok());
+
+        mgr.release(&lease).await.unwrap();
+
+        assert!(
+            fs.stat("/data/deleted.md").await.is_err(),
+            "releasing a tree lock on a missing path must not leave a directory behind"
+        );
+        assert!(fs.stat("/data").await.unwrap().is_dir);
+    }
+
+    #[tokio::test]
+    async fn tree_lock_on_missing_nested_path_reclaims_all_created_directories() {
+        let (fs, mgr) = reclaim_test_manager();
+        fs.mkdir("/data", 0o755).await.unwrap();
+
+        let lease = mgr
+            .acquire_tree("/data/a/b/c", Duration::ZERO, None)
+            .await
+            .unwrap();
+        assert!(fs.stat("/data/a/b/c").await.unwrap().is_dir);
+
+        mgr.release(&lease).await.unwrap();
+
+        assert!(fs.stat("/data/a/b/c").await.is_err());
+        assert!(fs.stat("/data/a/b").await.is_err());
+        assert!(fs.stat("/data/a").await.is_err());
+        assert!(fs.stat("/data").await.unwrap().is_dir);
+    }
+
+    #[tokio::test]
+    async fn tree_lock_reservation_keeps_directory_once_content_is_written() {
+        let (fs, mgr) = reclaim_test_manager();
+        fs.mkdir("/data", 0o755).await.unwrap();
+
+        let lease = mgr
+            .acquire_tree("/data/new", Duration::ZERO, None)
+            .await
+            .unwrap();
+        fs.write("/data/new/file.txt", b"payload", 0, WriteFlag::Create)
+            .await
+            .unwrap();
+
+        mgr.release(&lease).await.unwrap();
+
+        assert!(fs.stat("/data/new").await.unwrap().is_dir);
+        assert!(!fs.stat("/data/new/file.txt").await.unwrap().is_dir);
+        assert!(fs.stat("/data/new/.path.ovlock").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn tree_lock_release_keeps_preexisting_directory() {
+        let (fs, mgr) = reclaim_test_manager();
+        fs.mkdir("/data", 0o755).await.unwrap();
+        fs.mkdir("/data/existing", 0o755).await.unwrap();
+
+        let lease = mgr
+            .acquire_tree("/data/existing", Duration::ZERO, None)
+            .await
+            .unwrap();
+        mgr.release(&lease).await.unwrap();
+
+        assert!(fs.stat("/data/existing").await.unwrap().is_dir);
+    }
+
+    #[tokio::test]
+    async fn exact_lock_on_missing_nested_path_reclaims_created_directories() {
+        let (fs, mgr) = reclaim_test_manager();
+        fs.mkdir("/data", 0o755).await.unwrap();
+
+        // Exact sidecar lives in the parent, so /data/x/y is materialized.
+        let lease = mgr
+            .acquire_exact("/data/x/y/file.txt", Duration::ZERO, None)
+            .await
+            .unwrap();
+        assert!(fs.stat("/data/x/y").await.unwrap().is_dir);
+
+        mgr.release(&lease).await.unwrap();
+
+        assert!(fs.stat("/data/x/y").await.is_err());
+        assert!(fs.stat("/data/x").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn failed_batch_acquire_reclaims_directories_created_before_the_conflict() {
+        let (fs, mgr) = reclaim_test_manager();
+        fs.mkdir("/data", 0o755).await.unwrap();
+        fs.write("/data/held.txt", b"", 0, WriteFlag::Create)
+            .await
+            .unwrap();
+
+        let holder = PathLockManager::new(
+            fs.clone(),
+            Arc::new(crate::lock::provider::FilesystemPathLockProvider::new(
+                fs.clone(),
+                PathLockConfig::default().lock_expire_secs,
+            )),
+            PathLockConfig::default(),
+        );
+        let _held = holder
+            .acquire_exact("/data/held.txt", Duration::ZERO, None)
+            .await
+            .unwrap();
+
+        // "/data/new" sorts before "/data/held.txt", so its reservation
+        // directory is created before the batch hits the conflict.
+        let result = mgr
+            .acquire_batch(
+                &[
+                    PathLockRequest {
+                        path: "/data/new".to_string(),
+                        kind: PathLockKind::Tree,
+                    },
+                    PathLockRequest {
+                        path: "/data/held.txt".to_string(),
+                        kind: PathLockKind::Exact,
+                    },
+                ],
+                Duration::ZERO,
+                None,
+            )
+            .await;
+        assert!(result.is_err());
+
+        assert!(
+            fs.stat("/data/new").await.is_err(),
+            "a failed batch acquire must reclaim reservation directories it created"
+        );
+    }
+
+    #[tokio::test]
+    async fn adopted_handoff_reclaims_created_directories_on_final_release() {
+        let fs = Arc::new(MemFileSystem::new());
+        fs.mkdir("/data", 0o755).await.unwrap();
+        let provider = Arc::new(crate::lock::provider::FilesystemPathLockProvider::new(
+            fs.clone(),
+            PathLockConfig::default().lock_expire_secs,
+        ));
+        let producer =
+            PathLockManager::new(fs.clone(), provider.clone(), PathLockConfig::default());
+        let consumer = PathLockManager::new(fs.clone(), provider, PathLockConfig::default());
+
+        let lease = producer
+            .acquire_tree("/data/reserved", Duration::ZERO, None)
+            .await
+            .unwrap();
+        assert!(fs.stat("/data/reserved").await.unwrap().is_dir);
+        let handoff = producer.to_handoff(&lease);
+        assert_eq!(handoff.created_dirs, vec!["/data/reserved".to_string()]);
+        producer.handoff(&lease).await.unwrap();
+
+        let adopted = consumer.adopt(&handoff).await.unwrap();
+        consumer.release(&adopted).await.unwrap();
+
+        assert!(
+            fs.stat("/data/reserved").await.is_err(),
+            "the adopter inherits reclamation of acquisition-created directories"
+        );
+    }
+
+    #[tokio::test]
+    async fn reentrant_lease_inherits_reclamation_when_creating_lease_releases_first() {
+        let (fs, mgr) = reclaim_test_manager();
+        fs.mkdir("/data", 0o755).await.unwrap();
+
+        let first = mgr
+            .acquire_tree("/data/reserved", Duration::ZERO, None)
+            .await
+            .unwrap();
+        let second = mgr
+            .acquire_tree(
+                "/data/reserved",
+                Duration::ZERO,
+                Some((&first.lease.lease_ref, &first.ownership_ref)),
+            )
+            .await
+            .unwrap();
+
+        // The creating lease goes away first; the shared token keeps the
+        // directory alive, so reclamation duty transfers to the survivor.
+        mgr.release(&first).await.unwrap();
+        assert!(fs.stat("/data/reserved").await.unwrap().is_dir);
+
+        mgr.release(&second).await.unwrap();
+        assert!(fs.stat("/data/reserved").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn tree_lock_on_missing_path_reclaims_directory_on_localfs() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let fs: Arc<dyn FileSystem> = Arc::new(
+            crate::plugins::localfs::LocalFileSystem::new(tempdir.path().to_str().unwrap())
+                .unwrap(),
+        );
+        let provider = Arc::new(crate::lock::provider::FilesystemPathLockProvider::new(
+            fs.clone(),
+            PathLockConfig::default().lock_expire_secs,
+        ));
+        let mgr = PathLockManager::new(fs.clone(), provider, PathLockConfig::default());
+        fs.mkdir("/data", 0o755).await.unwrap();
+
+        let lease = mgr
+            .acquire_tree("/data/deleted.md", Duration::ZERO, None)
+            .await
+            .unwrap();
+        assert!(tempdir.path().join("data/deleted.md").is_dir());
+
+        mgr.release(&lease).await.unwrap();
+
+        assert!(
+            !tempdir.path().join("data/deleted.md").exists(),
+            "localfs release must remove the reservation directory"
+        );
+        assert!(tempdir.path().join("data").is_dir());
+    }
+
     #[tokio::test]
     async fn acquire_exact_reentrant_requires_local_owned_capability() {
         let mgr = make_manager().await;
@@ -2715,6 +3075,7 @@ mod tests {
         // Historic payload: no lease_ref, no covered_paths.
         let legacy = PathLockHandoffRef {
             lease_ref: None,
+            created_dirs: Vec::new(),
             owner_id: lease.lease.owner_id.clone(),
             lock_paths: lease.lease.lock_paths.clone(),
             covered_paths: Vec::new(),

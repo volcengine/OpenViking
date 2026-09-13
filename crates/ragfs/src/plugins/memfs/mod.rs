@@ -207,13 +207,18 @@ impl FileSystem for MemFileSystem {
         // Check if exists
         match entries.get(&normalized) {
             Some(entry) if entry.is_dir => {
-                return Err(Error::IsADirectory(normalized));
+                // Match localfs: an empty directory may be removed, a
+                // non-empty one may not.
+                let prefix = format!("{}/", normalized);
+                if entries.keys().any(|p| p.starts_with(&prefix)) {
+                    return Err(Error::IsADirectory(normalized));
+                }
             }
             Some(_) => {}
             None => return Err(Error::not_found(&normalized)),
         }
 
-        // Remove file
+        // Remove file or empty directory
         entries.remove(&normalized);
         Ok(())
     }
@@ -622,6 +627,25 @@ MemFS has no configuration parameters.
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn remove_deletes_empty_directory_but_not_populated_one() {
+        let fs = MemFileSystem::new();
+        fs.mkdir("/empty", 0o755).await.unwrap();
+        fs.mkdir("/full", 0o755).await.unwrap();
+        fs.write("/full/file.txt", b"x", 0, crate::core::WriteFlag::Create)
+            .await
+            .unwrap();
+
+        fs.remove("/empty").await.unwrap();
+        assert!(fs.stat("/empty").await.is_err());
+
+        assert!(matches!(
+            fs.remove("/full").await,
+            Err(Error::IsADirectory(_))
+        ));
+        assert!(fs.stat("/full").await.unwrap().is_dir);
+    }
 
     #[tokio::test]
     async fn test_create_and_read_file() {

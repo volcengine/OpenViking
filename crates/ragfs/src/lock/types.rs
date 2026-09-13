@@ -52,6 +52,10 @@ pub struct PathLockLease {
     pub lock_paths: Vec<String>,
     /// Original path coverage granted by the lease.
     pub covered_paths: Vec<PathLockRequest>,
+    /// Directories materialized by `ensure_lock_dir` while acquiring this
+    /// lease (creation order, shallowest first). Reclaimed on final release
+    /// when still empty so locking a missing path leaves no residue behind.
+    pub created_dirs: Vec<String>,
 }
 
 /// Owned lease — caller controls refresh/release/handoff lifecycle.
@@ -84,6 +88,11 @@ pub struct PathLockHandoffRef {
     /// Original path coverage granted by the handed-off lease.
     #[serde(default)]
     pub covered_paths: Vec<PathLockRequest>,
+    /// Directories materialized while acquiring the handed-off lease
+    /// (creation order, shallowest first). The adopter inherits the duty to
+    /// reclaim them on final release when they are still empty.
+    #[serde(default)]
+    pub created_dirs: Vec<String>,
 }
 
 /// A single lock request for batch acquire.
