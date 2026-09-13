@@ -56,7 +56,7 @@ describe('server message presentation', () => {
     const messages = [
       msg('1', 'user', [tool('ok')]),
       msg('2', 'user', [
-        { type: 'image_url', url: 'https://example.com/a.png' },
+        { type: 'image_url', image_url: { url: 'https://example.com/a.png' } },
       ]),
       msg('3', 'user', [
         {

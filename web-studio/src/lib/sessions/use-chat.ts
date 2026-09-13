@@ -70,7 +70,7 @@ function clonePart(part: MessagePart): MessagePart {
     case 'tool_result':
       return { ...part } satisfies ToolResultPart
     case 'image_url':
-      return { ...part }
+      return { ...part, image_url: { ...part.image_url } }
     case 'context':
       return { ...part } satisfies ContextPart
   }

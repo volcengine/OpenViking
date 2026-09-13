@@ -421,12 +421,12 @@ function Attachments({ parts }: { parts: MessagePart[] }) {
           )
         if (
           part.type === 'image_url' &&
-          /^(https?:|data:image\/)/i.test(part.url)
+          /^(https?:|data:image\/)/i.test(part.image_url.url)
         )
           return (
             <img
               key={index}
-              src={part.url}
+              src={part.image_url.url}
               alt=""
               className="my-2 max-h-80 max-w-full rounded-lg object-contain"
             />

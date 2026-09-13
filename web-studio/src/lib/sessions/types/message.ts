@@ -51,8 +51,10 @@ export interface ToolResultPart {
 
 export interface ImagePart {
   type: 'image_url'
-  url: string
-  detail?: string
+  image_url: {
+    url: string
+    detail?: string
+  }
 }
 
 export type MessagePart =

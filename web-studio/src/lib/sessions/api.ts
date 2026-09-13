@@ -471,7 +471,7 @@ export function serializeParts(
       return [
         {
           type: 'image_url',
-          image_url: { url: part.url, detail: part.detail },
+          image_url: { ...part.image_url },
         },
       ]
     }

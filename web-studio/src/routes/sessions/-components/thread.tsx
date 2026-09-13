@@ -118,7 +118,7 @@ export function Thread({ sessionId }: ThreadProps) {
           </div>
         ) : historyError ? (
           <div role="alert" className="py-6 text-sm text-destructive">
-            {historyError.message}
+            {t('chat.historyLoadFailed', { error: historyError.message })}
           </div>
         ) : isEmpty ? (
           <ThreadEmpty />
@@ -143,7 +143,7 @@ export function Thread({ sessionId }: ThreadProps) {
           role="alert"
           className="relative z-10 mx-auto w-full max-w-4xl px-4 py-2 text-sm text-destructive"
         >
-          {chat.error}
+          {t('chat.sendFailed', { error: chat.error })}
         </div>
       )}
       <div className="relative z-10">
