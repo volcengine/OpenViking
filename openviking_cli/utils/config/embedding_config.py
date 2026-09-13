@@ -656,6 +656,16 @@ class EmbeddingConfig(BaseModel):
         ge=100,
         description="Maximum estimated tokens sent to embeddings when raw text fallback is used",
     )
+    tokenizer_safety_factor: float = Field(
+        default=1.0,
+        gt=0.0,
+        description=(
+            "Safety multiplier applied to token estimates before comparing against "
+            "max_input_tokens. Qwen3-style tokenizers inflate CJK-heavy text roughly "
+            "1.1-1.5x versus the CJK=1 estimate; set 1.5 for CJK-heavy deployments. "
+            "Default 1.0 preserves legacy behavior exactly."
+        ),
+    )
     allow_metadata_override: bool = Field(
         default=False,
         description=(
@@ -746,6 +756,7 @@ class EmbeddingConfig(BaseModel):
             "max_retries": self.max_retries,
             "max_concurrent": self.max_concurrent,
             "max_input_tokens": self.max_input_tokens,
+            "tokenizer_safety_factor": self.tokenizer_safety_factor,
         }
 
         factory_registry = {
