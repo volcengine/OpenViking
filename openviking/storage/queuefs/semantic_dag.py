@@ -211,6 +211,10 @@ class SemanticDagExecutor:
             path for key in ("added", "modified", "deleted") for path in self._changes.get(key, [])
         }
         self._added_paths = {path.rstrip("/") for path in self._changes.get("added", [])}
+        self._modified_paths = {path.rstrip("/") for path in self._changes.get("modified", [])}
+        self._tree_changed_paths = {
+            path.rstrip("/") for key in ("added", "deleted") for path in self._changes.get(key, [])
+        }
         # Per-file md5 (target-URI keyed) supplied by local incremental apply, so
         # re-vectorization records the fresh fingerprint instead of leaving it stale.
         self._file_md5s = dict(file_md5s or {})
@@ -641,11 +645,7 @@ class SemanticDagExecutor:
             return None
         rel_path = file_path[len(root) + 1 :]
         artifact_doc_rel = str(getattr(self._artifact_ref, "resource_rel", "")).strip("/")
-        artifact_rel = (
-            f"{artifact_doc_rel}/{rel_path}"
-            if artifact_doc_rel
-            else rel_path
-        )
+        artifact_rel = f"{artifact_doc_rel}/{rel_path}" if artifact_doc_rel else rel_path
         return await self._artifact_store.read_bytes(self._artifact_ref, artifact_rel)
 
     def _get_target_file_path(self, current_uri: str) -> Optional[str]:
@@ -670,11 +670,13 @@ class SemanticDagExecutor:
             and self._target_uri == self._root_uri
         )
 
-    def _path_has_direct_change(self, uri: str) -> bool:
-        if uri in self._changed_paths:
-            return True
-        prefix = uri.rstrip("/") + "/"
-        return any(path.startswith(prefix) for path in self._changed_paths)
+    def _directory_entries_changed(self, dir_uri: str) -> bool:
+        """Return whether this directory subtree gained or lost an entry."""
+        normalized = dir_uri.rstrip("/")
+        prefix = normalized + "/"
+        return any(
+            path == normalized or path.startswith(prefix) for path in self._tree_changed_paths
+        )
 
     def _ingest_options_for_file(self, file_path: str) -> IngestOptions:
         if self._generation_trigger == "content_write" and file_path not in self._changed_paths:
@@ -773,7 +775,10 @@ class SemanticDagExecutor:
         self, dir_uri: str, current_files: List[str], current_dirs: List[str]
     ) -> bool:
         if self._is_direct_incremental_update():
-            if self._path_has_direct_change(dir_uri):
+            node = self._nodes.get(dir_uri)
+            if node is not None and node.pending_snapshot > 0:
+                return True
+            if self._directory_entries_changed(dir_uri):
                 return True
             for current_file in current_files:
                 if self._file_change_status.get(current_file, True):
@@ -869,6 +874,17 @@ class SemanticDagExecutor:
                 summary_dict = await self._processor._generate_single_file_summary(
                     file_path, **summary_kwargs
                 )
+                old_abstract = self._file_abstracts.get(file_path.rstrip("/"), "")
+                new_abstract = str(summary_dict.get("summary") or "")
+                if (
+                    file_path.rstrip("/") in self._modified_paths
+                    and old_abstract
+                    and new_abstract
+                    and new_abstract == old_abstract
+                ):
+                    # The file record still needs its fresh md5/vector, but the
+                    # directory aggregation input did not change.
+                    self._file_change_status[file_path] = False
         except (AbstractOverviewFormatError, FileNotFoundError, ValueError):
             # A generated sidecar that opted into OKF must never be treated as
             # an empty file summary; doing so would silently feed metadata or

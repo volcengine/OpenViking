@@ -687,6 +687,153 @@ no-op 相对同一代码版本下普通本地入口（仍有 SOURCE 暂存和 wo
 
 当前样本说明文件级增量已经收敛：no-op 不重算文件摘要和向量，单文件修改只重新生成 1 个文件摘要。单文件修改仍有 4 次目录 overview LLM 调用及父级刷新，约 30.85s 的语义 DAG 是下一阶段最明显的优化空间。
 
+### 14.7 shared-only 严格基线对比
+
+为回答“只启用 shared、没有 P2-P5 时的耗时”，建立独立 worktree 固定在 `6e04f20ed`（仅 P1 shared SOURCE 引用）。该提交原有 shared worker 以普通 USER 身份读取 `viking://upload/...`，会稳定触发 `PermissionDeniedError`，因此基线只带同租户内部 ROOT 读取这一项正确性补丁；未引入 local parse output、MD5 diff、显式文件快照或向量 abstract 复用。
+
+两组使用同一 benchmark runner、同一冻结 fixture、同一 shared HTTP 入口、S3 正式存储、本地向量库、模型与并发配置。`environment.json.manifest` 按路径排序后字节级相同：40 文件、420,774 bytes、11,534 行，每个文件 SHA-256 一致。两组每轮都在 shared 上传后等待 5 秒，端到端时间均包含该等待。
+
+| 场景 | shared-only 基线 | P1-P5 优化 | 节省 | 降幅 | 加速比 |
+|---|---:|---:|---:|---:|---:|
+| initial | 100.85s | 54.90s | 45.95s | 45.6% | 1.84x |
+| no-op | 77.07s | 11.05s | 66.02s | 85.7% | 6.97x |
+| edit-one | 75.02s | 38.06s | 36.97s | 49.3% | 1.97x |
+
+扣除两组共同的 5 秒 benchmark 等待后：initial 为 95.85s → 49.90s（47.9%），no-op 为 72.07s → 6.05s（91.6%），edit-one 为 70.02s → 33.06s（52.8%）。
+
+#### 阶段耗时对照
+
+下表使用 profiler 的 `wall_union_s`。阶段可能并行或嵌套，不能把各项直接相加还原端到端时间。
+
+| 场景/阶段 | shared-only 基线 | P1-P5 优化 | 说明 |
+|---|---:|---:|---|
+| initial / shared 上传 | 1.38s | 0.15s | 单次网络波动较大，不作为核心算法收益 |
+| initial / shared 物化 | 0.14s | 0.52s | 两组都只下载一次 shared ZIP |
+| initial / 解析产物写入 | 11.60s | 0.21s | AGFS temp 全量写入改为 local artifact |
+| initial / 正式落库 | 10.38s | 2.76s | 基线 persist temp tree；优化组 local→正式 S3 |
+| initial / 语义 DAG | 66.98s | 42.93s | 首次导入仍需全量摘要/向量 |
+| no-op / shared 上传 | 0.13s | 0.15s | 基本一致 |
+| no-op / shared 物化 | 0.13s | 0.14s | 基本一致 |
+| no-op / 解析产物写入 | 11.97s | 0.28s | 避免 AGFS temp 全量上传 |
+| no-op / tree diff/apply | sync 9.86s | local diff 0.04s | MD5 内存比较，正式内容零上传 |
+| no-op / 语义 DAG | 41.92s | 3.06s | 向量 abstract 复用；文件摘要/embedding 均为 0 |
+| no-op / 清理 | 2.21s | local cleanup 未单独计时 | 优化组本地产物终态清理后目录为空 |
+| edit-one / 解析产物写入 | 10.91s | 0.26s | local artifact |
+| edit-one / tree diff/apply | sync 14.86s | local diff 0.13s | 只上传一个变化文件 |
+| edit-one / 语义 DAG | 33.92s | 27.07s | 文件摘要 15→1，embedding 27→9；仍有目录刷新 |
+
+工作量对照：
+
+| 场景 | 指标 | shared-only 基线 | P1-P5 优化 |
+|---|---|---:|---:|
+| no-op | 文件摘要生成 | 20 | 0 |
+| no-op | overview 生成 | 7 | 0 |
+| no-op | embedding | 34 | 0 |
+| edit-one | 文件摘要生成 | 15 | 1 |
+| edit-one | overview 生成 | 6 | 4 |
+| edit-one | embedding | 27 | 9 |
+
+所有六轮均为 `status=success`，40/40 正式文件、40/40 L2、全文逐文件校验通过，无缺失、无多余项、无正文不一致。每个场景目前各 1 个有效样本，结果用于严格同条件功能/工作量 A/B，不宣称 P95 或统计显著性。
+
+基线证据：`/Users/bytedance/github_openviking/OpenViking/.worktrees/add-resource-shared-baseline/.scratch/ingest-profile/shared-only-baseline40-20260913-012946`。优化组证据：`.scratch/ingest-profile/shared-local-strict-ab40-20260913-013449`。
+
+### 14.8 完整 OpenViking Python 源码规模严格 A/B
+
+进一步扩大到 OpenViking 开源仓库中 Git 跟踪的全部 `openviking/**/*.py`：642 文件、7,061,967 bytes、188,387 行。冻结 fixture manifest SHA-256 为 `f43b08d9d8173879fb9d57c80e62cc63db95bbecf6f081e71528674875b6f9e6`；基线与优化组的 `environment.json.manifest` 逐项比较完全一致。
+
+两组仍使用 shared HTTP、S3 正式存储、本地向量库及相同模型/并发。基线固定在 `6e04f20ed` 并仅补 shared 上传区内部 ROOT 读取权限，不带 P2-P5。两组上传后都有相同 5 秒 benchmark 等待。
+
+| 场景 | shared-only 基线 | P1-P5 优化 | 节省 | 降幅 | 加速比 |
+|---|---:|---:|---:|---:|---:|
+| initial | 397.71s | 143.12s | 254.59s | 64.0% | 2.78x |
+| no-op | 439.58s | 15.85s | 423.72s | 96.4% | 27.73x |
+| edit-one | 429.06s | 44.87s | 384.19s | 89.5% | 9.56x |
+
+扣除共同的 5 秒 benchmark 等待后：initial 为 392.71s → 138.12s（64.8%，2.84x），no-op 为 434.58s → 10.85s（97.5%，40.04x），edit-one 为 424.06s → 39.87s（90.6%，10.64x）。
+
+#### 完整仓库阶段耗时
+
+| 场景/阶段 | shared-only 基线 | P1-P5 优化 |
+|---|---:|---:|
+| initial / shared 上传 | 0.55s | 0.63s |
+| initial / shared 物化 | 0.23s | 0.56s |
+| initial / 解析及产物写入 | 148.78s | 1.00s |
+| initial / 正式落库 | persist 151.99s | local persist 41.80s |
+| initial / 语义 DAG | 83.15s | 90.55s |
+| no-op / shared 上传 | 0.61s | 0.54s |
+| no-op / shared 物化 | 0.28s | 0.35s |
+| no-op / 解析及产物写入 | 149.89s | 0.86s |
+| no-op / diff/apply | sync 191.60s | local diff 0.27s |
+| no-op / 语义 DAG | 79.93s | 4.09s |
+| no-op / 清理 | 4.34s | local cleanup 未单独计时 |
+| edit-one / 解析及产物写入 | 147.42s | 1.20s |
+| edit-one / diff/apply | sync 195.35s | local diff 0.20s |
+| edit-one / 语义 DAG | 66.73s | 32.04s |
+| edit-one / 清理 | 4.44s | local cleanup 未单独计时 |
+
+阶段时间使用 `wall_union_s`，阶段间存在嵌套/并行，不能直接求和还原端到端。initial 的语义 DAG 波动由真实模型时延主导；两组工作量完全相同（642 文件摘要、77 overview、132 LLM、796 embedding），因此不把 83.15s 与 90.55s 的差异解释为算法回退。
+
+#### 完整仓库增量工作量
+
+| 场景 | 指标 | shared-only 基线 | P1-P5 优化 |
+|---|---|---:|---:|
+| no-op | 文件摘要生成 | 324 | 0 |
+| no-op | overview 生成 | 53 | 0 |
+| no-op | LLM | 67 | 0 |
+| no-op | embedding / upsert | 430 / 430 | 0 / 0 |
+| edit-one | 文件摘要生成 | 305 | 1 |
+| edit-one | overview 生成 | 52 | 3 |
+| edit-one | LLM | 64 | 3 |
+| edit-one | embedding / upsert | 409 / 409 | 7 / 7 |
+
+六轮全部 `status=success`；642/642 正式文件、642/642 L2、逐文件正文校验通过，无缺失、无多余项、无队列错误。优化组 `parse-out` 终态为空。
+
+#### 新旧方案数据等价性检查
+
+正确性校验分为两层。每个 initial、no-op、edit-one 场景结束时，benchmark 都独立校验正式文件集合、逐文件正文和 L2 索引集合；六轮结果均为 642/642，且 missing、unexpected、content mismatch、vector missing 和 queue error 全部为 0。跨方案的完整字段级离线 diff 使用两组 edit-one 终态快照；initial 与 no-op 没有额外保存全量向量/sidecar 快照，因此不能宣称这两个中间时点的生成文本逐字段相等。优化组 no-op 的操作计数为 0，可以确认该轮没有重新生成摘要、embedding 或 upsert。
+
+| 检查项 | 结果 | 判定 |
+|---|---|---|
+| 正式业务文件 | 两组都是 642 个，URI 集合和最终正文逐文件一致 | 符合预期 |
+| 向量记录结构 | 两组都是 794 条：L0=76、L1=76、L2=642；`(uri, level)`、稳定 ID、类型、ACL、tags、维度等结构字段无差异 | 符合预期 |
+| MD5 | 基线 642 条 L2 均无 MD5；优化组 642 条 L2 均有 MD5，且与各自 edit-one 最终正式文件逐项一致 | 符合新增字段设计 |
+| 修改文件 | `connector/client.py` 两组稳定 ID 和 L2 abstract 相同；优化组额外写入正确 MD5 `25844a23d9544029ae171a52ffef56d3` | 符合预期 |
+| L2 abstract | 587/642 精确相同；55 条不同全部是代码解析器无法产出稳定 skeleton、转入 LLM fallback 的文件；确定性 AST 摘要差异为 0 | 符合模型非确定性预期 |
+| L2 dense vector | 149/642 字节级相同；其余虽有浮点差异，但跨组 cosine 最小 0.99731、均值 0.99944，低于 0.99 的为 0 | 符合 embedding 非确定性预期 |
+| sparse vector | 794/794 精确相同 | 符合预期 |
+| 目录及 sidecar 结构 | 两组都是 76 个目录、152 个 sidecar、869 个总树条目；URI 集合一致，全部 sidecar 可解析，`directory/source/generated_by/freshness` 元数据无差异 | 符合预期 |
+| L0/L1 正文与 dense vector | 75/76 个 abstract 和 76/76 个 overview 正文不同；L0 cosine 均值 0.87664，L1 为 0.95813 | 两次独立 LLM 生成的预期差异，不属于文件树或索引结构回归 |
+
+目录正文还暴露出一个既有质量问题：虽然两组 `freshness` 都声明 717 个直属条目全部采样、没有 unsampled，实际 Markdown 链接未覆盖所有直属条目；基线有 18 个目录共缺 69 个链接，优化组有 20 个目录共缺 77 个链接，且 24 个目录的链接集合不同。两组都没有错误或越界链接，目录/文件真实清单也完全一致，因此该现象来自生成式输出及后续长度截断没有保证“全量列出”，不是 local diff 漏同步；但目录 overview 不能据此宣称字节或条目覆盖严格等价。后续若把“所有直属条目必须在 overview 出现”作为产品契约，应由确定性后处理补链接或校验后重试，不能只依赖模型输出。
+
+因此，本轮结论是：持久化文件、索引拓扑和可确定计算字段等价，新增 MD5 正确；生成式摘要和 dense embedding 只满足结构与语义合理性，不满足字节级等价。这个结论足以排除 P1-P5 导致漏文件、漏索引、错误删除或 MD5 错配，但不等价于证明 LLM 输出文本完全一致。
+
+#### 单文件摘要不变时停止目录传播
+
+在已有 diff 快照携带旧 L2 abstract 的基础上，同路径 `modified` 文件生成新摘要后执行非空精确比较。若新旧 abstract 完全相同，文件本身仍按原流程更新 L2 向量和 MD5，但将该文件对子目录语义标记为未变化；直接父目录复用现有 sidecar，祖先目录也不再刷新。新增、删除、结构替换、旧摘要缺失、空摘要、新旧摘要不同以及目录存在 freshness 欠账时，仍按原流程传播。该规则不限定文件类型，也不做 embedding 相似度判断。
+
+在完整 642 文件 fixture 上重新运行 shared+local initial→edit-one，修改 `connector/client.py` 并保持其确定性 skeleton 不变。edit-one 结果为 642/642 正式文件、642/642 L2、全文一致、全部 L2 MD5 与最终正文一致、队列错误为 0。与应用该剪枝前的同规模 edit-one 样本相比：
+
+| 指标 | 剪枝前 | 剪枝后 |
+|---|---:|---:|
+| 端到端（含 5s 等待） | 44.87s | 23.22s |
+| 语义 DAG | 32.04s | 5.38s |
+| 文件摘要 | 1 | 1 |
+| overview / LLM | 3 / 3 | 0 / 0 |
+| embedding / upsert | 7 / 7 | 1 / 1 |
+
+本次端到端降低 48.3%，语义 DAG 降低 83.2%。两轮远程服务时延并非严格受控，因此耗时只作为单样本量级；调用数收敛是确定性的功能证据。保留的 1 次 embedding 用于更新修改文件的 L2 记录和 MD5，尚未引入“复用旧向量、仅更新标量”的额外写入协议。证据目录：`.scratch/ingest-profile/shared-local-abstract-stop-full-20260913-1026`。
+
+证据目录：
+
+- 基线：`/Users/bytedance/github_openviking/OpenViking/.worktrees/add-resource-shared-baseline/.scratch/ingest-profile/shared-only-openviking-full-20260913-015003`
+- 优化：`.scratch/ingest-profile/shared-local-openviking-full-20260913-021245`
+- 冻结 fixture：`.scratch/fixtures/openviking-python-full`
+- fixture manifest：`.scratch/fixtures/openviking-python-full.sha256`
+- 向量字段 diff：`.scratch/ingest-profile/openviking-full-vector-diff.json`
+- L2 摘要分类：`.scratch/ingest-profile/openviking-full-l2-abstract-classification.json`
+- sidecar 结构/覆盖 diff：`.scratch/ingest-profile/openviking-full-sidecar-semantic-diff.json`
+
 ## 15. 风险和发布条件
 
 | 风险 | 影响 | 控制措施 |

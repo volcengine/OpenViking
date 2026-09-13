@@ -234,6 +234,178 @@ async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_modified_file_with_same_abstract_stops_directory_propagation(monkeypatch):
+    root_uri = "viking://resources/root"
+    child_uri = f"{root_uri}/nested"
+    file_uri = f"{child_uri}/a.txt"
+    old_root_overview = render_abstract_overview(
+        ContextLevel.OVERVIEW, root_uri, "FILES:\n- nested/: old-root-child"
+    )
+    old_child_overview = render_abstract_overview(
+        ContextLevel.OVERVIEW, child_uri, "FILES:\n- a.txt: summary"
+    )
+    fake_fs = _FakeVikingFS(
+        tree={
+            root_uri: [{"name": "nested", "isDir": True}],
+            child_uri: [{"name": "a.txt", "isDir": False}],
+        },
+        file_contents={
+            file_uri: "changed body",
+            f"{root_uri}/.overview.md": old_root_overview,
+            f"{root_uri}/.abstract.md": render_abstract_overview(
+                ContextLevel.ABSTRACT, root_uri, "old-root-child"
+            ),
+            f"{child_uri}/.overview.md": old_child_overview,
+            f"{child_uri}/.abstract.md": render_abstract_overview(
+                ContextLevel.ABSTRACT, child_uri, "old-child"
+            ),
+        },
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
+    )
+
+    processor = _FakeProcessor(fake_fs)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER),
+        incremental_update=True,
+        target_uri=root_uri,
+        changes={"modified": [file_uri]},
+        file_abstracts={file_uri: "summary"},
+        file_md5s={file_uri: "new-md5"},
+    )
+
+    await executor.run(root_uri)
+
+    assert processor.summarized_files == [file_uri]
+    assert processor.vectorized_files == [file_uri]
+    assert processor.file_md5s[file_uri] == "new-md5"
+    assert processor.generated_overviews == []
+    assert processor.vectorized_dirs == []
+    assert fake_fs._file_contents[f"{child_uri}/.overview.md"] == old_child_overview
+    assert fake_fs._file_contents[f"{root_uri}/.overview.md"] == old_root_overview
+
+
+@pytest.mark.asyncio
+async def test_modified_file_with_different_abstract_still_propagates(monkeypatch):
+    root_uri = "viking://resources/root"
+    file_uri = f"{root_uri}/a.txt"
+    fake_fs = _FakeVikingFS(
+        tree={root_uri: [{"name": "a.txt", "isDir": False}]},
+        file_contents={
+            file_uri: "changed body",
+            f"{root_uri}/.overview.md": render_abstract_overview(
+                ContextLevel.OVERVIEW, root_uri, "FILES:\n- a.txt: old-summary"
+            ),
+            f"{root_uri}/.abstract.md": render_abstract_overview(
+                ContextLevel.ABSTRACT, root_uri, "old-abstract"
+            ),
+        },
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
+    )
+
+    processor = _FakeProcessor(fake_fs)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER),
+        incremental_update=True,
+        target_uri=root_uri,
+        changes={"modified": [file_uri]},
+        file_abstracts={file_uri: "old-summary"},
+    )
+
+    await executor.run(root_uri)
+
+    assert processor.generated_overviews == [root_uri]
+    assert processor.vectorized_dirs == [root_uri]
+
+
+@pytest.mark.asyncio
+async def test_added_file_with_matching_stale_abstract_still_propagates(monkeypatch):
+    root_uri = "viking://resources/root"
+    child_uri = f"{root_uri}/nested"
+    file_uri = f"{child_uri}/a.txt"
+    fake_fs = _FakeVikingFS(
+        tree={
+            root_uri: [{"name": "nested", "isDir": True}],
+            child_uri: [{"name": "a.txt", "isDir": False}],
+        },
+        file_contents={file_uri: "new body"},
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
+    )
+
+    processor = _FakeProcessor(fake_fs)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER),
+        incremental_update=True,
+        target_uri=root_uri,
+        changes={"added": [file_uri]},
+        file_abstracts={file_uri: "summary"},
+    )
+
+    await executor.run(root_uri)
+
+    assert processor.generated_overviews == [child_uri, root_uri]
+    assert processor.vectorized_dirs == [child_uri, root_uri]
+
+
+@pytest.mark.asyncio
+async def test_deleted_last_nested_file_still_refreshes_existing_ancestor(monkeypatch):
+    root_uri = "viking://resources/root"
+    deleted_uri = f"{root_uri}/removed/a.txt"
+    fake_fs = _FakeVikingFS(
+        tree={root_uri: []},
+        file_contents={
+            f"{root_uri}/.overview.md": render_abstract_overview(
+                ContextLevel.OVERVIEW, root_uri, "FILES:\n- removed/: old-child"
+            ),
+            f"{root_uri}/.abstract.md": render_abstract_overview(
+                ContextLevel.ABSTRACT, root_uri, "old-root"
+            ),
+        },
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
+    )
+
+    processor = _FakeProcessor(fake_fs)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER),
+        incremental_update=True,
+        target_uri=root_uri,
+        changes={"deleted": [deleted_uri]},
+    )
+
+    await executor.run(root_uri)
+
+    assert processor.generated_overviews == [root_uri]
+    assert processor.vectorized_dirs == [root_uri]
+
+
+@pytest.mark.asyncio
 async def test_artifact_snapshot_drives_dag_when_target_listing_is_empty(
     tmp_path, monkeypatch
 ):
@@ -408,6 +580,53 @@ async def test_content_write_tags_apply_only_to_changed_file(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_content_write_with_same_abstract_still_updates_file_and_skips_parent(monkeypatch):
+    root_uri = "viking://resources/root"
+    changed_uri = f"{root_uri}/a.txt"
+    old_overview = render_abstract_overview(
+        ContextLevel.OVERVIEW, root_uri, "FILES:\n- a.txt: summary"
+    )
+    fake_fs = _FakeVikingFS(
+        tree={root_uri: [{"name": "a.txt", "isDir": False}]},
+        file_contents={
+            changed_uri: "new content",
+            f"{root_uri}/.overview.md": old_overview,
+            f"{root_uri}/.abstract.md": render_abstract_overview(
+                ContextLevel.ABSTRACT, root_uri, "old-abstract"
+            ),
+        },
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
+    )
+
+    processor = _FakeProcessor(fake_fs)
+    tag_options = IngestOptions(search_tags=["team=search"])
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER),
+        incremental_update=True,
+        target_uri=root_uri,
+        changes={"modified": [changed_uri]},
+        file_abstracts={changed_uri: "summary"},
+        ingest_options=tag_options,
+        generation_trigger="content_write",
+    )
+
+    await executor.run(root_uri)
+
+    assert processor.file_ingest_options == {changed_uri: tag_options}
+    assert processor.vectorized_files == [changed_uri]
+    assert processor.generated_overviews == []
+    assert processor.vectorized_dirs == []
+    assert fake_fs._file_contents[f"{root_uri}/.overview.md"] == old_overview
+
+
+@pytest.mark.asyncio
 async def test_pending_refresh_rebuilds_every_sampled_file_summary(monkeypatch):
     root_uri = "viking://resources/wide"
     file_names = [f"file-{idx:03}.txt" for idx in range(40)]
@@ -447,6 +666,7 @@ async def test_pending_refresh_rebuilds_every_sampled_file_summary(monkeypatch):
         target_uri=root_uri,
         recursive=False,
         changes={"modified": [changed_path]},
+        file_abstracts={changed_path: "summary"},
     )
 
     await executor.run(root_uri)
