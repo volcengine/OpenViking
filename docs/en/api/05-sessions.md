@@ -1421,6 +1421,10 @@ Commit a session. Message archiving (Phase 1) completes immediately. Summary gen
 |-----------|------|----------|---------|-------------|
 | session_id | str | Yes | - | Session ID to commit |
 | keep_recent_count | int | No | 0 | Number of recent live messages to retain (kept live, not archived) after commit. `0` (default) archives all messages. |
+| reset_context | bool | No | false | HTTP API: archive all live messages, then append a boundary archive containing only a `.done` marker with `context_reset`. Keeps the session ID and raw history, clears injected context and stops future summaries from inheriting pre-reset overviews. Requires `keep_recent_count=0` and no `retention_mode`. |
+
+`reset_context` is used by the OpenClaw plugin reset hook and `Session.commit_async()`. It also creates a boundary when there are no live messages, unless the newest archive is already a reset boundary. Memory extraction for older archives can finish independently; long-term memories are preserved. SDK/CLI convenience options are not added in this change.
+
 
 The effective policy is resolved in this order: Session `.meta.json`, latest
 `settings/user_config.json`, then the kernel default. The fully resolved policy

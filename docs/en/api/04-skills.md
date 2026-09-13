@@ -341,8 +341,24 @@ fmt.Println(result["task_id"])
 
 **CLI**
 
+`ov add-skill` and `ov skills add` share the same options and import flow. The CLI
+clones Git repositories or GitHub `tree` directories locally, then packages and
+uploads the selected skills. The server API still receives inline content or
+temporary uploads. Supporting files such as `references/` and `scripts/` are included.
+Use `--list` to inspect a collection and `--skill` to select skills. Batch imports
+require confirmation unless `--yes` is set. By default, the command waits for downloading,
+uploading, server-side parsing, overview generation, and file writes, but not vectorization.
+`--wait` additionally waits for vectorization.
+
 ```bash
-# Add skill (from file or directory
+# Import one skill from the standalone skills branch; ov skills add also works
+ov add-skill https://github.com/volcengine/OpenViking/tree/skills/llm-wiki --wait
+
+# Inspect a local collection, then select skills to import
+ov add-skill ./examples/compile/ov-compile-skills --list
+ov add-skill ./examples/compile/ov-compile-skills --skill llm-wiki daily-report --yes
+
+# Add a skill from a local file or directory
 ov add-skill ./skills/my-skill.json
 ov add-skill ./skills/search-web/SKILL.md
 ov add-skill ./skills/code-runner/
@@ -377,7 +393,7 @@ ov add-skill ./skills/my-skill/ -o json
 
 **CLI response (default table format)**:
 ```
-Note: Skill is being processed in the background.
+Note: Skill processing may continue in the background.
 Use 'ov task status <task_id>' to check progress, or 'ov task list' to see all tasks.
 status          success
 root_uri        viking://user/alice/skills/my-skill

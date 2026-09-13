@@ -32,6 +32,7 @@ Task records are persisted in AGFS and can be queried after server restart, subj
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | task_id | str | Yes | - | Task ID returned by a background API |
+| include_events | bool | No | false | Include persisted execution events in the HTTP response |
 
 #### 3. Usage Examples
 
@@ -114,6 +115,44 @@ ov task status uuid-xxx
 ```
 
 `stage` is nullable. Git repository resource import tasks may report `queued`, `fetching`, `parsing`, `finalizing`, or `processing_queue`; other task types may leave it as `null`. Live queue counters are intentionally not part of task status; use observer queue APIs for live counts, or read `result.queue_status` after completion.
+
+**Recorded execution events (HTTP)**
+
+Request `GET /api/v1/tasks/{task_id}?include_events=true` to also receive `result.execution_events`. The default detail response and task lists omit this field. Events use the same authorization and retention policy as the task record.
+
+```json
+{
+  "items": [
+    {
+      "seq": 1,
+      "recorded_at": "2026-09-09T01:00:00.123456+00:00",
+      "kind": "created",
+      "status": "pending",
+      "stage": null,
+      "operation": null,
+      "error": null
+    }
+  ],
+  "dropped_count": 0,
+  "started_mid_task": false
+}
+```
+
+| Kind | Recorded fact |
+|------|---------------|
+| `created` | TaskTracker created the task record |
+| `status_changed` | TaskTracker accepted a new status, including cancellation and terminal states |
+| `stage_changed` | An execution path reported a different stage while the task was active |
+| `error_recorded` | TaskTracker accepted the task's first sanitized error |
+| `waiting_for_descendants` | The wait path observed unfinished owned queue work, excluding its own work ID |
+
+`recorded_at` is the UTC time TaskTracker recorded the event, not browser polling time or necessarily when an underlying exception occurred. Events and task state are written together before publication. `seq` orders events within this task even when timestamps coincide. `stage` is the last reported task stage; parallel work can report errors from other stages. `operation`, when present, identifies the reporting work item. Errors use the existing sanitization and length limit; this history is not the complete component log or Python traceback.
+
+History retains at most 64 events and 32 KiB of serialized event data. Older entries are removed first, `dropped_count` counts removed entries, and retained sequence numbers are not reset. Events expire with the task. Legacy tasks return `execution_events: null`; if an active legacy task later emits an event, `started_mid_task` is true. No earlier events are reconstructed. An older server can omit the field even when requested. Studio explains these cases and retains task metadata, results and errors.
+
+To instrument another execution point, register its kind in `openviking/service/task_events.py`, add Studio translations, and call `await tracker.record_event(task_id, kind, account_id=..., user_id=..., operation=...)`. This internal API records a fact without changing status or stage; it accepts bounded operation identifiers, not arbitrary log payloads. Existing lifecycle methods automatically record their accepted transitions.
+
+Persisted task files now contain `execution_events`. Rolling back requires a version that preserves unknown task fields (commit `a5166386` or later); older readers may reject these files. Rolling back also stops event reporting, so history for tasks active during a downgrade may be incomplete.
 
 **Response Example (completed)**
 

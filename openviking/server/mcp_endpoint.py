@@ -22,7 +22,7 @@ import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 from urllib.parse import quote
 
 from mcp.server.fastmcp import FastMCP
@@ -47,6 +47,7 @@ from openviking.parse.mode import ParseMode, normalize_parse_mode
 from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.retrieve.context_assembler import (
     DEFAULT_MAX_TOKENS,
+    MAX_EXCLUDE_URIS,
     AssembleParams,
     assemble_context,
 )
@@ -283,18 +284,18 @@ async def search(
     context_type: Optional[Union[str, List[str]]] = None,
     mode: Literal["list", "context"] = "list",
     query_expansion: Literal["off", "auto"] = "auto",
-    max_tokens: int = DEFAULT_MAX_TOKENS,
+    max_tokens: Annotated[int, Field(ge=64, le=32000)] = DEFAULT_MAX_TOKENS,
     quotas: Optional[Dict[str, int]] = None,
     purpose: Optional[Literal["chat", "coding"]] = None,
     detail: Literal["auto", "abstract", "overview", "full"] = "auto",
     detail_by_category: Optional[Dict[str, str]] = None,
-    dedup_turns: int = 0,
-    exclude_uris: Optional[List[str]] = None,
+    dedup_turns: Annotated[int, Field(ge=0, le=100)] = 0,
+    exclude_uris: Annotated[Optional[List[str]], Field(max_length=MAX_EXCLUDE_URIS)] = None,
     peer_scope: Literal["actor", "all"] = "all",
     other_peer_penalty: Optional[float] = None,
     other_peer_penalties: Optional[Dict[str, float]] = None,
     rewrite: Literal["off", "auto"] = "off",
-    rewrite_max_bullets: int = 6,
+    rewrite_max_bullets: Annotated[int, Field(ge=1, le=20)] = 6,
     read_content: bool = False,
 ) -> str:
     """Deep semantic retrieval with optional session context and intent analysis.

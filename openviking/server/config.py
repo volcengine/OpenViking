@@ -328,6 +328,14 @@ class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 1933
     workers: int = 1
+    executor_threads: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Maximum number of threads in each server process's default asyncio "
+            "executor. Zero keeps Python's default sizing policy."
+        ),
+    )
     # Seconds an idle HTTP keep-alive connection is kept open before the server
     # closes it. Defaults to 5 to match uvicorn's built-in default and preserve
     # the existing service behavior. Raise it above the idle-connection lifetime

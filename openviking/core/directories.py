@@ -19,6 +19,7 @@ from openviking.core.namespace import (
     user_space_fragment,
 )
 from openviking.server.identity import RequestContext
+from openviking.storage.abstract_overview import AbstractOverviewFormatError
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.vector_ids import vector_record_id
 
@@ -304,7 +305,18 @@ class DirectoryInitializer:
         from openviking_cli.utils.logger import get_logger
 
         logger = get_logger(__name__)
-        if await self._check_agfs_files_exist(target.uri, ctx=target.ctx):
+        try:
+            directory_exists = await self._check_agfs_files_exist(target.uri, ctx=target.ctx)
+        except AbstractOverviewFormatError as exc:
+            logger.warning(
+                "[VikingFS] Directory %s (account=%s) has an invalid abstract; "
+                "preserving existing contents: %s",
+                target.uri,
+                target.ctx.account_id,
+                exc,
+            )
+            return False
+        if directory_exists:
             logger.debug(f"[VikingFS] Directory {target.uri} already exists")
             return False
         logger.debug(f"[VikingFS] Creating directory: {target.uri} for scope {target.scope}")

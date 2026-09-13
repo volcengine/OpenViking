@@ -1,18 +1,24 @@
-from pathlib import Path
+import json
+from email.parser import BytesParser
+from email.policy import default
 from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
 
+from openviking.parse.accessors.base import LocalResource, SourceType
+from openviking.parse.parser_router import ParserRouter
 from openviking.parse.understanding_api import (
     PREPARED_FILE_ID_ARG,
     UnderstandingAPI,
     UnderstandingAPIError,
 )
+from openviking.utils.media_processor import UnifiedResourceProcessor
 from openviking_cli.exceptions import InvalidArgumentError
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("entry_point", ["parse", "submit", "upload_file"])
 @pytest.mark.parametrize(
     "filename,content,original_source,resolved_extension,source_format",
     [
@@ -22,35 +28,58 @@ from openviking_cli.exceptions import InvalidArgumentError
     ],
 )
 async def test_parse_uses_downloaded_file_and_resolved_extension(
-    monkeypatch, tmp_path, filename, content, original_source, resolved_extension, source_format
+    monkeypatch,
+    tmp_path,
+    entry_point,
+    filename,
+    content,
+    original_source,
+    resolved_extension,
+    source_format,
 ):
-    downloaded = tmp_path / filename
-    downloaded.write_bytes(content)
+    source_name = f"original.{source_format}"
+    uploaded_names = []
+    uploaded_content = []
+
+    def handler(request):
+        if request.url.path.endswith("/files"):
+            if request.url.query == b"uploads":
+                uploaded_names.append(json.loads(request.content)["file_name"])
+                return httpx.Response(200, json={"upload_id": "upload-1", "object_key": "obj-1"})
+            if request.method == "GET":
+                return httpx.Response(200, json={"parts": []})
+            if request.method == "PUT":
+                uploaded_content.append(request.content)
+                return httpx.Response(200, json={"etag": "part-1"})
+            if not request.url.query:
+                message = BytesParser(policy=default).parsebytes(
+                    f"Content-Type: {request.headers['content-type']}\r\n\r\n".encode()
+                    + request.content
+                )
+                part = next(part for part in message.iter_parts() if part.get_filename())
+                uploaded_names.append(part.get_filename())
+                uploaded_content.append(part.get_payload(decode=True))
+            return httpx.Response(200, json={"id": "file-1", "status": "active"})
+        if request.method == "POST" and request.url.path.endswith("/responses"):
+            assert json.loads(request.content)["input"][0]["content"] == [
+                {"type": "file", "file": {"file_id": "file-1"}}
+            ]
+            return httpx.Response(200, json={"id": "response-1"})
+        assert request.url.path.endswith("/responses/response-1")
+        return httpx.Response(
+            200,
+            json={"status": "completed", "result": {"zip_url": "https://example.com/result.zip"}},
+        )
+
+    api = _api_with_transport(monkeypatch, handler)
+    api._enable_resumable_upload = True
+    # Exercise both upload protocols through every ingestion entry point.
+    api._upload_simple_max_bytes = 1 if source_format == "pdf" else 1024
+    router = ParserRouter(parser_registry=object())
+    router._understanding_api = api
+    processor = UnifiedResourceProcessor(vlm_processor=object())
+    processor._parser_router = router
     zip_path = tmp_path / "result.zip"
-    zip_path.write_bytes(b"zip")
-    uploaded: list[Path] = []
-
-    api = UnderstandingAPI.__new__(UnderstandingAPI)
-    api._video_exts = {"mp4"}
-    api._audio_exts = {"mp3"}
-    api._image_exts = {"png"}
-
-    async def create_file(*, local_path):
-        uploaded.append(local_path)
-        return {"id": "file-1"}
-
-    async def create_response_for_file(*, file_id):
-        assert file_id == "file-1"
-        return {"id": "response-1"}
-
-    async def poll_response(*, response_id):
-        assert response_id == "response-1"
-        return {"status": "completed"}
-
-    monkeypatch.setattr(api, "_create_file", create_file)
-    monkeypatch.setattr(api, "_create_response_for_file", create_response_for_file)
-    monkeypatch.setattr(api, "_poll_response", poll_response)
-    monkeypatch.setattr(api, "_extract_zip_url", lambda _: "https://example.com/result.zip")
     monkeypatch.setattr(api, "_download_zip", lambda _: _return(zip_path))
     monkeypatch.setattr(
         api,
@@ -58,21 +87,39 @@ async def test_parse_uses_downloaded_file_and_resolved_extension(
         lambda **_: _return("viking://temp/result"),
     )
 
-    result = await api.parse(
-        downloaded,
-        original_source=original_source,
-        resource_name="report",
-        resolved_extension=resolved_extension,
-    )
+    for prefix in ("tmpABC", "tmpXYZ"):
+        downloaded = tmp_path / f"{prefix}-{filename}"
+        downloaded.write_bytes(content)
+        resource = LocalResource(
+            path=downloaded,
+            source_type=SourceType.HTTP,
+            original_source=original_source,
+            meta={"original_filename": source_name, "extension": resolved_extension},
+        )
+        processor._set_resolved_identity(resource, source_name=None)
+        if entry_point == "parse":
+            zip_path.write_bytes(b"zip")
+            result = await processor.process(
+                original_source,
+                prepared_resource=resource,
+                resource_name="report",
+                source_name=None,
+                parser_backend="understanding",
+            )
+            assert result.source_path == original_source
+            assert result.source_format == source_format
+            assert result.root.title == "report"
+        elif entry_point == "submit":
+            assert await processor.submit_understanding(resource) == "response-1"
+        else:
+            assert await processor.upload_understanding_file(resource) == "file-1"
 
-    assert uploaded == [downloaded]
-    assert result.source_path == original_source
-    assert result.source_format == source_format
-    assert result.root.title == "report"
+    assert uploaded_names == [source_name, source_name]
+    assert uploaded_content == [content, content]
 
 
 @pytest.mark.asyncio
-async def test_upload_file_validates_input_and_returns_file_id(tmp_path):
+async def test_upload_file_validates_input_and_returns_file_id(monkeypatch, tmp_path):
     empty_source = tmp_path / "empty.pdf"
     empty_source.touch()
     api = UnderstandingAPI.__new__(UnderstandingAPI)
@@ -87,12 +134,17 @@ async def test_upload_file_validates_input_and_returns_file_id(tmp_path):
 
     source = tmp_path / "download.pdf"
     source.write_bytes(b"%PDF-1.7")
-    api._create_file = AsyncMock(return_value={"id": "file-1"})
+
+    def handler(request):
+        assert b'filename="download.pdf"' in request.content
+        assert source.read_bytes() in request.content
+        return httpx.Response(200, json={"id": "file-1"})
+
+    api = _api_with_transport(monkeypatch, handler)
 
     file_id = await api.upload_file(source)
 
     assert file_id == "file-1"
-    api._create_file.assert_awaited_once_with(local_path=source)
 
 
 @pytest.mark.asyncio
@@ -143,21 +195,6 @@ async def test_file_above_simple_limit_requires_resumable_upload(tmp_path):
 
     with pytest.raises(ValueError, match="size=9, upload_simple_max_bytes=8"):
         await api._create_file(local_path=source)
-
-
-@pytest.mark.asyncio
-async def test_file_above_simple_limit_uses_multipart_when_enabled(tmp_path):
-    source = tmp_path / "large.pdf"
-    source.write_bytes(b"123456789")
-    api = UnderstandingAPI.__new__(UnderstandingAPI)
-    api._upload_simple_max_bytes = 8
-    api._enable_resumable_upload = True
-    api._multipart_create_file = AsyncMock(return_value={"id": "file-1"})
-
-    result = await api._create_file(local_path=source)
-
-    assert result == {"id": "file-1"}
-    api._multipart_create_file.assert_awaited_once_with(source)
 
 
 @pytest.mark.asyncio
@@ -325,7 +362,7 @@ async def test_http_errors_preserve_business_message(monkeypatch, tmp_path, meth
         "_create_response_for_file": {"file_id": "file-1"},
         "_create_response_for_url": {"url": "https://example.test/a.pdf", "doc_type": "pdf"},
         "_poll_response": {"response_id": "response-1"},
-        "_uploads_init": {"file_path": source},
+        "_uploads_init": {"file_path": source, "file_name": source.name},
         "_uploads_status": {"upload_id": "upload-1", "object_key": "object-1"},
         "_uploads_put_part": {
             "upload_id": "upload-1",

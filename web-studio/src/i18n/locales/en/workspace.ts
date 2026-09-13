@@ -405,6 +405,27 @@ const workspace = {
       noResultCancelledDescription:
         'This task was cancelled before it returned a result.',
     },
+    events: {
+      title: 'Task execution log',
+      description:
+        'Reported task events. Times show when the backend recorded each event.',
+      created: 'Task registered',
+      statusChanged: 'Task status changed to {{status}}',
+      stageChanged: 'Reported stage changed to {{stage}}',
+      errorRecorded: 'Backend recorded an error',
+      waitingForDescendants:
+        'Unfinished work remains; waiting for owned work to settle',
+      stageContext: 'Last reported stage: {{stage}}',
+      operation: 'Operation: {{operation}}',
+      partial: 'Only events recorded after tracking began are available.',
+      truncated: '{{count}} earlier events were truncated.',
+      unsupported: 'The server did not provide task events.',
+      empty: 'No execution events were recorded for this task.',
+      copy: 'Copy events',
+      copied: 'Events copied',
+      copyFailed: 'Could not copy events',
+      context: 'Current task context',
+    },
     filters: {
       label: 'Filter',
       type: 'Task type',

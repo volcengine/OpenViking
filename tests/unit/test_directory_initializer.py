@@ -1,3 +1,5 @@
+from unittest.mock import AsyncMock
+
 import pytest
 
 from openviking.core.directories import PRESET_DIRECTORIES, DirectoryInitializer
@@ -7,6 +9,7 @@ from openviking.core.namespace import (
     may_include_hidden_actor_peers,
 )
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.abstract_overview import body_for_preview
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -30,7 +33,7 @@ class _FakeVikingFS:
     async def abstract(self, uri, ctx):
         if uri not in self.contexts:
             raise FileNotFoundError(uri)
-        return self.contexts[uri]["abstract"]
+        return body_for_preview(self.contexts[uri]["abstract"])
 
     async def write_context(self, uri, abstract, overview, is_leaf, ctx):
         if ctx.actor_peer_id and may_include_hidden_actor_peers(uri, ctx):
@@ -43,7 +46,7 @@ class _FakeVikingFS:
 
 
 @pytest.mark.asyncio
-async def test_initialize_account_workspace_batches_preset_directories():
+async def test_initialize_account_workspace_batches_preset_directories(monkeypatch):
     vikingdb = _FakeVikingDB()
     viking_fs = _FakeVikingFS()
     initializer = DirectoryInitializer(vikingdb, viking_fs=viking_fs)
@@ -66,11 +69,21 @@ async def test_initialize_account_workspace_batches_preset_directories():
     assert len(vikingdb.get_calls[0][0]) == 2 * len(vectorized_uris)
     assert len(vikingdb.embedding_messages) == 2 * len(vectorized_uris)
 
+    malformed_abstract = "---\ndirectory: viking://resources/\n"
+    viking_fs.contexts["viking://resources"]["abstract"] = malformed_abstract
+
     second_account_count, second_user_count = await initializer.initialize_account_workspace(ctx)
 
     assert (second_account_count, second_user_count) == (0, 0)
+    assert viking_fs.contexts["viking://resources"]["abstract"] == malformed_abstract
     assert set(viking_fs.contexts) == expected_uris
     assert len(vikingdb.get_calls) == 1
+
+    storage_error = PermissionError("storage access denied")
+    monkeypatch.setattr(viking_fs, "abstract", AsyncMock(side_effect=storage_error))
+    with pytest.raises(PermissionError) as exc_info:
+        await initializer.initialize_account_workspace(ctx)
+    assert exc_info.value is storage_error
 
 
 @pytest.mark.asyncio

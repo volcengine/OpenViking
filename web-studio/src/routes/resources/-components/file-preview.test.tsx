@@ -113,6 +113,11 @@ function renderPreview(
 }
 
 describe('FilePreview Markdown links', () => {
+  beforeEach(() => cleanup())
+  afterEach(() => {
+    previewState.override = null
+  })
+
   it('opens internal Markdown links in the resource preview', () => {
     const onNavigate = vi.fn()
     renderPreview(file, onNavigate)
@@ -172,6 +177,26 @@ describe('FilePreview Markdown links', () => {
     fireEvent.click(screen.getByRole('link', { name: '目标' }))
 
     expect(onNavigate).toHaveBeenCalledWith('viking://resources/资料/目标.md')
+  })
+
+  it.each([file, directory])('opens encoded filenames from $name', (entry) => {
+    const onNavigate = vi.fn()
+    const prefix = entry.isDir ? 'viking://resources/wiki/' : './'
+    const content = `[One](${prefix}a%23one.md#intro)\n\n[Percent](${prefix}a%2523one.md#intro)`
+    previewState.override = entry.isDir
+      ? null
+      : { content, fileType: 'markdown' }
+    renderPreview(entry, onNavigate, content)
+    fireEvent.click(screen.getByRole('link', { name: 'One' }))
+    fireEvent.click(screen.getByRole('link', { name: 'Percent' }))
+    expect(onNavigate).toHaveBeenNthCalledWith(
+      1,
+      'viking://resources/wiki/a#one.md',
+    )
+    expect(onNavigate).toHaveBeenNthCalledWith(
+      2,
+      'viking://resources/wiki/a%23one.md',
+    )
   })
 
   it('preserves non-viking links in a directory overview', () => {

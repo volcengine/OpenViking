@@ -120,7 +120,7 @@ describe("context-engine commitOVSession()", () => {
 
     await engine.commitOVSession({ sessionId: "s1" });
 
-    expect(client.commitSession.mock.calls[0][1]).toMatchObject({ wait: true });
+    expect(client.commitSession.mock.calls[0][1]).toMatchObject({ wait: true, keepRecentCount: 0, resetContext: true });
   });
 
   it("uses sessionKey-derived OV session ID for commitOVSession", async () => {
