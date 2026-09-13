@@ -3,6 +3,7 @@ import path from "path"
 import {
   extractPartsFromPayload,
   extractTextFromPayload,
+  filterCaptureParts,
   shouldCaptureText,
 } from "./shared/capture-utils.mjs"
 import {
@@ -418,10 +419,14 @@ export function createMemorySessionManager({ config, pluginRoot, client }) {
     const captureParts = partsRaw.flatMap((part) => extractPartsFromPayload(part, {
       toolMaxChars: config.captureToolMaxChars,
     }))
-    const decision = shouldCaptureText(rawText, role, config)
-    if (!decision.shouldCapture && captureParts.length === 0) return null
-    const body = captureParts.length > 0
-      ? { role, parts: captureParts }
+    // Apply captureFilters (sed-style redaction rules) to the extracted parts,
+    // mirroring the Codex plugin's reference flow in shared/capture-utils.mjs.
+    const shaped = filterCaptureParts(captureParts, role, config)
+    if (shaped.dropped) return null
+    const decision = shouldCaptureText(rawText, role, config, { filters: shaped.parts.length === 0 })
+    if (!decision.shouldCapture && shaped.parts.length === 0) return null
+    const body = shaped.parts.length > 0
+      ? { role, parts: shaped.parts }
       : { role, content: decision.text }
     const peerId = effectivePeerId(config)
     if (peerId) body.peer_id = peerId

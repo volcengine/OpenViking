@@ -46,6 +46,7 @@ const DEFAULT_CONFIG = {
   captureMaxLength: 24000,
   captureAssistantTurns: true,
   captureToolMaxChars: 1000000,
+  captureFilters: [],
   commitTokenThreshold: 20000,
   commitKeepRecentCount: 10,
   profileTokenBudget: 10000,
@@ -160,6 +161,7 @@ function applyBehaviorConfig(config, fileConfig = {}) {
     "captureMaxLength",
     "captureAssistantTurns",
     "captureToolMaxChars",
+    "captureFilters",
     "commitTokenThreshold",
     "commitKeepRecentCount",
     "profileTokenBudget",
@@ -215,6 +217,14 @@ function applyEnv(config) {
   if (process.env.OPENVIKING_CAPTURE_TOOL_MAX_CHARS) {
     config.captureToolMaxChars = process.env.OPENVIKING_CAPTURE_TOOL_MAX_CHARS
   }
+  if (process.env.OPENVIKING_CAPTURE_FILTERS) {
+    try {
+      const filters = JSON.parse(process.env.OPENVIKING_CAPTURE_FILTERS)
+      if (Array.isArray(filters)) config.captureFilters = filters
+    } catch {
+      // malformed env value: keep file/default value
+    }
+  }
   if (process.env.OPENVIKING_COMMIT_TOKEN_THRESHOLD) {
     config.commitTokenThreshold = process.env.OPENVIKING_COMMIT_TOKEN_THRESHOLD
   }
@@ -263,6 +273,9 @@ function normalizeConfig(config) {
   config.recallQueryExpansion = config.recallQueryExpansion === "off" ? "off" : "auto"
   config.captureMaxLength = Math.max(200, Math.min(100000, Math.round(Number(config.captureMaxLength) || 24000)))
   config.captureToolMaxChars = Math.max(200, Math.min(1000000, Math.round(Number(config.captureToolMaxChars) || 1000000)))
+  config.captureFilters = Array.isArray(config.captureFilters)
+    ? config.captureFilters.filter((rule) => typeof rule === "string" && rule.length > 0)
+    : []
   config.commitTokenThreshold = Math.max(1000, Math.round(Number(config.commitTokenThreshold) || 20000))
   const rawCommitKeepRecentCount = config.commitKeepRecentCount
   const commitKeepRecentCount = rawCommitKeepRecentCount == null ||
