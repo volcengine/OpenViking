@@ -19,7 +19,7 @@ if (!isPluginEnabled()) {
   process.exit(0);
 }
 
-const cfg = loadConfig();
+let cfg = loadConfig();
 const { log, logError } = createLogger("pre-compact");
 const fetchJSON = makeFetchJSON(cfg);
 
@@ -28,14 +28,6 @@ function approve() {
 }
 
 async function main() {
-  // Write-path hook: gated by autoCapture so that disabling capture also
-  // disables the pending-message commits triggered here.
-  if (!cfg.autoCapture) {
-    log("skip", { reason: "autoCapture disabled" });
-    approve();
-    return;
-  }
-
   let input = {};
   try {
     const chunks = [];
@@ -45,6 +37,18 @@ async function main() {
 
   const sessionId = input.session_id;
   const cwd = input.cwd;
+  // The workspace layer belongs to the session's directory, which only the
+  // payload knows; see loadConfig for why re-resolving this late is safe.
+  cfg = loadConfig(cwd);
+
+  // Write-path hook: gated by autoCapture so that disabling capture also
+  // disables the pending-message commits triggered here.
+  if (!cfg.autoCapture) {
+    log("skip", { reason: "autoCapture disabled" });
+    approve();
+    return;
+  }
+
   if (!sessionId) {
     log("skip", { reason: "no session_id" });
     approve();

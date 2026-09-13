@@ -7,7 +7,8 @@ use super::cache_protocol::{
     STARTUP_RECOVERY_SWEEPS,
 };
 use crate::cache_runtime::{
-    CacheError, CacheRuntime, Expiration, ScriptDefinition, ScriptRequest, ScriptValue, SetOptions,
+    CacheError, CacheOperation, CacheRuntime, Expiration, ScriptDefinition, ScriptRequest,
+    ScriptValue, SetOptions,
 };
 use crate::core::errors::{Error, Result};
 use bytes::Bytes;
@@ -81,6 +82,18 @@ pub(super) struct CacheQueueStorage {
 
 impl CacheQueueStorage {
     pub(super) async fn open(runtime: Arc<CacheRuntime>, key_prefix: String) -> Result<Self> {
+        runtime
+            .require_operations(&[
+                CacheOperation::Set,
+                CacheOperation::Del,
+                CacheOperation::Mget,
+                CacheOperation::Sismember,
+                CacheOperation::Smembers,
+                CacheOperation::Llen,
+                CacheOperation::Lrange,
+                CacheOperation::ExecuteScript,
+            ])
+            .map_err(|error| cache_error("validate provider operations", error))?;
         for definition in SCRIPT_DEFINITIONS {
             runtime
                 .register_script(*definition)

@@ -314,9 +314,13 @@ jobs:
           set -euo pipefail
           npm version --no-git-tag-version --allow-same-version "$VERSION"
           npm ci
+          npm run prepack
+          # OpenClaw installs the extracted artifact as a project root. Even with
+          # --omit=dev, npm resolves devDependencies and can hit Arborist peer bugs.
+          npm pkg delete devDependencies
           pack_dir="$RUNNER_TEMP/openviking-pack"
           mkdir -p "$pack_dir"
-          npm pack --pack-destination "$pack_dir"
+          npm pack --ignore-scripts --pack-destination "$pack_dir"
           tarball="$(find "$pack_dir" -maxdepth 1 -name '*.tgz' -print -quit)"
           if [ -z "$tarball" ]; then
             echo "::error title=Pack failed::npm pack did not produce a tgz file."
@@ -364,10 +368,13 @@ jobs:
           set -euo pipefail
           npm version --no-git-tag-version --allow-same-version "$VERSION"
           npm ci
+          npm run prepack
+          # Keep the legacy ClawHub zip runtime-only for the same install path.
+          npm pkg delete devDependencies
           pack_dir="$RUNNER_TEMP/openviking-clawhub-pack"
           package_dir="$RUNNER_TEMP/openviking-clawhub-package"
           mkdir -p "$pack_dir" "$package_dir"
-          npm pack --pack-destination "$pack_dir"
+          npm pack --ignore-scripts --pack-destination "$pack_dir"
           tarball="$(find "$pack_dir" -maxdepth 1 -name '*.tgz' -print -quit)"
           if [ -z "$tarball" ]; then
             echo "::error title=Pack failed::npm pack did not produce a tgz file for ClawHub."

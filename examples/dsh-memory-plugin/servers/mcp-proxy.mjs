@@ -25,6 +25,10 @@ export function readProxyConfig(env = process.env, cwd = process.cwd()) {
     apiKey: cfg.apiKey,
     account: cfg.account,
     user: cfg.user,
+    // Not gated through `resolveMcpActorPeerId` like the other proxies: DSH's
+    // parent process resolves the peer per session and hands it over in the
+    // child env (`mcp.mjs` `buildMcpConfig`), so this one is not a guess at the
+    // launch directory.
     peerId: cfg.peerId,
     userAgent: cfg.userAgent,
     timeoutMs: cfg.requestTimeoutMs,

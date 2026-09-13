@@ -419,7 +419,7 @@ async def _generate_media_summary(
     result = {"name": original_filename, "summary": ""}
 
     viking_fs = get_viking_fs()
-    stat = await viking_fs.stat(media_uri, ctx=ctx)
+    stat = await viking_fs.stat(media_uri, ctx=ctx, skip_count=True)
     size_bytes = int((stat or {}).get("size", 0))
     if not vlm.supports_media(
         media_type=media_type,

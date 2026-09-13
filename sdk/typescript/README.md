@@ -27,12 +27,14 @@ Existing local file paths are uploaded automatically, and local directories are 
 To ingest content without VLM semantic understanding, pass `processingMode: "vectors_only"` to `addResource`. This writes or syncs the resource tree and vectorizes current files, but does not generate or refresh `.abstract.md` / `.overview.md`.
 
 ```ts
-await client.addResource("./docs/guide.md", {
+const task = await client.addResource("./docs/guide.md", {
   to: "viking://resources/guide",
   processingMode: "vectors_only",
-  wait: true,
 });
+console.log(task.task_id);
 ```
+
+Query `client.getTask(task.task_id as string)` for import status and search the imported content after the task reaches `completed`.
 
 Event-memory tags can be configured as session defaults, updated later, or overridden per commit. Passing `[]` to `commitSession` explicitly skips the session defaults for that commit.
 

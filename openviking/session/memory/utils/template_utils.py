@@ -46,3 +46,15 @@ class TemplateUtils:
             - ignored
             - {"extract_context"}
         )
+
+    @staticmethod
+    def referenced_variables(template: str) -> set[str]:
+        """Return the top-level variables a template actually references.
+
+        Uses Jinja's own parser so filters, functions, and attribute/method
+        names (e.g. ``lower`` in ``{{ name|lower }}`` or ``get_year`` in
+        ``{{ extract_context.get_year(ranges) }}``) are never mistaken for
+        variables the way a plain substring/regex scan would.
+        """
+        parsed_template = jinja2.Environment(autoescape=False).parse(template)
+        return meta.find_undeclared_variables(parsed_template)

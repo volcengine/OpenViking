@@ -42,7 +42,7 @@ if (!isPluginEnabled()) {
   process.exit(0);
 }
 
-const cfg = loadConfig();
+let cfg = loadConfig();
 const { log, logError } = createLogger("session-start");
 const fetchJSON = makeFetchJSON(cfg);
 
@@ -106,6 +106,9 @@ async function main() {
   const source = input.source || "startup";
   const sessionId = input.session_id;
   const cwd = input.cwd;
+  // The workspace layer belongs to the session's directory, which only the
+  // payload knows; see loadConfig for why re-resolving this late is safe.
+  cfg = loadConfig(cwd);
   const effectivePeer = getEffectivePeerId(cfg, { sessionId, cwd });
   log("start", { source, sessionId, peerSource: effectivePeer.source });
 

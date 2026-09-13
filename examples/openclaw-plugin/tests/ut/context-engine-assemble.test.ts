@@ -52,6 +52,7 @@ function makeEngine(
   const client = {
     healthCheck: vi.fn().mockResolvedValue(undefined),
     getSessionContext: vi.fn().mockResolvedValue(contextResult),
+    searchContext: vi.fn().mockResolvedValue({ entries: [], rendered: "", stats: {} }),
     find: vi.fn().mockResolvedValue({ memories: [], resources: [], total: 0 }),
     read: vi.fn().mockResolvedValue(""),
   } as unknown as OpenVikingClient;
@@ -81,6 +82,7 @@ function makeEngine(
     client: client as unknown as {
       getSessionContext: ReturnType<typeof vi.fn>;
       healthCheck: ReturnType<typeof vi.fn>;
+      searchContext: ReturnType<typeof vi.fn>;
       find: ReturnType<typeof vi.fn>;
       read: ReturnType<typeof vi.fn>;
     },
@@ -91,6 +93,99 @@ function makeEngine(
 }
 
 describe("context-engine assemble()", () => {
+  describe("recall from the separately supplied prompt", () => {
+    const prompt = "what backend language should we use?";
+    const memory = "User prefers Rust for backend tasks.";
+    function mockRecall(client: ReturnType<typeof makeEngine>["client"]) {
+      client.searchContext.mockResolvedValue({
+        entries: [{ uri: "viking://user/default/memories/rust-pref", category: "preferences", text: memory, score: 0.93 }],
+        rendered: `<memory>${memory}</memory>`,
+        stats: { candidates: 1, used_tokens: 18 },
+      });
+    }
+
+    it.each([false, true])("recalls on a fresh session (missing session: %s) without manufacturing a user turn", async (missing) => {
+      const { engine, client } = makeEngine(undefined, { cfgOverrides: { autoRecall: true } });
+      if (missing) client.getSessionContext.mockRejectedValue(new Error("[NOT_FOUND] Session not found"));
+      mockRecall(client);
+      const messages: [] = [];
+      const result = await engine.assemble({ sessionId: "new-session", messages, prompt, availableTools: new Set() });
+      expect(client.searchContext).toHaveBeenCalledWith(prompt, expect.objectContaining({ sessionId: "new-session" }));
+      expect(result.messages).toBe(messages);
+      expect(result.systemPromptAddition).toContain(memory);
+      expect(result.systemPromptAddition).not.toContain(prompt);
+      expect(result.estimatedTokens).toBeGreaterThan(systemPromptTokens(result.systemPromptAddition));
+    });
+
+    it("recalls another detail from the same memory on a follow-up turn", async () => {
+      const { engine, client } = makeEngine(undefined, { cfgOverrides: { autoRecall: true } });
+      const savedMemory = "Use Rust; deploy in eu-west.";
+      let messageCount = 2;
+      let lastServedAt: number | undefined;
+      client.searchContext.mockImplementation(async (_query, options) => {
+        const cooled = lastServedAt !== undefined && messageCount - lastServedAt < (options.dedupTurns ?? 0);
+        if (cooled) return { entries: [], rendered: "", stats: {} };
+        lastServedAt = messageCount;
+        return {
+          entries: [{ uri: "viking://user/default/memories/development", category: "preferences", text: savedMemory, score: 0.95 }],
+          rendered: `<memory>${savedMemory}</memory>`, stats: {},
+        };
+      });
+      const common = { sessionId: "existing-session", availableTools: new Set<string>() };
+      const messages = [{ role: "user", content: "Hello" }, { role: "assistant", content: "Hello" }];
+      const first = await engine.assemble({ ...common, messages, prompt: "What language should I use?" });
+      expect(first.systemPromptAddition).toContain(savedMemory);
+
+      const followupMessages = [...messages,
+        { role: "user", content: "What language should I use?" },
+        { role: "assistant", content: "Rust." },
+      ];
+      messageCount = followupMessages.length;
+      const second = await engine.assemble({ ...common, messages: followupMessages, prompt: "What region should I deploy in?" });
+      expect(second.systemPromptAddition).toContain("eu-west");
+      expect(second.messages).toBe(followupMessages);
+      expect(JSON.stringify(second.messages)).not.toContain("eu-west");
+      expect(client.searchContext).toHaveBeenLastCalledWith("What region should I deploy in?", expect.objectContaining({ dedupTurns: 0 }));
+    });
+
+    it("keeps archive guidance and recalls the current prompt rather than the history tail", async () => {
+      const { engine, client } = makeEngine({
+        latest_archive_overview: "Previously discussed repository setup.",
+        pre_archive_abstracts: [], messages: [], estimatedTokens: 10, stats: makeStats(),
+      }, { cfgOverrides: { autoRecall: true } });
+      mockRecall(client);
+      const messages = [{ role: "user", content: "an unrelated old question" }];
+      const result = await engine.assemble({ sessionId: "archived-session", messages, prompt });
+      expect(client.searchContext).toHaveBeenCalledWith(prompt, expect.anything());
+      expect(result.systemPromptAddition).toContain("Session Context Guide");
+      expect(result.systemPromptAddition).toContain(memory);
+      expect(JSON.stringify(result.messages)).not.toContain(memory);
+      expect(messages).toEqual([{ role: "user", content: "an unrelated old question" }]);
+    });
+
+    it.each([
+      { autoRecall: false, prompt, bypassSessionPatterns: [] },
+      { autoRecall: true, prompt: "", bypassSessionPatterns: [] },
+      { autoRecall: true, prompt: "hi", bypassSessionPatterns: [] },
+      { autoRecall: true, prompt, bypassSessionPatterns: ["agent:*:cron:**"] },
+    ])("respects disabled, empty and bypassed recall: %j", async ({ prompt: currentPrompt, ...cfgOverrides }) => {
+      const { engine, client } = makeEngine(undefined, { cfgOverrides });
+      const result = await engine.assemble({ sessionId: "session", sessionKey: "agent:main:cron:task", messages: [], prompt: currentPrompt });
+      expect(client.searchContext).not.toHaveBeenCalled();
+      expect(result.systemPromptAddition).toBeUndefined();
+    });
+
+    it.each(["no hits", "search failure", "budget exhausted"])("preserves history on %s", async (scenario) => {
+      const { engine, client } = makeEngine(undefined, { cfgOverrides: { autoRecall: true } });
+      if (scenario === "search failure") client.searchContext.mockRejectedValue(new Error("unavailable"));
+      if (scenario === "budget exhausted") mockRecall(client);
+      const messages = [{ role: "assistant", content: "previous answer" }];
+      const result = await engine.assemble({ sessionId: "session", messages, prompt, tokenBudget: scenario === "budget exhausted" ? 1 : 128_000 });
+      expect(result.messages).toBe(messages);
+      expect(result.systemPromptAddition).toBeUndefined();
+    });
+  });
+
   it("prepends auto-recall to the latest user message during transformContext", async () => {
       const { engine, client } = makeEngine(
         {
@@ -114,20 +209,16 @@ describe("context-engine assemble()", () => {
           },
         },
       );
-      client.find
-        .mockResolvedValueOnce({
-          memories: [
-            {
-              uri: "viking://user/default/memories/rust-pref",
-              level: 2,
-              category: "preferences",
-              abstract: "User prefers Rust for backend tasks.",
-              score: 0.93,
-            },
-          ],
-          total: 1,
-        })
-        .mockResolvedValueOnce({ memories: [], total: 0 });
+      client.searchContext.mockResolvedValueOnce({
+        entries: [{
+          uri: "viking://user/default/memories/rust-pref",
+          category: "preferences",
+          text: "User prefers Rust for backend tasks.",
+          score: 0.93,
+        }],
+        rendered: '<memory uri="viking://user/default/memories/rust-pref">User prefers Rust for backend tasks.</memory>',
+        stats: { candidates: 1, used_tokens: 18 },
+      });
 
       const sourceMessages = [
         { role: "user", content: "[Session History Summary]\nOlder archive summary." },
@@ -171,17 +262,15 @@ describe("context-engine assemble()", () => {
           },
         },
       );
-      client.find.mockResolvedValueOnce({
-        memories: [
-          {
-            uri: "viking://user/default/memories/typescript-pref",
-            level: 2,
-            category: "preferences",
-            abstract: "Use TypeScript for gateway plugins.",
-            score: 0.9,
-          },
-        ],
-        total: 1,
+      client.searchContext.mockResolvedValueOnce({
+        entries: [{
+          uri: "viking://user/default/memories/typescript-pref",
+          category: "preferences",
+          text: "Use TypeScript for gateway plugins.",
+          score: 0.9,
+        }],
+        rendered: '<memory uri="viking://user/default/memories/typescript-pref">Use TypeScript for gateway plugins.</memory>',
+        stats: { candidates: 1, used_tokens: 16 },
       });
 
       await engine.assemble({
@@ -215,29 +304,28 @@ describe("context-engine assemble()", () => {
           },
         },
       );
-      client.find.mockImplementation(async (_query: string, options: { contextType?: string }) => ({
-        resources: [],
-        memories: options.contextType === "memory"
-          ? [{
-              uri: "viking://user/memories/project-docs",
-              level: 2,
-              category: "memory",
-              abstract: "Memory docs for the gateway plugin.",
-              score: 0.9,
-            }]
-          : [],
-        total: options.contextType === "memory" ? 1 : 0,
-      }));
+      client.searchContext.mockResolvedValue({
+        entries: [{
+          uri: "viking://user/memories/project-docs",
+          category: "memory",
+          text: "Memory docs for the gateway plugin.",
+          score: 0.9,
+        }],
+        rendered: '<memory uri="viking://user/memories/project-docs">Memory docs for the gateway plugin.</memory>',
+        stats: { candidates: 1, used_tokens: 14 },
+      });
 
       await engine.assemble({
         sessionId: "session-transform-resource-default",
         messages: [{ role: "user", content: "where are the gateway plugin docs?" }],
       });
 
-      expect(client.find).toHaveBeenCalledTimes(1);
-      expect(client.find.mock.calls[0]?.[1]).toMatchObject({
+      expect(client.searchContext).toHaveBeenCalledTimes(1);
+      expect(client.searchContext.mock.calls[0]?.[1]).toMatchObject({
+        sessionId: "session-transform-resource-default",
         contextType: "memory",
-        targetUri: undefined,
+        queryExpansion: "auto",
+        dedupTurns: 5,
       });
       const recorded = traces.query({ turn: "latest", sessionId: "session-transform-resource-default", limit: 10 }).entries[0]!;
       expect(recorded.resourceTypes).toEqual(["user", "agent"]);
@@ -277,24 +365,15 @@ describe("context-engine assemble()", () => {
           queryConfigStore,
         },
       );
-      client.find.mockResolvedValueOnce({
-        memories: [
-          {
-            uri: "viking://user/default/memories/high",
-            level: 2,
-            category: "preferences",
-            abstract: "High-confidence dynamic query memory.",
-            score: 0.9,
-          },
-          {
-            uri: "viking://user/default/memories/low",
-            level: 2,
-            category: "facts",
-            abstract: "Low-confidence memory should be filtered.",
-            score: 0.1,
-          },
-        ],
-        total: 2,
+      client.searchContext.mockResolvedValueOnce({
+        entries: [{
+          uri: "viking://user/default/memories/high",
+          category: "preferences",
+          text: "High-confidence dynamic query memory.",
+          score: 0.9,
+        }],
+        rendered: '<memory uri="viking://user/default/memories/high">High-confidence dynamic query memory.</memory>',
+        stats: { candidates: 1, used_tokens: 12 },
       });
 
       const result = await engine.assemble({
@@ -302,11 +381,12 @@ describe("context-engine assemble()", () => {
         messages: [{ role: "user", content: "which dynamic query memory applies?" }],
       });
 
-      expect(client.find).toHaveBeenCalledTimes(1);
-      expect(client.find.mock.calls[0]?.[1]).toMatchObject({
+      expect(client.searchContext).toHaveBeenCalledTimes(1);
+      expect(client.searchContext.mock.calls[0]?.[1]).toMatchObject({
         contextType: "memory",
-        targetUri: undefined,
-        limit: 3,
+        limit: 1,
+        scoreThreshold: 0.5,
+        maxTokens: 250,
       });
       expect(String(result.messages[0]?.content)).toContain("High-confidence dynamic query memory.");
       expect(String(result.messages[0]?.content)).not.toContain("Low-confidence memory should be filtered.");
@@ -407,7 +487,7 @@ describe("context-engine assemble()", () => {
       "session-main-no-prompt",
       4096,
     );
-    expect(client.find).not.toHaveBeenCalled();
+    expect(client.searchContext).not.toHaveBeenCalled();
     expect(result.messages[0]).toEqual({
       role: "user",
       content: "[Session History Summary]\n# Session Summary\nPreviously discussed repository setup.",

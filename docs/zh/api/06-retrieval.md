@@ -809,6 +809,12 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 | node_limit | int | 否 | 256 | 最大返回节点数。省略时默认使用 256；如需更多结果，请显式传入更大的整数 |
 | exclude_uri | str | 否 | None | 要排除在搜索之外的 URI 前缀 |
 | level_limit | int | 否 | Python SDK: 5；HTTP API / CLI / Go SDK: 10 | 最大目录遍历深度。Go SDK 当前使用 HTTP API 默认值。 |
+| tags | string[] | 否 | 未设置 | 仅搜索同时匹配全部 `k=v` 检索标签的文件 |
+| include_tags | bool | 否 | `false` | 不过滤时也在每条命中中返回检索标签 |
+
+`tags` 使用 AND 语义，并在内容匹配与 `node_limit` 截断之前过滤候选文件。例如 `["team=search", "env=prod"]` 只匹配同时具有两个标签的文件。
+
+使用 `tags` 过滤或传 `include_tags=true` 时，`matches` 中的命中会返回文件的 `tags`；没有检索标签的文件返回空数组 `[]`。普通 grep 会省略 `tags`，避免不必要的 VectorDB 读取。
 
 #### 3. 使用示例
 
@@ -825,7 +831,8 @@ curl -X POST http://localhost:1933/api/v1/search/grep \
     -d '{
         "uri": "viking://resources",
         "pattern": "authentication",
-        "case_insensitive": true
+        "case_insensitive": true,
+        "tags": ["team=search", "env=prod"]
     }'
 ```
 
@@ -842,6 +849,7 @@ results = client.grep(
     pattern="authentication",
     case_insensitive=True,
     node_limit=1024,
+    tags=["team=search", "env=prod"],
 )
 
 print(f"Found {results['count']} matches")
@@ -853,7 +861,9 @@ for match in results['matches']:
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.grep("viking://resources/docs/", "authentication"));
+console.log(await client.grep("viking://resources/docs/", "authentication", {
+  tags: ["team=search", "env=prod"],
+}));
 ```
 
 **Go SDK**
@@ -863,6 +873,7 @@ nodeLimit := 1024
 result, err := client.Grep(ctx, "viking://resources", "authentication", &openviking.GrepOptions{
     CaseInsensitive: true,
     NodeLimit:       &nodeLimit,
+    Tags:            []string{"team=search", "env=prod"},
 })
 if err != nil {
     return err
@@ -881,7 +892,15 @@ openviking grep "authentication" --uri viking://resources --ignore-case
 
 # 指定深度限制
 openviking grep "TODO" --uri viking://resources --level-limit 3
+
+# 只搜索同时匹配所有 tags 的文件
+openviking grep "TODO" --uri viking://resources --tags team=search,env=prod
+
+# 不过滤、但在人类可读结果中显示 tags
+openviking grep "TODO" --uri viking://resources --fields tags
 ```
+
+HTTP `POST /api/v1/search/grep` 在不做过滤时可传 `include_tags: true` 返回 tags；传入 `tags` 过滤时会始终返回命中文件的 tags。
 
 **响应示例**
 
@@ -893,7 +912,8 @@ openviking grep "TODO" --uri viking://resources --level-limit 3
             {
                 "uri": "viking://resources/docs/auth.md",
                 "line": 15,
-                "content": "User authentication is handled by..."
+                "content": "User authentication is handled by...",
+                "tags": ["team=search", "env=prod"]
             }
         ],
         "count": 1
@@ -932,6 +952,11 @@ openviking grep "TODO" --uri viking://resources --level-limit 3
 | pattern | str | 是 | - | Glob 模式（例如 `**/*.md`）|
 | uri | str | 否 | "viking://" | 起始 URI |
 | node_limit | int | 否 | 256 | 最大返回匹配数。省略时默认使用 256；如需更多结果，请显式传入更大的整数 |
+| extra_fields | list[str] | 否 | None | 每条命中的额外字段。省略时返回 URI 字符串；提供后 `result.matches` 返回条目对象 |
+| tags | string[] | 否 | 未设置 | 仅保留同时匹配全部 `k=v` 检索标签的结果 |
+| include_tags | bool | 否 | `false` | 不过滤时也在每条命中中返回检索标签 |
+
+`tags` 使用 AND 语义，并在 `node_limit` 截断前应用。传入 `tags` 或 `include_tags=true` 时，响应返回带 `tags` 数组的条目对象；普通 glob 继续返回 URI 字符串，且不会为了 tags 读取 VectorDB。
 
 #### 3. 使用示例
 
@@ -947,7 +972,9 @@ curl -X POST http://localhost:1933/api/v1/search/glob \
     -H "X-API-Key: your-key" \
     -d '{
         "pattern": "**/*.md",
-        "uri": "viking://resources"
+        "uri": "viking://resources",
+        "tags": ["team=search", "env=prod"],
+        "include_tags": true
     }'
 ```
 
@@ -965,19 +992,21 @@ print(f"Found {results['count']} markdown files:")
 for uri in results['matches']:
     print(f"  {uri}")
 
-# 查找所有 Python 文件，并显式放宽返回上限
+# 查找同时匹配全部 tags 的 Markdown 文件
 results = client.glob(
-    pattern="**/*.py",
+    pattern="**/*.md",
     uri="viking://resources",
-    node_limit=1024,
+    tags=["team=search", "env=prod"],
 )
-print(f"Found {results['count']} Python files")
+print(f"Found {results['count']} tagged markdown files")
 ```
 
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.glob("**/*.md", "viking://resources/docs/"));
+console.log(await client.glob("**/*.md", "viking://resources/docs/", {
+  tags: ["team=search", "env=prod"],
+}));
 ```
 
 **Go SDK**
@@ -985,6 +1014,7 @@ console.log(await client.glob("**/*.md", "viking://resources/docs/"));
 ```go
 result, err := client.Glob(ctx, "**/*.md", "viking://resources", &openviking.GlobOptions{
     NodeLimit: openviking.Int(1024),
+    Tags:      []string{"team=search", "env=prod"},
 })
 if err != nil {
     return err
@@ -1000,6 +1030,10 @@ openviking glob "**/*.md" --uri viking://resources
 
 # 查找所有 Python 文件
 openviking glob "**/*.py"
+
+# 按全部 tags 过滤，或只返回 tags
+openviking glob "**/*.md" --tags team=search,env=prod
+openviking glob "**/*.md" -f tags
 ```
 
 **响应示例**

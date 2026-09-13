@@ -5,9 +5,20 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 
 ## Unreleased
 
+- **Watch API migration (breaking change)**: Re-importing with `watch_interval > 0`
+  no longer updates or reactivates an existing Watch. Native Watches retain exclusive
+  ownership while paused, and incompatible target reuse returns `409 Conflict`.
+  Replace scripts that re-import to update a Watch with `PATCH /api/v1/watches/{task_id}`
+  (use `is_active: true` to resume), or delete the old Watch before creating its replacement.
+  Connector Watches may share targets; repeating the same source and target creates a new
+  independent Watch, so retries are not idempotent. Use task IDs to manage shared targets;
+  URI lookups with multiple accessible Watches return 409. One-off Connector imports
+  (`watch_interval <= 0`) leave existing Watches untouched; pause or delete them through
+  the watches API. See [resource task management](../api/02-resources.md#task-management-operations).
 - **Session policy compatibility**: String `"false"` memory-policy switches now disable
   extraction correctly. Existing boolean-like values remain temporarily compatible and
   emit deprecation warnings; use JSON booleans for new configurations.
+- **Workspace peer derivation**: The coding-agent plugins now derive a workspace's peer from git instead of from the working directory. The new default, `peer.source: "git"`, uses the repository's normalized `origin` URL (`github.com-volcengine-openviking`), falling back to the repository root path, so every clone, worktree, and subdirectory of one repository shares a single peer while a fork keeps its own. A directory that is not a git repository now gets no peer at all, and what is remembered there goes to the user-level space instead of a fresh namespace per folder. Give such a directory a memory of its own by creating `.openviking/config.json` with `{"version": 1, "peer": {"id": "my-project"}}`. No migration is required: the previous cwd-derived id can always be recomputed locally, and the default `peer_scope: "all"` recall already sweeps every peer, so memories written under it keep coming back (with `peer_scope: "actor"`, the Claude Code, Codex, OpenCode, and DSH plugins query that id as well). Set `peer.source: "cwd"` — or `OPENVIKING_PEER_SOURCE=cwd` — to keep the old behavior.
 - **External peer identity migration**: Mixed-script log-ingestion identities now use
   lossless `ext-<base64>` ids. The `ext-` namespace is reserved, so ASCII identities that
   would otherwise enter it are encoded as well. Older lossy peer directories are not read

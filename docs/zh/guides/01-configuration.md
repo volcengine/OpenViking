@@ -213,7 +213,7 @@ openviking-server doctor
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
-| `max_concurrent` | int | 最大并发 Embedding 请求数（`embedding.max_concurrent`，默认：`10`） |
+| `max_concurrent` | int | 最大并发 Embedding 请求数（`embedding.max_concurrent`，默认：`10`；必须 `>= 1`） |
 | `max_retries` | int | Embedding provider 瞬时错误的最大重试次数（`embedding.max_retries`，默认：`3`；`0` 表示禁用重试） |
 | `text_source` | str | 文本文件向量化时使用的文本来源。`content_only` 读取原文内容；`summary_first` 优先使用摘要，没有摘要时回退到原文；`summary_only` 只使用摘要。默认：`content_only` |
 | `max_input_tokens` | int | 使用原文内容向量化时，发送给 embedding 模型的最大估算 token 数。默认：`4096` |
@@ -615,7 +615,7 @@ provider，并设置 `storage.vectordb.sparse_weight > 0`。自托管模型的�
 | `timeout` | float | 单次 VLM API 请求的 HTTP 超时时间（秒），传递给底层 OpenAI/LiteLLM 客户端。慢端点（如 DashScope、本地推理）可调大。必须 `> 0`（默认：`600.0`） |
 | `extra_headers` | object | 兼容 HTTP provider 的自定义请求头。`kimi` 默认已注入所需订阅请求头，也支持在这里覆盖或扩展 |
 | `extra_request_body` | object | 传给 OpenAI 兼容 completion 请求的额外 JSON body 字段，可用于 Ollama `{"think": false}` 等 provider 专有参数 |
-| `reasoning_effort` | str | OpenAI Codex Responses 请求的推理强度。不设置时使用模型默认值 |
+| `reasoning_effort` | str | `openai`、`azure`、`kimi`、`glm` 和 `openai-codex` 的推理强度，显式配置时发送；可用值由模型决定。不设置时，GPT-5/o 系列名称保留 `low`，其他模型不发送。Chat Completions 请求中，`extra_request_body.reasoning_effort` 优先 |
 | `media` | object | 音视频运行参数；音视频理解复用该 VLM 的 provider、模型、凭据、client、超时、重试、请求头、输出 token 限制、故障切换和 token 统计 |
 | `media.enabled` | bool | 启用音视频理解（默认：`false`） |
 | `media.max_concurrent` | int | 音视频调用最大并发数（默认：`2`） |
@@ -1445,7 +1445,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 
 ##### ACL schema
 
-ACL 只维护在 context collection。除 `acl_enabled: bool` 外，需要以下 `list<string>` 标量索引字段：
+ACL 只维护在 context collection。除 `acl_mode: string`（`none`、`inherit` 或 `restricted`）外，需要以下 `list<string>` 标量索引字段：
 
 ```text
 acl_direct_grants
@@ -1454,7 +1454,7 @@ acl_inherited_grants
 
 每个元素使用 `{mask}:{principal}` 格式，其中 `1` 表示 `read`、`3` 表示 `write`、`7` 表示 `manage`。
 
-本地 backend 会在启动时为存量 collection 增加字段并重建标量索引。旧记录不做全量回填；缺失 ACL 字段按 `acl_enabled=false` 和空列表读取。
+本地 backend 会在启动时为存量 collection 增加字段并重建标量索引。旧记录不做全量回填；缺失 ACL 字段按 `acl_mode=none` 和空列表读取。
 
 火山向量库等远端 backend 的存量 collection 需要由部署方预先添加这些字段和 scalar index，OpenViking 只校验 schema。`volcengine` API key 数据面模式还要求 context collection 和配置的 index 已存在。权限模型详见 [资源访问控制（ACL）](../concepts/15-acl.md)。
 

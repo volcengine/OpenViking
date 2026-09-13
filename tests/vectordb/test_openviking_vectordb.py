@@ -4,6 +4,7 @@
 import json
 import shutil
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from openviking.storage.vectordb.collection.local_collection import get_or_create_local_collection
@@ -254,6 +255,28 @@ class TestOpenVikingVectorDB(unittest.TestCase):
 
         index_meta = collection.get_index_meta_data("idx_filters") or {}
         self.assertIn("type", index_meta.get("ScalarIndex", []))
+        index = collection.get_index("idx_filters")
+        previous_version = index.get_newest_version()
+        collection.update(
+            fields=[
+                {"FieldName": "schema_flag", "FieldType": "bool", "DefaultValue": False}
+            ]
+        )
+        collection.update_index(
+            "idx_filters",
+            scalar_index=[*index_meta["ScalarIndex"], "schema_flag"],
+        )
+        current_version = index.get_newest_version()
+        self.assertGreater(current_version, previous_version)
+        self.assertTrue(Path(index.version_dir, str(previous_version)).is_dir())
+        self.assertTrue(Path(f"{index.version_dir}/{previous_version}.write_done").is_file())
+        self.assertEqual(
+            self._search_ids(
+                collection,
+                {"op": "must", "field": "schema_flag", "conds": [False]},
+            ),
+            sorted(item["id"] for item in self.data),
+        )
         fetched = collection.fetch_data(["res_1"])
         self.assertEqual(fetched.items[0].fields.get("type"), "file")
 

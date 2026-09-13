@@ -119,9 +119,14 @@ The proxy requires Node.js 18+ and writes debug logs only when `OPENVIKING_DEBUG
 Every plugin field follows this chain (highest → lowest):
 
 1. **Environment variables** (`OPENVIKING_*` — see tables below)
-2. **`ovcli.conf`** — CLI client config (`~/.openviking/ovcli.conf` or `OPENVIKING_CLI_CONFIG_FILE`); only carries connection fields (`url`, `api_key`, `account`, `user`)
-3. **`ov.conf`** — server config (`~/.openviking/ov.conf` or `OPENVIKING_CONFIG_FILE`); the plugin reads `server.url`, `server.root_api_key`, and a legacy `claude_code` block if present (see [Legacy `claude_code` block](#legacy-claude_code-block-in-ovconf))
-4. **Built-in defaults** (`http://127.0.0.1:1933`, no auth)
+2. **Workspace registry** — this machine's entry for the current repository, `~/.openviking/workspaces/<slot>.json`
+3. **`<repo-root>/.openviking/config.local.json`** — private, gitignored workspace settings
+4. **`<repo-root>/.openviking/config.json`** — workspace settings the team commits
+5. **`ovcli.conf`** — CLI client config (`~/.openviking/ovcli.conf` or `OPENVIKING_CLI_CONFIG_FILE`); connection fields (`url`, `api_key`, `account`, `user`) plus the `plugin` section, `plugin.claude_code` ahead of the shared `plugin`
+6. **`ov.conf`** — server config (`~/.openviking/ov.conf` or `OPENVIKING_CONFIG_FILE`); the plugin reads `server.url`, `server.root_api_key`, and a legacy `claude_code` block if present (see [Legacy `claude_code` block](#legacy-claude_code-block-in-ovconf))
+7. **Built-in defaults** (`http://127.0.0.1:1933`, no auth)
+
+The three workspace layers carry only the settings listed under [Workspace configuration files](#workspace-configuration-files); connection and credentials are never read from them.
 
 The same connection and identity fields are also used by the stdio MCP proxy.
 
@@ -138,9 +143,25 @@ All plugin behavior can be set via env vars. Connection / identity vars affect b
 | `OPENVIKING_ACCOUNT`                             | Multi-tenant account (`X-OpenViking-Account` header)                     |
 | `OPENVIKING_USER`                                | Multi-tenant user (`X-OpenViking-User` header)                           |
 | `OPENVIKING_PEER_ID`                             | Optional stable peer for recall and captured session messages            |
+| `OPENVIKING_PEER_SOURCE`                         | How the workspace peer is derived: `git` (default), `cwd`, `none`, or a template |
 | `OPENVIKING_WORKSPACE_PEER`                      | Derive a peer from the current workspace by default; set `0` to disable  |
 
-By default the plugin derives a peer from the workspace path using Claude's project-directory naming rule: every non-letter-or-digit character becomes `-`, with no path normalization. For example, `/Users/x/Dev/OpenViking` becomes `-Users-x-Dev-OpenViking`. Data-plane recall/profile requests send the effective peer as `X-OpenViking-Actor-Peer`; captured session messages store it as body `peer_id`. `OPENVIKING_PEER_ID` overrides the workspace-derived value. Set `OPENVIKING_WORKSPACE_PEER=0` to turn this off. Subagent capture uses the parent workspace peer when available, and falls back to Claude's `agent_id` only when no explicit or workspace peer exists.
+By default the plugin derives the peer from git rather than from where the repository happens to sit: the normalized `origin` URL, else the repository root path. Outside a repository nothing is sent, and what is remembered there goes to your user-level space at `viking://user/<you>/memories`. In `/Users/x/Dev/OpenViking` with origin `git@github.com:volcengine/OpenViking.git` the peer is `github.com-volcengine-openviking`, and it stays that from any subdirectory, worktree, machine or clone — so every clone of one repository shares one project memory, while a fork, having a different origin, stays separate. Data-plane recall/profile requests send the effective peer as `X-OpenViking-Actor-Peer`; captured session messages store it as body `peer_id`. `OPENVIKING_PEER_ID` overrides the derived value. Subagent capture uses the parent workspace peer when available, and falls back to Claude's `agent_id` only when no explicit or workspace peer exists.
+
+`OPENVIKING_PEER_SOURCE` (or `plugin.peerSource` / `plugin.claude_code.peerSource` in `ovcli.conf`, or `peer.source` in a workspace config file) picks the rule:
+
+| Value        | Meaning                                                                                                                     |
+|--------------|-----------------------------------------------------------------------------------------------------------------------------|
+| `git`        | Default. Same as `["{git_remote}", "{git_root}"]`: normalized origin, else repository root. Outside a repository nothing is sent. No prefix is added |
+| `cwd`        | The previous behaviour, byte for byte — every non-letter-or-digit character becomes `-`, so `/Users/x/Dev/OpenViking` becomes `-Users-x-Dev-OpenViking` |
+| `none`       | Send no peer at all; `OPENVIKING_WORKSPACE_PEER=0` still means this                                                          |
+| a template   | `"git-{git_remote}"`, `"team-{dir}"`, or a list tried in order; a template with an empty variable falls through to the next   |
+
+The variables are `{git_remote}`, `{git_root}`, `{cwd}` and `{dir}` — see [Workspace Peers](../memory-plugin-shared/README.md#workspace-peers) for what each resolves to. `{git_root}` is empty outside a repository; `{cwd}` is never empty but sits in no default chain, so a bare path becomes a peer only when you ask for one; `{dir}` is the workspace root's directory name — the repository root, or the directory holding `.openviking/config.json` — and is empty when the directory is not a workspace. Derivation is pure filesystem work, no `git` subprocess, so it also holds where `git` is missing from `PATH` or would refuse the repository over dubious ownership.
+
+To give a directory that is not a repository its own peer, create `.openviking/config.json` there holding `{"version": 1, "peer": {"id": "my-project"}}`.
+
+Upgrading from the path-derived peer needs no action: memories written under the old id stay reachable. With the default `peer_scope: "all"` the server's cross-peer sweep already covers them at no cost; with `actor` scope the plugin asks the old peer separately. There is no deadline, and `OPENVIKING_PEER_SOURCE=cwd` restores the old id outright.
 
 #### Recall tuning
 
@@ -159,6 +180,7 @@ By default the plugin derives a peer from the workspace path using Claude's proj
 | `OPENVIKING_RECALL_COMPRESS_MAX_BULLETS` | `6`        | Digest bullet ceiling                                                     |
 | `OPENVIKING_SCORE_THRESHOLD`           | `0.35`       | Min relevance score (0–1)                                                |
 | `OPENVIKING_MIN_QUERY_LENGTH`          | `3`          | Skip recall for very short queries                                       |
+| `OPENVIKING_RECALL_QUERY_FILTERS`      | `""`         | CSV of regex rules applied to the prompt before it becomes a search query — see [Input filters](#input-filters) |
 
 Recall defaults to the broad mode: global memory, the current workspace, and other workspace memories can all be recalled, with other workspaces penalized and rendered later. Set `OPENVIKING_RECALL_PEER_SCOPE=actor` for the isolation mode, which only sees global memory plus the current workspace. In deployments where one bot serves multiple real people, such as zouk, vikingbot, or AstrBot, use the isolation mode with an explicit actor peer so one person's memories are not recalled into another person's session.
 | `OPENVIKING_LOG_RANKING_DETAILS`       | `false`      | Per-candidate scoring logs (verbose)                                     |
@@ -174,6 +196,7 @@ Recall defaults to the broad mode: global memory, the current workspace, and oth
 | `OPENVIKING_CAPTURE_TOOL_MAX_CHARS`    | `1000000`    | Guard cap on one tool part's `tool_output`; oversized output is externalized server-side |
 | `OPENVIKING_COMMIT_TOKEN_THRESHOLD`    | `20000`      | Pending-token threshold for client-driven commit                         |
 | `OPENVIKING_RESUME_CONTEXT_BUDGET`     | `32000`      | Token budget when fetching archive overview on session resume            |
+| `OPENVIKING_CAPTURE_FILTERS`           | `""`         | CSV of regex rules applied to every captured turn — see [Input filters](#input-filters) |
 
 #### Lifecycle / behavior / misc
 
@@ -222,6 +245,51 @@ OPENVIKING_BYPASS_SESSION=1 claude
 
 When bypass is active, every hook approves immediately without contacting OpenViking.
 
+### Input filters
+
+Two knobs put an ordered list of regex rules in front of the text the plugin sends:
+
+- `recallQueryFilters` / `OPENVIKING_RECALL_QUERY_FILTERS` — the prompt, before it becomes a search query.
+- `captureFilters` / `OPENVIKING_CAPTURE_FILTERS` — every turn on the write path (`Stop`, `PreCompact`, `SessionEnd`, `SubagentStop`), before it is stored.
+
+Rules are sed-style strings applied in order to one piece of text:
+
+| Form | Meaning |
+|------|---------|
+| `s<d>pattern<d>replacement<d>[flags]` | substitute; `$1`, `$&`, `$$` work in the replacement |
+| `d<d>pattern<d>[flags]` | drop the text when the pattern matches |
+| `k<d>pattern<d>[flags]` | keep the text only when the pattern matches (chain them for AND) |
+| `user:` / `assistant:` prefix | apply the rule to that role only |
+
+`<d>` is any punctuation delimiter — `/`, `|`, `#`, `:` — and `\` escapes it inside the pattern. Flags are `i`, `m`, `s`, `u` and `g` (`g` replaces every match; it means nothing on `d`/`k` and is dropped there).
+
+| Rule | Effect |
+|------|--------|
+| `s/^\s*(ultrathink\|think harder?)\s+//i` | strip a thinking-keyword prefix from the query |
+| `d\|^\s*[/!]\|` | skip recall for slash commands and `!` bash-mode prompts (a `\|` delimiter keeps the `/` unescaped) |
+| `k/^\?ov\b/` then `s/^\?ov\s*//` | opt-in recall: only prompts starting with `?ov`, with the trigger stripped |
+| `s/\b(sk\|ghp\|xoxb)_[A-Za-z0-9_-]+/[redacted]/g` | redact tokens before they are stored |
+| `user:d/^\s*\/(clear\|compact)\b/` | never store those command turns, user role only |
+| `s/^(请\|麻烦)(你\|帮我)?//` | strip a Chinese politeness prefix |
+
+In `ovcli.conf` the rules are a JSON array, so backslashes are doubled:
+
+```json
+{
+  "plugin": {
+    "claude_code": {
+      "recallQueryFilters": ["s/^\\s*ultrathink\\s+//i", "d|^\\s*[/!]|"],
+      "captureFilters": ["s/\\b(sk|ghp)_[A-Za-z0-9_-]{10,}/[redacted]/g"]
+    }
+  }
+}
+```
+
+- **The env vars are comma-separated lists**, split before parsing, so a rule that needs a literal comma — a bounded `{10,}`, say — belongs in the array above. (`\x2c` covers a literal comma elsewhere in a pattern, but it is not quantifier syntax.)
+- **Order matters and drops win.** The first `d` that matches, or `k` that does not, ends the decision. Filters run before `OPENVIKING_MIN_QUERY_LENGTH` and before the built-in ack / slash-command heuristics, so a prefix stripped down to `ok` is discarded as an ack. Text a substitution empties is not a drop — an emptied query is simply too short to recall on.
+- **Filters shape what is sent, not what is stored.** Adding a `d`/`k` rule mid-session also shortens the turn list the capture cursor counts, which reads as a transcript rewrite and replays from the last user turn — the same thing toggling `OPENVIKING_CAPTURE_ASSISTANT_TURNS` does.
+- **A bad rule is skipped, never fatal.** `ov-memory-doctor` lists the active rules and reports the exact parse or RegExp error for the ones it could not compile.
+
 ### Plugin settings in `ovcli.conf`
 
 Client-side tuning belongs in `~/.openviking/ovcli.conf` under a `plugin` section. Shared keys apply to every harness; a per-harness object overrides them:
@@ -235,13 +303,32 @@ Client-side tuning belongs in `~/.openviking/ovcli.conf` under a `plugin` sectio
 }
 ```
 
-Resolution order: env vars → `plugin.claude_code` → `plugin` → the legacy `claude_code` block in `ov.conf` → built-in defaults.
+Resolution order: env vars → the workspace layers → `plugin.claude_code` → `plugin` → the legacy `claude_code` block in `ov.conf` → built-in defaults.
 The plugin omits server-owned Context defaults such as `limit=10`, `max_tokens=1600`,
 and `query_expansion="auto"` unless you explicitly override them.
 An explicit legacy `recallLimit` is converted to per-category coding quotas,
 not enforced as a final result cap. Values from 1 through 5 therefore produce
 an effective total quota of 6, one retrieval slot for each coding domain. New
 direct API integrations should configure `quotas` instead.
+
+### Workspace configuration files
+
+A repository can carry its own plugin settings in `<repo-root>/.openviking/config.json`, which the team commits, and `<repo-root>/.openviking/config.local.json`, which stays private and gitignored. A third layer, this machine's entry under `~/.openviking/workspaces/`, outranks both.
+
+```json
+{
+  "version": 1,
+  "peer": { "source": "git" },
+  "recall": { "peer_scope": "actor" },
+  "bypass": { "session_patterns": ["**/fixtures/**"] }
+}
+```
+
+`version: 1` is required; a file declaring another version is skipped with a warning. Schema v1 is `peer.source`, `peer.id`, `recall.enabled`, `recall.peer_scope`, `recall.dedup_turns`, `recall.max_items`, `recall.score_threshold`, `capture.enabled`, `capture.commit_token_threshold`, `bypass.session_patterns`, and `labels`. Lists union across layers, and a leading `"!reset"` drops what was inherited. Unknown keys are kept and ignored.
+
+These files are trusted without a prompt, because a hook is non-interactive and an approval gate would mean one command per workspace. What is refused is structural: connection and credential keys (`url`, `api_key`, `account`, `user`, `extra_headers`, …) are stripped with a warning and `${VAR}` is never expanded in them. What a committed file switches off is announced by `ov-memory-doctor` rather than blocked.
+
+Keep `.gitignore` from ignoring all of `.openviking/`, or `config.json` can never be committed — narrow the rule to `.openviking/media/` and `.openviking/downloads/`. The doctor warns while the blanket rule is in place.
 
 ### Digest compression
 

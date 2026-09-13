@@ -69,7 +69,8 @@ Then enable plugin hooks (if your Codex build doesn't already) by adding to `~/.
 
 ```toml
 [features]
-plugin_hooks = true
+hooks = true
+# plugin_hooks = true  # for older Codex releases
 ```
 
 Finally start Codex and trust the plugin hooks once:
@@ -116,9 +117,24 @@ Hooks and the MCP proxy call the same resolver directly, so the model tools and 
 
 Auth is sent as `Authorization: Bearer <api_key>` to both the REST API (used by hooks) and the `/mcp` endpoint (used by the model); the hooks also send the same key as `X-API-Key` for compatibility with older servers.
 
-By default the hooks derive a peer from the current workspace path using Claude's project-directory naming rule: every non-letter-or-digit character becomes `-`, with no path normalization. For example, `/Users/x/Dev/OpenViking` becomes `-Users-x-Dev-OpenViking`. Hooks pass the effective peer as `peer_id` for captured session messages and as `X-OpenViking-Actor-Peer` for retrieval and filesystem calls.
+By default the hooks derive the peer from git rather than from where the repository happens to sit: the normalized `origin` URL, else the repository root path. Outside a repository nothing is sent, and what is remembered there goes to your user-level space at `viking://user/<you>/memories`. In `/Users/x/Dev/OpenViking/examples/codex-memory-plugin` with origin `git@github.com:volcengine/OpenViking.git` the peer is `github.com-volcengine-openviking`, and it stays that from any subdirectory, worktree, machine or clone. Every clone of one repository therefore shares one project memory; a fork has a different origin and stays separate, and `gh pr checkout` of an external PR leaves `origin` alone, so reviewing one does not move the identity. Derivation is pure filesystem work — no `git` subprocess — so it also holds where `git` is missing from `PATH` or would refuse the repository over dubious ownership. Hooks pass the effective peer as `peer_id` for captured session messages and as `X-OpenViking-Actor-Peer` for retrieval and filesystem calls.
 
-Set `actor_peer_id` in `ovcli.conf` (or `OPENVIKING_PEER_ID` with `OPENVIKING_CREDENTIAL_SOURCE=env`) to override the workspace-derived peer. The legacy `codex.peerId` / `codex.peer_id` fields in `ov.conf` still resolve as a fallback. Set `OPENVIKING_WORKSPACE_PEER=0` or `codex.workspacePeer=false` to turn off workspace-derived peers.
+`OPENVIKING_PEER_SOURCE` (or `plugin.peerSource` / `plugin.codex.peerSource` in `ovcli.conf`, or `peer.source` in a workspace config file) picks the rule:
+
+| Value | Meaning |
+|---|---|
+| `git` | Default. Same as `["{git_remote}", "{git_root}"]`: normalized origin, else repository root. Outside a repository nothing is sent. No prefix is added. |
+| `cwd` | The previous behaviour, byte for byte — every non-letter-or-digit character becomes `-`, so `/Users/x/Dev/OpenViking` becomes `-Users-x-Dev-OpenViking`. |
+| `none` | Send no peer at all; `OPENVIKING_WORKSPACE_PEER=0` and `codex.workspacePeer=false` still mean this. |
+| a template | `"git-{git_remote}"`, `"team-{dir}"`, or a list tried in order; a template with an empty variable falls through to the next. |
+
+The variables are `{git_remote}`, `{git_root}`, `{cwd}` and `{dir}` — see [Workspace Peers](../memory-plugin-shared/README.md#workspace-peers) for what each resolves to. `{git_root}` is empty outside a repository; `{cwd}` is never empty but sits in no default chain, so a bare path becomes a peer only when you ask for one; `{dir}` is the workspace root's directory name — the repository root, or the directory holding `.openviking/config.json` — and is empty when the directory is not a workspace.
+
+To give a directory that is not a repository its own peer, create `.openviking/config.json` there holding `{"version": 1, "peer": {"id": "my-project"}}`.
+
+Set `actor_peer_id` in `ovcli.conf` (or `OPENVIKING_PEER_ID` with `OPENVIKING_CREDENTIAL_SOURCE=env`) to pin an explicit peer instead of deriving one. The legacy `codex.peerId` / `codex.peer_id` fields in `ov.conf` still resolve as a fallback.
+
+Upgrading from the path-derived peer needs no action: memories written under the old id stay reachable. With the default `peer_scope: "all"` the server's cross-peer sweep already covers them at no cost; with `actor` scope the hooks ask the old peer separately. There is no deadline, and `OPENVIKING_PEER_SOURCE=cwd` restores the old id outright.
 
 Recall defaults to broad mode: global memory, the current workspace, and other workspace memories can all be recalled, with other workspaces ranked lower and rendered later. In this mode, the MCP proxy omits `X-OpenViking-Actor-Peer` so it can read any URI returned by broad recall for the authenticated user.
 
@@ -145,6 +161,52 @@ export OPENVIKING_DEBUG=1
 ```
 
 Full list: see the `Misc env vars` block in `scripts/config.mjs`. Tuning fields have `OPENVIKING_*` counterparts and env vars win for those tuning fields.
+
+#### Input filters
+
+Two knobs put an ordered list of regex rules in front of the text the plugin sends: `recallQueryFilters` / `OPENVIKING_RECALL_QUERY_FILTERS` shapes the prompt before it becomes a search query, and `captureFilters` / `OPENVIKING_CAPTURE_FILTERS` shapes every turn on the write path before it is stored.
+
+Rules are sed-style strings applied in order to one piece of text: `s<d>pattern<d>replacement<d>[flags]` substitutes, `d<d>pattern<d>[flags]` drops the text on a match, and `k<d>pattern<d>[flags]` keeps it only on a match (chain them for AND). `<d>` is any punctuation delimiter — `/`, `|`, `#`, `:` — escaped with `\` inside the pattern; flags are `i`, `m`, `s`, `u`, `g`. A `user:` or `assistant:` prefix limits a rule to that role.
+
+```sh
+# strip a thinking-keyword prefix, and don't recall on slash / bash-mode prompts
+export OPENVIKING_RECALL_QUERY_FILTERS='s/^\s*(ultrathink|think harder?)\s+//i,d|^\s*[/!]|'
+# redact tokens before they are stored, and never store /clear or /compact turns
+export OPENVIKING_CAPTURE_FILTERS='s/\b(sk|ghp|xoxb)_[A-Za-z0-9_-]+/[redacted]/g,user:d/^\s*\/(clear|compact)\b/'
+```
+
+The env vars are comma-separated lists, split before parsing, so a rule needing a literal comma — a bounded `{10,}` quantifier, say — belongs in the `ovcli.conf` array instead, where only trimming happens:
+
+```json
+{
+  "plugin": {
+    "codex": {
+      "captureFilters": ["s/\\b(sk|ghp)_[A-Za-z0-9_-]{10,}/[redacted]/g"]
+    }
+  }
+}
+```
+
+Rules run top to bottom and the first `d` that matches (or `k` that does not) ends the decision; text a substitution empties is not a drop, just too short to recall on. Filters run before `OPENVIKING_MIN_QUERY_LENGTH` and before the built-in ack / slash-command heuristics. A capture rule shapes what is sent, not what is already stored, and anything already in the pending queue carries the rules that were in effect when it was enqueued; adding a `d`/`k` rule mid-session also shortens the turn list the cursor counts, which reads as a transcript rewrite and replays from the last user turn. A rule that fails to compile is skipped, never fatal — `ov-memory-doctor` lists the active rules and reports the exact error for the ones it could not parse.
+
+#### Workspace configuration files
+
+A repository can carry its own plugin settings in `<repo-root>/.openviking/config.json`, which the team commits, and `<repo-root>/.openviking/config.local.json`, which stays private and gitignored. A third layer, this machine's entry under `~/.openviking/workspaces/`, outranks both, and all three outrank `ovcli.conf`.
+
+```json
+{
+  "version": 1,
+  "peer": { "source": "git" },
+  "recall": { "peer_scope": "actor" },
+  "bypass": { "session_patterns": ["**/fixtures/**"] }
+}
+```
+
+`version: 1` is required; a file declaring another version is skipped with a warning. Schema v1 is `peer.source`, `peer.id`, `recall.enabled`, `recall.peer_scope`, `recall.dedup_turns`, `recall.max_items`, `recall.score_threshold`, `capture.enabled`, `capture.commit_token_threshold`, `bypass.session_patterns`, and `labels`. Lists union across layers, and a leading `"!reset"` drops what was inherited. Unknown keys are kept and ignored.
+
+These files are trusted without a prompt, because a hook is non-interactive and an approval gate would mean one command per workspace. What is refused is structural: connection and credential keys (`url`, `api_key`, `account`, `user`, `extra_headers`, …) are stripped with a warning and `${VAR}` is never expanded in them. What a committed file switches off is announced by `$ov-memory-doctor` rather than blocked.
+
+Keep `.gitignore` from ignoring all of `.openviking/`, or `config.json` can never be committed — narrow the rule to `.openviking/media/` and `.openviking/downloads/`. The doctor warns while the blanket rule is in place.
 
 #### Legacy `codex` block in `ov.conf`
 
@@ -217,7 +279,7 @@ On `resume`, the script skips commit/sweep. It still injects the profile block. 
 { "hookSpecificOutput": { "hookEventName": "UserPromptSubmit", "additionalContext": "<openviking-context source=\"auto-recall\" format=\"digest\">\nOpenViking memory digest:\n- ...\n</openviking-context>" } }
 ```
 
-Codex injects `additionalContext` into the model turn, so memories arrive without an extra tool call. By default the hook runs a Codex compression pass over recalled candidates before injection, dropping weakly-related memories and preserving only a short digest. If the compressor returns `NO_RELEVANT_MEMORY`, empty text, or non-digest chatter, the hook emits `{}` and injects nothing. The whole hook has its own `OPENVIKING_RECALL_TIMEOUT_MS` deadline (default 120s); the bundled `hooks.json` gives Codex 130s so the script can return `{}` before Codex kills it. Digests may keep `viking://` source URIs and point the model at the OpenViking MCP `read`/`search` tools for details when the inline bullet is intentionally short. The outer `<openviking-context ...>` wrapper is deterministic, not compressor-generated; capture strips it to distinguish recalled context from the user's prompt. Set `OPENVIKING_RECALL_COMPRESS=0` to fall back to deterministic short formatting.
+Codex injects `additionalContext` into the model turn, so memories arrive without an extra tool call. By default, recalled context below `OPENVIKING_RECALL_COMPRESS_MIN_INPUT_CHARS` is injected directly; larger blocks pass through the shared relevance compressor, and an identical query/context pair reuses its cached digest. If the compressor returns `NO_RELEVANT_MEMORY`, empty text, or non-digest chatter, the hook emits `{}` and injects nothing. The whole hook has its own `OPENVIKING_RECALL_TIMEOUT_MS` deadline (default 120s); the bundled `hooks.json` gives Codex 130s so the script can return `{}` before Codex kills it. Digests keep validated `viking://` source URIs and point the model at the OpenViking MCP `read`/`search` tools for details when the inline bullet is intentionally short. The outer `<openviking-context ...>` wrapper is deterministic, not compressor-generated; capture strips it to distinguish recalled context from the user's prompt. Set `OPENVIKING_RECALL_COMPRESS=0` to fall back to deterministic short formatting.
 
 The compressor profile is recreated on every `SessionStart` and cached under `OPENVIKING_CODEX_STATE_DIR` so cross-session config changes are picked up but each `UserPromptSubmit` does not probe models. Default fallback order:
 
@@ -235,12 +297,14 @@ Config knobs:
 | `OPENVIKING_RECALL_COMPRESS_MODEL` | unset | Custom first-choice compressor model. Set `off` to disable compression. |
 | `OPENVIKING_RECALL_COMPRESS_THINKING` | unset | Custom `model_reasoning_effort`; `default` omits the Codex config override. Alias: `OPENVIKING_RECALL_COMPRESS_REASONING_EFFORT`. |
 | `OPENVIKING_RECALL_COMPRESS_BASE_URL` | unset | Base URL for the nested compressor's provider. Use this when `--ignore-user-config` prevents the compressor from reading the main Codex provider configuration. |
+| `OPENVIKING_RECALL_COMPRESS_MIN_INPUT_CHARS` | `1500` | Skip the nested compressor below this recalled-context size. Set `0` to compress every non-empty result. |
 | `OPENVIKING_RECALL_COMPRESS_DETECT_ON_STARTUP` | `1` | Recreate/cache compressor profile in `SessionStart`. |
 | `OPENVIKING_RECALL_COMPRESS_DETECT_TIMEOUT_MS` | `15000` | Per-candidate startup probe timeout. |
 | `OPENVIKING_RECALL_COMPRESS_DETECT_TTL_MS` | `604800000` | Cache TTL used by `UserPromptSubmit` when reading the latest profile. |
 | `OPENVIKING_RECALL_MAX_TOKENS` | `1600` | Token budget the server assembles the context block within, independent of the local compressor input limit. |
 | `OPENVIKING_RECALL_DEDUP_TURNS` | `5` | Cross-turn cooldown: URIs served in the last N turns are skipped. |
 | `OPENVIKING_RECALL_QUERY_EXPANSION` | `auto` | `auto` lets the server widen short prompts using session context; `off` disables it. |
+| `OPENVIKING_RECALL_QUERY_FILTERS` | `""` | Comma-separated regex rules applied to the prompt before it becomes a query — see [Input filters](#input-filters). |
 
 Recall now asks the server to assemble the context block in one request
 (`POST /api/v1/search/search` with `mode="context"`), so budgeting, detail tiers
@@ -251,17 +315,17 @@ unless explicitly configured, so the plugin follows the server instead of copyin
 values such as `limit=10` or `max_tokens=1600`. An explicit legacy `recallLimit`
 is converted to per-category coding quotas, not a final result cap. Values
 from 1 through 5 therefore produce an effective total quota of 6, one retrieval
-slot for each coding domain. Local `codex exec` compression is
-unchanged and still runs on top of whichever path answered.
+slot for each coding domain. Eligible cache misses still use local `codex exec`
+compression on top of whichever path answered.
 
 Client-side knobs can also live in `~/.openviking/ovcli.conf` under
-`plugin` (shared) or `plugin.codex` (this harness only); resolution order is env
-vars → `plugin.codex` → `plugin` → the legacy `codex` block in `ov.conf` →
-defaults.
+`plugin` (shared) or `plugin.codex` (this harness only), or in the workspace
+layers; resolution order is env vars → the workspace layers → `plugin.codex` →
+`plugin` → the legacy `codex` block in `ov.conf` → defaults.
 
 ### Stop (turn end → `add_message`, threshold commit)
 
-`auto-capture.mjs` derives one long-lived OpenViking session id per Codex `session_id` as `cx-<safe-session-id>` and incrementally appends every new user/assistant turn via `/api/v1/sessions/{id}/messages`. The `/messages` endpoint auto-creates the session on first append. Per-codex-session state lives at `~/.openviking/codex-plugin-state/<safe-session-id>.json`. Capture sanitizes obvious hook noise, metadata wrappers, and plugin-injected `<openviking-context ...>` blocks before append. Tool calls and results become dedicated `tool` parts and `tool_output` is reported verbatim — the server externalizes anything larger than `tool_output_externalization.threshold_chars` (default `20000`) and leaves a synopsis stub plus `tool_output_ref`, so the original stays readable via `/api/v1/sessions/{id}/tool-results`. `OPENVIKING_CAPTURE_TOOL_MAX_CHARS` (default `1000000`) is only a guard against pathological payloads.
+`auto-capture.mjs` derives one long-lived OpenViking session id per Codex `session_id` as `cx-<safe-session-id>` and incrementally appends every new user/assistant turn via `/api/v1/sessions/{id}/messages`. The `/messages` endpoint auto-creates the session on first append. Per-codex-session state lives at `~/.openviking/codex-plugin-state/<safe-session-id>.json`. Capture sanitizes obvious hook noise, metadata wrappers, and plugin-injected `<openviking-context ...>` blocks before append. Tool calls and results become dedicated `tool` parts and `tool_output` is reported verbatim — the server externalizes anything larger than `tool_output_externalization.threshold_chars` (default `20000`) and leaves a synopsis stub plus `tool_output_ref`, so the original stays readable via `/api/v1/sessions/{id}/tool-results`. `OPENVIKING_CAPTURE_TOOL_MAX_CHARS` (default `1000000`) is only a guard against pathological payloads. Configured `captureFilters` rules run last, just before the payload is sent — see [Input filters](#input-filters).
 
 After a successful append, Stop reads the session meta and commits when `pending_tokens >= OPENVIKING_COMMIT_TOKEN_THRESHOLD` (default `20000`). Threshold commits pass `keep_recent_count=OPENVIKING_COMMIT_KEEP_RECENT_COUNT` (default `10`) so the newest turns remain live for continuity while older context is archived and extracted. `PreCompact` still commits everything before compaction.
 

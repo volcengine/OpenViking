@@ -66,7 +66,7 @@ Available Providers:
 | Provider | Best for | Notes |
 |----------|----------|-------|
 | `redis` | Default delivery on standard networks | Built into RAGFS; supports standalone, Cluster, and Sentinel |
-| `dynamic` | YuanRong, Mooncake, or closed-source cache systems | Not implemented in this release; returns UnsupportedProvider |
+| `dynamic` | YuanRong, Mooncake, or closed-source cache systems | Loaded from an external shared library through the versioned C ABI |
 
 `MemoryMockProvider` is only used by unit and smoke tests; it is not a production configuration option.
 
@@ -85,9 +85,9 @@ Legacy cache configuration is no longer accepted. Migrate before upgrading:
 
 OpenViking rejects removed fields with a migration error instead of silently translating them.
 
-## Future DynamicProvider
+## DynamicProvider
 
-This release only ships the built-in RedisProvider. DynamicProvider, `.so` loading, and the versioned C ABI are deferred; configuring `provider=dynamic` currently returns UnsupportedProvider during startup.
+OpenViking ships the DynamicProvider loader and a versioned C ABI. The default wheel does not bundle third-party SDKs or Provider libraries. Deploy the Provider shared library separately and configure `provider=dynamic` when an external cache system is required.
 
 A dynamic library must export this versioned entry point:
 
@@ -95,7 +95,9 @@ A dynamic library must export this versioned entry point:
 openviking_cache_provider_v1
 ```
 
-Provider artifacts should declare the ABI version, target OS and CPU, minimum glibc version, external SDK version, dynamic dependencies, and SHA256. When a Provider depends on native libraries, its publisher must make them discoverable through RPATH, `LD_LIBRARY_PATH`, or deployment instructions.
+The C contract is defined by `crates/ragfs/include/openviking_cache_provider_v1.h`. The Provider must use the Host allocator for returned data, obey the documented ownership and close semantics, catch exceptions before they cross the C ABI, and make its handle safe for concurrent calls.
+
+Provider artifacts should declare the ABI version, target OS and CPU, minimum runtime version, external SDK version, dynamic dependencies, and SHA256. When a Provider depends on native libraries, its publisher must make them discoverable through RPATH, `LD_LIBRARY_PATH`, or deployment instructions.
 
 External Providers can be upgraded independently without rebuilding the default OpenViking wheel. OpenViking only needs a coordinated upgrade when the DynamicProvider ABI becomes incompatible.
 
@@ -105,7 +107,7 @@ The top-level `cache` section is a sibling of `storage`:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `provider` | str | none | Provider name; this release supports `redis` |
+| `provider` | str | none | Provider name; supports `redis` and `dynamic` |
 | `params` | object | `{}` | Provider-owned parameters |
 
 `storage.agfs.cachefs` controls CacheFS behavior:
@@ -134,9 +136,9 @@ Redis configuration:
 
 All Redis reads are sent to the primary node so QueueFS does not observe stale queue state. CacheRuntime relies on Redis transport security when required and does not add a separate application-layer value encryption format.
 
-Future DynamicProvider configuration shape:
+DynamicProvider configuration:
 
-`cache.params` is entirely Provider-owned. The fields below only illustrate configuration forwarding; use the schema documented by the Provider publisher.
+OpenViking uses `cache.params.library` to load the dynamic library. All remaining fields are Provider-owned and passed to `create` as JSON. Use the schema documented by the Provider publisher.
 
 ```json
 {
@@ -156,7 +158,7 @@ Future DynamicProvider configuration shape:
 RAGFS splits caching into two layers:
 
 - `CachedFileSystem`: implements filesystem semantics, including cache hit/miss handling, backend fallback, cache fill, invalidation, generation checks, and metrics.
-- `CacheRuntime`: exposes common primitive operations and binds the built-in RedisProvider in this release; DynamicProvider remains a future extension.
+- `CacheRuntime`: exposes common primitive operations and binds either the built-in RedisProvider or an external DynamicProvider during startup.
 
 Call flow:
 
@@ -165,7 +167,7 @@ OpenViking
   -> RAGFS / MountableFS
   -> CachedFileSystem
        |-> CacheRuntime -> RedisProvider
-       |               `-> DynamicProvider (future)
+       |               `-> DynamicProvider -> external shared library
        `-> Backend FileSystem
 ```
 

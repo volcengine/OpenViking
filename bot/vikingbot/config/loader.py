@@ -102,6 +102,23 @@ def load_config() -> Config:
             # Extract bot section
             bot_data = full_data.get("bot", {})
             bot_data = convert_keys(bot_data)
+            if "providers" in bot_data:
+                legacy_providers = bot_data.pop("providers")
+                legacy_groq = (
+                    legacy_providers.get("groq") if isinstance(legacy_providers, dict) else None
+                )
+                groq_key = legacy_groq.get("api_key") if isinstance(legacy_groq, dict) else None
+                channels = bot_data.get("channels")
+                if isinstance(groq_key, str) and groq_key and isinstance(channels, list):
+                    for channel in channels:
+                        if isinstance(channel, dict) and channel.get("type") == "telegram":
+                            channel.setdefault("groq_api_key", groq_key)
+                logger.warning(
+                    "bot.providers has been removed; its model settings are ignored. "
+                    "Configure model credentials in vlm or bot.agents instead. "
+                    "Legacy Groq transcription keys are migrated to Telegram channels "
+                    "when groq_api_key is absent."
+                )
             raw_agents = bot_data.get("agents", {})
             bot_model_explicit = bool(
                 isinstance(raw_agents, dict) and str(raw_agents.get("model") or "").strip()
@@ -142,7 +159,15 @@ def load_config() -> Config:
                 )
 
             server_managed = _is_truthy_env(VIKINGBOT_WITH_OPENVIKING_SERVER_ENV)
-            bot_server_data = {} if server_managed else bot_data.get("ov_server", {})
+            configured_bot_server = bot_data.get("ov_server", {})
+            # --with-bot owns the server lifecycle and endpoint, but Bot-level
+            # OpenViking credentials and settings still belong to the Bot.
+            # Ignore only an explicitly configured alternate server URL.
+            bot_server_data = (
+                _server_managed_bot_server_data(configured_bot_server)
+                if server_managed
+                else configured_bot_server
+            )
             server_section_present = "server" in full_data and isinstance(
                 full_data.get("server"), dict
             )
@@ -213,6 +238,13 @@ def _merge_vlm_model_config(
             agents["temperature"] = vlm_data["temperature"]
         if "extra_headers" in vlm_data and vlm_data["extra_headers"] is not None:
             agents["extra_headers"] = vlm_data["extra_headers"]
+
+
+def _server_managed_bot_server_data(value: Any) -> dict:
+    """Keep Bot OpenViking settings while ignoring an alternate server URL."""
+    if not isinstance(value, dict):
+        return {}
+    return {key: item for key, item in value.items() if key != "server_url"}
 
 
 def _merge_ov_server_config(
@@ -773,44 +805,6 @@ def validate_openviking_auth(config: Config) -> None:
         )
         raise SystemExit(1)
     return
-
-
-def reconcile_vlm_inheritance_after_edit(previous: Config, edited: Config) -> None:
-    """Update root-VLM inheritance state after an editor rebuilds Config.
-
-    Editors such as the Web Console serialize and reconstruct ``Config``. The
-    hidden inheritance marker must survive an unchanged round-trip, but it must
-    be cleared when the user explicitly edits the Bot-owned model connection.
-
-    When Bot credentials are added to an inherited config, connection fields
-    flattened from the root VLM must not become implicit Bot-level fallbacks.
-    Preserve only fields whose values were explicitly changed by the editor.
-    """
-    if not previous.inherits_root_vlm():
-        return
-
-    connection_fields = ("model", "provider", "api_key", "api_base", "extra_headers")
-    credentials_changed = previous.agents.credentials != edited.agents.credentials
-    if credentials_changed:
-        empty_values = {
-            "model": "",
-            "provider": "",
-            "api_key": "",
-            "api_base": "",
-            "extra_headers": {},
-        }
-        for field in connection_fields:
-            if getattr(previous.agents, field) == getattr(edited.agents, field):
-                setattr(edited.agents, field, empty_values[field])
-        edited.set_inherits_root_vlm(False)
-        return
-
-    ownership_fields = ("model", "provider", "api_key", "api_base")
-    if any(
-        getattr(previous.agents, field) != getattr(edited.agents, field)
-        for field in ownership_fields
-    ):
-        edited.set_inherits_root_vlm(False)
 
 
 def save_config(

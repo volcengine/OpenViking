@@ -37,15 +37,14 @@ ov skills list
 
 ## Step 3: Run compile
 
-Spell out the **analytical question, comparison dimensions, baseline, and scope** in `--reason` — it directly sets the direction of the distillation:
+Spell out the **analytical question, comparison dimensions, baseline, and scope** in `--instruction` — it directly sets the direction of the distillation:
 
 ```bash
 ov compile \
   --from viking://resources/finance-reports \
   --to viking://resources/finance-insights \
   --skill viking://agent/skills/knowledge-distillation \
-  --reason "Compare the last three years of reports; obtain changes and drivers in revenue quality, profitability, and risk" \
-  --wait
+  --instruction "Compare the last three years of reports; obtain changes and drivers in revenue quality, profitability, and risk"
 ```
 
 `--from` accepts multiple sources for cross-knowledge-base comparison:
@@ -55,11 +54,10 @@ ov compile \
   --from viking://resources/finance-2024,viking://resources/finance-2025 \
   --to viking://resources/finance-insights \
   --skill viking://agent/skills/knowledge-distillation \
-  --reason "Compare the two yearly knowledge bases; surface changes and structural differences in key metrics" \
-  --wait
+  --instruction "Compare the two yearly knowledge bases; surface changes and structural differences in key metrics"
 ```
 
-Drop `--wait` to get a `task_id` back immediately:
+The command returns a `task_id` immediately:
 
 ```bash
 ov task status cmp_01abc      # progress and final result
@@ -75,10 +73,10 @@ ov tree viking://resources/finance-insights
 ov read viking://resources/finance-insights/revenue-quality/growth-shifted-from-volume-to-pricing.md
 ```
 
-By default **no `index.md` is created** — a distillation is itself a set of conclusions, unless `--reason` explicitly asks for a navigation page. Re-running refreshes the same analysis page and time-bounds any conclusion that may change.
+By default **no `index.md` is created** — a distillation is itself a set of conclusions, unless `--instruction` explicitly asks for a navigation page. Re-running refreshes the same analysis page and time-bounds any conclusion that may change.
 
 ## Related docs
 
 - [Context Compilation Overview](./01-overview.md)
 - [Daily Report example](./04-daily-report.md)
-- [VikingBot API → compile()](../api/24-vikingbot.md#compile)
+- [Agent Runtime API](../api/23-agent-runtime.md)

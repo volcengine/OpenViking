@@ -333,7 +333,7 @@ def _check_cli_compatible():
 CLI_COMPATIBLE = _check_cli_compatible()
 
 
-def pytest_collection_modifyitems(config, items):
+def _apply_cli_skip_markers(items):
     skip_reason = None
     if not CLI_COMPATIBLE:
         skip_reason = "openviking CLI not available"
@@ -553,6 +553,16 @@ def ov_mv(src_uri, dst_uri):
     return ov_retry(["mv", src_uri, dst_uri, "-o", "json"], attempts=20, interval=15)
 
 
+def ov_cp(src_uri, dst_uri, *, recursive=False, output="json"):
+    args = ["cp"]
+    if recursive:
+        args.append("-r")
+    args.extend([src_uri, dst_uri])
+    if output:
+        args.extend(["-o", output])
+    return ov_retry(args, attempts=20, interval=15)
+
+
 def ov_write(uri, content, *extra_args):
     return ov_retry(
         [
@@ -604,6 +614,10 @@ def _find_file_in_pack(pack_uri, retries=10, interval=5):
                     return item["uri"]
         time.sleep(interval)
     return None
+
+
+def pytest_collection_modifyitems(items):
+    _apply_cli_skip_markers(items)
 
 
 @pytest.fixture(scope="session")

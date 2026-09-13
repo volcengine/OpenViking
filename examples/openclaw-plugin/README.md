@@ -23,7 +23,7 @@ The agent runs install → setup → restart → verify automatically. See [INST
 
 | Stage | What happens |
 |-------|-------------|
-| **Every turn** (`afterTurn`) | New messages are appended to an OpenViking session; commit/extraction is threshold-triggered |
+| **Every turn** (`afterTurn` or `commitTurn`, depending on host/runner) | New messages are appended to an OpenViking session; commit/extraction is threshold-triggered |
 | **Explicit remember** (`memory_store`) | Important long-term facts can be written and committed immediately |
 | **On `/compact`** (`compact`) | Pending session messages are committed and extracted into long-term memories |
 | **Before each reply** (`assemble`) | Relevant memories are auto-retrieved and injected into context |
@@ -124,14 +124,25 @@ The main rules are:
 - reuse `sessionId` directly when it is already a UUID
 - prefer `sessionKey` when deriving a stable `ovSessionId`
 - normalize unsafe path characters, or fall back to a stable SHA-256 when needed
-- `peer_role=assistant` is the default and writes assistant messages with `peer_id=<sessionAgent>`; if `peer_prefix` is set, the value becomes `<peer_prefix>_<sessionAgent>`
-- `peer_role=none` disables peer message attribution and actor-peer routing
-- `peer_role=person` writes user messages with `peer_id` derived from OpenClaw sender identity; assistant messages do not get `peer_id`
-- data-plane recall/search/read/import/delete sends the same resolved peer identity as `X-OpenViking-Actor-Peer` when `peer_role` is `assistant` or `person`
+- `peer_role=none` is the default: messages have no peer attribution and memory stays in the shared user scope, for example `viking://user/alice/memories/...`; no peer-specific memory subtree is used
+- `peer_role=assistant` writes assistant messages with `peer_id=<sessionAgent>` and uses peer-scoped memory such as `viking://user/alice/peers/main/memories/...`; if `peer_prefix` is set, the peer id becomes `<peer_prefix>_<sessionAgent>`
+- `peer_role=sender` writes user messages with the OpenClaw sender identity as `peer_id` and uses peer-scoped memory such as `viking://user/support-agent/peers/customer-42/memories/...`; assistant messages do not get `peer_id`
+- `person` remains accepted as a legacy config alias for `sender`, but new configuration and documentation use `sender`
+- data-plane recall/search/read/import/delete sends the same resolved peer identity as `X-OpenViking-Actor-Peer` when `peer_role` is `assistant` or `sender`
 - when OpenClaw does not provide a session agent, use its default agent `main` for local session and assistant peer metadata
 - only add `X-OpenViking-Account` / `X-OpenViking-User` when `accountId` / `userId` are explicitly configured
 
 This matters because OpenViking tenant identity is account/user-scoped, while OpenClaw agent identity is runtime metadata.
+
+Choose the scope from what `viking://user/<user_id>` represents:
+
+| Model | Example | Result |
+| --- | --- | --- |
+| General/shared (`none`) | `user_id=alice` uses any OpenClaw assistant | Shared user memory under `viking://user/alice/memories/...` |
+| Human is the OpenViking user (`assistant`) | Alice uses OpenClaw assistants `main` and `research` | Assistant-scoped memories are separated under `.../peers/main/memories/...` and `.../peers/research/memories/...` |
+| Agent is the OpenViking user (`sender`) | `user_id=support-agent` receives messages from `customer-42` and `customer-99` | Sender-scoped memories are separated under `.../peers/customer-42/memories/...` and `.../peers/customer-99/memories/...` |
+
+OpenViking creates the managed `peers/` container as part of the user namespace. `none` means that the plugin does not create or route into a specific `peers/<peer_id>/memories` subtree. With `assistant` or `sender`, actor-peer recall includes the shared user memory plus the current peer's memory; changing the setting does not move existing memories.
 
 The recommended remote-mode configuration only needs:
 
@@ -143,7 +154,7 @@ The recommended remote-mode configuration only needs:
 In this setup:
 
 - `apiKey` should usually be a user key
-- new installs default to `peer_role=assistant`
+- new installs default to `peer_role=none`
 - `accountId` / `userId` are advanced options only when the deployment needs explicit identity headers, such as root-key or trusted-server flows
 
 ### User namespace
@@ -164,16 +175,9 @@ During recall, the plugin:
 1. Extracts query text from the latest user message.
 2. Resolves the agent routing for the current `sessionId/sessionKey`.
 3. Runs a quick availability precheck so model requests do not stall when OpenViking is unavailable.
-4. Queries the configured `recallTargetTypes` (`user,agent` by default; optionally `resource`; use `ov_archive_search` and `ov_archive_expand` for session history).
-5. Deduplicates, threshold-filters, reranks, and trims the results under a token budget.
-6. Prepends the selected memories as a `## Long-term Memories` section inside `<openviking-context>` to the current user message; it does not append a standalone synthetic user message.
-
-The reranking logic is not pure vector-score sorting. The current implementation also considers:
-
-- whether a result is a leaf memory with `level == 2`
-- whether it looks like a preference memory
-- whether it looks like an event memory
-- lexical overlap with the current query
+4. Sends one session-aware context search for the configured `recallTargetTypes` (`user,agent` by default; optionally `resource`; use `ov_archive_search` and `ov_archive_expand` to inspect raw session history).
+5. Lets OpenViking expand the query from session history, filter and rank candidates, apply cross-turn deduplication, select detail tiers, and assemble the result under the injection budget.
+6. Prepends the server-rendered context inside `<relevant-memories>` to the current user message; it does not append a standalone synthetic user message.
 
 ## Session Lifecycle
 
@@ -198,6 +202,17 @@ That means OpenClaw sees "compressed history summary + archive index + active me
 
 `afterTurn()` has a narrower job: append only the new turn into the OpenViking session.
 
+Capture ownership depends on the **host** version from `api.runtime.version`:
+
+- Before OpenClaw 2026.9.3, `afterTurn` captures messages; `commitTurn` only acknowledges the turn to avoid writing those messages twice.
+- Starting with 2026.9.3, admitted/deferred turns are captured inside `commitTurn` before acknowledgment. Standalone runners still capture via `afterTurn`.
+- The minimum supported OpenClaw version remains 2026.5.27. Missing/unparseable versions and ambiguous 2026.9.3 prereleases reject `commitTurn` rather than silently discarding queued messages; `afterTurn` remains available. Numeric packaging revisions such as `2026.9.3-1` use the 9.3 behavior.
+
+Durable capture propagates client/write/commit failures to the host for retry and shares one in-flight write between concurrent deliveries of the same advancement key. Disabled capture, heartbeats, bypassed sessions, and empty turns are intentional skips. The legacy `afterTurn` callback retains best-effort error handling.
+
+The host's durable delivery does not supply the model token budget or sender runtime context: this path uses the 128,000-token fallback and cannot attach the runtime sender ID to user messages. Message writes remain non-transactional: replay after partial writes or a process crash can duplicate messages. The in-memory advancement-key cache does not provide server-side exactly-once delivery.
+
+
 - it slices only the newly added messages
 - it keeps only `user` / `assistant` capture text
 - it preserves `toolCall` / `toolResult` content in the serialized turn text
@@ -210,7 +225,7 @@ After that, the plugin checks `pending_tokens`. Once it reaches `commitTokenThre
 - the current turn is not blocked waiting for extraction
 - if `logFindRequests` is enabled, the logs include the task id and follow-up extraction detail
 
-This automatic path is best-effort and commit-dependent. Short but important facts can stay only in the live session until a threshold commit, `/compact`, or an explicit store happens.
+Memory extraction on this automatic path is commit-dependent. Short but important facts can stay only in the live session until a threshold commit, `/compact`, or an explicit store happens.
 
 ### Explicit long-term memory writes
 

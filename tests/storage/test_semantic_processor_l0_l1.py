@@ -3,8 +3,11 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from openviking.core.context import ContextLevel
 from openviking.storage.abstract_overview import render_abstract_overview
+from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs import semantic_processor as semantic_processor_module
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 
@@ -17,6 +20,72 @@ def _patch_semantic_limits(monkeypatch, *, abstract_max_chars=256, overview_max_
         )
     )
     monkeypatch.setattr(semantic_processor_module, "get_openviking_config", lambda: config)
+
+
+async def _completed(value):
+    return value
+
+
+async def _raise(error):
+    raise error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "expected_type"),
+    [
+        (LockAcquisitionError("sidecars busy"), LockAcquisitionError),
+        (ValueError("write failed"), RuntimeError),
+    ],
+)
+async def test_memory_directory_write_error_contract(monkeypatch, error, expected_type):
+    # _handle_message relies on this exact type to requeue lock conflicts without
+    # incrementing the API circuit breaker or dropping the semantic message.
+    processor = SemanticProcessor()
+    msg = SimpleNamespace(
+        uri="viking://resources/memory",
+        changes=None,
+        skip_vectorization=True,
+        source=None,
+        generation_trigger="semantic_refresh",
+    )
+
+    class FakeVikingFS:
+        async def ls(self, uri, node_limit, ctx):
+            return [{"name": "entry.md", "isDir": False}]
+
+    monkeypatch.setattr(semantic_processor_module, "get_viking_fs", lambda: FakeVikingFS())
+    monkeypatch.setattr(
+        semantic_processor_module,
+        "get_openviking_config",
+        lambda: SimpleNamespace(
+            semantic=SimpleNamespace(
+                abstract_max_chars=256,
+                overview_max_chars=4000,
+                overview_sample_limit=32,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        processor,
+        "_generate_single_file_summary",
+        lambda *args, **kwargs: _completed({"name": "entry.md", "summary": "summary"}),
+    )
+    monkeypatch.setattr(
+        processor,
+        "_generate_overview",
+        lambda *args, **kwargs: _completed("# memory\n\nSummary."),
+    )
+    monkeypatch.setattr(
+        semantic_processor_module,
+        "write_abstract_overview",
+        lambda **kwargs: _raise(error),
+    )
+
+    with pytest.raises(expected_type) as exc_info:
+        await processor._process_memory_directory(msg)
+    if expected_type is RuntimeError:
+        assert isinstance(exc_info.value.__cause__, ValueError)
 
 
 def test_markdown_overview_uses_brief_description_as_abstract(monkeypatch):

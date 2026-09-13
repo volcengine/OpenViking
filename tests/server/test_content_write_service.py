@@ -17,6 +17,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils import MemoryFileUtils
 from openviking.session.memory.utils.content_visibility import visible_content
+from openviking.storage.acl import AclMode
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
@@ -128,6 +129,10 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
         user=UserIdentifier(admin.account_id, "outsider"),
         role=Role.USER,
     )
+    late_reader = RequestContext(
+        user=UserIdentifier(admin.account_id, "late_reader"),
+        role=Role.USER,
+    )
     parent_uri = "viking://resources/append_plain"
     auto_protected_dir = "viking://resources/auto_protected"
     uri = "viking://resources/append_plain/journal.md"
@@ -158,7 +163,8 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
         },
         ctx=admin,
     )
-    await service.fs.set_acl(
+    assert (await service.fs.get_acl(parent_uri, ctx=admin))["acl_mode"] == "none"
+    parent_acl = await service.fs.set_acl(
         parent_uri,
         [
             {"principal": "group:readers", "level": "read"},
@@ -166,6 +172,7 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
         ],
         ctx=admin,
     )
+    assert parent_acl["acl_mode"] == "inherit"
 
     await service.fs.write(uri, content="line1\n", ctx=creator, mode="create", wait=True)
     inherited_entries = [
@@ -191,6 +198,70 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
     child_acl = await service.fs.get_acl(children[0], ctx=creator)
     assert child_acl["direct_entries"] == []
     assert child_acl["inherited_entries"] == [*inherited_entries, creator_entry]
+
+    restricted_acl = await service.fs.set_acl(
+        import_root,
+        None,
+        ctx=creator,
+        acl_mode=AclMode.RESTRICTED,
+    )
+    assert restricted_acl["acl_mode"] == "restricted"
+    assert restricted_acl["inherited_entries"] == inherited_entries
+    assert restricted_acl["effective_entries"] == [creator_entry]
+    child_acl = await service.fs.get_acl(children[0], ctx=creator)
+    assert child_acl["inherited_entries"] == [creator_entry]
+    with pytest.raises(PermissionDeniedError):
+        await service.fs.ls(import_root, ctx=reader, simple=True)
+
+    refreshed_inherited_entries = [
+        *inherited_entries,
+        {"principal": "user:late_reader", "level": "read"},
+    ]
+    await service.fs.set_acl(
+        parent_uri,
+        [
+            {"principal": "group:readers", "level": "read"},
+            {"principal": "group:writers", "level": "write"},
+            {"principal": "user:late_reader", "level": "read"},
+        ],
+        ctx=admin,
+    )
+    restricted_acl = await service.fs.get_acl(import_root, ctx=creator)
+    assert restricted_acl["inherited_entries"] == refreshed_inherited_entries
+    assert restricted_acl["effective_entries"] == [creator_entry]
+    child_acl = await service.fs.get_acl(children[0], ctx=creator)
+    assert child_acl["inherited_entries"] == [creator_entry]
+    with pytest.raises(PermissionDeniedError):
+        await service.fs.ls(import_root, ctx=late_reader, simple=True)
+
+    inherited_acl = await service.fs.set_acl(
+        import_root,
+        None,
+        ctx=creator,
+        acl_mode=AclMode.INHERIT,
+    )
+    assert inherited_acl["acl_mode"] == "inherit"
+    assert inherited_acl["inherited_entries"] == refreshed_inherited_entries
+    assert await service.fs.ls(import_root, ctx=late_reader, simple=True) == children
+
+    await service.fs.set_acl(import_root, [], acl_mode=AclMode.RESTRICTED, ctx=creator)
+    child_acl = await service.fs.get_acl(children[0], ctx=admin)
+    assert child_acl["acl_mode"] == "inherit"
+    assert child_acl["effective_entries"] == []
+    with pytest.raises(PermissionDeniedError):
+        await service.fs.ls(import_root, ctx=late_reader, simple=True)
+    with pytest.raises(PermissionDeniedError):
+        await service.viking_fs.read_file(children[0], ctx=late_reader)
+
+    removed_acl = await service.fs.delete_acl(import_root, ctx=admin)
+    assert removed_acl["acl_mode"] == "inherit"
+    assert removed_acl["direct_entries"] == []
+    assert removed_acl["inherited_entries"] == refreshed_inherited_entries
+    with pytest.raises(PermissionDeniedError):
+        await service.fs.get_acl(import_root, ctx=creator)
+    assert (await service.fs.get_acl(import_root, ctx=admin))["effective_entries"] == (
+        refreshed_inherited_entries
+    )
 
     await service.fs.write(uri, content="line2\n", ctx=creator, mode="append", wait=True)
 
@@ -342,7 +413,9 @@ async def test_memory_write_linkifies_resource_uri_marker_with_readable_anchor(s
     refs = mf.extra_fields["resource_refs"]
     assert refs[0]["resource_uri"] == resource_uri
     assert refs[0]["source"] == "content.write"
-    assert refs[0]["match_text"] == "2026-06-12，用户保存了粉丝创作的越前龙马动漫插画资源，资源URI为"
+    assert (
+        refs[0]["match_text"] == "2026-06-12，用户保存了粉丝创作的越前龙马动漫插画资源，资源URI为"
+    )
     assert mf.links == []
 
 
@@ -462,8 +535,9 @@ class _FakeVikingFS:
         self.tree_entries = []
         self._async_agfs = _FakePathLock()
 
-    async def stat(self, uri: str, ctx=None):
+    async def stat(self, uri: str, ctx=None, skip_count=False):
         del ctx
+        assert skip_count is True
         if uri == self._file_uri or uri in self.content:
             return {"isDir": False}
         if uri == self._root_uri:
@@ -719,9 +793,10 @@ async def test_write_direct_reuses_outer_lease_for_viking_fs(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_resource_write_updates_target_and_queues_refresh_before_return(monkeypatch):
-    file_uri = "viking://resources/demo/doc.md"
-    root_uri = "viking://resources/demo"
+@pytest.mark.parametrize("path", ["demo/doc.md", "demo#1/a#one.md"])
+async def test_resource_write_updates_target_and_queues_refresh_before_return(monkeypatch, path):
+    file_uri = f"viking://resources/{path}"
+    root_uri = file_uri.rsplit("/", 1)[0]
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
     viking_fs = _FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
     coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
@@ -873,8 +948,9 @@ class _FakeVikingFSForCreate:
         self.existing_dirs = set({root_uri} if existing_dirs is None else existing_dirs)
         self._async_agfs = _FakePathLock()
 
-    async def stat(self, uri: str, ctx=None):
+    async def stat(self, uri: str, ctx=None, skip_count=False):
         del ctx
+        assert skip_count is True
         if uri == self._file_uri:
             if self._file_exists:
                 return {"isDir": False}
@@ -1216,8 +1292,9 @@ class _AnyDirVikingFS:
     def __init__(self, file_uri: str):
         self._file_uri = file_uri
 
-    async def stat(self, uri: str, ctx=None):
+    async def stat(self, uri: str, ctx=None, skip_count=False):
         del ctx
+        assert skip_count is True
         return {"isDir": uri != self._file_uri}
 
 

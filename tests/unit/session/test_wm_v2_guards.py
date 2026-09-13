@@ -7,6 +7,8 @@ These tests target pure/static methods on Session and related helpers,
 so they don't need a running OpenViking server.
 """
 
+import pytest
+
 from openviking.message.message import Message
 from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.session.session import WM_SEVEN_SECTIONS, Session
@@ -636,6 +638,40 @@ class TestFormatMessageForWm:
         assert "found 3 results" in result
         assert result.startswith("[assistant]:")
 
+    def test_tool_inline_image_base64_redacted(self):
+        image_data = "A" * 50_000
+        output = (
+            'before {"image_url":{"url":"data:image/png;base64,'
+            + image_data
+            + '"},"b64_json":"'
+            + image_data
+            + '"} after'
+        )
+        m = _msg(
+            "assistant",
+            [ToolPart(tool_name="view_image", tool_status="completed", tool_output=output)],
+        )
+
+        result = Session._format_message_for_wm(m)
+
+        assert "before" in result
+        assert "after" in result
+        assert "mime=image/png" in result
+        assert result.count("base64_chars=50000") == 2
+        assert image_data not in result
+
+    def test_malformed_inline_image_data_url_is_not_redacted(self):
+        malformed = "data:image/png" + ";param" * 1_024 + ";notbase64,"
+        m = _msg(
+            "assistant",
+            [ToolPart(tool_name="view_image", tool_status="completed", tool_output=malformed)],
+        )
+
+        result = Session._format_message_for_wm(m)
+
+        assert malformed in result
+        assert "inline image omitted" not in result
+
     def test_context_part_included(self):
         m = _msg(
             "assistant",
@@ -694,3 +730,32 @@ class TestFormatMessageForWm:
         )
         result = Session._format_message_for_wm(m)
         assert "(pending)" in result
+
+
+@pytest.mark.asyncio
+async def test_hydrated_extraction_output_redacts_inline_images():
+    image_data = "A" * 50_000
+    original = _msg(
+        "assistant",
+        [
+            ToolPart(
+                tool_name="view_image",
+                tool_output="externalized preview",
+                tool_output_ref="viking://user/test/sessions/test/tool-results/result-1",
+                tool_output_truncated=True,
+            )
+        ],
+    )
+
+    class Store:
+        async def read(self, _tool_result_id, **_kwargs):
+            return {"content": f"before data:image/png;base64,{image_data} after"}
+
+    session = Session.__new__(Session)
+    session._tool_result_store = lambda: Store()
+
+    hydrated = await session._hydrate_tool_outputs_for_extraction([original])
+
+    assert original.parts[0].tool_output == "externalized preview"
+    assert image_data not in hydrated[0].parts[0].tool_output
+    assert "base64_chars=50000" in hydrated[0].parts[0].tool_output

@@ -39,9 +39,7 @@ def _clean_memory_attrs(raw: str) -> dict[str, Any]:
     return attrs
 
 
-async def _tags_attr(
-    service: Any, uri: str, ctx: RequestContext, *, is_dir: bool
-) -> list[str]:
+async def _tags_attr(service: Any, uri: str, ctx: RequestContext, *, is_dir: bool) -> list[str]:
     vikingdb_manager = getattr(service, "vikingdb_manager", None)
     if not vikingdb_manager:
         return []
@@ -76,7 +74,8 @@ async def ls(
     abs_limit: int = Query(256, description="Abstract limit (only for agent output)"),
     show_all_hidden: bool = Query(False, description="List all hidden files, like -a"),
     node_limit: int = Query(1000, description="Maximum number of nodes to list"),
-    limit: Optional[int] = Query(None, description="Alias for node_limit"),
+    offset: int = Query(0, ge=0, description="Number of visible nodes to skip"),
+    limit: Optional[int] = Query(None, ge=1, description="Alias for node_limit"),
     sort_by: Optional[Literal["name", "mtime"]] = Query(
         None,
         description="Sort directory and file groups before applying node_limit",
@@ -85,6 +84,8 @@ async def ls(
     extra_fields: Optional[list[str]] = Query(
         None, description="Extra fields to include: locked, id, count"
     ),
+    tags: list[str] | None = Query(None, description="Only include entries matching all k=v tags"),
+    include_tags: bool = Query(False, description="Include tags in each entry"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """List directory contents."""
@@ -102,9 +103,12 @@ async def ls(
             abs_limit=abs_limit,
             show_all_hidden=show_all_hidden,
             node_limit=actual_node_limit,
+            offset=offset,
             sort_by=sort_by,
             sort_order=sort_order,
             extra_fields=extra_fields,
+            tags=tags,
+            include_tags=include_tags,
         )
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
@@ -123,11 +127,14 @@ async def tree(
     abs_limit: int = Query(256, description="Abstract limit (only for agent output)"),
     show_all_hidden: bool = Query(False, description="List all hidden files, like -a"),
     node_limit: int = Query(1000, description="Maximum number of nodes to list"),
-    limit: Optional[int] = Query(None, description="Alias for node_limit"),
+    offset: int = Query(0, ge=0, description="Number of visible nodes to skip"),
+    limit: Optional[int] = Query(None, ge=1, description="Alias for node_limit"),
     level_limit: int = Query(3, description="Maximum depth level to traverse"),
     extra_fields: Optional[list[str]] = Query(
         None, description="Extra fields to include: locked, id, count"
     ),
+    tags: list[str] | None = Query(None, description="Only include entries matching all k=v tags"),
+    include_tags: bool = Query(False, description="Include tags in each entry"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get directory tree."""
@@ -144,7 +151,10 @@ async def tree(
             show_all_hidden=show_all_hidden,
             node_limit=actual_node_limit,
             level_limit=level_limit,
+            offset=offset,
             extra_fields=extra_fields,
+            tags=tags,
+            include_tags=include_tags,
         )
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
@@ -170,7 +180,7 @@ async def stat(
     else:
         resolved = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
-        result = await service.fs.stat(resolved, ctx=_ctx)
+        result = await service.fs.stat(resolved, ctx=_ctx, include_lock_status=True)
         # URI requests use the canonical validated URI. ID requests are resolved
         # inside VikingFS, which returns the corresponding canonical URI.
         response_uri = result.get("uri", resolved)
@@ -198,7 +208,7 @@ async def attrs(
     service = get_service()
     uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
-        stat_result = await service.fs.stat(uri, ctx=_ctx)
+        stat_result = await service.fs.stat(uri, ctx=_ctx, skip_count=True)
         result = {
             "uri": uri,
             "context_type": context_type_for_uri(uri),
@@ -209,9 +219,7 @@ async def attrs(
             },
         }
         if result["context_type"] == "memory" and not stat_result.get("isDir", False):
-            result["attrs"]["memory"] = _clean_memory_attrs(
-                await service.fs.read(uri, ctx=_ctx)
-            )
+            result["attrs"]["memory"] = _clean_memory_attrs(await service.fs.read(uri, ctx=_ctx))
         return Response(status="ok", result=result)
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
@@ -308,6 +316,54 @@ class MvRequest(BaseModel):
 
     from_uri: str
     to_uri: str
+
+
+class CpRequest(BaseModel):
+    """Request model for cp."""
+
+    from_uri: str
+    to_uri: str
+    recursive: bool = False
+
+
+@router.post("/cp")
+async def cp(
+    request: CpRequest,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Copy a file or directory together with its vector records."""
+    service = get_service()
+    from_uri = validate_request_viking_uri(
+        resolve_path_variables(request.from_uri), _ctx, field_name="from_uri"
+    )
+    to_uri = validate_request_viking_uri(
+        resolve_path_variables(request.to_uri), _ctx, field_name="to_uri"
+    )
+    try:
+        result = await service.fs.cp(
+            from_uri,
+            to_uri,
+            recursive=request.recursive,
+            ctx=_ctx,
+        )
+    except AGFSNotFoundError:
+        raise NotFoundError(from_uri, "file")
+    except AGFSClientError as exc:
+        mapped = map_exception(exc, resource=from_uri, resource_type="file")
+        if mapped is not None:
+            raise mapped from exc
+        raise
+    except Exception as exc:
+        mapped = map_exception(exc, resource=from_uri)
+        if mapped is not None:
+            raise mapped from exc
+        raise
+
+    response_result = dict(result or {})
+    response_result.setdefault("from", from_uri)
+    response_result.setdefault("to", to_uri)
+    response_result.setdefault("recursive", request.recursive)
+    return Response(status="ok", result=response_result)
 
 
 @router.post("/mv")

@@ -75,3 +75,37 @@ def test_native_packed_filter_abi_has_exact_little_endian_layout_and_shapes():
     assert routed_wide.native_filter_token == 0
     assert empty.bitset_words == b"\x00" * 12
     assert empty.eligible_count == 0
+
+    for row, request in enumerate(requests):
+        request.fields_str = json.dumps(
+            {
+                "uri": f"/keep/item-{row}" if row in selected_rows else f"/drop/item-{row}",
+                "schema_flag": row in selected_rows,
+            }
+        )
+    scalar_meta = [
+        {"FieldName": "uri", "FieldType": "path"},
+        {"FieldName": "schema_flag", "FieldType": "bool"},
+    ]
+
+    def interrupted_rows():
+        for row in range(1100):
+            request = engine.AddDataRequest()
+            request.label = labels[row % len(labels)]
+            request.fields_str = '{"uri":"/replacement","schema_flag":true}'
+            yield request
+        raise ValueError("Store scan interrupted")
+
+    # Even after a batch has been built, a failed scan must keep the old index.
+    with pytest.raises(ValueError, match="Store scan interrupted"):
+        index.rebuild_scalar_index(json.dumps(scalar_meta), interrupted_rows())
+    assert index.evaluate_filter(keep_filter).bitset_words == expected_words
+
+    assert index.rebuild_scalar_index(json.dumps(scalar_meta), iter(requests)) == 0
+    assert index.set_filter_layout(labels) == 0
+    rebuilt = index.evaluate_filter(
+        json.dumps({"op": "must", "field": "schema_flag", "conds": [True]})
+    )
+    assert rebuilt.bitset_words == expected_words
+    assert rebuilt.eligible_count == len(selected_rows)
+    assert index.evaluate_filter(keep_filter).bitset_words == expected_words

@@ -451,6 +451,12 @@ Role.register("operator", rank=1)  # 权限介于 USER (0) 与 ADMIN (1) 之间
 
 ### Trusted 模式
 
+trusted 模式的普通数据面请求无需预先注册 user 或创建 user API Key。服务端会异步批量注册
+该 account/user，使其最终出现在既有 account/user 管理接口中（默认五分钟刷盘）。注册不会
+创建 user API Key，也不会修改 group 或已有 user 的角色。设置
+`server.trusted_identity_flush_interval_seconds` 为 `0` 可完全关闭注册能力；
+`/api/v1/admin/*` 请求不会被注册。
+
 ```bash
 # 创建工作区 + 首个 admin
 curl -X POST http://localhost:1933/api/v1/admin/accounts \

@@ -61,7 +61,7 @@ import {
 import { buildProfileBlock } from "./shared/profile-inject.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
-const cfg = loadConfig();
+let cfg = loadConfig();
 const { log, logError } = createLogger("session-start");
 let activePeerId = cfg.peerId || "";
 
@@ -341,6 +341,9 @@ async function main() {
   const source = input.source || "unknown";
   const newSessionId = input.session_id || "unknown";
   const cwd = typeof input.cwd === "string" && input.cwd.trim() ? input.cwd : process.cwd();
+  // The workspace layer belongs to the session's directory, which only the
+  // payload knows; see loadConfig for why re-resolving this late is safe.
+  cfg = loadConfig(cwd);
   const effectivePeer = resolveEffectivePeerId({ cfg, cwd });
   activePeerId = effectivePeer.peerId;
   if (newSessionId !== "unknown") {

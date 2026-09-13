@@ -1124,7 +1124,7 @@ Usage: ov config [OPTIONS] [COMMAND]
 
     #[test]
     fn compile_refresh_failure_explains_safe_retry() {
-        let command = "ov compile --from viking://resources/source --to viking://resources/wiki --skill viking://agent/skills/wiki --wait";
+        let command = "ov compile --from viking://resources/source --to viking://resources/wiki --skill viking://agent/skills/wiki";
         let error = Error::api_response(
             Some("REFRESH_FAILED".to_string()),
             "Content is already at the requested state, but semantic/index refresh failed: injected overview failure. Re-run the same batch-write or ov compile command; matching files will remain unchanged and refresh will be retried.",

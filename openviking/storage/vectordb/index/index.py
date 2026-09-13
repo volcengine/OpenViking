@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 from openviking.storage.vectordb.store.data import DeltaRecord
 
@@ -187,6 +187,13 @@ class IIndex(ABC):
         Note:
             Adding new scalar indexes may trigger background index building.
         """
+        raise NotImplementedError
+
+    @abstractmethod
+    def rebuild_scalar_index(
+        self, scalar_index: List[str], cands_fields: Iterable[Tuple[int, str]]
+    ) -> None:
+        """Replace the scalar index from a Store snapshot without rebuilding vectors."""
         raise NotImplementedError
 
     @abstractmethod

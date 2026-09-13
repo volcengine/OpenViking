@@ -1377,6 +1377,70 @@ PyObject* py_index_engine_delete_data(PyObject*, PyObject* args) {
   }
 }
 
+PyObject* py_index_engine_rebuild_scalar_index(PyObject*, PyObject* args) {
+  PyObject* capsule = nullptr;
+  const char* scalar_index_json = nullptr;
+  PyObject* items = nullptr;
+  if (!PyArg_ParseTuple(args, "OsO", &capsule, &scalar_index_json, &items)) {
+    return nullptr;
+  }
+
+  auto* engine = capsule_to_ptr<vdb::IndexEngine>(capsule, kIndexCapsuleName);
+  if (engine == nullptr) {
+    return nullptr;
+  }
+
+  std::unique_ptr<PyObject, decltype(&Py_DecRef)> iterator(PyObject_GetIter(items),
+                                                        Py_DecRef);
+  if (!iterator) {
+    return nullptr;
+  }
+
+  try {
+    // Bound the native input independently of the Store's encoded page size.
+    // A single oversized row is allowed so every nonempty batch makes progress.
+    auto read_batch = [&](std::vector<vdb::AddDataRequest>& batch) {
+      constexpr size_t kMaxRows = 1024;
+      constexpr size_t kMaxBytes = 1024 * 1024;
+      const auto gil = PyGILState_Ensure();
+      try {
+        batch.clear();
+        size_t bytes = 0;
+        while (batch.size() < kMaxRows && bytes < kMaxBytes) {
+          std::unique_ptr<PyObject, decltype(&Py_DecRef)> item(
+              PyIter_Next(iterator.get()), Py_DecRef);
+          if (!item) {
+            if (PyErr_Occurred()) {
+              throw std::runtime_error("Failed to read scalar index rows");
+            }
+            break;
+          }
+          vdb::AddDataRequest request;
+          if (!parse_add_request(item.get(), &request)) {
+            throw std::runtime_error("Invalid scalar index row");
+          }
+          bytes += request.fields_str.size();
+          batch.push_back(std::move(request));
+        }
+      } catch (...) {
+        PyGILState_Release(gil);
+        throw;
+      }
+      PyGILState_Release(gil);
+      return !batch.empty();
+    };
+    const int result = call_without_gil([&]() {
+      return engine->rebuild_scalar_index(scalar_index_json, read_batch);
+    });
+    return PyLong_FromLong(result);
+  } catch (const std::exception& exc) {
+    if (!PyErr_Occurred()) {
+      raise_runtime_error(exc.what());
+    }
+    return nullptr;
+  }
+}
+
 PyObject* py_index_engine_search(PyObject*, PyObject* args) {
   PyObject* capsule = nullptr;
   PyObject* request_obj = nullptr;
@@ -1942,6 +2006,9 @@ PyMethodDef kModuleMethods[] = {
      "Add data to the index engine."},
     {"_index_engine_delete_data", py_index_engine_delete_data, METH_VARARGS,
      "Delete data from the index engine."},
+    {"_index_engine_rebuild_scalar_index",
+     py_index_engine_rebuild_scalar_index, METH_VARARGS,
+     "Rebuild scalar fields without rebuilding the vector index."},
     {"_index_engine_search", py_index_engine_search, METH_VARARGS,
      "Search the index engine."},
     {"_index_engine_search_with_filter_token",

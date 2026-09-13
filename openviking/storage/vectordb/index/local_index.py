@@ -24,11 +24,12 @@ from openviking.storage.vectordb.index.index import IIndex
 from openviking.storage.vectordb.store.data import CandidateData, DeltaRecord
 from openviking.storage.vectordb.utils.constants import IndexFileMarkers
 from openviking.storage.vectordb.utils.data_processor import DataProcessor
+from openviking.storage.vectordb.utils.json_safety import safe_json_dumps
 from openviking.storage.vectordb.utils.path_safety import (
     safe_join,
     safe_join_name,
 )
-from openviking.storage.vectordb.utils.validation import validate_name_str
+from openviking.storage.vectordb.utils.validation import fix_fields_data, validate_name_str
 from openviking_cli.utils.logger import default_logger as logger
 
 _DENSE_REBUILD_MEMORY_RETRY_BASE_SECONDS = 1.0
@@ -198,6 +199,16 @@ class IndexEngineProxy:
                 add_req_list[i].sparse_values = data.sparse_values
             add_req_list[i].fields_str = data.fields
         self.index_engine.add_data(add_req_list)
+
+    def rebuild_scalar_index(
+        self, scalar_index_meta: List[Dict[str, str]], requests: Iterable[engine.AddDataRequest]
+    ) -> None:
+        if not self.index_engine:
+            raise RuntimeError("Index engine not initialized")
+
+        result = self.index_engine.rebuild_scalar_index(json.dumps(scalar_index_meta), requests)
+        if result != 0:
+            raise RuntimeError("Failed to rebuild native scalar index")
 
     def upsert_data(self, delta_list: List[DeltaRecord]):
         if not self.index_engine:
@@ -464,6 +475,43 @@ class LocalIndex(IIndex):
         if not meta_data:
             return
         self.meta.update(meta_data)
+
+    def rebuild_scalar_index(
+        self, scalar_index: List[str], cands_fields: Iterable[Tuple[int, str]]
+    ) -> None:
+        if not self.engine_proxy:
+            raise RuntimeError("Index engine not initialized")
+
+        self.field_type_converter = DataProcessor(self.meta.collection_meta.fields_dict)
+        indexed_fields = {
+            name: self.meta.collection_meta.fields_dict[name] for name in scalar_index
+        }
+
+        def requests() -> Iterator[engine.AddDataRequest]:
+            for label, fields_json in cands_fields:
+                fields = json.loads(fields_json)
+                fields = {name: fields[name] for name in indexed_fields if name in fields}
+                fix_fields_data(fields, indexed_fields)
+                request = engine.AddDataRequest()
+                request.label = label
+                request.fields_str = safe_json_dumps(
+                    self.field_type_converter.convert_fields_dict_for_index(fields),
+                    ensure_ascii=False,
+                )
+                yield request
+
+        engine_scalar_meta = self.field_type_converter.build_scalar_index_meta(scalar_index)
+        self.engine_proxy.rebuild_scalar_index(engine_scalar_meta, requests())
+        if isinstance(self, PersistentIndex) and self.persist() <= 0:
+            raise RuntimeError("Failed to persist rebuilt scalar index")
+        if not self.meta.update({"ScalarIndex": scalar_index}):
+            raise RuntimeError("Failed to persist scalar index metadata")
+
+        if self.dense_search is not None:
+            self.dense_search.field_types = {
+                name: DataProcessor.normalize_field_type(field_meta.get("FieldType", ""))
+                for name, field_meta in self.meta.collection_meta.fields_dict.items()
+            }
 
     def get_meta_data(self):
         return self.meta.get_meta_data()

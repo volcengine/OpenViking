@@ -16,7 +16,7 @@
  * Env vars covered:
  *   Connection / identity:
  *     OPENVIKING_URL / OPENVIKING_BASE_URL, OPENVIKING_API_KEY / OPENVIKING_BEARER_TOKEN,
- *     OPENVIKING_ACCOUNT, OPENVIKING_USER, OPENVIKING_PEER_ID, OPENVIKING_WORKSPACE_PEER
+ *     OPENVIKING_ACCOUNT, OPENVIKING_USER, OPENVIKING_PEER_ID
  *   Config file overrides:
  *     OPENVIKING_CONFIG_FILE (ov.conf), OPENVIKING_CLI_CONFIG_FILE (ovcli.conf)
  *   Misc:
@@ -125,7 +125,6 @@ export function loadConfig() {
     || str(cliFile.user, "");
 
   const peerId = str(process.env.OPENVIKING_PEER_ID, "");
-  const workspacePeer = envBool("OPENVIKING_WORKSPACE_PEER") ?? true;
 
   const timeoutMs = Math.max(1000, Math.floor(num(
     process.env.OPENVIKING_TIMEOUT_MS,
@@ -143,7 +142,6 @@ export function loadConfig() {
     accountId,
     userId,
     peerId,
-    workspacePeer,
     timeoutMs,
     userAgent: USER_AGENT,
     debug,

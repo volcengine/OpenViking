@@ -119,6 +119,24 @@ async def test_full_lifecycle(client: httpx.AsyncClient, watch_manager, monkeypa
     assert resp.status_code == 404
 
 
+async def test_list_exposes_last_execution_result(client: httpx.AsyncClient, watch_manager):
+    task = await _seed(watch_manager, to_uri="viking://resources/test/observable")
+    await watch_manager.record_execution(
+        task.task_id,
+        status="failed",
+        execution_task_id="connector-task-1",
+        error="pull failed",
+    )
+
+    resp = await client.get("/api/v1/watches")
+
+    assert resp.status_code == 200
+    result = resp.json()["result"]["tasks"][0]
+    assert result["last_task_id"] == "connector-task-1"
+    assert result["last_status"] == "failed"
+    assert result["last_error"] == "pull failed"
+
+
 async def test_get_by_uri_returns_single_object(client: httpx.AsyncClient, watch_manager):
     task = await _seed(watch_manager, to_uri="viking://resources/test/uri-keyed")
     resp = await client.get("/api/v1/watches", params={"to_uri": task.to_uri})

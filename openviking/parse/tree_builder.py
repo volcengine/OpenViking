@@ -126,7 +126,7 @@ class TreeBuilder:
                         f"Parent URI does not exist: {effective_parent_uri}. "
                         f"Use --parent-auto-create/-p to automatically create it."
                     )
-            stat_result = await viking_fs.stat(effective_parent_uri, ctx=ctx)
+            stat_result = await viking_fs.stat(effective_parent_uri, ctx=ctx, skip_count=True)
             if not stat_result.get("isDir"):
                 raise ValueError(f"Parent URI is not a directory: {effective_parent_uri}")
             base_uri = effective_parent_uri

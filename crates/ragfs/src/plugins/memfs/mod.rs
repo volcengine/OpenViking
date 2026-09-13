@@ -357,7 +357,14 @@ impl FileSystem for MemFileSystem {
         Ok(matches)
     }
 
-    async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
+    async fn read_dir(
+        &self,
+        path: &str,
+        offset: Option<usize>,
+        limit: Option<usize>,
+        sort_by: Option<crate::core::ListSortBy>,
+        sort_order: Option<crate::core::SortOrder>,
+    ) -> Result<Vec<FileInfo>> {
         let normalized = Self::normalize_path(path);
         let entries = self.entries.read().await;
 
@@ -385,7 +392,9 @@ impl FileSystem for MemFileSystem {
             }
         }
 
-        Ok(result)
+        Ok(crate::core::filesystem::apply_read_dir_options(
+            result, offset, limit, sort_by, sort_order,
+        ))
     }
 
     async fn stat(&self, path: &str) -> Result<FileInfo> {
@@ -495,7 +504,10 @@ impl FileSystem for MemFileSystem {
             }
         }
 
-        if entries.get(&dst_normalized).is_some_and(|entry| entry.is_dir) {
+        if entries
+            .get(&dst_normalized)
+            .is_some_and(|entry| entry.is_dir)
+        {
             return Err(Error::IsADirectory(dst_normalized));
         }
 
@@ -641,7 +653,10 @@ mod tests {
         fs.create("/testdir/file2.txt").await.unwrap();
 
         // List directory
-        let entries = fs.read_dir("/testdir").await.unwrap();
+        let entries = fs
+            .read_dir("/testdir", None, None, None, None)
+            .await
+            .unwrap();
         assert_eq!(entries.len(), 2);
     }
 

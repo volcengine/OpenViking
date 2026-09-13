@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Callable, Optional
@@ -35,6 +36,7 @@ from openviking.server.routers import (
     admin_router,
     agent_evolution_router,
     bot_router,
+    compile_router,
     console_router,
     content_router,
     debug_router,
@@ -72,6 +74,25 @@ logger = get_logger(__name__)
 
 WORKER_WITH_BOT_ENV = "OPENVIKING_WORKER_WITH_BOT"
 WORKER_BOT_API_URL_ENV = "OPENVIKING_WORKER_BOT_API_URL"
+
+
+def _configure_default_executor(config: ServerConfig) -> None:
+    """Apply the configured asyncio default executor to the current worker loop.
+
+    The event loop owns the executor after ``set_default_executor`` and shuts it
+    down when the loop closes. This must run before service initialization,
+    because initialization itself can submit work through ``asyncio.to_thread``.
+    """
+    max_workers = config.executor_threads
+    if max_workers == 0:
+        return
+
+    executor = ThreadPoolExecutor(
+        max_workers=max_workers,
+        thread_name_prefix="openviking-asyncio",
+    )
+    asyncio.get_running_loop().set_default_executor(executor)
+    logger.info("Configured asyncio default executor: max_workers=%d", max_workers)
 
 
 def create_worker_app() -> FastAPI:
@@ -303,15 +324,20 @@ def create_app(
     if service is not None:
         _configure_session_runtime(service)
 
+    bot_gateway_token = load_bot_gateway_token() if config.with_bot else ""
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """Application lifespan handler."""
         nonlocal service
+        _configure_default_executor(config)
         owns_service = service is None
         if owns_service:
             service = OpenVikingService()
 
         assert service is not None
+        if config.with_bot:
+            service.compile.configure_local_backend(config.bot_api_url, bot_gateway_token)
         _configure_session_runtime(service)
         set_service(service)
 
@@ -610,7 +636,7 @@ def create_app(
         import openviking.server.routers.bot as bot_module
 
         bot_module.set_bot_api_url(config.bot_api_url)
-        bot_module.set_bot_api_key(load_bot_gateway_token())
+        bot_module.set_bot_api_key(bot_gateway_token)
         logger.info(f"Bot API proxy enabled, forwarding to {config.bot_api_url}")
     else:
         logger.info("Bot API proxy disabled (use --with-bot to enable)")
@@ -620,6 +646,7 @@ def create_app(
     app.include_router(acl_router)
     app.include_router(admin_router)
     app.include_router(agent_evolution_router)
+    app.include_router(compile_router)
     app.include_router(resources_router)
     app.include_router(filesystem_router)
     app.include_router(content_router)

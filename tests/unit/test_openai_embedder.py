@@ -58,6 +58,91 @@ class TestOpenAIDenseEmbedder:
         assert "extra_body" not in call_kwargs
 
     @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
+    def test_default_input_type_embed_downgrades_multimodal_parts(self, mock_openai_class):
+        """Direct embed(parts) should also apply the text-only input guard."""
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+
+        mock_embedding = MagicMock()
+        mock_embedding.embedding = [0.1] * 1536
+
+        mock_response = MagicMock()
+        mock_response.data = [mock_embedding]
+        mock_client.embeddings.create.return_value = mock_response
+
+        embedder = OpenAIDenseEmbedder(
+            model_name="text-embedding-3-small",
+            api_key="test-api-key",
+            dimension=1536,
+        )
+        parts = [
+            {"type": "text", "text": "find this"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,xxx"}},
+        ]
+
+        embedder.embed(parts)
+
+        call_kwargs = mock_client.embeddings.create.call_args[1]
+        assert call_kwargs["input"] == "find this"
+
+    @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
+    def test_embed_preserves_openai_batch_text_input(self, mock_openai_class):
+        """OpenAI batch text input should keep the historical list[str] passthrough."""
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+
+        mock_embedding = MagicMock()
+        mock_embedding.embedding = [0.1] * 1536
+
+        mock_response = MagicMock()
+        mock_response.data = [mock_embedding]
+        mock_client.embeddings.create.return_value = mock_response
+
+        embedder = OpenAIDenseEmbedder(
+            model_name="text-embedding-3-small",
+            api_key="test-api-key",
+            dimension=1536,
+        )
+
+        embedder.embed(["first text", "second text"])
+
+        call_kwargs = mock_client.embeddings.create.call_args[1]
+        assert call_kwargs["input"] == ["first text", "second text"]
+
+    @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
+    def test_multimodal_input_type_passes_content_parts(self, mock_openai_class):
+        """OpenAI-compatible multimodal mode should pass content parts to embeddings.create."""
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+
+        mock_embedding = MagicMock()
+        mock_embedding.embedding = [0.1] * 1536
+
+        mock_response = MagicMock()
+        mock_response.data = [mock_embedding]
+        mock_client.embeddings.create.return_value = mock_response
+
+        embedder = OpenAIDenseEmbedder(
+            model_name="custom-multimodal-embedding",
+            api_key="test-api-key",
+            api_base="https://example.com/v1",
+            dimension=1536,
+            input_type="multimodal",
+        )
+        parts = [
+            {"type": "text", "text": "find this"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,xxx"}},
+        ]
+
+        assert embedder.supports_multimodal is True
+        assert embedder.prepare_embedding_input(parts) == parts
+
+        embedder.embed(parts)
+
+        call_kwargs = mock_client.embeddings.create.call_args[1]
+        assert call_kwargs["input"] == parts
+
+    @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
     def test_embed_with_context_query(self, mock_openai_class):
         """OpenAI embed should include extra_body with input_type='query' when is_query=True"""
         mock_client = MagicMock()

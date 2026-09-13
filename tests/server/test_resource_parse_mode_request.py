@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import resources as resources_router
 from openviking.server.routers.resources import AddResourceRequest
@@ -38,7 +39,7 @@ async def test_add_resource_route_forwards_no_split_mode(monkeypatch: pytest.Mon
     )
 
     await resources_router.add_resource(
-        SimpleNamespace(),
+        SimpleNamespace(headers={}),
         AddResourceRequest(
             path="https://example.com/demo.md",
             args={"parse_mode": "no_split"},
@@ -57,6 +58,7 @@ async def test_signed_temp_upload_forwards_token_bound_parse_mode(
         account_id="test_account",
         user_id="test_user",
         to="",
+        parent="viking://user/test_user/resources/team",
         reason="",
         actor_peer_id="",
         parse_mode="no_split",
@@ -87,3 +89,4 @@ async def test_signed_temp_upload_forwards_token_bound_parse_mode(
     )
 
     assert ingest.await_args.kwargs["parse_mode"] == "no_split"
+    assert ingest.await_args.kwargs["parent"] == "viking://user/test_user/resources/team"

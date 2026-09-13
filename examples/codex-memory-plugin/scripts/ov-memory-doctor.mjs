@@ -17,7 +17,7 @@
  * Exit code 1 when any check fails, 0 otherwise. Never prints a full api key.
  */
 
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,8 +43,13 @@ import {
   scanDebugLog,
   scanRcFiles,
   unknownOvcliKeys,
+  unknownPluginKeys,
   whichCommand,
+  checkWorkspace,
+  lintPeerScopeDowngrade,
+  WORKSPACE_PEER_HINT,
 } from "./shared/doctor-core.mjs";
+import { describeInputFilters } from "./shared/input-filters.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
 const PLUGIN_ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), "..");
@@ -138,6 +143,81 @@ function checkEnvironment(report) {
   return { codexOnPath: codex.ok };
 }
 
+export function parseFeaturesList(stdout) {
+  const map = new Map();
+  if (typeof stdout !== "string") return map;
+  for (const line of stdout.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const parts = trimmed.split(/\s+/);
+    if (parts.length >= 3) {
+      const key = parts[0];
+      const stateStr = parts[parts.length - 1].toLowerCase();
+      const stage = parts.slice(1, -1).join(" ");
+      map.set(key, {
+        stage,
+        enabled: stateStr === "true",
+      });
+    }
+  }
+  return map;
+}
+
+export function assessHooksFeature(features, cliFeatures = null) {
+  const hooks = features?.hooks;
+  const pluginHooks = features?.plugin_hooks;
+
+  if (hooks === true) {
+    return { status: "ok", message: "[features] hooks = true" };
+  }
+  if (hooks === false) {
+    return {
+      status: "fail",
+      message: `hooks disabled in [features] (hooks=${hooks ?? "unset"}, plugin_hooks=${pluginHooks ?? "unset"})`,
+      detail: "no plugin hook fires when hooks feature is disabled",
+      fix: "set hooks = true under [features] in ~/.codex/config.toml",
+    };
+  }
+
+  if (cliFeatures instanceof Map) {
+    const liveHooks = cliFeatures.get("hooks");
+    if (liveHooks?.enabled === true) {
+      return {
+        status: "ok",
+        message: `[features] hooks enabled by default (Codex stage: ${liveHooks.stage || "stable"})`,
+      };
+    }
+    if (liveHooks?.enabled === false) {
+      return {
+        status: "fail",
+        message: "hooks feature is disabled in Codex",
+        detail: "Codex reports hooks feature effective state is false",
+        fix: "set hooks = true under [features] in ~/.codex/config.toml",
+      };
+    }
+  }
+
+  // Legacy config only applies when the modern feature cannot be determined.
+  if (pluginHooks === true) {
+    return { status: "ok", message: "[features] plugin_hooks = true (legacy; modern Codex uses hooks = true)" };
+  }
+  if (pluginHooks === false) {
+    return {
+      status: "fail",
+      message: "hooks disabled in [features] (plugin_hooks=false)",
+      detail: "legacy plugin hooks are explicitly disabled",
+      fix: "set plugin_hooks = true for older Codex, or hooks = true for modern Codex under [features] in ~/.codex/config.toml",
+    };
+  }
+
+  return {
+    status: "info",
+    message: "[features] hooks is not set (modern Codex enables hooks by default; older Codex needs plugin_hooks = true)",
+    detail: "if hooks do not fire, verify with `codex features list` or add hooks = true",
+    fix: "add hooks = true under [features] in ~/.codex/config.toml (or plugin_hooks = true for older Codex)",
+  };
+}
+
 function checkInstall(report, { codexOnPath }) {
   report.section("Plugin install");
   const manifest = tryJson(join(PLUGIN_ROOT, ".codex-plugin", "plugin.json"));
@@ -206,9 +286,26 @@ function checkInstall(report, { codexOnPath }) {
   if (!toml) {
     report.warn(`${homeShort(CODEX_CONFIG)} not found`, "Codex has never been configured on this machine");
   } else {
-    const hooksOn = toml.features?.plugin_hooks;
-    if (hooksOn === true) report.ok("[features] plugin_hooks = true");
-    else report.fail(`[features] plugin_hooks is ${hooksOn === undefined ? "not set" : hooksOn}`, "no plugin hook fires at all", `add plugin_hooks = true under [features] in ${homeShort(CODEX_CONFIG)}`);
+    let cliFeatures = null;
+    if (codexOnPath) {
+      const featRes = runCommand("codex", ["features", "list"], { timeoutMs: 5000 });
+      if (featRes.ok) cliFeatures = parseFeaturesList(featRes.stdout);
+    }
+
+    const hooksAssessment = assessHooksFeature(toml.features, cliFeatures);
+    if (hooksAssessment.status === "ok") {
+      report.ok(hooksAssessment.message);
+    } else if (hooksAssessment.status === "warn") {
+      report.warn(hooksAssessment.message, hooksAssessment.detail, hooksAssessment.fix?.replace("~/.codex/config.toml", homeShort(CODEX_CONFIG)));
+    } else if (hooksAssessment.status === "info") {
+      report.info(hooksAssessment.message);
+    } else {
+      report.fail(
+        hooksAssessment.message,
+        hooksAssessment.detail,
+        hooksAssessment.fix?.replace("~/.codex/config.toml", homeShort(CODEX_CONFIG)),
+      );
+    }
     const pluginSection = toml[`plugins."${PLUGIN_ID}"`];
     if (!pluginSection) report.warn(`no [plugins."${PLUGIN_ID}"] section`, "the installer normally writes enabled = true here");
     else if (pluginSection.enabled === false) report.fail(`[plugins."${PLUGIN_ID}"] enabled = false`, "", "set enabled = true");
@@ -290,6 +387,11 @@ function checkConfig(report, cfg) {
         if (conf.mode !== "600" && conf.mode !== "400") report.warn("ovcli.conf is not private", `mode ${conf.mode}; it holds the api key`, `chmod 600 ${homeShort(conf.path)}`);
         const unknown = unknownOvcliKeys(conf.data);
         if (unknown.length) report.warn("ovcli.conf has keys nobody reads", unknown.join(", "), "typos such as apiKey/base_url/token are silently ignored — use url, api_key, account, user");
+        // `plugin` is on the allowlist above, so until now nothing inside it
+        // was ever checked and a misspelled knob just sat there doing nothing.
+        for (const { key, suggestion } of unknownPluginKeys(conf.data.plugin)) {
+          report.warn(`ovcli.conf ${key} is not a knob any plugin reads`, "", suggestion ? `did you mean ${suggestion}?` : "remove it, or check the plugin README for the knob you meant");
+        }
         if (conf.data.plugin?.claude_code && !conf.data.plugin?.codex) report.info("ovcli.conf plugin.claude_code settings do not apply to Codex (use plugin.codex)");
       }
       if (label === "ov.conf" && conf.data.codex) report.info("ov.conf has a legacy codex block (still honoured; prefer ovcli.conf plugin.codex or env vars)");
@@ -322,7 +424,28 @@ function checkConfig(report, cfg) {
   }
   report.info(`auth mode ${cfg.authMode} (identity headers ${cfg.sendIdentityHeaders ? "sent" : "not sent"}; trusted is implied when account/user are set)`);
   const peer = resolveEffectivePeerId({ cfg, cwd: process.cwd() });
-  report.info(`peer     ${peer.peerId || "(none)"}  ← ${peer.source}${peer.source === "workspace" ? " (derived from cwd; changes when the directory moves)" : ""}`);
+  report.info(`peer     ${peer.peerId || "(none)"}  ← ${peer.source} (${peer.origin})`);
+  if (peer.origin === "unresolved") {
+    report.info(
+      "no peer is sent: this directory is in no git repository, so its memories go to your user-level space",
+      `to give it a memory of its own, create .openviking/config.json here with ${WORKSPACE_PEER_HINT}`,
+    );
+  } else if (peer.source === "none") {
+    report.warn(
+      "no peer is sent, so recall defaults to every memory under this user",
+      "sending a peer narrows the search to this workspace",
+      'unset OPENVIKING_WORKSPACE_PEER, or set peer.source to "git"',
+    );
+  }
+  if (peer.legacyPeerId) {
+    report.info(
+      `previous peer  ${peer.legacyPeerId}`,
+      cfg.recallPeerScope === "actor"
+        ? "recall asks it separately, because peer_scope actor turns off the server's cross-peer sweep"
+        : "already covered by the server's cross-peer sweep under peer_scope all",
+    );
+  }
+  for (const p of lintPeerScopeDowngrade()) report[p.level](p.message, p.detail, p.fix);
 
   report.info(`timeouts ${cfg.timeoutMs}ms request, ${cfg.recallTimeoutMs}ms recall, ${cfg.captureTimeoutMs}ms capture; recall limit ${cfg.recallLimit}, threshold ${cfg.scoreThreshold}`);
   const hooks = tryJson(join(PLUGIN_ROOT, "hooks", "hooks.json"))?.hooks || {};
@@ -333,6 +456,20 @@ function checkConfig(report, cfg) {
   const toggles = [`auto-inject ${cfg.noAutoInject ? "OFF" : "on"}`, `auto-recall ${cfg.autoRecall ? "on" : "OFF"}`, `auto-capture ${cfg.autoCapture ? "on" : "OFF"}`, `commit on compact ${cfg.autoCommitOnCompact ? "on" : "OFF"}`, `recall compress ${cfg.recallCompress ? "on" : "off"}`, `write path ${cfg.writePathAsync ? "async" : "sync"}`];
   report.info(`toggles  ${toggles.join(", ")}`);
   if (!cfg.autoRecall || !cfg.autoCapture || cfg.noAutoInject) report.warn("one or more injection paths are switched off", toggles.join(", "), "check OPENVIKING_AUTO_RECALL / OPENVIKING_AUTO_CAPTURE / OPENVIKING_NO_AUTO_INJECT and ovcli.conf plugin.codex");
+  for (const filters of describeInputFilters(cfg)) {
+    if (!filters.total) continue;
+    report.info(`${filters.label}  ${filters.summary}`);
+    for (const e of filters.errors) {
+      const where = `${filters.env} or ovcli.conf plugin.codex.${filters.key}`;
+      report.warn(
+        `${filters.key}[${e.index}]: ${e.message}`,
+        e.source ? `rule: ${e.source}` : "this rule is skipped, the rest still apply",
+        e.message.startsWith("invalid regular expression")
+          ? `fix the pattern in ${where} (the u flag rejects escapes that are legal without it)`
+          : `fix the rule in ${where}`,
+      );
+    }
+  }
   report.info(`debug log ${cfg.debug ? "on" : "off"} → ${homeShort(cfg.debugLogPath)}${cfg.debug ? "" : " (set OPENVIKING_DEBUG=1 in Codex's environment to record hook errors)"}`);
 
   const env = collectEnv();
@@ -402,7 +539,7 @@ function checkActivity(report, cfg, connection) {
 
   const log = scanDebugLog(cfg.debugLogPath);
   if (!log.exists) {
-    report.info(`no hook log at ${homeShort(cfg.debugLogPath)}${cfg.debug ? " — debug is on but no hook has run since; if a Codex turn ran, hooks are not being spawned (plugin_hooks, trust, node)" : ""}`);
+    report.info(`no hook log at ${homeShort(cfg.debugLogPath)}${cfg.debug ? " — debug is on but no hook has run since; if a Codex turn ran, hooks are not being spawned (hooks, trust, node)" : ""}`);
   } else {
     report.info(`hook log ${homeShort(log.path)} — ${fmtBytes(log.size)}, last write ${fmtAge(log.mtimeMs)}, hooks seen: ${log.hooks.join(", ") || "(none)"}`);
     if (log.proxyStart?.data?.mcpUrl) {
@@ -426,6 +563,7 @@ async function main() {
   checkInstall(report, envInfo);
   const cfg = loadConfig();
   const configInfo = checkConfig(report, cfg);
+  const workspace = checkWorkspace(report);
   const connection = await checkConnection(report, cfg, configInfo, opts);
   const serverHealth = await checkServerHealth(report, { baseUrl: cfg.baseUrl, ovConf: configInfo.ovConf, health: connection?.probes?.health, offline: opts.offline, timeoutMs: opts.timeoutMs });
   checkActivity(report, cfg, connection);
@@ -445,6 +583,7 @@ async function main() {
         credentialSource: cfg.credentialSource,
         authMode: cfg.authMode,
       },
+      workspace,
       server: connection?.summary || null,
       serverHealth,
       ...report.toJSON(),
@@ -455,7 +594,18 @@ async function main() {
   process.exitCode = report.exitCode();
 }
 
-main().catch((err) => {
-  console.error("ov-memory-doctor failed:", err?.stack || err?.message || err);
-  process.exit(2);
-});
+function isDirectRun() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return resolvePath(process.argv[1]) === fileURLToPath(import.meta.url);
+  }
+}
+
+if (isDirectRun()) {
+  main().catch((err) => {
+    console.error("ov-memory-doctor failed:", err?.stack || err?.message || err);
+    process.exit(2);
+  });
+}

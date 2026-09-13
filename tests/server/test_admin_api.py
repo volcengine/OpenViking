@@ -119,6 +119,9 @@ class _FakeService:
     async def initialize_user_directories(self, ctx):
         return None
 
+    async def initialize_account_workspace(self, ctx):
+        return None
+
 
 def _build_lightweight_admin_test_app() -> FastAPI:
     from openviking.server.auth.plugins import ApiKeyAuthPlugin
@@ -519,6 +522,177 @@ async def test_list_accounts(admin_client: httpx.AsyncClient):
     account_ids = {a["account_id"] for a in accounts}
     assert "default" in account_ids
     assert acct in account_ids
+
+
+async def test_list_accounts_without_watcher_reads_only_accounts_registry(
+    lightweight_admin_client: httpx.AsyncClient,
+    lightweight_admin_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Without a watcher, account listing must not load user registries."""
+    manager = lightweight_admin_app.state.api_key_manager
+    original_read_json = manager._legacy._read_json
+    read_paths: list[str] = []
+
+    async def _record_read(path: str):
+        read_paths.append(path)
+        return await original_read_json(path)
+
+    monkeypatch.setattr(manager._legacy, "_read_json", _record_read)
+
+    resp = await lightweight_admin_client.get(
+        "/api/v1/admin/accounts?limit=5&page=1", headers=root_headers()
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert read_paths == ["/local/_system/accounts.json"]
+
+
+async def test_list_users_without_watcher_reads_only_target_user_registry(
+    lightweight_admin_client: httpx.AsyncClient,
+    lightweight_admin_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Without a watcher, user listing must not load unrelated registries."""
+    acct = _uid()
+    await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    manager = lightweight_admin_app.state.api_key_manager
+    original_read_json = manager._legacy._read_json
+    read_paths: list[str] = []
+
+    async def _record_read(path: str):
+        read_paths.append(path)
+        return await original_read_json(path)
+
+    monkeypatch.setattr(manager._legacy, "_read_json", _record_read)
+
+    resp = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/users", headers=root_headers()
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert read_paths == [f"/local/{acct}/_system/users.json"]
+
+
+async def test_list_users_for_default_account_without_users_file_returns_empty_list(
+    lightweight_admin_client: httpx.AsyncClient,
+):
+    """The initialized default account may legitimately have no users.json."""
+    resp = await lightweight_admin_client.get(
+        "/api/v1/admin/accounts/default/users", headers=root_headers()
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["result"] == []
+
+
+async def test_list_accounts_with_watcher_uses_memory(
+    lightweight_admin_client: httpx.AsyncClient,
+    lightweight_admin_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A running watcher keeps list requests on the in-memory fast path."""
+    loop = asyncio.get_running_loop()
+    watch_task = loop.create_future()
+    lightweight_admin_app.state.auth_plugin._watch_task = watch_task
+
+    async def _unexpected_read(_path: str):
+        raise AssertionError("list accounts should not read AGFS while watcher is running")
+
+    manager = lightweight_admin_app.state.api_key_manager
+    monkeypatch.setattr(manager._legacy, "_read_json", _unexpected_read)
+    try:
+        resp = await lightweight_admin_client.get(
+            "/api/v1/admin/accounts", headers=root_headers()
+        )
+        users_resp = await lightweight_admin_client.get(
+            "/api/v1/admin/accounts/default/users", headers=root_headers()
+        )
+    finally:
+        watch_task.cancel()
+
+    assert resp.status_code == 200, resp.text
+    assert users_resp.status_code == 200, users_resp.text
+
+
+async def test_identity_settings_refreshes_a_stale_registry_on_demand(
+    admin_client: httpx.AsyncClient,
+    admin_app: FastAPI,
+    admin_service: OpenVikingService,
+):
+    """Detail settings reads must not depend on a preceding list request."""
+    replica = admin_app.state.api_key_manager
+    writer = APIKeyManager(
+        root_key=ROOT_KEY,
+        viking_fs=admin_service.viking_fs,
+    )
+    await writer.load()
+    acct = _uid()
+
+    await writer.ensure_trusted_identities({acct: {"trusted-user"}})
+    assert replica.has_user(acct, "trusted-user") is False
+
+    account_settings = await admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/settings",
+        headers=root_headers(),
+    )
+    assert account_settings.status_code == 200, account_settings.text
+    assert replica.has_user(acct, "trusted-user") is False
+
+    await writer.ensure_trusted_identities({acct: {"trusted-user-2"}})
+    assert replica.has_user(acct, "trusted-user-2") is False
+
+    user_settings = await admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/users/trusted-user-2/settings",
+        headers=root_headers(),
+    )
+    assert user_settings.status_code == 200, user_settings.text
+    assert replica.has_user(acct, "trusted-user") is True
+    assert replica.has_user(acct, "trusted-user-2") is True
+
+
+async def test_identity_settings_without_watcher_use_scoped_registry_reads(
+    lightweight_admin_client: httpx.AsyncClient,
+    lightweight_admin_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Settings checks must not fall back to a full identity-registry reload."""
+    acct = _uid()
+    await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    manager = lightweight_admin_app.state.api_key_manager
+    original_read_json = manager._legacy._read_json
+    read_paths: list[str] = []
+
+    async def _record_read(path: str):
+        read_paths.append(path)
+        return await original_read_json(path)
+
+    monkeypatch.setattr(manager._legacy, "_read_json", _record_read)
+
+    account_resp = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/settings", headers=root_headers()
+    )
+    assert account_resp.status_code == 200, account_resp.text
+    assert read_paths == ["/local/_system/accounts.json"]
+
+    read_paths.clear()
+    user_resp = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/users/alice/settings",
+        headers=root_headers(),
+    )
+    assert user_resp.status_code == 200, user_resp.text
+    assert read_paths == [
+        "/local/_system/accounts.json",
+        f"/local/{acct}/_system/users.json",
+    ]
 
 
 async def test_delete_account(admin_client: httpx.AsyncClient):

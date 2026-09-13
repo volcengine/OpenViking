@@ -19,7 +19,9 @@ use super::errors::{Error, Result};
 #[cfg(feature = "cache")]
 use crate::cache::{CacheNamespace, CachePolicy};
 #[cfg(feature = "cache")]
-use crate::cache_runtime::{CacheRuntime, DynamicProviderConfig, RedisProviderConfig};
+use crate::cache_runtime::{
+    CacheOperation, CacheRuntime, DynamicProviderConfig, RedisProviderConfig,
+};
 
 use crate::lock::{
     FilesystemPathLockProvider, MemoryPathLockProvider, PathLockConfig, PathLockManager,
@@ -164,6 +166,18 @@ pub async fn build_configured_stack(
         ),
         None => None,
     };
+    if cache.cachefs.enabled {
+        runtime
+            .as_ref()
+            .expect("cache provider is validated")
+            .require_operations(&[
+                CacheOperation::Get,
+                CacheOperation::Set,
+                CacheOperation::Del,
+                CacheOperation::Mget,
+            ])
+            .map_err(|error| Error::config(format!("CacheFS provider is incompatible: {error}")))?;
+    }
     let mountable = if cache.cachefs.enabled {
         Arc::new(MountableFS::with_cache_runtime(
             runtime
@@ -200,7 +214,8 @@ async fn build_stack_with_mountable_and_runtime(
     let provider: Arc<dyn PathLockProvider> = match config.pathlock.provider.as_str() {
         "memory" => Arc::new(MemoryPathLockProvider::new()),
         _ => Arc::new(FilesystemPathLockProvider::new(
-            mountable.clone() as Arc<dyn FileSystem>
+            mountable.clone() as Arc<dyn FileSystem>,
+            config.pathlock.lock_expire_secs,
         )),
     };
     let pathlock_manager = Arc::new(PathLockManager::new(

@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from openviking.session.memory.dataclass import WikiLink
 from vikingbot.channels.openapi_models import OpenVikingConnection
 
-DEFAULT_COMPILE_REASON = (
+DEFAULT_COMPILE_INSTRUCTION = (
     "Follow the loaded Skill's instructions to transform the provided source materials "
     "into the outputs required by the Skill."
 )
@@ -49,8 +49,6 @@ class CompileLimits(BaseModel):
     concurrent_tasks: int = 10
     accepted_tasks: int = 40
     accepted_tasks_per_principal: int = 10
-    queue_wait_seconds: float = 60 * 60
-    task_runtime_seconds: float = 60 * 60
     salvage_grace_seconds: float = 120
     cleanup_grace_seconds: float = 40
     terminal_task_retention_seconds: float = 24 * 60 * 60
@@ -62,15 +60,19 @@ class CompileRequest(BaseModel):
 
     from_: list[str] = Field(alias="from", min_length=1)
     to: str = Field(min_length=1)
-    reason: str | None = None
+    instruction: str | None = None
     skill: str = Field(min_length=1)
-    runtime_timeout_seconds: float | None = Field(
-        default=None,
-        gt=0,
-        allow_inf_nan=False,
-    )
+    args: dict[str, Any] | None = None
     openviking_connection: OpenVikingConnection | None = None
     _principal_scope: str = PrivateAttr(default="local")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_reason(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "reason" in data:
+            data = dict(data)
+            data.setdefault("instruction", data.pop("reason"))
+        return data
 
 
 class SanitizedCompileRequest(BaseModel):
@@ -78,14 +80,9 @@ class SanitizedCompileRequest(BaseModel):
 
     from_: list[str] = Field(alias="from")
     to: str
-    reason: str
-    reason_provided: bool = False
+    instruction: str
+    instruction_provided: bool = False
     skill: str
-    runtime_timeout_seconds: float | None = Field(
-        default=None,
-        gt=0,
-        allow_inf_nan=False,
-    )
 
 
 class WikiPageDraft(BaseModel):
@@ -233,6 +230,7 @@ class CompileTask(BaseModel):
     stage: str
     created_at: str
     updated_at: str
+    meta: dict[str, Any] = Field(default_factory=dict)
     result: CompileResult | None = None
     error: CompileErrorInfo | None = None
 
@@ -246,9 +244,16 @@ class CompileTask(BaseModel):
 class CompileAccepted(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    session_id: str
     task_id: str
     status: Literal["accepted"] = "accepted"
     to: str
+
+
+class CompileSessionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str = Field(min_length=1)
 
 
 class CompileFailure(RuntimeError):
@@ -270,8 +275,9 @@ __all__ = [
     "CompileLimits",
     "CompileRequest",
     "CompileResult",
+    "CompileSessionRequest",
     "CompileTask",
-    "DEFAULT_COMPILE_REASON",
+    "DEFAULT_COMPILE_INSTRUCTION",
     "OKF_VERSION",
     "SanitizedCompileRequest",
     "TERMINAL_STATUSES",

@@ -64,7 +64,7 @@ ov chat → OpenViking Server → VikingBot Gateway → Agent
 
 Follow the [OpenViking quickstart](../docs/en/getting-started/03-quickstart-server.md) to configure the models and storage required by OpenViking. By default, the Bot inherits the root-level `vlm` configuration as its Agent model. Configure `bot.agents` only if the Bot should use a separate model.
 
-In this combined mode, the Bot always uses the OpenViking Server started by the same command and ignores `bot.ov_server` settings that point to another service. OpenViking Server injects an authenticated request-scoped identity into every Chat request sent to the Bot.
+In this combined mode, the Bot always uses the OpenViking Server started by the same command. `bot.ov_server.server_url` is ignored, while an explicit `bot.ov_server.api_key` and other Bot OpenViking settings are preserved. In `api_key` mode, that key must be a User/Admin key. OpenViking Server injects an authenticated request-scoped identity into every Chat request sent to the Bot.
 
 #### 2. Start both services
 
@@ -315,6 +315,7 @@ Restart `vikingbot gateway` after changing the configuration.
 | `bot.agents.max_tool_iterations` | `50` | Maximum tool iterations in one turn |
 | `bot.agents.memory_window` | `50` | Local history window and session commit message threshold |
 | `bot.agents.subagent_enabled` | `true` | Whether to expose the `spawn` tool |
+| `bot.agents.subagent_max_concurrency` | `4` | Maximum number of background subagents running at once |
 | `bot.gateway.host` | `127.0.0.1` | Gateway listen address |
 | `bot.gateway.port` | `18790` | Gateway listen port |
 | `bot.sandbox.backend` | `direct` | Execution backend |

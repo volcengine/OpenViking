@@ -87,14 +87,24 @@ Configuration priority: Environment variables > `ovcli.conf` > `ov.conf` > Built
 | `OPENVIKING_AUTO_CAPTURE` | `true` | Auto-capture after each turn |
 | `OPENVIKING_BYPASS_SESSION` | `false` | Skip all hooks for this session |
 | `OPENVIKING_BYPASS_SESSION_PATTERNS` | `""` | CSV glob patterns to auto-bypass |
+| `OPENVIKING_RECALL_QUERY_FILTERS` | `""` | CSV of sed-style regex rules applied to the prompt before it becomes a query ([grammar and examples](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#input-filters)) |
+| `OPENVIKING_CAPTURE_FILTERS` | `""` | CSV of sed-style regex rules applied to every captured turn (same grammar) |
 | `OPENVIKING_MEMORY_ENABLED` | (auto) | Force on/off |
 | `OPENVIKING_DEBUG` | `false` | Write logs to `~/.openviking/logs/cc-hooks.log` |
+
+Most of these knobs can also live in `ovcli.conf` under `plugin` — see [Plugin Settings](../configuration/02-client.md#plugin-settings). The two filter knobs are better written there, as JSON arrays, because the environment form is split on commas.
 
 If recall latency matters most, see [Low-latency recall](./01-overview.md#low-latency-recall) for the environment-variable and `ovcli.conf` settings that disable query expansion and result compression.
 
 For multi-tenant deployments, configure `OPENVIKING_ACCOUNT` and `OPENVIKING_USER`. The complete list of environment variables is available in the [plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#configuration).
 
 </details>
+
+## Workspace peer
+
+Memories are filed under a peer derived from the repository you are working in, so one project keeps one memory across clones, worktrees, and subdirectories. The default `peer.source: "git"` uses the repository's normalized `origin` URL — with `origin git@github.com:volcengine/OpenViking.git`, the peer is `github.com-volcengine-openviking` — falling back to the repository root path; outside a repository no peer is sent at all, and what is remembered there goes to your user-level space at `viking://user/<you>/memories`. A fork has its own `origin`, so it stays a separate peer.
+
+Change it with `OPENVIKING_PEER_SOURCE`, with `plugin.peerSource` in `ovcli.conf`, or with `peer.source` in the workspace's `.openviking/config.json` (a `"version": 1` file the team can commit): `"cwd"` restores the previous behavior — the working directory with every non-alphanumeric character replaced by `-` — `"none"` sends no peer, and a template such as `"team-{dir}"` builds your own. To [give a directory that is not a repository its own memory](../configuration/02-client.md#give-a-directory-its-own-peer), create `.openviking/config.json` in it containing `{"version": 1, "peer": {"id": "my-project"}}`. Memories written under the earlier cwd-derived peer are still recalled, so nothing needs migrating. The layer precedence and the full workspace-file schema are in [Client Configuration → Workspace Configuration](../configuration/02-client.md#workspace-configuration).
 
 ## Statusline
 

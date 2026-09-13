@@ -30,6 +30,7 @@ def _issue(
     user_id: str = "user",
     *,
     to: str = "",
+    parent: str = "",
     reason: str = "",
     actor_peer_id: str = "",
     tags: list[str] | None = None,
@@ -40,6 +41,7 @@ def _issue(
         user_id,
         ttl_seconds=600,
         to=to,
+        parent=parent,
         reason=reason,
         actor_peer_id=actor_peer_id,
         tags=tags,
@@ -57,6 +59,7 @@ def _stub_ingest(service, monkeypatch, root_uri: str = "viking://resources/uploa
         captured["content"] = Path(path).read_bytes()
         captured["ctx"] = ctx
         captured["to"] = kwargs.get("to")
+        captured["parent"] = kwargs.get("parent")
         captured["reason"] = kwargs.get("reason")
         captured["tags"] = kwargs.get("tags")
         captured["tag_mode"] = kwargs.get("tag_mode")
@@ -100,6 +103,21 @@ async def test_token_upload_forwards_to_and_reason(
     assert resp.status_code == 200, resp.text
     assert captured["to"] == "viking://resources/team/proj"
     assert captured["reason"] == "quarterly report"
+
+
+async def test_token_upload_forwards_parent(
+    client: httpx.AsyncClient, service, upload_temp_dir: Path, monkeypatch
+):
+    captured = _stub_ingest(service, monkeypatch)
+    token = _issue(parent="viking://user/user/resources/team")
+    resp = await client.post(
+        "/api/v1/resources/temp_upload",
+        params={"token": token},
+        files={"file": ("r.md", b"data", "text/markdown")},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert captured["parent"] == "viking://user/user/resources/team"
 
 
 async def test_token_upload_forwards_tags_and_tag_mode(

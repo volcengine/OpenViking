@@ -12,6 +12,7 @@ from loguru import logger
 
 from vikingbot.agent.memory import MemoryStore
 from vikingbot.agent.skills import SkillsLoader
+from vikingbot.agent.tools.base import MultimodalToolResult
 from vikingbot.config.schema import SessionKey
 from vikingbot.sandbox import SandboxManager
 from vikingbot.utils.helpers import ensure_non_empty_assistant_content
@@ -127,6 +128,14 @@ class ContextBuilder:
 
         # Core identity
         parts.append(await self._get_identity(session_key))
+
+        if session_key.type == "feishu":
+            parts.append(
+                "## Feishu images\n\n"
+                "To display an OpenViking image, use ![description](viking://...) outside code.\n"
+                "To cite an image URI without displaying it, use inline code.\n"
+                "Reading an image does not send it to the user."
+            )
 
         # Sandbox environment info
         if self.sandbox_manager:
@@ -510,7 +519,7 @@ IMPORTANT:
         return images + [{"type": "text", "text": text}]
 
     def add_tool_result(
-        self, messages: list[dict[str, Any]], tool_call_id: str, tool_name: str, result: str
+        self, messages: list[dict[str, Any]], tool_call_id: str, tool_name: str, result: Any
     ) -> list[dict[str, Any]]:
         """
         Add a tool result to the message list.
@@ -524,8 +533,9 @@ IMPORTANT:
         Returns:
             Updated message list.
         """
+        content = result.content if isinstance(result, MultimodalToolResult) else result
         messages.append(
-            {"role": "tool", "tool_call_id": tool_call_id, "name": tool_name, "content": result}
+            {"role": "tool", "tool_call_id": tool_call_id, "name": tool_name, "content": content}
         )
         return messages
 

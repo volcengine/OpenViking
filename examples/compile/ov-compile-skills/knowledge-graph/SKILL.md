@@ -16,7 +16,7 @@ entities/
 relations.jsonl
 ```
 
-Keep sources read-only. Follow the task reason for scope, language, audience, and depth;
+Keep sources read-only. Follow the task instruction for scope, language, audience, and depth;
 otherwise use the dominant language of the sources. Ground every node, material claim,
 and edge in the supplied sources. Treat sources as provenance rather than domain nodes
 unless a source is itself a named subject in the domain.

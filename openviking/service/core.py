@@ -20,7 +20,9 @@ from openviking.server.account_settings import (
 )
 from openviking.server.identity import RequestContext, Role
 from openviking.service.agent_evolution_service import AgentEvolutionService
+from openviking.service.compile_service import CompileService
 from openviking.service.debug_service import DebugService
+from openviking.service.external_task_service import ExternalTaskService
 from openviking.service.fs_service import FSService
 from openviking.service.mineru_preflight import wait_for_mineru_ready
 from openviking.service.pack_service import PackService
@@ -35,6 +37,7 @@ from openviking.storage.acl import AclManager
 from openviking.storage.collection_schemas import init_context_collection
 from openviking.storage.index_consistency import check_index_consistency
 from openviking.storage.queuefs.add_resource_processor import AddResourceProcessor
+from openviking.storage.queuefs.external_task_processor import ExternalTaskProcessor
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
 from openviking.storage.queuefs.session_commit_processor import SessionCommitProcessor
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
@@ -115,6 +118,13 @@ class OpenVikingService:
         self._session_service = SessionService()
         self._debug_service = DebugService()
         self._agent_evolution_service = AgentEvolutionService()
+        self._external_task_service = ExternalTaskService()
+        self._compile_service = CompileService(
+            config.compile_api,
+            self._external_task_service,
+            self._fs_service,
+        )
+        self._external_task_service.register(self._compile_service)
 
         # State
         self._initialized = False
@@ -136,6 +146,7 @@ class OpenVikingService:
             max_concurrent_external_parse=config.queue_workers.external_parse.max_concurrent,
             max_concurrent_add_resource=config.queue_workers.add_resource.max_concurrent,
             max_concurrent_session_commit=config.queue_workers.session_commit.max_concurrent,
+            max_concurrent_external_task=config.queue_workers.external_task.max_concurrent,
             binding_config=binding_config,
             git_config=config.git,
         )
@@ -154,6 +165,7 @@ class OpenVikingService:
         max_concurrent_external_parse: int = 4,
         max_concurrent_add_resource: int = 4,
         max_concurrent_session_commit: int = 8,
+        max_concurrent_external_task: int = 10,
         binding_config: Any = None,
         *,
         git_config: Optional[GitConfig] = None,
@@ -177,6 +189,7 @@ class OpenVikingService:
                 max_concurrent_external_parse=max_concurrent_external_parse,
                 max_concurrent_add_resource=max_concurrent_add_resource,
                 max_concurrent_session_commit=max_concurrent_session_commit,
+                max_concurrent_external_task=max_concurrent_external_task,
             )
         else:
             logger.warning("RAGFS client not initialized, skipping queue manager")
@@ -310,6 +323,11 @@ class OpenVikingService:
         """Get Agent Evolution query service."""
         return self._agent_evolution_service
 
+    @property
+    def compile(self) -> CompileService:
+        """Get the Compile task service."""
+        return self._compile_service
+
     async def initialize(self) -> None:
         """Initialize OpenViking storage and indexes."""
         if self._initialized:
@@ -331,6 +349,9 @@ class OpenVikingService:
                 ),
                 max_concurrent_session_commit=(
                     self._config.queue_workers.session_commit.max_concurrent
+                ),
+                max_concurrent_external_task=(
+                    self._config.queue_workers.external_task.max_concurrent
                 ),
                 binding_config=self._build_ragfs_binding_config(),
                 git_config=self._config.git,
@@ -385,8 +406,9 @@ class OpenVikingService:
         )
         self._directory_initializer = directory_initializer
         default_ctx = RequestContext(user=self._user, role=Role.ROOT)
-        account_count = await directory_initializer.initialize_account_directories(default_ctx)
-        user_count = await directory_initializer.initialize_user_directories(default_ctx)
+        account_count, user_count = await directory_initializer.initialize_account_workspace(
+            default_ctx
+        )
         logger.info(
             "Initialized preset directories account=%d user=%d",
             account_count,
@@ -489,6 +511,14 @@ class OpenVikingService:
                 ),
                 allow_create=True,
             )
+            self._queue_manager.get_queue(
+                self._queue_manager.EXTERNAL_TASK,
+                dequeue_handler=ExternalTaskProcessor(
+                    self._external_task_service,
+                    asyncio.get_running_loop(),
+                ),
+                allow_create=True,
+            )
             # Auth state is initialized by the HTTP server after the core service.
             # Register the durable queue now so task tracking can rebuild its work;
             # the user-deletion service binds the handler once auth is ready.
@@ -496,7 +526,8 @@ class OpenVikingService:
                 self._queue_manager.USER_DELETION,
                 allow_create=True,
             )
-            await self._queue_manager.prepare_task_tracking(get_task_tracker())
+            restored_tasks = await self._queue_manager.prepare_task_tracking(get_task_tracker())
+            await self._external_task_service.restore_tasks(restored_tasks)
 
         if self._config.enable_watch_scheduler:
             await self._watch_scheduler.start()
@@ -562,6 +593,12 @@ class OpenVikingService:
                 await asyncio.to_thread(close_agfs)
             self._agfs_client = None
             logger.info("RAGFS binding closed")
+
+        embedder = getattr(self, "_embedder", None)
+        if embedder is not None:
+            embedder.close()
+            self._embedder = None
+            await asyncio.sleep(0)
 
         self._viking_fs = None
         self._resource_processor = None
@@ -661,6 +698,13 @@ class OpenVikingService:
         if not self._directory_initializer:
             return 0
         return await self._directory_initializer.initialize_account_directories(ctx)
+
+    async def initialize_account_workspace(self, ctx: RequestContext) -> tuple[int, int]:
+        """Initialize account and first-user preset directories in one batch."""
+        self._ensure_initialized()
+        if not self._directory_initializer:
+            return 0, 0
+        return await self._directory_initializer.initialize_account_workspace(ctx)
 
     async def initialize_user_directories(self, ctx: RequestContext) -> int:
         """Initialize current user's directory tree."""

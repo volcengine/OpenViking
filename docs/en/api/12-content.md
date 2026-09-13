@@ -222,6 +222,8 @@ Write a file and automatically refresh related semantics and vectors.
 | mode | str | No | `replace` | `replace` overwrites an existing file or creates a missing file; `append` appends to an existing file or creates a missing file; `create` creates only a missing file and returns `409 Conflict` if it already exists |
 | wait | bool | No | `false` | Wait for background semantic/vector refresh |
 | timeout | float | No | `null` | Timeout in seconds when `wait=true` |
+| tags | string[] | No | Unset | Explicit retrieval tags for the written file, for example `["team=search", "env=prod"]` |
+| tag_mode | string | No | `replace` | Tag update mode when `tags` is supplied: `replace` overwrites tags; `append` merges tags by key |
 
 **Notes**
 
@@ -230,6 +232,7 @@ Write a file and automatically refresh related semantics and vectors.
 - Existing `.abstract.md` and `.overview.md` bodies may be updated, but public APIs cannot create them. A body-only request preserves stored OKF metadata; a full-OKF request must match the stored metadata. Unknown metadata fields are silently dropped. A sidecar body write rebuilds only the directory's existing L0/L1 vectors and does not regenerate semantics.
 - File content is updated before the API returns. `wait` only controls whether the call waits for semantic/vector refresh to finish.
 - The public API no longer accepts `regenerate_semantics` or `revectorize`; write always refreshes related semantics and vectors.
+- When `tags` is supplied, tags are included in the file's first vector upsert rather than updated after processing. Omitting `tags` preserves existing tags; explicit `tags: []` with `tag_mode: "replace"` clears them.
 
 
 **Python SDK**
@@ -240,6 +243,7 @@ result = client.write(
     content="# Updated API\n\nFresh content.",
     mode="replace",
     wait=True,
+    options={"tags": ["team=search", "env=prod"], "tag_mode": "replace"},
 )
 print(result["root_uri"])
 ```
@@ -247,7 +251,11 @@ print(result["root_uri"])
 **TypeScript SDK**
 
 ```typescript
-await client.write("viking://resources/docs/new.md", "# New document\n", { wait: true });
+await client.write("viking://resources/docs/new.md", "# New document\n", {
+  wait: true,
+  tags: ["team=search", "env=prod"],
+  tagMode: "replace",
+});
 ```
 
 **Go SDK**
@@ -260,6 +268,8 @@ result, err := client.Write(
     &openviking.WriteOptions{
         Mode: "replace",
         Wait: true,
+        Tags: []string{"team=search", "env=prod"},
+        TagMode: "replace",
     },
 )
 if err != nil {
@@ -282,7 +292,9 @@ curl -X POST "http://localhost:1933/api/v1/content/write" \
     "uri": "viking://resources/docs/api.md",
     "content": "# Updated API\n\nFresh content.",
     "mode": "replace",
-    "wait": true
+    "wait": true,
+    "tags": ["team=search", "env=prod"],
+    "tag_mode": "replace"
   }'
 ```
 
@@ -291,6 +303,8 @@ curl -X POST "http://localhost:1933/api/v1/content/write" \
 ```bash
 openviking write viking://resources/docs/api.md \
   --content "# Updated API\n\nFresh content." \
+  --tags team=search,env=prod \
+  --tag-mode replace \
   --wait
 ```
 
@@ -726,10 +740,10 @@ curl -X POST http://localhost:1933/api/v1/content/reindex \
 
 ```bash
 openviking reindex viking://resources --mode vectors_only \
-  --tag team=search --tag env=prod --tag-mode replace
+  --tags team=search,env=prod --tag-mode replace
 ```
 
-The CLI sends tag fields only when at least one `--tag` is provided. Use HTTP or an SDK to clear tags with `tags: []`.
+The CLI sends tag fields only when non-empty `--tags` is provided. Use HTTP or an SDK to clear tags with `tags: []`.
 
 ```bash
 openviking reindex viking://user/default/skills --mode semantic_and_vectors --wait false

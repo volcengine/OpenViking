@@ -3,8 +3,12 @@
 """Tests for VLM extra_headers support."""
 
 import asyncio
+import json
 import threading
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import httpx
+from openai import OpenAI
 
 from openviking.models.vlm.backends.litellm_vlm import (
     LiteLLMVLMProvider,
@@ -12,6 +16,7 @@ from openviking.models.vlm.backends.litellm_vlm import (
 )
 from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
 from openviking.models.vlm.backends.volcengine_vlm import VolcEngineVLM
+from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
 class TestVLMExtraHeaders:
@@ -459,27 +464,34 @@ class TestVLMExtraRequestBody:
     """Test provider-specific VLM request body passthrough."""
 
     @patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI")
-    def test_openai_text_completion_passes_extra_request_body(self, mock_openai_class):
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock(message=MagicMock(content="ok"), finish_reason="stop")]
-        mock_response.usage = None
-        mock_client.chat.completions.create.return_value = mock_response
-
-        vlm = OpenAIVLM(
-            {
-                "api_key": "sk-test",
-                "api_base": "https://api.openai.com/v1",
-                "model": "gpt-4o-mini",
-                "extra_request_body": {"think": False, "keep_alive": "5m"},
-            }
+    def test_completion_body_overrides_configured_reasoning_effort(self, mock_openai_class):
+        send = MagicMock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                },
+            )
         )
+        with OpenAI(
+            api_key="sk-test",
+            http_client=httpx.Client(transport=httpx.MockTransport(send)),
+        ) as client:
+            mock_openai_class.return_value = client
+            vlm = VLMConfig(
+                provider="glm",
+                model="glm-5.3-flash",
+                api_key="sk-test",
+                reasoning_effort="low",
+                extra_request_body={"reasoning_effort": "high", "seed": 7},
+            ).get_vlm_instance()
 
-        vlm.get_completion("hello")
+            assert vlm.get_completion("hello") == "ok"
+            assert vlm.get_vision_completion("describe", images=[b"\x89PNG\r\n\x1a\n"]) == "ok"
 
-        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
-        assert call_kwargs["extra_body"] == {"think": False, "keep_alive": "5m"}
+        bodies = [json.loads(call.args[0].content) for call in send.call_args_list]
+        assert [body["reasoning_effort"] for body in bodies] == ["high", "high"]
+        assert [body["seed"] for body in bodies] == [7, 7]
 
     @patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI")
     def test_dashscope_thinking_merges_with_extra_request_body(self, mock_openai_class):
@@ -494,7 +506,8 @@ class TestVLMExtraRequestBody:
             {
                 "api_key": "sk-test",
                 "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                "model": "qwen3.5-plus",
+                "model": "ZHIPU/GLM-5.3",
+                "reasoning_effort": "low",
                 "extra_request_body": {"seed": 7},
             }
         )
@@ -503,6 +516,7 @@ class TestVLMExtraRequestBody:
 
         call_kwargs = mock_client.chat.completions.create.call_args.kwargs
         assert call_kwargs["extra_body"] == {"seed": 7, "enable_thinking": True}
+        assert call_kwargs["reasoning_effort"] == "low"
 
     def test_litellm_build_kwargs_passes_extra_request_body(self):
         vlm = LiteLLMVLMProvider(

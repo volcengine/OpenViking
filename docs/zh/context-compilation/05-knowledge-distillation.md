@@ -37,15 +37,14 @@ ov skills list
 
 ## 第三步：执行编译
 
-在 `--reason` 里说清**分析问题、对比维度、基线和范围**——这直接决定蒸馏的方向：
+在 `--instruction` 里说清**分析问题、对比维度、基线和范围**——这直接决定蒸馏的方向：
 
 ```bash
 ov compile \
   --from viking://resources/finance-reports \
   --to viking://resources/finance-insights \
   --skill viking://agent/skills/knowledge-distillation \
-  --reason "对比近三年财报，找到营收质量、盈利能力和风险的变化及驱动因素" \
-  --wait
+  --instruction "对比近三年财报，找到营收质量、盈利能力和风险的变化及驱动因素"
 ```
 
 `--from` 可以传多个来源，用于跨知识库对比：
@@ -55,11 +54,10 @@ ov compile \
   --from viking://resources/finance-2024,viking://resources/finance-2025 \
   --to viking://resources/finance-insights \
   --skill viking://agent/skills/knowledge-distillation \
-  --reason "对比两个年度知识库，找出关键指标的变化与结构性差异" \
-  --wait
+  --instruction "对比两个年度知识库，找出关键指标的变化与结构性差异"
 ```
 
-去掉 `--wait` 会立刻返回 `task_id`：
+命令会立刻返回 `task_id`：
 
 ```bash
 ov task status cmp_01abc      # 查看进度与最终结果
@@ -79,4 +77,4 @@ ov read viking://resources/finance-insights/revenue-quality/growth-shifted-from-
 
 - [上下文编译概览](./01-overview.md)
 - [日报示例](./04-daily-report.md)
-- [VikingBot API → compile()](../api/24-vikingbot.md#compile)
+- [Agent Runtime API](../api/23-agent-runtime.md)

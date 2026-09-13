@@ -20,6 +20,7 @@ from openviking.core.namespace import canonical_user_root
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.skill_loader import validate_skill_format
 from openviking.core.uri_validation import validate_request_viking_uri
+from openviking.models.embedder.base import query_embed_cache_scope
 from openviking.privacy.service import UserPrivacyConfigVersion
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
@@ -159,7 +160,7 @@ async def _entry_looks_like_skill(service, ctx: RequestContext, entry: Dict[str,
     # directory actually contains a SKILL.md file before listing it.  Any
     # error (including NotFound) means we cannot confirm it is a skill.
     try:
-        skill_md_stat = await service.fs.stat(_skill_md_uri(entry_uri), ctx=ctx)
+        skill_md_stat = await service.fs.stat(_skill_md_uri(entry_uri), ctx=ctx, skip_count=True)
     except Exception:
         return False
     if not skill_md_stat or skill_md_stat.get("isDir", False):
@@ -266,7 +267,7 @@ async def _require_skill(
     if target_uri:
         root_uri = _skill_root_uri(ctx, skill_name, target_uri)
         try:
-            stat = await service.fs.stat(root_uri, ctx=ctx)
+            stat = await service.fs.stat(root_uri, ctx=ctx, skip_count=True)
             if stat and stat.get("isDir", False):
                 return root_uri
         except NotFoundError:
@@ -276,7 +277,7 @@ async def _require_skill(
 
     user_root_uri = _skill_root_uri(ctx, skill_name)
     try:
-        stat = await service.fs.stat(user_root_uri, ctx=ctx)
+        stat = await service.fs.stat(user_root_uri, ctx=ctx, skip_count=True)
         if stat and stat.get("isDir", False):
             return user_root_uri
     except NotFoundError:
@@ -286,7 +287,7 @@ async def _require_skill(
 
     agent_root_uri = _skill_root_uri(ctx, skill_name, "viking://agent/skills")
     try:
-        stat = await service.fs.stat(agent_root_uri, ctx=ctx)
+        stat = await service.fs.stat(agent_root_uri, ctx=ctx, skip_count=True)
         if stat and stat.get("isDir", False):
             return agent_root_uri
     except NotFoundError:
@@ -599,32 +600,35 @@ async def find_skills(
         user_root = f"{canonical_user_root(_ctx)}/skills"
         agent_root = "viking://agent/skills"
 
-        user_execution, agent_execution = await asyncio.gather(
-            run_operation(
-                operation="skills.find",
-                telemetry=request.telemetry,
-                fn=lambda: service.search.find(
-                    query=request.query,
-                    ctx=_ctx,
-                    target_uri=user_root,
-                    limit=request.limit,
-                    score_threshold=request.score_threshold,
-                    level=request.level,
+        # Both finds embed the same query text, so wrap the fan-out in the
+        # request-scoped cache to reuse the first in-flight embed.
+        with query_embed_cache_scope():
+            user_execution, agent_execution = await asyncio.gather(
+                run_operation(
+                    operation="skills.find",
+                    telemetry=request.telemetry,
+                    fn=lambda: service.search.find(
+                        query=request.query,
+                        ctx=_ctx,
+                        target_uri=user_root,
+                        limit=request.limit,
+                        score_threshold=request.score_threshold,
+                        level=request.level,
+                    ),
                 ),
-            ),
-            run_operation(
-                operation="skills.find",
-                telemetry=request.telemetry,
-                fn=lambda: service.search.find(
-                    query=request.query,
-                    ctx=_ctx,
-                    target_uri=agent_root,
-                    limit=request.limit,
-                    score_threshold=request.score_threshold,
-                    level=request.level,
+                run_operation(
+                    operation="skills.find",
+                    telemetry=request.telemetry,
+                    fn=lambda: service.search.find(
+                        query=request.query,
+                        ctx=_ctx,
+                        target_uri=agent_root,
+                        limit=request.limit,
+                        score_threshold=request.score_threshold,
+                        level=request.level,
+                    ),
                 ),
-            ),
-        )
+            )
 
         user_result = user_execution.result
         user_result_dict = (

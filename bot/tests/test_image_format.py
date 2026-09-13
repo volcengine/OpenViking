@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from vikingbot.utils.image_format import detect_image_format  # noqa: E402
+from vikingbot.utils.image_format import detect_image_format, sniff_image_format  # noqa: E402
 
 
 def test_detect_image_format_identifies_jpeg():
@@ -22,3 +22,7 @@ def test_detect_image_format_uses_mime_hint_for_unknown_bytes():
 
     assert image_format.extension == "webp"
     assert image_format.mime_type == "image/webp"
+
+
+def test_sniff_image_format_rejects_unknown_bytes():
+    assert sniff_image_format(b"not an image") is None

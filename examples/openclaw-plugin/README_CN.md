@@ -152,14 +152,25 @@ openclaw config get plugins.slots.contextEngine  # 应输出：openviking
 - `sessionId` 是 UUID 时直接复用。
 - `sessionKey` 存在时优先用它生成稳定的 `ovSessionId`。
 - 非安全路径字符会被规整或退化成稳定的 SHA-256。
-- `peer_role=assistant` 是默认值，assistant message 写入 `peer_id=<sessionAgent>`；如果配置了 `peer_prefix`，则写入 `<peer_prefix>_<sessionAgent>`。
-- `peer_role=none` 会关闭 peer message 归因和 actor-peer 路由。
-- `peer_role=person` 时，user message 使用 OpenClaw sender 身份派生 `peer_id`；assistant message 不写 `peer_id`。
-- 数据面的 recall/search/read/import/delete 会在 `peer_role=assistant` 或 `peer_role=person` 时把同一个解析后的 peer 身份作为 `X-OpenViking-Actor-Peer` 发送。
+- `peer_role=none` 是默认值：消息不写 peer 归因，记忆留在用户共享空间，例如 `viking://user/alice/memories/...`；不使用具体 peer 的记忆子树。
+- `peer_role=assistant` 会让 assistant message 写入 `peer_id=<sessionAgent>`，并使用例如 `viking://user/alice/peers/main/memories/...` 的 peer 记忆；如果配置了 `peer_prefix`，peer id 为 `<peer_prefix>_<sessionAgent>`。
+- `peer_role=sender` 会让 user message 用 OpenClaw sender 身份派生 `peer_id`，并使用例如 `viking://user/support-agent/peers/customer-42/memories/...` 的 peer 记忆；assistant message 不写 `peer_id`。
+- `person` 仍作为 `sender` 的旧配置别名被兼容；新配置和文档统一使用 `sender`。
+- 数据面的 recall/search/read/import/delete 会在 `peer_role=assistant` 或 `peer_role=sender` 时把同一个解析后的 peer 身份作为 `X-OpenViking-Actor-Peer` 发送。
 - OpenClaw 没有提供 session agent 时，使用其默认 agent `main` 作为本地 session 和 assistant peer metadata。
 - 只有显式配置了 `accountId` / `userId` 时才发送 `X-OpenViking-Account` / `X-OpenViking-User`。
 
 这样做是因为 OpenViking 的租户身份是 account/user 级，OpenClaw agent 身份只作为运行时 metadata 使用。
+
+选择 scope 时，先看 `viking://user/<user_id>` 代表谁：
+
+| 模型 | 案例 | 结果 |
+| --- | --- | --- |
+| 通用／共享（`none`） | `user_id=alice` 使用任意 OpenClaw 助手 | 共享用户记忆位于 `viking://user/alice/memories/...` |
+| 人是 OpenViking user（`assistant`） | Alice 同时使用 `main` 和 `research` 两个 OpenClaw 助手 | 助手 peer 记忆分别位于 `.../peers/main/memories/...` 和 `.../peers/research/memories/...` |
+| Agent 是 OpenViking user（`sender`） | `user_id=support-agent` 接收 `customer-42` 和 `customer-99` 的消息 | 发送者 peer 记忆分别位于 `.../peers/customer-42/memories/...` 和 `.../peers/customer-99/memories/...` |
+
+OpenViking 会把受管的 `peers/` 容器作为用户 namespace 的一部分初始化。`none` 表示插件不创建、也不路由到具体的 `peers/<peer_id>/memories` 子树。使用 `assistant` 或 `sender` 时，actor-peer 召回同时包含用户共享记忆和当前 peer 记忆；切换配置不会搬迁已有记忆。
 
 默认推荐的远程模式配置只有：
 
@@ -171,7 +182,7 @@ openclaw config get plugins.slots.contextEngine  # 应输出：openviking
 其中：
 
 - `apiKey` 推荐使用某个 user 的 user key
-- 新安装默认 `peer_role=assistant`
+- 新安装默认 `peer_role=none`
 - `accountId` / `userId` 仅在部署需要显式身份 header 时作为高级选项使用，例如 root key 或 trusted server 流程
 
 ### User namespace
@@ -192,16 +203,9 @@ openclaw config get plugins.slots.contextEngine  # 应输出：openviking
 1. 从最后一条 user message 提取查询文本。
 2. 基于当前 `sessionId/sessionKey` 解析本轮的 agent 路由。
 3. 先做一次快速可用性检查，避免在 OpenViking 不可用时拖慢模型请求。
-4. 检索配置的 `recallTargetTypes`（默认 `user,agent`；可选 `resource`；session 历史请使用 `ov_archive_search` 和 `ov_archive_expand`）。
-5. 在插件侧做去重、阈值筛选、重排和 token budget 裁剪。
-6. 把最终记忆块以 `<relevant-memories>` 形式 prepend 到当前 user message；不会追加独立 synthetic user message。
-
-这里的重排不是单纯依赖向量分数。当前实现还会额外考虑：
-
-- 是否是 `level == 2` 的叶子记忆
-- 是否属于偏好类记忆
-- 是否属于事件类记忆
-- 与当前 query 的词面重合度
+4. 按配置的 `recallTargetTypes` 发起一次带 session 上下文的 context search（默认 `user,agent`；可选 `resource`；原始 session 历史仍可用 `ov_archive_search` 和 `ov_archive_expand` 查看）。
+5. 由 OpenViking 服务端结合 session 历史扩展查询，完成候选过滤与排序、跨轮去重、内容层级选择和预算内组装。
+6. 把服务端渲染的上下文以 `<relevant-memories>` 形式 prepend 到当前 user message；不会追加独立 synthetic user message。
 
 ## Session 生命周期
 

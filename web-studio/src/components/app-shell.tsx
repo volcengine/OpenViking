@@ -4,6 +4,7 @@ import {
   BlocksIcon,
   BookOpenIcon,
   BracesIcon,
+  BrainCircuitIcon,
   ChevronRightIcon,
   ClipboardListIcon,
   Clock3Icon,
@@ -53,6 +54,7 @@ import {
   AppConnectionProvider,
   useAppConnection,
 } from '#/hooks/use-app-connection'
+import type { ServerMode } from '#/hooks/use-server-mode'
 import { cn } from '#/lib/utils'
 import { resolveStudioManagementCapabilities } from '#/lib/studio-permissions'
 
@@ -107,6 +109,13 @@ const NAV_ITEMS: readonly NavItem[] = [
     section: 'workspace',
     titleKey: 'navigation.skills.title',
     to: '/skills',
+  },
+  {
+    icon: BrainCircuitIcon,
+    id: 'agentExperience',
+    section: 'workspace',
+    titleKey: 'navigation.agentExperience.title',
+    to: '/agent-experience',
   },
   {
     icon: BlocksIcon,
@@ -246,8 +255,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 }
 
 function IdentityScopedAppShell({ children }: { children: React.ReactNode }) {
-  const { identityScopeKey } = useAppConnection()
-  return <AppShellInner key={identityScopeKey}>{children}</AppShellInner>
+  const { identityScopeKey, serverMode } = useAppConnection()
+  return (
+    <AppShellInner key={identityScopeKey}>
+      <ConnectionScopedRouteContent serverMode={serverMode}>
+        {children}
+      </ConnectionScopedRouteContent>
+    </AppShellInner>
+  )
+}
+
+export function ConnectionScopedRouteContent({
+  children,
+  serverMode,
+}: {
+  children: React.ReactNode
+  serverMode: ServerMode
+}) {
+  return serverMode === 'checking' ? null : children
 }
 
 function AppShellInner({ children }: { children: React.ReactNode }) {

@@ -6,6 +6,7 @@ description: >
   ("like last time", "what did we decide"), asks to remember or forget
   something, shares files, URLs, or repos worth keeping, or when the task needs
   context this session does not have — even if nobody says the word "memory".
+  Also use it when the user asks where memories are stored: per project, per folder, or shared between repositories.
   Covers choosing between context search, find, list search, and grep, reading viking://
   URIs, and when (not) to write.
 version: 2026.8.7
@@ -62,6 +63,24 @@ filesystem tools.
   of blocking on completion.
 - `forget` — permanently deletes. Confirm with the user and pass the exact URI;
   never delete from a fuzzy match.
+
+## Where memories are filed
+
+A git repository derives its peer from its `origin`, so every clone, worktree and subdirectory of one repository shares one memory.
+
+A directory that is neither a repository nor marked gets no peer at all, and what is remembered there goes to the user-level space — which is why a scratch directory sees no project memory of its own.
+
+To give a directory its own memory under Claude Code or Codex, create `.openviking/config.json` in it:
+
+```json
+{"version": 1, "peer": {"id": "my-project"}}
+```
+
+Two directories carrying the same `peer.id` share one memory. Adding `"recall": {"peer_scope": "actor"}` to the same file limits recall to this project.
+
+Other harnesses do not read that file: under them, pin a peer with the `OPENVIKING_PEER_ID` environment variable instead.
+
+Do not invent other keys or commands for this: that file is the whole interface, and no `ov` subcommand creates, renames or merges a peer.
 
 ## Boundaries
 

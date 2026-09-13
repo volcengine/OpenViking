@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openviking.server.identity import Role
+from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_ops.freshness_policy import (
     FreshnessAction,
@@ -129,13 +130,7 @@ async def test_parent_refresh_stops_at_nonsemantic_namespace_root(
 async def test_parent_refresh_preserves_semantic_roots(
     monkeypatch, uri, context_type, expected_parent
 ):
-    plan = AsyncMock(
-        return_value=FreshnessDecision(
-            FreshnessAction.NOOP,
-            pending_after=0,
-            total_entries=1,
-        )
-    )
+    plan = AsyncMock(side_effect=LockAcquisitionError("parent sidecars are busy"))
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_processor.plan_abstract_overview_refresh",
         plan,
@@ -153,6 +148,12 @@ async def test_parent_refresh_preserves_semantic_roots(
         "openviking.storage.queuefs.semantic_processor.get_viking_fs",
         lambda: SimpleNamespace(),
     )
+    get_queue_manager = AsyncMock(
+        side_effect=AssertionError("best-effort lock miss must not enqueue parent work")
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager", get_queue_manager
+    )
 
     msg = SemanticMsg(uri=uri, context_type=context_type)
     await SemanticProcessor()._enqueue_parent_refresh(
@@ -163,3 +164,5 @@ async def test_parent_refresh_preserves_semantic_roots(
 
     plan.assert_awaited_once()
     assert plan.await_args.kwargs["dir_uri"] == expected_parent
+    assert plan.await_args.kwargs["lock_timeout_secs"] == 1.0
+    get_queue_manager.assert_not_called()

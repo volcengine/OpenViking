@@ -474,6 +474,17 @@ def build_abi3_exports(backend: Any) -> dict[str, Any]:
                 )
             )
 
+        def rebuild_scalar_index(
+            self, scalar_index_json: str, data_list: Iterable[AddDataRequest]
+        ) -> int:
+            return int(
+                self._backend._index_engine_rebuild_scalar_index(
+                    self._handle,
+                    scalar_index_json,
+                    data_list,
+                )
+            )
+
         def search(self, req: SearchRequest) -> SearchResult:
             return SearchResult.from_backend(self._backend._index_engine_search(self._handle, req))
 

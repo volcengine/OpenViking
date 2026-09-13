@@ -23,6 +23,7 @@ from openviking.storage.acl import (
     AclAction,
     AclEntry,
     AclLevel,
+    AclMode,
     acl_allows,
     acl_ancestors,
     has_implicit_manage,
@@ -43,10 +44,6 @@ from openviking_cli.utils.uri import VikingURI
 class _AccessMixin:
     """URI normalization, access control, path conversion, and visibility helpers."""
 
-    # Over-fetch multiplier for bounded tree traversal. When a node_limit is
-    # set, we push down node_limit * this factor as the raw-node limit to Rust,
-    # leaving headroom for ACL/internal-name filtering before re-fetching.
-    _TREE_OVERFETCH_FACTOR = 4
     _GLOB_PAGE_SIZE_DEFAULT = 1024
 
     # Maximum bytes for a single filename component (filesystem limit is typically 255)
@@ -59,14 +56,16 @@ class _AccessMixin:
     # crates/ragfs/src/git/enumerate.rs and VikingFS._INTERNAL_NAMES so that
     # callers fail fast in Python with a clear error rather than passing a
     # path that the Rust side will silently drop.
-    _GIT_INTERNAL_FIRST_SEGMENTS = frozenset({
-        "_system",
-        "tasks",
-        "temp",
-        "queue",
-        "upload",
-        ".path.ovlock",
-    })
+    _GIT_INTERNAL_FIRST_SEGMENTS = frozenset(
+        {
+            "_system",
+            "tasks",
+            "temp",
+            "queue",
+            "upload",
+            ".path.ovlock",
+        }
+    )
 
     _DEFAULT_GIT_AUTHOR_NAME = "viking-bot"
     _DEFAULT_GIT_AUTHOR_EMAIL = "bot@viking.local"
@@ -259,9 +258,7 @@ class _AccessMixin:
                     resource=uri,
                 )
 
-    async def _ensure_retrieval_scope(
-        self, uri: str, ctx: Optional[RequestContext]
-    ) -> None:
+    async def _ensure_retrieval_scope(self, uri: str, ctx: Optional[RequestContext]) -> None:
         self._safe_uri_parts(uri)
         if self._acl_enabled(ctx) and is_acl_uri(uri):
             return
@@ -269,13 +266,9 @@ class _AccessMixin:
 
     def _acl_enabled(self, ctx: Optional[RequestContext]) -> bool:
         real_ctx = self._ctx_or_default(ctx)
-        return self.acl_manager is not None and self.acl_manager.is_enabled(
-            real_ctx.account_id
-        )
+        return self.acl_manager is not None and self.acl_manager.is_enabled(real_ctx.account_id)
 
-    async def _ensure_acl_manage(
-        self, uri: str, ctx: Optional[RequestContext]
-    ) -> RequestContext:
+    async def _ensure_acl_manage(self, uri: str, ctx: Optional[RequestContext]) -> RequestContext:
         if self.acl_manager is None:
             raise RuntimeError("ACL is not initialized")
         real_ctx = self._ctx_or_default(ctx)
@@ -305,8 +298,10 @@ class _AccessMixin:
     async def set_acl(
         self,
         uri: str,
-        entries: Sequence[AclEntry | Mapping[str, Any]],
+        entries: Sequence[AclEntry | Mapping[str, Any]] | None = None,
         ctx: Optional[RequestContext] = None,
+        *,
+        acl_mode: AclMode | None = None,
     ) -> Dict[str, Any]:
         real_ctx = await self._ensure_acl_manage(uri, ctx)
         path = self._uri_to_path(uri, ctx=real_ctx)
@@ -314,7 +309,7 @@ class _AccessMixin:
         try:
             await self._ensure_acl_manage(uri, real_ctx)
             await self._ensure_acl_target_exists(uri, real_ctx)
-            effective = await self.acl_manager.set_direct(uri, entries, real_ctx)
+            effective = await self.acl_manager.set_acl(uri, entries, real_ctx, acl_mode=acl_mode)
             return self.acl_manager.to_report(uri, effective)
         finally:
             await self._async_agfs.pathlock_release(lease)
@@ -357,21 +352,17 @@ class _AccessMixin:
                 entries.pop(principal, None)
             else:
                 entries[principal] = AclEntry(principal, normalized_level)
-            effective = await self.acl_manager.set_direct(uri, list(entries.values()), real_ctx)
+            effective = await self.acl_manager.set_acl(uri, list(entries.values()), real_ctx)
             return self.acl_manager.to_report(uri, effective)
         finally:
             await self._async_agfs.pathlock_release(lease)
 
     async def delete_acl(self, uri: str, ctx: Optional[RequestContext] = None) -> Dict[str, Any]:
-        return await self.set_acl(uri, [], ctx=ctx)
+        return await self.set_acl(uri, [], acl_mode=AclMode.INHERIT, ctx=ctx)
 
     def _ensure_user_not_deleting(self, ctx: RequestContext) -> None:
         guard = getattr(self, "_user_deletion_guard", None)
-        if (
-            ctx.role != Role.ROOT
-            and guard is not None
-            and guard(ctx.account_id, ctx.user.user_id)
-        ):
+        if ctx.role != Role.ROOT and guard is not None and guard(ctx.account_id, ctx.user.user_id):
             raise FailedPreconditionError("User deletion is in progress")
 
     def _ensure_supported_delete_namespace(self, normalized_uri: str) -> None:
@@ -513,25 +504,12 @@ class _AccessMixin:
         show_all_hidden: bool = False,
         node_limit: Optional[int] = None,
         level_limit: Optional[int] = None,
+        offset: int = 0,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
         ctx: Optional[RequestContext] = None,
     ):
-        """Shared generator: fetch raw TreeEntry list from Rust, yield (entry, uri) tuples.
-
-        node_limit counts ACL-visible entries, so the user's node_limit cannot
-        be pushed directly to Rust — doing so would truncate before filtering
-        and drop entries that should be visible.
-
-        To keep memory bounded without changing that semantic, we push down an
-        *amplified* raw-node limit (node_limit * _TREE_OVERFETCH_FACTOR). If ACL
-        filtering leaves fewer than node_limit visible entries while Rust still
-        returned a full page (i.e. more raw nodes may exist), we double the raw
-        limit and re-fetch. Because Rust truncates a deterministic sorted prefix,
-        this yields exactly the same result as an unbounded fetch, while avoiding
-        materializing the entire prefix in the common case.
-
-        When node_limit is None (full-tree callers), no limit is pushed down.
-        level_limit IS always passed to Rust.
-        """
+        """Yield one visible tree page after namespace and ACL filtering."""
         real_ctx = self._ctx_or_default(ctx)
         primary_path = self._uri_to_path(uri, ctx=ctx)
         path: Optional[str] = None
@@ -546,11 +524,15 @@ class _AccessMixin:
                 return
             raise NotFoundError(uri, "directory")
 
-        if node_limit is None:
-            raw_limit: Optional[int] = None
-        else:
-            raw_limit = max(node_limit * self._TREE_OVERFETCH_FACTOR, node_limit)
+        if node_limit == 0:
+            return
+        raw_offset = 0
+        raw_limit = None if node_limit is None else max(node_limit, 256)
+        remaining_offset = offset
+        yielded = 0
         acl_enabled = self._acl_enabled(real_ctx)
+        expose_resource_names = acl_enabled and is_acl_uri(uri)
+        denied_directories: set[str] = set()
 
         while True:
             raw_entries = await self._async_agfs.tree_directory(
@@ -558,7 +540,12 @@ class _AccessMixin:
                 show_hidden=show_all_hidden,
                 node_limit=raw_limit,
                 level_limit=level_limit,
+                offset=raw_offset,
+                sort_by=sort_by,
+                sort_order=sort_order,
             )
+            if not raw_entries:
+                return
 
             candidates: List[tuple] = []
             for entry in raw_entries:
@@ -573,14 +560,14 @@ class _AccessMixin:
                     ctx=ctx,
                 )
                 candidates.append((entry, entry_uri))
+                remaining_limit = None if node_limit is None else node_limit - yielded
                 if (
                     not acl_enabled
-                    and node_limit is not None
-                    and len(candidates) >= node_limit
+                    and remaining_limit is not None
+                    and len(candidates) >= (remaining_offset + remaining_limit)
                 ):
                     break
 
-            expose_resource_names = acl_enabled and is_acl_uri(uri)
             if not acl_enabled:
                 visible = candidates
             else:
@@ -588,12 +575,14 @@ class _AccessMixin:
                     [entry_uri for _, entry_uri in candidates], real_ctx
                 )
                 if expose_resource_names:
-                    denied_directories = {
-                        entry["path"].rstrip("/")
-                        for entry, entry_uri in candidates
-                        if entry.get("info", {}).get("isDir", False)
-                        and not access.get(entry_uri, False)
-                    }
+                    denied_directories.update(
+                        {
+                            entry["path"].rstrip("/")
+                            for entry, entry_uri in candidates
+                            if entry.get("info", {}).get("isDir", False)
+                            and not access.get(entry_uri, False)
+                        }
+                    )
                     visible = []
                     base = path.rstrip("/")
                     for entry, entry_uri in candidates:
@@ -614,25 +603,19 @@ class _AccessMixin:
                             visible.append((denied_entry, entry_uri))
                 else:
                     visible = [item for item in candidates if access.get(item[1], False)]
-            if node_limit is not None:
-                visible = visible[:node_limit]
-
-            # If we still lack enough visible entries but Rust returned a full
-            # page (raw_limit reached), more raw nodes may exist — re-fetch with
-            # a doubled limit. Otherwise Rust is exhausted and we yield as-is.
-            need_more = (
-                node_limit is not None
-                and len(visible) < node_limit
-                and raw_limit is not None
-                and len(raw_entries) >= raw_limit
-            )
-            if need_more:
-                raw_limit *= 2
-                continue
 
             for item in visible:
+                if remaining_offset:
+                    remaining_offset -= 1
+                    continue
                 yield item
-            return
+                yielded += 1
+                if node_limit is not None and yielded >= node_limit:
+                    return
+
+            if raw_limit is None or len(raw_entries) < raw_limit:
+                return
+            raw_offset += len(raw_entries)
 
     # ========== URI Conversion ==========
 
@@ -662,9 +645,7 @@ class _AccessMixin:
             raise ValueError(f"Legacy session URI is not accepted internally: {uri}")
         if parts and parts[0] == "agent" and self._is_legacy_agent_id_uri(uri):
             # Old format: viking://agent/{agent_id}/... — direct mapping for read-only compat
-            safe_parts = [
-                self._shorten_component(p, self._MAX_FILENAME_BYTES) for p in parts
-            ]
+            safe_parts = [self._shorten_component(p, self._MAX_FILENAME_BYTES) for p in parts]
             return f"/local/{account_id}/{'/'.join(safe_parts)}"
         if not parts:
             return f"/local/{account_id}"
@@ -736,9 +717,7 @@ class _AccessMixin:
             return True
         if self._legacy_session_alias(request_uri):
             owner_user_id = self._safe_uri_parts(request_uri)[1]
-            return await self._legacy_session_path_visible(
-                path, owner_user_id=owner_user_id
-            )
+            return await self._legacy_session_path_visible(path, owner_user_id=owner_user_id)
         return True
 
     def _alias_uri_for_path(
@@ -751,9 +730,7 @@ class _AccessMixin:
     ) -> str:
         base = base_path.rstrip("/")
         request_parts = self._safe_uri_parts(request_uri)
-        request_root = (
-            request_uri if request_uri == "viking://" else request_uri.rstrip("/")
-        )
+        request_root = request_uri if request_uri == "viking://" else request_uri.rstrip("/")
         preserve_request_alias = request_uri in {"viking://", "viking://user"} or bool(
             request_parts
             and request_parts[0] == "agent"
@@ -932,23 +909,38 @@ class _AccessMixin:
     async def _list_read_path_items(
         self,
         uri: str,
+        raw_offset: int = 0,
+        raw_limit: Optional[int] = None,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
         ctx: Optional[RequestContext] = None,
-    ) -> List[tuple[Dict[str, Any], str]]:
+    ) -> tuple[List[tuple[Dict[str, Any], str]], int, bool]:
+        """Return one mapped RagFS page, consumed count, and exhaustion state."""
         real_ctx = self._ctx_or_default(ctx)
         if self._is_session_root_uri(uri):
-            return await self._session_root_items(uri, real_ctx)
+            items = await self._session_root_items(uri, real_ctx)
+            return items, len(items), True
 
         primary_path = self._uri_to_path(uri, ctx=ctx)
         merge_paths = self._legacy_session_alias(uri) is not None
         found_path = False
         last_not_found: Optional[Exception] = None
         by_uri: Dict[str, tuple[Dict[str, Any], str]] = {}
+        raw_count = 0
 
         for path in self._read_paths(uri, ctx=ctx):
             if not await self._read_path_visible(uri, path, primary_path, real_ctx):
                 continue
             try:
-                entries = await self._ls_entries(path, ctx=ctx)
+                entries = await self._ls_entries(
+                    path,
+                    offset=0 if merge_paths else raw_offset,
+                    limit=None if merge_paths else raw_limit,
+                    sort_by=sort_by,
+                    sort_order=sort_order,
+                    filter_internal=False,
+                    ctx=ctx,
+                )
             except Exception as exc:
                 if is_not_found_error(exc):
                     last_not_found = exc
@@ -956,6 +948,8 @@ class _AccessMixin:
                 raise
 
             found_path = True
+            raw_count += len(entries)
+            entries = self._filter_ls_entries(path, entries)
             for entry in entries:
                 entry_uri = self._alias_uri_for_path(
                     request_uri=uri,
@@ -968,7 +962,8 @@ class _AccessMixin:
                 break
 
         if found_path:
-            return list(by_uri.values())
+            exhausted = raw_limit is None or merge_paths or raw_count < raw_limit
+            return list(by_uri.values()), raw_count, exhausted
         raise NotFoundError(uri, "directory") from last_not_found
 
     def _path_to_uri(self, path: str, ctx: Optional[RequestContext] = None) -> str:

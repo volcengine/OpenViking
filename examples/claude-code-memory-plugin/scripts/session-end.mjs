@@ -26,7 +26,7 @@ if (!isPluginEnabled()) {
   process.exit(0);
 }
 
-const cfg = loadConfig();
+let cfg = loadConfig();
 const { log, logError } = createLogger("session-end");
 const fetchJSON = makeFetchJSON(cfg);
 
@@ -52,6 +52,16 @@ async function main() {
 
   const sessionId = input.session_id;
   const cwd = input.cwd;
+  // The workspace layer belongs to the session's directory, which only the
+  // payload knows; see loadConfig for why re-resolving this late is safe.
+  cfg = loadConfig(cwd);
+  if (!cfg.autoCapture) {
+    // The gate above ran against this process's directory, not the session's.
+    log("skip", { reason: "autoCapture disabled" });
+    approve();
+    return;
+  }
+
   if (!sessionId) {
     log("skip", { reason: "no session_id" });
     approve();

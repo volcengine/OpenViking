@@ -1,7 +1,7 @@
 import { appendFile, mkdir, readFile, readdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 
-export type RecallResourceType = "resource" | "session" | "user" | "agent";
+import type { RecallResourceType } from "./registries/recall-resource-types.js";
 
 export type RecallTraceSource = "auto_recall" | "memory_recall" | "ov_search" | "ov_archive_search";
 
@@ -27,7 +27,9 @@ export type RecallTraceEntry = {
   agentId?: string;
   source: RecallTraceSource;
   operationType: RecallTraceOperationType;
-  resourceTypes: RecallResourceType[];
+  // "session" labels archive-grep traces over session history; recall targets
+  // stay in the registry's narrower union and never include it.
+  resourceTypes: Array<RecallResourceType | "session">;
   trigger: {
     rawUserTextPreview?: string;
     query: string;
@@ -92,78 +94,6 @@ export type RecallTraceFlushResult = {
   warnings: string[];
 };
 
-const ALLOWED_RESOURCE_TYPES: RecallResourceType[] = ["resource", "user", "agent"];
-const DEFAULT_RESOURCE_TYPES: RecallResourceType[] = ["user", "agent"];
-
-function toResourceTypeEntries(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return value
-      .filter((entry): entry is string => typeof entry === "string")
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-  }
-  if (typeof value === "string") {
-    return value
-      .split(/[,\n]/)
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-  }
-  return [];
-}
-
-export function normalizeResourceTypes(value: unknown): RecallResourceType[] {
-  const entries = toResourceTypeEntries(value);
-  if (entries.length === 0) {
-    return [...DEFAULT_RESOURCE_TYPES];
-  }
-
-  const seen = new Set<RecallResourceType>();
-  const normalized: RecallResourceType[] = [];
-  const invalid: string[] = [];
-  for (const entry of entries) {
-    if ((ALLOWED_RESOURCE_TYPES as string[]).includes(entry)) {
-      const typed = entry as RecallResourceType;
-      if (!seen.has(typed)) {
-        seen.add(typed);
-        normalized.push(typed);
-      }
-    } else {
-      invalid.push(entry);
-    }
-  }
-
-  if (invalid.length > 0) {
-    throw new Error(`invalid resourceTypes: ${invalid.join(", ")}`);
-  }
-
-  return normalized.length > 0 ? normalized : [...DEFAULT_RESOURCE_TYPES];
-}
-
-export function resolveRecallSearchPlan(
-  resourceTypes: unknown,
-  _ctx: { ovSessionId?: string; agentId?: string },
-): {
-  resourceTypes: RecallResourceType[];
-  searches: Array<{ resourceType: RecallResourceType; targetUri?: string; contextType: "memory" | "resource" }>;
-  skipped: Array<{ resourceType: RecallResourceType; reason: "missing_session" }>;
-} {
-  const normalized = normalizeResourceTypes(resourceTypes);
-  const searches: Array<{ resourceType: RecallResourceType; targetUri?: string; contextType: "memory" | "resource" }> = [];
-  const skipped: Array<{ resourceType: RecallResourceType; reason: "missing_session" }> = [];
-  let addedMemorySearch = false;
-
-  for (const resourceType of normalized) {
-    if (resourceType === "resource") {
-      searches.push({ resourceType, contextType: "resource" });
-    } else if ((resourceType === "user" || resourceType === "agent") && !addedMemorySearch) {
-      searches.push({ resourceType: "user", contextType: "memory" });
-      addedMemorySearch = true;
-    }
-  }
-
-  return { resourceTypes: normalized, searches, skipped };
-}
-
 export class RecallTraceMemoryStore {
   private readonly maxEntries: number;
   private readonly entries: RecallTraceEntry[] = [];
@@ -183,7 +113,7 @@ export class RecallTraceMemoryStore {
     const limit = Math.max(1, Math.floor(query.limit ?? 20));
     const turn = query.turn ?? "latest";
     const resourceTypes = query.resourceTypes && query.resourceTypes.length > 0
-      ? new Set(query.resourceTypes)
+      ? new Set<string>(query.resourceTypes)
       : undefined;
 
     const filtered = this.entries

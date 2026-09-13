@@ -35,9 +35,11 @@
  *   OPENVIKING_RECALL_TIMEOUT_MS, OPENVIKING_RECALL_COMPRESS_TIMEOUT_MS
  *   OPENVIKING_RECALL_COMPRESS_MODEL, OPENVIKING_RECALL_COMPRESS_THINKING
  *   OPENVIKING_RECALL_COMPRESS_BASE_URL
+ *   OPENVIKING_RECALL_COMPRESS_MIN_INPUT_CHARS
  *   OPENVIKING_RECALL_LIMIT, OPENVIKING_SCORE_THRESHOLD
  *   OPENVIKING_WORKSPACE_PEER, OPENVIKING_RECALL_PEER_SCOPE
  *   OPENVIKING_NO_AUTO_INJECT, OPENVIKING_PROFILE_TOKEN_BUDGET
+ *   OPENVIKING_RECALL_QUERY_FILTERS (CSV), OPENVIKING_CAPTURE_FILTERS (CSV)
  *   OPENVIKING_DEBUG=1, OPENVIKING_DEBUG_LOG
  */
 
@@ -89,25 +91,61 @@ function hasOwn(obj, key) {
   return Object.prototype.hasOwnProperty.call(obj || {}, key);
 }
 
+/**
+ * A configured list of input filter rules. An env CSV replaces the configured
+ * array entirely; both paths trim, so a rule reads the same however it was
+ * configured — and a rule needing a literal comma has to come from the array,
+ * since the env value is split on one.
+ */
+function filterList(envName, configured) {
+  const raw = str(process.env[envName], null);
+  const list = raw !== null ? raw.split(",") : (Array.isArray(configured) ? configured : []);
+  return list.filter((r) => typeof r === "string").map((r) => r.trim()).filter(Boolean);
+}
+
 function normalizeAuthMode(val) {
   const mode = str(val, "").toLowerCase();
   return ["trusted", "api_key"].includes(mode) ? mode : "";
 }
 
-export function loadConfig() {
+/**
+ * `cwd` selects the workspace layer (`.openviking/config.json` and the registry
+ * entry for that directory). It defaults to this process's directory, which is
+ * all a hook knows at module load; a hook whose payload names the session's
+ * directory calls this again with it. Re-resolving that late is safe because a
+ * workspace file may not carry connection or credential keys, so baseUrl/apiKey
+ * cannot move — loggers and fetch helpers built from the first load stay valid.
+ */
+export function loadConfig(cwd = process.cwd()) {
   const creds = resolveOpenVikingCredentials();
   const { cliPath, ovFile, ovPath } = creds;
   const configPath = cliPath || ovPath || null;
 
   // ovcli.conf plugin.<harness> overrides plugin.* which overrides ov.conf's
   // codex section, so client-side tuning no longer needs a server config.
-  const cx = { ...(ovFile.codex || {}), ...loadPluginSettings(HARNESS_KEYS.codex) };
+  const workspaceCwd = str(cwd, "") || process.cwd();
+  const pluginSettings = loadPluginSettings(HARNESS_KEYS.codex, process.env, { cwd: workspaceCwd });
+  const cx = { ...(ovFile.codex || {}), ...pluginSettings };
   const server = ovFile.server || {};
   const explicitAuthMode = normalizeAuthMode(process.env.OPENVIKING_AUTH_MODE)
     || normalizeAuthMode(cx.authMode)
     || normalizeAuthMode(cx.auth_mode)
     || normalizeAuthMode(server.auth_mode);
   const authMode = explicitAuthMode || ((creds.account || creds.user) ? "trusted" : "api_key");
+
+  // A workspace file's `peer.id` (and ovcli.conf's plugin.codex.peerId) is
+  // projected into pluginSettings; reading only the credential chain dropped it.
+  // A repository's pin is the more specific answer, so it outranks the file peer
+  // that chain ends in — but not OPENVIKING_PEER_ID, and not a credential source
+  // pinned to ovcli.conf, where env peers are meant not to apply. ov.conf's
+  // codex.peerId stays where it was, behind ovcli.conf, inside creds.peerId.
+  const envPeerId = creds.credentialSource === "ovcli"
+    ? null
+    : str(process.env.OPENVIKING_PEER_ID, null);
+  const peerId = envPeerId
+    || str(pluginSettings.peerId, null)
+    || str(pluginSettings.peer_id, null)
+    || creds.peerId;
 
   const debug = envBool("OPENVIKING_DEBUG") ?? (cx.debug === true);
   const defaultLogPath = join(homedir(), ".openviking", "logs", "codex-hooks.log");
@@ -166,8 +204,10 @@ export function loadConfig() {
     apiKey: creds.apiKey,
     account: creds.account,
     user: creds.user,
-    peerId: creds.peerId,
+    peerId,
     workspacePeer,
+    peerSource: str(process.env.OPENVIKING_PEER_SOURCE, null) ?? cx.peerSource,
+    harness: "codex",
     userAgent: USER_AGENT,
     timeoutMs,
     recallTimeoutMs,
@@ -187,6 +227,10 @@ export function loadConfig() {
       process.env.OPENVIKING_MIN_QUERY_LENGTH,
       num(cx.minQueryLength, 3),
     ))),
+    // Ordered sed-style rules over the text the plugin sends: the recall query
+    // on the UserPromptSubmit hook, and every captured turn on the write path.
+    recallQueryFilters: filterList("OPENVIKING_RECALL_QUERY_FILTERS", cx.recallQueryFilters),
+    captureFilters: filterList("OPENVIKING_CAPTURE_FILTERS", cx.captureFilters),
     logRankingDetails: envBool("OPENVIKING_LOG_RANKING_DETAILS") ?? (cx.logRankingDetails === true),
     recallPeerScope,
     recallCompress: envBool("OPENVIKING_RECALL_COMPRESS") ?? configBool(cx.recallCompress, true),
@@ -203,6 +247,10 @@ export function loadConfig() {
     recallCompressDetectTtlMs: Math.max(0, Math.floor(num(
       process.env.OPENVIKING_RECALL_COMPRESS_DETECT_TTL_MS,
       num(cx.recallCompressDetectTtlMs, 604800000),
+    ))),
+    recallCompressMinInputChars: Math.max(0, Math.floor(num(
+      process.env.OPENVIKING_RECALL_COMPRESS_MIN_INPUT_CHARS,
+      num(cx.recallCompressMinInputChars, 1500),
     ))),
     recallCompressMaxInputChars: Math.max(1000, Math.floor(num(
       process.env.OPENVIKING_RECALL_COMPRESS_MAX_INPUT_CHARS,

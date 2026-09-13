@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
@@ -509,7 +510,7 @@ class ReindexExecutor:
 
         acquire_lock = service.viking_fs._async_agfs.pathlock_acquire_tree
         if mode != "prune_orphans" or await service.viking_fs.exists(uri, ctx=ctx):
-            stat = await service.viking_fs.stat(uri, ctx=ctx)
+            stat = await service.viking_fs.stat(uri, ctx=ctx, skip_count=True)
             if not stat.get("isDir", stat.get("is_dir")):
                 acquire_lock = service.viking_fs._async_agfs.pathlock_acquire_exact
         lease = await acquire_lock(path)
@@ -846,9 +847,26 @@ class ReindexExecutor:
                 )
             return True
 
+        if self._is_hidden_meta_file(uri):
+            return False
+        exists = await self._prune_source_exists(uri, ctx=owner_ctx)
+        if exists.error:
+            self._record_prune_source_error(
+                counters=counters,
+                uri=uri,
+                source_uri=uri,
+                error=exists.error,
+            )
+            return False
+        # A real filename can have the same spelling as a virtual chunk URI.
+        if exists.exists:
+            return False
+
         if "#" in uri:
-            if context_type == ContextType.MEMORY.value and "#chunk_" in uri:
-                base_uri = uri.split("#chunk_", 1)[0]
+            # Generated chunks append a zero-padded index to the full base URI.
+            chunk_match = re.fullmatch(r"(.+)#chunk_[0-9]{4,}", uri)
+            if context_type == ContextType.MEMORY.value and chunk_match:
+                base_uri = chunk_match.group(1)
                 base = await self._read_prune_source(base_uri, ctx=owner_ctx)
                 if base.error:
                     self._record_prune_source_error(
@@ -866,18 +884,7 @@ class ReindexExecutor:
                 return uri not in expected
             return False
 
-        if self._is_hidden_meta_file(uri):
-            return False
-        exists = await self._prune_source_exists(uri, ctx=owner_ctx)
-        if exists.error:
-            self._record_prune_source_error(
-                counters=counters,
-                uri=uri,
-                source_uri=uri,
-                error=exists.error,
-            )
-            return False
-        return not exists.exists
+        return True
 
     async def _read_prune_source(self, uri: str, *, ctx: RequestContext) -> _PruneSourceRead:
         viking_fs = get_viking_fs()
@@ -1009,7 +1016,7 @@ class ReindexExecutor:
         counters = run.counters
         ctx = run.ctx
         if mode == "semantic_and_vectors":
-            stat = await get_viking_fs().stat(uri, ctx=ctx)
+            stat = await get_viking_fs().stat(uri, ctx=ctx, skip_count=True)
             if stat.get("isDir", stat.get("is_dir")):
                 semantic_kwargs = {
                     "uri": uri,
@@ -1078,7 +1085,7 @@ class ReindexExecutor:
         try:
             if not await viking_fs.exists(uri, ctx=ctx):
                 raise NotFoundError(uri, "resource")
-            stat = await viking_fs.stat(uri, ctx=ctx)
+            stat = await viking_fs.stat(uri, ctx=ctx, skip_count=True)
             is_dir = stat.get("isDir", stat.get("is_dir")) if isinstance(stat, dict) else False
             if is_dir and recursive:
                 entries = await self._tree_all(viking_fs, uri, show_all_hidden=True, ctx=ctx)
@@ -1582,7 +1589,7 @@ class ReindexExecutor:
     ) -> None:
         viking_fs = get_viking_fs()
         if await viking_fs.exists(uri, ctx=ctx):
-            stat = await viking_fs.stat(uri, ctx=ctx)
+            stat = await viking_fs.stat(uri, ctx=ctx, skip_count=True)
             if stat.get("isDir", stat.get("is_dir")):
                 entries = (
                     await self._tree_all(viking_fs, uri, show_all_hidden=False, ctx=ctx)

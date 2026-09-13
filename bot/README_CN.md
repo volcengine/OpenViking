@@ -61,7 +61,7 @@ ov chat → OpenViking Server → VikingBot Gateway → Agent
 
 先按照 [OpenViking 快速开始](../docs/zh/getting-started/03-quickstart-server.md)配置好 OpenViking 所需的模型和存储。Bot 默认继承根级 `vlm` 作为 Agent 模型；如需使用独立模型，再配置 `bot.agents`。
 
-一体启动时，Bot 固定使用当前启动的 OpenViking Server，忽略 `bot.ov_server` 中指向其他服务的配置。OpenViking Server 会为每个 Chat 请求向 Bot 注入已经认证的 request-scoped 身份。
+一体启动时，Bot 固定使用当前启动的 OpenViking Server；`bot.ov_server.server_url` 会被忽略，但显式配置的 `bot.ov_server.api_key` 和其他 Bot 侧 OpenViking 设置会保留。`api_key` 模式下，该 key 必须是 User/Admin key。OpenViking Server 会为每个 Chat 请求向 Bot 注入已经认证的 request-scoped 身份。
 
 #### 2. 一体启动
 
@@ -312,6 +312,7 @@ export OPENVIKING_CONFIG_FILE=/path/to/ov.conf
 | `bot.agents.max_tool_iterations` | `50` | 单轮最大工具迭代数 |
 | `bot.agents.memory_window` | `50` | 本地历史窗口和会话提交消息阈值 |
 | `bot.agents.subagent_enabled` | `true` | 是否提供 `spawn` 工具 |
+| `bot.agents.subagent_max_concurrency` | `4` | 同时运行的后台子 Agent 数量上限 |
 | `bot.gateway.host` | `127.0.0.1` | Gateway 监听地址 |
 | `bot.gateway.port` | `18790` | Gateway 监听端口 |
 | `bot.sandbox.backend` | `direct` | 执行后端 |

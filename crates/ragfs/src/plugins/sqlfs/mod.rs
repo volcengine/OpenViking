@@ -412,12 +412,21 @@ impl FileSystem for SQLFileSystem {
         Ok(changed)
     }
 
-    async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
+    async fn read_dir(
+        &self,
+        path: &str,
+        offset: Option<usize>,
+        limit: Option<usize>,
+        sort_by: Option<crate::core::ListSortBy>,
+        sort_order: Option<crate::core::SortOrder>,
+    ) -> Result<Vec<FileInfo>> {
         let normalized = Self::normalize_path(path);
 
         // Try cache first
         if let Some(files) = self.cache.get(&normalized).await {
-            return Ok(files);
+            return Ok(crate::core::filesystem::apply_read_dir_options(
+                files, offset, limit, sort_by, sort_order,
+            ));
         }
 
         let normalized_for_db = normalized.clone();
@@ -453,7 +462,9 @@ impl FileSystem for SQLFileSystem {
         // Cache the result
         self.cache.put(normalized.clone(), files.clone()).await;
 
-        Ok(files)
+        Ok(crate::core::filesystem::apply_read_dir_options(
+            files, offset, limit, sort_by, sort_order,
+        ))
     }
 
     async fn stat(&self, path: &str) -> Result<FileInfo> {
@@ -799,7 +810,10 @@ mod tests {
         write_file(&fs, "/testdir/file.txt", b"data").await;
 
         // List directory
-        let entries = fs.read_dir("/testdir").await.unwrap();
+        let entries = fs
+            .read_dir("/testdir", None, None, None, None)
+            .await
+            .unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "file.txt");
 
@@ -862,7 +876,7 @@ mod tests {
         write_file(&fs, "/a/b/file.txt", b"nested").await;
 
         // List /a should only show /a/b
-        let entries = fs.read_dir("/a").await.unwrap();
+        let entries = fs.read_dir("/a", None, None, None, None).await.unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "b");
         assert!(entries[0].is_dir);

@@ -28,6 +28,12 @@ class AclAction(str, Enum):
     MANAGE = "manage"
 
 
+class AclMode(str, Enum):
+    NONE = "none"
+    INHERIT = "inherit"
+    RESTRICTED = "restricted"
+
+
 class CreatorAclGrant(str, Enum):
     DIRECT = "direct"
     INHERITED = "inherited"
@@ -40,7 +46,8 @@ _LEVEL_MASK = {
 }
 _MASK_LEVEL = {mask: level for level, mask in _LEVEL_MASK.items()}
 ACL_GRANT_FIELDS = ("acl_direct_grants", "acl_inherited_grants")
-ACL_CONTEXT_FIELDS = frozenset(("acl_enabled", *ACL_GRANT_FIELDS))
+ACL_MODE_FIELD = "acl_mode"
+ACL_CONTEXT_FIELDS = frozenset((ACL_MODE_FIELD, *ACL_GRANT_FIELDS))
 ACL_CREATOR_GRANT_FIELD = "_acl_creator_grant"
 _ACL_OUTPUT_FIELDS = ["uri", *sorted(ACL_CONTEXT_FIELDS)]
 
@@ -92,17 +99,41 @@ class DirectAcl:
 
 @dataclass(frozen=True)
 class EffectiveAcl:
-    enabled: bool
+    mode: AclMode
     direct: DirectAcl
     inherited: DirectAcl
 
+    @classmethod
+    def from_permissions(
+        cls,
+        direct: DirectAcl,
+        inherited: DirectAcl,
+        *,
+        mode: AclMode = AclMode.NONE,
+        parent_mode: AclMode = AclMode.NONE,
+    ) -> "EffectiveAcl":
+        if mode != AclMode.RESTRICTED:
+            # A restricted ancestor can protect descendants even with no grants.
+            mode = (
+                AclMode.INHERIT
+                if parent_mode != AclMode.NONE or not direct.empty or not inherited.empty
+                else AclMode.NONE
+            )
+        return cls(mode, direct, inherited)
+
+    @property
+    def enabled(self) -> bool:
+        return self.mode != AclMode.NONE
+
     @property
     def permissions(self) -> DirectAcl:
+        if self.mode == AclMode.RESTRICTED:
+            return self.direct
         return self.inherited.union(self.direct)
 
     def context_fields(self) -> dict[str, Any]:
         return {
-            "acl_enabled": self.enabled,
+            ACL_MODE_FIELD: self.mode.value,
             **self.direct.context_fields("acl_direct"),
             **self.inherited.context_fields("acl_inherited"),
         }
@@ -215,7 +246,7 @@ def acl_allows(acl: EffectiveAcl, ctx: RequestContext, action: AclAction) -> boo
 
 
 class AclManager:
-    """Stores direct and inherited ACL fields in the context collection."""
+    """Stores ACL state in the context collection."""
 
     def __init__(
         self,
@@ -237,10 +268,15 @@ class AclManager:
     def _effective_from_record(record: Mapping[str, Any]) -> EffectiveAcl:
         direct = DirectAcl.from_context_fields(record, "acl_direct")
         inherited = DirectAcl.from_context_fields(record, "acl_inherited")
+        raw_mode = record.get(ACL_MODE_FIELD, AclMode.NONE.value)
+        if raw_mode is None:
+            raw_mode = AclMode.NONE.value
+        try:
+            mode = AclMode(raw_mode)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(f"Invalid ACL mode: {raw_mode!r}") from exc
         return EffectiveAcl(
-            enabled=bool(record.get("acl_enabled", False))
-            or not direct.empty
-            or not inherited.empty,
+            mode=mode,
             direct=direct,
             inherited=inherited,
         )
@@ -248,7 +284,7 @@ class AclManager:
     @classmethod
     def _effective_from_records(cls, records: Sequence[Mapping[str, Any]]) -> EffectiveAcl:
         if not records:
-            return EffectiveAcl(False, DirectAcl(), DirectAcl())
+            return EffectiveAcl(AclMode.NONE, DirectAcl(), DirectAcl())
         values = {cls._effective_from_record(record) for record in records}
         if len(values) != 1:
             uri = records[0].get("uri", "<unknown>")
@@ -332,20 +368,21 @@ class AclManager:
                 (ancestor for uri in missing for ancestor in paths[uri]), ctx
             )
             ancestor_groups = self._group_by_uri(ancestor_records)
-            direct_map = {
-                uri: self._effective_from_records(records).direct
+            acl_map = {
+                uri: self._effective_from_records(records)
                 for uri, records in ancestor_groups.items()
             }
             for uri in missing:
-                inherited = DirectAcl()
-                for ancestor in paths[uri][:-1]:
-                    inherited = inherited.union(direct_map.get(ancestor, DirectAcl()))
-                direct = direct_map.get(uri, DirectAcl())
-                result[uri] = EffectiveAcl(
-                    enabled=not inherited.empty or not direct.empty,
-                    direct=direct,
-                    inherited=inherited,
-                )
+                effective = EffectiveAcl(AclMode.NONE, DirectAcl(), DirectAcl())
+                for ancestor in paths[uri]:
+                    stored = acl_map.get(ancestor)
+                    effective = EffectiveAcl.from_permissions(
+                        stored.direct if stored is not None else DirectAcl(),
+                        effective.permissions,
+                        mode=stored.mode if stored is not None else AclMode.NONE,
+                        parent_mode=effective.mode,
+                    )
+                result[uri] = effective
         return result
 
     async def resolve(self, uri: str, ctx: RequestContext) -> EffectiveAcl:
@@ -409,7 +446,11 @@ class AclManager:
                         direct = creator_acl
                     else:
                         inherited = inherited.union(creator_acl)
-                effective = EffectiveAcl(not direct.empty or not inherited.empty, direct, inherited)
+                effective = EffectiveAcl.from_permissions(
+                    direct,
+                    inherited,
+                    parent_mode=parent_acl[parent].mode if parent else AclMode.NONE,
+                )
             materialized.append({**record, **effective.context_fields()})
         return materialized
 
@@ -417,20 +458,24 @@ class AclManager:
         self, record: Mapping[str, Any], new_uri: str, ctx: RequestContext
     ) -> dict[str, Any]:
         if not is_acl_uri(new_uri):
-            return EffectiveAcl(False, DirectAcl(), DirectAcl()).context_fields()
+            return EffectiveAcl(AclMode.NONE, DirectAcl(), DirectAcl()).context_fields()
         ancestors = acl_ancestors(new_uri)
         parent = ancestors[-2] if len(ancestors) > 1 else None
-        inherited = (await self.resolve(parent, ctx)).permissions if parent else DirectAcl()
+        parent_acl = (
+            await self.resolve(parent, ctx)
+            if parent
+            else EffectiveAcl(AclMode.NONE, DirectAcl(), DirectAcl())
+        )
+        inherited = parent_acl.permissions
         source_uri = str(record.get("uri") or "")
         direct = (
             DirectAcl.from_context_fields(record, "acl_direct")
             if is_acl_uri(source_uri)
             else DirectAcl()
         )
-        return EffectiveAcl(
-            enabled=not direct.empty or not inherited.empty,
-            direct=direct,
-            inherited=inherited,
+        mode = self._effective_from_record(record).mode if is_acl_uri(source_uri) else AclMode.NONE
+        return EffectiveAcl.from_permissions(
+            direct, inherited, mode=mode, parent_mode=parent_acl.mode
         ).context_fields()
 
     async def _apply_subtree(
@@ -440,32 +485,38 @@ class AclManager:
         ctx: RequestContext,
         *,
         root_direct: DirectAcl | None = None,
+        root_mode: AclMode | None = None,
     ) -> EffectiveAcl:
         grouped = self._group_by_uri(records)
         if root_uri not in grouped:
             raise InvalidArgumentError("ACL target has no context record; index it first")
 
-        direct_map = {
-            uri: self._effective_from_records(items).direct for uri, items in grouped.items()
-        }
+        stored_acl = {uri: self._effective_from_records(items) for uri, items in grouped.items()}
+        direct_map = {uri: effective.direct for uri, effective in stored_acl.items()}
+        mode_map = {uri: effective.mode for uri, effective in stored_acl.items()}
         if root_direct is not None:
             direct_map[root_uri] = root_direct
+        if root_mode is not None:
+            mode_map[root_uri] = root_mode
 
         root_ancestors = acl_ancestors(root_uri)
         parent = root_ancestors[-2] if len(root_ancestors) > 1 else None
-        base = (await self.resolve(parent, ctx)).permissions if parent else DirectAcl()
+        base = (
+            await self.resolve(parent, ctx)
+            if parent
+            else EffectiveAcl(AclMode.NONE, DirectAcl(), DirectAcl())
+        )
         effective_by_uri: dict[str, EffectiveAcl] = {}
         root_depth = len(root_ancestors)
-        for uri in grouped:
+        for uri in sorted(grouped, key=lambda value: len(acl_ancestors(value))):
             ancestors = acl_ancestors(uri)
-            inherited = base
+            parent_effective = base
             for ancestor in ancestors[root_depth - 1 : -1]:
-                inherited = inherited.union(direct_map.get(ancestor, DirectAcl()))
+                parent_effective = effective_by_uri.get(ancestor, parent_effective)
+            inherited = parent_effective.permissions
             direct = direct_map.get(uri, DirectAcl())
-            effective_by_uri[uri] = EffectiveAcl(
-                enabled=not direct.empty or not inherited.empty,
-                direct=direct,
-                inherited=inherited,
+            effective_by_uri[uri] = EffectiveAcl.from_permissions(
+                direct, inherited, mode=mode_map[uri], parent_mode=parent_effective.mode
             )
 
         updated = [
@@ -483,19 +534,27 @@ class AclManager:
         if records:
             await self._apply_subtree(uri, records, ctx)
 
-    async def set_direct(
+    async def set_acl(
         self,
         uri: str,
-        entries: Sequence[AclEntry | Mapping[str, Any]],
+        entries: Sequence[AclEntry | Mapping[str, Any]] | None,
         ctx: RequestContext,
+        *,
+        acl_mode: AclMode | None = None,
     ) -> EffectiveAcl:
         if uri_parts(uri) == ["resources"]:
             raise InvalidArgumentError("ACL cannot be set on viking://resources")
-        proposed = DirectAcl.from_entries(entries)
+        if entries is None and acl_mode is None:
+            raise InvalidArgumentError("entries or acl_mode must be provided")
+        proposed_direct = DirectAcl.from_entries(entries) if entries is not None else None
         old_records = await self._subtree_records(uri, ctx)
         try:
             effective = await self._apply_subtree(
-                uri, old_records, ctx, root_direct=proposed
+                uri,
+                old_records,
+                ctx,
+                root_direct=proposed_direct,
+                root_mode=acl_mode,
             )
         except Exception:
             if old_records:
@@ -507,7 +566,7 @@ class AclManager:
     def to_report(uri: str, effective: EffectiveAcl) -> dict[str, Any]:
         return {
             "uri": uri,
-            "acl_enabled": effective.enabled,
+            ACL_MODE_FIELD: effective.mode.value,
             "direct_entries": [entry.to_dict() for entry in effective.direct.entries],
             "inherited_entries": [entry.to_dict() for entry in effective.inherited.entries],
             "effective_entries": [entry.to_dict() for entry in effective.permissions.entries],

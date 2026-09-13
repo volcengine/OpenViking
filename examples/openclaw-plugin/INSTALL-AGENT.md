@@ -42,6 +42,7 @@ Before setup, determine:
 | --- | --- | --- |
 | OpenViking base URL | Yes | Ask user or read `OPENVIKING_BASE_URL` |
 | API key | Usually | Ask user or read `OPENVIKING_API_KEY` |
+| Memory scope | Optional; default `none` | Ask whether memory is shared, separated by assistant, or separated by sender. Use `sender`; accept legacy `person` as an alias. |
 | Account ID | Only for root API keys | Ask user if setup reports root-key tenant context is needed |
 | User ID | Only for root API keys | Ask user if setup reports root-key tenant context is needed |
 | Slot replacement approval | Only if another context engine owns the slot | Ask user before using `--force-slot` |
@@ -73,6 +74,23 @@ Run setup with `--json` whenever possible:
 openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --json
 ```
 
+Choose memory scope before building that command:
+
+| Value | Concrete layout | Use when |
+| --- | --- | --- |
+| `none` (default; omit the flag) | Shared `viking://user/<user_id>/memories/...`; no concrete peer memory subtree | General case |
+| `assistant` | Assistant-attributed peer memory under `.../peers/<assistant_id>/memories/...` | A human is the OpenViking user and uses multiple OpenClaw assistants |
+| `sender` | Sender-attributed peer memory under `.../peers/<sender_id>/memories/...` | An agent is the OpenViking user and receives messages from multiple humans |
+
+`person` is a legacy alias for `sender`. Accept it from existing config or user input, but write `sender` in new setup commands. OpenViking initializes the managed `peers/` container for every user; `none` only means that no concrete `peers/<peer_id>/memories` subtree is used. Actor-peer recall includes shared user memory plus the current peer memory, and changing the scope does not move existing memories.
+
+Examples:
+
+```bash
+openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --peer-role assistant --json
+openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --peer-role sender --json
+```
+
 Branch on the result:
 
 | JSON result | Meaning | Agent action |
@@ -96,10 +114,10 @@ openclaw openviking setup \
   --json
 ```
 
-Custom agent routing prefix (optional; only when the user explicitly requests a prefix):
+Custom assistant routing prefix (optional; only with `peer_role=assistant` and when the user explicitly requests a prefix):
 
 ```bash
-openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --peer-prefix <PREFIX> --json
+openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --peer-role assistant --peer-prefix <PREFIX> --json
 ```
 
 Slot replacement retry, only after user approval:
@@ -139,6 +157,7 @@ Also inspect:
 | `health.version` | Records server version |
 | `health.compatibility` | Determines whether to warn |
 | `config.hasApiKey` | Confirms whether an API key was saved |
+| `config.peer_role` | Confirms `none`, `assistant`, or canonical `sender` scope |
 | `config.peer_prefix` | Confirms configured peer prefix when present |
 
 ## Environment Detection
@@ -267,7 +286,8 @@ Core fields:
 | `mode` | Legacy compatibility field. Expected value: `remote`. |
 | `baseUrl` | OpenViking HTTP endpoint |
 | `apiKey` | OpenViking API key |
-| `peer_prefix` | Optional; prefix for OpenClaw agent IDs when set. Interactive setup accepts only letters, digits, `_`, and `-`. If unset, the plugin follows session agent IDs. |
+| `peer_role` | `none` (shared user memory), `assistant` (`peers/<assistant_id>`), or `sender` (`peers/<sender_id>`). Legacy `person` is accepted as `sender`. |
+| `peer_prefix` | Optional only with `peer_role=assistant`; prefix for OpenClaw agent IDs. Interactive setup accepts only letters, digits, `_`, and `-`. If unset, the plugin follows session agent IDs. |
 | `accountId` | Required for root API keys |
 | `userId` | Required for root API keys |
 
@@ -329,7 +349,8 @@ Existing config fields are preserved during migration. The new plugin reads old 
 
 - `baseUrl`
 - `apiKey`
-- `peer_prefix`: optional; interactive setup accepts only letters, digits, `_`, and `-`
+- `peer_role`: optional; `none`, `assistant`, or `sender`; legacy `person` is accepted as `sender`
+- `peer_prefix`: optional only with `peer_role=assistant`; interactive setup accepts only letters, digits, `_`, and `-`
 
 ## Backup Path: ov-install
 

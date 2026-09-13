@@ -622,6 +622,38 @@ async def test_read_delegates_to_visible_read(monkeypatch):
     read_visible.assert_awaited_once_with(
         "viking://user/test_user/project/private.md",
         ctx=DEFAULT_CTX,
+        offset=0,
+        limit=-1,
+    )
+
+
+async def test_read_passes_offset_limit_to_visible_read(monkeypatch):
+    read_visible = AsyncMock(return_value="line 3\nline 4\n")
+    monkeypatch.setattr(
+        mcp_endpoint,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(read_visible=read_visible)),
+    )
+    uri = "viking://resources/notes.md"
+
+    result = await mcp_endpoint.mcp.call_tool(
+        "read",
+        {
+            "uris": uri,
+            "offset": 2,
+            "limit": 2,
+        },
+    )
+
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert isinstance(result[0], TextContent)
+    assert result[0].text == "line 3\nline 4\n"
+    read_visible.assert_awaited_once_with(
+        uri,
+        ctx=DEFAULT_CTX,
+        offset=2,
+        limit=2,
     )
 
 
@@ -746,7 +778,11 @@ async def test_read_video_returns_unsupported_hint(monkeypatch):
 
     assert "no standard VideoContent" in result
     assert 'ov get "viking://resources/demo.mp4" "./demo.mp4"' in result
-    stat.assert_awaited_once_with("viking://resources/demo.mp4", ctx=DEFAULT_CTX)
+    stat.assert_awaited_once_with(
+        "viking://resources/demo.mp4",
+        ctx=DEFAULT_CTX,
+        skip_count=True,
+    )
     read_visible.assert_not_awaited()
 
 
@@ -769,7 +805,11 @@ async def test_read_video_nonexistent_uri_preserves_not_found(monkeypatch):
 
     assert "not found" in result.lower()
     assert "VideoContent" not in result
-    stat.assert_awaited_once_with("viking://resources/missing.mp4", ctx=DEFAULT_CTX)
+    stat.assert_awaited_once_with(
+        "viking://resources/missing.mp4",
+        ctx=DEFAULT_CTX,
+        skip_count=True,
+    )
     read_visible.assert_not_awaited()
 
 
@@ -792,7 +832,11 @@ async def test_read_video_directory_uri_preserves_directory_hint(monkeypatch):
 
     assert "URI points to a directory" in result
     assert "VideoContent" not in result
-    stat.assert_awaited_once_with("viking://resources/archive.mp4", ctx=DEFAULT_CTX)
+    stat.assert_awaited_once_with(
+        "viking://resources/archive.mp4",
+        ctx=DEFAULT_CTX,
+        skip_count=True,
+    )
     read_visible.assert_not_awaited()
 
 
@@ -880,7 +924,7 @@ async def test_read_svg_remains_text(monkeypatch):
     uri = "viking://resources/diagram.svg"
 
     assert await read(uri) == "<svg></svg>"
-    read_visible.assert_awaited_once_with(uri, ctx=DEFAULT_CTX)
+    read_visible.assert_awaited_once_with(uri, ctx=DEFAULT_CTX, offset=0, limit=-1)
     read_file_bytes.assert_not_awaited()
 
 

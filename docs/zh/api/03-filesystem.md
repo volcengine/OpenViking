@@ -23,9 +23,13 @@ OpenViking 提供类 Unix 的文件系统操作来管理上下文。
 | abs_limit | int | 否 | 256 | `agent` 输出中的摘要长度限制 |
 | show_all_hidden | bool | 否 | False | 像 `-a` 一样包含隐藏文件 |
 | node_limit | int | 否 | 1000 | 最大返回节点数 |
+| offset | int | 否 | 0 | 跳过的可见节点数 |
 | limit | int | 否 | None | `node_limit` 的别名 |
-| sort_by | str | 否 | None | 在应用 `node_limit` 前，分别按 `name` 或 `mtime` 排序目录组和文件组；目录仍优先 |
+| sort_by | str | 否 | None | 在分页前，分别按 `name` 或 `mtime` 排序目录组和文件组；目录仍优先 |
 | sort_order | str | 否 | `asc` | 排序方向：`asc` 或 `desc` |
+| tags | string[] | 否 | 未设置 | 仅返回同时匹配全部 `k=v` 检索标签的条目 |
+
+`tags` 使用 AND 语义，并在 `offset` 和 `limit` 前应用。带 tags 过滤的响应会返回 `tags`；未过滤时需传 `include_tags=true`（CLI：`-f tags`）才返回它们。`simple=true` 保持仅返回路径。
 
 **条目结构**
 
@@ -37,7 +41,8 @@ OpenViking 提供类 Unix 的文件系统操作来管理上下文。
     "modTime": "2024-01-01T00:00:00Z",  # ISO 时间戳
     "isDir": True,            # 如果是目录则为 True
     "uri": "viking://resources/docs/",  # Viking URI
-    "meta": {}                # 可选元数据
+    "meta": {},               # 可选元数据
+    "tags": ["team=search"] # 显式检索标签；未设置时为空数组
 }
 ```
 
@@ -64,9 +69,11 @@ OpenViking 提供类 Unix 的文件系统操作来管理上下文。
 ```python
 entries = client.ls(
     uri="viking://resources/",
-    node_limit=200,
+    offset=100,
+    limit=100,
     sort_by="mtime",
     sort_order="desc",
+    tags=["team=search", "env=prod"],
 )
 for entry in entries:
     type_str = "dir" if entry['isDir'] else "file"
@@ -76,14 +83,18 @@ for entry in entries:
 **TypeScript SDK**
 
 ```typescript
-const entries = await client.list("viking://resources/docs/", { simple: true });
+const entries = await client.list("viking://resources/docs/", {
+  tags: ["team=search", "env=prod"],
+});
 console.log(entries);
 ```
 
 **Go SDK**
 
 ```go
-entries, err := client.List(ctx, "viking://resources/", nil)
+entries, err := client.List(ctx, "viking://resources/", &openviking.ListOptions{
+    Tags: []string{"team=search", "env=prod"},
+})
 if err != nil {
     return err
 }
@@ -95,7 +106,7 @@ for _, entry := range entries {
 **HTTP API**
 
 ```
-GET /api/v1/fs/ls?uri={uri}&simple={bool}&recursive={bool}
+GET /api/v1/fs/ls?uri={uri}&offset={int}&limit={int}
 ```
 
 ```bash
@@ -110,12 +121,29 @@ curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&simple=t
 # 递归列表
 curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&recursive=true" \
   -H "X-API-Key: your-key"
+
+# 按全部 tags 过滤（重复 query 参数）
+curl -G "http://localhost:1933/api/v1/fs/ls" \
+  -H "X-API-Key: your-key" \
+  --data-urlencode "uri=viking://resources/" \
+  --data-urlencode "tags=team=search" \
+  --data-urlencode "tags=env=prod"
+
+# 不过滤、但在结果中携带 tags
+curl -G "http://localhost:1933/api/v1/fs/ls" \
+  -H "X-API-Key: your-key" \
+  --data-urlencode "uri=viking://resources/" \
+  --data-urlencode "include_tags=true"
 ```
 
 **CLI**
 
 ```bash
-openviking ls viking://resources/ [--simple] [--recursive]
+openviking ls viking://resources/ [--simple] [--recursive] [--tags team=search,env=prod] [-f tags]
+openviking glob "**/*.md" [--uri viking://resources/] [--simple] [--tags team=search,env=prod] [-f tags]
+
+# 在人类可读列表中显示 tags；不能与 --simple 一起使用
+openviking ls viking://resources/ --fields tags
 ```
 
 
@@ -131,7 +159,8 @@ openviking ls viking://resources/ [--simple] [--recursive]
       "mode": 16877,
       "modTime": "2024-01-01T00:00:00Z",
       "isDir": true,
-      "uri": "viking://resources/docs/"
+      "uri": "viking://resources/docs/",
+      "tags": ["team=search"]
     }
   ],
   "time": 0.1
@@ -153,13 +182,23 @@ openviking ls viking://resources/ [--simple] [--recursive]
 | abs_limit | int | 否 | HTTP：256；SDK：128 | `agent` 输出中的摘要长度限制 |
 | show_all_hidden | bool | 否 | False | 像 `-a` 一样包含隐藏文件 |
 | node_limit | int | 否 | 1000 | 最大返回节点数 |
+| offset | int | 否 | 0 | 跳过的可见节点数 |
+| limit | int | 否 | None | `node_limit` 的别名 |
 | level_limit | int | 否 | 3 | 最大目录遍历深度 |
+| tags | string[] | 否 | 未设置 | 仅保留同时匹配全部 `k=v` 检索标签的节点 |
+
+`tags` 使用 AND 语义，并在 `offset` 和 `limit` 前应用。带 tags 过滤的响应会返回 `tags`；未过滤时需传 `include_tags=true` 才返回它们，否则会省略 tags 以避免额外的向量库读取。
 
 
 **Python HTTP SDK**
 
 ```python
-entries = client.tree(uri="viking://resources/")
+entries = client.tree(
+    uri="viking://resources/",
+    offset=100,
+    limit=100,
+    tags=["team=search", "env=prod"],
+)
 for entry in entries:
     type_str = "dir" if entry['isDir'] else "file"
     print(f"{entry['rel_path']} - {type_str}")
@@ -168,14 +207,19 @@ for entry in entries:
 **TypeScript SDK**
 
 ```typescript
-const tree = await client.tree("viking://resources/docs/", { nodeLimit: 100 });
+const tree = await client.tree("viking://resources/docs/", {
+  nodeLimit: 100,
+  tags: ["team=search", "env=prod"],
+});
 console.log(tree);
 ```
 
 **Go SDK**
 
 ```go
-entries, err := client.Tree(ctx, "viking://resources/", nil)
+entries, err := client.Tree(ctx, "viking://resources/", &openviking.TreeOptions{
+    Tags: []string{"team=search", "env=prod"},
+})
 if err != nil {
     return err
 }
@@ -187,18 +231,25 @@ for _, entry := range entries {
 **HTTP API**
 
 ```
-GET /api/v1/fs/tree?uri={uri}
+GET /api/v1/fs/tree?uri={uri}&offset={int}&limit={int}
 ```
 
 ```bash
 curl -X GET "http://localhost:1933/api/v1/fs/tree?uri=viking://resources/" \
   -H "X-API-Key: your-key"
+
+# 仅返回同时包含 team=search 和 env=prod 的节点
+curl -G "http://localhost:1933/api/v1/fs/tree" \
+  -H "X-API-Key: your-key" \
+  --data-urlencode "uri=viking://resources/" \
+  --data-urlencode "tags=team=search" \
+  --data-urlencode "tags=env=prod"
 ```
 
 **CLI**
 
 ```bash
-openviking tree viking://resources/my-project/
+openviking tree viking://resources/my-project/ --fields tags
 ```
 
 
@@ -213,14 +264,16 @@ openviking tree viking://resources/my-project/
       "size": 4096,
       "isDir": true,
       "rel_path": "docs/",
-      "uri": "viking://resources/docs/"
+      "uri": "viking://resources/docs/",
+      "tags": ["team=search"]
     },
     {
       "name": "api.md",
       "size": 1024,
       "isDir": false,
       "rel_path": "docs/api.md",
-      "uri": "viking://resources/docs/api.md"
+      "uri": "viking://resources/docs/api.md",
+      "tags": ["team=search", "env=prod"]
     }
   ],
   "time": 0.1
@@ -608,9 +661,97 @@ openviking rm viking://resources/old.md [--recursive]
 
 ---
 
+### cp()
+
+把文件或目录复制到新的 Viking URI，源内容保持不变。源 URI 下已有的向量记录会同步复制并改写为目标 URI，因此无需重新解析复制内容，也无需重新执行文件级 VLM 或 embedding。
+
+目标父目录必须已经存在。目标文件存在时直接覆盖；目标目录存在时递归合并，保留目标独有文件。`to_uri` 就是实际目标位置，不额外追加源目录名；文件与目录类型冲突时拒绝。复制目录时必须设置 `recursive=true`（CLI 中使用 `-r`）。源、目标不能相同或互为祖先与后代。覆盖时保留目标原有访问权限；新目标继承目标父级权限。
+
+文件使用源、目标双 Exact Lock，目录使用双 Tree Lock，不锁父目录整树。复制失败可能保留部分目标；向量复制失败时尝试清理目标向量和目标数据。旧目标不备份，合并后发生向量失败可能删除整个目标目录，包括其原有内容；该操作不是原子事务。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| from_uri | str | 是 | - | 源 Viking URI |
+| to_uri | str | 是 | - | 目标 Viking URI，必须包含新的文件名或目录名 |
+| recursive | bool | 否 | False | 源为目录时必须设为 `true` |
+
+**HTTP API**
+
+```
+POST /api/v1/fs/cp
+```
+
+```bash
+# 复制单个文件
+curl -X POST http://localhost:1933/api/v1/fs/cp \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "from_uri": "viking://resources/docs/guide.md",
+    "to_uri": "viking://resources/archive/guide-copy.md",
+    "recursive": false
+  }'
+
+# 递归复制目录
+curl -X POST http://localhost:1933/api/v1/fs/cp \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "from_uri": "viking://resources/docs",
+    "to_uri": "viking://resources/docs-backup",
+    "recursive": true
+  }'
+```
+
+**CLI**
+
+```bash
+# 复制单个文件
+ov cp viking://resources/docs/guide.md viking://resources/archive/guide-copy.md
+
+# 递归复制目录
+ov cp -r viking://resources/docs viking://resources/docs-backup
+```
+
+**响应**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "operation_id": "61ec2a80bf5f46a28aa3497fbdcb56dd",
+    "operation": "copy",
+    "from": "viking://resources/docs/guide.md",
+    "to": "viking://resources/archive/guide-copy.md",
+    "recursive": false,
+    "phase": "completed",
+    "files_created": 1,
+    "vectors": {
+      "scanned": 3,
+      "written": 3,
+      "deleted": 0,
+      "restored": 0,
+      "batches": 1
+    },
+    "semantic_root_uri": "viking://resources/archive",
+    "semantic_status": "queued"
+  }
+}
+```
+
+`semantic_status: "queued"` 表示复制已经提交，目标父目录的 overview 和 abstract 将根据目标目录中已有的摘要异步重建，接口不会等待刷新完成。若语义刷新入队失败，响应可能包含 `semantic_status: "failed"` 和 `semantic_error`；已经完成的文件和向量复制不会因此回滚。
+
+常见错误包括：源或目标父目录不存在时返回 `NOT_FOUND`；路径锁繁忙时返回 `CONFLICT`；复制目录但未设置 `recursive=true` 时返回 `FAILED_PRECONDITION`；源和目标关系非法或类型冲突时返回 `INVALID_ARGUMENT`。
+
+---
+
 ### mv()
 
-移动文件或目录。
+移动文件或目录。目标文件存在时覆盖，目标目录存在时递归合并并保留目标独有内容；`to_uri` 为实际目标位置，不追加源目录名。文件与目录类型冲突、源目标相同或互相包含时拒绝。
+
+文件使用双 Exact Lock，目录使用源、目标双 Tree Lock，不锁父目录整树。执行顺序为复制目标、迁移向量、删除源。复制失败不统一清理部分目标；向量迁移或 ACL 更新失败时尝试恢复源向量并删除目标；最后删除源失败时保留目标与残余源，不重建源。旧目标不备份，合并目标可能在回滚清理中被整体删除，因此不保证失败后恢复原状。
 
 **参数**
 

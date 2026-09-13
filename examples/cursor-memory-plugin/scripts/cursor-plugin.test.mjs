@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -135,13 +135,18 @@ test("Cursor injects recall before the request and Stop captures transcript delt
     OPENVIKING_MEMORY_ENABLED: "1",
   };
   try {
-    const base = { conversation_id: "cursor-test", workspace_roots: ["/workspace"] };
+    // The peer comes from the repository the workspace root sits in; outside
+    // one the plugin deliberately sends no peer at all.
+    const workspace = join(root, "cursor-project");
+    mkdirSync(join(workspace, ".git"), { recursive: true });
+    writeFileSync(join(workspace, ".git", "config"), '[remote "origin"]\n\turl = git@github.com:acme/cursor-project.git\n');
+    const base = { conversation_id: "cursor-test", workspace_roots: [workspace] };
     const injections = await Promise.all([
       runHook("beforeSubmitPrompt", { ...base, prompt: "what did we decide?", generation_id: "prompt-1" }, env),
       runHook("beforeSubmitPrompt", { ...base, prompt: "what did we decide?", generation_id: "prompt-1" }, env),
     ]);
     assert.equal(injections.filter((item) => /remembered context/.test(item.additional_context || "")).length, 1);
-    assert.deepEqual(actorPeers, ["-workspace"]);
+    assert.deepEqual(actorPeers, ["github.com-acme-cursor-project"]);
 
     const transcript = join(root, "cursor-test.jsonl");
     writeFileSync(transcript, [

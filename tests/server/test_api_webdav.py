@@ -6,7 +6,9 @@
 import xml.etree.ElementTree as ET
 
 import httpx
+from starlette.requests import Request
 
+from openviking.server.routers import webdav as webdav_router
 from openviking.server.routers.webdav import _ensure_exposed_path, _exposed_child_entries
 from openviking_cli.exceptions import NotFoundError
 
@@ -20,6 +22,40 @@ def _webdav_path_from_uri(uri: str) -> str:
     prefix = "viking://resources"
     assert uri.startswith(prefix)
     return uri[len(prefix) :].lstrip("/")
+
+
+async def test_webdav_get_content_length_uses_delivered_body_size(monkeypatch):
+    class FakeFS:
+        async def stat(self, uri: str, ctx=None):
+            assert uri == "viking://resources/scratch/notes.md"
+            return {
+                "isDir": False,
+                "name": "notes.md",
+                "size": len(b"hello") + 100,
+                "modTime": "",
+            }
+
+        async def read_file_bytes(self, uri: str, ctx=None):
+            assert uri == "viking://resources/scratch/notes.md"
+            return b"hello"
+
+    class FakeService:
+        fs = FakeFS()
+
+    monkeypatch.setattr(webdav_router, "get_service", lambda: FakeService())
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/webdav/resources/scratch/notes.md",
+            "headers": [],
+        }
+    )
+
+    resp = await webdav_router.get_or_head(request, "scratch/notes.md", None)
+
+    assert resp.body == b"hello"
+    assert resp.headers["content-length"] == "5"
 
 
 async def test_webdav_options_advertises_dav(client: httpx.AsyncClient):
@@ -112,6 +148,7 @@ async def test_webdav_put_create_get_and_replace_text_file(client: httpx.AsyncCl
     get_resp = await client.get("/webdav/resources/scratch/notes.md")
     assert get_resp.status_code == 200
     assert get_resp.text == "# Notes\n\nhello"
+    assert get_resp.headers["content-length"] == str(len(get_resp.content))
 
     replace_resp = await client.request(
         "PUT",
@@ -123,6 +160,7 @@ async def test_webdav_put_create_get_and_replace_text_file(client: httpx.AsyncCl
     get_resp = await client.get("/webdav/resources/scratch/notes.md")
     assert get_resp.status_code == 200
     assert get_resp.text == "# Notes\n\nupdated"
+    assert get_resp.headers["content-length"] == str(len(get_resp.content))
 
 
 async def test_webdav_put_replace_reuses_direct_write_path(

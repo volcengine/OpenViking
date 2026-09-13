@@ -186,6 +186,15 @@ async def test_init_context_collection_writes_embedding_metadata(monkeypatch):
 @pytest.mark.asyncio
 async def test_init_context_collection_backfills_metadata_for_empty_legacy_collection(monkeypatch):
     updates = []
+    schema_updates = []
+    config = _DummyConfig(_DummyEmbedder(), backend="local")
+    existing_schema = CollectionSchemas.context_collection("context", config.embedding.dimension)
+    existing_fields = [
+        field for field in existing_schema["Fields"] if field["FieldName"] != "tags"
+    ]
+    existing_scalar_index = [
+        field for field in existing_schema["ScalarIndex"] if field != "tags"
+    ]
 
     class _FakeStorage:
         async def create_collection(self, name, schema):
@@ -193,7 +202,11 @@ async def test_init_context_collection_backfills_metadata_for_empty_legacy_colle
             return False
 
         async def get_collection_meta(self):
-            return {"Description": "Unified context collection"}
+            return {
+                "Description": "Unified context collection",
+                "Fields": existing_fields,
+                "ScalarIndex": existing_scalar_index,
+            }
 
         async def count(self):
             return 0
@@ -202,7 +215,9 @@ async def test_init_context_collection_backfills_metadata_for_empty_legacy_colle
             updates.append(description)
             return True
 
-    config = _DummyConfig(_DummyEmbedder())
+        async def update_collection_schema(self, fields, scalar_index):
+            schema_updates.append((fields, scalar_index))
+
     monkeypatch.setattr(
         "openviking_cli.utils.config.get_openviking_config",
         lambda: config,
@@ -213,6 +228,12 @@ async def test_init_context_collection_backfills_metadata_for_empty_legacy_colle
     assert created is False
     assert len(updates) == 1
     assert '"provider": "local"' in updates[0]
+    assert len(schema_updates) == 1
+    fields, scalar_index = schema_updates[0]
+    assert {field["FieldName"] for field in fields} - {
+        field["FieldName"] for field in existing_fields
+    } == {"tags"}
+    assert set(scalar_index) - set(existing_scalar_index) == {"tags"}
 
 
 @pytest.mark.asyncio
@@ -704,13 +725,24 @@ async def test_embedding_handler_settles_request_wait_by_message_id(monkeypatch)
     assert completed == [("request-1", queue_data["id"], {"vector_written": True})]
 
 
-def test_context_collection_excludes_parent_uri():
+def test_context_collection_uses_acl_mode_and_excludes_parent_uri():
     schema = CollectionSchemas.context_collection("ctx", 8)
 
     field_names = [field["FieldName"] for field in schema["Fields"]]
+    acl_mode = next(field for field in schema["Fields"] if field["FieldName"] == "acl_mode")
 
+    assert acl_mode == {
+        "FieldName": "acl_mode",
+        "FieldType": "string",
+        "DefaultValue": "none",
+    }
+    assert "acl_mode" in schema["ScalarIndex"]
+    assert "acl_enabled" not in field_names
+    assert "acl_enabled" not in schema["ScalarIndex"]
     assert "parent_uri" not in field_names
     assert "parent_uri" not in schema["ScalarIndex"]
+    assert "acl_restricted" not in field_names
+    assert "acl_restricted" not in schema["ScalarIndex"]
 
 
 def test_context_collection_signature_has_no_include_parent_uri():

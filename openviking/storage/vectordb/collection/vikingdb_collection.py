@@ -169,7 +169,7 @@ class VikingDBCollection(ICollection):
     def update_index(
         self,
         index_name: str,
-        scalar_index: Optional[Dict[str, Any]] = None,
+        scalar_index: Optional[List[str]] = None,
         description: Optional[str] = None,
     ):
         raise NotImplementedError("index should be managed manually")

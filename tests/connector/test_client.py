@@ -75,6 +75,23 @@ async def test_submit_doc_add_sends_controlled_payload_and_auth_headers():
 
 
 @pytest.mark.asyncio
+async def test_submit_doc_add_forwards_external_connector_stream_states():
+    _FakeAsyncClient.response_payload = {"code": 0, "data": {"task_key": "connector-1"}}
+    client = ConnectorClient("https://connector/doc/add", "https://tracker/task/info", "acct")
+    stream_states = {"documents": {"cursor": {"sync_checkpoint": "2026-09-01T00:00:00+00:00"}}}
+
+    await client.submit_doc_add(
+        add_type="tos",
+        api_key="secret",
+        tos_path="bucket/prefix",
+        to="viking://resources/imports",
+        stream_states=stream_states,
+    )
+
+    assert _FakeAsyncClient.calls[0]["json"]["stream_states"] == stream_states
+
+
+@pytest.mark.asyncio
 async def test_submit_doc_add_carries_non_tos_source_in_param_config():
     _FakeAsyncClient.response_payload = {"code": 0, "data": {"task_key": "connector-1"}}
     client = ConnectorClient("https://connector/doc/add", "https://tracker/task/info", "acct")
@@ -144,15 +161,23 @@ async def test_submit_doc_add_keeps_credentials_out_of_param_config():
 
 @pytest.mark.asyncio
 async def test_get_task_info_unwraps_task_object():
+    stream_states = {"documents": {"cursor": {"sync_checkpoint": "2026-09-01T00:00:00Z"}}}
     _FakeAsyncClient.response_payload = {
         "code": 0,
-        "data": {"Task": {"TaskKey": "connector-1", "Status": "running"}},
+        "data": {
+            "Task": {"TaskKey": "connector-1", "Status": "running"},
+            "StreamStates": stream_states,
+        },
     }
     client = ConnectorClient("https://connector/doc/add", "https://tracker/task/info")
 
     result = await client.get_task_info("connector-1", "Bearer secret")
 
-    assert result == {"TaskKey": "connector-1", "Status": "running"}
+    assert result == {
+        "TaskKey": "connector-1",
+        "Status": "running",
+        "StreamStates": stream_states,
+    }
     assert _FakeAsyncClient.calls[0]["json"] == {"TaskKey": "connector-1"}
     assert _FakeAsyncClient.calls[0]["headers"] == {"Authorization": "Bearer secret"}
 

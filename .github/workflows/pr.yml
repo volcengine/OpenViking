@@ -38,20 +38,25 @@ jobs:
             examples/codex-memory-plugin/scripts/capture-utils.test.mjs \
             examples/codex-memory-plugin/scripts/marketplace.test.mjs \
             examples/codex-memory-plugin/scripts/ov-credentials.test.mjs \
+            examples/codex-memory-plugin/scripts/ov-memory-doctor.test.mjs \
             examples/codex-memory-plugin/scripts/recall-compressor-profile.test.mjs \
             examples/codex-memory-plugin/scripts/auto-recall.test.mjs \
             examples/codex-memory-plugin/scripts/session-start-commit.test.mjs \
             examples/codex-memory-plugin/scripts/session-end.test.mjs \
             examples/codex-memory-plugin/scripts/pre-compact-capture.test.mjs \
             examples/codex-memory-plugin/scripts/session-state.test.mjs \
+            examples/codex-memory-plugin/scripts/config.test.mjs \
             examples/claude-code-memory-plugin/scripts/auto-capture.test.mjs \
+            examples/claude-code-memory-plugin/scripts/auto-recall-filters.test.mjs \
             examples/claude-code-memory-plugin/scripts/config.test.mjs \
             examples/claude-code-memory-plugin/scripts/marketplace.test.mjs \
             examples/claude-code-memory-plugin/scripts/skill-experience.test.mjs \
             examples/claude-code-memory-plugin/scripts/uri-guard.test.mjs \
             examples/claude-code-memory-plugin/scripts/lib/pending-queue.test.mjs \
+            examples/claude-code-memory-plugin/scripts/lib/recall-core-timeout.test.mjs \
             examples/cursor-memory-plugin/scripts/cursor-plugin.test.mjs \
             examples/trae-memory-hooks/scripts/trae-hooks.test.mjs \
+            examples/trae-cli-memory-hooks/scripts/trae-cli-hooks.test.mjs \
             examples/zcode-memory-plugin/scripts/zcode-async.test.mjs \
             examples/zcode-memory-plugin/scripts/zcode-capture.test.mjs \
             examples/zcode-memory-plugin/scripts/zcode-hooks.test.mjs \
@@ -60,16 +65,26 @@ jobs:
             examples/memory-plugin-shared/batch-send.test.mjs \
             examples/memory-plugin-shared/doctor-core.test.mjs \
             examples/memory-plugin-shared/install-agent-hooks.test.mjs \
+            examples/memory-plugin-shared/install-lib-closure.test.mjs \
             examples/memory-plugin-shared/install-opencode-jsonc.test.mjs \
             examples/memory-plugin-shared/install-tui.test.mjs \
             examples/memory-plugin-shared/release-marketplace.test.mjs \
             examples/memory-plugin-shared/setup-wizard.test.mjs \
             examples/memory-plugin-shared/sync.test.mjs \
             examples/memory-plugin-shared/mcp-proxy-config.test.mjs \
+            examples/memory-plugin-shared/mcp-proxy-core.test.mjs \
             examples/memory-plugin-shared/recall-compress-core.test.mjs \
             examples/memory-plugin-shared/recall-core.test.mjs \
+            examples/memory-plugin-shared/recall-session-wiring.test.mjs \
             examples/memory-plugin-shared/workspace-peer.test.mjs \
+            examples/memory-plugin-shared/peer-guidance.test.mjs \
+            examples/memory-plugin-shared/workspace-identity.test.mjs \
+            examples/memory-plugin-shared/workspace-config.test.mjs \
+            examples/memory-plugin-shared/workspace-registry.test.mjs \
+            examples/memory-plugin-shared/plugin-known-keys.test.mjs \
             examples/memory-plugin-shared/uri-guard.test.mjs \
+            examples/memory-plugin-shared/capture-utils.test.mjs \
+            examples/memory-plugin-shared/input-filters.test.mjs \
             examples/dsh-memory-plugin/*.test.mjs \
             examples/opencode-plugin/tests/*.test.mjs \
             examples/opencode-plugin/servers/mcp-proxy.test.mjs \
@@ -85,12 +100,43 @@ jobs:
           bash -n examples/codex-memory-plugin/setup-helper/install.sh
           bash -n examples/codex-memory-plugin/setup-helper/tos-install.sh
 
+  openclaw-tests:
+    needs: check-deps
+    if: ${{ needs.check-deps.outputs.openclaw_changed == 'true' }}
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: examples/openclaw-plugin
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install plugin dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Run the OpenClaw plugin Vitest suite
+        # The suite is otherwise never exercised by CI, so regressions in
+        # examples/openclaw-plugin only surface in user installs.
+        # tests/ut/architecture-boundaries.test.ts is excluded until its 4
+        # pre-existing main failures are resolved (see #4720 / #4731 / #4732);
+        # every other file passes on main (44 files / 690 tests).
+        # The node_modules exclude restores vitest's default filters, which a
+        # custom --exclude replaces.
+        run: >
+          npm test --
+          --exclude "tests/ut/architecture-boundaries.test.ts"
+          --exclude "**/node_modules/**"
+
   check-deps:
     runs-on: ubuntu-24.04
     outputs:
       deps_changed: ${{ steps.check.outputs.deps_changed }}
       cuvs_changed: ${{ steps.check.outputs.cuvs_changed }}
       langchain_changed: ${{ steps.check.outputs.langchain_changed }}
+      openclaw_changed: ${{ steps.check.outputs.openclaw_changed }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -102,7 +148,7 @@ jobs:
           git fetch origin ${{ github.base_ref }}
           
           # Define grep pattern for dependency files
-          PATTERN="pyproject\.toml|setup\.py|uv\.lock|src/CMakeLists\.txt|third_party/|\.github/workflows/_build\.yml"
+          PATTERN="pyproject\.toml|setup\.py|uv\.lock|src/CMakeLists\.txt|third_party/|crates/|\.github/workflows/_build\.yml"
           
           # Check for changes
           CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep -E "$PATTERN" || true)
@@ -118,7 +164,7 @@ jobs:
 
           # Run the CPU-only cuVS regression suite when the optional backend,
           # its native filter bridge, or its focused tests are modified.
-          CUVS_PATTERN="openviking/storage/vectordb/|openviking/storage/vectordb_adapters/(factory|local_adapter)\.py|openviking_cli/utils/config/vectordb_config\.py|src/|tests/(vectordb/test_cuvs_|benchmark/test_cuvs_)|benchmark/cuvs/|examples/cuvs_smoke\.py|\.github/workflows/_test_lite\.yml"
+          CUVS_PATTERN="crates/|openviking/storage/vectordb/|openviking/storage/vectordb_adapters/(factory|local_adapter)\.py|openviking_cli/utils/config/vectordb_config\.py|src/|tests/(vectordb/test_cuvs_|benchmark/test_cuvs_)|benchmark/cuvs/|examples/cuvs_smoke\.py|\.github/workflows/_test_lite\.yml"
           CUVS_CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep -E "$CUVS_PATTERN" || true)
 
           if [ -n "$CUVS_CHANGED_FILES" ]; then
@@ -140,6 +186,18 @@ jobs:
           else
             echo "No LangChain integration changes detected."
             echo "langchain_changed=false" >> $GITHUB_OUTPUT
+          fi
+
+          OPENCLAW_PATTERN="examples/openclaw-plugin/|\.github/workflows/pr\.yml"
+          OPENCLAW_CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep -E "$OPENCLAW_PATTERN" || true)
+
+          if [ -n "$OPENCLAW_CHANGED_FILES" ]; then
+            echo "OpenClaw plugin changes detected:"
+            echo "$OPENCLAW_CHANGED_FILES"
+            echo "openclaw_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "No OpenClaw plugin changes detected."
+            echo "openclaw_changed=false" >> $GITHUB_OUTPUT
           fi
 
   build:

@@ -4,12 +4,12 @@ use super::envelope::{CacheEnvelope, CacheObjectKind, GenerationSnapshot};
 use super::{CacheMetrics, CachePolicy, CacheTraversalMode};
 use crate::cache_runtime::{CacheError, CacheResult, CacheRuntime, SetOptions, SetResult};
 use crate::core::filesystem::{
-    compile_grep_regex, is_excluded_path, normalize_prefix_path, relative_depth,
-    relative_match_file, sort_directory_entries,
+    apply_read_dir_options, compile_grep_regex, is_excluded_path, normalize_prefix_path,
+    paginate_entries, relative_depth, relative_match_file,
 };
 use crate::core::{
-    FileInfo, FileSystem, GlobPage, GrepMatch, GrepResult, MultiWriteWrappedFS, Result, TreeEntry,
-    WriteFlag,
+    FileInfo, FileSystem, GlobPage, GrepMatch, GrepResult, ListSortBy, MultiWriteWrappedFS, Result,
+    SortOrder, TreeEntry, WriteFlag,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -124,6 +124,9 @@ impl CachedFileSystem {
         show_hidden: bool,
         node_limit: Option<usize>,
         level_limit: Option<usize>,
+        offset: Option<usize>,
+        sort_by: Option<ListSortBy>,
+        sort_order: Option<SortOrder>,
     ) -> Result<Vec<TreeEntry>> {
         enum TreeTask {
             VisitDir(String),
@@ -133,9 +136,10 @@ impl CachedFileSystem {
         let base_path = normalize_prefix_path(path);
         let mut result = Vec::new();
         let mut stack = vec![TreeTask::VisitDir(base_path.clone())];
+        let traversal_limit = node_limit.map(|limit| offset.unwrap_or(0).saturating_add(limit));
 
         while let Some(task) = stack.pop() {
-            if node_limit.is_some_and(|limit| result.len() >= limit) {
+            if traversal_limit.is_some_and(|limit| result.len() >= limit) {
                 break;
             }
 
@@ -149,8 +153,9 @@ impl CachedFileSystem {
                         }
                     }
 
-                    let mut entries = self.read_dir(&current_path).await?;
-                    sort_directory_entries(&mut entries);
+                    let entries = self
+                        .read_dir(&current_path, None, None, sort_by, sort_order)
+                        .await?;
                     for entry in entries.into_iter().rev() {
                         let is_hidden_file = !entry.is_dir && entry.name.starts_with('.');
                         if is_hidden_file && !show_hidden {
@@ -180,7 +185,7 @@ impl CachedFileSystem {
             }
         }
 
-        Ok(result)
+        Ok(paginate_entries(result, offset, node_limit))
     }
 
     async fn grep_via_cache(
@@ -846,13 +851,13 @@ impl CachedFileSystem {
     ) -> Result<Vec<FileInfo>> {
         if !self.policy.cache_directory(path) || self.is_runtime_bypassed(path).await {
             self.metrics.policy_bypass();
-            return self.backend.read_dir(path).await;
+            return self.backend.read_dir(path, None, None, None, None).await;
         }
 
         let _operation_guard = self.operation_lock.read().await;
         if self.is_runtime_bypassed(path).await {
             self.metrics.policy_bypass();
-            return self.backend.read_dir(path).await;
+            return self.backend.read_dir(path, None, None, None, None).await;
         }
 
         let normalized = normalize_path(path);
@@ -890,7 +895,7 @@ impl CachedFileSystem {
             }
         }
 
-        let entries = self.backend.read_dir(path).await;
+        let entries = self.backend.read_dir(path, None, None, None, None).await;
         if let Ok(value) = &entries {
             self.metrics.backend_fallback(0);
             self.fill_directory(&key, &normalized, value).await;
@@ -1082,22 +1087,37 @@ impl FileSystem for CachedFileSystem {
         Ok(written)
     }
 
-    async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
+    async fn read_dir(
+        &self,
+        path: &str,
+        offset: Option<usize>,
+        limit: Option<usize>,
+        sort_by: Option<ListSortBy>,
+        sort_order: Option<SortOrder>,
+    ) -> Result<Vec<FileInfo>> {
         if !self.policy.cache_directory(path) || self.is_runtime_bypassed(path).await {
             self.metrics.policy_bypass();
-            return self.backend.read_dir(path).await;
+            return self
+                .backend
+                .read_dir(path, offset, limit, sort_by, sort_order)
+                .await;
         }
 
         let _operation_guard = self.operation_lock.read().await;
         if self.is_runtime_bypassed(path).await {
             self.metrics.policy_bypass();
-            return self.backend.read_dir(path).await;
+            return self
+                .backend
+                .read_dir(path, offset, limit, sort_by, sort_order)
+                .await;
         }
 
         let normalized = normalize_path(path);
         let key = self.directory_key(&normalized);
         if let Some(entries) = self.probe_directory(&key, &normalized, true).await {
-            return Ok(entries);
+            return Ok(apply_read_dir_options(
+                entries, offset, limit, sort_by, sort_order,
+            ));
         }
         self.metrics.read_dir_miss();
 
@@ -1114,18 +1134,20 @@ impl FileSystem for CachedFileSystem {
                 self.metrics.inflight_backend_saved();
                 drop(inflight_guard);
                 self.release_inflight(&key, &inflight).await;
-                return Ok(entries);
+                return Ok(apply_read_dir_options(
+                    entries, offset, limit, sort_by, sort_order,
+                ));
             }
         }
 
-        let entries = self.backend.read_dir(path).await;
+        let entries = self.backend.read_dir(path, None, None, None, None).await;
         if let Ok(value) = &entries {
             self.metrics.backend_fallback(0);
             self.fill_directory(&key, &normalized, value).await;
         }
         drop(inflight_guard);
         self.release_inflight(&key, &inflight).await;
-        entries
+        entries.map(|entries| apply_read_dir_options(entries, offset, limit, sort_by, sort_order))
     }
 
     async fn stat(&self, path: &str) -> Result<FileInfo> {
@@ -1230,17 +1252,36 @@ impl FileSystem for CachedFileSystem {
         show_hidden: bool,
         node_limit: Option<usize>,
         level_limit: Option<usize>,
+        offset: Option<usize>,
+        sort_by: Option<ListSortBy>,
+        sort_order: Option<SortOrder>,
     ) -> Result<Vec<TreeEntry>> {
         if self.policy.traversal_mode() == CacheTraversalMode::CachedTraversal
             && !self.wraps_multiwrite()
         {
             return self
-                .tree_directory_via_cache(path, show_hidden, node_limit, level_limit)
+                .tree_directory_via_cache(
+                    path,
+                    show_hidden,
+                    node_limit,
+                    level_limit,
+                    offset,
+                    sort_by,
+                    sort_order,
+                )
                 .await;
         }
 
         self.backend
-            .tree_directory(path, show_hidden, node_limit, level_limit)
+            .tree_directory(
+                path,
+                show_hidden,
+                node_limit,
+                level_limit,
+                offset,
+                sort_by,
+                sort_order,
+            )
             .await
     }
 

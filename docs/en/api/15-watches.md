@@ -151,6 +151,9 @@ Listing tasks returns:
         "processor_kwargs": {},
         "created_at": "2026-07-24T10:00:00",
         "last_execution_time": null,
+        "last_task_id": null,
+        "last_status": null,
+        "last_error": null,
         "next_execution_time": "2026-07-24T10:30:00",
         "is_active": true,
         "account_id": "default",
@@ -166,6 +169,12 @@ Listing tasks returns:
 `source_type` is optional provenance metadata. Explicit Connector `add_type` values take
 precedence (for example, `tos` or `feishu_project`); native imports report `feishu`, `git`,
 `url`, or `local`. Legacy or unclassified watches return `null`.
+
+Before the first run, `last_task_id`, `last_status`, and `last_error` are `null`. After a run,
+`last_task_id` points to the corresponding ingestion task (and can remain `null` for preflight
+failures), while `last_status` is `completed`, `failed`, or `cancelled`. On failure,
+`last_error` contains a credential-redacted error limited to 500 characters. Use
+`ov task status <last_task_id>` for the ingestion task details.
 
 Getting one task and a successful update return the same task object directly in `result`. Delete and trigger return:
 
@@ -191,7 +200,9 @@ Getting one task and a successful update return the same task object directly in
 }
 ```
 
-`scheduled=true` only confirms that background execution was scheduled. It does not mean re-ingestion has completed; read the task again and inspect `last_execution_time`.
+`scheduled=true` only confirms that background execution was scheduled. It does not mean
+re-ingestion has completed; read the task again until `last_execution_time` changes, then inspect
+`last_status` and `last_error`.
 
 **MCP** (agent control plane — minimum closure only)
 

@@ -328,6 +328,14 @@ class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 1933
     workers: int = 1
+    executor_threads: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Maximum number of threads in each server process's default asyncio "
+            "executor. Zero keeps Python's default sizing policy."
+        ),
+    )
     # Seconds an idle HTTP keep-alive connection is kept open before the server
     # closes it. Defaults to 5 to match uvicorn's built-in default and preserve
     # the existing service behavior. Raise it above the idle-connection lifetime
@@ -353,6 +361,9 @@ class ServerConfig(BaseModel):
     api_key_watch_enabled: bool = False
     # Poll interval; each check only stats registry files and reads fully on change.
     api_key_watch_interval_seconds: float = 30.0
+    # Trusted-mode identity registration is batched in memory; 0 disables it.
+    trusted_identity_flush_interval_seconds: float = Field(300.0, ge=0)
+    trusted_identity_pending_max_size: int = Field(10_000, gt=0)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     usage_reporter: UsageReporterConfig = Field(default_factory=UsageReporterConfig)
     # Public-facing base URL emitted in MCP-issued upload instructions. See
@@ -459,7 +470,7 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
     if server_data is None:
         server_data = {}
     if not isinstance(server_data, dict):
-        raise ValueError("Invalid server config: 'server' section must be an object")
+        raise ValueError(f"Invalid server config in {path}: 'server' section must be an object")
 
     # Convert auth_mode string — built-in enums are converted to their string
     # value; custom modes are kept as-is for plugin extensibility.

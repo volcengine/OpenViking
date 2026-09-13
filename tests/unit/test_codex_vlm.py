@@ -4,12 +4,15 @@
 import base64
 import json
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
 from openviking.models.vlm.backends import codex_auth
 from openviking.models.vlm.backends.codex_auth import resolve_codex_runtime_credentials
+from openviking.models.vlm.backends.codex_responses_adapter import (
+    _convert_message_for_responses,
+)
 from openviking.models.vlm.backends.codex_vlm import CodexVLM
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
@@ -299,6 +302,126 @@ def test_codex_auth_bootstraps_into_openviking_store(tmp_path, monkeypatch):
     assert persisted["imported_from"] == str(bootstrap_path)
 
 
+def test_codex_auth_resyncs_external_tokens_before_cached_token_expires(tmp_path, monkeypatch):
+    ov_auth_path = tmp_path / "codex_auth.json"
+    bootstrap_path = tmp_path / "codex_cli_auth.json"
+    old_access_token = _make_jwt_token({"exp": 9999999999, "version": "old"})
+    new_access_token = _make_jwt_token({"exp": 9999999999, "version": "new"})
+    ov_auth_path.write_text(
+        json.dumps(
+            {
+                "auth_owner": "external",
+                "imported_from": str(bootstrap_path),
+                "tokens": {
+                    "access_token": old_access_token,
+                    "refresh_token": "old-refresh",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    bootstrap_path.write_text(
+        json.dumps(
+            {
+                "tokens": {
+                    "access_token": new_access_token,
+                    "refresh_token": "new-refresh",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENVIKING_CODEX_AUTH_PATH", str(ov_auth_path))
+
+    creds = resolve_codex_runtime_credentials()
+
+    assert creds["api_key"] == new_access_token
+    persisted = json.loads(ov_auth_path.read_text(encoding="utf-8"))
+    assert persisted["tokens"]["refresh_token"] == "new-refresh"
+
+
+def test_codex_auth_force_refresh_resyncs_external_credentials_once(tmp_path, monkeypatch):
+    ov_auth_path = tmp_path / "codex_auth.json"
+    bootstrap_path = tmp_path / "codex_cli_auth.json"
+    old_access_token = _make_jwt_token({"exp": 9999999999, "version": "old"})
+    new_access_token = _make_jwt_token({"exp": 9999999999, "version": "new"})
+    payload = {"tokens": {"access_token": new_access_token, "refresh_token": "new-refresh"}}
+    bootstrap_path.write_text(json.dumps(payload), encoding="utf-8")
+    ov_auth_path.write_text(
+        json.dumps(
+            {
+                "tokens": {
+                    "access_token": old_access_token,
+                    "refresh_token": "old-refresh",
+                },
+                "auth_owner": "external",
+                "imported_from": str(bootstrap_path),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENVIKING_CODEX_AUTH_PATH", str(ov_auth_path))
+
+    with patch.object(
+        codex_auth,
+        "_write_tokens_to_ov_store",
+        wraps=codex_auth._write_tokens_to_ov_store,
+    ) as mock_write:
+        creds = resolve_codex_runtime_credentials(force_refresh=True)
+
+    assert creds["api_key"] == new_access_token
+    assert creds["auth_owner"] == "external"
+    assert mock_write.call_count == 1
+
+
+def test_codex_auth_parse_failure_preserves_external_owner(tmp_path, monkeypatch):
+    ov_auth_path = tmp_path / "codex_auth.json"
+    bootstrap_path = tmp_path / "codex_cli_auth.json"
+    old_access_token = _make_jwt_token({"exp": 9999999999, "version": "old"})
+    new_access_token = _make_jwt_token({"exp": 9999999999, "version": "new"})
+    ov_payload = {
+        "tokens": {
+            "access_token": old_access_token,
+            "refresh_token": "old-refresh",
+        },
+        "auth_owner": "external",
+        "imported_from": str(bootstrap_path),
+    }
+    ov_auth_path.write_text(json.dumps(ov_payload), encoding="utf-8")
+    bootstrap_path.write_text("{invalid", encoding="utf-8")
+    monkeypatch.setenv("OPENVIKING_CODEX_AUTH_PATH", str(ov_auth_path))
+
+    with patch.object(codex_auth, "refresh_codex_oauth") as mock_refresh:
+        with pytest.raises(codex_auth.CodexAuthError, match="exists but could not be read"):
+            resolve_codex_runtime_credentials(force_refresh=True)
+
+    persisted = json.loads(ov_auth_path.read_text(encoding="utf-8"))
+    assert persisted["auth_owner"] == "external"
+    assert persisted["imported_from"] == str(bootstrap_path)
+    assert persisted["tokens"]["refresh_token"] == "old-refresh"
+    mock_refresh.assert_not_called()
+
+    bootstrap_path.write_text(
+        json.dumps(
+            {
+                "tokens": {
+                    "access_token": new_access_token,
+                    "refresh_token": "new-refresh",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    recovered = resolve_codex_runtime_credentials()
+
+    assert recovered["api_key"] == new_access_token
+    assert recovered["auth_owner"] == "external"
+    recovered_persisted = json.loads(ov_auth_path.read_text(encoding="utf-8"))
+    assert recovered_persisted["auth_owner"] == "external"
+    assert recovered_persisted["imported_from"] == str(bootstrap_path)
+
+
 def test_codex_auth_native_login_defaults_to_openviking_owner(tmp_path, monkeypatch):
     ov_auth_path = tmp_path / "codex_auth.json"
     monkeypatch.setenv("OPENVIKING_CODEX_AUTH_PATH", str(ov_auth_path))
@@ -500,6 +623,56 @@ def test_codex_sync_client_re_resolves_credentials_per_request(mock_resolve, moc
 
 @patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI")
 @patch("openviking.models.vlm.backends.codex_vlm.resolve_codex_runtime_credentials")
+def test_codex_retries_unauthorized_once_with_refreshed_credentials(
+    mock_resolve, mock_openai_class
+):
+    class _UnauthorizedError(Exception):
+        status_code = 401
+
+    mock_resolve.side_effect = [
+        {"api_key": "stale-token", "base_url": "https://example.test"},
+        {"api_key": "fresh-token", "base_url": "https://example.test"},
+    ]
+    stale_client = MagicMock()
+    stale_client.responses.create.side_effect = _UnauthorizedError()
+    fresh_client = _build_fake_openai_client("recovered")
+    mock_openai_class.side_effect = [stale_client, fresh_client]
+
+    vlm = CodexVLM({"provider": "openai-codex", "model": "gpt-5.3-codex"})
+
+    assert vlm.get_completion("hello") == "recovered"
+    assert mock_resolve.call_args_list == [call(), call(force_refresh=True)]
+    stale_client.responses.create.assert_called_once()
+    fresh_client.responses.create.assert_called_once()
+
+
+@patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI")
+@patch("openviking.models.vlm.backends.codex_vlm.resolve_codex_runtime_credentials")
+def test_codex_does_not_retry_a_second_unauthorized_response(mock_resolve, mock_openai_class):
+    class _UnauthorizedError(Exception):
+        status_code = 401
+
+    mock_resolve.side_effect = [
+        {"api_key": "stale-token", "base_url": "https://example.test"},
+        {"api_key": "still-invalid-token", "base_url": "https://example.test"},
+    ]
+    first_client = MagicMock()
+    second_client = MagicMock()
+    first_client.responses.create.side_effect = _UnauthorizedError()
+    second_client.responses.create.side_effect = _UnauthorizedError()
+    mock_openai_class.side_effect = [first_client, second_client]
+    vlm = CodexVLM({"provider": "openai-codex", "model": "gpt-5.3-codex"})
+
+    with pytest.raises(_UnauthorizedError):
+        vlm.get_completion("hello")
+
+    assert mock_resolve.call_args_list == [call(), call(force_refresh=True)]
+    first_client.responses.create.assert_called_once()
+    second_client.responses.create.assert_called_once()
+
+
+@patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI")
+@patch("openviking.models.vlm.backends.codex_vlm.resolve_codex_runtime_credentials")
 def test_codex_translates_tool_history_into_responses_input(mock_resolve, mock_openai_class):
     mock_resolve.return_value = {
         "api_key": "oauth-token",
@@ -566,6 +739,89 @@ def test_codex_translates_tool_history_into_responses_input(mock_resolve, mock_o
             "output": '{"temperature":72}',
         },
     ]
+
+
+@pytest.mark.parametrize(
+    ("content", "expected_output"),
+    [
+        (
+            [
+                {"type": "text", "text": "first"},
+                {"type": "text", "text": "second"},
+            ],
+            "firstsecond",
+        ),
+        ({"ok": True}, '{"ok": true}'),
+    ],
+)
+def test_codex_preserves_legacy_text_tool_output_serialization(content, expected_output):
+    converted = _convert_message_for_responses(
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": content,
+        }
+    )
+
+    assert converted == [
+        {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": expected_output,
+        }
+    ]
+
+
+@patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI")
+@patch("openviking.models.vlm.backends.codex_vlm.resolve_codex_runtime_credentials")
+def test_codex_preserves_images_in_function_call_output(mock_resolve, mock_openai_class):
+    mock_resolve.return_value = {
+        "api_key": "oauth-token",
+        "base_url": "https://chatgpt.com/backend-api/codex",
+    }
+    mock_real_client = MagicMock()
+    mock_real_client.responses.create.return_value = _MockResponsesStream(
+        _build_final_response("image inspected")
+    )
+    mock_openai_class.return_value = mock_real_client
+    image_url = "data:image/png;base64,aW1hZ2U="
+
+    vlm = CodexVLM({"provider": "openai-codex", "model": "gpt-5.3-codex"})
+    result = vlm.get_completion(
+        messages=[
+            {"role": "user", "content": "Inspect the image"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "read_image", "arguments": "{}"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [
+                    {"type": "text", "text": "Source: image.png"},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ],
+            },
+        ]
+    )
+
+    assert result == "image inspected"
+    input_items = mock_real_client.responses.create.call_args.kwargs["input"]
+    assert input_items[-1] == {
+        "type": "function_call_output",
+        "call_id": "call_1",
+        "output": [
+            {"type": "input_text", "text": "Source: image.png"},
+            {"type": "input_image", "image_url": image_url},
+        ],
+    }
 
 
 def test_codex_auth_invalid_exp_claim_is_treated_as_expiring():

@@ -30,6 +30,7 @@ def test_add_resource_request_defaults_processing_mode():
     request = AddResourceRequest(path="https://example.com/demo.md")
 
     assert request.processing_mode == "semantic_and_vectors"
+    assert request.is_active is True
 
 
 def test_add_resource_request_accepts_declared_add_type():
@@ -41,6 +42,40 @@ def test_add_resource_request_accepts_declared_add_type():
 
     assert request.add_type == "feishu"
     assert request.to == "viking://resources/feishu"
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        {"to": "viking://resources/docs"},
+        {"parent": "viking://resources"},
+    ],
+)
+def test_add_resource_request_accepts_paused_watch_with_target(target):
+    request = AddResourceRequest(
+        path="https://example.feishu.cn/docx/doc_token",
+        watch_interval=30,
+        is_active=False,
+        **target,
+    )
+
+    assert request.is_active is False
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"watch_interval": 0, "to": "viking://resources/docs"},
+        {"watch_interval": 30},
+    ],
+)
+def test_add_resource_request_rejects_invalid_paused_watch(kwargs):
+    with pytest.raises(ValueError, match="is_active=false"):
+        AddResourceRequest(
+            path="tos://bucket/docs/",
+            is_active=False,
+            **kwargs,
+        )
 
 
 def test_add_resource_request_rejects_add_type_with_temp_file_id():
@@ -126,10 +161,12 @@ async def test_add_resource_success(
     assert body["result"]["task_id"]
 
 
+@pytest.mark.parametrize("timeout", [None, 0.0])
 async def test_add_resource_with_wait(
     client: httpx.AsyncClient,
     sample_markdown_file,
     upload_temp_dir,
+    timeout,
 ):
     resp = await client.post(
         "/api/v1/resources",
@@ -137,12 +174,62 @@ async def test_add_resource_with_wait(
             "temp_file_id": sample_markdown_file.name,
             "reason": "test resource",
             "wait": True,
+            "timeout": timeout,
         },
     )
+    if timeout == 0.0:
+        assert resp.status_code == 504
+        error = resp.json()["error"]
+        assert error["code"] == "DEADLINE_EXCEEDED"
+        task_id = error["details"]["task_id"]
+        assert error["details"]["timeout"] == timeout
+        assert "Waiting for resource import timed out" in error["message"]
+        assert "does not cancel or fail the background task" in error["message"]
+        assert f"ov task status {task_id}" in error["message"]
+        task = await _wait_task_terminal(client, task_id)
+        assert task["status"] == "completed"
+        assert "root_uri" in task["result"]
+        return
+
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
     assert "root_uri" in body["result"]
+
+
+async def test_add_resource_remote_empty_with_wait_returns_invalid_argument(
+    client: httpx.AsyncClient,
+    temp_dir,
+    monkeypatch,
+):
+    from openviking.parse.accessors.base import LocalResource, SourceType
+    from openviking.parse.accessors.http_accessor import HTTPAccessor
+
+    downloaded = temp_dir / "remote-empty.txt"
+    downloaded.write_bytes(b"")
+
+    async def return_empty_download(self, source, **kwargs):
+        return LocalResource(
+            path=downloaded,
+            source_type=SourceType.HTTP,
+            original_source=str(source),
+            meta={"original_filename": downloaded.name},
+            is_temporary=True,
+        )
+
+    monkeypatch.setattr(HTTPAccessor, "access", return_empty_download)
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={"path": "https://example.com/remote-empty.txt", "wait": True},
+    )
+
+    assert resp.status_code == 400, resp.text
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
+    assert "empty" in body["error"]["message"].lower()
+    assert not downloaded.exists()
 
 
 async def test_add_resource_forwards_args_to_service(
@@ -174,7 +261,35 @@ async def test_add_resource_forwards_args_to_service(
     assert seen["internal_task"] is False
 
 
-async def test_add_resource_marks_connector_child_task_internal(
+async def test_add_resource_forwards_paused_watch_to_service(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+):
+    seen = {}
+
+    async def fake_add_resource(**kwargs):
+        seen.update(kwargs)
+        return {"status": "accepted", "task_id": "task-1"}
+
+    monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
+
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "path": "tos://bucket/docs/",
+            "to": "viking://resources/docs",
+            "watch_interval": 30,
+            "is_active": False,
+        },
+    )
+
+    assert resp.status_code == 200
+    assert seen["watch_interval"] == 30
+    assert seen["is_active"] is False
+
+
+async def test_add_resource_forwards_internal_task_to_service(
     client: httpx.AsyncClient,
     service,
     monkeypatch,
@@ -189,8 +304,7 @@ async def test_add_resource_marks_connector_child_task_internal(
 
     resp = await client.post(
         "/api/v1/resources",
-        headers={"X-OpenViking-Task-Origin": "connector_import"},
-        json={"path": "https://example.com/demo.md"},
+        json={"path": "https://example.com/demo.md", "internal_task": True},
     )
 
     assert resp.status_code == 200
@@ -1075,10 +1189,6 @@ async def test_add_resource_non_wait_queue_task_queryable(
     sample_markdown_file,
     upload_temp_dir,
 ):
-    from openviking.service.task_tracker import set_task_tracker
-
-    set_task_tracker(None)
-
     resp = await client.post(
         "/api/v1/resources",
         json={

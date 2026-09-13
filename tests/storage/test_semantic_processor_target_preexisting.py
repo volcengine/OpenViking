@@ -227,6 +227,29 @@ async def test_memory_trigger_does_not_select_hierarchical_aggregation(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_content_copy_does_not_enqueue_ancestor_refresh(monkeypatch):
+    processor = SemanticProcessor()
+    plan_refresh = AsyncMock()
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.plan_abstract_overview_refresh",
+        plan_refresh,
+    )
+    msg = SemanticMsg(
+        uri="viking://resources/archive",
+        context_type="resource",
+        generation_trigger="content_copy",
+    )
+
+    await processor._enqueue_parent_refresh(
+        msg,
+        "viking://resources/archive/copied.jpg",
+        l0_body_changed=True,
+    )
+
+    plan_refresh.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_sync_wrapper_delegates_to_sync_tree_and_cleans_temp(monkeypatch):
     """The wrapper calls viking_fs.sync_tree and then deletes the temp tree."""
     fake_fs = _SyncWrapperVikingFS(target_exists=True)

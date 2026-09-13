@@ -21,13 +21,14 @@ import { writeJsonState } from "./lib/state.mjs";
 import { createHostCompressor } from "./lib/host-compressor.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
 import { buildServerAssembledBlock } from "./shared/recall-core.mjs";
+import { applyInputFilters, compileInputFilters } from "./shared/input-filters.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
   process.exit(0);
 }
 
-const cfg = loadConfig();
+let cfg = loadConfig();
 const { log, logError } = createLogger("auto-recall");
 const fetchJSON = makeFetchJSON(cfg);
 
@@ -299,15 +300,26 @@ async function buildInjectionBlock(items, actorPeerId = "") {
   return { block: lines.join("\n"), contentCount, hintCount, budgetUsed };
 }
 
-async function recallViaServerAssembly(query, actorPeerId = "", sessionId = "") {
+async function recallViaServerAssembly(query, actorPeerId = "", sessionId = "", legacyPeerId = "") {
   const runCompressor = await createHostCompressor(cfg, log);
-  return buildServerAssembledBlock(fetchJSON, cfg, query, {
-    actorPeerId,
+  const assemble = (peerId) => buildServerAssembledBlock(fetchJSON, cfg, query, {
+    actorPeerId: peerId,
     sessionId,
     log,
     runCompressor,
     localCompressorAvailable: Boolean(runCompressor),
   });
+
+  const block = await assemble(actorPeerId);
+  // `peer_scope: "all"` already sweeps every peer under this user, so the peer
+  // this workspace used before the identity rule changed needs asking only
+  // when that sweep is off.
+  if (cfg.recallPeerScope !== "actor" || !legacyPeerId || legacyPeerId === actorPeerId) return block;
+
+  const legacy = await assemble(legacyPeerId);
+  if (!legacy) return block;
+  log("recall_legacy_peer_hit", { legacyPeerId });
+  return block ? `${block}\n${legacy}` : legacy;
 }
 
 // ---------------------------------------------------------------------------
@@ -325,13 +337,6 @@ async function main() {
     ...extra,
   });
 
-  if (!cfg.autoRecall) {
-    log("skip", { reason: "autoRecall disabled" });
-    writeRecallState({ count: 0, reason: "disabled" });
-    approve();
-    return;
-  }
-
   let input;
   try {
     const chunks = [];
@@ -344,9 +349,21 @@ async function main() {
     return;
   }
 
-  const userPrompt = (input.prompt || "").trim();
+  let userPrompt = (input.prompt || "").trim();
   const sessionId = input.session_id;
   const cwd = input.cwd;
+  // The workspace layer belongs to the session's directory, which only the
+  // payload knows; see loadConfig for why re-resolving this late is safe.
+  // Everything gated below — recall.enabled included — reads the reload.
+  cfg = loadConfig(cwd);
+
+  if (!cfg.autoRecall) {
+    log("skip", { reason: "autoRecall disabled" });
+    writeRecallState({ count: 0, reason: "disabled" });
+    approve();
+    return;
+  }
+
   const effectivePeer = getEffectivePeerId(cfg, { sessionId, cwd });
   log("start", {
     query: userPrompt.slice(0, 200),
@@ -367,6 +384,22 @@ async function main() {
     approve();
     return;
   }
+
+  // Filters run before the length gate, so a prompt whose only content was a
+  // stripped prefix is short_query rather than a search for the empty string.
+  const queryFilters = compileInputFilters(cfg.recallQueryFilters);
+  if (queryFilters.rules.length) {
+    const verdict = applyInputFilters(userPrompt, queryFilters.rules, { role: "user" });
+    if (verdict.dropped) {
+      log("skip", { reason: "query_filter", rule: verdict.ruleIndex, op: verdict.op });
+      writeRecallState({ count: 0, reason: "query_filtered", cc_session_id: sessionId });
+      approve();
+      return;
+    }
+    if (verdict.changed) log("query_filter", { rawLength: userPrompt.length, length: verdict.text.length });
+    userPrompt = verdict.text;
+  }
+  if (queryFilters.errors.length) log("query_filter_errors", queryFilters.errors);
 
   if (!userPrompt || userPrompt.length < cfg.minQueryLength) {
     log("skip", { reason: "query too short or empty" });
@@ -390,6 +423,7 @@ async function main() {
     userPrompt,
     effectivePeer.peerId,
     ovSessionId,
+    effectivePeer.legacyPeerId,
   );
   if (endpointBlock !== null) {
     if (!endpointBlock) {

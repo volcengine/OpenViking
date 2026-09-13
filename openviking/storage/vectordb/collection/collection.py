@@ -136,7 +136,7 @@ class ICollection(ABC):
     def update_index(
         self,
         index_name: str,
-        scalar_index: Optional[Dict[str, Any]] = None,
+        scalar_index: Optional[List[str]] = None,
         description: Optional[str] = None,
     ):
         raise NotImplementedError
@@ -535,7 +535,7 @@ class Collection:
     def update_index(
         self,
         index_name: str,
-        scalar_index: Optional[Dict[str, Any]] = None,
+        scalar_index: Optional[List[str]] = None,
         description: Optional[str] = None,
     ):
         """
@@ -543,7 +543,7 @@ class Collection:
 
         Args:
             index_name (str): Name of the index to update.
-            scalar_index (Optional[Dict[str, Any]]): Updated configuration for scalar indexes.
+            scalar_index (Optional[List[str]]): Complete list of scalar-indexed fields.
                 Defaults to None.
             description (Optional[str]): New description for the index. Defaults to None.
         """

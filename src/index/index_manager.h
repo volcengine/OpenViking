@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 #pragma once
+#include <functional>
 #include <string>
 #include <vector>
 #include "index/common_structs.h"
@@ -35,6 +36,10 @@ class IndexManager {
   virtual int add_data(const std::vector<AddDataRequest>& data_list) = 0;
 
   virtual int delete_data(const std::vector<DeleteDataRequest>& data_list) = 0;
+
+  virtual int rebuild_scalar_index(
+      const std::string& scalar_index_json,
+      const std::function<bool(std::vector<AddDataRequest>&)>& read_batch) = 0;
 
   virtual int64_t dump(const std::string& dir) = 0;
 

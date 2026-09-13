@@ -36,6 +36,7 @@ def init_queue_manager(
     max_concurrent_external_parse: int = 4,
     max_concurrent_add_resource: int = 4,
     max_concurrent_session_commit: int = DEFAULT_MAX_CONCURRENT_SESSION_COMMIT,
+    max_concurrent_external_task: int = 10,
 ) -> "QueueManager":
     """Initialize QueueManager singleton.
 
@@ -59,6 +60,7 @@ def init_queue_manager(
         max_concurrent_external_parse=max_concurrent_external_parse,
         max_concurrent_add_resource=max_concurrent_add_resource,
         max_concurrent_session_commit=max_concurrent_session_commit,
+        max_concurrent_external_task=max_concurrent_external_task,
     )
     return _instance
 
@@ -83,9 +85,10 @@ class QueueManager:
     EXTERNAL_PARSE = "ExternalParse"
     ADD_RESOURCE = "AddResource"
     SESSION_COMMIT = "SessionCommit"
+    EXTERNAL_TASK = "ExternalTask"
     USER_DELETION = "UserDeletion"
-    # A deferred archive re-enqueues itself; throttle the next scheduling round.
-    _SESSION_COMMIT_POLL_INTERVAL = 1.0
+    # Deferred work re-enqueues itself; throttle the next scheduling round.
+    _REQUEUE_POLL_INTERVAL = 1.0
 
     def __init__(
         self,
@@ -97,6 +100,7 @@ class QueueManager:
         max_concurrent_external_parse: int = 4,
         max_concurrent_add_resource: int = 4,
         max_concurrent_session_commit: int = DEFAULT_MAX_CONCURRENT_SESSION_COMMIT,
+        max_concurrent_external_task: int = 10,
     ):
         """Initialize QueueManager."""
         self._agfs = agfs
@@ -107,6 +111,7 @@ class QueueManager:
         self._max_concurrent_external_parse = max_concurrent_external_parse
         self._max_concurrent_add_resource = max_concurrent_add_resource
         self._max_concurrent_session_commit = max_concurrent_session_commit
+        self._max_concurrent_external_task = max_concurrent_external_task
         self._queues: Dict[str, NamedQueue] = {}
         self._started = False
         self._queue_threads: Dict[str, threading.Thread] = {}
@@ -132,12 +137,12 @@ class QueueManager:
 
         logger.info(f"[QueueManager] mount_point={self.mount_point} Started")
 
-    async def prepare_task_tracking(self, tracker: Any) -> None:
+    async def prepare_task_tracking(self, tracker: Any) -> list[Any]:
         """Rebuild task work from QueueFS before any consumer starts."""
         snapshots = {name: await queue.snapshot() for name, queue in self._queues.items()}
         owners = self._task_work_index.rebuild(snapshots)
         tracker.attach_work_index(self._task_work_index)
-        await tracker.restore_work_tasks(owners)
+        return await tracker.restore_work_tasks(owners)
 
     def setup_standard_queues(self, vector_store: Any, start: bool = True) -> None:
         """
@@ -205,6 +210,8 @@ class QueueManager:
             return self._max_concurrent_add_resource
         if queue_name == self.SESSION_COMMIT:
             return self._max_concurrent_session_commit
+        if queue_name == self.EXTERNAL_TASK:
+            return self._max_concurrent_external_task
         return self._max_concurrent_semantic
 
     def _queue_worker_loop(
@@ -218,8 +225,8 @@ class QueueManager:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         poll_interval = (
-            self._SESSION_COMMIT_POLL_INTERVAL
-            if queue.name == self.SESSION_COMMIT
+            self._REQUEUE_POLL_INTERVAL
+            if queue.name in {self.SESSION_COMMIT, self.EXTERNAL_TASK}
             else self._poll_interval
         )
         try:
@@ -235,7 +242,7 @@ class QueueManager:
                             data = loop.run_until_complete(queue.dequeue())
                             if data is not None:
                                 logger.debug("[QueueManager] Dequeued message from %s", queue.name)
-                            if queue.name == self.SESSION_COMMIT:
+                            if queue.name in {self.SESSION_COMMIT, self.EXTERNAL_TASK}:
                                 stop_event.wait(poll_interval)
                         else:
                             stop_event.wait(poll_interval)
@@ -254,8 +261,8 @@ class QueueManager:
         A Semaphore caps inflight tasks at max_concurrent.
         """
         poll_interval = (
-            self._SESSION_COMMIT_POLL_INTERVAL
-            if queue.name == self.SESSION_COMMIT
+            self._REQUEUE_POLL_INTERVAL
+            if queue.name in {self.SESSION_COMMIT, self.EXTERNAL_TASK}
             else self._poll_interval
         )
         sem = asyncio.Semaphore(max_concurrent)

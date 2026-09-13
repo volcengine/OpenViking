@@ -138,7 +138,7 @@ async function main() {
     if (!cfg.autoCapture) return;
     await withAgentHookLock("zcode", nativeSessionId, async () => {
       state = await readHookState("zcode", nativeSessionId);
-      const plan = buildZcodeCapturePlan(buildZcodeTurns(input, state), state);
+      const plan = buildZcodeCapturePlan(buildZcodeTurns(input, state), state, cfg);
 
       // Fail-closed: if no turns and no dedup keys, skip silently (not an error —
       // could be a Stop with no new content, or a race with UserPromptSubmit).

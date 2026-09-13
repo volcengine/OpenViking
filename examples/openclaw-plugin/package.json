@@ -26,6 +26,7 @@
     "config/feature-gates.json",
     "registries/",
     "routing/",
+    "shared/",
     "plugin/",
     "services/",
     "!vitest.config.ts",

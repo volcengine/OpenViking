@@ -147,7 +147,9 @@ async def test_patch_merge_context_provider_skips_extra_candidates_for_existing_
             )
         ],
     )
-    provider.search_files = AsyncMock(return_value=["viking://user/u/memories/experiences/other.md"])
+    provider.search_files = AsyncMock(
+        return_value=["viking://user/u/memories/experiences/other.md"]
+    )
     provider.read_file = AsyncMock(
         return_value={
             "memory_type": "experiences",
@@ -380,12 +382,18 @@ def test_patch_merge_context_provider_instruction_mentions_path_field_normalizat
     instruction = provider.instruction()
 
     assert "independent extraction patch proposals" in instruction
-    assert "merge duplicate/overlapping\nmemories into one canonical file patch" in instruction
+    assert "same identity under the active memory schema" in instruction
+    assert "same object or occurrence" in instruction
+    assert "overlapping topic only identifies candidates" in instruction
+    assert "never sufficient evidence" in instruction
+    assert "every substantive atomic fact" in instruction
+    assert "If identity is uncertain" in instruction
     assert "directory/filename fields" in instruction
     assert "schema identifiers" in instruction
     assert "book not books" in instruction
     assert "Chinese" in instruction
     assert "书籍 not 书/图书" in instruction
+    assert "verified duplicate existing file" in instruction
     assert "put it in delete_ids" in instruction
 
 

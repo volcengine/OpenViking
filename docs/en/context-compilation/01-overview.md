@@ -10,7 +10,7 @@ You supply three things:
 - **Where it goes (`--to`)**: the target directory for the output;
 - **Which Skill to use (`--skill`)**: a spec describing what the output should look like.
 
-Plus an optional **`--reason`**: extra instructions for this run — scope, audience, language, emphasis, or date range. The Skill defines *what shape* to compile into; `--reason` tells the agent *what you want this particular time* on top of that.
+Plus an optional **`--instruction`**: extra instructions for this run — scope, audience, language, emphasis, or date range. The Skill defines *what shape* to compile into; `--instruction` tells the agent *what you want this particular time* on top of that.
 
 OpenViking does the rest. Compile is powered by [VikingBot](../concepts/15-vikingbot.md): once a task is accepted, VikingBot loads the Skill you named, reads the sources under your identity, and works through them autonomously in a dedicated **agent loop** — reading, distilling, organizing, and writing pages, much like hiring someone to turn a pile of material into a clean knowledge base and hand you back the finished result. The whole thing runs asynchronously: you can wait for it, or grab the `task_id` and move on.
 
@@ -23,11 +23,10 @@ ov compile \
   --from viking://resources/research \
   --to viking://resources/research-wiki \
   --skill viking://agent/skills/llm-wiki \
-  --reason "Organize the research into a knowledge base the team can search" \
-  --wait
+  --instruction "Organize the research into a knowledge base the team can search"
 ```
 
-`--wait` polls until the task reaches a terminal state; drop it to get a `cmp_...` task ID back immediately, then use `ov task status <id>` to check progress and `ov task cancel <id>` to stop it. Full field reference, task lifecycle, and HTTP API are in [VikingBot API → compile()](../api/24-vikingbot.md#compile).
+The command returns a `cmp_...` task ID immediately. Use `ov task status <id>` to check progress and `ov task cancel <id>` to stop it. The full field reference, task lifecycle, and HTTP API are in the [Agent Runtime API](../api/23-agent-runtime.md).
 
 ## Swap the Skill, get a different output
 
@@ -51,5 +50,5 @@ The first two examples also give the complete `ov` commands from **importing sou
 ## Related docs
 
 - [VikingBot concepts](../concepts/15-vikingbot.md) — the runtime behind Compile
-- [VikingBot API](../api/24-vikingbot.md) — full reference for `compile()` / `compile_status()` / `compile_cancel()`
+- [Agent Runtime API](../api/23-agent-runtime.md) — full reference for creating, inspecting, and cancelling Compile tasks
 - [Skills API](../api/04-skills.md) — managing and customizing Skills
