@@ -25,6 +25,10 @@ export function buildZcodeCapturePlan(turns, state = {}, cfg = {}) {
     role: turn.role,
     content,
     ...(turn.turnId ? { turn_id: turn.turnId } : {}),
+    // Attribute distilled memories to the agent's peer (peers/<peerId>) instead of the
+    // user-level shared layer: upstream ships header-only attribution, which single-user
+    // dev-mode deployments rely on body-level peer_id to route correctly.
+    ...(cfg.peerId ? { peer_id: cfg.peerId } : {}),
   }));
   return { candidates, toSend, payloads };
 }
