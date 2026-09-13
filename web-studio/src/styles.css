@@ -161,6 +161,29 @@
     overflow: hidden;
   }
 
+  /* Keep the icon language quiet and precise across native controls, feature
+     views, and third-party primitives. Size remains owned by each context. */
+  .lucide {
+    flex: none;
+    stroke-width: 1.75;
+    shape-rendering: geometricPrecision;
+  }
+
+  button .lucide,
+  a .lucide,
+  [role="button"] .lucide {
+    transition:
+      color 160ms ease,
+      opacity 160ms ease,
+      transform 160ms ease;
+  }
+
+  button:active:not(:disabled) .lucide,
+  a:active .lucide,
+  [role="button"]:active .lucide {
+    transform: scale(0.94);
+  }
+
   @media (max-width: 767px) {
     input,
     select,
