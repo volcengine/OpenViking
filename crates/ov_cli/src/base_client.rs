@@ -700,6 +700,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn post_with_timeout_overrides_client_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _connection = listener.accept().await.unwrap();
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        });
+
+        let client = BaseClient::new(
+            format!("http://{address}"),
+            None,
+            None,
+            None,
+            None,
+            5.0,
+            false,
+            None,
+        );
+        let started = std::time::Instant::now();
+        let error = client
+            .post_with_timeout::<_, Value>("/slow", &json!({}), Duration::from_millis(20))
+            .await
+            .expect_err("slow response should time out");
+
+        assert!(matches!(error, Error::Timeout(_)));
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "request-level timeout should fire before the 5s client timeout"
+        );
+    }
+
+    #[tokio::test]
     async fn plain_text_http_error_preserves_status() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
