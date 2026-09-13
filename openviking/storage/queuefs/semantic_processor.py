@@ -334,6 +334,7 @@ class SemanticProcessor(DequeueHandlerBase):
         """Process dequeued SemanticMsg, recursively process all subdirectories."""
         msg: Optional[SemanticMsg] = None
         collector = None
+        syncing_source = False
         try:
             import json
 
@@ -445,12 +446,14 @@ class SemanticProcessor(DequeueHandlerBase):
                                         "Syncing semantic source into target before processing: "
                                         f"{msg.uri} -> {msg.target_uri}"
                                     )
+                                    syncing_source = True
                                     diff = await self._sync_topdown_recursive(
                                         msg.uri,
                                         msg.target_uri,
                                         ctx=current_ctx,
                                         lock=semantic_lock.lock,
                                     )
+                                    syncing_source = False
                                     logger.info(
                                         "[SyncDiff] Diff computed: "
                                         f"added_files={len(diff.added_files)}, "
@@ -527,6 +530,15 @@ class SemanticProcessor(DequeueHandlerBase):
                     reset_root_observability_context(root_context_token)
 
         except Exception as e:
+            if syncing_source:
+                assert msg is not None
+                # A move-based sync may already have consumed part of the source.
+                # Replaying that partial tree can delete previously moved content.
+                logger.error("Source sync failed; retaining remaining staging data: %s", e)
+                self._merge_request_stats(msg.telemetry_id, error_count=1)
+                get_request_wait_tracker().mark_semantic_failed(msg.telemetry_id, msg.id, str(e))
+                self.report_error(str(e), data)
+                return None
             if isinstance(e, LockAcquisitionError):
                 logger.warning(
                     "Lock error processing semantic message, re-enqueueing without "
