@@ -467,16 +467,6 @@ impl BaseClient {
         })
     }
 
-    pub(crate) fn create_client_with_timeout(
-        &self,
-        timeout: std::time::Duration,
-    ) -> Result<ReqwestClient> {
-        ReqwestClient::builder()
-            .timeout(timeout)
-            .build()
-            .map_err(|e| Error::from_reqwest("Failed to build HTTP client", e))
-    }
-
     pub(crate) fn create_client_with_connect_timeout(
         &self,
         connect_timeout: std::time::Duration,
@@ -534,9 +524,13 @@ impl BaseClient {
         timeout: std::time::Duration,
     ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
-        let client = self.create_client_with_timeout(timeout)?;
 
-        let request = client.post(&url).headers(self.build_headers()).json(body);
+        let request = self
+            .http
+            .post(&url)
+            .headers(self.build_headers())
+            .timeout(timeout)
+            .json(body);
         let request = if self.profile_enabled {
             request.query(&[("profile", "1")])
         } else {
@@ -703,6 +697,38 @@ mod tests {
             .expect_err("slow response should time out");
 
         assert!(matches!(error, Error::Timeout(_)));
+    }
+
+    #[tokio::test]
+    async fn post_with_timeout_overrides_client_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _connection = listener.accept().await.unwrap();
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        });
+
+        let client = BaseClient::new(
+            format!("http://{address}"),
+            None,
+            None,
+            None,
+            None,
+            5.0,
+            false,
+            None,
+        );
+        let started = std::time::Instant::now();
+        let error = client
+            .post_with_timeout::<_, Value>("/slow", &json!({}), Duration::from_millis(20))
+            .await
+            .expect_err("slow response should time out");
+
+        assert!(matches!(error, Error::Timeout(_)));
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "request-level timeout should fire before the 5s client timeout"
+        );
     }
 
     #[tokio::test]
