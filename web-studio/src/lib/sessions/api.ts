@@ -467,6 +467,14 @@ export function serializeParts(
     if (part.type === 'text') {
       return [{ type: 'text', text: part.text }]
     }
+    if (part.type === 'image_url') {
+      return [
+        {
+          type: 'image_url',
+          image_url: { url: part.url, detail: part.detail },
+        },
+      ]
+    }
     if (part.type === 'context') {
       return [
         {

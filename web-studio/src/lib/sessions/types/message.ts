@@ -49,7 +49,14 @@ export interface ToolResultPart {
   is_error: boolean
 }
 
+export interface ImagePart {
+  type: 'image_url'
+  url: string
+  detail?: string
+}
+
 export type MessagePart =
+  | ImagePart
   | TextPart
   | ReasoningPart
   | IterationPart
@@ -60,6 +67,9 @@ export type MessagePart =
 /** A single message in a session (matches backend Message.to_dict()). */
 export interface Message {
   id: string
+  turn_id?: string
+  message_kind?:
+    'user_query' | 'assistant_step' | 'tool_transport' | 'checkpoint'
   role: 'user' | 'assistant'
   parts: MessagePart[]
   created_at: string

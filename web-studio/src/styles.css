@@ -291,3 +291,22 @@
 .dark .hljs-strong { color: #c9d1d9; font-weight: bold; }
 .dark .hljs-addition { color: #aff5b4; background-color: #033a16; }
 .dark .hljs-deletion { color: #ffdcd7; background-color: #67060c; }
+
+/* Fenced code inherits the active theme; inline-code decoration stays inline. */
+.chat-markdown pre code {
+  color: inherit;
+  background: transparent;
+  border-radius: 0;
+  padding: 0;
+  font-size: inherit;
+}
+
+/* Streamdown already provides the code body inset; reset prose's nested pre. */
+.chat-markdown [data-streamdown="code-block-body"] {
+  padding: 12px 16px;
+}
+
+.chat-markdown [data-streamdown="code-block-body"] pre {
+  margin: 0;
+  padding: 0;
+}
