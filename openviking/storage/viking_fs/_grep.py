@@ -79,7 +79,7 @@ class _GrepMixin:
             else await self._resolve_grep_engine(engine, uri, ctx, switch_to_remote_threshold)
         )
         tags_by_uri: Dict[str, List[str]] = {}
-        if tag_filter is not None and resolved_engine == "fs":
+        if tag_filter is not None:
             vector_store = self._get_vector_store()
             if vector_store is None:
                 return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
@@ -115,8 +115,22 @@ class _GrepMixin:
                 content_transform=content_transform,
                 allowed_uris=allowed_uris,
             )
-        else:  # "vikingdb_then_fs"
+        elif resolved_engine == "vikingdb_then_fs":
             result = await self._grep_vikingdb_then_fs(
+                uri=uri,
+                pattern=pattern,
+                exclude_uri=exclude_uri,
+                case_insensitive=case_insensitive,
+                node_limit=node_limit,
+                level_limit=level_limit,
+                ctx=ctx,
+                allowed_uris=allowed_uris,
+                tag_filter=tag_filter,
+                include_tags=include_tags,
+            )
+        else:
+            # "local_then_fs"
+            result = await self._grep_local_then_fs(
                 uri=uri,
                 pattern=pattern,
                 exclude_uri=exclude_uri,
@@ -133,41 +147,50 @@ class _GrepMixin:
     async def _resolve_grep_engine(
         self, engine: GrepEngine, uri: str, ctx, switch_to_remote_threshold: int = 10000
     ) -> str:
-        """Resolve the actual grep engine to use."""
+        """Resolve the actual grep engine to use.
+
+        Resolution order for ``engine="auto"``:
+        1. remote VikingDB BM25 when the backend stores the ``content`` field and
+           the record count is at/above ``switch_to_remote_threshold``;
+        2. the local FTS5 keyword sidecar when enabled and ready;
+        3. filesystem scan.
+        """
         if engine == "fs":
             return "fs"
 
-        # auto mode: check vikingdb availability
         vector_store = self._get_vector_store()
-        if not vector_store:
-            return "fs"
+        remote_available = False
+        if vector_store is not None:
+            backend_type = getattr(vector_store, "_backend_type", "unknown")
+            # Keep this set consistent with ``CollectionAdapter.USE_CONTENT_FIELD``:
+            # only these backends store the ``content`` field required for full-text grep.
+            if backend_type in ("volcengine", "vikingdb"):
+                remote_available = await self._collection_has_fulltext(vector_store, ctx)
 
-        backend_type = getattr(vector_store, "_backend_type", "unknown")
-        # Keep this set consistent with ``CollectionAdapter.USE_CONTENT_FIELD``:
-        # only these backends store the ``content`` field required for full-text grep.
-        if backend_type not in ("volcengine", "vikingdb"):
-            return "fs"
+        if engine == "vikingdb":
+            return "vikingdb_then_fs" if remote_available else "fs"
 
-        # Check collection has content field and FullText config
-        if not await self._collection_has_fulltext(vector_store, ctx):
-            return "fs"
+        if engine == "local":
+            return "local_then_fs" if self._keyword_available(ctx) else "fs"
 
-        # switch_to_remote_threshold=0 means always use vikingdb
-        if switch_to_remote_threshold == 0:
-            return "vikingdb_then_fs"
-
-        # Check data volume threshold
-        try:
-            count = await self._get_cached_count(uri, ctx)
-            if count < switch_to_remote_threshold:
-                return "fs"
-        except Exception:
-            logger.debug(
-                "grep engine=auto: count() check failed, falling back to fs", exc_info=True
-            )
-            return "fs"
-
-        return "vikingdb_then_fs"
+        # engine == "auto": remote BM25 when the collection has a usable full-text
+        # index and enough data; otherwise the filesystem scan. The local sidecar is
+        # deliberately excluded: its coverage mirrors vector coverage, so selecting
+        # it here could silently lose recall (design D1).
+        if remote_available:
+            # switch_to_remote_threshold=0 means always use vikingdb
+            if switch_to_remote_threshold == 0:
+                return "vikingdb_then_fs"
+            try:
+                count = await self._get_cached_count(uri, ctx)
+                if count >= switch_to_remote_threshold:
+                    return "vikingdb_then_fs"
+            except Exception:
+                logger.debug(
+                    "grep engine=auto: count() check failed, falling back to fs",
+                    exc_info=True,
+                )
+        return "fs"
 
     async def _collection_has_fulltext(self, vector_store, ctx) -> bool:
         """Check if collection has content field and FullText config.
@@ -412,6 +435,143 @@ class _GrepMixin:
             for match in result.get("matches", [])
         ]
         return result
+
+    async def _grep_local_then_fs(
+        self,
+        uri: str,
+        pattern: str,
+        exclude_uri: Optional[str],
+        case_insensitive: bool,
+        node_limit: Optional[int],
+        level_limit: int,
+        ctx: Optional[RequestContext] = None,
+        allowed_uris: Optional[Set[str]] = None,
+        tag_filter: Optional[Dict[str, Any]] = None,
+        include_tags: bool = False,
+    ) -> Dict:
+        """Local FTS5 keyword recall + local fs precise matching.
+
+        Mirrors ``_grep_vikingdb_then_fs`` but recalls candidate URIs from the
+        local SQLite FTS5 sidecar instead of a remote VikingDB BM25 index. The
+        final regex match always runs against the on-disk content
+        (``_grep_in_files``), so the sidecar only accelerates recall. The same
+        tag/ACL scope and depth limits that constrain the other engines are
+        applied to the recalled candidates.
+
+        ``tag_filter``/``include_tags`` are accepted for call-site symmetry with
+        ``_grep_vikingdb_then_fs``; the tag scope itself reaches this method as
+        the caller-computed ``allowed_uris`` set.
+        """
+        kfs = self._get_keyword_fs()
+        if kfs is None or not self._keyword_available(ctx):
+            return await self._local_fs_fallback(
+                uri=uri,
+                pattern=pattern,
+                exclude_uri=exclude_uri,
+                case_insensitive=case_insensitive,
+                node_limit=node_limit,
+                level_limit=level_limit,
+                ctx=ctx,
+                allowed_uris=allowed_uris,
+            )
+
+        real_ctx = self._ctx_or_default(ctx)
+        query = " ".join(kw.strip() for kw in pattern.split("|") if kw.strip())
+        if not query.strip():
+            return await self._local_fs_fallback(
+                uri=uri,
+                pattern=pattern,
+                exclude_uri=exclude_uri,
+                case_insensitive=case_insensitive,
+                node_limit=node_limit,
+                level_limit=level_limit,
+                ctx=ctx,
+                allowed_uris=allowed_uris,
+            )
+
+        remote_return_limit = min(node_limit * 5, 100000) if node_limit else 100000
+        try:
+            candidates = kfs.lookup(
+                account_id=real_ctx.account_id,
+                query=query,
+                scope_uri=uri,
+                exclude_uri=exclude_uri.rstrip("/") if exclude_uri else "",
+                limit=remote_return_limit,
+            )
+        except Exception as e:
+            logger.warning(f"grep local keyword recall failed, falling back to fs: {e}")
+            return await self._local_fs_fallback(
+                uri=uri,
+                pattern=pattern,
+                exclude_uri=exclude_uri,
+                case_insensitive=case_insensitive,
+                node_limit=node_limit,
+                level_limit=level_limit,
+                ctx=ctx,
+                allowed_uris=allowed_uris,
+            )
+
+        candidate_uris = [u for u, _score in candidates]
+        if allowed_uris is not None:
+            candidate_uris = [u for u in candidate_uris if u in allowed_uris]
+        if level_limit is not None:
+            base_depth = self._uri_depth(uri)
+            candidate_uris = [
+                u for u in candidate_uris if self._uri_depth(u) - base_depth <= level_limit
+            ]
+        if not candidate_uris:
+            # A partial or not-yet-built sidecar must not turn a miss into a final
+            # "no results": fall back to the authoritative filesystem scan.
+            logger.debug(
+                "grep local keyword recall empty; falling back to filesystem scan for %s", uri
+            )
+            return await self._local_fs_fallback(
+                uri=uri,
+                pattern=pattern,
+                exclude_uri=exclude_uri,
+                case_insensitive=case_insensitive,
+                node_limit=node_limit,
+                level_limit=level_limit,
+                ctx=ctx,
+                allowed_uris=allowed_uris,
+            )
+
+        return await self._grep_in_files(
+            candidate_uris,
+            pattern,
+            case_insensitive,
+            node_limit,
+            ctx,
+        )
+
+    @staticmethod
+    def _uri_depth(uri: str) -> int:
+        """Number of non-empty path segments in a Viking URI."""
+        return len([seg for seg in uri.strip("/").split("/") if seg])
+
+    async def _local_fs_fallback(
+        self,
+        *,
+        uri: str,
+        pattern: str,
+        exclude_uri: Optional[str],
+        case_insensitive: bool,
+        node_limit: Optional[int],
+        level_limit: int,
+        ctx: Optional[RequestContext],
+        allowed_uris: Optional[Set[str]],
+    ) -> Dict:
+        """Delegate to the filesystem engine with the caller's ACL scope intact."""
+        return await self._grep_fs(
+            uri=uri,
+            pattern=pattern,
+            exclude_uri=exclude_uri,
+            case_insensitive=case_insensitive,
+            node_limit=node_limit,
+            level_limit=level_limit,
+            ctx=ctx,
+            allowed_uris=allowed_uris,
+        )
 
     async def _grep_in_files(
         self,
